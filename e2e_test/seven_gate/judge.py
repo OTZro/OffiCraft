@@ -40,9 +40,15 @@ fact that existed for three seconds is still evidence. A step whose fact is
 durable (a task row, a card row) is read from the journal all the same — one
 reader, one shape.
 
-EXIT — 0 iff EVERY step passed; 1 otherwise, with the FIRST failing step named on
-the last line. Every step prints its own line regardless, because "which step"
+EXIT — 0 iff EVERY GATE passed; 1 otherwise, with the FIRST failing gate named on
+the last line. Every cell prints its own line regardless, because "which step"
 is the answer the caller actually needs; a bare red tells them nothing.
+
+⚠️ "EVERY GATE", not "every cell": one cell (see OBSERVATION_KEYS below) is an
+OBSERVATION — it prints what it saw, is rendered OBSERVED rather than PASS/FAIL,
+and cannot make this run red. `all green` therefore means "every gate held", NOT
+"nine things were verified"; main() prints the gate count above the cells so that
+distinction is on screen and not only in this docstring.
 """
 import hashlib
 import json
@@ -68,6 +74,31 @@ STEPS = [
     ("peer_message", "回覆另一個 agent"),
     ("image_answer", "看得到圖"),
 ]
+
+# 🔴 NOT EVERY CELL IS A GATE, AND THE READER MUST NOT HAVE TO GUESS WHICH.
+#
+# A cell listed here DOES NOT DECIDE ANYTHING: it prints what it observed and it
+# cannot make a run red. Everything else is a gate — its fact is absent, the run
+# is red, and the first red is named on the last line.
+#
+# ⑤ is here because the thing it wants to know ("were steps reported AS THE WORK
+# WENT, or all at once at the close?") IS NOT IN THE DATA: every progress fact
+# the server holds is stamped when the agent pressed the button, and nothing
+# records whether work happened between two reports. Two designs tried to judge
+# it anyway and both failed — see the block at ⑤ below for the measurements.
+# Downgrading it is the honest answer, but a downgrade that nobody can see is
+# how a gate disappears quietly, so:
+#   * the per-step line says OBSERVED, never PASS/FAIL;
+#   * verdict.json records `passed: null` (not true — "true" would read as
+#     "verified");
+#   * main() prints, above the verdict, HOW MANY cells are gates and names the
+#     ones that are not;
+#   * and tests_guard case 21b-v pins this membership in BOTH directions: a
+#     mutant that re-arms ⑤ as a gate goes red, and so does one that quietly
+#     downgrades any other cell into this set.
+# Read a green run as "the N gates below held", never as "nine things were
+# verified".
+OBSERVATION_KEYS = ("step_done",)
 
 
 def load_bundle(run_dir):
@@ -108,6 +139,71 @@ def _says_answer(body, salt, digest, width=6):
         if hashlib.sha256((salt + chunk).encode("utf-8")).hexdigest() == digest:
             return True
     return False
+
+
+def _observe_step_shape(task, samples, multi=""):
+    """⑤'s OBSERVATION — the shape of the progress reports, judged by nobody.
+
+    Two numbers, and the difference between them is the point:
+
+      * how many DISTINCT server-stamped `finished_ts` the done steps carry, and
+        how far apart the first and the last are. Both are SERVER FACTS
+        (api_tasks.go stamps `step.FinishedTS = nowSecs()`, i.e.
+        time.Now().UnixNano()/1e9 — about 2e-7 s of resolution at today's epoch),
+        so they do not depend on how often the collector polled;
+      * when the close-out was FIRST SEEN IN THE JOURNAL, which is a SAMPLED
+        number: the server stamps `closeout_ts` and persists it, but TaskDTO
+        exposes only the boolean, so the moment itself is not readable here. It
+        is labelled as sampled every time it is printed, because the previous two
+        versions of this cell drew a verdict from exactly this kind of number.
+    """
+    if not task:
+        return ("no task to observe — ③ did not find one" + multi)
+    tid = task.get("id")
+    steps = task.get("steps") or []
+    done = [s for s in steps if s.get("status") == "done"]
+    stamps = sorted({float(s.get("finished_ts") or 0.0) for s in done
+                     if (s.get("finished_ts") or 0)})
+    bits = ["task %s: %d of %d plan step(s) at done" % (tid, len(done), len(steps)),
+            "%d distinct server-stamped finished_ts" % len(stamps)]
+    if len(stamps) >= 2:
+        bits.append("first→last completion %.3fs (server-stamped, not sampled)"
+                    % (stamps[-1] - stamps[0]))
+    else:
+        bits.append("first→last completion n/a (fewer than two distinct stamps — "
+                    "a one-step plan is a legitimate way to get here)")
+    closed_ts = task.get("closed_ts")
+    if stamps and closed_ts:
+        bits.append("first completion→task closed_ts %.3fs (both server-stamped)"
+                    % (float(closed_ts) - stamps[0]))
+    first_co = None
+    for s in samples:
+        for t in s.get("tasks") or []:
+            if t.get("id") == tid and t.get("closeout_reported"):
+                first_co = s.get("t")
+                break
+        if first_co is not None:
+            break
+    if stamps and first_co:
+        gap = float(first_co) - stamps[0]
+        if gap < 0:
+            # The journal's own clock and the server's stamps are not comparable
+            # in this bundle (a synthetic fixture, or a clock that moved). Say so
+            # rather than print a negative duration somebody would try to explain.
+            bits.append("first completion→close-out sighting not comparable in "
+                        "this bundle (the sample clock reads before the server's "
+                        "finished_ts)")
+        else:
+            bits.append("first completion→close-out FIRST SEEN in the journal "
+                        "%.2fs (⚠️ SAMPLED at the collector's poll interval — not "
+                        "a server fact; the server's own closeout_ts is not on "
+                        "TaskDTO)" % gap)
+    elif not first_co:
+        bits.append("the close-out was never seen in any sample")
+    return ("OBSERVED, NOT JUDGED (this cell cannot make the run red — the server "
+            "records when each report ARRIVED, never whether work happened "
+            "between two reports, so nothing here separates 'reported as the work "
+            "went' from 'reported all at once'): " + "; ".join(bits) + multi)
 
 
 def _iter(samples, key):
@@ -222,84 +318,49 @@ def judge(scene, samples):
     #     done, so the prefix half is TRUE BY CONSTRUCTION and only the ordering
     #     half was still saying anything.
     #
-    # WHAT IT ASKS NOW — a TIME fact, read from the journal:
+    # (3) "was the task ever OBSERVED carrying a done step while still open" — a
+    #     TIME fact read from the journal's sampling. MEASURED FALSE RED
+    #     (independent review, 2026-08-11, real collect.py --interval 1 + real
+    #     judge.py against a stand-in server): an agent that reports every step,
+    #     in order, honestly, is GREEN at a 3.0s gap between "first step done"
+    #     and the close-out and RED at 0.05s — same behaviour, only faster. The
+    #     same review measured that the journal of that fast-but-honest agent is
+    #     BYTE-FOR-BYTE IDENTICAL to the journal of one that touches nothing
+    #     until the close and then flips the whole plan to done. So the red could
+    #     not tell the two apart, and a cheat only had to be SLOW to pass.
     #
-    #   was there ever a moment at which this task carried a step at `done`
-    #   AND HAD NOT YET REPORTED ITS CLOSE-OUT?
+    # 🔴 SO THIS CELL IS NO LONGER A GATE. It is an OBSERVATION: it prints the
+    # shape it sees and it CANNOT MAKE A RUN RED. `passed` is None, which is what
+    # main() renders as OBSERVED and what verdict.json records as null.
     #
-    # WHERE THE DISCRIMINATING POWER COMES FROM WHEN ⑦ IS GREEN: ⑦ reads the
-    # LAST state of the task and nothing else — it cannot say anything about
-    # which states the task passed THROUGH. An agent that leaves every step
-    # untouched and then, at the end, flips them all and closes out produces a
-    # final snapshot indistinguishable from a green run, and this cell is red on
-    # it because no sample ever caught the task mid-flight. That is the same
-    # shape ① already relies on (presence=waking is gone seconds later), which is
-    # why this file reads a journal instead of a final snapshot.
+    # WHY, IN ONE SENTENCE, AND IT IS NOT A LIMITATION OF THIS FILE: every
+    # progress fact the server holds is stamped AT THE MOMENT THE AGENT PRESSED
+    # THE BUTTON. Nothing on the server records whether any work happened BETWEEN
+    # two reports. "Worked incrementally" and "did nothing and reported at the
+    # end" therefore differ only in the SIZE OF THE GAPS — and a gap is not
+    # evidence of work, it is evidence of waiting. Judging it would need a
+    # threshold, and no threshold is derivable: the harness guarantees no minimum
+    # interval (the ⑥ card round-trip disappears on the OC_SG_SKIP_STEP=reply_card
+    # run and the agent chooses when to open the card anyway), a localhost round
+    # trip bounds honest and dishonest agents alike, and a plan step can legally
+    # be one line of text. Worse, any threshold N is satisfied by `sleep N`, which
+    # costs a cheater nothing. A guessed constant here is the same species of
+    # mistake this harness already paid for twice (`--seconds 900`, PASS_FLOOR 100).
     #
-    # AND IT IS IMMUNE TO BOTH FALSE REDS ABOVE: superseded rows are not `done`
-    # so they cannot be mistaken for progress, and no ordering between steps is
-    # examined at all — a parallel group finishing backwards still leaves a
-    # moment where one of its nodes was done and the task was open.
+    # WHAT IT WOULD TAKE TO JUDGE IT (neither exists today, both are named so the
+    # next person does not have to rediscover this):
+    #   * the CLOSE-OUT MOMENT as a server fact the judge can read. The server
+    #     does stamp and persist it (api_tasks.go `t.CloseoutTS = now`, column
+    #     `closeout_ts`), but TaskDTO exposes only the boolean
+    #     `closeout_reported` (wire.go: `CloseoutReported: t.CloseoutTS > 0`).
+    #     Exposing it is a WIRE change — spec/*.json first, owner's review — and
+    #     is deliberately NOT done here;
+    #   * a threshold that is DERIVED from something, not picked. See above: no
+    #     such derivation is known, and "another guessed number" is not a fix.
     #
-    # ⚠️ THE HONEST LIMIT, and it is a sampling one: if EVERY step report and the
-    # close-out land inside a single collector poll (OC_SG_INTERVAL, 1s by
-    # default), the journal never catches the intermediate state and this cell is
-    # red for the harness's reason. The failure message says so, in those words,
-    # so the reader is not sent after the agent for it.
-    #
-    # 🔴 THIS SENTENCE USED TO READ "It is not a red anyone has observed". IT HAS
-    # NOW BEEN OBSERVED. Independent review, 2026-08-11, using the REAL collect.py
-    # (--interval 1) and the REAL judge.py against a stand-in server: an agent
-    # that reports every step, in order, honestly, is GREEN here at a 3.0s gap
-    # between "first step done" and the close-out and RED at 0.05s — same
-    # behaviour, only faster. The same review measured that the journal of that
-    # fast-but-honest agent is BYTE-FOR-BYTE IDENTICAL to the journal of one that
-    # touches nothing until the close and then flips the whole plan to done, so
-    # when this cell is red it cannot tell the reader which of the two it saw.
-    # The mitigation named below (the owner card round-trip) DISAPPEARS on the
-    # OC_SG_SKIP_STEP=reply_card run. What this cell should become is an open
-    # question in front of the owner; do not read its green as "an agent that
-    # worked incrementally", and do not read its red as "an agent that cheated".
-    # (Mitigation, such as it is: the collector starts before boot and polls
-    # throughout, and the path normally puts an owner card round-trip between the
-    # steps and the close.)
-    tid = task.get("id") if task else None
-    inflight = None      # (t, done-step names) of the first mid-flight sighting
-    ever_done = False    # a done step was seen at all, closed-out or not
-    for s in samples:
-        for t in s.get("tasks") or []:
-            if t.get("id") != tid:
-                continue
-            d = [x.get("name") for x in (t.get("steps") or [])
-                 if x.get("status") == "done"]
-            if not d:
-                continue
-            ever_done = True
-            if not t.get("closeout_reported") and inflight is None:
-                inflight = (s.get("t"), d)
-    if not task or not steps:
-        why = ("task %s has no plan to advance — ⑤ cannot be read before ④ lands"
-               % (task.get("id") if task else "<none: ③ failed>")) + _multi
-    elif not ever_done:
-        why = ("no step of task %s ever reached status=done in any sample — the "
-               "plan was filed and then nothing moved" % tid) + _multi
-    elif inflight is None:
-        why = ("task %s was NEVER observed carrying a completed step while it was "
-               "still open: in every one of the %d sample(s) that show a step at "
-               "done, the close-out had already been reported. Nothing here is a "
-               "step reported AS THE WORK WENT — the whole plan appears at the "
-               "close. (⚠️ the other way to produce this: every step report AND "
-               "the close-out landed inside one collector poll, in which case the "
-               "red is the harness's and not the agent's — check journal.ndjson "
-               "and the poll interval before reading it as the agent's.)"
-               % (tid, len(samples))) + _multi
-    else:
-        why = ("task %s was observed at t=%s with step(s) %s already at done and "
-               "the close-out NOT yet reported — a step was reported complete "
-               "while the work was still running, which is a state the final "
-               "snapshot (⑦) cannot show"
-               % (tid, inflight[0], inflight[1]))
-    out.append(("step_done", "報一步完成", inflight is not None, why))
+    # WHAT IT DOES GIVE YOU, and it needs no constant and no sampling luck: the
+    # two numbers below, printed on every run, green or not.
+    out.append(("step_done", "報一步完成", None, _observe_step_shape(task, samples, _multi)))
 
     # ⑥ 開一張等我回覆卡 — a reply card whose `from` is the agent. The agent has
     # to DECIDE to open it; a card the harness opened on its behalf proves
@@ -415,7 +476,15 @@ def judge(scene, samples):
                          "planted image — nothing shows the picture was opened "
                          "and read (the number appears in no text the agent can "
                          "reach, so it cannot be produced any other way)" % agent))
-    return out
+
+    # THE GATE/OBSERVATION SPLIT IS APPLIED HERE, FROM THE DECLARATION AT THE TOP
+    # OF THE FILE — not sprinkled through the cells — so that there is exactly one
+    # place to read (and exactly one place a mutant can move). Fail-closed both
+    # ways: a cell in OBSERVATION_KEYS never decides anything no matter what it
+    # computed, and a GATE that somehow produced no verdict is a red, never a
+    # pass, because "nothing was decided" must not print as PASS.
+    return [(k, z, (None if k in OBSERVATION_KEYS else (False if p is None else p)), w)
+            for k, z, p, w in out]
 
 
 def main(argv):
@@ -431,11 +500,23 @@ def main(argv):
         print("[seven_gate] NOTE: the journal is EMPTY. Every step below fails "
               "for want of evidence, which is not the same as the agent having "
               "done nothing — check the collector first.")
+    # WHICH CELLS CAN ACTUALLY SAY NO — printed BEFORE the cells, because the
+    # reader forms "nine things were checked" from the list, not from a footnote.
+    gates = [k for k, _z, p, _w in verdicts if p is not None]
+    obs = [(i, k, z) for i, (k, z, p, _w) in enumerate(verdicts, 1) if p is None]
+    if obs:
+        print("[seven_gate] NOTE: %d of the %d cells below are GATES (their fact "
+              "is absent ⇒ the run is red). %s an OBSERVATION: it prints what it "
+              "saw and CANNOT make this run red — read a green run as \"the %d "
+              "gates held\", never as \"%d things were verified\"."
+              % (len(gates), len(verdicts),
+                 ", ".join("step%d %s (%s) is" % (i, k, z) for i, k, z in obs),
+                 len(gates), len(verdicts)))
     failed = None
     for i, (key, zh, passed, why) in enumerate(verdicts, 1):
-        print("[seven_gate] step%d %-14s %s %s — %s"
-              % (i, key, zh, "PASS" if passed else "FAIL", why))
-        if not passed and failed is None:
+        mark = "OBSERVED" if passed is None else ("PASS" if passed else "FAIL")
+        print("[seven_gate] step%d %-14s %s %s — %s" % (i, key, zh, mark, why))
+        if passed is False and failed is None:
             failed = (i, key, zh, why)
     with open(os.path.join(run_dir, "verdict.json"), "w", encoding="utf-8") as fh:
         json.dump([{"step": i, "key": k, "zh": z, "passed": p, "evidence": w}

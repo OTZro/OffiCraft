@@ -1752,7 +1752,12 @@ sg_mutant report_waking 報到
 sg_mutant resume_scene  接回現場
 sg_mutant create_task   開票
 sg_mutant submit_plan   提出計畫
-sg_mutant step_done     報一步完成
+# ⚠️ NO `sg_mutant step_done` — ON PURPOSE, and 21b-v below is what replaces it.
+# ⑤ is no longer a gate (owner's ruling, 2026-08-11): it prints what it observed
+# and cannot make a run red, because the thing it wanted to judge is not in the
+# data — the server stamps WHEN EACH REPORT ARRIVED and never whether work
+# happened between two reports. A mutant here would now assert the opposite of
+# the contract. 21b-v pins the downgrade itself, in both directions.
 sg_mutant reply_card    開一張等我回覆卡
 sg_mutant closeout      回報收尾
 sg_mutant peer_message  回覆另一個-agent
@@ -1772,13 +1777,17 @@ sg_mutant image_answer  看得到圖
 # whole plan done and closed out in the final sample. Every row of it is a state
 # the server can produce, which the previous fixture (step todo + task done) was
 # not.
-_sg_v="$SG_WORK/b-step_done/verdict.json"
-_sg_pair="$(python3 -c '
-import json, sys
-v = {r["key"]: r["passed"] for r in json.load(open(sys.argv[1]))}
-print("%s|%s" % (v.get("step_done"), v.get("closeout")))' "$_sg_v" 2>/dev/null)"
-check "seven_gate: ⑤ can be RED while ⑦ is GREEN — the cell is independently falsifiable, not implied by the close-out" \
-  "False|True" "$_sg_pair"
+# ⚠️ 2026-08-11: THE CELL THIS PARAGRAPH DESCRIBES NO LONGER JUDGES ANYTHING.
+# The time fact it reads separates a fast honest agent from a slow one, not an
+# honest agent from a cheat — measured, see 21b-v and judge.py's ⑤ block. What
+# survives here is the BUNDLE: the back-fill world is still the interesting one
+# and it is still REACHABLE, which is the half the old fixture got wrong. What is
+# asserted about it changed from "⑤ goes red on it" to "⑤ CANNOT redden it".
+_sg_bf="$(sg_judge step_done)"
+check "seven_gate: the back-fill bundle (nothing done mid-flight, whole plan done and closed out at the end) exits 0 — ⑤ is an observation and cannot redden a run on its own" \
+  "0" "${_sg_bf%%|*}"
+check "seven_gate: …and its last line is the exact green marker (a downgraded cell must not leave a half-red verdict behind either)" \
+  "[seven_gate] all green" "${_sg_bf#*|}"
 # …and the bundle it says that about must be REACHABLE. The old one asserted a
 # `todo` step on a `done` task, which DeriveTaskStatus cannot produce: it proved
 # the predicate was falsifiable, not that the world existed.
@@ -1798,8 +1807,68 @@ for t in last.get("tasks") or []:
     break
 else:
     print("no-task")' "$SG_WORK/b-step_done/journal.ndjson" 2>/dev/null)"
-check "seven_gate: …and the ⑤-red/⑦-green bundle is a state the server can actually reach (no un-done step on a done task)" \
+check "seven_gate: …and the back-fill bundle is a state the server can actually reach (no un-done step on a done task)" \
   "reachable" "$_sg_reach"
+
+# 21b-v) 🔴 THE GATE/OBSERVATION SPLIT ITSELF — pinned in BOTH directions.
+#
+# WHY THIS CASE EXISTS. ⑤ was downgraded from a gate to an observation because
+# what it wanted to judge is not in the data (judge.py's ⑤ block has the
+# measurements). That downgrade is the right answer AND it is exactly the shape
+# this repo keeps getting hurt by: a check that stops checking while everything
+# still prints green. So the membership of OBSERVATION_KEYS is not a comment, it
+# is an assertion — someone re-arming ⑤ as a gate goes red HERE, and so does
+# someone quietly moving a real gate into the observation set. Both directions
+# matter: the first would resurrect a measured false red that names the agent,
+# the second is how a gate disappears without anyone noticing.
+_sg_labels() { # _sg_labels JUDGE BUNDLE -> "<gates>|<observations>|<obs keys>"
+  python3 - "$1" "$2" <<'PY'
+import json, os, subprocess, sys
+judge, bundle = sys.argv[1], sys.argv[2]
+subprocess.run([sys.executable, judge, bundle], capture_output=True)
+rows = json.load(open(os.path.join(bundle, "verdict.json")))
+obs = [r for r in rows if r["passed"] is None]
+print("%d|%d|%s" % (len(rows) - len(obs), len(obs), ",".join(r["key"] for r in obs)))
+PY
+}
+check "seven_gate: the verdict declares 8 GATES and exactly 1 OBSERVATION, and the observation is ⑤ (a cell that stopped deciding must say so in the machine-readable output, not only in a comment)" \
+  "8|1|step_done" "$(_sg_labels "$SG_DIR/judge.py" "$SG_WORK/b-none")"
+# …and on screen. `passed: null` in a file nobody opens is not a label.
+_sg_obs_line="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | grep -E '^\[seven_gate\] step5 step_done')"
+case "$_sg_obs_line" in
+  *OBSERVED*) ok "seven_gate: …and ⑤'s line reads OBSERVED, not PASS — $(printf '%s' "$_sg_obs_line" | cut -c1-120)…" ;;
+  *) bad "seven_gate: ⑤'s line does not say OBSERVED, so a reader counts it as a step that was verified: $_sg_obs_line" ;;
+esac
+_sg_head="$(python3 "$SG_DIR/judge.py" "$SG_WORK/b-none" 2>&1 | grep -cF 'cells below are GATES')"
+check "seven_gate: …and the verdict states the GATE COUNT above the cells (so 'all green' is not read as 'nine things were verified')" \
+  "1" "$_sg_head"
+# …and the two numbers ⑤ exists to report are actually reported.
+_sg_nums="$(printf '%s' "$_sg_obs_line" | grep -cE 'distinct server-stamped finished_ts')"
+check "seven_gate: …and it prints the shape it observed (distinct server-stamped finished_ts), which is the whole of what it still offers" \
+  "1" "$_sg_nums"
+# MUT-regate / MUT-degrade — the declaration moved, on a COPY of judge.py.
+# Each mutant judges its OWN bundle (judge.py writes verdict.json into whatever
+# directory it is given, and a shared one would let the last writer decide).
+SG_JMUT="$SG_WORK/judge-mut.py"
+python3 "$SG_WORK/mk.py" none "$SG_WORK/b-regate"  >/dev/null 2>&1 \
+  && python3 "$SG_WORK/mk.py" none "$SG_WORK/b-degrade" >/dev/null 2>&1 \
+  || bad "seven_gate: could not build the 21b-v mutant bundles — the two cells below would be testing nothing"
+sed 's/^OBSERVATION_KEYS = ("step_done",)$/OBSERVATION_KEYS = ()/' \
+    "$SG_DIR/judge.py" > "$SG_JMUT"
+if ! grep -q '^OBSERVATION_KEYS = ()$' "$SG_JMUT"; then
+  bad "seven_gate: MUT-regate did not apply — the OBSERVATION_KEYS declaration moved, so 21b-v is testing nothing (fix the sed)"
+else
+  check "MUT-regate: with ⑤ put back in the gate set, the split is visibly different (a re-armed ⑤ cannot slip past this case)" \
+    "9|0|" "$(_sg_labels "$SG_JMUT" "$SG_WORK/b-regate")"
+fi
+sed 's/^OBSERVATION_KEYS = ("step_done",)$/OBSERVATION_KEYS = ("step_done", "closeout")/' \
+    "$SG_DIR/judge.py" > "$SG_JMUT"
+if ! grep -q '"step_done", "closeout"' "$SG_JMUT"; then
+  bad "seven_gate: MUT-degrade did not apply — the OBSERVATION_KEYS declaration moved, so the other direction is testing nothing (fix the sed)"
+else
+  check "MUT-degrade: quietly moving a REAL gate (⑦) into the observation set is caught and named — this is the direction in which a gate disappears silently" \
+    "7|2|step_done,closeout" "$(_sg_labels "$SG_JMUT" "$SG_WORK/b-degrade")"
+fi
 
 # 21b-iii) ⑤ MUST NOT BE RED ON THE TWO THINGS THE SERVER DOES ON PURPOSE.
 # This is the other half of 21b-i and it is the half that was broken: a bundle
@@ -2911,10 +2980,11 @@ echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 # (2026-08-11, hole 191).
 #
 # SO IT IS NOW SET NEAR THE COUNT, WITH DELIBERATE SLACK, AND IT IS EXPECTED TO
-# BE EDITED. 298 today, floor 295: three assertions of room. (It was 291/288
-# before 2026-08-11's bash-3.2 round added 23e's three cells and case 26's four;
-# the floor moved with it in the same commit, which is the edit this block asks
-# for.) The slack is measured, not guessed — deleting the whole of case 26 (then
+# BE EDITED. 303 today, floor 300: three assertions of room. (291/288 → 298/295
+# when 2026-08-11's bash-3.2 round added 23e's three cells and case 26's four →
+# 303/300 when ⑤'s downgrade traded two cells away — `sg_mutant step_done` and
+# the ⑤-red/⑦-green pair — for seven in 21b-i/21b-v. Each move edited the floor
+# in the same commit, which is the edit this block asks for.) The slack is measured, not guessed — deleting the whole of case 26 (then
 # 8 assertions) gave PASS=283, which was FATAL and named at 288 and GREEN at
 # 280. Read the
 # guarantee narrowly: a change that removes FOUR OR MORE assertions is loud; one
@@ -2951,7 +3021,7 @@ echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 # printed the marker with no floor evaluated at all: MEASURED, floor block
 # deleted and the trailing echo kept → PASS=153 FAIL=0 rc=0, last line
 # `[tests_guard] all green`, `bin/ci.sh` all green. Keep it in the branch.
-PASS_FLOOR=295
+PASS_FLOOR=300
 if [[ "$PASS" -lt "$PASS_FLOOR" ]]; then
   echo "[tests_guard] FATAL: only $PASS assertion(s) ran, floor is $PASS_FLOOR." >&2
   echo "[tests_guard] FAIL=0 with a collapsed PASS count means cases went missing, not that they passed." >&2
