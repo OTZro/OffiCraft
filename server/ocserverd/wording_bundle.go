@@ -39,6 +39,14 @@ const (
 	// whitelist is the real ceiling (a JSON object cannot repeat a key, so a
 	// language can never carry more distinct valid codes than the whitelist holds);
 	// this explicit cap bounds the stored JSON row regardless of whitelist growth.
+	// 🔴 THIS CEILING IS FULL as of T-49e7: the whitelist holds 999 keys, and the
+	// usable ceiling is 999 rather than 1000 because the frontend's
+	// ThemeSettings.test.tsx forges a pack of "every whitelisted key + 1" to prove
+	// an oversized pack is rejected. ⇒ ADDING ONE MORE MESSAGE KEY TURNS THAT TEST
+	// RED, and it fails with `expected +0 to be 2` — nothing in that message points
+	// back here. Raise this together with its TypeScript twin
+	// (MAX_WORDING_ENTRIES_PER_LANG in frontend/src/lib/themeBundleCore.ts); they
+	// are compared for equality, so moving one alone trades this trap for another.
 	maxWordingEntriesPerLang = 1000
 )
 
