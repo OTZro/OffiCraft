@@ -697,6 +697,33 @@ describe("ScheduledMessagesCard", () => {
     );
   });
 
+  it("names each of the three sets as a group instead of leaving 60 bare checkboxes", async () => {
+    const view = await renderOpenCard();
+    fireEvent.click(await view.findByTestId("mp-schedmsg-add"));
+    fireEvent.change(await view.findByTestId("mp-schedmsg-cadence"), {
+      target: { value: "custom" },
+    });
+
+    // Read the way a screen reader does: by accessible name, not by class. The
+    // minute grid is sixty checkboxes labelled 0…59; without a named group there
+    // is nothing on the page saying they are minutes, and the days and hours
+    // grids sound the same.
+    for (const [name, label] of [
+      ["days", s.customDaysLabel],
+      ["hours", s.customHoursLabel],
+      ["minutes", s.customMinutesLabel],
+    ] as const) {
+      const group = view.getByRole("group", { name: label });
+      expect(group).toBe(view.getByTestId(`mp-schedmsg-custom-${name}`));
+    }
+
+    // …and the three names are distinct, so "named" is not one name three times.
+    const named = view
+      .getAllByRole("group")
+      .map((g) => g.getAttribute("aria-labelledby"));
+    expect(new Set(named).size).toBe(named.length);
+  });
+
   it("edits a custom schedule from its stored sets and shows the result without a remount", async () => {
     store = [
       mkSchedule({

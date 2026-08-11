@@ -104,10 +104,11 @@ export const MAX_WORDING_VALUE_LEN = 200;
 // usable ceiling is 999 rather than 1000 because ThemeSettings.test.tsx forges a
 // pack of "every whitelisted key + 1" to prove the cap rejects an oversized one.
 // ⇒ ADDING ONE MORE MESSAGE KEY TURNS THAT TEST RED, and its failure reads
-// `expected +0 to be 2` — a message with nothing in it pointing back here, so the
-// next person pays for the diagnosis rather than the fix. T-49e7 hit this: a
-// first pass added 22 leaves (1002), went red, and was squeezed to 20 to land on
-// 999. The fix is to raise this constant AND its Go twin together (they are
+// `expected 1 to be 2` — the oversized pack is rejected, so only the built-in row
+// is still named 辦公室. A message with nothing in it pointing back here, so the
+// next person pays for the diagnosis rather than the fix. T-49e7 hit this: the
+// whitelist stood at 980 on origin/main and this branch adds 19 leaves, landing
+// exactly on 999. The fix is to raise this constant AND its Go twin together (they are
 // compared for equality); it was left alone deliberately because that is a wire
 // concern and belongs in its own ticket, not smuggled into a feature branch.
 export const MAX_WORDING_ENTRIES_PER_LANG = 1000;

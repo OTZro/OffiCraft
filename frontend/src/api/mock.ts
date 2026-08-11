@@ -1563,7 +1563,11 @@ function validateSchedulePart(
     customHours?: number[];
     customMinutes?: number[];
     timezone?: string;
-  }
+  },
+  // The cadence the row ends up on. On create that is `part.cadence`; on patch
+  // the stored one unless this request changes it. It matters because the
+  // empty-set rule is cadence-scoped on the server — see below.
+  cadenceInEffect?: string
 ): void {
   const bad = (detail: string) => {
     throw new ApiError(
@@ -1583,9 +1587,17 @@ function validateSchedulePart(
   // The three `custom` sets are EXPLICIT: an empty set is a 422 rather than a
   // silent "all" or a silent "never", because a schedule that always fires and
   // one that never fires must not be one keystroke apart.
+  //
+  // 🔴 That refusal is CADENCE-SCOPED, and the mock must scope it the same way
+  // or it is stricter than the server it stands in for. The server folds an
+  // empty array to nil on the way in (intSliceOrNil) and only judges the sets
+  // when the cadence is `custom`, so `{"cadence":"daily","custom_days":[]}` is
+  // accepted there. A mock that refuses it teaches the caller a rule the wire
+  // does not have.
+  const cadence = cadenceInEffect ?? part.cadence;
   const set = (name: string, values: number[] | undefined, lo: number, hi: number) => {
     if (values === undefined) return;
-    if (values.length === 0) bad(`${name} must not be empty`);
+    if (values.length === 0 && cadence === "custom") bad(`${name} must not be empty`);
     for (const v of values) {
       if (!Number.isInteger(v) || v < lo || v > hi)
         bad(`${name} must be ${lo}-${hi}`);
@@ -2032,7 +2044,7 @@ export const mockApi: Api = {
         `scheduled message '${scheduleId}' not found`
       );
     }
-    validateSchedulePart(memberId, patch);
+    validateSchedulePart(memberId, patch, patch.cadence ?? s.cadence);
     // Switching TO custom must arrive with the three sets in the SAME request
     // unless the stored row already carries them — a cadence with no times for
     // it is exactly what the conditional 422 exists to refuse.

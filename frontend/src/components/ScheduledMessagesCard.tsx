@@ -229,9 +229,20 @@ function NumberSetPicker({
   const gridOpen = !collapsible || detailOpen;
 
   return (
-    <div className="mp-schedmsg__setgroup" data-testid={p}>
+    // Named as a group, the way MultiSelectFilter names its option list. Without
+    // it a screen reader announces sixty checkboxes called 「0」…「59」 with
+    // nothing anywhere saying they are minutes — and the days (1…31) and hours
+    // (0…23) grids are indistinguishable from them by ear.
+    <div
+      className="mp-schedmsg__setgroup"
+      role="group"
+      aria-labelledby={`${p}-label`}
+      data-testid={p}
+    >
       <div className="mp-schedmsg__sethead">
-        <span className="mp-schedmsg__fieldlabel">{label}</span>
+        <span className="mp-schedmsg__fieldlabel" id={`${p}-label`}>
+          {label}
+        </span>
         <span className="mp-schedmsg__spacer" />
         <button
           type="button"

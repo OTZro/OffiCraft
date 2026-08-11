@@ -69,6 +69,14 @@ const weeklyLookbackDays = 14
 // grow expensive: every candidate day costs at most one firstReadingOn probe
 // plus the hour×minute enumeration, and only days actually listed in
 // CustomDays are probed at all.
+//
+// ⚠️ NOTHING PINS THIS CONSTANT, AND THAT IS PROPORTIONATE — do not read the
+// paragraph above as a claim that a guard is watching it (70 → 40 leaves every
+// test green). It is a bound with headroom, and the cost of it being too small
+// is that mostRecentSlot reports NO slot for an interval in which no slot was
+// due anyway, so the delivery outcome is unchanged. That is unlike
+// monthlyLookbackMonths next door, where an insufficient bound really does stop
+// a schedule from ever firing and a named test says so.
 const customLookbackDays = 70
 
 // mostRecentSlot returns the latest slot of s at or before now, computed as
@@ -176,24 +184,48 @@ func mostRecentSlot(s ScheduledMessage, now time.Time) (time.Time, bool) {
 //
 // The calendar cadences have exactly ONE reading a day, so searching forward is
 // what stops the owner from getting nothing at all that day — "half an hour
-// late" beats silence. `custom` has MANY readings a day, and searching forward
-// there would land on a reading that is ALREADY in the set: two occurrences
-// would collapse onto the same instant, hence the same slotKey, and the second
-// delivery would merge into the first without a word. That silent merge is
-// precisely the failure this ticket exists to prevent. Skipping instead costs
-// the few readings inside the gap, and that loss is predictable, bounded and
-// testable.
+// late" beats silence. `custom` typically names many readings a day, and
+// searching forward there tends to land on a reading that is ALREADY in the
+// set: two occurrences collapse onto the same instant, hence the same slotKey,
+// and the second delivery merges into the first without a word.
+//
+// ⚠️ THIS IS A TRADE-OFF APPLIED UNCONDITIONALLY, NOT A TWO-WAY CHOICE, AND THE
+// COST IS REAL AT THE DEGENERATE END. `days={15} × hours={2} × minutes={30}` is
+// a perfectly legal `custom` schedule with exactly ONE reading a day, and for it
+// the merge argument does not apply at all: skipping simply loses the whole day,
+// silently, while a `monthly` schedule with the same meaning fires at 03:00.
+// Two schedules that say the same thing behave oppositely, and this code chooses
+// the silent-loss side for both. Skipping was chosen because its loss is
+// predictable, bounded and testable, whereas a merge is invisible — but the
+// choice is paid for by the single-reading case.
+//
+// A THIRD OPTION EXISTS and is not taken here: search forward, and discard the
+// result only when the landing reading is itself in the declared sets. That
+// keeps "never merge silently" AND stops a single-reading `custom` from
+// vanishing. It is a real candidate for a future ticket — tzsweep's no-merge
+// invariant (a reported slot must be a declared reading) already has the shape
+// to check it. The owner ruled the current behaviour in; this note exists so the
+// next person weighs three options rather than the two the first draft named.
 //
 // The forward-search behaviour of daily/weekly/monthly is untouched.
 //
 // ⚠️ THE AUTUMN SIDE IS NOT SYMMETRIC WITH THAT, AND IS LEFT AS IT IS. When the
-// clocks go back, a wall-clock reading occurs TWICE, and time.Date resolves an
-// ambiguous reading to the EARLIER offset — always. So the second pass over
-// that hour reconstructs the first instant, produces the same slotKey, and the
-// cursor refuses it: the reading fires ONCE, not twice. That is not fixed here
+// clocks go back, a wall-clock reading occurs TWICE, and time.Date picks ONE of
+// the two instants. WHICH one is not ours to state: Go documents the result as
+// implementation-defined for an ambiguous reading, and it is NOT always the
+// earlier offset — measured, America/New_York resolves 2024-11-03 01:30 to the
+// earlier instant while Europe/London and Africa/Cairo resolve their repeated
+// readings to the LATER one. Roughly half the zones go each way, so "always the
+// earlier offset" would be a false claim about half the world.
+//
+// The invariant we actually depend on is weaker and true everywhere: time.Date
+// is DETERMINISTIC, so one wall-clock reading reconstructs one instant, produces
+// one slotKey, and the cursor refuses the second pass — the reading fires ONCE,
+// not twice. That is what the tests pin (and what tzsweep's no-duplicate arm
+// checks in every shipped zone); the offset DIRECTION is deliberately not
+// pinned, because it is not a promise this code can keep. Nothing is fixed here
 // because the resolution lives in the shared readBack/time.Date path every
-// cadence uses, and changing it would move all four. It is pinned by a test
-// instead, so the behaviour is a recorded decision rather than an accident.
+// cadence uses, and changing it would move all four.
 func customSlotOn(day time.Time, s ScheduledMessage, loc *time.Location, notAfter time.Time) (time.Time, bool) {
 	year, month, dayNum := day.Year(), day.Month(), day.Day()
 	// Does the ZONE have this date at all? Asked with the SAME judgement the

@@ -426,6 +426,30 @@ func scheduledMessageCadenceList() string {
 	return "[" + strings.Join(quoted, " ") + "]"
 }
 
+// scheduledMessageCadenceFields names, per cadence, the schedule fields that
+// cadence actually reads when it computes a slot. It is the SAME statement the
+// field descriptions in spec/openapi.json make ("ignored by `daily`, `weekly`
+// and `custom`"), expressed once as data so a caller cannot be told a field is
+// ignored and then have it move the delivery cursor anyway.
+var scheduledMessageCadenceFields = map[string][]string{
+	ScheduledMessageCadenceDaily:   {"hour", "minute"},
+	ScheduledMessageCadenceWeekly:  {"day_of_week", "hour", "minute"},
+	ScheduledMessageCadenceMonthly: {"day_of_month", "hour", "minute"},
+	ScheduledMessageCadenceCustom:  {"custom_days", "custom_hours", "custom_minutes"},
+}
+
+// scheduledMessageCadenceReads reports whether cadence reads field. A cadence
+// outside the closed set reads nothing — that row can never fire anyway, and
+// answering "yes" would re-aim a cursor no slot computation will ever consult.
+func scheduledMessageCadenceReads(cadence, field string) bool {
+	for _, f := range scheduledMessageCadenceFields[cadence] {
+		if f == field {
+			return true
+		}
+	}
+	return false
+}
+
 // ValidateScheduledMessageCustomSets enforces the three explicit sets `custom`
 // intersects (T-49e7). Applied ONLY when the cadence is `custom` — every other
 // cadence ignores these columns outright.

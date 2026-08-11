@@ -90,11 +90,21 @@ CREATE INDEX idx_scheduled_message_member ON scheduled_message (member_id);
 -- fires at midnight in the recipient's zone. That is a WRONG delivery at a time
 -- nobody chose, and it is silent: the row looks like an ordinary daily schedule
 -- and nothing anywhere records that it used to mean something else. Rolling
--- back therefore stops those schedules rather than re-aiming them: `disabled`
--- is visible in the cockpit and reversible by hand, whereas a midnight
--- delivery is neither. The set columns are dropped with the table, so the
--- choice itself IS lost on rollback — this Down is lossy by construction and
--- says so rather than pretending otherwise.
+-- back therefore stops those schedules rather than re-aiming them: a stopped
+-- schedule is reversible by hand, whereas a midnight delivery is not. The set
+-- columns are dropped with the table, so the choice itself IS lost on rollback
+-- — this Down is lossy by construction and says so rather than pretending
+-- otherwise.
+--
+-- ⚠️ WHAT THE COCKPIT SHOWS IS ONLY HALF OF IT, AND THE MISSING HALF MATTERS.
+-- The row is visibly `disabled`, but NOTHING on it records WHY: the label and
+-- body are untouched, and `last_fired_slot` still holds a `custom` slot key the
+-- rolled-back daily cadence can never produce. An operator who sees a stopped
+-- schedule, wonders why, and switches it back on gets exactly the midnight
+-- delivery this Down was written to avoid — the protection stops automation, not
+-- people. Marking the row (a label prefix, say) would close that, and it is NOT
+-- done here: it is a behaviour change on a rollback path and belongs in its own
+-- ticket. Do not read `disabled` as "the operator has been told".
 CREATE TABLE scheduled_message_rebuild (
     id              TEXT PRIMARY KEY,
     member_id       TEXT NOT NULL,

@@ -90,9 +90,14 @@ roster MemberCard 成員列**右側(flex 尾端)的紅色計數 badge**(>99 顯�
   在 320 / 900 兩個面板寬**量矩形**(面板橫向溢出、每個勾選框的實際 rect、格線高度、
   收合前後的表單高度)。⚠️ **同一顆壞掉的 sheet 下,把那些斷言換成 class 名 + 數量,
   6 條全綠**(實測)——這類守衛的鑑別力**全部**來自量到的幾何。
-- **閉集在 `api/` 有四份**,加值時四份都要動:`adapter.ts` 的 `ScheduleCadence`、
-  `http.ts` **兩處** inline union(create body 與 patch body,**沒有** import adapter 的
-  型別)、`mock.ts` 的 `validateSchedulePart`。漏一份就是一條路徑不認得新值。
+- **這個閉集在前端有很多份手抄副本,加值時每一份都要動**(漏一份就是一條路徑不認得新值,
+  而**沒有任何東西會紅**)。刻意不在這裡列它們——清單會過期而不會變色。**當下的完整清單
+  自己跑出來**(`api/` 之外也有,例如手寫的 `<option>` 選單):
+  ```
+  grep -rn daily frontend/src --include=*.ts --include=*.tsx \
+    | grep -v '\.test\.\|/stories/\|/visual-guards/\|/generated/'
+  ```
+  `/generated/` 那幾筆由 spec 重生、不手改;其餘每一筆都要看(散文命中順手排掉)。
 
 ## 聊天未讀跳轉(M2 批次 19;LINE/FB 式,純 FE)
 ChatArea 兩個行為,皆不動 server:

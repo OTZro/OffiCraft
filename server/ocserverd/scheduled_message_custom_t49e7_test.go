@@ -522,6 +522,14 @@ func TestCustomDropsAWallClockTheZoneSkipped(t *testing.T) {
 // use; changing it here would move all four. This test exists so the behaviour
 // is a recorded decision — red if anything ever makes the repeated hour deliver
 // twice, which in the chat log is indistinguishable from a correct delivery.
+// TestCustomDeliversAnAmbiguousWallClockOnce covers ONE zone, America/New_York,
+// and therefore only the half of the world where time.Date happens to resolve a
+// repeated reading to the EARLIER offset. The offset it lands on is not a
+// promise this code can keep (Europe/London and Africa/Cairo resolve theirs to
+// the LATER instant); the invariant that holds everywhere — one reading, one
+// slot, one delivery — is pinned zone-agnostically by
+// TestCustomDeliversAnAmbiguousWallClockOnceInEveryZone below. This test stays
+// because the exact instant for this zone is worth keeping stable.
 func TestCustomDeliversAnAmbiguousWallClockOnce(t *testing.T) {
 	newYork := mustLoadZone(t, "America/New_York")
 	_, _, api := scheduledStack(t)
@@ -599,6 +607,152 @@ func TestPatchCustomSetsReAimOnlyOnARealChange(t *testing.T) {
 	}
 	if slot := mustParseSlot(t, got); slot.After(time.Now()) {
 		t.Fatalf("the re-aimed cursor %q is in the FUTURE", got)
+	}
+}
+
+// findAmbiguousHour returns the first whole hour in `year` that `loc` reads
+// twice, and fails when the zone has none — a vacuous run of the sentinel below
+// would prove nothing.
+func findAmbiguousHour(t *testing.T, loc *time.Location, year int) time.Time {
+	t.Helper()
+	for at := time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC); at.Year() == year; at = at.Add(time.Hour) {
+		local := at.In(loc)
+		if local.Minute() != 0 {
+			continue
+		}
+		// The same wall reading an hour of real time apart means the zone read it
+		// twice: two distinct instants, one wall clock.
+		if local.Add(time.Hour).In(loc).Hour() == local.Hour() {
+			return local
+		}
+	}
+	t.Fatalf("%s has no repeated wall-clock hour in %d — the fixture cannot exercise "+
+		"the ambiguity it exists to exercise", loc, year)
+	return time.Time{}
+}
+
+// TestCustomDeliversAnAmbiguousWallClockOnceInEveryZone pins the invariant the
+// code actually guarantees on the autumn side, in zones that resolve the
+// ambiguity BOTH ways.
+//
+// It deliberately does NOT assert which of the two instants the delivery lands
+// on. Go's time.Date resolves an ambiguous reading deterministically but
+// implementation-defined, and it is not always the earlier offset: measured,
+// America/New_York picks the earlier instant while Europe/London and
+// Africa/Cairo pick the later. What is true everywhere — and what the cursor
+// depends on — is that ONE wall-clock reading yields ONE slot, hence exactly
+// one delivery.
+//
+// Red when: a repeated reading is delivered twice (two instants, two slot keys,
+// the owner gets the same message an hour apart with nothing to explain it).
+func TestCustomDeliversAnAmbiguousWallClockOnceInEveryZone(t *testing.T) {
+	for _, zone := range []string{"America/New_York", "Europe/London", "Africa/Cairo"} {
+		t.Run(zone, func(t *testing.T) {
+			loc := mustLoadZone(t, zone)
+			repeated := findAmbiguousHour(t, loc, 2026)
+			_, _, api := scheduledStack(t)
+			sm := ScheduledMessage{
+				ID: "sch-ambiguous-" + zone, MemberID: "mira", Body: "the repeated hour",
+				Cadence:    ScheduledMessageCadenceCustom,
+				CustomDays: []int{repeated.Day()}, CustomHours: []int{repeated.Hour()},
+				CustomMinutes: []int{0},
+				Timezone:      zone,
+			}
+			start := time.Date(repeated.Year(), repeated.Month(), repeated.Day(), 0, 0, 0, 0, loc)
+			seedScheduleWithCurrentCursor(t, api, sm, start)
+			slots := tickEvery(t, api, sm.ID, start, start.Add(24*time.Hour), 10*time.Minute)
+			if len(slots) != 1 {
+				t.Fatalf("%s read %02d:00 twice on %s and delivered %v — a repeated reading "+
+					"is one occurrence, not two", zone, repeated.Hour(),
+					repeated.Format("2006-01-02"), slots)
+			}
+			want := repeated.Format("2006-01-02T15:04")
+			if !strings.HasPrefix(slots[0], want) {
+				t.Fatalf("%s delivered slot %q, want the declared reading %s (the OFFSET it "+
+					"resolves to is not pinned, the reading is)", zone, slots[0], want)
+			}
+		})
+	}
+}
+
+// TestPatchIgnoredFieldsNeverReAimTheCursor pins the other half of the re-aim
+// comparison: a field the row's cadence does not read cannot move the cursor.
+//
+// Red when: the three sets are compared regardless of cadence. A `daily`
+// schedule PATCHed with `custom_days` — which the contract says is "ignored by
+// every other cadence" — then re-aims, and a re-aim landing between a slot
+// elapsing and the next tick swallows that delivery permanently, with no error,
+// no log line and a card that looks entirely normal.
+func TestPatchIgnoredFieldsNeverReAimTheCursor(t *testing.T) {
+	srv, secret, api := scheduledStack(t)
+	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
+	status, created := doJSON(t, "POST", srv.URL+"/api/members/mira/scheduled-messages",
+		ownerTok, `{"body":"tick","cadence":"daily","hour":9,"minute":0,"timezone":"Asia/Taipei"}`)
+	if status != 200 {
+		t.Fatalf("create: %d %v", status, created)
+	}
+	id, _ := created["id"].(string)
+	path := srv.URL + "/api/members/mira/scheduled-messages/" + id
+
+	const planted = "2020-01-01T09:00+08:00"
+	plant := func() {
+		t.Helper()
+		stored, _ := api.dal.GetScheduledMessage(id)
+		stored.LastFiredSlot = planted
+		if err := api.dal.PutScheduledMessage(*stored); err != nil {
+			t.Fatalf("plant cursor: %v", err)
+		}
+	}
+
+	for _, body := range []string{
+		`{"custom_days":[1,2,3]}`,
+		`{"custom_hours":[7,8]}`,
+		`{"custom_minutes":[0,20,40]}`,
+	} {
+		plant()
+		status, patched := doJSON(t, "PATCH", path, ownerTok, body)
+		if status != 200 {
+			t.Fatalf("PATCH %s: %d %v", body, status, patched)
+		}
+		if got, _ := patched["last_fired_slot"].(string); got != planted {
+			t.Fatalf("PATCH %s on a daily schedule moved the cursor to %q — that field is "+
+				"documented as ignored by every other cadence, and the pending delivery "+
+				"was just swallowed", body, got)
+		}
+	}
+
+	// The mirror case: a field `custom` does not read, on a custom row.
+	status, custom := doJSON(t, "POST", srv.URL+"/api/members/mira/scheduled-messages",
+		ownerTok, customSchedulePayload([]int{1}, []int{9}, []int{0}, "Asia/Taipei"))
+	if status != 200 {
+		t.Fatalf("create custom: %d %v", status, custom)
+	}
+	customID, _ := custom["id"].(string)
+	customPath := srv.URL + "/api/members/mira/scheduled-messages/" + customID
+	stored, _ := api.dal.GetScheduledMessage(customID)
+	stored.LastFiredSlot = planted
+	if err := api.dal.PutScheduledMessage(*stored); err != nil {
+		t.Fatalf("plant custom cursor: %v", err)
+	}
+	status, patched := doJSON(t, "PATCH", customPath, ownerTok, `{"hour":23,"minute":45}`)
+	if status != 200 {
+		t.Fatalf("PATCH hour on a custom schedule: %d %v", status, patched)
+	}
+	if got, _ := patched["last_fired_slot"].(string); got != planted {
+		t.Fatalf("PATCH hour/minute on a custom schedule moved the cursor to %q — "+
+			"`custom` reads neither", got)
+	}
+
+	// Positive control: a field the cadence DOES read still re-aims, so the
+	// guard above is not simply "the cursor never moves".
+	plant()
+	status, patched = doJSON(t, "PATCH", path, ownerTok, `{"hour":8}`)
+	if status != 200 {
+		t.Fatalf("PATCH hour on a daily schedule: %d %v", status, patched)
+	}
+	if got, _ := patched["last_fired_slot"].(string); got == planted {
+		t.Fatalf("changing a daily schedule's hour left the cursor at %q — the next tick "+
+			"would deliver the slot the edit just crossed", got)
 	}
 }
 

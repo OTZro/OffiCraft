@@ -141,14 +141,31 @@ func (s *apiServer) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessa
 	// press purely because a checkbox order differed — and a re-aim inside the
 	// window between a slot elapsing and the next tick swallows that delivery
 	// permanently, silently, on a card that looks entirely normal.
+	// 🔴 A field the resulting cadence does NOT read cannot move the cursor,
+	// because it cannot move a single slot. `custom_days` is documented as
+	// "ignored by every other cadence", and a caller that PATCHes the whole form
+	// back — the generated client, any "send every field" integration — sends all
+	// three sets on a `daily` row. Comparing them anyway made that no-op save
+	// re-aim, which inside the window between a slot elapsing and the next tick
+	// swallows that delivery permanently, silently, on a card that looks entirely
+	// normal: exactly the failure the canonical-form comparison above already
+	// closes from the other direction (order) but left open from this one
+	// (fields the cadence never reads).
+	cadenceAfter := m.Cadence
+	if body.Cadence != nil {
+		cadenceAfter = string(*body.Cadence)
+	}
+	reads := func(field string) bool {
+		return scheduledMessageCadenceReads(cadenceAfter, field)
+	}
 	reAimed := (body.Cadence != nil && string(*body.Cadence) != m.Cadence) ||
-		(body.DayOfWeek != nil && *body.DayOfWeek != m.DayOfWeek) ||
-		(body.DayOfMonth != nil && *body.DayOfMonth != m.DayOfMonth) ||
-		(body.Hour != nil && *body.Hour != m.Hour) ||
-		(body.Minute != nil && *body.Minute != m.Minute) ||
-		(body.CustomDays != nil && canonicalIntSet(*body.CustomDays) != canonicalIntSet(m.CustomDays)) ||
-		(body.CustomHours != nil && canonicalIntSet(*body.CustomHours) != canonicalIntSet(m.CustomHours)) ||
-		(body.CustomMinutes != nil && canonicalIntSet(*body.CustomMinutes) != canonicalIntSet(m.CustomMinutes)) ||
+		(reads("day_of_week") && body.DayOfWeek != nil && *body.DayOfWeek != m.DayOfWeek) ||
+		(reads("day_of_month") && body.DayOfMonth != nil && *body.DayOfMonth != m.DayOfMonth) ||
+		(reads("hour") && body.Hour != nil && *body.Hour != m.Hour) ||
+		(reads("minute") && body.Minute != nil && *body.Minute != m.Minute) ||
+		(reads("custom_days") && body.CustomDays != nil && canonicalIntSet(*body.CustomDays) != canonicalIntSet(m.CustomDays)) ||
+		(reads("custom_hours") && body.CustomHours != nil && canonicalIntSet(*body.CustomHours) != canonicalIntSet(m.CustomHours)) ||
+		(reads("custom_minutes") && body.CustomMinutes != nil && canonicalIntSet(*body.CustomMinutes) != canonicalIntSet(m.CustomMinutes)) ||
 		(body.Timezone != nil && trimString(*body.Timezone) != m.Timezone)
 	// Whether this edit leaves `custom` behind, asked BEFORE the patch is
 	// applied — see the wall-clock guard further down for why it matters.

@@ -224,3 +224,119 @@ for (const { name, panel, viewport } of PANELS) {
     ).toBeVisible();
   });
 }
+
+// ── The tick has to be visible, and only a real browser can say so ───────────
+// A 60-cell grid whose entire purpose is "which ones did I tick" is useless if
+// checked and unchecked cannot be told apart. That distinction is drawn by the
+// browser from `accent-color`, which jsdom does not compute and no class-name
+// assertion can see: `.mp-schedmsg__setbox input` had the same class either way
+// while sitting at ~1.1:1 against the card under the built-in dark palette.
+//
+// LIGHT_PACK is the palette of a REAL shipped theme pack, copied verbatim from
+// visual-guards/stories/ThemeContrastStory.tsx (value-imported here rather than
+// shared, because the CT bundler rewrites a spec's imports into component
+// handles). Do not hand-tune these values: tuned, the guard stops reporting a
+// fact about anything a user can ship.
+const LIGHT_PACK: Record<string, string> = {
+  "--color-bg": "#c2d492",
+  "--color-card": "#fdfbf1",
+  "--color-text": "#33301f",
+  "--color-text-strong": "#1e1c10",
+  "--color-text-muted": "#403d2c",
+  "--color-border": "#b0ae83",
+  "--color-accent": "#2b450b",
+  "--color-overlay": "#241f0d",
+};
+
+type Rgb = { r: number; g: number; b: number; a: number };
+
+function parseRgb(s: string): Rgb {
+  const m = s.match(/rgba?\(([^)]+)\)/i);
+  if (m) {
+    const p = m[1].split(/[,/]/).map((x) => parseFloat(x.trim()));
+    return { r: p[0], g: p[1], b: p[2], a: p[3] === undefined ? 1 : p[3] };
+  }
+  // Chromium reports some resolved colours in the CSS Color 4 form.
+  const srgb = s.match(/color\(\s*srgb\s+([^)]+)\)/i);
+  if (srgb) {
+    const [chans, alpha] = srgb[1].split("/").map((x) => x.trim());
+    const c = chans.split(/\s+/).map((x) => parseFloat(x));
+    return {
+      r: c[0] * 255,
+      g: c[1] * 255,
+      b: c[2] * 255,
+      a: alpha === undefined ? 1 : parseFloat(alpha),
+    };
+  }
+  throw new Error(`unparseable colour: ${s}`);
+}
+
+function over(fg: Rgb, bg: Rgb): Rgb {
+  return {
+    r: fg.r * fg.a + bg.r * (1 - fg.a),
+    g: fg.g * fg.a + bg.g * (1 - fg.a),
+    b: fg.b * fg.a + bg.b * (1 - fg.a),
+    a: 1,
+  };
+}
+
+function contrast(a: Rgb, b: Rgb): number {
+  const lin = (v: number) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const lum = (c: Rgb) =>
+    0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+for (const theme of ["built-in dark", "light pack"] as const) {
+  test(`${theme}: a ticked minute box is distinguishable from an unticked one`, async ({
+    mount,
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const cmp = await mount(<ScheduledMessagesCustomStory width={900} />);
+    if (theme === "light pack") {
+      await page.evaluate((pack: Record<string, string>) => {
+        for (const [k, v] of Object.entries(pack))
+          document.documentElement.style.setProperty(k, v);
+      }, LIGHT_PACK);
+    }
+    await openCustomEditor(cmp, page);
+
+    const box = cmp.locator(`[data-testid="${EDIT}-custom-minutes-3"]`);
+    await expect(box).toBeChecked();
+
+    // The tick's colour, and every background painted behind the cell folded
+    // down to the pixels actually on screen.
+    const read = await box.evaluate((el: HTMLElement) => {
+      const layers: string[] = [];
+      let node: HTMLElement | null = el;
+      while (node) {
+        layers.push(getComputedStyle(node).backgroundColor);
+        node = node.parentElement;
+      }
+      return { accent: getComputedStyle(el).accentColor, layers };
+    });
+
+    let bg: Rgb = { r: 255, g: 255, b: 255, a: 1 };
+    for (let i = read.layers.length - 1; i >= 0; i--) {
+      const layer = parseRgb(read.layers[i]);
+      if (layer.a === 0) continue;
+      bg = over(layer, bg);
+    }
+    // `auto` would mean the sheet says nothing and the browser picks — which is
+    // not a fact this guard can measure, and not what the control declares.
+    expect(read.accent).not.toBe("auto");
+    const accent = over(parseRgb(read.accent), bg);
+
+    // 3:1, the non-text threshold for a UI component's state.
+    const ratio = contrast(accent, bg);
+    expect(
+      ratio,
+      `the checked fill sits at ${ratio.toFixed(2)}:1 against the cell it is painted on under the ${theme} — an owner cannot see which minutes are selected`
+    ).toBeGreaterThanOrEqual(3);
+  });
+}

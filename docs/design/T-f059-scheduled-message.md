@@ -367,8 +367,11 @@ jq '.components.schemas.ScheduledMessageCreateDTO             | {properties: (.p
 因為它根本不讀那兩欄——逼它送兩個伺服器會忽略的數字，就是這份 DTO 一直在拒絕的
 「required-but-ignored」歧義。同理，`custom` **一定要**送三組 `custom_*`（少一組或空集合是 422）。
 - 代價講明白：「沒送 hour」從此是一個**表示得出來**的狀態，所以它必須被明文拒絕，
-  而**這條規則在 OpenAPI schema 裡表達不出來**——它只活在各欄位的 `description` 裡，
-  沒有任何生成的 client 擋得住它。`ValidateScheduledMessageWallClockPresence` 是唯一那道閘。
+  而**這條規則在 OpenAPI schema 裡表達不出來**，沒有任何生成的 client 擋得住它。
+  ⚠️ **它散文寫在哪裡是不對稱的，別以為讀那一欄就讀得到**：三組 `custom_*` 的 description
+  各自寫了「REQUIRED when `cadence` is `custom`」，但 `hour` / `minute` 的 description
+  **對條件必填隻字未提**——那半只寫在 DTO 的總描述與 operation 描述裡。
+  `ValidateScheduledMessageWallClockPresence` 是唯一那道閘。
 - 一條**沒有時刻**的排程仍然沒有意義，這一點沒變；變的只是「時刻」對 `custom` 而言
   是三組集合、不是兩個純量。
 

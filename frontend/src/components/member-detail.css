@@ -1664,7 +1664,11 @@
   height: 13px;
   flex: none;
   margin: 0;
-  accent-color: var(--color-indigo);
+  /* The token the repo's other two checkbox grids use (tasks.css,
+     theme-settings.css). --color-indigo sits at ~1.1:1 against --color-card in
+     the built-in dark palette, which on a 60-cell grid whose entire purpose is
+     "which ones did I tick" leaves the checked state effectively invisible. */
+  accent-color: var(--color-accent);
 }
 .mp-schedmsg__setbox span {
   font-variant-numeric: tabular-nums;

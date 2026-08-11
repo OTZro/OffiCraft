@@ -43,7 +43,8 @@ const (
 	// usable ceiling is 999 rather than 1000 because the frontend's
 	// ThemeSettings.test.tsx forges a pack of "every whitelisted key + 1" to prove
 	// an oversized pack is rejected. ⇒ ADDING ONE MORE MESSAGE KEY TURNS THAT TEST
-	// RED, and it fails with `expected +0 to be 2` — nothing in that message points
+	// RED, and it fails with `expected 1 to be 2` (the rejected pack never lands, so
+	// only the built-in row carries that name) — nothing in that message points
 	// back here. Raise this together with its TypeScript twin
 	// (MAX_WORDING_ENTRIES_PER_LANG in frontend/src/lib/themeBundleCore.ts); they
 	// are compared for equality, so moving one alone trades this trap for another.
