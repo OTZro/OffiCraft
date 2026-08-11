@@ -5750,6 +5750,25 @@
         "additionalProperties": false,
         "type": "object"
       },
+      "TaskTitleDTO": {
+        "description": "Correct one task's title in place (MCP ``update_task_title``, T-2ebe). PARTIAL update in ``TaskDescriptionDTO``'s shape: the ONLY field is ``title``, omitting it is a legal no-op that versions nothing, and unknown keys are refused (``additionalProperties: false``) so a caller who reaches for ``name`` or ``summary`` is told rather than ignored. ONE DELIBERATE DIFFERENCE FROM THE DESCRIPTION TWIN, and it is a difference in kind rather than an oversight: an explicit blank (``\"\"`` or whitespace-only) is REFUSED with 400 instead of clearing the field. ``create_task`` has always refused a blank title on the same terms, and an edit door looser than the create door would let a caller reach a state the create door forbids — a task whose only cell on the task list is empty, which is precisely the surface this capability exists to keep true. The value is trimmed of surrounding whitespace before it is stored, again matching create. The write is wholesale within that one field; there is no append form.",
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "title": "TaskTitleDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
       "TaskLearningsPatchDTO": {
         "description": "Anchor-addressed PATCH of a type's learnings (MCP ``patch_task_learnings`` — the learnings twin of ``patch_lessons``): ``{edits: [{old, new}], allow_shrink?}``. The write cost scales with the CHANGE, not the doc — a whole-doc ``write_task_learnings`` stops fitting in one model output as the learnings grow (30k chars observed), so this is the primary write seam and whole-doc replace stays the last resort. ATOMIC — edits apply sequentially to an in-memory copy and any failing anchor (absent or ambiguous ``old``) rejects the ENTIRE batch with a flat 400 and ZERO writes. ``allow_shrink`` (default false) must be set explicitly for a patch that empties the doc or shrinks it to under a tenth of its size — the r-76 wipe-guard posture.",
         "properties": {
@@ -15263,6 +15282,76 @@
           }
         },
         "summary": "Terminate a task (owner/admin agent; the only non-executor status change)."
+      }
+    },
+    "/api/tasks/{task_id}/title": {
+      "post": {
+        "description": "Correct one task's title in place (MCP ``update_task_title``, T-2ebe). The title is the ONLY cell of a task that the task list shows, so before this row existed a card whose scope was later overturned went on advertising its first wording forever: the description could correct itself, the title could not, and the two drifted apart until the card said one thing on the list and the opposite inside. Admitted for the task's EXECUTOR or an admin/owner — the same ``callerMayDriveTask`` gate every other task-driving write uses, 403 otherwise; the CREATOR gets no standing from having created it, exactly as on the description twin. Partial update: a body that omits ``title`` is a legal no-op that versions nothing, and unknown keys are refused rather than dropped. An explicit BLANK (``\"\"`` or whitespace-only) is a 400, NOT a clear — this is the one place this route parts company with the description twin, because ``create_task`` refuses a blank title too and an edit door looser than the create door would let a caller reach a list row with nothing in it. The stored value is trimmed, matching create. DELIBERATELY accepted while the task is CLOSED (completed / terminated / duplicated), for the reason the description twin states at length: a ticket worded wrongly is usually discovered to be wrong after it closed, and correcting its text changes nothing about what it produced — the artifact set, which IS the outcome, stays frozen in both directions. Every write that actually changes the text retains the previous one in the SHARED document-history series (kind ``task_title``, key = the task id), so the newest three revisions stay listable and restorable. 404 for an unknown task.",
+        "operationId": "handle_update_task_title_api_tasks__task_id__title_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskTitleDTO"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Validation error (unified error envelope)."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Client error (unified error envelope)."
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Server error (unified error envelope)."
+          }
+        },
+        "summary": "Correct a task's title (executor/admin; closed tasks included)."
       }
     },
     "/api/theme/fetch": {

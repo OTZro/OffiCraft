@@ -30,6 +30,8 @@ export const DOC_FIELD_ORDER: Record<DocumentKind, readonly string[]> = {
   // T-e271. One field, because a task's description IS one field — there is no
   // second thing a revision of it could carry.
   task_description: ["description"],
+  // T-2ebe. Same shape as the description's, one field for the same reason.
+  task_title: ["title"],
 };
 
 /** Keys a revision may CARRY but that are not content of the document.

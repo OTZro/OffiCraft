@@ -55,6 +55,10 @@ interface UseTasks {
    * CLOSED task too — see the adapter's note on why this one write does not
    * refuse a terminal task. */
   updateDescription: (id: string, description: string) => Promise<void>;
+  /** Correct the task's title (T-2ebe), then refetch. Closed tasks are accepted
+   * here too; a BLANK title is not — the server answers 400 and this rejects,
+   * so the caller can surface it. */
+  updateTitle: (id: string, title: string) => Promise<void>;
   /** 轉派 (T-160e): re-point the task at a member / a freshly minted 外包, then
    * refetch — the move lands the task in `reassigning` and (on an outsource
    * target) changes the worker roster too. */
@@ -283,6 +287,14 @@ export function useTasks(
     [refetch]
   );
 
+  const updateTitle = useCallback(
+    async (id: string, title: string) => {
+      await api.updateTaskTitle(id, title);
+      await refetch();
+    },
+    [refetch]
+  );
+
   const reassign = useCallback(
     async (id: string, input: TaskReassignInput) => {
       await api.reassignTask(id, input);
@@ -318,6 +330,7 @@ export function useTasks(
     markDuplicate,
     setPriority,
     updateDescription,
+    updateTitle,
     reassign,
     sendMessage,
     getDetail,

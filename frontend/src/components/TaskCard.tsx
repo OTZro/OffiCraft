@@ -59,6 +59,7 @@ import {
   useWorkerCodenames,
 } from "../hooks/useWorkerCodenames";
 import { useI18n } from "../i18n";
+import { isHttpStatus } from "../api/errors";
 import type { Member } from "../types";
 import type {
   ChatAttachmentInput,
@@ -149,6 +150,7 @@ export function TaskCard({
   onMarkDuplicate,
   onSetPriority,
   onUpdateDescription,
+  onUpdateTitle,
   onReassign,
   onSendMessage,
   onHydrate,
@@ -180,6 +182,9 @@ export function TaskCard({
    * read-only (no edit affordance), which is what every non-cockpit render of
    * this card gets. */
   onUpdateDescription?: (id: string, description: string) => Promise<void>;
+  /** Correct the task's title in place (T-2ebe). Absent ⇒ the title stays a
+   * plain heading (no edit affordance), same as the description block. */
+  onUpdateTitle?: (id: string, title: string) => Promise<void>;
   /** 轉派 (T-160e): hand the task to a member / a freshly minted 外包. The whole
    * handover is the server's; the dialog only names the target. */
   onReassign: (id: string, input: TaskReassignInput) => Promise<void>;
@@ -606,6 +611,13 @@ export function TaskCard({
   const [descBusy, setDescBusy] = useState(false);
   const [descError, setDescError] = useState<string | null>(null);
   const descRef = useRef<HTMLDivElement>(null);
+  // In-place TITLE editing (T-2ebe) — the description editor's twin, with the
+  // one asymmetry the server has: a blank title is REFUSED, never a clear.
+  const [titleOpen, setTitleOpen] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [titleBusy, setTitleBusy] = useState(false);
+  const [titleError, setTitleError] = useState<string | null>(null);
+  const titleRef = useRef<HTMLDivElement>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -650,6 +662,20 @@ export function TaskCard({
   }, [descOpen, descDraft, view.description]);
 
   useEffect(() => {
+    if (!titleOpen) return;
+    function onDown(e: MouseEvent) {
+      if (titleRef.current?.contains(e.target as Node)) return;
+      // Same rule as the description editor: a CLEAN editor closes on an
+      // outside click, a dirty one does not — the typed text is the only copy.
+      if (titleDraft !== task.title) return;
+      setTitleOpen(false);
+      setTitleError(null);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [titleOpen, titleDraft, task.title]);
+
+  useEffect(() => {
     if (!statusOpen) return;
     function onDown(e: MouseEvent) {
       if (!statusRef.current?.contains(e.target as Node)) setStatusOpen(false);
@@ -691,6 +717,44 @@ export function TaskCard({
       setDescError(t.tasks.descError);
     } finally {
       setDescBusy(false);
+    }
+  }
+
+  function openTitleEditor() {
+    setTitleDraft(task.title);
+    setTitleError(null);
+    setTitleOpen(true);
+  }
+
+  // 🔴 The blank rule, and where it is enforced. The server refuses a blank
+  // title with 400 `title must not be blank`; the cockpit must not be STRICTER
+  // than that (no length rule, no character rule of its own) and must not
+  // silently send one either. So: 儲存 is disabled while the draft trims to
+  // nothing, and this guard refuses in the same breath — a keyboard-driven
+  // click on a disabled-looking button still cannot post the blank.
+  const titleBlank = titleDraft.trim() === "";
+
+  async function doSaveTitle() {
+    if (!onUpdateTitle) return;
+    if (titleBlank) {
+      setTitleError(t.tasks.titleBlank);
+      return;
+    }
+    setTitleBusy(true);
+    try {
+      await onUpdateTitle(task.id, titleDraft);
+      setTitleError(null);
+      setTitleOpen(false);
+    } catch (e) {
+      // Stay OPEN and keep the draft, exactly as the description editor does.
+      // A 400 gets the server's own rule spelled out rather than the generic
+      // "try again", which would be false — retrying an empty title cannot work.
+      console.warn("TaskCard: title save failed", e);
+      setTitleError(
+        isHttpStatus(e, 400) ? t.tasks.titleBlank : t.tasks.titleError
+      );
+    } finally {
+      setTitleBusy(false);
     }
   }
 
@@ -1313,8 +1377,112 @@ export function TaskCard({
 
         {/* Row 2 — the title. Demoted under the badges (v4); still the h3,
             still the card's heading in the a11y tree. */}
-        <div className="task-card__title-line">
-          <h3 className="task-card__title">{task.title}</h3>
+        {/* Row 2 — the title, and since T-2ebe the in-place editor for it. The
+            editor stands where the h3 stands, so what is being corrected is a
+            fact of the layout rather than something a heading has to explain.
+            The AFFORDANCE is expanded-only, the same rule the description block
+            already follows: the collapsed card stays a compact scanning row.
+            The EDITOR itself is not — it holds text the owner typed, and
+            collapsing the card must not be able to destroy that. */}
+        <div className="task-card__title-line" ref={titleRef}>
+          {titleOpen ? (
+            <div
+              className="task-card__title-edit"
+              data-testid="task-title-editor"
+              // Unlike the description block, this editor sits in the card HEAD
+              // — the toggle surface. closest() already exempts the input and
+              // the buttons; a click on the editor's own padding or on its hint
+              // line would otherwise collapse the card out from under a
+              // half-written correction.
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="task-card__desc-hint">{t.tasks.titleEditHint}</div>
+              {/* Only on a terminal card — without it the owner cannot tell
+                  "editing a closed ticket is supported" from "this screen
+                  forgot to stop me". */}
+              {closed && (
+                <div
+                  className="task-card__desc-hint task-card__desc-hint--closed"
+                  data-testid="task-title-closed-note"
+                >
+                  {t.tasks.titleClosedNote}
+                </div>
+              )}
+              <input
+                type="text"
+                className="task-card__title-input"
+                data-testid="task-title-input"
+                aria-label={t.tasks.titleLabel}
+                placeholder={t.tasks.titlePlaceholder}
+                value={titleDraft}
+                disabled={titleBusy}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setTitleOpen(false);
+                    setTitleError(null);
+                  }
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void doSaveTitle();
+                  }
+                }}
+              />
+              <div className="task-card__desc-actions">
+                <button
+                  type="button"
+                  className="task-card__desc-save"
+                  data-testid="task-title-save"
+                  disabled={titleBusy || titleBlank}
+                  onClick={() => void doSaveTitle()}
+                >
+                  {t.tasks.titleSave}
+                </button>
+                <button
+                  type="button"
+                  className="task-card__desc-cancel"
+                  data-testid="task-title-cancel"
+                  disabled={titleBusy}
+                  onClick={() => {
+                    setTitleOpen(false);
+                    setTitleError(null);
+                  }}
+                >
+                  {t.tasks.titleCancel}
+                </button>
+                {/* The SHARED 版本紀錄 entry, its own series over the task id —
+                    separate from the description's three retained revisions. */}
+                <DocumentHistoryEntry
+                  kind="task_title"
+                  docKey={task.id}
+                  title={t.tasks.titleHistoryTitle}
+                  currentContent={{ title: task.title }}
+                  onRestored={() => onHydrate(task.id)}
+                  disabled={titleBusy}
+                />
+              </div>
+              {titleError && (
+                <div className="task-card__error" data-testid="task-title-error">
+                  {titleError}
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              <h3 className="task-card__title">{task.title}</h3>
+              {onUpdateTitle && expanded && (
+                <button
+                  type="button"
+                  className="task-card__desc-editbtn task-card__title-editbtn"
+                  data-testid="task-title-edit"
+                  onClick={openTitleEditor}
+                >
+                  {t.tasks.titleEdit}
+                </button>
+              )}
+            </>
+          )}
         </div>
 
         {/* Below the badge row: an aligned label column (任務類型 / 負責人 /

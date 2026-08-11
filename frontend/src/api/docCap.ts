@@ -94,7 +94,8 @@ export function docCapBlocked(
 }
 
 /** The wire field names each kind's restore runs the cap over. Empty = this
- * kind's restore is never refused on size (global_context / task_description). */
+ * kind's restore is never refused on size (global_context / task_description /
+ * task_title). */
 export const CAPPED_FIELDS: Record<DocumentKind, readonly string[]> = {
   global_context: [],
   // T-ae38: Duty is capped now, on BOTH doors. It was capped on neither, and
@@ -121,6 +122,10 @@ export const CAPPED_FIELDS: Record<DocumentKind, readonly string[]> = {
   // happily accept — the cockpit inventing a refusal is worse than not having
   // one, because there is no way for the owner to tell it is imaginary.
   task_description: [],
+  // EMPTY on purpose (T-2ebe): create_task has never capped a title, and the
+  // edit route deliberately declines to introduce a ceiling only the edit door
+  // would enforce — so its restore runs no cap either.
+  task_title: [],
 };
 
 /**
@@ -186,6 +191,7 @@ export function capForKind(
       return caps.manualLearnings;
     case "global_context":
     case "task_description":
+    case "task_title":
       return undefined;
   }
 }

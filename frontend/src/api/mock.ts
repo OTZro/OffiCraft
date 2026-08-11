@@ -936,7 +936,10 @@ function hasDocumentRow(kind: DocumentKind, key: string): boolean {
   // moment the task is created, so the very first correction already replaces
   // something. Whether that something is worth keeping is snapshotDocument's
   // call (an empty description retains nothing), exactly as on the server.
-  if (kind === "task_description") return tasks.some((t) => t.id === key);
+  // T-2ebe: the title's row is the same TASK row, for the same reason.
+  if (kind === "task_description" || kind === "task_title") {
+    return tasks.some((t) => t.id === key);
+  }
   return documentRows.has(historySlot(kind, key));
 }
 
@@ -1083,6 +1086,16 @@ function snapshotDocument(
       if (!task || task.description === "") return null;
       return { description: task.description };
     }
+    // T-2ebe. NO empty-string branch, and its absence is load-bearing rather
+    // than a copy-paste slip: a task cannot have a blank title (create_task
+    // refuses one and so does this route), so "" would mean the row vanished —
+    // which the not-found arm above reports, not a snapshot claiming there was
+    // no document here. Server twin: taskTitleHistorySnapshot.
+    case "task_title": {
+      const task = tasks.find((t) => t.id === key);
+      if (!task) return null;
+      return { title: task.title };
+    }
   }
 }
 
@@ -1223,6 +1236,16 @@ function applyDocumentHistory(
       const task = tasks.find((t) => t.id === key);
       if (!task) return;
       task.description = content.description ?? "";
+      task.updatedTs = Date.now() / 1000;
+      emitTopic("task");
+      return;
+    }
+    // T-2ebe: the title's own single-column write. Separate series over the
+    // same key, so restoring a title leaves the description exactly as it is.
+    case "task_title": {
+      const task = tasks.find((t) => t.id === key);
+      if (!task) return;
+      task.title = content.title ?? "";
       task.updatedTs = Date.now() / 1000;
       emitTopic("task");
       return;
@@ -2586,6 +2609,46 @@ export const mockApi: Api = {
     if (t.description === description) return t;
     recordDocumentHistory("task_description", id);
     t.description = description;
+    t.updatedTs = Date.now() / 1000;
+    emitTopic("task");
+    return t;
+  },
+
+  async updateTaskTitle(id: string, title: string): Promise<TaskView> {
+    // Mirrors HandleUpdateTaskTitle... (T-2ebe) rule for rule, in the same
+    // guard ORDER the server uses — 404 → (403, which never arises in the
+    // owner's cockpit) → 400 blank → write:
+    //
+    //   * unknown task -> 404 (findTask);
+    //   * NO terminal check, deliberately — a closed task is editable, exactly
+    //     as on the description twin;
+    //   * a BLANK title (empty or whitespace-only) -> 400 `title must not be
+    //     blank`. 🔴 This is the one rule that parts company with the twin, in
+    //     which "" CLEARS the field. A mock that cleared here would let the
+    //     cockpit ship a wipe the server refuses;
+    //   * the value is TRIMMED before it is stored, matching create_task, and
+    //     the unchanged comparison runs AFTER the trim — so re-sending a title
+    //     with a stray trailing space is no change: nothing versioned, no
+    //     `task` delta.
+    const t = findTask(id);
+    const trimmed = title.trim();
+    if (trimmed === "") {
+      throw new ApiError(
+        `http 400 for POST /api/tasks/${id}/title`,
+        400,
+        // The real server answers `validation_error` here (its envelope maps
+        // both 400 and 422 to that code) — pinned by the Go side's
+        // assertErrorEnvelope. An earlier draft said `bad_request`, which made
+        // this fake a FALSE ORACLE for anything that ever branches on the code
+        // rather than the status: component tests would agree with a server
+        // that does not exist.
+        "validation_error",
+        "title must not be blank"
+      );
+    }
+    if (t.title === trimmed) return t;
+    recordDocumentHistory("task_title", id);
+    t.title = trimmed;
     t.updatedTs = Date.now() / 1000;
     emitTopic("task");
     return t;

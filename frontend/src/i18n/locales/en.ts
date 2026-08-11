@@ -185,6 +185,21 @@ export const en: Dict = {
     // reads as the decision it is.
     descClosedNote:
       "A closed task's description can still be corrected (its artifacts are frozen).",
+    // In-place title editing (T-2ebe), the description family's twin. titleBlank
+    // is the ONE rule that differs: a title may not be emptied, because it is
+    // the only cell of the task the list shows.
+    titleLabel: "Title",
+    titleEdit: "Edit title",
+    titleEditHint:
+      "The title is the only part of this task the list shows. Keep it a short statement of what the task is.",
+    titlePlaceholder: "A short statement of what this task is…",
+    titleSave: "Save",
+    titleCancel: "Cancel",
+    titleBlank: "A title cannot be blank.",
+    titleError: "Failed to save the title. Please try again.",
+    titleHistoryTitle: "Task title",
+    titleClosedNote:
+      "A closed task's title can still be corrected (its artifacts are frozen).",
     // Click-to-copy task-no chip (owner 2026-07-19).
     copyTaskNoLabel: "Copy task number",
     taskNoCopied: "Copied",

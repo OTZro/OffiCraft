@@ -250,9 +250,10 @@ func (d *DAL) CountTasksDuplicatingOriginal(originalID string) (int, error) {
 
 // PutTask upserts a task row (the SSE delta is the handler's job).
 //
-// 🔴 `description` IS DELIBERATELY ABSENT FROM THE ON CONFLICT UPDATE LIST
-// (T-e271 node 3). Do not "restore" it — that line is the lost update, and it
-// was measured, not theorised.
+// 🔴 `description` AND `title` ARE DELIBERATELY ABSENT FROM THE ON CONFLICT
+// UPDATE LIST (description: T-e271 node 3; title: T-2ebe). Do not "restore"
+// either — those lines are the lost update, and for description it was
+// measured, not theorised.
 //
 // The hazard is structural, not exotic: this is a whole-row upsert with no
 // optimistic lock, and every task-writing handler is a load-mutate-save
@@ -265,13 +266,27 @@ func (d *DAL) CountTasksDuplicatingOriginal(originalID string) (int, error) {
 // deterministic interleave lost it every time, and two goroutines driving the
 // two real endpoints lost it by round 17 of 60. "Rare" was not true.
 //
-// The fix is an OWNERSHIP BOUNDARY rather than a lock or a retry: the column is
-// written ONLY by SetTaskDescriptionOn (which versions it in the same
-// transaction) and by the INSERT half of this very statement, which is how
-// create_task and the handoff follow-up set it — both mint a fresh id, so
-// neither ever reaches the conflict clause. Single-writer columns cannot be
-// clobbered by a stale whole-row copy, because no stale whole-row copy of them
-// exists. Guarded by TestTaskDescriptionRaceGuardHasTeeth.
+// The fix is an OWNERSHIP BOUNDARY rather than a lock or a retry: each column is
+// written ONLY by its own single-field setter (SetTaskDescriptionOn /
+// SetTaskTitleOn, each of which versions its column in the same transaction) and
+// by the INSERT half of this very statement, which is how create_task and the
+// handoff follow-up set them — both mint a fresh id, so neither ever reaches the
+// conflict clause. Single-writer columns cannot be clobbered by a stale
+// whole-row copy, because no stale whole-row copy of them exists. Guarded by
+// TestTaskDescriptionRaceGuardHasTeeth and TestTaskTitleRaceGuardHasTeeth.
+//
+// 🔴 `title` JOINED THIS CARVE-OUT WHEN IT BECAME EDITABLE (T-2ebe), and the
+// ORDER of those two facts is the whole point. While a title could only be set
+// at birth, listing it in the conflict clause was harmless: the value being
+// replayed was always the value already stored, so a lost update had nothing to
+// lose. Opening an edit door is what turns that same line into the description
+// bug verbatim — an admin changing a task's priority replays the title it
+// happened to read a moment earlier and silently destroys a correction the title
+// endpoint has already answered 200 to. Verified at the time of the change that
+// no production path mutates Title on an EXISTING row (the only writers are the
+// create INSERT, the handoff follow-up's INSERT, and the new setter), so
+// dropping it from the conflict clause changes nothing for any existing caller —
+// it only removes the clobber.
 //
 // ⚠️ SCOPE, stated so nobody reads more safety into this than is here: this
 // removes the hazard for ONE column. Every OTHER column of this row remains a
@@ -297,7 +312,7 @@ func (d *DAL) PutTask(t Task) error {
 		INSERT INTO task (`+taskColumns+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
-			type_key = excluded.type_key, title = excluded.title,
+			type_key = excluded.type_key,
 			dedupe_key = excluded.dedupe_key, inputs = excluded.inputs,
 			status = excluded.status,
 			lock = excluded.lock,
@@ -638,6 +653,55 @@ func taskDescriptionOn(q sqlQuerier, id string) (string, bool, error) {
 		return "", false, err
 	}
 	return description, true, nil
+}
+
+// SetTaskTitleOn writes ONE task's title (plus the updated_ts that makes an
+// already-open cockpit card re-read it) and nothing else, through the caller's
+// executer — so the title edit and the document_history revision it replaces
+// land in the SAME transaction (T-2ebe, api_tasks_title.go). Reports whether a
+// row was actually updated; false means the task is gone, which the caller turns
+// into a 404 rather than silently succeeding.
+//
+// Deliberately NOT PutTask, for the reason spelled out at PutTask's carve-out:
+// a whole-row upsert replays every other column as the caller read it a moment
+// earlier, and it RESURRECTS a task deleted in that window because an upsert on
+// a missing row inserts. Correcting a ticket's title carries no opinion about
+// its status, priority or executor.
+//
+// The caller trims; this writes what it is given. Keeping the trim at the door
+// rather than here is deliberate — the door is also where a blank is refused
+// (400), and splitting "what counts as blank" from "what gets stored" across two
+// layers is how the two drift apart.
+func SetTaskTitleOn(ex sqlExecer, id, title string, updatedTS float64) (bool, error) {
+	res, err := ex.Exec(
+		`UPDATE task SET title = ?, updated_ts = ? WHERE id = ?`,
+		title, updatedTS, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// taskTitleOn reads ONE task's title from inside the caller's transaction — the
+// document-history snapshot reader (T-2ebe), twin of taskDescriptionOn. It
+// re-reads rather than trusting a value the handler folded earlier: the retained
+// revision must be the state this write actually replaced, otherwise two writers
+// racing on one task both retain the same ancestor and the revision written
+// between them becomes unrecoverable.
+func taskTitleOn(q sqlQuerier, id string) (string, bool, error) {
+	var title string
+	err := q.QueryRow(`SELECT title FROM task WHERE id = ?`, id).Scan(&title)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return title, true, nil
 }
 
 // TouchTaskUpdatedTS bumps ONE task's updated_ts and nothing else (T-cc3e).

@@ -1426,6 +1426,33 @@ export interface Api {
    */
   updateTaskDescription(id: string, description: string): Promise<TaskView>;
   /**
+   * Correct one task's title (`POST /api/tasks/{id}/title`, T-2ebe) — the ONLY
+   * cell of a task the task list renders, and so the half of a card most likely
+   * to be read alone. Before this route existed a card whose scope was later
+   * narrowed kept advertising its first wording forever while the description
+   * corrected itself, and the two ended up contradicting each other.
+   *
+   * The description twin's exact shape — same executor-or-admin gate (403
+   * otherwise; the creator gets no standing), same 404 on an unknown task, and
+   * the same deliberate acceptance of a CLOSED task (see that method's note at
+   * length; do not "align" it by refusing terminal tasks in the UI).
+   *
+   * 🔴 ONE DIFFERENCE, and it is a difference in kind rather than an oversight:
+   * an explicit BLANK title (empty or whitespace-only) is a 400 `title must not
+   * be blank`, NOT a clear. `create_task` refuses a blank title on the same
+   * terms, and an edit door looser than the create door would let a caller
+   * reach a task-list row with nothing in it. The stored value is TRIMMED,
+   * matching create — and the server compares after trimming, so re-sending a
+   * title with a stray trailing space is correctly seen as no change.
+   *
+   * There is NO length cap, on this door or on create. Every change that
+   * actually alters the text retains the previous one as a `task_title`
+   * revision keyed on the task id — a series separate from `task_description`
+   * over that same key. Returns the task after the change; the SSE `task` delta
+   * also fans.
+   */
+  updateTaskTitle(id: string, title: string): Promise<TaskView>;
+  /**
    * Reassign a task (`POST /api/tasks/{id}/reassign`) — owner + 特助 only
    * (the server gates it; a member/worker caller is a 403). The server expires
    * the task's waiting cards, rewinds non-terminal steps to pending, dismisses

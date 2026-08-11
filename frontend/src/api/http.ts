@@ -1135,6 +1135,30 @@ export const httpApi: Api = {
     return toTask(wire);
   },
 
+  async updateTaskTitle(id: string, title: string): Promise<TaskView> {
+    // POST /api/tasks/{task_id}/title {title} -> TaskDTO (T-2ebe). The field is
+    // ALWAYS sent for the same reason the description twin always sends its
+    // own: an absent `title` is "change nothing" on the wire, so omitting it
+    // would turn a write into a silent no-op that still answers 200.
+    //
+    // 🔴 Unlike the twin, a blank title does NOT clear the field — the server
+    // answers 400 `title must not be blank`, and the caller surfaces that. The
+    // seam does not pre-empt the refusal by trimming to a no-op here: inventing
+    // a local refusal would hide which door said no, and a local SUCCESS would
+    // be a lie. The server also trims what it stores, so the task that comes
+    // back may differ from what was sent by exactly that whitespace.
+    //
+    // Other faces: 404 (unknown task) and 403 (neither executor nor
+    // admin-capable). A closed task is accepted on purpose.
+    const wire = unwrap(
+      await client.POST("/api/tasks/{task_id}/title", {
+        params: { path: { task_id: id } },
+        body: { title },
+      }),
+    );
+    return toTask(wire);
+  },
+
   async reassignTask(id: string, input: TaskReassignInput): Promise<TaskView> {
     // POST /api/tasks/{task_id}/reassign {target, note?} -> TaskDTO. The whole
     // handover is the server's (card expiry / step rewind / old-worker dismiss

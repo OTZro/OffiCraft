@@ -3107,6 +3107,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/title": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Correct a task's title (executor/admin; closed tasks included).
+         * @description Correct one task's title in place (MCP ``update_task_title``, T-2ebe). The title is the ONLY cell of a task that the task list shows, so before this row existed a card whose scope was later overturned went on advertising its first wording forever: the description could correct itself, the title could not, and the two drifted apart until the card said one thing on the list and the opposite inside. Admitted for the task's EXECUTOR or an admin/owner — the same ``callerMayDriveTask`` gate every other task-driving write uses, 403 otherwise; the CREATOR gets no standing from having created it, exactly as on the description twin. Partial update: a body that omits ``title`` is a legal no-op that versions nothing, and unknown keys are refused rather than dropped. An explicit BLANK (``""`` or whitespace-only) is a 400, NOT a clear — this is the one place this route parts company with the description twin, because ``create_task`` refuses a blank title too and an edit door looser than the create door would let a caller reach a list row with nothing in it. The stored value is trimmed, matching create. DELIBERATELY accepted while the task is CLOSED (completed / terminated / duplicated), for the reason the description twin states at length: a ticket worded wrongly is usually discovered to be wrong after it closed, and correcting its text changes nothing about what it produced — the artifact set, which IS the outcome, stays frozen in both directions. Every write that actually changes the text retains the previous one in the SHARED document-history series (kind ``task_title``, key = the task id), so the newest three revisions stay listable and restorable. 404 for an unknown task.
+         */
+        post: operations["handle_update_task_title_api_tasks__task_id__title_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/theme/fetch": {
         parameters: {
             query?: never;
@@ -7141,6 +7161,14 @@ export interface components {
         TaskDescriptionDTO: {
             /** Description */
             description?: string | null;
+        };
+        /**
+         * TaskTitleDTO
+         * @description Correct one task's title in place (MCP ``update_task_title``, T-2ebe). PARTIAL update in ``TaskDescriptionDTO``'s shape: the ONLY field is ``title``, omitting it is a legal no-op that versions nothing, and unknown keys are refused (``additionalProperties: false``) so a caller who reaches for ``name`` or ``summary`` is told rather than ignored. ONE DELIBERATE DIFFERENCE FROM THE DESCRIPTION TWIN, and it is a difference in kind rather than an oversight: an explicit blank (``""`` or whitespace-only) is REFUSED with 400 instead of clearing the field. ``create_task`` has always refused a blank title on the same terms, and an edit door looser than the create door would let a caller reach a state the create door forbids — a task whose only cell on the task list is empty, which is precisely the surface this capability exists to keep true. The value is trimmed of surrounding whitespace before it is stored, again matching create. The write is wholesale within that one field; there is no append form.
+         */
+        TaskTitleDTO: {
+            /** Title */
+            title?: string | null;
         };
         /**
          * TaskLearningsPatchDTO
@@ -14564,6 +14592,59 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_update_task_title_api_tasks__task_id__title_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskTitleDTO"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
