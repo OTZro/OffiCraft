@@ -32,11 +32,28 @@
 // the one that hits its cap, so the guard requires what it hides to be
 // reachable inside its own scroll box. Every cell is 13x13 CSS px.
 //
-// MUTANTS, measured (restored from a scratchpad backup + shasum, never
-// `git checkout --`) — see the report at the end of the ticket for the full
-// table; the shape that matters is that a guard rewritten to read class names
-// and counts is green on a broken sheet, so the rectangles below are the entire
-// reason this file catches anything.
+// MUTANTS, measured on THESE assertions (restored from a scratchpad backup +
+// shasum, never `git checkout --`):
+//
+//   mutant                                          this guard (10)
+//   `offered` re-derived per render instead of      🔴 2 — both minute-cell
+//     frozen at mount (unticking 7 deletes its           tests, `expect(locator)
+//     cell from under the pointer)                       .not.toBeChecked()`
+//   `.mp-schedmsg__setgrid--minutes{max-height:26px}` 🔴 1 — narrow only, and the
+//     (the sheet-level "cells need inner scrolling")     message names the cell
+//                                                        and the 24px
+//   全選 hands over `offered.slice(0, 1)`            🔴 2 — both months tests
+//   the 幾月 group is not rendered at all            🔴 6 (＋ tsc red)
+//
+// ⚠️ The capped-grid mutant reddens the NARROW arm only, and that is correct
+// rather than a miss: at 900px all thirteen cells fit in one 26px row, so
+// nothing is out of view there. It is also why the width is an input.
+// ⚠️ NOT re-measured for round 2: round 1 recorded that rewriting these
+// assertions as class names + counts leaves them green on a broken sheet. The
+// reasoning still applies to the rectangles below — `toHaveClass` and
+// `toHaveCount` cannot see a cell that is 24px outside its container — but the
+// experiment was run against the OLD assertions, so do not cite it as a
+// measurement of these.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { ScheduledMessagesCustomStory } from "./stories/ScheduledMessagesCustomStory";
 
