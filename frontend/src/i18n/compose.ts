@@ -72,6 +72,16 @@ export interface Messages {
   agentPendingChange: (value: string) => string;
   workerMachineMovingTo: (machine: string) => string;
   agentWindDownForChange: (by: string) => string;
+  // ── 定期訊息 · custom cadence (T-49e7) ──
+  schedCustomDays: (days: number[]) => string;
+  schedCustomHours: (hours: number[]) => string;
+  schedCustomMinutes: (minutes: number[]) => string;
+  schedCustomSummary: (
+    days: number[],
+    hours: number[],
+    minutes: number[]
+  ) => string;
+  schedMinuteStep: (step: number) => string;
   // ── machine picker ──
   machineOfflineOption: (name: string) => string;
   // ── monitor › accounts ──
@@ -105,6 +115,7 @@ export function makeMessages(t: Dict, language: Lang): Messages {
   const replies = t.replies;
   const chat = t.chat;
   const mp = t.mp;
+  const sched = t.mp.schedmsg;
   const mon = t.monitor;
   const mach = t.monitor.machine;
   const set = t.settings;
@@ -112,7 +123,10 @@ export function makeMessages(t: Dict, language: Lang): Messages {
   const diff = t.diff;
   // The list separator between two codes: a join, not vocabulary.
   const listSep = language === "zh" ? "、" : ", ";
-  return {
+  // Named rather than returned inline: the row summary is literally the three
+  // group phrases joined, so it composes them through this same object instead
+  // of keeping a second copy of the every-set/empty-set rules.
+  const messages: Messages = {
     // 「量於 3d 前」/「measured 3d ago」— the age rides beside the usage number
     // so a frozen snapshot can never read as a live one (T-3b90).
     //
@@ -183,6 +197,42 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     agentWindDownForChange: (by) =>
       `${mp.windDownForChangeLabel}${sp}·${sp}${mp.windDownByLabel} ${by} ${mp.windDownEffectSuffix}`,
 
+    // 定期訊息 · 自訂頻率 (T-49e7). The whole-set day phrase reuses the cadence
+    // menu's own 每天 / Daily rather than keeping a second word for the same
+    // idea — one leaf, so a theme that re-words it cannot re-word only half.
+    // Each of the three phrases stands ALONE under
+    // its own group heading, so none of them may borrow grammar from a
+    // neighbour; the row summary is those same three joined by a separator,
+    // which is a join and not vocabulary. A whole set reads as 「每天」/
+    // 「每小時」/「每分鐘」 rather than listing 24 or 60 numbers, and an EMPTY set
+    // says so out loud — it is a refusable state, never a silent "all".
+    schedCustomDays: (days) =>
+      days.length === 0
+        ? sched.customNone
+        : days.length === 31
+          ? sched.cadenceDaily
+          : `${sched.customDaysLead}${days.join(listSep)}${sched.customDaysTail}`,
+    schedCustomHours: (hours) =>
+      hours.length === 0
+        ? sched.customNone
+        : hours.length === 24
+          ? sched.customEveryHour
+          : `${sched.customHoursLead}${hours.join(listSep)}${sched.customHoursTail}`,
+    schedCustomMinutes: (minutes) =>
+      minutes.length === 0
+        ? sched.customNone
+        : minutes.length === 60
+          ? sched.customEveryMinute
+          : `${sched.customMinutesLead}${minutes.join(listSep)}${sched.customMinutesTail}`,
+    schedCustomSummary: (days, hours, minutes) =>
+      [
+        messages.schedCustomDays(days),
+        messages.schedCustomHours(hours),
+        messages.schedCustomMinutes(minutes),
+      ].join(" · "),
+    schedMinuteStep: (step) =>
+      `${sched.customStepLead}${step}${sched.customStepTail}`,
+
     machineOfflineOption: (name) =>
       `${name}${sp}${t.machine.picker.offlineOptionSuffix}`,
 
@@ -245,6 +295,7 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     // still knows (lib/lineDiff returns the counts even when it declines).
     diffTooLarge: (lines) => `${diff.tooLargeLead}${lines}${diff.tooLargeTail}`,
   };
+  return messages;
 }
 
 /** The former lookup-map leaf is a plain object leaf now (the shape

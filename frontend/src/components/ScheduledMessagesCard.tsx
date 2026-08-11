@@ -45,6 +45,31 @@ const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const MINUTES = Array.from({ length: 60 }, (_, i) => i);
 const DAYS_OF_MONTH = Array.from({ length: 31 }, (_, i) => i + 1);
 
+/** The intervals an owner actually asks for, offered as one click each on the
+ * minute group. They are SHORTCUTS, not values: each expands to the explicit
+ * wall-clock minutes it names (每 20 分 → 0/20/40), because the wire has no
+ * "interval" and an interval that does not divide an hour cannot be one. */
+const MINUTE_STEPS = [5, 10, 15, 20, 30];
+
+function minutesForStep(step: number): number[] {
+  const out: number[] = [];
+  for (let m = 0; m < 60; m += step) out.push(m);
+  return out;
+}
+
+function sameSet(a: number[], b: number[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/** Toggle one value in a sorted set. Sorted on the way in, so two orderings of
+ * the same choice compare equal on the wire and a re-save does not re-aim the
+ * delivery cursor. */
+function toggleIn(values: number[], v: number): number[] {
+  return values.includes(v)
+    ? values.filter((x) => x !== v)
+    : [...values, v].sort((x, y) => x - y);
+}
+
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
@@ -70,9 +95,16 @@ interface ScheduleFormValues {
   dayOfMonth: number;
   hour: number;
   minute: number;
+  customDays: number[];
+  customHours: number[];
+  customMinutes: number[];
   timezone: string;
 }
 
+/** 🔴 The three custom sets start EMPTY, and that is a form that cannot be
+ * submitted until the owner picks. Seeding them with "everything" would put a
+ * schedule nobody chose one click from going live, and seeding them with a
+ * guess is the silent-default the wire refuses on purpose. */
 const BLANK_FORM: ScheduleFormValues = {
   label: "",
   body: "",
@@ -81,6 +113,9 @@ const BLANK_FORM: ScheduleFormValues = {
   dayOfMonth: 1,
   hour: 9,
   minute: 0,
+  customDays: [],
+  customHours: [],
+  customMinutes: [],
   timezone: DEFAULT_TIMEZONE,
 };
 
@@ -93,6 +128,9 @@ function formValuesOf(m: ScheduledMessage): ScheduleFormValues {
     dayOfMonth: m.dayOfMonth,
     hour: m.hour,
     minute: m.minute,
+    customDays: m.customDays,
+    customHours: m.customHours,
+    customMinutes: m.customMinutes,
     timezone: m.timezone,
   };
 }
@@ -100,6 +138,7 @@ function formValuesOf(m: ScheduledMessage): ScheduleFormValues {
 /** The wire payload for a create AND for a save — same fields either way, so an
  * edit can reach every setting a create can. */
 function wirePayload(v: ScheduleFormValues): ScheduledMessageCreateInput {
+  const custom = v.cadence === "custom";
   return {
     label: v.label.trim(),
     body: v.body.trim(),
@@ -108,14 +147,162 @@ function wirePayload(v: ScheduleFormValues): ScheduledMessageCreateInput {
     // sending the other one would write a value nothing will ever apply.
     ...(v.cadence === "weekly" ? { dayOfWeek: v.dayOfWeek } : {}),
     ...(v.cadence === "monthly" ? { dayOfMonth: v.dayOfMonth } : {}),
-    hour: v.hour,
-    minute: v.minute,
+    // `custom` reads neither hour nor minute — it reads the three sets, and
+    // sending a wall-clock reading it ignores is the required-but-ignored
+    // ambiguity the DTO went out of its way to remove.
+    ...(custom
+      ? {
+          customDays: v.customDays,
+          customHours: v.customHours,
+          customMinutes: v.customMinutes,
+        }
+      : { hour: v.hour, minute: v.minute }),
     timezone: v.timezone.trim(),
   };
 }
 
+/** 🔴 The empty set is refused HERE as well as by the server. The server's 422
+ * is the backstop; letting the owner press 建立 and find out afterwards is the
+ * part that reads as a bug. */
 function incomplete(v: ScheduleFormValues): boolean {
-  return v.body.trim() === "" || v.timezone.trim() === "";
+  if (v.body.trim() === "" || v.timezone.trim() === "") return true;
+  return (
+    v.cadence === "custom" &&
+    (v.customDays.length === 0 ||
+      v.customHours.length === 0 ||
+      v.customMinutes.length === 0)
+  );
+}
+
+interface NumberSetPickerProps {
+  /** `<idPrefix>-custom-<name>-*` is this group's whole test-id namespace. */
+  idPrefix: string;
+  name: "days" | "hours" | "minutes";
+  label: string;
+  /** The plain-language sentence for the CURRENT selection, rendered above the
+   * boxes: 60 ticked checkboxes are not something anyone reads back. */
+  summary: string;
+  options: number[];
+  values: number[];
+  onChange: (next: number[]) => void;
+  /** Shortcut row + collapsed detail grid. The minute group has 60 boxes, which
+   * laid out flat is a wall nobody wants to aim at for the thing they almost
+   * always want ("every 20 minutes"). */
+  steps?: number[];
+  stepLabel?: (step: number) => string;
+  detailShowLabel?: string;
+  detailHideLabel?: string;
+  selectAllLabel: string;
+  clearLabel: string;
+}
+
+/** One explicit set of wall-clock numbers, with 全選 / 清除 and a live summary.
+ * 全選 lists every option — the wire has no "all" value and an empty set means
+ * "refused", so the only honest way to say "every day" is to name every day. */
+function NumberSetPicker({
+  idPrefix,
+  name,
+  label,
+  summary,
+  options,
+  values,
+  onChange,
+  steps,
+  stepLabel,
+  detailShowLabel,
+  detailHideLabel,
+  selectAllLabel,
+  clearLabel,
+}: NumberSetPickerProps) {
+  const p = `${idPrefix}-custom-${name}`;
+  // Collapsed by default only where there IS a shortcut row to stand in for it:
+  // hiding the boxes with nothing offered in their place would just hide the
+  // control. The group opens itself when the current selection is not one of
+  // the shortcuts, so an owner who picked odd minutes still sees them.
+  const collapsible = Boolean(steps && steps.length > 0);
+  const matchesAStep = Boolean(
+    steps?.some((st) => sameSet(values, minutesForStep(st)))
+  );
+  const [detailOpen, setDetailOpen] = useState(
+    collapsible ? values.length > 0 && !matchesAStep : true
+  );
+  const gridOpen = !collapsible || detailOpen;
+
+  return (
+    <div className="mp-schedmsg__setgroup" data-testid={p}>
+      <div className="mp-schedmsg__sethead">
+        <span className="mp-schedmsg__fieldlabel">{label}</span>
+        <span className="mp-schedmsg__spacer" />
+        <button
+          type="button"
+          className="mp-schedmsg__setaction"
+          onClick={() => onChange([...options])}
+          data-testid={`${p}-all`}
+        >
+          {selectAllLabel}
+        </button>
+        <button
+          type="button"
+          className="mp-schedmsg__setaction"
+          onClick={() => onChange([])}
+          data-testid={`${p}-clear`}
+        >
+          {clearLabel}
+        </button>
+      </div>
+      <div className="mp-schedmsg__setsummary" data-testid={`${p}-summary`}>
+        {summary}
+      </div>
+      {collapsible && (
+        <div className="mp-schedmsg__quickrow">
+          {steps!.map((st) => {
+            const on = sameSet(values, minutesForStep(st));
+            return (
+              <button
+                key={st}
+                type="button"
+                aria-pressed={on}
+                className={`mp-schedmsg__quickbtn${on ? " mp-schedmsg__quickbtn--on" : ""}`}
+                onClick={() => onChange(minutesForStep(st))}
+                data-testid={`${p}-step-${st}`}
+              >
+                {stepLabel!(st)}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {collapsible && (
+        <button
+          type="button"
+          className="mp-schedmsg__setmore"
+          aria-expanded={detailOpen}
+          onClick={() => setDetailOpen((v) => !v)}
+          data-testid={`${p}-detail-toggle`}
+        >
+          {detailOpen ? detailHideLabel : detailShowLabel}
+        </button>
+      )}
+      {gridOpen && (
+        <div
+          className={`mp-schedmsg__setgrid mp-schedmsg__setgrid--${name}`}
+          data-testid={`${p}-grid`}
+        >
+          {options.map((o) => (
+            <label key={o} className="mp-schedmsg__setbox">
+              <input
+                type="checkbox"
+                checked={values.includes(o)}
+                onChange={() => onChange(toggleIn(values, o))}
+                data-testid={`${p}-${o}`}
+              />
+              <span>{o}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface ScheduleFieldsProps {
@@ -136,7 +323,7 @@ function ScheduleFields({
   onChange,
   autoFocus,
 }: ScheduleFieldsProps) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   const s = t.mp.schedmsg;
   const weekdayNames = weekdayNamesOf(s);
 
@@ -184,6 +371,7 @@ function ScheduleFields({
           <option value="daily">{s.cadenceDaily}</option>
           <option value="weekly">{s.cadenceWeekly}</option>
           <option value="monthly">{s.cadenceMonthly}</option>
+          <option value="custom">{s.cadenceCustom}</option>
         </select>
       </label>
       {/* The day field belongs to exactly one cadence, so the other one is not
@@ -231,6 +419,64 @@ function ScheduleFields({
           )}
         </label>
       )}
+      {/* 自訂: the three sets ARE the schedule, so the single wall-clock
+          reading below is not rendered at all — a visible 時/分 pair the server
+          ignores would read as part of the choice. */}
+      {values.cadence === "custom" && (
+        <>
+          <NumberSetPicker
+            idPrefix={idPrefix}
+            name="days"
+            label={s.customDaysLabel}
+            summary={msg.schedCustomDays(values.customDays)}
+            options={DAYS_OF_MONTH}
+            values={values.customDays}
+            onChange={(next) => onChange({ customDays: next })}
+            selectAllLabel={s.customSelectAll}
+            clearLabel={s.customClear}
+          />
+          <NumberSetPicker
+            idPrefix={idPrefix}
+            name="hours"
+            label={s.customHoursLabel}
+            summary={msg.schedCustomHours(values.customHours)}
+            options={HOURS}
+            values={values.customHours}
+            onChange={(next) => onChange({ customHours: next })}
+            selectAllLabel={s.customSelectAll}
+            clearLabel={s.customClear}
+          />
+          <NumberSetPicker
+            idPrefix={idPrefix}
+            name="minutes"
+            label={s.customMinutesLabel}
+            summary={msg.schedCustomMinutes(values.customMinutes)}
+            options={MINUTES}
+            values={values.customMinutes}
+            onChange={(next) => onChange({ customMinutes: next })}
+            steps={MINUTE_STEPS}
+            stepLabel={msg.schedMinuteStep}
+            detailShowLabel={s.customMinuteDetailShow}
+            // The generic collapse verb the message body already uses — the
+            // same action, and a second leaf saying 「收合」 would just be a word
+            // a theme could re-word in one place and not the other.
+            detailHideLabel={s.bodyCollapse}
+            selectAllLabel={s.customSelectAll}
+            clearLabel={s.customClear}
+          />
+          {(values.customDays.length === 0 ||
+            values.customHours.length === 0 ||
+            values.customMinutes.length === 0) && (
+            <div
+              className="mp-schedmsg__skiphint"
+              data-testid={`${idPrefix}-custom-empty-hint`}
+            >
+              {s.customEmptyHint}
+            </div>
+          )}
+        </>
+      )}
+      {values.cadence !== "custom" && (
       <div className="mp-schedmsg__timerow">
         <label className="mp-schedmsg__field">
           <span className="mp-schedmsg__fieldlabel">{s.hourLabel}</span>
@@ -263,6 +509,7 @@ function ScheduleFields({
           </select>
         </label>
       </div>
+      )}
       <label className="mp-schedmsg__field">
         <span className="mp-schedmsg__fieldlabel">{s.timezoneLabel}</span>
         <input
@@ -309,7 +556,7 @@ interface ScheduledMessagesCardProps {
  * WorkerDetailPanel). A second copy of this JSX is the bug, not the feature.
  */
 export function ScheduledMessagesCard({ memberId }: ScheduledMessagesCardProps) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   const s = t.mp.schedmsg;
   const {
     items,
@@ -339,7 +586,13 @@ export function ScheduledMessagesCard({ memberId }: ScheduledMessagesCardProps) 
 
   const weekdayNames = weekdayNamesOf(s);
 
+  // 🔴 The `custom` branch is not optional decoration. Without it a custom
+  // schedule falls through to the `daily` floor and the row states 「每天」 —
+  // a wall-clock claim about a schedule that may fire 72 times a day, with
+  // nothing on screen saying otherwise.
   function cadenceText(m: ScheduledMessage): string {
+    if (m.cadence === "custom")
+      return msg.schedCustomSummary(m.customDays, m.customHours, m.customMinutes);
     if (m.cadence === "weekly") return s.weeklyOn(weekdayNames[m.dayOfWeek] ?? "");
     if (m.cadence === "monthly") return s.monthlyOn(m.dayOfMonth);
     return s.cadenceDaily;
@@ -575,11 +828,19 @@ export function ScheduledMessagesCard({ memberId }: ScheduledMessagesCardProps) 
                           <TrashIcon size={15} />
                         </button>
                       </div>
-                      <div className="mp-schedmsg__when">
+                      <div
+                        className="mp-schedmsg__when"
+                        data-testid={`mp-schedmsg-when-${m.id}`}
+                      >
                         <span>{cadenceText(m)}</span>
-                        <span className="mp-schedmsg__time">
-                          {pad2(m.hour)}:{pad2(m.minute)}
-                        </span>
+                        {/* `custom` reads no single wall-clock slot, so there
+                            is no one time to print — the summary beside it
+                            already names every reading it fires at. */}
+                        {m.cadence !== "custom" && (
+                          <span className="mp-schedmsg__time">
+                            {pad2(m.hour)}:{pad2(m.minute)}
+                          </span>
+                        )}
                         <span className="mp-schedmsg__tz">{m.timezone}</span>
                       </div>
                       {/* The clamp is a class on the SAME full text node — the

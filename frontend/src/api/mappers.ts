@@ -1333,6 +1333,12 @@ export function toScheduledMessage(w: WireScheduledMessage): ScheduledMessage {
     dayOfMonth: w.day_of_month ?? 1,
     hour: w.hour,
     minute: w.minute,
+    // The three `custom` sets are additive-optional on the wire (a reader
+    // written before T-49e7 must keep working), so an absent one lands as the
+    // EMPTY set — which is exactly what every non-custom cadence carries.
+    customDays: w.custom_days ?? [],
+    customHours: w.custom_hours ?? [],
+    customMinutes: w.custom_minutes ?? [],
     timezone: w.timezone ?? "",
     status: w.status === "disabled" ? "disabled" : "enabled",
     lastFiredSlot: w.last_fired_slot ?? "",
