@@ -95,13 +95,20 @@ The sub-response `(status, raw_body)` wraps into a `CallToolResult`:
   in `text`).
 - An exception escaping the loopback itself maps to JSON-RPC error `-32603`.
 
-## 4. The tool catalog — reflected from the route table
+## 4. The tool catalog — derived, never hand-listed
 
-The catalog is NOT a hand-maintained list: it MUST be derived from the implementation's
-single route table, keeping every route **not** flagged `mcp_exclude`, in table
-order. At freeze this yields **37 tools** (of 54 routes; 17 route rows
-are `mcp_exclude` — ops probes, login/mint, the SSE stream, installer/binary, the MCP
-endpoint itself).
+The catalog is NOT a hand-maintained list: it MUST be derived from the authoritative
+per-operation definitions, keeping every operation **not** excluded, in declared order.
+Today that authority is the `x-mcp` block carried by each operation in `spec/openapi.json`:
+`include: true` puts the operation on the tool surface and `order` fixes its position;
+`include: false` keeps it off (ops probes, login/mint, the SSE stream, installer/binary, the
+MCP endpoint itself). That included set mirrors the implementation's single route table
+(the rows **not** flagged `mcp_exclude`), and `server/ocserverd/spec_catalog_conformance_test.go`
+confronts the route table, `spec/openapi.json` and the catalog against each other so the
+three cannot disagree in silence. **Counts are deliberately not written down here** — how the
+committed catalog is produced and pinned is §5; the numbers come from re-running those tools.
+At M1 freeze this yielded **37 tools** (of 54 route rows; 17 `mcp_exclude`) — a historical
+figure, not today's.
 
 Each tool descriptor is exactly:
 
@@ -129,21 +136,37 @@ One flat `{type:"object", properties, required?, $defs?}` object, merged in this
 The frozen implementation reflects handler signatures at runtime; a rewrite MAY make the
 schemas explicit/static — **byte-equality of the emitted catalog against
 `spec/mcp-catalog.json` is the contract**, not the derivation mechanism (though deriving
-from the route table is strongly recommended to prevent a second drifting list).
+from the authoritative definitions — see §5 — is required precisely to prevent a second
+drifting list).
 
-## 5. `spec/mcp-catalog.json` — the frozen snapshot
+## 5. `spec/mcp-catalog.json` — the committed generated snapshot
 
-- ⚠️ **THERE IS NO GENERATOR IN THIS TREE.** This section used to name a
-  `bin/dump-mcp-catalog` that emits the payload and a CI step that diffs a fresh dump
-  against the committed file; neither exists (`ls bin/dump-mcp-catalog`, and `bin/ci.sh`
-  prints no such step — `grep -n '^echo "\[ci\] ('  bin/ci.sh`). The committed
-  `spec/mcp-catalog.json` is hand-maintained and is the frozen wire truth.
-- What actually pins it today is the other direction: ocserverd serves `tools/list`
-  straight out of the committed snapshot (`server/ocserverd/assets.go` + `mcp.go`), so the
-  descriptor surface cannot drift from the file by construction, and
-  `conformance/test_mcp.py` asserts a LIVE `tools/list` equals the snapshot's `tools`
-  array element-wise. Changing the tool surface stays spec-first: edit the snapshot
-  (owner walkthrough) → then the code.
+- **It is generated, not hand-edited.** `bin/gen-mcp-catalog` renders it from the `x-mcp`
+  metadata on `spec/openapi.json`'s operations; the committed file is that render checked
+  in. Run `bin/gen-mcp-catalog` (it writes `spec/mcp-catalog.json` by default; pass a path
+  to render elsewhere) and commit the output in the same batch as the `spec/openapi.json`
+  edit that caused it.
+- **A byte-diff gate stops the committed file going stale.** `make drift-mcp-catalog`
+  re-renders into a temp file and `diff -u`s it against the committed bytes — wired into
+  `bin/ci.sh` and into the drift cell of `.github/workflows/ci.yml`. A **separate** guard,
+  `bin/tests/mcp-catalog-generator.sh` (dispatched from `bin/tests/run.sh`), drives the
+  generator with mutated inputs and requires it to refuse the lie. The two answer different
+  questions — *has the committed file drifted from its source* vs *is the generator still
+  honest* — and neither substitutes for the other: a provably correct generator still leaves
+  a stale catalog on disk if nobody re-runs it, and that stale file is what the wire serves.
+- The other direction is pinned as well: ocserverd serves `tools/list` straight out of the
+  committed snapshot (`server/ocserverd/assets.go` + `mcp.go`), so the descriptor surface
+  cannot drift from the file by construction, and `conformance/test_mcp.py` asserts a LIVE
+  `tools/list` equals the snapshot's `tools` array element-wise.
+- Changing the tool surface therefore stays spec-first, and **the first edit is no longer
+  this file**: edit the operation's `x-mcp` in `spec/openapi.json` (owner walkthrough) →
+  `bin/gen-mcp-catalog` → commit both → then the code.
+- ⚠️ **Transitional (T-2590):** `x-mcp.legacy.descriptor` still carries each tool's
+  descriptor as a verbatim JSON fragment, which is what makes the render byte-identical to
+  the catalog frozen at M1. Until those fragments are unfolded into real derivation from the
+  DTO/param definitions, changing a tool's wire shape means editing that fragment — the
+  generator cross-checks it against `x-mcp.name` / `x-mcp.description` and refuses when they
+  disagree, so the two cannot silently diverge.
 - JSON key order within an object is not significant on the live wire; the committed file
   is kept sorted-key/2-space/trailing-newline so it byte-diffs cleanly by hand.
 
