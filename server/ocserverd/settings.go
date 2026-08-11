@@ -325,11 +325,17 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 	if v, err := d.GetSetting(settingOutsourceMaxParallel); err != nil {
 		return out, err
 	} else if v != nil {
+		// SAME bounds as the PATCH face — one predicate, one wording
+		// (outsourceParallelInRange / outsourceParallelRangeMsg in
+		// api_settings.go). This used to apply the generic non-negative-integer
+		// check, which belongs to timestamp-shaped keys: it rejected -1, a value
+		// the write face, the UI and the docs all call legal, so saving it
+		// succeeded and the next start died here.
 		n, err := strconv.Atoi(*v)
-		if err != nil || n < 0 {
+		if err != nil || !outsourceParallelInRange(n) {
 			return out, fmt.Errorf(
-				"settings %s: not a non-negative integer: %q",
-				settingOutsourceMaxParallel, *v)
+				"settings %s: %s: %q",
+				settingOutsourceMaxParallel, outsourceParallelRangeMsg, *v)
 		}
 		out.outsourceMaxParallel = n
 	}
