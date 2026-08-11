@@ -55,6 +55,32 @@ sg_scrub_names() {
   done
 }
 
+# _sg_scrub_filter — stdin is one variable NAME per line; print (space
+# separated) the ones that belong to the harness namespace.
+#
+# 🔴 WHY THIS IS A NAMED FUNCTION AND NOT AN INLINE LOOP. It used to live inside
+# the `$( )` on the names_left= line below, as a single-line
+# `case … ) … ; break ;; esac`. bash 3.2 — the /bin/bash on every stock macOS —
+# CANNOT PARSE THAT, and the parse happens at EXPANSION time, so `bash -n` sees
+# nothing and the file loads fine right up to the moment the function is called.
+# MEASURED on this machine (3.2.57 vs 5.3.9): under 3.2 the substitution died
+# with `syntax error near unexpected token 'newline'`, then `set -u` hit
+# `n: unbound variable`, and sg_scrub_assert returned 1 — i.e. actors/live.sh
+# refuses to spawn, ONE HOP BEFORE THE MONEY IS SPENT, and the failure looks
+# exactly like a machine that never came online. Which bash actors/live.sh gets
+# is decided by PATH (`#!/usr/bin/env bash`): a Mac without Homebrew bash, or
+# any trimmed launchd/cron PATH, gets 3.2.
+sg_scrub_filter() {
+  local n p
+  while IFS= read -r n; do
+    for p in $SG_SCRUB_PREFIXES; do
+      case "$n" in
+        "$p"*) printf '%s ' "$n"; break ;;
+      esac
+    done
+  done
+}
+
 # sg_scrub_env — run a command with the harness namespace removed.
 #   sg_scrub_env env FOO=bar /path/to/ocwarden run
 # Everything the child IS meant to get is spelled out by the caller after this.
@@ -99,11 +125,7 @@ sg_scrub_assert() {
     fi
   done
   names_left="$(printf '%s' "$after" | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' \
-                | while IFS= read -r n; do
-                    for p in $SG_SCRUB_PREFIXES; do
-                      case "$n" in "$p"*) printf '%s ' "$n"; break ;; esac
-                    done
-                  done)"
+                | sg_scrub_filter)"
   if [[ -n "$names_left" ]]; then
     leaked=$(( leaked + 1 ))
     echo "[seven_gate] FATAL: harness-namespaced variables survive into the child environment: $names_left — the scrub is a list again, not a namespace." >&2

@@ -288,12 +288,17 @@ scan_scene_text() { # scan_scene_text NEEDLE -> prints hit count
   hits=$(( hits + $(scan_scene_files "$needle") ))
   printf '%s' "$hits"
 }
+# ⚠️ `find -L`: plain `find` does not descend into a SYMLINKED directory, so a
+# file behind one was outside "every file this run has written so far"
+# (measured on the tests_guard walks that share this shape). At this point the
+# run dir holds only what the harness itself has written, so following links
+# cannot wander somewhere large.
 scan_scene_files() { # scan_scene_files NEEDLE -> prints hit count over $RUN_DIR
   local needle="$1" hits=0 f
   while IFS= read -r f; do
     [[ "$(basename "$f")" == "scene-image.png" ]] && continue
     hits=$(( hits + $(grep -o -a -F "$needle" "$f" 2>/dev/null | wc -l | tr -d ' ') ))
-  done < <(find "$RUN_DIR" -type f 2>/dev/null | sort)
+  done < <(find -L "$RUN_DIR" -type f 2>/dev/null | sort)
   printf '%s' "$hits"
 }
 CONTROL_HITS="$(scan_scene_text "$NONCE")"

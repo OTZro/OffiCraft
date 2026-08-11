@@ -109,7 +109,17 @@ bundle，跑在 `bin/ci.sh` 的第 (0) 階，不起任何服務。
   （`OC_SG_INTERVAL`，預設 1 秒），journal 就沒抓到中間態，這一格會為了**載體的理由**變紅。
   失敗訊息**逐字寫著這件事**，要讀的人先去看 `journal.ndjson` 與輪詢間隔，不要先怪 agent。
   緩解不是靠祈禱：collector 從開機前就起、整場都在輪詢，而路徑本身在步驟與收尾之間夾著一次
-  ⑥的卡（owner 回卡才解得開 `waiting_owner`）。**但這一條沒有在真跑上實測過**（本輪沒跑）。
+  ⑥的卡（owner 回卡才解得開 `waiting_owner`）。
+  🔴 **這一段以前寫「但這一條沒有在真跑上實測過」，現在不能那樣寫了——它已經被量出來會發生。**
+  第二輪獨立覆核（2026-08-11）用**真的 `collect.py`（`--interval 1`）＋ 真的 `judge.py` ＋ 一支
+  只服務 collector 端點的替身 server** 實測：一個每一步都回報、順序正確的**誠實** agent，
+  「第一步 done → 收尾」間隔 **3.0s 時⑤綠、0.05s 時⑤紅**（同一支 agent，只是快）。
+  而且同一輪量到：**「快的誠實者」與「全程不動、收尾一次翻完的作弊者」兩份 journal 逐位元組相同**
+  ⇒ ⑤紅的時候，它分不出這兩者；反過來，作弊者只要在兩個動作之間慢過一個輪詢間隔就會綠。
+  ⚠️ 上面那個「⑥的卡」緩解在 `OC_SG_SKIP_STEP=reply_card` 那一輪**整個消失**。
+  ⇒ **今天⑤量到的是「動作之間有沒有超過一個輪詢間隔」，不是「有沒有邊做邊報」。**
+  這一格要怎麼改（改讀 server 自己的時間戳、或降級成不判生死的觀察行）是**owner 手上待裁的問題**，
+  本輪刻意沒有動它的碼——⑤ 已經連續兩個判定設計失敗，第三個不該是又一次直接換上去。
 - 單步計畫**照樣過**：只要那一步 done 的當下收尾還沒回報。
 - 它擋不住「邊做邊報但其實是照抄」這一類語意問題——這一格量的是時序，不是內容。
 - `tests_guard` 案例 21b-i 釘「⑤紅⑦綠造得出來」，**而且釘那份 fixture 是 server 產得出來的狀態**
@@ -373,6 +383,23 @@ CI 絕對不能做的事。所以守衛不能是「跑跑看」,必須是**在�
   不是回頭當清單用。案例 23c 用植進 `lib/scrub.sh` 的同型錯字釘住這條射程。
 - **同型掃描**結果:同一次改寫製造了**兩個**,第二個在 friction 段(`$OC_SG_FRICTION_WAITs`),
   真跑那次還沒走到就先死在第一個。兩個都修了。
+- 🔴 **同一格的第二個病:「綁得對」不等於「這台機器的 bash 讀得懂」。** 這些腳本的 shebang 是
+  `#!/usr/bin/env bash`,**解析到哪一支 bash 由 PATH 決定**;原廠 macOS 的 `/bin/bash` 是 **3.2.57**。
+  **實測(2026-08-11,`68e3bfd1`)**:`lib/scrub.sh` 把過濾器寫成 `$( )` **裡面**一行 `case … esac`,
+  bash 3.2 parse 不了 ⇒ `sg_scrub_assert` 當場死在函式中間、`live.sh` **在花錢前一跳拒絕 spawn**,
+  而失敗的樣子跟「一台從沒上線的機器」一模一樣。**三道守衛當時全瞎**:`bash -n` 看不見
+  (命令替換的內容只在**展開**時 parse——這件事現在是案例 26 的一條斷言)、varcheck 查綁定不查語法、
+  案例 26 用 `env -i PATH="$PATH"` **繼承開發者的 PATH** ⇒ 永遠只測到 bash 5。
+  現在兩條:**23e** 要求 seven_gate 底下每一支 `.sh` 都能被**原廠 `/bin/bash` 靜態 parse**
+  (mutant:一個 bash 4 才有的 `|&`,原廠 bash 拒絕、負控制要求同一支 binary 收下一支普通腳本);
+  **26a-bis** 把 scrub 整套 assert **釘死在 `/bin/bash` ＋ `PATH=/usr/bin:/bin`** 跑一次,
+  並用「把那段 inline `case` 放回去」的 mutant 同時證明三件事——3.2 下拿不到乾淨 spawn、
+  bash 5 下逐字全綠、而且 `/bin/bash -n` 也照樣放行。
+- ⚠️ **`find` 的射程有一個縫**:三個 walk(案例 23 varcheck、案例 24 禁令、`run.sh` 的檔案洩漏掃描)
+  原本都是**沒有 `-L` 的 `find`**,而那**走不進 symlink 目錄** ⇒ 一支同時帶 `$VARs` 錯字與禁令形狀、
+  藏在 symlink 後面的 `.sh`,兩道守衛全綠(2026-08-11 實測)。三個都改成 `find -L`;
+  symlink loop 也量過:`/usr/bin/find -L` 照樣終止、每個真檔只列一次(GNU 系會對 loop 印錯誤並 rc=1,
+  而這三處都只讀 stdout、不看 find 的 rc)。
 - ⚠️ **守衛的射程**:它是**名字層級**的,而且**不做完整的 bash 引號解析**——所以它適用於這個載體的
   腳本,**不適合指著 `tests_guard/run.sh` 那種「內容大多是在談論別的腳本」的檔**(那裡的 `$x` 住在
   單引號 fixture 與 sed 程式裡,看起來跟真的展開一模一樣)。單引號區段**刻意不剝除**:剝了會讓
@@ -630,13 +657,13 @@ ocwarden／agent 用同一支 binary、同一組 argv 跑著的機器上。**
   另外三次刻意讓一格不發生——`OC_SG_SKIP_STEP=` `reply_card` / `peer_message` / `image_answer`——
   都 rc=1 並精準點名那一格（`runs/sayno-*`、`runs/saynopeer-*`、`runs/saynoimage-*`），而且
   **其餘格子照樣各自判**（跳過⑨時⑧仍綠）。live actor 那條路徑一次都沒跑過。
-  ⚠️ **⑤改判定那一輪又在隔離站上跑了四次**（stub，`:8791`，沒有起任何 agent、沒有花錢）：
-  baseline **九格全綠 rc=0**（⑤的證據逐字是「advanced through its plan: step(s)
-  ['走完七步', '回報收尾'] reached done, in plan order (finished_ts […]), and they are the
-  plan's first 2」）；`OC_SG_SKIP_STEP=step_done` ⇒ **rc=1、⑤FAIL 且首紅點名⑤**
-  （同一輪⑦也紅，但⑤排在前面——**改之前這一輪是⑤PASS、首紅點名⑦**）；
-  另外兩輪確認沒有誤傷：`skip=closeout` ⇒ ⑤**仍綠**、首紅點名⑦，
-  `skip=reply_card` ⇒ ⑤**仍綠**、首紅點名⑥。
+  🔴 **這裡本來有一段「⑤改判定那一輪又在隔離站上跑了四次」的四輪實測（含 `skip=reply_card`
+  ⇒ ⑤仍綠），2026-08-11 刪掉了——那四輪量的是 a2296332 的⑤，不是今天這個⑤。**
+  證據是它引用的⑤逐字證據（「… in plan order (finished_ts …), and they are the plan's first 2」）
+  屬於已經被刪掉的「前綴＋順序」判定：`grep -c "advanced through its plan" judge.py` = **0**
+  （2026-08-11 自跑）。放在「⑤改判定那一輪」標題底下，讀起來就是「新⑤已經在真站上驗過四輪」，
+  而下一個人會據此**跳過**「新⑤在 `skip=reply_card` 上還綠不綠」這個檢查——那正好是新⑤最容易
+  誤紅的那一輪。**今天這個⑤在隔離站上一輪都沒跑過**，這一行不補上任何沒量過的替代宣稱。
 - 這支不在 `run_all.sh` 裡、也不在 `bin/ci.sh` 裡。CI 守的是**判定邏輯**與載體的幾條靜態不變式
   （`tests_guard` 案例 21：21a–21e 判定與 friction 措辭、21b-i ⑤紅⑦綠造得出來**且那份 fixture 可達**、
   21b-ii 多開票時警語會出現在最後一行、21b-iii replan ＋ 並行亂序必須是綠的、

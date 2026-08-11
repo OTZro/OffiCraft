@@ -2133,13 +2133,22 @@ fi
 # nobody thought to add a ninth line here. So the scope is now the same QUERY
 # case 24 uses (it picks up the next file somebody adds) plus a floor, because a
 # walk that finds nothing passes every assertion by having none.
+#
+# ⚠️ `find -L`, NOT plain `find`: a plain walk does not DESCEND INTO A SYMLINKED
+# DIRECTORY, so the query's "every .sh under seven_gate/" was not true of a file
+# behind one. MEASURED (2026-08-11, both walks): a .sh carrying a `$VARs` typo
+# AND a banned `pgrep`, planted under `lib/zzsymdir -> <tmpdir>`, left this case
+# and case 24 completely green. `-L` also costs nothing here: with a symlink
+# LOOP planted, /usr/bin/find -L still terminated and listed each real file once
+# (measured; GNU-style finds print a "filesystem loop" error to stderr and exit
+# 1, but the pipelines below read stdout and never look at find's rc).
 SG_VARCHECK="$SG_DIR/lib/varcheck.py"
 SG_VARFILES=()
 _sg_varscanned=0
 while IFS= read -r _sg_varf; do
   SG_VARFILES+=("$_sg_varf")
   _sg_varscanned=$(( _sg_varscanned + 1 ))
-done < <(find "$SG_DIR" -name '*.sh' -type f | sort)
+done < <(find -L "$SG_DIR" -name '*.sh' -type f | sort)
 [[ "$_sg_varscanned" -ge 6 ]] \
   && ok "seven_gate: varcheck's scope is the directory — it walked $_sg_varscanned .sh files under seven_gate/ (not a roll-call somebody has to remember to extend)" \
   || bad "seven_gate: varcheck only found $_sg_varscanned .sh file(s) under $SG_DIR — a walk that finds nothing passes silently, which is exactly how this check lost its reach for lib/scrub.sh"
@@ -2152,8 +2161,17 @@ for _sg_varmust in actors/live.sh lib/ownedkill.sh lib/scrub.sh; do
 done
 
 # 23a) the shipped harness is clean.
-python3 "$SG_VARCHECK" "${SG_VARFILES[@]}" >/dev/null 2>&1
-check "seven_gate: every variable reference in the harness scripts is bound (no unbound-variable landmine)" "0" "$?"
+# The output is KEPT, not sent to /dev/null: varcheck already prints file, line
+# and variable name (23b/23c assert on exactly that), and this cell used to throw
+# all of it away — so a real typo in a real file produced "want '0' got '1'" and
+# nothing else, while the two mutant cells right below it named their variable.
+# A red that does not say WHERE is a red somebody has to reproduce by hand.
+_vc_ship_out="$(python3 "$SG_VARCHECK" "${SG_VARFILES[@]}" 2>&1)"; _vc_ship_rc=$?
+if [[ "$_vc_ship_rc" -eq 0 ]]; then
+  ok "seven_gate: every variable reference in the harness scripts is bound (no unbound-variable landmine)"
+else
+  bad "seven_gate: every variable reference in the harness scripts is bound (no unbound-variable landmine) — varcheck rc=$_vc_ship_rc: $(printf '%s' "$_vc_ship_out" | head -5 | tr '\n' ' ')"
+fi
 
 # 23b) THE MUTANT — put the exact typo back and the guard must go red, naming it.
 # Without this, a varcheck.py that returned 0 unconditionally would satisfy 23a
@@ -2221,6 +2239,57 @@ if [[ -n "$_pf_line" && -n "$_spend_line" && "$_pf_line" -lt "$_spend_line" ]]; 
   ok "seven_gate: live.sh's pre-spend preflight (line $_pf_line) runs before the spend point (line $_spend_line)"
 else
   bad "seven_gate: live.sh has no PRE-SPEND PREFLIGHT ahead of the activate that starts the spending (preflight=${_pf_line:-none} spend=${_spend_line:-none})"
+fi
+
+# 23e) …AND IT MUST PARSE UNDER THE BASH THAT ACTUALLY RUNS IT.
+#
+# 🔴 THE HOLE THIS CLOSES. varcheck answers "is every name bound"; it says
+# nothing about SYNTAX. And the syntax that matters is not this developer's
+# bash: every one of these scripts is `#!/usr/bin/env bash`, so WHICH bash runs
+# them is decided by PATH — a Mac without Homebrew bash, or any trimmed
+# launchd/cron PATH, resolves to the stock /bin/bash, which on macOS is still
+# 3.2.57 (this repo already has a launchd-empty-PATH boot-death in its history).
+# MEASURED at 68e3bfd1: lib/scrub.sh — the file that runs at the PRE-SPEND hop —
+# could not run under 3.2 at all, while the whole suite was green here.
+#
+# ⚠️ SAID NARROWLY, BECAUSE THIS CHECK IS WEAKER THAN IT LOOKS: `-n` parses the
+# file, and a command substitution's CONTENTS are parsed at EXPANSION time, not
+# at file-parse time. So `-n` did NOT see the 68e3bfd1 bug (measured, and pinned
+# as an assertion in case 26). This cell catches the class `-n` can see — a
+# construct that is valid in bash 4+/5 and rejected outright by 3.2. The
+# behavioural half of the same exposure lives in case 26, which runs the scrub
+# under the stock interpreter for real.
+SG_STOCK_BASH="/bin/bash"
+if [[ ! -x "$SG_STOCK_BASH" ]]; then
+  bad "seven_gate: there is no executable $SG_STOCK_BASH on this host, so the stock-interpreter parse check cannot run (23e is testing nothing)"
+  bad "seven_gate: (23e mutant skipped — no stock bash)"
+  bad "seven_gate: (23e control skipped — no stock bash)"
+else
+  _sg_stockver="$("$SG_STOCK_BASH" -c 'echo "${BASH_VERSION%%(*}"')"
+  _sg_synbad=""
+  for _sg_synf in "${SG_VARFILES[@]}"; do
+    "$SG_STOCK_BASH" -n "$_sg_synf" 2>/dev/null || _sg_synbad="$_sg_synbad ${_sg_synf#$SG_DIR/}"
+  done
+  check "seven_gate: every .sh under seven_gate/ parses under the STOCK $SG_STOCK_BASH ($_sg_stockver), not just this shell's bash ($BASH_VERSION) — nothing here is green because of what is early on somebody's PATH" \
+    "" "$_sg_synbad"
+  # THE MUTANT, and it is the whole point of pinning the interpreter: a shape
+  # that the developer's bash accepts and the stock one rejects. `|&` is bash 4.
+  SG_SYNMUT="$SHIMDIR/sg-syntax-mut.sh"
+  printf '#!/usr/bin/env bash\necho hi |%s cat\n' '&' > "$SG_SYNMUT"
+  "$SG_STOCK_BASH" -n "$SG_SYNMUT" 2>/dev/null
+  check "MUT-bash4syntax: a bash-4-only construct is REJECTED by the stock $SG_STOCK_BASH (so the cell above is a live check, not a walk over files nothing parses)" \
+    "2" "$?"
+  # …and the negative control, because "rejects everything" and "rejects this"
+  # look identical: a trivially valid file must be ACCEPTED by the same binary.
+  # (The other half — that THIS shell's bash accepts `|&` and 3.2 does not — is
+  # deliberately NOT an assertion: tests_guard itself gets run under whatever
+  # bash is first on PATH, and this suite's assertion COUNT must not depend on
+  # the host. MEASURED by hand 2026-08-11 on this machine: `/bin/bash -n` rc=2
+  # vs `bash -n` (5.3.9) rc=0 on the identical file.)
+  printf '#!/usr/bin/env bash\necho hi\n' > "$SHIMDIR/sg-syntax-ok.sh"
+  "$SG_STOCK_BASH" -n "$SHIMDIR/sg-syntax-ok.sh" 2>/dev/null
+  check "MUT-bash4syntax: …and the same stock binary ACCEPTS an ordinary script (it is not rejecting everything, which would make the cell above vacuous)" \
+    "0" "$?"
 fi
 
 # ── 24) T-42bb: the harness may only kill what it can PROVE it created ───────
@@ -2450,12 +2519,16 @@ fi
 # Comments are stripped first: several of these files NAME the banned shape in
 # their headers to explain why it is banned, and a scan that reddens on its own
 # documentation is a scan somebody deletes. Those comments must stay green.
+#
+# ⚠️ `find -L` for the same reason case 23 spells out: plain `find` does not
+# descend into a symlinked directory, so "every .sh under seven_gate/" was false
+# of anything behind one — measured green with a banned shape planted there.
 _sg24_scanned=0
 while IFS= read -r _sg24_f; do
   _sg24_scanned=$(( _sg24_scanned + 1 ))
   _sg24_bans="$(_sg_code_only "$_sg24_f" | grep -cE '(^|[^[:alnum:]_])(pkill|killall|pgrep)([^[:alnum:]_]|$)' || true)"
   check "seven_gate: ${_sg24_f#$SG_DIR/} uses no pkill/killall/pgrep in code (name is not identity)" "0" "${_sg24_bans:-0}"
-done < <(find "$SG_DIR" -name '*.sh' -type f | sort)
+done < <(find -L "$SG_DIR" -name '*.sh' -type f | sort)
 # A roll-call of zero files would pass every assertion above by having none. The
 # floor is a floor, not a count: it must not need editing when a script is added,
 # only when the walk itself breaks.
@@ -2465,7 +2538,7 @@ done < <(find "$SG_DIR" -name '*.sh' -type f | sort)
 # …and the three files the old two-name scan could not see are each named, so a
 # future narrowing of the walk cannot quietly drop them.
 for _sg24_must in run.sh lib/carrier.sh actors/live.sh; do
-  find "$SG_DIR" -name '*.sh' -type f | grep -Fqx "$SG_DIR/$_sg24_must" \
+  find -L "$SG_DIR" -name '*.sh' -type f | grep -Fqx "$SG_DIR/$_sg24_must" \
     && ok "seven_gate: …including $_sg24_must (a mutant here used to be SILENT)" \
     || bad "seven_gate: $_sg24_must is not in the banned-shape scan's reach — that is the file that took the live server down"
 done
@@ -2700,11 +2773,11 @@ if [[ ! -f "$SG_SCRUB" ]]; then
 else
   cp "$SG_SCRUB" "$SG26/scrub.sh"
   # 26a) the child environment is really clean, and the check can really see.
-  _sg26() { # _sg26 <lib> -> "<assert-rc>|<secret hits in child env>|<harness names in child env>"
-    env -i PATH="$PATH" HOME="${HOME:-/tmp}" \
+  _sg26() { # _sg26 <lib> [interpreter] [PATH] -> "<assert-rc>|<secret hits>|<harness names>"
+    env -i PATH="${3:-$PATH}" HOME="${HOME:-/tmp}" \
         OC_SG_IMAGE_ANSWER=481902 OC_SG_SCENE_NONCE=sg-nonce-deadbeef \
         SG_TOKEN=owner-token-abc \
-        bash -c '
+        "${2:-bash}" -c '
 set -uo pipefail
 . "$1" || exit 9
 sg_scrub_assert "481902" "sg-nonce-deadbeef" "owner-token-abc" >/dev/null 2>&1; a=$?
@@ -2714,6 +2787,61 @@ printf "%s|%s|%s\n" "$a" "$h" "$n"' _ "$1"
   }
   check "seven_gate: with the scrub in place, the environment the warden (and therefore the agent) would inherit carries none of ②⑧⑨'s answers" \
     "0|0|0" "$(_sg26 "$SG26/scrub.sh")"
+  # 26a-bis) THE SAME THING UNDER THE INTERPRETER THIS ACTUALLY RUNS ON.
+  #
+  # 🔴 THE CELL ABOVE WAS BLIND FOR A REASON WORTH KEEPING WRITTEN DOWN: it says
+  # `env -i PATH="$PATH"`, i.e. it inherits the DEVELOPER'S PATH, so it only ever
+  # exercised whatever bash is early on it (5.3.9 here). actors/live.sh is
+  # `#!/usr/bin/env bash`, so on a Mac without Homebrew bash — or under any
+  # trimmed launchd/cron PATH — the interpreter is the stock /bin/bash, 3.2.57.
+  # MEASURED at 68e3bfd1: this file's names_left= filter was written as a
+  # one-line `case` inside `$( )`, which 3.2 cannot parse; sg_scrub_assert died
+  # mid-function and live.sh refused to spawn ONE HOP BEFORE THE SPEND, looking
+  # exactly like a machine that never came online — and this suite was green.
+  # So the PATH is pinned to /usr/bin:/bin and the interpreter is named.
+  if [[ -x "$SG_STOCK_BASH" ]]; then
+    check "seven_gate: …and the same holds under the stock $SG_STOCK_BASH with a pinned PATH (the hop that refuses to spawn must work on a stock macOS, not just where Homebrew bash is first on PATH)" \
+      "0|0|0" "$(_sg26 "$SG26/scrub.sh" "$SG_STOCK_BASH" /usr/bin:/bin)"
+    # MUT-inlinecase — the 68e3bfd1 shape put back, verbatim. Three cells,
+    # because the interesting fact is the DISAGREEMENT between interpreters.
+    awk '{ if ($0 ~ /\| sg_scrub_filter\)"$/) {
+             print "                | while IFS= read -r n; do";
+             print "                    for p in $SG_SCRUB_PREFIXES; do";
+             print "                      case \"$n\" in \"$p\"*) printf '"'"'%s '"'"' \"$n\"; break ;; esac";
+             print "                    done";
+             print "                  done)\"" } else print }' \
+        "$SG26/scrub.sh" > "$SG26/scrub-inline.sh"
+    if ! grep -q 'in "\$p"\*) printf' "$SG26/scrub-inline.sh"; then
+      bad "seven_gate: MUT-inlinecase did not apply to lib/scrub.sh — the names_left= pipeline moved, so 26a-bis is testing nothing (fix the awk)"
+      bad "seven_gate: (MUT-inlinecase second cell skipped — mutant did not apply)"
+      bad "seven_gate: (MUT-inlinecase third cell skipped — mutant did not apply)"
+    else
+      _sg26_inl32="$(_sg26 "$SG26/scrub-inline.sh" "$SG_STOCK_BASH" /usr/bin:/bin)"
+      _sg26_inl32_clean=no; [[ "$_sg26_inl32" == "0|0|0" ]] && _sg26_inl32_clean=yes
+      check "MUT-inlinecase: with the filter written back as a one-line case inside \$( ), the stock $SG_STOCK_BASH never reaches a clean spawn (got '${_sg26_inl32:-<the assert died mid-function, there is not even an rc>}')" \
+        "no" "$_sg26_inl32_clean"
+      # …and the disagreement itself. The UNPINNED form of the cell above (the
+      # one that says `PATH="$PATH"` and plain `bash`) reports this same file
+      # perfectly clean on bash 4+ — that blindness is the whole reason the
+      # pinned cell exists. The expectation is written per major version because
+      # tests_guard is itself run by whatever bash is first on PATH, and this
+      # suite's assertion COUNT and RESULT must not depend on the host: run this
+      # file under 3.2 and the unpinned interpreter IS the stock one, so it
+      # agrees with the pinned cell instead of disagreeing with it.
+      _sg26_unpinned_exp="0|0|0"
+      [[ "${BASH_VERSINFO[0]}" -lt 4 ]] && _sg26_unpinned_exp=""
+      check "MUT-inlinecase: …and the UNPINNED interpreter (this shell's bash $BASH_VERSION) reports what its major version predicts on the identical file — on 4+ that is a spotless '0|0|0', which is exactly the blindness the pinned cell was added to remove" \
+        "$_sg26_unpinned_exp" "$(_sg26 "$SG26/scrub-inline.sh")"
+      "$SG_STOCK_BASH" -n "$SG26/scrub-inline.sh" 2>/dev/null
+      check "MUT-inlinecase: …and even the stock binary's own \`-n\` passes it (a command substitution is parsed when it is EXPANDED) — which is why 23e's static parse is not enough on its own" \
+        "0" "$?"
+    fi
+  else
+    bad "seven_gate: no executable $SG_STOCK_BASH — the scrub is only ever exercised under whatever bash is first on PATH"
+    bad "seven_gate: (MUT-inlinecase skipped — no stock bash)"
+    bad "seven_gate: (MUT-inlinecase skipped — no stock bash)"
+    bad "seven_gate: (MUT-inlinecase skipped — no stock bash)"
+  fi
   # 26b) MUTANT — the derivation severed, the assertion must REFUSE and NAME it.
   # Without this, 26a is satisfied by an environment that never had the secrets.
   sed 's/^sg_scrub_names() {$/sg_scrub_names() { return 0;/' \
@@ -2783,9 +2911,12 @@ echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 # (2026-08-11, hole 191).
 #
 # SO IT IS NOW SET NEAR THE COUNT, WITH DELIBERATE SLACK, AND IT IS EXPECTED TO
-# BE EDITED. 291 today, floor 288: three assertions of room. The slack is
-# measured, not guessed — deleting the whole of case 26 (8 assertions) gives
-# PASS=283, which is FATAL and named at 288 and was GREEN at 280. Read the
+# BE EDITED. 298 today, floor 295: three assertions of room. (It was 291/288
+# before 2026-08-11's bash-3.2 round added 23e's three cells and case 26's four;
+# the floor moved with it in the same commit, which is the edit this block asks
+# for.) The slack is measured, not guessed — deleting the whole of case 26 (then
+# 8 assertions) gave PASS=283, which was FATAL and named at 288 and GREEN at
+# 280. Read the
 # guarantee narrowly: a change that removes FOUR OR MORE assertions is loud; one
 # that removes three or fewer is not, and nothing here knows which case blocks
 # are that small.
@@ -2820,7 +2951,7 @@ echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 # printed the marker with no floor evaluated at all: MEASURED, floor block
 # deleted and the trailing echo kept → PASS=153 FAIL=0 rc=0, last line
 # `[tests_guard] all green`, `bin/ci.sh` all green. Keep it in the branch.
-PASS_FLOOR=288
+PASS_FLOOR=295
 if [[ "$PASS" -lt "$PASS_FLOOR" ]]; then
   echo "[tests_guard] FATAL: only $PASS assertion(s) ran, floor is $PASS_FLOOR." >&2
   echo "[tests_guard] FAIL=0 with a collapsed PASS count means cases went missing, not that they passed." >&2
