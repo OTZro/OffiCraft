@@ -906,8 +906,15 @@ export interface WebhookCreateInput {
 // ── 定期訊息 · scheduled messages (T-f059) ────────────────────────────────────
 
 /** How often a scheduled message repeats. `weekly` reads `dayOfWeek`,
- * `monthly` reads `dayOfMonth`, `daily` reads neither. */
-export type ScheduleCadence = "daily" | "weekly" | "monthly";
+ * `monthly` reads `dayOfMonth`, `daily` reads neither — those three fire once a
+ * day at the single wall-clock reading `hour`/`minute` names.
+ *
+ * `custom` (T-49e7) reads none of those four: it reads the three sets
+ * `customDays`/`customHours`/`customMinutes` and fires at EVERY reading where
+ * all three hold at once, so it is the only cadence that can fire more than
+ * once a day. Each set is EXPLICIT — "every day" means listing every day; an
+ * empty set is a 422, never a silent "all" and never a silent "never". */
+export type ScheduleCadence = "daily" | "weekly" | "monthly" | "custom";
 
 /** One recurring message bound to a member (view model of
  * `ScheduledMessageDTO`) — the clock-driven twin of a webhook endpoint: when a
@@ -932,6 +939,17 @@ export interface ScheduledMessage {
   dayOfMonth: number;
   hour: number;
   minute: number;
+  /** Days of the month `custom` fires on (1–31), sorted and deduplicated.
+   * EMPTY for every other cadence, and never empty for `custom`. Membership is
+   * decided day by day: a listed day the month lacks is dropped for THAT DAY
+   * only, so [1,15,31] in February fires on the 1st and the 15th. */
+  customDays: number[];
+  /** Hours of the day `custom` fires on (0–23), read in `timezone`. Empty for
+   * every other cadence; never empty for `custom`. */
+  customHours: number[];
+  /** Minutes of the hour `custom` fires on (0–59), read in `timezone`. Empty
+   * for every other cadence; never empty for `custom`. */
+  customMinutes: number[];
   /** IANA zone name the wall-clock slot is computed in. */
   timezone: string;
   status: "enabled" | "disabled";
@@ -941,10 +959,15 @@ export interface ScheduledMessage {
 }
 
 /** Create-form payload for a new scheduled message (mirrors
- * `ScheduledMessageCreateDTO`). `body`/`cadence`/`hour`/`minute`/`timezone` are
- * REQUIRED on the wire — a schedule with no time of day is meaningless, and a
- * defaulted timezone would sooner or later be read as "wherever the server
- * happens to run". `label` omitted = no label; `dayOfWeek` omitted = 0;
+ * `ScheduledMessageCreateDTO`). `body`/`cadence`/`timezone` are REQUIRED
+ * UNCONDITIONALLY — a defaulted timezone would sooner or later be read as
+ * "wherever the server happens to run". The rest is required or ignored
+ * ACCORDING TO `cadence`: `daily`/`weekly`/`monthly` need `hour`+`minute`
+ * (omitting either is a 422, never a silent midnight), `custom` needs the three
+ * sets instead and never reads `hour`/`minute`/`dayOfWeek`/`dayOfMonth`. That
+ * is why `hour`/`minute` are optional HERE and required in practice for the
+ * calendar cadences — a `custom` schedule must not have to send two values it
+ * never reads. `label` omitted = no label; `dayOfWeek` omitted = 0;
  * `dayOfMonth` omitted = 1. */
 export interface ScheduledMessageCreateInput {
   label?: string;
@@ -952,8 +975,12 @@ export interface ScheduledMessageCreateInput {
   cadence: ScheduleCadence;
   dayOfWeek?: number;
   dayOfMonth?: number;
-  hour: number;
-  minute: number;
+  hour?: number;
+  minute?: number;
+  /** REQUIRED (and non-empty) when `cadence` is `custom`; ignored otherwise. */
+  customDays?: number[];
+  customHours?: number[];
+  customMinutes?: number[];
   timezone: string;
 }
 
@@ -968,6 +995,12 @@ export interface ScheduledMessageUpdate {
   dayOfMonth?: number;
   hour?: number;
   minute?: number;
+  /** Switching a schedule TO `custom` must supply all three sets in the SAME
+   * request unless the stored row already carries them; switching AWAY leaves
+   * them stored and unread, so switching back does not lose the choice. */
+  customDays?: number[];
+  customHours?: number[];
+  customMinutes?: number[];
   timezone?: string;
   status?: "enabled" | "disabled";
 }

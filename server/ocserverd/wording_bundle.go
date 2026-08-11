@@ -35,11 +35,25 @@ const (
 	// maxWordingValueLen caps one override string (runes). A UI label, not a
 	// document — 200 runes is generous for any menu/button/heading copy.
 	maxWordingValueLen = 200
-	// maxWordingEntriesPerLang bounds one language's override map. The message-key
-	// whitelist is the real ceiling (a JSON object cannot repeat a key, so a
-	// language can never carry more distinct valid codes than the whitelist holds);
-	// this explicit cap bounds the stored JSON row regardless of whitelist growth.
-	maxWordingEntriesPerLang = 1000
+	// maxWordingEntriesPerLang bounds one language's override map. validateWording
+	// measures the RAW submitted map BEFORE unknown codes are pruned, so this is
+	// not "how big may the whitelist get" — it is "how many raw entries may one
+	// submission carry". The binding constraint is therefore that the cap must sit
+	// ABOVE the whitelist length: a legitimate pack that re-words EVERY message key
+	// submits exactly len(messageKeys) entries, and a cap at or below that number
+	// makes that pack refuse itself.
+	//
+	// 1200 (owner ruling 2026-08-11) against a whitelist of ~1009: ~190 spare
+	// entries is a year-odd of headroom at the ~10-keys-a-month growth actually
+	// measured, for +20% on the worst-case stored row. Deliberately not larger —
+	// wording_cap_mirror_test.go turns the next collision into a message that
+	// names both numbers and says to raise both twins, so there is no need to buy
+	// slack by doubling the worst-case payload.
+	//
+	// Raise this together with its TypeScript twin (MAX_WORDING_ENTRIES_PER_LANG in
+	// frontend/src/lib/themeBundleCore.ts); they are asserted equal, so moving one
+	// alone is red.
+	maxWordingEntriesPerLang = 1200
 )
 
 // wordingLangAllowed is the closed set of override languages (the two UI

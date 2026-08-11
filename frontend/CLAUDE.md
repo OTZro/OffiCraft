@@ -63,6 +63,42 @@ roster MemberCard 成員列**右側(flex 尾端)的紅色計數 badge**(>99 顯�
   `make test-frontend-ct`)。**但那不是拿掉 vitest 那半的理由**:兩層守的本來就
   不是同一件事(真顏色 vs 來源掃描),理由過期不等於守衛過期。
 
+## 定期訊息 · `custom` 頻率 = 三個 EXPLICIT 集合的交集(T-49e7)
+
+`cadence` 多一個 `custom`,配 `custom_days`(1–31)/`custom_hours`(0–23)/
+`custom_minutes`(0–59) 三個整數陣列;**三組的交集**就是送出的牆鐘時刻,所以它是唯一
+一天可以送超過一次的頻率。daily/weekly/monthly **一個字都沒動**。
+
+- 🔴 **空集合是伺服器的 422,不是「全部」也不是「永遠不送」**。所以「全選」= 把每一項
+  都列出來(31 / 24 / 60 個數字真的送上去),**不是**送一個特殊值。`BLANK_FORM` 的三組
+  刻意是**空的**:預設塞滿等於把一條沒人選過的排程放在按鈕旁邊一下就上線。
+- **前端也擋空集合**(`incomplete()`)。伺服器那道是後盾;讓人按了「建立」才知道,那個
+  形狀本身就是缺陷。護欄:`ScheduledMessagesCard.test.tsx` 的
+  「blocks a custom schedule with an empty set…」(mutant:拿掉那個 clause → **恰好紅 1 條**)。
+- 🔴 **列摘要 `cadenceText` 的 `custom` 分支不是裝飾**。它原本是 if-weekly /
+  if-monthly / **else-daily**,所以少了那一支,一條一天送 72 次的排程會被畫成
+  「每天」,而且畫面上沒有任何東西承認這件事。護欄:同檔的
+  「states a custom schedule's own times in the list instead of drawing it as 每天」
+  (**帶一條 daily 對照列**,否則「跟每天不一樣」可能只是 fixture 的巧合;mutant:拿掉
+  那一支 → 紅 2 條,訊息直接印出 `'每天Asia/Taipei'`)。
+- **`custom` 不讀 `hour`/`minute`/`day_of_week`/`day_of_month`**,所以那四個
+  **不上線**(`wirePayload`),列上也**不印**那個 `HH:mm` —— 送一個伺服器會忽略的讀數
+  正是 DTO 特地拿掉的 required-but-ignored 歧義。
+- **分鐘那組 60 格**:上排是常用間隔快捷(每 5/10/15/20/30 分,**展開成它指名的那些分鐘**
+  ——wire 上沒有「間隔」這種東西,不整除小時的間隔更不可能是),細部勾選預設收合。
+  版面護欄只有真瀏覽器答得出來:`visual-guards/scheduled-message-custom-sets.ct.spec.tsx`
+  在 320 / 900 兩個面板寬**量矩形**(面板橫向溢出、每個勾選框的實際 rect、格線高度、
+  收合前後的表單高度)。⚠️ **同一顆壞掉的 sheet 下,把那些斷言換成 class 名 + 數量,
+  6 條全綠**(實測)——這類守衛的鑑別力**全部**來自量到的幾何。
+- **這個閉集在前端有很多份手抄副本,加值時每一份都要動**(漏一份就是一條路徑不認得新值,
+  而**沒有任何東西會紅**)。刻意不在這裡列它們——清單會過期而不會變色。**當下的完整清單
+  自己跑出來**(`api/` 之外也有,例如手寫的 `<option>` 選單):
+  ```
+  grep -rn daily frontend/src --include=*.ts --include=*.tsx \
+    | grep -v '\.test\.\|/stories/\|/visual-guards/\|/generated/'
+  ```
+  `/generated/` 那幾筆由 spec 重生、不手改;其餘每一筆都要看(散文命中順手排掉)。
+
 ## 聊天未讀跳轉(M2 批次 19;LINE/FB 式,純 FE)
 ChatArea 兩個行為,皆不動 server:
 - **進房跳第一則未讀**:進對話時 snapshot `member.unreadCount`(**render 同步取**,搶在 listChat「list 即讀」清 watermark 之前——這是 race-free 的關鍵;server 清掉後 roster unreadCount 才歸 0)。第一則未讀 = thread 中 `from===peer && to===owner` 訊息的**最後 count 則之最早者**;其上渲染 `.chat__unread-divider`(「以下是未讀訊息」細線)並 `scrollIntoView({block:"start"})` 頂到視野頂;divider 整個 session 保留(如 LINE)。無未讀照舊落底。ChatArea 換 peer 不 remount → render-time guard 重置 session 追蹤;useChat 於 withId 換時**立即清空 messages**(防舊 thread 殘影 + 防未讀定位錨錯舊訊息)。

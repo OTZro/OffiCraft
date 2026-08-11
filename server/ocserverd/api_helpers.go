@@ -443,3 +443,13 @@ func intOr(p *int, fallback int) int {
 	}
 	return *p
 }
+
+// intSliceOrNil dereferences an optional request-body integer array. An absent
+// array and an empty one both become nil — they mean the same thing here, and
+// the write seam renders nil as the empty column value.
+func intSliceOrNil(p *[]int) []int {
+	if p == nil {
+		return nil
+	}
+	return *p
+}

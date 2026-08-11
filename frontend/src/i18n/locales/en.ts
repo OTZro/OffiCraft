@@ -876,6 +876,32 @@ export const en: Dict = {
       cadenceDaily: "Daily",
       cadenceWeekly: "Weekly",
       cadenceMonthly: "Monthly",
+      cadenceCustom: "Custom",
+      // ── Custom cadence (T-49e7). The schedule is the INTERSECTION of three
+      // sets — which days × which hours × which minutes — and each is listed
+      // explicitly: an empty set is a 422, because "fires every time" and
+      // "never fires" must not be one keystroke apart. ──
+      customDaysLabel: "Which days",
+      customHoursLabel: "Which hours",
+      customMinutesLabel: "Which minutes",
+      customSelectAll: "Select all",
+      customClear: "Clear",
+      customMinuteDetailShow: "Pick individual minutes",
+      customEmptyHint:
+        "Each of the three needs at least one pick, or the schedule has no time to fire at — and the server will refuse it.",
+      customNone: "Nothing selected",
+      // Summary phrases: each stands on its own under its group heading, and the
+      // row summary joins the three with a middle dot.
+      customDaysLead: "Days ",
+      customDaysTail: " of the month",
+      customEveryHour: "Every hour",
+      customHoursLead: "Hours ",
+      customHoursTail: " of the day",
+      customEveryMinute: "Every minute",
+      customMinutesLead: "Minutes ",
+      customMinutesTail: " of the hour",
+      customStepLead: "Every ",
+      customStepTail: " min",
       // Row-summary phrases: the word order differs per language, so these are
       // interpolated rather than glued together from fragments in the component.
       weeklyOn: (weekday: string) => `Every ${weekday}`,

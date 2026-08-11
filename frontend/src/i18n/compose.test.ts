@@ -18,8 +18,15 @@ import type { Effort } from "../types";
 type Lang = "zh" | "en";
 const DICTS: Record<Lang, Dict> = { zh, en };
 
+/** The FULL sets, spelled out rather than abbreviated: "every day" on this wire
+ * IS the list of every day, and the summary's whole job is to say so in one
+ * phrase instead of 31 numbers. */
+const ALL_DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
+const ALL_HOURS = Array.from({ length: 24 }, (_, i) => i);
+const ALL_MINUTES = Array.from({ length: 60 }, (_, i) => i);
+
 /** [language, message, arguments, the text that must appear on screen]. */
-const EXPECTED: [Lang, string, (string | number | string[])[], string][] = [
+const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string][] = [
     ["zh", "taskProgress", [3,7], "步驟 3/7"],
     ["zh", "taskElapsed", ["2 小時"], "已歷時 2 小時"],
     ["zh", "taskPlanningBy", ["Mira"], "等待 Mira 建立 Steps"],
@@ -75,6 +82,21 @@ const EXPECTED: [Lang, string, (string | number | string[])[], string][] = [
     ["zh", "docHistoryActor", ["Kyle", "m-f663"], "Kyle（m-f663）"],
     ["zh", "docHistoryActor", ["", "ow-c975"], "ow-c975"],
     ["zh", "diffTooLarge", [2400], "內容太長，無法逐行比對（2400 行）。"],
+    // ── 定期訊息 · 自訂頻率 (T-49e7) ──
+    // 每一組的三態各釘一次:整組選滿、部分、空的。空的那一態是可被拒絕的狀態,
+    // 說出來才不會與「全選」看起來一樣。
+    ["zh", "schedCustomDays", [ALL_DAYS], "每天"],
+    ["zh", "schedCustomDays", [[1, 15, 31]], "每月 1、15、31 號"],
+    ["zh", "schedCustomDays", [[]], "尚未選擇"],
+    ["zh", "schedCustomHours", [ALL_HOURS], "每小時"],
+    ["zh", "schedCustomHours", [[9, 17]], "第 9、17 點"],
+    ["zh", "schedCustomHours", [[]], "尚未選擇"],
+    ["zh", "schedCustomMinutes", [ALL_MINUTES], "每分鐘"],
+    ["zh", "schedCustomMinutes", [[0, 20, 40]], "第 0、20、40 分"],
+    ["zh", "schedCustomMinutes", [[]], "尚未選擇"],
+    ["zh", "schedCustomSummary", [ALL_DAYS, ALL_HOURS, [0, 20, 40]], "每天 · 每小時 · 第 0、20、40 分"],
+    ["zh", "schedCustomSummary", [[1, 15], [9], [30]], "每月 1、15 號 · 第 9 點 · 第 30 分"],
+    ["zh", "schedMinuteStep", [20], "每 20 分"],
     ["en", "taskProgress", [3,7], "Step 3/7"],
     ["en", "taskElapsed", ["2h"], "Elapsed 2h"],
     ["en", "taskPlanningBy", ["Mira"], "Waiting for Mira to create steps"],
@@ -136,6 +158,18 @@ const EXPECTED: [Lang, string, (string | number | string[])[], string][] = [
     ["en", "docHistoryActor", ["Kyle", "m-f663"], "Kyle (m-f663)"],
     ["en", "docHistoryActor", ["", "ow-c975"], "ow-c975"],
     ["en", "diffTooLarge", [2400], "Too long to compare line by line (2400 lines)."],
+    ["en", "schedCustomDays", [ALL_DAYS], "Daily"],
+    ["en", "schedCustomDays", [[1, 15, 31]], "Days 1, 15, 31 of the month"],
+    ["en", "schedCustomDays", [[]], "Nothing selected"],
+    ["en", "schedCustomHours", [ALL_HOURS], "Every hour"],
+    ["en", "schedCustomHours", [[9, 17]], "Hours 9, 17 of the day"],
+    ["en", "schedCustomHours", [[]], "Nothing selected"],
+    ["en", "schedCustomMinutes", [ALL_MINUTES], "Every minute"],
+    ["en", "schedCustomMinutes", [[0, 20, 40]], "Minutes 0, 20, 40 of the hour"],
+    ["en", "schedCustomMinutes", [[]], "Nothing selected"],
+    ["en", "schedCustomSummary", [ALL_DAYS, ALL_HOURS, [0, 20, 40]], "Daily · Every hour · Minutes 0, 20, 40 of the hour"],
+    ["en", "schedCustomSummary", [[1, 15], [9], [30]], "Days 1, 15 of the month · Hours 9 of the day · Minutes 30 of the hour"],
+    ["en", "schedMinuteStep", [20], "Every 20 min"],
 ];
 
 describe("makeMessages", () => {
@@ -144,7 +178,7 @@ describe("makeMessages", () => {
     (lang, name, args, want) => {
       const composed = makeMessages(DICTS[lang], lang) as unknown as Record<
         string,
-        (...a: (string | number | string[])[]) => string
+        (...a: (string | number | string[] | number[])[]) => string
       >;
       expect(composed[name](...args)).toBe(want);
     }
@@ -259,6 +293,18 @@ describe("makeMessages", () => {
       "settings.historyVersionLabelTail",
       "diff.tooLargeLead",
       "diff.tooLargeTail",
+      "mp.schedmsg.cadenceDaily",
+      "mp.schedmsg.customDaysLead",
+      "mp.schedmsg.customDaysTail",
+      "mp.schedmsg.customEveryHour",
+      "mp.schedmsg.customHoursLead",
+      "mp.schedmsg.customHoursTail",
+      "mp.schedmsg.customEveryMinute",
+      "mp.schedmsg.customMinutesLead",
+      "mp.schedmsg.customMinutesTail",
+      "mp.schedmsg.customNone",
+      "mp.schedmsg.customStepLead",
+      "mp.schedmsg.customStepTail",
     ]) {
       expect(keys.has(code), `${code} must be overridable`).toBe(true);
     }

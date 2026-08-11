@@ -1674,13 +1674,13 @@ export interface paths {
         };
         /**
          * List one member's scheduled messages.
-         * @description List a member's scheduled messages (T-f059), oldest→newest. Each row carries the whole schedule — label, body, cadence, wall-clock slot and timezone, plus the enabled/disabled toggle — and the delivery cursor: `last_fired_slot` (the identifier of the slot already delivered, which is what the fire/skip test compares) alongside `last_fired_ts` (when that delivery actually happened). The cockpit card surfaces the timestamp as a human-readable last-delivered line; the slot identifier is carried for clients that need to reason about the cursor itself. 404 if the member is absent or soft-removed.
+         * @description List a member's scheduled messages (T-f059), oldest→newest. Each row carries the whole schedule — label, body, cadence, the slot fields `day_of_week`/`day_of_month`/`hour`/`minute`, the three `custom` sets `custom_days`/`custom_hours`/`custom_minutes` (always present as arrays, empty on the cadences that do not read them) and timezone, plus the enabled/disabled toggle — and the delivery cursor: `last_fired_slot` (the identifier of the slot already delivered, which is what the fire/skip test compares) alongside `last_fired_ts` (when that delivery actually happened). The cockpit card surfaces the timestamp as a human-readable last-delivered line; the slot identifier is carried for clients that need to reason about the cursor itself. 404 if the member is absent or soft-removed.
          */
         get: operations["handle_list_scheduled_messages_api_members__member_id__scheduled_messages_get"];
         put?: never;
         /**
          * Create a scheduled message on one member.
-         * @description Create a scheduled message on a member (T-f059). When a slot comes due the server delivers `body` down the ORDINARY chat path — live if the member is online, the durable mailbox otherwise — from the synthetic sender `sched:<schedule_id>`, with `meta.scheduled` naming the schedule and the slot. The delivery cursor is initialised to the slot most recently elapsed, so a schedule created at 10:00 for `daily` 09:00 does not fire today. The recipient may be an assistant OR an `ow-` outsource worker. A missing/blank `body`, a cadence outside the set, or an out-of-range slot field is a 422; the member absent is a 404.
+         * @description Create a scheduled message on a member (T-f059). When a slot comes due the server delivers `body` down the ORDINARY chat path — live if the member is online, the durable mailbox otherwise — from the synthetic sender `sched:<schedule_id>`, with `meta.scheduled` naming the schedule and the slot. The delivery cursor is initialised to the slot most recently elapsed, so a schedule created at 10:00 for `daily` 09:00 does not fire today. The recipient may be an assistant OR an `ow-` outsource worker. A missing/blank `body`, a cadence outside the set, an out-of-range slot field, a missing `hour` or `minute` on a `daily`/`weekly`/`monthly` schedule, or a missing or empty `custom_days`/`custom_hours`/`custom_minutes` on a `custom` schedule is a 422; the member absent is a 404.
          */
         post: operations["handle_create_scheduled_message_api_members__member_id__scheduled_messages_post"];
         delete?: never;
@@ -1708,7 +1708,7 @@ export interface paths {
         head?: never;
         /**
          * Update one scheduled message (including enable/disable).
-         * @description Edit a scheduled message (T-f059): flip `status` (enable/disable — the reversible suspend, effective from the next tick) and/or edit the label, body, cadence, wall-clock slot or timezone. Only supplied fields change; `id` and `member_id` are immutable. Re-aiming the schedule moves the delivery cursor to the slot most recently elapsed, so an edit never fires the slot it crosses. 404 if the member or the schedule is absent; a bad cadence, a bad status or an out-of-range slot field is a 422.
+         * @description Edit a scheduled message (T-f059): flip `status` (enable/disable — the reversible suspend, effective from the next tick) and/or edit the label, body, cadence, the wall-clock slot fields `day_of_week`/`day_of_month`/`hour`/`minute`, the three `custom` sets `custom_days`/`custom_hours`/`custom_minutes`, or timezone. Only supplied fields change; `id` and `member_id` are immutable. Re-aiming the schedule moves the delivery cursor to the slot most recently elapsed, so an edit never fires the slot it crosses — and an edit counts as a re-aim ONLY when it changes a field the resulting cadence actually reads, so sending a field that cadence ignores (`custom_days` on a `daily` schedule, `hour` on a `custom` one) leaves the cursor where it was. 404 if the member or the schedule is absent; a 422 for a bad cadence, a bad status, an out-of-range slot field, an empty `custom_days`/`custom_hours`/`custom_minutes`, a switch TO `custom` that leaves the row without all three sets, or a switch AWAY from `custom` that does not state `hour` and `minute`.
          */
         patch: operations["handle_update_scheduled_message_api_members__member_id__scheduled_messages__schedule_id__patch"];
         trace?: never;
@@ -6371,7 +6371,7 @@ export interface components {
         };
         /**
          * ScheduledMessageCreateDTO
-         * @description Create one scheduled message on a member (T-f059 定期訊息). `body`, `cadence`, `hour`, `minute` and `timezone` are REQUIRED; `label`, `day_of_week` and `day_of_month` are optional and each states its own omitted-value behaviour. The wall-clock time and its zone are required rather than defaulted on purpose: a schedule with no time of day is meaningless, and a defaulted timezone would sooner or later be read as "wherever the server happens to run". `cadence` selects which day field applies — `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither — while `hour`/`minute`/`timezone` fix the wall-clock slot. The delivery cursor is initialised to the slot most recently elapsed at creation time, so a schedule created at 10:00 for `daily` 09:00 does not fire today. The recipient may be an assistant OR an `ow-` outsource worker — the same recipient rule ordinary chat uses.
+         * @description Create one scheduled message on a member (T-f059 定期訊息; `custom` cadence added by T-49e7). `body`, `cadence` and `timezone` are REQUIRED unconditionally; the remaining fields are required or ignored ACCORDING TO `cadence`, and each states its own behaviour. `daily`/`weekly`/`monthly` fire once a day at the single wall-clock reading `hour`/`minute` names, so those two are required for them (omitting either is a 422, never a silent midnight) and `weekly` additionally reads `day_of_week`, `monthly` `day_of_month`. `custom` fires at every reading where `custom_days`, `custom_hours` and `custom_minutes` all hold, so those three are required for it and `hour`/`minute`/`day_of_week`/`day_of_month` are ignored. `hour` and `minute` left the unconditional required list in T-49e7 precisely so that a `custom` schedule does not have to send two values it never reads — a required-but-ignored field is the ambiguity this table was warned about — and the conditional 422 keeps the calendar cadences exactly as strict as before. `timezone` is required for every cadence and deliberately not defaulted: a defaulted zone would sooner or later be read as "wherever the server happens to run". The delivery cursor is initialised to the slot most recently elapsed at creation time, so a schedule created at 10:00 for `daily` 09:00 does not fire today. The recipient may be an assistant OR an `ow-` outsource worker — the same recipient rule ordinary chat uses.
          */
         ScheduledMessageCreateDTO: {
             /**
@@ -6381,25 +6381,40 @@ export interface components {
             body: string;
             /**
              * Cadence
-             * @description How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
+             * @description How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither; those three all fire once a day at the single wall-clock reading `hour`/`minute` names. `custom` (T-49e7) reads none of those four: it reads the three sets `custom_days`, `custom_hours` and `custom_minutes` and fires at EVERY wall-clock reading where all three hold at once, so it is the only cadence that can fire more than once a day. DAYLIGHT-SAVING BEHAVIOUR, which `custom` enlarges because it names many readings a day rather than one: a reading the zone SKIPPED (spring forward) is simply not fired for `custom` — it is NOT moved forward to the next existing reading the way a once-a-day cadence's single reading is, because moving it would land on a neighbouring selected reading, produce the same slot identifier and silently merge two deliveries into one; a reading the zone repeats (autumn back) fires ONCE. WHICH of the two instants that single delivery lands on is whatever Go's `time.Date` resolves the ambiguous reading to — deterministic for a given zone and reading, but implementation-defined and NOT guaranteed to be the earlier one (measured: `America/New_York` resolves to the earlier instant, `Europe/London` and `Africa/Cairo` to the later). The invariant this contract states is only that ONE wall-clock reading yields ONE slot, hence one delivery. The `daily`/`weekly`/`monthly` behaviour is unchanged in both directions. Every set's range is enforced server-side (a 422), not by this schema — `custom_minutes: [0,20,40]` with every hour and every day listed is "every 20 minutes", and `custom_minutes: [15]` with every hour and every day listed is "15 minutes past every hour".
              * @enum {string}
              */
-            cadence: "daily" | "weekly" | "monthly";
+            cadence: "daily" | "weekly" | "monthly" | "custom";
+            /**
+             * Custom Days
+             * @description Days of the month `custom` fires on, 1-31, as an EXPLICIT set. "Every day" means listing every day; an empty set is a 422 rather than a silent "all" or a silent "never", because a schedule that always fires and one that never fires must not be one keystroke apart. Duplicates collapse and the set is stored sorted, so two orderings of the same choice compare equal — which is what stops a caller that sends the whole form back on every save from re-aiming the cursor. Membership is decided DAY BY DAY, not month by month: a listed day the month does not contain is dropped for THAT DAY only and the month's other listed days are unaffected, so [1,15,31] in February fires on the 1st and the 15th and simply has no 31st. (`monthly` names a single day, so for it the same rule reads as "the whole month is skipped" — that phrasing does NOT carry over to a set and reading it across was the review finding this sentence exists to prevent.) The day is never clamped to the month's last day, the same RFC 5545 rule `monthly` follows. Range is enforced server-side (a 422), not by this schema. REQUIRED when `cadence` is `custom` (a 422 otherwise); ignored by every other cadence.
+             */
+            custom_days?: number[] | null;
+            /**
+             * Custom Hours
+             * @description Hours of the day `custom` fires on, 0-23, read in `timezone`, as an EXPLICIT set. Same rules as `custom_days`: "every hour" means listing every hour, an empty set is a 422, duplicates collapse and the set is stored sorted. REQUIRED when `cadence` is `custom` (a 422 otherwise); ignored by every other cadence.
+             */
+            custom_hours?: number[] | null;
+            /**
+             * Custom Minutes
+             * @description Minutes of the hour `custom` fires on, 0-59, read in `timezone`, as an EXPLICIT set. Same rules as `custom_days`: an empty set is a 422, duplicates collapse and the set is stored sorted. An interval that does not divide an hour can only be approximated by naming wall-clock minutes — [0,7,14,21,28,35,42,49,56] leaves a 4-minute gap across the hour boundary, not 7 — which is a property of naming readings rather than a defect. REQUIRED when `cadence` is `custom` (a 422 otherwise); ignored by every other cadence.
+             */
+            custom_minutes?: number[] | null;
             /**
              * Day Of Month
-             * @description Day of month for `monthly` cadence, 1-31. A month that does not contain the day is skipped entirely rather than clamped — the iCalendar RFC 5545 rule for invalid recurrence dates — so a schedule on day 31 fires seven times a year and never in February. Owner decision 2026-08-10, card rc-aeef15360ab5: match the common standard rather than cap the range. Omitted or null means 1. Ignored by `daily` and `weekly`.
+             * @description Day of month for `monthly` cadence, 1-31. A month that does not contain the day is skipped entirely rather than clamped — the iCalendar RFC 5545 rule for invalid recurrence dates — so a schedule on day 31 fires seven times a year and never in February. Owner decision 2026-08-10, card rc-aeef15360ab5: match the common standard rather than cap the range. Omitted or null means 1. Ignored by `daily`, `weekly` and `custom`.
              */
             day_of_month?: number | null;
             /**
              * Day Of Week
-             * @description Day of week for `weekly` cadence: 0=Sunday through 6=Saturday. Omitted or null means 0 (Sunday). Ignored by `daily` and `monthly`.
+             * @description Day of week for `weekly` cadence: 0=Sunday through 6=Saturday. Omitted or null means 0 (Sunday). Ignored by `daily`, `monthly` and `custom`.
              */
             day_of_week?: number | null;
             /**
              * Hour
              * @description Hour of the wall-clock slot, 0-23, read in `timezone`.
              */
-            hour: number;
+            hour?: number;
             /**
              * Label
              * @description Human-facing name for this schedule. Also rides the delivered message's `meta.scheduled.label`, so the receiving agent can tell which of its schedules just spoke. Omitted or null means no label.
@@ -6409,10 +6424,10 @@ export interface components {
              * Minute
              * @description Minute of the wall-clock slot, 0-59, read in `timezone`.
              */
-            minute: number;
+            minute?: number;
             /**
              * Timezone
-             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. The two ways a wall-clock reading can be absent are treated differently. A DATE that is not there — a 31st in a month that has none, or a calendar day the zone deleted outright at a date-line move — is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date. A TIME the date does not have, because the zone skipped it springing forward, still happens: it moves forward to the next reading the zone does have — a 02:30 slot fires at 03:00, and where the skipped stretch runs to midnight the slot lands at the start of the following date — while the next occurrence returns to the stated time, so the shift never accumulates. That forward search is bounded by the following date: if the zone deleted that date outright too, the occurrence is skipped like an absent date rather than searched for any further.
+             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. The two ways a wall-clock reading can be absent are treated differently. A DATE that is not there — a 31st in a month that has none, or a calendar day the zone deleted outright at a date-line move — is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date. A TIME the date does not have, because the zone skipped it springing forward, is answered DIFFERENTLY BY CADENCE. For `daily`, `weekly` and `monthly` — the three that name one reading a day — it still happens: it moves forward to the next reading the zone does have — a 02:30 slot fires at 03:00, and where the skipped stretch runs to midnight the slot lands at the start of the following date — while the next occurrence returns to the stated time, so the shift never accumulates. That forward search is bounded by the following date: if the zone deleted that date outright too, the occurrence is skipped like an absent date rather than searched for any further. For `custom` the OPPOSITE holds: a skipped reading is NOT moved forward, it is simply not fired, because moving it would land on a neighbouring selected reading and silently merge two deliveries into one. See `cadence` for the full statement of that divergence.
              */
             timezone: string;
         };
@@ -6428,16 +6443,31 @@ export interface components {
             body: string;
             /**
              * Cadence
-             * @description How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
+             * @description How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither; those three all fire once a day at the single wall-clock reading `hour`/`minute` names. `custom` (T-49e7) reads none of those four: it reads the three sets `custom_days`, `custom_hours` and `custom_minutes` and fires at EVERY wall-clock reading where all three hold at once, so it is the only cadence that can fire more than once a day. DAYLIGHT-SAVING BEHAVIOUR, which `custom` enlarges because it names many readings a day rather than one: a reading the zone SKIPPED (spring forward) is simply not fired for `custom` — it is NOT moved forward to the next existing reading the way a once-a-day cadence's single reading is, because moving it would land on a neighbouring selected reading, produce the same slot identifier and silently merge two deliveries into one; a reading the zone repeats (autumn back) fires ONCE. WHICH of the two instants that single delivery lands on is whatever Go's `time.Date` resolves the ambiguous reading to — deterministic for a given zone and reading, but implementation-defined and NOT guaranteed to be the earlier one (measured: `America/New_York` resolves to the earlier instant, `Europe/London` and `Africa/Cairo` to the later). The invariant this contract states is only that ONE wall-clock reading yields ONE slot, hence one delivery. The `daily`/`weekly`/`monthly` behaviour is unchanged in both directions. Every set's range is enforced server-side (a 422), not by this schema.
              * @enum {string}
              */
-            cadence: "daily" | "weekly" | "monthly";
+            cadence: "daily" | "weekly" | "monthly" | "custom";
             /**
              * Created Ts
              * @description Epoch seconds the schedule was created.
              * @default 0
              */
             created_ts: number;
+            /**
+             * Custom Days
+             * @description Days of the month `custom` fires on, 1-31, sorted and deduplicated. Empty for a schedule that has never been `custom`; a schedule SWITCHED AWAY from `custom` KEEPS the sets it had (owner ruling 2026-08-11, card rc-68c581070e55) — they are simply not read while another cadence is selected, so switching back does not lose the choice. Never empty for a live `custom` schedule, which refuses an empty set at write time rather than treating it as "all" or as "never". Optional on this response for the reason the repo charter gives for every added field (§12): a reader written before T-49e7 must keep working, and a field it has never heard of must not become one it is required to find.
+             */
+            custom_days?: number[];
+            /**
+             * Custom Hours
+             * @description Hours of the day `custom` fires on, 0-23, read in `timezone`, sorted and deduplicated. Empty unless the schedule is or once was `custom`; a schedule switched away from `custom` keeps its sets unread rather than losing them (see `custom_days`). Never empty for a live `custom` schedule.
+             */
+            custom_hours?: number[];
+            /**
+             * Custom Minutes
+             * @description Minutes of the hour `custom` fires on, 0-59, read in `timezone`, sorted and deduplicated. Empty unless the schedule is or once was `custom`; a schedule switched away from `custom` keeps its sets unread rather than losing them (see `custom_days`). Never empty for a live `custom` schedule.
+             */
+            custom_minutes?: number[];
             /**
              * Day Of Month
              * @description Day of month for `monthly` cadence, 1-31. A month that does not contain the day is skipped entirely rather than clamped — the iCalendar RFC 5545 rule for invalid recurrence dates — so a schedule on day 31 fires seven times a year and never in February. Owner decision 2026-08-10, card rc-aeef15360ab5: match the common standard rather than cap the range.
@@ -6493,7 +6523,7 @@ export interface components {
             status: "enabled" | "disabled";
             /**
              * Timezone
-             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. The two ways a wall-clock reading can be absent are treated differently. A DATE that is not there — a 31st in a month that has none, or a calendar day the zone deleted outright at a date-line move — is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date. A TIME the date does not have, because the zone skipped it springing forward, still happens: it moves forward to the next reading the zone does have — a 02:30 slot fires at 03:00, and where the skipped stretch runs to midnight the slot lands at the start of the following date — while the next occurrence returns to the stated time, so the shift never accumulates. That forward search is bounded by the following date: if the zone deleted that date outright too, the occurrence is skipped like an absent date rather than searched for any further.
+             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. The two ways a wall-clock reading can be absent are treated differently. A DATE that is not there — a 31st in a month that has none, or a calendar day the zone deleted outright at a date-line move — is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date. A TIME the date does not have, because the zone skipped it springing forward, is answered DIFFERENTLY BY CADENCE. For `daily`, `weekly` and `monthly` — the three that name one reading a day — it still happens: it moves forward to the next reading the zone does have — a 02:30 slot fires at 03:00, and where the skipped stretch runs to midnight the slot lands at the start of the following date — while the next occurrence returns to the stated time, so the shift never accumulates. That forward search is bounded by the following date: if the zone deleted that date outright too, the occurrence is skipped like an absent date rather than searched for any further. For `custom` the OPPOSITE holds: a skipped reading is NOT moved forward, it is simply not fired, because moving it would land on a neighbouring selected reading and silently merge two deliveries into one. See `cadence` for the full statement of that divergence.
              * @default Asia/Taipei
              */
             timezone: string;
@@ -6510,9 +6540,24 @@ export interface components {
             body?: string | null;
             /**
              * Cadence
-             * @description How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither.
+             * @description How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither; those three all fire once a day at the single wall-clock reading `hour`/`minute` names. `custom` (T-49e7) reads none of those four: it reads `custom_days`, `custom_hours` and `custom_minutes` and fires at every reading where all three hold at once. Switching a schedule TO `custom` in this PATCH must supply all three sets in the SAME request unless the stored row already carries them (a 422 otherwise, never a schedule that has a cadence it has no times for); switching AWAY from `custom` leaves the stored sets in place, unread, so switching back does not lose the choice.
              */
-            cadence?: ("daily" | "weekly" | "monthly") | null;
+            cadence?: ("daily" | "weekly" | "monthly" | "custom") | null;
+            /**
+             * Custom Days
+             * @description Days of the month `custom` fires on, 1-31, as an explicit set — see the create DTO for why an empty set is a 422 rather than "all" or "never". Supplying a set whose SORTED, DEDUPLICATED form equals the stored one changes nothing, cursor included, which is the same value-comparison rule every other field here follows: a caller that sends the whole form back on every save must not quietly swallow a delivery just because it re-sent the same choice in a different order.
+             */
+            custom_days?: number[] | null;
+            /**
+             * Custom Hours
+             * @description Hours of the day `custom` fires on, 0-23, read in `timezone`, as an explicit set. Same empty-set and same-value rules as `custom_days`.
+             */
+            custom_hours?: number[] | null;
+            /**
+             * Custom Minutes
+             * @description Minutes of the hour `custom` fires on, 0-59, read in `timezone`, as an explicit set. Same empty-set and same-value rules as `custom_days`.
+             */
+            custom_minutes?: number[] | null;
             /**
              * Day Of Month
              * @description Day of month for `monthly` cadence, 1-31. A month that does not contain the day is skipped entirely rather than clamped — the iCalendar RFC 5545 rule for invalid recurrence dates — so a schedule on day 31 fires seven times a year and never in February. Owner decision 2026-08-10, card rc-aeef15360ab5: match the common standard rather than cap the range.
@@ -6545,7 +6590,7 @@ export interface components {
             status?: ("enabled" | "disabled") | null;
             /**
              * Timezone
-             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. The two ways a wall-clock reading can be absent are treated differently. A DATE that is not there — a 31st in a month that has none, or a calendar day the zone deleted outright at a date-line move — is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date. A TIME the date does not have, because the zone skipped it springing forward, still happens: it moves forward to the next reading the zone does have — a 02:30 slot fires at 03:00, and where the skipped stretch runs to midnight the slot lands at the start of the following date — while the next occurrence returns to the stated time, so the shift never accumulates. That forward search is bounded by the following date: if the zone deleted that date outright too, the occurrence is skipped like an absent date rather than searched for any further.
+             * @description IANA timezone name the wall-clock slot is computed in (e.g. `Asia/Taipei`). Must name a place: `Local` and the empty string are REFUSED with 422 even though they resolve, because they mean `wherever this server runs` and `UTC by accident` rather than a stated zone. `UTC` itself is accepted. The two ways a wall-clock reading can be absent are treated differently. A DATE that is not there — a 31st in a month that has none, or a calendar day the zone deleted outright at a date-line move — is an occurrence that does not happen, per RFC 5545's treatment of an invalid recurrence date. A TIME the date does not have, because the zone skipped it springing forward, is answered DIFFERENTLY BY CADENCE. For `daily`, `weekly` and `monthly` — the three that name one reading a day — it still happens: it moves forward to the next reading the zone does have — a 02:30 slot fires at 03:00, and where the skipped stretch runs to midnight the slot lands at the start of the following date — while the next occurrence returns to the stated time, so the shift never accumulates. That forward search is bounded by the following date: if the zone deleted that date outright too, the occurrence is skipped like an absent date rather than searched for any further. For `custom` the OPPOSITE holds: a skipped reading is NOT moved forward, it is simply not fired, because moving it would land on a neighbouring selected reading and silently merge two deliveries into one. See `cadence` for the full statement of that divergence.
              */
             timezone?: string | null;
         };

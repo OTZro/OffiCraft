@@ -384,11 +384,140 @@ func ValidWebhookPlatform(platform string) bool {
 
 // ── scheduled messages (T-f059 定期訊息) ───────────────────────────────────────
 
+// scheduledMessageCadences is the cadence closed set AS DATA, and it is the
+// single place the set is written down.
+//
+// 🔴 It is a slice rather than a chain of ||, and that is the whole point: a
+// cadence the slot arithmetic does not implement fails SILENTLY. mostRecentSlot
+// answers "no slot", the tick skips the row, and a schedule that never fires
+// looks exactly like one that has nothing due — which is how the previous
+// bounded-lookback defects hid. With the set as data,
+// TestEveryCadenceInTheClosedSetProducesASlot can walk it and demand a real
+// slot from EVERY member, so adding a value here without teaching
+// schedule_slot.go turns red and names the value. Adding a value to a boolean
+// expression is unobservable; adding one here is not.
+//
+// Scope note: only the CADENCE set moved to data. The status set next door is
+// deliberately untouched.
+var scheduledMessageCadences = []string{
+	ScheduledMessageCadenceDaily,
+	ScheduledMessageCadenceWeekly,
+	ScheduledMessageCadenceMonthly,
+	ScheduledMessageCadenceCustom,
+}
+
 // ValidScheduledMessageCadence reports whether cadence is in the closed set.
 func ValidScheduledMessageCadence(cadence string) bool {
-	return cadence == ScheduledMessageCadenceDaily ||
-		cadence == ScheduledMessageCadenceWeekly ||
-		cadence == ScheduledMessageCadenceMonthly
+	for _, c := range scheduledMessageCadences {
+		if c == cadence {
+			return true
+		}
+	}
+	return false
+}
+
+// scheduledMessageCadenceList renders the closed set for a refusal message, so
+// the message cannot come to list a different set from the one enforced.
+func scheduledMessageCadenceList() string {
+	quoted := make([]string, len(scheduledMessageCadences))
+	for i, c := range scheduledMessageCadences {
+		quoted[i] = "'" + c + "'"
+	}
+	return "[" + strings.Join(quoted, " ") + "]"
+}
+
+// scheduledMessageCadenceFields names, per cadence, the schedule fields that
+// cadence actually reads when it computes a slot. It is the SAME statement the
+// field descriptions in spec/openapi.json make ("ignored by `daily`, `weekly`
+// and `custom`"), expressed once as data so a caller cannot be told a field is
+// ignored and then have it move the delivery cursor anyway.
+var scheduledMessageCadenceFields = map[string][]string{
+	ScheduledMessageCadenceDaily:   {"hour", "minute"},
+	ScheduledMessageCadenceWeekly:  {"day_of_week", "hour", "minute"},
+	ScheduledMessageCadenceMonthly: {"day_of_month", "hour", "minute"},
+	ScheduledMessageCadenceCustom:  {"custom_days", "custom_hours", "custom_minutes"},
+}
+
+// scheduledMessageCadenceReads reports whether cadence reads field. A cadence
+// outside the closed set reads nothing — that row can never fire anyway, and
+// answering "yes" would re-aim a cursor no slot computation will ever consult.
+func scheduledMessageCadenceReads(cadence, field string) bool {
+	for _, f := range scheduledMessageCadenceFields[cadence] {
+		if f == field {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateScheduledMessageCustomSets enforces the three explicit sets `custom`
+// intersects (T-49e7). Applied ONLY when the cadence is `custom` — every other
+// cadence ignores these columns outright.
+//
+// 🔴 An EMPTY set is a 422 rather than a silent "all" or a silent "never"
+// (migrations/00052): those two readings sit one keystroke apart and are
+// indistinguishable on screen, so "every day" is expressed by LISTING every
+// day. A set that reached the table empty would mean a writer bypassed this
+// function, which is why the column's empty-string default can only ever be the
+// not-custom marker.
+//
+// (Written as "empty-string" rather than as a pair of single quotes on purpose:
+// gofmt's doc-comment formatter rewrites that pair into a curly quote, which
+// turns the sentence into something a reader cannot parse — and the rewrite is
+// silent.)
+func ValidateScheduledMessageCustomSets(days, hours, minutes []int) error {
+	for _, set := range []struct {
+		field  string
+		vals   []int
+		lo, hi int
+	}{
+		{"custom_days", days, 1, 31},
+		{"custom_hours", hours, 0, 23},
+		{"custom_minutes", minutes, 0, 59},
+	} {
+		if len(set.vals) == 0 {
+			return fmt.Errorf("%s cannot be empty when cadence is 'custom'; "+
+				"list every value that should fire (an empty set would be read as either "+
+				"'always' or 'never', and those must not be one keystroke apart)", set.field)
+		}
+		for _, v := range set.vals {
+			if v < set.lo || v > set.hi {
+				return fmt.Errorf("%s values must be between %d and %d; got %d",
+					set.field, set.lo, set.hi, v)
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateScheduledMessageWallClockPresence refuses a calendar cadence
+// (daily/weekly/monthly) that was not given an hour AND a minute.
+//
+// 🔴 hourSent/minuteSent are "did the caller state it", not "is it non-zero".
+// The wire types are pointers precisely so a `custom` schedule need not send
+// two values it never reads, and the cost of that is that a MISSING hour is now
+// representable — so it is refused here rather than folded to 0. A schedule
+// that silently means midnight looks exactly like one that was asked to run at
+// midnight, and nothing anywhere would say otherwise.
+func ValidateScheduledMessageWallClockPresence(cadence string, hourSent, minuteSent bool) error {
+	if cadence == ScheduledMessageCadenceCustom {
+		return nil
+	}
+	// A cadence outside the closed set is refused by ValidScheduledMessageCadence,
+	// which owns that message. Saying "hour is required when cadence is 'hourly'"
+	// first would answer a question the caller is not being asked yet.
+	if !ValidScheduledMessageCadence(cadence) {
+		return nil
+	}
+	if !hourSent {
+		return fmt.Errorf("hour is required when cadence is '%s'; only 'custom' reads "+
+			"the custom_hours set instead, and an omitted hour must never be taken to mean midnight", cadence)
+	}
+	if !minuteSent {
+		return fmt.Errorf("minute is required when cadence is '%s'; only 'custom' reads "+
+			"the custom_minutes set instead, and an omitted minute must never be taken to mean 0", cadence)
+	}
+	return nil
 }
 
 // ValidScheduledMessageStatus reports whether status is in the closed set (the

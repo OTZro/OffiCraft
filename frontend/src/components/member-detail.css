@@ -1561,6 +1561,118 @@
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
+/* ---- 自訂頻率的三組集合 (T-49e7) ----
+   哪幾天 × 哪幾點 × 哪幾分 的交集就是送出時刻,所以三組長得一樣、只有格子數不同。
+   分鐘那組有 60 格:格線用 auto-fill + minmax 讓它在 320px 的面板寬也只會變成更
+   多列、不會橫向溢出,再用 max-height 把列數收在捲動盒裡,免得一組選項就把整張
+   面板撐到看不見底下的按鈕。 */
+.mp-schedmsg__setgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  min-width: 0;
+}
+.mp-schedmsg__sethead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mp-schedmsg__setaction {
+  padding: 3px 9px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.mp-schedmsg__setaction:hover {
+  color: var(--color-text);
+  border-color: var(--color-indigo);
+}
+/* 白話摘要:60 個勾選框沒有人讀得回來,這一句才是使用者確認自己選了什麼的地方。 */
+.mp-schedmsg__setsummary {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text-strong);
+  overflow-wrap: anywhere;
+}
+.mp-schedmsg__quickrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.mp-schedmsg__quickbtn {
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.mp-schedmsg__quickbtn:hover {
+  color: var(--color-text);
+  border-color: var(--color-indigo);
+}
+.mp-schedmsg__quickbtn--on {
+  color: var(--color-on-indigo);
+  background: var(--color-indigo);
+  border-color: var(--color-indigo);
+}
+.mp-schedmsg__setmore {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+  transition: color 0.15s;
+}
+.mp-schedmsg__setmore:hover {
+  color: var(--color-text);
+}
+.mp-schedmsg__setgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(46px, 1fr));
+  gap: 4px;
+  max-height: 172px;
+  overflow-y: auto;
+  min-width: 0;
+}
+.mp-schedmsg__setbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 3px 4px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-overlay) 3%, transparent);
+}
+.mp-schedmsg__setbox:hover {
+  color: var(--color-text);
+}
+.mp-schedmsg__setbox input {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  margin: 0;
+  /* The token the repo's other two checkbox grids use (tasks.css,
+     theme-settings.css). --color-indigo sits at ~1.1:1 against --color-card in
+     the built-in dark palette, which on a 60-cell grid whose entire purpose is
+     "which ones did I tick" leaves the checked state effectively invisible. */
+  accent-color: var(--color-accent);
+}
+.mp-schedmsg__setbox span {
+  font-variant-numeric: tabular-nums;
+}
 .mp-schedmsg__formactions {
   display: flex;
   justify-content: flex-end;

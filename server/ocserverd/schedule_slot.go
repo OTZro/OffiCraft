@@ -59,6 +59,26 @@ const dailyLookbackDays = 3
 // zone deleted, so the answer is a week earlier again.
 const weeklyLookbackDays = 14
 
+// customLookbackDays bounds how far back a `custom` schedule scans for a date
+// whose day-of-month is in CustomDays.
+//
+// 🔴 Why 70 and not something smaller: custom_days may name a SINGLE day, and
+// the longest gap between two dates that actually exist is 31 January → 31
+// March — February has no 31st, so that occurrence is skipped entirely — which
+// is 59 days. 70 leaves headroom over that worst case without letting the loop
+// grow expensive: every candidate day costs at most one firstReadingOn probe
+// plus the hour×minute enumeration, and only days actually listed in
+// CustomDays are probed at all.
+//
+// ⚠️ NOTHING PINS THIS CONSTANT, AND THAT IS PROPORTIONATE — do not read the
+// paragraph above as a claim that a guard is watching it (70 → 40 leaves every
+// test green). It is a bound with headroom, and the cost of it being too small
+// is that mostRecentSlot reports NO slot for an interval in which no slot was
+// due anyway, so the delivery outcome is unchanged. That is unlike
+// monthlyLookbackMonths next door, where an insufficient bound really does stop
+// a schedule from ever firing and a named test says so.
+const customLookbackDays = 70
+
 // mostRecentSlot returns the latest slot of s at or before now, computed as
 // WALL-CLOCK TIME IN s.Timezone — never in the host's zone, never in UTC.
 //
@@ -123,8 +143,123 @@ func mostRecentSlot(s ScheduledMessage, now time.Time) (time.Time, bool) {
 			}
 		}
 		return time.Time{}, false
+
+	case ScheduledMessageCadenceCustom:
+		anchor := dayAnchor(local)
+		for back := 0; back <= customLookbackDays; back++ {
+			day := anchor.AddDate(0, 0, -back)
+			// Membership is decided DATE BY DATE, walking real calendar dates:
+			// a listed day the month does not contain simply never comes up,
+			// and the month's OTHER listed days are unaffected — [1,15,31] in
+			// February fires on the 1st and the 15th and has no 31st. The day
+			// is never clamped onto the month's last date, which is the same
+			// RFC 5545 rule `monthly` follows; `monthly` names a single day, so
+			// for it that rule reads as "the whole month is skipped", and that
+			// phrasing does not carry over to a set.
+			if !intSetContains(s.CustomDays, day.Day()) {
+				continue
+			}
+			if slot, ok := customSlotOn(day, s, loc, local); ok {
+				return slot, true
+			}
+		}
+		return time.Time{}, false
+	}
+	// A cadence outside the closed set produces no slot — that half is
+	// deliberate and unchanged. What is NOT acceptable is doing it in silence:
+	// such a row simply never fires, with no error and no trace, which looks
+	// exactly like a schedule working correctly. One log line is the whole
+	// remedy; the trigger behaviour is untouched.
+	schedLog("skip %s: unknown cadence %q — this schedule can never fire", s.ID, s.Cadence)
+	return time.Time{}, false
+}
+
+// customSlotOn returns the latest reading `custom` has on this calendar date at
+// or before notAfter, and false when the date contributes none.
+//
+// 🔴 THE DST ASYMMETRY AGAINST THE CALENDAR CADENCES, AND WHY IT IS DELIBERATE.
+// slotAt moves a wall-clock reading the zone SKIPPED (spring forward) FORWARD to
+// the next reading the zone does have. `custom` does the opposite: it SKIPS that
+// reading and carries on with the next one in its own enumeration.
+//
+// The calendar cadences have exactly ONE reading a day, so searching forward is
+// what stops the owner from getting nothing at all that day — "half an hour
+// late" beats silence. `custom` typically names many readings a day, and
+// searching forward there tends to land on a reading that is ALREADY in the
+// set: two occurrences collapse onto the same instant, hence the same slotKey,
+// and the second delivery merges into the first without a word.
+//
+// ⚠️ THIS IS A TRADE-OFF APPLIED UNCONDITIONALLY, NOT A TWO-WAY CHOICE, AND THE
+// COST IS REAL AT THE DEGENERATE END. `days={15} × hours={2} × minutes={30}` is
+// a perfectly legal `custom` schedule with exactly ONE reading a day, and for it
+// the merge argument does not apply at all: skipping simply loses the whole day,
+// silently, while a `monthly` schedule with the same meaning fires at 03:00.
+// Two schedules that say the same thing behave oppositely, and this code chooses
+// the silent-loss side for both. Skipping was chosen because its loss is
+// predictable, bounded and testable, whereas a merge is invisible — but the
+// choice is paid for by the single-reading case.
+//
+// A THIRD OPTION EXISTS and is not taken here: search forward, and discard the
+// result only when the landing reading is itself in the declared sets. That
+// keeps "never merge silently" AND stops a single-reading `custom` from
+// vanishing. It is a real candidate for a future ticket — tzsweep's no-merge
+// invariant (a reported slot must be a declared reading) already has the shape
+// to check it. The owner ruled the current behaviour in; this note exists so the
+// next person weighs three options rather than the two the first draft named.
+//
+// The forward-search behaviour of daily/weekly/monthly is untouched.
+//
+// ⚠️ THE AUTUMN SIDE IS NOT SYMMETRIC WITH THAT, AND IS LEFT AS IT IS. When the
+// clocks go back, a wall-clock reading occurs TWICE, and time.Date picks ONE of
+// the two instants. WHICH one is not ours to state: Go documents the result as
+// implementation-defined for an ambiguous reading, and it is NOT always the
+// earlier offset — measured, America/New_York resolves 2024-11-03 01:30 to the
+// earlier instant while Europe/London and Africa/Cairo resolve their repeated
+// readings to the LATER one. Roughly half the zones go each way, so "always the
+// earlier offset" would be a false claim about half the world.
+//
+// The invariant we actually depend on is weaker and true everywhere: time.Date
+// is DETERMINISTIC, so one wall-clock reading reconstructs one instant, produces
+// one slotKey, and the cursor refuses the second pass — the reading fires ONCE,
+// not twice. That is what the tests pin (and what tzsweep's no-duplicate arm
+// checks in every shipped zone); the offset DIRECTION is deliberately not
+// pinned, because it is not a promise this code can keep. Nothing is fixed here
+// because the resolution lives in the shared readBack/time.Date path every
+// cadence uses, and changing it would move all four.
+func customSlotOn(day time.Time, s ScheduledMessage, loc *time.Location, notAfter time.Time) (time.Time, bool) {
+	year, month, dayNum := day.Year(), day.Month(), day.Day()
+	// Does the ZONE have this date at all? Asked with the SAME judgement the
+	// calendar cadences use (firstReadingOn), so a date the zone deleted
+	// outright — Pacific/Apia, 30 December 2011 — drops the whole day here too.
+	if _, exists := firstReadingOn(year, month, dayNum, loc); !exists {
+		return time.Time{}, false
+	}
+	hours, minutes := sortedIntSet(s.CustomHours), sortedIntSet(s.CustomMinutes)
+	// Hours descending, minutes descending: the first readable reading at or
+	// before notAfter is therefore the LATEST one, so no comparison beyond the
+	// first hit is needed.
+	for hi := len(hours) - 1; hi >= 0; hi-- {
+		for mi := len(minutes) - 1; mi >= 0; mi-- {
+			slot, ok := readBack(time.Date(year, month, dayNum, hours[hi], minutes[mi], 0, 0, time.UTC), loc)
+			if !ok {
+				continue // the zone skipped this reading — dropped, never searched forward
+			}
+			if !slot.After(notAfter) {
+				return slot, true
+			}
+		}
 	}
 	return time.Time{}, false
+}
+
+// intSetContains reports membership without assuming the slice is sorted.
+func intSetContains(vals []int, want int) bool {
+	for _, v := range vals {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }
 
 // dayAnchor names t's calendar DATE — year, month, day, with the zone dropped —
@@ -333,6 +468,15 @@ func currentSlotKey(s ScheduledMessage, now time.Time) string {
 
 // describeSchedule is the log identity of one schedule — id plus the aimed slot
 // in words, so a skipped-delivery line says which schedule and which aim.
+//
+// `custom` prints its three sets instead of Hour/Minute: those two columns hold
+// their 0/0 defaults on a custom row, so printing them would name a time nobody
+// chose — a log line that reads like a fact and is not one.
 func describeSchedule(s ScheduledMessage) string {
+	if s.Cadence == ScheduledMessageCadenceCustom {
+		return fmt.Sprintf("%s (custom days=[%s] hours=[%s] minutes=[%s] %s)", s.ID,
+			canonicalIntSet(s.CustomDays), canonicalIntSet(s.CustomHours),
+			canonicalIntSet(s.CustomMinutes), s.Timezone)
+	}
 	return fmt.Sprintf("%s (%s %02d:%02d %s)", s.ID, s.Cadence, s.Hour, s.Minute, s.Timezone)
 }

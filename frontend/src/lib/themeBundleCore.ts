@@ -99,7 +99,24 @@ export const MAX_THEME_NAME_LEN = 80;
 // Wording overlay bounds (T-16a1 P3) — the character-for-character twin of the
 // Go constants in server/ocserverd/wording_bundle.go.
 export const MAX_WORDING_VALUE_LEN = 200;
-export const MAX_WORDING_ENTRIES_PER_LANG = 1000;
+// The cap counts the RAW submitted entries, BEFORE unknown codes are pruned, so
+// it is not "how big may the whitelist get" — it is "how many raw entries may
+// one submission carry". The binding constraint is therefore that it must sit
+// ABOVE the whitelist length (src/i18n/messageKeys.generated.ts): a legitimate
+// pack that re-words EVERY message key submits exactly MESSAGE_KEYS.length
+// entries, and a cap at or below that number makes that pack refuse itself.
+//
+// 1200 (owner ruling 2026-08-11) against a whitelist of ~1009: ~190 spare
+// entries is a year-odd of headroom at the ~10-keys-a-month growth actually
+// measured, for +20% on the worst-case stored row. Deliberately not larger —
+// themeBundleCore.test.ts turns the next collision into a message that names
+// both numbers and says to raise both twins, so there is no need to buy slack
+// by doubling the worst-case payload.
+//
+// Raise this together with its Go twin (maxWordingEntriesPerLang in
+// server/ocserverd/wording_bundle.go); they are asserted equal, so moving one
+// alone is red.
+export const MAX_WORDING_ENTRIES_PER_LANG = 1200;
 
 // Font overlay bound (T-16a1 P4) — the twin of maxFontValueLen in
 // server/ocserverd/font_bundle.go. A font value is a whole family stack; the

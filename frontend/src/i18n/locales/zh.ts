@@ -946,6 +946,30 @@ export const zh = {
       cadenceDaily: "每天",
       cadenceWeekly: "每週",
       cadenceMonthly: "每月",
+      cadenceCustom: "自訂",
+      // ── 自訂頻率(T-49e7)。三組是「哪幾天 × 哪幾點 × 哪幾分」的交集,每一組
+      // 都要逐項列出來:空集合會被伺服器擋下(422),因為「每次都送」與「永遠
+      // 不送」不可以只差一個鍵。 ──
+      customDaysLabel: "哪幾天",
+      customHoursLabel: "哪幾點",
+      customMinutesLabel: "哪幾分",
+      customSelectAll: "全選",
+      customClear: "清除",
+      customMinuteDetailShow: "細部選擇",
+      customEmptyHint:
+        "三組都要至少選一項,否則這條排程沒有任何送出時間,伺服器也會拒絕。",
+      customNone: "尚未選擇",
+      // 摘要片語:三組各自成句(標題就在它上面),列摘要再把三句用「 · 」接起來。
+      customDaysLead: "每月 ",
+      customDaysTail: " 號",
+      customEveryHour: "每小時",
+      customHoursLead: "第 ",
+      customHoursTail: " 點",
+      customEveryMinute: "每分鐘",
+      customMinutesLead: "第 ",
+      customMinutesTail: " 分",
+      customStepLead: "每 ",
+      customStepTail: " 分",
       // 列摘要用的組合詞:語序在各語言不同,所以用內插而不是把碎片在元件裡黏起來。
       weeklyOn: (weekday: string) => `每${weekday}`,
       monthlyOn: (day: number) => `每月 ${day} 號`,

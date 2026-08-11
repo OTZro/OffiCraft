@@ -13,6 +13,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 )
 
 // DAL owns the migrated database handles. Construct with NewDALPools over a
@@ -2028,10 +2031,18 @@ const (
 
 // ScheduledMessageCadence closed set — which day field the slot computation
 // reads: weekly reads DayOfWeek, monthly reads DayOfMonth, daily reads neither.
+//
+// `custom` (T-49e7) reads NONE of those four. It reads the three explicit sets
+// CustomDays/CustomHours/CustomMinutes and fires at every wall-clock reading
+// where all three hold at once, so it is the only cadence that can fire more
+// than once a day — which is the whole point of it (owner card
+// rc-4acc4013a0ae: "every 20 minutes", whose only alternative was 72 separate
+// schedules a day).
 const (
 	ScheduledMessageCadenceDaily   = "daily"
 	ScheduledMessageCadenceWeekly  = "weekly"
 	ScheduledMessageCadenceMonthly = "monthly"
+	ScheduledMessageCadenceCustom  = "custom"
 )
 
 // ScheduledMessage mirrors the scheduled_message table: one recurring
@@ -2040,9 +2051,14 @@ const (
 //
 // 🔴 LastFiredSlot holds the IDENTIFIER of the slot already delivered
 // (slotKey, e.g. `2026-08-10T09:00+08:00`), NOT a clock reading. The tick
-// recomputes the most recently elapsed slot and fires only when the strings
-// differ — see migrations/00050 for why that, and not a "last run at"
-// timestamp, is what makes restart-does-not-resend true by construction.
+// recomputes the most recently elapsed slot and fires only when that slot is
+// STRICTLY LATER than the one named here — an ORDERING test over the parsed
+// instants (slotIsAfterCursor), never a string inequality. See
+// migrations/00050 for why storing the slot, and not a "last run at"
+// timestamp, is what makes restart-does-not-resend true by construction, and
+// slotIsAfterCursor for why "different from last time" is the wrong question
+// (a computation that ever moved backwards would differ, and therefore
+// redeliver).
 // LastFiredTS is the human-facing companion and takes NO part in the decision.
 type ScheduledMessage struct {
 	ID       string
@@ -2056,6 +2072,22 @@ type ScheduledMessage struct {
 	DayOfMonth int
 	Hour       int
 	Minute     int
+	// The three explicit sets `custom` intersects (T-49e7). Days are 1-31,
+	// hours 0-23, minutes 0-59, all read in Timezone. Empty for every other
+	// cadence, and never empty for `custom` — an empty set is refused at the
+	// write (see migrations/00052 for why "all" and "never" must not sit one
+	// keystroke apart).
+	//
+	// 🔴 The Go side deals in []int; the COLUMN is a canonical comma-joined
+	// string, and canonicalIntSet/parseIntSet are the only translation. The
+	// canonical form (sorted ascending, deduplicated, no whitespace) is a
+	// STORAGE invariant, not a formatting preference: the PATCH re-aim test
+	// compares supplied against stored, and a cockpit that posts the whole
+	// form back would otherwise re-aim — swallowing the crossed delivery —
+	// merely because the user's checkbox order produced [20,0,40] this time.
+	CustomDays    []int
+	CustomHours   []int
+	CustomMinutes []int
 	// Timezone is an IANA name. The wall clock is ALWAYS read in this zone —
 	// there is deliberately no host-local fallback anywhere in this feature.
 	Timezone      string
@@ -2065,14 +2097,75 @@ type ScheduledMessage struct {
 	CreatedTS     float64
 }
 
-const scheduledMessageColumns = `id, member_id, label, body, cadence, day_of_week, day_of_month, hour, minute, timezone, status, last_fired_slot, last_fired_ts, created_ts`
+// Column order mirrors migrations/00052 exactly, so a reader comparing the two
+// never has to hold a permutation in their head.
+const scheduledMessageColumns = `id, member_id, label, body, cadence, day_of_week, day_of_month, hour, minute, custom_days, custom_hours, custom_minutes, timezone, status, last_fired_slot, last_fired_ts, created_ts`
 
 func scanScheduledMessage(row interface{ Scan(...any) error }) (ScheduledMessage, error) {
 	var m ScheduledMessage
+	var days, hours, minutes string
 	err := row.Scan(&m.ID, &m.MemberID, &m.Label, &m.Body, &m.Cadence,
-		&m.DayOfWeek, &m.DayOfMonth, &m.Hour, &m.Minute, &m.Timezone,
+		&m.DayOfWeek, &m.DayOfMonth, &m.Hour, &m.Minute,
+		&days, &hours, &minutes, &m.Timezone,
 		&m.Status, &m.LastFiredSlot, &m.LastFiredTS, &m.CreatedTS)
+	m.CustomDays, m.CustomHours, m.CustomMinutes = parseIntSet(days), parseIntSet(hours), parseIntSet(minutes)
 	return m, err
+}
+
+// canonicalIntSet renders a set for storage: sorted ascending, deduplicated,
+// comma-joined, no whitespace ("0,20,40"); the empty set is "".
+//
+// 🔴 This is the ONLY place a custom_* column value is produced, and it runs on
+// every write path, so the invariant holds regardless of what a caller handed
+// the struct. parseIntSet(canonicalIntSet(x)) is sortedIntSet(x), and
+// canonicalIntSet(parseIntSet(s)) == s for every s this function wrote — the
+// round trip is identity on its own output, which is what makes the PATCH
+// value comparison mean "same choice" rather than "same bytes as typed".
+func canonicalIntSet(vals []int) string {
+	sorted := sortedIntSet(vals)
+	parts := make([]string, len(sorted))
+	for i, v := range sorted {
+		parts[i] = strconv.Itoa(v)
+	}
+	return strings.Join(parts, ",")
+}
+
+// sortedIntSet returns vals sorted ascending with duplicates collapsed, without
+// mutating the input.
+func sortedIntSet(vals []int) []int {
+	if len(vals) == 0 {
+		return nil
+	}
+	seen := make(map[int]struct{}, len(vals))
+	out := make([]int, 0, len(vals))
+	for _, v := range vals {
+		if _, dup := seen[v]; dup {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// parseIntSet reads a stored custom_* column back. An entry that is not a
+// decimal integer is dropped rather than failing the read: the column is only
+// ever written by canonicalIntSet, so anything else got there by a hand-edit,
+// and refusing to load the row would take the whole schedule down with it.
+func parseIntSet(s string) []int {
+	if s == "" {
+		return nil
+	}
+	var out []int
+	for _, part := range strings.Split(s, ",") {
+		v, err := strconv.Atoi(part)
+		if err != nil {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 // GetScheduledMessage returns one schedule by id, or nil when absent.
@@ -2137,18 +2230,22 @@ func (d *DAL) ListAllEnabledScheduledMessages() ([]ScheduledMessage, error) {
 func (d *DAL) PutScheduledMessage(m ScheduledMessage) error {
 	_, err := d.wdb.Exec(`
 		INSERT INTO scheduled_message (`+scheduledMessageColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			member_id = excluded.member_id, label = excluded.label,
 			body = excluded.body, cadence = excluded.cadence,
 			day_of_week = excluded.day_of_week, day_of_month = excluded.day_of_month,
 			hour = excluded.hour, minute = excluded.minute,
+			custom_days = excluded.custom_days, custom_hours = excluded.custom_hours,
+			custom_minutes = excluded.custom_minutes,
 			timezone = excluded.timezone, status = excluded.status,
 			last_fired_slot = excluded.last_fired_slot,
 			last_fired_ts = excluded.last_fired_ts,
 			created_ts = excluded.created_ts`,
 		m.ID, m.MemberID, m.Label, m.Body, m.Cadence, m.DayOfWeek, m.DayOfMonth,
-		m.Hour, m.Minute, m.Timezone, m.Status, m.LastFiredSlot, m.LastFiredTS,
+		m.Hour, m.Minute,
+		canonicalIntSet(m.CustomDays), canonicalIntSet(m.CustomHours), canonicalIntSet(m.CustomMinutes),
+		m.Timezone, m.Status, m.LastFiredSlot, m.LastFiredTS,
 		m.CreatedTS)
 	return err
 }
@@ -2173,10 +2270,14 @@ func (d *DAL) UpdateScheduledMessageSettings(m ScheduledMessage) error {
 	_, err := d.wdb.Exec(`
 		UPDATE scheduled_message SET
 			label = ?, body = ?, cadence = ?, day_of_week = ?, day_of_month = ?,
-			hour = ?, minute = ?, timezone = ?, status = ?
+			hour = ?, minute = ?,
+			custom_days = ?, custom_hours = ?, custom_minutes = ?,
+			timezone = ?, status = ?
 		WHERE id = ?`,
 		m.Label, m.Body, m.Cadence, m.DayOfWeek, m.DayOfMonth,
-		m.Hour, m.Minute, m.Timezone, m.Status, m.ID)
+		m.Hour, m.Minute,
+		canonicalIntSet(m.CustomDays), canonicalIntSet(m.CustomHours), canonicalIntSet(m.CustomMinutes),
+		m.Timezone, m.Status, m.ID)
 	return err
 }
 

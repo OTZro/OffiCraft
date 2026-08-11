@@ -43,6 +43,7 @@ import type {
   WebhookUpdate,
   WebhookRequestLog,
   ScheduledMessage,
+  ScheduleCadence,
   ScheduledMessageCreateInput,
   ScheduledMessageUpdate,
   ReplyCard,
@@ -1474,6 +1475,10 @@ const mockScheduledMessages = new Map<string, ScheduledMessage[]>([
         dayOfMonth: 1,
         hour: 9,
         minute: 0,
+        // Empty for every non-custom cadence (server parity, T-49e7).
+        customDays: [],
+        customHours: [],
+        customMinutes: [],
         timezone: "Asia/Taipei",
         status: "enabled",
         lastFiredSlot: "2026-08-10T09:00+08:00",
@@ -1502,12 +1507,12 @@ function mockScheduleId(): string {
  * slot" computation: reproducing that here would imply a fidelity the mock does
  * not have. */
 function mockScheduleSlot(s: {
-  hour: number;
-  minute: number;
+  hour?: number;
+  minute?: number;
   timezone: string;
 }): string {
-  const hh = String(s.hour).padStart(2, "0");
-  const mm = String(s.minute).padStart(2, "0");
+  const hh = String(s.hour ?? 0).padStart(2, "0");
+  const mm = String(s.minute ?? 0).padStart(2, "0");
   let day = new Date().toISOString().slice(0, 10);
   try {
     // sv-SE renders as YYYY-MM-DD, so the zone's own calendar day comes out
@@ -1520,6 +1525,14 @@ function mockScheduleSlot(s: {
     // UTC day rather than inventing an offset
   }
   return `${day}T${hh}:${mm}`;
+}
+
+/** Server parity for the three `custom` sets: duplicates collapse and the set
+ * is stored sorted, so two orderings of the same choice compare equal — which
+ * is what stops a caller that sends the whole form back on every save from
+ * re-aiming the delivery cursor. */
+function sortedSet(values: number[]): number[] {
+  return [...new Set(values)].sort((a, b) => a - b);
 }
 
 /** Recipient parity with the server (T-f059): a schedule may bind to an
@@ -1546,8 +1559,15 @@ function validateSchedulePart(
     dayOfMonth?: number;
     hour?: number;
     minute?: number;
+    customDays?: number[];
+    customHours?: number[];
+    customMinutes?: number[];
     timezone?: string;
-  }
+  },
+  // The cadence the row ends up on. On create that is `part.cadence`; on patch
+  // the stored one unless this request changes it. It matters because the
+  // empty-set rule is cadence-scoped on the server — see below.
+  cadenceInEffect?: string
 ): void {
   const bad = (detail: string) => {
     throw new ApiError(
@@ -1561,9 +1581,31 @@ function validateSchedulePart(
     bad("body must not be blank");
   if (
     part.cadence !== undefined &&
-    !["daily", "weekly", "monthly"].includes(part.cadence)
+    !["daily", "weekly", "monthly", "custom"].includes(part.cadence)
   )
-    bad("cadence must be one of daily / weekly / monthly");
+    bad("cadence must be one of daily / weekly / monthly / custom");
+  // The three `custom` sets are EXPLICIT: an empty set is a 422 rather than a
+  // silent "all" or a silent "never", because a schedule that always fires and
+  // one that never fires must not be one keystroke apart.
+  //
+  // 🔴 That refusal is CADENCE-SCOPED, and the mock must scope it the same way
+  // or it is stricter than the server it stands in for. The server folds an
+  // empty array to nil on the way in (intSliceOrNil) and only judges the sets
+  // when the cadence is `custom`, so `{"cadence":"daily","custom_days":[]}` is
+  // accepted there. A mock that refuses it teaches the caller a rule the wire
+  // does not have.
+  const cadence = cadenceInEffect ?? part.cadence;
+  const set = (name: string, values: number[] | undefined, lo: number, hi: number) => {
+    if (values === undefined) return;
+    if (values.length === 0 && cadence === "custom") bad(`${name} must not be empty`);
+    for (const v of values) {
+      if (!Number.isInteger(v) || v < lo || v > hi)
+        bad(`${name} must be ${lo}-${hi}`);
+    }
+  };
+  set("custom_days", part.customDays, 1, 31);
+  set("custom_hours", part.customHours, 0, 23);
+  set("custom_minutes", part.customMinutes, 0, 59);
   if (part.hour !== undefined && (part.hour < 0 || part.hour > 23))
     bad("hour must be 0-23");
   if (part.minute !== undefined && (part.minute < 0 || part.minute > 59))
@@ -1586,6 +1628,42 @@ function validateSchedulePart(
       bad(`unknown timezone '${part.timezone}'`);
     }
   }
+}
+
+/** The CONDITIONAL half of the create/patch 422 (T-49e7): which fields a
+ * cadence cannot do without. `daily`/`weekly`/`monthly` fire at the single
+ * reading `hour`/`minute` names, so omitting either is a 422 and never a silent
+ * midnight; `custom` fires where the three sets intersect, so it needs all
+ * three (from the request, or already stored on the row being patched). */
+function requireCadenceFields(
+  memberId: string,
+  cadence: ScheduleCadence,
+  have: {
+    hour?: number;
+    minute?: number;
+    customDays?: number[];
+    customHours?: number[];
+    customMinutes?: number[];
+  }
+): void {
+  const bad = (detail: string) => {
+    throw new ApiError(
+      `http 422 for /api/members/${memberId}/scheduled-messages`,
+      422,
+      "validation_error",
+      detail
+    );
+  };
+  if (cadence === "custom") {
+    if (!have.customDays?.length) bad("custom_days is required for cadence custom");
+    if (!have.customHours?.length)
+      bad("custom_hours is required for cadence custom");
+    if (!have.customMinutes?.length)
+      bad("custom_minutes is required for cadence custom");
+    return;
+  }
+  if (have.hour === undefined) bad(`hour is required for cadence ${cadence}`);
+  if (have.minute === undefined) bad(`minute is required for cadence ${cadence}`);
 }
 
 // T-7fa1 staged *_pending responses. The mock has no wardens, so it can never
@@ -1911,8 +1989,12 @@ export const mockApi: Api = {
       dayOfMonth: input.dayOfMonth,
       hour: input.hour,
       minute: input.minute,
+      customDays: input.customDays,
+      customHours: input.customHours,
+      customMinutes: input.customMinutes,
       timezone: input.timezone,
     });
+    requireCadenceFields(memberId, input.cadence, input);
     const created: ScheduledMessage = {
       id: mockScheduleId(),
       memberId,
@@ -1923,8 +2005,16 @@ export const mockApi: Api = {
       // day_of_month → 1.
       dayOfWeek: input.dayOfWeek ?? 0,
       dayOfMonth: input.dayOfMonth ?? 1,
-      hour: input.hour,
-      minute: input.minute,
+      hour: input.hour ?? 0,
+      minute: input.minute ?? 0,
+      // Empty for every cadence but `custom` — the sets are that cadence's
+      // whole schedule, and a non-custom row must not carry a stale one.
+      customDays:
+        input.cadence === "custom" ? sortedSet(input.customDays ?? []) : [],
+      customHours:
+        input.cadence === "custom" ? sortedSet(input.customHours ?? []) : [],
+      customMinutes:
+        input.cadence === "custom" ? sortedSet(input.customMinutes ?? []) : [],
       timezone: input.timezone,
       status: "enabled",
       lastFiredSlot: mockScheduleSlot(input),
@@ -1954,7 +2044,19 @@ export const mockApi: Api = {
         `scheduled message '${scheduleId}' not found`
       );
     }
-    validateSchedulePart(memberId, patch);
+    validateSchedulePart(memberId, patch, patch.cadence ?? s.cadence);
+    // Switching TO custom must arrive with the three sets in the SAME request
+    // unless the stored row already carries them — a cadence with no times for
+    // it is exactly what the conditional 422 exists to refuse.
+    if (patch.cadence !== undefined) {
+      requireCadenceFields(memberId, patch.cadence, {
+        hour: patch.hour ?? s.hour,
+        minute: patch.minute ?? s.minute,
+        customDays: patch.customDays ?? s.customDays,
+        customHours: patch.customHours ?? s.customHours,
+        customMinutes: patch.customMinutes ?? s.customMinutes,
+      });
+    }
     if (patch.label !== undefined) s.label = patch.label;
     if (patch.body !== undefined) s.body = patch.body;
     if (patch.cadence !== undefined) s.cadence = patch.cadence;
@@ -1962,6 +2064,13 @@ export const mockApi: Api = {
     if (patch.dayOfMonth !== undefined) s.dayOfMonth = patch.dayOfMonth;
     if (patch.hour !== undefined) s.hour = patch.hour;
     if (patch.minute !== undefined) s.minute = patch.minute;
+    // Switching AWAY from custom leaves the stored sets in place, unread, so
+    // switching back does not lose the choice.
+    if (patch.customDays !== undefined) s.customDays = sortedSet(patch.customDays);
+    if (patch.customHours !== undefined)
+      s.customHours = sortedSet(patch.customHours);
+    if (patch.customMinutes !== undefined)
+      s.customMinutes = sortedSet(patch.customMinutes);
     if (patch.timezone !== undefined) s.timezone = patch.timezone;
     if (patch.status !== undefined) s.status = patch.status;
     // Re-aim the cursor only when a CADENCE/SLOT field moved (design §實作時才
@@ -1973,6 +2082,9 @@ export const mockApi: Api = {
       patch.dayOfMonth !== undefined ||
       patch.hour !== undefined ||
       patch.minute !== undefined ||
+      patch.customDays !== undefined ||
+      patch.customHours !== undefined ||
+      patch.customMinutes !== undefined ||
       patch.timezone !== undefined;
     if (reAimed) s.lastFiredSlot = mockScheduleSlot(s);
     return { ...s };

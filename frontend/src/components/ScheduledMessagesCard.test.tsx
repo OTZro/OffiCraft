@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { render, fireEvent, waitFor, within } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
+import { makeMessages } from "../i18n/compose";
 import { ScheduledMessagesCard } from "./ScheduledMessagesCard";
 import { MemberDetailPanel } from "./MemberDetailPanel";
 import { WorkerDetailPanel } from "./WorkerDetailPanel";
@@ -56,6 +57,9 @@ function mkSchedule(over: Partial<ScheduledMessage> = {}): ScheduledMessage {
     dayOfMonth: 1,
     hour: 9,
     minute: 0,
+    customDays: [],
+    customHours: [],
+    customMinutes: [],
     timezone: "Asia/Taipei",
     status: "enabled",
     lastFiredSlot: "2026-08-10T09:00+08:00",
@@ -74,8 +78,11 @@ const createScheduledMessage = vi.fn(
       cadence: input.cadence,
       dayOfWeek: input.dayOfWeek ?? 0,
       dayOfMonth: input.dayOfMonth ?? 1,
-      hour: input.hour,
-      minute: input.minute,
+      hour: input.hour ?? 0,
+      minute: input.minute ?? 0,
+      customDays: input.customDays ?? [],
+      customHours: input.customHours ?? [],
+      customMinutes: input.customMinutes ?? [],
       timezone: input.timezone,
     });
     store = [...store, created];
@@ -183,6 +190,13 @@ function mkWorker(over: Partial<OutsourceWorkerView> = {}): OutsourceWorkerView 
 }
 
 const s = zh.mp.schedmsg;
+const m = makeMessages(zh, "zh");
+
+/** The FULL sets. Spelled out because that is what the wire carries: "every
+ * day" IS the list of every day, and an implementation that shipped a marker
+ * instead would satisfy any assertion written the short way. */
+const ALL_DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
+const ALL_HOURS = Array.from({ length: 24 }, (_, i) => i);
 
 // Frozen clock for the last-sent assertions: 2026-08-10 10:00 local, with a
 // delivery the evening before.
@@ -570,6 +584,220 @@ describe("ScheduledMessagesCard", () => {
 
     await waitFor(() => expect(updateScheduledMessage).toHaveBeenCalledTimes(1));
     expect(updateScheduledMessage.mock.calls[0][2].body).toBe(LONG_BODY);
+  });
+
+  it("creates a custom-cadence schedule from the three sets and sends no wall-clock reading", async () => {
+    const view = await renderOpenCard();
+    fireEvent.click(await view.findByTestId("mp-schedmsg-add"));
+    fireEvent.change(await view.findByTestId("mp-schedmsg-body-input"), {
+      target: { value: "每 20 分鐘看一次佇列" },
+    });
+    fireEvent.change(await view.findByTestId("mp-schedmsg-cadence"), {
+      target: { value: "custom" },
+    });
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-days-all"));
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-hours-all"));
+    // The shortcut is not a value on the wire: it expands to the explicit
+    // minutes it names.
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-minutes-step-20"));
+    fireEvent.click(view.getByTestId("mp-schedmsg-create"));
+
+    await waitFor(() => expect(createScheduledMessage).toHaveBeenCalledTimes(1));
+    const input = createScheduledMessage.mock.calls[0][1];
+    expect(input.cadence).toBe("custom");
+    expect(input.customDays).toEqual(ALL_DAYS);
+    expect(input.customHours).toEqual(ALL_HOURS);
+    expect(input.customMinutes).toEqual([0, 20, 40]);
+    // custom reads none of these four; sending a reading nothing applies is the
+    // required-but-ignored ambiguity the DTO removed on purpose.
+    expect(input.hour).toBeUndefined();
+    expect(input.minute).toBeUndefined();
+    expect(input.dayOfWeek).toBeUndefined();
+    expect(input.dayOfMonth).toBeUndefined();
+  });
+
+  it("blocks a custom schedule with an empty set before it reaches the wire", async () => {
+    const view = await renderOpenCard();
+    fireEvent.click(await view.findByTestId("mp-schedmsg-add"));
+    fireEvent.change(await view.findByTestId("mp-schedmsg-body-input"), {
+      target: { value: "沒有選任何時間" },
+    });
+    fireEvent.change(await view.findByTestId("mp-schedmsg-cadence"), {
+      target: { value: "custom" },
+    });
+
+    const submit = view.getByTestId("mp-schedmsg-create") as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    expect(view.getByTestId("mp-schedmsg-custom-empty-hint").textContent).toBe(
+      s.customEmptyHint
+    );
+    // Pressing it anyway must not reach the wire — a disabled attribute alone
+    // would leave the guard to the DOM.
+    fireEvent.click(submit);
+    expect(createScheduledMessage).not.toHaveBeenCalled();
+
+    // TWO of three is still empty: the block is about the INTERSECTION, so it
+    // must not lift until every set has something in it.
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-days-all"));
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-hours-all"));
+    expect(
+      (view.getByTestId("mp-schedmsg-create") as HTMLButtonElement).disabled
+    ).toBe(true);
+
+    // The other direction — a block that never lifted would satisfy everything
+    // above on its own. The 60 minute boxes ship collapsed behind the shortcut
+    // row, so reaching one is the two-step it is on screen.
+    expect(view.queryByTestId("mp-schedmsg-custom-minutes-grid")).toBeNull();
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-minutes-detail-toggle"));
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-minutes-0"));
+    expect(
+      (view.getByTestId("mp-schedmsg-create") as HTMLButtonElement).disabled
+    ).toBe(false);
+    expect(view.queryByTestId("mp-schedmsg-custom-empty-hint")).toBeNull();
+    fireEvent.click(view.getByTestId("mp-schedmsg-create"));
+    await waitFor(() => expect(createScheduledMessage).toHaveBeenCalledTimes(1));
+  });
+
+  it("selects and clears a whole set, and says in words what is selected", async () => {
+    const view = await renderOpenCard();
+    fireEvent.click(await view.findByTestId("mp-schedmsg-add"));
+    fireEvent.change(await view.findByTestId("mp-schedmsg-cadence"), {
+      target: { value: "custom" },
+    });
+
+    // 全選 means the set is LISTED whole — the wire has no "all" value, so an
+    // implementation that stored a marker instead would show up right here.
+    expect(view.getByTestId("mp-schedmsg-custom-hours-summary").textContent).toBe(
+      s.customNone
+    );
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-hours-all"));
+    expect(view.getByTestId("mp-schedmsg-custom-hours-summary").textContent).toBe(
+      m.schedCustomHours(ALL_HOURS)
+    );
+    for (const h of ALL_HOURS) {
+      expect(
+        (view.getByTestId(`mp-schedmsg-custom-hours-${h}`) as HTMLInputElement)
+          .checked
+      ).toBe(true);
+    }
+
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-hours-clear"));
+    expect(view.getByTestId("mp-schedmsg-custom-hours-summary").textContent).toBe(
+      s.customNone
+    );
+    expect(
+      (view.getByTestId("mp-schedmsg-custom-hours-0") as HTMLInputElement).checked
+    ).toBe(false);
+
+    // …and 清除 hit one group, not all three.
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-days-all"));
+    fireEvent.click(view.getByTestId("mp-schedmsg-custom-hours-clear"));
+    expect(view.getByTestId("mp-schedmsg-custom-days-summary").textContent).toBe(
+      m.schedCustomDays(ALL_DAYS)
+    );
+  });
+
+  it("names each of the three sets as a group instead of leaving 60 bare checkboxes", async () => {
+    const view = await renderOpenCard();
+    fireEvent.click(await view.findByTestId("mp-schedmsg-add"));
+    fireEvent.change(await view.findByTestId("mp-schedmsg-cadence"), {
+      target: { value: "custom" },
+    });
+
+    // Read the way a screen reader does: by accessible name, not by class. The
+    // minute grid is sixty checkboxes labelled 0…59; without a named group there
+    // is nothing on the page saying they are minutes, and the days and hours
+    // grids sound the same.
+    for (const [name, label] of [
+      ["days", s.customDaysLabel],
+      ["hours", s.customHoursLabel],
+      ["minutes", s.customMinutesLabel],
+    ] as const) {
+      const group = view.getByRole("group", { name: label });
+      expect(group).toBe(view.getByTestId(`mp-schedmsg-custom-${name}`));
+    }
+
+    // …and the three names are distinct, so "named" is not one name three times.
+    const named = view
+      .getAllByRole("group")
+      .map((g) => g.getAttribute("aria-labelledby"));
+    expect(new Set(named).size).toBe(named.length);
+  });
+
+  it("edits a custom schedule from its stored sets and shows the result without a remount", async () => {
+    store = [
+      mkSchedule({
+        label: "佇列巡檢",
+        cadence: "custom",
+        customDays: ALL_DAYS,
+        customHours: ALL_HOURS,
+        customMinutes: [0, 30],
+      }),
+    ];
+    const target = store[0];
+    const view = await renderOpenCard();
+    const p = `mp-schedmsg-edit-${target.id}`;
+
+    fireEvent.click(await view.findByTestId(`mp-schedmsg-edit-${target.id}`));
+    // The editor opens on what the SERVER holds — an editor that opened with
+    // empty sets would silently blank a schedule the owner only came to rename.
+    expect(view.getByTestId(`${p}-custom-minutes-summary`).textContent).toBe(
+      m.schedCustomMinutes([0, 30])
+    );
+    fireEvent.click(view.getByTestId(`${p}-custom-minutes-detail-toggle`));
+    expect(
+      (view.getByTestId(`${p}-custom-minutes-30`) as HTMLInputElement).checked
+    ).toBe(true);
+
+    fireEvent.click(view.getByTestId(`${p}-custom-minutes-step-15`));
+    fireEvent.click(view.getByTestId(`mp-schedmsg-edit-save-${target.id}`));
+
+    await waitFor(() => expect(updateScheduledMessage).toHaveBeenCalledTimes(1));
+    expect(updateScheduledMessage.mock.calls[0][2].customMinutes).toEqual([
+      0, 15, 30, 45,
+    ]);
+    expect(updateScheduledMessage.mock.calls[0][2].hour).toBeUndefined();
+
+    const row = await view.findByTestId(`mp-schedmsg-row-${target.id}`);
+    expect(
+      within(row).getByText(
+        m.schedCustomSummary(ALL_DAYS, ALL_HOURS, [0, 15, 30, 45])
+      )
+    ).toBeTruthy();
+  });
+
+  // 🔴 The list summary used to be if-weekly / if-monthly / else-daily. Without
+  // a custom branch a schedule that fires 72 times a day is DRAWN as 「每天」,
+  // with nothing on the row admitting it — the silent lie this case exists for.
+  it("states a custom schedule's own times in the list instead of drawing it as 每天", async () => {
+    store = [
+      mkSchedule({ label: "真的每天", cadence: "daily" }),
+      mkSchedule({
+        label: "每 20 分",
+        cadence: "custom",
+        customDays: ALL_DAYS,
+        customHours: ALL_HOURS,
+        customMinutes: [0, 20, 40],
+      }),
+    ];
+    const [daily, custom] = store;
+    const view = await renderOpenCard();
+
+    const when = await view.findByTestId(`mp-schedmsg-when-${custom.id}`);
+    expect(when.textContent).toContain(
+      m.schedCustomSummary(ALL_DAYS, ALL_HOURS, [0, 20, 40])
+    );
+    // The daily row is the CONTROL: it proves 每天 is what a daily schedule
+    // really renders, so the custom row differing from it is a real difference
+    // and not an artefact of the fixture.
+    const dailyWhen = await view.findByTestId(`mp-schedmsg-when-${daily.id}`);
+    expect(dailyWhen.textContent).toContain(s.cadenceDaily);
+    expect(when.textContent).not.toBe(dailyWhen.textContent);
+
+    // custom reads no single wall-clock reading, so the row prints none — the
+    // stored 09:00 belongs to a cadence this schedule is not on.
+    expect(dailyWhen.textContent).toContain("09:00");
+    expect(when.textContent).not.toContain("09:00");
   });
 
   it("says the load failed instead of reading as honest-empty", async () => {

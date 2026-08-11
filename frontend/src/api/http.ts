@@ -680,29 +680,39 @@ export const httpApi: Api = {
     memberId: string,
     input: ScheduledMessageCreateInput,
   ): Promise<ScheduledMessage> {
-    // POST /api/members/{id}/scheduled-messages {body, cadence, hour, minute,
-    // timezone, label?, day_of_week?, day_of_month?} -> ScheduledMessageDTO.
-    // The five required fields always ride; the three optional ones only when
-    // supplied (an absent field must not arrive as null).
+    // POST /api/members/{id}/scheduled-messages {body, cadence, timezone,
+    // hour?, minute?, label?, day_of_week?, day_of_month?, custom_days?,
+    // custom_hours?, custom_minutes?} -> ScheduledMessageDTO.
+    // The three unconditionally required fields always ride; every other one
+    // only when supplied (an absent field must not arrive as null). `hour` and
+    // `minute` left the unconditional set in T-49e7 so a `custom` schedule does
+    // not have to send two values it never reads.
     const body: {
       body: string;
-      cadence: "daily" | "weekly" | "monthly";
-      hour: number;
-      minute: number;
+      cadence: "daily" | "weekly" | "monthly" | "custom";
       timezone: string;
+      hour?: number;
+      minute?: number;
       label?: string;
       day_of_week?: number;
       day_of_month?: number;
+      custom_days?: number[];
+      custom_hours?: number[];
+      custom_minutes?: number[];
     } = {
       body: input.body,
       cadence: input.cadence,
-      hour: input.hour,
-      minute: input.minute,
       timezone: input.timezone,
     };
+    if (input.hour !== undefined) body.hour = input.hour;
+    if (input.minute !== undefined) body.minute = input.minute;
     if (input.label !== undefined) body.label = input.label;
     if (input.dayOfWeek !== undefined) body.day_of_week = input.dayOfWeek;
     if (input.dayOfMonth !== undefined) body.day_of_month = input.dayOfMonth;
+    if (input.customDays !== undefined) body.custom_days = input.customDays;
+    if (input.customHours !== undefined) body.custom_hours = input.customHours;
+    if (input.customMinutes !== undefined)
+      body.custom_minutes = input.customMinutes;
     const wire = unwrap(
       await client.POST("/api/members/{member_id}/scheduled-messages", {
         params: { path: { member_id: memberId } },
@@ -723,11 +733,14 @@ export const httpApi: Api = {
     const body: {
       label?: string;
       body?: string;
-      cadence?: "daily" | "weekly" | "monthly";
+      cadence?: "daily" | "weekly" | "monthly" | "custom";
       day_of_week?: number;
       day_of_month?: number;
       hour?: number;
       minute?: number;
+      custom_days?: number[];
+      custom_hours?: number[];
+      custom_minutes?: number[];
       timezone?: string;
       status?: "enabled" | "disabled";
     } = {};
@@ -736,6 +749,10 @@ export const httpApi: Api = {
     if (patch.cadence !== undefined) body.cadence = patch.cadence;
     if (patch.dayOfWeek !== undefined) body.day_of_week = patch.dayOfWeek;
     if (patch.dayOfMonth !== undefined) body.day_of_month = patch.dayOfMonth;
+    if (patch.customDays !== undefined) body.custom_days = patch.customDays;
+    if (patch.customHours !== undefined) body.custom_hours = patch.customHours;
+    if (patch.customMinutes !== undefined)
+      body.custom_minutes = patch.customMinutes;
     if (patch.hour !== undefined) body.hour = patch.hour;
     if (patch.minute !== undefined) body.minute = patch.minute;
     if (patch.timezone !== undefined) body.timezone = patch.timezone;
