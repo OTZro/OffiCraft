@@ -83,6 +83,10 @@ func (s *apiServer) HandleCreateScheduledMessageApiMembersMemberIdScheduledMessa
 		// non-custom row that carries a set it does not read cannot defer a
 		// fault, because a PATCH that flips the cadence to `custom` judges the
 		// WHOLE assembled row before it lands.
+		// custom_months is the ONE set resolved rather than copied: an omitted
+		// field on a `custom` create means all twelve months. Stored is nil
+		// here because a create has no prior row to leave alone.
+		CustomMonths:  resolveCustomMonths(string(body.Cadence), nil, body.CustomMonths),
 		CustomDays:    intSliceOrNil(body.CustomDays),
 		CustomHours:   intSliceOrNil(body.CustomHours),
 		CustomMinutes: intSliceOrNil(body.CustomMinutes),
@@ -103,6 +107,45 @@ func (s *apiServer) HandleCreateScheduledMessageApiMembersMemberIdScheduledMessa
 		return
 	}
 	writeJSON(w, http.StatusOK, newScheduledMessageDTO(m))
+}
+
+// resolveCustomMonths decides what `custom_months` a request means, and it is
+// the ONLY place in the server where an ABSENT set carries a meaning.
+//
+// 🔴 Why the rule lives here and not in the validator: nil and [] are the same
+// value by the time a request becomes a ScheduledMessage, and they are two
+// DIFFERENT requests. "The caller never mentioned months" is a client that
+// predates the field, and its schedules already meant every month — refusing it
+// would break every one of them. "The caller sent []" is someone asking for a
+// schedule that never fires, which is the 422 migrations/00052 argues for. The
+// distinction survives exactly as long as the *[]int does, so it is made here,
+// and everything downstream sees a row that lists its months.
+//
+// The three inputs answer three different questions, in this order:
+//
+//	sent != nil     the caller stated something — honour it VERBATIM, including
+//	                the empty slice, which validation then refuses. Never
+//	                "helpfully" substitute all twelve for it.
+//	not custom      no months are read at all; leave whatever is stored, which
+//	                on a create is nothing and on a PATCH is the parked set a
+//	                row switched away from `custom` keeps.
+//	stored non-empty  an existing choice the caller did not touch. Absent means
+//	                unchanged, the ordinary PATCH rule.
+//
+// Only when all three fall through — a `custom` row that must exist, with no
+// months from the request and none on file — does the all-twelve default apply.
+// That is a create, or a PATCH that switches a never-custom row to `custom`.
+func resolveCustomMonths(cadence string, stored []int, sent *[]int) []int {
+	if sent != nil {
+		return *sent
+	}
+	if cadence != ScheduledMessageCadenceCustom {
+		return stored
+	}
+	if len(stored) > 0 {
+		return stored
+	}
+	return allCustomMonths()
 }
 
 // PATCH /api/members/{member_id}/scheduled-messages/{schedule_id} — partial
@@ -163,6 +206,7 @@ func (s *apiServer) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessa
 		(reads("day_of_month") && body.DayOfMonth != nil && *body.DayOfMonth != m.DayOfMonth) ||
 		(reads("hour") && body.Hour != nil && *body.Hour != m.Hour) ||
 		(reads("minute") && body.Minute != nil && *body.Minute != m.Minute) ||
+		(reads("custom_months") && body.CustomMonths != nil && canonicalIntSet(*body.CustomMonths) != canonicalIntSet(m.CustomMonths)) ||
 		(reads("custom_days") && body.CustomDays != nil && canonicalIntSet(*body.CustomDays) != canonicalIntSet(m.CustomDays)) ||
 		(reads("custom_hours") && body.CustomHours != nil && canonicalIntSet(*body.CustomHours) != canonicalIntSet(m.CustomHours)) ||
 		(reads("custom_minutes") && body.CustomMinutes != nil && canonicalIntSet(*body.CustomMinutes) != canonicalIntSet(m.CustomMinutes)) ||
@@ -205,6 +249,14 @@ func (s *apiServer) HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessa
 	// The response-schema sentences were rewritten to say so; this code did not
 	// move, because it already followed the PATCH clause — the one that
 	// describes THIS verb. Nothing here is open.
+	// 🔴 Months go through the resolver rather than the `!= nil` copy the other
+	// three use, and it runs AFTER m.Cadence has been patched — the question it
+	// asks is about the cadence this row will HAVE, not the one it had. That is
+	// what lets a PATCH switch a never-custom row to `custom` without naming
+	// months: the old client that does exactly that still lands a schedule, and
+	// it lands the all-twelve meaning it has always had. On a row that already
+	// carries months, absent still means unchanged.
+	m.CustomMonths = resolveCustomMonths(m.Cadence, m.CustomMonths, body.CustomMonths)
 	if body.CustomDays != nil {
 		m.CustomDays = *body.CustomDays
 	}
@@ -341,12 +393,15 @@ func (s *apiServer) validateScheduledMessage(w http.ResponseWriter, m ScheduledM
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return false
 	}
-	// The three sets are judged only for `custom`, the only cadence that reads
+	// The four sets are judged only for `custom`, the only cadence that reads
 	// them. Because a PATCH assembles the WHOLE row before it is judged,
 	// switching a schedule TO `custom` without sets — in the request or already
 	// stored — is refused here rather than landing a cadence with no times.
+	// custom_months reaches this point already resolved (see
+	// resolveCustomMonths), so an empty months set here can only mean the
+	// caller sent one explicitly.
 	if m.Cadence == ScheduledMessageCadenceCustom {
-		if err := ValidateScheduledMessageCustomSets(m.CustomDays, m.CustomHours, m.CustomMinutes); err != nil {
+		if err := ValidateScheduledMessageCustomSets(m.CustomMonths, m.CustomDays, m.CustomHours, m.CustomMinutes); err != nil {
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 			return false
 		}

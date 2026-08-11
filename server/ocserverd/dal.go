@@ -2072,11 +2072,17 @@ type ScheduledMessage struct {
 	DayOfMonth int
 	Hour       int
 	Minute     int
-	// The three explicit sets `custom` intersects (T-49e7). Days are 1-31,
-	// hours 0-23, minutes 0-59, all read in Timezone. Empty for every other
-	// cadence, and never empty for `custom` — an empty set is refused at the
-	// write (see migrations/00052 for why "all" and "never" must not sit one
-	// keystroke apart).
+	// The FOUR explicit sets `custom` intersects (T-49e7). Months are 1-12,
+	// days 1-31, hours 0-23, minutes 0-59, all read in Timezone. Empty for
+	// every other cadence, and never empty for `custom` — an empty set is
+	// refused at the write (see migrations/00052 for why "all" and "never" must
+	// not sit one keystroke apart).
+	//
+	// CustomMonths (round 2, migrations/00053) is the one set a REQUEST may
+	// omit, and omitting it means all twelve — the resolution happens in the
+	// handler, where nil and [] are still distinguishable. By the time a row
+	// reaches this struct the months are always listed explicitly, so nothing
+	// below the API layer ever has to read an absence as a meaning.
 	//
 	// 🔴 The Go side deals in []int; the COLUMN is a canonical comma-joined
 	// string, and canonicalIntSet/parseIntSet are the only translation. The
@@ -2085,6 +2091,7 @@ type ScheduledMessage struct {
 	// compares supplied against stored, and a cockpit that posts the whole
 	// form back would otherwise re-aim — swallowing the crossed delivery —
 	// merely because the user's checkbox order produced [20,0,40] this time.
+	CustomMonths  []int
 	CustomDays    []int
 	CustomHours   []int
 	CustomMinutes []int
@@ -2097,17 +2104,20 @@ type ScheduledMessage struct {
 	CreatedTS     float64
 }
 
-// Column order mirrors migrations/00052 exactly, so a reader comparing the two
-// never has to hold a permutation in their head.
-const scheduledMessageColumns = `id, member_id, label, body, cadence, day_of_week, day_of_month, hour, minute, custom_days, custom_hours, custom_minutes, timezone, status, last_fired_slot, last_fired_ts, created_ts`
+// The list is EXPLICIT, so it names the read order rather than inheriting the
+// table's physical one: migrations/00053 appended custom_months at the end of
+// the row (a constant-DEFAULT ADD COLUMN), and it is listed here beside the
+// three sets it belongs with. scanScheduledMessage must match THIS order.
+const scheduledMessageColumns = `id, member_id, label, body, cadence, day_of_week, day_of_month, hour, minute, custom_months, custom_days, custom_hours, custom_minutes, timezone, status, last_fired_slot, last_fired_ts, created_ts`
 
 func scanScheduledMessage(row interface{ Scan(...any) error }) (ScheduledMessage, error) {
 	var m ScheduledMessage
-	var days, hours, minutes string
+	var months, days, hours, minutes string
 	err := row.Scan(&m.ID, &m.MemberID, &m.Label, &m.Body, &m.Cadence,
 		&m.DayOfWeek, &m.DayOfMonth, &m.Hour, &m.Minute,
-		&days, &hours, &minutes, &m.Timezone,
+		&months, &days, &hours, &minutes, &m.Timezone,
 		&m.Status, &m.LastFiredSlot, &m.LastFiredTS, &m.CreatedTS)
+	m.CustomMonths = parseIntSet(months)
 	m.CustomDays, m.CustomHours, m.CustomMinutes = parseIntSet(days), parseIntSet(hours), parseIntSet(minutes)
 	return m, err
 }
@@ -2230,12 +2240,13 @@ func (d *DAL) ListAllEnabledScheduledMessages() ([]ScheduledMessage, error) {
 func (d *DAL) PutScheduledMessage(m ScheduledMessage) error {
 	_, err := d.wdb.Exec(`
 		INSERT INTO scheduled_message (`+scheduledMessageColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			member_id = excluded.member_id, label = excluded.label,
 			body = excluded.body, cadence = excluded.cadence,
 			day_of_week = excluded.day_of_week, day_of_month = excluded.day_of_month,
 			hour = excluded.hour, minute = excluded.minute,
+			custom_months = excluded.custom_months,
 			custom_days = excluded.custom_days, custom_hours = excluded.custom_hours,
 			custom_minutes = excluded.custom_minutes,
 			timezone = excluded.timezone, status = excluded.status,
@@ -2243,7 +2254,7 @@ func (d *DAL) PutScheduledMessage(m ScheduledMessage) error {
 			last_fired_ts = excluded.last_fired_ts,
 			created_ts = excluded.created_ts`,
 		m.ID, m.MemberID, m.Label, m.Body, m.Cadence, m.DayOfWeek, m.DayOfMonth,
-		m.Hour, m.Minute,
+		m.Hour, m.Minute, canonicalIntSet(m.CustomMonths),
 		canonicalIntSet(m.CustomDays), canonicalIntSet(m.CustomHours), canonicalIntSet(m.CustomMinutes),
 		m.Timezone, m.Status, m.LastFiredSlot, m.LastFiredTS,
 		m.CreatedTS)
@@ -2271,11 +2282,11 @@ func (d *DAL) UpdateScheduledMessageSettings(m ScheduledMessage) error {
 		UPDATE scheduled_message SET
 			label = ?, body = ?, cadence = ?, day_of_week = ?, day_of_month = ?,
 			hour = ?, minute = ?,
-			custom_days = ?, custom_hours = ?, custom_minutes = ?,
+			custom_months = ?, custom_days = ?, custom_hours = ?, custom_minutes = ?,
 			timezone = ?, status = ?
 		WHERE id = ?`,
 		m.Label, m.Body, m.Cadence, m.DayOfWeek, m.DayOfMonth,
-		m.Hour, m.Minute,
+		m.Hour, m.Minute, canonicalIntSet(m.CustomMonths),
 		canonicalIntSet(m.CustomDays), canonicalIntSet(m.CustomHours), canonicalIntSet(m.CustomMinutes),
 		m.Timezone, m.Status, m.ID)
 	return err

@@ -67,7 +67,8 @@ func TestEveryCadenceInTheClosedSetProducesASlot(t *testing.T) {
 		ScheduledMessageCadenceMonthly: {Cadence: ScheduledMessageCadenceMonthly,
 			DayOfMonth: 1, Hour: 9, Minute: 0, Timezone: "Asia/Taipei"},
 		ScheduledMessageCadenceCustom: {Cadence: ScheduledMessageCadenceCustom,
-			CustomDays: intRange(1, 31), CustomHours: intRange(0, 23),
+			CustomMonths: intRange(1, 12),
+			CustomDays:   intRange(1, 31), CustomHours: intRange(0, 23),
 			CustomMinutes: []int{0, 20, 40}, Timezone: "Asia/Taipei"},
 	}
 	if len(scheduledMessageCadences) == 0 {
@@ -118,6 +119,19 @@ func TestScheduledMessageRowSurvivesTheTableRebuild(t *testing.T) {
 		Cadence: ScheduledMessageCadenceMonthly, DayOfWeek: 6, DayOfMonth: 31,
 		Hour: 0, Minute: 0, Timezone: "America/New_York", Status: ScheduledMessageStatusEnabled,
 		LastFiredSlot: "2026-07-31T00:00-04:00", LastFiredTS: 1786000002.5, CreatedTS: 1785000002.25,
+	}, {
+		// 🔴 The four set columns are adjacent TEXT columns holding the same
+		// shape of value, so a transposition between any two of them survives
+		// every test that writes and reads one field. The four sets below are
+		// therefore pairwise DISJOINT and each is illegal in the others' range
+		// where possible — months [11] is not a legal hour set member's
+		// neighbour by accident, and reading months back as [7] names the swap.
+		ID: "sch-rt-custom", MemberID: "mira", Label: "custom label", Body: "custom body",
+		Cadence: ScheduledMessageCadenceCustom, DayOfWeek: 2, DayOfMonth: 9,
+		CustomMonths: []int{3, 11}, CustomDays: []int{22, 28},
+		CustomHours: []int{7, 19}, CustomMinutes: []int{35, 55},
+		Hour: 0, Minute: 0, Timezone: "Europe/London", Status: ScheduledMessageStatusEnabled,
+		LastFiredSlot: "2026-03-22T07:35+00:00", LastFiredTS: 1786000003.5, CreatedTS: 1785000003.25,
 	}}
 	for _, want := range rows {
 		t.Run(want.Cadence, func(t *testing.T) {
@@ -148,7 +162,8 @@ func TestCustomSetsRoundTripInCanonicalForm(t *testing.T) {
 	sm := ScheduledMessage{
 		ID: "sch-canon", MemberID: "mira", Body: "tick",
 		Cadence: ScheduledMessageCadenceCustom, DayOfMonth: 1,
-		CustomDays: []int{31, 1, 15, 1}, CustomHours: []int{9, 0, 9},
+		CustomMonths: []int{12, 3, 12, 1},
+		CustomDays:   []int{31, 1, 15, 1}, CustomHours: []int{9, 0, 9},
 		CustomMinutes: []int{20, 0, 40},
 		Timezone:      "Asia/Taipei", Status: ScheduledMessageStatusEnabled, CreatedTS: nowSecs(),
 	}
@@ -164,6 +179,7 @@ func TestCustomSetsRoundTripInCanonicalForm(t *testing.T) {
 		got   []int
 		want  []int
 	}{
+		{"custom_months", got.CustomMonths, []int{1, 3, 12}},
 		{"custom_days", got.CustomDays, []int{1, 15, 31}},
 		{"custom_hours", got.CustomHours, []int{0, 9}},
 		{"custom_minutes", got.CustomMinutes, []int{0, 20, 40}},
@@ -340,9 +356,10 @@ func TestCustomFiresEveryTwentyMinutes(t *testing.T) {
 	taipei := mustLoadZone(t, "Asia/Taipei")
 	sm := ScheduledMessage{
 		ID: "sch-20min", MemberID: "mira", Body: "twenty minutes",
-		Cadence:     ScheduledMessageCadenceCustom,
-		CustomDays:  intRange(1, 31),
-		CustomHours: intRange(0, 23), CustomMinutes: []int{0, 20, 40},
+		Cadence:      ScheduledMessageCadenceCustom,
+		CustomMonths: intRange(1, 12),
+		CustomDays:   intRange(1, 31),
+		CustomHours:  intRange(0, 23), CustomMinutes: []int{0, 20, 40},
 		Timezone: "Asia/Taipei",
 	}
 
@@ -406,8 +423,9 @@ func TestCustomSkipsADateTheMonthDoesNotHave(t *testing.T) {
 	_, _, api := scheduledStack(t)
 	sm := ScheduledMessage{
 		ID: "sch-31st", MemberID: "mira", Body: "month end",
-		Cadence:    ScheduledMessageCadenceCustom,
-		CustomDays: []int{31}, CustomHours: []int{9}, CustomMinutes: []int{0},
+		Cadence:      ScheduledMessageCadenceCustom,
+		CustomMonths: intRange(1, 12),
+		CustomDays:   []int{31}, CustomHours: []int{9}, CustomMinutes: []int{0},
 		Timezone: "UTC",
 	}
 	// Mid-February: the most recent occurrence is 31 JANUARY. Anything else means
@@ -442,8 +460,9 @@ func TestCustomSkipsADateTheMonthDoesNotHave(t *testing.T) {
 	_, _, api2 := scheduledStack(t)
 	many := ScheduledMessage{
 		ID: "sch-1-15-31", MemberID: "mira", Body: "three days",
-		Cadence:    ScheduledMessageCadenceCustom,
-		CustomDays: []int{1, 15, 31}, CustomHours: []int{9}, CustomMinutes: []int{0},
+		Cadence:      ScheduledMessageCadenceCustom,
+		CustomMonths: intRange(1, 12),
+		CustomDays:   []int{1, 15, 31}, CustomHours: []int{9}, CustomMinutes: []int{0},
 		Timezone: "UTC",
 	}
 	febStart := time.Date(2026, time.February, 1, 0, 0, 0, 0, time.UTC)
@@ -475,8 +494,9 @@ func TestCustomDropsAWallClockTheZoneSkipped(t *testing.T) {
 	newYork := mustLoadZone(t, "America/New_York")
 	sm := ScheduledMessage{
 		ID: "sch-spring", MemberID: "mira", Body: "in the gap",
-		Cadence:    ScheduledMessageCadenceCustom,
-		CustomDays: []int{8}, CustomHours: []int{2}, CustomMinutes: []int{0, 30},
+		Cadence:      ScheduledMessageCadenceCustom,
+		CustomMonths: intRange(1, 12),
+		CustomDays:   []int{8}, CustomHours: []int{2}, CustomMinutes: []int{0, 30},
 		Timezone: "America/New_York",
 	}
 	// Late on the transition day, the most recent occurrence is a MONTH earlier.
@@ -535,8 +555,9 @@ func TestCustomDeliversAnAmbiguousWallClockOnce(t *testing.T) {
 	_, _, api := scheduledStack(t)
 	sm := ScheduledMessage{
 		ID: "sch-autumn", MemberID: "mira", Body: "the repeated hour",
-		Cadence:    ScheduledMessageCadenceCustom,
-		CustomDays: []int{1}, CustomHours: []int{1}, CustomMinutes: []int{0},
+		Cadence:      ScheduledMessageCadenceCustom,
+		CustomMonths: intRange(1, 12),
+		CustomDays:   []int{1}, CustomHours: []int{1}, CustomMinutes: []int{0},
 		Timezone: "America/New_York",
 	}
 	start := time.Date(2026, time.November, 1, 0, 0, 0, 0, newYork)
@@ -653,8 +674,9 @@ func TestCustomDeliversAnAmbiguousWallClockOnceInEveryZone(t *testing.T) {
 			_, _, api := scheduledStack(t)
 			sm := ScheduledMessage{
 				ID: "sch-ambiguous-" + zone, MemberID: "mira", Body: "the repeated hour",
-				Cadence:    ScheduledMessageCadenceCustom,
-				CustomDays: []int{repeated.Day()}, CustomHours: []int{repeated.Hour()},
+				Cadence:      ScheduledMessageCadenceCustom,
+				CustomMonths: intRange(1, 12),
+				CustomDays:   []int{repeated.Day()}, CustomHours: []int{repeated.Hour()},
 				CustomMinutes: []int{0},
 				Timezone:      zone,
 			}

@@ -181,17 +181,20 @@ func sweepSchedules(tz string) []sweepSchedule {
 	return []sweepSchedule{
 		{name: "custom/every-20-min", sm: ScheduledMessage{
 			Cadence: ScheduledMessageCadenceCustom, Timezone: tz,
-			CustomDays: intRange(1, 31), CustomHours: intRange(0, 23),
+			CustomMonths: intRange(1, 12),
+			CustomDays:   intRange(1, 31), CustomHours: intRange(0, 23),
 			CustomMinutes: []int{0, 20, 40},
 		}},
 		{name: "custom/days-1-15-31-hours-0-2-3", sm: ScheduledMessage{
 			Cadence: ScheduledMessageCadenceCustom, Timezone: tz,
-			CustomDays: []int{1, 15, 31}, CustomHours: []int{0, 2, 3},
+			CustomMonths: intRange(1, 12),
+			CustomDays:   []int{1, 15, 31}, CustomHours: []int{0, 2, 3},
 			CustomMinutes: []int{0, 15, 30, 45},
 		}},
 		{name: "custom/day-31-only", sm: ScheduledMessage{
 			Cadence: ScheduledMessageCadenceCustom, Timezone: tz,
-			CustomDays: []int{31}, CustomHours: []int{0, 12},
+			CustomMonths: intRange(1, 12),
+			CustomDays:   []int{31}, CustomHours: []int{0, 12},
 			CustomMinutes: []int{0},
 		}},
 		// One reading a day, in the middle of the day. 🔴 This one is not
@@ -203,7 +206,8 @@ func sweepSchedules(tz string) []sweepSchedule {
 		// reading is still ahead and yesterday has to be examined.
 		{name: "custom/noon-daily", sm: ScheduledMessage{
 			Cadence: ScheduledMessageCadenceCustom, Timezone: tz,
-			CustomDays: intRange(1, 31), CustomHours: []int{12},
+			CustomMonths: intRange(1, 12),
+			CustomDays:   intRange(1, 31), CustomHours: []int{12},
 			CustomMinutes: []int{0},
 		}},
 		{name: "daily/00:30", sm: ScheduledMessage{
@@ -576,11 +580,41 @@ func earliestDeclaredReading(day time.Time, sm ScheduledMessage, loc *time.Locat
 // Red when: any of the four rules is broken anywhere. The failure names the
 // zone, the schedule, the instant and the rule.
 func TestTZSweepFindsNothing(t *testing.T) {
+	assertSweepSchedulesSelectEveryMonth(t)
 	st := sweepAllZones(t)
 	t.Log(st.report())
 	assertSweepLookedAtSomething(t, st)
 	if st.total() != 0 {
 		t.Fatalf("timezone sweep is not clean:\n%s", st.report())
+	}
+}
+
+// assertSweepSchedulesSelectEveryMonth keeps the independent oracle below
+// honest about the fourth set.
+//
+// The oracle re-derives the expected readings from CustomDays/Hours/Minutes and
+// has NO month condition — which is correct only while every custom fixture
+// here selects all twelve months. Add a month-filtered fixture and the oracle
+// would silently expect readings production correctly declines, so every
+// invariant in the sweep would start reporting findings that are not bugs. This
+// turns that into a named failure at the top of the sweep instead.
+func assertSweepSchedulesSelectEveryMonth(t *testing.T) {
+	t.Helper()
+	checked := 0
+	for _, sched := range sweepSchedules("UTC") {
+		if sched.sm.Cadence != ScheduledMessageCadenceCustom {
+			continue
+		}
+		checked++
+		if canonicalIntSet(sched.sm.CustomMonths) != canonicalIntSet(intRange(1, 12)) {
+			t.Fatalf("sweep schedule %q selects months [%s], but the oracle below has no month "+
+				"condition and would expect readings production correctly declines. Teach the "+
+				"oracle the month test before adding a month-filtered fixture.",
+				sched.name, canonicalIntSet(sched.sm.CustomMonths))
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no custom schedules in the sweep — this check, and most of the sweep, would be vacuous")
 	}
 }
 

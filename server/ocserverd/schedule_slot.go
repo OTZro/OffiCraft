@@ -77,6 +77,28 @@ const weeklyLookbackDays = 14
 // due anyway, so the delivery outcome is unchanged. That is unlike
 // monthlyLookbackMonths next door, where an insufficient bound really does stop
 // a schedule from ever firing and a named test says so.
+//
+// ⚠️ THE MONTH SET (round 2) MAKES THE WORST-CASE GAP FAR LARGER THAN 70 DAYS
+// AND THE CONSTANT IS DELIBERATELY NOT RAISED. months {1} × days {1} has a gap
+// of a whole year, so for most of that year mostRecentSlot answers "no slot" —
+// the previous occurrence is out of the window. That does NOT strand the
+// schedule, and the reason is that the SAME function answers both questions
+// this feature asks: currentSlotKey seeds a new schedule's cursor with it, and
+// the tick fires from it. A slot the window cannot reach is therefore invisible
+// to both, consistently — the cursor is seeded empty (which fires at the next
+// real slot, per slotIsAfterCursor) and the tick delivers nothing until that
+// slot actually arrives, at which point it is zero days back and plainly in
+// range. Past slots only ever move FURTHER out of the window as time advances,
+// so nothing can drift back into range and fire late.
+//
+// 🔴 THIS IS AN ASSERTION ABOUT COMPOSITION, NOT A MEASURED PROPERTY, AND IT IS
+// THE ONE THING TO RE-DERIVE IF A THIRD CALLER OF mostRecentSlot APPEARS. What
+// the bound really costs is a STALE catch-up: come back from downtime longer
+// than the window and the occurrence missed during it is not delivered late.
+// That is already this feature's stated behaviour (missed slots are not
+// backfilled), which is why the window was not grown to a year — a year of
+// lookback would enlarge no promise and would make every tick of every
+// month-filtered schedule walk 365 dates.
 const customLookbackDays = 70
 
 // mostRecentSlot returns the latest slot of s at or before now, computed as
@@ -156,6 +178,17 @@ func mostRecentSlot(s ScheduledMessage, now time.Time) (time.Time, bool) {
 			// RFC 5545 rule `monthly` follows; `monthly` names a single day, so
 			// for it that rule reads as "the whole month is skipped", and that
 			// phrasing does not carry over to a set.
+			//
+			// The MONTH test (round 2) is one more condition on the same date,
+			// asked first because it is the cheapest way to skip a whole month
+			// of candidate days. It composes with CustomDays rather than
+			// overriding it: months {2} × days {29} names 29 February and
+			// therefore fires in leap years only — the 29th is simply a date
+			// the other three Februaries do not have, which is the day-by-day
+			// rule above, not a new one.
+			if !intSetContains(s.CustomMonths, int(day.Month())) {
+				continue
+			}
 			if !intSetContains(s.CustomDays, day.Day()) {
 				continue
 			}
@@ -469,14 +502,14 @@ func currentSlotKey(s ScheduledMessage, now time.Time) string {
 // describeSchedule is the log identity of one schedule — id plus the aimed slot
 // in words, so a skipped-delivery line says which schedule and which aim.
 //
-// `custom` prints its three sets instead of Hour/Minute: those two columns hold
+// `custom` prints its four sets instead of Hour/Minute: those two columns hold
 // their 0/0 defaults on a custom row, so printing them would name a time nobody
 // chose — a log line that reads like a fact and is not one.
 func describeSchedule(s ScheduledMessage) string {
 	if s.Cadence == ScheduledMessageCadenceCustom {
-		return fmt.Sprintf("%s (custom days=[%s] hours=[%s] minutes=[%s] %s)", s.ID,
-			canonicalIntSet(s.CustomDays), canonicalIntSet(s.CustomHours),
-			canonicalIntSet(s.CustomMinutes), s.Timezone)
+		return fmt.Sprintf("%s (custom months=[%s] days=[%s] hours=[%s] minutes=[%s] %s)", s.ID,
+			canonicalIntSet(s.CustomMonths), canonicalIntSet(s.CustomDays),
+			canonicalIntSet(s.CustomHours), canonicalIntSet(s.CustomMinutes), s.Timezone)
 	}
 	return fmt.Sprintf("%s (%s %02d:%02d %s)", s.ID, s.Cadence, s.Hour, s.Minute, s.Timezone)
 }

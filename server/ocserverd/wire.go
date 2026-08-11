@@ -2032,11 +2032,19 @@ type scheduledMessageDTO struct {
 	DayOfMonth int    `json:"day_of_month"`
 	Hour       int    `json:"hour"`
 	Minute     int    `json:"minute"`
-	// The three `custom` sets (T-49e7). ALWAYS emitted, as an honest-empty
+	// The four `custom` sets (T-49e7). ALWAYS emitted, as an honest-empty
 	// array for every other cadence — never omitted. A field that appears only
 	// sometimes forces every reader to distinguish "this schedule has no set"
 	// from "this server does not know about sets", and those are two different
 	// answers to two different questions.
+	//
+	// 🔴 custom_months is emitted the same way even though the REQUEST side lets
+	// it be omitted. The two asymmetries are not in tension: on the way IN, an
+	// absent field is how a caller says "every month"; on the way OUT there is
+	// nothing to be coy about, because the row always lists its months (the
+	// handler resolved the omission, migrations/00053 backfilled the rest). A
+	// reader therefore never has to infer "all twelve" from an absence.
+	CustomMonths  []int   `json:"custom_months"`
 	CustomDays    []int   `json:"custom_days"`
 	CustomHours   []int   `json:"custom_hours"`
 	CustomMinutes []int   `json:"custom_minutes"`
@@ -2058,6 +2066,7 @@ func newScheduledMessageDTO(m ScheduledMessage) scheduledMessageDTO {
 		DayOfMonth:    m.DayOfMonth,
 		Hour:          m.Hour,
 		Minute:        m.Minute,
+		CustomMonths:  intSetOrEmpty(m.CustomMonths),
 		CustomDays:    intSetOrEmpty(m.CustomDays),
 		CustomHours:   intSetOrEmpty(m.CustomHours),
 		CustomMinutes: intSetOrEmpty(m.CustomMinutes),

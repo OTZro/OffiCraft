@@ -4484,7 +4484,7 @@
         "type": "object"
       },
       "ScheduledMessageCreateDTO": {
-        "description": "Create one scheduled message on a member (T-f059 定期訊息; `custom` cadence added by T-49e7). `body`, `cadence` and `timezone` are REQUIRED unconditionally; the remaining fields are required or ignored ACCORDING TO `cadence`, and each states its own behaviour. `daily`/`weekly`/`monthly` fire once a day at the single wall-clock reading `hour`/`minute` names, so those two are required for them (omitting either is a 422, never a silent midnight) and `weekly` additionally reads `day_of_week`, `monthly` `day_of_month`. `custom` fires at every reading where `custom_days`, `custom_hours` and `custom_minutes` all hold, so those three are required for it and `hour`/`minute`/`day_of_week`/`day_of_month` are ignored. `hour` and `minute` left the unconditional required list in T-49e7 precisely so that a `custom` schedule does not have to send two values it never reads — a required-but-ignored field is the ambiguity this table was warned about — and the conditional 422 keeps the calendar cadences exactly as strict as before. `timezone` is required for every cadence and deliberately not defaulted: a defaulted zone would sooner or later be read as \"wherever the server happens to run\". The delivery cursor is initialised to the slot most recently elapsed at creation time, so a schedule created at 10:00 for `daily` 09:00 does not fire today. The recipient may be an assistant OR an `ow-` outsource worker — the same recipient rule ordinary chat uses.",
+        "description": "Create one scheduled message on a member (T-f059 定期訊息; `custom` cadence added by T-49e7). `body`, `cadence` and `timezone` are REQUIRED unconditionally; the remaining fields are required or ignored ACCORDING TO `cadence`, and each states its own behaviour. `daily`/`weekly`/`monthly` fire once a day at the single wall-clock reading `hour`/`minute` names, so those two are required for them (omitting either is a 422, never a silent midnight) and `weekly` additionally reads `day_of_week`, `monthly` `day_of_month`. `custom` fires at every reading where `custom_months`, `custom_days`, `custom_hours` and `custom_minutes` all hold, so `custom_days`/`custom_hours`/`custom_minutes` are required for it and `hour`/`minute`/`day_of_week`/`day_of_month` are ignored. `custom_months` is the one set of the four that may be omitted — an omitted `custom_months` means all twelve months, which is what keeps a client written before that field working unchanged; an explicit empty array is still a 422. `hour` and `minute` left the unconditional required list in T-49e7 precisely so that a `custom` schedule does not have to send two values it never reads — a required-but-ignored field is the ambiguity this table was warned about — and the conditional 422 keeps the calendar cadences exactly as strict as before. `timezone` is required for every cadence and deliberately not defaulted: a defaulted zone would sooner or later be read as \"wherever the server happens to run\". The delivery cursor is initialised to the slot most recently elapsed at creation time, so a schedule created at 10:00 for `daily` 09:00 does not fire today. The recipient may be an assistant OR an `ow-` outsource worker — the same recipient rule ordinary chat uses.",
         "properties": {
           "body": {
             "description": "The message text delivered to the member when a slot comes due. It is sent verbatim, as an ordinary chat message.",
@@ -4492,7 +4492,7 @@
             "type": "string"
           },
           "cadence": {
-            "description": "How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither; those three all fire once a day at the single wall-clock reading `hour`/`minute` names. `custom` (T-49e7) reads none of those four: it reads the three sets `custom_days`, `custom_hours` and `custom_minutes` and fires at EVERY wall-clock reading where all three hold at once, so it is the only cadence that can fire more than once a day. DAYLIGHT-SAVING BEHAVIOUR, which `custom` enlarges because it names many readings a day rather than one: a reading the zone SKIPPED (spring forward) is simply not fired for `custom` — it is NOT moved forward to the next existing reading the way a once-a-day cadence's single reading is, because moving it would land on a neighbouring selected reading, produce the same slot identifier and silently merge two deliveries into one; a reading the zone repeats (autumn back) fires ONCE. WHICH of the two instants that single delivery lands on is whatever Go's `time.Date` resolves the ambiguous reading to — deterministic for a given zone and reading, but implementation-defined and NOT guaranteed to be the earlier one (measured: `America/New_York` resolves to the earlier instant, `Europe/London` and `Africa/Cairo` to the later). The invariant this contract states is only that ONE wall-clock reading yields ONE slot, hence one delivery. The `daily`/`weekly`/`monthly` behaviour is unchanged in both directions. Every set's range is enforced server-side (a 422), not by this schema — `custom_minutes: [0,20,40]` with every hour and every day listed is \"every 20 minutes\", and `custom_minutes: [15]` with every hour and every day listed is \"15 minutes past every hour\".",
+            "description": "How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither; those three all fire once a day at the single wall-clock reading `hour`/`minute` names. `custom` (T-49e7) reads none of those four: it reads the FOUR sets `custom_months`, `custom_days`, `custom_hours` and `custom_minutes` and fires at EVERY wall-clock reading where all four hold at once, so it is the only cadence that can fire more than once a day. `custom_months` (T-49e7 round 2) is the only one of the four that may be omitted, and an omitted `custom_months` means all twelve months. DAYLIGHT-SAVING BEHAVIOUR, which `custom` enlarges because it names many readings a day rather than one: a reading the zone SKIPPED (spring forward) is simply not fired for `custom` — it is NOT moved forward to the next existing reading the way a once-a-day cadence's single reading is, because moving it would land on a neighbouring selected reading, produce the same slot identifier and silently merge two deliveries into one; a reading the zone repeats (autumn back) fires ONCE. WHICH of the two instants that single delivery lands on is whatever Go's `time.Date` resolves the ambiguous reading to — deterministic for a given zone and reading, but implementation-defined and NOT guaranteed to be the earlier one (measured: `America/New_York` resolves to the earlier instant, `Europe/London` and `Africa/Cairo` to the later). The invariant this contract states is only that ONE wall-clock reading yields ONE slot, hence one delivery. The `daily`/`weekly`/`monthly` behaviour is unchanged in both directions. Every set's range is enforced server-side (a 422), not by this schema — `custom_minutes: [0,20,40]` with every hour and every day listed is \"every 20 minutes\", and `custom_minutes: [15]` with every hour and every day listed is \"15 minutes past every hour\".",
             "enum": [
               "daily",
               "weekly",
@@ -4544,8 +4544,23 @@
                 "type": "null"
               }
             ],
-            "description": "Minutes of the hour `custom` fires on, 0-59, read in `timezone`, as an EXPLICIT set. Same rules as `custom_days`: an empty set is a 422, duplicates collapse and the set is stored sorted. An interval that does not divide an hour can only be approximated by naming wall-clock minutes — [0,7,14,21,28,35,42,49,56] leaves a 4-minute gap across the hour boundary, not 7 — which is a property of naming readings rather than a defect. REQUIRED when `cadence` is `custom` (a 422 otherwise); ignored by every other cadence.",
+            "description": "Minutes of the hour `custom` fires on, 0-59, read in `timezone`, as an EXPLICIT set. Same rules as `custom_days`: an empty set is a 422, duplicates collapse and the set is stored sorted. An interval that does not divide an hour can only be approximated by naming wall-clock minutes — [0,7,14,21,28,35,42,49,56] leaves a 4-minute gap across the hour boundary, not 7 — which is a property of naming readings rather than a defect. REQUIRED when `cadence` is `custom` (a 422 otherwise); ignored by every other cadence. The closed set stays 0-59 whatever the cockpit chooses to OFFER: a picker that shows only multiples of five is a presentation decision and does not narrow this contract.",
             "title": "Custom Minutes"
+          },
+          "custom_months": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Months of the year `custom` fires in, 1-12 (1 = January), as an EXPLICIT set — the fourth dimension of the intersection, added in T-49e7 round 2. A `custom` schedule fires at a reading only when `custom_months`, `custom_days`, `custom_hours` and `custom_minutes` ALL hold at once. It is the ONE set of the four that may be OMITTED: an omitted or null `custom_months` on a `custom` schedule means ALL TWELVE MONTHS, which is what makes every client written before this field kept working unchanged — it never sent the field, and \"every month\" is exactly what those schedules already meant. An EXPLICIT EMPTY ARRAY is still a 422, the same as the other three sets: \"never fires\" and \"fires every month\" must not be one keystroke apart, and the omitted case is answered by the field being ABSENT rather than by it being present and empty. Duplicates collapse and the set is stored sorted. Membership is decided MONTH BY MONTH against the calendar date, so it composes with `custom_days` exactly as the other sets do: months [2] with days [29] fires only in a February that HAS a 29th — a leap year — and is simply absent in the other three years, never clamped to the 28th. Range is enforced server-side (a 422), not by this schema.",
+            "title": "Custom Months"
           },
           "day_of_month": {
             "anyOf": [
@@ -4617,7 +4632,7 @@
             "type": "string"
           },
           "cadence": {
-            "description": "How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither; those three all fire once a day at the single wall-clock reading `hour`/`minute` names. `custom` (T-49e7) reads none of those four: it reads the three sets `custom_days`, `custom_hours` and `custom_minutes` and fires at EVERY wall-clock reading where all three hold at once, so it is the only cadence that can fire more than once a day. DAYLIGHT-SAVING BEHAVIOUR, which `custom` enlarges because it names many readings a day rather than one: a reading the zone SKIPPED (spring forward) is simply not fired for `custom` — it is NOT moved forward to the next existing reading the way a once-a-day cadence's single reading is, because moving it would land on a neighbouring selected reading, produce the same slot identifier and silently merge two deliveries into one; a reading the zone repeats (autumn back) fires ONCE. WHICH of the two instants that single delivery lands on is whatever Go's `time.Date` resolves the ambiguous reading to — deterministic for a given zone and reading, but implementation-defined and NOT guaranteed to be the earlier one (measured: `America/New_York` resolves to the earlier instant, `Europe/London` and `Africa/Cairo` to the later). The invariant this contract states is only that ONE wall-clock reading yields ONE slot, hence one delivery. The `daily`/`weekly`/`monthly` behaviour is unchanged in both directions. Every set's range is enforced server-side (a 422), not by this schema.",
+            "description": "How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither; those three all fire once a day at the single wall-clock reading `hour`/`minute` names. `custom` (T-49e7) reads none of those four: it reads the FOUR sets `custom_months`, `custom_days`, `custom_hours` and `custom_minutes` and fires at EVERY wall-clock reading where all four hold at once, so it is the only cadence that can fire more than once a day. `custom_months` (T-49e7 round 2) is the only one of the four that may be omitted, and an omitted `custom_months` means all twelve months. DAYLIGHT-SAVING BEHAVIOUR, which `custom` enlarges because it names many readings a day rather than one: a reading the zone SKIPPED (spring forward) is simply not fired for `custom` — it is NOT moved forward to the next existing reading the way a once-a-day cadence's single reading is, because moving it would land on a neighbouring selected reading, produce the same slot identifier and silently merge two deliveries into one; a reading the zone repeats (autumn back) fires ONCE. WHICH of the two instants that single delivery lands on is whatever Go's `time.Date` resolves the ambiguous reading to — deterministic for a given zone and reading, but implementation-defined and NOT guaranteed to be the earlier one (measured: `America/New_York` resolves to the earlier instant, `Europe/London` and `Africa/Cairo` to the later). The invariant this contract states is only that ONE wall-clock reading yields ONE slot, hence one delivery. The `daily`/`weekly`/`monthly` behaviour is unchanged in both directions. Every set's range is enforced server-side (a 422), not by this schema.",
             "enum": [
               "daily",
               "weekly",
@@ -4655,6 +4670,14 @@
               "type": "integer"
             },
             "title": "Custom Minutes",
+            "type": "array"
+          },
+          "custom_months": {
+            "description": "Months of the year `custom` fires in, 1-12 (1 = January), sorted and deduplicated — the fourth dimension of the intersection (T-49e7 round 2). Empty for a schedule that has never been `custom`; a schedule switched away from `custom` keeps its sets unread rather than losing them (see `custom_days`). Never empty for a live `custom` schedule: a create that omitted the field is stored as all twelve months EXPLICITLY, and rows that predate the field were backfilled to all twelve by migration 00053, so \"fires in every month\" is always a listed set on the wire and never an absent one. Optional on this response for the reason the repo charter gives for every added field (§12): a reader written before this field must keep working, and a field it has never heard of must not become one it is required to find.",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Custom Months",
             "type": "array"
           },
           "day_of_month": {
@@ -4770,7 +4793,7 @@
                 "type": "null"
               }
             ],
-            "description": "How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither; those three all fire once a day at the single wall-clock reading `hour`/`minute` names. `custom` (T-49e7) reads none of those four: it reads `custom_days`, `custom_hours` and `custom_minutes` and fires at every reading where all three hold at once. Switching a schedule TO `custom` in this PATCH must supply all three sets in the SAME request unless the stored row already carries them (a 422 otherwise, never a schedule that has a cadence it has no times for); switching AWAY from `custom` leaves the stored sets in place, unread, so switching back does not lose the choice.",
+            "description": "How often the message repeats. `weekly` reads `day_of_week`, `monthly` reads `day_of_month`, `daily` reads neither; those three all fire once a day at the single wall-clock reading `hour`/`minute` names. `custom` (T-49e7) reads none of those four: it reads `custom_months`, `custom_days`, `custom_hours` and `custom_minutes` and fires at every reading where all four hold at once. Switching a schedule TO `custom` in this PATCH must supply `custom_days`, `custom_hours` and `custom_minutes` in the SAME request unless the stored row already carries them (a 422 otherwise, never a schedule that has a cadence it has no times for); `custom_months` is exempt from that requirement — a switch that names no months, on a row carrying none, lands as all twelve. Switching AWAY from `custom` leaves the stored sets in place, unread, so switching back does not lose the choice.",
             "title": "Cadence"
           },
           "custom_days": {
@@ -4815,8 +4838,23 @@
                 "type": "null"
               }
             ],
-            "description": "Minutes of the hour `custom` fires on, 0-59, read in `timezone`, as an explicit set. Same empty-set and same-value rules as `custom_days`.",
+            "description": "Minutes of the hour `custom` fires on, 0-59, read in `timezone`, as an explicit set. Same empty-set and same-value rules as `custom_days`. The closed set stays 0-59 whatever the cockpit chooses to OFFER: a picker that shows only multiples of five is a presentation decision and does not narrow this contract.",
             "title": "Custom Minutes"
+          },
+          "custom_months": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Months of the year `custom` fires in, 1-12 (1 = January), as an explicit set — the fourth dimension of the intersection (T-49e7 round 2). Same empty-set and same-value rules as `custom_days`: an explicit empty array is a 422, and supplying a set whose sorted, deduplicated form equals the stored one changes nothing, cursor included. OMITTING it here means \"leave the stored months alone\", the ordinary PATCH rule — it does NOT re-assert all twelve. The all-twelve reading of an omitted field belongs to a request that has to produce a WHOLE `custom` row from nothing: a create, or a PATCH that switches the cadence TO `custom` on a row carrying no months. Everywhere else, absent means unchanged.",
+            "title": "Custom Months"
           },
           "day_of_month": {
             "anyOf": [
