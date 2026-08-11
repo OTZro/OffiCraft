@@ -27,6 +27,7 @@ import { useI18n } from "../i18n";
 import { effortText } from "../i18n/compose";
 import type { Effort, Member } from "../types";
 import type { TaskReassignInput, TaskView } from "../api/adapter";
+import { serverMessageOf } from "../api/errors";
 import { useMachines } from "../hooks/useMachines";
 import { useMonitoring } from "../hooks/useMonitoring";
 import { ConfirmModal } from "./ConfirmModal";
@@ -197,7 +198,17 @@ export function TaskReassignDialog({
       onClose();
     } catch (e) {
       console.warn("TaskReassignDialog: reassign failed", e);
-      setError(t.tasks.reassignError);
+      // 🔴 The server ALWAYS knows why it refused — terminal task (409), an
+      // outsource worker asking at all (403), a 一般正職 naming another member
+      // (403), an invalid target (400) — and each refusal carries its own
+      // sentence. This line used to drop all of it on the floor and print one
+      // fixed 「轉派失敗」, so the only way to learn which refusal you hit was to
+      // ask someone to read the code (owner did exactly that, 2026-08-11, chat
+      // c-066088ffad83 → T-b9f6). `console.warn` is not a channel: nobody has
+      // devtools open. Same shape as InsightCard / LessonsCard / MonitorPage:
+      // the server's reason when there is one, our own copy when there is not
+      // (an empty error line is worse than a generic one).
+      setError(serverMessageOf(e) || t.tasks.reassignError);
     } finally {
       setBusy(false);
     }

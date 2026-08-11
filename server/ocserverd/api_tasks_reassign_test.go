@@ -966,7 +966,17 @@ func TestReassignGuards(t *testing.T) {
 		}
 	}
 
-	// Frozen task → 400 (unfreeze first).
+	// Frozen task → reassignable.
+	//
+	// 🔴 This block used to assert `frozen task must 400`, i.e. the OLD behaviour
+	// (「unfreeze it before reassigning」). owner ruled that guard away on
+	// 2026-08-11 (T-b9f6, verbatim 「我不覺得凍結的東西應該不能轉派 我覺得應該移除
+	// 凍結不能轉派的限制」), so the assertion is inverted rather than deleted —
+	// deleting it would read like the protection was lost by accident.
+	// Frozen still means "do not advance this": nobody is woken by the reassign
+	// itself, which is pinned separately by
+	// TestReassignFrozenTaskToOutsourceWakesNobody and the two scheduler-layer
+	// tests it names.
 	rec := httptest.NewRecorder()
 	api.HandleSetTaskPriorityApiTasksTaskIdPriorityPost(rec,
 		taskReq(t, "POST", "/x", map[string]any{"priority": "frozen"},
@@ -975,8 +985,15 @@ func TestReassignGuards(t *testing.T) {
 		t.Fatalf("freeze: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := reassign(t, api, task.ID, memberTarget("m-new"),
-		"owner", "owner"); rec.Code != http.StatusBadRequest {
-		t.Fatalf("frozen task must 400: %d %s", rec.Code, rec.Body.String())
+		"owner", "owner"); rec.Code != http.StatusOK {
+		t.Fatalf("frozen task must be reassignable: %d %s", rec.Code, rec.Body.String())
+	}
+	if got, err := api.dal.GetTask(task.ID); err != nil || got == nil {
+		t.Fatalf("read back frozen task: %v", err)
+	} else if got.ExecutorID != "m-new" {
+		t.Fatalf("frozen task executor: want m-new, got %q", got.ExecutorID)
+	} else if got.Priority != TaskPriorityFrozen {
+		t.Fatalf("reassign must not thaw the task: got priority %q", got.Priority)
 	}
 
 	// Unknown task → 404; terminal task → 409.

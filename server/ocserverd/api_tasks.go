@@ -1110,9 +1110,10 @@ func (s *apiServer) HandlePostTaskMessageApiTasksTaskIdMessagePost(w http.Respon
 //     executor, which would silently drop the person just unassigned).
 //
 // Identity is untouched: type/inputs/dedupe_key/task id/deps never change.
-// Guards: 404 unknown task; 409 terminal or target == current executor; 400
-// frozen task or an invalid target (unknown/inactive member, a warden,
-// missing member_id, a bad effort).
+// Guards: 404 unknown task; 409 terminal or target == current executor; 400 an
+// invalid target (unknown/inactive member, a warden, missing member_id, a bad
+// effort). A FROZEN task is reassignable (owner ruling 2026-08-11, T-b9f6 — see
+// the comment at the removed check below).
 func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.ResponseWriter, r *http.Request, taskId string) {
 	var body TaskReassignDTO
 	if !decodeJSONBodyRequired(w, r, &body, "target") {
@@ -1155,11 +1156,25 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 			"task '"+taskId+"' is already closed ("+t.Status+")")
 		return
 	}
-	if t.Priority == TaskPriorityFrozen {
-		writeError(w, http.StatusBadRequest,
-			"task '"+taskId+"' is frozen; unfreeze it before reassigning")
-		return
-	}
+	// 🔴 There is deliberately NO frozen check here (owner ruling 2026-08-11,
+	// T-b9f6, verbatim: 「我不覺得凍結的東西應該不能轉派 我覺得應該移除凍結不能轉派的
+	// 限制」). It used to 400 with "unfreeze it before reassigning".
+	//
+	// Why removing it is safe, and where that safety actually lives: freezing
+	// means "do not advance this", and the fear was that a reassign wakes a new
+	// executor. It does not — the outsource scheduler skips frozen tasks by
+	// itself, at TWO independent places (outsource_sched.go:
+	// outsourceAwaitingAssignment and the outsourceDecide loop), so a frozen
+	// task reassigned to outsource just sits unassigned until someone unfreezes
+	// it. That is the invariant this removal rests on, and each of the two is
+	// pinned at its OWN layer — TestOutsourceAwaitingAssignment_SkipsFrozen and
+	// TestOutsourceDecideSkipsFrozenAndSpeclessTypes — because they are
+	// redundant, so no behavioural test can see either one alone go away. The
+	// scenario itself is TestReassignFrozenTaskToOutsourceWakesNobody.
+	//
+	// What this check actually blocked was the legitimate act of arranging a
+	// handover ahead of time and unfreezing later. A member target never woke
+	// anybody at reassign time either (no inline mint — see the header above).
 
 	kind := trimString(body.Target.Kind)
 	var newMember *Member
