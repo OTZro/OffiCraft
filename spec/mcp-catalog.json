@@ -2302,6 +2302,34 @@
       "name": "update_task_description"
     },
     {
+      "description": "Correct THIS task's title — the one line the task list shows. T-2ebe: until this tool existed a title could never be changed after creation, so a card whose scope was later overturned kept advertising its first wording forever — the description could correct itself, the title could not, and whoever scanned the list saw only the stale half. If you have just corrected a description because the scope moved, ask whether the title still says the same thing. WHO: the task's own executor, or an admin/owner; anyone else is a flat 403. Creating a task grants NO standing to keep rewriting it — if you handed the task over, it is the new executor's title now. PARTIAL like update_task_description: omitting `title` changes nothing (a safe no-op); unknown keys are refused rather than dropped. ⚠️ ONE DIFFERENCE FROM ITS DESCRIPTION TWIN: a blank title (\"\" or only whitespace) is REFUSED with 400, it does NOT clear the field — create_task refuses a blank title too, and a task with no title is a blank row on the list. Surrounding whitespace is trimmed. The write is wholesale within that field: send the full corrected title, not a fragment. A CLOSED task (completed / terminated / duplicated) is STILL editable, on the same terms — a ticket is usually found to be worded wrongly after it closed, and freezing the text would preserve a known falsehood; its artifact set is the opposite and freezes at close. Every change that actually alters the text retains the previous one as a document version (kind `task_title`, key = the task id) — list it with list_document_history, so a correction is recoverable.",
+      "inputSchema": {
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "update_task_title"
+    },
+    {
       "description": "Mark a task duplicated, pointing at the original (executor/owner; terminal). T-74f8 交棒閘 (third door): ``duplicated`` is terminal, so this closes the task; it is never refused. A duplicate's ball is on the ORIGINAL by construction, so the server records that itself — a cross-executor task marked duplicate lands ``handoff='follow_up'`` with ``handoff_task_id`` = ``duplicate_of``. No task_dep edge is added (the original is not blocked by its duplicate).",
       "inputSchema": {
         "properties": {
