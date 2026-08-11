@@ -19,9 +19,13 @@
 > 查詢不會）：
 >
 > ```
-> grep -n "slots={" -A 12 frontend/src/components/MemberDetailPanel.tsx \
->                          frontend/src/components/WorkerDetailPanel.tsx
+> command grep -an "slots={" -A 20 frontend/src/components/MemberDetailPanel.tsx \
+>                                   frontend/src/components/WorkerDetailPanel.tsx
 > ```
+>
+> （`command` 是為了繞過某些機器上被包過的 `grep` 函式，`-a` 讓它不會把檔案judge成
+> 非文字而靜默跳過。`-A 20` 而不是剛好夠用的行數——獨立審查指出原本的 `-A 12` 距離
+> 截斷只差一行，理由字串多一行就會靜默少印一個 key。）
 >
 > 這份文件仍然是**下面那些逐項裁定的家**（哪些差異是刻意的、理由是什麼）——那是型別答不出來的。
 > 設計與 mutant 證據見 `T-0b4f-exhaustive-slots-mutants.md`。
@@ -30,8 +34,12 @@
 
 - ~~`AgentDetailVM.onSaveModelEffort` 未傳 ⇒ 模型格不長編輯鈕（`AgentDetailPanel.tsx` 的
   `{vm.onSaveModelEffort && (<button …model-effort-edit>)}`）~~ —— **已不成立**：那顆就地編輯器
-  連同 `onSaveModelEffort` 這個 prop 本身，已於 **T-7f28 整個移除**，今天原碼裡零命中（實查
-  2026-08-12）。留著這句會讓下一個人去找一段不存在的碼。
+  連同 `onSaveModelEffort` 這個 prop 本身，已於 **T-7f28 整個移除**。留著這句會讓下一個人去找
+  一段不存在的碼。
+  ⚠️ 這裡原本寫「今天原碼裡零命中」，**那句話不準**（獨立審查抓到）：全庫掃描實際上還有兩處
+  命中——`AgentDetailPanel.tsx` 一句記錄「它被移除了」的註解（無害），以及 `frontend/CLAUDE.md`
+  同族的那段敘述（已於同一包一併更正）。**準確的說法是「型別與 production 碼裡沒有這個 prop」**，
+  不是「repo 裡零命中」。
 - `vm.machineAction` 未傳 ⇒ 機器格標題右側無任何控制項 —— **仍然成立**（該欄位今天仍是
   `AgentDetailVM` 上的 optional prop）。
 - 「共用面板的鍵由 wrapper 傳不傳決定」這個**總結句**，對**插槽**已不再成立（見上方 T-0b4f

@@ -13,7 +13,15 @@ T-7526 的獨立審查回來時，那包宣稱的 mutant 驗證在 repo 裡找�
 
 全部 5 支的還原檢查都是 `OK`（`shasum -a 256 -c` 逐位元組相同，且 `git status` 空）。
 
-🔴 **本檔的數字是 2026-08-11 在 `t-0b4f/exhaustive-slots` @ `ea28ad1`（基底 = 當時的 `origin/main` `1b21afb`）重跑的**，不是沿用更早那一輪。**理由：換基底之後「比對型」證據全部失效** —— 而這幾支 mutant 的證據形式正是 **tsc 的逐字訊息**，屬於比對型。第一輪跑在 `a8fdb42`（基底 `7246049`）上，主幹隨後動了兩次，所以那一輪的輸出已不可引用。
+🔴 **每一列都標它最後一次被實跑的 SHA，不要問「這份文件是哪個版本的」——那個問題永遠會過期。** 理由：換基底之後「比對型」證據全部失效，而這幾支 mutant 的證據形式正是 **tsc 的逐字訊息**，屬於比對型。
+
+⚠️ **這份文件自己犯過它要防的錯，兩次，所以這段留著**：第一版的數字跑在 `a8fdb42`（基底 `7246049`），主幹動了兩次就失效；改寫後的第二版標成 `ea28ad1`（基底 `1b21afb`），而**那顆 commit 的全部存在理由就是修「數字跑在一個已經不存在的基底上」**——它交出去時 HEAD 已經是 `cabfbf4`（基底 `6a96e56`），同一個缺陷原地重演。**判準不是「作者再仔細一點」，是「每列自帶它自己的 SHA」。**
+
+| 列 | 最後一次實跑於 | 誰跑的 |
+|---|---|---|
+| A / A2 / B / C / D | `cabfbf4`（基底 `6a96e56`） | **獨立審查者**（不同 actor）逐列重跑，行號與條數與本檔一致 |
+| E / E′ | `cabfbf4` | 獨立審查者（E′ 是本檔原本承認沒跑的對稱那半） |
+| F / G（下方新增） | 見該列 | 實作者，回應獨立審查的 finding M1 |
 
 ## 未施加 mutant 的基準（先證明它本來是綠的）
 
@@ -100,7 +108,9 @@ src/components/AgentDetailPanel.tsx(415,17): error TS2345: Argument of type 'Age
 
 **mutant**：把 `WorkerDetailPanel` 的 `extraExpandCards: slot(scheduleCard)` 換成 `notHere("mutant")`。
 
-`ScheduledMessagesCard.test.tsx` **恰好紅 1 條，而且是外包那一條**（另外 23 條全綠）：
+`ScheduledMessagesCard.test.tsx` **恰好紅 1 條，而且是外包那一條**（另外 **25** 條全綠，該檔共 26 條）：
+
+⚠️ 本檔原本寫「另外 23 條全綠」，**那是我數錯，而且寫下當時就錯**（獨立審查實查：該檔在 `ea28ad1` 與 `cabfbf4` 都是 26 條 `it(`）。一份**存在理由就是逐列可重放**的文件裡的錯數字，比別處的錯數字嚴重——因為讀者會拿它去對帳。
 
 ```
 × both detail panels render the 定期訊息 card > renders it on the outsource worker panel, bound to the ow- id
@@ -108,7 +118,38 @@ src/components/AgentDetailPanel.tsx(415,17): error TS2345: Argument of type 'Age
 
 ⇒ 該檔註解改寫後的那句「Turn either wrapper's `extraExpandCards` into `notHere(...)` and exactly one of
 these two reddens」成立。
-⚠️ 對稱的另一半（改正職那一邊 ⇒ 只有正職那條紅）**未實跑**，是由對稱性推論的。
+**E′（對稱的另一半，本檔原本承認未跑）**：獨立審查把它跑掉了——改 `MemberDetailPanel` 那一邊 ⇒ **恰好紅 1 條，且是 `renders it on the member panel`**，25 條全綠。⇒ 對稱性現在是**量到的**，不是推論的。
+
+## F · 面板側：宣告了、卻沒 resolve（獨立審查 finding M1 的前半）
+
+**這一顆是獨立審查做出來的，而它當時是全綠的。** 形狀：加一個插槽、**兩個 wrapper 都乖乖填了真的卡**、清單斷言也跟著更新（那是最自然的下一步編輯），**但忘了在 `AgentDetailPanel` 裡渲染它** ⇒ 卡片在兩個面板上都不會出現，而 **tsc rc=0、2072 條全綠**。
+⇒ 那正是本票要根治的病（一張卡靜默地不在），**從 wrapper 側搬到面板側**。本包原本把 wrapper 側守得很緊、面板側完全沒守。
+
+**修法**：面板把每個 key 在一個 `rendered` 物件裡解析，並用 `satisfies Record<AgentDetailSlotKey, ReactNode>` 釘住。
+
+**mutant（`cabfbf4` 之後、修完當下實跑）**：加 `afterFooterCards` 到 `AGENT_DETAIL_SLOTS`、**不動 `rendered`** ⇒
+
+```
+src/components/AgentDetailPanel.tsx(286,5): error TS1360: Type '{ overlays: ReactNode; … }'
+  does not satisfy the expected type 'Record<"overlays" | … | "afterFooterCards", ReactNode>'.
+```
+
+⇒ 現在**面板自己也會編不過**，不是只有兩個 wrapper。
+
+## G · 面板側：resolve 了、卻沒放上畫面（M1 的後半，`satisfies` 答不出來）
+
+`satisfies` 只證明「每個 key 都被解析過」，**不證明它到得了 DOM**——把值算出來丟在地上照樣編得過。
+
+**修法**：`AgentDetailPanel.slots.test.tsx` 新增一條哨兵：每個 key 塞一個**各自不同的 marker**，掛載後斷言五個 marker 全部出現在 `container.textContent`。斷言的是 **DOM**，不是「`slotNode` 被呼叫過幾次」——後者對一個算完就丟掉的面板照樣成立。
+
+**mutant（修完當下實跑）**：加 `afterFooterCards`、**在 `rendered` 裡解析它**、但**不放進 JSX** ⇒ 該哨兵紅，而且**點名是哪一個插槽**：
+
+```
+× AgentDetailPanel slot map > puts every declared slot's content on the screen
+  → expected [ 'afterFooterCards' ] to deeply equal []
+```
+
+⇒ 訊息刻意設計成印出「漏掉的那個 key」而不是「expected 4 to be 5」——它紅的時候，唯一該問的問題就是「是哪一個」。
 
 ## 這份紀錄沒有涵蓋的（誠實界線）
 

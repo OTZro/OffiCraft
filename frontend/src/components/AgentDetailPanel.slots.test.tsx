@@ -22,9 +22,11 @@ import { render } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import {
   AGENT_DETAIL_SLOTS,
+  AgentDetailPanel,
   notHere,
   slot,
   type AgentDetailSlots,
+  type AgentDetailVM,
 } from "./AgentDetailPanel";
 import { MemberDetailPanel } from "./MemberDetailPanel";
 import type { Member } from "../types";
@@ -90,6 +92,34 @@ const bareLiteral: AgentDetailSlots = {
   afterPromptCards: { on: false, why: "" },
 };
 
+/** The smallest VM the panel accepts — every REQUIRED field, nothing more, so
+ * this file does not quietly depend on optional behaviour. */
+function mkVM(): AgentDetailVM {
+  return {
+    testIdPrefix: "mp",
+    online: false,
+    runtime: "claude",
+    reportedRuntime: "",
+    model: "",
+    effort: "",
+    machineText: "",
+    accountText: "",
+    contextPct: null,
+    cost: null,
+    refocusSince: null,
+    refocusSubmittedNote: "",
+    refocusSinceLabel: (x: string) => x,
+    lastOp: "",
+    lastOpVerb: "",
+    lastOpOk: null,
+    lastOpLog: "",
+    lastOpReason: "",
+    lastOpAt: null,
+    tmuxSession: "",
+    terminalHint: "",
+  };
+}
+
 describe("AgentDetailPanel slot map", () => {
   it("offers exactly the five slots both wrappers must answer", () => {
     // Pins the LIST itself: growing it is exactly the event that must break
@@ -152,5 +182,41 @@ describe("AgentDetailPanel slot map", () => {
     // line of internal prose on the owner's screen.
     expect(container.textContent ?? "").not.toContain("外包獨有");
     expect(container.textContent ?? "").not.toContain("worker-panel-parity");
+  });
+
+  // 🔴 The half `satisfies` cannot answer: a key can be RESOLVED in the panel and
+  // still never reach the screen. Independent review built exactly that mutant —
+  // add a slot, have BOTH wrappers fill it with a real card, forget the render
+  // site — and got tsc rc=0 with 2072 tests green: the original bug of this
+  // ticket (a card that silently is not there), relocated from the wrapper side
+  // to the panel side. This test is the sentinel for that side.
+  //
+  // It asserts on the DOM, not on call counts: "slotNode was called" is
+  // satisfied by a panel that computes the node and drops it on the floor.
+  it("puts every declared slot's content on the screen", () => {
+    const markers = Object.fromEntries(
+      AGENT_DETAIL_SLOTS.map((k) => [k, `SLOT-MARKER-${k}`]),
+    ) as Record<(typeof AGENT_DETAIL_SLOTS)[number], string>;
+
+    const filled = Object.fromEntries(
+      AGENT_DETAIL_SLOTS.map((k) => [k, slot(<div>{markers[k]}</div>)]),
+    ) as AgentDetailSlots;
+
+    const { container } = render(
+      <I18nProvider>
+        <AgentDetailPanel
+          onBack={() => {}}
+          identity={<div className="mp-card mp-identity">identity</div>}
+          slots={filled}
+          vm={mkVM()}
+        />
+      </I18nProvider>,
+    );
+
+    const text = container.textContent ?? "";
+    const missing = AGENT_DETAIL_SLOTS.filter((k) => !text.includes(markers[k]));
+    // Names the offenders — "expected 4 to be 5" would not tell you WHICH slot
+    // the panel forgot, and that is the whole question when this reddens.
+    expect(missing).toEqual([]);
   });
 });

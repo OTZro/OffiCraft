@@ -165,8 +165,13 @@ declare const SLOT_REASON: unique symbol;
 export type SlotReason = string & { readonly [SLOT_REASON]: true };
 
 /** What ONE wrapper does with ONE slot. `on: false` is a DECISION that was
- * written down, not an omission: it carries the reason, and it is the only way
- * to say 「這一邊不要」 — there is no third state and no way to stay silent. */
+ * written down, not an omission: it carries the reason, and it is the intended
+ * way to say 「這一邊不要」.
+ *
+ * ⚠️ The earlier wording here said 「there is no third state and no way to stay
+ * silent」 — that was false, and independent review proved it with `slot(null)`
+ * (see `slot`). What the union removes is the SILENT omission of a whole key;
+ * a deliberately empty fill is still expressible. */
 export type AgentDetailSlot =
   | { on: true; node: ReactNode }
   | { on: false; why: SlotReason };
@@ -176,17 +181,31 @@ export type AgentDetailSlot =
  * literal catches the other direction (a key the panel does not offer). */
 export type AgentDetailSlots = Record<AgentDetailSlotKey, AgentDetailSlot>;
 
-/** This side fills the slot with `node`. */
+/** This side fills the slot with `node`.
+ *
+ * ⚠️ `slot(null)` compiles and renders nothing — so "on" does NOT imply "visible"
+ * and it IS possible to answer a slot without explaining an empty. That is
+ * deliberate, not an oversight: a conditionally-open dialog is a legitimate
+ * `slot(open ? <D/> : null)` (WorkerDetailPanel's settings dialog is exactly
+ * that), and the ergonomics that keep it easy are the same ones that keep a
+ * lazy `slot(null)` easy. ⇒ The invariant this type really buys is **every key
+ * is named**, not **every empty is explained**. Do not read the two as one. */
 export function slot(node: ReactNode): AgentDetailSlot {
   return { on: true, node };
 }
 
 /** This side deliberately has nothing here — and says why.
  *
- * 🔴 The reason is branded (`SlotReason`) so the off variant CANNOT be written
- * as a bare `{ on: false, why: "" }` literal, and the generic rejects the empty
- * string outright. An un-reasoned "not here" is indistinguishable from having
- * forgotten, which is the exact failure this whole type exists to remove. */
+ * The reason is branded (`SlotReason`) so the off variant cannot be written as a
+ * bare `{ on: false, why: "" }` literal, and the generic rejects an empty string
+ * LITERAL. An un-reasoned "not here" is indistinguishable from having forgotten,
+ * which is the failure this type exists to remove.
+ *
+ * ⚠️ Both guards are LITERAL-ONLY, and the earlier wording here ("CANNOT",
+ * "outright") over-claimed — independent review broke it: `notHere(s)` where
+ * `s: string` compiles, and so does a map assembled through an intermediate
+ * variable. Inline literals are what both wrappers use today, so the guard bites
+ * where it is aimed; it is a speed bump, not a proof. */
 export function notHere<W extends string>(
   why: W extends "" ? never : W,
 ): AgentDetailSlot {
@@ -206,14 +225,21 @@ interface AgentDetailPanelProps {
   identity: ReactNode;
   /** Every slot the panel offers — see `AGENT_DETAIL_SLOTS`.
    *
-   * Render positions, in order: `overlays` right after the identity card
-   * (modal-ish machine pickers / confirms) · `afterIdentityCards` between those
-   * and the 模型/機器 info card (worker: 委託任務, T-b0e3) · `afterInfoCards`
-   * between the info card and the runtime card (worker: 委託人) ·
+   * Render POSITIONS, in order: `overlays` right after the identity card ·
+   * `afterIdentityCards` between those and the 模型/機器 info card ·
+   * `afterInfoCards` between the info card and the runtime card ·
    * `extraExpandCards` after the terminal card and BEFORE the initial-prompt
-   * card (member: 回呼端點 webhook + 定期訊息; worker: 定期訊息) ·
-   * `afterPromptCards` after the initial-prompt card, the LAST slot the panel
-   * offers (member: RESUME SUMMARY, T-8b0d). */
+   * card · `afterPromptCards` after it, the LAST slot the panel offers.
+   *
+   * ⚠️ WHICH CARD each side puts in each slot is deliberately NOT listed here.
+   * That inventory goes stale without anything changing colour — the same reason
+   * this ticket stopped `docs/design/worker-panel-parity.md` from maintaining it.
+   * Read it off the code instead (positions above are pinned by the JSX below and
+   * by `visual-guards/worker-detail-task-card-order.ct.spec.tsx`):
+   *
+   *   command grep -an "slots={" -A 20 src/components/MemberDetailPanel.tsx \
+   *                                      src/components/WorkerDetailPanel.tsx
+   */
   slots: AgentDetailSlots;
 }
 
@@ -234,6 +260,29 @@ export function AgentDetailPanel({
   const { t, msg } = useI18n();
   const dash = t.mp.dash;
   const p = vm.testIdPrefix;
+
+  // 🔴 EVERY key gets resolved HERE, and `satisfies` is what makes that
+  // exhaustive: add a key to AGENT_DETAIL_SLOTS and THIS object stops compiling
+  // too, not just the two wrappers.
+  //
+  // Independent review found the gap this closes: before it, a new slot that
+  // both wrappers dutifully filled but which the panel never rendered was
+  // completely green — tsc clean, 2072 tests passing, and the card simply never
+  // appeared on either page. That is the ORIGINAL bug of this ticket (a card
+  // that silently is not there) moved from the wrapper side to the panel side.
+  // The wrapper side was guarded thoroughly and this side not at all.
+  //
+  // ⚠️ `satisfies` proves every key was RESOLVED, not that every value reached
+  // the DOM — a resolved-but-unrendered key still compiles. That second half is
+  // pinned at runtime by "every declared slot actually reaches the DOM" in
+  // AgentDetailPanel.slots.test.tsx. Neither layer replaces the other.
+  const rendered = {
+    overlays: slotNode(slots.overlays),
+    afterIdentityCards: slotNode(slots.afterIdentityCards),
+    afterInfoCards: slotNode(slots.afterInfoCards),
+    extraExpandCards: slotNode(slots.extraExpandCards),
+    afterPromptCards: slotNode(slots.afterPromptCards),
+  } satisfies Record<AgentDetailSlotKey, ReactNode>;
 
   // ── the four configurable cells: reported state, plus a pending hint ──────
   //
@@ -412,8 +461,8 @@ export function AgentDetailPanel({
       </button>
 
       {identity}
-      {slotNode(slots.overlays)}
-      {slotNode(slots.afterIdentityCards)}
+      {rendered.overlays}
+      {rendered.afterIdentityCards}
 
       {/* info card: LEFT 執行環境 + 模型 + 投入度 (editable launch intents), RIGHT 機器 +
        * runtime account — the member page's mp-info2 layout, now the ONE layout. */}
@@ -480,7 +529,7 @@ export function AgentDetailPanel({
         </div>
       </div>
 
-      {slotNode(slots.afterInfoCards)}
+      {rendered.afterInfoCards}
 
       {/* runtime card: context% + est.$ + 換手 */}
       <div className="mp-card mp-runtime">
@@ -618,7 +667,7 @@ export function AgentDetailPanel({
         <div className="mp-terminal__hint">{vm.terminalHint}</div>
       </div>
 
-      {slotNode(slots.extraExpandCards)}
+      {rendered.extraExpandCards}
 
       {/* expandable: initial prompt */}
       {vm.prompt && (
@@ -678,7 +727,7 @@ export function AgentDetailPanel({
         </div>
       )}
 
-      {slotNode(slots.afterPromptCards)}
+      {rendered.afterPromptCards}
     </div>
   );
 }
