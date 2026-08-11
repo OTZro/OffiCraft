@@ -591,16 +591,19 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "learnings doc", m.Learnings, next))
 		return
 	}
-	// 🔴 applied == 0 → the learnings doc is byte-identical, so there is nothing
-	// to write and nothing to retain. Writing anyway burns one of the THREE
-	// document history slots on a snapshot of text nobody replaced (and bumps
-	// updated_ts for a change that did not happen), silently shortening the
-	// owner's undo path. Full reasoning at the patch_lessons twin (api_roles.go,
+	// 🔴 `next` byte-identical to the stored learnings → there is nothing to
+	// write and nothing to retain. The gate is that text comparison and NOT
+	// applied > 0: `applied` counts edits that moved the INTERMEDIATE result, so
+	// a batch whose edits undo one another reports applied != 0 over a document
+	// that never changed. Writing anyway burns one of the THREE document history
+	// slots on a snapshot of text nobody replaced (and bumps updated_ts for a
+	// change that did not happen), silently shortening the owner's undo path.
+	// Full reasoning at the patch_lessons twin (api_roles.go,
 	// HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost). This is the same
 	// "did the field actually change" gate update_task_manual already applies
 	// above via taskManualHistoryStreams; the receipt below stays outside the
 	// gate and unchanged.
-	if applied > 0 {
+	if next != m.Learnings {
 		m.Learnings = next
 		m.UpdatedTS = nowSecs()
 		if err := s.dal.SaveWithDocumentHistories(

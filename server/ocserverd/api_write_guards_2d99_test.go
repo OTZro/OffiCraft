@@ -349,7 +349,8 @@ func TestPatchLessonsAnchorNotFoundIs400(t *testing.T) {
 // TestPatchLessonsAppliedEditsCountsWhatLanded: applied_edits used to report
 // len(edits) — the count REQUESTED, structurally incapable of being 0 and so
 // carrying no information about whether anything landed. It must now report
-// the edits that actually changed the doc.
+// the edits that changed the text THEY were handed — which is still not a
+// report on whether the document moved (see ApplyDocEdits in domain.go).
 func TestPatchLessonsAppliedEditsCountsWhatLanded(t *testing.T) {
 	srv, dal, secret := newLessonsTestServer(t)
 	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")

@@ -1509,7 +1509,7 @@
         "type": "object"
       },
       "InsightPatchResultDTO": {
-        "description": "Receipt of an insight PATCH. ``size_chars`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc.cap_chars.insight`` cap the write is judged against) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` counts the edits that ACTUALLY CHANGED the doc, so a batch of no-ops reports 0 rather than looking like a success.",
+        "description": "Receipt of an insight PATCH. ``size_chars`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc.cap_chars.insight`` cap the write is judged against) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING doc text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` counts the edits that changed the text THEY were handed — it is not a report on whether the document ended up different from where it started. A batch of no-ops reports 0, but a batch whose edits undo one another (``anchor → middle`` then ``middle → anchor``) reports the full count over a document that never moved, and nothing is written in that case. To decide whether the doc actually changed, compare ``sha256`` against the value you held before the call.",
         "properties": {
           "applied_edits": {
             "default": 0,
@@ -5797,7 +5797,7 @@
         "type": "object"
       },
       "TaskLearningsPatchResultDTO": {
-        "description": "Receipt of a task-learnings PATCH (MCP ``patch_task_learnings``). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc.cap_chars.manual_learnings`` cap the write is judged against; it counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so \"0 applied\" is expressible and a silent no-op cannot masquerade as success.",
+        "description": "Receipt of a task-learnings PATCH (MCP ``patch_task_learnings``). ``size`` (CHARACTERS — Unicode code points, the SAME unit as the ``doc.cap_chars.manual_learnings`` cap the write is judged against; it counted UTF-8 BYTES until 2026-07-31, when the owner ruled the receipt must speak the cap's unit) and ``sha256`` (hex) are lightweight verification anchors over the RESULTING learnings text, so the caller can confirm the write landed without re-reading the full doc. ``applied_edits`` is the number of edits that changed the text THEY were handed (a no-op append/replace does not count), so \"0 applied\" is expressible and a silent no-op cannot masquerade as success. It is not a report on whether the document ended up different from where it started: a batch whose edits undo one another (``anchor → middle`` then ``middle → anchor``) reports the full count over learnings that never moved, and nothing is written in that case. To decide whether the doc actually changed, compare ``sha256`` against the value you held before the call.",
         "properties": {
           "applied_edits": {
             "default": 0,

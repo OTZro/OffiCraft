@@ -629,24 +629,39 @@ type LessonsEdit struct {
 // writes nothing on error. The unique-anchor requirement doubles as an
 // optimistic concurrency check: a concurrent write that moved or duplicated
 // the anchor turns this batch into a refusal, never a silent mis-splice.
-// It also returns the number of edits that ACTUALLY CHANGED the doc (T-2d99).
-// The receipt's applied_edits used to report len(edits) — the count REQUESTED,
-// which is structurally incapable of being 0 and therefore carries zero
-// information about whether anything landed. A no-op edit (appending "", or a
-// replace whose new equals its old) now decrements that count, so "0 applied"
-// becomes expressible and a silent no-op stops looking like a success.
+// It also returns the number of edits that CHANGED THE TEXT THEY WERE HANDED
+// (T-2d99). The receipt's applied_edits used to report len(edits) — the count
+// REQUESTED, which is structurally incapable of being 0 and therefore carries
+// zero information about whether anything landed. An edit that leaves the text
+// it was handed untouched — a replace whose new equals its old, or an append of
+// "" to a doc that is empty or already newline-terminated — does not increment
+// that count, so "0 applied" becomes expressible and a silent no-op stops
+// looking like a success. (Appending "" to a doc that does NOT end in a newline
+// is not a no-op: the append branch below adds the separator, so the text
+// really does change and the count really does rise.)
 //
 // It is the anchor-patch core shared by every document that takes {old,new}
 // edits; rereadTool is the name of the tool the caller should re-read that
 // document with when an anchor does not resolve.
 //
-// 🔴 applied == 0 IS ALSO THE WRITE GATE, not just a number on the receipt.
-// Every edit either changes the doc or increments nothing, so applied == 0 with
-// a nil error means the returned text is byte-identical to the input: there is
-// no write to make. The three handlers built on this engine therefore skip BOTH
-// the persist and the document-history retention in that case — see the
-// `if applied > 0` gates in api_roles.go, api_insight.go and api_taskmanuals.go
-// and the reason spelled out there.
+// 🔴 THE RETURNED COUNT IS NOT A WRITE GATE, and must never be used as one.
+// It measures each edit against the INTERMEDIATE result that edit was handed —
+// NOT the finished document against the one that came in. The two come apart
+// the moment a batch undoes itself: `anchor → middle` followed by
+// `middle → anchor` is two uniquely-anchored, individually-effective edits that
+// return applied == 2 over text byte-identical to the input. This comment used
+// to assert the opposite ("every edit either changes the doc or increments
+// nothing"), and that sentence is the exact reasoning error the three handlers
+// on this engine were then built on: all three gated their write, their
+// document-history retention and their SSE delta on `applied > 0`, so a
+// cancelling batch persisted, burned one of the three retained versions, and
+// announced a change that never happened.
+//
+// They now compare the TEXT — `next != current.Text`, and `next != m.Learnings`
+// for a manual's learnings — in api_roles.go, api_insight.go and
+// api_taskmanuals.go. Anyone asking "did this patch change the document" must
+// do the same, or read the sha256 the receipt carries over the result; the
+// count answers a different question and always did.
 //
 // 🔴 WHY THE TOOL NAME IS A PARAMETER AND NOT A CONSTANT. The anchor-miss
 // message tells the caller what to do next, and "re-read (get_lessons)" is
