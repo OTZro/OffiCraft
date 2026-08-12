@@ -25,8 +25,8 @@ package main
 // Wake chain (SPEC §4 / contract §A.4, ruling H8):
 //
 //	scheduler assigns (worker row 'assigned')
-//	  → notifyWorkerSpawn: assemble the worker boot context (worker_context.md
-//	    seed + identity + the bound task + its manual) + SERVER-MINT the worker
+//	  → notifyWorkerSpawn: assemble the worker boot context (the shared seeds +
+//	    the type manual; T-4595) + SERVER-MINT the worker
 //	    token (sub == ow-id; unknown-sub auth floors to the agent class —
 //	    contract §H; the token rides ONLY the directed warden frame → a 0600
 //	    workdir file, never a log/chat/transcript)
@@ -61,7 +61,6 @@ package main
 // no-op). Durable truth stays in the worker row alone.
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -108,136 +107,60 @@ const (
 
 // ── boot context (worker-specific assembly — NEVER the member fold) ──────────
 
-// buildWorkerBootContext assembles the worker persona, in this order:
+// buildWorkerBootContext assembles the worker boot context as the STAFF boot
+// context minus slot 3 — T-4595, owner-ruled:
 //
-//  1. GLOBAL CONTEXT — all three 全域情境 blocks (系統互動 ⊕ 使用者自訂 ⊕
-//     啟動程序), grouped and shared byte-for-byte with the member seeds FOR THE
-//     SAME RUNTIME: the 啟動程序 block follows w.Runtime through
-//     bootSequenceSeedName, exactly as buildBootContext follows member.Runtime.
-//     Global Context is the FIRST section: owner requirement, T-108b, pinned by
-//     TestWorkerBootContextStartsWithGlobalContext.
-//  2. the worker OVERLAY — seeds/worker_context.md, now only "how a worker
-//     differs from a member" rather than a second full copy of the policy.
-//  3. the concrete assignment — who the worker is, the bound task in full, and
-//     the type manual (Q1/Q2/Q3 + learnings).
+//  1. 系統互動   — the shared seed, byte-for-byte identical to staff's;
+//  2. 使用者自訂 — the owner's additive block, skipped entirely when blank;
+//  3. the persona — staff read 角色說明 → 長期筆記 here. A worker has no role,
+//     so it reads NOTHING here. That is the entire difference.
+//  4. 啟動程序   — the boot sequence for the worker's OWN runtime, plus that
+//     runtime's execution-environment tail. Recency-authoritative, LAST.
 //
-// Still deliberately NOT buildBootContext: a worker has no role doc or lessons
-// shard, and its overlay and assignment have a different placement. The member
-// fold consumes the same shared core, and conformance pins it byte-for-byte.
+// Not one word is written for outsource readers anywhere in this document.
+//
+// WHAT THIS ASSEMBLY NO LONGER CONTAINS, and why (all T-4595):
+//
+//   - the outsource OVERLAY (seeds/worker_context.md) — deleted, file and all.
+//     Every paragraph in it was either false (it told workers report_waking was
+//     not in their boot sequence, while HandleReportWakingApiSelfWakingPost
+//     routes an outsource caller straight through workerReportWaking; it told
+//     them they had no roster teammates, while §11 says the opposite), a
+//     restatement of the shared seed that could drift from it silently, or a
+//     difference nobody could name a harm for.
+//   - the BOUND TASK in full. The boot sequence has the worker pick its task up
+//     with get_my_task, which serves the LIVE task; the copy pasted here was a
+//     spawn-time snapshot, stale by construction. Staff boot contexts have never
+//     carried a task either.
+//   - the TYPE MANUAL in full. Staff pull a manual with get_task_manual at the
+//     moment they plan a task's steps (§10.2 says 先讀手冊 there); outsource now
+//     does the same. Handing it at boot froze it at spawn AND put it in a slot
+//     staff have nothing in.
+//   - the 你的身分 block. Identity arrives the way it always has for staff: the
+//     launcher's --append-system-prompt already opens with 你是 <ow-id>(role=
+//     outsource-worker) (cli/ocwarden/spawn.go buildAppendSystemPrompt, fed the
+//     worker's own id and workerBootRoleLabel). The remaining fields of that
+//     block have staff equivalents that are NOT in a boot context either: model
+//     and effort ride the runtime's own status reporting, and the owner's chat
+//     id is substituted into the shared seed's {OWNER_ID} placeholders.
 func (s *apiServer) buildWorkerBootContext(w OutsourceWorker, t Task, manual *TaskManual) (string, error) {
-	core, err := s.workerGlobalContext(w.Runtime)
+	head, err := s.workerSharedHead()
 	if err != nil {
 		return "", err
 	}
-	seed, err := s.root.readSeedFile("worker_context.md")
+	bootSeq, err := s.workerBootSequence(w.Runtime)
 	if err != nil {
 		return "", err
 	}
 
 	var b strings.Builder
-	b.WriteString(core)
-	b.WriteString("\n\n---\n\n")
-	b.WriteString(strings.TrimSpace(seed))
-
-	b.WriteString("\n\n---\n\n# 你的身分\n\n")
-	fmt.Fprintf(&b, "- worker id（token sub、聊天定址都用它）：`%s`\n", w.ID)
-	fmt.Fprintf(&b, "- 代號：%s\n", w.Codename)
-	fmt.Fprintf(&b, "- 模型：%s\n", w.Model)
-	fmt.Fprintf(&b, "- 投入度（effort）：%s\n", w.Effort)
-	fmt.Fprintf(&b, "- 雇主（owner）聊天 id：`%s`\n", wireOwnerID)
-
-	b.WriteString("\n# 你的任務（就這一張）\n\n")
-	fmt.Fprintf(&b, "- 編號：%s（task id `%s`）\n", TaskNo(t.ID), t.ID)
-	fmt.Fprintf(&b, "- 標題：%s\n", t.Title)
-	// 顯示名為主、括號保留 type_key(T-fa76):the worker addresses the manual
-	// by key (get_task_manual / write_task_learnings), so the key stays.
-	typeLabel := t.TypeKey
-	if manual != nil {
-		typeLabel = manualDisplayLabel(manual.DisplayName, t.TypeKey)
-	}
-	fmt.Fprintf(&b, "- 類型：%s\n", typeLabel)
-	fmt.Fprintf(&b, "- 優先權：%s\n", t.Priority)
-	if t.DedupeKey != "" {
-		fmt.Fprintf(&b, "- 識別鍵：%s\n", t.DedupeKey)
-	}
-	if len(t.Inputs) > 0 {
-		b.WriteString("- 輸入欄位：\n")
-		for _, name := range sortedKeys(t.Inputs) {
-			fmt.Fprintf(&b, "  - %s: %v\n", name, t.Inputs[name])
-		}
-	}
-	if strings.TrimSpace(t.Description) != "" {
-		b.WriteString("\n## 任務描述\n\n")
-		b.WriteString(strings.TrimSpace(t.Description))
-		b.WriteString("\n")
-	}
-	if t.HandoverNote != "" {
-		b.WriteString("\n## 交接備註\n\n")
-		fmt.Fprintf(&b, "- 時間：%.3f\n- 發送者：`%s`\n\n%s\n",
-			t.HandoverNoteTS, t.HandoverNoteBy, t.HandoverNote)
-		b.WriteString("這則備註保留自先前交接；請依時間與前任確認是否仍適用。\n")
-	}
-
-	// T-ba04: a task minted onto you while it is in `reassigning` is a TAKEOVER,
-	// not a fresh assignment — you have a predecessor to hand over WITH. Print
-	// who they are + the handover protocol up front, because a headless worker
-	// reads chat only after it boots (the paired handover chat message is also
-	// posted, but the boot context is what it sees first).
-	if t.Lock == TaskLockReassigning && t.ReassignedFrom != "" {
-		b.WriteString("\n## ⚠️ 你是接手這張任務（轉派交接）\n\n")
-		fmt.Fprintf(&b, "這張任務目前掛著「轉派中」鎖（`reassigning` lock）——你是 owner 轉派後的**接手人**，"+
-			"有一位**前任**在等你交接：\n")
-		fmt.Fprintf(&b, "- 前任：%s（聊天 id `%s`）\n",
-			s.executorLabel(t.ReassignedFromKind, t.ReassignedFrom), t.ReassignedFrom)
-		b.WriteString("\n**接手序列（先交接、確認完成，才由你自己認領）：**\n")
-		b.WriteString("1. 先 `post_chat` 給前任，問清楚目前進度、進行中的事項、有哪些雷要注意；反覆確認到你有把握接得住。\n")
-		b.WriteString("2. 確認交接完成後，**由你自己**呼叫 `claim_task`（認領）解除轉派鎖" +
-			"——只有你這個新負責人動得了；server 不會自動幫你解。任務狀態一律照步驟推導，不必也不能自己報。\n")
-		b.WriteString("3. 未完成的節點已被 server 退回「待辦」——照實況續推，或照常 `submit_plan` 重規劃" +
-			"（已完成／已取代的節點會保留）。\n")
-	}
-
-	if manual != nil {
-		fmt.Fprintf(&b, "\n# 任務手冊：%s\n",
-			manualDisplayLabel(manual.DisplayName, manual.TypeKey))
-		if strings.TrimSpace(manual.Purpose) != "" {
-			b.WriteString("\n## 這是什麼任務（Q1）\n\n" + strings.TrimSpace(manual.Purpose) + "\n")
-		}
-		if fields, err := ParseManualFields(manual.Fields); err == nil && len(fields) > 0 {
-			b.WriteString("\n## 需要哪些資訊（Q2）\n\n")
-			for _, f := range fields {
-				req := "選填"
-				if f.Required {
-					req = "必填"
-				}
-				key := ""
-				if f.IsKey {
-					key = "、識別鍵"
-				}
-				fmt.Fprintf(&b, "- %s（%s%s）\n", f.Name, req, key)
-			}
-		}
-		if strings.TrimSpace(manual.SopMD) != "" {
-			b.WriteString("\n## 該怎麼做（Q3 SOP——規劃 steps 的藍本）\n\n" +
-				strings.TrimSpace(manual.SopMD) + "\n")
-		}
-		if strings.TrimSpace(manual.Learnings) != "" {
-			b.WriteString("\n## 學習經驗（前人踩坑，先讀再動手）\n\n" +
-				strings.TrimSpace(manual.Learnings) + "\n")
-		}
-	} else {
-		// A worker only ever exists for a manual-typed task, but the manual
-		// may have been deleted/renamed since assignment — say so honestly
-		// rather than fabricating an empty manual.
-		b.WriteString("\n# 任務手冊\n\n（該類型的手冊目前不存在——照任務描述與 owner 的指示規劃。）\n")
-	}
-	// The worker overlay names this final tail as its step 2. It is selected by
-	// runtime, so ownership instructions never ask Codex to use Claude's Monitor
-	// or ask Claude to wait for Codex's sidecar.
-	b.WriteString("\n---\n\n")
+	b.WriteString(head)
+	b.WriteString("\n\n")
+	b.WriteString(bootSeq)
+	b.WriteString("\n\n")
 	b.WriteString(workerRuntimeBootTail(w.Runtime))
 	b.WriteString("\n")
-	return b.String() + "\n", nil
+	return b.String(), nil
 }
 
 func workerRuntimeBootTail(runtime string) string {

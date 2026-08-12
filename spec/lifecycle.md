@@ -153,16 +153,22 @@ The context MUST be the following parts joined with `"\n\n"`, plus a single trai
    write endpoint exists for it). In every file seed (this block, role-def seeds, lessons
    seeds) the literal placeholder `{OWNER_ID}` MUST be substituted with the owner id
    (`"owner"`) at read time;
-2. `# Role: {name or key}\n\n{definition_md.strip()}`;
-3. `# Lessons ({role_key} / {task_type})\n\n{lessons_text.strip()}` — the title injection
+2. `# 使用者自訂（Owner Additions）\n\n{user_text.strip()}` — **skipped entirely** when the
+   owner text is blank (no noise header);
+3. `# Role: {name or key}\n\n{definition_md.strip()}`;
+4. `# Lessons ({role_key} / {task_type})\n\n{lessons_text.strip()}` — the title injection
    MUST be idempotent (T-8327): when the stripped lessons text itself already begins with
    the exact title line (a past generation wrote its boot segment back as the doc base),
    the assembler MUST strip those leading duplicate title line(s) and prepend exactly one,
    so titles never accumulate across write-back generations;
-4. `# 使用者自訂（Owner Additions）\n\n{user_text.strip()}` — **skipped entirely** when the
-   owner text is blank (no noise header);
 5. the 啟動程序 (boot-sequence) file seed, stripped — appended LAST (the
    recency-authoritative tail).
+
+The user-custom block moved from 4th to 2nd in T-4595. The reason is the outsource
+assembly: an outsource worker's boot context MUST be this same list minus parts 3 and 4
+(it has no role and no per-role lessons shard), in this same order, with no
+outsource-specific document of any kind. With the owner block at the end of the staff
+persona it could not be — the two assemblies had one seam that only staff carried.
 
 The seed `.md` files under the repo-root `seeds/` are language-neutral assets; a rewrite MUST
 consume the same files (byte-for-byte block content equality is testable across

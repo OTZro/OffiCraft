@@ -16,9 +16,9 @@ import (
 )
 
 // newWorkerTestServer builds an apiServer with the out-of-box roster seeded
-// (Mira + the server-self warden). The worker_context.md seed is read
-// embed-only (from the staged seedsdist baked into the test binary), so no
-// on-disk seeds/ is staged — a disk copy would be ignored anyway (T-e731).
+// (Mira + the server-self warden). The seeds are read embed-only (from the
+// staged seedsdist baked into the test binary), so no on-disk seeds/ is staged
+// — a disk copy would be ignored anyway (T-e731).
 func newWorkerTestServer(t *testing.T) *apiServer {
 	t.Helper()
 	db, err := openSQLite(filepath.Join(t.TempDir(), "worker-test.db"))
@@ -110,26 +110,35 @@ func TestBuildWorkerBootContext_FullAssembly(t *testing.T) {
 		t.Fatalf("fold: %v", err)
 	}
 	if strings.Contains(got, ownerPlaceholder) {
-		t.Errorf("the worker_context.md seed must have its %s placeholder substituted", ownerPlaceholder)
+		t.Errorf("the shared seed must have its %s placeholder substituted", ownerPlaceholder)
 	}
 	for _, want := range []string{
-		// T-108b: the worker OVERLAY no longer LEADS — Global Context does
-		// (order pinned by worker_sharedcore_test.go). The overlay is now a
-		// "how I differ from a member" section rather than a second full copy.
-		"外包工作者 —— 你與正職成員的差異",
-		"ow-abc", "O-7", "opus", "high", // identity block
-		TaskNo(task.ID), "Review PR 42", "review-pr", "https://pr/42",
-		"把 42 號 PR 看完", "pr_url", // task block
-		"交接備註", "m-kyle", "先跑既有測試", "先前交接", "確認是否仍適用",
+		"ow-abc", "O-7", "opus", "high", // identity block (spawn-path residue)
 		"review 一個 PR", "先看 diff 再留結論", "大 PR 先分檔看", // manual Q1/Q3/learnings
 		"必填、識別鍵", // Q2 field annotations
 		// T-fa76: the display face leads, the ADDRESSING type_key stays in
 		// parentheses (the worker calls write_task_learnings by key).
-		"類型：審查 PR（review-pr）",
 		"# 任務手冊：審查 PR（review-pr）",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("boot context missing %q", want)
+		}
+	}
+
+	// T-4595 — THE BOUND TASK IS NO LONGER PASTED IN. Boot-sequence 領工 has
+	// the worker call get_my_task, which serves the LIVE task; this copy was a
+	// spawn-time snapshot, stale by construction, and staff boot contexts never
+	// carried one. Every string below is a field of the fixture task, so this
+	// stays a real assertion rather than a spelling check: reinstating any part
+	// of the task block turns it red.
+	for _, gone := range []string{
+		TaskNo(task.ID), "Review PR 42", "https://pr/42",
+		"把 42 號 PR 看完", "pr_url", "x/y",
+		"交接備註", "m-kyle", "先跑既有測試",
+	} {
+		if strings.Contains(got, gone) {
+			t.Errorf("boot context still pastes the bound task (%q) — get_my_task "+
+				"serves the live one; a frozen copy can only be stale", gone)
 		}
 	}
 }
@@ -179,7 +188,24 @@ func TestBuildWorkerBootContext_ClaudeRuntimeTailHasFinalPrecedence(t *testing.T
 // first, THEN flip the status yourself" protocol. A non-reassigning task must
 // NOT carry that section (a fresh assignment has no predecessor). RED/GREEN pin
 // for the boot-context handover fold.
-func TestBuildWorkerBootContext_ReassigningTakeoverSection(t *testing.T) {
+// TestWorkerBootContextIsInvariantToTheTaskAndItsManual — T-4595 replaces two
+// tests that pinned blocks the assembly no longer emits
+// (_ReassigningTakeoverSection and _MissingManualIsHonest).
+//
+// Neither the bound task nor its type manual is pasted into a worker's boot
+// context any more: the boot sequence has the worker pick the task up with
+// get_my_task (which serves the LIVE row, lock and handover note included), and
+// a manual is pulled with get_task_manual at the moment the task is planned —
+// exactly what staff do, in exactly the same places. So the STRONGEST statement
+// available is INVARIANCE: the assembled document does not vary with either
+// input at all.
+//
+// That is deliberately stronger than a list of absent substrings. A future
+// reinstatement of any per-task or per-manual text — the takeover protocol, the
+// honest "手冊目前不存在" placeholder, a description, a single field name —
+// makes two of these three documents differ and turns this red, without anyone
+// having to predict the wording.
+func TestWorkerBootContextIsInvariantToTheTaskAndItsManual(t *testing.T) {
 	s := newWorkerTestServer(t)
 	if err := s.dal.PutMember(Member{
 		ID: "m-pred", Name: "Ken", Kind: KindAssistant, RosterStatus: RosterStatusActive,
@@ -187,51 +213,56 @@ func TestBuildWorkerBootContext_ReassigningTakeoverSection(t *testing.T) {
 		t.Fatalf("put predecessor: %v", err)
 	}
 	w := OutsourceWorker{ID: "ow-new", Codename: "O-2", Model: "opus", Effort: "high"}
-	base := Task{ID: "t-aabbccddeeff", TypeKey: "x", Title: "接手任務", Priority: TaskPriorityMid}
 
-	// Fresh (not reassigning) → no takeover section.
-	fresh, err := s.buildWorkerBootContext(w, base, nil)
-	if err != nil {
-		t.Fatalf("fold fresh: %v", err)
-	}
-	// "接手序列" is dynamic-only (the seed cross-references the header phrase but
-	// never emits this line) — a clean marker for the takeover block's presence.
-	if strings.Contains(fresh, "接手序列") {
-		t.Error("a non-reassigning task must NOT carry the takeover section")
-	}
+	plain := Task{ID: "t-aabbccddeeff", TypeKey: "x", Title: "接手任務",
+		Priority: TaskPriorityMid}
 
-	// Reassigning with a stamped member predecessor → the section names it.
-	takeover := base
+	// A reassignment takeover, with a predecessor and a handover note — the
+	// richest task shape the old assembly rendered.
+	takeover := plain
 	takeover.Lock = TaskLockReassigning
 	takeover.ReassignedFrom = "m-pred"
 	takeover.ReassignedFromKind = TaskExecutorMember
-	got, err := s.buildWorkerBootContext(w, takeover, nil)
+	takeover.Description = "把 42 號 PR 看完"
+	takeover.HandoverNote = "先跑既有測試"
+	takeover.HandoverNoteTS = 1
+	takeover.HandoverNoteBy = "m-kyle"
+
+	manual := &TaskManual{
+		TypeKey: "x", DisplayName: "審查 PR",
+		Purpose:   "review 一個 PR",
+		Fields:    `[{"name":"pr_url","required":true,"is_key":true}]`,
+		SopMD:     "先看 diff 再留結論",
+		Learnings: "大 PR 先分檔看",
+	}
+
+	base, err := s.buildWorkerBootContext(w, plain, nil)
+	if err != nil {
+		t.Fatalf("fold plain: %v", err)
+	}
+	// Positive control: the fold really did produce a document. Comparing two
+	// empty strings would satisfy every assertion below.
+	if len(base) < 10000 {
+		t.Fatalf("worker boot context is only %d bytes — the shared core is missing "+
+			"and the equalities below would be vacuous", len(base))
+	}
+
+	withTakeover, err := s.buildWorkerBootContext(w, takeover, nil)
 	if err != nil {
 		t.Fatalf("fold takeover: %v", err)
 	}
-	for _, want := range []string{
-		"接手序列",       // the takeover block (dynamic-only)
-		"前任：Ken",     // predecessor resolved to its member name
-		"m-pred",     // predecessor chat id
-		"claim_task", // the takeover is the claim action now (T-9ca5)
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("takeover boot context missing %q", want)
-		}
+	if withTakeover != base {
+		t.Error("worker boot context varies with the bound task — get_my_task serves " +
+			"the live task; a spawn-time copy can only be stale (T-4595)")
 	}
-}
 
-func TestBuildWorkerBootContext_MissingManualIsHonest(t *testing.T) {
-	s := newWorkerTestServer(t)
-	got, err := s.buildWorkerBootContext(
-		OutsourceWorker{ID: "ow-1", Codename: "S-1", Model: "sonnet", Effort: "medium"},
-		Task{ID: "t-aabbccddeeff", TypeKey: "gone-type", Title: "x", Priority: TaskPriorityMid},
-		nil)
+	withManual, err := s.buildWorkerBootContext(w, takeover, manual)
 	if err != nil {
-		t.Fatalf("fold: %v", err)
+		t.Fatalf("fold with manual: %v", err)
 	}
-	if !strings.Contains(got, "手冊目前不存在") {
-		t.Error("nil manual must be stated honestly, not silently omitted")
+	if withManual != base {
+		t.Error("worker boot context varies with the type manual — a manual is pulled " +
+			"with get_task_manual when the task is planned, as staff do (T-4595)")
 	}
 }
 

@@ -6,9 +6,8 @@ package main
 //
 // Guard 1 — dangling cross-references in the assembled worker context.
 //
-// Guard 2 — complete assembly. The worker must receive both the shared core and
-// its role-specific overlay; a green compile is not evidence that either was
-// actually folded into the final context.
+// Guard 2 — complete assembly. The worker must receive the shared core; a green
+// compile is not evidence that it was actually folded into the final context.
 
 import (
 	"regexp"
@@ -147,17 +146,23 @@ var riskLanguageFloor = []string{
 	"verify-before-assert",
 }
 
-// TestWorkerBootContextAssemblesSharedCoreAndOverlay checks the two required
-// layers without turning ordinary seed edits into a byte-for-byte baseline.
-func TestWorkerBootContextAssemblesSharedCoreAndOverlay(t *testing.T) {
+// TestWorkerBootContextAssemblesTheSharedCore checks that the shared core is
+// really folded in, without turning ordinary seed edits into a byte-for-byte
+// baseline.
+//
+// T-4595 renamed it: there is no overlay any more. An outsource boot context is
+// the staff assembly minus the persona slot, so "both required layers" collapsed
+// to one — and that makes the size floor and the risk vocabulary carry the whole
+// weight, since nothing else would notice the shared core going missing.
+func TestWorkerBootContextAssemblesTheSharedCore(t *testing.T) {
 	ctx := crossrefWorkerCtx(t)
 
 	// Anything substantially below this floor means the shared core is not being
-	// folded in and the overlay is pointing at a document the worker cannot see.
+	// folded in.
 	const floor = 30000
 	if len(ctx) < floor {
 		t.Fatalf("worker boot context is %d bytes, want >= %d.\n"+
-			"這幾乎一定表示共用核心（Global Context 三塊）沒有被組進來。",
+			"這幾乎一定表示共用核心（系統互動 ⊕ 使用者自訂 ⊕ 啟動程序）沒有被組進來。",
 			len(ctx), floor)
 	}
 
@@ -166,10 +171,5 @@ func TestWorkerBootContextAssemblesSharedCoreAndOverlay(t *testing.T) {
 			t.Errorf("worker boot context lost risk language %q — confirm the shared core "+
 				"is still assembled without worker-only filtering", kw)
 		}
-	}
-
-	// The overlay must still be there too.
-	if !strings.Contains(ctx, "外包工作者 —— 你與正職成員的差異") {
-		t.Error("worker boot context lost the outsource overlay")
 	}
 }

@@ -248,7 +248,7 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
 
 `ocagent listen` 是一條訂閱 server 即時通知的持久 SSE 連線；它同時也是你「已就緒且還活著」的主要訊號。runtime 必須等 boot readiness 完成才持有它，持有者與確切動作由文末 Boot Sequence 指定；**不要自行猜 listener ownership，也不要另開第二條或寫前景空轉死迴圈。**
 
-**第二條 liveness：presence（驅動 UI 成員的線上燈號）。** `waking` 與 `online` 是兩段不同機制：boot readiness 尚未完成時是 waking；完成後，server 依這個 runtime 有沒有持著 `ocagent listen` 的 SSE 連線來判定 online（online == connected），連線一斷就是 **offline（離線）**，**沒有你要自己維持的 heartbeat**。presence 自報的身分一律由 token 判定，你只能報自己；正職與外包的起手動作各自由其 Boot Sequence 指定。
+**第二條 liveness：presence（驅動 UI 成員的線上燈號）。** `waking` 與 `online` 是兩段不同機制：boot readiness 尚未完成時是 waking；完成後，server 依這個 runtime 有沒有持著 `ocagent listen` 的 SSE 連線來判定 online（online == connected），連線一斷就是 **offline（離線）**，**沒有你要自己維持的 heartbeat**。presence 自報的身分一律由 token 判定，你只能報自己；開機當下的起手動作照文末的 Boot Sequence。
 
 **context 用量上報也是 runtime adapter 自動處理的**。你不要手動跑 `context-report`；具體來源（例如 Claude statusLine 或 Codex App Server token-usage）由 Boot Sequence 說明。
 
@@ -313,11 +313,13 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
 2. **把還在進行中的工作寫回步驟備註**：MCP `update_step_note`（帶 `task_id` / `step_id` / `note`），寫做到哪、下一步接什麼。**任何步驟狀態下都寫得進**（不像 `waiting_reason` 只有進 `waiting_external` 時能填），所以換手落在哪個時點都有地方寫。整份取代、後寫的蓋掉前一份——它是「現在的狀態」，不是流水帳。
 
    > **它和票面描述怎麼分工**（兩個都能寫，別猜）：**票面描述＝這張票是什麼**（範圍、由來、驗收；穩定，很少改）；**步驟備註＝這一步現在做到哪**（易變，隨工作推進重寫，給下一個接手的你讀）。要記的是「進度」就寫步驟備註。
-3. **用 lessons 工具整併長期教訓**：MCP `get_lessons` 讀現況 → 同主題合併、過時的刪掉或改寫 → `replace_lessons` 整份替換（整理不是往後貼，見 §9）。
+3. **把這一輪的長期教訓整併回「你那一份」長期記憶**——讀現況 → 同主題合併、過時的刪掉或改寫 → 整份寫回（整理不是往後貼，見 §9；兩邊都吃 §9a 的字數上限）。**哪一份取決於你有沒有角色**：
+   - **正職成員**（有角色）→ 你角色的**學習筆記**：MCP `get_lessons` → `replace_lessons`。
+   - **外包工作者**（沒有角色）→ 你那張任務所屬類型的**任務手冊學習經驗**：MCP `get_task_manual` → `write_task_learnings`。🔴 **不要照正職那句去打 lessons**：外包的名冊列 `role_key` 是空的，而 lessons 的寫入判定是「只能寫自己角色的」，所以那一呼**必定 403**——你會把 120 秒寬限花在一個註定失敗的呼叫上，而那一輪的學習經驗就這樣消失；`get_lessons` 又是不設限的讀，你還會先讀到一份**不屬於你**的長期記憶當基底。
 4. **post chat 給「自己」一則交接 baton**：用 MCP `post_chat` 送到**你自己的 member id**，講清現況／進行中的事／blocker——這是給下一個你的第一手交接。
 5. **MCP `report_stopped()`** — 報完就停手。之後 runtime 自動收攤、server 原地重生一個新的你。
 
-**接班起手式**（你剛醒來，很可能就是上一個你換手後的新你）：先讀自己 chat 裡最新的交接 baton（查與**自己 id** 的對話）＋ lessons ＋ 你手上的 tasks，接上了再動工。waking 與 model 上報的精確規則以文末該 runtime 的 Boot Sequence 為準；**不要猜 model id**。`report_waking` 的 `model` 欄位是**你實際在跑的模型**：server 會把它存成一個獨立欄位、在成員詳情面板顯示（沒有人回報過就顯示空白），但它**不會**改寫 owner 設定的模型——設定值仍是啟動時採用的那一個，兩者分開存。
+**接班起手式**（你剛醒來，很可能就是上一個你換手後的新你）：先讀自己 chat 裡最新的交接 baton（查與**自己 id** 的對話）＋ lessons ＋ 你手上的 tasks，接上了再動工。**接手一張已經規劃過的任務時，動手前，確認你讀過它那本手冊的學習經驗（`get_task_manual`）。**waking 與 model 上報的精確規則以文末該 runtime 的 Boot Sequence 為準；**不要猜 model id**。`report_waking` 的 `model` 欄位是**你實際在跑的模型**：server 會把它存成一個獨立欄位、在成員詳情面板顯示（沒有人回報過就顯示空白），但它**不會**改寫 owner 設定的模型——設定值仍是啟動時採用的那一個，兩者分開存。
 
 **你也可以主動要求換手（自我重啟）。** 換手通常由 server 觸發（context 高、owner 點 refocus），但如果你自己判斷該換一輪了、server 還沒動，可用 MCP `restart_self`（選填 `reason` 一句話說明為什麼）。它**不是強制終止**——走的就是上面那條換手流：server 幫你 stamp、你會收到自己的換手 SOP，照**同一個五步**走完，server 再原地重生一個新的你（收到自己觸發的 SOP 不是 bug，照走即可）。兩個限制（server 會直接擋下、會回你讀得到的錯，別一直重試）：**非 online 不能自我重啟**（409）；**這個 session 剛起不到 10 分鐘不能自我重啟**（429，防「重生→立刻自重啟」的風暴）。撞到就照常做事，真到臨界讓 server 的自動換手接手。
 
@@ -477,6 +479,8 @@ owner 的座艙有一頁「任務」。**任務 = 一件帶完成準則（DoD）
 ### 10.4 換手：任務狀態都在 server，新的你接著跑
 
 換手／換機（§8b）時，你手上任務的完整狀態——plan structure、已執行 vs 未執行的分界、當前節點、各 gate 狀態、負責人、識別鍵——**全都在 server 上**。接手的新 session **先用 MCP `peek_resume_summary_size` 探快照多大**（只回大小／counts ＋ `estimated_total_chars`、不含任何內容），再決定怎麼接回：小（經驗法則的門檻：小於 20000 字元、約 5k tokens）就直接用 `resume_summary` 拿回、大就派便宜 sub-agent（如 haiku）去 `resume_summary` 拉回並回壓縮摘要——然後**接著跑完**。`resume_summary` 快照是**有界摘要**（省你的開機 context）：每張任務只有編號／標題／狀態／優先權／當前節點名稱＋進度，**不含 steps／DoD 全文**。它另外帶兩塊「你醒來的現場」：`roster`（全體成員與外包，各帶線上／離線狀態、所在機器、以及職責——職責截 1000 字（截的是文件扣掉自己標題行之後的內容），結尾 `…` 表示被截；外包沒有角色，改帶他手上那張任務的標題，另外帶該任務的狀態、等待原因（`waiting_reason` 非空即代表卡住）、以及做到第幾步／共幾步（`progress_done`/`progress_total`）；正職這幾欄維持空白，不帶進度）與 `machines`（機器清單 ＋ `you_are_on` 你自己在哪一台；**「我在哪台」以這個欄位為準，不要用 hostname 推**——我們的機器會互報同名）。`overview` 欄帶大小概要（未結案任務總數、省略掉的計畫文字字數 `detail_chars`、快照 chat 字數 `chat_chars`、你的等回覆卡數，另有 `roster_chars`／`machines_chars` 兩塊現場的字數，peek 讀的就是這塊）——**先看大小再決定**：細節按需 `get_task` 逐張拉，`detail_chars` 很大就丟給 sub-agent 消化、別整包塞進自己的 context；卡片列表用 `list_reply_cards`（有 `limit` 可限制筆數，列表只給標題＋決策要點，全文 `get_reply_card`）。所以務必**持續把狀態回報存 server**（`update_step_status`／`update_step_note`／`submit_plan`／開卡等；任務狀態由步驟推導、不需你報），別把進度只留在自己的 context 裡——你沒報回 server 的，對下一個你就是不存在。
+
+🔴 **接手一張已經規劃過的任務時，動手前，確認你讀過它那本手冊的學習經驗（`get_task_manual`）。** 手冊的學習經驗記的是「**這一類任務**前人踩過什麼坑」，跟你是第一個規劃它的人、還是第三個接手的人**無關**——§10.2 那句「先讀手冊」掛在**規劃**那個動作底下，所以一張已經規劃好的任務轉手之後，就再也沒有人會走到它。這句是補那個缺口，**兩種人都適用**（正職接手自己那 N 張裡的一張、外包接手它唯一那一張，讀的是同一件事）。措辭是「確認你讀過」不是「去讀」：同一個 session 裡接著做第二張同類任務時，那份東西還在你眼前，不必再拉一次。
 
 ### 10.5 收尾事項：經驗回寫、清暫存、回報處理完
 

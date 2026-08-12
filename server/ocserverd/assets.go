@@ -360,10 +360,10 @@ func bootSequenceSeedName(runtime string) string {
 }
 
 // buildBootContext resolves the role + folds the three docs + assembles the
-// boot context (lifecycle.md §2.2 normative
-// order: system-interaction seed, # Role, # Lessons, user-custom block when
-// non-blank, boot-sequence seed — joined "\n\n" + one trailing "\n"). nil =
-// unknown role (caller maps to 404 / fail-closed).
+// boot context (lifecycle.md §2.2 normative order: system-interaction seed,
+// user-custom block when non-blank, # Role, # Lessons, boot-sequence seed —
+// joined "\n\n" + one trailing "\n"). nil = unknown role (caller maps to 404 /
+// fail-closed).
 func (s *apiServer) buildBootContext(role string, member *Member, taskType string) (*bootContext, error) {
 	roleKey := resolveBootRoleKey(role, member)
 	roleDTO, err := s.foldRoleDefDTO(roleKey)
@@ -418,16 +418,27 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 		}
 		lessonsBody = strings.TrimSpace(rest)
 	}
-	parts := []string{
-		strings.TrimSpace(sysSeed),
-		"# Role: " + roleTitle + "\n\n" + strings.TrimSpace(roleDTO.DefinitionMD),
-		lessonsTitle + "\n\n" + lessonsBody,
-	}
+	// T-4595 — the user-custom block moved from 4th to 2nd. Staff and outsource
+	// boot contexts are now the SAME FOUR SLOTS in the same order:
+	//
+	//	1. 系統互動 (shared seed)
+	//	2. 使用者自訂 (shared, skipped entirely when blank)
+	//	3. the persona — staff: 角色說明 → 長期筆記; outsource: the task manual
+	//	4. 啟動程序 (shared seed, recency-authoritative tail)
+	//
+	// Only slot 3 differs between the two, and that is the whole difference.
+	// Putting the owner's additions ABOVE the persona is what makes the two
+	// assemblies line up; leaving it wedged between the lessons and the boot
+	// sequence would keep one seam that only staff have.
+	parts := []string{strings.TrimSpace(sysSeed)}
 	if strings.TrimSpace(userCtx.Text) != "" {
 		parts = append(parts,
 			"# 使用者自訂（Owner Additions）\n\n"+strings.TrimSpace(userCtx.Text))
 	}
-	parts = append(parts, strings.TrimSpace(bootSeed))
+	parts = append(parts,
+		"# Role: "+roleTitle+"\n\n"+strings.TrimSpace(roleDTO.DefinitionMD),
+		lessonsTitle+"\n\n"+lessonsBody,
+		strings.TrimSpace(bootSeed))
 	name := roleDTO.Name
 	if member != nil {
 		name = member.Name

@@ -242,14 +242,15 @@ def _expected_context(client, owner_token, role_key: str, task_type: str, user_t
     lessons = client.get(
         f"/api/lessons/{role_key}/{task_type}", headers=_auth(owner_token)
     ).json()
-    parts = [
-        _seed("system_interaction.md").strip(),
-        f"# Role: {role['name'] or role['key']}\n\n{role['definition_md'].strip()}",
-        f"# Lessons ({role_key} / {task_type})\n\n{lessons['text'].strip()}",
-    ]
+    # §2.2 order (T-4595): 系統互動 → 使用者自訂 → Role → Lessons → 啟動程序.
+    parts = [_seed("system_interaction.md").strip()]
     if user_text.strip():
         parts.append(f"# 使用者自訂（Owner Additions）\n\n{user_text.strip()}")
-    parts.append(_seed("boot_sequence.md").strip())
+    parts += [
+        f"# Role: {role['name'] or role['key']}\n\n{role['definition_md'].strip()}",
+        f"# Lessons ({role_key} / {task_type})\n\n{lessons['text'].strip()}",
+        _seed("boot_sequence.md").strip(),
+    ]
     return "\n\n".join(parts) + "\n"
 
 
@@ -281,7 +282,7 @@ def test_boot_fold_bytes_with_owner_additions(client, owner_token) -> None:
 
 
 def test_boot_fold_bytes_blank_user_block_skipped(client, owner_token) -> None:
-    """§2.2 part 4: a blank owner text drops the ENTIRE user-custom block —
+    """§2.2 part 2: a blank owner text drops the ENTIRE user-custom block —
     no noise header — and the fold is byte-identical to the 4-part form."""
     r = client.post("/api/global-context/reset", headers=_auth(owner_token))
     assert r.status_code == 200, r.text
