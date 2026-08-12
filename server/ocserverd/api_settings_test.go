@@ -252,7 +252,7 @@ func TestUpdateSettingsValidatesAndAppliesImmediately(t *testing.T) {
 	}
 	if minted, err := api.mintAgentToken("agent-test", "", api.agentTokenTTLValue()); err != nil {
 		t.Fatalf("agent mint: %v", err)
-	} else if claims, err := verifyJWT(minted, api.secret, time.Now().Unix()); err != nil || claims["exp"].(int64)-claims["iat"].(int64) != 2592000 {
+	} else if claims, err := verifyJWT(minted, api.secret, time.Now().Unix()); err != nil || claims["exp"].(float64)-claims["iat"].(float64) != 2592000 {
 		t.Fatalf("agent mint must use patched agent TTL: %+v %v", claims, err)
 	}
 
