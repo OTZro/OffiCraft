@@ -1261,7 +1261,7 @@ func (s *apiServer) HandlePeekResumeSummarySizeApiResumeSummarySizeGet(w http.Re
 // The original /api/resume-summary route and its identity lock (actor :=
 // currentActor(r), caller = target, always) are untouched by this addition.
 func (s *apiServer) HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryGet(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveResumeSummaryTarget(memberId)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
