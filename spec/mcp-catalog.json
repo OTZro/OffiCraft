@@ -2825,14 +2825,6 @@
       "name": "remove_task_artifact"
     },
     {
-      "description": "Outsource worker's claim: read the task bound to the caller. The steps are a BOUNDED projection: only the current step(s) carry their dod/note in full, the rest give id/name/status/order_idx only, and steps_omitted_chars reports how much was dropped — call get_task for the whole plan.",
-      "inputSchema": {
-        "properties": {},
-        "type": "object"
-      },
-      "name": "get_my_task"
-    },
-    {
       "description": "List live outsource workers (codename, model, effort, task).",
       "inputSchema": {
         "properties": {},

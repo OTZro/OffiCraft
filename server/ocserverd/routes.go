@@ -1410,15 +1410,9 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Remove one artifact from a task's set (executor/owner/admin).",
 			MCPTool:  "remove_task_artifact",
 		},
-		{
-			Method:   "GET",
-			Path:     "/api/self/task",
-			Handler:  w.HandleGetMyTaskApiSelfTaskGet,
-			Auth:     authGated,
-			Requires: principalAgent,
-			Summary:  "Outsource worker's claim: read the task bound to the caller.",
-			MCPTool:  "get_my_task",
-		},
+		// T-4595: GET /api/self/task (get_my_task) is RETIRED — see the note in
+		// api_tasks.go. A worker reads its task through get_task like everyone
+		// else, and reports its wake through report_waking like everyone else.
 		// ── Outsource panel (M3) ─────────────────────────────────────────────
 		{
 			Method:   "GET",

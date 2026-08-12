@@ -2571,26 +2571,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/self/task": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Outsource worker's claim: read the task bound to the caller.
-         * @description The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. A caller with no bound worker row (any roster member included) is a 404. ``task.steps`` is SLIM here and here only: the CURRENT step(s) — every step in ``in_progress`` / ``waiting_owner`` / ``waiting_external``, or, when none is live, the lowest-``order_idx`` ``pending`` one — carry their full content, while every other step serves ``dod`` and ``note`` EMPTY and keeps the rest: ``id`` / ``name`` / ``status`` / ``order_idx`` plus the bounded structural scalars ``parallel_group`` / ``is_gate`` / ``waiting_reason``, so the shape of the plan — which stage runs in parallel, which gate is coming, why another step is parked — survives the trim. ``steps_omitted_chars`` reports how much text that dropped (the ``ResumeTaskDTO.detail_chars`` move: peek the number, then pull get_task, which is unslimmed).
-         */
-        get: operations["handle_get_my_task_api_self_task_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/self/waking": {
         parameters: {
             query?: never;
@@ -4953,7 +4933,7 @@ export interface components {
             actual_machine: string;
             /**
              * Actual Model
-             * @description The model the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.model``) — durably persisted, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported a model for this member; it is separate from, and NEVER falls back to, the owner-configured `model` launch setting. Applies identically to ``kind=outsource`` rows, whose reports arrive under their own ``ow-`` token sub. WAS: written only by ``report_waking``, which no outsource worker calls (a worker's boot signal is ``get_my_task``), so it was structurally always empty for them.
+             * @description The model the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.model``) — durably persisted, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported a model for this member; it is separate from, and NEVER falls back to, the owner-configured `model` launch setting. Applies identically to ``kind=outsource`` rows, whose reports arrive under their own ``ow-`` token sub. WAS: written only by ``report_waking``, which no outsource worker called (its boot signal was the since-retired ``get_my_task``), so it was structurally always empty for them; T-4595 put every worker on the same report_waking boot verb, so the field now fills for them too.
              * @default
              */
             actual_model: string;
@@ -5423,20 +5403,6 @@ export interface components {
             tokens?: {
                 [key: string]: number;
             } | null;
-        };
-        /**
-         * MyTaskDTO
-         * @description The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. ``task.steps`` is SLIM here and here only: the CURRENT step(s) — every step in ``in_progress`` / ``waiting_owner`` / ``waiting_external``, or, when none is live, the lowest-``order_idx`` ``pending`` one — carry their full content, while every other step serves ``dod`` and ``note`` EMPTY and keeps the rest: ``id`` / ``name`` / ``status`` / ``order_idx`` plus the bounded structural scalars ``parallel_group`` / ``is_gate`` / ``waiting_reason``, so the shape of the plan — which stage runs in parallel, which gate is coming, why another step is parked — survives the trim. ``steps_omitted_chars`` reports how much text that dropped (the ``ResumeTaskDTO.detail_chars`` move: peek the number, then pull get_task, which is unslimmed).
-         */
-        MyTaskDTO: {
-            /** Manual */
-            manual: components["schemas"]["TaskManualDTO"] | null;
-            /**
-             * Steps Omitted Chars
-             * @description Total runes of ``dod`` + ``note`` blanked out of the non-current steps (CJK counts 1 per character). 0 = nothing was dropped.
-             */
-            steps_omitted_chars: number;
-            task: components["schemas"]["TaskDTO"];
         };
         /**
          * OnboardingReportDTO
@@ -13118,53 +13084,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemberDTO"];
-                };
-            };
-            /** @description Validation error (unified error envelope). */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
-                };
-            };
-            /** @description Client error (unified error envelope). */
-            "4XX": {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
-                };
-            };
-            /** @description Server error (unified error envelope). */
-            "5XX": {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
-                };
-            };
-        };
-    };
-    handle_get_my_task_api_self_task_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MyTaskDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

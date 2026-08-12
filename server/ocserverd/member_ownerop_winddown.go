@@ -50,11 +50,18 @@ package main
 //	  "we opened a wind-down" can never disagree.
 //
 //	worker: Status != active (never claimed its task) → immediate
-//	  staff: NO ANALOGUE, deliberately. assigned→active is the get_my_task
+//	  staff: NO ANALOGUE, deliberately. assigned→active WAS the get_my_task
 //	  claim, a lifecycle step a staff member simply does not have; there is no
 //	  state in which a live staff session has PROVABLY never been handed work.
 //	  Omitting it errs toward winding down, i.e. toward the grace — the safe
 //	  direction, and the wait is a CEILING not a duration (below).
+//	  🔴 T-4595 RESOLVED THIS ASYMMETRY THE OTHER WAY: get_my_task is retired
+//	  and the flip moved to report_waking, the FIRST boot verb — so "active" no
+//	  longer proves a worker was ever handed task content, and the worker arm
+//	  was DELETED rather than kept as a stale proof. Both predicates now agree,
+//	  and they agree on THIS side of the argument: the safe direction. The cost
+//	  is the one this paragraph already priced for staff — at most one grace
+//	  ceiling, cut short the instant the session answers report_stopped.
 //
 //	worker: RefocusSince > 0 ∧ StoppedSince > 0 (this epoch already collected)
 //	  staff: COPIED VERBATIM, including the epoch scoping, because the two-latch

@@ -33,9 +33,9 @@ package main
 //	  → push a member `start` frame onto an ONLINE warden's FIFO (fail-closed:
 //	    no online warden → nothing enqueued, the cadence retries)
 //	  → the warden boots tmux session member-<ow-id> running claude with the
-//	    worker's own .mcp.json; the worker's first get_my_task flips it
-//	    'active' (Phase 1) — that flip, not a warden receipt, is the
-//	    observable wake signal.
+//	    worker's own .mcp.json; the worker's first report_waking flips it
+//	    'active' (T-4595 moved that flip off the retired get_my_task) — that
+//	    flip, not a warden receipt, is the observable wake signal.
 //
 // Reclaim (SPEC §6.3 second half):
 //
@@ -1089,16 +1089,12 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // immediately? The owner's ask was 「有東西要存才等,沒有就立刻走」 — he must not
 // wait out a grace window just to change a model.
 //
-// The server can prove exactly THREE negatives, and all three are structural
-// rather than guessed:
+// The server can prove exactly TWO negatives, and both are structural rather
+// than guessed:
 //
 //   - NO LIVE SESSION (!hub.IsOnline). Nothing can hear the 預告 and nothing
 //     exists to flush; waiting would burn the whole deadline for certain. This
 //     is the pre-existing D6 rule openWorkerHandoverGrace already applies.
-//   - NEVER CLAIMED ITS TASK (Status != active, i.e. activated_ts == 0). The
-//     assigned→active flip IS the get_my_task claim, so a non-active worker has
-//     provably never been handed its task content. It has no task state to write
-//     back, and its ocagent may not even have finished booting.
 //   - THIS EPOCH'S WIND-DOWN IS ALREADY COLLECTED (RefocusSince > 0 ∧
 //     StoppedSince > 0 — read the epoch guard note below; the RefocusSince half
 //     is load-bearing, not decoration). 收口 latched: the
@@ -1115,7 +1111,26 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 //     machine indefinitely, because the FSM rescue is gated on !IsOnline.
 //     A collected worker has nothing left to flush, so the verb goes out NOW.
 //
-// Everything else (active + online) opens the window — and the WAIT IS NOT THE
+// 🔴 T-4595 REMOVED A THIRD NEGATIVE, DELIBERATELY, AND THE COST IS BOUNDED.
+// There used to be a "NEVER CLAIMED ITS TASK" arm (Status != active, i.e.
+// activated_ts == 0): the assigned→active flip WAS the get_my_task claim, so a
+// non-active worker had provably never been handed its task content. get_my_task
+// is retired and that flip now lives in report_waking (workerReportWaking), which
+// is the FIRST verb of the boot sequence — so "active" no longer proves anything
+// about whether the worker ever received task content, it only proves the session
+// said hello. Keeping the arm would have meant reading a stale proof; keeping the
+// flip on a later verb would have meant inventing an outsource-only lifecycle step
+// that staff do not have (the exact thing the owner's 「兩邊機制一樣」 rule forbids).
+// So the arm is gone, and an owner verb on a freshly-booted worker that has nothing
+// to save now waits for the wind-down instead of firing instantly. STAFF ALREADY
+// PAY EXACTLY THIS: member_ownerop_winddown.go spells out that the staff twin has
+// NO ANALOGUE of this arm on purpose, and that omitting it "errs toward winding
+// down, i.e. toward the grace — the safe direction, and the wait is a CEILING not
+// a duration". Both halves of that argument carry over verbatim: the 收口 fires the
+// instant the worker answers report_stopped, so a session with nothing to save
+// still ends in seconds; StoppingTimeoutSecs (120s) is only the ceiling.
+//
+// Everything else (online) opens the window — and the WAIT IS NOT THE
 // DEADLINE. StoppingTimeoutSecs is a ceiling, not a duration: the 收口 fires the
 // instant the worker answers report_stopped, so a session with nothing to save
 // ends in seconds. That is deliberately where the judgement is made, because the
@@ -1123,7 +1138,7 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // zero visibility into a transcript; any finer server-side test (context pct,
 // time since boot, message counts) would be a GUESS dressed as a criterion, and
 // guessing wrong here silently discards a round of learnings. Recorded honestly:
-// for the active+online case this is the 「照舊等滿但可提早結束」 fallback, not a
+// for the online case this is the 「照舊等滿但可提早結束」 fallback, not a
 // positive detection of unsaved work.
 // ⚠️ THE EPOCH GUARD ON THAT THIRD ARM (review round 3 — the hole round 2's
 // own fix opened). stopped_since is latched in TWO places and only one of them
@@ -1149,8 +1164,8 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // table does not cover means the table is now wrong too.
 // Callers hold s.outsourceMu.
 func (s *apiServer) workerHasStateToFlush(w OutsourceWorker) bool {
-	return w.Status == WorkerStatusActive &&
-		hasUncollectedOnlineOwnerOpState(w.RefocusSince, w.StoppedSince, s.hub.IsOnline(w.ID))
+	return hasUncollectedOnlineOwnerOpState(
+		w.RefocusSince, w.StoppedSince, s.hub.IsOnline(w.ID))
 }
 
 // openOwnerOpHandover puts an owner verb through the graceful wind-down: stamp a
@@ -1513,15 +1528,28 @@ func (s *apiServer) resolveLiveWorker(id string) (*OutsourceWorker, error) {
 // workerReportWaking is report_waking for a kind='outsource' caller: clear the
 // recycle markers (the durable loop-break, member parity). The boot-reported
 // model is runtime telemetry, stored separately from the owner configuration.
-// waking_since itself is NOT carried on the worker vocabulary —
-// the worker's observable wake signal stays the get_my_task claim. Takes
-// s.outsourceMu.
+// waking_since itself is NOT carried on the worker vocabulary.
+//
+// 🔴 T-4595 — THIS IS NOW THE assigned → active WRITE POINT, the only one.
+// It used to live in get_my_task, which is retired: a worker's first boot verb
+// is report_waking, exactly as a staff member's is, so the wake signal and the
+// claim are the same event again instead of two. WorkerStatusAssigned is a
+// projection of activated_ts == 0 (memberFromWorker stamps it), so the flip is
+// durable through the ordinary putMember write below — and it publishes an
+// outsource_worker delta so the cockpit panel moves on the same edge it always
+// did. Idempotent: a repeat report on an already-active worker changes nothing
+// and fans no worker delta.
+// Takes s.outsourceMu.
 func (s *apiServer) workerReportWaking(id string, model *string, trigger string) (*Member, error) {
 	s.outsourceMu.Lock()
 	defer s.outsourceMu.Unlock()
 	w, err := s.resolveLiveWorker(id)
 	if err != nil {
 		return nil, err
+	}
+	claimed := w.Status == WorkerStatusAssigned
+	if claimed {
+		w.Status = WorkerStatusActive
 	}
 	w.RefocusSince = 0.0
 	w.RefocusOp = ""
@@ -1533,6 +1561,12 @@ func (s *apiServer) workerReportWaking(id string, model *string, trigger string)
 	}
 	if err := s.putMember(m, trigger); err != nil {
 		return nil, err
+	}
+	if claimed {
+		// memberFromWorker minted the activated_ts; echo it back onto the row we
+		// publish so the delta's status is the one that was just persisted.
+		w.ActivatedTS = m.ActivatedTS
+		s.publishOutsourceWorker(*w, trigger)
 	}
 	return &m, nil
 }
