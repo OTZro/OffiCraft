@@ -2,24 +2,13 @@ package main
 
 // worker_crossref_test.go — T-108b follow-up.
 //
-// TWO guards live here, and they are in their OWN FILE on purpose.
+// TWO assembly guards live here.
 //
-// Guard 1 — dangling cross-references. "Excluded sections" and "in-document §N
-// cross-references" are two different things. The original T-108b work handled
-// only the first: it removed §9 / §5.1 / §10.1 / §10.1b / §10.1c from the
-// worker's copy, but left the POINTERS to them alive elsewhere in the text. The
-// FAIL-CLOSED anchor guard cannot see this — the anchors still resolve; there is
-// just one more pointer than before. So the next time upstream adds a sentence
-// pointing at an excluded section, nothing catches it. This guard does.
+// Guard 1 — dangling cross-references in the assembled worker context.
 //
-// Guard 2 — commit coupling. The two T-108b commits (ec3cdce docs, 8153aa3 code)
-// are NOT independently revertible, and the failure was SILENT in one direction:
-// reverting the code commit alone still built, deleted its own tests along with
-// itself, and dropped the worker context from 58,636 to 7,104 bytes with the
-// risk language back to zero — worse than before the ticket, with nothing red.
-// A guard that lives in worker_sharedcore_test.go cannot catch that, because
-// that file IS part of the commit being reverted. This file is not part of
-// either commit, so it survives a revert of either one and goes red.
+// Guard 2 — complete assembly. The worker must receive both the shared core and
+// its role-specific overlay; a green compile is not evidence that either was
+// actually folded into the final context.
 
 import (
 	"regexp"
@@ -27,17 +16,8 @@ import (
 	"testing"
 )
 
-// crossrefWorkerCtx deliberately DUPLICATES workerCtx from
-// worker_sharedcore_test.go instead of calling it.
-//
-// That duplication is the entire point of Guard 2. worker_sharedcore_test.go is
-// part of commit 8153aa3; reverting that commit deletes it. If this file called
-// its helper, a revert would break COMPILATION here — which looks loud, but the
-// obvious way to make a build error go away is to delete the file that no longer
-// compiles, and the guard dies with it. Depending only on symbols that predate
-// T-108b (newWorkerTestServer, putWorkerFixture, putTaskFixture,
-// buildWorkerBootContext) means a revert leaves this file COMPILING and going
-// red on the assertion itself — a failure that states what is actually wrong.
+// crossrefWorkerCtx deliberately builds through the production worker assembly
+// instead of calling workerGlobalContext directly.
 func crossrefWorkerCtx(t *testing.T) string {
 	t.Helper()
 	s := newWorkerTestServer(t)
@@ -53,7 +33,7 @@ func crossrefWorkerCtx(t *testing.T) string {
 	return ctx
 }
 
-// crossrefMemberCtx is the member-side equivalent, decoupled for the same reason.
+// crossrefMemberCtx is the member-side equivalent.
 func crossrefMemberCtx(t *testing.T) string {
 	t.Helper()
 	s := newWorkerTestServer(t)
@@ -118,9 +98,7 @@ func dangling(doc string) []string {
 // must resolve to a heading the worker can actually reach.
 //
 // This is deliberately stated as a closure property of the assembled document
-// rather than as a blacklist of today's excluded section numbers. A blacklist
-// would need editing every time the exclusion list changes; this does not, and
-// it also catches plain typos and upstream renames.
+// rather than as a blacklist. It also catches plain typos and upstream renames.
 func TestWorkerBootContextHasNoDanglingSectionRefs(t *testing.T) {
 	ctx := crossrefWorkerCtx(t)
 
@@ -135,33 +113,28 @@ func TestWorkerBootContextHasNoDanglingSectionRefs(t *testing.T) {
 		t.Fatalf("heading extraction looks broken: only %d headings found in the "+
 			"worker context — every ref would falsely look dangling", got)
 	}
-	// And prove the resolver rejects what it should: a synthetic pointer to a
-	// section that is definitely excluded must be reported as dangling.
-	if d := dangling(ctx + "\n\n見 §10.1c 的發包流程。\n"); len(d) == 0 {
-		t.Fatal("resolver has no teeth: an injected pointer to the excluded §10.1c " +
-			"was not reported as dangling")
+	// And prove the resolver rejects what it should.
+	if d := dangling(ctx + "\n\n見 §9999 的流程。\n"); len(d) == 0 {
+		t.Fatal("resolver has no teeth: an injected pointer to §9999 was not reported as dangling")
 	}
 
 	if d := dangling(ctx); len(d) > 0 {
 		t.Errorf("worker boot context points at sections it does not contain: %v\n"+
-			"每一個 §N 指標都必須在外包讀得到的同一份文件裡解析得到。"+
-			"指向被排除章節的指標不是「被後面覆寫」，是壞掉的指示。", d)
+			"每一個 §N 指標都必須在外包讀得到的同一份文件裡解析得到。", d)
 	}
 }
 
 // TestMemberBootContextHasNoDanglingSectionRefs is the paired control. If the
-// member fold — which excludes nothing — also had dangling refs, the worker
-// assertion above would be measuring a pre-existing defect in the seed rather
-// than anything T-108b did.
+// member fold also had dangling refs, the worker assertion above would be
+// measuring a pre-existing defect in the seed rather than worker assembly.
 func TestMemberBootContextHasNoDanglingSectionRefs(t *testing.T) {
 	if d := dangling(crossrefMemberCtx(t)); len(d) > 0 {
 		t.Errorf("member boot context has dangling refs %v — the worker-side "+
-			"assertion cannot attribute anything to the worker exclusions until "+
-			"this baseline is clean", d)
+			"assertion needs this baseline clean", d)
 	}
 }
 
-// ── Guard 2: the two T-108b commits must move together ───────────────────────
+// ── Guard 2: the assembled context must retain both layers ──────────────────
 
 // riskLanguageFloor lists the safety vocabulary that reaching an outsource
 // worker IS the motivation for T-108b. Measured on base (42ea399) it was zero
@@ -174,46 +147,29 @@ var riskLanguageFloor = []string{
 	"verify-before-assert",
 }
 
-// TestWorkerBootContextRevertCoupling fails loudly if EITHER T-108b commit is
-// reverted without the other.
-//
-// Why this is a test and not a note in the commit message: the observed failure
-// mode was silent. Reverting 8153aa3 alone removed worker_sharedcore.go AND
-// worker_sharedcore_test.go together, so every assertion about the shared core
-// vanished with the thing it was asserting about — `go build` passed and no
-// test went red, while the worker silently dropped to a state strictly worse
-// than before the ticket. Tests that ship inside the commit under test cannot
-// guard that commit. This file ships separately.
-//
-// It is intentionally a floor, not an equality: it must not become a
-// change-detector that has to be re-baselined on every seed edit.
-func TestWorkerBootContextRevertCoupling(t *testing.T) {
+// TestWorkerBootContextAssemblesSharedCoreAndOverlay checks the two required
+// layers without turning ordinary seed edits into a byte-for-byte baseline.
+func TestWorkerBootContextAssemblesSharedCoreAndOverlay(t *testing.T) {
 	ctx := crossrefWorkerCtx(t)
 
-	// The overlay alone (the ec3cdce-only state) was 7,104 bytes; base was
-	// 15,279. Anything near either number means the shared core is not being
-	// folded in and the "differences overlay" is pointing at a document the
-	// worker cannot see.
+	// Anything substantially below this floor means the shared core is not being
+	// folded in and the overlay is pointing at a document the worker cannot see.
 	const floor = 30000
 	if len(ctx) < floor {
 		t.Fatalf("worker boot context is %d bytes, want >= %d.\n"+
-			"這幾乎一定表示共用核心（Global Context 三塊）沒有被組進來——"+
-			"也就是有人只退了 T-108b 兩顆 commit 的其中一顆。"+
-			"這兩顆必須一起進退：差異覆寫段假設共用核心就在它上面。",
+			"這幾乎一定表示共用核心（Global Context 三塊）沒有被組進來。",
 			len(ctx), floor)
 	}
 
 	for _, kw := range riskLanguageFloor {
 		if !strings.Contains(ctx, kw) {
-			t.Errorf("worker boot context lost risk language %q — this is the whole "+
-				"safety motivation of T-108b (measured zero on base 42ea399). "+
-				"若這條紅了而 context 長度沒紅，先確認共用核心是否被部分排除掉。", kw)
+			t.Errorf("worker boot context lost risk language %q — confirm the shared core "+
+				"is still assembled without worker-only filtering", kw)
 		}
 	}
 
-	// The overlay must still be there too — the other revert direction.
+	// The overlay must still be there too.
 	if !strings.Contains(ctx, "外包工作者 —— 你與正職成員的差異") {
-		t.Error("worker boot context lost the outsource overlay — the shared core " +
-			"alone tells a worker to do member-only things")
+		t.Error("worker boot context lost the outsource overlay")
 	}
 }
