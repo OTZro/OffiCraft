@@ -1024,10 +1024,11 @@ export interface paths {
          *     ``display_name`` (required, 422 if blank) is the human label; it is written as a
          *     MachineAlias overlay keyed by the machine id (== member.id).
          *
-         *     The response carries the member id (== machine_id), the minted exec-token
-         *     (``scope="agent"``, ``sub=member_id``, TTL = min(ttl_days*86400,
-         *     MAX_AGENT_TTL_SECS)), and the copy-paste ``boot_command`` the operator runs on
-         *     that machine to install the warden (identity rides in the token's ``sub``).
+         *     The response carries the member id (== machine_id), a permanent exec-token
+         *     (``scope="agent"``, ``sub=member_id``, no ``exp`` claim; ``expires_in=0``), and the
+         *     copy-paste ``boot_command`` the operator runs on that machine to install the
+         *     warden (identity rides in the token's ``sub``). ``ttl_days`` remains accepted for
+         *     request compatibility but does not alter the permanent warden credential.
          */
         post: operations["handle_onboard_machine_api_machines_post"];
         delete?: never;
@@ -1049,7 +1050,7 @@ export interface paths {
          * Exchange a one-time claim code for the machine's exec-token.
          * @description Exchange a one-time claim code for the machine's exec-token (``POST /api/machines/claim``).
          *
-         *     The onboard / boot-command responses no longer template the machine's long-lived exec-token into the copy-paste one-liner; they mint a short-lived (600 s), SINGLE-USE claim code instead and the served ``install.sh?code=`` script calls this endpoint to redeem it. On a valid, unexpired, unused code the response carries a freshly minted exec-token (``scope="agent"``, ``sub=machine_id``, default 90-day TTL capped at 400 days — the same mint onboard performed) plus ``expires_in`` and the ``machine_id`` the token is bound to. Redemption CONSUMES the code atomically: a second call with the same code — or any invalid/expired code — is a flat 401 with no hint which it was (no guessing oracle).
+         *     The onboard / boot-command responses no longer template the machine's long-lived exec-token into the copy-paste one-liner; they mint a short-lived (600 s), SINGLE-USE claim code instead and the served ``install.sh?code=`` script calls this endpoint to redeem it. On a valid, unexpired, unused code the response carries a freshly minted permanent exec-token (``scope="agent"``, ``sub=machine_id``, no ``exp`` claim — the same mint every warden install path performs) plus ``expires_in=0`` and the ``machine_id`` the token is bound to. Redemption CONSUMES the code atomically: a second call with the same code — or any invalid/expired code — is a flat 401 with no hint which it was (no guessing oracle).
          *
          *     Auth: PUBLIC — the code IS the credential (possession proves the caller holds a boot command the owner just minted). Codes live in memory only (TTL 600 s); a server restart voids them, which reads as expiry.
          */
@@ -1100,7 +1101,7 @@ export interface paths {
          *     installer for an existing machine again later (Seth: "I can get the machine
          *     boot command anytime") without re-onboarding (which would mint a NEW machine).
          *     Resolves the ACTIVE warden member whose id IS ``machine_id`` (404 otherwise),
-         *     RE-MINTS a fresh exec-token (default machine TTL, the same mint onboard uses),
+         *     RE-MINTS a fresh permanent exec-token (no ``exp`` claim; ``expires_in=0``),
          *     and rebuilds the one-liner via the shared ``_build_boot_command``.
          *
          *     Governance: the SAME ``requires="admin_agent"`` route choke onboard uses. Route
@@ -1133,9 +1134,9 @@ export interface paths {
          *     The common case is that the officraft server RUNS ON the machine being
          *     provisioned, so instead of copy-pasting the boot command into a shell the owner
          *     clicks once and the server installs the warden locally. It resolves the ACTIVE
-         *     warden member (404 otherwise), re-mints a fresh exec-token, resolves the
-         *     ocwarden binary the SAME way ``handle_warden_binary`` does (503 if absent), and
-         *     runs ``<ocwarden> install`` as a subprocess.
+         *     warden member (404 otherwise), re-mints a fresh permanent exec-token (no ``exp``
+         *     claim), resolves the ocwarden binary the SAME way ``handle_warden_binary`` does
+         *     (503 if absent), and runs ``<ocwarden> install`` as a subprocess.
          *
          *     Governance: ``requires="admin_agent"`` — the SAME admin choke onboard uses
          *     (T-6020, owner ruling 2026-07-26: installing the warden on the server host is
@@ -1258,11 +1259,12 @@ export interface paths {
          *     ``uninstall`` verb, above). It reuses the ``handle_dismiss_member`` soft-delete
          *     (``status="removed"`` + intent ``desired_state="offline"``, then re-put) — NEVER a
          *     hard
-         *     delete, so the audit row + the token's ``sub`` attribution survive; no token
-         *     revocation infrastructure (HS256 is stateless; the exec-token expires by TTL —
-         *     kyle's decree). It hands back NO ``teardown_command`` placeholder: DELETE does not
-         *     command removal, so it never returns an installer/uninstaller line (the old
-         *     teardown-command occupancy is gone — uninstall is now its own seam).
+         *     delete, so the audit row + the token's ``sub`` attribution survive; the roster
+         *     revocation check rejects every later gated request bearing that machine's
+         *     credential, including a permanent warden token. It hands back NO
+         *     ``teardown_command`` placeholder: DELETE does not command removal, so it never
+         *     returns an installer/uninstaller line (the old teardown-command occupancy is gone
+         *     — uninstall is now its own seam).
          *
          *     Admin-gated on the route table (requires="admin_agent"). Kind guard: a
          *     non-warden member is
@@ -3767,8 +3769,8 @@ export interface components {
          *     installer for an EXISTING machine again later without re-onboarding.
          *     ``machine_id`` is the warden member id; ``boot_command`` is the same
          *     curl-download-then-install one-liner onboard builds (it embeds ``machine_id``
-         *     as OC_ID); ``token`` is a FRESHLY re-minted exec-token (``scope="agent"``,
-         *     ``sub=machine_id``) and ``expires_in`` is its lifetime in seconds.
+         *     as OC_ID); ``token`` is a FRESHLY re-minted permanent exec-token (``scope="agent"``,
+         *     ``sub=machine_id``, no ``exp`` claim) and ``expires_in`` is ``0``.
          *
          *     ``claim_code`` is a fresh short-lived (``claim_expires_in`` = 600 s), single-use code
          *     the ``boot_command`` embeds (``install.sh?code=``) instead of the exec-token; the served
@@ -4622,10 +4624,10 @@ export interface components {
          * MachineClaimResultDTO
          * @description The claim-code redemption result (``POST /api/machines/claim``).
          *
-         *     ``token`` is the freshly minted machine exec-token (``scope="agent"``,
-         *     ``sub=machine_id`` — the same mint onboard performed); ``expires_in`` is its
-         *     lifetime in seconds (default 90 days, capped at 400); ``machine_id`` is the
-         *     warden member the token is bound to.
+         *     ``token`` is the freshly minted permanent machine exec-token (``scope="agent"``,
+         *     ``sub=machine_id`` — the same mint every warden install path performs); it omits
+         *     ``exp`` and answers ``expires_in=0``. ``machine_id`` is the warden member the
+         *     token is bound to.
          */
         MachineClaimResultDTO: {
             /** Expires In */
@@ -4714,10 +4716,11 @@ export interface components {
          *     the
          *     machine from the ROSTER, it does not tear the warden daemon off the box (that is
          *     the ``uninstall`` verb). Never a hard tombstone — the audit row + token ``sub``
-         *     attribution survive; the exec-token expires by TTL (HS256 is stateless). There is
-         *     NO ``teardown_command`` placeholder: DELETE does not command removal, so it never
-         *     hands back an installer/uninstaller line. ``machine_id`` is the machine's stable
-         *     id (== the warden member's own id; renamed from the hostname-era ``host``).
+         *     attribution survive; every later gated request with that machine's credential is
+         *     rejected by the roster revocation check, including permanent warden credentials.
+         *     There is NO ``teardown_command`` placeholder: DELETE does not command removal, so
+         *     it never hands back an installer/uninstaller line. ``machine_id`` is the machine's
+         *     stable id (== the warden member's own id; renamed from the hostname-era ``host``).
          */
         MachineDeleteResultDTO: {
             /**
@@ -4742,9 +4745,9 @@ export interface components {
          *     mints a NEW warden member whose stable, server-minted id (``m-<uuid12>``) IS the
          *     machine id (the warden carries no self-binding — routing resolves it by get_member
          *     of that id; see ``handle_onboard_machine``). The display name is stored as a
-         *     MachineAlias overlay keyed by that machine id. ``ttl_days`` overrides the exec-token
-         *     lifetime (defaults to a sensible 90 days; capped server-side at
-         *     ``MAX_AGENT_TTL_SECS``).
+         *     MachineAlias overlay keyed by that machine id. ``ttl_days`` is retained for request
+         *     compatibility but does not affect warden credentials: they are permanent and omit
+         *     ``exp``.
          */
         MachineOnboardDTO: {
             /** Display Name */
