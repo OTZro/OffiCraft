@@ -2142,11 +2142,13 @@ type SettingsDTO struct {
 }
 
 // SettingsUpdateDTO Partial settings edit (`PATCH /api/settings`) — only supplied fields change,
-// effective immediately (no restart). `token_ttl` MUST be one of 43200 / 86400 /
-// 604800 / 2592000 seconds (12h / 24h / 7d / 30d — a whitelist, so a stray 0 can
-// never lock every future login out); `handover_pct` MUST be 40..90 (the warn
-// band sits at 40 — a handover threshold below it would fire before the
-// warning). Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).
+// effective immediately (no restart). `owner_token_ttl` and `agent_token_ttl` are
+// independent and each MUST be one of 43200 / 86400 / 604800 / 2592000 seconds
+// (12h / 24h / 7d / 30d — a whitelist, so a stray 0 can never lock future logins
+// or agent mints out); owner changes apply from the next login and agent changes
+// from the next bootstrap, reconcile, or outsource spawn. `handover_pct` MUST be
+// 40..90 (the warn band sits at 40 — a handover threshold below it would fire
+// before the warning). Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).
 // `updater_receive_beta` toggles whether the GitHub-release update check also
 // admits prereleases; `updater_auto_update` toggles unattended background
 // self-upgrade to the newest admissible release (both booleans, default false;

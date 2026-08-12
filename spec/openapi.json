@@ -5113,7 +5113,7 @@
         "type": "object"
       },
       "SettingsUpdateDTO": {
-        "description": "Partial settings edit (`PATCH /api/settings`) — only supplied fields change,\neffective immediately (no restart). `token_ttl` MUST be one of 43200 / 86400 /\n604800 / 2592000 seconds (12h / 24h / 7d / 30d — a whitelist, so a stray 0 can\nnever lock every future login out); `handover_pct` MUST be 40..90 (the warn\nband sits at 40 — a handover threshold below it would fire before the\nwarning). Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).\n`updater_receive_beta` toggles whether the GitHub-release update check also\nadmits prereleases; `updater_auto_update` toggles unattended background\nself-upgrade to the newest admissible release (both booleans, default false;\nthe manual upgrade endpoint is unaffected). The five document caps (T-ae38;\nthe manual's one became two in T-30f1) are independent knobs. Each one MUST be\nbetween THAT segment's shipped default (the `default` on the matching\n`SettingsDTO` field — Duty's is its own, much smaller number) and 100000. The floor equalling the shipped default is the\npoint: a cap can only ever be RAISED (owner ruling 2026-07-31), because\nlowering one would turn documents that are legal today into shrink-only ones.",
+        "description": "Partial settings edit (`PATCH /api/settings`) — only supplied fields change,\neffective immediately (no restart). `owner_token_ttl` and `agent_token_ttl` are\nindependent and each MUST be one of 43200 / 86400 / 604800 / 2592000 seconds\n(12h / 24h / 7d / 30d — a whitelist, so a stray 0 can never lock future logins\nor agent mints out); owner changes apply from the next login and agent changes\nfrom the next bootstrap, reconcile, or outsource spawn. `handover_pct` MUST be\n40..90 (the warn band sits at 40 — a handover threshold below it would fire\nbefore the warning). Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).\n`updater_receive_beta` toggles whether the GitHub-release update check also\nadmits prereleases; `updater_auto_update` toggles unattended background\nself-upgrade to the newest admissible release (both booleans, default false;\nthe manual upgrade endpoint is unaffected). The five document caps (T-ae38;\nthe manual's one became two in T-30f1) are independent knobs. Each one MUST be\nbetween THAT segment's shipped default (the `default` on the matching\n`SettingsDTO` field — Duty's is its own, much smaller number) and 100000. The floor equalling the shipped default is the\npoint: a cap can only ever be RAISED (owner ruling 2026-07-31), because\nlowering one would turn documents that are legal today into shrink-only ones.",
         "properties": {
           "codex_compaction_threshold": {
             "anyOf": [
@@ -14295,7 +14295,7 @@
     },
     "/api/settings": {
       "get": {
-        "description": "Read the org-adjustable settings (owner or admin agent — T-6020): the login TTL, the context\nauto-handover threshold, and the read-only self-healed port (null while the\nserver runs on its preferred port).",
+        "description": "Read the org-adjustable settings (owner or admin agent — T-6020): independent owner-login\nand agent-token TTLs, the context auto-handover threshold, and the read-only\nself-healed port (null while the server runs on its preferred port).",
         "operationId": "handle_get_settings_api_settings_get",
         "responses": {
           "200": {
@@ -14351,7 +14351,7 @@
         }
       },
       "patch": {
-        "description": "Partially update the org-adjustable settings (owner or admin agent — T-6020). Only supplied\nfields change; a change is durable (DB) AND live immediately — `token_ttl`\napplies from the next login, `handover_pct` applies from the next context\nreport. `token_ttl` outside the 12h/24h/7d/30d whitelist or `handover_pct`\noutside 40..90 is a 422 (nothing is written).",
+        "description": "Partially update the org-adjustable settings (owner or admin agent — T-6020). Only supplied\nfields change; a change is durable (DB) AND live immediately — `owner_token_ttl`\napplies from the next login, `agent_token_ttl` from the next bootstrap, reconcile,\nor outsource spawn, and `handover_pct` from the next context report. Either TTL\noutside the 12h/24h/7d/30d whitelist or `handover_pct` outside 40..90 is a 422\n(nothing is written).",
         "operationId": "handle_update_settings_api_settings_patch",
         "requestBody": {
           "content": {

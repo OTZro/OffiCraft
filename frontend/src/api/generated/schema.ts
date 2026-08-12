@@ -2634,9 +2634,9 @@ export interface paths {
         };
         /**
          * Read the org-adjustable settings (owner/admin agent).
-         * @description Read the org-adjustable settings (owner or admin agent — T-6020): the login TTL, the context
-         *     auto-handover threshold, and the read-only self-healed port (null while the
-         *     server runs on its preferred port).
+         * @description Read the org-adjustable settings (owner or admin agent — T-6020): independent owner-login
+         *     and agent-token TTLs, the context auto-handover threshold, and the read-only
+         *     self-healed port (null while the server runs on its preferred port).
          */
         get: operations["handle_get_settings_api_settings_get"];
         put?: never;
@@ -2647,10 +2647,11 @@ export interface paths {
         /**
          * Edit settings (owner-login and agent token TTLs / handover threshold); live immediately.
          * @description Partially update the org-adjustable settings (owner or admin agent — T-6020). Only supplied
-         *     fields change; a change is durable (DB) AND live immediately — `token_ttl`
-         *     applies from the next login, `handover_pct` applies from the next context
-         *     report. `token_ttl` outside the 12h/24h/7d/30d whitelist or `handover_pct`
-         *     outside 40..90 is a 422 (nothing is written).
+         *     fields change; a change is durable (DB) AND live immediately — `owner_token_ttl`
+         *     applies from the next login, `agent_token_ttl` from the next bootstrap, reconcile,
+         *     or outsource spawn, and `handover_pct` from the next context report. Either TTL
+         *     outside the 12h/24h/7d/30d whitelist or `handover_pct` outside 40..90 is a 422
+         *     (nothing is written).
          */
         patch: operations["handle_update_settings_api_settings_patch"];
         trace?: never;
@@ -6751,11 +6752,13 @@ export interface components {
         /**
          * SettingsUpdateDTO
          * @description Partial settings edit (`PATCH /api/settings`) — only supplied fields change,
-         *     effective immediately (no restart). `token_ttl` MUST be one of 43200 / 86400 /
-         *     604800 / 2592000 seconds (12h / 24h / 7d / 30d — a whitelist, so a stray 0 can
-         *     never lock every future login out); `handover_pct` MUST be 40..90 (the warn
-         *     band sits at 40 — a handover threshold below it would fire before the
-         *     warning). Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).
+         *     effective immediately (no restart). `owner_token_ttl` and `agent_token_ttl` are
+         *     independent and each MUST be one of 43200 / 86400 / 604800 / 2592000 seconds
+         *     (12h / 24h / 7d / 30d — a whitelist, so a stray 0 can never lock future logins
+         *     or agent mints out); owner changes apply from the next login and agent changes
+         *     from the next bootstrap, reconcile, or outsource spawn. `handover_pct` MUST be
+         *     40..90 (the warn band sits at 40 — a handover threshold below it would fire
+         *     before the warning). Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).
          *     `updater_receive_beta` toggles whether the GitHub-release update check also
          *     admits prereleases; `updater_auto_update` toggles unattended background
          *     self-upgrade to the newest admissible release (both booleans, default false;

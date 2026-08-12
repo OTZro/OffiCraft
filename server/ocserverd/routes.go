@@ -201,7 +201,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleUpdateSettingsApiSettingsPatch,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Edit settings (login TTL / handover threshold); live immediately.",
+			Summary:  "Edit settings (owner and agent token TTLs / handover threshold); live immediately.",
 			MCPTool:  "update_settings",
 		},
 		{
