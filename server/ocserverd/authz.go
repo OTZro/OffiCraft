@@ -219,6 +219,30 @@ func isRemovedMachine(m *Member) bool {
 	return m != nil && m.Kind == machineKind && m.RosterStatus == RosterStatusRemoved
 }
 
+// permanentCredentialRefusal confines exp-less JWTs to the credential class
+// that is allowed to be permanent: an active warden roster row. verifyJWT
+// deliberately handles the cryptographic shape only, so this stateful policy
+// belongs at requireAuth with the other roster checks. In particular, a
+// correctly signed no-exp token for an agent, worker, owner, unknown subject,
+// or removed machine must never turn into an indefinite credential.
+func permanentCredentialRefusal(claims map[string]any, lookup func(id string) (*Member, error)) bool {
+	if _, hasExpiry := claims["exp"]; hasExpiry {
+		return false
+	}
+	if scope, _ := claims["scope"].(string); scope != "agent" {
+		return true
+	}
+	if machineID, _ := claims["machine_id"].(string); machineID != "" {
+		return true
+	}
+	if lookup == nil {
+		return true
+	}
+	sub, _ := claims["sub"].(string)
+	m, err := lookup(sub)
+	return err != nil || m == nil || m.Kind != machineKind || m.RosterStatus != RosterStatusActive
+}
+
 // machineRevokedMsg is the refusal text. It states the FACT (this machine is
 // off the roster, so this credential is dead) and deliberately stops there: no
 // "retry without", no "use the other endpoint", no hint that some subset of

@@ -204,7 +204,8 @@ func extractToken(r *http.Request) string {
 // and deliberately in the same place: a credential belonging to a machine the
 // roster has deleted is refused (authz.go revocationRefusal). It sits AFTER
 // signature verification — a forged token is still just "invalid token" and
-// never reaches a roster read.
+// never reaches a roster read. It also binds every exp-less credential to an
+// active warden row; no other signed JWT may become permanent.
 func requireAuth(secret []byte, ownerIatFloor func() int64, lookup func(id string) (*Member, error), next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(secret) == 0 {
@@ -229,6 +230,10 @@ func requireAuth(secret []byte, ownerIatFloor func() int64, lookup func(id strin
 					return
 				}
 			}
+		}
+		if permanentCredentialRefusal(claims, lookup) {
+			writeError(w, http.StatusUnauthorized, "invalid token")
+			return
 		}
 		if refusal := revocationRefusal(claims, lookup); refusal != "" {
 			writeError(w, http.StatusUnauthorized, refusal)
