@@ -133,7 +133,7 @@ func TestBuildWorkerBootContext_FullAssembly(t *testing.T) {
 	//  1. 你的身分 — identity arrives the way it always has for staff, through
 	//     the launcher's --append-system-prompt.
 	//  2. the BOUND TASK — the boot sequence has the worker pick it up with
-	//     get_my_task, which serves the LIVE row; this copy was a spawn-time
+	//     the boot sequence's 領工 step, which serves the LIVE row; this copy was a spawn-time
 	//     snapshot, stale by construction. Staff boot contexts never carried one.
 	//  3. the TYPE MANUAL — staff pull a manual with get_task_manual at the
 	//     moment they plan a task's steps; outsource now does the same.
@@ -287,7 +287,7 @@ func TestWorkerBootContextIsTheStaffFoldMinusThePersona(t *testing.T) {
 //
 // Neither the bound task nor its type manual is pasted into a worker's boot
 // context any more: the boot sequence has the worker pick the task up with
-// get_my_task (which serves the LIVE row, lock and handover note included), and
+// its own read (which serves the LIVE row, lock and handover note included), and
 // a manual is pulled with get_task_manual at the moment the task is planned —
 // exactly what staff do, in exactly the same places. So the STRONGEST statement
 // available is INVARIANCE: the assembled document does not vary with either
@@ -345,7 +345,7 @@ func TestWorkerBootContextIsInvariantToTheTaskAndItsManual(t *testing.T) {
 		t.Fatalf("fold takeover: %v", err)
 	}
 	if withTakeover != base {
-		t.Error("worker boot context varies with the bound task — get_my_task serves " +
+		t.Error("worker boot context varies with the bound task — the worker reads " +
 			"the live task; a spawn-time copy can only be stale (T-4595)")
 	}
 

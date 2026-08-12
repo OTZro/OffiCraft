@@ -130,8 +130,8 @@ const (
 //     them they had no roster teammates, while §11 says the opposite), a
 //     restatement of the shared seed that could drift from it silently, or a
 //     difference nobody could name a harm for.
-//   - the BOUND TASK in full. The boot sequence has the worker pick its task up
-//     with get_my_task, which serves the LIVE task; the copy pasted here was a
+//   - the BOUND TASK in full. The boot sequence has the worker read its task
+//     itself, which serves the LIVE row; the copy pasted here was a
 //     spawn-time snapshot, stale by construction. Staff boot contexts have never
 //     carried a task either.
 //   - the TYPE MANUAL in full. Staff pull a manual with get_task_manual at the

@@ -36,19 +36,41 @@ func TestWorkerSharedCoreStartsWithTheUnfilteredSystemSeed(t *testing.T) {
 // nothing to notice. The overlay is gone.
 //
 // What must remain true of the assembled document: the shared boot sequence is
-// present, it still tells the worker to pick up its one task with get_my_task,
-// and nothing claims the shared steps were removed or overridden.
+// present, that shared text still covers the worker's one-bound-task case
+// itself, and nothing claims the shared steps were removed or overridden.
+//
+// 🔴 THE "want" LIST USED TO NAME A TOOL, AND THAT WAS THE WRONG THING TO PIN.
+// It required the literal string "get_my_task" — an assertion that survived the
+// overlay's deletion only because the sentence this package added to the shared
+// boot-sequence seed happened to name that tool too. It is being retired
+// (T-4595's other half removes it outright and workers read their plan with
+// get_task, the same tool staff use), so a guard spelled that way would have
+// forced the shared seed to keep advertising a tool that no longer exists —
+// exactly the "共用那份對每一個外包說謊" failure this whole ticket is about.
+//
+// What the assertion was really for is one level up: the ONE-TASK case is
+// covered by the SHARED document, not by a replacement overlay. That is what is
+// pinned now, by the sentence rather than by the tool name inside it.
 func TestWorkerLaunchGuidanceIsTheSharedOneNotAReplacement(t *testing.T) {
 	ctx := crossrefWorkerCtx(t)
 	if strings.Contains(ctx, "已從你這份的啟動程序裡拿掉") {
 		t.Error("worker boot context falsely claims shared boot steps were removed")
 	}
 	for _, want := range []string{
-		bootSequenceH1, // the shared 啟動程序 block itself
-		"get_my_task",  // the one worker-specific step: 領工
+		bootSequenceH1,     // the shared 啟動程序 block itself
+		"外包 worker 只綁一張任務", // …and the shared text covers the one-task case
 	} {
 		if !strings.Contains(ctx, want) {
 			t.Errorf("worker boot context is missing launch guidance %q", want)
 		}
+	}
+	// And the shared seeds must not go back to naming the retired tool. This is
+	// a wording tripwire over an ASSEMBLED document, so it cannot catch a
+	// rephrasing nobody has written yet — it catches the realistic regression
+	// (a revert, or a merge from a branch cut before this one).
+	if strings.Contains(ctx, "get_my_task") {
+		t.Error("the shared boot documents name get_my_task again — it is being " +
+			"retired, and a worker obeying that sentence would call a tool that " +
+			"does not exist; workers read their plan with get_task, same as staff")
 	}
 }

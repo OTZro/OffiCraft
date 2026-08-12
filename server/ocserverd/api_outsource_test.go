@@ -283,8 +283,8 @@ func TestGetWorkerBootContext(t *testing.T) {
 			nil, wireOwnerID, "owner"), workerID)
 	after := decodeBody[WorkerBootContextDTO](t, rec)
 	if strings.Contains(after.Context, "事後補充的描述") {
-		t.Error("preview pastes the bound task's description — get_my_task serves the " +
-			"live task; a boot-time copy can only be stale (T-4595)")
+		t.Error("preview pastes the bound task's description — the worker reads the " +
+			"live task itself; a boot-time copy can only be stale (T-4595)")
 	}
 	if after.Context != got.Context {
 		t.Error("preview varies with the bound task row; it must not")
