@@ -3585,7 +3585,7 @@ export const mockApi: Api = {
 
   async onboardMachine(
     displayName: string,
-    opts?: OnboardOptions
+    _opts?: OnboardOptions
   ): Promise<OnboardResultView> {
     // Fake onboard: the machine is created by DISPLAY NAME ONLY (no host) — the
     // server owns the opaque machine_id. We mint a stable id and push a warden
@@ -3597,8 +3597,9 @@ export const mockApi: Api = {
     const name = displayName.trim();
     const machineId = `m-${Math.random().toString(36).slice(2, 10)}`;
     const token = `mock-warden-token-${Math.random().toString(36).slice(2, 14)}`;
-    const ttlDays = opts?.ttlDays ?? 30;
-    const expiresIn = ttlDays * 86400;
+    // Warden exec credentials are permanent on the real server. Keep the
+    // legacy request option in the adapter signature for wire compatibility,
+    // but do not let it fabricate a finite expiry in the mock.
     // The boot command embeds a short-lived single-use claim code, never the
     // token (mirrors the real POST /api/machines onboard shape).
     const claimCode = `mock-claim-code-${Math.random().toString(36).slice(2, 14)}`;
@@ -3640,7 +3641,7 @@ export const mockApi: Api = {
       member_id: machineId,
       machine_id: machineId,
       token,
-      expires_in: expiresIn,
+      expires_in: 0,
       boot_command: bootCommand,
       claim_code: claimCode,
       claim_expires_in: 600,
