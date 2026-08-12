@@ -475,7 +475,10 @@ poll_ow_live "$TASK_ID" "$TASK_WORKER_TIMEOUT" \
   || fail_stage "no LIVE outsource worker (assigned|active) was bound to task=$TASK_ID within ${TASK_WORKER_TIMEOUT}s — scheduler never bound a worker"
 OW_ID="$(ow_for_task "$TASK_ID" id)"
 [[ -n "$OW_ID" ]] || fail_stage "worker bound to task=$TASK_ID but its id was empty on GET /api/outsource-workers"
-log "scheduler minted+bound worker: ow-id=$OW_ID (status=assigned)"
+# Read the status back instead of hard-coding it: since T-4595 the gate above
+# accepts assigned|active, so a literal "(status=assigned)" here would print a
+# claim the run may have just falsified.
+log "scheduler minted+bound worker: ow-id=$OW_ID (status=$(ow_for_task "$TASK_ID" status))"
 # assert task.executor_id == the bound ow-id.
 A4_TASK="$(api_get "/api/tasks/$TASK_ID" 2>/dev/null || echo '{}')"
 A4_EXEC="$(task_field "$A4_TASK" executor_id)"

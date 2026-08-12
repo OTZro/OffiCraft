@@ -57,8 +57,17 @@ func seedAssignedWorker(t *testing.T, api *apiServer, id, taskID string) {
 
 // TestWorkerClaimsItsTaskOnReportWaking is the sentinel for the moved write
 // point. MUTANT VERIFIED: dropping the `if claimed { w.Status = ... }` lines
-// from workerReportWaking fails HERE, on this file's own assertion, and on
-// nothing else in the package.
+// from workerReportWaking fails HERE, on this test's own assertion
+// ("report_waking must flip assigned → active").
+//
+// ⚠️ IT IS NOT THE ONLY ONE, AND AN EARLIER VERSION OF THIS COMMENT CLAIMED IT
+// WAS. That mutant reddens TWO tests: this one, and
+// api_tasks_reassign_test.go's TestReassignOutsourceSuccessorClaimsOnWakingThenTakesOver
+// (which asserts the same flip as the precondition of a handover scenario).
+// Both land on their own assertion about the flip, so the coverage is honest —
+// the false half was the word "only". Recorded because an over-claiming comment
+// is worse than no comment: the next reader skips their own re-verification on
+// the strength of it.
 func TestWorkerClaimsItsTaskOnReportWaking(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true

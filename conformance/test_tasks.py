@@ -1200,17 +1200,31 @@ def test_get_my_task_route_is_gone(client, owner_token, executor, warden_agent):
     surface itself is gone — including for the identities that used to get a
     *different* answer here, which is what would betray a half-removal.
 
-    Not vacuous: the positive control below proves the client, the token and the
-    404-vs-405 discrimination all still work, so a 404 here means ABSENT rather
-    than "everything 404s in this fixture".
+    Not vacuous, and the two controls below are what make the 404 mean
+    something. The FIRST proves the client and the token still get a live answer
+    out of a sibling /api/self/* route. The SECOND is the one that matters: the
+    router answers 405 — not 404 — for a wrong METHOD on a path it still knows,
+    so a 404 above is the router saying it does not know the PATH at all. Without
+    that second probe a 404 would be consistent with "the route survived and only
+    GET was dropped", which is exactly the half-removal this test exists to catch.
     """
     for who in (executor, warden_agent):
         r = client.get("/api/self/task", headers=_auth(who.token))
         assert r.status_code == 404, f"{r.status_code} {r.text}"
-    # Positive control: a sibling /api/self/* route on the same auth floor still
-    # answers, so the 404s above are about THIS path, not about the fixture.
+    # Control 1 — the fixture is live: a sibling /api/self/* route still answers.
     r = client.post("/api/self/waking", headers=_auth(executor.token), json={})
     assert r.status_code == 200, f"{r.status_code} {r.text}"
+    # Control 2 — path-absence vs method-mismatch really are distinguishable here:
+    # /api/self/waking is POST-only, and asking for it by GET is a 405, not a 404.
+    r = client.get("/api/self/waking", headers=_auth(executor.token))
+    assert r.status_code == 405, (
+        f"{r.status_code} {r.text} — a wrong method on a KNOWN path must 405; "
+        "if it 404s, the 404s asserted above no longer prove the path is gone"
+    )
+    # …and /api/self/task 404s under that other method too — a surviving route
+    # with only its GET arm removed would answer 405 here.
+    r = client.post("/api/self/task", headers=_auth(executor.token), json={})
+    assert r.status_code == 404, f"{r.status_code} {r.text}"
 
 
 def test_get_my_task_is_not_advertised_as_a_tool(client, executor):
