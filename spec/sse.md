@@ -144,8 +144,8 @@ and docs listed fewer topics, and the publish seam never validated against them)
 the actual wire emitted all of the above except `reply_card` (added M2). This spec froze
 the **observed wire** (8 topics at M1; 9 with the approved M2 addition; 12 with the M3
 task batch). The
-directed band topics `context-high` and `warden-command` (§6, §7) are a separate envelope
-family, not entity-delta topics.
+directed band topics `context-high`, `token-expiry`, and `warden-command` (§6, §6.1,
+§7) are a separate envelope family, not entity-delta topics.
 **"Resolved in favour of the wire" is the record of THIS one adjudication, made at the M1
 freeze — not a standing rule that the wire (or the code) beats the docs whenever they
 disagree.** A discrepancy found today goes to the owner instead of being decided in place;
@@ -311,6 +311,34 @@ data: {"topic":"context-high","data":{"topic":"context-high","to":"m-1a2b3c","le
   reset on reconnect and MUST NOT be persisted.
 - Fail-safe: a missing/non-numeric/stale pct or any internal error MUST emit nothing and
   MUST NOT disturb the delta stream.
+
+### 6.1 Token-expiry reminder (directed signal, restartable agent connections only)
+
+When the verified JWT on an assistant or outsource agent's live SSE connection has
+**30 minutes or less** remaining, the server MUST direct that connection to checkpoint
+its current turn and call `restart_self`. This is deliberately an advance warning, not
+a token refresh route: the standard restart lifecycle mints the replacement credential.
+Warden connections are excluded because their credential lifecycle is machine governance,
+not `restart_self`.
+
+- Frame shape — a bare `data:` event with no `id:` line:
+
+```
+data: {"topic":"token-expiry","data":{"topic":"token-expiry","to":"m-1a2b3c","expires_in":1800,"reason":"agent token expires in 1800s; checkpoint this turn, then call restart_self to receive a fresh token"}}
+```
+
+  The inner payload is exactly `{topic, to, expires_in, reason}`. `expires_in` is the
+  remaining whole seconds and `reason` wording is not contract; the envelope shape,
+  target, and `expires_in` are.
+- This is a **pending condition, not a one-shot notification**. The server MUST repeat
+  the frame at most once every 30 seconds while the same expiring session remains live.
+  It settles only when that session is replaced (normally by `restart_self`) or expires;
+  a reconnect before restart receives a fresh pending reminder.
+- The server MUST NOT send the reminder before `restart_self` can work: a session whose
+  authoritative `boot_ts` is still inside the 10-minute minimum-liveness guard stays
+  quiet. It MUST also stay quiet once the member is already in a refocus/handover.
+- Fail-safe: absent/malformed expiry claims, an already-expired token, an unknown member,
+  or a member lookup error MUST emit nothing and MUST NOT disturb the delta stream.
 
 ## 7. Warden-command band (directed commands, warden connections only)
 

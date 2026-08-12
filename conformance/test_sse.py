@@ -37,6 +37,8 @@ Coverage, MUST by MUST:
   * §6  context-high directed band: warn emit on the agent's own connection
         (bare data:, no id line), never on the owner connection; stale-pct
         (boot_ts) guard suppresses a predecessor's leftover pct;
+  * §6.1 token-expiry directed band: covered by the ocserverd wire test because
+        the public mint surface only accepts whole-day TTLs;
   * §7  warden-command band: a real onboarded warden token drains a START
         frame produced by the event-driven reconcile dispatch; args shape and
         member_token viability asserted; never delivered to the owner fan-out.
@@ -174,13 +176,14 @@ def _closed_topic_set() -> set[str]:
 
     ⚠️ SCOPE of this guard (and of ocserverd's TestSSETopicsMatchSpec, the other
     edge): it covers the ENTITY-DELTA topics only — the ones that ride
-    ``hub.Publish``. The three DIRECTED bands (``context-high`` §6,
-    ``warden-command`` §7, ``task-close`` §8) go out through ``PushDirected``,
+    ``hub.Publish``. The four DIRECTED bands (``context-high`` §6,
+    ``token-expiry`` §6.1, ``warden-command`` §7, ``task-close`` §8) go out through ``PushDirected``,
     bypass ``Publish`` entirely, and are a separate envelope family by design
     (§3.1's own note: "a separate envelope family, not entity-delta topics").
     Their ABSENCE from this set is deliberate, not an oversight — do NOT "fix"
     it by adding them here or to ``sseTopics``; they are pinned by their own
-    tests (``test_context_high_*``, ``test_warden_command_band_start_frame``).
+    tests (``test_context_high_*``, ``test_warden_command_band_start_frame``,
+    and ocserverd's token-expiry wire test).
     """
     path = HERE.parent / "spec" / "sse.md"
     return _parse_closed_topics(path.read_text(encoding="utf-8"), source=str(path))

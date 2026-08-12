@@ -6,12 +6,30 @@ package main
 // conformance/test_sse.py; here the predicate's every arm is pinned directly.
 
 import (
+	"bytes"
 	"context"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// tokenExpiryRecorder closes the otherwise long-lived SSE handler exactly
+// after the token-expiry frame reaches the response body. It drives the real
+// wire path without sleeping for a heartbeat or relying on a synthetic band
+// call as proof of delivery.
+type tokenExpiryRecorder struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+}
+
+func (r *tokenExpiryRecorder) Write(p []byte) (int, error) {
+	n, err := r.ResponseRecorder.Write(p)
+	if bytes.Contains(p, []byte(`"topic":"token-expiry"`)) {
+		r.cancel()
+	}
+	return n, err
+}
 
 // newGateTestAPI assembles a real apiServer over a temp sqlite DB (no HTTP
 // mux — the gate tests drive the handler/predicate directly).
@@ -147,5 +165,36 @@ func TestEventsHandlerAppliesStopGatePreStream(t *testing.T) {
 	}
 	if api.hub.IsOnline("z-1") {
 		t.Fatal("the pre-cancelled test stream must have disconnected (projection cleared)")
+	}
+}
+
+func TestEventsHandlerDeliversTokenExpiryReminderOnTheRealSSEWire(t *testing.T) {
+	api, dal := newGateTestAPI(t)
+	now := int64(nowSecs())
+	putGateMember(t, dal, Member{
+		ID: "expiry-wire", Kind: KindAssistant, DesiredState: DesiredStateOnline,
+		// The session is old enough that restart_self is currently permitted.
+		SessionBootTS: float64(now) - minSelfRestartSecs - 1,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest("GET", "/api/events", nil).WithContext(
+		context.WithValue(ctx, claimsContextKey, map[string]any{
+			"sub": "expiry-wire", "scope": "agent",
+			// Exactly at the owner-approved thirty-minute boundary.
+			"exp": float64(now + tokenExpiryWarningWindow),
+		}))
+	rec := &tokenExpiryRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+	api.HandleEventsApiEventsGet(rec, req)
+
+	text := rec.Body.String()
+	if !strings.Contains(text, `data: {"topic":"token-expiry"`) || strings.Contains(text, "id: ") {
+		t.Fatalf("expiry reminder must be a bare directed SSE frame, got %q", text)
+	}
+	if !strings.Contains(text, `"to":"expiry-wire"`) ||
+		!strings.Contains(text, `"expires_in":`) ||
+		!strings.Contains(text, "restart_self") {
+		t.Fatalf("expiry frame must target the live agent and instruct restart_self, got %q", text)
 	}
 }

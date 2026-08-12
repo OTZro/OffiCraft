@@ -1,6 +1,6 @@
 package main
 
-// sse_bands.go — the two DIRECTED SSE bands (spec/sse.md §6/§7), ported from
+// sse_bands.go — the DIRECTED SSE bands (spec/sse.md §6/§6.1/§7/§8), ported from
 // the retired Python service/sse/{context_high,warden_command}.py:
 //
 //   * context-high (§6): the server watches each agent's context_pct gauge
@@ -14,10 +14,17 @@ package main
 //     WARN ever emits on the wire; the HANDOVER band belongs to the producer
 //     auto-recycle (reconcile.go stampContextHighRecycle).
 //
+//   * token-expiry (§6.1): the server watches the verified JWT exp carried by
+//     the live SSE request and repeatedly asks a restartable agent to use
+//     restart_self before its credential becomes unusable.
+//
 //   * warden-command (§7): the directed frame envelope + the wire arg shapes.
 //     The producer that decides + dispatches these frames (cadence tick,
 //     event-driven click seams, grace clocks, reconcile store) lives in
 //     reconcile.go.
+//
+//   * task-close (§8): the terminal-task nudge that asks an executor to write
+//     back its learnings and report closeout.
 
 import (
 	"bytes"
@@ -30,6 +37,12 @@ import (
 
 const (
 	contextHighTopic = "context-high"
+	// tokenExpiryTopic is the agent's own advance notice that its currently
+	// authenticated session will shortly lose every API surface. It is a
+	// directed band rather than a durable task/chat record: replacing the token
+	// by restart_self is the acknowledgement, and a replacement session gets a
+	// fresh expiry claim.
+	tokenExpiryTopic = "token-expiry"
 
 	levelNone = "none"
 	levelWarn = "warn"
@@ -41,6 +54,17 @@ const (
 	// state a connection carries below WARN (and at boot). Any real bucket
 	// (>= 0) is strictly greater, so the first climb into the band emits.
 	bucketReset = -1
+)
+
+const (
+	// tokenExpiryWarningWindow is owner-set product policy: give an agent thirty
+	// minutes to checkpoint its current turn and request restart_self before the
+	// token becomes unusable.
+	tokenExpiryWarningWindow = 30 * 60 // seconds
+	// tokenExpiryReminderInterval keeps the warning pending instead of treating
+	// one SSE frame as an acknowledgement. The server has no proof an agent read
+	// a frame; only a replacement session (or expiry) settles it.
+	tokenExpiryReminderInterval = 30 // seconds
 )
 
 // asNumber narrows a gauge value to float64 (a bool is NOT a number here).
@@ -211,6 +235,95 @@ func formatPct(pct float64) any {
 		return int64(pct)
 	}
 	return pct
+}
+
+// tokenExpirySignal is the inner payload of the repeating token-expiry
+// directed band. expires_in is deliberately an integer number of seconds: it
+// gives the agent enough urgency to prioritise a safe checkpoint, without
+// asking it to inspect or expose its credential.
+type tokenExpirySignal struct {
+	Topic     string `json:"topic"`
+	To        string `json:"to"`
+	ExpiresIn int64  `json:"expires_in"`
+	Reason    string `json:"reason"`
+}
+
+// tokenExpiryRemaining returns the remaining lifetime of the verified request
+// token. Normal authenticated requests always carry numeric exp, but this
+// deliberately fails closed for synthetic/malformed claim maps so an unknown
+// credential shape can never make a listener noisy.
+func tokenExpiryRemaining(claims map[string]any, now int64) (int64, bool) {
+	if claims == nil {
+		return 0, false
+	}
+	exp, ok := asNumber(claims["exp"])
+	if !ok {
+		return 0, false
+	}
+	remaining := int64(exp) - now
+	if remaining <= 0 {
+		return 0, false
+	}
+	return remaining, true
+}
+
+// tokenExpiryClaims narrows tokenExpiryRemaining to the advance-warning window.
+func tokenExpiryClaims(claims map[string]any, now int64) (int64, bool) {
+	remaining, ok := tokenExpiryRemaining(claims, now)
+	if !ok || remaining > tokenExpiryWarningWindow {
+		return 0, false
+	}
+	return remaining, true
+}
+
+// tokenExpiryNextCheck schedules the SSE loop's next expiry inspection. A
+// far-away token wakes the loop again at the WARNING BOUNDARY itself, rather
+// than only at the repeating-reminder cadence; that is what keeps the first
+// signal aligned to "30 minutes before expiry". Invalid claims stay quiet and
+// use the ordinary cadence solely to avoid hot-looping synthetic requests.
+func tokenExpiryNextCheck(claims map[string]any, now int64) int64 {
+	remaining, ok := tokenExpiryRemaining(claims, now)
+	if !ok {
+		return now + tokenExpiryReminderInterval
+	}
+	if remaining > tokenExpiryWarningWindow {
+		return now + (remaining - tokenExpiryWarningWindow)
+	}
+	return now + tokenExpiryReminderInterval
+}
+
+// decideTokenExpirySignal decides one scheduled token-expiry reminder. It is
+// intentionally separate from context-high: unlike a gauge, a token's expiry
+// cannot recover, so it repeats every interval until the old session goes away.
+//
+// Wardens are excluded: their credential lifecycle is a machine governance
+// concern, and they cannot use restart_self. A row already in handover is also
+// excluded; its replacement is already being minted, so repeating a request to
+// restart would only distract it. The minimum-liveness guard is the exact same
+// one restart_self enforces, preventing a warning that can only yield 429.
+func decideTokenExpirySignal(
+	agentID string, claims map[string]any, member *Member, gauge map[string]any,
+	now int64, lastReminder int64,
+) (*tokenExpirySignal, int64) {
+	if member == nil || member.Kind == KindWarden || member.RefocusSince > 0 {
+		return nil, lastReminder
+	}
+	if bootStormTripped(gaugeSecsSinceBoot(gauge, float64(now)), minSelfRestartSecs) {
+		return nil, lastReminder
+	}
+	remaining, ok := tokenExpiryClaims(claims, now)
+	if !ok {
+		return nil, lastReminder
+	}
+	if lastReminder > 0 && now-lastReminder < tokenExpiryReminderInterval {
+		return nil, lastReminder
+	}
+	return &tokenExpirySignal{
+		Topic:     tokenExpiryTopic,
+		To:        agentID,
+		ExpiresIn: remaining,
+		Reason:    fmt.Sprintf("agent token expires in %ds; checkpoint this turn, then call restart_self to receive a fresh token", remaining),
+	}, now
 }
 
 // directedFrameText wraps a directed band payload in the shared

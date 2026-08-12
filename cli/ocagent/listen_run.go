@@ -155,7 +155,7 @@ func (l *listener) resetRefusals() {
 // reads the payload); a reply_card delta refetches the card and wakes the session when
 // MY card got answered; a task delta refetches the task and prints ONE readable line
 // (task_no + title + what moved + who moved it); a member delta nudges the graceful
-// hooks; a DIRECTED band frame (context-high / task-close) prints its server-composed
+// hooks; a DIRECTED band frame (context-high / token-expiry / task-close) prints its server-composed
 // message. A non-dict frame / any other topic is silently ignored.
 //
 // ECHO SUPPRESSION (spec/sse.md §2.3, T-f39c 方案 A — the client half): a delta whose
@@ -208,9 +208,9 @@ func (l *listener) dispatch(payload []byte) {
 		l.winddown.maybeWindDown(frame)
 		l.recycle.maybeRecycle(frame)
 	default:
-		// Directed band frames (context-high / task-close) carry a server-
+		// Directed band frames (context-high / token-expiry / task-close) carry a server-
 		// composed message for THIS agent — print it so the Monitor brings it
-		// into the transcript (spec/sse.md §6/§8).
+		// into the transcript (spec/sse.md §6/§6.1/§8).
 		if directedBandTopics[topic] {
 			handleDirectedBand(frame, l.out)
 			return

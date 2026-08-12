@@ -321,6 +321,8 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
 
 **你也可以主動要求換手（自我重啟）。** 換手通常由 server 觸發（context 高、owner 點 refocus），但如果你自己判斷該換一輪了、server 還沒動，可用 MCP `restart_self`（選填 `reason` 一句話說明為什麼）。它**不是強制終止**——走的就是上面那條換手流：server 幫你 stamp、你會收到自己的換手 SOP，照**同一個五步**走完，server 再原地重生一個新的你（收到自己觸發的 SOP 不是 bug，照走即可）。兩個限制（server 會直接擋下、會回你讀得到的錯，別一直重試）：**非 online 不能自我重啟**（409）；**這個 session 剛起不到 10 分鐘不能自我重啟**（429，防「重生→立刻自重啟」的風暴）。撞到就照常做事，真到臨界讓 server 的自動換手接手。
 
+**收到 `token-expiry` signal 時不要等它真的到期。** 這表示目前 token 已進入最後 30 分鐘；先把正在做的工作與交接落到 server，再呼叫 `restart_self` 換一個新 session。這個 signal 會每 30 秒持續提醒，直到舊 session 被換掉；它不是 owner 的核可，也不需要開卡。
+
 ---
 
 ## 9. 保存跨 session 的學習（學習筆記）

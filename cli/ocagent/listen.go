@@ -132,9 +132,11 @@ const (
 	replyCardAnswered = "answered"
 	replyCardExpired  = "expired"
 
-	// contextHighTopic / taskCloseTopic mirror the server's directed band
-	// topic constants (server/ocserverd/sse_bands.go; spec/sse.md §6/§8).
+	// contextHighTopic / tokenExpiryTopic / taskCloseTopic mirror the server's
+	// directed band topic constants (server/ocserverd/sse_bands.go; spec/sse.md
+	// §6/§6.1/§8).
 	contextHighTopic = "context-high"
+	tokenExpiryTopic = "token-expiry"
 	taskCloseTopic   = "task-close"
 
 	// taskTopic / tasksPath: the task delta downlink. A task delta is a NUDGE;
@@ -536,11 +538,13 @@ func handleEvent(frame map[string]any, trigger string, out io.Writer) {
 
 // directedBandTopics is the closed set of DIRECTED band topics the server
 // pushes down THIS agent's own connection (mirrors server/ocserverd/
-// sse_bands.go contextHighTopic / taskCloseTopic; spec/sse.md §6/§8). Unlike
+// sse_bands.go contextHighTopic / tokenExpiryTopic / taskCloseTopic; spec/sse.md
+// §6/§6.1/§8). Unlike
 // the entity-delta topics these carry a server-composed human message the
 // agent must actually READ — so they print, they don't just wake.
 var directedBandTopics = map[string]bool{
 	contextHighTopic: true,
+	tokenExpiryTopic: true,
 	taskCloseTopic:   true,
 }
 
@@ -567,6 +571,9 @@ func handleDirectedBand(frame map[string]any, out io.Writer) {
 		case contextHighTopic:
 			line = fmt.Sprintf("context usage high (level=%s pct=%s) — start converging",
 				get("level"), get("pct"))
+		case tokenExpiryTopic:
+			line = fmt.Sprintf("agent token expires in %ss — checkpoint this turn, then call restart_self",
+				get("expires_in"))
 		case taskCloseTopic:
 			line = fmt.Sprintf("task %s (type=%s) closed (%s) — fold this run's "+
 				"learnings back into the manual (write_task_learnings)",
