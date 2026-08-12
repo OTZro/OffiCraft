@@ -628,12 +628,18 @@ func TestReassignTakeoverIsTheNewExecutorsAlone(t *testing.T) {
 	}
 }
 
-// T-ba04 e2e: an outsource successor claims the handed-over task via
-// get_my_task (assigned→active), sees the reassigning status + the stamped
-// predecessor on the DTO it reads, then reports the takeover
-// (reassigning→in_progress) itself. The whole "外包經 get_my_task 認領後翻狀態"
-// path the pre-T-ba04 suite never exercised.
-func TestReassignOutsourceSuccessorClaimsViaGetMyTaskThenTakesOver(t *testing.T) {
+// T-ba04 e2e: an outsource successor claims the handed-over task (assigned→
+// active) on its boot report, sees the reassigning status + the stamped
+// predecessor on the task it reads, then reports the takeover
+// (reassigning→in_progress) itself. The whole "外包認領後翻狀態" path the
+// pre-T-ba04 suite never exercised.
+//
+// T-4595 moved BOTH halves of that path: the claim used to be get_my_task's
+// first call, and the read used to be that same response. get_my_task is
+// retired, so the claim now rides report_waking (the same boot verb staff use)
+// and the read is get_task (which every worker could already call). The
+// assertions below are unchanged — the same facts, through the surviving faces.
+func TestReassignOutsourceSuccessorClaimsOnWakingThenTakesOver(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
@@ -655,29 +661,34 @@ func TestReassignOutsourceSuccessorClaimsViaGetMyTaskThenTakesOver(t *testing.T)
 	}
 	workerID := bound.ExecutorID
 
-	// The worker claims via get_my_task: it must land assigned→active and the
-	// task it reads must be `reassigning` with the predecessor stamped.
-	claimRec := httptest.NewRecorder()
-	api.HandleGetMyTaskApiSelfTaskGet(claimRec,
-		taskReq(t, "GET", "/api/self/task", nil, workerID, "agent"))
-	if claimRec.Code != http.StatusOK {
+	// The worker claims on its boot report: that must land assigned→active.
+	if claimRec := reportWaking(t, api, workerID, "sonnet"); claimRec.Code != http.StatusOK {
 		t.Fatalf("claim: %d %s", claimRec.Code, claimRec.Body.String())
 	}
-	claimed := decodeBody[myTaskDTO](t, claimRec)
-	if claimed.Task.Lock != TaskLockReassigning {
-		t.Fatalf("claimed task must carry the reassigning lock: %+v", claimed.Task)
-	}
-	if claimed.Task.ReassignedFrom != "m-old" ||
-		claimed.Task.ReassignedFromKind != TaskExecutorMember {
-		t.Fatalf("claim DTO must carry the predecessor stamp: %+v", claimed.Task)
-	}
-	if claimed.Task.HandoverNote != note ||
-		claimed.Task.HandoverNoteBy != "owner" ||
-		claimed.Task.HandoverNoteTS <= 0 {
-		t.Fatalf("worker claim must carry the durable handover note: %+v", claimed.Task)
-	}
 	if w, _ := api.dal.GetOutsourceWorker(workerID); w == nil || w.Status != WorkerStatusActive {
-		t.Fatalf("first claim must flip assigned→active")
+		t.Fatalf("first report_waking must flip assigned→active")
+	}
+
+	// …and the task it then reads through get_task must be `reassigning` with
+	// the predecessor and the durable handover note on it.
+	readRec := httptest.NewRecorder()
+	api.HandleGetTaskApiTasksTaskIdGet(readRec,
+		taskReq(t, "GET", "/api/tasks/"+task.ID, nil, workerID, "agent"), task.ID)
+	if readRec.Code != http.StatusOK {
+		t.Fatalf("worker get_task: %d %s", readRec.Code, readRec.Body.String())
+	}
+	claimed := decodeBody[taskDTO](t, readRec)
+	if claimed.Lock != TaskLockReassigning {
+		t.Fatalf("claimed task must carry the reassigning lock: %+v", claimed)
+	}
+	if claimed.ReassignedFrom != "m-old" ||
+		claimed.ReassignedFromKind != TaskExecutorMember {
+		t.Fatalf("the task the worker reads must carry the predecessor stamp: %+v", claimed)
+	}
+	if claimed.HandoverNote != note ||
+		claimed.HandoverNoteBy != "owner" ||
+		claimed.HandoverNoteTS <= 0 {
+		t.Fatalf("worker read must carry the durable handover note: %+v", claimed)
 	}
 
 	// The successor claims the takeover itself (only it may) — clearing the lock.

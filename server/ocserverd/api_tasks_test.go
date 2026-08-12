@@ -13,7 +13,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -1883,160 +1882,12 @@ func TestTerminalStatesReleaseTheBoundWorker(t *testing.T) {
 }
 
 // ── the worker claim (identity-locked) ───────────────────────────────────────
+//
+// T-4595 retired get_my_task, so the two tests that used to live here moved:
+// the claim (assigned→active) is pinned on its new write point in
+// api_self_task_retired_t4595_test.go, and the SLIM step projection it used to
+// serve is gone entirely — a worker reads its plan through get_task, unslimmed.
 
-func TestGetMyTaskClaimsAndActivates(t *testing.T) {
-	api := newTasksTestServer(t)
-	seedManualWithKey(t, api, "review-pr")
-	created, code := createTypedTask(t, api, "review-pr", "77")
-	if code != http.StatusOK {
-		t.Fatalf("create: %d", code)
-	}
-	if err := api.dal.PutOutsourceWorker(OutsourceWorker{
-		ID: "ow-claimer", Codename: "S-1", Model: "sonnet",
-		TaskID: created.Task.ID, Status: WorkerStatusAssigned, CreatedTS: 1,
-	}); err != nil {
-		t.Fatalf("seed worker: %v", err)
-	}
-	plan := submitPlan(t, api, created.Task.ID, "m-exec", []map[string]any{
-		{"name": "gather", "dod": "DODONE"},
-		{"name": "build", "dod": "DODTWO", "is_gate": true},
-	})
-	for _, st := range plan.Steps {
-		if rec := writeStepNote(t, api, created.Task.ID, st.ID, "m-exec",
-			"NOTE-"+st.Name); rec.Code != http.StatusOK {
-			t.Fatalf("seed note: %d %s", rec.Code, rec.Body.String())
-		}
-	}
-	if rec := reportStepStatus(t, api, created.Task.ID, plan.Steps[0].ID,
-		"m-exec", StepStatusInProgress, ""); rec.Code != http.StatusOK {
-		t.Fatalf("start step: %d %s", rec.Code, rec.Body.String())
-	}
-
-	rec := httptest.NewRecorder()
-	api.HandleGetMyTaskApiSelfTaskGet(rec,
-		taskReq(t, "GET", "/api/self/task", nil, "ow-claimer", "agent"))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
-	}
-	got := decodeBody[myTaskDTO](t, rec)
-	if got.Task.ID != created.Task.ID {
-		t.Fatalf("claimed wrong task: %+v", got.Task)
-	}
-	if got.Manual == nil || got.Manual.TypeKey != "review-pr" {
-		t.Fatalf("claim must carry the manual snapshot: %+v", got.Manual)
-	}
-	w, _ := api.dal.GetOutsourceWorker("ow-claimer")
-	if w.Status != WorkerStatusActive {
-		t.Fatalf("first claim must flip assigned -> active: %+v", w)
-	}
-	// The claim serves the CURRENT step whole and the rest as bare rows, with
-	// the dropped prose reported as a count (T-a98d).
-	if len(got.Task.Steps) != 2 {
-		t.Fatalf("claim must still list every step: %+v", got.Task.Steps)
-	}
-	cur, other := got.Task.Steps[0], got.Task.Steps[1]
-	if cur.DoD != "DODONE" || cur.Note != "NOTE-gather" {
-		t.Fatalf("current step must keep its full content: %+v", cur)
-	}
-	if other.DoD != "" || other.Note != "" {
-		t.Fatalf("non-current step must serve dod/note empty: %+v", other)
-	}
-	if other.ID == "" || other.Name != "build" ||
-		other.Status != StepStatusPending || other.OrderIdx != 1 {
-		t.Fatalf("non-current step must keep id/name/status/order_idx: %+v", other)
-	}
-	if !other.IsGate {
-		t.Fatalf("a gate further down the plan must stay visible: %+v", other)
-	}
-	if want := len("DODTWO") + len("NOTE-build"); got.StepsOmittedChars != want {
-		t.Fatalf("steps_omitted_chars = %d, want %d", got.StepsOmittedChars, want)
-	}
-	// get_task is deliberately NOT slimmed — the whole plan stays one pull away.
-	if full := getTaskView(t, api, created.Task.ID); full.Steps[1].DoD != "DODTWO" {
-		t.Fatalf("get_task must stay unslimmed: %+v", full.Steps[1])
-	}
-	// A caller with no worker row is a 404.
-	rec = httptest.NewRecorder()
-	api.HandleGetMyTaskApiSelfTaskGet(rec,
-		taskReq(t, "GET", "/api/self/task", nil, "m-member", "agent"))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("memberless claim must 404, got %d", rec.Code)
-	}
-}
-
-// TestSlimMyTaskSteps pins WHICH steps the get_my_task projection calls current.
-// The handler test above covers the wiring; these are the selection rules that a
-// single seeded task cannot show at once.
-func TestSlimMyTaskSteps(t *testing.T) {
-	step := func(idx int, status, dod, note string) taskStepDTO {
-		return taskStepDTO{
-			ID: "s" + status + string(rune('0'+idx)), TaskID: "t-1",
-			OrderIdx: idx, Name: "n", Status: status, DoD: dod, Note: note,
-			ParallelGroup: "g", IsGate: true, WaitingReason: "w",
-			StartedTS: 1, FinishedTS: 2,
-		}
-	}
-	fullIdx := func(steps []taskStepDTO) []int {
-		var out []int
-		for i, st := range steps {
-			if st.DoD != "" || st.Note != "" {
-				out = append(out, i)
-			}
-		}
-		return out
-	}
-	eq := func(t *testing.T, got, want []int) {
-		t.Helper()
-		if fmt.Sprint(got) != fmt.Sprint(want) {
-			t.Fatalf("full steps = %v, want %v", got, want)
-		}
-	}
-
-	t.Run("every live step is current", func(t *testing.T) {
-		steps := []taskStepDTO{
-			step(0, StepStatusDone, "d", "n"),
-			step(1, StepStatusInProgress, "d", "n"),
-			step(2, StepStatusWaitingExternal, "d", "n"),
-			step(3, StepStatusWaitingOwner, "d", "n"),
-			step(4, StepStatusPending, "d", "n"),
-		}
-		if omitted := slimMyTaskSteps(steps); omitted != 4 {
-			t.Fatalf("omitted = %d, want 4 (the done + pending rows)", omitted)
-		}
-		eq(t, fullIdx(steps), []int{1, 2, 3})
-	})
-
-	t.Run("no live step falls back to the lowest-order pending", func(t *testing.T) {
-		steps := []taskStepDTO{
-			step(7, StepStatusPending, "d", "n"),
-			step(3, StepStatusPending, "d", "n"),
-			step(1, StepStatusDone, "d", "n"),
-		}
-		slimMyTaskSteps(steps)
-		eq(t, fullIdx(steps), []int{1})
-	})
-
-	t.Run("an all-done plan keeps nothing and counts runes", func(t *testing.T) {
-		steps := []taskStepDTO{step(0, StepStatusDone, "驗收完成", "筆記")}
-		if omitted := slimMyTaskSteps(steps); omitted != 6 {
-			t.Fatalf("omitted = %d, want 6 runes (CJK counts 1)", omitted)
-		}
-		eq(t, fullIdx(steps), nil)
-		bare := steps[0]
-		if bare.TaskID != "" || bare.StartedTS != 0 || bare.FinishedTS != 0 {
-			t.Fatalf("a slimmed row drops what the reader already has: %+v", bare)
-		}
-		if bare.ID == "" || bare.Name != "n" || bare.Status != StepStatusDone {
-			t.Fatalf("a slimmed row must keep its identity: %+v", bare)
-		}
-		// The bounded structural scalars SURVIVE the trim: the worker is told to
-		// fan out a sub-agent per parallel lane and to see an approval gate
-		// coming, and it can do neither if the projection hides the shape.
-		if bare.ParallelGroup != "g" || !bare.IsGate || bare.WaitingReason != "w" {
-			t.Fatalf("a slimmed row must keep parallel_group/is_gate/waiting_reason: %+v", bare)
-		}
-	})
-}
 
 // ── waiting_external requires a reason ───────────────────────────────────────
 

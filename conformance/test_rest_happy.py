@@ -1623,17 +1623,10 @@ SKIPPED_HAPPY: dict[str, str] = {
         "the old binary untouched) in the server unit tests "
         "(update_check_test.go / upgrade_test.go)."
     ),
-    "GET /api/self/task": (
-        "the positive face needs a BOUND outsource worker identity, mintable "
-        "only by the Phase 2 assignment scheduler (no black-box mint path). "
-        "The memberless-404 / below-floor-403 faces are pinned in the auth "
-        "matrix and test_tasks.py; the positive claim (assigned → active + "
-        "manual snapshot) in the server unit tests (api_tasks_test.go)."
-    ),
     "GET /api/outsource-workers/{id}": (
         "the positive face needs a LIVE worker row, mintable only by the Phase 2 "
-        "assignment scheduler (no black-box mint path — same reasoning as GET "
-        "/api/self/task). The unknown-404 / anonymous-401 faces are pinned in the "
+        "assignment scheduler (no black-box mint path). The unknown-404 / "
+        "anonymous-401 faces are pinned in the "
         "auth matrix; the projection fold (machine/account/context/cost/"
         "delegated_by) in the server unit tests (api_outsource_test.go, "
         "TestListOutsourceWorkers_RuntimeFold)."

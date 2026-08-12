@@ -78,7 +78,8 @@ feeds context telemetry; `AskUserQuestion` stays disabled.
 The Codex member boot sequence changes only execution ownership:
 
 1. The sidecar starts a boot-only App Server turn. The member performs
-   `report_waking` + resume recovery, or the worker performs `get_my_task`, then completes
+   `report_waking` + resume recovery (T-4595: a worker walks the SAME sequence — its
+   `report_waking` is also the assigned → active claim), then completes
    that turn.
 2. `turn/completed` is the readiness boundary. Only then does the sidecar launch the same
    bare `ocagent listen` child and consume its stdout; the model must not launch a second

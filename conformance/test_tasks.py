@@ -1188,19 +1188,50 @@ def test_agent_manual_authorship_via_mcp_tools(client, executor):
     assert r.json()["result"]["isError"] is True, "assignee over MCP must 403"
 
 
-# ── the worker-claim faces reachable black-box ───────────────────────────────
+# ── the worker-claim face is retired (T-4595) ────────────────────────────────
 
 
-def test_get_my_task_member_404_and_warden_403(
-    client, owner_token, executor, warden_agent
-):
-    # A plain member (no worker row) is an honest 404.
-    r = client.get("/api/self/task", headers=_auth(executor.token))
-    assert r.status_code == 404, f"{r.status_code} {r.text}"
-    # A warden sits BELOW the agent floor: flat 403, deny-first.
-    r = client.get("/api/self/task", headers=_auth(warden_agent.token))
-    assert r.status_code == 403, f"{r.status_code} {r.text}"
-    assert "principal not permitted" in r.text
+def test_get_my_task_route_is_gone(client, owner_token, executor, warden_agent):
+    """GET /api/self/task is retired — no handler, no tool, no route.
+
+    This used to assert the route's two refusal faces (a plain member with no
+    worker row → 404, a warden below the agent floor → 403). Both are now the
+    404 of a path that does not exist, so what is left to check is that the
+    surface itself is gone — including for the identities that used to get a
+    *different* answer here, which is what would betray a half-removal.
+
+    Not vacuous: the positive control below proves the client, the token and the
+    404-vs-405 discrimination all still work, so a 404 here means ABSENT rather
+    than "everything 404s in this fixture".
+    """
+    for who in (executor, warden_agent):
+        r = client.get("/api/self/task", headers=_auth(who.token))
+        assert r.status_code == 404, f"{r.status_code} {r.text}"
+    # Positive control: a sibling /api/self/* route on the same auth floor still
+    # answers, so the 404s above are about THIS path, not about the fixture.
+    r = client.post("/api/self/waking", headers=_auth(executor.token), json={})
+    assert r.status_code == 200, f"{r.status_code} {r.text}"
+
+
+def test_get_my_task_is_not_advertised_as_a_tool(client, executor):
+    """The LIVE tools/list must not carry the retired tool (T-4595).
+
+    Asserted against the running server's catalog rather than the frozen file:
+    a stale committed catalog is exactly the drift the two generators exist to
+    prevent, so checking the file would check the wrong authority.
+    """
+    r = client.post(
+        "/api/mcp",
+        headers=_auth(executor.token),
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+    )
+    assert r.status_code == 200, f"{r.status_code} {r.text}"
+    names = {t["name"] for t in r.json()["result"]["tools"]}
+    assert names, "tools/list came back empty — this check would pass vacuously"
+    assert "get_my_task" not in names, "retired tool still advertised"
+    # Positive control: the two verbs a worker now uses instead ARE on the list,
+    # so a missing name means retired, not a broken lookup.
+    assert {"get_task", "report_waking"} <= names, sorted(names)
 
 
 # ── executor guard ───────────────────────────────────────────────────────────

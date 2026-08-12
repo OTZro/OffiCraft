@@ -75,19 +75,33 @@ package main
 //	                                  │           │ so waiting burns the whole
 //	                                  │           │ deadline for certain.
 //	                                  │           │ (_NoLiveSessionTakesEffectImmediately)
-//	9-16  N     any    any     any    │ IMMEDIATE │ assigned (activated_ts == 0)
-//	                                  │           │ ⇒ the get_my_task claim never
-//	                                  │           │ happened ⇒ provably no task
-//	                                  │           │ state to write back.
-//	                                  │           │ (_NeverClaimedItsTaskTakesEffectImmediately)
+//	9-16  N     any    any     any    │ SAME AS   │ 🔴 T-4595: `active` IS NO
+//	                                  │ 1-8       │ LONGER AN INPUT. It used to
+//	                                  │           │ short-circuit the whole
+//	                                  │           │ predicate to IMMEDIATE,
+//	                                  │           │ because assigned (activated_ts
+//	                                  │           │ == 0) meant the get_my_task
+//	                                  │           │ claim never happened ⇒
+//	                                  │           │ provably no task state. That
+//	                                  │           │ tool is retired and the flip
+//	                                  │           │ moved to report_waking, the
+//	                                  │           │ FIRST boot verb, so `active`
+//	                                  │           │ now proves only that the
+//	                                  │           │ session said hello. Reading it
+//	                                  │           │ as proof of an empty session
+//	                                  │           │ would be reading a stale
+//	                                  │           │ proof, so rows 9-16 collapsed
+//	                                  │           │ into 1-8: an un-claimed but
+//	                                  │           │ ONLINE worker winds down.
+//	                                  │           │ (_UnclaimedButOnlineStillWindsDown)
 //
 // stopping_since is deliberately NOT an input: a worker that has announced it is
 // stopping still owes a report_stopped, so it is mid-flush, not done.
 //
-// Cells 5-8 and 9-16 are collapsed because the earlier conjunct short-circuits —
-// that is a claim about the code, and it is why those rows need one test each
-// rather than four. Cells 1-4 are each pinned individually, because those four
-// are exactly where the boundary has been drawn wrong twice.
+// Cells 5-8 are collapsed because the earlier conjunct short-circuits — that is a
+// claim about the code, and it is why that row needs one test rather than four.
+// Cells 1-4 are each pinned individually, because those four are exactly where
+// the boundary has been drawn wrong twice.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (
@@ -224,10 +238,27 @@ func TestOwnerOp_NoLiveSessionTakesEffectImmediately(t *testing.T) {
 	}
 }
 
-// TestOwnerOp_NeverClaimedItsTaskTakesEffectImmediately: assigned (activated_ts
-// == 0) means the worker has provably never been handed its task content — the
-// claim IS the assigned→active flip — so there is no task state to write back.
-func TestOwnerOp_NeverClaimedItsTaskTakesEffectImmediately(t *testing.T) {
+// TestOwnerOp_UnclaimedButOnlineStillWindsDown is the INVERSE of the test that
+// used to stand here, and the inversion is the point (T-4595).
+//
+// Before: `assigned` (activated_ts == 0) proved the worker had never been handed
+// its task content, because the flip WAS the get_my_task claim — a tool call the
+// agent makes after its runtime is up and it has started working. So an owner
+// verb on such a worker took effect immediately.
+//
+// Now: get_my_task is retired and that flip lives on report_waking, the FIRST
+// verb of the boot sequence. `assigned` therefore means "has not said hello yet",
+// which says nothing about unsaved work, and `active` no longer proves the
+// opposite either. Keeping the arm would mean shooting a working session on the
+// strength of a proof that has stopped proving anything.
+//
+// 🔴 THIS IS THE SENTINEL FOR THAT REMOVAL: restoring the
+// `w.Status == WorkerStatusActive &&` conjunct in workerHasStateToFlush fails
+// HERE, on this test's own two assertions (no epoch stamped / a frame dispatched
+// on the spot). The direction is the one member_ownerop_winddown.go argues for
+// staff: err toward the grace, and the grace is a CEILING — this session ends the
+// instant it answers report_stopped.
+func TestOwnerOp_UnclaimedButOnlineStillWindsDown(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	seedLiveWorkerEnv(t, api)
@@ -247,11 +278,20 @@ func TestOwnerOp_NeverClaimedItsTaskTakesEffectImmediately(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("relocate: %d %s", rec.Code, rec.Body.String())
 	}
-	if w, _ := api.dal.GetOutsourceWorker(workerID); w.RefocusSince != 0 {
-		t.Fatal("a worker that never claimed its task has nothing to flush — no wind-down")
+	w, _ := api.dal.GetOutsourceWorker(workerID)
+	if w.RefocusSince <= 0 {
+		t.Fatal("an ONLINE worker must wind down even when it has not claimed its " +
+			"task: since T-4595 the claim rides report_waking (the first boot verb), " +
+			"so `assigned` no longer proves the session has nothing to save")
 	}
-	if got := len(api.hub.DrainWardenCommands("m-elsewhere")); got != 1 {
-		t.Fatalf("the move must take effect immediately, got %d frames", got)
+	// The pin is persisted up front, so the pending collect lands on the new
+	// machine — the move still happens, it is only no longer instantaneous.
+	if w.DesiredMachineID != "m-elsewhere" {
+		t.Fatalf("the owner's destination must be on the row before the collect: %+v", w)
+	}
+	if got := len(api.hub.DrainWardenCommands("m-elsewhere")); got != 0 {
+		t.Fatalf("a wind-down dispatches NOTHING yet — the 收口 belongs to the "+
+			"worker's report_stopped or the grace deadline; got %d frames", got)
 	}
 }
 
