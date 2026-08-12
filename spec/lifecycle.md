@@ -62,8 +62,13 @@ retired `var/jwt_secret` fallback file has no successor.
 | `POST /api/tokens/mint` (owner-gated) | `agent` / `body.member_id` | `min(ttl_days*86400, 400 days)` — the 400-day ceiling MUST cap every long-lived agent token | none |
 | `POST /api/bootstrap` (with `member_id`) | `agent` / member id | DB setting `auth.agent_token_ttl` (default **604800 s**) | `member.desired_machine_id` (omitted if empty) |
 | reconcile START payload (server-side, per spawn) | `agent` / member id | `auth.agent_token_ttl` | `member.desired_machine_id` |
-| machine onboard exec-token | `agent` / warden member id | default **90 days**, still capped at 400 days | none (warden tokens carry no placement claim) |
-| `POST /api/machines/claim` (public; redeems a one-time claim code) | `agent` / warden member id | default **90 days**, still capped at 400 days — the same mint onboard performs | none (warden tokens carry no placement claim) |
+| machine onboard / boot-command / bootstrap-here exec-token | `agent` / warden member id | **no expiry** (`exp` omitted; response `expires_in=0`) | none (warden tokens carry no placement claim) |
+| `POST /api/machines/claim` (public; redeems a one-time claim code) | `agent` / warden member id | **no expiry** (`exp` omitted; response `expires_in=0`) — the same permanent mint used by every warden install path | none (warden tokens carry no placement claim) |
+
+Warden credentials are revoked by removing their machine from the roster, which rejects the
+next gated request. Existing finite warden credentials remain finite until that machine is
+reinstalled and receives a newly minted permanent credential. The 400-day cap remains the
+ceiling for non-warden agent-token mints.
 
 - Login MUST verify the password against the DB-stored argon2id hash (`auth.password_hash`)
   and answer a flat 401 for a wrong password OR no set password, with no distinguishing

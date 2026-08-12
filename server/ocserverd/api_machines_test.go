@@ -7,6 +7,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -412,16 +413,10 @@ func TestHandleClaimMachineTokenApiMachinesClaimPost(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &dto); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
-		if dto.MachineID != ob.MachineID || dto.ExpiresIn != machineTTL(defaultMachineTTLDays) {
+		if dto.MachineID != ob.MachineID || dto.ExpiresIn != 0 {
 			t.Fatalf("claim result drifted from the onboard mint: %+v", dto)
 		}
-		claims, err := verifyJWT(dto.Token, s.secret, time.Now().Unix())
-		if err != nil {
-			t.Fatalf("claimed token must verify: %v", err)
-		}
-		if claims["sub"] != ob.MachineID || claims["scope"] != "agent" {
-			t.Fatalf("claimed token claims drifted: %v", claims)
-		}
+		assertPermanentWardenToken(t, s, dto.Token, ob.MachineID)
 
 		// Single-use: the same code is spent.
 		if rec := claim(t, s, `{"code":"`+ob.ClaimCode+`"}`); rec.Code != http.StatusUnauthorized {
@@ -447,6 +442,148 @@ func TestHandleClaimMachineTokenApiMachinesClaimPost(t *testing.T) {
 			t.Fatalf("missing code field must 422: %d %s", rec.Code, rec.Body.String())
 		}
 	})
+}
+
+// assertPermanentWardenToken proves the token is both structurally permanent
+// (no exp claim) and accepted long after any finite machine TTL. Looking only
+// at expires_in would be a false proof: a response field could drift while the
+// credential itself still expired.
+func assertPermanentWardenToken(t *testing.T, s *apiServer, token, wantMachineID string) {
+	t.Helper()
+	claims, err := verifyJWT(token, s.secret, time.Now().AddDate(100, 0, 0).Unix())
+	if err != nil {
+		t.Fatalf("permanent warden token must verify a century later: %v", err)
+	}
+	if _, hasExpiry := claims["exp"]; hasExpiry {
+		t.Fatalf("warden token must omit exp, got claims %v", claims)
+	}
+	if claims["sub"] != wantMachineID || claims["scope"] != "agent" {
+		t.Fatalf("warden identity drifted: %v", claims)
+	}
+}
+
+func TestWardenCredentialsNeverExpireAcrossAllMachineMintPaths(t *testing.T) {
+	s := newMachinesTestServer(t)
+
+	// Onboard accepts the legacy override for compatibility, but it must not
+	// restore a finite warden credential or let the 400-day cap leak back in.
+	onboardRec := httptest.NewRecorder()
+	onboardReq := httptest.NewRequest("POST", "/api/machines",
+		strings.NewReader(`{"display_name":"permanent-box","ttl_days":401}`))
+	s.HandleOnboardMachineApiMachinesPost(onboardRec, onboardReq)
+	if onboardRec.Code != http.StatusOK {
+		t.Fatalf("onboard: %d %s", onboardRec.Code, onboardRec.Body.String())
+	}
+	var onboard machineOnboardResultDTO
+	if err := json.Unmarshal(onboardRec.Body.Bytes(), &onboard); err != nil {
+		t.Fatalf("unmarshal onboard: %v", err)
+	}
+	if onboard.ExpiresIn != 0 {
+		t.Fatalf("onboard expires_in = %d, want 0 for no expiry", onboard.ExpiresIn)
+	}
+	assertPermanentWardenToken(t, s, onboard.Token, onboard.MachineID)
+
+	bootRec := httptest.NewRecorder()
+	bootReq := httptest.NewRequest("GET", "/api/machines/"+onboard.MachineID+"/boot-command", nil)
+	s.HandleMachineBootCommandApiMachinesMachineIdBootCommandGet(bootRec, bootReq, onboard.MachineID)
+	if bootRec.Code != http.StatusOK {
+		t.Fatalf("boot-command: %d %s", bootRec.Code, bootRec.Body.String())
+	}
+	var boot bootCommandResultDTO
+	if err := json.Unmarshal(bootRec.Body.Bytes(), &boot); err != nil {
+		t.Fatalf("unmarshal boot-command: %v", err)
+	}
+	if boot.ExpiresIn != 0 {
+		t.Fatalf("boot-command expires_in = %d, want 0 for no expiry", boot.ExpiresIn)
+	}
+	assertPermanentWardenToken(t, s, boot.Token, onboard.MachineID)
+
+	claimRec := httptest.NewRecorder()
+	claimReq := httptest.NewRequest("POST", "/api/machines/claim",
+		strings.NewReader(`{"code":"`+boot.ClaimCode+`"}`))
+	s.HandleClaimMachineTokenApiMachinesClaimPost(claimRec, claimReq)
+	if claimRec.Code != http.StatusOK {
+		t.Fatalf("claim: %d %s", claimRec.Code, claimRec.Body.String())
+	}
+	var claim machineClaimResultDTO
+	if err := json.Unmarshal(claimRec.Body.Bytes(), &claim); err != nil {
+		t.Fatalf("unmarshal claim: %v", err)
+	}
+	if claim.ExpiresIn != 0 {
+		t.Fatalf("claim expires_in = %d, want 0 for no expiry", claim.ExpiresIn)
+	}
+	assertPermanentWardenToken(t, s, claim.Token, onboard.MachineID)
+
+	// Exercise the HTTP bootstrap-here path, then inspect the exact child env
+	// it would hand to ocwarden. This proves the route, not only its shared core.
+	runs := withRecordedOcwarden(t, 0)
+	s.binCacheDir = t.TempDir()
+	s.ocwardenFS = fstest.MapFS{
+		"ocwarden":  {Data: []byte("test warden")},
+		"officraft": {Data: []byte("test anchor")},
+	}
+	bootstrapRec := httptest.NewRecorder()
+	bootstrapReq := httptest.NewRequest("POST", "/api/machines/"+onboard.MachineID+"/bootstrap-here", nil)
+	s.HandleBootstrapHereApiMachinesMachineIdBootstrapHerePost(bootstrapRec, bootstrapReq, onboard.MachineID)
+	if bootstrapRec.Code != http.StatusOK {
+		t.Fatalf("bootstrap-here: %d %s", bootstrapRec.Code, bootstrapRec.Body.String())
+	}
+	if len(*runs) != 1 {
+		t.Fatalf("bootstrap-here must invoke ocwarden once, got %d", len(*runs))
+	}
+	token, ok := envValue((*runs)[0].env, "OC_TOKEN")
+	if !ok {
+		t.Fatal("bootstrap-here must pass its warden token to ocwarden")
+	}
+	assertPermanentWardenToken(t, s, token, onboard.MachineID)
+}
+
+func TestNonWardenTokensStillExpireAndKeepThe400DayClamp(t *testing.T) {
+	s := newMachinesTestServer(t)
+	agent := Member{ID: "m-expiring-agent", Name: "agent", Kind: KindAssistant,
+		Effort: "medium", RosterStatus: RosterStatusActive}
+	putTestMember(t, s, agent)
+	if _, err := s.mintWardenToken(agent); err == nil {
+		t.Fatal("permanent warden mint must refuse a non-warden member")
+	}
+
+	// POST /api/mint is the public long-lived non-warden mint seam. A 401-day
+	// request proves the existing 400-day ceiling remains live rather than being
+	// removed to make warden credentials permanent.
+	mintRec := httptest.NewRecorder()
+	mintReq := httptest.NewRequest("POST", "/api/mint",
+		strings.NewReader(`{"member_id":"m-expiring-agent","ttl_days":401}`))
+	s.HandleMintApiMintPost(mintRec, mintReq)
+	if mintRec.Code != http.StatusOK {
+		t.Fatalf("mint: %d %s", mintRec.Code, mintRec.Body.String())
+	}
+	var minted tokenDTO
+	if err := json.Unmarshal(mintRec.Body.Bytes(), &minted); err != nil {
+		t.Fatalf("unmarshal mint: %v", err)
+	}
+	if minted.ExpiresIn != maxAgentTTLSecs {
+		t.Fatalf("non-warden mint expires_in = %d, want 400-day cap %d", minted.ExpiresIn, maxAgentTTLSecs)
+	}
+	claims, err := verifyJWT(minted.Token, s.secret, time.Now().Unix())
+	if err != nil {
+		t.Fatalf("capped agent token must verify before expiry: %v", err)
+	}
+	if _, hasExpiry := claims["exp"]; !hasExpiry {
+		t.Fatalf("agent token must retain exp: %v", claims)
+	}
+	if _, err := verifyJWT(minted.Token, s.secret, time.Now().Add(401*24*time.Hour).Unix()); !errors.Is(err, errExpiredToken) {
+		t.Fatalf("capped agent token must expire after the cap, got %v", err)
+	}
+
+	worker := Member{ID: "ow-expiring-worker", Name: "worker", Kind: KindOutsource,
+		Effort: "medium", RosterStatus: RosterStatusActive}
+	workerToken, err := s.mintMemberToken(worker, 60)
+	if err != nil {
+		t.Fatalf("mint worker token: %v", err)
+	}
+	if _, err := verifyJWT(workerToken, s.secret, time.Now().Add(61*time.Second).Unix()); !errors.Is(err, errExpiredToken) {
+		t.Fatalf("worker token must remain expiring, got %v", err)
+	}
 }
 
 func TestMachineBinStatus(t *testing.T) {

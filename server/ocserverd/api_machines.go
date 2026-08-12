@@ -23,12 +23,8 @@ import (
 	"time"
 )
 
-// defaultMachineTTLDays is the exec-token lifetime an onboard defaults to
-// (handlers._DEFAULT_MACHINE_TTL_DAYS); still capped at maxAgentTTLSecs.
-const defaultMachineTTLDays int64 = 90
-
 // machineClaimTTLSecs is the lifetime of a one-time machine claim code — the
-// short-lived credential the boot command carries INSTEAD of the 90-day
+// short-lived credential the boot command carries INSTEAD of the permanent
 // exec-token (a pasted/leaked one-liner stops granting anything after 10
 // minutes or one use, whichever comes first).
 const machineClaimTTLSecs int64 = 600
@@ -96,15 +92,6 @@ func (st *machineClaimStore) take(code string, now time.Time) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// machineTTL is the capped default machine exec-token TTL in seconds.
-func machineTTL(ttlDays int64) int64 {
-	ttl := ttlDays * 86400
-	if ttl > maxAgentTTLSecs {
-		ttl = maxAgentTTLSecs
-	}
-	return ttl
 }
 
 // requestBaseURL rebuilds the request base ("scheme://host", no trailing
@@ -573,11 +560,8 @@ func (s *apiServer) HandleOnboardMachineApiMachinesPost(w http.ResponseWriter, r
 		writeError(w, http.StatusUnprocessableEntity, "display_name is required")
 		return
 	}
-	ttlDays := defaultMachineTTLDays
-	if body.TtlDays != nil {
-		ttlDays = int64(*body.TtlDays)
-	}
-	ttl := machineTTL(ttlDays)
+	// ttl_days remains accepted for wire compatibility, but cannot turn a
+	// warden credential back into an expiring one.
 	member := Member{
 		ID:   "m-" + newHexID(12),
 		Name: displayName,
@@ -600,7 +584,7 @@ func (s *apiServer) HandleOnboardMachineApiMachinesPost(w http.ResponseWriter, r
 		internalError(w, err)
 		return
 	}
-	token, err := s.mintMemberToken(member, ttl)
+	token, err := s.mintWardenToken(member)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -614,7 +598,7 @@ func (s *apiServer) HandleOnboardMachineApiMachinesPost(w http.ResponseWriter, r
 		MemberID:       member.ID,
 		MachineID:      member.ID,
 		Token:          token,
-		ExpiresIn:      ttl,
+		ExpiresIn:      0, // 0 is the wire sentinel for a credential with no exp.
 		BootCommand:    buildBootCommand(requestBaseURL(r), code),
 		ClaimCode:      code,
 		ClaimExpiresIn: machineClaimTTLSecs,
@@ -647,8 +631,7 @@ func (s *apiServer) HandleMachineBootCommandApiMachinesMachineIdBootCommandGet(w
 		internalError(w, err)
 		return
 	}
-	ttl := machineTTL(defaultMachineTTLDays)
-	token, err := s.mintMemberToken(*machine, ttl)
+	token, err := s.mintWardenToken(*machine)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -662,7 +645,7 @@ func (s *apiServer) HandleMachineBootCommandApiMachinesMachineIdBootCommandGet(w
 		MachineID:      machine.ID,
 		BootCommand:    buildBootCommand(requestBaseURL(r), code),
 		Token:          token,
-		ExpiresIn:      ttl,
+		ExpiresIn:      0,
 		ClaimCode:      code,
 		ClaimExpiresIn: machineClaimTTLSecs,
 	})
@@ -689,15 +672,14 @@ func (s *apiServer) HandleClaimMachineTokenApiMachinesClaimPost(w http.ResponseW
 		writeError(w, http.StatusUnauthorized, claimCodeDeniedMsg)
 		return
 	}
-	ttl := machineTTL(defaultMachineTTLDays)
-	token, err := s.mintMemberToken(*machine, ttl)
+	token, err := s.mintWardenToken(*machine)
 	if err != nil {
 		internalError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, machineClaimResultDTO{
 		Token:     token,
-		ExpiresIn: ttl,
+		ExpiresIn: 0,
 		MachineID: machine.ID,
 	})
 }
@@ -895,8 +877,7 @@ func (s *apiServer) HandleBootstrapHereApiMachinesMachineIdBootstrapHerePost(w h
 // returns the result DTO (a non-zero exit is a RESULT, not an error) and an
 // error only for a genuine server fault (token mint).
 func (s *apiServer) runWardenInstallHere(machine Member, binPath, baseURL string) (bootstrapResultDTO, error) {
-	ttl := machineTTL(defaultMachineTTLDays)
-	token, err := s.mintMemberToken(machine, ttl)
+	token, err := s.mintWardenToken(machine)
 	if err != nil {
 		return bootstrapResultDTO{}, err
 	}

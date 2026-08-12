@@ -414,8 +414,8 @@ type BackupHealthDTO struct {
 // installer for an EXISTING machine again later without re-onboarding.
 // “machine_id“ is the warden member id; “boot_command“ is the same
 // curl-download-then-install one-liner onboard builds (it embeds “machine_id“
-// as OC_ID); “token“ is a FRESHLY re-minted exec-token (“scope="agent"“,
-// “sub=machine_id“) and “expires_in“ is its lifetime in seconds.
+// as OC_ID); “token“ is a FRESHLY re-minted permanent exec-token (“scope="agent"“,
+// “sub=machine_id“, no “exp“ claim) and “expires_in“ is “0“.
 //
 // “claim_code“ is a fresh short-lived (“claim_expires_in“ = 600 s), single-use code
 // the “boot_command“ embeds (“install.sh?code=“) instead of the exec-token; the served
@@ -862,10 +862,10 @@ type MachineClaimDTO struct {
 
 // MachineClaimResultDTO The claim-code redemption result (“POST /api/machines/claim“).
 //
-// “token“ is the freshly minted machine exec-token (“scope="agent"“,
-// “sub=machine_id“ — the same mint onboard performed); “expires_in“ is its
-// lifetime in seconds (default 90 days, capped at 400); “machine_id“ is the
-// warden member the token is bound to.
+// “token“ is the freshly minted permanent machine exec-token (“scope="agent"“,
+// “sub=machine_id“ — the same mint every warden install path performs); it omits
+// “exp“ and answers “expires_in=0“. “machine_id“ is the warden member the
+// token is bound to.
 type MachineClaimResultDTO struct {
 	ExpiresIn int    `json:"expires_in"`
 	MachineId string `json:"machine_id"`
@@ -919,10 +919,11 @@ type MachineDTO struct {
 // the
 // machine from the ROSTER, it does not tear the warden daemon off the box (that is
 // the “uninstall“ verb). Never a hard tombstone — the audit row + token “sub“
-// attribution survive; the exec-token expires by TTL (HS256 is stateless). There is
-// NO “teardown_command“ placeholder: DELETE does not command removal, so it never
-// hands back an installer/uninstaller line. “machine_id“ is the machine's stable
-// id (== the warden member's own id; renamed from the hostname-era “host“).
+// attribution survive; every later gated request with that machine's credential is
+// rejected by the roster revocation check, including permanent warden credentials.
+// There is NO “teardown_command“ placeholder: DELETE does not command removal, so
+// it never hands back an installer/uninstaller line. “machine_id“ is the machine's
+// stable id (== the warden member's own id; renamed from the hostname-era “host“).
 type MachineDeleteResultDTO struct {
 	MachineId *string `json:"machine_id,omitempty"`
 	MemberId  string  `json:"member_id"`
@@ -936,9 +937,9 @@ type MachineDeleteResultDTO struct {
 // mints a NEW warden member whose stable, server-minted id (“m-<uuid12>“) IS the
 // machine id (the warden carries no self-binding — routing resolves it by get_member
 // of that id; see “handle_onboard_machine“). The display name is stored as a
-// MachineAlias overlay keyed by that machine id. “ttl_days“ overrides the exec-token
-// lifetime (defaults to a sensible 90 days; capped server-side at
-// “MAX_AGENT_TTL_SECS“).
+// MachineAlias overlay keyed by that machine id. “ttl_days“ is retained for request
+// compatibility but does not affect warden credentials: they are permanent and omit
+// “exp“.
 type MachineOnboardDTO struct {
 	DisplayName string `json:"display_name"`
 	TtlDays     *int   `json:"ttl_days,omitempty"`

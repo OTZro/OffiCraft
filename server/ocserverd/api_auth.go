@@ -5,6 +5,7 @@ package main
 // long-lived agent mint, and the agent boot seam (context fold + member JWT).
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -25,6 +26,17 @@ func (s *apiServer) mintAgentToken(sub, machineID string, ttl int64) (string, er
 // machine_id = desired_machine_id.
 func (s *apiServer) mintMemberToken(m Member, ttl int64) (string, error) {
 	return s.mintAgentToken(m.ID, m.DesiredMachineID, ttl)
+}
+
+// mintWardenToken mints the permanent machine credential used only by warden
+// installation paths. It intentionally cannot accept an arbitrary member: a
+// permanent token for an agent or outsource worker would bypass their TTL and
+// the 400-day ceiling.
+func (s *apiServer) mintWardenToken(m Member) (string, error) {
+	if m.Kind != machineKind {
+		return "", fmt.Errorf("%w: permanent credentials are warden-only", errInvalidToken)
+	}
+	return mintJWTWithoutExpiry(m.ID, "agent", s.secret, time.Now().Unix(), "")
 }
 
 // POST /api/login — exchange the owner password for an owner-scoped JWT.

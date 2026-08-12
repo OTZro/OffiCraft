@@ -116,10 +116,10 @@ func resolvePrincipal(claims map[string]any, lookup func(id string) (*Member, er
 // machine that is still talking.
 //
 // WHICH LAYER — per-request roster read, NOT sign-time binding. Sign-time
-// binding cannot solve this at all: machine tokens are minted with a
-// multi-day TTL (defaultMachineTTLDays) and members up to 400 days, and they
-// are already in the field on hosts the server can no longer reach. There is
-// nothing to un-sign. Revocation of an already-issued bearer token is
+// binding cannot solve this at all: warden tokens are permanent and member
+// tokens can last up to 400 days, and they are already in the field on hosts
+// the server can no longer reach. There is nothing to un-sign. Revocation of
+// an already-issued bearer token is
 // inherently a read at USE time, so the only real question is where the read
 // goes, and the answer is the ONE seam that already does credential
 // revocation: requireAuth, next to the change-password owner-iat floor.
