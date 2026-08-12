@@ -15,7 +15,6 @@ import type {
   WebhookEndpoint,
   WebhookPlatform,
   WebhookRequestLog,
-  MemberResumeSummaryView,
 } from "../api/adapter";
 import {
   AgentDetailPanel,
@@ -29,6 +28,7 @@ import { Avatar } from "./Avatar";
 import { avatarKindForMember } from "../lib/avatarKind";
 import { ConfirmModal } from "./ConfirmModal";
 import { ScheduledMessagesCard } from "./ScheduledMessagesCard";
+import { ResumeSummaryCard } from "./ResumeSummaryCard";
 import { InlineEdit } from "./InlineEdit";
 import { ModelEffortEditor } from "./ModelEffortEditor";
 import { presenceVisual } from "./LifecycleDot";
@@ -39,7 +39,6 @@ import {
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  ClockIcon,
   CloseIcon,
   CopyIcon,
   MonitorIcon,
@@ -1027,231 +1026,10 @@ export function MemberDetailPanel({
     </>
   );
 
-  // ── RESUME SUMMARY (T-8b0d) ────────────────────────────────────────────────
-  // Below 初始 PROMPT (afterPromptCards, the panel's last slot). 🔴 HARD
-  // REQUIREMENT: the panel's default load must not issue any request for this
-  // section — the fetch fires ONLY on first expand. This is the initial-prompt
-  // pattern (AgentDetailPanel.tsx), NOT useWebhooks' eager-prefetch shape:
-  // fetch fn read through a ref (never in the effect's deps — an inline arrow
-  // rebuilt every render would tear the effect down mid-flight on any repaint,
-  // T-7526), effect deps `[showResumeSummary, member.id]` only, loaded-stamp
-  // written on ARRIVAL (not at fetch start) so a failed read can retry.
-  const [showResumeSummary, setShowResumeSummary] = useState(false);
-  const [resumeSummary, setResumeSummary] = useState<{
-    data: MemberResumeSummaryView | null;
-    loading: boolean;
-    error: boolean;
-  }>({ data: null, loading: false, error: false });
-  const resumeSummaryLoadedKeyRef = useRef<string | null>(null);
-  const resumeSummaryInFlightKeyRef = useRef<string | null>(null);
-  const resumeSummaryFetchRef = useRef<() => Promise<MemberResumeSummaryView>>(
-    () => api.getMemberResumeSummary(member.id),
-  );
-  resumeSummaryFetchRef.current = () => api.getMemberResumeSummary(member.id);
-
-  function runResumeSummaryFetch(key: string) {
-    resumeSummaryInFlightKeyRef.current = key;
-    setResumeSummary({ data: null, loading: true, error: false });
-    resumeSummaryFetchRef
-      .current()
-      .then((data) => {
-        if (resumeSummaryInFlightKeyRef.current !== key) return;
-        resumeSummaryInFlightKeyRef.current = null;
-        resumeSummaryLoadedKeyRef.current = key; // stamped on ARRIVAL only
-        setResumeSummary({ data, loading: false, error: false });
-      })
-      .catch(() => {
-        if (resumeSummaryInFlightKeyRef.current !== key) return;
-        resumeSummaryInFlightKeyRef.current = null;
-        // No stamp: the read failed, so re-expanding (or 重試) reads again.
-        setResumeSummary({ data: null, loading: false, error: true });
-      });
-  }
-
-  useEffect(() => {
-    if (!showResumeSummary) return;
-    if (resumeSummaryLoadedKeyRef.current === member.id) return;
-    if (resumeSummaryInFlightKeyRef.current === member.id) return;
-    runResumeSummaryFetch(member.id);
-    // NO cleanup that cancels the read (a repaint/unmount is not a
-    // cancellation); staleness is decided by comparing the key, not an
-    // `alive` flag a repaint can flip.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showResumeSummary, member.id]);
-
-  const resumeSummaryCard = (
-    <div className="mp-card mp-expand">
-      <button
-        type="button"
-        className="mp-expand__head"
-        aria-expanded={showResumeSummary}
-        onClick={() => setShowResumeSummary((v) => !v)}
-        data-testid="mp-resume-toggle"
-      >
-        <ClockIcon size={15} className="mp-expand__icon" />
-        <span className="mp-expand__title">{t.mp.resumeSummary.title}</span>
-        {showResumeSummary ? (
-          <ChevronDownIcon size={16} className="mp-expand__chevron" />
-        ) : (
-          <ChevronRightIcon size={16} className="mp-expand__chevron" />
-        )}
-      </button>
-      {showResumeSummary && (
-        <div className="mp-expand__body" data-testid="mp-resume-body">
-          {/* `!resumeSummary.data && !resumeSummary.error` covers the one
-           * render tick between the toggle click and the effect's own
-           * setState — treated as loading, not as a fabricated empty state. */}
-          {resumeSummary.loading ||
-          (!resumeSummary.data && !resumeSummary.error) ? (
-            t.mp.resumeSummary.loading
-          ) : resumeSummary.error ? (
-            <div data-testid="mp-resume-error">
-              <span>{t.mp.resumeSummary.error}</span>{" "}
-              <button
-                type="button"
-                className="doc-btn"
-                data-testid="mp-resume-retry"
-                onClick={() => runResumeSummaryFetch(member.id)}
-              >
-                {t.mp.resumeSummary.retry}
-              </button>
-            </div>
-          ) : resumeSummary.data ? (
-            <>
-              <div className="mp-resume__note">{resumeSummary.data.note}</div>
-              <div
-                className="mp-resume__statsgrid"
-                data-testid="mp-resume-overview"
-              >
-                <div className="mp-resume__stat">
-                  <div className="mp-resume__statlabel">
-                    {t.mp.resumeSummary.chatCount}
-                  </div>
-                  <div
-                    className="mp-resume__statvalue"
-                    data-testid="mp-resume-stat-chatCount"
-                  >
-                    {resumeSummary.data.overview.chatCount}
-                  </div>
-                </div>
-                <div className="mp-resume__stat">
-                  <div className="mp-resume__statlabel">
-                    {t.mp.resumeSummary.chatChars}
-                  </div>
-                  <div
-                    className="mp-resume__statvalue"
-                    data-testid="mp-resume-stat-chatChars"
-                  >
-                    {resumeSummary.data.overview.chatChars}
-                  </div>
-                </div>
-                <div className="mp-resume__stat">
-                  <div className="mp-resume__statlabel">
-                    {t.mp.resumeSummary.tasksReturned}
-                  </div>
-                  <div
-                    className="mp-resume__statvalue"
-                    data-testid="mp-resume-stat-tasksReturned"
-                  >
-                    {resumeSummary.data.overview.tasksReturned}
-                  </div>
-                </div>
-                <div className="mp-resume__stat">
-                  <div className="mp-resume__statlabel">
-                    {t.mp.resumeSummary.tasksOpenTotal}
-                  </div>
-                  <div
-                    className="mp-resume__statvalue"
-                    data-testid="mp-resume-stat-tasksOpenTotal"
-                  >
-                    {resumeSummary.data.overview.tasksOpenTotal}
-                  </div>
-                </div>
-                <div className="mp-resume__stat">
-                  <div className="mp-resume__statlabel">
-                    {t.mp.resumeSummary.tasksDetailChars}
-                  </div>
-                  <div
-                    className="mp-resume__statvalue"
-                    data-testid="mp-resume-stat-tasksDetailChars"
-                  >
-                    {resumeSummary.data.overview.tasksDetailChars}
-                  </div>
-                </div>
-                <div className="mp-resume__stat">
-                  <div className="mp-resume__statlabel">
-                    {t.mp.resumeSummary.cardsWaiting}
-                  </div>
-                  <div
-                    className="mp-resume__statvalue"
-                    data-testid="mp-resume-stat-cardsWaiting"
-                  >
-                    {resumeSummary.data.overview.cardsWaiting}
-                  </div>
-                </div>
-                <div className="mp-resume__stat">
-                  <div className="mp-resume__statlabel">
-                    {t.mp.resumeSummary.cardsAnsweredRecent}
-                  </div>
-                  <div
-                    className="mp-resume__statvalue"
-                    data-testid="mp-resume-stat-cardsAnsweredRecent"
-                  >
-                    {resumeSummary.data.overview.cardsAnsweredRecent}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mp-resume__section">
-                <div className="mp-resume__sectiontitle">
-                  {t.mp.resumeSummary.chatSection}
-                </div>
-                {resumeSummary.data.chat.length === 0 ? (
-                  <div className="mp-resume__empty">
-                    {t.mp.resumeSummary.chatEmpty}
-                  </div>
-                ) : (
-                  resumeSummary.data.chat.map((m) => (
-                    <div className="mp-resume__chatrow" key={m.id}>
-                      <span className="mp-resume__chatfrom">
-                        {m.from === member.id ? "→" : "←"}
-                      </span>
-                      <span className="mp-resume__chatbody">{m.body}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              <div className="mp-resume__section">
-                <div className="mp-resume__sectiontitle">
-                  {t.mp.resumeSummary.tasksSection}
-                </div>
-                {resumeSummary.data.tasks.length === 0 ? (
-                  <div className="mp-resume__empty">
-                    {t.mp.resumeSummary.tasksEmpty}
-                  </div>
-                ) : (
-                  resumeSummary.data.tasks.map((rt) => (
-                    <div className="mp-resume__taskrow" key={rt.id}>
-                      <code className="mp-resume__taskno">{rt.taskNo}</code>
-                      <span className="mp-resume__tasktitle">{rt.title}</span>
-                      <span className="mp-resume__taskstatus">
-                        {rt.status}
-                      </span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </>
-          ) : (
-            <div className="mp-resume__empty" data-testid="mp-resume-empty">
-              {t.mp.resumeSummary.chatEmpty}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
+  // 履歷摘要 lives in its own component because the outsource panel renders
+  // the same card (T-4595). See ResumeSummaryCard for the first-expand
+  // fetch contract this panel depends on.
+  const resumeSummaryCard = <ResumeSummaryCard agentId={member.id} />;
 
   // The panel's `extraExpandCards` payload: 回呼端點 (webhook) + 定期訊息
   // (schedule) — the inbound-triggered and the clock-triggered halves of the

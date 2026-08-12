@@ -1380,3 +1380,40 @@ describe("WorkerDetailPanel — pending launch changes (T-7f28)", () => {
     }
   });
 });
+
+// ── the resume summary card (T-4595) ────────────────────────────────────────
+//
+// The owner released ONE member verb to workers — reading a worker's resume
+// summary — so the outsource panel now renders the same 履歷摘要 card the staff
+// panel does, from the same component.
+//
+// This test exists because NOTHING else covered the slot: swapping the panel's
+// old notHere() placeholder for the real card turned zero tests red. A slot
+// whose content no test asserts is a slot that can quietly go back to being
+// empty.
+describe("WorkerDetailPanel · 履歷摘要", () => {
+  it("renders the shared resume summary card, and fetches only on expand", async () => {
+    __injectMockTask(mkTask({ id: "t-r1", taskNo: "T-4595", title: "履歷摘要" }));
+    __injectMockOutsourceWorker(
+      mkWorker({ id: "ow-r1", codename: "O-9", taskId: "t-r1", taskTitle: "履歷摘要" }),
+    );
+    const spy = vi.spyOn(api, "getMemberResumeSummary");
+
+    const { findByTestId, queryByTestId } = renderOfficeAt("#office/worker/ow-r1");
+    const toggle = await findByTestId("mp-resume-toggle");
+
+    // Collapsed: the card is there, the request is NOT. This half is the one
+    // the staff panel's own comment calls a HARD REQUIREMENT — a panel that
+    // pulls a wake snapshot on every open would make opening the panel
+    // expensive for every agent in the roster.
+    expect(queryByTestId("mp-resume-body")).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+
+    fireEvent.click(toggle);
+    await findByTestId("mp-resume-body");
+    // Fetched for THIS worker — an id mix-up would show a stranger's snapshot
+    // under this worker's name, which reads as truth.
+    expect(spy).toHaveBeenCalledWith("ow-r1");
+    spy.mockRestore();
+  });
+});
