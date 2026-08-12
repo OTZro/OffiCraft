@@ -162,7 +162,7 @@ func TestHandoverStepThreeIsTrueForBothAudiences(t *testing.T) {
 		t.Run(tc.who, func(t *testing.T) {
 			sec := handoverSectionOf(t, tc.doc)
 			for _, want := range []string{
-				"`get_lessons` → `replace_lessons`",         // the staff arm
+				"`get_lessons` → `replace_lessons`",          // the staff arm
 				"`get_task_manual` → `write_task_learnings`", // the outsource arm
 			} {
 				if !strings.Contains(sec, want) {

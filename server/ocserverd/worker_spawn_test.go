@@ -116,9 +116,9 @@ func TestBuildWorkerBootContext_FullAssembly(t *testing.T) {
 	// must really be here. Without it every absence assertion below is satisfied
 	// by an empty string.
 	for _, want := range []string{
-		"# Global Context",      // slot 1 — the 系統互動 seed's own H1
+		"# Global Context",     // slot 1 — the 系統互動 seed's own H1
 		"# 啟動程序（Boot Sequence", // slot 4 — the shared boot sequence
-		"## Claude Code 執行環境",   // that runtime's 執行環境 section, inside slot 4
+		"## Claude Code 執行環境",  // that runtime's 執行環境 section, inside slot 4
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("boot context missing the shared block %q", want)
