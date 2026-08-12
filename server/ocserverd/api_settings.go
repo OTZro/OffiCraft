@@ -23,7 +23,7 @@ import (
 // ChangePasswordDTO.new_password.
 const minPasswordLen = 8
 
-// tokenTTLWhitelist is the closed PATCH vocabulary for auth.token_ttl
+// tokenTTLWhitelist is the closed PATCH vocabulary for each token lifetime.
 // (12h / 24h / 7d / 30d — a whitelist, so a stray 0 can never lock every
 // future login out; SettingsUpdateDTO contract).
 var tokenTTLWhitelist = map[int]bool{
@@ -172,7 +172,7 @@ func (s *apiServer) HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWrite
 		return
 	}
 	s.passwordHash = phc
-	s.writeOwnerToken(w, s.tokenTTL, time.Now().Unix())
+	s.writeOwnerToken(w, s.ownerTokenTTL, time.Now().Unix())
 	// T-ba62: the owner has just claimed this server — do the two things that
 	// used to be manual (install THIS host's warden, bring the seeded assistant
 	// online) so a fresh install lands on a working studio instead of an empty
@@ -221,7 +221,7 @@ func (s *apiServer) HandleChangePasswordApiAuthChangePasswordPost(w http.Respons
 	}
 	s.passwordHash = phc
 	s.passwordChangedAt = now
-	s.writeOwnerToken(w, s.tokenTTL, now)
+	s.writeOwnerToken(w, s.ownerTokenTTL, now)
 }
 
 // writeOwnerToken mints and writes the owner tokenDTO. Callers hold
@@ -252,16 +252,22 @@ func (s *apiServer) HandleGetSettingsApiSettingsGet(w http.ResponseWriter, r *ht
 
 // PATCH /api/settings — partial update; both knobs validated BEFORE anything
 // is written (a 422 writes nothing), then DB write + in-place snapshot update
-// under settingsMu: token_ttl applies from the next login, handover_pct from
+// under settingsMu: owner_token_ttl applies from the next login,
+// agent_token_ttl from the next agent spawn, handover_pct from
 // the next context report.
 func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, r *http.Request) {
 	var body SettingsUpdateDTO
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
-	if body.TokenTtl != nil && !tokenTTLWhitelist[*body.TokenTtl] {
+	if body.OwnerTokenTtl != nil && !tokenTTLWhitelist[*body.OwnerTokenTtl] {
 		writeError(w, http.StatusUnprocessableEntity,
-			"token_ttl must be one of 43200, 86400, 604800, 2592000 seconds")
+			"owner_token_ttl must be one of 43200, 86400, 604800, 2592000 seconds")
+		return
+	}
+	if body.AgentTokenTtl != nil && !tokenTTLWhitelist[*body.AgentTokenTtl] {
+		writeError(w, http.StatusUnprocessableEntity,
+			"agent_token_ttl must be one of 43200, 86400, 604800, 2592000 seconds")
 		return
 	}
 	if body.HandoverPct != nil &&
@@ -378,13 +384,21 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		}
 	}
 	s.settingsMu.Lock()
-	if body.TokenTtl != nil {
-		if err := s.dal.PutSetting(settingTokenTTL, strconv.Itoa(*body.TokenTtl)); err != nil {
+	if body.OwnerTokenTtl != nil {
+		if err := s.dal.PutSetting(settingOwnerTokenTTL, strconv.Itoa(*body.OwnerTokenTtl)); err != nil {
 			s.settingsMu.Unlock()
 			internalError(w, err)
 			return
 		}
-		s.tokenTTL = int64(*body.TokenTtl)
+		s.ownerTokenTTL = int64(*body.OwnerTokenTtl)
+	}
+	if body.AgentTokenTtl != nil {
+		if err := s.dal.PutSetting(settingAgentTokenTTL, strconv.Itoa(*body.AgentTokenTtl)); err != nil {
+			s.settingsMu.Unlock()
+			internalError(w, err)
+			return
+		}
+		s.agentTokenTTL = int64(*body.AgentTokenTtl)
 	}
 	if body.HandoverPct != nil {
 		if err := s.dal.PutSetting(settingCtxHandoverPct, strconv.Itoa(*body.HandoverPct)); err != nil {
@@ -563,7 +577,8 @@ func (s *apiServer) settingsView() settingsDTO {
 		customThemes = []ThemeBundleDTO{}
 	}
 	return settingsDTO{
-		TokenTTL:                   s.tokenTTL,
+		OwnerTokenTTL:              s.ownerTokenTTL,
+		AgentTokenTTL:              s.agentTokenTTL,
 		HandoverPct:                s.ctxhigh.HandoverPct,
 		CodexCompactionThreshold:   s.codexCompactionThreshold,
 		MonitoringRefreshSeconds:   s.monitoringRefreshSeconds,

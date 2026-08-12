@@ -626,7 +626,7 @@ HAPPY: dict[str, Happy] = {
     ),
     "GET /api/settings": Happy(
         check=lambda _c, r: _expect(
-            r, lambda d: d["token_ttl"] > 0 and 40 <= d["handover_pct"] <= 90
+            r, lambda d: d["owner_token_ttl"] > 0 and d["agent_token_ttl"] > 0 and 40 <= d["handover_pct"] <= 90
         ),
     ),
     "GET /api/push/public-key": Happy(
@@ -650,9 +650,9 @@ HAPPY: dict[str, Happy] = {
     "PATCH /api/settings": Happy(
         # Patch to the defaults: exercises the write path without steering the
         # shared instance away from its expected knobs.
-        body={"token_ttl": 86400, "handover_pct": 50},
+        body={"owner_token_ttl": 86400, "agent_token_ttl": 604800, "handover_pct": 50},
         check=lambda _c, r: _expect(
-            r, lambda d: d["token_ttl"] == 86400 and d["handover_pct"] == 50
+            r, lambda d: d["owner_token_ttl"] == 86400 and d["agent_token_ttl"] == 604800 and d["handover_pct"] == 50
         ),
     ),
     "GET /api/release/check": Happy(

@@ -646,7 +646,7 @@ func (s *apiServer) buildStartFrame(m Member) ([]byte, bool) {
 		}
 		return nil, false
 	}
-	token, err := s.mintMemberToken(m, s.authTokenTTL())
+	token, err := s.mintMemberToken(m, s.agentTokenTTLValue())
 	if err != nil {
 		reconcileLog("START mint failed for %q: %v", m.ID, err)
 		return nil, false

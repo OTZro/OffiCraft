@@ -1491,6 +1491,8 @@ export const zh = {
     paramsSaveError: "沒存成，請再試一次",
     sessionTtl: "登入有效期",
     sessionTtlSub: "登入後多久需要重新輸入密碼",
+    agentTokenTtl: "Agent token 有效期",
+    agentTokenTtlSub: "新啟動的成員與外包工作者多久需要換新 token",
     ttl12h: "12 小時",
     ttl24h: "24 小時",
     ttl7d: "7 天",

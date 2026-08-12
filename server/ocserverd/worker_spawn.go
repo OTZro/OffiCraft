@@ -678,7 +678,7 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 	// mirroring the member token (api_auth.go mintMemberToken burns
 	// DesiredMachineID). So the worker's live SSE now projects hub.MachineOf ==
 	// its host, the same WHERE an agent's does.
-	token, err := s.mintAgentToken(w.ID, warden, s.authTokenTTL())
+	token, err := s.mintAgentToken(w.ID, warden, s.agentTokenTTLValue())
 	if err != nil {
 		s.stampWorkerPlacementBlocked(&w, spawnReasonTokenMint+
 			": minting this worker's session token failed: "+err.Error(), now)

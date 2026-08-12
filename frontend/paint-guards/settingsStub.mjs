@@ -61,7 +61,8 @@ const SERVER_THEME = JSON.parse(
 function settingsDTO() {
   const known = MODE !== "unknown-theme";
   return {
-    token_ttl: 86400,
+    owner_token_ttl: 86400,
+    agent_token_ttl: 604800,
     handover_pct: 50,
     codex_compaction_threshold: 3,
     monitoring_refresh_seconds: 5,

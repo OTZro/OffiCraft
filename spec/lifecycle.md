@@ -58,10 +58,10 @@ retired `var/jwt_secret` fallback file has no successor.
 
 | mint | scope / sub | ttl | machine_id claim |
 |---|---|---|---|
-| `POST /api/login` (owner password → token) | `owner` / the fixed single-tenant owner id `"owner"` | DB setting `auth.token_ttl` (default **86400 s**; owner-adjustable via `PATCH /api/settings`, applies from the next login) | none |
+| `POST /api/login` (owner password → token) | `owner` / the fixed single-tenant owner id `"owner"` | DB setting `auth.owner_token_ttl` (default **86400 s**; owner-adjustable via `PATCH /api/settings`, applies from the next login) | none |
 | `POST /api/tokens/mint` (owner-gated) | `agent` / `body.member_id` | `min(ttl_days*86400, 400 days)` — the 400-day ceiling MUST cap every long-lived agent token | none |
-| `POST /api/bootstrap` (with `member_id`) | `agent` / member id | `token_ttl` | `member.desired_machine_id` (omitted if empty) |
-| reconcile START payload (server-side, per spawn) | `agent` / member id | `token_ttl` | `member.desired_machine_id` |
+| `POST /api/bootstrap` (with `member_id`) | `agent` / member id | DB setting `auth.agent_token_ttl` (default **604800 s**) | `member.desired_machine_id` (omitted if empty) |
+| reconcile START payload (server-side, per spawn) | `agent` / member id | `auth.agent_token_ttl` | `member.desired_machine_id` |
 | machine onboard exec-token | `agent` / warden member id | default **90 days**, still capped at 400 days | none (warden tokens carry no placement claim) |
 | `POST /api/machines/claim` (public; redeems a one-time claim code) | `agent` / warden member id | default **90 days**, still capped at 400 days — the same mint onboard performs | none (warden tokens carry no placement claim) |
 

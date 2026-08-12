@@ -9,8 +9,9 @@ Third conformance batch. What this file pins, MUST by MUST:
   * §1.1 verification: a tampered signature and an alg-downgrade token are
         both refused 401 (black-box crafts the tokens — no secret needed to
         FORGE, only to verify);
-  * §1.3 mint surfaces and TTLs: login (owner scope, token_ttl default
-        86400 s), /api/mint (agent scope, min(ttl_days·86400, 400 d) cap),
+  * §1.3 mint surfaces and TTLs: login (owner scope, owner_token_ttl default
+        86400 s), bootstrap/reconcile (agent_token_ttl default 604800 s),
+        /api/mint (agent scope, min(ttl_days·86400, 400 d) cap),
         machine onboard (90 d default, no machine claim), the one-time
         machine claim-code redemption (same mint), bootstrap-with-
         member (claim = desired_machine_id); wrong password → flat 401;
@@ -48,7 +49,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 SEEDS = HERE.parent / "seeds"
 
 MAX_AGENT_TTL_SECS = 400 * 86400
-DEFAULT_TOKEN_TTL = 86400
+DEFAULT_OWNER_TOKEN_TTL = 86400
+DEFAULT_AGENT_TOKEN_TTL = 604800
 DEFAULT_MACHINE_TTL_SECS = 90 * 86400
 MACHINE_CLAIM_TTL_SECS = 600
 
@@ -105,7 +107,7 @@ def _assert_claims(
 
 
 def test_login_token_claims_and_default_ttl(owner_token) -> None:
-    _assert_claims(owner_token, sub="owner", scope="owner", ttl=DEFAULT_TOKEN_TTL)
+    _assert_claims(owner_token, sub="owner", scope="owner", ttl=DEFAULT_OWNER_TOKEN_TTL)
 
 
 def test_mint_ttl_days_and_400_day_cap(client, owner_token, agent_a) -> None:
@@ -180,7 +182,7 @@ def test_bootstrap_token_carries_desired_machine_claim(
         r.json()["token"],
         sub=member_id,
         scope="agent",
-        ttl=DEFAULT_TOKEN_TTL,
+        ttl=DEFAULT_AGENT_TOKEN_TTL,
         machine_id=machine_id,
     )
     client.post(f"/api/members/{member_id}/deactivate", headers=_auth(owner_token))

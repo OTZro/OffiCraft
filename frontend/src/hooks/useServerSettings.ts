@@ -1,5 +1,5 @@
 // hooks/useServerSettings.ts — the owner-tunable server PARAMETERS
-// (登入有效期 token_ttl / 自動換手門檻 handover_pct) behind /api/settings.
+// (登入與 agent token 有效期 / 自動換手門檻) behind /api/settings.
 //
 // Home is the 設定 page's 參數調整 entry (owner 2026-07-12: parameter knobs
 // belong together in 設定, not scattered in the profile menu). The dropdown used

@@ -39,7 +39,7 @@ type apiServer struct {
 	machineClaims *machineClaimStore
 	secret        []byte
 	// settingsMu guards the LIVE settings snapshot below (passwordHash /
-	// passwordChangedAt / tokenTTL / ctxhigh): the boot-time DB snapshot is
+	// passwordChangedAt / ownerTokenTTL / agentTokenTTL / ctxhigh): the boot-time DB snapshot is
 	// updated IN PLACE by the B3 owner endpoints (set-password /
 	// change-password / PATCH /api/settings) while the SSE stream loop and the
 	// reconcile cadence read it concurrently — reads go through the
@@ -53,9 +53,8 @@ type apiServer struct {
 	// revocation cut: owner-scope tokens with iat before it are refused at the
 	// auth gate (requireAuth) — stamped by change-password.
 	passwordChangedAt int64
-	// tokenTTL is the owner/bootstrap JWT lifetime in seconds (DB
-	// auth.token_ttl setting).
-	tokenTTL int64
+	ownerTokenTTL int64
+	agentTokenTTL int64
 	// outsourceMaxParallel is the global cap on concurrently live outsource
 	// workers (DB task.outsource_max_parallel; M3 owner ruling ③) — read by
 	// the Phase 2 assignment scheduler.
@@ -337,11 +336,16 @@ func (s *apiServer) authPasswordChangedAt() int64 {
 	return s.passwordChangedAt
 }
 
-// authTokenTTL returns the owner/bootstrap JWT lifetime in seconds.
-func (s *apiServer) authTokenTTL() int64 {
+func (s *apiServer) ownerTokenTTLValue() int64 {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
-	return s.tokenTTL
+	return s.ownerTokenTTL
+}
+
+func (s *apiServer) agentTokenTTLValue() int64 {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.agentTokenTTL
 }
 
 // outsourceParallelCap returns the live outsource-worker concurrency cap.

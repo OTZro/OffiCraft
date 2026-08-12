@@ -350,7 +350,8 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 		gauge:                      newMemStore(),
 		machineClaims:              newMachineClaimStore(),
 		secret:                     secret,
-		tokenTTL:                   tokenTTL,
+		ownerTokenTTL:              tokenTTL,
+		agentTokenTTL:              defaultAgentTokenTTL,
 		outsourceMaxParallel:       defaultOutsourceMaxParallel,
 		docCapCharsDuty:            dutyCapCharsDefault,
 		docCapCharsInsight:         contextDocMaxCharsDefault,
@@ -379,7 +380,7 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 // the SPA fallback's template list): the probes work, the business handlers
 // would need the full newAPIServer wiring.
 func defaultRouteSpecs() []RouteSpec {
-	return specsFor(newAPIServer(nil, NewHub(), nil, defaultTokenTTL, "."))
+	return specsFor(newAPIServer(nil, NewHub(), nil, defaultOwnerTokenTTL, "."))
 }
 
 // sseKeepAlive is the TCP keep-alive config applied to every accepted
@@ -506,7 +507,8 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 		fmt.Fprintf(out, "[ocserverd] FATAL: load settings: %v\n", err)
 		return 1
 	}
-	api := newAPIServer(dal, NewHub(), auth.secret, auth.tokenTTL, ".")
+	api := newAPIServer(dal, NewHub(), auth.secret, auth.ownerTokenTTL, ".")
+	api.agentTokenTTL = auth.agentTokenTTL
 	api.passwordHash = auth.passwordHash
 	api.passwordChangedAt = auth.passwordChangedAt
 	api.ctxhigh = auth.ctxhigh

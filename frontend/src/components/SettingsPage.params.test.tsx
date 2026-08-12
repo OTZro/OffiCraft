@@ -56,7 +56,19 @@ describe("SettingsPage · 參數調整", () => {
       target: { value: "604800" },
     });
     await waitFor(async () => {
-      expect((await api.getServerSettings()).tokenTtl).toBe(604800);
+      const settings = await api.getServerSettings();
+      expect(settings.ownerTokenTtl).toBe(604800);
+      expect(settings.agentTokenTtl).toBe(604800);
+    });
+  });
+
+  it("changing the agent TTL leaves the login TTL unchanged", async () => {
+    const utils = await openParams();
+    fireEvent.change(utils.getByLabelText(s.agentTokenTtl), { target: { value: "2592000" } });
+    await waitFor(async () => {
+      const settings = await api.getServerSettings();
+      expect(settings.agentTokenTtl).toBe(2592000);
+      expect(settings.ownerTokenTtl).toBe(86400);
     });
   });
 

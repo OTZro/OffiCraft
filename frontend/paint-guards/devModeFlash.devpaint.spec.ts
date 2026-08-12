@@ -74,7 +74,8 @@ const isOffice = (f: FrameSample) => f.bg === OFFICE_BG_RGB;
  * what the server said. */
 function settingsDTO() {
   return {
-    token_ttl: 86400,
+    owner_token_ttl: 86400,
+    agent_token_ttl: 604800,
     handover_pct: 50,
     codex_compaction_threshold: 3,
     monitoring_refresh_seconds: 5,

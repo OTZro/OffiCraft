@@ -2643,7 +2643,7 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Edit settings (login TTL / handover threshold); live immediately.
+         * Edit settings (owner-login and agent token TTLs / handover threshold); live immediately.
          * @description Partially update the org-adjustable settings (owner or admin agent — T-6020). Only supplied
          *     fields change; a change is durable (DB) AND live immediately — `token_ttl`
          *     applies from the next login, `handover_pct` applies from the next context
@@ -6626,32 +6626,7 @@ export interface components {
         };
         /**
          * SettingsDTO
-         * @description The org-adjustable settings surface (`GET /api/settings`; owner or admin agent since T-6020). `token_ttl` —
-         *     the owner-login JWT lifetime (seconds). `handover_pct` — the context
-         *     handover threshold. `outsource_max_parallel` — the global cap on
-         *     concurrently live outsource workers (-1 = unlimited, 0 pauses assignment).
-         *     `updater_receive_beta` — whether the GitHub-release update check also
-         *     admits prereleases (default false: official releases only).
-         *     `updater_auto_update` — arms unattended background self-upgrade to the
-         *     newest admissible GitHub release (default false: upgrading stays an
-         *     explicit owner action). `org_name` — the studio display name ("" = unset).
-         *     `owner_name` — the owner's display nickname ("" = unset). `display_theme` /
-         *     `display_language` — the owner's cockpit visual prefs ("" = unset).
-         *     `display_wide` — whether the cockpit uses the wide layout (default false =
-         *     the narrow centred column). `doc_cap_chars_duty` / `doc_cap_chars_insight` /
-         *     `doc_cap_chars_learning` / `doc_cap_chars_manual_sop` /
-         *     `doc_cap_chars_manual_learnings` (T-ae38, manual split in two by T-30f1) — the
-         *     FIVE independent size caps on the accumulating documents, in CHARACTERS
-         *     (Unicode code points): a role's Duty (role definition), Insight and Learning
-         *     (lessons), plus a task manual's sop_md and learnings, which are now judged by
-         *     TWO separate knobs rather than one shared manual cap. Each knob's shipped
-         *     default is the `default` on its own field below — Duty's is deliberately much
-         *     smaller than the other four's, and every one of them is owner-adjustable, so no
-         *     prose here restates a number. EVERY key carries a suffix on purpose:
-         *     `get_settings` shows an agent key NAMES and no descriptions, so an unsuffixed
-         *     `doc.cap_chars` — or a bare `doc.cap_chars.manual` sitting beside the two it
-         *     was split into — reads as a global default and would be adjusted by someone
-         *     believing they had moved all of them.
+         * @description The org-adjustable settings surface (`GET /api/settings`; owner or admin agent). `owner_token_ttl` controls owner-login JWTs; `agent_token_ttl` controls member and outsource-worker JWTs. They are independent and apply to newly minted tokens. Existing deployments migrate their former shared `auth.token_ttl` value into both successor settings, preserving current behaviour.
          */
         SettingsDTO: {
             /**
@@ -6747,8 +6722,18 @@ export interface components {
              * @default
              */
             push_contact_email: string;
-            /** Token Ttl */
-            token_ttl: number;
+            /**
+             * Agent Token Ttl
+             * @description Agent and outsource-worker JWT lifetime in seconds. Fresh installs default to 7 days.
+             * @default 604800
+             */
+            agent_token_ttl: number;
+            /**
+             * Owner Token Ttl
+             * @description Owner-login JWT lifetime in seconds. Fresh installs default to 24 hours.
+             * @default 86400
+             */
+            owner_token_ttl: number;
             /**
              * Updater Auto Update
              * @default false
@@ -6853,8 +6838,10 @@ export interface components {
             push_contact_email?: string | null;
             /** Outsource Max Parallel */
             outsource_max_parallel?: number | null;
-            /** Token Ttl */
-            token_ttl?: number | null;
+            /** Agent Token Ttl */
+            agent_token_ttl?: number | null;
+            /** Owner Token Ttl */
+            owner_token_ttl?: number | null;
             /** Updater Auto Update */
             updater_auto_update?: boolean | null;
             /** Updater Receive Beta */

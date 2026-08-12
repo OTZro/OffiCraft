@@ -599,6 +599,8 @@ export const MESSAGE_KEYS: readonly string[] = [
   "settings.addRoleError",
   "settings.addRoleName",
   "settings.addRoleSubmit",
+  "settings.agentTokenTtl",
+  "settings.agentTokenTtlSub",
   "settings.assigneeClear",
   "settings.assigneeCopies",
   "settings.assigneeCopiesDecrease",

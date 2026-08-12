@@ -1272,7 +1272,8 @@ function findWire(id: string): WireMember {
 let mockPasswordSet = true;
 let mockPassword = "mock-password";
 const DEFAULT_MOCK_SETTINGS = {
-  token_ttl: 86400,
+  owner_token_ttl: 86400,
+  agent_token_ttl: 604800,
   handover_pct: 50,
   codex_compaction_threshold: 3,
   monitoring_refresh_seconds: 5,
@@ -3854,13 +3855,16 @@ export const mockApi: Api = {
     patch: ServerSettingsPatch
   ): Promise<ServerSettingsView> {
     // Validate BOTH fields before writing anything (server parity).
-    if (patch.tokenTtl !== undefined && !TOKEN_TTL_CHOICES.has(patch.tokenTtl)) {
+    if (patch.ownerTokenTtl !== undefined && !TOKEN_TTL_CHOICES.has(patch.ownerTokenTtl)) {
       throw new ApiError(
         "http 422 for PATCH /api/settings",
         422,
         "validation_error",
-        "token_ttl must be one of 43200, 86400, 604800, 2592000 seconds"
+        "owner_token_ttl must be one of 43200, 86400, 604800, 2592000 seconds"
       );
+    }
+    if (patch.agentTokenTtl !== undefined && !TOKEN_TTL_CHOICES.has(patch.agentTokenTtl)) {
+      throw new ApiError("http 422 for PATCH /api/settings", 422, "validation_error", "agent_token_ttl must be one of 43200, 86400, 604800, 2592000 seconds");
     }
     if (
       patch.handoverPct !== undefined &&
@@ -3994,8 +3998,11 @@ export const mockApi: Api = {
         "display_language must be one of zh, en"
       );
     }
-    if (patch.tokenTtl !== undefined) {
-      mockServerSettings.token_ttl = patch.tokenTtl;
+    if (patch.ownerTokenTtl !== undefined) {
+      mockServerSettings.owner_token_ttl = patch.ownerTokenTtl;
+    }
+    if (patch.agentTokenTtl !== undefined) {
+      mockServerSettings.agent_token_ttl = patch.agentTokenTtl;
     }
     if (patch.handoverPct !== undefined) {
       mockServerSettings.handover_pct = patch.handoverPct;

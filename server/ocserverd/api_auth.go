@@ -46,7 +46,7 @@ func (s *apiServer) HandleLoginApiLoginPost(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusUnauthorized, "auth not configured")
 		return
 	}
-	ttl := s.authTokenTTL()
+	ttl := s.ownerTokenTTLValue()
 	token, err := mintJWT(wireOwnerID, "owner", ttl, s.secret, time.Now().Unix(), "")
 	if err != nil {
 		internalError(w, err)
@@ -120,7 +120,7 @@ func (s *apiServer) HandleBootstrapApiBootstrapPost(w http.ResponseWriter, r *ht
 	}
 	var token *string
 	if member != nil && len(s.secret) > 0 {
-		minted, err := s.mintMemberToken(*member, s.authTokenTTL())
+		minted, err := s.mintMemberToken(*member, s.agentTokenTTLValue())
 		if err != nil {
 			internalError(w, err)
 			return

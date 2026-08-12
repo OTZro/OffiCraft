@@ -17,7 +17,7 @@
       "name": "get_settings"
     },
     {
-      "description": "Edit settings (login TTL / handover threshold); live immediately.",
+      "description": "Edit settings (owner-login and agent token TTLs / handover threshold); live immediately.",
       "inputSchema": {
         "$defs": {
           "ThemeBundleDTO": {
@@ -284,7 +284,7 @@
             "description": "The push contact address (T-8a82) \u2014 trimmed, max 254 runes; \"\" clears it back to unset and stops all Web Push delivery. A value must be a single `local@domain` address whose domain is a real public one: a malformed address, or one on a reserved suffix (.local, .localhost, .internal, .test, .invalid, .example), is a 422 \u2014 those are exactly the values the push gateways reject with BadJwtToken, which would take push down silently.",
             "title": "Push Contact Email"
           },
-          "token_ttl": {
+          "agent_token_ttl": {
             "anyOf": [
               {
                 "type": "integer"
@@ -293,7 +293,18 @@
                 "type": "null"
               }
             ],
-            "title": "Token Ttl"
+            "title": "Agent Token Ttl"
+          },
+          "owner_token_ttl": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Token Ttl"
           },
           "updater_auto_update": {
             "anyOf": [

@@ -616,7 +616,8 @@ def test_t6020_opened_tool_is_callable_by_the_admin_agent(client, admin_agent) -
     assert result.get("isError") is not True, (
         f"the RBAC choke still refuses the admin agent: {r.text}"
     )
-    assert "token_ttl" in result["structuredContent"], r.text
+    assert "owner_token_ttl" in result["structuredContent"], r.text
+    assert "agent_token_ttl" in result["structuredContent"], r.text
 
 
 def test_t6020_opened_tool_is_refused_for_a_plain_agent(client, agent_a) -> None:

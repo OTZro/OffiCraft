@@ -600,6 +600,8 @@ var messageKeys = map[string]bool{
 	"settings.addRoleError":                    true,
 	"settings.addRoleName":                     true,
 	"settings.addRoleSubmit":                   true,
+	"settings.agentTokenTtl":                   true,
+	"settings.agentTokenTtlSub":                true,
 	"settings.assigneeClear":                   true,
 	"settings.assigneeCopies":                  true,
 	"settings.assigneeCopiesDecrease":          true,

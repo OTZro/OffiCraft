@@ -119,34 +119,41 @@ func TestLoadAuthSettingsFreshInstallMintsSecret(t *testing.T) {
 	}
 }
 
-func TestLoadAuthSettingsTokenTTLPrecedence(t *testing.T) {
-	// DB value wins over oc.toml.
+func TestLoadAuthSettingsSplitsLegacyTokenTTLWithoutChangingDeployedBehavior(t *testing.T) {
 	d := newTestDAL(t)
-	if err := d.PutSetting(settingTokenTTL, "7200"); err != nil {
+	if err := d.PutSetting(settingLegacyTokenTTL, "604800"); err != nil {
 		t.Fatal(err)
 	}
-	cfg := defaultConfig()
-	cfg.Auth.TokenTTL, cfg.Auth.TokenTTLSet = 3600, true
-	if got, _ := loadForTest(t, d, cfg); got.tokenTTL != 7200 {
-		t.Fatalf("DB token_ttl must win: %d", got.tokenTTL)
+	got, _ := loadForTest(t, d, defaultConfig())
+	if got.ownerTokenTTL != 604800 || got.agentTokenTTL != 604800 {
+		t.Fatalf("legacy value must preserve both behaviours: %+v", got)
 	}
+	for _, key := range []string{settingOwnerTokenTTL, settingAgentTokenTTL} {
+		if v, err := d.GetSetting(key); err != nil || v == nil || *v != "604800" {
+			t.Fatalf("legacy TTL must durably migrate to %s: %v %v", key, v, err)
+		}
+	}
+	// A later independent edit wins and the legacy value only fills the missing
+	// successor; upgrades never overwrite an already-split deployment.
+	if err := d.PutSetting(settingOwnerTokenTTL, "86400"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = loadForTest(t, d, defaultConfig())
+	if got.ownerTokenTTL != 86400 || got.agentTokenTTL != 604800 {
+		t.Fatalf("successors must remain independent: %+v", got)
+	}
+}
 
-	// An explicitly written oc.toml token_ttl migrates into the DB.
-	d2 := newTestDAL(t)
-	if got, _ := loadForTest(t, d2, cfg); got.tokenTTL != 3600 {
-		t.Fatalf("explicit oc.toml token_ttl must apply: %d", got.tokenTTL)
+func TestLoadAuthSettingsFreshDefaultsSplitOwnerAndAgentTTL(t *testing.T) {
+	d := newTestDAL(t)
+	got, _ := loadForTest(t, d, defaultConfig())
+	if got.ownerTokenTTL != defaultOwnerTokenTTL || got.agentTokenTTL != defaultAgentTokenTTL {
+		t.Fatalf("fresh defaults must split owner and agent TTLs: %+v", got)
 	}
-	if v, err := d2.GetSetting(settingTokenTTL); err != nil || v == nil || *v != "3600" {
-		t.Fatalf("explicit oc.toml token_ttl must migrate into the DB: %v %v", v, err)
-	}
-
-	// The convention default is NOT written (absent key = code default).
-	d3 := newTestDAL(t)
-	if got, _ := loadForTest(t, d3, defaultConfig()); got.tokenTTL != defaultTokenTTL {
-		t.Fatalf("default token_ttl expected: %d", got.tokenTTL)
-	}
-	if v, err := d3.GetSetting(settingTokenTTL); err != nil || v != nil {
-		t.Fatalf("the default must not be written to the DB: %v %v", v, err)
+	for _, key := range []string{settingOwnerTokenTTL, settingAgentTokenTTL} {
+		if v, err := d.GetSetting(key); err != nil || v != nil {
+			t.Fatalf("fresh default must stay implicit for %s: %v %v", key, v, err)
+		}
 	}
 }
 
@@ -337,7 +344,8 @@ func TestLoginVerifiesAgainstMigratedHash(t *testing.T) {
 	cfg.Auth.Password = "old-password"
 	auth, _ := loadForTest(t, d, cfg)
 
-	api := newAPIServer(d, NewHub(), auth.secret, auth.tokenTTL, "../..")
+	api := newAPIServer(d, NewHub(), auth.secret, auth.ownerTokenTTL, "../..")
+	api.agentTokenTTL = auth.agentTokenTTL
 	api.passwordHash = auth.passwordHash
 	h, err := buildHandler(specsFor(api), auth.secret, d.GetMember, nil)
 	if err != nil {
@@ -535,11 +543,11 @@ func TestLoadAuthSettingsFailsLoudOnCorruptValues(t *testing.T) {
 	}
 
 	d2 := newTestDAL(t)
-	if err := d2.PutSetting(settingTokenTTL, "not-a-number"); err != nil {
+	if err := d2.PutSetting(settingOwnerTokenTTL, "not-a-number"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := loadAuthSettings(d2, defaultConfig(), func(string) {}); err == nil {
-		t.Fatal("a corrupt token_ttl must fail loud")
+		t.Fatal("a corrupt owner_token_ttl must fail loud")
 	}
 }
 
