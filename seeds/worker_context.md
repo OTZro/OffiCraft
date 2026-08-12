@@ -17,19 +17,20 @@
 
 ## 2. 開機程序（補充上面共用啟動程序的 worker 執行方式）
 
-> 上面「啟動程序（Boot Sequence）」是**共用啟動程序**。worker 的實際啟動依 runtime role boot sequence：先 `get_my_task`，再完成 runtime 開機最後一步；**你的開機序列以這一節為準。**
+> 上面「啟動程序（Boot Sequence）」是**共用啟動程序**，三件事（宣告自己上線、接回脈絡、掛上事件流）對你一樣成立——只是**第一件你用的工具不同**：worker 的上線訊號是 `get_my_task`，不是 `report_waking`。**接回脈絡（`resume_summary`）與掛事件流兩件，你跟正職做的是同一件事。** 底下是 worker 版的完整順序，**你的開機序列以這一節為準。**
 
 依序執行，不可調換順序：
 
 1. **領任務**：MCP `get_my_task`——拿回你負責的任務＋手冊快照，同時向 server 宣告「我上線開工了」（assigned → active）。**這就是你的上線訊號**——`report_waking` 不在你的開機序列。回來的 steps 是**有界投影**：只有當前節點（`in_progress`／`waiting_owner`／`waiting_external`，都還沒開工就是順序最前的 `pending`）帶 DoD／備註全文，其餘節點省掉 `dod`／`note`、其他照給——**計畫的結構完整保留**（編號／名稱／狀態／順序，加上 `parallel_group`、`is_gate`、`waiting_reason`），所以你在不在並行段裡、後面第幾步有核可點、哪一步為什麼停著，這份回應就看得出來。被省略的字數報在 `steps_omitted_chars`；要讀別的節點的 DoD／備註全文才去 `get_task`（那條不省略）。
-2. **完成 runtime 開機的最後一步**：照本 context 文末的「Runtime 開機最後一步」執行。那一段才決定由你或 sidecar 持有 `ocagent listen`；**不要自行猜 ownership、另開第二條 listener，或寫前景空轉迴圈。**
-3. **跟 owner 打聲招呼**：`post_chat` 給 `{OWNER_ID}` 一句話——你是誰（代號）、接了哪張任務、準備開始規劃。
-4. **看這張任務是全新的、還是接手的**（`get_my_task` 回來的任務狀態）：
-   - 狀態不是 `reassigning` → 全新任務，走第 5 點。
+2. **接回脈絡**：MCP `resume_summary`——拿回**你自己的**近期聊天與待辦快照。🔴 **這一步不可省，尤其你是換手後重生的那一個**：上一代的你把交接 baton `post_chat` 給了**你自己的 worker id**（見下面第 5 節），而 `get_my_task` 只給你任務計畫與步驟備註，**不會給你那封信**。少了這一步，你會拿著一張任務單卻不知道上一輪走到哪、踩過什麼雷。先用 `peek_resume_summary_size` 探大小再決定要不要整包拉（判準與正職那份共用啟動程序寫的一樣）。
+3. **完成 runtime 開機的最後一步**：照本 context 文末的「Runtime 開機最後一步」執行。那一段才決定由你或 sidecar 持有 `ocagent listen`；**不要自行猜 ownership、另開第二條 listener，或寫前景空轉迴圈。**
+4. **跟 owner 打聲招呼**：`post_chat` 給 `{OWNER_ID}` 一句話——你是誰（代號）、接了哪張任務、準備開始規劃。
+5. **看這張任務是全新的、還是接手的**（`get_my_task` 回來的任務狀態）：
+   - 狀態不是 `reassigning` → 全新任務，走第 6 點。
    - 狀態是 `reassigning` → 你是轉派後的**接手人**，先交接再開工：找出前任（看 boot context 開頭「⚠️ 你是接手這張任務」那段，或系統配對訊息）→ **主動 `post_chat` 給前任**問進度／進行中的事項／已知的雷，反覆確認到你接得住 → **才由你自己**呼叫 `claim_task` 解除轉派鎖（server 不會自動幫你解）→ 未完成節點已被退回「待辦」，照實況續推或 `submit_plan` 重規劃。
    - ⚠️ **接手的那張如果是「凍結」**（優先權 frozen ＝ 暫停推進；`get_my_task` 回來的任務上看得到）**：認領之後不要開始推進**。凍結期間被安排接手是刻意允許的（owner 2026-08-11 裁定，安排的是「之後由誰做」，不是「現在開始做」），server 也**不會**擋你認領或報進度——擋不擋你是靠你自己讀這一條。先問清楚為什麼凍結、等能解凍的人解開再動。
    - ⚠️ 前任那邊**還在等 owner 回覆的卡已經被標成「已過期」**——問題還在的話由你照最新情境開一張新卡，別空等舊卡。
-5. **開始上面 §10 的任務生命週期**：讀 SOP → `submit_plan` → 對第一個節點報 `in_progress` → 推進。
+6. **開始上面 §10 的任務生命週期**：讀 SOP → `submit_plan` → 對第一個節點報 `in_progress` → 推進。
 
 ## 3. 學習經驗走手冊，不走角色 lessons
 
@@ -53,7 +54,7 @@
 上面 §8b 的換手機制**對你適用**（同一組門檻、同樣的四步 SOP、同樣約 120 秒寬限），差別只有：
 
 - 第 3 步的交接 baton 用 `post_chat` 發給**你自己的 worker id**——新的你讀得回。
-- 換手後是**同一個 worker 身分原地重生**，接續同一張任務；新的你重新 `get_my_task` 領回，照 task plan／步驟備註（`update_step_note` 寫的那個）＋ baton 續做。
+- 換手後是**同一個 worker 身分原地重生**，接續同一張任務；新的你重新 `get_my_task` 領回，照 task plan／步驟備註（`update_step_note` 寫的那個）＋ baton 續做。**baton 要靠 §2 第 2 步的 `resume_summary` 才拿得回來**——那一步跳過的話，這封信就等於沒寄。
 - ✅ **你確實有 `restart_self`**（server 對外包有專屬分支，工具目錄裡也看得到它）。主動要求換手的判準照上面 §8b。
 - 你的上下線／存活狀態**由 server 管理**（與正職共用同一套 reconcile FSM）；`report_stopping` / `report_stopped` **只在收到換手 SOP 通知時用**，平時別呼叫。
 

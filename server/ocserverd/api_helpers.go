@@ -189,6 +189,32 @@ func (s *apiServer) resolveMember(memberID string) (*Member, error) {
 	return m, nil
 }
 
+// resolveResumeSummaryTarget is resolveMember WITHOUT the kind='outsource'
+// fold, for the ONE verb the owner released to workers: reading a worker's
+// resume summary from the cockpit (T-4595, ruling rc-64b712bfc703 option ①).
+//
+// WHY A SECOND RESOLVER RATHER THAN WIDENING resolveMember: that function has
+// 16 production call sites across five files, so dropping its outsource arm
+// would open every member verb to ow- ids at once — account and token, member
+// lifecycle, machines, webhooks. The owner picked the blast radius of one.
+// The shape is not invented here: api_members.go already keeps a sibling
+// resolver that deliberately does not fold outsource away, and GetMember has
+// the same precedent for a worker reading its own row.
+//
+// It keeps BOTH of resolveMember's other refusals: an absent row and a
+// soft-removed one are still errNotFound, so a released worker's summary stops
+// being readable at exactly the moment its roster row goes.
+func (s *apiServer) resolveResumeSummaryTarget(memberID string) (*Member, error) {
+	m, err := s.dal.GetMember(memberID)
+	if err != nil {
+		return nil, err
+	}
+	if m == nil || m.RosterStatus == RosterStatusRemoved {
+		return nil, errNotFound
+	}
+	return m, nil
+}
+
 // resolveMachine returns the live ACTIVE kind=="warden" member whose id IS
 // machineID (errNotFound otherwise).
 func (s *apiServer) resolveMachine(machineID string) (*Member, error) {
