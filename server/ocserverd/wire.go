@@ -722,9 +722,11 @@ type lessonsPatchResultDTO struct {
 // runes, the cap's unit since T-3aeb) + sha256 (hex) are verification anchors
 // over the RESULTING learnings text so the caller can confirm the write
 // without re-reading the full doc;
-// applied_edits is the count that ACTUALLY changed the doc (a no-op does not
-// count). No owner_id/is_default — a manual's learnings is not a per-owner
-// overlay the way a role's lessons doc is.
+// applied_edits is the count of edits that changed the text THEY were handed (a
+// no-op does not count) — NOT a report on whether the document ended up
+// different from where it started, which a batch that undoes itself does not.
+// Compare sha256 to answer that. No owner_id/is_default — a manual's learnings
+// is not a per-owner overlay the way a role's lessons doc is.
 type taskLearningsPatchResultDTO struct {
 	TypeKey      string `json:"type_key"`
 	AppliedEdits int    `json:"applied_edits"`

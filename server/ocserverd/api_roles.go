@@ -692,18 +692,51 @@ func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.
 		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "lessons doc", current.Text, next))
 		return
 	}
-	if err := s.dal.SaveWithDocumentHistory("lessons", roleKey+"::"+taskType, currentActor(r), lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
-		return putLessonsOn(ex, Lessons{
-			RoleKey:    roleKey,
-			TaskType:   taskType,
-			Text:       next,
-			Tombstoned: false,
-		})
-	}); err != nil {
-		internalError(w, err)
-		return
+	// 🔴 A batch that changed NOTHING must not reach the write. The question
+	// that decides it is whether `next` differs from the stored doc — NOT how
+	// many edits ApplyDocEdits counted. Those are different questions, and the
+	// difference is reachable: `applied` counts an edit that changed the
+	// INTERMEDIATE result it was handed, so two uniquely-anchored edits that
+	// undo one another (anchor → middle, then middle → anchor) report
+	// applied == 2 over a document that never moved. A gate written as
+	// `applied > 0` passes that batch straight through.
+	//
+	// What the write accomplishes when the text is unchanged is RETAINING A
+	// HISTORY VERSION of text that is not being replaced — and document history
+	// keeps only the three most recent versions per doc (dal.go,
+	// documentHistoryKeep = 3). Three such patches therefore evict every
+	// restorable version the owner had, which is the owner's undo path in the
+	// cockpit, and they do it with no signal at all: the doc still reads the
+	// same, the receipt still answers 200, nothing goes red. That is worse than
+	// a loud failure, and both ways in are reached by accident rather than by
+	// abuse — agents send `old == new` batches deliberately as a cheap "count
+	// the occurrences / read back sha256+size_chars without pulling the whole
+	// doc into context" probe, which is a legitimate use of this endpoint's
+	// receipt and must stay one, and an agent that edits a line then reverts it
+	// within one call arrives at the same place carrying applied == 2.
+	//
+	// The receipt below is deliberately OUTSIDE this gate and unchanged: same
+	// fields, same values (whatever applied_edits counted, plus the anchors over
+	// the doc as it stands), so callers cannot tell the two paths apart by
+	// shape. The write and the SSE delta are what is skipped — nothing was
+	// written, so nothing is announced. update_task_manual and update_role
+	// already gate their retention on "did this field actually change"
+	// (roleDefHistoryStreams / taskManualHistoryStreams); the anchor-patch seams
+	// were the outliers.
+	if next != current.Text {
+		if err := s.dal.SaveWithDocumentHistory("lessons", roleKey+"::"+taskType, currentActor(r), lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
+			return putLessonsOn(ex, Lessons{
+				RoleKey:    roleKey,
+				TaskType:   taskType,
+				Text:       next,
+				Tombstoned: false,
+			})
+		}); err != nil {
+			internalError(w, err)
+			return
+		}
+		s.hub.Publish("lessons", "patch", "lessons", wireOwnerID+"::"+roleKey+"::"+taskType, nil, audienceOwnerOnly(), requestTrigger(r))
 	}
-	s.hub.Publish("lessons", "patch", "lessons", wireOwnerID+"::"+roleKey+"::"+taskType, nil, audienceOwnerOnly(), requestTrigger(r))
 	sum := sha256.Sum256([]byte(next))
 	writeJSON(w, http.StatusOK, lessonsPatchResultDTO{
 		RoleKey:       roleKey,

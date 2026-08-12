@@ -334,17 +334,28 @@ func (s *apiServer) HandlePatchInsightApiInsightRoleKeyPatchPost(w http.Response
 		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "insight doc", current.Text, next))
 		return
 	}
-	if err := s.dal.SaveWithDocumentHistory("insight", roleKey, currentActor(r), insightSnapshotIn(roleKey), func(ex sqlExecer) error {
-		return putInsightOn(ex, Insight{
-			RoleKey:    roleKey,
-			Text:       next,
-			Tombstoned: false,
-		})
-	}); err != nil {
-		internalError(w, err)
-		return
+	// 🔴 `next` byte-identical to the stored doc → there is nothing to write and
+	// nothing to retain. The gate is that text comparison and NOT applied > 0:
+	// `applied` counts edits that moved the INTERMEDIATE result, so a batch
+	// whose edits undo one another reports applied != 0 over a document that
+	// never changed. Writing anyway burns one of the THREE document history
+	// slots on a snapshot of text nobody replaced, silently shortening the
+	// owner's undo path. Full reasoning at the patch_lessons twin (api_roles.go,
+	// HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost). The receipt below
+	// stays outside the gate and unchanged.
+	if next != current.Text {
+		if err := s.dal.SaveWithDocumentHistory("insight", roleKey, currentActor(r), insightSnapshotIn(roleKey), func(ex sqlExecer) error {
+			return putInsightOn(ex, Insight{
+				RoleKey:    roleKey,
+				Text:       next,
+				Tombstoned: false,
+			})
+		}); err != nil {
+			internalError(w, err)
+			return
+		}
+		s.hub.Publish("insight", "patch", "insight", wireOwnerID+"::"+roleKey, nil, audienceOwnerOnly(), requestTrigger(r))
 	}
-	s.hub.Publish("insight", "patch", "insight", wireOwnerID+"::"+roleKey, nil, audienceOwnerOnly(), requestTrigger(r))
 	sum := sha256.Sum256([]byte(next))
 	writeJSON(w, http.StatusOK, insightPatchResultDTO{
 		RoleKey:       roleKey,

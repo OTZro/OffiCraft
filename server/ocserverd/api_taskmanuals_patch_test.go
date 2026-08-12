@@ -265,9 +265,11 @@ func TestPatchTaskLearningsWipeNeedsAllowShrink(t *testing.T) {
 }
 
 // TestPatchTaskLearningsAppliedEditsCountsWhatLanded: applied_edits reports the
-// edits that ACTUALLY changed the doc, so "0 applied" is expressible and a
-// no-op cannot masquerade as a success (the patch_lessons pre-fix bug reported
-// len(edits), structurally incapable of being 0).
+// edits that changed the text THEY were handed, so "0 applied" is expressible
+// and a no-op cannot masquerade as a success (the patch_lessons pre-fix bug
+// reported len(edits), structurally incapable of being 0). It is NOT a report
+// on whether the document moved — a batch that undoes itself counts every edit
+// over learnings that end byte-identical; sha256 is what answers that.
 func TestPatchTaskLearningsAppliedEditsCountsWhatLanded(t *testing.T) {
 	api := newTasksTestServer(t)
 	const seeded = "line one\nline two\n"
