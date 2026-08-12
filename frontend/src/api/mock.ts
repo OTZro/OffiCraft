@@ -1265,6 +1265,31 @@ function findWire(id: string): WireMember {
   return w;
 }
 
+/** Resume-summary target parity with the server (T-4595): the ONE member verb
+ * the owner released to workers resolves member ∪ outsource — the server's
+ * `resolveResumeSummaryTarget` is deliberately `resolveMember` WITHOUT the
+ * kind='outsource' fold, so an `ow-` id is a 200 here, not a 404.
+ *
+ * Same shape as `findScheduleRecipient` (the other verb with this resolver) on
+ * purpose: two resolvers for one rule already invites drift; a third spelling
+ * would guarantee it.
+ *
+ * 🔴 A NARROWER RESOLVER IS NOT THE ONLY THING THIS PARITY NEEDS. Letting the
+ * id through is worth nothing while the snapshot's own task filter still
+ * excludes the worker's rows — the card would just trade "讀取喚醒快照失敗" for
+ * an empty task list, which is a second wrong picture wearing the first one's
+ * clothes. See the executor filter in getMemberResumeSummary. */
+function findResumeSummaryTarget(memberId: string): void {
+  if (wireMembers.some((m) => m.id === memberId)) return;
+  if (outsourceWorkers.some((w) => w.id === memberId)) return;
+  throw new ApiError(
+    `http 404 for /api/members/${memberId}/resume-summary`,
+    404,
+    "not_found",
+    `member '${memberId}' not found`
+  );
+}
+
 // ── mock owner credential + settings state (B3) ─────────────────────────────
 // The mock boots "installed": password set (AuthGate's mock mode never shows
 // the first-run page anyway), default settings. Same validation rules as the
@@ -2241,7 +2266,10 @@ export const mockApi: Api = {
   async getMemberResumeSummary(
     memberId: string
   ): Promise<MemberResumeSummaryView> {
-    findWire(memberId); // 404 parity: an unknown member throws
+    // 404 parity: an unknown id throws — but an `ow-` id is NOT unknown here
+    // (this is the one member verb released to workers). See
+    // findResumeSummaryTarget.
+    findResumeSummaryTarget(memberId);
 
     // Mirrors the CHAT/TASKS/OVERVIEW SUBSET of the server's
     // resumeSnapshotParts(actor=memberId): a BOUNDED recent-chat window
@@ -2265,11 +2293,17 @@ export const mockApi: Api = {
       .sort((a, b) => a.ts - b.ts);
     const chat = chatAll.slice(-RESUME_CHAT_N).map((m) => ({ ...m }));
 
+    // EXECUTOR MATCH IS BY ID ALONE — no executorKind gate. That mirrors the
+    // server exactly: `resumeTasksFor` → `ListOpenTasksByExecutor` filters on
+    // `executor_id = ?` and nothing else (dal_tasks.go), because a task's
+    // executorKind and executorId always move together (assignment and
+    // reassign write both), so the kind adds no discrimination for a member —
+    // it only ever SUBTRACTS the rows of an `ow-` worker. With the id now let
+    // through above, keeping it would hand every worker an empty task list
+    // while claiming to mirror the server.
     const openTasksAll = tasks.filter(
       (t) =>
-        t.executorKind === "member" &&
-        t.executorId === memberId &&
-        !TERMINAL_TASK_STATUSES.has(t.status)
+        t.executorId === memberId && !TERMINAL_TASK_STATUSES.has(t.status)
     );
     const openTasksSorted = [...openTasksAll].sort(
       (a, b) => b.updatedTs - a.updatedTs

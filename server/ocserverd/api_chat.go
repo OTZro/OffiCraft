@@ -1256,8 +1256,13 @@ func (s *apiServer) HandlePeekResumeSummarySizeApiResumeSummarySizeGet(w http.Re
 // unmodified resumeSnapshotParts(actor) the self-scoped route uses, called
 // with actor=member_id — no near-copy of the assembly, so this payload can
 // never drift from what resume_summary itself would carry for that member.
-// 404 if member_id does not resolve to a live roster member (resolveMember
-// — the same floor every other /api/members/{member_id}/... verb uses).
+// 404 if member_id does not resolve to a LIVE roster row — but the resolver is
+// resolveResumeSummaryTarget, NOT resolveMember: this is the ONE member verb
+// the owner released to workers (T-4595), so the kind='outsource' fold that
+// every other /api/members/{member_id}/... verb keeps is deliberately absent
+// here and an `ow-` id gets a 200. resolveMember's other two refusals (absent
+// row, soft-removed row) still apply, so a released worker's summary stops
+// being readable the moment its roster row goes.
 // The original /api/resume-summary route and its identity lock (actor :=
 // currentActor(r), caller = target, always) are untouched by this addition.
 func (s *apiServer) HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryGet(w http.ResponseWriter, r *http.Request, memberId string) {
