@@ -114,10 +114,12 @@ const (
 //  2. 使用者自訂 — the owner's additive block, skipped entirely when blank;
 //  3. the persona — staff read 角色說明 → 長期筆記 here. A worker has no role,
 //     so it reads NOTHING here. That is the entire difference.
-//  4. 啟動程序   — the boot sequence for the worker's OWN runtime, plus that
-//     runtime's execution-environment tail. Recency-authoritative, LAST.
+//  4. 啟動程序   — the boot-sequence seed for the worker's OWN runtime, which
+//     carries that runtime's 執行環境 section. Recency-authoritative, LAST.
 //
-// Not one word is written for outsource readers anywhere in this document.
+// Not one word is written for outsource readers anywhere in this document; the
+// assembled result is byte-for-byte the staff fold with slot 3 taken out, and
+// TestWorkerBootContextIsTheStaffFoldMinusThePersona asserts exactly that.
 //
 // WHAT THIS ASSEMBLY NO LONGER CONTAINS, and why (all T-4595):
 //
@@ -143,6 +145,12 @@ const (
 //     block have staff equivalents that are NOT in a boot context either: model
 //     and effort ride the runtime's own status reporting, and the owner's chat
 //     id is substituted into the shared seed's {OWNER_ID} placeholders.
+//   - the outsource-only RUNTIME TAIL (「# Runtime 開機最後一步」). It was a
+//     second, hand-written copy of the 執行環境 section the runtime's own
+//     boot-sequence seed already carries — listener ownership, the disabled
+//     interactive prompt, the automatic context reporting — for an audience
+//     staff does not have. Two copies of one instruction can only drift, and a
+//     tail written for outsource readers is exactly what "not one word" forbids.
 func (s *apiServer) buildWorkerBootContext(w OutsourceWorker, t Task, manual *TaskManual) (string, error) {
 	head, err := s.workerSharedHead()
 	if err != nil {
@@ -157,25 +165,8 @@ func (s *apiServer) buildWorkerBootContext(w OutsourceWorker, t Task, manual *Ta
 	b.WriteString(head)
 	b.WriteString("\n\n")
 	b.WriteString(bootSeq)
-	b.WriteString("\n\n")
-	b.WriteString(workerRuntimeBootTail(w.Runtime))
 	b.WriteString("\n")
 	return b.String(), nil
-}
-
-func workerRuntimeBootTail(runtime string) string {
-	if NormalizeRuntime(runtime) == RuntimeCodex {
-		return `# Runtime 開機最後一步（Codex App Server）
-
-- ` + "`get_my_task`" + ` 成功後，完成這個 boot turn。**不要**自行啟動 ` + "`ocagent listen`" + `、Monitor 或前景空轉迴圈；OffiCraft 的 App Server sidecar 會在 ` + "`turn/completed`" + ` 後啟動並持有 listener。
-- 權限模式是 ` + "`danger-full-access`" + `，approval policy 是 ` + "`never`" + `。` + "`request_user_input`" + ` 已禁用；需要 owner 決策或動作時，用 OffiCraft ` + "`create_reply_card`" + `，不要等待 terminal 鍵盤。
-- context 使用量由 App Server token-usage 自動上報；不要手動跑 ` + "`context-report`" + `。`
-	}
-	return `# Runtime 開機最後一步（Claude Code）
-
-- ` + "`get_my_task`" + ` 成功後，用內建 Monitor 在背景跑 bare ` + "`ocagent listen`" + `（spawn 已把 ` + "`ocagent`" + ` 放進 cwd 並 prepend 進 PATH）；不要寫前景空轉迴圈。
-- ` + "`AskUserQuestion`" + ` 已禁用；需要 owner 決策或動作時，用 OffiCraft ` + "`create_reply_card`" + `，不要等待 terminal 互動選單。
-- context 使用量由 Claude Code ` + "`statusLine`" + ` 自動上報；不要手動跑 ` + "`context-report`" + `。`
 }
 
 // sortedKeys returns m's keys sorted — deterministic boot-context emission.

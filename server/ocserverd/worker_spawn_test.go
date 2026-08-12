@@ -112,74 +112,167 @@ func TestBuildWorkerBootContext_FullAssembly(t *testing.T) {
 	if strings.Contains(got, ownerPlaceholder) {
 		t.Errorf("the shared seed must have its %s placeholder substituted", ownerPlaceholder)
 	}
+	// Positive control FIRST: the two shared slots this assembly is now made of
+	// must really be here. Without it every absence assertion below is satisfied
+	// by an empty string.
 	for _, want := range []string{
-		"ow-abc", "O-7", "opus", "high", // identity block (spawn-path residue)
-		"review 一個 PR", "先看 diff 再留結論", "大 PR 先分檔看", // manual Q1/Q3/learnings
-		"必填、識別鍵", // Q2 field annotations
-		// T-fa76: the display face leads, the ADDRESSING type_key stays in
-		// parentheses (the worker calls write_task_learnings by key).
-		"# 任務手冊：審查 PR（review-pr）",
+		"# Global Context",      // slot 1 — the 系統互動 seed's own H1
+		"# 啟動程序（Boot Sequence", // slot 4 — the shared boot sequence
+		"## Claude Code 執行環境",   // that runtime's 執行環境 section, inside slot 4
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf("boot context missing %q", want)
+			t.Errorf("boot context missing the shared block %q", want)
 		}
 	}
 
-	// T-4595 — THE BOUND TASK IS NO LONGER PASTED IN. Boot-sequence 領工 has
-	// the worker call get_my_task, which serves the LIVE task; this copy was a
-	// spawn-time snapshot, stale by construction, and staff boot contexts never
-	// carried one. Every string below is a field of the fixture task, so this
-	// stays a real assertion rather than a spelling check: reinstating any part
-	// of the task block turns it red.
+	// T-4595 — WHAT THIS ASSEMBLY NO LONGER CONTAINS. Three groups, each with
+	// its own reason; every literal is a field of the fixture above (or the
+	// heading the old assembly emitted for it), so this stays a real assertion
+	// rather than a spelling check.
+	//
+	//  1. 你的身分 — identity arrives the way it always has for staff, through
+	//     the launcher's --append-system-prompt.
+	//  2. the BOUND TASK — the boot sequence has the worker pick it up with
+	//     get_my_task, which serves the LIVE row; this copy was a spawn-time
+	//     snapshot, stale by construction. Staff boot contexts never carried one.
+	//  3. the TYPE MANUAL — staff pull a manual with get_task_manual at the
+	//     moment they plan a task's steps; outsource now does the same.
 	for _, gone := range []string{
-		TaskNo(task.ID), "Review PR 42", "https://pr/42",
+		"# 你的身分", w.ID, w.Codename, // 1
+		TaskNo(task.ID), "Review PR 42", "https://pr/42", // 2
 		"把 42 號 PR 看完", "pr_url", "x/y",
 		"交接備註", "m-kyle", "先跑既有測試",
+		"# 任務手冊", "review 一個 PR", "先看 diff 再留結論", // 3
+		"大 PR 先分檔看", "必填、識別鍵",
 	} {
 		if strings.Contains(got, gone) {
-			t.Errorf("boot context still pastes the bound task (%q) — get_my_task "+
-				"serves the live one; a frozen copy can only be stale", gone)
+			t.Errorf("worker boot context still carries %q — a worker reads the staff "+
+				"assembly minus slot 3, and nothing is written for it (T-4595)", gone)
 		}
 	}
 }
 
-func TestBuildWorkerBootContext_CodexRuntimeTailHasFinalPrecedence(t *testing.T) {
-	s := newWorkerTestServer(t)
-	task := Task{ID: "t-codex", Title: "Codex task", Priority: TaskPriorityMid}
-	got, err := s.buildWorkerBootContext(
-		OutsourceWorker{ID: "ow-codex", Codename: "C-1", Runtime: RuntimeCodex},
-		task, nil,
-	)
-	if err != nil {
-		t.Fatalf("fold: %v", err)
-	}
-	tail := strings.LastIndex(got, "# Runtime 開機最後一步（Codex App Server）")
-	if tail < 0 {
-		t.Fatal("Codex worker must receive its runtime boot tail")
-	}
-	if !strings.Contains(got[tail:], "不要**自行啟動 `ocagent listen`") {
-		t.Fatal("Codex runtime tail must transfer listener ownership to the sidecar")
-	}
-	if strings.Contains(got, "# Runtime 開機最後一步（Claude Code）") {
-		t.Fatal("Codex worker must not receive Claude's runtime boot tail")
+// TestBuildWorkerBootContext_RuntimeGuidanceIsTheSeedsOwnAndItIsLast — T-4595,
+// the replacement for the two _RuntimeTailHasFinalPrecedence tests.
+//
+// The listener-ownership instruction is what those two guarded, and it still
+// has to be right for both runtimes and last in the document — a worker that
+// reads Claude's "hold `ocagent listen` under Monitor" while running under a
+// codex sidecar is the T-4595-era regression this repo already paid for once.
+// What changed is WHERE it comes from: it used to be a hand-written outsource
+// tail appended after the seed, and it is now the 執行環境 section of the
+// runtime's own boot-sequence seed — the same bytes staff read.
+func TestBuildWorkerBootContext_RuntimeGuidanceIsTheSeedsOwnAndItIsLast(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		runtime        string
+		wantEnvH2      string
+		wantOwnership  string
+		otherRuntimeH2 string
+	}{
+		{"codex", RuntimeCodex, "## Codex App Server 執行環境",
+			"**不要**自行啟動 `ocagent listen`", "## Claude Code 執行環境"},
+		{"claude", RuntimeClaude, "## Claude Code 執行環境",
+			"用內建 **Monitor 工具**在背景掛住", "## Codex App Server 執行環境"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newWorkerTestServer(t)
+			got, err := s.buildWorkerBootContext(
+				OutsourceWorker{ID: "ow-" + tc.name, Codename: "C-1", Runtime: tc.runtime},
+				Task{ID: "t-aabbccddeeff", Title: "x", Priority: TaskPriorityMid}, nil)
+			if err != nil {
+				t.Fatalf("fold: %v", err)
+			}
+			if !strings.Contains(got, tc.wantOwnership) {
+				t.Errorf("%s worker is not told who owns the listener", tc.name)
+			}
+			if strings.Contains(got, tc.otherRuntimeH2) {
+				t.Errorf("%s worker received the OTHER runtime's 執行環境 section", tc.name)
+			}
+			// Recency-authoritative: the boot sequence is the TAIL, so its
+			// 執行環境 section is the last heading in the document. Before
+			// T-4595 the three shared blocks were grouped at the TOP for
+			// workers and the persona came after them — the one asymmetry with
+			// nothing behind it.
+			env := strings.LastIndex(got, tc.wantEnvH2)
+			if env < 0 {
+				t.Fatalf("%s worker is missing %q", tc.name, tc.wantEnvH2)
+			}
+			if strings.Contains(got[env+len(tc.wantEnvH2):], "\n# ") {
+				t.Errorf("%s: something follows the 啟動程序 block; it must be last", tc.name)
+			}
+		})
 	}
 }
 
-func TestBuildWorkerBootContext_ClaudeRuntimeTailHasFinalPrecedence(t *testing.T) {
+// TestWorkerBootContextIsTheStaffFoldMinusThePersona — T-4595, the whole ruling
+// in one equality.
+//
+// 「外包的 boot context ＝ 正職的 boot context 扣掉第 3 格（角色說明→長期筆記）。
+// 一個字都不為外包另寫。」
+//
+// So the want is BUILT FROM THE STAFF FOLD: take the document a staff member
+// actually receives, cut the persona slot out of it, and require the worker's
+// document to equal what is left, byte for byte. That is deliberately not a
+// "contains" assertion — every weaker form was satisfied by the assembly this
+// change replaced, which carried an overlay, an identity block, the whole bound
+// task, the whole type manual, and a second copy of the runtime guidance.
+//
+// Both folds run on ONE server with a non-blank owner block, so the shared
+// slots are the same bytes on both sides by construction rather than by a
+// second re-derivation of them here.
+func TestWorkerBootContextIsTheStaffFoldMinusThePersona(t *testing.T) {
 	s := newWorkerTestServer(t)
-	got, err := s.buildWorkerBootContext(
-		OutsourceWorker{ID: "ow-claude", Codename: "C-2", Runtime: RuntimeClaude},
-		Task{ID: "t-claude", Title: "Claude task", Priority: TaskPriorityMid}, nil,
-	)
+	const ownerMark = "T4595-OWNER-CUSTOM-MARKER"
+	if err := s.dal.PutUserContext(UserContext{Text: ownerMark}); err != nil {
+		t.Fatalf("put user context: %v", err)
+	}
+
+	staff, err := s.buildBootContext("", nil, "")
+	if err != nil || staff == nil {
+		t.Fatalf("buildBootContext: %v", err)
+	}
+	worker, err := s.buildWorkerBootContext(
+		OutsourceWorker{ID: "ow-eq", Codename: "O-9", Model: "opus", Effort: "high",
+			Runtime: RuntimeClaude},
+		Task{ID: "t-aabbccddeeff", TypeKey: "review-pr", Title: "Review PR 42",
+			Priority: TaskPriorityHigh},
+		&TaskManual{TypeKey: "review-pr", DisplayName: "審查 PR",
+			Purpose: "review 一個 PR", SopMD: "先看 diff 再留結論"})
 	if err != nil {
-		t.Fatalf("fold: %v", err)
+		t.Fatalf("buildWorkerBootContext: %v", err)
 	}
-	tail := strings.LastIndex(got, "# Runtime 開機最後一步（Claude Code）")
-	if tail < 0 || !strings.Contains(got[tail:], "Monitor 在背景跑 bare `ocagent listen`") {
-		t.Fatal("Claude worker must receive its Monitor-owned listener tail")
+
+	// Cut slot 3 out of the staff document: everything from the 角色說明 header
+	// up to (but not including) the 啟動程序 header, plus the "\n\n" that joined
+	// it to the block before.
+	role := strings.Index(staff.Context, "# Role: ")
+	boot := strings.Index(staff.Context, "# 啟動程序（Boot Sequence")
+	if role < 0 || boot < 0 || role >= boot {
+		t.Fatalf("cannot locate slot 3 in the staff fold (角色說明=%d 啟動程序=%d) — "+
+			"the staff assembly moved and this equality must be re-derived", role, boot)
 	}
-	if strings.Contains(got, "# Runtime 開機最後一步（Codex App Server）") {
-		t.Fatal("Claude worker must not receive Codex's runtime boot tail")
+	// Positive control: the persona really is a substantial block, so "minus
+	// slot 3" is a real subtraction and not a no-op that makes this vacuous.
+	if boot-role < 200 {
+		t.Fatalf("staff slot 3 is only %d bytes — too small to be the persona; "+
+			"the subtraction below would prove nothing", boot-role)
+	}
+	want := staff.Context[:role] + staff.Context[boot:]
+
+	// And prove the owner block is on BOTH sides, above the cut: if it were
+	// still fourth (the pre-T-4595 staff order) it would sit inside the excised
+	// span and this equality could hold while the two documents disagreed about
+	// where the owner's additions live.
+	if o := strings.Index(want, ownerMark); o < 0 || o > role {
+		t.Fatalf("使用者自訂 must sit in slot 2, above the persona (found at %d, cut at %d)", o, role)
+	}
+
+	if worker != want {
+		t.Errorf("outsource boot context is not the staff fold minus slot 3\n"+
+			"got  %d bytes\nwant %d bytes\n"+
+			"外包的 boot context ＝ 正職的扣掉第 3 格，一個字都不為外包另寫（T-4595）",
+			len(worker), len(want))
 	}
 }
 

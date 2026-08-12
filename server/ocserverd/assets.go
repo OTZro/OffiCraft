@@ -423,7 +423,7 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 	//
 	//	1. 系統互動 (shared seed)
 	//	2. 使用者自訂 (shared, skipped entirely when blank)
-	//	3. the persona — staff: 角色說明 → 長期筆記; outsource: the task manual
+	//	3. the persona — staff: 角色說明 → 長期筆記; outsource: NOTHING (no role)
 	//	4. 啟動程序 (shared seed, recency-authoritative tail)
 	//
 	// Only slot 3 differs between the two, and that is the whole difference.
