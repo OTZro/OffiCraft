@@ -274,25 +274,40 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 	}
 
 	legacyTTL, err := d.GetSetting(settingLegacyTokenTTL)
-	if err != nil { return out, err }
+	if err != nil {
+		return out, err
+	}
 	if legacyTTL == nil && cfg.Auth.TokenTTLSet {
 		v := strconv.Itoa(cfg.Auth.TokenTTL)
 		legacyTTL = &v
 	}
-	for _, target := range []struct { key string; dst *int64; fallback int64 }{
+	for _, target := range []struct {
+		key      string
+		dst      *int64
+		fallback int64
+	}{
 		{settingOwnerTokenTTL, &out.ownerTokenTTL, defaultOwnerTokenTTL},
 		{settingAgentTokenTTL, &out.agentTokenTTL, defaultAgentTokenTTL},
 	} {
 		stored, err := d.GetSetting(target.key)
-		if err != nil { return out, err }
-		if stored == nil && legacyTTL != nil {
-			if err := d.PutSetting(target.key, *legacyTTL); err != nil { return out, err }
-			stored = legacyTTL
-			logf("migrated legacy auth.token_ttl into "+target.key)
+		if err != nil {
+			return out, err
 		}
-		if stored == nil { *target.dst = target.fallback; continue }
+		if stored == nil && legacyTTL != nil {
+			if err := d.PutSetting(target.key, *legacyTTL); err != nil {
+				return out, err
+			}
+			stored = legacyTTL
+			logf("migrated legacy auth.token_ttl into " + target.key)
+		}
+		if stored == nil {
+			*target.dst = target.fallback
+			continue
+		}
 		n, err := strconv.ParseInt(*stored, 10, 64)
-		if err != nil || n <= 0 { return out, fmt.Errorf("settings %s: not a positive integer: %q", target.key, *stored) }
+		if err != nil || n <= 0 {
+			return out, fmt.Errorf("settings %s: not a positive integer: %q", target.key, *stored)
+		}
 		*target.dst = n
 	}
 

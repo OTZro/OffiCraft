@@ -48,8 +48,8 @@ const (
 	// change moves it again to 7755. Existing installs pin their port in
 	// oc.toml (bin/ocserver renders it explicitly) and are unaffected; only a
 	// config-less `ocserverd serve` moves.
-	defaultPort     = 7755
-	defaultOwnerTokenTTL = 86400   // owner login JWT lifetime: 24h
+	defaultPort          = 7755
+	defaultOwnerTokenTTL = 86400  // owner login JWT lifetime: 24h
 	defaultAgentTokenTTL = 604800 // agent/worker JWT lifetime: 7d
 )
 

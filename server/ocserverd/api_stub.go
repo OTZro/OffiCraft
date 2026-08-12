@@ -53,8 +53,8 @@ type apiServer struct {
 	// revocation cut: owner-scope tokens with iat before it are refused at the
 	// auth gate (requireAuth) — stamped by change-password.
 	passwordChangedAt int64
-	ownerTokenTTL int64
-	agentTokenTTL int64
+	ownerTokenTTL     int64
+	agentTokenTTL     int64
 	// outsourceMaxParallel is the global cap on concurrently live outsource
 	// workers (DB task.outsource_max_parallel; M3 owner ruling ③) — read by
 	// the Phase 2 assignment scheduler.
