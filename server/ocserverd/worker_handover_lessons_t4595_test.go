@@ -115,3 +115,98 @@ func TestStaffCanStillWriteLessonsTheHandoverSOPPrescribes(t *testing.T) {
 		t.Fatalf("a staff member must still be able to run §8b step 3; code=%q body=%s", code, text)
 	}
 }
+
+// ── the seed side of the same fix ────────────────────────────────────────────
+//
+// The tests above prove WHY §8b step 3 had to change; these two prove it
+// actually did, in the one document both audiences read. Nothing else covers
+// this: the parity equality
+// (TestWorkerBootContextIsTheStaffFoldMinusThePersona) compares the two folds
+// against each other, so a seed edit moves BOTH sides and stays green, and the
+// §2.2 byte-identity test re-reads the same seed from disk. Reverting the seed
+// wording is therefore invisible to every other guard in this package.
+
+// handoverSectionOf returns §8b's handover SOP — the region these two sentences
+// have to live in — cut out of an assembled boot context. Failing loudly when
+// the anchors move is the point: an assertion over a region that silently
+// became the whole document proves nothing.
+func handoverSectionOf(t *testing.T, doc string) string {
+	t.Helper()
+	const start = "## 8b."
+	const end = "## 9."
+	i := strings.Index(doc, start)
+	j := strings.Index(doc, end)
+	if i < 0 || j < 0 || i >= j {
+		t.Fatalf("cannot locate the §8b handover section (start=%d end=%d) — "+
+			"re-derive these guards before trusting them", i, j)
+	}
+	return doc[i:j]
+}
+
+// TestHandoverStepThreeIsTrueForBothAudiences — T-4595.
+//
+// §8b step 3 used to spell ONE literal tool pair (get_lessons →
+// replace_lessons), which a worker cannot execute at all (see the 403 proved
+// above). The owner's ruling was NOT to write a second, outsource-only
+// instruction — it was to make the shared sentence true for both readers.
+//
+// So the assertion is: BOTH arms are named, in the handover section, in the
+// document BOTH audiences receive.
+func TestHandoverStepThreeIsTrueForBothAudiences(t *testing.T) {
+	s := newWorkerTestServer(t)
+	_, staff := memberCtx(t)
+	for _, tc := range []struct{ who, doc string }{
+		{"outsource", workerCtxOn(t, s)},
+		{"staff", staff.Context},
+	} {
+		t.Run(tc.who, func(t *testing.T) {
+			sec := handoverSectionOf(t, tc.doc)
+			for _, want := range []string{
+				"`get_lessons` → `replace_lessons`",         // the staff arm
+				"`get_task_manual` → `write_task_learnings`", // the outsource arm
+			} {
+				if !strings.Contains(sec, want) {
+					t.Errorf("§8b step 3 no longer names %s — it must be true for BOTH "+
+						"audiences, because both read this one sentence", want)
+				}
+			}
+			// And it must not go back to prescribing the lessons pair
+			// unconditionally: that is the exact wording that sent every worker
+			// into a guaranteed 403 with its handover budget.
+			if strings.Contains(sec, "**用 lessons 工具整併長期教訓**") {
+				t.Error("§8b step 3 is back to one unconditional tool pair; a worker " +
+					"obeying it literally spends its ~120s grace on a call that 403s " +
+					"and loses that round's learnings")
+			}
+		})
+	}
+}
+
+// TestHandoverTellsTheTakerToHaveReadTheManualsLearnings — T-4595, owner's own
+// wording, pinned VERBATIM at his request.
+//
+// §10.2 already says 先讀手冊, but it hangs off the PLANNING action, so a task
+// that was planned by someone else and then handed over never routes anyone
+// past it — and a manual's learnings are precisely "what previous people got
+// wrong at THIS KIND of task", which does not care whether you are the first or
+// the third person on it. Hence the handover section, and hence 確認你讀過
+// (have read) rather than 去讀 (go read): a second task of the same type in one
+// session needs no second fetch, a fresh session after a handover does.
+func TestHandoverTellsTheTakerToHaveReadTheManualsLearnings(t *testing.T) {
+	const verbatim = "動手前，確認你讀過它那本手冊的學習經驗（`get_task_manual`）。"
+	s := newWorkerTestServer(t)
+	_, staff := memberCtx(t)
+	for _, tc := range []struct{ who, doc string }{
+		{"outsource", workerCtxOn(t, s)},
+		{"staff", staff.Context},
+	} {
+		t.Run(tc.who, func(t *testing.T) {
+			if !strings.Contains(handoverSectionOf(t, tc.doc), verbatim) {
+				t.Errorf("the handover section does not carry the owner's sentence "+
+					"verbatim:\n%s\n(it is deliberately 確認你讀過, not 去讀, and it "+
+					"belongs to 接手／換手 — not under 節點規劃, which is the gap it fills)",
+					verbatim)
+			}
+		})
+	}
+}
