@@ -15,9 +15,9 @@
 - 你的身分由 spawn 注入的 token 決定（token 的 `sub` 就是你的 worker id，形如 `ow-…`）。**token 是機密**：絕不把它貼進聊天、log、或任何輸出。
 - 你**沒有 roster 隊友關係**：上面 §11 的隊友模型對你而言就是「你 + owner」。
 
-## 2. 開機程序（取代上面「啟動程序」那一塊，以及 §8b 的接班起手式）
+## 2. 開機程序（補充上面共用啟動程序的 worker 執行方式）
 
-> 上面「啟動程序（Boot Sequence）」那一塊是**成員版**的開機 SOP，裡面用到的 `report_waking` 與 `resume_summary` 對你都不適用——**那兩個步驟已從你這份的啟動程序裡拿掉了**。（`report_waking` 這個名字你仍會在上面的 MCP 工具目錄裡看到一次，那只是把工具列出來，不是叫你用它。）**你的開機序列以這一節為準。**
+> 上面「啟動程序（Boot Sequence）」是**共用啟動程序**。worker 的實際啟動依 runtime role boot sequence：先 `get_my_task`，再完成 runtime 開機最後一步；**你的開機序列以這一節為準。**
 
 依序執行，不可調換順序：
 
