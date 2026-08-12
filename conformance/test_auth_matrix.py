@@ -1400,8 +1400,9 @@ DEGRADED: dict[str, str] = {
     "GET /api/self/task": (
         "every at-floor face pinned at 404: an outsource worker identity is "
         "mintable only by the Phase 2 assignment scheduler (no black-box mint "
-        "path). The positive claim (assigned → active + manual snapshot) is "
-        "pinned in the server unit tests (api_tasks_test.go)."
+        "path). The positive claim (assigned → active + the LIGHT manual row "
+        "— T-4595) is pinned in the server unit tests (api_tasks_test.go, "
+        "api_tasks_manual_slim_t4595_test.go)."
     ),
     "GET /api/docs/assets/{name}": (
         "probed with a missing asset name (404 across authenticated identities); "

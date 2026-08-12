@@ -1627,8 +1627,10 @@ SKIPPED_HAPPY: dict[str, str] = {
         "the positive face needs a BOUND outsource worker identity, mintable "
         "only by the Phase 2 assignment scheduler (no black-box mint path). "
         "The memberless-404 / below-floor-403 faces are pinned in the auth "
-        "matrix and test_tasks.py; the positive claim (assigned → active + "
-        "manual snapshot) in the server unit tests (api_tasks_test.go)."
+        "matrix and test_tasks.py; the positive claim (assigned → active + the "
+        "LIGHT manual row — T-4595, sop_md/learnings live behind "
+        "get_task_manual) in the server unit tests (api_tasks_test.go, "
+        "api_tasks_manual_slim_t4595_test.go)."
     ),
     "GET /api/outsource-workers/{id}": (
         "the positive face needs a LIVE worker row, mintable only by the Phase 2 "

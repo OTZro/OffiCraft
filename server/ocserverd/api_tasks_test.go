@@ -1923,7 +1923,9 @@ func TestGetMyTaskClaimsAndActivates(t *testing.T) {
 		t.Fatalf("claimed wrong task: %+v", got.Task)
 	}
 	if got.Manual == nil || got.Manual.TypeKey != "review-pr" {
-		t.Fatalf("claim must carry the manual snapshot: %+v", got.Manual)
+		t.Fatalf("claim must still name its manual (the LIGHT row since "+
+			"T-4595 — sop_md/learnings live behind get_task_manual): %+v",
+			got.Manual)
 	}
 	w, _ := api.dal.GetOutsourceWorker("ow-claimer")
 	if w.Status != WorkerStatusActive {
