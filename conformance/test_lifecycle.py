@@ -9,10 +9,11 @@ Third conformance batch. What this file pins, MUST by MUST:
   * §1.1 verification: a tampered signature and an alg-downgrade token are
         both refused 401 (black-box crafts the tokens — no secret needed to
         FORGE, only to verify);
-  * §1.3 mint surfaces and TTLs: login (owner scope, token_ttl default
-        86400 s), /api/mint (agent scope, min(ttl_days·86400, 400 d) cap),
-        machine onboard (90 d default, no machine claim), the one-time
-        machine claim-code redemption (same mint), bootstrap-with-
+  * §1.3 mint surfaces and TTLs: login (owner scope, owner_token_ttl default
+        86400 s), bootstrap/reconcile (agent_token_ttl default 604800 s),
+        /api/mint (agent scope, min(ttl_days·86400, 400 d) cap), and every
+        warden install mint (permanent, no machine claim), including one-time
+        machine claim-code redemption, bootstrap-with-
         member (claim = desired_machine_id); wrong password → flat 401;
   * §2  boot-context assembly reproduced BYTE-FOR-BYTE from the seed files
         (language-neutral assets under seeds/ — data, not code)
@@ -48,8 +49,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 SEEDS = HERE.parent / "seeds"
 
 MAX_AGENT_TTL_SECS = 400 * 86400
-DEFAULT_TOKEN_TTL = 86400
-DEFAULT_MACHINE_TTL_SECS = 90 * 86400
+DEFAULT_OWNER_TOKEN_TTL = 86400
+DEFAULT_AGENT_TOKEN_TTL = 604800
 MACHINE_CLAIM_TTL_SECS = 600
 
 
@@ -101,11 +102,22 @@ def _assert_claims(
     return payload
 
 
+def _assert_permanent_warden_claims(token: str, *, sub: str) -> dict:
+    header, payload = _decode_jwt(token)
+    assert header == {"alg": "HS256", "typ": "JWT"}, header
+    assert payload["sub"] == sub, payload
+    assert payload["scope"] == "agent", payload
+    assert isinstance(payload["iat"], int), payload
+    assert "exp" not in payload, payload
+    assert "machine_id" not in payload, payload
+    return payload
+
+
 # ── §1.3 mint surfaces and TTL semantics ─────────────────────────────────────
 
 
 def test_login_token_claims_and_default_ttl(owner_token) -> None:
-    _assert_claims(owner_token, sub="owner", scope="owner", ttl=DEFAULT_TOKEN_TTL)
+    _assert_claims(owner_token, sub="owner", scope="owner", ttl=DEFAULT_OWNER_TOKEN_TTL)
 
 
 def test_mint_ttl_days_and_400_day_cap(client, owner_token, agent_a) -> None:
@@ -121,7 +133,7 @@ def test_mint_ttl_days_and_400_day_cap(client, owner_token, agent_a) -> None:
         )
 
 
-def test_machine_onboard_token_90d_no_placement_claim(client, owner_token) -> None:
+def test_machine_onboard_token_never_expires_no_placement_claim(client, owner_token) -> None:
     r = client.post(
         "/api/machines",
         json={"display_name": f"conf-lc-machine-{uuid.uuid4().hex[:6]}"},
@@ -129,17 +141,12 @@ def test_machine_onboard_token_90d_no_placement_claim(client, owner_token) -> No
     )
     assert r.status_code == 200, r.text
     data = r.json()
-    assert data["expires_in"] == DEFAULT_MACHINE_TTL_SECS, data["expires_in"]
+    assert data["expires_in"] == 0, data["expires_in"]
     # Warden tokens carry NO machine_id claim (§1.3) — the warden IS the machine.
-    _assert_claims(
-        data["token"],
-        sub=data["machine_id"],
-        scope="agent",
-        ttl=DEFAULT_MACHINE_TTL_SECS,
-    )
+    _assert_permanent_warden_claims(data["token"], sub=data["machine_id"])
     # §1.3 machine claim codes: the boot command carries the ONE-TIME code,
     # never the token, and redeeming it mints the SAME shape onboard minted
-    # (agent scope, warden sub, 90 d, no placement claim).
+    # (agent scope, warden sub, no expiry, no placement claim).
     assert data["claim_expires_in"] == MACHINE_CLAIM_TTL_SECS, data["claim_expires_in"]
     assert f"/install.sh?code={data['claim_code']}" in data["boot_command"], (
         data["boot_command"]
@@ -151,13 +158,8 @@ def test_machine_onboard_token_90d_no_placement_claim(client, owner_token) -> No
     assert claimed.status_code == 200, claimed.text
     body = claimed.json()
     assert body["machine_id"] == data["machine_id"], body
-    assert body["expires_in"] == DEFAULT_MACHINE_TTL_SECS, body["expires_in"]
-    _assert_claims(
-        body["token"],
-        sub=data["machine_id"],
-        scope="agent",
-        ttl=DEFAULT_MACHINE_TTL_SECS,
-    )
+    assert body["expires_in"] == 0, body["expires_in"]
+    _assert_permanent_warden_claims(body["token"], sub=data["machine_id"])
 
 
 def test_bootstrap_token_carries_desired_machine_claim(
@@ -180,7 +182,7 @@ def test_bootstrap_token_carries_desired_machine_claim(
         r.json()["token"],
         sub=member_id,
         scope="agent",
-        ttl=DEFAULT_TOKEN_TTL,
+        ttl=DEFAULT_AGENT_TOKEN_TTL,
         machine_id=machine_id,
     )
     client.post(f"/api/members/{member_id}/deactivate", headers=_auth(owner_token))

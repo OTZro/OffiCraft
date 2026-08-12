@@ -25,7 +25,8 @@ func newSettingsTestServer(t *testing.T, password string) (*apiServer, *httptest
 	if err != nil {
 		t.Fatalf("ensureFirstRunClaimToken: %v", err)
 	}
-	api := newAPIServer(d, NewHub(), auth.secret, auth.tokenTTL, "../..")
+	api := newAPIServer(d, NewHub(), auth.secret, auth.ownerTokenTTL, "../..")
+	api.agentTokenTTL = auth.agentTokenTTL
 	api.passwordHash = auth.passwordHash
 	api.passwordChangedAt = auth.passwordChangedAt
 	api.ctxhigh = auth.ctxhigh
@@ -199,34 +200,37 @@ func TestUpdateSettingsValidatesAndAppliesImmediately(t *testing.T) {
 
 	// GET: defaults.
 	status, data = doJSON(t, "GET", srv.URL+"/api/settings", owner, "")
-	if status != 200 || data["token_ttl"] != float64(86400) ||
+	if status != 200 || data["owner_token_ttl"] != float64(86400) || data["agent_token_ttl"] != float64(604800) ||
 		data["handover_pct"] != float64(50) {
 		t.Fatalf("settings defaults: %d %v", status, data)
 	}
 
 	// Invalid values → 422, nothing written.
 	for _, body := range []string{
-		`{"token_ttl":0}`, `{"token_ttl":3600}`,
+		`{"owner_token_ttl":0}`, `{"agent_token_ttl":3600}`,
 		`{"handover_pct":39}`, `{"handover_pct":91}`,
-		`{"token_ttl":604800,"handover_pct":10}`, // one bad field poisons the whole patch
+		`{"agent_token_ttl":604800,"handover_pct":10}`, // one bad field poisons the whole patch
 	} {
 		if status, _ := doJSON(t, "PATCH", srv.URL+"/api/settings", owner, body); status != 422 {
 			t.Fatalf("PATCH %s: want 422, got %d", body, status)
 		}
 	}
-	if v, err := d.GetSetting(settingTokenTTL); err != nil || v != nil {
+	if v, err := d.GetSetting(settingOwnerTokenTTL); err != nil || v != nil {
 		t.Fatalf("a rejected patch must write nothing: %v %v", v, err)
 	}
 
-	// Valid patch: durable + live immediately.
+	// Changing the owner-login setting leaves the agent setting untouched.
 	status, data = doJSON(t, "PATCH", srv.URL+"/api/settings", owner,
-		`{"token_ttl":604800,"handover_pct":60}`)
-	if status != 200 || data["token_ttl"] != float64(604800) ||
+		`{"owner_token_ttl":604800,"handover_pct":60}`)
+	if status != 200 || data["owner_token_ttl"] != float64(604800) || data["agent_token_ttl"] != float64(604800) ||
 		data["handover_pct"] != float64(60) {
 		t.Fatalf("PATCH response must echo the new settings: %d %v", status, data)
 	}
-	if v, err := d.GetSetting(settingTokenTTL); err != nil || v == nil || *v != "604800" {
-		t.Fatalf("token_ttl must be durable: %v %v", v, err)
+	if v, err := d.GetSetting(settingOwnerTokenTTL); err != nil || v == nil || *v != "604800" {
+		t.Fatalf("owner_token_ttl must be durable: %v %v", v, err)
+	}
+	if got := api.agentTokenTTLValue(); got != 604800 {
+		t.Fatalf("owner patch must not alter agent mint TTL: %d", got)
 	}
 	if got := api.ctxHighConfig().HandoverPct; got != 60 {
 		t.Fatalf("handover_pct must be live: %d", got)
@@ -235,6 +239,21 @@ func TestUpdateSettingsValidatesAndAppliesImmediately(t *testing.T) {
 	status, data = doJSON(t, "POST", srv.URL+"/api/login", "", `{"password":"settings-pass"}`)
 	if status != 200 || data["expires_in"] != float64(604800) {
 		t.Fatalf("login must pick up the patched TTL immediately: %d %v", status, data)
+	}
+
+	// Conversely an agent patch applies to future agent mints only, not logins.
+	status, data = doJSON(t, "PATCH", srv.URL+"/api/settings", owner,
+		`{"agent_token_ttl":2592000}`)
+	if status != 200 || data["owner_token_ttl"] != float64(604800) || data["agent_token_ttl"] != float64(2592000) {
+		t.Fatalf("agent patch must leave owner setting untouched: %d %v", status, data)
+	}
+	if v, err := d.GetSetting(settingAgentTokenTTL); err != nil || v == nil || *v != "2592000" {
+		t.Fatalf("agent_token_ttl must be durable: %v %v", v, err)
+	}
+	if minted, err := api.mintAgentToken("agent-test", "", api.agentTokenTTLValue()); err != nil {
+		t.Fatalf("agent mint: %v", err)
+	} else if claims, err := verifyJWT(minted, api.secret, time.Now().Unix()); err != nil || claims["exp"].(float64)-claims["iat"].(float64) != 2592000 {
+		t.Fatalf("agent mint must use patched agent TTL: %+v %v", claims, err)
 	}
 
 	// Empty patch = no-op read.

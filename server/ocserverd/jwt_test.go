@@ -80,6 +80,21 @@ func TestMintVerifyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMintWithoutExpiryVerifiesWithoutExp(t *testing.T) {
+	secret := []byte("permanent-warden-test-secret")
+	tok, err := mintJWTWithoutExpiry("m-warden", "agent", secret, interopNow, "")
+	if err != nil {
+		t.Fatalf("mint permanent token: %v", err)
+	}
+	claims, err := verifyJWT(tok, secret, interopNow+100*365*86400)
+	if err != nil {
+		t.Fatalf("permanent token must verify long after a finite TTL: %v", err)
+	}
+	if _, hasExpiry := claims["exp"]; hasExpiry {
+		t.Fatalf("permanent token must omit exp: %v", claims)
+	}
+}
+
 func TestMintRequiresSub(t *testing.T) {
 	if _, err := mintJWT("", "agent", 60, []byte(interopSecret), interopNow, ""); err == nil {
 		t.Fatal("mint with empty sub must fail")

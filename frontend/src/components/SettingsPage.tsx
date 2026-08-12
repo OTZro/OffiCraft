@@ -616,7 +616,7 @@ export function SettingsPage({
 const TTL_CHOICES = [43200, 86400, 604800, 2592000] as const;
 
 /**
- * 參數調整 — 登入有效期 (token_ttl) + 自動換手門檻 (handover_pct), both durable
+ * 參數調整 — 登入與 agent 有效期 + 自動換手門檻, both durable
  * and live immediately (PATCH echoes the effective values back). Honest states:
  * a REJECTED load renders the error line instead of a fabricated form, and an
  * out-of-range / rejected write snaps the field back to the last server-confirmed
@@ -737,10 +737,10 @@ function ServerParams({
               id="param-ttl"
               className="param-select"
               aria-label={t.settings.sessionTtl}
-              value={settings.tokenTtl}
+              value={settings.ownerTokenTtl}
               onChange={(e) => {
                 setRangeError(false);
-                void onSave({ tokenTtl: Number(e.target.value) });
+                void onSave({ ownerTokenTtl: Number(e.target.value) });
               }}
             >
               {TTL_CHOICES.map((secs) => (
@@ -748,6 +748,18 @@ function ServerParams({
                   {ttlLabel[secs]}
                 </option>
               ))}
+            </select>
+          </div>
+
+          <div className="param-row">
+            <div className="param-row__body">
+              <label className="param-row__name" htmlFor="param-agent-ttl">{t.settings.agentTokenTtl}</label>
+              <div className="param-row__sub">{t.settings.agentTokenTtlSub}</div>
+            </div>
+            <select id="param-agent-ttl" className="param-select" aria-label={t.settings.agentTokenTtl}
+              value={settings.agentTokenTtl}
+              onChange={(e) => { setRangeError(false); void onSave({ agentTokenTtl: Number(e.target.value) }); }}>
+              {TTL_CHOICES.map((secs) => <option key={secs} value={secs}>{ttlLabel[secs]}</option>)}
             </select>
           </div>
 

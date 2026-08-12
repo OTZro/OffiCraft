@@ -878,7 +878,8 @@ export function toMonitoring(w: WireMonitoring): MonitoringView {
  * as "no outsource assignment". */
 export function toServerSettings(w: WireServerSettings): ServerSettingsView {
   return {
-    tokenTtl: w.token_ttl,
+    ownerTokenTtl: w.owner_token_ttl,
+    agentTokenTtl: w.agent_token_ttl,
     handoverPct: w.handover_pct,
     codexCompactionThreshold: w.codex_compaction_threshold ?? 3,
     monitoringRefreshSeconds: w.monitoring_refresh_seconds ?? 5,

@@ -414,8 +414,8 @@ type BackupHealthDTO struct {
 // installer for an EXISTING machine again later without re-onboarding.
 // “machine_id“ is the warden member id; “boot_command“ is the same
 // curl-download-then-install one-liner onboard builds (it embeds “machine_id“
-// as OC_ID); “token“ is a FRESHLY re-minted exec-token (“scope="agent"“,
-// “sub=machine_id“) and “expires_in“ is its lifetime in seconds.
+// as OC_ID); “token“ is a FRESHLY re-minted permanent exec-token (“scope="agent"“,
+// “sub=machine_id“, no “exp“ claim) and “expires_in“ is “0“.
 //
 // “claim_code“ is a fresh short-lived (“claim_expires_in“ = 600 s), single-use code
 // the “boot_command“ embeds (“install.sh?code=“) instead of the exec-token; the served
@@ -862,10 +862,10 @@ type MachineClaimDTO struct {
 
 // MachineClaimResultDTO The claim-code redemption result (“POST /api/machines/claim“).
 //
-// “token“ is the freshly minted machine exec-token (“scope="agent"“,
-// “sub=machine_id“ — the same mint onboard performed); “expires_in“ is its
-// lifetime in seconds (default 90 days, capped at 400); “machine_id“ is the
-// warden member the token is bound to.
+// “token“ is the freshly minted permanent machine exec-token (“scope="agent"“,
+// “sub=machine_id“ — the same mint every warden install path performs); it omits
+// “exp“ and answers “expires_in=0“. “machine_id“ is the warden member the
+// token is bound to.
 type MachineClaimResultDTO struct {
 	ExpiresIn int    `json:"expires_in"`
 	MachineId string `json:"machine_id"`
@@ -919,10 +919,11 @@ type MachineDTO struct {
 // the
 // machine from the ROSTER, it does not tear the warden daemon off the box (that is
 // the “uninstall“ verb). Never a hard tombstone — the audit row + token “sub“
-// attribution survive; the exec-token expires by TTL (HS256 is stateless). There is
-// NO “teardown_command“ placeholder: DELETE does not command removal, so it never
-// hands back an installer/uninstaller line. “machine_id“ is the machine's stable
-// id (== the warden member's own id; renamed from the hostname-era “host“).
+// attribution survive; every later gated request with that machine's credential is
+// rejected by the roster revocation check, including permanent warden credentials.
+// There is NO “teardown_command“ placeholder: DELETE does not command removal, so
+// it never hands back an installer/uninstaller line. “machine_id“ is the machine's
+// stable id (== the warden member's own id; renamed from the hostname-era “host“).
 type MachineDeleteResultDTO struct {
 	MachineId *string `json:"machine_id,omitempty"`
 	MemberId  string  `json:"member_id"`
@@ -936,9 +937,9 @@ type MachineDeleteResultDTO struct {
 // mints a NEW warden member whose stable, server-minted id (“m-<uuid12>“) IS the
 // machine id (the warden carries no self-binding — routing resolves it by get_member
 // of that id; see “handle_onboard_machine“). The display name is stored as a
-// MachineAlias overlay keyed by that machine id. “ttl_days“ overrides the exec-token
-// lifetime (defaults to a sensible 90 days; capped server-side at
-// “MAX_AGENT_TTL_SECS“).
+// MachineAlias overlay keyed by that machine id. “ttl_days“ is retained for request
+// compatibility but does not affect warden credentials: they are permanent and omit
+// “exp“.
 type MachineOnboardDTO struct {
 	DisplayName string `json:"display_name"`
 	TtlDays     *int   `json:"ttl_days,omitempty"`
@@ -949,10 +950,10 @@ type MachineOnboardDTO struct {
 // surfaced under the machine-model name (the machine id == the warden member's own
 // id — the binding key agents store in their “desired_machine_id“ column). “token“
 // is
-// the freshly minted exec-token (“scope="agent"“, “sub=member_id“); “expires_in“
-// is its lifetime in seconds; “boot_command“ is the copy-paste line the operator
-// runs ON that machine to install the warden (identity rides in the token's “sub“,
-// not a templated machine id).
+// the freshly minted permanent exec-token (“scope="agent"“, “sub=member_id“) with
+// no “exp“ claim; “expires_in“ is “0“. “boot_command“ is the copy-paste line
+// the operator runs ON that machine to install the warden (identity rides in the
+// token's “sub“, not a templated machine id).
 //
 // “claim_code“ is a short-lived (“claim_expires_in“ = 600 s), single-use code the
 // “boot_command“ embeds (“install.sh?code=“) instead of the exec-token; the served
@@ -2082,33 +2083,11 @@ type SetPasswordDTO struct {
 	Password   string `json:"password"`
 }
 
-// SettingsDTO The org-adjustable settings surface (`GET /api/settings`; owner or admin agent since T-6020). `token_ttl` —
-// the owner-login JWT lifetime (seconds). `handover_pct` — the context
-// handover threshold. `outsource_max_parallel` — the global cap on
-// concurrently live outsource workers (-1 = unlimited, 0 pauses assignment).
-// `updater_receive_beta` — whether the GitHub-release update check also
-// admits prereleases (default false: official releases only).
-// `updater_auto_update` — arms unattended background self-upgrade to the
-// newest admissible GitHub release (default false: upgrading stays an
-// explicit owner action). `org_name` — the studio display name ("" = unset).
-// `owner_name` — the owner's display nickname ("" = unset). `display_theme` /
-// `display_language` — the owner's cockpit visual prefs ("" = unset).
-// `display_wide` — whether the cockpit uses the wide layout (default false =
-// the narrow centred column). `doc_cap_chars_duty` / `doc_cap_chars_insight` /
-// `doc_cap_chars_learning` / `doc_cap_chars_manual_sop` /
-// `doc_cap_chars_manual_learnings` (T-ae38, manual split in two by T-30f1) — the
-// FIVE independent size caps on the accumulating documents, in CHARACTERS
-// (Unicode code points): a role's Duty (role definition), Insight and Learning
-// (lessons), plus a task manual's sop_md and learnings, which are now judged by
-// TWO separate knobs rather than one shared manual cap. Each knob's shipped
-// default is the `default` on its own field below — Duty's is deliberately much
-// smaller than the other four's, and every one of them is owner-adjustable, so no
-// prose here restates a number. EVERY key carries a suffix on purpose:
-// `get_settings` shows an agent key NAMES and no descriptions, so an unsuffixed
-// `doc.cap_chars` — or a bare `doc.cap_chars.manual` sitting beside the two it
-// was split into — reads as a global default and would be adjusted by someone
-// believing they had moved all of them.
+// SettingsDTO The org-adjustable settings surface (`GET /api/settings`; owner or admin agent). `owner_token_ttl` controls owner-login JWTs; `agent_token_ttl` controls member and outsource-worker JWTs. They are independent and apply to newly minted tokens. Existing deployments migrate their former shared `auth.token_ttl` value into both successor settings, preserving current behaviour.
 type SettingsDTO struct {
+	// AgentTokenTtl Agent and outsource-worker JWT lifetime in seconds. Fresh installs default to 7 days.
+	AgentTokenTtl int `json:"agent_token_ttl"`
+
 	// CodexCompactionThreshold Codex context-compaction threshold, 1 through 10.
 	CodexCompactionThreshold *int `json:"codex_compaction_threshold,omitempty"`
 
@@ -2153,19 +2132,23 @@ type SettingsDTO struct {
 	// OwnerName The owner's display nickname shown in the cockpit topbar profile pill (T-0b41). "" = never set — the pill falls back to the localized default label.
 	OwnerName *string `json:"owner_name,omitempty"`
 
+	// OwnerTokenTtl Owner-login JWT lifetime in seconds. Fresh installs default to 24 hours.
+	OwnerTokenTtl int `json:"owner_token_ttl"`
+
 	// PushContactEmail The contact address the push gateways are told to reach us at (T-8a82). "" = never set, and while it is unset no Web Push is delivered at all: Apple rejects the whole VAPID JWT when the address sits on an unreachable domain, so an unset or reserved-domain value would silently kill push on every device.
 	PushContactEmail   *string `json:"push_contact_email,omitempty"`
-	TokenTtl           int     `json:"token_ttl"`
 	UpdaterAutoUpdate  *bool   `json:"updater_auto_update,omitempty"`
 	UpdaterReceiveBeta *bool   `json:"updater_receive_beta,omitempty"`
 }
 
 // SettingsUpdateDTO Partial settings edit (`PATCH /api/settings`) — only supplied fields change,
-// effective immediately (no restart). `token_ttl` MUST be one of 43200 / 86400 /
-// 604800 / 2592000 seconds (12h / 24h / 7d / 30d — a whitelist, so a stray 0 can
-// never lock every future login out); `handover_pct` MUST be 40..90 (the warn
-// band sits at 40 — a handover threshold below it would fire before the
-// warning). Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).
+// effective immediately (no restart). `owner_token_ttl` and `agent_token_ttl` are
+// independent and each MUST be one of 43200 / 86400 / 604800 / 2592000 seconds
+// (12h / 24h / 7d / 30d — a whitelist, so a stray 0 can never lock future logins
+// or agent mints out); owner changes apply from the next login and agent changes
+// from the next bootstrap, reconcile, or outsource spawn. `handover_pct` MUST be
+// 40..90 (the warn band sits at 40 — a handover threshold below it would fire
+// before the warning). Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).
 // `updater_receive_beta` toggles whether the GitHub-release update check also
 // admits prereleases; `updater_auto_update` toggles unattended background
 // self-upgrade to the newest admissible release (both booleans, default false;
@@ -2176,6 +2159,8 @@ type SettingsDTO struct {
 // point: a cap can only ever be RAISED (owner ruling 2026-07-31), because
 // lowering one would turn documents that are legal today into shrink-only ones.
 type SettingsUpdateDTO struct {
+	AgentTokenTtl *int `json:"agent_token_ttl,omitempty"`
+
 	// CodexCompactionThreshold Codex context-compaction threshold, 1 through 10.
 	CodexCompactionThreshold *int `json:"codex_compaction_threshold,omitempty"`
 
@@ -2215,11 +2200,11 @@ type SettingsUpdateDTO struct {
 	OutsourceMaxParallel *int    `json:"outsource_max_parallel,omitempty"`
 
 	// OwnerName The owner's display nickname (T-0b41) — trimmed, max 80 runes; "" clears it back to the localized default. A value longer than 80 runes is a 422.
-	OwnerName *string `json:"owner_name,omitempty"`
+	OwnerName     *string `json:"owner_name,omitempty"`
+	OwnerTokenTtl *int    `json:"owner_token_ttl,omitempty"`
 
 	// PushContactEmail The push contact address (T-8a82) — trimmed, max 254 runes; "" clears it back to unset and stops all Web Push delivery. A value must be a single `local@domain` address whose domain is a real public one: a malformed address, or one on a reserved suffix (.local, .localhost, .internal, .test, .invalid, .example), is a 422 — those are exactly the values the push gateways reject with BadJwtToken, which would take push down silently.
 	PushContactEmail   *string `json:"push_contact_email,omitempty"`
-	TokenTtl           *int    `json:"token_ttl,omitempty"`
 	UpdaterAutoUpdate  *bool   `json:"updater_auto_update,omitempty"`
 	UpdaterReceiveBeta *bool   `json:"updater_receive_beta,omitempty"`
 }
@@ -3456,7 +3441,7 @@ type ServerInterface interface {
 	// Read the org-adjustable settings (owner/admin agent).
 	// (GET /api/settings)
 	HandleGetSettingsApiSettingsGet(w http.ResponseWriter, r *http.Request)
-	// Edit settings (login TTL / handover threshold); live immediately.
+	// Edit settings (owner-login and agent token TTLs / handover threshold); live immediately.
 	// (PATCH /api/settings)
 	HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, r *http.Request)
 	// List task types (match by display_name/purpose; address by type_key).

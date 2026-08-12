@@ -48,7 +48,8 @@ type authStatusDTO struct {
 // settingsDTO is the owner-adjustable settings surface (GET/PATCH
 // /api/settings).
 type settingsDTO struct {
-	TokenTTL                 int64 `json:"token_ttl"`
+	OwnerTokenTTL            int64 `json:"owner_token_ttl"`
+	AgentTokenTTL            int64 `json:"agent_token_ttl"`
 	HandoverPct              int   `json:"handover_pct"`
 	CodexCompactionThreshold int   `json:"codex_compaction_threshold"`
 	MonitoringRefreshSeconds int   `json:"monitoring_refresh_seconds"`

@@ -1646,11 +1646,12 @@ export const httpApi: Api = {
   async patchServerSettings(
     patch: ServerSettingsPatch,
   ): Promise<ServerSettingsView> {
-    // PATCH /api/settings {token_ttl?, handover_pct?, outsource_max_parallel?}
+    // PATCH /api/settings {owner_token_ttl?, agent_token_ttl?, handover_pct?, outsource_max_parallel?}
     // -> SettingsDTO (the settings after the change — durable + live
     // immediately; an outsource_max_parallel outside -1..20 is a 422; -1 = 無限).
     const body: {
-      token_ttl?: number;
+      owner_token_ttl?: number;
+      agent_token_ttl?: number;
       handover_pct?: number;
       codex_compaction_threshold?: number;
       monitoring_refresh_seconds?: number;
@@ -1673,7 +1674,8 @@ export const httpApi: Api = {
       // out of sync with the bundle and silently drop new fields again.
       custom_themes?: ThemeBundle[];
     } = {};
-    if (patch.tokenTtl !== undefined) body.token_ttl = patch.tokenTtl;
+    if (patch.ownerTokenTtl !== undefined) body.owner_token_ttl = patch.ownerTokenTtl;
+    if (patch.agentTokenTtl !== undefined) body.agent_token_ttl = patch.agentTokenTtl;
     if (patch.handoverPct !== undefined) body.handover_pct = patch.handoverPct;
     if (patch.codexCompactionThreshold !== undefined) body.codex_compaction_threshold = patch.codexCompactionThreshold;
     if (patch.monitoringRefreshSeconds !== undefined) body.monitoring_refresh_seconds = patch.monitoringRefreshSeconds;

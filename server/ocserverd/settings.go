@@ -38,9 +38,11 @@ const (
 	// NOT stamp it — migrating is not a password change, and pre-migration
 	// tokens must survive.
 	settingPasswordChangedAt = "auth.password_changed_at"
-	// settingTokenTTL is the owner-login JWT lifetime in seconds (default
-	// defaultTokenTTL).
-	settingTokenTTL = "auth.token_ttl"
+	// settingLegacyTokenTTL is the former shared TTL. It is read only as a
+	// migration source; upgrades copy it into BOTH independent successor keys.
+	settingLegacyTokenTTL = "auth.token_ttl"
+	settingOwnerTokenTTL  = "auth.owner_token_ttl"
+	settingAgentTokenTTL  = "auth.agent_token_ttl"
 	// settingClaimToken is the ONE-SHOT first-run claim token (B3): minted at
 	// serve start while no password is set, printed only to the local serve
 	// log / installer banner, required by POST /api/auth/set-password and
@@ -173,7 +175,8 @@ type authSettings struct {
 	secret                     []byte
 	passwordHash               string // "" = not set in DB (first-run: set-password flow)
 	passwordChangedAt          int64  // epoch secs; owner tokens with iat before it are refused
-	tokenTTL                   int64
+	ownerTokenTTL              int64
+	agentTokenTTL              int64
 	ctxhigh                    SseContextHighConfig
 	codexCompactionThreshold   int
 	monitoringRefreshSeconds   int
@@ -207,11 +210,14 @@ type authSettings struct {
 //     fresh install (no DB value, no oc.toml auth) mints a random secret.
 //   - Password: DB hash wins; absent + oc.toml plaintext → store its argon2id
 //     hash (the plaintext itself never enters the DB).
-//   - token_ttl: DB → explicitly-written oc.toml value (migrated in) → default.
+//   - token TTLs: successor DB keys win independently. On upgrade, the legacy
+//     shared value is copied to each missing successor, preserving both
+//     deployed behaviours; fresh installs use their separate code defaults.
 //   - ctx.*: DB overrides on top of the oc.toml/[defaults] config.
 func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, error) {
 	out := authSettings{
-		tokenTTL:                 int64(cfg.Auth.TokenTTL),
+		ownerTokenTTL:            defaultOwnerTokenTTL,
+		agentTokenTTL:            defaultAgentTokenTTL,
 		ctxhigh:                  cfg.SseContextHigh,
 		codexCompactionThreshold: defaultCodexCompactionThreshold,
 		monitoringRefreshSeconds: defaultMonitoringRefreshSeconds,
@@ -267,21 +273,42 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 		logf("migrated oc.toml [auth].password into DB settings as an argon2id hash")
 	}
 
-	ttl, err := d.GetSetting(settingTokenTTL)
+	legacyTTL, err := d.GetSetting(settingLegacyTokenTTL)
 	if err != nil {
 		return out, err
 	}
-	if ttl != nil {
-		n, err := strconv.ParseInt(*ttl, 10, 64)
-		if err != nil || n <= 0 {
-			return out, fmt.Errorf("settings %s: not a positive integer: %q", settingTokenTTL, *ttl)
-		}
-		out.tokenTTL = n
-	} else if cfg.Auth.TokenTTLSet {
-		if err := d.PutSetting(settingTokenTTL, strconv.Itoa(cfg.Auth.TokenTTL)); err != nil {
+	if legacyTTL == nil && cfg.Auth.TokenTTLSet {
+		v := strconv.Itoa(cfg.Auth.TokenTTL)
+		legacyTTL = &v
+	}
+	for _, target := range []struct {
+		key      string
+		dst      *int64
+		fallback int64
+	}{
+		{settingOwnerTokenTTL, &out.ownerTokenTTL, defaultOwnerTokenTTL},
+		{settingAgentTokenTTL, &out.agentTokenTTL, defaultAgentTokenTTL},
+	} {
+		stored, err := d.GetSetting(target.key)
+		if err != nil {
 			return out, err
 		}
-		logf("migrated oc.toml [auth].token_ttl into DB settings")
+		if stored == nil && legacyTTL != nil {
+			if err := d.PutSetting(target.key, *legacyTTL); err != nil {
+				return out, err
+			}
+			stored = legacyTTL
+			logf("migrated legacy auth.token_ttl into " + target.key)
+		}
+		if stored == nil {
+			*target.dst = target.fallback
+			continue
+		}
+		n, err := strconv.ParseInt(*stored, 10, 64)
+		if err != nil || n <= 0 {
+			return out, fmt.Errorf("settings %s: not a positive integer: %q", target.key, *stored)
+		}
+		*target.dst = n
 	}
 
 	changed, err := d.GetSetting(settingPasswordChangedAt)

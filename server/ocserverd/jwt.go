@@ -10,7 +10,9 @@ package main
 // produces — same header ({"alg":"HS256","typ":"JWT"}), same claim ORDER
 // (sub, scope, iat, exp[, machine_id]), same compact JSON (no spaces), same
 // unpadded base64url — so a token minted by either daemon verifies on the
-// other under the shared secret.
+// other under the shared secret. Warden credentials are the sole exception:
+// their server-only mint path intentionally omits exp, so a deleted machine's
+// roster row — not a timer — is their revocation seam.
 
 import (
 	"crypto/hmac"
@@ -41,7 +43,7 @@ type jwtClaims struct {
 	Sub       string `json:"sub"`
 	Scope     string `json:"scope"`
 	Iat       int64  `json:"iat"`
-	Exp       int64  `json:"exp"`
+	Exp       *int64 `json:"exp,omitempty"`
 	MachineID string `json:"machine_id,omitempty"`
 }
 
@@ -71,7 +73,21 @@ func mintJWT(sub, scope string, ttl int64, secret []byte, now int64, machineID s
 	if sub == "" {
 		return "", fmt.Errorf("%w: mint requires a non-empty sub (identity id)", errInvalidToken)
 	}
-	claims := jwtClaims{Sub: sub, Scope: scope, Iat: now, Exp: now + ttl, MachineID: machineID}
+	exp := now + ttl
+	return mintJWTClaims(jwtClaims{Sub: sub, Scope: scope, Iat: now, Exp: &exp, MachineID: machineID}, secret)
+}
+
+// mintJWTWithoutExpiry mints a signed JWT with no exp claim. It is deliberately
+// separate from mintJWT so ordinary callers must opt into a permanent token
+// explicitly; its only production caller is mintWardenToken.
+func mintJWTWithoutExpiry(sub, scope string, secret []byte, now int64, machineID string) (string, error) {
+	if sub == "" {
+		return "", fmt.Errorf("%w: mint requires a non-empty sub (identity id)", errInvalidToken)
+	}
+	return mintJWTClaims(jwtClaims{Sub: sub, Scope: scope, Iat: now, MachineID: machineID}, secret)
+}
+
+func mintJWTClaims(claims jwtClaims, secret []byte) (string, error) {
 	payload, err := json.Marshal(claims)
 	if err != nil {
 		return "", fmt.Errorf("%w: marshal claims: %v", errInvalidToken, err)
@@ -87,8 +103,9 @@ func mintJWT(sub, scope string, ttl int64, secret []byte, now int64, machineID s
 //
 // Checks, in Python-contract order: structural shape (3 dot-segments), the
 // HS256 header alg (refusing an alg:none downgrade), a CONSTANT-TIME signature
-// compare (hmac.Equal), exp present + not in the past (errExpiredToken), and a
-// non-empty sub.
+// compare (hmac.Equal), an exp that is not in the past when present
+// (errExpiredToken), and a non-empty sub. Missing exp is reserved for the
+// server's warden-only mint path.
 func verifyJWT(token string, secret []byte, now int64) (map[string]any, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -126,12 +143,14 @@ func verifyJWT(token string, secret []byte, now int64) (map[string]any, error) {
 		return nil, fmt.Errorf("%w: bad payload: %v", errInvalidToken, err)
 	}
 
-	exp, ok := claims["exp"].(float64) // encoding/json numbers land as float64
-	if !ok {
-		return nil, fmt.Errorf("%w: token has no numeric exp", errInvalidToken)
-	}
-	if float64(now) >= exp {
-		return nil, errExpiredToken
+	if rawExp, present := claims["exp"]; present {
+		exp, ok := rawExp.(float64) // encoding/json numbers land as float64
+		if !ok {
+			return nil, fmt.Errorf("%w: token has no numeric exp", errInvalidToken)
+		}
+		if float64(now) >= exp {
+			return nil, errExpiredToken
+		}
 	}
 	if sub, _ := claims["sub"].(string); sub == "" {
 		return nil, fmt.Errorf("%w: token has no sub (identity id)", errInvalidToken)

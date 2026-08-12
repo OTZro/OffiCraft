@@ -6,8 +6,9 @@ package main
 //     gates, the dual-SSE takeover (kick-old-admit-new; only the anti-flap
 //     throttle still answers a pre-stream 409), the `: connected` greeting, the
 //     online/machine-claim projection, the buffered delta stream (the hub
-//     Publish fan-out), the two directed bands — context-high on any agent
-//     connection, warden-command on a kind=="warden" connection — and the
+//     Publish fan-out), the directed bands — context-high and token-expiry on
+//     restartable agent connections, warden-command on a kind=="warden"
+//     connection — and the
 //     15 s quiet-stream heartbeat.
 //
 //   * POST /api/mcp — the JSON-RPC face (spec/mcp.md): parse errors,
@@ -166,6 +167,11 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 	// marker (T-7826 dedup). In-memory, reset on reconnect, never persisted;
 	// bucketReset (below WARN / boot) so the first climb into the band emits.
 	chLastBucket := bucketReset
+	// Per-connection token-expiry band state (spec §6.1): the last time the
+	// still-unacknowledged warning was sent. A restart replaces this connection
+	// and its JWT, which naturally clears the reminder state.
+	lastTokenExpiryReminder := int64(0)
+	nextTokenExpiryCheck := int64(0)
 
 	write := func(frame []byte) bool {
 		armWriteDeadline()
@@ -210,6 +216,43 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 						return
 					}
 					continue
+				}
+			}
+		}
+		// Token-expiry band (spec §6.1): the server alone can read the verified
+		// JWT expiry, so it repeatedly directs a still-valid agent to checkpoint
+		// and restart before auth fails. While the token is still far away, its
+		// exp schedules the NEXT check at the 30-minute boundary; once pending,
+		// a member read occurs only at the 30-second reminder cadence. This keeps
+		// the hot SSE poll free of DB reads without delaying the first warning.
+		if memberID != "" {
+			now := time.Now().Unix()
+			if now >= nextTokenExpiryCheck {
+				claims := claimsFromContext(r.Context())
+				remaining, validExpiry := tokenExpiryRemaining(claims, now)
+				nextTokenExpiryCheck = tokenExpiryNextCheck(claims, now)
+				switch {
+				case !validExpiry:
+					// Fail-safe on an absent/malformed/expired claim. The schedule above
+					// avoids re-checking every 250ms while preserving stream health.
+				case remaining > tokenExpiryWarningWindow:
+					// The schedule above is the exact 30-minute warning boundary.
+				default:
+					member, err := s.dal.GetMember(memberID)
+					if err == nil {
+						signal, last := decideTokenExpirySignal(
+							memberID, claims, member, s.gauge.Get(memberID),
+							now, lastTokenExpiryReminder)
+						lastTokenExpiryReminder = last
+						if signal != nil {
+							if frame, err := directedFrameText(tokenExpiryTopic, signal); err == nil {
+								if !write(frame) {
+									return
+								}
+								continue
+							}
+						}
+					}
 				}
 			}
 		}

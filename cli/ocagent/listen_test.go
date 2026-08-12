@@ -232,6 +232,20 @@ func TestHandleDirectedBandPrintsTheServerMessage(t *testing.T) {
 		t.Fatalf("context-high out = %q", got)
 	}
 
+	// token-expiry: the listener must surface the restart instruction instead
+	// of treating this directed frame as an ignorable wake.
+	out.Reset()
+	handleDirectedBand(map[string]any{
+		"topic": "token-expiry",
+		"data": map[string]any{
+			"topic": "token-expiry", "to": "m-1", "expires_in": float64(1800),
+			"reason": "agent token expires in 1800s; checkpoint this turn, then call restart_self to receive a fresh token",
+		},
+	}, &out)
+	if got := out.String(); got != "[ocagent] signal token-expiry: agent token expires in 1800s; checkpoint this turn, then call restart_self to receive a fresh token\n" {
+		t.Fatalf("token-expiry out = %q", got)
+	}
+
 	// task-close: same shape, task fields riding along.
 	out.Reset()
 	handleDirectedBand(map[string]any{
@@ -277,13 +291,15 @@ func TestDispatchRoutesDirectedBandsAndIgnoresUnknownTopics(t *testing.T) {
 		}
 		return raw
 	}
-	// Both directed band topics print their message through dispatch().
+	// All directed band topics print their message through dispatch().
 	l.dispatch(frame("context-high", map[string]any{"reason": "context 45% — start converging"}))
+	l.dispatch(frame("token-expiry", map[string]any{"reason": "agent token expires soon; call restart_self"}))
 	l.dispatch(frame("task-close", map[string]any{"reason": "任務 T-7d40 已結束（done）"}))
 	got := out.String()
 	if !strings.Contains(got, "[ocagent] signal context-high: context 45% — start converging") ||
+		!strings.Contains(got, "[ocagent] signal token-expiry: agent token expires soon; call restart_self") ||
 		!strings.Contains(got, "[ocagent] signal task-close: 任務 T-7d40 已結束（done）") {
-		t.Fatalf("dispatch must surface both directed bands, got %q", got)
+		t.Fatalf("dispatch must surface all directed bands, got %q", got)
 	}
 	// An unknown topic stays silent (the pre-existing contract).
 	out.Reset()

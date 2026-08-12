@@ -80,11 +80,12 @@ func specSSETopics(t *testing.T) map[string]bool {
 // phantom wire topic no client is contracted to understand, and a topic in the
 // spec that the code drops is a delta the wire promises and never sends.
 //
-// ⚠️ SCOPE — the three DIRECTED bands are NOT missing from this equality, they
-// are deliberately outside it. `context-high` (spec §6), `warden-command` (§7)
-// and `task-close` (§8) go out through hub.PushDirected and never touch
-// Publish, so they are neither in sseTopics nor in §3.1's table; §3.1 says so
-// itself ("a separate envelope family, not entity-delta topics"). Do NOT
+// ⚠️ SCOPE — the four DIRECTED bands are NOT missing from this equality, they
+// are deliberately outside it. `context-high` (spec §6), `token-expiry`
+// (§6.1), `warden-command` (§7) and `task-close` (§8) go out through
+// hub.PushDirected and never touch Publish, so they are neither in sseTopics
+// nor in §3.1's table; §3.1 says so itself ("a separate envelope family, not
+// entity-delta topics"). Do NOT
 // "repair" this test by adding them to either side — that would make the
 // equality fail against a spec table they were never meant to be in, and it
 // would put non-entity topics through the Publish gate. They are pinned by

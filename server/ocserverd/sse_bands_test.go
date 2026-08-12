@@ -192,6 +192,57 @@ func TestDecideContextHighSignal(t *testing.T) {
 	}
 }
 
+func TestDecideTokenExpirySignalRepeatsUntilRestart(t *testing.T) {
+	const now int64 = 20_000
+	claims := map[string]any{"exp": float64(now + tokenExpiryWarningWindow)}
+	oldSession := map[string]any{"boot_ts": float64(now - int64(minSelfRestartSecs) - 1)}
+	member := &Member{ID: "m-expiry", Kind: KindAssistant}
+
+	signal, last := decideTokenExpirySignal("m-expiry", claims, member, oldSession, now, 0)
+	if signal == nil {
+		t.Fatal("an eligible agent at the 30-minute boundary must be reminded")
+	}
+	if signal.Topic != tokenExpiryTopic || signal.To != "m-expiry" ||
+		signal.ExpiresIn != tokenExpiryWarningWindow || !strings.Contains(signal.Reason, "restart_self") {
+		t.Fatalf("signal = %+v", signal)
+	}
+	if last != now {
+		t.Fatalf("first reminder timestamp = %d, want %d", last, now)
+	}
+	if signal, repeatedLast := decideTokenExpirySignal(
+		"m-expiry", claims, member, oldSession, now+tokenExpiryReminderInterval-1, last); signal != nil || repeatedLast != last {
+		t.Fatalf("reminder must stay quiet before cadence: signal=%+v last=%d", signal, repeatedLast)
+	}
+	if signal, repeatedLast := decideTokenExpirySignal(
+		"m-expiry", claims, member, oldSession, now+tokenExpiryReminderInterval, last); signal == nil || repeatedLast != now+tokenExpiryReminderInterval {
+		t.Fatalf("unhandled expiry must repeat on cadence: signal=%+v last=%d", signal, repeatedLast)
+	}
+
+	far := map[string]any{"exp": float64(now + tokenExpiryWarningWindow + 1)}
+	if signal, _ := decideTokenExpirySignal("m-expiry", far, member, oldSession, now, 0); signal != nil {
+		t.Fatalf("far-from-expiry token must stay quiet: %+v", signal)
+	}
+	if got, want := tokenExpiryNextCheck(far, now), now+1; got != want {
+		t.Fatalf("far token must recheck at the exact 30-minute boundary: got %d want %d", got, want)
+	}
+	if got, want := tokenExpiryNextCheck(claims, now), now+tokenExpiryReminderInterval; got != want {
+		t.Fatalf("pending token must use reminder cadence: got %d want %d", got, want)
+	}
+	freshSession := map[string]any{"boot_ts": float64(now - 1)}
+	if signal, _ := decideTokenExpirySignal("m-expiry", claims, member, freshSession, now, 0); signal != nil {
+		t.Fatalf("notification must wait until restart_self is usable: %+v", signal)
+	}
+	member.RefocusSince = float64(now - 1)
+	if signal, _ := decideTokenExpirySignal("m-expiry", claims, member, oldSession, now, 0); signal != nil {
+		t.Fatalf("agent already in handover must not be reminded: %+v", signal)
+	}
+	member.RefocusSince = 0
+	member.Kind = KindWarden
+	if signal, _ := decideTokenExpirySignal("m-expiry", claims, member, oldSession, now, 0); signal != nil {
+		t.Fatalf("warden must not receive restart_self reminder: %+v", signal)
+	}
+}
+
 func TestDirectedFrameText(t *testing.T) {
 	frame, err := directedFrameText(wardenCommandTopic, wardenCommandFrame{
 		RPC:  "start",

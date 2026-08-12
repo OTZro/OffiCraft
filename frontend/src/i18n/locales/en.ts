@@ -1406,6 +1406,8 @@ export const en: Dict = {
     paramsSaveError: "Didn't save — try again",
     sessionTtl: "Session length",
     sessionTtlSub: "How long before you have to sign in again",
+    agentTokenTtl: "Agent token lifetime",
+    agentTokenTtlSub: "How long newly started members and outsource workers keep their token",
     ttl12h: "12 hours",
     ttl24h: "24 hours",
     ttl7d: "7 days",

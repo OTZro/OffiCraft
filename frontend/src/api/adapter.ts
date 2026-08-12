@@ -660,7 +660,9 @@ export interface TaskReassignInput {
 /** The owner-adjustable server settings in view-model form (`/api/settings`). */
 export interface ServerSettingsView {
   /** Owner-login lifetime in seconds (one of 43200/86400/604800/2592000). */
-  tokenTtl: number;
+  ownerTokenTtl: number;
+  /** Member and outsource-worker lifetime in seconds. */
+  agentTokenTtl: number;
   /** Context auto-handover threshold in percent (40..90). */
   handoverPct: number;
   /** Codex context compactions before automatic refocus (1..10). */
@@ -743,10 +745,11 @@ export interface OnboardingReportView {
 }
 
 /** Partial settings edit — only supplied fields change (server 422s a
- * token_ttl outside its whitelist / a handover_pct outside 40..90 / an
+ * owner_token_ttl or agent_token_ttl outside their whitelist / a handover_pct outside 40..90 / an
  * outsource_max_parallel outside -1..20; -1 = 無限 unlimited). */
 export interface ServerSettingsPatch {
-  tokenTtl?: number;
+  ownerTokenTtl?: number;
+  agentTokenTtl?: number;
   handoverPct?: number;
   codexCompactionThreshold?: number;
   monitoringRefreshSeconds?: number;
@@ -1873,7 +1876,8 @@ export interface Api {
   getServerSettings(): Promise<ServerSettingsView>;
   /**
    * Partial settings edit (`PATCH /api/settings`) — durable and live
-   * immediately (token_ttl from the next login, handover_pct from the next
+   * immediately (owner_token_ttl from the next login, agent_token_ttl from the
+   * next agent or worker mint, handover_pct from the next
    * context report). Returns the settings after the change.
    */
   patchServerSettings(patch: ServerSettingsPatch): Promise<ServerSettingsView>;

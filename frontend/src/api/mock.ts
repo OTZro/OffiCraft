@@ -1272,7 +1272,8 @@ function findWire(id: string): WireMember {
 let mockPasswordSet = true;
 let mockPassword = "mock-password";
 const DEFAULT_MOCK_SETTINGS = {
-  token_ttl: 86400,
+  owner_token_ttl: 86400,
+  agent_token_ttl: 604800,
   handover_pct: 50,
   codex_compaction_threshold: 3,
   monitoring_refresh_seconds: 5,
@@ -3584,7 +3585,7 @@ export const mockApi: Api = {
 
   async onboardMachine(
     displayName: string,
-    opts?: OnboardOptions
+    _opts?: OnboardOptions
   ): Promise<OnboardResultView> {
     // Fake onboard: the machine is created by DISPLAY NAME ONLY (no host) — the
     // server owns the opaque machine_id. We mint a stable id and push a warden
@@ -3596,8 +3597,9 @@ export const mockApi: Api = {
     const name = displayName.trim();
     const machineId = `m-${Math.random().toString(36).slice(2, 10)}`;
     const token = `mock-warden-token-${Math.random().toString(36).slice(2, 14)}`;
-    const ttlDays = opts?.ttlDays ?? 30;
-    const expiresIn = ttlDays * 86400;
+    // Warden exec credentials are permanent on the real server. Keep the
+    // legacy request option in the adapter signature for wire compatibility,
+    // but do not let it fabricate a finite expiry in the mock.
     // The boot command embeds a short-lived single-use claim code, never the
     // token (mirrors the real POST /api/machines onboard shape).
     const claimCode = `mock-claim-code-${Math.random().toString(36).slice(2, 14)}`;
@@ -3639,7 +3641,7 @@ export const mockApi: Api = {
       member_id: machineId,
       machine_id: machineId,
       token,
-      expires_in: expiresIn,
+      expires_in: 0,
       boot_command: bootCommand,
       claim_code: claimCode,
       claim_expires_in: 600,
@@ -3854,13 +3856,16 @@ export const mockApi: Api = {
     patch: ServerSettingsPatch
   ): Promise<ServerSettingsView> {
     // Validate BOTH fields before writing anything (server parity).
-    if (patch.tokenTtl !== undefined && !TOKEN_TTL_CHOICES.has(patch.tokenTtl)) {
+    if (patch.ownerTokenTtl !== undefined && !TOKEN_TTL_CHOICES.has(patch.ownerTokenTtl)) {
       throw new ApiError(
         "http 422 for PATCH /api/settings",
         422,
         "validation_error",
-        "token_ttl must be one of 43200, 86400, 604800, 2592000 seconds"
+        "owner_token_ttl must be one of 43200, 86400, 604800, 2592000 seconds"
       );
+    }
+    if (patch.agentTokenTtl !== undefined && !TOKEN_TTL_CHOICES.has(patch.agentTokenTtl)) {
+      throw new ApiError("http 422 for PATCH /api/settings", 422, "validation_error", "agent_token_ttl must be one of 43200, 86400, 604800, 2592000 seconds");
     }
     if (
       patch.handoverPct !== undefined &&
@@ -3994,8 +3999,11 @@ export const mockApi: Api = {
         "display_language must be one of zh, en"
       );
     }
-    if (patch.tokenTtl !== undefined) {
-      mockServerSettings.token_ttl = patch.tokenTtl;
+    if (patch.ownerTokenTtl !== undefined) {
+      mockServerSettings.owner_token_ttl = patch.ownerTokenTtl;
+    }
+    if (patch.agentTokenTtl !== undefined) {
+      mockServerSettings.agent_token_ttl = patch.agentTokenTtl;
     }
     if (patch.handoverPct !== undefined) {
       mockServerSettings.handover_pct = patch.handoverPct;

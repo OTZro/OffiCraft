@@ -204,7 +204,8 @@ func extractToken(r *http.Request) string {
 // and deliberately in the same place: a credential belonging to a machine the
 // roster has deleted is refused (authz.go revocationRefusal). It sits AFTER
 // signature verification — a forged token is still just "invalid token" and
-// never reaches a roster read.
+// never reaches a roster read. It also binds every exp-less credential to an
+// active warden row; no other signed JWT may become permanent.
 func requireAuth(secret []byte, ownerIatFloor func() int64, lookup func(id string) (*Member, error), next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(secret) == 0 {
@@ -229,6 +230,10 @@ func requireAuth(secret []byte, ownerIatFloor func() int64, lookup func(id strin
 					return
 				}
 			}
+		}
+		if permanentCredentialRefusal(claims, lookup) {
+			writeError(w, http.StatusUnauthorized, "invalid token")
+			return
 		}
 		if refusal := revocationRefusal(claims, lookup); refusal != "" {
 			writeError(w, http.StatusUnauthorized, refusal)
@@ -350,7 +355,8 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 		gauge:                      newMemStore(),
 		machineClaims:              newMachineClaimStore(),
 		secret:                     secret,
-		tokenTTL:                   tokenTTL,
+		ownerTokenTTL:              tokenTTL,
+		agentTokenTTL:              defaultAgentTokenTTL,
 		outsourceMaxParallel:       defaultOutsourceMaxParallel,
 		docCapCharsDuty:            dutyCapCharsDefault,
 		docCapCharsInsight:         contextDocMaxCharsDefault,
@@ -379,7 +385,7 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 // the SPA fallback's template list): the probes work, the business handlers
 // would need the full newAPIServer wiring.
 func defaultRouteSpecs() []RouteSpec {
-	return specsFor(newAPIServer(nil, NewHub(), nil, defaultTokenTTL, "."))
+	return specsFor(newAPIServer(nil, NewHub(), nil, defaultOwnerTokenTTL, "."))
 }
 
 // sseKeepAlive is the TCP keep-alive config applied to every accepted
@@ -506,7 +512,8 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 		fmt.Fprintf(out, "[ocserverd] FATAL: load settings: %v\n", err)
 		return 1
 	}
-	api := newAPIServer(dal, NewHub(), auth.secret, auth.tokenTTL, ".")
+	api := newAPIServer(dal, NewHub(), auth.secret, auth.ownerTokenTTL, ".")
+	api.agentTokenTTL = auth.agentTokenTTL
 	api.passwordHash = auth.passwordHash
 	api.passwordChangedAt = auth.passwordChangedAt
 	api.ctxhigh = auth.ctxhigh

@@ -229,6 +229,68 @@ func assertMachineRevoked(t *testing.T, machineID, who string, status int, body 
 	}
 }
 
+// TestPermanentCredentialsAreLimitedToActiveWardens is the T-356a admission
+// guard. A missing exp is only meaningful for the server-issued warden
+// credential: even a correctly signed token must be rejected when its subject
+// is an ordinary member (or absent from the roster), and immediately stops
+// working once its warden row is removed.
+//
+// Mutant: remove permanentCredentialRefusal from requireAuth → every negative
+// arm below turns 200, including the removed warden after its roster change.
+func TestPermanentCredentialsAreLimitedToActiveWardens(t *testing.T) {
+	srv, secret, api := revokeStack(t)
+	putTestMember(t, api, Member{ID: "m-permanent-warden", Name: "permanent-box",
+		Kind: KindWarden, DesiredState: DesiredStateOffline, RosterStatus: RosterStatusActive})
+	agent := testAgent("m-finite-agent")
+	putTestMember(t, api, agent)
+	worker := testAgent("ow-finite-worker")
+	worker.Kind = KindOutsource
+	putTestMember(t, api, worker)
+
+	now := time.Now().Unix()
+	wardenTok, err := mintJWTWithoutExpiry("m-permanent-warden", "agent", secret, now, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentTok, err := mintJWTWithoutExpiry(agent.ID, "agent", secret, now, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerTok, err := mintJWTWithoutExpiry(worker.ID, "agent", secret, now, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerTok, err := mintJWTWithoutExpiry(wireOwnerID, "owner", secret, now, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknownTok, err := mintJWTWithoutExpiry("m-not-on-roster", "agent", secret, now, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundWardenTok, err := mintJWTWithoutExpiry("m-permanent-warden", "agent", secret, now, "m-other")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if st, body := revokeCall(t, "GET", srv.URL+"/api/members", wardenTok, ""); st != http.StatusOK {
+		t.Fatalf("positive control: active warden permanent credential must work, got %d %s", st, body)
+	}
+	for who, token := range map[string]string{
+		"agent": agentTok, "outsource worker": workerTok, "owner": ownerTok,
+		"unknown subject": unknownTok, "warden with machine binding": boundWardenTok,
+	} {
+		if st, body := revokeCall(t, "GET", srv.URL+"/api/members", token, ""); st != http.StatusUnauthorized {
+			t.Errorf("permanent %s token must be 401, got %d %s", who, st, body)
+		}
+	}
+
+	revokeMachine(t, api, "m-permanent-warden")
+	if st, body := revokeCall(t, "GET", srv.URL+"/api/members", wardenTok, ""); st != http.StatusUnauthorized {
+		t.Fatalf("removed warden permanent credential must be 401, got %d %s", st, body)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // ② the collateral-damage guard — the load-bearing half
 // ---------------------------------------------------------------------------
