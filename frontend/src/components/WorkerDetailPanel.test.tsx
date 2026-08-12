@@ -23,6 +23,7 @@ import { OfficePage } from "./OfficePage";
 import {
   __resetMock,
   __injectMockTask,
+  __injectMockChat,
   __injectMockOutsourceWorker,
   __injectMockTaskType,
   __injectMockMonitoringSession,
@@ -1378,5 +1379,87 @@ describe("WorkerDetailPanel — pending launch changes (T-7f28)", () => {
     for (const cell of CELLS) {
       expect(queryByTestId(`worker-detail-${cell}-pending`)).toBeNull();
     }
+  });
+});
+
+// ── the resume summary card (T-4595) ────────────────────────────────────────
+//
+// The owner released ONE member verb to workers — reading a worker's resume
+// summary — so the outsource panel now renders the same 履歷摘要 card the staff
+// panel does, from the same component.
+//
+// This test exists because NOTHING else covered the slot: swapping the panel's
+// old notHere() placeholder for the real card turned zero tests red. A slot
+// whose content no test asserts is a slot that can quietly go back to being
+// empty.
+//
+// 🔴 THE SHELL IS NOT THE PAYLOAD. `mp-resume-body` renders in the ERROR state
+// too (ResumeSummaryCard puts `mp-resume-error` INSIDE it), so a test that stops
+// at "the container appeared" + "the spy was called with ow-r1" is satisfied by
+// a card drawing 讀取喚醒快照失敗 — which is exactly what the mock produced
+// before the `ow-` id was let through `findResumeSummaryTarget`. So the
+// assertions below reach for the OVERVIEW GRID and the individual stat values,
+// and they pin the worker's OWN numbers (its own chat line, its own bound task)
+// rather than a shape any snapshot would satisfy.
+describe("WorkerDetailPanel · 履歷摘要", () => {
+  it("renders the shared resume summary card, and fetches only on expand", async () => {
+    __injectMockTask(
+      mkTask({
+        id: "t-r1",
+        taskNo: "T-4595",
+        title: "履歷摘要",
+        // This worker's OWN task. The mock's task block matches on executorId
+        // alone (server parity — dal ListOpenTasksByExecutor filters on
+        // executor_id and nothing else), so an executorKind gate reappearing
+        // there would empty this list while everything else stayed green.
+        executorId: "ow-r1",
+      }),
+    );
+    __injectMockOutsourceWorker(
+      mkWorker({ id: "ow-r1", codename: "O-9", taskId: "t-r1", taskTitle: "履歷摘要" }),
+    );
+    // One inbound line from THIS worker, so chatCount/chatChars are its own and
+    // not a number every agent in the mock would share.
+    __injectMockChat({
+      id: "m-r1",
+      from: "ow-r1",
+      to: "owner",
+      body: "回報",
+      ts: Date.now() / 1000 - 30,
+      attachments: [],
+      replyCardId: null,
+    });
+    const spy = vi.spyOn(api, "getMemberResumeSummary");
+
+    const { findByTestId, queryByTestId } = renderOfficeAt("#office/worker/ow-r1");
+    const toggle = await findByTestId("mp-resume-toggle");
+
+    // Collapsed: the card is there, the request is NOT. This half is the one
+    // the staff panel's own comment calls a HARD REQUIREMENT — a panel that
+    // pulls a wake snapshot on every open would make opening the panel
+    // expensive for every agent in the roster.
+    expect(queryByTestId("mp-resume-body")).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+
+    fireEvent.click(toggle);
+    await findByTestId("mp-resume-body");
+    // Fetched for THIS worker — an id mix-up would show a stranger's snapshot
+    // under this worker's name, which reads as truth.
+    expect(spy).toHaveBeenCalledWith("ow-r1");
+
+    // The PAYLOAD arrived and was drawn: the overview grid only renders on the
+    // success branch, and the error branch renders `mp-resume-error` instead.
+    await findByTestId("mp-resume-overview");
+    expect(queryByTestId("mp-resume-error")).toBeNull();
+
+    // …and the numbers in it are THIS worker's snapshot, not an empty husk.
+    expect((await findByTestId("mp-resume-stat-chatCount")).textContent).toBe("1");
+    expect((await findByTestId("mp-resume-stat-tasksReturned")).textContent).toBe("1");
+    expect((await findByTestId("mp-resume-stat-tasksOpenTotal")).textContent).toBe("1");
+    // The bound task's own row, by its task number — the task block really
+    // resolved to the row this worker executes.
+    expect((await findByTestId("mp-resume-body")).textContent).toContain("T-4595");
+
+    spy.mockRestore();
   });
 });

@@ -6,7 +6,6 @@ import type { MonSessionView } from "../types";
 import { useMachines } from "../hooks/useMachines";
 import {
   AgentDetailPanel,
-  notHere,
   runtimeLabel,
   slot,
 } from "./AgentDetailPanel";
@@ -15,6 +14,7 @@ import { ModelEffortEditor } from "./ModelEffortEditor";
 import { ChevronLeftIcon, ChevronRightIcon } from "./icons";
 import { AvatarEditor } from "./AvatarEditor";
 import { Avatar } from "./Avatar";
+import { ResumeSummaryCard } from "./ResumeSummaryCard";
 import { LifecycleDot, presenceVisual } from "./LifecycleDot";
 import { ScheduledMessagesCard } from "./ScheduledMessagesCard";
 // 🔴 This panel renders its settings dialog with the .machine-picker* classes,
@@ -706,11 +706,7 @@ export function WorkerDetailPanel({
         afterIdentityCards: slot(taskCard),
         afterInfoCards: slot(delegatorCard),
         extraExpandCards: slot(scheduleCard),
-        afterPromptCards: notHere(
-          "RESUME SUMMARY 目前對外包取不到資料：server 的 resolveMember 對 " +
-            "KindOutsource 回 404（api_helpers.go；那道邊界是通用的，不是為這張卡立的）。" +
-            "這是「還沒做」不是「不該有」——要掛上來得先動後端，見 T-0b4f 票面",
-        ),
+        afterPromptCards: slot(<ResumeSummaryCard agentId={worker.id} />),
       }}
       vm={{
         testIdPrefix: "worker-detail",
