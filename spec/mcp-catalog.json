@@ -2825,7 +2825,7 @@
       "name": "remove_task_artifact"
     },
     {
-      "description": "Outsource worker's claim: read the task bound to the caller. The steps are a BOUNDED projection: only the current step(s) carry their dod/note in full, the rest give id/name/status/order_idx only, and steps_omitted_chars reports how much was dropped — call get_task for the whole plan.",
+      "description": "Outsource worker's claim: read the task bound to the caller. The steps are a BOUNDED projection: only the current step(s) carry their dod/note in full, the rest give id/name/status/order_idx only, and steps_omitted_chars reports how much was dropped — call get_task for the whole plan. The manual is the LIGHT row — type_key, display_name, purpose and the sizes of what was left out — NOT its sop_md/learnings: your initial prompt already carries those verbatim. manual_omitted_chars reports how much manual text was left out, and get_task_manual with that type_key serves the whole manual whenever you want it.",
       "inputSchema": {
         "properties": {},
         "type": "object"

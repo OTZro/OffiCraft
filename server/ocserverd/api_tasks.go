@@ -2775,12 +2775,22 @@ func (s *apiServer) HandleGetMyTaskApiSelfTaskGet(w http.ResponseWriter, r *http
 			return
 		}
 		if manual != nil {
-			dto, err := newTaskManualDTO(*manual, s.manualSopCap(), s.manualLearningsCap())
-			if err != nil {
-				internalError(w, err)
-				return
-			}
+			// LIGHT manual for this face only (T-4595): the worker's initial
+			// prompt already carries this manual VERBATIM (Q1 purpose / Q2
+			// fields / Q3 SOP / learnings, buildWorkerBootContext), so sending
+			// sop_md + learnings again on the worker's very first call was the
+			// same document twice in the same session — 92–98% of this
+			// response, measured on live rows, and one call was refused by the
+			// client's tool layer at 98,271 characters. type_key stays and the
+			// sizes stay, so the worker still knows the manual exists and how
+			// big it is; get_task_manual (machine floor — reachable by every
+			// worker) serves it in full whenever it is actually wanted.
+			// The TASK BODY above is deliberately untouched: that half is LIVE
+			// and this is the worker's only view of an owner's edits.
+			dto := newTaskManualListItemDTO(*manual, s.manualSopCap(), s.manualLearningsCap())
 			out.Manual = &dto
+			out.ManualOmittedChars = utf8.RuneCountInString(manual.SopMD) +
+				utf8.RuneCountInString(manual.Learnings)
 		}
 	}
 	writeJSON(w, http.StatusOK, out)

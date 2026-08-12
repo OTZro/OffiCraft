@@ -1424,16 +1424,44 @@ type outsourceWorkerProjection struct {
 	typeDisplay func(string) string
 }
 
-// myTaskDTO is the outsource worker's claim (get_my_task). Its task carries the
-// SLIM step projection (slimMyTaskSteps): full content for the current step(s)
-// only, id/name/status/order_idx for the rest. steps_omitted_chars reports what
-// that projection dropped — the resumeTaskDTO.detail_chars move: an omission is
-// served as a NUMBER so the caller can peek-then-decide (get_task still serves
-// every step in full).
+// myTaskDTO is the outsource worker's claim (get_my_task). TWO projections are
+// applied here and here only, and both report what they dropped as a NUMBER so
+// the caller can peek-then-decide (the resumeTaskDTO.detail_chars move):
+//
+//   - the SLIM step projection (slimMyTaskSteps): full content for the current
+//     step(s) only, id/name/status/order_idx for the rest → steps_omitted_chars.
+//   - the manual served WITHOUT its two authored documents (T-4595): the LIGHT
+//     row (newTaskManualListItemDTO) instead of the whole manual →
+//     manual_omitted_chars.
+//
+// WHY the manual is trimmed but the TASK BODY is not, which looks inconsistent
+// until you ask what each one is for. The worker's initial prompt
+// (buildWorkerBootContext) ALREADY carries both verbatim, so the first thing a
+// worker does on boot — call get_my_task — used to receive a second copy of
+// everything it had just read. Measured on live worker rows, get_my_task
+// returned 28k–34k characters of which 92–98% was byte-identical to the boot
+// context, and one call hit 98,271 characters and was refused outright by the
+// client's tool layer. But the two halves differ in KIND:
+//
+//   - the task body is LIVE. The boot context is a snapshot taken at spawn, so
+//     when the owner edits the ticket, get_my_task is the worker's only view of
+//     that edit. Trimming it would make the worker blind to its own task.
+//   - the manual is a stable, type-level document with its OWN tool
+//     (get_task_manual, machine floor — every worker can call it). Serving it
+//     twice in one session buys nothing; type_key + the sizes below say it
+//     exists and how big it is, and that tool serves it in full on demand.
+//
+// So this is deliberately NOT "the response is too big" — it is the SAME
+// document sent TWICE in the SAME session.
 type myTaskDTO struct {
 	Task              taskDTO        `json:"task"`
 	Manual            *taskManualDTO `json:"manual"` // null for an ad-hoc task
 	StepsOmittedChars int            `json:"steps_omitted_chars"`
+	// ManualOmittedChars is the runes of sop_md + learnings the manual
+	// projection dropped (0 when there is no manual, or when both documents
+	// are empty). Deliberately the SAME shape as StepsOmittedChars rather than
+	// a third vocabulary for "what I did not send".
+	ManualOmittedChars int `json:"manual_omitted_chars"`
 }
 
 // slimMyTaskSteps trims steps IN PLACE to the get_my_task projection and returns
@@ -1704,13 +1732,18 @@ func newTaskManualDTO(m TaskManual, sopCapChars, learningsCapChars int) (taskMan
 	}, nil
 }
 
-// newTaskManualListItemDTO is the ?view=list light projection (T-ec2c): the
-// SAME taskManualDTO wire shape carrying only the type identity the 類型 filter
+// newTaskManualListItemDTO is the LIGHT manual projection: the SAME
+// taskManualDTO wire shape carrying only the type identity the 類型 filter
 // reads (type_key / display_name / purpose + updated_ts), with the heavy
 // authored blobs HONEST-EMPTY — sop_md / learnings "" (the markdown bulk),
 // fields an empty list, assignee an empty object. It never parses the stored
 // fields/assignee JSON, so unlike newTaskManualDTO it cannot fail on a corrupt
 // blob (the light path deliberately does not touch those columns).
+//
+// TWO callers, one shape (deliberately — a second near-identical projection is
+// how the two would drift): ?view=list on the manual list (T-ec2c), and
+// get_my_task (T-4595), whose caller has the whole manual verbatim in its own
+// boot context already and can re-read it any time via get_task_manual.
 func newTaskManualListItemDTO(m TaskManual, sopCapChars, learningsCapChars int) taskManualDTO {
 	// The sizes are measured on the STORED row, not on the blanked-out wire
 	// fields: this projection omits the bulky text but must not therefore
