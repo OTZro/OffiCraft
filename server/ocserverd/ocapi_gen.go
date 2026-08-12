@@ -2801,7 +2801,7 @@ type WebhookUpdateDTO struct {
 	Status        *string `json:"status,omitempty"`
 }
 
-// WorkerBootContextDTO The outsource worker's boot-context PREVIEW (GET /api/outsource-workers/{id}/boot-context, T-ba6b) — the worker twin of the member panel's /api/bootstrap preview. The server re-runs the SAME buildWorkerBootContext fold the spawn path uses (worker_context.md seed + identity + the bound task in full + the type manual), from the CURRENT DB rows. HONEST: this is what the boot context would look like NOW — not a verbatim record of the spawn-time text (the task/manual may have changed since; nothing is stored). Never carries a worker token.
+// WorkerBootContextDTO The outsource worker's boot-context PREVIEW (GET /api/outsource-workers/{id}/boot-context, T-ba6b) — the worker twin of the member panel's /api/bootstrap preview. The server re-runs the SAME buildWorkerBootContext fold the spawn path uses. Since T-4595 that fold is the STAFF boot context minus the persona slot (系統互動 + 使用者自訂 + the boot sequence for the worker's own runtime); it carries no outsource-only document, no identity block, no bound task and no type manual, so it does not vary with them. HONEST: this is what the boot context would look like NOW — the seeds may have changed since spawn, and nothing is stored. Never carries a worker token.
 type WorkerBootContextDTO struct {
 	Context string `json:"context"`
 }

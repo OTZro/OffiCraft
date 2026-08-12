@@ -114,6 +114,7 @@ import {
   SEED_LESSONS_MD,
   SEED_INSIGHT_ASSISTANT_MD,
   SEED_BOOT_SEQUENCE_MD,
+  SEED_BOOT_SEQUENCE_CODEX_MD,
 } from "./seeds";
 import { ApiError } from "./errors";
 import { validateThemeBundles, isValidDisplayTheme } from "../lib/themeBundle";
@@ -3395,9 +3396,16 @@ export const mockApi: Api = {
   },
 
   async getWorkerBootContext(id: string): Promise<string> {
-    // Honest preview mirroring the backend buildWorkerBootContext order
-    // (seed → 你的身分 → 你的任務 → 任務手冊), re-assembled from the CURRENT
-    // mock rows — never a stored spawn-time text, never a token (T-ba6b).
+    // Honest preview mirroring the backend buildWorkerBootContext (T-ba6b),
+    // never a stored spawn-time text and never a token.
+    //
+    // 🔴 T-4595 rewrote this. It used to assemble 外包工作守則 → 你的身分 →
+    // 你的任務 → 任務手冊, and NONE of those exist any more: a worker's boot
+    // context is the STAFF fold (getBootstrap above) MINUS the persona slot —
+    // 系統互動 + 使用者自訂 + the boot sequence for the worker's OWN runtime,
+    // with not one word written for outsource readers. A mock that keeps the
+    // old shape is worse than no mock: the cockpit's tests go green against a
+    // fake server that still ships a document the real one deleted.
     const w = outsourceWorkers.find((x) => x.id === id);
     if (!w) {
       throw new ApiError(
@@ -3412,21 +3420,20 @@ export const mockApi: Api = {
         404, "not_found", `task ${w.taskId} not found`
       );
     }
-    const manual = taskManuals.find((m) => m.typeKey === task.typeKey);
-    const parts = [
-      "# 外包工作守則\n\n(worker_context.md seed——依目前資料即時重組的預覽。)",
-      `# 你的身分\n\n- 代號：${w.codename}\n- 模型：${w.model}\n- 投入度（effort）：${w.effort}`,
-      `# 你的任務（就這一張）\n\n- 編號：${task.taskNo}\n- 標題：${task.title}` +
-        (task.description.trim() ? `\n\n## 任務描述\n\n${task.description.trim()}` : ""),
-    ];
-    if (manual) {
-      parts.push(
-        `# 任務手冊：${manual.displayName || manual.typeKey}` +
-          (manual.purpose.trim() ? `\n\n## 這是什麼任務（Q1）\n\n${manual.purpose.trim()}` : "")
-      );
-    } else {
-      parts.push("# 任務手冊\n\n（該類型的手冊目前不存在——照任務描述與 owner 的指示規劃。）");
+    // The worker and its bound task are still resolved above, because the two
+    // 404s are the contract that tells the panel the row is stale — but the
+    // assembled text does not depend on either of them.
+    const userText = foldGlobalContext().text;
+    const parts = [SEED_SYSTEM_INTERACTION_MD.trim()];
+    if (userText.trim()) {
+      parts.push(`# 使用者自訂（Owner Additions）\n\n${userText.trim()}`);
     }
+    parts.push(
+      (w.runtime === "codex"
+        ? SEED_BOOT_SEQUENCE_CODEX_MD
+        : SEED_BOOT_SEQUENCE_MD
+      ).trim(),
+    );
     return parts.join("\n\n") + "\n";
   },
 
@@ -4375,28 +4382,32 @@ export const mockApi: Api = {
   },
 
   async getBootstrap(role: string): Promise<BootstrapView> {
-    // Honest preview mirroring the backend assemble_boot_context 3-block order
-    // (global-context-3block-restructure step1):
+    // Honest preview mirroring the backend buildBootContext slot order
+    // (spec/lifecycle.md §2.2, as re-ordered by T-4595):
     //   1. 系統互動 — the read-only file seed, FIRST;
-    //   2. `# Role:` — the folded role persona;
-    //   3. `# Lessons (role / task_type)` — the folded per-role lessons;
-    //   4. 使用者自訂 — the owner's ADDITIVE block, SKIPPED entirely when empty;
-    //   5. 啟動程序 — the read-only file seed, LAST (recency-authoritative tail).
+    //   2. 使用者自訂 — the owner's ADDITIVE block, SKIPPED entirely when empty;
+    //   3. `# Role:` + `# Lessons (role / task_type)` — the persona, and the
+    //      ONLY slot an outsource worker has nothing in (see
+    //      getWorkerBootContext below);
+    //   4. 啟動程序 — the read-only file seed, LAST (recency-authoritative tail).
+    // The owner block moved from 4th to 2nd so the two assemblies line up: a
+    // worker's boot context is this list minus slot 3, and with the owner block
+    // wedged between the lessons and the boot sequence it could not be.
     // NO token (a UI preview mints none).
     const taskType = "general"; // mirrors the server seed lessons task_type
     const roleDef = foldRole(role); // throws for an unknown role (≈ server 404)
     const lessons =
       lessonsOverlays.get(lessonsKey(role, taskType))?.text ?? SEED_LESSONS_MD;
     const userText = foldGlobalContext().text;
-    const parts = [
-      SEED_SYSTEM_INTERACTION_MD.trim(),
-      `# Role: ${roleDef.name || roleDef.key}\n\n${roleDef.definition_md.trim()}`,
-      `# Lessons (${role} / ${taskType})\n\n${lessons.trim()}`,
-    ];
+    const parts = [SEED_SYSTEM_INTERACTION_MD.trim()];
     if (userText.trim()) {
       parts.push(`# 使用者自訂（Owner Additions）\n\n${userText.trim()}`);
     }
-    parts.push(SEED_BOOT_SEQUENCE_MD.trim());
+    parts.push(
+      `# Role: ${roleDef.name || roleDef.key}\n\n${roleDef.definition_md.trim()}`,
+      `# Lessons (${role} / ${taskType})\n\n${lessons.trim()}`,
+      SEED_BOOT_SEQUENCE_MD.trim(),
+    );
     const wire: WireBootstrap = {
       role,
       name: roleDef.name,

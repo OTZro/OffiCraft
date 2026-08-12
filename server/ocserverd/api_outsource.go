@@ -213,13 +213,22 @@ func (s *apiServer) HandleGetOutsourceWorkerApiOutsourceWorkersIdGet(w http.Resp
 // initial-prompt PREVIEW (T-ba6b), the worker twin of the member panel's
 // POST /api/bootstrap {role} preview. Nothing is stored at spawn time (the
 // persona rides the worker_start frame and is dropped — worker_spawn.go), so
-// the server re-runs the SAME buildWorkerBootContext fold over the CURRENT DB
-// rows (worker + bound task + type manual) and returns the text — NO token is
-// minted (parity with the member preview's no-member_id branch). HONEST: this
-// is today's re-assembly, not a verbatim spawn-time record; the UI carries
-// that caveat. Owner-only (route Requires=owner — the text embeds the full
-// task + manual). 404 for an unknown worker or a gone bound task; a RELEASED
-// worker still reads (its rows are the audit trail, same as the single GET).
+// the server re-runs the SAME buildWorkerBootContext fold and returns the text
+// — NO token is minted (parity with the member preview's no-member_id branch).
+//
+// 🔴 T-4595 CHANGED WHAT "PREVIEW" MEANS HERE, and the old caveat is now the
+// wrong one. A worker's boot context is the staff fold minus the persona slot:
+// it does NOT contain the bound task or the type manual any more, so it does
+// not vary with them. The honest caveat is no longer "this is today's rows, not
+// the spawn-time text" — it is that the SEEDS may have changed since spawn.
+//
+// The worker and its bound task are still resolved, because the 404 contract
+// below is unchanged and is what tells the cockpit the row is stale; they are
+// still handed to the fold so that reinstating any per-task text shows up here
+// too rather than only on the spawn path.
+//
+// 404 for an unknown worker or a gone bound task; a RELEASED worker still reads
+// (its rows are the audit trail, same as the single GET).
 func (s *apiServer) HandleGetWorkerBootContextApiOutsourceWorkersIdBootContextGet(w http.ResponseWriter, r *http.Request, id string) {
 	worker, err := s.dal.GetOutsourceWorker(id)
 	if err != nil {
@@ -239,8 +248,9 @@ func (s *apiServer) HandleGetWorkerBootContextApiOutsourceWorkersIdBootContextGe
 		writeResolveError(w, errNotFound, "task", worker.TaskID)
 		return
 	}
-	// Manual is best-effort — buildWorkerBootContext renders an honest
-	// 「手冊目前不存在」 section when it is gone (same as the spawn path).
+	// Manual is best-effort, and since T-4595 the fold does not render it at
+	// all — it is resolved and passed so this preview keeps taking exactly the
+	// same inputs the spawn path takes.
 	var manual *TaskManual
 	if task.TypeKey != "" {
 		if m, err := s.dal.GetTaskManual(task.TypeKey); err == nil {

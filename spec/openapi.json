@@ -7298,7 +7298,7 @@
         "type": "object"
       },
       "WorkerBootContextDTO": {
-        "description": "The outsource worker's boot-context PREVIEW (GET /api/outsource-workers/{id}/boot-context, T-ba6b) — the worker twin of the member panel's /api/bootstrap preview. The server re-runs the SAME buildWorkerBootContext fold the spawn path uses (worker_context.md seed + identity + the bound task in full + the type manual), from the CURRENT DB rows. HONEST: this is what the boot context would look like NOW — not a verbatim record of the spawn-time text (the task/manual may have changed since; nothing is stored). Never carries a worker token.",
+        "description": "The outsource worker's boot-context PREVIEW (GET /api/outsource-workers/{id}/boot-context, T-ba6b) — the worker twin of the member panel's /api/bootstrap preview. The server re-runs the SAME buildWorkerBootContext fold the spawn path uses. Since T-4595 that fold is the STAFF boot context minus the persona slot (系統互動 + 使用者自訂 + the boot sequence for the worker's own runtime); it carries no outsource-only document, no identity block, no bound task and no type manual, so it does not vary with them. HONEST: this is what the boot context would look like NOW — the seeds may have changed since spawn, and nothing is stored. Never carries a worker token.",
         "properties": {
           "context": {
             "title": "Context",
@@ -12394,7 +12394,7 @@
     },
     "/api/outsource-workers/{id}/boot-context": {
       "get": {
-        "description": "Read the outsource worker's boot-context PREVIEW (T-ba6b): the server re-assembles the persona/boot text with the SAME fold the spawn path uses (buildWorkerBootContext — worker_context.md seed + 你的身分 + the bound task in full + the type manual Q1/Q2/Q3 + learnings) from the CURRENT DB rows, WITHOUT minting any token. Owner/admin-agent cockpit read (T-6020; the text embeds the full task + manual, so a plain agent is a flat 403). 404 for an unknown worker or a worker whose bound task is gone. HONEST caveat the UI must carry: this is today's re-assembly, not a verbatim spawn-time record — nothing is stored (no prompt column, no migration).",
+        "description": "Read the outsource worker's boot-context PREVIEW (T-ba6b): the server re-assembles the boot text with the SAME fold the spawn path uses (buildWorkerBootContext), WITHOUT minting any token. Since T-4595 that fold is the STAFF boot context minus the persona slot — 系統互動 + 使用者自訂 + the boot sequence for the worker's own runtime, with no outsource-only document, no 你的身分 block, no bound task and no type manual. Owner/admin-agent cockpit read (T-6020; the floor is unchanged, and it is now the only thing keeping this read narrow — the text no longer embeds the task or the manual). 404 for an unknown worker or a worker whose bound task is gone. HONEST caveat the UI must carry: this is today's re-assembly, not a verbatim spawn-time record — nothing is stored (no prompt column, no migration).",
         "operationId": "handle_get_worker_boot_context_api_outsource_workers__id__boot_context_get",
         "parameters": [
           {
