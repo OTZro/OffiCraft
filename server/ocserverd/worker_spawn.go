@@ -111,7 +111,9 @@ const (
 // buildWorkerBootContext assembles the worker persona, in this order:
 //
 //  1. GLOBAL CONTEXT — all three 全域情境 blocks (系統互動 ⊕ 使用者自訂 ⊕
-//     啟動程序), grouped and shared byte-for-byte with the member seeds.
+//     啟動程序), grouped and shared byte-for-byte with the member seeds FOR THE
+//     SAME RUNTIME: the 啟動程序 block follows w.Runtime through
+//     bootSequenceSeedName, exactly as buildBootContext follows member.Runtime.
 //     Global Context is the FIRST section: owner requirement, T-108b, pinned by
 //     TestWorkerBootContextStartsWithGlobalContext.
 //  2. the worker OVERLAY — seeds/worker_context.md, now only "how a worker
@@ -123,7 +125,7 @@ const (
 // shard, and its overlay and assignment have a different placement. The member
 // fold consumes the same shared core, and conformance pins it byte-for-byte.
 func (s *apiServer) buildWorkerBootContext(w OutsourceWorker, t Task, manual *TaskManual) (string, error) {
-	core, err := s.workerGlobalContext()
+	core, err := s.workerGlobalContext(w.Runtime)
 	if err != nil {
 		return "", err
 	}

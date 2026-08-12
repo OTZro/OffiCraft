@@ -334,6 +334,31 @@ type bootContext struct {
 	Context  string
 }
 
+// bootSequenceSeedName picks the boot-sequence seed for a runtime. It is the
+// SINGLE source of truth for that choice: the member fold (buildBootContext,
+// below) and the outsource-worker shared core (workerGlobalContext,
+// worker_sharedcore.go) both call it, so the two paths cannot decide it with
+// two different expressions.
+//
+// This exists because they once did. The worker path hard-coded
+// "boot_sequence.md" (PR #170 removed the worker-only seed filtering that had
+// been masking it), so a worker running the codex runtime was handed the Claude
+// boot sequence — which tells it to run a bare `ocagent listen` in the
+// background under Monitor — while its own codex runtime tail told it NOT to
+// start a listener because the App Server sidecar owns it. Two contradictory
+// instructions in one boot context. Parity between staff and outsource is "read
+// the seed for the runtime you are actually running", exactly as staff does; it
+// is NOT "filter the Claude seed down".
+//
+// "" normalises to claude (NormalizeRuntime), so an unset runtime keeps the
+// historical default.
+func bootSequenceSeedName(runtime string) string {
+	if NormalizeRuntime(runtime) == RuntimeCodex {
+		return "boot_sequence_codex.md"
+	}
+	return "boot_sequence.md"
+}
+
 // buildBootContext resolves the role + folds the three docs + assembles the
 // boot context (lifecycle.md §2.2 normative
 // order: system-interaction seed, # Role, # Lessons, user-custom block when
@@ -363,11 +388,11 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 	if err != nil {
 		return nil, err
 	}
-	bootSeedName := "boot_sequence.md"
-	if member != nil && NormalizeRuntime(member.Runtime) == RuntimeCodex {
-		bootSeedName = "boot_sequence_codex.md"
+	var memberRuntime string
+	if member != nil {
+		memberRuntime = member.Runtime
 	}
-	bootSeed, err := s.root.readSeedFile(bootSeedName)
+	bootSeed, err := s.root.readSeedFile(bootSequenceSeedName(memberRuntime))
 	if err != nil {
 		return nil, err
 	}
