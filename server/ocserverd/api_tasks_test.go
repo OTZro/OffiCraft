@@ -1888,7 +1888,6 @@ func TestTerminalStatesReleaseTheBoundWorker(t *testing.T) {
 // api_self_task_retired_t4595_test.go, and the SLIM step projection it used to
 // serve is gone entirely — a worker reads its plan through get_task, unslimmed.
 
-
 // ── waiting_external requires a reason ───────────────────────────────────────
 
 // TestWaitingExternalRequiresAReasonAndClearsOnExit pins the T-9ca5 down-push:
