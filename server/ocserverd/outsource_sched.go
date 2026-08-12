@@ -28,7 +28,8 @@ package main
 // member table has ever carried, removed rows included, so a codename is never
 // reused; model/effort from the manual assignee), writes task.executor_id, and
 // fans the task + outsource_worker SSE deltas. The worker then sits in
-// 'assigned' until its first GET /api/self/task claim flips it 'active'.
+// 'assigned' until its first report_waking flips it 'active' (T-4595 moved that
+// claim off the retired GET /api/self/task onto the shared boot verb).
 //
 // The scheduler keeps NO in-memory ledger (unlike reconcile's store): the
 // worker rows ARE the bookkeeping — every tick recounts from the DB, so a

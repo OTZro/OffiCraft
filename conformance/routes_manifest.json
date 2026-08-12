@@ -841,13 +841,6 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": "get_my_task",
-    "method": "GET",
-    "path": "/api/self/task",
-    "requires": "agent"
-  },
-  {
-    "auth": "gated",
     "mcp_tool": "list_outsource_workers",
     "method": "GET",
     "path": "/api/outsource-workers",

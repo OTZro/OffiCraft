@@ -781,11 +781,20 @@ func TestGetMonitoring_SessionEffortRoundTrips(t *testing.T) {
 //
 // The OUTSOURCE case is the one the owner reported. A worker's model column was
 // served from ActualModel, whose only two writers both sit on report_waking —
-// and seeds/worker_context.md §2 deliberately removes report_waking from a
-// worker's boot sequence (a worker's online signal is get_my_task, which never
-// touches the field). So every outsource worker's model was STRUCTURALLY the
-// empty string, forever, and empty is indistinguishable from "has not reported
-// yet". Nothing was red because nothing tested the path end to end.
+// and the outsource overlay seed deliberately removed report_waking from a
+// worker's boot sequence at the time (it claimed a worker's online signal was
+// get_my_task, which never touches the field). So every outsource worker's
+// model was STRUCTURALLY the empty string, forever, and empty is
+// indistinguishable from "has not reported yet". Nothing was red because
+// nothing tested the path end to end.
+//
+// T-4595 closed that hole from BOTH ends, and the two halves shipped as two
+// packages: the overlay seed was deleted outright (report_waking always worked
+// for an outsource caller — the seed that said otherwise was simply wrong), and
+// get_my_task was retired, which moved the assigned→active flip onto
+// report_waking so every worker now calls it on boot. That particular structural
+// emptiness is therefore gone; the telemetry writer added here remains the
+// load-bearing fix, and this test still guards the wire it left behind.
 //
 // The STAFF case is the other half of the same ruling (owner, 2026-07-31: both
 // kinds read the reported value, with no fall-back-to-configured branch left

@@ -1186,21 +1186,12 @@ MATRIX: dict[str, Route] = {
         path=lambda ctx, _i: "/api/tasks/{}/artifact/{}".format(
             *_matrix_task_artifact(ctx)),
     ),
-    "GET /api/self/task": Route(
-        # identity-locked worker claim: NO black-box identity has a worker
-        # row (the Phase 2 scheduler mints them), so every at-floor face is
-        # an honest 404 — the warden's 403 (below the agent floor) is the
-        # row's real teeth.
-        requires="agent",
-        overrides={"owner": 404, "admin_agent": 404,
-                   "agent_self": 404, "agent_other": 404},
-    ),
     # ── outsource panel (M3) ────────────────────────────────────────────────
     "GET /api/outsource-workers": Route(requires="machine"),
     "GET /api/outsource-workers/{id}": Route(
         # T-f190 detail-panel single read. NO black-box identity has a worker row
         # (the Phase 2 scheduler mints them), so every at-floor face is an honest
-        # 404 — the anonymous 401 is the gate's teeth. Mirrors GET /api/self/task.
+        # 404 — the anonymous 401 is the gate's teeth.
         requires="machine",
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope",
         overrides={"warden": 404, "agent_self": 404, "agent_other": 404,
@@ -1396,12 +1387,6 @@ DEGRADED: dict[str, str] = {
         "owner face pinned at 401 (wrong current password): a real change would "
         "rotate the shared owner credential and revoke the session token fixture. "
         "The full change/revocation semantics are pinned in the server unit tests."
-    ),
-    "GET /api/self/task": (
-        "every at-floor face pinned at 404: an outsource worker identity is "
-        "mintable only by the Phase 2 assignment scheduler (no black-box mint "
-        "path). The positive claim (assigned → active + manual snapshot) is "
-        "pinned in the server unit tests (api_tasks_test.go)."
     ),
     "GET /api/docs/assets/{name}": (
         "probed with a missing asset name (404 across authenticated identities); "

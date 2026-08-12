@@ -78,7 +78,8 @@ feeds context telemetry; `AskUserQuestion` stays disabled.
 The Codex member boot sequence changes only execution ownership:
 
 1. The sidecar starts a boot-only App Server turn. The member performs
-   `report_waking` + resume recovery, or the worker performs `get_my_task`, then completes
+   `report_waking` + resume recovery (T-4595: a worker walks the SAME sequence — its
+   `report_waking` is also the assigned → active claim), then completes
    that turn.
 2. `turn/completed` is the readiness boundary. Only then does the sidecar launch the same
    bare `ocagent listen` child and consume its stdout; the model must not launch a second
@@ -103,11 +104,16 @@ boundary clears the count before the replacement thread reports again. Monitorin
 Codex as `context N% · ↻ compact x/3`; Claude remains percentage-only.
 
 The cockpit's Global Context editor remains a single shared owner-additions block. The
-read-only Claude and Codex Boot Sequence variants are shown together in the preview. For
-workers, the common worker overlay refers to a small final runtime boot tail selected at
-assembly time; it carries only that runtime's listener owner, interactive-question guard,
-and context-telemetry mechanics. Thus no recipient is asked to ignore another provider's
-instructions.
+read-only Claude and Codex Boot Sequence variants are shown together in the preview. A
+worker is handed exactly one of those two variants — the one for the runtime it is
+actually running — and that seed's own execution-environment section is where the
+listener owner, the interactive-question guard and the context-telemetry mechanics come
+from. Thus no recipient is asked to ignore another provider's instructions.
+
+T-4595 removed the hand-written outsource-only tail that used to carry those same three
+bullets after the seed. It was a second copy of one instruction for an audience staff does
+not have, and two copies can only drift; the earlier regression in this area was a codex
+worker being handed the Claude seed, which is the same failure one level up.
 
 ## Wake and steering policy
 

@@ -1958,7 +1958,7 @@ export interface paths {
         };
         /**
          * Read an outsource worker's boot-context preview (owner/admin agent).
-         * @description Read the outsource worker's boot-context PREVIEW (T-ba6b): the server re-assembles the persona/boot text with the SAME fold the spawn path uses (buildWorkerBootContext — worker_context.md seed + 你的身分 + the bound task in full + the type manual Q1/Q2/Q3 + learnings) from the CURRENT DB rows, WITHOUT minting any token. Owner/admin-agent cockpit read (T-6020; the text embeds the full task + manual, so a plain agent is a flat 403). 404 for an unknown worker or a worker whose bound task is gone. HONEST caveat the UI must carry: this is today's re-assembly, not a verbatim spawn-time record — nothing is stored (no prompt column, no migration).
+         * @description Read the outsource worker's boot-context PREVIEW (T-ba6b): the server re-assembles the boot text with the SAME fold the spawn path uses (buildWorkerBootContext), WITHOUT minting any token. Since T-4595 that fold is the STAFF boot context minus the persona slot — 系統互動 + 使用者自訂 + the boot sequence for the worker's own runtime, with no outsource-only document, no 你的身分 block, no bound task and no type manual. Owner/admin-agent cockpit read (T-6020; the floor is unchanged, and it is now the only thing keeping this read narrow — the text no longer embeds the task or the manual). 404 for an unknown worker or a worker whose bound task is gone. HONEST caveat the UI must carry: this is today's re-assembly, not a verbatim spawn-time record — nothing is stored (no prompt column, no migration).
          */
         get: operations["handle_get_worker_boot_context_api_outsource_workers__id__boot_context_get"];
         put?: never;
@@ -2565,26 +2565,6 @@ export interface paths {
          *     SSE projection, never written here.
          */
         post: operations["handle_report_stopping_api_self_stopping_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/self/task": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Outsource worker's claim: read the task bound to the caller.
-         * @description The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. A caller with no bound worker row (any roster member included) is a 404. ``task.steps`` is SLIM here and here only: the CURRENT step(s) — every step in ``in_progress`` / ``waiting_owner`` / ``waiting_external``, or, when none is live, the lowest-``order_idx`` ``pending`` one — carry their full content, while every other step serves ``dod`` and ``note`` EMPTY and keeps the rest: ``id`` / ``name`` / ``status`` / ``order_idx`` plus the bounded structural scalars ``parallel_group`` / ``is_gate`` / ``waiting_reason``, so the shape of the plan — which stage runs in parallel, which gate is coming, why another step is parked — survives the trim. ``steps_omitted_chars`` reports how much text that dropped (the ``ResumeTaskDTO.detail_chars`` move: peek the number, then pull get_task, which is unslimmed).
-         */
-        get: operations["handle_get_my_task_api_self_task_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4953,7 +4933,7 @@ export interface components {
             actual_machine: string;
             /**
              * Actual Model
-             * @description The model the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.model``) — durably persisted, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported a model for this member; it is separate from, and NEVER falls back to, the owner-configured `model` launch setting. Applies identically to ``kind=outsource`` rows, whose reports arrive under their own ``ow-`` token sub. WAS: written only by ``report_waking``, which no outsource worker calls (a worker's boot signal is ``get_my_task``), so it was structurally always empty for them.
+             * @description The model the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.model``) — durably persisted, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported a model for this member; it is separate from, and NEVER falls back to, the owner-configured `model` launch setting. Applies identically to ``kind=outsource`` rows, whose reports arrive under their own ``ow-`` token sub. WAS: written only by ``report_waking``, which no outsource worker called (its boot signal was the since-retired ``get_my_task``), so it was structurally always empty for them; T-4595 put every worker on the same report_waking boot verb, so the field now fills for them too.
              * @default
              */
             actual_model: string;
@@ -5423,20 +5403,6 @@ export interface components {
             tokens?: {
                 [key: string]: number;
             } | null;
-        };
-        /**
-         * MyTaskDTO
-         * @description The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. ``task.steps`` is SLIM here and here only: the CURRENT step(s) — every step in ``in_progress`` / ``waiting_owner`` / ``waiting_external``, or, when none is live, the lowest-``order_idx`` ``pending`` one — carry their full content, while every other step serves ``dod`` and ``note`` EMPTY and keeps the rest: ``id`` / ``name`` / ``status`` / ``order_idx`` plus the bounded structural scalars ``parallel_group`` / ``is_gate`` / ``waiting_reason``, so the shape of the plan — which stage runs in parallel, which gate is coming, why another step is parked — survives the trim. ``steps_omitted_chars`` reports how much text that dropped (the ``ResumeTaskDTO.detail_chars`` move: peek the number, then pull get_task, which is unslimmed).
-         */
-        MyTaskDTO: {
-            /** Manual */
-            manual: components["schemas"]["TaskManualDTO"] | null;
-            /**
-             * Steps Omitted Chars
-             * @description Total runes of ``dod`` + ``note`` blanked out of the non-current steps (CJK counts 1 per character). 0 = nothing was dropped.
-             */
-            steps_omitted_chars: number;
-            task: components["schemas"]["TaskDTO"];
         };
         /**
          * OnboardingReportDTO
@@ -8094,7 +8060,7 @@ export interface components {
         };
         /**
          * WorkerBootContextDTO
-         * @description The outsource worker's boot-context PREVIEW (GET /api/outsource-workers/{id}/boot-context, T-ba6b) — the worker twin of the member panel's /api/bootstrap preview. The server re-runs the SAME buildWorkerBootContext fold the spawn path uses (worker_context.md seed + identity + the bound task in full + the type manual), from the CURRENT DB rows. HONEST: this is what the boot context would look like NOW — not a verbatim record of the spawn-time text (the task/manual may have changed since; nothing is stored). Never carries a worker token.
+         * @description The outsource worker's boot-context PREVIEW (GET /api/outsource-workers/{id}/boot-context, T-ba6b) — the worker twin of the member panel's /api/bootstrap preview. The server re-runs the SAME buildWorkerBootContext fold the spawn path uses. Since T-4595 that fold is the STAFF boot context minus the persona slot (系統互動 + 使用者自訂 + the boot sequence for the worker's own runtime); it carries no outsource-only document, no identity block, no bound task and no type manual, so it does not vary with them. HONEST: this is what the boot context would look like NOW — the seeds may have changed since spawn, and nothing is stored. Never carries a worker token.
          */
         WorkerBootContextDTO: {
             /** Context */
@@ -13118,53 +13084,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemberDTO"];
-                };
-            };
-            /** @description Validation error (unified error envelope). */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
-                };
-            };
-            /** @description Client error (unified error envelope). */
-            "4XX": {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
-                };
-            };
-            /** @description Server error (unified error envelope). */
-            "5XX": {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
-                };
-            };
-        };
-    };
-    handle_get_my_task_api_self_task_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MyTaskDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

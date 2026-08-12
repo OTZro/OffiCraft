@@ -1091,7 +1091,7 @@ type MemberDTO struct {
 	// ActualMachine The machine this member was LAST OBSERVED running on, durably persisted — the offline-surviving twin of the live ``machine`` projection. Empty means this member has never been observed on any machine. It is separate from, and NEVER falls back to, the owner-configured ``desired_machine_id`` placement: a pending relocation must stay legible as pending even while the member is offline (T-7f28).
 	ActualMachine *string `json:"actual_machine,omitempty"`
 
-	// ActualModel The model the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.model``) — durably persisted, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported a model for this member; it is separate from, and NEVER falls back to, the owner-configured `model` launch setting. Applies identically to ``kind=outsource`` rows, whose reports arrive under their own ``ow-`` token sub. WAS: written only by ``report_waking``, which no outsource worker calls (a worker's boot signal is ``get_my_task``), so it was structurally always empty for them.
+	// ActualModel The model the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.model``) — durably persisted, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported a model for this member; it is separate from, and NEVER falls back to, the owner-configured `model` launch setting. Applies identically to ``kind=outsource`` rows, whose reports arrive under their own ``ow-`` token sub. WAS: written only by ``report_waking``, which no outsource worker called (its boot signal was the since-retired ``get_my_task``), so it was structurally always empty for them; T-4595 put every worker on the same report_waking boot verb, so the field now fills for them too.
 	ActualModel *string `json:"actual_model,omitempty"`
 
 	// ActualRuntime The AI CLI runtime the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.runtime``) — durably persisted alongside ``actual_model``. Empty means nothing has ever reported a runtime for this member; it is separate from, and NEVER falls back to, the owner-configured ``runtime`` launch setting. WAS: the reported runtime was ingested and then discarded on every read path — every wire that carried a ``runtime`` re-served the roster's CONFIGURED value, so the detail panel flipped the instant the owner changed the setting and a not-yet-applied change was indistinguishable from a live one (T-7f28).
@@ -1314,17 +1314,6 @@ type MonitoringSessionDTO struct {
 
 // MonitoringSessionDTORuntime The runtime this session REPORTED it is running (the roster row's “actual_runtime“). Honest-empty until something reports one, and it NEVER falls back to the owner-configured “runtime“ launch setting. WAS: this served the CONFIGURED value under a comment claiming it folded through the reported telemetry, so the cell flipped the instant the owner changed the setting and a runtime switch that had not happened yet was indistinguishable from one that had (T-7f28). NOT an “AgentRuntime“ $ref like the CONFIGURED runtime fields: this one admits "" for "nothing has reported yet", and the closed two-value vocabulary has no member for that. Widening the shared enum instead would have let "unknown" leak into every owner-configured runtime field, where it is not a legal setting.
 type MonitoringSessionDTORuntime string
-
-// MyTaskDTO The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. “task.steps“ is SLIM here and here only: the CURRENT step(s) — every step in “in_progress“ / “waiting_owner“ / “waiting_external“, or, when none is live, the lowest-“order_idx“ “pending“ one — carry their full content, while every other step serves “dod“ and “note“ EMPTY and keeps the rest: “id“ / “name“ / “status“ / “order_idx“ plus the bounded structural scalars “parallel_group“ / “is_gate“ / “waiting_reason“, so the shape of the plan — which stage runs in parallel, which gate is coming, why another step is parked — survives the trim. “steps_omitted_chars“ reports how much text that dropped (the “ResumeTaskDTO.detail_chars“ move: peek the number, then pull get_task, which is unslimmed).
-type MyTaskDTO struct {
-	Manual *TaskManualDTO `json:"manual"`
-
-	// StepsOmittedChars Total runes of ``dod`` + ``note`` blanked out of the non-current steps (CJK counts 1 per character). 0 = nothing was dropped.
-	StepsOmittedChars int `json:"steps_omitted_chars"`
-
-	// Task One task (M3 任務卡): a workflow with a Definition of Done, executed by a roster member or an anonymous outsource worker. ``task_no`` is the display number derived from the id (never a lookup key). ``status`` is DERIVED from the steps (not agent-reported): the work states not_started/in_progress/waiting_owner/waiting_external plus the terminals done/terminated/duplicated. ``reassigning`` is NO LONGER a status — it is the orthogonal ``lock`` field (the owner/admin handover hold, cleared by the claim action; see ``POST /api/tasks/{task_id}/reassign``); ``priority`` includes ``frozen`` (pause-pushing — a priority, not a status). ``executor_kind='outsource'`` with an empty ``executor_id`` is the transient unassigned state. ``closed_ts`` is null while open. ``deps`` are the blocking task ids (display markers, never a status change); ``progress_done``/``progress_total`` count step leaves (``superseded`` replan history counts toward neither side). ``closeout_reported`` flips true once the executor reports the close-out follow-ups done (``report_task_closeout``; terminal tasks only). ``creator_id`` is the verified token sub of the task's creator (a member id, an outsource worker id, or the literal "owner"); "" on rows created before the column existed. ``duplicate_of`` is the id of the ORIGINAL task this one duplicates — non-empty ONLY while ``status='duplicated'`` (MCP ``mark_duplicate``); the graph is depth-1 by construction so the cockpit link always resolves in one hop.
-	Task TaskDTO `json:"task"`
-}
 
 // OnboardingReportDTO The result of the automatic first-run onboarding that runs right after the owner sets the initial password (T-ba62): install this host's warden, then bring the seeded assistant online. “state“ is “running“ / “ok“ / “failed“. “steps“ carries one entry per attempted step in order. “finished_at“ is the unix seconds the run ended (0 while running). Null on the settings read when onboarding never ran (an install that predates it, or a database that already had a password).
 type OnboardingReportDTO struct {
@@ -2801,7 +2790,7 @@ type WebhookUpdateDTO struct {
 	Status        *string `json:"status,omitempty"`
 }
 
-// WorkerBootContextDTO The outsource worker's boot-context PREVIEW (GET /api/outsource-workers/{id}/boot-context, T-ba6b) — the worker twin of the member panel's /api/bootstrap preview. The server re-runs the SAME buildWorkerBootContext fold the spawn path uses (worker_context.md seed + identity + the bound task in full + the type manual), from the CURRENT DB rows. HONEST: this is what the boot context would look like NOW — not a verbatim record of the spawn-time text (the task/manual may have changed since; nothing is stored). Never carries a worker token.
+// WorkerBootContextDTO The outsource worker's boot-context PREVIEW (GET /api/outsource-workers/{id}/boot-context, T-ba6b) — the worker twin of the member panel's /api/bootstrap preview. The server re-runs the SAME buildWorkerBootContext fold the spawn path uses. Since T-4595 that fold is the STAFF boot context minus the persona slot (系統互動 + 使用者自訂 + the boot sequence for the worker's own runtime); it carries no outsource-only document, no identity block, no bound task and no type manual, so it does not vary with them. HONEST: this is what the boot context would look like NOW — the seeds may have changed since spawn, and nothing is stored. Never carries a worker token.
 type WorkerBootContextDTO struct {
 	Context string `json:"context"`
 }
@@ -3432,9 +3421,6 @@ type ServerInterface interface {
 	// report_stopping(): stamp the caller's stopping_since (graceful stop).
 	// (POST /api/self/stopping)
 	HandleReportStoppingApiSelfStoppingPost(w http.ResponseWriter, r *http.Request)
-	// Outsource worker's claim: read the task bound to the caller.
-	// (GET /api/self/task)
-	HandleGetMyTaskApiSelfTaskGet(w http.ResponseWriter, r *http.Request)
 	// report_waking(): stamp the caller's waking + clear recycle markers.
 	// (POST /api/self/waking)
 	HandleReportWakingApiSelfWakingPost(w http.ResponseWriter, r *http.Request)
@@ -6041,20 +6027,6 @@ func (siw *ServerInterfaceWrapper) HandleReportStoppingApiSelfStoppingPost(w htt
 	handler.ServeHTTP(w, r)
 }
 
-// HandleGetMyTaskApiSelfTaskGet operation middleware
-func (siw *ServerInterfaceWrapper) HandleGetMyTaskApiSelfTaskGet(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.HandleGetMyTaskApiSelfTaskGet(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
 // HandleReportWakingApiSelfWakingPost operation middleware
 func (siw *ServerInterfaceWrapper) HandleReportWakingApiSelfWakingPost(w http.ResponseWriter, r *http.Request) {
 
@@ -7251,7 +7223,6 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/self/refocus", wrapper.HandleRestartSelfApiSelfRefocusPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/self/stopped", wrapper.HandleReportStoppedApiSelfStoppedPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/self/stopping", wrapper.HandleReportStoppingApiSelfStoppingPost)
-	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/self/task", wrapper.HandleGetMyTaskApiSelfTaskGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/self/waking", wrapper.HandleReportWakingApiSelfWakingPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/settings", wrapper.HandleGetSettingsApiSettingsGet)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/settings", wrapper.HandleUpdateSettingsApiSettingsPatch)

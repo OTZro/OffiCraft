@@ -254,10 +254,6 @@ var knownToolDescriptionDrift = map[string]map[string]string{
 		"openapi_summary": "List members, including outsource members by default; fields=light preserves kind.",
 		"route_summary":   "List the owner's roster (presence-derived MemberDTO[]).",
 	},
-	"get_my_task": {
-		"openapi_summary": "Outsource worker's claim: read the task bound to the caller.",
-		"route_summary":   "Outsource worker's claim: read the task bound to the caller.",
-	},
 	"get_task_manual": {
 		"openapi_summary": "Read one task manual (purpose/fields/SOP/learnings/assignee).",
 		"route_summary":   "Read one task manual (purpose/fields/SOP/learnings/assignee).",

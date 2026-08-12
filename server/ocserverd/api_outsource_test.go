@@ -213,9 +213,21 @@ func TestListOutsourceWorkers_WorkerCreatorResolvesToCodename(t *testing.T) {
 }
 
 // TestGetWorkerBootContext (T-ba6b): the detail panel's initial-prompt preview
-// re-runs the SAME buildWorkerBootContext fold the spawn path uses, over the
-// CURRENT DB rows — the response carries the seed + identity + task + manual
-// text and NEVER a token (parity with the member /api/bootstrap UI preview).
+// re-runs the SAME buildWorkerBootContext fold the spawn path uses, and NEVER
+// carries a token (parity with the member /api/bootstrap UI preview).
+//
+// 🔴 T-4595 rewrote the interesting half. This used to assert the preview
+// carried the identity block, the bound task and the manual, and that editing
+// the task description showed up in it. None of that is true any more, and the
+// old assertions were not merely stale — they pinned the very thing the ruling
+// removed: a worker's boot context is the staff fold minus the persona slot, so
+// it does not vary with the task or its manual AT ALL.
+//
+// What is asserted instead is the property that survived and the one that
+// replaced it: the response really is the production fold (not an empty string
+// or some second assembly), and it is INVARIANT to an edited task row — the
+// strongest available statement, and one that turns red if any per-task text
+// comes back through this endpoint.
 func TestGetWorkerBootContext(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
@@ -233,9 +245,18 @@ func TestGetWorkerBootContext(t *testing.T) {
 		t.Fatalf("boot-context: %d %s", rec.Code, rec.Body.String())
 	}
 	got := decodeBody[WorkerBootContextDTO](t, rec)
-	for _, want := range []string{w.Codename, "review 1", "# 你的身分", "# 你的任務"} {
+	// It is the real fold: the two shared slots a worker actually receives.
+	// Without this, every absence/invariance assertion below is satisfied by an
+	// empty string.
+	for _, want := range []string{"# Global Context", "# 啟動程序（Boot Sequence"} {
 		if !strings.Contains(got.Context, want) {
-			t.Errorf("preview must contain %q", want)
+			t.Errorf("preview must contain the shared block %q", want)
+		}
+	}
+	for _, gone := range []string{"# 你的身分", "# 你的任務", "# 任務手冊", w.Codename} {
+		if strings.Contains(got.Context, gone) {
+			t.Errorf("preview still carries %q — a worker's boot context is the staff "+
+				"fold minus the persona slot (T-4595)", gone)
 		}
 	}
 	// The preview must never mint or echo a credential.
@@ -244,17 +265,11 @@ func TestGetWorkerBootContext(t *testing.T) {
 		t.Fatalf("preview must not carry any token: %s", rec.Body.String()[:200])
 	}
 
-	// The preview reads the CURRENT rows: an edited task description shows up
-	// (honest 「目前版本」 semantics — NOT a verbatim spawn-time record).
-	//
-	// The edit goes through writeTaskDescription — the production write path
-	// (T-e271) — and NOT through PutTask. That is not cosmetic: PutTask no
-	// longer writes the description column at all, because a whole-row upsert
-	// replaying a stale copy of it is precisely the lost update T-e271 node 3
-	// fixed (see PutTask's own note). Editing through PutTask here would have
-	// tested a mechanism no caller uses, so the assertion below would have
-	// stopped meaning anything the moment the real path diverged. What is being
-	// pinned is unchanged: the preview re-assembles from the CURRENT row.
+	// The preview does not vary with the bound task. The edit goes through
+	// writeTaskDescription — the production write path (T-e271) — and NOT
+	// through PutTask, which no longer writes the description column at all
+	// (see PutTask's own note). Using PutTask here would exercise a mechanism
+	// no caller uses, and the assertion would stop meaning anything.
 	task, err := api.dal.GetTask(w.TaskID)
 	if err != nil || task == nil {
 		t.Fatalf("get task: %v", err)
@@ -266,8 +281,13 @@ func TestGetWorkerBootContext(t *testing.T) {
 	api.HandleGetWorkerBootContextApiOutsourceWorkersIdBootContextGet(rec,
 		taskReq(t, "GET", "/api/outsource-workers/"+workerID+"/boot-context",
 			nil, wireOwnerID, "owner"), workerID)
-	if got := decodeBody[WorkerBootContextDTO](t, rec); !strings.Contains(got.Context, "事後補充的描述") {
-		t.Errorf("preview must re-assemble from the current task row")
+	after := decodeBody[WorkerBootContextDTO](t, rec)
+	if strings.Contains(after.Context, "事後補充的描述") {
+		t.Error("preview pastes the bound task's description — the worker reads the " +
+			"live task itself; a boot-time copy can only be stale (T-4595)")
+	}
+	if after.Context != got.Context {
+		t.Error("preview varies with the bound task row; it must not")
 	}
 }
 

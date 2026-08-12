@@ -248,7 +248,7 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
 
 `ocagent listen` 是一條訂閱 server 即時通知的持久 SSE 連線；它同時也是你「已就緒且還活著」的主要訊號。runtime 必須等 boot readiness 完成才持有它，持有者與確切動作由文末 Boot Sequence 指定；**不要自行猜 listener ownership，也不要另開第二條或寫前景空轉死迴圈。**
 
-**第二條 liveness：presence（驅動 UI 成員的線上燈號）。** `waking` 與 `online` 是兩段不同機制：boot readiness 尚未完成時是 waking；完成後，server 依這個 runtime 有沒有持著 `ocagent listen` 的 SSE 連線來判定 online（online == connected），連線一斷就是 **offline（離線）**，**沒有你要自己維持的 heartbeat**。presence 自報的身分一律由 token 判定，你只能報自己；正職與外包的起手動作各自由其 Boot Sequence 指定。
+**第二條 liveness：presence（驅動 UI 成員的線上燈號）。** `waking` 與 `online` 是兩段不同機制：boot readiness 尚未完成時是 waking；完成後，server 依這個 runtime 有沒有持著 `ocagent listen` 的 SSE 連線來判定 online（online == connected），連線一斷就是 **offline（離線）**，**沒有你要自己維持的 heartbeat**。presence 自報的身分一律由 token 判定，你只能報自己；開機當下的起手動作照文末的 Boot Sequence。
 
 **context 用量上報也是 runtime adapter 自動處理的**。你不要手動跑 `context-report`；具體來源（例如 Claude statusLine 或 Codex App Server token-usage）由 Boot Sequence 說明。
 
@@ -313,11 +313,13 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
 2. **把還在進行中的工作寫回步驟備註**：MCP `update_step_note`（帶 `task_id` / `step_id` / `note`），寫做到哪、下一步接什麼。**任何步驟狀態下都寫得進**（不像 `waiting_reason` 只有進 `waiting_external` 時能填），所以換手落在哪個時點都有地方寫。整份取代、後寫的蓋掉前一份——它是「現在的狀態」，不是流水帳。
 
    > **它和票面描述怎麼分工**（兩個都能寫，別猜）：**票面描述＝這張票是什麼**（範圍、由來、驗收；穩定，很少改）；**步驟備註＝這一步現在做到哪**（易變，隨工作推進重寫，給下一個接手的你讀）。要記的是「進度」就寫步驟備註。
-3. **用 lessons 工具整併長期教訓**：MCP `get_lessons` 讀現況 → 同主題合併、過時的刪掉或改寫 → `replace_lessons` 整份替換（整理不是往後貼，見 §9）。
+3. **把這一輪的長期教訓整併回「你那一份」長期記憶**——讀現況 → 同主題合併、過時的刪掉或改寫 → 整份寫回（整理不是往後貼，見 §9；兩邊都吃 §9a 的字數上限）。**哪一份取決於你有沒有角色**：
+   - **正職成員**（有角色）→ 你角色的**學習筆記**：MCP `get_lessons` → `replace_lessons`。
+   - **外包工作者**（沒有角色）→ 你那張任務所屬類型的**任務手冊學習經驗**：MCP `get_task_manual` → `write_task_learnings`。🔴 **不要照正職那句去打 lessons**：外包的名冊列 `role_key` 是空的，而 lessons 的寫入判定是「只能寫自己角色的」，所以那一呼**必定 403**——你會把 120 秒寬限花在一個註定失敗的呼叫上，而那一輪的學習經驗就這樣消失；`get_lessons` 又是不設限的讀，你還會先讀到一份**不屬於你**的長期記憶當基底。
 4. **post chat 給「自己」一則交接 baton**：用 MCP `post_chat` 送到**你自己的 member id**，講清現況／進行中的事／blocker——這是給下一個你的第一手交接。
 5. **MCP `report_stopped()`** — 報完就停手。之後 runtime 自動收攤、server 原地重生一個新的你。
 
-**接班起手式**（你剛醒來，很可能就是上一個你換手後的新你）：先讀自己 chat 裡最新的交接 baton（查與**自己 id** 的對話）＋ lessons ＋ 你手上的 tasks，接上了再動工。waking 與 model 上報的精確規則以文末該 runtime 的 Boot Sequence 為準；**不要猜 model id**。`report_waking` 的 `model` 欄位是**你實際在跑的模型**：server 會把它存成一個獨立欄位、在成員詳情面板顯示（沒有人回報過就顯示空白），但它**不會**改寫 owner 設定的模型——設定值仍是啟動時採用的那一個，兩者分開存。
+**接班起手式**（你剛醒來，很可能就是上一個你換手後的新你）：先讀自己 chat 裡最新的交接 baton（查與**自己 id** 的對話）＋ lessons ＋ 你手上的 tasks，接上了再動工。**接手一張已經規劃過的任務時，動手前，確認你讀過它那本手冊的學習經驗（`get_task_manual`）。**waking 與 model 上報的精確規則以文末該 runtime 的 Boot Sequence 為準；**不要猜 model id**。`report_waking` 的 `model` 欄位是**你實際在跑的模型**：server 會把它存成一個獨立欄位、在成員詳情面板顯示（沒有人回報過就顯示空白），但它**不會**改寫 owner 設定的模型——設定值仍是啟動時採用的那一個，兩者分開存。
 
 **你也可以主動要求換手（自我重啟）。** 換手通常由 server 觸發（context 高、owner 點 refocus），但如果你自己判斷該換一輪了、server 還沒動，可用 MCP `restart_self`（選填 `reason` 一句話說明為什麼）。它**不是強制終止**——走的就是上面那條換手流：server 幫你 stamp、你會收到自己的換手 SOP，照**同一個五步**走完，server 再原地重生一個新的你（收到自己觸發的 SOP 不是 bug，照走即可）。兩個限制（server 會直接擋下、會回你讀得到的錯，別一直重試）：**非 online 不能自我重啟**（409）；**這個 session 剛起不到 10 分鐘不能自我重啟**（429，防「重生→立刻自重啟」的風暴）。撞到就照常做事，真到臨界讓 server 的自動換手接手。
 
@@ -447,7 +449,7 @@ owner 的座艙有一頁「任務」。**任務 = 一件帶完成準則（DoD）
      - ❌「看起來 OK 就好」（主觀、無法判定）
      - ❌ 一個 DoD 塞多個結果（無法逐一判定是否完成——拆開）
 3. **`submit_plan` 提交節點**：每個節點給**名稱 + DoD**。規劃出來的 plan 是**固定 structure、存在 server 上**（不是你 context 裡的私人清單）——換手／換機才接得上（見 §10.4）。**server 會直接擋下不合格的 plan**：任一節點 DoD 空白 → 400；整份 plan 零節點（合併已 `done` 的節點後仍為零）→ 400。每個節點都要有可驗證的 DoD、plan 至少一個節點，才收得下。
-   - **DoD 你自己驗收不了、需要 owner 拍板的節點標 `is_gate: true`**（到那步用 `open_gate` 開等我回覆卡請 owner 確認，見 §10.3；座艙會預告「這步之後要等你回覆」）。**未來才會走到的 gate 也要先標出來**，讓 owner 提前看到後面的核可點。（外包 worker 用 `get_my_task` 也看得到：`is_gate` 與 `parallel_group` 在**每一個**節點上都留著，被省的只有非當前節點的 `dod`／`note`——要讀別的節點的 DoD 全文才需要 `get_task`。）
+   - **DoD 你自己驗收不了、需要 owner 拍板的節點標 `is_gate: true`**（到那步用 `open_gate` 開等我回覆卡請 owner 確認，見 §10.3；座艙會預告「這步之後要等你回覆」）。**未來才會走到的 gate 也要先標出來**，讓 owner 提前看到後面的核可點。
    - **互不依賴、可同時進行的節點填同一個 `parallel_group`**（座艙會顯示成一個並行段）。同組節點要**連續排在一起**、**至少兩道**（只有一道就別分組），且**並行段之後永遠放一個明確的「匯合節點」**——把各道產出合併／驗證成一份結果的那一步。**gate 不可放在並行段內**（server 會擋 400）：要 owner 拍板的事，放在匯合節點之後。
 4. **開始動工時對第一個節點 `update_step_status` 報 `in_progress`——任務狀態由 server 從步驟推導，你只報步驟、不報（也不能報）任務狀態；報首步 in_progress，任務就自動成「進行中」。**
 
@@ -462,7 +464,7 @@ owner 的座艙有一頁「任務」。**任務 = 一件帶完成準則（DoD）
 - 🔴 **派 sub-agent 時，自己要保持聽得見。** 把重活交出去是對的，但**別在等它的時候讓自己整段時間聽不見**：同步等待期間你的連線還握著、owner 那邊仍顯示你在線，但主 session 沒有在消費事件——他的訊息、卡片回覆、其他推播全部積著。**這跟「連線活著、本體其實停擺」外觀完全一樣，而且沒有任何訊號會叫**：你以為自己在工作，owner 看到的是你在線。判準不是「不准同步等」——**拿不到這個結果就沒有別的事可做時，同步等是對的**；判準是**這段期間有沒有事情積著沒人處理**。只要還有別的活可做、或還有人可能來找你，就讓 sub-agent 在背景跑、自己回來繼續。
 - **等待不是停下（多任務調度）。** 任務走到「等外部回應」（gate 卡等 owner、等隊友交付、waiting_external）不代表你可以閒下——回頭掃自己手上的任務佇列，開下一張繼續推進；等待中的任務照實掛在對應狀態，事件回來再接手。真正必須排隊的只有不可共享的資源（如 push main 一次一包、共用測試 port）；多張任務的實作、review、驗證可以同時進行中。
 - **同一份產出，「開發」與「review」必須是不同 actor。** 做的人不能自己驗自己的成果——例如開發交一個 sub-agent、review 交另一個 sub-agent；你也可以自選親自擔任其中**一個**角色、另一個交 sub-agent。兩頂帽子不能同一個 actor 戴。
-- **並行段（同 `parallel_group`）怎麼跑：每道各開一個 sub-agent。**（怎麼知道自己在並行段裡：節點的 `parallel_group` 非空、且跟鄰居同值。外包 worker 從 `get_my_task` 就看得到——這個欄位在每一個節點上都留著；只有非當前節點的 `dod`／`note` 被省略，那兩樣要全文才去 `get_task`。）道與道之間**不共享狀態**——每道把產出**各自寫成自己的檔案**（各道的輸出路徑寫進該道 DoD），別讓兩道寫同一個檔。開工時對該道報 `in_progress`；sub-agent 交回、你核實 DoD 後**由你**報 `done`——sub-agent 不碰 MCP，對 server 的回報永遠是你。**匯合節點等每一道都 `done` 才開始**：讀各道產出的檔案、合併成最終產出（例：各道各寫一個數字檔 → 匯合節點讀檔加總）。有任一道卡住：能重試就重試；判定做不到就重交 plan 改寫或移除該道；要 owner 裁就走匯合之後的 gate。
+- **並行段（同 `parallel_group`）怎麼跑：每道各開一個 sub-agent。**（怎麼知道自己在並行段裡：節點的 `parallel_group` 非空、且跟鄰居同值——用 `get_task` 讀回整份計畫就看得到。）道與道之間**不共享狀態**——每道把產出**各自寫成自己的檔案**（各道的輸出路徑寫進該道 DoD），別讓兩道寫同一個檔。開工時對該道報 `in_progress`；sub-agent 交回、你核實 DoD 後**由你**報 `done`——sub-agent 不碰 MCP，對 server 的回報永遠是你。**匯合節點等每一道都 `done` 才開始**：讀各道產出的檔案、合併成最終產出（例：各道各寫一個數字檔 → 匯合節點讀檔加總）。有任一道卡住：能重試就重試；判定做不到就重交 plan 改寫或移除該道；要 owner 裁就走匯合之後的 gate。
 - **走到 gate 節點，用 `open_gate` 開卡**（就是 §4.1 那套等我回覆卡，多帶任務連結；節點與任務自動轉「等我回覆」）。gate 的問題就走 gate，**別另用一般聊天問**。**「等我回覆」是卡片的 hold，不是你能報的狀態**——開卡才進得去（你不能自己報 `waiting_owner`，報了是 400），而 owner 答卡後 **server 會自動把該節點與任務從「等我回覆」退回「進行中」**（這個轉換你不用、也不能自己報；卡沒答之前你也退不出「等我回覆」）。你收到 `reply_card` delta 後只要用 `get_reply_card` 讀答案，照答案把工作做完、做完該節點再 `update_step_status` 報 `done`。**答覆沒解決問題就再開一張卡**（`open_gate` 或 `create_reply_card` 皆可）——節點會重新綁上新卡、繼續等；別拿著沒用的答案硬著頭皮往下做。**gate 卡也可能不被回答、直接被標「已過期」**（owner／admin 助理，或你自己撤回——§4.1）：節點與任務同樣被 server 退回「進行中」，但那**不是核可**——問題還在就照最新情境**重開一張新卡**再等，不在了才照常推進。任務進行中臨時要請示、又不是預先標好的 gate 節點：直接 `create_reply_card` 即可，卡會自動掛到你的當前節點（§4.1）。
 - **動態調整**：context 變了、或有**新事件進來**時重新規劃——用 `submit_plan` 重交 plan，但**只動「尚未執行」的節點**；**已執行的保留不動、不可回頭改**（server 也會保留已 `done` 的節點；**綁過已答／已過期卡的節點也會被 server 保留**——新 plan 同名重列就原樣續用、沒重列就被凍結成「已取代」(superseded) 的紀錄節點，不算進度、不可再動；還在等 owner 回的卡節點照舊被整批取代，卡本身仍在 Ask 頁）。產出的是**更新後的 plan**，不是把做過的重寫。`submit_plan` 回的是**有界回條**（`task_id`／`steps_total`／`progress_done`／`progress_total`），不是整份 plan——要看存下來的節點就 `get_task`。
 - **卡在你和 owner 都推不動的外部條件**（第三方開通、時間窗）→ 把**當前節點**用 `update_step_status` 報 `waiting_external` 並帶 `waiting_reason` 一句話說明在等什麼（等待外部已下放到步驟層，任務自動推導成「等待外部」並顯示該原因）。等 CI／部署／掃描跑完**不算**——那還算是自家流程節點內的長時間作業，維持步驟 `in_progress`。
@@ -477,6 +479,8 @@ owner 的座艙有一頁「任務」。**任務 = 一件帶完成準則（DoD）
 ### 10.4 換手：任務狀態都在 server，新的你接著跑
 
 換手／換機（§8b）時，你手上任務的完整狀態——plan structure、已執行 vs 未執行的分界、當前節點、各 gate 狀態、負責人、識別鍵——**全都在 server 上**。接手的新 session **先用 MCP `peek_resume_summary_size` 探快照多大**（只回大小／counts ＋ `estimated_total_chars`、不含任何內容），再決定怎麼接回：小（經驗法則的門檻：小於 20000 字元、約 5k tokens）就直接用 `resume_summary` 拿回、大就派便宜 sub-agent（如 haiku）去 `resume_summary` 拉回並回壓縮摘要——然後**接著跑完**。`resume_summary` 快照是**有界摘要**（省你的開機 context）：每張任務只有編號／標題／狀態／優先權／當前節點名稱＋進度，**不含 steps／DoD 全文**。它另外帶兩塊「你醒來的現場」：`roster`（全體成員與外包，各帶線上／離線狀態、所在機器、以及職責——職責截 1000 字（截的是文件扣掉自己標題行之後的內容），結尾 `…` 表示被截；外包沒有角色，改帶他手上那張任務的標題，另外帶該任務的狀態、等待原因（`waiting_reason` 非空即代表卡住）、以及做到第幾步／共幾步（`progress_done`/`progress_total`）；正職這幾欄維持空白，不帶進度）與 `machines`（機器清單 ＋ `you_are_on` 你自己在哪一台；**「我在哪台」以這個欄位為準，不要用 hostname 推**——我們的機器會互報同名）。`overview` 欄帶大小概要（未結案任務總數、省略掉的計畫文字字數 `detail_chars`、快照 chat 字數 `chat_chars`、你的等回覆卡數，另有 `roster_chars`／`machines_chars` 兩塊現場的字數，peek 讀的就是這塊）——**先看大小再決定**：細節按需 `get_task` 逐張拉，`detail_chars` 很大就丟給 sub-agent 消化、別整包塞進自己的 context；卡片列表用 `list_reply_cards`（有 `limit` 可限制筆數，列表只給標題＋決策要點，全文 `get_reply_card`）。所以務必**持續把狀態回報存 server**（`update_step_status`／`update_step_note`／`submit_plan`／開卡等；任務狀態由步驟推導、不需你報），別把進度只留在自己的 context 裡——你沒報回 server 的，對下一個你就是不存在。
+
+🔴 **接手一張已經規劃過的任務時，動手前，確認你讀過它那本手冊的學習經驗（`get_task_manual`）。** 手冊的學習經驗記的是「**這一類任務**前人踩過什麼坑」，跟你是第一個規劃它的人、還是第三個接手的人**無關**——§10.2 那句「先讀手冊」掛在**規劃**那個動作底下，所以一張已經規劃好的任務轉手之後，就再也沒有人會走到它。這句是補那個缺口，**兩種人都適用**（正職接手自己那 N 張裡的一張、外包接手它唯一那一張，讀的是同一件事）。措辭是「確認你讀過」不是「去讀」：同一個 session 裡接著做第二張同類任務時，那份東西還在你眼前，不必再拉一次。
 
 ### 10.5 收尾事項：經驗回寫、清暫存、回報處理完
 

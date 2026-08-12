@@ -248,17 +248,38 @@ else:
 ' "$1" "$2"
 }
 
-# poll_ow_status TASK_ID WANT BUDGET — poll /api/outsource-workers until the worker
-# bound to TASK_ID reaches status WANT. Echoes nothing; 0 on match, 1 on timeout.
-poll_ow_status() {
-  local tid="$1" want="$2" budget="$3" deadline cur
+# poll_ow_live TASK_ID BUDGET — poll /api/outsource-workers until a LIVE worker is
+# bound to TASK_ID, i.e. the row exists AND its status is one of the live states
+# (assigned | active). 0 bound, 1 timeout.
+#
+# 🔴 WHY THIS IS NOT A poll-for-the-literal-string-"assigned" (T-4595; that helper
+# is deleted, it had no other caller). Both call sites below
+# used to demand the literal string 'assigned', and what they were actually
+# verifying is 「排程器把一個活的 worker 綁到這張任務上了」 — 'assigned' was only ever
+# the proxy for it. That proxy just got shorter-lived: assigned→active used to flip
+# on the worker's first get_my_task (a tool call the agent makes AFTER its runtime
+# has booted), and it now flips on report_waking, the FIRST verb of the boot
+# sequence. A 3-second poll racing a state that ends earlier is a flake generator,
+# and the file's own A5 comment already records what a missed transient costs here.
+#
+# It is NOT weakened into something that always passes, and the two ways it can
+# still fail are the two real failures it always caught: NO row bound to the task
+# (the scheduler never assigned one — 'gone'/'' fails) and a row that is no longer
+# live (released). Only the assigned-vs-active distinction is dropped, and that
+# distinction was never what either gate was asserting — the very next lines assert
+# the durable facts (a non-empty ow-id, and task.executor_id == that id).
+poll_ow_live() {
+  local tid="$1" budget="$2" deadline cur
   deadline=$(( $(date +%s) + budget ))
   while [[ "$(date +%s)" -lt "$deadline" ]]; do
     cur="$(ow_for_task "$tid" status)"
-    [[ "$cur" == "$want" ]] && { log "outsource-worker[task=$tid] status=$cur"; return 0; }
+    case "$cur" in
+      assigned|active)
+        log "outsource-worker[task=$tid] bound and live (status=$cur)"; return 0 ;;
+    esac
     sleep 3
   done
-  warn "outsource-worker[task=$tid] never reached status '$want' within ${budget}s (last='${cur:-<none>}')"
+  warn "outsource-worker[task=$tid] never reached a live status (assigned|active) within ${budget}s (last='${cur:-<none>}')"
   return 1
 }
 
@@ -450,11 +471,14 @@ pass_stage
 stage "A5. scheduler binds worker (assigned + executor_id) + BEST-EFFORT liveness (active/session are TRANSIENT — outcome verified A6-A8)"
 # wire §D: 30s tick + create_task event tick; binding mints ow-<hex12> {status:assigned}
 #   and sets task.executor_id = worker.id. Poll the panel until a worker binds to the task.
-poll_ow_status "$TASK_ID" assigned "$TASK_WORKER_TIMEOUT" \
-  || fail_stage "no outsource worker reached status=assigned for task=$TASK_ID within ${TASK_WORKER_TIMEOUT}s — scheduler never bound a worker"
+poll_ow_live "$TASK_ID" "$TASK_WORKER_TIMEOUT" \
+  || fail_stage "no LIVE outsource worker (assigned|active) was bound to task=$TASK_ID within ${TASK_WORKER_TIMEOUT}s — scheduler never bound a worker"
 OW_ID="$(ow_for_task "$TASK_ID" id)"
 [[ -n "$OW_ID" ]] || fail_stage "worker bound to task=$TASK_ID but its id was empty on GET /api/outsource-workers"
-log "scheduler minted+bound worker: ow-id=$OW_ID (status=assigned)"
+# Read the status back instead of hard-coding it: since T-4595 the gate above
+# accepts assigned|active, so a literal "(status=assigned)" here would print a
+# claim the run may have just falsified.
+log "scheduler minted+bound worker: ow-id=$OW_ID (status=$(ow_for_task "$TASK_ID" status))"
 # assert task.executor_id == the bound ow-id.
 A4_TASK="$(api_get "/api/tasks/$TASK_ID" 2>/dev/null || echo '{}')"
 A4_EXEC="$(task_field "$A4_TASK" executor_id)"
@@ -462,7 +486,8 @@ A4_EXEC="$(task_field "$A4_TASK" executor_id)"
   || fail_stage "task.executor_id='$A4_EXEC' != bound ow-id '$OW_ID' — outsource binding did not set task.executor_id"
 
 # ── A5 (cont.): BEST-EFFORT liveness observation (active + tmux are TRANSIENT) ──
-# wire §D: the worker's first get_my_task claim flips assigned→active; the warden runs a
+# wire §D: the worker's first report_waking flips assigned→active (T-4595 moved that
+#   claim off the retired get_my_task onto the boot sequence's FIRST verb); the warden runs a
 #   tmux session member-<ow-id> with claude. BUT a fast worker (small model + tiny task)
 #   can blow through assigned→active→done→closeout→released in well under a minute —
 #   PROVEN: run1+run2 both wrote the '42' product yet the worker had already left the
@@ -475,7 +500,7 @@ _saw=""
 _deadline=$(( $(date +%s) + 20 ))
 while [[ "$(date +%s)" -lt "$_deadline" ]]; do
   if [[ "$(ow_for_task "$TASK_ID" status 2>/dev/null)" == "active" ]]; then
-    _saw="active"; log "observed worker $OW_ID status=active (claimed via get_my_task)"; break
+    _saw="active"; log "observed worker $OW_ID status=active (claimed via report_waking)"; break
   fi
   if tmux_has_worker "$OW_ID"; then
     _saw="session"; log "observed worker $OW_ID tmux session $(worker_session "$OW_ID") live"; break
@@ -730,8 +755,8 @@ log "fork-join task created: id=$FORK_TID"
 # scheduler assigns + spawns the worker. Assert BINDING (durable); 'active' is TRANSIENT
 # (same lesson as A5) — never REQUIRE the active snapshot. The authoritative proof the
 # worker really ran the fork-join is the disk products (D3 lanes + D5 sum) below.
-poll_ow_status "$FORK_TID" assigned "$TASK_WORKER_TIMEOUT" \
-  || fail_stage "fork-join scheduler never bound a worker to task=$FORK_TID within ${TASK_WORKER_TIMEOUT}s"
+poll_ow_live "$FORK_TID" "$TASK_WORKER_TIMEOUT" \
+  || fail_stage "fork-join scheduler never bound a LIVE worker (assigned|active) to task=$FORK_TID within ${TASK_WORKER_TIMEOUT}s"
 FORK_OW="$(ow_for_task "$FORK_TID" id)"
 [[ -n "$FORK_OW" ]] || fail_stage "fork-join worker bound but its id was empty on GET /api/outsource-workers"
 if [[ "$(ow_for_task "$FORK_TID" status 2>/dev/null)" == "active" ]]; then

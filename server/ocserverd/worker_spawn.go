@@ -25,17 +25,17 @@ package main
 // Wake chain (SPEC §4 / contract §A.4, ruling H8):
 //
 //	scheduler assigns (worker row 'assigned')
-//	  → notifyWorkerSpawn: assemble the worker boot context (worker_context.md
-//	    seed + identity + the bound task + its manual) + SERVER-MINT the worker
+//	  → notifyWorkerSpawn: assemble the worker boot context (the shared seeds +
+//	    the type manual; T-4595) + SERVER-MINT the worker
 //	    token (sub == ow-id; unknown-sub auth floors to the agent class —
 //	    contract §H; the token rides ONLY the directed warden frame → a 0600
 //	    workdir file, never a log/chat/transcript)
 //	  → push a member `start` frame onto an ONLINE warden's FIFO (fail-closed:
 //	    no online warden → nothing enqueued, the cadence retries)
 //	  → the warden boots tmux session member-<ow-id> running claude with the
-//	    worker's own .mcp.json; the worker's first get_my_task flips it
-//	    'active' (Phase 1) — that flip, not a warden receipt, is the
-//	    observable wake signal.
+//	    worker's own .mcp.json; the worker's first report_waking flips it
+//	    'active' (T-4595 moved that flip off the retired get_my_task) — that
+//	    flip, not a warden receipt, is the observable wake signal.
 //
 // Reclaim (SPEC §6.3 second half):
 //
@@ -61,7 +61,6 @@ package main
 // no-op). Durable truth stays in the worker row alone.
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -108,165 +107,66 @@ const (
 
 // ── boot context (worker-specific assembly — NEVER the member fold) ──────────
 
-// buildWorkerBootContext assembles the worker persona, in this order:
+// buildWorkerBootContext assembles the worker boot context as the STAFF boot
+// context minus slot 3 — T-4595, owner-ruled:
 //
-//  1. GLOBAL CONTEXT — all three 全域情境 blocks (系統互動 ⊕ 使用者自訂 ⊕
-//     啟動程序), grouped and shared byte-for-byte with the member seeds FOR THE
-//     SAME RUNTIME: the 啟動程序 block follows w.Runtime through
-//     bootSequenceSeedName, exactly as buildBootContext follows member.Runtime.
-//     Global Context is the FIRST section: owner requirement, T-108b, pinned by
-//     TestWorkerBootContextStartsWithGlobalContext.
-//  2. the worker OVERLAY — seeds/worker_context.md, now only "how a worker
-//     differs from a member" rather than a second full copy of the policy.
-//  3. the concrete assignment — who the worker is, the bound task in full, and
-//     the type manual (Q1/Q2/Q3 + learnings).
+//  1. 系統互動   — the shared seed, byte-for-byte identical to staff's;
+//  2. 使用者自訂 — the owner's additive block, skipped entirely when blank;
+//  3. the persona — staff read 角色說明 → 長期筆記 here. A worker has no role,
+//     so it reads NOTHING here. That is the entire difference.
+//  4. 啟動程序   — the boot-sequence seed for the worker's OWN runtime, which
+//     carries that runtime's 執行環境 section. Recency-authoritative, LAST.
 //
-// Still deliberately NOT buildBootContext: a worker has no role doc or lessons
-// shard, and its overlay and assignment have a different placement. The member
-// fold consumes the same shared core, and conformance pins it byte-for-byte.
+// Not one word is written for outsource readers anywhere in this document; the
+// assembled result is byte-for-byte the staff fold with slot 3 taken out, and
+// TestWorkerBootContextIsTheStaffFoldMinusThePersona asserts exactly that.
+//
+// WHAT THIS ASSEMBLY NO LONGER CONTAINS, and why (all T-4595):
+//
+//   - the outsource OVERLAY (seeds/worker_context.md) — deleted, file and all.
+//     Every paragraph in it was either false (it told workers report_waking was
+//     not in their boot sequence, while HandleReportWakingApiSelfWakingPost
+//     routes an outsource caller straight through workerReportWaking; it told
+//     them they had no roster teammates, while §11 says the opposite), a
+//     restatement of the shared seed that could drift from it silently, or a
+//     difference nobody could name a harm for.
+//   - the BOUND TASK in full. The boot sequence has the worker read its task
+//     itself, which serves the LIVE row; the copy pasted here was a
+//     spawn-time snapshot, stale by construction. Staff boot contexts have never
+//     carried a task either.
+//   - the TYPE MANUAL in full. Staff pull a manual with get_task_manual at the
+//     moment they plan a task's steps (§10.2 says 先讀手冊 there); outsource now
+//     does the same. Handing it at boot froze it at spawn AND put it in a slot
+//     staff have nothing in.
+//   - the 你的身分 block. Identity arrives the way it always has for staff: the
+//     launcher's --append-system-prompt already opens with 你是 <ow-id>(role=
+//     outsource-worker) (cli/ocwarden/spawn.go buildAppendSystemPrompt, fed the
+//     worker's own id and workerBootRoleLabel). The remaining fields of that
+//     block have staff equivalents that are NOT in a boot context either: model
+//     and effort ride the runtime's own status reporting, and the owner's chat
+//     id is substituted into the shared seed's {OWNER_ID} placeholders.
+//   - the outsource-only RUNTIME TAIL (「# Runtime 開機最後一步」). It was a
+//     second, hand-written copy of the 執行環境 section the runtime's own
+//     boot-sequence seed already carries — listener ownership, the disabled
+//     interactive prompt, the automatic context reporting — for an audience
+//     staff does not have. Two copies of one instruction can only drift, and a
+//     tail written for outsource readers is exactly what "not one word" forbids.
 func (s *apiServer) buildWorkerBootContext(w OutsourceWorker, t Task, manual *TaskManual) (string, error) {
-	core, err := s.workerGlobalContext(w.Runtime)
+	head, err := s.workerSharedHead()
 	if err != nil {
 		return "", err
 	}
-	seed, err := s.root.readSeedFile("worker_context.md")
+	bootSeq, err := s.workerBootSequence(w.Runtime)
 	if err != nil {
 		return "", err
 	}
 
 	var b strings.Builder
-	b.WriteString(core)
-	b.WriteString("\n\n---\n\n")
-	b.WriteString(strings.TrimSpace(seed))
-
-	b.WriteString("\n\n---\n\n# 你的身分\n\n")
-	fmt.Fprintf(&b, "- worker id（token sub、聊天定址都用它）：`%s`\n", w.ID)
-	fmt.Fprintf(&b, "- 代號：%s\n", w.Codename)
-	fmt.Fprintf(&b, "- 模型：%s\n", w.Model)
-	fmt.Fprintf(&b, "- 投入度（effort）：%s\n", w.Effort)
-	fmt.Fprintf(&b, "- 雇主（owner）聊天 id：`%s`\n", wireOwnerID)
-
-	b.WriteString("\n# 你的任務（就這一張）\n\n")
-	fmt.Fprintf(&b, "- 編號：%s（task id `%s`）\n", TaskNo(t.ID), t.ID)
-	fmt.Fprintf(&b, "- 標題：%s\n", t.Title)
-	// 顯示名為主、括號保留 type_key(T-fa76):the worker addresses the manual
-	// by key (get_task_manual / write_task_learnings), so the key stays.
-	typeLabel := t.TypeKey
-	if manual != nil {
-		typeLabel = manualDisplayLabel(manual.DisplayName, t.TypeKey)
-	}
-	fmt.Fprintf(&b, "- 類型：%s\n", typeLabel)
-	fmt.Fprintf(&b, "- 優先權：%s\n", t.Priority)
-	if t.DedupeKey != "" {
-		fmt.Fprintf(&b, "- 識別鍵：%s\n", t.DedupeKey)
-	}
-	if len(t.Inputs) > 0 {
-		b.WriteString("- 輸入欄位：\n")
-		for _, name := range sortedKeys(t.Inputs) {
-			fmt.Fprintf(&b, "  - %s: %v\n", name, t.Inputs[name])
-		}
-	}
-	if strings.TrimSpace(t.Description) != "" {
-		b.WriteString("\n## 任務描述\n\n")
-		b.WriteString(strings.TrimSpace(t.Description))
-		b.WriteString("\n")
-	}
-	if t.HandoverNote != "" {
-		b.WriteString("\n## 交接備註\n\n")
-		fmt.Fprintf(&b, "- 時間：%.3f\n- 發送者：`%s`\n\n%s\n",
-			t.HandoverNoteTS, t.HandoverNoteBy, t.HandoverNote)
-		b.WriteString("這則備註保留自先前交接；請依時間與前任確認是否仍適用。\n")
-	}
-
-	// T-ba04: a task minted onto you while it is in `reassigning` is a TAKEOVER,
-	// not a fresh assignment — you have a predecessor to hand over WITH. Print
-	// who they are + the handover protocol up front, because a headless worker
-	// reads chat only after it boots (the paired handover chat message is also
-	// posted, but the boot context is what it sees first).
-	if t.Lock == TaskLockReassigning && t.ReassignedFrom != "" {
-		b.WriteString("\n## ⚠️ 你是接手這張任務（轉派交接）\n\n")
-		fmt.Fprintf(&b, "這張任務目前掛著「轉派中」鎖（`reassigning` lock）——你是 owner 轉派後的**接手人**，"+
-			"有一位**前任**在等你交接：\n")
-		fmt.Fprintf(&b, "- 前任：%s（聊天 id `%s`）\n",
-			s.executorLabel(t.ReassignedFromKind, t.ReassignedFrom), t.ReassignedFrom)
-		b.WriteString("\n**接手序列（先交接、確認完成，才由你自己認領）：**\n")
-		b.WriteString("1. 先 `post_chat` 給前任，問清楚目前進度、進行中的事項、有哪些雷要注意；反覆確認到你有把握接得住。\n")
-		b.WriteString("2. 確認交接完成後，**由你自己**呼叫 `claim_task`（認領）解除轉派鎖" +
-			"——只有你這個新負責人動得了；server 不會自動幫你解。任務狀態一律照步驟推導，不必也不能自己報。\n")
-		b.WriteString("3. 未完成的節點已被 server 退回「待辦」——照實況續推，或照常 `submit_plan` 重規劃" +
-			"（已完成／已取代的節點會保留）。\n")
-	}
-
-	if manual != nil {
-		fmt.Fprintf(&b, "\n# 任務手冊：%s\n",
-			manualDisplayLabel(manual.DisplayName, manual.TypeKey))
-		if strings.TrimSpace(manual.Purpose) != "" {
-			b.WriteString("\n## 這是什麼任務（Q1）\n\n" + strings.TrimSpace(manual.Purpose) + "\n")
-		}
-		if fields, err := ParseManualFields(manual.Fields); err == nil && len(fields) > 0 {
-			b.WriteString("\n## 需要哪些資訊（Q2）\n\n")
-			for _, f := range fields {
-				req := "選填"
-				if f.Required {
-					req = "必填"
-				}
-				key := ""
-				if f.IsKey {
-					key = "、識別鍵"
-				}
-				fmt.Fprintf(&b, "- %s（%s%s）\n", f.Name, req, key)
-			}
-		}
-		if strings.TrimSpace(manual.SopMD) != "" {
-			b.WriteString("\n## 該怎麼做（Q3 SOP——規劃 steps 的藍本）\n\n" +
-				strings.TrimSpace(manual.SopMD) + "\n")
-		}
-		if strings.TrimSpace(manual.Learnings) != "" {
-			b.WriteString("\n## 學習經驗（前人踩坑，先讀再動手）\n\n" +
-				strings.TrimSpace(manual.Learnings) + "\n")
-		}
-	} else {
-		// A worker only ever exists for a manual-typed task, but the manual
-		// may have been deleted/renamed since assignment — say so honestly
-		// rather than fabricating an empty manual.
-		b.WriteString("\n# 任務手冊\n\n（該類型的手冊目前不存在——照任務描述與 owner 的指示規劃。）\n")
-	}
-	// The worker overlay names this final tail as its step 2. It is selected by
-	// runtime, so ownership instructions never ask Codex to use Claude's Monitor
-	// or ask Claude to wait for Codex's sidecar.
-	b.WriteString("\n---\n\n")
-	b.WriteString(workerRuntimeBootTail(w.Runtime))
+	b.WriteString(head)
+	b.WriteString("\n\n")
+	b.WriteString(bootSeq)
 	b.WriteString("\n")
-	return b.String() + "\n", nil
-}
-
-func workerRuntimeBootTail(runtime string) string {
-	if NormalizeRuntime(runtime) == RuntimeCodex {
-		return `# Runtime 開機最後一步（Codex App Server）
-
-- ` + "`get_my_task`" + ` 成功後，完成這個 boot turn。**不要**自行啟動 ` + "`ocagent listen`" + `、Monitor 或前景空轉迴圈；OffiCraft 的 App Server sidecar 會在 ` + "`turn/completed`" + ` 後啟動並持有 listener。
-- 權限模式是 ` + "`danger-full-access`" + `，approval policy 是 ` + "`never`" + `。` + "`request_user_input`" + ` 已禁用；需要 owner 決策或動作時，用 OffiCraft ` + "`create_reply_card`" + `，不要等待 terminal 鍵盤。
-- context 使用量由 App Server token-usage 自動上報；不要手動跑 ` + "`context-report`" + `。`
-	}
-	return `# Runtime 開機最後一步（Claude Code）
-
-- ` + "`get_my_task`" + ` 成功後，用內建 Monitor 在背景跑 bare ` + "`ocagent listen`" + `（spawn 已把 ` + "`ocagent`" + ` 放進 cwd 並 prepend 進 PATH）；不要寫前景空轉迴圈。
-- ` + "`AskUserQuestion`" + ` 已禁用；需要 owner 決策或動作時，用 OffiCraft ` + "`create_reply_card`" + `，不要等待 terminal 互動選單。
-- context 使用量由 Claude Code ` + "`statusLine`" + ` 自動上報；不要手動跑 ` + "`context-report`" + `。`
-}
-
-// sortedKeys returns m's keys sorted — deterministic boot-context emission.
-func sortedKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	for i := 1; i < len(keys); i++ { // tiny n: insertion sort, no new import
-		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
-	return keys
+	return b.String(), nil
 }
 
 // ── warden targeting ─────────────────────────────────────────────────────────
@@ -1189,16 +1089,12 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // immediately? The owner's ask was 「有東西要存才等,沒有就立刻走」 — he must not
 // wait out a grace window just to change a model.
 //
-// The server can prove exactly THREE negatives, and all three are structural
-// rather than guessed:
+// The server can prove exactly TWO negatives, and both are structural rather
+// than guessed:
 //
 //   - NO LIVE SESSION (!hub.IsOnline). Nothing can hear the 預告 and nothing
 //     exists to flush; waiting would burn the whole deadline for certain. This
 //     is the pre-existing D6 rule openWorkerHandoverGrace already applies.
-//   - NEVER CLAIMED ITS TASK (Status != active, i.e. activated_ts == 0). The
-//     assigned→active flip IS the get_my_task claim, so a non-active worker has
-//     provably never been handed its task content. It has no task state to write
-//     back, and its ocagent may not even have finished booting.
 //   - THIS EPOCH'S WIND-DOWN IS ALREADY COLLECTED (RefocusSince > 0 ∧
 //     StoppedSince > 0 — read the epoch guard note below; the RefocusSince half
 //     is load-bearing, not decoration). 收口 latched: the
@@ -1215,7 +1111,26 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 //     machine indefinitely, because the FSM rescue is gated on !IsOnline.
 //     A collected worker has nothing left to flush, so the verb goes out NOW.
 //
-// Everything else (active + online) opens the window — and the WAIT IS NOT THE
+// 🔴 T-4595 REMOVED A THIRD NEGATIVE, DELIBERATELY, AND THE COST IS BOUNDED.
+// There used to be a "NEVER CLAIMED ITS TASK" arm (Status != active, i.e.
+// activated_ts == 0): the assigned→active flip WAS the get_my_task claim, so a
+// non-active worker had provably never been handed its task content. get_my_task
+// is retired and that flip now lives in report_waking (workerReportWaking), which
+// is the FIRST verb of the boot sequence — so "active" no longer proves anything
+// about whether the worker ever received task content, it only proves the session
+// said hello. Keeping the arm would have meant reading a stale proof; keeping the
+// flip on a later verb would have meant inventing an outsource-only lifecycle step
+// that staff do not have (the exact thing the owner's 「兩邊機制一樣」 rule forbids).
+// So the arm is gone, and an owner verb on a freshly-booted worker that has nothing
+// to save now waits for the wind-down instead of firing instantly. STAFF ALREADY
+// PAY EXACTLY THIS: member_ownerop_winddown.go spells out that the staff twin has
+// NO ANALOGUE of this arm on purpose, and that omitting it "errs toward winding
+// down, i.e. toward the grace — the safe direction, and the wait is a CEILING not
+// a duration". Both halves of that argument carry over verbatim: the 收口 fires the
+// instant the worker answers report_stopped, so a session with nothing to save
+// still ends in seconds; StoppingTimeoutSecs (120s) is only the ceiling.
+//
+// Everything else (online) opens the window — and the WAIT IS NOT THE
 // DEADLINE. StoppingTimeoutSecs is a ceiling, not a duration: the 收口 fires the
 // instant the worker answers report_stopped, so a session with nothing to save
 // ends in seconds. That is deliberately where the judgement is made, because the
@@ -1223,7 +1138,7 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // zero visibility into a transcript; any finer server-side test (context pct,
 // time since boot, message counts) would be a GUESS dressed as a criterion, and
 // guessing wrong here silently discards a round of learnings. Recorded honestly:
-// for the active+online case this is the 「照舊等滿但可提早結束」 fallback, not a
+// for the online case this is the 「照舊等滿但可提早結束」 fallback, not a
 // positive detection of unsaved work.
 // ⚠️ THE EPOCH GUARD ON THAT THIRD ARM (review round 3 — the hole round 2's
 // own fix opened). stopped_since is latched in TWO places and only one of them
@@ -1249,8 +1164,8 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // table does not cover means the table is now wrong too.
 // Callers hold s.outsourceMu.
 func (s *apiServer) workerHasStateToFlush(w OutsourceWorker) bool {
-	return w.Status == WorkerStatusActive &&
-		hasUncollectedOnlineOwnerOpState(w.RefocusSince, w.StoppedSince, s.hub.IsOnline(w.ID))
+	return hasUncollectedOnlineOwnerOpState(
+		w.RefocusSince, w.StoppedSince, s.hub.IsOnline(w.ID))
 }
 
 // openOwnerOpHandover puts an owner verb through the graceful wind-down: stamp a
@@ -1613,15 +1528,28 @@ func (s *apiServer) resolveLiveWorker(id string) (*OutsourceWorker, error) {
 // workerReportWaking is report_waking for a kind='outsource' caller: clear the
 // recycle markers (the durable loop-break, member parity). The boot-reported
 // model is runtime telemetry, stored separately from the owner configuration.
-// waking_since itself is NOT carried on the worker vocabulary —
-// the worker's observable wake signal stays the get_my_task claim. Takes
-// s.outsourceMu.
+// waking_since itself is NOT carried on the worker vocabulary.
+//
+// 🔴 T-4595 — THIS IS NOW THE assigned → active WRITE POINT, the only one.
+// It used to live in get_my_task, which is retired: a worker's first boot verb
+// is report_waking, exactly as a staff member's is, so the wake signal and the
+// claim are the same event again instead of two. WorkerStatusAssigned is a
+// projection of activated_ts == 0 (memberFromWorker stamps it), so the flip is
+// durable through the ordinary putMember write below — and it publishes an
+// outsource_worker delta so the cockpit panel moves on the same edge it always
+// did. Idempotent: a repeat report on an already-active worker changes nothing
+// and fans no worker delta.
+// Takes s.outsourceMu.
 func (s *apiServer) workerReportWaking(id string, model *string, trigger string) (*Member, error) {
 	s.outsourceMu.Lock()
 	defer s.outsourceMu.Unlock()
 	w, err := s.resolveLiveWorker(id)
 	if err != nil {
 		return nil, err
+	}
+	claimed := w.Status == WorkerStatusAssigned
+	if claimed {
+		w.Status = WorkerStatusActive
 	}
 	w.RefocusSince = 0.0
 	w.RefocusOp = ""
@@ -1633,6 +1561,12 @@ func (s *apiServer) workerReportWaking(id string, model *string, trigger string)
 	}
 	if err := s.putMember(m, trigger); err != nil {
 		return nil, err
+	}
+	if claimed {
+		// memberFromWorker minted the activated_ts; echo it back onto the row we
+		// publish so the delta's status is the one that was just persisted.
+		w.ActivatedTS = m.ActivatedTS
+		s.publishOutsourceWorker(*w, trigger)
 	}
 	return &m, nil
 }

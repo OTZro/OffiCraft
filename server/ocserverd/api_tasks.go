@@ -2723,65 +2723,16 @@ func (s *apiServer) HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDele
 	s.writeTaskArtifactReceipt(w, *t, artifactId)
 }
 
-// GET /api/self/task — the outsource worker's claim (identity-locked, the
-// resume-summary pattern: the caller's JWT sub IS the worker id). The first
-// claim flips assigned → active. Any caller with no live worker row — every
-// roster member included — is a 404.
-func (s *apiServer) HandleGetMyTaskApiSelfTaskGet(w http.ResponseWriter, r *http.Request) {
-	sub := currentActor(r)
-	worker, err := s.dal.GetOutsourceWorker(sub)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if worker == nil || worker.Status == WorkerStatusReleased {
-		writeError(w, http.StatusNotFound,
-			"no outsource task is bound to the caller")
-		return
-	}
-	t, err := s.dal.GetTask(worker.TaskID)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if t == nil {
-		writeError(w, http.StatusNotFound,
-			"no outsource task is bound to the caller")
-		return
-	}
-	if worker.Status == WorkerStatusAssigned {
-		worker.Status = WorkerStatusActive
-		if err := s.dal.PutOutsourceWorker(*worker); err != nil {
-			internalError(w, err)
-			return
-		}
-		s.publishOutsourceWorker(*worker, requestTrigger(r))
-	}
-	taskView, err := s.taskDTOOf(*t)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	// SLIM the steps for this face only (T-a98d): the full task + manual
-	// measured 100k characters, over the client's token ceiling, and 43% of it
-	// was step notes for steps the worker is not on. get_task is untouched —
-	// the cockpit and any agent that wants the whole plan still pull it there.
-	omitted := slimMyTaskSteps(taskView.Steps)
-	out := myTaskDTO{Task: taskView, StepsOmittedChars: omitted}
-	if t.TypeKey != "" {
-		manual, err := s.dal.GetTaskManual(t.TypeKey)
-		if err != nil {
-			internalError(w, err)
-			return
-		}
-		if manual != nil {
-			dto, err := newTaskManualDTO(*manual, s.manualSopCap(), s.manualLearningsCap())
-			if err != nil {
-				internalError(w, err)
-				return
-			}
-			out.Manual = &dto
-		}
-	}
-	writeJSON(w, http.StatusOK, out)
-}
+// T-4595 — get_my_task (GET /api/self/task) is RETIRED, tool and route alike.
+// It was the outsource worker's own read of its bound task, and it was a SECOND
+// copy of a document the worker already had: buildWorkerBootContext puts the
+// whole task and the whole manual into the worker's initial prompt verbatim, so
+// the worker's first boot action re-sent 92–98% of what it had just read (one
+// live call was refused outright by the client's tool layer at 98,271 chars).
+//
+// The replacement is not a narrower projection of this face — it is get_task,
+// which every worker could already call (that route sits on principalMachine)
+// and which serves LESS, not more, because the manual was never part of it.
+// The assigned → active flip this handler used to own moved to report_waking's
+// outsource arm (workerReportWaking): a worker now walks the SAME three-step
+// boot sequence as a staff member, and its wake signal is the same verb.

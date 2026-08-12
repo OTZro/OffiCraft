@@ -1072,8 +1072,19 @@ describe("WorkerDetailPanel — initial-prompt preview (T-ba6b)", () => {
     // Lazy-fetched on first expand (the mock re-assembles from current rows).
     fireEvent.click(await findByTestId("worker-detail-prompt-toggle"));
     const body = await findByTestId("worker-detail-prompt-body");
-    await waitFor(() => expect(body.textContent ?? "").toContain("O-42"));
-    expect(body.textContent ?? "").toContain("查帳單對帳");
+    // POSITIVE control: the real assembly landed, not an empty body — the two
+    // shared slots a worker actually receives.
+    await waitFor(() =>
+      expect(body.textContent ?? "").toContain("Global Context"),
+    );
+    expect(body.textContent ?? "").toContain("啟動程序");
+    // T-4595: this used to assert the codename and the bound task title were in
+    // the preview. Both are gone — a worker's boot context is the staff fold
+    // minus the persona slot, with no identity block, no task and no manual —
+    // so asserting their ABSENCE is what keeps the cockpit honest about what it
+    // is showing.
+    expect(body.textContent ?? "").not.toContain("O-42");
+    expect(body.textContent ?? "").not.toContain("查帳單對帳");
     // The honesty caveat is present (目前版本重組, 非派工當下逐字版).
     const note = await findByTestId("worker-detail-prompt-note");
     expect(note.textContent ?? "").toContain("非派工當下");

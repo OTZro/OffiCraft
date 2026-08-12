@@ -925,7 +925,8 @@ type OutsourceWorker struct {
 	TaskID        string
 	Status        string // closed set assigned|active|released (derived projection)
 	// ActivatedTS is the durable assigned→active anchor (member.activated_ts):
-	// 0 = never claimed its task; >0 = the first GET /api/self/task claim time.
+	// 0 = never claimed its task; >0 = the first report_waking claim time (T-4595
+	// moved that edge off the retired GET /api/self/task).
 	// Writers normally leave it alone — the Put mapping stamps it when Status
 	// flips to active with no anchor yet.
 	ActivatedTS  float64
@@ -1056,8 +1057,8 @@ func workerFromMember(m Member) OutsourceWorker {
 // role_key stays "" (an outsource member classifies as a plain agent — the
 // same authz floor the roster-less worker had). Status → roster_status +
 // activated_ts: the first write with Status active and no anchor yet stamps
-// activated_ts = now (the GET /api/self/task claim edge — the only
-// assigned→active transition).
+// activated_ts = now (the report_waking claim edge — the only assigned→active
+// transition; T-4595 moved it off the retired GET /api/self/task).
 func memberFromWorker(w OutsourceWorker) Member {
 	roster := RosterStatusActive
 	if w.Status == WorkerStatusReleased {

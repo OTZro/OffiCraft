@@ -11,10 +11,16 @@ import "strings"
 //	3. 啟動程序   seeds/boot_sequence*.md       (read-only studio SOP,
 //	                                            per-runtime — see below)
 //
-// Members receive all three through buildBootContext. Workers receive the same
-// three blocks grouped at the opening of their boot context, followed by their
-// role-specific overlay and assignment. The seed blocks deliberately remain
-// byte-for-byte shared; only the overlay describes role differences.
+// Members and workers receive all three, IN THE SAME SLOTS (T-4595): 系統互動
+// first, 使用者自訂 second, 啟動程序 last, with the reader's own persona
+// wedged in between (staff: 角色說明 → 長期筆記; outsource: nothing at all —
+// it has no role, and that empty slot is the ENTIRE difference between the two
+// documents).
+// The seed blocks deliberately remain byte-for-byte shared; nothing is filtered
+// or rewritten for either audience. There is no outsource-only seed at all —
+// seeds/worker_context.md was deleted by T-4595 after every line in it turned
+// out to be either false, a restatement of the shared seed, or a difference
+// nobody could name a harm for.
 //
 // "Byte-for-byte shared" is per RUNTIME, not global: the 啟動程序 block is the
 // boot sequence of the runtime the reader is actually running
@@ -22,21 +28,19 @@ import "strings"
 // get the same bytes. Handing every worker the Claude seed is not parity — it is
 // how a codex worker ended up being told to run its own `ocagent listen`.
 
-// workerGlobalContext returns the worker's view of all THREE 全域情境 blocks,
-// grouped in cockpit order (系統互動 → 使用者自訂 → 啟動程序). This is the FIRST
-// section of every worker boot context.
+// workerSharedHead returns the FIRST TWO shared blocks of a worker boot context
+// — 系統互動 then 使用者自訂 — in the same order and with the same rule the
+// member fold uses.
 //
 // The 使用者自訂 block follows the member rule: skipped entirely when the owner
 // text is blank, so a worker never sees an empty header.
 //
-// runtime is the worker's OWN runtime (OutsourceWorker.Runtime). The
-// boot-sequence seed is chosen from it through bootSequenceSeedName — the same
-// single expression the staff fold uses — because parity with staff means "read
-// the seed for the runtime you are running", not "everyone reads the Claude
-// one". A codex worker handed boot_sequence.md is told to run a bare `ocagent
-// listen` under Monitor, which directly contradicts the codex runtime tail its
-// spawn appends.
-func (s *apiServer) workerGlobalContext(runtime string) (string, error) {
+// The 啟動程序 block is NOT here: it is the recency-authoritative tail and is
+// appended last by buildWorkerBootContext, exactly as buildBootContext does for
+// staff. Grouping all three at the top (the pre-T-4595 shape) put the studio
+// SOP ABOVE the persona for workers and BELOW it for staff — one asymmetry with
+// nothing behind it.
+func (s *apiServer) workerSharedHead() (string, error) {
 	sys, err := s.root.readSeedFile("system_interaction.md")
 	if err != nil {
 		return "", err
@@ -52,11 +56,22 @@ func (s *apiServer) workerGlobalContext(runtime string) (string, error) {
 			"# 使用者自訂（Owner Additions）\n\n"+strings.TrimSpace(userCtx.Text))
 	}
 
+	return strings.Join(parts, "\n\n"), nil
+}
+
+// workerBootSequence returns the 啟動程序 block for a worker's OWN runtime.
+//
+// runtime is the worker's OWN runtime (OutsourceWorker.Runtime). The
+// boot-sequence seed is chosen from it through bootSequenceSeedName — the same
+// single expression the staff fold uses — because parity with staff means "read
+// the seed for the runtime you are running", not "everyone reads the Claude
+// one". A codex worker handed boot_sequence.md is told to run a bare `ocagent
+// listen` under Monitor, which directly contradicts the codex runtime tail its
+// spawn appends.
+func (s *apiServer) workerBootSequence(runtime string) (string, error) {
 	boot, err := s.root.readSeedFile(bootSequenceSeedName(runtime))
 	if err != nil {
 		return "", err
 	}
-	parts = append(parts, strings.TrimSpace(boot))
-
-	return strings.Join(parts, "\n\n"), nil
+	return strings.TrimSpace(boot), nil
 }

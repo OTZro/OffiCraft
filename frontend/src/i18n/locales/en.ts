@@ -431,11 +431,14 @@ export const en: Dict = {
     terminalHint:
       "Paste this in your own terminal to attach to this worker's session.",
     // Initial-prompt preview (boot-context): a worker never stores its verbatim
-    // dispatch-time persona, so the server re-assembles it from the CURRENT
-    // task/manual — the hint and note both flag that it is today's version.
+    // dispatch-time persona, so the server re-runs the same assembly — the hint
+    // and note both flag that it is today's version. Since T-4595 that assembly
+    // is the STAFF boot context minus the role journal and its lessons (a worker
+    // has no role); it contains neither the task nor the manual, so the old
+    // "re-assembled from the current task and manual" wording was simply false.
     initialPromptHint: "current re-assembly",
     initialPromptNote:
-      "A preview re-assembled from the CURRENT task and manual — not a verbatim record of the dispatch-time text (edits to the task/manual since then will differ).",
+      "A preview re-assembled from the CURRENT boot documents — not a verbatim record of the dispatch-time text (edits to them since then will differ). It is the staff boot context minus the role journal and its lessons: a worker has no role, and it picks its task and manual up itself after booting.",
     dash: "—",
   },
   lifecycle: {

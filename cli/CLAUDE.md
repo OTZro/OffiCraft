@@ -142,7 +142,7 @@ log 讀起來跟完美執行一模一樣。與 step 1 的 context-report 戳記�
 warden `spawn.go` 寫一支 bare `ocagent` shim script → exec 真正的 golang `ocagent` binary。binary 解析順序:`OC_AGENT_BIN` 覆蓋 → home-install sibling `~/.officraft/warden/ocagent` → fallback repoRoot-relative `<repoRoot>/cli/ocagent/ocagent`(dev layout)。`resolveOcAgentBin`(`transport.go`)擁有此邏輯。⚠️ 改 spawn / 路徑前先讀 `spawn_test.go` 斷言(shim 內容精確比對)。
 
 ## trash 清理(T-684c;`cli/ocwarden/trash.go`)
-「agent `mv`、warden `rm`」的 **rm 半邊**。**基石不是「mv 比 rm 安全」**(實測相對/絕對 × mv/rm 四種組合鑑別力為零)——基石是**刪除的執行者從 agent 換成 warden**:Claude Code harness 有一道**任何 settings/permission 都豁免不掉**的 dangerous-rm 確認提示(`Dangerous rm operation on working directory or its ancestor` + Yes/No),headless agent 前面沒有人按 → **無聲卡死**。warden 是 launchd 直起的獨立 Go 常駐程式、鏈上沒有 claude,它刪檔不在那道檢查的管轄內。seeds(`seeds/system_interaction.md` §10.5 / `seeds/worker_context.md` §6 / 前端逐字副本 `frontend/src/api/seeds.ts` / server 的 task-close nudge `sse_bands.go`)因此改教 agent:**暫存 `mv` 進 `<workdir>/trash/`,不要自己 `rm`**。
+「agent `mv`、warden `rm`」的 **rm 半邊**。**基石不是「mv 比 rm 安全」**(實測相對/絕對 × mv/rm 四種組合鑑別力為零)——基石是**刪除的執行者從 agent 換成 warden**:Claude Code harness 有一道**任何 settings/permission 都豁免不掉**的 dangerous-rm 確認提示(`Dangerous rm operation on working directory or its ancestor` + Yes/No),headless agent 前面沒有人按 → **無聲卡死**。warden 是 launchd 直起的獨立 Go 常駐程式、鏈上沒有 claude,它刪檔不在那道檢查的管轄內。seeds(`seeds/system_interaction.md` §10.5 / 前端逐字副本 `frontend/src/api/seeds.ts` / server 的 task-close nudge `sse_bands.go`)因此改教 agent:**暫存 `mv` 進 `<workdir>/trash/`,不要自己 `rm`**。
 
 - **兩個掛點**:spawn(`spawn.go` `SpawnDeps.start`,MkdirAll workdir 之後,`PurgeTrash` seam)與 teardown(`kill.go` `stop()` 尾端,`sweepSeams.purgeTrash` seam);兩個 seam 都在 `transport.go` `buildCommandDeps` 綁定真實 `purgeTrash`。兩者皆 **nil-skipped、best-effort**:清不掉絕不 fail spawn、也絕不改 stop 的死亡判定。
 - **fail-closed**:`purgeTrash(root, workdir, logf)` 只刪 `<workdir>/trash`。任一守衛不過 → **拒絕不動,並在 warden stderr(`<logDir>/ocwarden.err.log`)留 `REFUSED` 行**,不默默跳過。trash 不存在 = 正常狀態,安靜 no-op、不當異常。
@@ -157,7 +157,7 @@ owner 拍板「乾淨新建」:warden 長出**臨時 session** 形態伺候外�
 - **A案 P5b 命名統一:外包走成員動詞**——worker spawn 就是 `start`(member_id=ow-id、role="outsource-worker"),session = `member-<ow-id>`、workdir 在 agents/;kill 就是 `stop` {member_id}。
 - **過渡 guard(舊 `worker-<ow-id>` 殘留不可永遠殺不掉)**:`stop` 帶 ow- 前綴 member_id 時額外掃殺派生的 legacy `worker-<id>` session(EXACT、絕不 pattern);legacy 動詞 `worker_stop` 仍收(舊 server 過渡 alias,走同一 Stop closure、workdir 依 prefix 解析 workers/);`worker_start` 已退役(unknown-rpc:log+skip)。
 - **kill ladder 外門擴為「member- 或 worker- 才准」**(kill.go stop();其他 session 一律拒)。
-- **無 command_result 回報**:worker 無 member row,fold-back 通道不適用;喚醒成敗由 server 從 worker 自己的 get_my_task 領任務觀察。
+- **無 command_result 回報**:worker 無 member row,fold-back 通道不適用;喚醒成敗由 server 從 worker 自己的 report_waking 領任務觀察(T-4595:那一呼就是 assigned→active 的翻轉,get_my_task 已退役)。
 
 ## deploy
 唯一安裝入口是 **`ocwarden install`**(Go,`cli/ocwarden/install.go`;flip 時期的 bash `bin/warden-install` 已退役刪除)。

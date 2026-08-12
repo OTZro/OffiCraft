@@ -2147,7 +2147,7 @@
           },
           "actual_model": {
             "default": "",
-            "description": "The model the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.model``) — durably persisted, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported a model for this member; it is separate from, and NEVER falls back to, the owner-configured `model` launch setting. Applies identically to ``kind=outsource`` rows, whose reports arrive under their own ``ow-`` token sub. WAS: written only by ``report_waking``, which no outsource worker calls (a worker's boot signal is ``get_my_task``), so it was structurally always empty for them.",
+            "description": "The model the member's session is REPORTED to be running, from its own live telemetry (``AgentTelemetryIngestDTO.model``) — durably persisted, so it survives a server restart and outlives the session that reported it. Empty means nothing has ever reported a model for this member; it is separate from, and NEVER falls back to, the owner-configured `model` launch setting. Applies identically to ``kind=outsource`` rows, whose reports arrive under their own ``ow-`` token sub. WAS: written only by ``report_waking``, which no outsource worker called (its boot signal was the since-retired ``get_my_task``), so it was structurally always empty for them; T-4595 put every worker on the same report_waking boot verb, so the field now fills for them too.",
             "title": "Actual Model",
             "type": "string"
           },
@@ -2967,38 +2967,6 @@
           "name"
         ],
         "title": "MonitoringSessionDTO",
-        "additionalProperties": false,
-        "type": "object"
-      },
-      "MyTaskDTO": {
-        "description": "The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. ``task.steps`` is SLIM here and here only: the CURRENT step(s) — every step in ``in_progress`` / ``waiting_owner`` / ``waiting_external``, or, when none is live, the lowest-``order_idx`` ``pending`` one — carry their full content, while every other step serves ``dod`` and ``note`` EMPTY and keeps the rest: ``id`` / ``name`` / ``status`` / ``order_idx`` plus the bounded structural scalars ``parallel_group`` / ``is_gate`` / ``waiting_reason``, so the shape of the plan — which stage runs in parallel, which gate is coming, why another step is parked — survives the trim. ``steps_omitted_chars`` reports how much text that dropped (the ``ResumeTaskDTO.detail_chars`` move: peek the number, then pull get_task, which is unslimmed).",
-        "properties": {
-          "manual": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/TaskManualDTO"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Manual"
-          },
-          "steps_omitted_chars": {
-            "description": "Total runes of ``dod`` + ``note`` blanked out of the non-current steps (CJK counts 1 per character). 0 = nothing was dropped.",
-            "title": "Steps Omitted Chars",
-            "type": "integer"
-          },
-          "task": {
-            "$ref": "#/components/schemas/TaskDTO"
-          }
-        },
-        "required": [
-          "task",
-          "manual",
-          "steps_omitted_chars"
-        ],
-        "title": "MyTaskDTO",
         "additionalProperties": false,
         "type": "object"
       },
@@ -7298,7 +7266,7 @@
         "type": "object"
       },
       "WorkerBootContextDTO": {
-        "description": "The outsource worker's boot-context PREVIEW (GET /api/outsource-workers/{id}/boot-context, T-ba6b) — the worker twin of the member panel's /api/bootstrap preview. The server re-runs the SAME buildWorkerBootContext fold the spawn path uses (worker_context.md seed + identity + the bound task in full + the type manual), from the CURRENT DB rows. HONEST: this is what the boot context would look like NOW — not a verbatim record of the spawn-time text (the task/manual may have changed since; nothing is stored). Never carries a worker token.",
+        "description": "The outsource worker's boot-context PREVIEW (GET /api/outsource-workers/{id}/boot-context, T-ba6b) — the worker twin of the member panel's /api/bootstrap preview. The server re-runs the SAME buildWorkerBootContext fold the spawn path uses. Since T-4595 that fold is the STAFF boot context minus the persona slot (系統互動 + 使用者自訂 + the boot sequence for the worker's own runtime); it carries no outsource-only document, no identity block, no bound task and no type manual, so it does not vary with them. HONEST: this is what the boot context would look like NOW — the seeds may have changed since spawn, and nothing is stored. Never carries a worker token.",
         "properties": {
           "context": {
             "title": "Context",
@@ -8634,7 +8602,7 @@
         "summary": "List the product-guide docs (slug + title).",
         "x-mcp": {
           "include": true,
-          "order": 98,
+          "order": 97,
           "name": "list_docs",
           "description": "List the product-guide docs (slug + title).",
           "legacy": {
@@ -8768,7 +8736,7 @@
         "summary": "Read one product-guide doc in full (markdown; unknown slug → 404).",
         "x-mcp": {
           "include": true,
-          "order": 99,
+          "order": 98,
           "name": "get_doc",
           "description": "Read one product-guide doc in full (markdown; unknown slug → 404).",
           "legacy": {
@@ -8838,7 +8806,7 @@
         "summary": "List retained versions of an editable document.",
         "x-mcp": {
           "include": true,
-          "order": 96,
+          "order": 95,
           "name": "list_document_history",
           "description": "READ the retained versions of one editable document (global_context | role_definition | lessons | insight | task_manual_sop | task_manual_learnings): what each version held, when it was replaced and by whom. Read-only, at most the 3 most recent versions, newest first. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything. `key` is the document: \"global\" for global_context, the role key, \"<role_key>::<task_type>\" for lessons, the bare role key for insight, the type_key for either task-manual series. A task manual keeps TWO independent series — task_manual_sop holds only sop_md, task_manual_learnings holds only learnings — so editing one never consumes a retained slot of the other, and purpose / fields are not versioned at all. A retired kind is refused with 400 naming the series that replaced it.",
           "legacy": {
@@ -8859,7 +8827,7 @@
         "summary": "Read the shipped default of an editable document.",
         "x-mcp": {
           "include": true,
-          "order": 97,
+          "order": 96,
           "name": "get_document_seed",
           "description": "READ the SHIPPED DEFAULT of one editable document (global_context | role_definition | lessons | task_manual_sop | task_manual_learnings) — the text a reset would put back, i.e. the 初始版本 entry of that document's version list. Read-only: this tool writes nothing, so reading the default can never replace the live document. Putting the default BACK is deliberately not an agent tool — the owner does that from the cockpit — exactly as with list_document_history. `content` carries the SAME field names a retained version carries, so the same reader can compare a default against the live document. `key` is the document: \"global\" for global_context, the role key, \"<role_key>::<task_type>\" for lessons, the type_key for either task-manual series. 400 for a retired kind (naming the series that replaced it). 404 when this document has no shipped default at all — a role the owner created, a task manual, per-role lessons — which is the same set whose reset the server also 404s.",
           "legacy": {
@@ -12320,7 +12288,7 @@
         "summary": "List live outsource workers (codename, model, effort, task).",
         "x-mcp": {
           "include": true,
-          "order": 83,
+          "order": 82,
           "name": "list_outsource_workers",
           "description": "List live outsource workers (codename, model, effort, task).",
           "legacy": {
@@ -12394,7 +12362,7 @@
     },
     "/api/outsource-workers/{id}/boot-context": {
       "get": {
-        "description": "Read the outsource worker's boot-context PREVIEW (T-ba6b): the server re-assembles the persona/boot text with the SAME fold the spawn path uses (buildWorkerBootContext — worker_context.md seed + 你的身分 + the bound task in full + the type manual Q1/Q2/Q3 + learnings) from the CURRENT DB rows, WITHOUT minting any token. Owner/admin-agent cockpit read (T-6020; the text embeds the full task + manual, so a plain agent is a flat 403). 404 for an unknown worker or a worker whose bound task is gone. HONEST caveat the UI must carry: this is today's re-assembly, not a verbatim spawn-time record — nothing is stored (no prompt column, no migration).",
+        "description": "Read the outsource worker's boot-context PREVIEW (T-ba6b): the server re-assembles the boot text with the SAME fold the spawn path uses (buildWorkerBootContext), WITHOUT minting any token. Since T-4595 that fold is the STAFF boot context minus the persona slot — 系統互動 + 使用者自訂 + the boot sequence for the worker's own runtime, with no outsource-only document, no 你的身分 block, no bound task and no type manual. Owner/admin-agent cockpit read (T-6020; the floor is unchanged, and it is now the only thing keeping this read narrow — the text no longer embeds the task or the manual). 404 for an unknown worker or a worker whose bound task is gone. HONEST caveat the UI must carry: this is today's re-assembly, not a verbatim spawn-time record — nothing is stored (no prompt column, no migration).",
         "operationId": "handle_get_worker_boot_context_api_outsource_workers__id__boot_context_get",
         "parameters": [
           {
@@ -12452,7 +12420,7 @@
         "summary": "Read an outsource worker's boot-context preview (owner/admin agent).",
         "x-mcp": {
           "include": true,
-          "order": 84,
+          "order": 83,
           "name": "get_outsource_worker_boot_context",
           "description": "Read an outsource worker's boot-context preview (owner/admin agent).",
           "legacy": {
@@ -12531,7 +12499,7 @@
         "summary": "Change (換 model) an outsource worker's model/effort (owner/admin agent).",
         "x-mcp": {
           "include": true,
-          "order": 88,
+          "order": 87,
           "name": "set_outsource_worker_model",
           "description": "Change (換 model) an outsource worker's model/effort (owner/admin agent).",
           "legacy": {
@@ -12600,7 +12568,7 @@
         "summary": "Refocus (換手) an outsource worker's context (owner/admin agent, online-only else 409).",
         "x-mcp": {
           "include": true,
-          "order": 85,
+          "order": 84,
           "name": "refocus_outsource_worker",
           "description": "Refocus (換手) an outsource worker (owner/admin agent, online-only else 409).",
           "legacy": {
@@ -12742,7 +12710,7 @@
         "summary": "Restart (重啟) an outsource worker that has no live session (owner/admin agent; 409 only when it is actually alive).",
         "x-mcp": {
           "include": true,
-          "order": 87,
+          "order": 86,
           "name": "restart_outsource_worker",
           "description": "Restart (重啟) an outsource worker that has no live session (owner/admin agent; 409 only when it is actually alive).",
           "legacy": {
@@ -12811,7 +12779,7 @@
         "summary": "Stop (停止) an outsource worker (owner/admin agent; kill + hold down).",
         "x-mcp": {
           "include": true,
-          "order": 86,
+          "order": 85,
           "name": "stop_outsource_worker",
           "description": "Stop (停止) an outsource worker: kill + hold down (owner/admin agent).",
           "legacy": {
@@ -14167,64 +14135,6 @@
         }
       }
     },
-    "/api/self/task": {
-      "get": {
-        "description": "The outsource worker's claim (GET /api/self/task, identity-locked): the task bound to the caller's JWT sub plus the type's manual snapshot (SOP + learnings; null for an ad-hoc task). The FIRST claim flips the worker assigned → active. A caller with no bound worker row (any roster member included) is a 404. ``task.steps`` is SLIM here and here only: the CURRENT step(s) — every step in ``in_progress`` / ``waiting_owner`` / ``waiting_external``, or, when none is live, the lowest-``order_idx`` ``pending`` one — carry their full content, while every other step serves ``dod`` and ``note`` EMPTY and keeps the rest: ``id`` / ``name`` / ``status`` / ``order_idx`` plus the bounded structural scalars ``parallel_group`` / ``is_gate`` / ``waiting_reason``, so the shape of the plan — which stage runs in parallel, which gate is coming, why another step is parked — survives the trim. ``steps_omitted_chars`` reports how much text that dropped (the ``ResumeTaskDTO.detail_chars`` move: peek the number, then pull get_task, which is unslimmed).",
-        "operationId": "handle_get_my_task_api_self_task_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MyTaskDTO"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
-                }
-              }
-            },
-            "description": "Validation error (unified error envelope)."
-          },
-          "4XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
-                }
-              }
-            },
-            "description": "Client error (unified error envelope)."
-          },
-          "5XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
-                }
-              }
-            },
-            "description": "Server error (unified error envelope)."
-          }
-        },
-        "summary": "Outsource worker's claim: read the task bound to the caller.",
-        "x-mcp": {
-          "include": true,
-          "order": 82,
-          "name": "get_my_task",
-          "description": "Outsource worker's claim: read the task bound to the caller. The steps are a BOUNDED projection: only the current step(s) carry their dod/note in full, the rest give id/name/status/order_idx only, and steps_omitted_chars reports how much was dropped — call get_task for the whole plan.",
-          "legacy": {
-            "descriptor": "{\n      \"description\": \"Outsource worker's claim: read the task bound to the caller. The steps are a BOUNDED projection: only the current step(s) carry their dod/note in full, the rest give id/name/status/order_idx only, and steps_omitted_chars reports how much was dropped — call get_task for the whole plan.\",\n      \"inputSchema\": {\n        \"properties\": {},\n        \"type\": \"object\"\n      },\n      \"name\": \"get_my_task\"\n    }"
-          }
-        }
-      }
-    },
     "/api/self/waking": {
       "post": {
         "description": "``report_waking()`` — the boot report (identity from token, NO member_id).\n\nStamps the CALLER's ``waking_since`` → derives *waking* until the SSE connects\n(⇒ online) or the wall-clock TTL lapses. ``online`` is untouched (pure SSE\nprojection).\n\nRECYCLE LOOP BREAK: a fresh session's FIRST report clears ALL the recycle markers\n— ``refocus_since`` / ``stopped_since`` / ``stopping_since`` → 0.0 — so the\nrespawned agent sheds the refocus intent, the dump-done stamp AND the graceful-\nshutdown anchor BEFORE it goes online. The boot序 guarantees this report lands\nbefore the SSE connects, so the new session can never inherit a stale marker and\nre-trigger a recycle (or derive *stopping*) on itself.\n\n``model`` is optional runtime telemetry. The server stores it as ``actual_model``\nwithout changing the owner-configured launch model.",
@@ -14489,7 +14399,7 @@
         "summary": "List task types (match by display_name/purpose; address by type_key).",
         "x-mcp": {
           "include": true,
-          "order": 89,
+          "order": 88,
           "name": "list_task_manuals",
           "description": "List task types (match by display_name/purpose; address by type_key). WITHOUT view=list this returns the FULL manual of every type — every SOP and every learnings blob in one answer, six figures of characters on a real roster. Pass view=list unless you actually need the text.",
           "legacy": {
@@ -14555,7 +14465,7 @@
         "summary": "Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate → 409; assignee = owner/admin agent).",
         "x-mcp": {
           "include": true,
-          "order": 90,
+          "order": 89,
           "name": "create_task_manual",
           "description": "Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate → 409; assignee = owner/admin agent). An outsource assignee may select runtime claude/codex; absent = claude.",
           "legacy": {
@@ -14624,7 +14534,7 @@
         "summary": "Delete a task type (open tasks of the type → 409).",
         "x-mcp": {
           "include": true,
-          "order": 93,
+          "order": 92,
           "name": "delete_task_manual",
           "description": "Delete a task type (open tasks of the type → 409).",
           "legacy": {
@@ -14691,7 +14601,7 @@
         "summary": "Read one task manual (purpose/fields/SOP/learnings/assignee).",
         "x-mcp": {
           "include": true,
-          "order": 91,
+          "order": 90,
           "name": "get_task_manual",
           "description": "Read one task manual (purpose/fields/SOP/learnings/assignee). The SOP and the learnings are judged by two SEPARATE caps: read sop_md_cap_chars and learnings_cap_chars. The older cap_chars is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read sop_md_cap_chars for the SOP.",
           "legacy": {
@@ -14768,7 +14678,7 @@
         "summary": "Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent).",
         "x-mcp": {
           "include": true,
-          "order": 92,
+          "order": 91,
           "name": "update_task_manual",
           "description": "Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent). An outsource assignee may select runtime claude/codex; absent = claude. Only the fields you name change, so omitting a field is safe — but unknown keys are rejected rather than dropped: the learnings doc goes in learnings (NOT text — that is write_task_learnings' field name). The SOP and the learnings are judged by two SEPARATE caps: read sop_md_cap_chars and learnings_cap_chars. The older cap_chars is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read sop_md_cap_chars for the SOP.",
           "legacy": {
@@ -14847,7 +14757,7 @@
         "summary": "Whole-doc replace of a type's learnings (task-close write-back).",
         "x-mcp": {
           "include": true,
-          "order": 94,
+          "order": 93,
           "name": "write_task_learnings",
           "description": "Whole-doc replace of a type's learnings (task-close write-back). The doc text goes in text (NOT learnings — that is update_task_manual's field name); text is REQUIRED and unknown keys are rejected. Wiping existing learnings needs allow_shrink=true.",
           "legacy": {
@@ -14926,7 +14836,7 @@
         "summary": "Patch a type's learnings by unique anchors ({edits:[{old,new}]}).",
         "x-mcp": {
           "include": true,
-          "order": 95,
+          "order": 94,
           "name": "patch_task_learnings",
           "description": "Patch a type's learnings by unique anchors ({edits:[{old,new}]}) — the learnings twin of patch_lessons, so the write cost scales with the CHANGE, not the whole (30k-char) doc, and re-typing the whole doc can no longer silently drop content. Edits apply in order; a non-empty old must match the current learnings EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400, zero writes — the unique anchor also acts as an optimistic lock); an empty old appends. Wiping the doc, or shrinking it below a tenth, needs allow_shrink=true.",
           "legacy": {
