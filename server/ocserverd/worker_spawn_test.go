@@ -640,8 +640,22 @@ func TestNotifyWorkerSpawn_DispatchesMemberStart_AndPaces(t *testing.T) {
 		t.Errorf("token machine_id = %q, want %s (the resolved auto pick)", mid, ServerSelfHost)
 	}
 	persona, _ := args["persona_context"].(string)
-	if !strings.Contains(persona, "O-2") || !strings.Contains(persona, "Review PR 42") {
-		t.Error("persona_context must carry the identity + task")
+	// T-4595: this used to require the codename and the bound task title in the
+	// frame. Neither is in a worker's boot context any more — it is the staff
+	// fold minus the persona slot. What this frame assertion is actually FOR is
+	// that the fold really rode the wire (an empty or truncated persona_context
+	// boots a worker with no instructions at all), so it now checks the shared
+	// blocks, plus the absences so the removal cannot quietly come back through
+	// the spawn path.
+	for _, want := range []string{"# Global Context", "# 啟動程序（Boot Sequence"} {
+		if !strings.Contains(persona, want) {
+			t.Errorf("persona_context is missing the shared block %q", want)
+		}
+	}
+	for _, gone := range []string{"O-2", "Review PR 42", "# 你的身分"} {
+		if strings.Contains(persona, gone) {
+			t.Errorf("persona_context still carries %q (T-4595)", gone)
+		}
 	}
 	// The token must never leak into the persona text (file/env only).
 	if strings.Contains(persona, token) {

@@ -162,13 +162,24 @@ The context MUST be the following parts joined with `"\n\n"`, plus a single trai
    the assembler MUST strip those leading duplicate title line(s) and prepend exactly one,
    so titles never accumulate across write-back generations;
 5. the 啟動程序 (boot-sequence) file seed, stripped — appended LAST (the
-   recency-authoritative tail).
+   recency-authoritative tail). It is selected by the READER'S OWN runtime
+   (`claude | codex`, blank folding to `claude`), and that seed carries that runtime's
+   執行環境 section; nothing may be appended after it.
 
 The user-custom block moved from 4th to 2nd in T-4595. The reason is the outsource
 assembly: an outsource worker's boot context MUST be this same list minus parts 3 and 4
 (it has no role and no per-role lessons shard), in this same order, with no
 outsource-specific document of any kind. With the owner block at the end of the staff
 persona it could not be — the two assemblies had one seam that only staff carried.
+
+"No outsource-specific document of any kind" is normative and exhaustive: the outsource
+assembly MUST NOT carry an outsource overlay seed, an identity block, the worker's bound
+task, its task-type manual, or a second copy of the runtime's execution-environment
+instructions. Identity is supplied the way it is for staff (the launcher's appended system
+prompt); the task and the manual are fetched by the worker itself after boot, so a
+boot-time copy could only be a stale snapshot. Byte-for-byte, the outsource context equals
+the staff context with parts 3 and 4 removed, and that equality is the testable form of
+this paragraph.
 
 The seed `.md` files under the repo-root `seeds/` are language-neutral assets; a rewrite MUST
 consume the same files (byte-for-byte block content equality is testable across

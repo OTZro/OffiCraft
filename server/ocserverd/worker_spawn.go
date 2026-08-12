@@ -169,20 +169,6 @@ func (s *apiServer) buildWorkerBootContext(w OutsourceWorker, t Task, manual *Ta
 	return b.String(), nil
 }
 
-// sortedKeys returns m's keys sorted — deterministic boot-context emission.
-func sortedKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	for i := 1; i < len(keys); i++ { // tiny n: insertion sort, no new import
-		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
-	return keys
-}
-
 // ── warden targeting ─────────────────────────────────────────────────────────
 
 // pickWorkerWarden resolves the warden (= machine) a worker session boots on.
