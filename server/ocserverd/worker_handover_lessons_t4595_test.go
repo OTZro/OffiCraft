@@ -192,8 +192,26 @@ func TestHandoverStepThreeIsTrueForBothAudiences(t *testing.T) {
 // the third person on it. Hence the handover section, and hence 確認你讀過
 // (have read) rather than 去讀 (go read): a second task of the same type in one
 // session needs no second fetch, a fresh session after a handover does.
+//
+// 🔴 THE SENTENCE IS DELIBERATELY IN THE DOCUMENT TWICE, AND BOTH COPIES ARE
+// PINNED HERE. §8b's 接班起手式 carries it because that is the position the
+// owner named; §10.4 carries it again with the reasoning for why it exists at
+// all. Keeping the redundancy is his ruling — demoting the §8b copy to a
+// pointer would take the sentence out of the very place he put it.
+//
+// So the guard has to cover the redundancy, not just one end of it. Asserting
+// only the §8b copy was measured and found wanting: an independent review
+// rewrote the §10.4 copy into something completely different and the ENTIRE
+// suite stayed green (rc=0, zero failures) — the worst possible arrangement,
+// where a reader believes a guard exists and edits the unguarded half in
+// silence. The exact-count assertion below is what closes that, and it also
+// catches a third copy being pasted in (a fourth reader "helpfully" repeating
+// it is drift too).
 func TestHandoverTellsTheTakerToHaveReadTheManualsLearnings(t *testing.T) {
 	const verbatim = "動手前，確認你讀過它那本手冊的學習經驗（`get_task_manual`）。"
+	// §8b 接班起手式 and §10.4. Both are handover contexts; see the note above
+	// for why the duplication is deliberate.
+	const wantCopies = 2
 	s := newWorkerTestServer(t)
 	_, staff := memberCtx(t)
 	for _, tc := range []struct{ who, doc string }{
@@ -201,11 +219,23 @@ func TestHandoverTellsTheTakerToHaveReadTheManualsLearnings(t *testing.T) {
 		{"staff", staff.Context},
 	} {
 		t.Run(tc.who, func(t *testing.T) {
+			// (1) The copy in the section the owner named must be there.
 			if !strings.Contains(handoverSectionOf(t, tc.doc), verbatim) {
-				t.Errorf("the handover section does not carry the owner's sentence "+
+				t.Errorf("§8b's 接班起手式 does not carry the owner's sentence "+
 					"verbatim:\n%s\n(it is deliberately 確認你讀過, not 去讀, and it "+
 					"belongs to 接手／換手 — not under 節點規劃, which is the gap it fills)",
 					verbatim)
+			}
+			// (2) …and so must the second one, which is what actually explains
+			// why the sentence exists. Counting is how BOTH ends get covered by
+			// one assertion: editing either copy, or adding a third, moves it.
+			if got := strings.Count(tc.doc, verbatim); got != wantCopies {
+				t.Errorf("the owner's sentence appears %d time(s), want exactly %d "+
+					"(§8b 接班起手式 + §10.4). Verbatim:\n%s\n"+
+					"Fewer: one of the two copies was reworded or deleted — the "+
+					"redundancy is the owner's ruling, not an oversight. More: a "+
+					"third copy is drift; edit the two that exist.",
+					got, wantCopies, verbatim)
 			}
 		})
 	}

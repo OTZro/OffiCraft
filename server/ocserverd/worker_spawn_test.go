@@ -221,6 +221,19 @@ func TestBuildWorkerBootContext_RuntimeGuidanceIsTheSeedsOwnAndItIsLast(t *testi
 // Both folds run on ONE server with a non-blank owner block, so the shared
 // slots are the same bytes on both sides by construction rather than by a
 // second re-derivation of them here.
+//
+// 🔴 SCOPE, MEASURED — IT GUARDS THE ASSEMBLY, NOT THE SEED TEXT. Because the
+// want is built FROM the staff fold, any edit to a shared seed moves BOTH sides
+// of the equality and this stays green. An independent review confirmed it:
+// changing a sentence of prose in system_interaction.md (verified to reach the
+// embed) left the ENTIRE ocserverd suite passing, this test included; inserting
+// a single "\n" on the worker side alone turned exactly this test red. So it
+// answers "are the two documents still the same shape?" and says NOTHING about
+// whether the shared documents still say the right thing. Guards for the seed
+// WORDING are separate and must be written separately — see
+// worker_handover_lessons_t4595_test.go and
+// TestNoBootContextReinstatesTheRetiredOutsourceClaims. Do not read a green
+// here as cover for a seed edit.
 func TestWorkerBootContextIsTheStaffFoldMinusThePersona(t *testing.T) {
 	s := newWorkerTestServer(t)
 	const ownerMark = "T4595-OWNER-CUSTOM-MARKER"
@@ -271,7 +284,11 @@ func TestWorkerBootContextIsTheStaffFoldMinusThePersona(t *testing.T) {
 	if worker != want {
 		t.Errorf("outsource boot context is not the staff fold minus slot 3\n"+
 			"got  %d bytes\nwant %d bytes\n"+
-			"外包的 boot context ＝ 正職的扣掉第 3 格，一個字都不為外包另寫（T-4595）",
+			"外包的 boot context ＝ 正職的扣掉第 3 格，一個字都不為外包另寫（T-4595）\n"+
+			"⚠️ 這顆守的是【組裝結構】，不是 seed 的文字內容：want 由正職那份實際產出"+
+			"切出來，所以改 seed 會讓兩邊一起移動、這顆不會紅。要守 seed 措辭請看"+
+			" worker_handover_lessons_t4595_test.go 與"+
+			" TestNoBootContextReinstatesTheRetiredOutsourceClaims。",
 			len(worker), len(want))
 	}
 }
