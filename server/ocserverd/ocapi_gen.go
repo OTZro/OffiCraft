@@ -950,10 +950,10 @@ type MachineOnboardDTO struct {
 // surfaced under the machine-model name (the machine id == the warden member's own
 // id — the binding key agents store in their “desired_machine_id“ column). “token“
 // is
-// the freshly minted exec-token (“scope="agent"“, “sub=member_id“); “expires_in“
-// is its lifetime in seconds; “boot_command“ is the copy-paste line the operator
-// runs ON that machine to install the warden (identity rides in the token's “sub“,
-// not a templated machine id).
+// the freshly minted permanent exec-token (“scope="agent"“, “sub=member_id“) with
+// no “exp“ claim; “expires_in“ is “0“. “boot_command“ is the copy-paste line
+// the operator runs ON that machine to install the warden (identity rides in the
+// token's “sub“, not a templated machine id).
 //
 // “claim_code“ is a short-lived (“claim_expires_in“ = 600 s), single-use code the
 // “boot_command“ embeds (“install.sh?code=“) instead of the exec-token; the served
