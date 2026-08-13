@@ -1710,8 +1710,25 @@
   color: var(--color-text-muted);
 }
 .mp-resume__chatrow {
+  /* 🔴 COLUMN, and this is the whole of the 2026-08-13 layout fix. It used to
+     be a plain `display: flex` — i.e. flex-direction: row — which laid the
+     meta, the body, the fold mark, the attachments and the card out as
+     HORIZONTAL siblings. All three things the owner circled on the screenshot
+     were that one fact:
+       - the body started to the RIGHT of the meta column, tens of pixels in
+         from the section title's left edge (measured: title.x=12, body.x=337
+         at 1280px) — 「標頭靠左、內文卻置中」;
+       - the fold mark was the third item on the row, pushed to the far right,
+         reading as a separate column rather than as a note on that message;
+       - the meta box got whatever width was left over, so the timestamp
+         wrapped onto its own line or not depending on how long the names were.
+     Stacking them puts every part of a message on the section's own left edge.
+     Pinned by visual-guards/resume-chat-row-align.ct.spec.tsx — the unit suite
+     cannot see any of this (jsdom resolves no flex). */
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
   padding: 6px 0;
   font-size: 12.5px;
 }
@@ -1720,6 +1737,10 @@
   color: var(--color-text-muted);
 }
 .mp-resume__chatbody {
+  /* Full width of the row now that the row is a column: without this the body
+     shrink-wraps to its longest word and a short message would sit in a narrow
+     box, which is the same "floating" look from a different cause. */
+  align-self: stretch;
   overflow-wrap: anywhere;
 }
 .mp-resume__taskrow {
@@ -1780,13 +1801,35 @@
   white-space: nowrap;
 }
 .mp-resume__chatmeta {
+  /* TWO STACKED LINES, structurally — the parties, then the timestamp. It was
+     one wrapping line, which is why the timestamp moved between rows: with
+     short names it fitted after the id, with long ones it wrapped. "Where does
+     the time go" then had no answer, only a width. Splitting it in the MARKUP
+     (rather than forcing a break with flex-basis) makes the answer the same at
+     every width and for every name length. */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin-bottom: 2px;
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+/* Line 1 of the meta: from → to. Wraps internally when the names are long; that
+   wrap is fine because nothing downstream depends on this line's height. */
+.mp-resume__chatparties {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
-  margin-bottom: 2px;
-  font-size: 11.5px;
-  color: var(--color-text-muted);
+}
+/* Line 2 of the meta: the timestamp, and the reply-card status when there is
+   one. ALWAYS its own line, so it is always in the same place. */
+.mp-resume__chatstamp {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
 }
 .mp-resume__party {
   display: inline-flex;
