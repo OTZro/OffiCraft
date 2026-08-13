@@ -75,6 +75,9 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
 // would have to surface if one leaked. The title is the owner's own prose and
 // may legitimately spell "T-" anything, so scanning the whole row would make
 // the adjudication assertion red for a reason the adjudication never covered.
+//
+// KNOWN BOUNDARY. 標題是逐字渲染的自由文字 ⇒ 若編號被寫進標題，它會顯示在卡片上，
+// 而這裡沒有任何斷言會紅。
 function taskRefTextOutsideTitle(ref: HTMLElement): string {
   const clone = ref.cloneNode(true) as HTMLElement;
   clone.querySelector(".reply-card__task-title")?.remove();
