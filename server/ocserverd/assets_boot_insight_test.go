@@ -37,45 +37,73 @@ func bootRoleWithInsight(t *testing.T, s *apiServer, key, insight string) {
 	}
 }
 
+// 🔴 TWO fixtures, and the pair is what makes the gate observable. They sit on
+// OPPOSITE corners of is_default × has_seed:
+//
+//	assistant  — factory seed, never written  ⇒ is_default=true,  has_seed=true
+//	r-boot-*   — written overlay, no seed file ⇒ is_default=false, has_seed=false
+//
+// So every wrong gate loses exactly one of them: `!IsDefault` drops assistant,
+// `IsDefault` drops the written role, `HasSeed` drops the written role. Only
+// TrimSpace(Text) != "" keeps both. One fixture alone would let some of those
+// mutants survive.
 func TestBootContextCarriesInsightBetweenRoleAndLessons(t *testing.T) {
-	s := newWorkerTestServer(t)
-	const key = "r-boot-insight"
-	const body = "判準探針：刪除成本不對稱時先問 owner。"
-	bootRoleWithInsight(t, s, key, body)
+	const written = "判準探針：刪除成本不對稱時先問 owner。"
+	for _, tc := range []struct {
+		name    string
+		key     string
+		overlay string
+	}{
+		{"seeded role that never wrote one", seedRoleAssistant, ""},
+		{"custom role that wrote one", "r-boot-insight", written},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newWorkerTestServer(t)
+			if tc.key != seedRoleAssistant {
+				bootRoleWithInsight(t, s, tc.key, tc.overlay)
+			}
 
-	boot, err := s.buildBootContext(key, nil, "general")
-	if err != nil {
-		t.Fatalf("buildBootContext: %v", err)
-	}
-	if boot == nil {
-		t.Fatal("buildBootContext resolved no role for a role that exists")
-	}
-	ctx := boot.Context
+			insight, err := s.foldInsightDTO(tc.key)
+			if err != nil {
+				t.Fatalf("foldInsightDTO: %v", err)
+			}
+			// Premise: this fixture really does have an insight to show. If the
+			// factory seed ever stops shipping, this fails HERE rather than
+			// silently turning the assertions below vacuous.
+			if strings.TrimSpace(insight.Text) == "" {
+				t.Fatalf("fixture %q has no insight text — the assertions below would prove nothing", tc.key)
+			}
 
-	title := "# Insight (" + key + ")"
-	if !strings.Contains(ctx, title) {
-		t.Fatalf("boot context is missing the insight section %q", title)
-	}
-	// The section must carry the doc the read face serves, not just a header.
-	insight, err := s.foldInsightDTO(key)
-	if err != nil {
-		t.Fatalf("foldInsightDTO: %v", err)
-	}
-	if !strings.Contains(ctx, title+"\n\n"+strings.TrimSpace(insight.Text)) {
-		t.Fatalf("insight section does not carry the folded doc verbatim")
-	}
+			boot, err := s.buildBootContext(tc.key, nil, "general")
+			if err != nil {
+				t.Fatalf("buildBootContext: %v", err)
+			}
+			if boot == nil {
+				t.Fatal("buildBootContext resolved no role for a role that exists")
+			}
+			ctx := boot.Context
 
-	// Position: Duty → Insight → Learning. Anchor on all three so a section
-	// that merely EXISTS somewhere cannot pass.
-	role := strings.Index(ctx, "# Role: ")
-	ins := strings.Index(ctx, title)
-	lessons := strings.Index(ctx, "# Lessons ("+key+" / general)")
-	if role < 0 || ins < 0 || lessons < 0 {
-		t.Fatalf("missing an anchor: role=%d insight=%d lessons=%d", role, ins, lessons)
-	}
-	if !(role < ins && ins < lessons) {
-		t.Fatalf("want 角色說明 → 判準 → 長期筆記, got role=%d insight=%d lessons=%d",
-			role, ins, lessons)
+			title := "# Insight (" + tc.key + ")"
+			// The section must carry the doc the read face serves, not just a
+			// header (is_default=%v has_seed=%v for this fixture).
+			if !strings.Contains(ctx, title+"\n\n"+strings.TrimSpace(insight.Text)) {
+				t.Fatalf("boot context does not carry %q with the folded doc verbatim "+
+					"(is_default=%v has_seed=%v)", title, insight.IsDefault, insight.HasSeed)
+			}
+
+			// Position: Duty → Insight → Learning. Anchor on all three so a
+			// section that merely EXISTS somewhere cannot pass.
+			role := strings.Index(ctx, "# Role: ")
+			ins := strings.Index(ctx, title)
+			lessons := strings.Index(ctx, "# Lessons ("+tc.key+" / general)")
+			if role < 0 || ins < 0 || lessons < 0 {
+				t.Fatalf("missing an anchor: role=%d insight=%d lessons=%d", role, ins, lessons)
+			}
+			if !(role < ins && ins < lessons) {
+				t.Fatalf("want 角色說明 → 判準 → 長期筆記, got role=%d insight=%d lessons=%d",
+					role, ins, lessons)
+			}
+		})
 	}
 }
 
