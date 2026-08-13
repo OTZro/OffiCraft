@@ -977,26 +977,32 @@ export const en: Dict = {
       // raised even when nothing older exists (see resumeChatCutHint).
       chatCutLabel: "Earlier exchanges may be absent — fetch to confirm:",
       // 🔴 The THIRD marker, and it is NOT a third flavour of the two above.
-      // Those two say material is missing; this one says everything is here and
-      // the block simply cost more than its budget. Each line's reserved
-      // messages are billed to the budget yet never evicted by it, so enough
-      // lines push the total past it — with no cap on the line count. Worded as
-      // "nothing lost" because a reader who files it with the other two draws
-      // the exact opposite conclusion. Marker only; the packing is unchanged
-      // (owner ruling rc-b1fb7f1be05d, option ①).
+      // Those two say material is missing; this one says the block cost more
+      // than its own budget — it reports COST, not loss. Why it happens: each
+      // line's reserved messages are billed to the budget yet never evicted by
+      // it, so enough lines push the total past it, with no cap on the line
+      // count. Marker only; the packing is unchanged (owner ruling
+      // rc-b1fb7f1be05d, option ①).
       //
-      // 🔴 It describes THIS LINE, and asserts nothing about the payload. The
-      // first draft said "nothing lost", which is FALSE in the TYPICAL overrun:
-      // the packer takes a non-reserved message only `if used+cost <= budget`,
-      // while the reserve pass adds `used += cost` unconditionally — so once the
-      // floors push `used` past the budget, every non-reserved message after
-      // them is refused and `chat_earlier_omitted` is necessarily raised. Over
-      // budget and genuinely-missing-material almost always occur TOGETHER, not
-      // as alternatives, and the two lines then sit side by side on one screen
-      // contradicting each other. The true statement is the narrow one: whatever
-      // is missing was not dropped to make room. Every server-side copy already
-      // carries that qualifier; only these two cockpit labels had dropped it —
-      // on the one rendering the owner actually looks at.
+      // 🔴 The label describes THIS LINE and asserts NOTHING about the payload's
+      // completeness — in particular it must never be read as "so everything is
+      // here". The two are not alternatives: the packer takes a non-reserved
+      // message only `if used+cost <= budget`, while the reserve pass adds
+      // `used += cost` unconditionally, so once the floors alone push `used`
+      // past the budget every non-reserved message after them is refused and
+      // `chat_earlier_omitted` is necessarily raised. Over budget and
+      // genuinely-missing-material almost always occur TOGETHER; the two lines
+      // then sit side by side on one screen, and any label claiming
+      // completeness contradicts its neighbour on sight.
+      // The narrow statement is the one that holds: whatever is missing was not
+      // dropped TO MAKE ROOM. Every server-side copy already carries that
+      // qualifier, so the current wording stays inside the same fence and
+      // describes only what kind of line this is.
+      //
+      // ⚠️ HISTORY, NOT THE CURRENT CHOICE: the FIRST DRAFT said "nothing lost",
+      // which is false in the typical state above; it was replaced in T-3970.
+      // It is recorded so the next reader knows the road was taken and was
+      // wrong — do NOT read it as the wording to use.
       budgetOverLabel: "Block size overrun — a cost notice, not a loss —",
       cardOptionsLabel: "Options offered",
       cardAiPickTag: "AI pick",

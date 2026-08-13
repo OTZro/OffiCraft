@@ -877,9 +877,18 @@ type resumeChatCutDTO struct {
 //     by an exact count. Certain.
 //   - resumeChatCutDTO — CUT. Whole messages MAY be absent from the payload.
 //     A maybe; only a get_chat settles it.
-//   - this one — OVERRUN. Everything the packer kept is here and nothing was
-//     discarded or shortened to make room; the block is simply BIGGER than the
-//     budget it was packed under. A cost statement, not an absence.
+//   - this one — OVERRUN. Nothing was discarded or shortened TO MAKE ROOM; the
+//     block is simply BIGGER than the budget it was packed under. A cost
+//     statement, and it says nothing either way about completeness.
+//
+// 🔴 THE OVERRUN AND THE CUT USUALLY FIRE TOGETHER — they are not alternatives,
+// so do not read this field as "and therefore nothing is absent". The reserve
+// pass charges the budget unconditionally while the fill pass only spends what
+// is left, so the moment the floors alone exceed the budget every non-reserved
+// message is refused and resumeChatCutDTO is raised too
+// (TestResumeChat_OverBudgetAndCutAreSimultaneous). In the typical overrun
+// "something is missing" is the CORRECT reading of the payload — just not of
+// this field, and not because room was being made.
 //
 // Why the overrun can happen at all is resumeChatPeerFloor's second paragraph:
 // each conversation line's reserved newest messages are charged to the budget

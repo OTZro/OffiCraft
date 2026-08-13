@@ -604,15 +604,25 @@ func overBudgetSnapshot(t *testing.T, lines, perLine int) (*apiServer, resumeSum
 	return api, resumeSnapshot(t, api, "m-exec")
 }
 
-// TestResumeChat_OverBudgetIsMarkedAndNothingIsDropped is the discriminating
+// TestResumeChat_OverBudgetIsMarkedAndTheFloorIsNotEvicted is the discriminating
 // test for the marker the owner ruled onto this payload (rc-b1fb7f1be05d,
 // 2026-08-13, option ①: 「超出預算時在快照上標一行,不改任何行為。」).
 //
 // It asserts BOTH directions, because only the pair has any discrimination:
 //   - over budget  → the marker is up, with figures that agree with each other
-//     and with the block, AND every seeded message is still carried (the ruling
-//     was "change no behaviour", so a marker that arrived alongside a silent
-//     eviction would be the wrong change wearing the right label).
+//     and with the block, AND every RESERVED message is still carried (the
+//     ruling was "change no behaviour", so a marker that arrived alongside a
+//     silent eviction of the floor would be the wrong change wearing the right
+//     label).
+//
+// 🔴 THE NAME IS NARROW ON PURPOSE — it used to be
+// "…AndNothingIsDropped", which over-claims. In THIS fixture every line holds
+// exactly its floor, so there are no non-reserved messages and nothing CAN be
+// dropped; that is a property of the fixture, not of an overrun. The general
+// case is the opposite and lives next door in
+// TestResumeChat_OverBudgetAndCutAreSimultaneous. A test name that generalises
+// its own fixture is how "over budget ⇒ nothing missing" became a belief, and
+// then a cockpit label.
 //   - inside budget → the marker is DOWN and every field is at its zero value.
 //     An orphan line on the ordinary snapshot is the failure mode of a marker.
 //
@@ -622,7 +632,7 @@ func overBudgetSnapshot(t *testing.T, lines, perLine int) (*apiServer, resumeSum
 // MUTANT B: make it always return the zero value → the over-budget half goes
 // red; the inside-budget half stays green.
 // Neither mutant can be hidden by the other half, which is why both are here.
-func TestResumeChat_OverBudgetIsMarkedAndNothingIsDropped(t *testing.T) {
+func TestResumeChat_OverBudgetIsMarkedAndTheFloorIsNotEvicted(t *testing.T) {
 	// ── inside budget: no marker, and no orphan fields ──────────────────────
 	_, small := overBudgetSnapshot(t, 1, resumeChatPeerFloor)
 	if small.Overview.ChatChars > resumeChatBudgetChars {

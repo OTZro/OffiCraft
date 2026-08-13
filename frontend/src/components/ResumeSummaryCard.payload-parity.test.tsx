@@ -109,9 +109,11 @@ const WIRE: WireResumeSummary = {
     omitted: true,
     hint: "call get_chat with with='m-planner' and BOTH before_ts=1786000001 and before_id='cm-1'",
   },
-  // OVER BUDGET: everything the packer kept is here — nothing folded away
-  // because of this and nothing left out because of this. The block simply
-  // cost more than the budget it was packed under. Third marker, third
+  // OVER BUDGET: the block cost more than the budget it was packed under.
+  // Nothing was folded or left out BECAUSE OF THAT — note the qualifier, and
+  // note that this fixture ALSO raises `chat_earlier_omitted` directly above:
+  // material genuinely is absent here, which is the ordinary pairing and the
+  // state every label on this screen has to stay true in. Third marker, third
   // statement; the figures are deliberately non-substring of every other
   // number in this fixture so a mis-slotted one stays visible.
   chat_budget_overrun: {
@@ -408,9 +410,11 @@ describe("ResumeSummaryCard renders the SAME snapshot the agent receives", () =>
   // the original single pair. The newcomer is `budgetOverLabel` — OVER BUDGET —
   // and it is the easiest of the three to misfile, because a marker attached to
   // a chat block reads as "something is wrong with the chat" when what it
-  // actually says is the opposite: everything is here, it just cost more than
-  // the budget. Sharing a word with either of the other two would make a reader
-  // hunt for material that was never missing.
+  // reports is only that the block cost more than its budget. ⚠️ NOT "so
+  // everything is here" — that is the very claim this round had to delete from
+  // the label, and it is false in the typical overrun (the two markers fire
+  // together; see the co-occurrence test above). Sharing a word with either of
+  // the other two would make a reader read a COST line as a LOSS line.
   it.each([
     ["zh", zh.mp.resumeSummary],
     ["en", en.mp.resumeSummary],
@@ -480,6 +484,16 @@ describe("ResumeSummaryCard renders the SAME snapshot the agent receives", () =>
   //   - NEGATIVE: a named blacklist of the exact phrasings that WERE wrong. A
   //     blacklist catches the regression that happened and nothing else; a new
   //     false sentence in new words walks straight past it.
+  //
+  // ⚠️ AND IT GUARDS THE LABEL, NOT THE PROSE AROUND THE LABEL. This was not a
+  // hypothetical: the round that introduced this guard fixed both labels and
+  // left the COMMENT two lines above `budgetOverLabel` still arguing, in the
+  // present tense, that the retired wording was the deliberate choice — so a
+  // green suite sat directly beneath a comment instructing the next reader to
+  // undo the fix, and he would have felt he was following the file. Nothing
+  // here reads comments, and widening it to do so would be a new mechanism.
+  // The countermeasure is procedural and belongs in the reviewer's head: after
+  // changing a string, grep the tree for whatever ARGUED for the old one.
   it.each([
     ["zh", zh.mp.resumeSummary, "通知", ["無一遺失", "沒有遺失", "都在"]],
     [

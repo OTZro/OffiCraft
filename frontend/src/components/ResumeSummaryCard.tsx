@@ -64,12 +64,20 @@ import "./member-detail.css";
 //      is a MAYBE that only a fetch settles.
 //      Reading one as the other is how a reader concludes it has seen a
 //      conversation it has not seen, so the two must never share a word.
-//      `chat_budget_overrun` is the third and it points the OTHER WAY: nothing
-//      is absent, the block simply cost more than the budget it was packed
-//      under. It is the easiest of the three to misfile, because a marker on a
-//      chat block reads as "something is wrong with the chat" — so it carries
-//      its own vocabulary too, and the three-way guard in the payload-parity
-//      test holds all three pairs apart, not just the original two.
+//      `chat_budget_overrun` is the third and it is not an absence at all: the
+//      block cost more than the budget it was packed under. ⚠️ It is SILENT
+//      about completeness — it does NOT mean nothing is absent, and it must
+//      never be worded as if it did. The two markers normally fire TOGETHER
+//      (the reserve pass charges the budget unconditionally, so once the floors
+//      exceed it every non-reserved message is refused), which is why the two
+//      lines land side by side on this screen and why a label claiming
+//      completeness contradicts its neighbour in front of the owner. That is
+//      not hypothetical: this label shipped as 「無一遺失」/"nothing lost" and
+//      had to be replaced (T-3970). It is the easiest of the three to misfile,
+//      because a marker on a chat block reads as "something is wrong with the
+//      chat" — so it carries its own vocabulary too, and the three-way guard in
+//      the payload-parity test holds all three pairs apart, not just the
+//      original two.
 //   3. EVERY SECTION SHOWS. Long ones may be collapsed, but which sections
 //      EXIST is always visible — a section that renders nothing at all is
 //      indistinguishable from a section the payload never carried.

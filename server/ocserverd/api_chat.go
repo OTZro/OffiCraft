@@ -139,11 +139,20 @@ const (
 	// 🔴 IT REPORTS SIZE, NOT LOSS, and that is the whole point of wording it
 	// away from the other two markers. `body_omitted_chars` is a COLLAPSE (this
 	// message is here, folded, certain). `chat_earlier_omitted` is a CUT (whole
-	// messages MAY be absent, only a fetch settles it). This one says the
-	// opposite of both: everything the packer kept is here, nothing was thrown
-	// away to make room, and the bill is simply larger than the budget. A reader
-	// that files it under either of the other two draws exactly the wrong
-	// conclusion — that something is missing.
+	// messages MAY be absent, only a fetch settles it). This one says neither:
+	// nothing was thrown away TO MAKE ROOM, and the bill is simply larger than
+	// the budget. It is a cost statement.
+	//
+	// 🔴 IT IS SILENT ABOUT COMPLETENESS, AND THE TWO USUALLY FIRE TOGETHER. An
+	// earlier draft of this comment ended "a reader that files it under the
+	// other two draws exactly the wrong conclusion — that something is missing",
+	// which is FALSE: in the typical overrun chat_earlier_omitted is raised as
+	// well, because the reserve pass charges the budget unconditionally while
+	// the fill pass only spends what is left — once the floors alone exceed the
+	// budget every non-reserved message is refused (pinned by
+	// TestResumeChat_OverBudgetAndCutAreSimultaneous). "Something is missing" is
+	// normally the CORRECT reading of the payload. What is wrong is reading it
+	// off THIS field, or concluding the loss was made to save room.
 	//
 	// 🔴 NO BEHAVIOUR HANGS OFF THIS. Owner ruling on rc-b1fb7f1be05d
 	// (2026-08-13), option ①, verbatim: 「超出預算時在快照上標一行,不改任何行為。

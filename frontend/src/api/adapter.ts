@@ -1134,10 +1134,17 @@ export interface ResumeChatCutView {
  *
  * 🔴 NOT A THIRD KIND OF ABSENCE. `ChatMessage.bodyOmittedChars` is a COLLAPSE
  * (this message is here, folded, certain); `ResumeChatCutView` is a CUT (whole
- * messages MAY be absent, only a fetch settles it). This one says the opposite
- * of both: everything the packer kept is here, nothing was discarded or
- * shortened to make room, and the bill is simply larger than the budget. The
- * panel must word it apart from the other two — see the `budgetOver*` i18n
+ * messages MAY be absent, only a fetch settles it). This one says NEITHER:
+ * nothing was discarded or shortened TO MAKE ROOM, and the bill is simply
+ * larger than the budget. It is a cost statement.
+ *
+ * 🔴 SILENT ABOUT COMPLETENESS, AND THE TWO USUALLY FIRE TOGETHER. Do not read
+ * `over === true` as "and therefore nothing is absent": the reserve pass
+ * charges the budget unconditionally while the fill pass spends only what is
+ * left, so once the floors alone exceed the budget every non-reserved message
+ * is refused and `chatEarlierOmitted` is raised as well. In the typical overrun
+ * material really IS absent — just not because room was being made.
+ * The panel must word it apart from the other two — see the `budgetOver*` i18n
  * leaves and the three-way vocabulary guard in the payload-parity test. */
 export interface ResumeChatBudgetOverrunView {
   /** true ⇒ the chat block exceeded its budget. Strictly greater: landing

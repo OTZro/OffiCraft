@@ -6061,10 +6061,18 @@ export interface components {
          *     OVERRUN, NOT COLLAPSE AND NOT CUT. ``ChatMessageDTO.body_omitted_chars`` is a
          *     COLLAPSE: that message is here, folded, by an exact count. ``ResumeChatCutDTO``
          *     is a CUT: whole messages MAY be absent and only a ``get_chat`` settles it. This
-         *     one says neither — everything the packer kept is here, nothing was discarded or
-         *     shortened to make room, and the block simply came out BIGGER than the budget it
-         *     was packed under. A reader who files it beside the other two concludes something
-         *     is missing, which is the opposite of what it says.
+         *     one says neither — nothing was discarded or shortened TO MAKE ROOM, and the
+         *     block simply came out BIGGER than the budget it was packed under. It is a cost
+         *     statement.
+         *
+         *     IT IS SILENT ABOUT COMPLETENESS, AND THE TWO MARKERS USUALLY FIRE TOGETHER. It
+         *     does not say material is present and it does not say material is absent — it
+         *     says this block cost more than its budget. In the TYPICAL overrun
+         *     ``chat_earlier_omitted`` is raised as well, because the reserve pass charges the
+         *     budget unconditionally while the fill pass only spends what is left: once the
+         *     floors alone exceed the budget, every non-reserved message is refused. So
+         *     'something is missing' is normally the CORRECT reading of the payload — it is
+         *     just not what THIS field reports, and it was not caused by making room.
          *
          *     WHY IT CAN HAPPEN AT ALL: each conversation line reserves its newest few
          *     messages before the budget is spent on anything else, and those reserved
