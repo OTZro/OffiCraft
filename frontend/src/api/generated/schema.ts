@@ -8617,6 +8617,20 @@ export interface operations {
                 peek?: string | null;
                 /** @description When true, return only messages involving both the verified caller and the optional `with` participant. Omitted or false preserves the existing participant-wide result. */
                 caller_only?: boolean;
+                /**
+                 * @description RE-READ SPECIFIC MESSAGES BY ID — repeatable (``?ids=<id>&ids=<id>``), returning those messages IN FULL (whole body, attachment refs and all), oldest→newest.
+                 *
+                 *     This is what makes the wake snapshot's fold marker honest (T-a828). ``ChatMessageDTO.body_omitted_chars`` > 0 says THIS message is here with part of its text folded away and tells the reader to re-read it with get_chat — but until this parameter existed get_chat took only a peer plus a paging cursor, so there was NO WAY TO NAME THE FOLDED MESSAGE. The promise beside the fold was not keepable, which made folding a silent drop.
+                 *
+                 *     ANSWERED ON ITS OWN: when ``ids`` is present, ``with``, ``limit``, ``before_ts``/``before_id`` and ``peek`` are NOT consulted, and a by-ids read NEVER advances a read watermark — re-reading a message you were already shown is not reading the conversation. Blank entries are dropped and duplicates collapse; an all-blank or empty set behaves exactly as if the parameter had not been sent.
+                 *
+                 *     YOURS ONLY: an id whose ``sender`` and ``recipient`` are both someone other than the verified caller is REFUSED with 403 — holding an id is not permission to read a conversation between two other people, and there is no parameter that widens this.
+                 *
+                 *     ALL OR NOTHING ON AN UNKNOWN ID: an id no message carries refuses the WHOLE call with 404 and names it. Deliberately not 'skip it and return the rest': a short array is indistinguishable from the fold this parameter exists to undo, so a caller could not tell a deleted message from one it simply did not ask for.
+                 *
+                 *     AT MOST 20 DISTINCT IDS per call (counted after blanks are dropped); more is a 400 that states the limit. The cap is the response bound: 20 × the 4,000-rune body cap is the worst case one call can emit. It is not 'unfold a whole snapshot in one call' — name the ones that matter and call again.
+                 */
+                ids?: string[];
             };
             header?: never;
             path?: never;
