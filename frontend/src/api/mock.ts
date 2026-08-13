@@ -512,6 +512,8 @@ function foldBootDoc(kind: BootDocKind, key: string): WireBootDoc {
     kind,
     key,
     text,
+    owner_id: MOCK_OWNER_ID,
+    schema_version: 3,
     size_chars: [...text].length,
     cap_chars: BOOT_DOC_CAP_CHARS_DEFAULTS[kind],
     is_default: overlay === undefined,
@@ -1463,6 +1465,15 @@ const DEFAULT_MOCK_SETTINGS = {
   doc_cap_chars_learning: DOC_CAP_CHARS_DEFAULTS.learning,
   doc_cap_chars_manual_sop: DOC_CAP_CHARS_DEFAULTS.manualSop,
   doc_cap_chars_manual_learnings: DOC_CAP_CHARS_DEFAULTS.manualLearnings,
+  // T-791e added the two boot-context caps to the SAME settings surface, so the
+  // mock has to serve them or it is answering a settings DTO the server does
+  // not send. They mirror the same shipped defaults foldBootDoc reports as
+  // `cap_chars` — one number per kind, and the boot-sequence one is ONE cap
+  // across both runtimes. Nothing on the cockpit reads them yet (docCap.ts
+  // abstains for these two kinds); they are here for wire fidelity.
+  doc_cap_chars_system_interaction:
+    BOOT_DOC_CAP_CHARS_DEFAULTS.system_interaction,
+  doc_cap_chars_boot_sequence: BOOT_DOC_CAP_CHARS_DEFAULTS.boot_sequence,
   // The two software-update toggles — both OFF out of the box, mirroring the
   // server (updates come from GitHub Releases; there is no updater server to
   // configure any more).

@@ -199,6 +199,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/boot-sequence/{runtime_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one runtime's 啟動程序 block — the boot checklist that ends that runtime's boot context. runtime_key is 'claude' or 'codex'; they are separate documents because step 3 of the two says opposite things (claude mounts its own `ocagent listen`, codex must not — the sidecar owns it), so any other value is a 404 rather than a silent fallback to claude. Folded: the owner's edit when one exists, otherwise the shipped factory seed. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.
+         * @description Read ONE runtime's 啟動程序 block — the boot checklist appended last to that runtime's boot context (T-791e).
+         *
+         *     runtime_key is 'claude' or 'codex' and they are SEPARATE documents on purpose: step 3 of the two sequences says opposite things (claude mounts its own `ocagent listen`; codex must NOT, because the App Server sidecar owns it), so serving one where the other belongs leaves the agent unable to come online. Any other value is a 404 rather than a silent fallback.
+         *
+         *     Folded overlay ⊕ the shipped seed (`seeds/boot_sequence.md` / `seeds/boot_sequence_codex.md`): ``is_default=true`` means nobody has edited it, ``has_seed`` that a factory version exists to reset to.
+         */
+        get: operations["handle_get_boot_sequence_api_boot_sequence__runtime_key__get"];
+        put?: never;
+        /**
+         * Replace the WHOLE 啟動程序 block of ONE runtime ({runtime_key, text}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. Judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.
+         * @description Whole-document replace of ONE runtime's 啟動程序 block: ``{text}`` (T-791e).
+         *
+         *     runtime_key is 'claude' or 'codex' and they are SEPARATE documents on purpose: step 3 of the two sequences says opposite things (claude mounts its own `ocagent listen`; codex must NOT, because the App Server sidecar owns it), so serving one where the other belongs leaves the agent unable to come online. Any other value is a 404 rather than a silent fallback.
+         *
+         *     Writes an OVERLAY — the shipped seed is never modified, so the reset route can always reach the factory text. ``text`` is REQUIRED; ``allow_shrink`` (default false) is needed to empty a block that had content (an empty boot sequence is not a small document — it is an agent with no instructions). The ``doc.cap_chars.boot_sequence`` cap is checked UNCONDITIONALLY and is ONE knob shared by both runtimes, each document measured on its own text.
+         *
+         *     A save whose result is identical to what is stored writes nothing and retains no version.
+         *
+         *     Governance write (owner or the admin 助理): a broken boot sequence keeps agents from coming online, and that failure is silent.
+         */
+        post: operations["handle_replace_boot_sequence_api_boot_sequence__runtime_key__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/boot-sequence/{runtime_key}/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore ONE runtime's 啟動程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). runtime_key is 'claude' or 'codex'; anything else is a 404. No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it, which is what makes this the recovery route when a bad edit has stopped agents from booting. The overlay being discarded is retained in the document history. Owner or admin assistant only.
+         * @description Reset ONE runtime's 啟動程序 block to the SHIPPED seed (T-791e): an idempotent tombstone of the overlay.
+         *
+         *     NO length cap is checked on this path, matching ``reset_role``/``reset_insight`` — the factory text is part of the product. This is the route that has to work when a bad edit has stopped agents booting: it needs no agent, no MCP client and no member identity, only the owner's token, because at that moment there is nobody online to ask.
+         *
+         *     The discarded overlay is retained as a document-history revision. Resetting an already-default block writes nothing and retains nothing. An unknown runtime is a 404.
+         */
+        post: operations["handle_reset_boot_sequence_api_boot_sequence__runtime_key__reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/bootstrap": {
         parameters: {
             query?: never;
@@ -2656,6 +2716,64 @@ export interface paths {
         patch: operations["handle_update_settings_api_settings_patch"];
         trace?: never;
     };
+    "/api/system-interaction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the 系統互動 block of the boot context — the shared studio handbook every agent reads at boot. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.
+         * @description Read the 系統互動 block of the boot context — the studio handbook every agent and outsource worker reads first (T-791e).
+         *
+         *     It is an OVERLAY over the shipped seed (`seeds/system_interaction.md`): ``is_default=true`` means nobody has edited it and you are reading the factory text, ``false`` means you are reading an edit. ``has_seed`` reports that a factory version exists to reset back to.
+         *
+         *     Before T-791e this block had no editable representation at all — changing one sentence cost a release.
+         */
+        get: operations["handle_get_system_interaction_api_system_interaction_get"];
+        put?: never;
+        /**
+         * Replace the WHOLE 系統互動 block of the boot context ({text}) — the handbook every agent reads at boot. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. The write is judged against the doc.cap_chars.system_interaction cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_system_interaction always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.
+         * @description Whole-document replace of the 系統互動 block: ``{text}`` (T-791e).
+         *
+         *     Writes an OVERLAY — the shipped seed is never modified, so ``/api/system-interaction/reset`` can always reach the factory text. ``text`` is REQUIRED (a whole-document replace must never infer "empty" from a missing key); ``allow_shrink`` (default false) must be set explicitly to replace existing content with an empty document. The ``doc.cap_chars.system_interaction`` cap is checked UNCONDITIONALLY — ``allow_shrink`` governs the opposite direction and is not a bypass.
+         *
+         *     A save whose folded result is IDENTICAL to what is stored writes nothing and retains NO version: these blocks are edited from a text box, and idle saves would otherwise push the version worth going back to off the end of the retained list.
+         *
+         *     Governance write (owner or the admin 助理): this text lands in every agent's boot context.
+         */
+        post: operations["handle_replace_system_interaction_api_system_interaction_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/system-interaction/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore the 系統互動 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.
+         * @description Reset the 系統互動 block to the SHIPPED seed (T-791e): an idempotent tombstone of the overlay, so the folded read falls back to `seeds/system_interaction.md` (``is_default`` → true).
+         *
+         *     NO length cap is checked on this path, matching ``reset_role``/``reset_insight``: the factory text is part of the product, so a cap the owner raised or set afterwards must never be able to block the way back to it. This is the route that has to work when a bad edit has stopped agents from booting, and at that moment there may be nobody online to ask — it needs no agent, no MCP client and no member identity, only the owner's token.
+         *
+         *     The discarded overlay is retained as a document-history revision, so the reset is itself recoverable. Resetting an already-default block writes nothing and retains nothing.
+         */
+        post: operations["handle_reset_system_interaction_api_system_interaction_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/task-manuals": {
         parameters: {
             query?: never;
@@ -3450,7 +3568,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
-             * Runtime
+             * Runtime Key
              * @description The provider runtime that produced this session telemetry. null when an older reporter did not identify it.
              */
             runtime?: components["schemas"]["AgentRuntime"] | null;
@@ -3588,7 +3706,7 @@ export interface components {
             /** Rate Limits */
             rate_limits?: unknown;
             /**
-             * Runtime
+             * Runtime Key
              * @description Optional session runtime: ``claude`` or ``codex``. Omitted leaves previously stored telemetry untouched.
              */
             runtime?: unknown;
@@ -3790,6 +3908,84 @@ export interface components {
             machine_id: string;
             /** Token */
             token: string;
+        };
+        /**
+         * BootDocumentDTO
+         * @description ONE editable block of the boot context (T-791e): the 系統互動 handbook (``kind="system_interaction"``, ``key="global"``) or one runtime's 啟動程序 checklist (``kind="boot_sequence"``, ``key="claude"``/``"codex"``).
+         *
+         *     The served text is FOLDED: the owner's overlay when one exists, otherwise the seed compiled into this binary. Editing writes only the overlay — the seed is never modified, which is what lets the reset route reach factory text without depending on anything the editor could have corrupted.
+         *
+         *     ``is_default`` and ``has_seed`` answer DIFFERENT questions: the first is "has anybody edited this block", the second is "does a factory version exist to go back TO" (the reset's precondition — that route 404s when it is false).
+         */
+        BootDocumentDTO: {
+            /**
+             * Cap Chars
+             * @description The size cap now in force on THIS document, in CHARACTERS (the doc.cap_chars.system_interaction or doc.cap_chars.boot_sequence setting). Served on the read face so an edit can be sized BEFORE it is written — the settings surface holding the cap is admin-only, so otherwise being refused is the only way to learn it.
+             * @default 0
+             */
+            cap_chars: number;
+            /**
+             * Has Seed
+             * @description True when a FACTORY version of this block ships in this binary, i.e. there is something for the reset route to restore. It says nothing about whether what you are holding IS that factory text — is_default answers that. True in every shipped build; served rather than assumed so a build whose seeds were not staged cannot be offered a 還原 button that 404s.
+             * @default false
+             */
+            has_seed: boolean;
+            /**
+             * Is Default
+             * @description True while nobody has edited this block (or it has been reset), i.e. the text you are reading is the shipped seed. False means you are reading somebody's edit.
+             * @default true
+             */
+            is_default: boolean;
+            /**
+             * Key
+             * @description Which document within the kind: "global" for system_interaction; the RUNTIME ("claude" or "codex") for boot_sequence. The two boot sequences are separate documents because step 3 of each says the opposite of the other.
+             * @default
+             */
+            key: string;
+            /**
+             * Kind
+             * @description "system_interaction" or "boot_sequence" — also the document-history kind of this document's retained versions.
+             * @default
+             */
+            kind: string;
+            /**
+             * Owner Id
+             * @default
+             */
+            owner_id: string;
+            /**
+             * Schema Version
+             * @default 0
+             */
+            schema_version: number;
+            /**
+             * Size Chars
+             * @description Size of `text` in CHARACTERS (Unicode code points) — the same unit as cap_chars.
+             * @default 0
+             */
+            size_chars: number;
+            /**
+             * Text
+             * @description The folded document: the overlay when one exists, otherwise the shipped seed.
+             * @default
+             */
+            text: string;
+        };
+        /**
+         * BootDocumentReplaceDTO
+         * @description Whole-document replace of one boot-context block: ``{text}``. ``text`` is REQUIRED — a whole-document replace must never infer "empty" from a missing key. ``allow_shrink`` (default false) must be set explicitly to replace existing content with an empty document, the same wipe-guard posture ``replace_global_context`` carries.
+         */
+        BootDocumentReplaceDTO: {
+            /**
+             * Allow Shrink
+             * @default false
+             */
+            allow_shrink: boolean;
+            /**
+             * Text
+             * @default
+             */
+            text: string;
         };
         /**
          * BootstrapDTO
@@ -5151,7 +5347,7 @@ export interface components {
              */
             role_name: string;
             /**
-             * Runtime
+             * Runtime Key
              * @description The member's selected AI CLI runtime. Existing rows default to ``claude``.
              * @default claude
              */
@@ -5210,7 +5406,7 @@ export interface components {
             /** Role Key */
             role_key?: string | null;
             /**
-             * Runtime
+             * Runtime Key
              * @description Optional provider runtime; null/omitted defaults to ``claude``.
              */
             runtime?: components["schemas"]["AgentRuntime"] | null;
@@ -5238,7 +5434,7 @@ export interface components {
             /** Name */
             name?: string | null;
             /**
-             * Runtime
+             * Runtime Key
              * @description Optional runtime replacement; null/omitted leaves the current runtime unchanged.
              */
             runtime?: components["schemas"]["AgentRuntime"] | null;
@@ -5481,7 +5677,7 @@ export interface components {
              */
             role: string;
             /**
-             * Runtime
+             * Runtime Key
              * @description The runtime this session REPORTED it is running (the roster row's ``actual_runtime``). Honest-empty until something reports one, and it NEVER falls back to the owner-configured ``runtime`` launch setting. WAS: this served the CONFIGURED value under a comment claiming it folded through the reported telemetry, so the cell flipped the instant the owner changed the setting and a runtime switch that had not happened yet was indistinguishable from one that had (T-7f28). NOT an ``AgentRuntime`` $ref like the CONFIGURED runtime fields: this one admits "" for "nothing has reported yet", and the closed two-value vocabulary has no member for that. Widening the shared enum instead would have let "unknown" leak into every owner-configured runtime field, where it is not a legal setting.
              * @default
              * @enum {string}
@@ -5704,7 +5900,7 @@ export interface components {
              */
             refocus_since: number;
             /**
-             * Runtime
+             * Runtime Key
              * @description The worker's selected AI CLI runtime. Existing rows default to ``claude``.
              * @default claude
              */
@@ -5770,7 +5966,7 @@ export interface components {
              */
             model: string;
             /**
-             * Runtime
+             * Runtime Key
              * @description Optional runtime replacement; null/absent keeps the current runtime.
              */
             runtime?: components["schemas"]["AgentRuntime"] | null;
@@ -6330,7 +6526,7 @@ export interface components {
             /** Name */
             name: string;
             /**
-             * Runtime
+             * Runtime Key
              * @description Founding member runtime; null/omitted defaults to ``claude``.
              */
             runtime?: components["schemas"]["AgentRuntime"] | null;
@@ -6764,6 +6960,12 @@ export interface components {
              */
             custom_themes: components["schemas"]["ThemeBundleDTO"][];
             /**
+             * Doc Cap Chars Boot Sequence
+             * @description The size cap on a 啟動程序 block of the boot context, in CHARACTERS (Unicode code points). ONE knob for BOTH runtimes (claude and codex), each document measured on its own text — they are two renderings of one short checklist, so a studio that needs more room for one needs it for the other. The floor of the adjustable range is this document's shipped default (the `default` field above), the ceiling is 100000.
+             * @default 15000
+             */
+            doc_cap_chars_boot_sequence: number;
+            /**
              * Doc Cap Chars Duty
              * @description The size cap on a role's DUTY doc (the role definition), in CHARACTERS (Unicode code points — Chinese prose counts one per character). The floor of the adjustable range is this segment's OWN shipped default (the `default` field above), which is smaller than the other three segments'; the ceiling is 100000. Duty had no cap at all before T-ae38.
              * @default 1000
@@ -6793,6 +6995,12 @@ export interface components {
              * @default 15000
              */
             doc_cap_chars_manual_sop: number;
+            /**
+             * Doc Cap Chars System Interaction
+             * @description The size cap on the 系統互動 block of the boot context, in CHARACTERS (Unicode code points). The floor of the adjustable range is this document's shipped default (the `default` field above), the ceiling is 100000. It is far larger than the role-journal caps because the block it governs is the studio handbook every agent reads at boot, and it is sized against the seed that ships with it.
+             * @default 60000
+             */
+            doc_cap_chars_system_interaction: number;
             /** Handover Pct */
             handover_pct: number;
             /**
@@ -6900,6 +7108,16 @@ export interface components {
              * @description The size cap on a TASK MANUAL's sop_md doc, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_manual_sop`, whose `default` is that floor) and at most 100000.
              */
             doc_cap_chars_manual_sop?: number | null;
+            /**
+             * Doc Cap Chars Boot Sequence
+             * @description The size cap on a 啟動程序 block of the boot context, in CHARACTERS (Unicode code points). One knob for both runtimes, each measured on its own text. Must be at least this document's shipped default (see `SettingsDTO.doc_cap_chars_boot_sequence`, whose `default` is that floor) and at most 100000.
+             */
+            doc_cap_chars_boot_sequence?: number | null;
+            /**
+             * Doc Cap Chars System Interaction
+             * @description The size cap on the 系統互動 block of the boot context, in CHARACTERS (Unicode code points). Must be at least this document's shipped default (see `SettingsDTO.doc_cap_chars_system_interaction`, whose `default` is that floor) and at most 100000.
+             */
+            doc_cap_chars_system_interaction?: number | null;
             /**
              * Display Language
              * @description The owner's cockpit language (T-0b41-p2) — trimmed; "" clears it back to unset. Must be one of zh, en (or ""); anything else is a 422.
@@ -7147,7 +7365,7 @@ export interface components {
              */
             model: string | null;
             /**
-             * Runtime
+             * Runtime Key
              * @description Outsource runtime; null/absent defaults to ``claude``.
              * @default null
              */
@@ -7756,7 +7974,7 @@ export interface components {
              */
             model: string | null;
             /**
-             * Runtime
+             * Runtime Key
              * @description Outsource runtime; null/absent defaults to ``claude``.
              * @default null
              */
@@ -8525,6 +8743,157 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BackupHealthDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_get_boot_sequence_api_boot_sequence__runtime_key__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runtime_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootDocumentDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_replace_boot_sequence_api_boot_sequence__runtime_key__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runtime_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BootDocumentReplaceDTO"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootDocumentDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_reset_boot_sequence_api_boot_sequence__runtime_key__reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runtime_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootDocumentDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */
@@ -13381,6 +13750,151 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SettingsDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_get_system_interaction_api_system_interaction_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootDocumentDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_replace_system_interaction_api_system_interaction_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BootDocumentReplaceDTO"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootDocumentDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_reset_system_interaction_api_system_interaction_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootDocumentDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

@@ -130,10 +130,10 @@ import {
 // The one wire type this seam names directly: GET /api/reply-cards serves a
 // UNION (light rows | full cards) and `?view=full` is what picks the second
 // arm, so listReplyCards has to narrow to it. See that function.
-import type { WireReplyCard, WireBootDoc } from "./wire";
+import type { WireReplyCard } from "./wire";
 import { ownerToken, setToken } from "./auth";
 import { ApiError } from "./errors";
-import { client, handleUnauthorized } from "./client";
+import { client } from "./client";
 
 // Auth is cross-cutting and lives in ONE place each: owner-JWT sourcing
 // (localStorage `oc_token` + VITE_OC_TOKEN fallback) is api/auth.ts
@@ -201,75 +201,6 @@ async function credentialPost(
     );
   }
   return (await res.json()) as { token: string };
-}
-
-// ── boot-context blocks: schema-external until the spec is unfrozen (T-791e) ─
-//
-// The three routes below are NOT in `spec/openapi.json` yet, so `client` cannot
-// type them and every other method in this file deliberately would not compile
-// against an unknown path. They ride a bare fetch instead — the SAME escape
-// hatch `credentialPost` uses, and for a comparable reason: something about
-// these calls is outside what the generated client can express.
-//
-// 🔴 THE DIFFERENCE IS THAT THIS ONE IS TEMPORARY, and losing that distinction
-// is how a stopgap becomes the architecture. `credentialPost` is permanently
-// hand-written (its whole point is NOT getting the middleware's 401 reaction);
-// this exists only because the wire freeze (root CLAUDE.md §13) means the spec
-// change needs owner sign-off first. The moment those routes are in the spec,
-// DELETE this helper and route the three methods through `client` like
-// everything else — otherwise a BE path or verb rename becomes a runtime 404
-// here instead of the tsc error the rest of the adapter gets.
-//
-// Auth and error shape are reproduced rather than skipped: the owner JWT rides
-// as `Authorization: Bearer` and a non-2xx throws the same ApiError off the
-// same `{"error":{"code","message"}}` envelope, so callers branch on `.status`
-// exactly as they do everywhere else. 401 clears the token and fires
-// oc-auth-expired, matching the middleware — these ARE gated routes (admin and
-// above), so an expired session must bounce to login here too.
-async function bootDocFetch(
-  method: "GET" | "POST",
-  path: string,
-  body?: unknown
-): Promise<WireBootDoc> {
-  const headers: Record<string, string> = {};
-  const t = ownerToken();
-  if (t) headers.Authorization = `Bearer ${t}`;
-  if (body !== undefined) headers["Content-Type"] = "application/json";
-  const res = await fetch(path, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!res.ok) {
-    if (res.status === 401) handleUnauthorized();
-    let code = "";
-    let serverMessage = "";
-    try {
-      const parsed: unknown = await res.json();
-      const err = (parsed as { error?: { code?: unknown; message?: unknown } })
-        ?.error;
-      if (typeof err?.code === "string") code = err.code;
-      if (typeof err?.message === "string") serverMessage = err.message;
-    } catch {
-      // Not JSON — keep the honest empties.
-    }
-    throw new ApiError(
-      `http ${res.status} for ${method} ${path}`,
-      res.status,
-      code,
-      serverMessage
-    );
-  }
-  return (await res.json()) as WireBootDoc;
-}
-
-/** The route prefix of one boot-document kind. Spelled ONCE: the two kinds have
- * different paths and different key spaces, and a caller composing the path
- * itself is a caller that can write the claude document to the codex route. */
-function bootDocPath(kind: BootDocKind, key: string): string {
-  return kind === "system_interaction"
-    ? `/api/system-interaction/${encodeURIComponent(key)}`
-    : `/api/boot-sequence/${encodeURIComponent(key)}`;
 }
 
 // ── shared SSE downlink (connection pool fix) ──────────────────────────────
@@ -1837,8 +1768,9 @@ export const httpApi: Api = {
   async getGlobalContext(): Promise<GlobalContextView> {
     // GET /api/global-context -> GlobalContextDTO — the 使用者自訂 (user-custom)
     // ADDITIVE block of the 3-block boot context (empty text/is_default=true when
-    // never written). The read-only system-interaction / boot-sequence blocks
-    // have NO endpoint by construction.
+    // never written). The other two blocks — system-interaction and
+    // boot-sequence — became editable in T-791e and have their own routes; see
+    // getBootDoc below.
     const wire = unwrap(await client.GET("/api/global-context"));
     return toGlobalContext(wire);
   },
@@ -1866,8 +1798,27 @@ export const httpApi: Api = {
     return toGlobalContext(wire);
   },
 
+  // ── boot-context blocks (T-791e) ────────────────────────────────────────
+  // The two kinds have DIFFERENT route shapes, and collapsing them into one
+  // composed path string is what produced the 404 these three methods used to
+  // ship with. `system_interaction` is a singleton — one document, so its key
+  // ("global") is implied by the kind and appears nowhere in the URL;
+  // `boot_sequence` is two documents, so its key IS the `{runtime_key}` path
+  // parameter. Both now ride the schema-typed client: a BE path or verb rename
+  // is a tsc error here, the same protection every other method in this file
+  // gets.
+
   async getBootDoc(kind: BootDocKind, key: string): Promise<BootDocView> {
-    return toBootDoc(await bootDocFetch("GET", bootDocPath(kind, key)));
+    if (kind === "system_interaction") {
+      return toBootDoc(unwrap(await client.GET("/api/system-interaction")));
+    }
+    return toBootDoc(
+      unwrap(
+        await client.GET("/api/boot-sequence/{runtime_key}", {
+          params: { path: { runtime_key: key } },
+        }),
+      ),
+    );
   },
 
   async saveBootDoc(
@@ -1877,14 +1828,44 @@ export const httpApi: Api = {
   ): Promise<BootDocView> {
     // Whole-document replace, POST — same verb contract as
     // /api/global-context: NOT a PUT and NOT a DELETE-then-write.
+    //
+    // allow_shrink stays FALSE here, the opposite of saveGlobalContext. There
+    // the owner clearing a textarea of their own additions is explicit intent
+    // worth honouring; here the same gesture ships agents a boot sequence with
+    // no instructions, and the server's refusal names the recovery path (reset
+    // to the shipped default) instead. Emptying is not what this surface is
+    // for — the 還原出廠版 button is.
+    if (kind === "system_interaction") {
+      return toBootDoc(
+        unwrap(
+          await client.POST("/api/system-interaction", {
+            body: { text, allow_shrink: false },
+          }),
+        ),
+      );
+    }
     return toBootDoc(
-      await bootDocFetch("POST", bootDocPath(kind, key), { text }),
+      unwrap(
+        await client.POST("/api/boot-sequence/{runtime_key}", {
+          params: { path: { runtime_key: key } },
+          body: { text, allow_shrink: false },
+        }),
+      ),
     );
   },
 
   async resetBootDoc(kind: BootDocKind, key: string): Promise<BootDocView> {
+    if (kind === "system_interaction") {
+      return toBootDoc(
+        unwrap(await client.POST("/api/system-interaction/reset")),
+      );
+    }
     return toBootDoc(
-      await bootDocFetch("POST", `${bootDocPath(kind, key)}/reset`),
+      unwrap(
+        await client.POST("/api/boot-sequence/{runtime_key}/reset", {
+          params: { path: { runtime_key: key } },
+        }),
+      ),
     );
   },
 
