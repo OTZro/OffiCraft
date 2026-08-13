@@ -1,7 +1,7 @@
-// components/BootDocPage.test.tsx — the six assertions this surface is bought
-// on (T-791e). Each is written to fail on its own: they bind to six different
-// pieces of behaviour, so one of them going green cannot be mistaken for the
-// others still being true.
+// components/BootDocPage.test.tsx — the seven assertions this surface is
+// bought on (T-791e). Each is written to fail on its own: they bind to seven
+// different pieces of behaviour, so one of them going green cannot be mistaken
+// for the others still being true.
 //
 //   1. Saving calls the REPLACE endpoint and the new content comes back onto
 //      the page.
@@ -15,6 +15,10 @@
 //      body renders what the API currently holds (control: the API answers
 //      with a string that is not the seed, and that string is what is on
 //      screen).
+//   7. A retained revision the server WOULD refuse is marked un-restorable
+//      before the click — the cap these blocks answer to is the
+//      `doc.cap_chars.*` SETTING, so the marking has to follow the owner's
+//      live value the way every other document's does.
 //
 // Everything runs against `api/mock.ts` — the shared adapter, never a
 // hand-rolled fake. A fake that answered these calls itself would be measuring
@@ -245,6 +249,51 @@ describe("BootDocPage", () => {
     expect(utils.getByTestId("boot-doc-usage").textContent).toBe(
       `${shown} / ${cap}`
     );
+  });
+
+  it("marks a revision the raised-then-lowered cap now refuses as un-restorable", async () => {
+    // The only way an over-cap revision exists at all: the owner RAISED the
+    // cap, wrote a long version, then put the cap back. Which is why the
+    // marking cannot judge by the shipped default — it has to read the
+    // `doc.cap_chars.system_interaction` setting that is in force NOW.
+    const shipped = BOOT_DOC_CAP_CHARS_DEFAULTS.system_interaction;
+    await api.patchServerSettings({
+      docCapCharsSystemInteraction: shipped + 10000,
+    });
+    const overCap = "字".repeat(shipped + 5000);
+    // The first write to an untouched document retains nothing, so the long
+    // text has to be the one the SECOND write replaces.
+    await api.saveBootDoc("system_interaction", "global", overCap);
+    await api.saveBootDoc("system_interaction", "global", "短\n");
+    await api.patchServerSettings({ docCapCharsSystemInteraction: shipped });
+
+    const utils = renderSystem();
+    fireEvent.click(
+      await utils.findByTestId("doc-history-entry-system_interaction")
+    );
+    const list = await utils.findByTestId("doc-history-list");
+    await waitFor(() =>
+      expect(within(list).queryByText(s.historyLoading)).toBeNull()
+    );
+
+    const [target] = await api.listDocumentHistory(
+      "system_interaction",
+      "global"
+    );
+    expect(target.content.text).toBe(overCap);
+
+    const row = await utils.findByTestId(`doc-history-item-${target.id}`);
+    expect(within(row).getByText(s.historyBlockedBadge)).toBeTruthy();
+    const reason = utils.getByTestId(`doc-history-blocked-${target.id}`);
+    expect(reason.textContent).toContain(s.historyField.text);
+    expect(reason.textContent).toContain(String(shipped));
+
+    // …and opening it is not a way around the verdict either.
+    fireEvent.click(utils.getByTestId(`doc-history-open-${target.id}`));
+    expect(
+      (utils.getByTestId("doc-history-modal-restore") as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
   });
 
   it("renders the API's current version; the ?raw seed is only the factory version", async () => {

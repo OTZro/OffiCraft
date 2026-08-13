@@ -1664,6 +1664,8 @@ export const httpApi: Api = {
       doc_cap_chars_learning?: number;
       doc_cap_chars_manual_sop?: number;
       doc_cap_chars_manual_learnings?: number;
+      doc_cap_chars_system_interaction?: number;
+      doc_cap_chars_boot_sequence?: number;
       updater_receive_beta?: boolean;
       updater_auto_update?: boolean;
       org_name?: string;
@@ -1699,6 +1701,12 @@ export const httpApi: Api = {
     }
     if (patch.docCapCharsManualLearnings !== undefined) {
       body.doc_cap_chars_manual_learnings = patch.docCapCharsManualLearnings;
+    }
+    if (patch.docCapCharsSystemInteraction !== undefined) {
+      body.doc_cap_chars_system_interaction = patch.docCapCharsSystemInteraction;
+    }
+    if (patch.docCapCharsBootSequence !== undefined) {
+      body.doc_cap_chars_boot_sequence = patch.docCapCharsBootSequence;
     }
     if (patch.updaterReceiveBeta !== undefined) {
       body.updater_receive_beta = patch.updaterReceiveBeta;

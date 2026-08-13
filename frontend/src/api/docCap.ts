@@ -37,27 +37,22 @@
 
 import type { BootDocKind, DocumentKind } from "../types";
 
-/** The five SHIPPED DEFAULTS (server/ocserverd/domain.go:
- * dutyCapCharsDefault + contextDocMaxCharsDefault) — defaults, NOT the caps
- * themselves. Since T-3aeb the live values are the `doc.cap_chars.*` settings,
- * so callers pass them in; these exist only as the fallback for a caller with
- * no server value yet, and as the shared fixture's anchor. Do not inline these
- * numbers anywhere else. */
+/** One live number per CAPPED SEGMENT — the set `capForKind` routes a kind to.
+ * Total over every segment the server caps: the five role/manual ones
+ * (server/ocserverd/domain.go: dutyCapCharsDefault + contextDocMaxCharsDefault)
+ * and, since T-791e, the two boot-context blocks. Since T-3aeb the live values
+ * are the `doc.cap_chars.*` settings, so callers pass them in; the constants
+ * below are only the fallback for a caller with no server value yet, and the
+ * shared fixture's anchor. Do not inline these numbers anywhere else. */
 export interface DocCaps {
   duty: number;
   insight: number;
   learning: number;
   manualSop: number;
   manualLearnings: number;
+  systemInteraction: number;
+  bootSequence: number;
 }
-
-export const DOC_CAP_CHARS_DEFAULTS: DocCaps = {
-  duty: 1000,
-  insight: 15000,
-  learning: 15000,
-  manualSop: 15000,
-  manualLearnings: 15000,
-};
 
 /**
  * The SHIPPED DEFAULT cap of each boot-context block, in the same rune unit
@@ -70,7 +65,27 @@ export const DOC_CAP_CHARS_DEFAULTS: DocCaps = {
  * read (`BootDocView.capChars`), and every enforcement point reads THAT. This
  * constant exists for the mock adapter (which has to answer with something) and
  * as the anchor these numbers are stated once. Do not inline them elsewhere.
+ *
+ * Keyed by `BootDocKind` rather than folded into `DOC_CAP_CHARS_DEFAULTS`
+ * because the page and the mock address these by WIRE kind, not by the
+ * view-model field name.
  */
+export const BOOT_DOC_CAP_CHARS_DEFAULTS: Record<BootDocKind, number> = {
+  system_interaction: 60000,
+  boot_sequence: 15000,
+};
+
+export const DOC_CAP_CHARS_DEFAULTS: DocCaps = {
+  duty: 1000,
+  insight: 15000,
+  learning: 15000,
+  manualSop: 15000,
+  manualLearnings: 15000,
+  // Not restated: the boot blocks' numbers are stated once, above.
+  systemInteraction: BOOT_DOC_CAP_CHARS_DEFAULTS.system_interaction,
+  bootSequence: BOOT_DOC_CAP_CHARS_DEFAULTS.boot_sequence,
+};
+
 /**
  * How many retained revisions a boot-context block keeps (T-791e). TEN, where
  * every other document keeps three — the owner's ruling, for the workflow this
@@ -85,11 +100,6 @@ export const DOC_CAP_CHARS_DEFAULTS: DocCaps = {
  * number, so the sentence cannot end up describing a retention nobody applies.
  */
 export const BOOT_DOC_HISTORY_KEPT = 10;
-
-export const BOOT_DOC_CAP_CHARS_DEFAULTS: Record<BootDocKind, number> = {
-  system_interaction: 60000,
-  boot_sequence: 15000,
-};
 
 /** The single number the shared fixture (bin/tests/fixtures/doc-cap-cases.tsv)
  * anchors its rows to. That table tests the PREDICATE, which takes the cap as a
@@ -158,12 +168,9 @@ export const CAPPED_FIELDS: Record<DocumentKind, readonly string[]> = {
   // edit route deliberately declines to introduce a ceiling only the edit door
   // would enforce — so its restore runs no cap either.
   task_title: [],
-  // T-791e. Both boot-context blocks ARE capped on their restore, on `text`,
-  // and both are named here truthfully — but `capForKind` abstains for them
-  // (see there). The pair therefore marks nothing today; naming the field is
-  // still the right entry, because the day the cap arrives as a setting the
-  // only edit needed is in capForKind, not a second discovery of which field
-  // the server measures.
+  // T-791e. Both boot-context blocks are capped on their restore, on `text`,
+  // against their own `doc.cap_chars.*` setting — so `capForKind` answers for
+  // them and this pair marks for real.
   system_interaction: ["text"],
   boot_sequence: ["text"],
 };
@@ -233,17 +240,19 @@ export function capForKind(
     case "task_description":
     case "task_title":
       return undefined;
-    // T-791e — ABSTAIN, and deliberately, not by oversight. The two blocks'
-    // caps are NOT `doc.cap_chars.*` settings: the server reports the number in
-    // force on the document's OWN read (`cap_chars` on BootDocView), and the
-    // editing surface enforces against that. There is therefore no live value
-    // to hand this table, and inventing one — the shipped 60000/15000 — could
-    // only ever grey out a revision the server would accept, which is the
-    // "greyed out for a reason that is not true" failure this module's header
-    // calls the worse of the two. When the caps become settings, return them
-    // here and the marking starts working with no other change.
+    // T-791e. These abstained while the two blocks' caps existed only as the
+    // number the server reports on the document's OWN read — there was no live
+    // value to hand this table, and inventing one (the shipped 60000/15000)
+    // could only ever grey out a revision the server would accept. The same
+    // change made them `doc.cap_chars.system_interaction` /
+    // `doc.cap_chars.boot_sequence` settings, so the live value now arrives the
+    // way every other segment's does and abstaining would leave the one
+    // revision the server WILL refuse looking restorable.
     case "system_interaction":
+      return caps.systemInteraction;
+    // ONE number across both runtimes: the setting is per BLOCK, and claude and
+    // codex are two documents of the same block, each measured on its own text.
     case "boot_sequence":
-      return undefined;
+      return caps.bootSequence;
   }
 }

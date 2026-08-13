@@ -515,7 +515,14 @@ function foldBootDoc(kind: BootDocKind, key: string): WireBootDoc {
     owner_id: MOCK_OWNER_ID,
     schema_version: 3,
     size_chars: [...text].length,
-    cap_chars: BOOT_DOC_CAP_CHARS_DEFAULTS[kind],
+    // The LIVE setting, not the shipped default: the server enforces this
+    // read's `cap_chars` against `doc.cap_chars.<kind>`, so a mock pinned to
+    // the default would keep answering 60000/15000 after the owner moved the
+    // knob — and the page sizes its edits against exactly this number.
+    cap_chars: {
+      system_interaction: mockServerSettings.doc_cap_chars_system_interaction,
+      boot_sequence: mockServerSettings.doc_cap_chars_boot_sequence,
+    }[kind],
     is_default: overlay === undefined,
     // Every one of the three ships a seed, so the 還原出廠版 path is always
     // real here. The field is still reported rather than hardcoded true at the
@@ -1469,8 +1476,8 @@ const DEFAULT_MOCK_SETTINGS = {
   // mock has to serve them or it is answering a settings DTO the server does
   // not send. They mirror the same shipped defaults foldBootDoc reports as
   // `cap_chars` — one number per kind, and the boot-sequence one is ONE cap
-  // across both runtimes. Nothing on the cockpit reads them yet (docCap.ts
-  // abstains for these two kinds); they are here for wire fidelity.
+  // across both runtimes. `capForKind` routes to them, so the version list's
+  // un-restorable marking is judged against these.
   doc_cap_chars_system_interaction:
     BOOT_DOC_CAP_CHARS_DEFAULTS.system_interaction,
   doc_cap_chars_boot_sequence: BOOT_DOC_CAP_CHARS_DEFAULTS.boot_sequence,
@@ -4228,6 +4235,16 @@ export const mockApi: Api = {
         "doc_cap_chars_manual_learnings",
         DOC_CAP_CHARS_DEFAULTS.manualLearnings,
       ],
+      [
+        patch.docCapCharsSystemInteraction,
+        "doc_cap_chars_system_interaction",
+        DOC_CAP_CHARS_DEFAULTS.systemInteraction,
+      ],
+      [
+        patch.docCapCharsBootSequence,
+        "doc_cap_chars_boot_sequence",
+        DOC_CAP_CHARS_DEFAULTS.bootSequence,
+      ],
     ] as const) {
       if (field !== undefined && (field < min || field > 100000)) {
         throw new ApiError(
@@ -4337,6 +4354,14 @@ export const mockApi: Api = {
     if (patch.docCapCharsManualLearnings !== undefined) {
       mockServerSettings.doc_cap_chars_manual_learnings =
         patch.docCapCharsManualLearnings;
+    }
+    if (patch.docCapCharsSystemInteraction !== undefined) {
+      mockServerSettings.doc_cap_chars_system_interaction =
+        patch.docCapCharsSystemInteraction;
+    }
+    if (patch.docCapCharsBootSequence !== undefined) {
+      mockServerSettings.doc_cap_chars_boot_sequence =
+        patch.docCapCharsBootSequence;
     }
     if (patch.updaterReceiveBeta !== undefined) {
       mockServerSettings.updater_receive_beta = patch.updaterReceiveBeta;

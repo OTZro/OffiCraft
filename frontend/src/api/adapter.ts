@@ -744,6 +744,13 @@ export interface ServerSettingsView {
   docCapCharsLearning: number;
   docCapCharsManualSop: number;
   docCapCharsManualLearnings: number;
+  /** T-791e: the two boot-context blocks' caps, on the SAME settings surface
+   * and in the same rune unit. `docCapCharsBootSequence` is ONE number across
+   * both runtimes — claude and codex are two documents of one block, each
+   * measured on its own text. Defaults in `BOOT_DOC_CAP_CHARS_DEFAULTS`
+   * (docCap.ts); same floor-is-the-default, ceiling-100000 rule as above. */
+  docCapCharsSystemInteraction: number;
+  docCapCharsBootSequence: number;
   /** Whether the GitHub-release update check also admits prereleases
    * (false = official releases only, the default). */
   updaterReceiveBeta: boolean;
@@ -819,6 +826,12 @@ export interface ServerSettingsPatch {
   docCapCharsLearning?: number;
   docCapCharsManualSop?: number;
   docCapCharsManualLearnings?: number;
+  /** T-791e boot-context caps, same range rule. Editable because the version
+   * list judges an old revision against these — a cap the cockpit can read but
+   * never write would leave the one number the marking depends on unreachable
+   * from the only surface that edits settings. */
+  docCapCharsSystemInteraction?: number;
+  docCapCharsBootSequence?: number;
   /** Also admit GitHub prereleases in update checks (default false). */
   updaterReceiveBeta?: boolean;
   /** Arm unattended background self-upgrade (default false = manual-only). */

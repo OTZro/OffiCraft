@@ -934,6 +934,12 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
     docCapCharsManualSop: w.doc_cap_chars_manual_sop ?? DOC_CAP_CHARS_DEFAULTS.manualSop,
     docCapCharsManualLearnings:
       w.doc_cap_chars_manual_learnings ?? DOC_CAP_CHARS_DEFAULTS.manualLearnings,
+    // T-791e boot-context caps — same rule and same reason as the five above.
+    docCapCharsSystemInteraction:
+      w.doc_cap_chars_system_interaction ??
+      DOC_CAP_CHARS_DEFAULTS.systemInteraction,
+    docCapCharsBootSequence:
+      w.doc_cap_chars_boot_sequence ?? DOC_CAP_CHARS_DEFAULTS.bootSequence,
     // The two software-update toggles (schema-optional for DTO-compat; the
     // Go wire always emits both — `?? false` only fires against an older
     // server, where OFF is exactly the honest reading).
