@@ -548,7 +548,29 @@
   font-size: 11px;
   color: var(--color-text-muted);
 }
+/* The task's own title (T-ee17). It is the only free-length thing on this row,
+ * so it is the one that shrinks; the ellipsis says a title was cut rather than
+ * ending mid-word as if that were the whole name. The badge and the jump keep
+ * their intrinsic width — a cut type or a cut 查看任務詳情 helps nobody.
+ *
+ * `overflow: hidden` is doing TWO jobs and both are load-bearing: it clips the
+ * text, AND it is what lets this flex item go below its content width at all
+ * (a flex item's automatic minimum size is only `auto` while its overflow is
+ * `visible`). The obvious companion `min-width: 0` was here and has been
+ * REMOVED: with overflow hidden it changes nothing, and a declaration no
+ * mutant can kill is a decoration that reads like a safeguard. Verified by
+ * measurement, not by reasoning — dropping it left every assertion in
+ * visual-guards/reply-task-title-truncate.ct.spec.tsx green. */
+.reply-card__task-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
 .reply-card__task-jump {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 3px;
