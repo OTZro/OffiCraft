@@ -50,11 +50,24 @@ for (const viewport of WIDTHS) {
 
     // (1) CORE red→green: nothing in the chain gets WIDER than the viewport.
     //
-    // ⚠️ Measure the CHAIN, not just the row. A row that refuses to shrink
-    // simply GROWS — its own scrollWidth then equals its clientWidth and the
-    // row looks innocent while the card, the scroll pane and the page all get
-    // dragged wide behind it. (Measured: the row-only assertion stayed green
-    // under the mutant. That is what a witness with no teeth looks like.)
+    // ⚠️ Measure the CHAIN, not just the row and the card. A row that refuses
+    // to shrink simply GROWS, and the width it takes has to end up somewhere:
+    // it can be absorbed by any ancestor that scrolls, so a pair of assertions
+    // one and two levels up can both look innocent while the scroll pane and
+    // the page get dragged wide behind them. Reaching all the way to
+    // document.scrollingElement is what closes that gap.
+    //
+    // This comment used to claim the row-only shape "stayed green under the
+    // mutant" — a witness with no teeth. RE-RUN ON THIS TREE (I copied the
+    // spec, cut its assertions back to that first-version shape — row and card
+    // only — and ran it twice): with the stylesheet untouched it is 2 passed;
+    // with `overflow: hidden` dropped from `.reply-card__task-title` it FAILS
+    // at both widths, and it fails on the ROW assertion first — row
+    // scrollWidth - clientWidth is 894 at 390px and 252 at 1040px. So the
+    // row-only judgement has teeth. The original green came from the mutant
+    // that was tried against it — dropping `min-width: 0`, which the same
+    // commit later established is a NO-OP under `overflow: hidden` — not from
+    // any weakness in what was being measured.
     const pageOver = await page.evaluate(
       () =>
         document.scrollingElement!.scrollWidth -
