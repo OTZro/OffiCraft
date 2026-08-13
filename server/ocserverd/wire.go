@@ -340,10 +340,10 @@ type chatMessageDTO struct {
 	// editable and repeats across the roster. Both are carried so a reader gets
 	// the human name AND the id in one row. "" when the id does not resolve to
 	// a roster row — honest empty, never fabricated.
-	FromName string         `json:"from_name"`
-	To       string         `json:"to"`
-	ToName   string         `json:"to_name"`
-	Body     string         `json:"body"`
+	FromName string `json:"from_name"`
+	To       string `json:"to"`
+	ToName   string `json:"to_name"`
+	Body     string `json:"body"`
 	// BodyOmittedChars is the COLLAPSE marker: how many runes of THIS body were
 	// folded away, 0 when the body is whole. The folded text is still on the
 	// server — get_chat re-reads the message.
@@ -873,14 +873,14 @@ type resumeSummaryDTO struct {
 	// offset. It is the ONLY anchor in the payload for turning a ts_display into
 	// 「多久以前」 — a waking agent must not assume its own wall clock agrees with
 	// the server's.
-	GeneratedAt        string           `json:"generated_at"`
-	Chat               []chatMessageDTO `json:"chat"`
-	ChatEarlierOmitted resumeChatCutDTO `json:"chat_earlier_omitted"`
-	Tasks              []resumeTaskDTO  `json:"tasks"`
-	Roster   []resumeRosterMemberDTO `json:"roster"`
-	Machines *resumeMachinesDTO      `json:"machines"`
-	Overview resumeOverviewDTO       `json:"overview"`
-	Note     string                  `json:"note"`
+	GeneratedAt        string                  `json:"generated_at"`
+	Chat               []chatMessageDTO        `json:"chat"`
+	ChatEarlierOmitted resumeChatCutDTO        `json:"chat_earlier_omitted"`
+	Tasks              []resumeTaskDTO         `json:"tasks"`
+	Roster             []resumeRosterMemberDTO `json:"roster"`
+	Machines           *resumeMachinesDTO      `json:"machines"`
+	Overview           resumeOverviewDTO       `json:"overview"`
+	Note               string                  `json:"note"`
 }
 
 // resumeRosterMemberDTO is one entry of the studio floor a waking agent lands
