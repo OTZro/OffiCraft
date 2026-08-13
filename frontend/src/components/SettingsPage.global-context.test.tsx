@@ -1,16 +1,18 @@
-// The 3-block global-context restructure (step2 FE):
+// The global-context block list and the 使用者自訂 block.
 //
-//   1. 系統互動 (system interaction) — read-only seed card: NO edit affordance.
-//   2. 使用者自訂 (user custom)      — the ONLY editable block; save/reset ride
-//      the /api/global-context wire (mock adapter here; the POST-verb contract
-//      is pinned in http.global-context.test.ts).
-//   3. 啟動程序 (boot sequence)      — read-only seed card: NO edit affordance.
+// T-791e turned the two read-only seed cards into editable documents, so the
+// list is now FOUR rows in boot-assembly order — 系統互動 → 使用者自訂 →
+// 啟動程序（Claude Code）→ 啟動程序（Codex CLI）— and the two boot sequences
+// have a row EACH, never one row for "the boot sequence". The editable
+// behaviour of the three new pages lives in BootDocPage.test.tsx; what is
+// pinned here is the list itself, the routing into each page, and the
+// unchanged 使用者自訂 block.
 //
-// Plus the presentation rule: none of the three blocks surfaces a .md filename
-// (blocks are content, not files).
+// Plus the presentation rule: no block surfaces a .md filename (blocks are
+// content, not files).
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { render, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
 import { SettingsPage } from "./SettingsPage";
@@ -36,15 +38,17 @@ beforeEach(() => {
 });
 
 describe("SettingsPage · global-context 3 blocks", () => {
-  it("lists the three blocks in boot-assembly order, without .md filenames", async () => {
+  it("lists the four blocks in boot-assembly order, without .md filenames", async () => {
     const { container, getByText } = await openRolesLog();
     const text = container.textContent ?? "";
     const iSystem = text.indexOf(s.systemName);
     const iCustom = text.indexOf(s.customName);
-    const iBoot = text.indexOf(s.bootName);
+    const iClaude = text.indexOf(s.bootClaudeName);
+    const iCodex = text.indexOf(s.bootCodexName);
     expect(iSystem).toBeGreaterThanOrEqual(0);
     expect(iCustom).toBeGreaterThan(iSystem);
-    expect(iBoot).toBeGreaterThan(iCustom);
+    expect(iClaude).toBeGreaterThan(iCustom);
+    expect(iCodex).toBeGreaterThan(iClaude);
     expect(getByText(s.globalSection)).toBeTruthy();
     // Presentation rule: the blocks never expose their backing filenames.
     expect(text).not.toContain("global-context.md");
@@ -52,29 +56,15 @@ describe("SettingsPage · global-context 3 blocks", () => {
     expect(text).not.toContain("system_interaction.md");
   });
 
-  it("系統互動 is read-only: badge, content, no edit entry, no filename", async () => {
+  it("系統互動 opens its own editable page instead of a read-only seed card", async () => {
     const utils = await openRolesLog();
     fireEvent.click(utils.getByText(s.systemName));
-    await utils.findByText(s.readOnlyBadge);
-    // The rendered seed content is present (its top heading), read-only.
-    expect(
-      within(utils.container).getByText(/Global Context（AI 工作室/)
-    ).toBeTruthy();
-    expect(utils.queryByText(s.edit)).toBeNull();
-    expect(utils.container.querySelector("textarea")).toBeNull();
-    // No filename chrome on the doc card.
+    // The live document arrives from the api seam, and the page offers the
+    // affordances the read-only card had none of.
+    await utils.findByTestId("boot-doc-usage");
+    expect(utils.getAllByTestId(/^boot-doc-sec-\d+$/).length).toBeGreaterThan(1);
+    expect(utils.getByTestId("boot-doc-reset")).toBeTruthy();
     expect(utils.container.querySelector(".doc-card__file code")).toBeNull();
-    expect(utils.container.textContent).not.toMatch(/\.md\b/);
-  });
-
-  it("啟動程序 is read-only: badge, no edit entry, no filename", async () => {
-    const utils = await openRolesLog();
-    fireEvent.click(utils.getByText(s.bootName));
-    await utils.findByText(s.bootBadge);
-    expect(utils.queryByText(s.edit)).toBeNull();
-    expect(utils.container.querySelector("textarea")).toBeNull();
-    expect(utils.container.querySelector(".doc-card__file code")).toBeNull();
-    expect(utils.container.textContent).not.toContain("boot_sequence.md");
   });
 
   it("使用者自訂 is editable: starts empty/default, save persists via the api", async () => {

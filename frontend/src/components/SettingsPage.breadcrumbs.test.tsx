@@ -85,12 +85,20 @@ describe("SettingsPage · unified breadcrumb header (T-8f6e)", () => {
     expectHeader(utils, [s.title, s.roles, zh.office.role.assistant]);
   });
 
-  it("系統互動 / 使用者自訂 / 啟動程序: 設定 › 角色誌 › <doc>", async () => {
+  it("系統互動 / 使用者自訂 / 兩份啟動程序: 設定 › 角色誌 › <doc>", async () => {
     const utils = renderSettings();
     fireEvent.click(utils.getByText(s.roles));
     await utils.findByText(s.systemName);
 
-    for (const name of [s.systemName, s.customName, s.bootName]) {
+    // The two boot sequences are separate documents with separate rows, so
+    // each has to carry its OWN crumb — one shared 啟動程序 crumb would leave
+    // the reader unable to tell which runtime's page he is on.
+    for (const name of [
+      s.systemName,
+      s.customName,
+      s.bootClaudeName,
+      s.bootCodexName,
+    ]) {
       fireEvent.click(utils.getByText(name));
       expectHeader(utils, [s.title, s.roles, name]);
       // Back up to the roles list via the 角色誌 crumb for the next doc.

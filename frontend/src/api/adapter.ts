@@ -18,6 +18,8 @@ import type {
   ReleaseCheckView,
   BackupHealthView,
   GlobalContextView,
+  BootDocKind,
+  BootDocView,
   DocumentKind,
   DocumentHistoryView,
   DocumentSeedView,
@@ -1881,6 +1883,40 @@ export interface Api {
   saveGlobalContext(text: string): Promise<GlobalContextView>;
   /** Reset the global context to seed (idempotent tombstone → `isDefault` true). */
   resetGlobalContext(): Promise<GlobalContextView>;
+  /**
+   * The folded boot-context block (T-791e) — one of THREE independent document
+   * streams, addressed by (kind, key):
+   *
+   *   system_interaction / global   — the studio's how-the-system-works block
+   *   boot_sequence      / claude   — the Claude Code boot SOP
+   *   boot_sequence      / codex    — the Codex CLI boot SOP
+   *
+   * 🔴 The two boot_sequence keys are DIFFERENT DOCUMENTS whose third step
+   * means opposite things. `key` is required rather than defaulted for exactly
+   * that reason: there is no "the boot sequence", so there is nothing sensible
+   * for a default to pick, and an omitted key would silently address one
+   * runtime while the caller meant the other.
+   */
+  getBootDoc(kind: BootDocKind, key: string): Promise<BootDocView>;
+  /** Whole-document replace of ONE boot-context block → the folded doc
+   * (`isDefault` flips false). Rejects with a 400 ApiError when `text` is over
+   * that kind's `cap_chars` and not getting shorter — the cockpit blocks first,
+   * this is the server's own floor. Requires admin or above. */
+  saveBootDoc(
+    kind: BootDocKind,
+    key: string,
+    text: string
+  ): Promise<BootDocView>;
+  /**
+   * Restore ONE boot-context block to its FACTORY version → the folded doc
+   * (`isDefault` true).
+   *
+   * 🔴 This is the recovery path for the failure this whole surface risks: a
+   * broken boot sequence means agents never attach to SSE, so they never come
+   * online, so there is nobody online to fix it from. It must stay reachable
+   * from the cockpit without a successful read and without any agent being up.
+   */
+  resetBootDoc(kind: BootDocKind, key: string): Promise<BootDocView>;
   /** List the folded role definitions (seed defaults + owner edits). */
   listRoles(): Promise<RoleDefView[]>;
   /** The folded role definition for `key`. */

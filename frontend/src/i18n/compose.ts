@@ -109,6 +109,8 @@ export interface Messages {
   docHistoryBlockedReason: (fields: string[], cap: number) => string;
   docHistoryVersionLabel: (when: string) => string;
   docHistoryActor: (name: string, actorId: string) => string;
+  bootDocNoteHistory: (kept: number) => string;
+  bootDocOverCap: (size: number, cap: number) => string;
   deleteManualConfirm: (key: string) => string;
   manualEditSection: (section: string) => string;
   // ── diff ──
@@ -393,6 +395,19 @@ export function makeMessages(t: Dict, language: Lang): Messages {
       name
         ? `${name}${set.historyActorLead}${actorId}${set.historyActorTail}`
         : actorId,
+
+    // The retention number is a PARAMETER, not a word in the sentence: it is
+    // the adapter's own cap and the sentence is wrong the moment the two
+    // disagree. Saying "counted in saves" here rather than in a tooltip is the
+    // point — an owner who reads it as "the last 10 days" will read a normal
+    // afternoon of edits as the cockpit losing his work.
+    bootDocNoteHistory: (kept) =>
+      `${set.bootDocNoteHistoryLead}${kept}${set.bootDocNoteHistoryTail}`,
+    // BOTH numbers, always. "Too long" without the current size gives an owner
+    // nothing to act on, and without the limit he cannot tell how far over he
+    // is — that is the difference between this and a silent truncation.
+    bootDocOverCap: (size, cap) =>
+      `${set.bootDocOverCapLead}${size}${set.bootDocOverCapMid}${cap}${set.bootDocOverCapTail}`,
 
     // Reports the longer side's line count, the only number the refused diff
     // still knows (lib/lineDiff returns the counts even when it declines).

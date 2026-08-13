@@ -234,6 +234,30 @@ export type WireReleaseCheck = components["schemas"]["ReleaseCheckDTO"];
  * doc. `is_default` = seed (true) vs owner-edited (false). */
 export type WireGlobalContext = components["schemas"]["GlobalContextDTO"];
 
+/**
+ * The folded boot-context block DTO (T-791e) — `system_interaction/global`,
+ * `boot_sequence/claude`, `boot_sequence/codex`.
+ *
+ * 🔴 HAND-WRITTEN, and that is a statement about the wire freeze, not a style
+ * choice: `spec/openapi.json` is frozen (root CLAUDE.md §13) and these three
+ * routes are not in it yet, so `components["schemas"]` has nothing to point at.
+ * Every OTHER type in this file is `components["schemas"][…]` precisely so a BE
+ * rename is a tsc error; this one buys none of that protection and must be
+ * REPLACED by the generated alias the moment the spec grows the routes. The
+ * field names below are the agreed contract, shaped after GlobalContextDTO plus
+ * the three fields the cockpit needs to be honest (`size_chars` / `cap_chars` /
+ * `has_seed`).
+ */
+export interface WireBootDoc {
+  kind: string;
+  key: string;
+  text: string;
+  size_chars: number;
+  cap_chars: number;
+  is_default: boolean;
+  has_seed: boolean;
+}
+
 /** Mirrors `DocumentHistoryDTO` — ONE retained revision of an editable
  * long-form document (`GET /api/document-history/{kind}/{key}`). `content` is
  * the field→value snapshot of the document as it stood BEFORE the write that

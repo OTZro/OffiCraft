@@ -86,6 +86,16 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
     ["zh", "deleteManualConfirm", ["review-pr"], "確定刪除任務類型「review-pr」？其手冊（定義、SOP、學習經驗）將一併移除，無法復原。"],
     ["zh", "manualEditSection", ["這是什麼任務？"], "編輯「這是什麼任務？」"],
     ["zh", "docHistoryVersionLabel", ["7/29 14:03"], "此版本（7/29 14:03）"],
+    // T-791e. Both numbers, both sentences: the retention line has to say the
+    // count is in SAVES, and the over-cap line has to carry the current size
+    // AND the limit — an owner cannot act on "too long".
+    [
+      "zh",
+      "bootDocNoteHistory",
+      [10],
+      "版本紀錄只保留最近 10 版，而且是以「存檔次數」計、不是以時間計——連按幾次小修就會把較舊的版本沖掉。「還原出廠版」不受影響，永遠在。",
+    ],
+    ["zh", "bootDocOverCap", [61234, 60000], "現在 61234 字，超過上限 60000 字，請先刪掉一些再儲存。"],
     ["zh", "docHistoryActor", ["Kyle", "m-f663"], "Kyle（m-f663）"],
     ["zh", "docHistoryActor", ["", "ow-c975"], "ow-c975"],
     ["zh", "diffTooLarge", [2400], "內容太長，無法逐行比對（2400 行）。"],
@@ -186,6 +196,18 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
     ["en", "deleteManualConfirm", ["review-pr"], "Delete the task type “review-pr”? Its manual (definition, SOP, learnings) is removed with it and cannot be restored."],
     ["en", "manualEditSection", ["What is this task?"], "Edit “What is this task?”"],
     ["en", "docHistoryVersionLabel", ["7/29 14:03"], "This version (7/29 14:03)"],
+    [
+      "en",
+      "bootDocNoteHistory",
+      [10],
+      "Version history keeps the last 10 versions, counted in SAVES rather than in time — a run of small saves pushes the older ones out. Restoring the factory version is never affected and is always available.",
+    ],
+    [
+      "en",
+      "bootDocOverCap",
+      [61234, 60000],
+      "Now 61234 characters, over the limit of 60000 — remove some before saving.",
+    ],
     ["en", "docHistoryActor", ["Kyle", "m-f663"], "Kyle (m-f663)"],
     ["en", "docHistoryActor", ["", "ow-c975"], "ow-c975"],
     ["en", "diffTooLarge", [2400], "Too long to compare line by line (2400 lines)."],
