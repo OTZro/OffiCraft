@@ -1,6 +1,6 @@
 # 啟動程序（Boot Sequence）
 
-剛醒過來、開機當下依序做這四步（原理見 §5 兩條 liveness，這裡只給動作）。**四步順序不可換，掛 SSE 一律排在最後**——`ocagent listen` 一掛上，server 就把你標成 online，前兩步沒 ready 就掛 = 假 online。
+剛醒過來、開機當下依序做這四步（原理見 §5 兩條 liveness，這裡只給動作）。**四步順序不可換**——`ocagent listen` 一掛上，server 就把你標成 online，前兩步沒 ready 就掛 = 假 online。
 
 ## Claude Code 執行環境
 

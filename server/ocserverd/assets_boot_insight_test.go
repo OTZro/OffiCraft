@@ -45,8 +45,14 @@ func bootRoleWithInsight(t *testing.T, s *apiServer, key, insight string) {
 //
 // So every wrong gate loses exactly one of them: `!IsDefault` drops assistant,
 // `IsDefault` drops the written role, `HasSeed` drops the written role. Only
-// TrimSpace(Text) != "" keeps both. One fixture alone would let some of those
-// mutants survive.
+// TrimSpace(Text) != "" keeps both. One fixture alone lets some of those
+// mutants survive — measured, not reasoned: the first draft of this test used
+// only the written role, and the `!IsDefault` mutant stayed green.
+//
+// ⚠️ NOTHING GUARDS THE PAIR. That is a statement of intent, not a protected
+// property: delete either fixture and no assertion anywhere goes red, the test
+// simply stops discriminating. If you touch this table, re-run the mutants
+// listed above by hand — there is no mechanism that will do it for you.
 func TestBootContextCarriesInsightBetweenRoleAndLessons(t *testing.T) {
 	const written = "判準探針：刪除成本不對稱時先問 owner。"
 	for _, tc := range []struct {

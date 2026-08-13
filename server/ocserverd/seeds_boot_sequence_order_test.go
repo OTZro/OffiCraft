@@ -6,9 +6,10 @@ import (
 )
 
 // The boot-sequence seeds are read TOP-DOWN by an agent that is DOING each step
-// as it reads it. Two structural properties follow, and neither of them fails
+// as it reads it. Three structural properties follow, and NONE of them fails
 // loudly on its own — a rule that sits after the step it was meant to gate is
-// indistinguishable from a rule that was never written.
+// indistinguishable from a rule that was never written, and a rule that has
+// quietly become false still reads like a rule.
 //
 //	(A) The runtime-environment note must appear BEFORE step 1. One of its
 //	    bullets is an execution detail OF step 1 (report_waking's model id must
@@ -17,6 +18,25 @@ import (
 //	    no signal at all.
 //	(B) 啟動後任務盤點與排程 is a step, not an aside — so it is item 4 of the
 //	    numbered list, and the preamble says 四步, not 三步.
+//	(C) The preamble must not say where 掛 SSE sits in the list. It used to
+//	    ("掛 SSE 一律排在最後"), and promoting the inventory to step 4 made that
+//	    FALSE. The owner's ruling (2026-08-13, verbatim 「掛 SSE 一律排在最後 ->
+//	    可以拿掉」) was to DELETE it rather than restate it, and the reason
+//	    generalises: step 3 already says 「全部就緒後，才掛 ocagent listen」, so
+//	    the preamble clause was a SECOND COPY of that rule — and being a second
+//	    copy is exactly why it could drift out of agreement with the body. The
+//	    fix for a duplicated rule is to delete the duplicate, not to word it
+//	    more carefully.
+//
+//	    This one is a REGRESSION guard, and that is the point: a helpful reader
+//	    who notices the preamble "forgot" to mention SSE will put it back, and
+//	    nothing about that edit looks wrong at the time.
+//
+// ⚠️ SCOPE OF WHAT THESE TESTS ACTUALLY GUARD. They pin the three structural
+// facts above and nothing more. They do NOT check that the bullets say
+// anything sensible, that the steps are in a workable order, or that any of
+// this matches the runtime's real behaviour — a seed can satisfy every
+// assertion in this file and still be wrong prose.
 
 func bootSeedFor(t *testing.T, name string) string {
 	t.Helper()
@@ -77,6 +97,51 @@ func TestBootSequenceSeedsNumberTheInventoryAsStepFour(t *testing.T) {
 			}
 			if !strings.Contains(text, "依序做這四步") || !strings.Contains(text, "四步順序不可換") {
 				t.Fatalf("%s: preamble does not say 四步 in both places", file)
+			}
+		})
+	}
+}
+
+// bootSeedPreamble returns the one-line preamble (the paragraph that states the
+// step count and the ordering rule), so the assertions below cannot be
+// satisfied or broken by wording anywhere else in the file.
+func bootSeedPreamble(t *testing.T, file string) string {
+	t.Helper()
+	for _, line := range strings.Split(bootSeedFor(t, file), "\n") {
+		if strings.Contains(line, "依序做這四步") {
+			return line
+		}
+	}
+	t.Fatalf("%s: no preamble line found", file)
+	return ""
+}
+
+func TestBootSequencePreambleNeverSaysWhereHangingSSESits(t *testing.T) {
+	for _, file := range []string{"boot_sequence.md", "boot_sequence_codex.md"} {
+		t.Run(file, func(t *testing.T) {
+			pre := bootSeedPreamble(t, file)
+
+			// Deleted on the owner's ruling, and it is the kind of sentence a
+			// well-meaning reader adds back. Step 3 already carries this rule;
+			// a second copy in the preamble is what let it drift into being
+			// false when the inventory became step 4.
+			for _, banned := range []string{"最後", "排在"} {
+				if strings.Contains(pre, banned) {
+					t.Fatalf("%s: the preamble is talking about WHERE 掛 SSE sits (%q). "+
+						"That clause was deleted deliberately — step 3 already says "+
+						"「全部就緒後，才掛 ocagent listen」, and the preamble copy is what "+
+						"went stale when 任務盤點 became step 4. Delete it again; do not "+
+						"reword it.\npreamble: %s", file, banned, pre)
+				}
+			}
+			// The half the owner kept must survive: deleting the whole
+			// sentence would satisfy the ban above and lose the ordering rule
+			// with it.
+			for _, want := range []string{"依序做這四步", "四步順序不可換", "假 online"} {
+				if !strings.Contains(pre, want) {
+					t.Fatalf("%s: preamble lost %q — the ban above must not be "+
+						"satisfied by deleting the sentence.\npreamble: %s", file, want, pre)
+				}
 			}
 		})
 	}

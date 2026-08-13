@@ -1,6 +1,6 @@
 # 啟動程序（Boot Sequence · Codex）
 
-剛醒過來、開機當下依序做這四步（原理見 §5 兩條 liveness，這裡只給動作）。**四步順序不可換；SSE 由 App Server sidecar 在最後接手**——sidecar 提前掛上，server 就把你標成 online，前兩步沒 ready 就掛 = 假 online。
+剛醒過來、開機當下依序做這四步（原理見 §5 兩條 liveness，這裡只給動作）。**四步順序不可換**——sidecar 提前掛上，server 就把你標成 online，前兩步沒 ready 就掛 = 假 online。
 
 ## Codex App Server 執行環境
 
