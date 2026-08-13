@@ -1017,7 +1017,11 @@ export const zh = {
       error: "讀取喚醒快照失敗",
       retry: "重試",
       chatCount: "近期訊息",
-      chatChars: "訊息字數",
+      // 🔴 這一格量的是「聊天那整塊要花多少 context」,不是內文長度:收合後的
+      // 內文,加上顯示名／`ts_display`／併進來的卡片／收合標記／快照抬頭。
+      // 標籤寫成「訊息字數」不算說錯,但看畫面的人(owner)正拿這些數字調預算,
+      // 會把它讀成內文長度而低估真實成本——所以用字要涵蓋整塊。
+      chatChars: "聊天區塊字數",
       tasksReturned: "回傳任務",
       tasksOpenTotal: "進行中任務總數",
       tasksDetailChars: "任務細節字數",

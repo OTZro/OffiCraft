@@ -952,7 +952,12 @@ export const en: Dict = {
       error: "Failed to load the wake snapshot",
       retry: "Retry",
       chatCount: "Recent messages",
-      chatChars: "Message chars",
+      // Sizes the WHOLE chat block, not the bodies: collapsed bodies plus the
+      // display names, the rendered timestamps, the folded-in reply cards, the
+      // collapse markers and the snapshot's own header. "Message chars" was not
+      // wrong, but the owner reads these numbers to budget context and would
+      // take it for body length — i.e. under-read the real cost.
+      chatChars: "Chat block chars",
       tasksReturned: "Tasks returned",
       tasksOpenTotal: "Open tasks total",
       tasksDetailChars: "Task detail chars",
