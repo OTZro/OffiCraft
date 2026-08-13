@@ -102,7 +102,8 @@ func TestMemberBootContextStartsWithGlobalContext(t *testing.T) {
 //  1. 系統互動   — shared seed
 //  2. 使用者自訂 — shared owner block (this is the MOVE: staff used to read it
 //     fourth, wedged between the lessons and the boot sequence)
-//  3. persona    — staff: 角色說明 → 長期筆記; outsource: NOTHING (no role)
+//  3. persona    — staff: 角色說明 → 判準（blank ⇒ skipped）→ 長期筆記;
+//     outsource: NOTHING (no role)
 //  4. 啟動程序   — shared seed, recency-authoritative tail
 //
 // Both halves are asserted here on purpose. The member fold is what every
@@ -128,7 +129,7 @@ func TestBothBootContextsUseTheSameFourSlots(t *testing.T) {
 
 		if !(owner < role && role < lessons && lessons < boot) {
 			t.Fatalf("staff slots out of order: 使用者自訂=%d 角色說明=%d 長期筆記=%d 啟動程序=%d\n"+
-				"要的順序是 系統互動 → 使用者自訂 → 角色說明 → 長期筆記 → 啟動程序",
+				"要的順序是 系統互動 → 使用者自訂 → 角色說明 →（判準）→ 長期筆記 → 啟動程序",
 				owner, role, lessons, boot)
 		}
 		// The owner block must sit AFTER the shared seed, not before it.
@@ -156,7 +157,7 @@ func TestBothBootContextsUseTheSameFourSlots(t *testing.T) {
 			t.Fatal("使用者自訂 must follow the 系統互動 seed, not lead the document")
 		}
 		// Slot 3 is EMPTY for a worker: it has no role, so it reads nothing
-		// where staff read 角色說明 → 長期筆記. The pre-T-4595 assembly put an
+		// where staff read 角色說明 →（判準）→ 長期筆記. The pre-T-4595 assembly put an
 		// overlay, an identity block, the whole bound task and the whole type
 		// manual in there — and put the shared boot sequence at the TOP rather
 		// than at the tail.

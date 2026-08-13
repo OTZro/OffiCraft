@@ -13,7 +13,8 @@ import "strings"
 //
 // Members and workers receive all three, IN THE SAME SLOTS (T-4595): 系統互動
 // first, 使用者自訂 second, 啟動程序 last, with the reader's own persona
-// wedged in between (staff: 角色說明 → 長期筆記; outsource: nothing at all —
+// wedged in between (staff: 角色說明 → 判準（空白則整段跳過）→ 長期筆記;
+// outsource: nothing at all —
 // it has no role, and that empty slot is the ENTIRE difference between the two
 // documents).
 // The seed blocks deliberately remain byte-for-byte shared; nothing is filtered

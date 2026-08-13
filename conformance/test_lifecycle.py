@@ -245,10 +245,15 @@ def _expected_context(client, owner_token, role_key: str, task_type: str, user_t
     insight = client.get(
         f"/api/insight/{role_key}", headers=_auth(owner_token)
     ).json()
-    # §2.2 order: 系統互動 → 使用者自訂 → Role → Insight → Lessons → 啟動程序.
-    # Insight, like the user-custom block, is skipped ENTIRELY when its folded
-    # text is blank — a role that never wrote one (and has no seed) must not
-    # grow an orphan header.
+    # spec/lifecycle.md §2.2 parts 1-6, in order:
+    #   1 系統互動 · 2 使用者自訂 (skipped when blank) · 3 # Role ·
+    #   4 # Insight (skipped when blank) · 5 # Lessons · 6 啟動程序.
+    # This reconstruction is written FROM that list, so the part numbering above
+    # is load-bearing: if §2.2 gains or reorders a part and this list does not
+    # move with it, the two drift and the byte-for-byte assertion stops meaning
+    # what it claims to mean.
+    # Part 4's skip condition is the FOLDED TEXT being blank — normatively NOT
+    # is_default and NOT has_seed (§2.2 part 4 spells out why).
     parts = [_seed("system_interaction.md").strip()]
     if user_text.strip():
         parts.append(f"# 使用者自訂（Owner Additions）\n\n{user_text.strip()}")
