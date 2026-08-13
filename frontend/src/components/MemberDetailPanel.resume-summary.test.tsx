@@ -114,16 +114,6 @@ function mkSnapshot(): MemberResumeSummaryView {
     note: "BOUNDED snapshot",
     generatedAt: "2026-08-13 09:47:11 +08:00",
     chatEarlierOmitted: { omitted: false, hint: "" },
-    // Inside its budget — the ordinary case, and the one that must draw no
-    // over-budget line at all. The marker's own two directions are pinned in
-    // ResumeSummaryCard.payload-parity.test.tsx.
-    chatBudgetOverrun: {
-      over: false,
-      budgetChars: 0,
-      blockChars: 0,
-      overByChars: 0,
-      note: "",
-    },
     roster: [],
     machines: null,
   };

@@ -1128,42 +1128,6 @@ export interface ResumeChatCutView {
   hint: string;
 }
 
-/** The SIZE marker of the snapshot's chat block (view model of
- * `ResumeChatBudgetOverrunDTO`): the block came out BIGGER than the budget it
- * was packed under.
- *
- * 🔴 NOT A THIRD KIND OF ABSENCE. `ChatMessage.bodyOmittedChars` is a COLLAPSE
- * (this message is here, folded, certain); `ResumeChatCutView` is a CUT (whole
- * messages MAY be absent, only a fetch settles it). This one says NEITHER:
- * nothing was discarded or shortened TO MAKE ROOM, and the bill is simply
- * larger than the budget. It is a cost statement.
- *
- * 🔴 SILENT ABOUT COMPLETENESS, AND THE TWO USUALLY FIRE TOGETHER. Do not read
- * `over === true` as "and therefore nothing is absent": the reserve pass
- * charges the budget unconditionally while the fill pass spends only what is
- * left, so once the floors alone exceed the budget every non-reserved message
- * is refused and `chatEarlierOmitted` is raised as well. In the typical overrun
- * material really IS absent — just not because room was being made.
- * The panel must word it apart from the other two — see the `budgetOver*` i18n
- * leaves and the three-way vocabulary guard in the payload-parity test. */
-export interface ResumeChatBudgetOverrunView {
-  /** true ⇒ the chat block exceeded its budget. Strictly greater: landing
-   * exactly on the budget is not an overrun and leaves every field zero. */
-  over: boolean;
-  /** The ceiling the block was packed under, in runes. 0 when `over` is false. */
-  budgetChars: number;
-  /** What the packer actually spent. NOT `overview.chatChars` — that one adds
-   * the header and the marker texts on top; only this one is comparable to
-   * `budgetChars`. 0 when `over` is false. */
-  blockChars: number;
-  /** `blockChars - budgetChars`. 0 when `over` is false. */
-  overByChars: number;
-  /** The SERVER's own statement that this is a size report and not a loss
-   * report. Shown VERBATIM, for the same reason the cut hint is. "" when
-   * `over` is false, so nothing inside budget draws an orphan line. */
-  note: string;
-}
-
 /** One roster entry in the wake snapshot (view model of
  * `ResumeRosterMemberDTO`) — who else is in the studio and how to reach them.
  * `id` is what you address a message to; names are editable and roles repeat,
@@ -1248,9 +1212,6 @@ export interface MemberResumeSummaryView {
   generatedAt: string;
   /** The chat CUT POINT — whole messages this payload does not carry. */
   chatEarlierOmitted: ResumeChatCutView;
-  /** The chat SIZE marker — the block cost more than its budget. Nothing is
-   * missing because of it; see `ResumeChatBudgetOverrunView`. */
-  chatBudgetOverrun: ResumeChatBudgetOverrunView;
   /** Who else is in the studio (owner ruling rc-4e98c0481852: "All members and
    * contractors and their online / offline status"). Empty ⇒ the snapshot
    * carries no roster block. */

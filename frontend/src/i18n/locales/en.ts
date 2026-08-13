@@ -970,40 +970,24 @@ export const en: Dict = {
       tasksSection: "Open tasks",
       tasksEmpty: "No open tasks",
       generatedAtLabel: "This snapshot was taken at",
-      bodyOmittedLead: "This message is folded —",
-      bodyOmittedTail: "characters kept on the server (re-read it with get_chat)",
+      // 🔴 THE PER-MESSAGE MARK IS A MARK, NOT A SENTENCE. It used to be
+      // "This message is folded — 46 characters kept on the server (re-read it
+      // with get_chat)", repeated under EVERY folded message. On a snapshot with
+      // hundreds of rows that template outweighed what the folds saved, and the
+      // owner called it (2026-08-13). The recovery convention is stated ONCE, in
+      // `bodyOmittedNote` at the top of the chat block; each message then carries
+      // only the count.
+      //
+      // 🔴 It still may not share a word with `chatCutLabel` — folded and absent
+      // are different failures and the two-way vocabulary guard in the
+      // payload-parity test holds them apart. "folded" is this side's word.
+      bodyOmittedMark: "folded",
+      // Stated once per chat block, so no message has to repeat it.
+      bodyOmittedNote: "folded = shortened here, whole text still on the server (re-read with get_chat)",
       // 🔴 "may", not "were": the server raises this marker as soon as a line
       // was cut at its read window, and it never looks past the cut — so it is
       // raised even when nothing older exists (see resumeChatCutHint).
       chatCutLabel: "Earlier exchanges may be absent — fetch to confirm:",
-      // 🔴 The THIRD marker, and it is NOT a third flavour of the two above.
-      // Those two say material is missing; this one says the block cost more
-      // than its own budget — it reports COST, not loss. Why it happens: each
-      // line's reserved messages are billed to the budget yet never evicted by
-      // it, so enough lines push the total past it, with no cap on the line
-      // count. Marker only; the packing is unchanged (owner ruling
-      // rc-b1fb7f1be05d, option ①).
-      //
-      // 🔴 The label describes THIS LINE and asserts NOTHING about the payload's
-      // completeness — in particular it must never be read as "so everything is
-      // here". The two are not alternatives: the packer takes a non-reserved
-      // message only `if used+cost <= budget`, while the reserve pass adds
-      // `used += cost` unconditionally, so once the floors alone push `used`
-      // past the budget every non-reserved message after them is refused and
-      // `chat_earlier_omitted` is necessarily raised. Over budget and
-      // genuinely-missing-material almost always occur TOGETHER; the two lines
-      // then sit side by side on one screen, and any label claiming
-      // completeness contradicts its neighbour on sight.
-      // The narrow statement is the one that holds: whatever is missing was not
-      // dropped TO MAKE ROOM. Every server-side copy already carries that
-      // qualifier, so the current wording stays inside the same fence and
-      // describes only what kind of line this is.
-      //
-      // ⚠️ HISTORY, NOT THE CURRENT CHOICE: the FIRST DRAFT said "nothing lost",
-      // which is false in the typical state above; it was replaced in T-3970.
-      // It is recorded so the next reader knows the road was taken and was
-      // wrong — do NOT read it as the wording to use.
-      budgetOverLabel: "Block size overrun — a cost notice, not a loss —",
       cardOptionsLabel: "Options offered",
       cardAiPickTag: "AI pick",
       cardPickedTag: "Picked",

@@ -2290,8 +2290,8 @@ export interface paths {
          *     bounded block so a waking / handed-over agent resumes without paging every plane
          *     by hand. It surfaces the caller's recent CHAT (sender == caller OR recipient == caller,
          *     oldest→newest), packed newest-first under a CHARACTER BUDGET rather than a fixed
-         *     message count, with a few newest messages RESERVED for every conversation line
-         *     so one long thread cannot squeeze the others to zero. Every message carries
+         *     message count, stopping at the last message that still fits. Every message
+         *     carries
          *     ``from_name`` / ``to_name`` beside the ids and ``ts_display`` (full date + time +
          *     zone offset) beside the epoch ``ts``, and folds in its reply card as ``card``
          *     when it has one; read every ``ts_display`` against the top-level
@@ -2305,12 +2305,7 @@ export interface paths {
          *     when there is in fact nothing older. Its ``hint`` says how to CHECK and fetch
          *     them. The two are asymmetric ON PURPOSE: the collapse marker is CERTAIN (that
          *     message IS here, shortened, and the count is exact); this one is not, and only
-         *     the fetch settles it. A THIRD marker, ``chat_budget_overrun``, is NOT about
-         *     missing material: it reports SIZE. When ``over`` is true this chat block came
-         *     out LARGER than its budget by ``over_by_chars`` runes, and nothing was
-         *     discarded or shortened to make that happen — each conversation line's
-         *     reserved newest messages are billed to the budget yet never evicted by it, so
-         *     enough lines push the total past it. It also surfaces the caller's OPEN tasks as LIGHT rows
+         *     the fetch settles it. It also surfaces the caller's OPEN tasks as LIGHT rows
          *     (executor == caller, non-terminal, most recently updated first, capped to
          *     ``RESUME_TASKS_N`` — owner ruling: 任務不該包含細節; each row names the task, its
          *     status/priority, the current node NAME and progress, plus ``detail_chars`` — the
@@ -6054,69 +6049,6 @@ export interface components {
             reason?: string | null;
         };
         /**
-         * ResumeChatBudgetOverrunDTO
-         * @description The SIZE marker of the wake snapshot's chat block — and the ONE of the three
-         *     markers on this payload that does not report absent material.
-         *
-         *     OVERRUN, NOT COLLAPSE AND NOT CUT. ``ChatMessageDTO.body_omitted_chars`` is a
-         *     COLLAPSE: that message is here, folded, by an exact count. ``ResumeChatCutDTO``
-         *     is a CUT: whole messages MAY be absent and only a ``get_chat`` settles it. This
-         *     one says neither — nothing was discarded or shortened TO MAKE ROOM, and the
-         *     block simply came out BIGGER than the budget it was packed under. It is a cost
-         *     statement.
-         *
-         *     IT IS SILENT ABOUT COMPLETENESS, AND THE TWO MARKERS USUALLY FIRE TOGETHER. It
-         *     does not say material is present and it does not say material is absent — it
-         *     says this block cost more than its budget. In the TYPICAL overrun
-         *     ``chat_earlier_omitted`` is raised as well, because the reserve pass charges the
-         *     budget unconditionally while the fill pass only spends what is left: once the
-         *     floors alone exceed the budget, every non-reserved message is refused. So
-         *     'something is missing' is normally the CORRECT reading of the payload — it is
-         *     just not what THIS field reports, and it was not caused by making room.
-         *
-         *     WHY IT CAN HAPPEN AT ALL: each conversation line reserves its newest few
-         *     messages before the budget is spent on anything else, and those reserved
-         *     messages are charged to the budget yet never evicted by it. Once enough separate
-         *     lines exist the total climbs past the budget, and nothing on this path bounds
-         *     how far — there is no time window and no cap on the number of lines.
-         *
-         *     NOTHING BRANCHES ON THIS. It reports; it does not change how the chat block is
-         *     packed (owner ruling rc-b1fb7f1be05d, 2026-08-13, option ①: mark the overrun on
-         *     the snapshot and change no behaviour).
-         */
-        ResumeChatBudgetOverrunDTO: {
-            /**
-             * Block Chars
-             * @description What the packer actually spent, in runes — the chat block's own cost, BEFORE the snapshot header and the marker texts that ``ResumeOverviewDTO.chat_chars`` adds on top. Deliberately NOT ``chat_chars``: that one answers "what does pulling this payload cost me", this one answers "what did the packer bill against the budget", and only the second is comparable to ``budget_chars``. ``0`` when ``over`` is false.
-             * @default 0
-             */
-            block_chars: number;
-            /**
-             * Budget Chars
-             * @description The ceiling the chat block was packed under, in runes. ``0`` when ``over`` is false.
-             * @default 0
-             */
-            budget_chars: number;
-            /**
-             * Note
-             * @description Says in the payload itself that this is a SIZE report and not a loss report — that nothing was discarded or shortened on account of it. Deliberately SHORT (a marker that only fires when the payload is already too big must not spend words at that moment) and it POINTS rather than explains: the mechanism behind the overrun lives in ``seeds/system_interaction.md`` §10.4. ``""`` when ``over`` is false, so a snapshot inside its budget carries no orphan line.
-             * @default
-             */
-            note: string;
-            /**
-             * Over
-             * @description ``true`` when the chat block came out LARGER than its budget. Strictly greater: a block that lands exactly on the budget overspent nothing and does not raise this. ``false`` — the ordinary case — leaves every other field on this object at its zero value.
-             * @default false
-             */
-            over: boolean;
-            /**
-             * Over By Chars
-             * @description ``block_chars`` minus ``budget_chars`` — how far over the block went, in runes. Carried rather than left for the reader to subtract because it is the number the decision gets made on. ``0`` when ``over`` is false.
-             * @default 0
-             */
-            over_by_chars: number;
-        };
-        /**
          * ResumeChatCutDTO
          * @description The CUT POINT of the wake snapshot's chat: whether messages exist that this
          *     payload does NOT carry, and how to go and get them.
@@ -6229,9 +6161,8 @@ export interface components {
          *         unauthenticated request (degrades to an empty snapshot, never an error).
          *       - ``chat``: the recent messages INVOLVING the caller (sender == caller OR
          *         recipient == caller), oldest→newest, packed newest-first under a CHARACTER
-         *         BUDGET rather than a fixed message count, with a minimum number of messages
-         *         reserved for EVERY conversation line so one long thread cannot squeeze the
-         *         others to zero. Each message carries ``from_name`` / ``to_name`` beside the
+         *         BUDGET rather than a fixed message count, stopping at the last message that
+         *         still fits. Each message carries ``from_name`` / ``to_name`` beside the
          *         ids and ``ts_display`` beside the epoch ``ts``, and folds in its reply card
          *         (``card``) when it has one. Bodies from OTHER AGENTS are COLLAPSED to a short
          *         lead with ``body_omitted_chars`` saying how much was folded; the owner's line
@@ -6241,12 +6172,6 @@ export interface components {
          *       - ``chat_earlier_omitted``: the CUT POINT — whether messages exist that this
          *         payload does not carry at all, and how to fetch them. Distinct from
          *         ``body_omitted_chars``, which is a shortened message that IS here.
-         *       - ``chat_budget_overrun``: the SIZE marker, and NOT a third flavour of absence.
-         *         Raised when the chat block came out LARGER than the budget it was packed
-         *         under; nothing was discarded or shortened on account of it. The overrun is
-         *         structural — every line's reserved messages are billed to the budget and
-         *         never evicted by it — and unbounded in the number of conversation lines.
-         *         See ``ResumeChatBudgetOverrunDTO``.
          *       - ``generated_at``: when the snapshot was taken, with date, time and zone
          *         offset — the anchor for reading every ``ts_display`` as an elapsed time.
          *       - ``tasks``: the NON-TERMINAL tasks the caller EXECUTES (SPEC §6.2 — a handover
@@ -6277,7 +6202,6 @@ export interface components {
         ResumeSummaryDTO: {
             /** Chat */
             chat?: components["schemas"]["ChatMessageDTO"][];
-            chat_budget_overrun?: components["schemas"]["ResumeChatBudgetOverrunDTO"];
             chat_earlier_omitted?: components["schemas"]["ResumeChatCutDTO"];
             /**
              * Generated At

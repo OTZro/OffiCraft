@@ -53,31 +53,23 @@ import "./member-detail.css";
 //      Same for `from_name` — unresolved is "", and "" renders as the id ALONE.
 //      Back-filling the id into the name slot would make "no name on file"
 //      indistinguishable from "the name really is that id".
-//   2. TWO KINDS OF ABSENCE, TWO SETS OF WORDS — AND A THIRD MARKER THAT IS
-//      NOT ABSENCE AT ALL. `body_omitted_chars` > 0 means
+//   2. TWO KINDS OF ABSENCE, TWO SETS OF WORDS. `body_omitted_chars` > 0 means
 //      THIS message IS here, folded, and the text is still on the server.
 //      `chat_earlier_omitted` means whole messages MAY be missing entirely: the
-//      line was cut at a read or budget limit and nothing looked past the cut,
+//      stream was cut at a read or budget limit and nothing looked past the cut,
 //      so it is raised even when nothing older exists — its `hint` says how to
 //      check and fetch, and is shown VERBATIM. The two halves are asymmetric on
 //      purpose and must stay that way: the fold is CERTAIN and counted, the cut
 //      is a MAYBE that only a fetch settles.
 //      Reading one as the other is how a reader concludes it has seen a
-//      conversation it has not seen, so the two must never share a word.
-//      `chat_budget_overrun` is the third and it is not an absence at all: the
-//      block cost more than the budget it was packed under. ⚠️ It is SILENT
-//      about completeness — it does NOT mean nothing is absent, and it must
-//      never be worded as if it did. The two markers normally fire TOGETHER
-//      (the reserve pass charges the budget unconditionally, so once the floors
-//      exceed it every non-reserved message is refused), which is why the two
-//      lines land side by side on this screen and why a label claiming
-//      completeness contradicts its neighbour in front of the owner. That is
-//      not hypothetical: this label shipped as 「無一遺失」/"nothing lost" and
-//      had to be replaced (T-3970). It is the easiest of the three to misfile,
-//      because a marker on a chat block reads as "something is wrong with the
-//      chat" — so it carries its own vocabulary too, and the three-way guard in
-//      the payload-parity test holds all three pairs apart, not just the
-//      original two.
+//      conversation it has not seen, so the two must never share a word — the
+//      two-way vocabulary guard in the payload-parity test holds them apart.
+//      ⚠️ There WAS a third marker here (`chat_budget_overrun`, T-3970): the
+//      chat block could exceed its budget because each conversation line's
+//      reserved messages were billed to the budget and never evicted by it. The
+//      per-line floor was removed on 2026-08-13 by owner ruling, so the budget
+//      is now a real ceiling and that marker was structurally unable to fire
+//      again — it is gone rather than left standing as a guard nobody keeps.
 //   3. EVERY SECTION SHOWS. Long ones may be collapsed, but which sections
 //      EXIST is always visible — a section that renders nothing at all is
 //      indistinguishable from a section the payload never carried.
@@ -202,8 +194,10 @@ function ChatRow({
         className="mp-resume__chatbody doc-md"
       />
       {/* COLLAPSE — this message IS here, shortened, and the rest is still on
-        * the server. Its wording shares no word with the truncation notice
-        * under the list; see rule 2 in the file header. */}
+        * the server. It is a MARK (word + count), not a sentence: what the mark
+        * means is stated once at the top of the block. Its wording shares no
+        * word with the truncation notice under the list; see rule 2 in the file
+        * header. */}
       {(m.bodyOmittedChars ?? 0) > 0 && (
         <div
           className="mp-resume__folded"
@@ -522,9 +516,28 @@ export function ResumeSummaryCard({ agentId }: { agentId: string }) {
                     {t.mp.resumeSummary.chatEmpty}
                   </div>
                 ) : (
-                  state.data.chat.map((m) => (
-                    <ChatRow key={m.id} m={m} t={t} msg={msg} />
-                  ))
+                  <>
+                    {/* The COLLAPSE convention, stated ONCE for the whole
+                      * block. It used to ride under every folded message as a
+                      * full sentence; on a snapshot with hundreds of rows that
+                      * template cost more than the folds saved. It draws only
+                      * when at least one message is actually folded — a legend
+                      * for a mark nobody can see is the same orphan problem in
+                      * the other direction. */}
+                    {state.data.chat.some(
+                      (m) => (m.bodyOmittedChars ?? 0) > 0,
+                    ) && (
+                      <div
+                        className="mp-resume__foldednote"
+                        data-testid="mp-resume-chat-body-omitted-note"
+                      >
+                        {t.mp.resumeSummary.bodyOmittedNote}
+                      </div>
+                    )}
+                    {state.data.chat.map((m) => (
+                      <ChatRow key={m.id} m={m} t={t} msg={msg} />
+                    ))}
+                  </>
                 )}
                 {/* TRUNCATION, not collapse: whole messages that are NOT in
                   * this payload. The hint is the SERVER's own recovery
@@ -541,36 +554,6 @@ export function ResumeSummaryCard({ agentId }: { agentId: string }) {
                     </span>{" "}
                     <span data-testid="mp-resume-chat-earlier-omitted-hint">
                       {state.data.chatEarlierOmitted.hint}
-                    </span>
-                  </div>
-                )}
-                {/* SIZE, not absence — the third marker, and the only one on
-                  * this payload that does not report material the reader is
-                  * missing. It draws ONLY when the server raised it: an
-                  * always-present line saying "0 over" is an orphan, and an
-                  * orphan marker is how a marker stops being read. The figures
-                  * are the SERVER's (block / budget / the difference) and the
-                  * note is printed VERBATIM for the same reason the cut hint
-                  * is — the cockpit does not get to restate what the endpoint
-                  * decided. */}
-                {state.data.chatBudgetOverrun.over && (
-                  <div
-                    className="mp-resume__chatoverbudget"
-                    data-testid="mp-resume-chat-budget-overrun"
-                  >
-                    <span className="mp-resume__chatcutlabel">
-                      {t.mp.resumeSummary.budgetOverLabel}
-                    </span>{" "}
-                    <span data-testid="mp-resume-chat-budget-overrun-figures">
-                      {state.data.chatBudgetOverrun.blockChars}
-                      {" / "}
-                      {state.data.chatBudgetOverrun.budgetChars}
-                      {" (+"}
-                      {state.data.chatBudgetOverrun.overByChars}
-                      {")"}
-                    </span>{" "}
-                    <span data-testid="mp-resume-chat-budget-overrun-note">
-                      {state.data.chatBudgetOverrun.note}
                     </span>
                   </div>
                 )}
