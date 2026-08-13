@@ -112,7 +112,8 @@ const (
 //
 //  1. 系統互動   — the shared seed, byte-for-byte identical to staff's;
 //  2. 使用者自訂 — the owner's additive block, skipped entirely when blank;
-//  3. the persona — staff read 角色說明 → 長期筆記 here. A worker has no role,
+//  3. the persona — staff read 角色說明 → 判準 → 長期筆記 here (the 判準 block is
+//     itself skipped when that role's insight folds blank). A worker has no role,
 //     so it reads NOTHING here. That is the entire difference.
 //  4. 啟動程序   — the boot-sequence seed for the worker's OWN runtime, which
 //     carries that runtime's 執行環境 section. Recency-authoritative, LAST.

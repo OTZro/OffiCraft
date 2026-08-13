@@ -145,32 +145,47 @@ fail (HTTP 404 on the bootstrap endpoint; the reconcile producer fails closed wi
 fold per `(role_key, task_type)`: overlay wins, else the shared file seed.
 The user-custom block folds from the owner's user-context row; absent/tombstoned → empty.
 
-### 2.2 Assembly order and format — normative
+### 2.2 Assembly order — normative
 
-The context MUST be the following parts joined with `"\n\n"`, plus a single trailing `"\n"`:
+The boot context is these blocks, in this order, joined into one document:
 
-1. the 系統互動 (system-interaction) file seed, stripped — read-only by construction (no
-   write endpoint exists for it). In every file seed (this block, role-def seeds, lessons
-   seeds) the literal placeholder `{OWNER_ID}` MUST be substituted with the owner id
-   (`"owner"`) at read time;
-2. `# 使用者自訂（Owner Additions）\n\n{user_text.strip()}` — **skipped entirely** when the
-   owner text is blank (no noise header);
-3. `# Role: {name or key}\n\n{definition_md.strip()}`;
-4. `# Lessons ({role_key} / {task_type})\n\n{lessons_text.strip()}` — the title injection
-   MUST be idempotent (T-8327): when the stripped lessons text itself already begins with
-   the exact title line (a past generation wrote its boot segment back as the doc base),
-   the assembler MUST strip those leading duplicate title line(s) and prepend exactly one,
-   so titles never accumulate across write-back generations;
-5. the 啟動程序 (boot-sequence) file seed, stripped — appended LAST (the
-   recency-authoritative tail). It is selected by the READER'S OWN runtime
-   (`claude | codex`, blank folding to `claude`), and that seed carries that runtime's
-   執行環境 section; nothing may be appended after it.
+1. **系統互動** — the shared system-interaction file seed;
+2. **使用者自訂** — the owner's additive block;
+3. **角色定義** (`# Role:`) — what this role does;
+4. **判準** (`# Insight`) — how this role weighs things;
+5. **學習筆記** (`# Lessons`) — what it has learned doing it;
+6. **啟動程序** — the boot-sequence file seed, selected by the READER'S OWN runtime
+   (`claude | codex`, blank folding to `claude`), and carrying that runtime's 執行環境
+   section. It is LAST — the recency-authoritative tail — and nothing may be appended
+   after it.
 
-The user-custom block moved from 4th to 2nd in T-4595. The reason is the outsource
-assembly: an outsource worker's boot context MUST be this same list minus parts 3 and 4
-(it has no role and no per-role lessons shard), in this same order, with no
-outsource-specific document of any kind. With the owner block at the end of the staff
-persona it could not be — the two assemblies had one seam that only staff carried.
+Blocks 3-5 are the persona. Two blocks are dropped entirely when they fold blank —
+使用者自訂 and 判準 — so a role that has never written a 判準 simply has no such section,
+rather than an empty heading.
+
+One normative BEHAVIOUR of the 學習筆記 block is stated here rather than delegated,
+because it is a contract and not a formatting detail: the title injection MUST be
+**idempotent** (T-8327). A generation that treats its own boot segment as the document
+base and writes it back turns the injected title into document content, so an assembler
+that blindly prepends stacks one more title per generation. The assembler MUST strip any
+leading copies of the exact title line before prepending exactly one. ⚠️ This rule is
+pinned by `server/ocserverd/api_lessons_patch_test.go`, **not** by the conformance suite —
+no conformance case feeds in a lessons doc that already starts with its own title, so
+satisfying conformance alone does NOT get you this behaviour.
+
+**The remaining assembly rules are deliberately not restated here.** The exact section
+titles, string formats, separator and trailing newline, and the seed placeholder
+substitution live in the implementation (`buildBootContext`) and are pinned byte-for-byte
+by `conformance/test_lifecycle.py`. That suite is what a rewrite must satisfy for those;
+this list is only the shape. A prose copy of formatting details is a second source that
+goes stale in silence — this very section did exactly that when 判準 was added to the
+fold and the list here was not updated.
+
+An outsource worker's boot context is this same document **with the persona removed** —
+it has no role, so it carries no 角色定義, no 判準 and no 學習筆記 — in this same order,
+with no outsource-specific document of any kind. 使用者自訂 used to sit between 學習筆記
+and 啟動程序; T-4595 moved it above the persona so that the staff and outsource
+assemblies would line up, leaving the persona as their only difference.
 
 "No outsource-specific document of any kind" is normative and exhaustive: the outsource
 assembly MUST NOT carry an outsource overlay seed, an identity block, the worker's bound
@@ -178,7 +193,7 @@ task, its task-type manual, or a second copy of the runtime's execution-environm
 instructions. Identity is supplied the way it is for staff (the launcher's appended system
 prompt); the task and the manual are fetched by the worker itself after boot, so a
 boot-time copy could only be a stale snapshot. Byte-for-byte, the outsource context equals
-the staff context with parts 3 and 4 removed, and that equality is the testable form of
+the staff context with the persona removed, and that equality is the testable form of
 this paragraph.
 
 The seed `.md` files under the repo-root `seeds/` are language-neutral assets; a rewrite MUST

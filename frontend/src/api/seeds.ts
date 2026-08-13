@@ -47,7 +47,7 @@ export const SEED_ROLE_ASSISTANT_MD = foldOwnerId(SEED_ROLE_ASSISTANT_RAW);
 export const SEED_LESSONS_MD = foldOwnerId(SEED_LESSONS_RAW);
 
 /** seeds/boot_sequence.md — the standalone 啟動程序 section appended LAST (after
- * Global → Role → Lessons) so the concrete boot steps are the recency-
+ * Global → Role → Insight → Lessons) so the concrete boot steps are the recency-
  * authoritative tail an agent reads. */
 export const SEED_BOOT_SEQUENCE_MD = foldOwnerId(SEED_BOOT_SEQUENCE_RAW);
 

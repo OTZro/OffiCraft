@@ -433,12 +433,14 @@ export const en: Dict = {
     // Initial-prompt preview (boot-context): a worker never stores its verbatim
     // dispatch-time persona, so the server re-runs the same assembly — the hint
     // and note both flag that it is today's version. Since T-4595 that assembly
-    // is the STAFF boot context minus the role journal and its lessons (a worker
-    // has no role); it contains neither the task nor the manual, so the old
+    // is the STAFF boot context minus the whole persona — the role definition
+    // (Duty), its insight and its lessons (a worker has no role, so it has none
+    // of the three);
+    // it contains neither the task nor the manual, so the old
     // "re-assembled from the current task and manual" wording was simply false.
     initialPromptHint: "current re-assembly",
     initialPromptNote:
-      "A preview re-assembled from the CURRENT boot documents — not a verbatim record of the dispatch-time text (edits to them since then will differ). It is the staff boot context minus the role journal and its lessons: a worker has no role, and it picks its task and manual up itself after booting.",
+      "A preview re-assembled from the CURRENT boot documents — not a verbatim record of the dispatch-time text (edits to them since then will differ). It is the staff boot context minus the whole persona — the role definition (Duty), its insight and its lessons: a worker has no role, so it has none of the three, and it picks its task and manual up itself after booting.",
     dash: "—",
   },
   lifecycle: {
