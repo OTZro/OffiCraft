@@ -1184,9 +1184,17 @@ func resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string
 	for _, p := range peers {
 		ids := idxByPeer[p]
 		if len(ids) >= resumeChatPerPeerFetch {
-			// This line filled its read window, so older messages exist that
-			// were never even fetched. That is a cut whether or not the budget
+			// This line filled its read window, so older messages MAY exist
+			// that were never even fetched — the read stopped at the cap and
+			// did not look past it. Reported as a cut whether or not the budget
 			// dropped anything.
+			//
+			// Deliberately one-sided: a line with exactly resumeChatPerPeerFetch
+			// messages and nothing older reports a cut that is not there. That
+			// costs a reader one wasted get_chat; the opposite error costs it a
+			// conversation it never learns exists. Answering it exactly would
+			// take a second query per line on the boot path, which this whole
+			// read is shaped to avoid.
 			atFetchCap = true
 		}
 		start := len(ids) - resumeChatPeerFloor
