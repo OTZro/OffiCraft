@@ -437,6 +437,78 @@ describe("ResumeSummaryCard renders the SAME snapshot the agent receives", () =>
     },
   );
 
+  // 🔴 THE TWO MARKERS CO-OCCUR — this is the state the wording has to survive,
+  // and the reason the previous label was false.
+  //
+  // The packer takes a NON-reserved message only `if used+cost <= budget`, while
+  // the reserve pass adds `used += cost` UNCONDITIONALLY. So the moment the
+  // per-line floors carry `used` past the budget, every non-reserved message
+  // after them is refused and `chat_earlier_omitted` is necessarily raised.
+  // "Over budget" and "material really is absent" are therefore near-ALWAYS
+  // simultaneous, not alternatives — and the two lines land next to each other
+  // on one screen, where a reader reads them as one paragraph.
+  //
+  // This fixture already had both markers up. What was missing was an assertion
+  // that they are on screen TOGETHER, which is what makes the wording rule below
+  // load-bearing rather than a style preference.
+  it("🔴 draws the ABSENT line and the OVER-BUDGET line at the same time", async () => {
+    const u = await open();
+    const cut = u.getByTestId("mp-resume-chat-earlier-omitted");
+    const over = u.getByTestId("mp-resume-chat-budget-overrun");
+    expect(cut).not.toBeNull();
+    expect(over).not.toBeNull();
+    // Both inside the chat section, so they really are read as one block.
+    const section = u.getByTestId("mp-resume-chat-section");
+    expect(section.contains(cut)).toBe(true);
+    expect(section.contains(over)).toBe(true);
+  });
+
+  // 🔴 The OVER-BUDGET label describes THIS LINE. It must not make a claim about
+  // the payload's completeness, because in the co-occurring state pinned above
+  // any such claim is FALSE: material genuinely is absent, it just was not
+  // dropped to make room. Every server-side copy carries that qualifier already
+  // (the note's "for it", the schema's "to make room", seeds §10.4's 「因此」);
+  // the cockpit labels are the only two that had shed it — on the one rendering
+  // the owner actually looks at.
+  //
+  // ⚠️ HOW MUCH THIS ACTUALLY GUARDS, stated plainly so nobody over-trusts it.
+  // "Is this sentence true?" is not mechanically checkable. What IS checkable is
+  // the structural difference between the two kinds of sentence, and that is all
+  // this asserts:
+  //   - POSITIVE: the label categorises itself (通知 / "notice") rather than
+  //     quantifying over the payload. The retired wording could not satisfy this.
+  //   - NEGATIVE: a named blacklist of the exact phrasings that WERE wrong. A
+  //     blacklist catches the regression that happened and nothing else; a new
+  //     false sentence in new words walks straight past it.
+  it.each([
+    ["zh", zh.mp.resumeSummary, "通知", ["無一遺失", "沒有遺失", "都在"]],
+    [
+      "en",
+      en.mp.resumeSummary,
+      "notice",
+      ["nothing lost", "nothing is missing", "nothing was lost", "all here"],
+    ],
+  ])(
+    "🔴 [%s] the OVER-BUDGET label describes ITSELF and claims nothing about what the payload contains",
+    (_locale, r, selfWord, forbidden) => {
+      const label = r.budgetOverLabel;
+      // Positive: it says what KIND of line this is, and the failure message
+      // shows the label rather than a bare `false`.
+      expect(
+        `${_locale}: ${label} — self-describing=${label
+          .toLowerCase()
+          .includes(selfWord.toLowerCase())}`,
+      ).toBe(`${_locale}: ${label} — self-describing=true`);
+      // Negative: none of the completeness claims this label used to make.
+      const hits = forbidden.filter((f) =>
+        label.toLowerCase().includes(f.toLowerCase()),
+      );
+      expect(`forbidden-in-${_locale}=${hits.join(",")}`).toBe(
+        `forbidden-in-${_locale}=`,
+      );
+    },
+  );
+
   it("shows the server's own recovery hint VERBATIM, not a cockpit paraphrase", async () => {
     // The hint names the exact cursor pair to send. A re-worded copy here
     // would be a second procedure that cannot be kept in step with the

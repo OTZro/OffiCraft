@@ -984,7 +984,20 @@ export const en: Dict = {
       // "nothing lost" because a reader who files it with the other two draws
       // the exact opposite conclusion. Marker only; the packing is unchanged
       // (owner ruling rc-b1fb7f1be05d, option ①).
-      budgetOverLabel: "Block size overrun, nothing lost —",
+      //
+      // 🔴 It describes THIS LINE, and asserts nothing about the payload. The
+      // first draft said "nothing lost", which is FALSE in the TYPICAL overrun:
+      // the packer takes a non-reserved message only `if used+cost <= budget`,
+      // while the reserve pass adds `used += cost` unconditionally — so once the
+      // floors push `used` past the budget, every non-reserved message after
+      // them is refused and `chat_earlier_omitted` is necessarily raised. Over
+      // budget and genuinely-missing-material almost always occur TOGETHER, not
+      // as alternatives, and the two lines then sit side by side on one screen
+      // contradicting each other. The true statement is the narrow one: whatever
+      // is missing was not dropped to make room. Every server-side copy already
+      // carries that qualifier; only these two cockpit labels had dropped it —
+      // on the one rendering the owner actually looks at.
+      budgetOverLabel: "Block size overrun — a cost notice, not a loss —",
       cardOptionsLabel: "Options offered",
       cardAiPickTag: "AI pick",
       cardPickedTag: "Picked",
