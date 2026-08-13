@@ -513,4 +513,56 @@ describe("RepliesPage", () => {
     const members = await api.listMembers();
     expect(members.find((m) => m.id === "mira")?.unreadCount).toBe(1);
   });
+
+  // T-ee17: the card has to say WHICH piece of work it is about. A contractor
+  // card read only「外勤支援 · X-79」and the owner could not tell what he was
+  // being asked about without leaving the page.
+  it("names the task a contractor's ask belongs to, verbatim", async () => {
+    __injectMockReplyCard(
+      mkCard({
+        from: "ow-rel",
+        task: {
+          id: "t-1",
+          typeKey: "review-pr",
+          title: "[ACE-7580] SOC2 年度風險評估：review Google Drive 上的 ISMS 文件",
+        },
+      }),
+    );
+    const { findByTestId } = renderPage();
+    const ref = await findByTestId("reply-task-ref");
+    // Verbatim — a shortened or reworded title is a different claim about
+    // which task this is.
+    expect(ref.textContent).toContain(
+      "[ACE-7580] SOC2 年度風險評估：review Google Drive 上的 ISMS 文件",
+    );
+    // The initiator is still named: the row answers WHO and WHICH, not one
+    // instead of the other.
+    const card = await findByTestId("waiting-card");
+    expect(card.textContent).toContain("R-2");
+  });
+
+  // Same field, different path (a staff member's card binds to its own step),
+  // so it gets its own assertion rather than riding on the contractor one.
+  it("names the task a staff member's ask belongs to", async () => {
+    __injectMockMember({ id: "m-dev", name: "Kyle", kind: "assistant" });
+    __injectMockReplyCard(
+      mkCard({
+        from: "m-dev",
+        task: { id: "t-2", typeKey: "", title: "把開機說明改成座艙可編輯" },
+      }),
+    );
+    const { findByTestId } = renderPage();
+    const ref = await findByTestId("reply-task-ref");
+    expect(ref.textContent).toContain("把開機說明改成座艙可編輯");
+  });
+
+  // The negative half: no task means the row says nothing about a task —
+  // NOT an empty slot, which reads as "this ask has no title" rather than
+  // "this ask has no task".
+  it("shows no task row at all on a pure chat ask", async () => {
+    __injectMockReplyCard(mkCard({ task: null }));
+    const { findByTestId, queryByTestId } = renderPage();
+    await findByTestId("waiting-card");
+    expect(queryByTestId("reply-task-ref")).toBeNull();
+  });
 });
