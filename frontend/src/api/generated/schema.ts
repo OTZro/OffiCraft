@@ -2299,8 +2299,13 @@ export interface paths {
          *     ``body_omitted_chars`` > 0 means THAT message IS here with that many characters
          *     COLLAPSED away (another agent's line — the owner's line and the caller's own
          *     hand-off notes to itself are carried IN FULL), re-read it with ``get_chat``;
-         *     ``chat_earlier_omitted`` means whole messages are NOT HERE AT ALL and its
-         *     ``hint`` says how to fetch them. It also surfaces the caller's OPEN tasks as LIGHT rows
+         *     ``chat_earlier_omitted`` is the other kind and it is a MAYBE, not a fact: that
+         *     line was cut at a read or budget limit and nothing looked past the cut, so
+         *     whole messages may be missing from this payload entirely — it is raised even
+         *     when there is in fact nothing older. Its ``hint`` says how to CHECK and fetch
+         *     them. The two are asymmetric ON PURPOSE: the collapse marker is CERTAIN (that
+         *     message IS here, shortened, and the count is exact); this one is not, and only
+         *     the fetch settles it. It also surfaces the caller's OPEN tasks as LIGHT rows
          *     (executor == caller, non-terminal, most recently updated first, capped to
          *     ``RESUME_TASKS_N`` — owner ruling: 任務不該包含細節; each row names the task, its
          *     status/priority, the current node NAME and progress, plus ``detail_chars`` — the

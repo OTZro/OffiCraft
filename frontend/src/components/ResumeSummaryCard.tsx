@@ -55,8 +55,12 @@ import "./member-detail.css";
 //      indistinguishable from "the name really is that id".
 //   2. TWO KINDS OF ABSENCE, TWO SETS OF WORDS. `body_omitted_chars` > 0 means
 //      THIS message IS here, folded, and the text is still on the server.
-//      `chat_earlier_omitted` means whole messages are NOT HERE AT ALL and you
-//      must go and fetch them — its `hint` says how, and is shown VERBATIM.
+//      `chat_earlier_omitted` means whole messages MAY be missing entirely: the
+//      line was cut at a read or budget limit and nothing looked past the cut,
+//      so it is raised even when nothing older exists — its `hint` says how to
+//      check and fetch, and is shown VERBATIM. The two halves are asymmetric on
+//      purpose and must stay that way: the fold is CERTAIN and counted, the cut
+//      is a MAYBE that only a fetch settles.
 //      Reading one as the other is how a reader concludes it has seen a
 //      conversation it has not seen, so the two must never share a word.
 //   3. EVERY SECTION SHOWS. Long ones may be collapsed, but which sections
