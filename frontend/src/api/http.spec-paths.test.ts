@@ -38,7 +38,9 @@
 // ── WHY THE FIXED-SAMPLE ANCHOR BELOW EXISTS ────────────────────────────────
 // The interpolation half of this scan (COVERED (b) above) has exactly one
 // positive sample in http.ts today — the SSE downlink, `/api/events` — and
-// that sample has no `${…}` in it at all. Nothing here proves PATH_SHAPE
+// that sample carries no parameterised path segment — its only `${…}` sits
+// in the `?token=` query tail, which is trimmed before matching (and is,
+// today, the sole real sample exercising that trim). Nothing here proves PATH_SHAPE
 // still recognises a *parameterised* template as path-shaped once it is
 // normalised. If PATH_SHAPE is ever tightened enough to filter out a real
 // parameterised route (e.g. by requiring the whole string to be non-empty
@@ -78,7 +80,11 @@
 //     escapes the scan"; only losing the prefix does.
 //   • a template whose static text is not path-shaped (spaces, `<id>`, an
 //     interpolation containing a `}`) — it is skipped rather than guessed at,
-//     which is also why prose in a comment does not produce a false red.
+//     which is also why prose in a comment does not produce a false red on
+//     this half; a double-quoted `/api/…` in a comment is read like any
+//     other literal and will go red. That misfire is scoped to this one
+//     file — the scan only reads http.ts, so the same fake path planted in
+//     a comment in another file (e.g. mock.ts) leaves this test green.
 //   • a path spelled in any file other than http.ts. This scan reads one file.
 // Closing any of those means widening the scan, not widening this paragraph.
 
