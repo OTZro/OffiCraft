@@ -2338,11 +2338,12 @@ export interface paths {
          *     through one shared server assembly, so the reported sizes cannot drift from what
          *     resume_summary actually carries) plus ``estimated_total_chars`` — a derived
          *     single number to gate the boot decision on — and a fixed guidance ``note``.
-         *     ``estimated_total_chars`` covers the WHOLE chat block resume_summary would carry
-         *     (bodies AFTER collapsing, plus the display names, the rendered timestamps, the
-         *     reply cards folded into messages, the collapse markers and the snapshot's own
-         *     header) plus the plan text its task rows omit and the roster / machine blocks —
-         *     what pulling the snapshot actually costs, not just the message bodies. It carries
+         *     ``estimated_total_chars`` is exactly ``chat_chars`` + ``tasks_detail_chars`` +
+         *     ``roster_chars`` + ``machines_chars``, all four reported in ``overview``: the
+         *     WHOLE chat block as the snapshot renders it (``chat_chars`` is the rendered
+         *     block's cost, NOT the sum of the message bodies), plus the plan text its task
+         *     rows omit and the two studio-floor blocks — what pulling the snapshot actually
+         *     costs. It carries
          *     NO chat bodies and NO task rows of any kind: peeking it costs a few hundred
          *     bytes, so a waking agent sizes ``resume_summary`` BEFORE deciding whether to
          *     pull it into its own context or hand the pull to a cheap sub-agent (e.g. haiku)
@@ -6227,11 +6228,12 @@ export interface components {
          *     Identity-locked to the caller's VERIFIED JWT ``sub``, it returns the SAME
          *     ``overview`` counts/sizes a full ``resume_summary`` would report (assembled
          *     through the shared server path, so they cannot drift) plus
-         *     ``estimated_total_chars`` — a derived single number (the WHOLE chat block the
-         *     snapshot would carry: bodies AFTER collapsing, plus the display names, the
-         *     rendered timestamps, the reply cards folded into messages, the collapse markers
-         *     and the snapshot's own header — plus the plan text its task rows omit, and the
-         *     roster + machine blocks it carries) the boot threshold gates on — and
+         *     ``estimated_total_chars`` — a derived single number the boot threshold gates on:
+         *     exactly ``chat_chars`` + ``tasks_detail_chars`` + ``roster_chars`` +
+         *     ``machines_chars``, all four reported in ``overview``. That is the WHOLE chat
+         *     block as the snapshot renders it (``chat_chars`` is the rendered block's cost,
+         *     NOT the sum of the message bodies), plus the plan text its task rows omit and
+         *     the two studio-floor blocks it carries — and
          *     a fixed guidance ``note``. It carries NO chat bodies and NO task rows: peeking
          *     it costs a few hundred bytes, so a waking agent can size ``resume_summary``
          *     BEFORE deciding whether to pull it into its own context or hand the pull to a

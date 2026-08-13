@@ -2332,9 +2332,9 @@ func TestPeekResumeSummarySizeIsLightAndConsistent(t *testing.T) {
 	if peek.Overview.ChatChars != wantChatChars {
 		t.Fatalf("chat_chars: want %d, got %d", wantChatChars, peek.Overview.ChatChars)
 	}
-	// estimated_total_chars = the whole chat block (chat_chars, asserted just
-	// above: collapsed bodies + names + ts_display + collapse markers + the
-	// snapshot header) + the plan text the rows omit.
+	// estimated_total_chars = the whole chat block (chat_chars, whose exact
+	// composition is asserted just above from the code's own addends rather
+	// than restated in prose) + the plan text the rows omit.
 	wantEstimate := peek.Overview.ChatChars + peek.Overview.TasksDetailChars
 	if peek.EstimatedTotalChars != wantEstimate {
 		t.Fatalf("estimated_total_chars: want %d, got %d",

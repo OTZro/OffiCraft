@@ -952,11 +952,13 @@ export const en: Dict = {
       error: "Failed to load the wake snapshot",
       retry: "Retry",
       chatCount: "Recent messages",
-      // Sizes the WHOLE chat block, not the bodies: collapsed bodies plus the
-      // display names, the rendered timestamps, the folded-in reply cards, the
-      // collapse markers and the snapshot's own header. "Message chars" was not
-      // wrong, but the owner reads these numbers to budget context and would
-      // take it for body length — i.e. under-read the real cost.
+      // Sizes the WHOLE chat block, not the bodies. Deliberately NOT itemised
+      // here: the server's resumeSnapshotParts is the only place that says what
+      // goes into it, and every prose copy that listed the ingredients listed
+      // an incomplete set (all of them dropped the largest single item, the cut
+      // hint). "Message chars" was not wrong, but the owner reads these numbers
+      // to budget context and would take it for body length — i.e. under-read
+      // the real cost.
       chatChars: "Chat block chars",
       tasksReturned: "Tasks returned",
       tasksOpenTotal: "Open tasks total",

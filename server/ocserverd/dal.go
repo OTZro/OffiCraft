@@ -565,8 +565,12 @@ func (d *DAL) ListChatInvolving(participant string, limit int) ([]ChatMessage, e
 // a round trip — which matters because this sits on the path EVERY agent runs
 // on EVERY wake. It replaces (does not add to) the single ListChatInvolving the
 // snapshot used to run, so the boot path's query COUNT is unchanged. The scan
-// shape is also unchanged: `sender`/`recipient` carry no index, so the old
-// newest-N read was already a full chat_message scan and so is this one.
+// is still a FULL chat_message scan — `sender`/`recipient` carry no index, so
+// the old newest-N read scanned the whole table and so does this one — but the
+// ROWS IT RETURNS ARE NOT the same order of magnitude: the old read handed back
+// at most 30 rows in total, this one hands back up to perPeer (40) per
+// conversation line, so the rows scanned, sorted and materialised grow with the
+// caller's number of correspondents. Same shape, more output.
 //
 // A blank participant / non-positive perPeer reads nothing.
 func (d *DAL) ListChatPerPeerInvolving(participant string, perPeer int) ([]ChatMessage, error) {

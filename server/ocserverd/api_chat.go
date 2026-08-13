@@ -55,10 +55,18 @@ const (
 	//
 	// 🔴 The floor OUTRANKS the budget: reserved messages are counted against
 	// the budget but never dropped by it, so a single enormous thread cannot
-	// squeeze another line to zero. That means the block can exceed
-	// resumeChatBudgetChars when there are many lines — deliberately. The
-	// alternative (floor yields to budget) re-introduces exactly the silent
-	// disappearance the floor exists to prevent.
+	// squeeze another line to zero. The alternative (floor yields to budget)
+	// re-introduces exactly the silent disappearance the floor exists to
+	// prevent.
+	//
+	// 🔴 What is deliberate is the DIRECTION of that trade — never the amount.
+	// The reserved messages are charged to resumeChatBudgetChars and then never
+	// evicted by it, so the block can exceed the budget, and by HOW MUCH is
+	// bounded by nothing here: it grows with the caller's number of
+	// conversation lines and with the size of the reserved messages on each
+	// (each body is capped by chatBodyMaxChars, the line count is not capped at
+	// all). "It can exceed the budget" is true; "it exceeds it by a little" is
+	// not something this constant, or anything else on this path, establishes.
 	resumeChatPeerFloor = 3
 	// resumeChatPerPeerFetch caps how many of a line's newest messages are READ
 	// before packing. It bounds the read itself (the quota is applied in SQL —
@@ -79,8 +87,7 @@ const (
 	//     resume from.
 	//   - anything to or from the owner (wireOwnerID). Instructions from the
 	//     human, and what was answered back, are not summarisable material.
-	// Both exemptions are decided per MESSAGE in resumeChatCarriesFullBody, not
-	// per line, so a line's classification cannot go stale.
+	// Both exemptions are applied in resumeChatCarriesFullBody.
 	resumeChatOtherPreview = 120
 	// resumeTimeLayout renders an epoch second for a READER: full date, full
 	// time, and the zone OFFSET, e.g. "2026-08-13 09:47:11 +08:00".
@@ -191,7 +198,14 @@ const (
 	// it is small, calls resume_summary directly in its own context, else has
 	// a cheap sub-agent (e.g. haiku) call resume_summary and hand back a
 	// compressed digest — the full payload never burns the main session.
-	peekNote                     = "Size-only preview of resume_summary — counts/sizes ONLY, no chat or task content. estimated_total_chars covers the WHOLE chat block resume_summary would carry (bodies after collapsing, plus the display names, the rendered timestamps, the reply cards folded into messages, and the snapshot's own header), so it is what pulling the snapshot actually costs — not just the message bodies. Use it to decide: if small (rule of thumb < 20000 chars, ≈ 5k tokens) call resume_summary directly in your main session; if large, spawn a cheap sub-agent (e.g. haiku) to call resume_summary and return a compressed digest, so the full payload never burns your own context."
+	//
+	// 🔴 It states the SUM, not a list of ingredients. Three prose copies of
+	// this used to itemise what the number covers, each with a DIFFERENT
+	// incomplete subset, and all three left out the cut hint — ~430 chars, the
+	// single largest item, added to chat_chars in resumeSnapshotParts. An
+	// itemised list can only go stale against that function; the four addends
+	// are checkable against the code that computes them.
+	peekNote                     = "Size-only preview of resume_summary — counts/sizes ONLY, no chat or task content. estimated_total_chars is exactly chat_chars + tasks_detail_chars + roster_chars + machines_chars, all four reported in overview: the WHOLE chat block as the snapshot renders it (chat_chars is the rendered block's cost, NOT the sum of the message bodies), plus the plan text its task rows omit and the two studio-floor blocks. So it is what pulling the snapshot actually costs. Use it to decide: if small (rule of thumb < 20000 chars, ≈ 5k tokens) call resume_summary directly in your main session; if large, spawn a cheap sub-agent (e.g. haiku) to call resume_summary and return a compressed digest, so the full payload never burns your own context."
 	attachmentOctetStream        = "application/octet-stream"
 	attachmentDefaultPastedImage = "pasted-image"
 	// chatBodyMaxChars caps a chat message BODY at 4,000 UTF-8 CHARACTERS
@@ -984,8 +998,11 @@ func (s *apiServer) resumeSnapshotParts(actor string) (resumeWakeSnapshot, error
 	// built in the same pass. A per-message GetReplyCard inside the chat loop
 	// would have been one point query per carded message, on every wake.
 	// The map also REPLACES servedChatMessageDTO's per-message GetReplyCard for
-	// reply_card_status, so this path now runs FEWER queries than before, not
-	// more.
+	// reply_card_status, so this path runs NO MORE queries than before — and
+	// strictly fewer whenever the snapshot carries at least one carded message,
+	// which is the only case where the replaced per-message lookups existed at
+	// all. On a snapshot with no cards there is nothing to save and the count
+	// is simply unchanged.
 	cardsByID := map[string]ReplyCard{}
 	cardsWaiting, cardsAnsweredRecent := 0, 0
 	if actor != "" {
@@ -1606,11 +1623,12 @@ func (s *apiServer) HandlePeekResumeSummarySizeApiResumeSummarySizeGet(w http.Re
 		Overview: overview,
 		// estimated_total_chars ≈ the context cost of pulling resume_summary
 		// AND then expanding every task via get_task: the WHOLE chat block the
-		// snapshot carries (bodies after collapsing, plus the display names,
-		// the rendered timestamps, the cards folded into messages, the collapse
-		// markers and the snapshot's own header — that is what chat_chars
-		// counts) plus the plan text those rows omit. The single
-		// number the boot threshold gates on (see the note / boot_sequence).
+		// snapshot carries — whatever chat_chars counts, which is the RENDERED
+		// block and not the sum of the bodies (resumeSnapshotParts is the one
+		// place that says what goes into it; do not restate the list here, the
+		// three prose copies that did each restated a different, incomplete
+		// one) — plus the plan text those rows omit. The single number the boot
+		// threshold gates on (see the note / boot_sequence).
 		//
 		// T-1b09: the roster and machine blocks are ADDED here because they are
 		// part of what pulling the snapshot costs. Leaving them out would have
