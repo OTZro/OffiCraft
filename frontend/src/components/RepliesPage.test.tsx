@@ -17,6 +17,11 @@
 //   6. Answering never touches the chat unread red dot — the badge and the
 //      red dot clear independently (red dot clears only by entering the
 //      conversation).
+//
+// KNOWN BOUNDARY (T-ee17). The task-title assertions below cover BOTH surfaces
+// at once: the chat inline card (ChatReplyCard) and this Ask page render the
+// same ReplyCardTaskRef, so one set of assertions is all there is.
+// 若日後有人在聊天面單獨加條件（例如聊天面不顯示標題），不會有任何東西變紅。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
@@ -554,6 +559,20 @@ describe("RepliesPage", () => {
     const { findByTestId } = renderPage();
     const ref = await findByTestId("reply-task-ref");
     expect(ref.textContent).toContain("把開機說明改成座艙可編輯");
+  });
+
+  // An empty title falls back to the OLD header (type + jump only) — the cell
+  // is not drawn at all, so there is no empty box and no placeholder standing
+  // in for a title nobody wrote.
+  it("draws no title cell when the task's title is empty", async () => {
+    __injectMockReplyCard(
+      mkCard({ task: { id: "t-3", typeKey: "review-pr", title: "" } }),
+    );
+    const { findByTestId } = renderPage();
+    const ref = await findByTestId("reply-task-ref");
+    expect(ref.querySelector(".reply-card__task-title")).toBeNull();
+    expect(ref.textContent).toContain("review-pr");
+    expect(ref.textContent).toContain("查看任務詳情");
   });
 
   // The negative half: no task means the row says nothing about a task —
