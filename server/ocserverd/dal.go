@@ -631,7 +631,36 @@ type DocumentHistory struct {
 	ActorID      string
 }
 
-const documentHistoryKeep = 3
+// documentHistoryKeepDefault is how many pre-write snapshots a document keeps
+// when nothing says otherwise.
+const documentHistoryKeepDefault = 3
+
+// documentHistoryKeepByKind raises the retained-version depth for the three
+// boot-context blocks (T-791e). WRITTEN DOWN BECAUSE IT IS A DECISION, NOT AN
+// OVERSIGHT: those three are the documents an owner can now retype at will from
+// the cockpit, and the sequence that matters — "put back the version from
+// before I broke it" — is exactly the one a handful of idle saves would push off
+// the end of a three-deep list. Ten is the owner's number; every other kind
+// stays at three deliberately, because nothing about this change made THEM
+// easier to churn.
+//
+// The no-op guard in the handlers is the other half of the same protection (a
+// save that changes nothing retains nothing at all); depth alone would still be
+// spent by anyone who edits, reverts, and edits again.
+var documentHistoryKeepByKind = map[string]int{
+	docKindSystemInteraction: 10,
+	docKindBootSequence:      10,
+}
+
+// documentHistoryKeepFor answers the depth for one kind: the table above, else
+// documentHistoryKeepDefault. A kind that is not listed is not a missing entry
+// — three is the answer for every document that has not been argued up.
+func documentHistoryKeepFor(kind string) int {
+	if keep, ok := documentHistoryKeepByKind[kind]; ok {
+		return keep
+	}
+	return documentHistoryKeepDefault
+}
 
 // documentHistoryStream addresses one retained-version series plus the reader
 // that serializes its live state. One row can carry SEVERAL independent series:
@@ -689,7 +718,7 @@ func retainDocumentVersion(tx *sql.Tx, stream documentHistoryStream) error {
 			SELECT id FROM document_history
 			WHERE document_kind = ? AND document_key = ?
 			ORDER BY id DESC LIMIT ?
-		)`, stream.Kind, stream.Key, stream.Kind, stream.Key, documentHistoryKeep)
+		)`, stream.Kind, stream.Key, stream.Kind, stream.Key, documentHistoryKeepFor(stream.Kind))
 	return err
 }
 
@@ -1487,6 +1516,56 @@ func (d *DAL) DeleteInsightForRole(roleKey string) (int, error) {
 		return 0, err
 	}
 	return deleted, nil
+}
+
+// BootDocument mirrors the boot_document table: the owner's overlay over ONE
+// shipped boot-context block (T-791e) — the 系統互動 seed, or one runtime's
+// 啟動程序 seed. Same three-state shape as Insight: no row / tombstoned row =
+// "serve the embedded seed", a live row = "serve this instead".
+//
+// The seed itself is never written here, which is what makes the reset route
+// reach factory text by construction rather than by anyone remembering to keep
+// a copy.
+type BootDocument struct {
+	Kind       string
+	Key        string
+	Text       string
+	Tombstoned bool
+}
+
+// GetBootDocument returns the overlay for (kind, key), or nil if never written.
+func (d *DAL) GetBootDocument(kind, key string) (*BootDocument, error) {
+	return getBootDocumentOn(d.rdb, kind, key)
+}
+
+func getBootDocumentOn(q sqlQuerier, kind, key string) (*BootDocument, error) {
+	var b BootDocument
+	err := q.QueryRow(`
+		SELECT doc_kind, doc_key, text, tombstoned FROM boot_document
+		WHERE doc_kind = ? AND doc_key = ?`, kind, key,
+	).Scan(&b.Kind, &b.Key, &b.Text, &b.Tombstoned)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+// PutBootDocument upserts one boot-context block overlay.
+func (d *DAL) PutBootDocument(b BootDocument) error {
+	return putBootDocumentOn(d.wdb, b)
+}
+
+func putBootDocumentOn(ex sqlExecer, b BootDocument) error {
+	_, err := ex.Exec(`
+		INSERT INTO boot_document (doc_kind, doc_key, text, tombstoned)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (doc_kind, doc_key) DO UPDATE SET
+			text = excluded.text, tombstoned = excluded.tombstoned`,
+		b.Kind, b.Key, b.Text, b.Tombstoned)
+	return err
 }
 
 // ── display-name overlays (account_alias / machine_alias) ────────────────────

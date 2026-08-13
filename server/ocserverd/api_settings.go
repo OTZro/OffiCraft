@@ -310,6 +310,8 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		{body.DocCapCharsLearning, "doc_cap_chars_learning", minDocCapChars},
 		{body.DocCapCharsManualSop, "doc_cap_chars_manual_sop", minDocCapChars},
 		{body.DocCapCharsManualLearnings, "doc_cap_chars_manual_learnings", minDocCapChars},
+		{body.DocCapCharsSystemInteraction, "doc_cap_chars_system_interaction", minSystemInteractionCapChars},
+		{body.DocCapCharsBootSequence, "doc_cap_chars_boot_sequence", minBootSequenceCapChars},
 	}
 	for _, c := range capRange {
 		if c.field != nil && (*c.field < c.min || *c.field > maxDocCapChars) {
@@ -443,6 +445,8 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		{body.DocCapCharsLearning, settingDocCapCharsLearning, &s.docCapCharsLearning},
 		{body.DocCapCharsManualSop, settingDocCapCharsManualSop, &s.docCapCharsManualSop},
 		{body.DocCapCharsManualLearnings, settingDocCapCharsManualLearnings, &s.docCapCharsManualLearnings},
+		{body.DocCapCharsSystemInteraction, settingDocCapCharsSystemInteraction, &s.docCapCharsSystemInteraction},
+		{body.DocCapCharsBootSequence, settingDocCapCharsBootSequence, &s.docCapCharsBootSequence},
 	}
 	for _, c := range capWrite {
 		if c.field == nil {
@@ -577,26 +581,28 @@ func (s *apiServer) settingsView() settingsDTO {
 		customThemes = []ThemeBundleDTO{}
 	}
 	return settingsDTO{
-		OwnerTokenTTL:              s.ownerTokenTTL,
-		AgentTokenTTL:              s.agentTokenTTL,
-		HandoverPct:                s.ctxhigh.HandoverPct,
-		CodexCompactionThreshold:   s.codexCompactionThreshold,
-		MonitoringRefreshSeconds:   s.monitoringRefreshSeconds,
-		OutsourceMaxParallel:       s.outsourceMaxParallel,
-		DocCapCharsDuty:            s.docCapCharsDuty,
-		DocCapCharsInsight:         s.docCapCharsInsight,
-		DocCapCharsLearning:        s.docCapCharsLearning,
-		DocCapCharsManualSop:       s.docCapCharsManualSop,
-		DocCapCharsManualLearnings: s.docCapCharsManualLearnings,
-		UpdaterReceiveBeta:         s.updaterReceiveBeta,
-		UpdaterAutoUpdate:          s.updaterAutoUpdate,
-		OrgName:                    s.orgName,
-		OwnerName:                  s.ownerName,
-		PushContactEmail:           s.pushContactEmail,
-		DisplayTheme:               s.displayTheme,
-		DisplayLanguage:            s.displayLanguage,
-		DisplayWide:                s.displayWide,
-		CustomThemes:               customThemes,
+		OwnerTokenTTL:                s.ownerTokenTTL,
+		AgentTokenTTL:                s.agentTokenTTL,
+		HandoverPct:                  s.ctxhigh.HandoverPct,
+		CodexCompactionThreshold:     s.codexCompactionThreshold,
+		MonitoringRefreshSeconds:     s.monitoringRefreshSeconds,
+		OutsourceMaxParallel:         s.outsourceMaxParallel,
+		DocCapCharsDuty:              s.docCapCharsDuty,
+		DocCapCharsInsight:           s.docCapCharsInsight,
+		DocCapCharsLearning:          s.docCapCharsLearning,
+		DocCapCharsManualSop:         s.docCapCharsManualSop,
+		DocCapCharsManualLearnings:   s.docCapCharsManualLearnings,
+		DocCapCharsSystemInteraction: s.docCapCharsSystemInteraction,
+		DocCapCharsBootSequence:      s.docCapCharsBootSequence,
+		UpdaterReceiveBeta:           s.updaterReceiveBeta,
+		UpdaterAutoUpdate:            s.updaterAutoUpdate,
+		OrgName:                      s.orgName,
+		OwnerName:                    s.ownerName,
+		PushContactEmail:             s.pushContactEmail,
+		DisplayTheme:                 s.displayTheme,
+		DisplayLanguage:              s.displayLanguage,
+		DisplayWide:                  s.displayWide,
+		CustomThemes:                 customThemes,
 		// Read from the DAL, NOT from the settings snapshot: onboarding runs in
 		// its own goroutine and finishes after this handler returned, so a
 		// boot-time snapshot would serve a permanently stale "running".

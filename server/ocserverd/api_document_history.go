@@ -167,6 +167,24 @@ func (s *apiServer) documentHistoryAllowed(w http.ResponseWriter, r *http.Reques
 		return false
 	}
 	switch kind {
+	case docKindSystemInteraction, docKindBootSequence:
+		// T-791e. Same class gate as global_context below — restoring one of
+		// these puts text into every agent's boot context, so it is a governance
+		// write (owner or the admin 助理), exactly as the edit route is. Reading
+		// stays at the floor the route table declares, like every other kind
+		// here.
+		//
+		// A key this server does not serve is refused BEFORE any of that: the
+		// list/restore faces must not answer for boot_sequence/opus as if it
+		// were a document that merely has no versions yet.
+		if !bootDocHistoryKeyKnown(kind, key) {
+			writeError(w, http.StatusBadRequest, unknownBootDocKeyMsg(kind, key))
+			return false
+		}
+		if write && !principalAtLeast(s.principalOfRequest(r), principalAdminAgent) {
+			writeError(w, http.StatusForbidden, "restoring this document requires admin capability")
+			return false
+		}
 	case "global_context", "role_definition":
 		if write && !principalAtLeast(s.principalOfRequest(r), principalAdminAgent) {
 			writeError(w, http.StatusForbidden, "restoring this document requires admin capability")
@@ -275,6 +293,25 @@ func (s *apiServer) documentSeedContent(kind, key string) (map[string]string, bo
 			return nil, false, nil
 		}
 		return map[string]string{"definition_md": seedMD, "tombstoned": "true"}, true, nil
+	case docKindSystemInteraction, docKindBootSequence:
+		// T-791e. The seed content comes from readSeedFile through the same
+		// resolver the reset uses (bootDocSpecFor → seedBlockMD), so "what the
+		// compare view shows" and "what 還原 would write" cannot be two different
+		// texts. Field name `text`, matching bootDocHistorySnapshot — the
+		// cockpit diffs the two maps key by key, so a mismatched name renders
+		// 「沒有差異」 against every retained version instead of erroring.
+		spec, ok := s.bootDocSpecFor(kind, key)
+		if !ok {
+			return nil, false, nil
+		}
+		seedMD, hasSeed, err := s.root.seedBlockMD(spec.SeedFile)
+		if err != nil {
+			return nil, false, err
+		}
+		if !hasSeed {
+			return nil, false, nil
+		}
+		return map[string]string{"text": seedMD, "tombstoned": "true"}, true, nil
 	case "insight":
 		// 🔴 `text`, NOT `definition_md` — that is the field name
 		// insightHistorySnapshot writes into a retained insight revision, and
@@ -378,6 +415,11 @@ func (s *apiServer) publishDocumentHistoryRestore(r *http.Request, kind, key str
 		// once (see the case above). api_document_history_insight_publish_test.go
 		// exists solely because nothing else in the build would go red here.
 		s.hub.Publish("insight", "patch", "insight", wireOwnerID+"::"+key, nil, audienceOwnerOnly(), requestTrigger(r))
+	case docKindSystemInteraction, docKindBootSequence:
+		// T-791e — the same frame the edit routes fan (see publishBootDoc).
+		// Forgetting to be in THIS switch is the silent failure the insight case
+		// above documents: 200, DB changed, nothing on any screen.
+		s.publishBootDoc(r)
 	case docKindTaskManualSop, docKindTaskManualLearnings:
 		s.publishTaskManual(key, requestTrigger(r))
 	case docKindTaskDescription, docKindTaskTitle:
@@ -537,6 +579,31 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		}
 		return s.dal.SaveWithDocumentHistory(kind, key, actor, insightSnapshotIn(key), func(ex sqlExecer) error {
 			return putInsightOn(ex, Insight{RoleKey: key, Text: content["text"], Tombstoned: historyTombstoned(content)})
+		})
+	case docKindSystemInteraction, docKindBootSequence:
+		// T-791e. The cap applies to a restore, exactly as it does for lessons
+		// and insight above: an older, larger revision is still a write, and
+		// letting history walk a document back over the ceiling would make the
+		// ceiling a suggestion. (The RESET path is the deliberate opposite — see
+		// resetBootDoc: the factory text is the product, not something a caller
+		// wrote.)
+		spec, ok := s.bootDocSpecFor(kind, key)
+		if !ok {
+			return errNotFound
+		}
+		current, err := s.foldBootDocDTO(spec)
+		if err != nil {
+			return err
+		}
+		if DocCapBlocked(spec.Cap, current.Text, content["text"]) {
+			return errDocumentHistoryCap
+		}
+		return s.dal.SaveWithDocumentHistory(kind, key, actor, bootDocSnapshotIn(kind, key), func(ex sqlExecer) error {
+			return putBootDocumentOn(ex, BootDocument{
+				Kind: kind, Key: key,
+				Text:       content["text"],
+				Tombstoned: historyTombstoned(content),
+			})
 		})
 	case docKindTaskManualSop:
 		return s.restoreTaskManualField(key, taskManualHistoryStreams(key, actor, true, false),

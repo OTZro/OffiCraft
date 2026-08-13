@@ -822,6 +822,26 @@ func FoldInsight(overlay *Insight, seedText string, hasSeed bool) (text string, 
 	return "", true
 }
 
+// FoldBootDocument resolves ONE boot-context block: owner overlay ⊕ the
+// embedded seed (T-791e). Same three states FoldInsight has, and the same
+// reading of is_default — "nobody has edited this block", never "the text is
+// empty".
+//
+// 🔴 THE OVERLAY NEVER TOUCHES THE SEED, which is the property the reset route
+// is built on: `hasSeed`/`seedText` come from the go:embed copy this binary was
+// built with, so "restore to default" is answered from a source no editing path
+// can reach. A design that wrote the edit back over the seed would look
+// identical until the first reset.
+func FoldBootDocument(overlay *BootDocument, seedText string, hasSeed bool) (text string, isDefault bool) {
+	if overlay != nil && !overlay.Tombstoned {
+		return overlay.Text, false
+	}
+	if hasSeed {
+		return seedText, true
+	}
+	return "", true
+}
+
 // ── lessons: anchor-addressed patch (MCP patch_lessons, T-8327) ──────────────
 
 // LessonsEdit is one {old, new} patch instruction: replace the UNIQUE
@@ -1017,14 +1037,34 @@ const contextDocMaxCharsDefault = 15000
 // "fix".
 const dutyCapCharsDefault = 1000
 
+// systemInteractionCapCharsDefault / bootSequenceCapCharsDefault are the
+// shipped defaults of the two boot-context blocks that became editable in
+// T-791e. Both are sized against the SEEDS THEY SHIP WITH, not picked round:
+// the system-interaction seed is a long studio handbook and the two boot
+// sequences are short checklists, so one shared number would either strand the
+// handbook in shrink-only mode on day one or hand the checklists a budget forty
+// times their own size.
+//
+// The boot-sequence cap is ONE knob for BOTH runtimes (claude and codex), each
+// measured on its own text. They are two renderings of the same short document;
+// a studio that needs more room for one needs it for the other.
+const (
+	systemInteractionCapCharsDefault = 60000
+	bootSequenceCapCharsDefault      = 15000
+)
+
 // min*CapChars / maxDocCapChars bound the adjustable caps. Each floor is THAT
 // segment's own default by design (see above), not a coincidence to be "tidied
 // up" into one shared number — putting the other segments' floor on Duty would
-// make dutyCapCharsDefault unreachable from the settings surface.
+// make dutyCapCharsDefault unreachable from the settings surface. The same
+// applies to the two boot-context blocks: their floors are their own defaults,
+// so an owner can only ever RAISE them.
 const (
-	minDocCapChars  = contextDocMaxCharsDefault
-	minDutyCapChars = dutyCapCharsDefault
-	maxDocCapChars  = 100000
+	minDocCapChars               = contextDocMaxCharsDefault
+	minDutyCapChars              = dutyCapCharsDefault
+	minSystemInteractionCapChars = systemInteractionCapCharsDefault
+	minBootSequenceCapChars      = bootSequenceCapCharsDefault
+	maxDocCapChars               = 100000
 )
 
 // DocCapBlocked reports whether replacing before with after must be refused by

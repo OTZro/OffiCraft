@@ -834,6 +834,34 @@ MATRIX: dict[str, Route] = {
         body={"text": "conformance user-custom block"},
     ),
     "POST /api/global-context/reset": Route(requires="admin_agent"),
+    # ── the two editable boot-context blocks (T-791e) ────────────────────────
+    # Read at the machine floor, write at admin_agent — the shape the
+    # 使用者自訂 block above already has. The replace bodies are deliberately
+    # NON-EMPTY: an empty one would be refused by the wipe guard, and a 400 in
+    # this table would say nothing about the floor.
+    #
+    # 🔴 THE RESET ROWS RUN LAST-WRITE-WINS AGAINST THE REPLACE ROWS ABOVE and
+    # that is fine in either order: reset is idempotent, replace is a whole
+    # document, and neither depends on what the other left behind.
+    "GET /api/system-interaction": Route(requires="machine"),
+    "POST /api/system-interaction": Route(
+        requires="admin_agent",
+        body={"text": "conformance system-interaction block"},
+    ),
+    "POST /api/system-interaction/reset": Route(requires="admin_agent"),
+    "GET /api/boot-sequence/{runtime_key}": Route(
+        requires="machine",
+        path="/api/boot-sequence/claude",
+    ),
+    "POST /api/boot-sequence/{runtime_key}": Route(
+        requires="admin_agent",
+        path="/api/boot-sequence/codex",
+        body={"text": "conformance boot sequence"},
+    ),
+    "POST /api/boot-sequence/{runtime_key}/reset": Route(
+        requires="admin_agent",
+        path="/api/boot-sequence/codex/reset",
+    ),
     "GET /api/roles": Route(requires="machine"),
     "GET /api/doc-sizes": Route(requires="machine"),
     "POST /api/roles": Route(
