@@ -193,17 +193,27 @@ func TestMemberBootContextByteIdenticalToSpecAssembly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fold user context: %v", err)
 	}
+	insight, err := s.foldInsightDTO(bc.RoleKey)
+	if err != nil {
+		t.Fatalf("fold insight: %v", err)
+	}
 	roleTitle := roleDTO.Name
 	if roleTitle == "" {
 		roleTitle = roleDTO.Key
 	}
-	// §2.2 order, T-4595: 系統互動 → 使用者自訂 → Role → Lessons → 啟動程序.
+	// §2.2 order: 系統互動 → 使用者自訂 → Role → Insight → Lessons → 啟動程序.
+	// Insight, like the owner block, is skipped ENTIRELY when its folded text
+	// is blank — the gate is the text, not is_default/has_seed.
 	parts := []string{strings.TrimSpace(sysSeed)}
 	if strings.TrimSpace(userCtx.Text) != "" {
 		parts = append(parts, ownerAdditionsH1+"\n\n"+strings.TrimSpace(userCtx.Text))
 	}
 	parts = append(parts,
-		"# Role: "+roleTitle+"\n\n"+strings.TrimSpace(roleDTO.DefinitionMD),
+		"# Role: "+roleTitle+"\n\n"+strings.TrimSpace(roleDTO.DefinitionMD))
+	if body := strings.TrimSpace(insight.Text); body != "" {
+		parts = append(parts, "# Insight ("+bc.RoleKey+")\n\n"+body)
+	}
+	parts = append(parts,
 		"# Lessons ("+bc.RoleKey+" / "+bc.TaskType+")\n\n"+strings.TrimSpace(lessons.Text),
 		strings.TrimSpace(bootSeed))
 	want := strings.Join(parts, "\n\n") + "\n"
