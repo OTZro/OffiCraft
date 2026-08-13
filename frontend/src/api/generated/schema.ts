@@ -297,7 +297,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List the chat stream (?with=<id>&limit=<n>; oldest→newest).
+         * List the chat stream (?with=<id>&limit=<n>; oldest→newest). History paging: before_ts + before_id (both together) return the limit messages strictly OLDER than that keyset cursor — a history page NEVER advances the read watermark. Re-read specific messages by id: ids=<id>&ids=<id> returns those messages in full without a peer and without a cursor; the ids schema states who may read what, the per-call limit, and what an unknown id does.
          * @description List the owner's chat stream oldest→newest, capped to the most recent
          *     ``limit`` (default 30; §3.4 #17). ``?with=<id>`` filters to messages a
          *     participant is in (``sender == id`` OR ``recipient == id``); the limit is
@@ -327,7 +327,7 @@ export interface paths {
         get: operations["handle_list_chat_api_chat_get"];
         put?: never;
         /**
-         * Post a chat message (sender = verified JWT sub; auto SSE fan-out).
+         * Post a chat message (sender = verified JWT sub; auto SSE fan-out). ``to`` must name the owner or an active AI member; unknown, removed, and machine ids are rejected. Presence is not a gate: an offline member keeps its durable mailbox.
          * @description Post one chat message (§3.4 #16). The sender is ALWAYS the VERIFIED JWT
          *     ``sub`` (``current_actor``) — never the body's ``from`` (ignored), so a sender
          *     can not be forged. The recipient ``to`` is a durable address: the owner or an
@@ -497,7 +497,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Mint a permanent single-file share link (?sig= HMAC; grants read of this one attachment only).
+         * Mint a permanent single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, forever, and it cannot be revoked. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.
          * @description Mint the permanent share link for ONE attachment
          *     (``GET /api/chat/attachments/<id>/share-link``). GATED like every chat
          *     route (any authenticated principal); 404 for an unknown blob id.
@@ -598,7 +598,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Size-only overview of every capped document (each against its own cap; NO content; role lessons = DEFAULT bucket only).
+         * Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on list_task_manuals ?view=list, and a role definition's size and cap are already on every list_roles row.
          * @description The station-wide capped-document SIZE overview (``peek_doc_sizes`` MCP tool,
          *     zero params; ``GET /api/doc-sizes``).
          *
@@ -726,7 +726,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List retained versions of an editable document. */
+        /** 讀取一份 editable document 保留的最新 3 筆歷史（支援 global_context、role_definition、lessons、insight、task_manual_sop/learnings、task_description/title）；此 endpoint 只讀、不提供 restore，退休的 `task_manual` kind 會以 400 指向兩個替代 series。 */
         get: operations["handle_list_document_history_api_document_history__kind___key__get"];
         put?: never;
         post?: never;
@@ -744,7 +744,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read the shipped default of an editable document.
+         * 讀取 global_context、seeded role_definition 或 seeded per-role insight 的 shipped default；唯讀，沒有對應 seed 時回 404（包括 task manual 與 per-role lessons），回傳 kind/key/content，且此 tool 不提供 restore。
          * @description Read the document's shipped default — the 初始版本 row of the cockpit's version list. It exists so that row can be COMPARED against the live document before anyone decides to go back to it; before this route the seed text only ever reached a client AFTER a reset had already overwritten the document, so "look first" was impossible for exactly the one entry whose restore is least reversible. Read-only, same floor as reading the retained versions. 404 where no seed exists.
          */
         get: operations["handle_get_document_seed_api_document_history__kind___key__seed_get"];
@@ -790,7 +790,7 @@ export interface paths {
         get: operations["handle_get_global_context_api_global_context_get"];
         put?: never;
         /**
-         * Whole-block replace of the user-custom additive block ({text}).
+         * Whole-block replace of the user-custom additive block ({text}). text is REQUIRED; unknown keys are rejected. Replacing existing content with an empty block needs allow_shrink=true (or use reset_global_context).
          * @description Whole-block replace of the user-custom additive block (§3.4 #21). Writes
          *     ONLY the 使用者自訂 block (``is_default`` → False) and fans a delta — the
          *     system-interaction / boot-sequence seeds are untouchable by construction.
@@ -852,7 +852,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read a per-role insight doc (per role_key; may have a PER-ROLE factory seed).
+         * Read a per-role insight doc - this role's accumulated judgement calls and trade-offs (per role_key). A role may ship with a factory seed, and that seed is PER-ROLE (seeds/insight_<role_key>.md) - today only the assistant has one; a role without one reads genuinely empty until it writes. is_default=true means THIS ROLE has never written its own, whether what you are reading is the factory wording or nothing at all. Separate from the lessons doc on purpose: lessons record what happened and what to do next time, insight records how this role weighs a call. Like lessons, reading is unrestricted: any authenticated identity may read ANY role's insight - it is SEPARATE, not private.
          * @description Read the per-role INSIGHT doc (T-3809) — the judgement calls and trade-offs this
          *     role keeps reaching for. Third block of the role journal alongside Duty (the
          *     role definition) and Learning (the lessons doc).
@@ -871,7 +871,7 @@ export interface paths {
         get: operations["handle_get_insight_api_insight__role_key__get"];
         put?: never;
         /**
-         * Whole-doc replace of a per-role insight doc ({text}).
+         * Whole-doc replace of a per-role insight doc ({text}). text is REQUIRED; unknown keys are rejected. Replacing existing content with an empty doc needs allow_shrink=true. Only the role's own agents (and admin) may WRITE it.
          * @description Whole-doc replace of a PER-ROLE insight doc (T-3809).
          *
          *     Per-role WRITE authz (load-bearing, and the ONLY thing this release narrows): a
@@ -906,7 +906,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Patch a per-role insight doc by unique anchors ({edits:[{old,new}]}).
+         * Patch a per-role insight doc by unique anchors ({edits:[{old,new}]}). Only the role's own agents (and admin) may WRITE it.
          * @description Anchor-addressed PATCH of a PER-ROLE insight doc (T-3809) — the write cost scales with the CHANGE, not the doc, so this is the primary write seam and replace stays the last resort.
          *
          *     Semantics: ``edits`` apply IN ORDER against the doc ``get_insight`` serves; each non-empty ``old`` must match the current text exactly once (0 hits or >1 hits → flat 400, WHOLE batch rejected, zero writes); an empty ``old`` appends ``new`` at the end. The unique anchor doubles as an optimistic lock under last-write-wins concurrency. A patch that empties the doc (or shrinks it below a tenth of its size) is refused unless ``allow_shrink=true``.
@@ -932,7 +932,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Reset a per-role insight doc to its factory seed (idempotent tombstone overlay).
+         * Reset a per-role insight doc back to its factory seed (idempotent tombstone of the overlay) - the counterpart of reset_role on the Duty block. A role with NO seed file (seeds/insight_<role_key>.md) returns 404: there must be a factory version to reset TO. No length cap is applied on this path, matching reset_role - the factory text is part of the product. The overlay you are discarding is retained as a document-history revision, so the reset is recoverable. Only the role's own agents (and admin) may do it.
          * @description Reset a per-role INSIGHT doc back to its factory seed (T-6501): an idempotent tombstone of the overlay, the exact counterpart of ``reset_role`` on the Duty block.
          *
          *     Until this operation existed there was NO way to reach the shipped ``seeds/insight_<role_key>.md`` again once a role had written its own insight — the seed shipped, and nothing could call it back.
@@ -967,7 +967,7 @@ export interface paths {
         get: operations["handle_get_lessons_api_lessons__role_key___task_type__get"];
         put?: never;
         /**
-         * Whole-doc replace of a per-role lessons doc ({text}).
+         * 整份替換 per-role lessons 文件；`text` 必填且 unknown keys 拒絕，只有該 role 的 agent/admin 可寫，清空或大幅縮減須 `allow_shrink=true`，結果仍受 lessons cap 限制。
          * @description Whole-doc replace of a PER-ROLE lessons doc (§3.4 #28).
          *
          *     Per-role WRITE authz (load-bearing): a caller BELOW admin capability may write
@@ -1230,7 +1230,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Teardown on server: run ocwarden teardown on the server's OWN host; machine_id is not a target selector and every target is currently refused (409).
+         * Teardown on server: runs `ocwarden teardown` on the SERVER's own host. machine_id is NOT a target — this verb has no way to reach another machine, and naming one is refused (409). The server-local machine is refused too (retiring it revokes credentials fleet-wide). To retire another machine use uninstall_machine then delete_machine; to repair the server host's own warden use install_warden_on_server_host, which runs `install --force` over the existing install.
          * @description Teardown on server: run ``<ocwarden> teardown`` ON THE SERVER HOST
          *     (``POST /api/machines/{machine_id}/teardown-here``).
          *
@@ -1463,7 +1463,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List members, including outsource members by default; fields=light preserves kind.
+         * 列出所有未移除的成員，預設包含 outsource 成員；回傳 presence-derived MemberDTO[]，`fields=light` 則回傳保留 kind 的 identity-only projection。
          * @description List the owner's roster (§3.4 #8). Soft-removed members are omitted (the
          *     audit row survives). ``online`` is the live SSE-connection projection
          *     (``hub.online_members``) — the single online source, not the durable field.
@@ -1486,7 +1486,7 @@ export interface paths {
         get: operations["handle_list_members_api_members_get"];
         put?: never;
         /**
-         * Hire a member (server mints the id). Pure seam, no UI (§9.1).
+         * 雇用成員（id 由 server 產生）；runtime 預設為 claude 且只接受 claude/codex，effort 預設為 medium 且須通過驗證，指定 kind 或 role_key 的雇用受 admin 權限保護。
          * @description Hire a roster member (§3.4 #9; pure seam, no UI). The owner assigns the
          *     display ``name``; the server mints the ``id`` (``m-<hex>`` — never client
          *     supplied, it is the attribution key). The member starts offline/active; hiring
@@ -1540,7 +1540,7 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Edit a member (name / model / effort). Blank name / bad effort → 422.
+         * 部分更新成員的 name/runtime/model/effort；空 name、無效 runtime 或無效 effort 回 422，且變更 launch-intent 欄位時會啟動 graceful handover。
          * @description Partially update a member's owner-editable fields (§3.4 #11: name / runtime /
          *     model / effort). PATCH semantics — only supplied fields change. A blank ``name``
          *     is a 422; a runtime outside claude/codex or effort outside low/medium/high/max is a
@@ -1717,7 +1717,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Relocate a member to a machine (placement only; never touches desired_state). Also accepts an outsource-worker id: the same move-one-agent verb relocates the worker.
+         * Relocate a member to a machine (placement only; never touches desired_state). Also accepts an outsource-worker id: the same move-one-agent verb relocates the worker. machine_id is REQUIRED (owner 2026-07-27): a relocate NAMES the destination machine and no longer doubles as an unpin — an absent key is a 422, an explicit null or "" is a 400.
          * @description Relocate a member to a machine (the owner cockpit's 改機器 for a roster member; the member twin of the outsource-worker relocate). Writes the owner-pinned ``desired_machine_id`` then runs the SAME event-driven reconcile the activate click uses (``reconcileMemberNow``): a LIVE member is auto-migrated onto the chosen machine (robust STOP the old session, the next tick re-spawns on the pin); an offline member just re-pins so the next wake lands there. PLACEMENT ONLY — unlike activate it NEVER touches ``desired_state`` (a relocate is not a wake). A ``member`` delta fans out immediately. Any non-"" pin must name a real machine, else 404 — "auto" included, since it names no machine and pinned the member to a destination dispatch could never reach. P7c: ``member_id`` also accepts an outsource-worker id — an id naming no roster member falls through to the worker table and relocates that worker (the response is then an OutsourceWorkerDTO); an id in neither table stays the member 404.
          */
         post: operations["handle_relocate_member_api_members__member_id__relocate_post"];
@@ -1851,7 +1851,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Bounded LIGHT wake snapshot for a TARGET member (admin_agent+; same shape as resume_summary).
+         * The SAME bounded wake snapshot as resume_summary, for a TARGET member (member_id) instead of the caller — control-others, admin_agent+ only (owner-scope or role=assistant); an ordinary agent gets 403. Same identity/chat/light-task-rows/roster/machines/overview/note shape, assembled by the identical resumeSnapshotParts function (so the roster and machine blocks cannot drift from what that member would get on waking; note that machines.you_are_on resolves for the TARGET member, not for you); resume_summary itself is unchanged and still identity-locked to the caller.
          * @description The SAME bounded wake snapshot as ``resume_summary``, for a TARGET member
          *     instead of the caller (control-others; ``member_id`` is a target param, never
          *     the caller's own identity — see the caller-identity convention). Assembled by
@@ -2204,7 +2204,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List reply cards — LIGHT rows (?status=waiting|answered|expired; ?limit= caps; get_reply_card for full).
+         * 列出 light reply-card rows（summary 與 decision digest，不含完整 body/options）；`status` 可為 waiting（預設，最久等待優先）、answered（近 24 小時）或 expired（近 24 小時），positive limit 在各 pane 排序後套用；要讀單一卡片全文請用 get_reply_card。
          * @description The reply-card list — LIGHT rows (``list_reply_cards`` MCP tool; owner ruling:
          *     卡只需要 title+決策). ``?status=waiting`` (the default) returns cards still
          *     waiting on the owner, longest-waiting first; ``?status=answered`` returns cards
@@ -2240,7 +2240,7 @@ export interface paths {
         get: operations["handle_list_reply_cards_api_reply_cards_get"];
         put?: never;
         /**
-         * Open a reply card: an ask the owner must answer (options ≤4, [0]=AI pick).
+         * Open a reply card: an ask the owner must answer (options ≤4, [0]=AI pick). Auto-binds to your single active task's CURRENT step — that step (and the task) enters waiting_owner until the owner answers; several lanes of one parallel_group running at once is fine (the lowest order_idx lane carries the card, and the whole task holds either way). If that task has NO resolvable current step the call is REFUSED with 409 and no card is opened: binding the task without a step places no hold, so the task would finish underneath your question and the owner's answer would then be rejected. Fix what the error names — report the step you are on (update_step_status in_progress), use open_gate with an explicit task_id + step_id, or send bind="none" if the ask is not about the task. With no single clear active task, a plain unbound 請示 opens as before. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).
          * @description Open a reply card (agent-side; the MCP tool ``create_reply_card``). The initiator is ALWAYS the verified JWT ``sub``. Server validation: ``kind`` must be ``decision``|``action``; ``summary`` must be non-blank; ``options`` must be 1..4 non-blank strings (index 0 = the AI recommendation) — violations are a 400. Opening a card ALSO posts one chat message (initiator → owner, body = summary, ``meta.reply_card_id`` = the card id) so the ask rides the normal chat stream (unread red dot, permanent history); the card's ``chat_message_id`` links back to it. AUTO task/step binding: when the initiator is the executor of EXACTLY ONE active task (``in_progress``|``waiting_owner``), the card binds to that task, and to its CURRENT step (the single ``in_progress`` step, else the single ``waiting_owner`` step) when that is unambiguous — the bound step enters ``waiting_owner`` carrying the card (``reply_card_id``), and the task follows into ``waiting_owner`` unless the step sits in a parallel group (sibling lanes may still run). An initiator with NO active task opens a plain unbound 請示. An initiator that IS executing active work but cannot be bound to both levels (2+ active tasks, or no single current step) is REFUSED with 409 and no card is minted — a card bound to a task but to no step places no ``waiting_owner`` hold, so the task would run on to ``done`` underneath an ask the owner can then never answer (T-4166). The explicit exit is ``open_gate`` (POST /api/tasks/{task_id}/steps/{step_id}/gate), which names the step. No request field selects the binding. Fans one ``chat`` and one ``reply_card`` SSE delta (plus a ``task`` delta when a step was bound).
          */
         post: operations["handle_create_reply_card_api_reply_cards_post"];
@@ -2342,7 +2342,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Bounded LIGHT wake snapshot for the caller (what it carries is enumerated in the description, not here).
+         * Bounded LIGHT wake snapshot for the caller (identity-locked; recent chat + light open-task rows + size overview — peek sizes first, pull detail via get_task). CHAT is packed newest-first under a CHARACTER BUDGET, not a fixed message count, and stopping at the last message that still fits; each message carries from_name/to_name beside the ids and ts_display (full date + time + zone offset) beside the epoch ts, and folds in its reply card as `card` when it has one — read every ts_display against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked DIFFERENTLY: `body_omitted_chars` > 0 means THAT message is here with that many characters COLLAPSED away (another agent's line — the owner's line and your own hand-off notes to yourself are carried in full), re-read it with get_chat; `chat_earlier_omitted` is the other kind and it is a MAYBE, not a fact: that line was cut at a read or budget limit and nothing looked past the cut, so whole messages may be missing from this payload entirely — it is raised even when there is in fact nothing older. Its hint tells you how to CHECK and fetch them. The two are asymmetric ON PURPOSE: the collapse marker is CERTAIN (that message IS here, shortened, exact count); this one is not, and only the fetch settles it. Also carries the STUDIO FLOOR you wake up onto: roster (every member and contractor, each with online/offline status, the machine it runs on, and its duty capped at 1000 chars with `…` marking a cut, the cap applied after the doc's own leading title line is removed — who to ask for help; no insight/learning by owner ruling. Contractors additionally carry their bound task's status, waiting_reason, and step progress (progress_done/progress_total) — members leave these at their zero value; a contractor's 0/0 is ambiguous (a task with no steps yet, or no task at all) and task_status is what tells them apart, non-empty vs empty) and machines (the machine list plus you_are_on, your server-recorded machine binding — never derive it from a hostname).
          * @description A BOUNDED, deterministic wake snapshot for the caller (``resume_summary`` MCP
          *     tool, zero params; ``GET /api/resume-summary``).
          *
@@ -2393,7 +2393,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Size-only PEEK of the wake snapshot (overview counts/sizes + estimated_total_chars, NO content).
+         * 回傳 identity-locked resume_summary 的 size estimate/overview（含 chat、task、roster、machine 大小），不含 chat/task 內容；這是 sizing peek，不是 snapshot 本身。
          * @description The size-only PEEK of the wake snapshot (``peek_resume_summary_size`` MCP
          *     tool, zero params; ``GET /api/resume-summary-size``) — step ONE of the two-step
          *     boot.
@@ -2441,7 +2441,7 @@ export interface paths {
         get: operations["handle_list_roles_api_roles_get"];
         put?: never;
         /**
-         * Create a custom role + its founding member (one pair per call).
+         * Create a custom role + its founding member (one pair per call). runtime is claude/codex (absent = claude).
          * @description Create ONE custom role + its ONE founding member (M2-2 角色誌新增;
          *     ``POST /api/roles``). One pair per call — 同角色多成員 / 零成員 is out of
          *     scope by decree. Admin-gated (requires="admin_agent") like every role write.
@@ -2782,13 +2782,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List task types (match by display_name/purpose; address by type_key).
+         * List task types (match by display_name/purpose; address by type_key). WITHOUT view=list this returns the FULL manual of every type — every SOP and every learnings blob in one answer, six figures of characters on a real roster. Pass view=list unless you actually need the text.
          * @description List task manuals (the 設定 › 任務手冊 cards). Answers with the FULL manual of every type by default — every ``sop_md`` and every ``learnings`` blob in one response, which is measured in six figures of characters once a few types are authored. Pass ``view=list`` for the light row instead (T-ec2c) and pull the one manual you need with get_task_manual.
          */
         get: operations["handle_list_task_manuals_api_task_manuals_get"];
         put?: never;
         /**
-         * Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate → 409; assignee = owner/admin agent).
+         * Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate → 409; assignee = owner/admin agent). An outsource assignee may select runtime claude/codex; absent = claude.
          * @description Create one task type (a blank manual). Pass ``display_name``; the server mints the ``tm-`` type_key id and returns it in the DTO. Legacy: an explicit ``type_key`` is still accepted verbatim as the id (duplicate → 409; blank display_name backfills to it). Agent floor: any agent may create a manual; ``assignee`` is GOVERNANCE — a caller below admin_agent supplying it is a 403 (T-6020).
          */
         post: operations["handle_create_task_manual_api_task_manuals_post"];
@@ -2806,13 +2806,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read one task manual (purpose/fields/SOP/learnings/assignee).
+         * Read one task manual (purpose/fields/SOP/learnings/assignee). The SOP and the learnings are judged by two SEPARATE caps: read sop_md_cap_chars and learnings_cap_chars. The older cap_chars is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read sop_md_cap_chars for the SOP.
          * @description Read one manual in full (purpose / fields / SOP / learnings / assignee) — the intake's type-judgement AND the planner's blueprint read. Unknown type → 404. The SOP and the learnings are judged by two SEPARATE caps, reported as ``sop_md_cap_chars`` and ``learnings_cap_chars``; the older ``cap_chars`` is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read ``sop_md_cap_chars`` for the SOP.
          */
         get: operations["handle_get_task_manual_api_task_manuals__type_key__get"];
         put?: never;
         /**
-         * Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent).
+         * Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent). An outsource assignee may select runtime claude/codex; absent = claude. Only the fields you name change, so omitting a field is safe — but unknown keys are rejected rather than dropped: the learnings doc goes in learnings (NOT text — that is write_task_learnings' field name). The SOP and the learnings are judged by two SEPARATE caps: read sop_md_cap_chars and learnings_cap_chars. The older cap_chars is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read sop_md_cap_chars for the SOP.
          * @description Partial manual edit — only supplied fields change. Agent floor: content fields (purpose / fields / sop_md / learnings) are agent-editable; ``assignee`` is GOVERNANCE — a caller below admin_agent supplying it is a 403 (T-6020). ``assignee`` is {"kind":"member","member_id":…} or {"kind":"outsource","model":…,"effort":…,"copies":N}; {} unsets it. Unknown keys are REJECTED (422) rather than silently dropped: this endpoint writes the same learnings document as ``write_task_learnings``, which spells the field ``text`` instead of ``learnings`` — sending the wrong name used to answer 200 having written nothing (T-2d99). Omitting a field remains legal; only unrecognised names are refused. The SOP and the learnings are judged by two SEPARATE caps, reported as ``sop_md_cap_chars`` and ``learnings_cap_chars``; the older ``cap_chars`` is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read ``sop_md_cap_chars`` for the SOP.
          */
         post: operations["handle_update_task_manual_api_task_manuals__type_key__post"];
@@ -2836,7 +2836,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Whole-doc replace of a type's learnings (task-close write-back).
+         * Whole-doc replace of a type's learnings (task-close write-back). The doc text goes in text (NOT learnings — that is update_task_manual's field name); text is REQUIRED and unknown keys are rejected. Wiping existing learnings needs allow_shrink=true.
          * @description Whole-doc replace of a type's learnings (MCP ``write_task_learnings`` — the agent's task-close write-back; the replace_lessons shape). Unknown type → 404.
          */
         post: operations["handle_write_task_learnings_api_task_manuals__type_key__learnings_post"];
@@ -2856,7 +2856,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Patch a type's learnings by unique anchors ({edits:[{old,new}]}).
+         * Patch a type's learnings by unique anchors ({edits:[{old,new}]}) — the learnings twin of patch_lessons, so the write cost scales with the CHANGE, not the whole (30k-char) doc, and re-typing the whole doc can no longer silently drop content. Edits apply in order; a non-empty old must match the current learnings EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400, zero writes — the unique anchor also acts as an optimistic lock); an empty old appends. Wiping the doc, or shrinking it below a tenth, needs allow_shrink=true.
          * @description Anchor-addressed PATCH of a type's learnings (MCP ``patch_task_learnings`` — the learnings twin of ``patch_lessons``). The write cost scales with the CHANGE, not the doc: a whole-doc ``write_task_learnings`` stops fitting in one model output as the learnings grow (30k chars observed, and re-typing the whole doc silently risks transcription loss), so this is the primary write seam and whole-doc replace stays the last resort.
          *
          *     Semantics: ``edits`` apply IN ORDER against the manual's current learnings; each non-empty ``old`` must match the current text exactly once (0 hits or >1 hits → flat 400, WHOLE batch rejected, zero writes); an empty ``old`` appends ``new`` at the end. Concurrency is last-write-wins with the unique anchor as a natural optimistic lock: a concurrent write that moved the anchor turns the next patch into a 400, never a silent mis-splice. A patch that empties the doc (or shrinks it below a tenth of its size) is refused unless ``allow_shrink=true`` — the r-76 wipe-guard posture. Unknown type → 404.
@@ -2878,13 +2878,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List tasks (?executor=&type=&status=; light list items — get_task for full).
+         * List tasks (?executor=&type=&status=, or statuses=[…] for a SET of states — every filter given is ANDed; LIGHT list items — id/task_no/title/type_key/status/priority/executor/creator_id/progress/timestamps/deps + dep_tasks, WITHOUT steps/description/inputs). Ask for the states you actually want (`statuses: ["not_started", "in_progress"]`) instead of listing everything and filtering yourself — the whole history is a large answer. `statuses` also accepts "reassigning", which matches the handover LOCK rather than the status column. `dep_tasks` already carries each blocker's task_no/title/status, so a blocked task needs no follow-up get_task just to name what it is waiting for. Call get_task for a task's full detail (steps, description, inputs).
          * @description List tasks (LIGHT ``TaskListItemDTO`` projection — the fields the 任務清單 card renders collapsed; ``steps``/``description``/``inputs`` are NOT included, fetch the full task with ``GET /api/tasks/{task_id}``). ``progress_done``/``progress_total`` are still counted. Optional exact-match filters: ``?executor=`` (an executor id, or the special values ``outsource`` / ``unassigned``), ``?type=`` (a type_key), ``?status=`` (the six-state closed set; anything else is a 400). ``?statuses=`` (repeatable, T-a3e4) is the SET form the cockpit's 狀態 dropdown speaks — see its own description. Every filter present is ANDed. Partitioning (未結束/已結束) and priority ordering are the FE's.
          */
         get: operations["handle_list_tasks_api_tasks_get"];
         put?: never;
         /**
-         * Create a task (dedupes on the manual's key; ad-hoc when type_key omitted).
+         * Create a task (dedupes on the manual's key; ad-hoc when type_key omitted). Pass target.kind=outsource to drop the task as an unassigned outsource task (發包); target.runtime is claude/codex (absent = claude). The existing outsource scheduler then spawns workers against the global concurrency cap (outsourceParallelCap) — below the cap it starts immediately, at the cap it queues for capacity and is picked up automatically when a slot frees. No owner-approval card and no per-task approval; the owner may reassign a still-queued task at any time. Caller authorization (正職授權矩陣, T-23cf): an outsource worker may never create a task; a 發包 create is open to any 正職 (owner/admin included); a typed task the manual assigns to member X may be created only by X (owner/admin NOT exempt); an ad-hoc task with a member executor may name only the caller itself unless the caller is owner/admin (a 一般正職 may self-execute or 發包, never assign another member).
          * @description Create one task (agent-side; MCP ``create_task``). With ``type_key`` the server derives the dedupe key from the manual's is_key fields over ``inputs`` and resolves the executor from the manual's assignee (member → bound directly; outsource → unassigned, awaiting the scheduler); an unset manual assignee requires an explicit ``executor_member_id``. Without ``type_key`` (ad-hoc 自由代辦) ``executor_member_id`` is mandatory. A dedupe hit on a NON-terminal task answers 200 with the EXISTING task and ``deduped: true`` — dedupe is the normal path, never an error. Caller authorization (正職授權矩陣, T-23cf): an outsource worker (kind=outsource) may NEVER create a task (403); a 發包 create (``target.kind=outsource`` or a manual outsource assignee) is open to any 正職, owner/admin included; a typed task the manual assigns to a member X may be created ONLY by X — owner/admin are NOT exempt (403 otherwise); an ad-hoc (or manual-assignee-less) task with a member executor may name only the caller itself, unless the caller is the owner or an admin agent — a 一般正職 pointing ``executor_member_id`` at another member is 403 (self, or a 發包, only). The authz gate precedes dedupe, so an unauthorized caller never receives the existing twin.
          */
         post: operations["handle_create_task_api_tasks_post"];
@@ -2943,7 +2943,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Register a deliverable onto the task's artifact set (MCP ``add_task_artifact``; requires the executing agent — caller must be the task's executor, admin capability excepted). Append-only and repeatable: each call pins one more artifact. FILE/IMAGE artifacts reference a chat_attachment blob already uploaded via ``POST /api/chat/attachments`` (``kind=file|image`` + ``attachment_id``); LINK artifacts carry a bare URL (``kind=link`` + ``url``), no upload needed. Returns a BOUNDED receipt (``TaskArtifactReceiptDTO``: the new artifact's id plus the resulting count) — not the task, which used to ride back whole on a one-line pin; pull GET /api/tasks/{task_id} for the artifact list. Guards: 404 unknown task; 409 terminal task (a closed task's deliverables are frozen); 400 an invalid kind, a missing/blank ``attachment_id`` for file/image, a missing/blank ``url`` for link, or an ``attachment_id`` that resolves to no stored blob. */
+        /**
+         * Register a deliverable (file, image, or link) onto the task's artifact set — the pinned deliverables shown on the task card. Append-only and repeatable: call it again to pin more. For a file or image, first upload the bytes via the chat-attachments upload to get an attachment id, then call this with kind=file|image and that attachment_id. For a link (e.g. a PR url) call it with kind=link and url — no upload needed. label is an optional display name (a link title such as "PR #123"). Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.
+         * @description Register a deliverable onto the task's artifact set (MCP ``add_task_artifact``; requires the executing agent — caller must be the task's executor, admin capability excepted). Append-only and repeatable: each call pins one more artifact. FILE/IMAGE artifacts reference a chat_attachment blob already uploaded via ``POST /api/chat/attachments`` (``kind=file|image`` + ``attachment_id``); LINK artifacts carry a bare URL (``kind=link`` + ``url``), no upload needed. Returns a BOUNDED receipt (``TaskArtifactReceiptDTO``: the new artifact's id plus the resulting count) — not the task, which used to ride back whole on a one-line pin; pull GET /api/tasks/{task_id} for the artifact list. Guards: 404 unknown task; 409 terminal task (a closed task's deliverables are frozen); 400 an invalid kind, a missing/blank ``attachment_id`` for file/image, a missing/blank ``url`` for link, or an ``attachment_id`` that resolves to no stored blob.
+         */
         post: operations["handle_add_task_artifact_api_tasks__task_id__artifact_post"];
         delete?: never;
         options?: never;
@@ -2961,7 +2964,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** @description Un-pin one artifact from a task's set (MCP ``remove_task_artifact``). SAME permission model as add (owner ruling 2026-07-18 — the executing agent removes its OWN task's deliverables): requires the executing agent — caller must be the task's executor, admin capability (owner/admin agent) excepted. Returns a BOUNDED receipt (``TaskArtifactReceiptDTO``: the removed artifact's id plus the resulting count) — not the task; pull GET /api/tasks/{task_id} for the artifact list. The referenced chat_attachment blob is left intact (it may be shared with a chat message). SYMMETRIC with add (owner ruling 2026-07-25): a closed task's deliverable set is frozen in BOTH directions — an add-only freeze made un-pin an unrecoverable loss, since the deliverable could be taken off a closed card and never put back. Like add's, the freeze sits AFTER the permission check, so admin/owner are not exempt. Guards: 404 unknown task → 403 not the executor → 409 terminal task (a closed task's deliverables are frozen) → 404 unknown artifact → 400 the artifact belongs to a different task. */
+        /**
+         * Un-pin (remove) one artifact from a task's artifact set — the counterpart to add_task_artifact. You may remove artifacts from a task you are the executor of (the owner/assistant may remove on any task). Give the task id and the artifact id (the id returned when it was added, or from get_task's artifacts). The underlying file blob is left intact; only the pin on the card is removed. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in both directions — remove is refused with the same 409 as add. So swap a deliverable BEFORE you close the task, not after; after the close it can neither be removed nor put back. Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.
+         * @description Un-pin one artifact from a task's set (MCP ``remove_task_artifact``). SAME permission model as add (owner ruling 2026-07-18 — the executing agent removes its OWN task's deliverables): requires the executing agent — caller must be the task's executor, admin capability (owner/admin agent) excepted. Returns a BOUNDED receipt (``TaskArtifactReceiptDTO``: the removed artifact's id plus the resulting count) — not the task; pull GET /api/tasks/{task_id} for the artifact list. The referenced chat_attachment blob is left intact (it may be shared with a chat message). SYMMETRIC with add (owner ruling 2026-07-25): a closed task's deliverable set is frozen in BOTH directions — an add-only freeze made un-pin an unrecoverable loss, since the deliverable could be taken off a closed card and never put back. Like add's, the freeze sits AFTER the permission check, so admin/owner are not exempt. Guards: 404 unknown task → 403 not the executor → 409 terminal task (a closed task's deliverables are frozen) → 404 unknown artifact → 400 the artifact belongs to a different task.
+         */
         delete: operations["handle_remove_task_artifact_api_tasks__task_id__artifact__artifact_id__delete"];
         options?: never;
         head?: never;
@@ -2978,7 +2984,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Take over a reassigned task (the new executor claims it -- clears the reassigning lock).
+         * Take over a reassigned task (the new executor claims it): clears the reassigning lock and fires the predecessor worker. The task status stays derived from its steps; only the lock is cleared. 409 if the task is not under the reassigning lock.
          * @description The NEW executor takes over a reassigned task (MCP ``claim_task``; T-9ca5). Clears the ``reassigning`` lock (task.lock -> empty) and fires the predecessor outsource worker -- ``reassigning`` is the handover LOCK on the task (task.lock), not a status. The task status is DERIVED from its steps and is never set here. Executor-guarded: only the task's current executor (the successor the reassign re-pointed to) may claim; owner/admin may drive any task. Guards: 404 unknown task; 403 caller is not the executor; 409 the task is not under the reassigning lock (nothing to claim).
          */
         post: operations["handle_claim_task_api_tasks__task_id__claim_post"];
@@ -3038,7 +3044,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Correct a task's description (executor/admin; closed tasks included).
+         * Correct THIS task's description — the ticket's own text (what the task IS: scope, origin, acceptance). T-e271: until this tool existed there was NO way to change a description after creation — create_task takes one only at birth, submit_plan writes steps, update_task_manual writes the TYPE's manual — so a decision to reword a card had nowhere to land. WHO: the task's own executor, or an admin/owner; anyone else is a flat 403. Creating a task grants NO standing to keep rewriting it — if you handed the task over, it is the new executor's text now. PARTIAL like update_task_manual: omitting `description` changes nothing (a safe no-op), while an explicit "" CLEARS it — absent and empty are different on purpose; unknown keys are refused rather than dropped. The write is wholesale within that field: the value replaces whatever was there, so send the full corrected text, not a fragment. ⚠️ Division of labour with update_step_note: the DESCRIPTION says what this task IS (stable); the step NOTE says where a step is RIGHT NOW (volatile, handover-facing) — do not put progress here. A CLOSED task (completed / terminated / duplicated) is STILL editable, on the same terms — unlike its artifact set, which freezes at close. The reason they differ: artifacts are the record of what the task PRODUCED and must stop moving, while a ticket worded wrongly is usually found to be wrong after it closed, and freezing the text would preserve a known falsehood in the permanent record. Every change that actually alters the text retains the previous one as a document version (kind `task_description`, key = the task id) — list it with list_document_history, so a correction is recoverable and the older wording is never simply gone.
          * @description Correct one task's description in place (MCP ``update_task_description``, T-e271). Admitted for the task's EXECUTOR or an admin/owner — the same ``callerMayDriveTask`` gate every other task-driving write uses, 403 otherwise; the CREATOR has no standing here unless it is also the executor (owner ruling, T-e271). Partial update in ``update_task_manual``'s shape: only the field you name changes, so a body that omits ``description`` is a legal no-op that versions nothing, and unknown keys are refused rather than dropped. DELIBERATELY accepted while the task is CLOSED (completed / terminated / duplicated), which is where this route parts company with the artifact set: a closed task's DELIVERABLES are its outcome and are frozen in both directions so the outcome cannot be restated, whereas the description is the ticket's own TEXT — a ticket worded wrongly stays wrong forever if it can only be corrected while open, and correcting it changes nothing about what was produced. Every write that actually changes the text retains the previous one in the SHARED document-history series (kind ``task_description``, key = the task id) that global context / role definitions / task manuals already use — one mechanism, not a second audit trail — so the newest three revisions stay listable and restorable. 404 for an unknown task.
          */
         post: operations["handle_update_task_description_api_tasks__task_id__description_post"];
@@ -3058,7 +3064,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Mark a task duplicated, pointing at the original (executor/owner; terminal).
+         * 將尚未終結的 task 標為 duplicated，指向已存在的 final original（executor/owner 可操作）；空白、找不到 original、自指、chained 或已被指向的 target 會被拒絕，跨 executor 關閉時建立 handoff_follow_up，但不新增 dependency。
          * @description Mark a task duplicated (MCP ``mark_duplicate``), pointing at the ORIGINAL it duplicates so the finder can close it without troubling the owner to terminate each one. The caller must be the task's executor (owner/admin may act on any task). ``duplicated`` becomes a terminal status alongside done/terminated (closed_ts stamps, bound outsource workers release), but this dedicated action is NOT the agent status-report path. Validation: the task must be non-terminal (409 otherwise); ``duplicate_of`` is required (422) and must name an EXISTING task (404) that is not this one (409 self-reference) and is not itself already ``duplicated`` (409 — point at the FINAL original; the server never chases a chain); a task already pointed at as an original cannot itself be marked duplicated (409). Unlike done/terminated, a duplicated close does NOT nudge the learnings write-back (a duplicate has no lessons to fold back).
          */
         post: operations["handle_mark_task_duplicate_api_tasks__task_id__duplicate_post"];
@@ -3098,7 +3104,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Submit/replace the workflow plan (done and answered-card steps are kept).
+         * Submit/replace the workflow plan (done and answered-card steps are kept). T-74f8 交棒閘 (second door): a plan is a step-set write and the task status is DERIVED from the step set, so a plan that leaves EVERY step done CLOSES the task — the same irreversible close the final step report performs. If that task's creator is not its executor and no handover is declared or already real, the replan is refused with 422 BEFORE anything is written (the plan stays fully editable). A plan carries no handoff field, so the way out is to hand over first: create the successor task and point its ``blocked_by`` at this task (the gate then stands aside by itself), or keep one unfinished step and declare the handover on the ``update_step_status`` report that closes it. A replan that still leaves work in the plan is never gated. Answers with a bounded receipt (task_id, steps_total, progress_done, progress_total), not the plan you just sent — use get_task to read the stored step rows back.
          * @description Submit/replace the workflow plan (MCP ``submit_plan``): replaces every non-preserved step wholesale. Kept ahead of the fresh plan, in original order: done steps, already-superseded history, and steps whose latest bound reply card is answered/expired — those freeze into the ``superseded`` terminal state (T-1aea) unless the fresh plan re-lists them by name (then the live row continues — no copy). Steps holding a still-waiting card are replaced like any other. New steps open ``pending``. Returns a BOUNDED receipt (``TaskPlanReceiptDTO``: stored step count plus leaf progress) — not the task, and not an echo of the plan the caller just sent; pull GET /api/tasks/{task_id} for the step rows. Closed tasks are a 409; the caller must be the task's executor (admin/owner capability excepted) — 403 otherwise.
          */
         post: operations["handle_submit_task_plan_api_tasks__task_id__plan_post"];
@@ -3118,7 +3124,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Set a task's priority (owner/admin agent any value; the executor any value on their own task — frozen included, T-6020).
+         * Set a task's priority (owner/admin agent any value on any task; the task's own executor any value on their task — frozen INCLUDED, and whoever may freeze may unfreeze, T-6020). The actor who sets frozen is recorded on the task as frozen_by and the field clears when the task leaves frozen. Anyone else is a flat 403. Answers with a bounded receipt (task_id, priority, frozen_by), not the whole task — use get_task when you need the rest.
          * @description Priority change: ``high`` | ``mid`` | ``low`` | ``frozen`` (freeze/unfreeze ride the same knob — SPEC §3.3). The owner and an admin agent may set any value on any task; the task's own executor may set any value on their task — including ``frozen`` and the clear of a frozen task, symmetrically (T-6020, owner ruling 2026-07-26). Anyone else is a flat 403. Whoever sets ``frozen`` is recorded on the task as ``frozen_by`` and the field is cleared when the task leaves frozen. Returns a BOUNDED receipt (``TaskPriorityReceiptDTO``: task id, the stored priority and ``frozen_by``) — not the task; pull GET /api/tasks/{task_id} for full detail. Closed tasks are a 409.
          */
         post: operations["handle_set_task_priority_api_tasks__task_id__priority_post"];
@@ -3138,7 +3144,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Reassign a task to a member or a fresh outsource worker (the task's executor or an admin; an outsource target lands the task unassigned for the scheduler to spawn under the global parallel cap; enters the reassigning handover state).
+         * Reassign a task to a member or a fresh outsource worker (executor-guarded: a plain agent may reassign only a task it executes; owner/admin drive any task). Caller authorization (正職授權矩陣, T-23cf): owner/admin may hand a task to any active member or 發包 it to a fresh outsource worker; a 一般正職 may only turn its own task into a 發包 (a member target is 403); an outsource worker may not reassign at all. An outsource target uses target.runtime claude/codex (absent = claude), lands the task unassigned for the scheduler to spawn under the global parallel cap, and enters the reassigning handover state.
          * @description Reassign a task to a NEW executor (MCP ``reassign_task``). The route floor is ``agent`` and the handler is executor-guarded: a plain agent may reassign only a task it EXECUTES; the owner and an admin agent (Mira) may drive any task. Caller authorization (正職授權矩陣, T-23cf): the owner/admin may hand a task to any active member OR 發包 it to a fresh outsource worker; a 一般正職 may only turn its OWN task into a 發包 (``target.kind=outsource``) — a member target is 403; an outsource worker (kind=outsource) may not reassign at all (403, even its own task). Hand the task to a NEW executor — a roster member (``target.kind='member'`` + ``member_id``) or a FRESH outsource worker minted on the spot (``target.kind='outsource'`` with ``model``/``effort``/``machine``). Effects: every WAITING reply card of the task expires (the ask was the old executor's — expired settles it, so a later replan freezes the step as history), non-terminal steps fall back to ``pending`` (done/superseded rows stay untouched), a previously bound outsource worker is dismissed (released + session reclaimed), and the task takes the ``reassigning`` LOCK (``task.lock``, orthogonal to its derived status) — the NEW executor reads the task + the handover notes and CLAIMS it (POST /api/tasks/{task_id}/claim) to clear the lock and take over. The server posts a handover chat message to each member side (``note`` rides the new executor's message; a new worker gets the task through its boot context instead). Identity never changes: type/inputs/dedupe_key/task id/deps stay. Guards: 404 unknown task; 409 terminal task or target == the current executor; 400 an invalid target (unknown/inactive member, a warden, ``member_id`` missing for kind=member). A FROZEN task IS reassignable (owner ruling 2026-08-11, T-b9f6): freezing means "do not advance this", and a reassign only ARRANGES who takes over. The two arms differ and the difference is deliberate: an OUTSOURCE target wakes nobody by construction (the scheduler skips frozen wholesale, so no worker is minted until someone unfreezes it), while a MEMBER successor is not gated anywhere in the server — so the handover notice it receives SAYS the task is paused and that claiming it is not permission to start work (owner ruling on card rc-4a166be12a29: say so, do not add a refusal).
          */
         post: operations["handle_reassign_task_api_tasks__task_id__reassign_post"];
@@ -3158,7 +3164,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Arm a gate step: opens the reply card the owner must answer.
+         * Arm a gate step: opens the reply card the owner must answer. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).
          * @description Arm a gate step (MCP ``open_gate`` — an entry into waiting_owner): opens a reply card through the M2 create machinery (same validation, same companion chat message), binds it to the step (step → waiting_owner, reply_card_id set) and flips the task to waiting_owner (a step inside a parallel group holds only its lane). Any non-terminal step is armable — a plain non-gate step too (the ad-hoc 請示 twin of create_reply_card; is_gate is a plan property and is not rewritten). The owner answers through the EXISTING reply-card answer route, where the server restores the step/task to in_progress; it still never advances the work forward (the agent reports done itself). An already-terminal step (``done`` / ``superseded`` — frozen replan history) → 409; a task that is neither in_progress nor waiting_owner → 409.
          */
         post: operations["handle_open_task_gate_api_tasks__task_id__steps__step_id__gate_post"];
@@ -3178,7 +3184,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Write a step's working note (any status; wholesale replace).
+         * Write this step's working note: where the work stands and what comes next — the field the handover SOP means by 「把還在進行中的工作寫回 task step note」. WHAT TO WRITE — three things, then stop: (1) STATE — one sentence on where this step actually got to; (2) NEXT — one sentence on what whoever takes over does next; (3) EVIDENCE POINTERS — version ids, file and log paths, what you verified YOURSELF versus what you are taking on someone's word, and the limits of what was NOT done. Long narrative does not live here: reasoning and scope belong in the task description, reports and diffs belong on the task as artifacts. The note is the current state — not a report, not an append-only log. Writable in ANY step status (pending, in_progress, waiting_owner, waiting_external, done, superseded), unlike `waiting_reason`, which is locked to waiting_external. Wholesale write: `note` replaces whatever was there and "" clears it, so rewrite it as the work moves rather than appending; over 4,000 characters (counted in runes) is refused. Same executor/admin gate as every other task-driving write (403 otherwise). ⚠️ A task auto-closes when its last step is reported done and a closed task 409s — so write the note BEFORE the report that finishes the last step, not after.
          * @description Write one step's working note (MCP ``update_step_note``, T-cc3e): what this step got to and what comes next. WHAT TO WRITE — three things, then stop: (1) STATE — one sentence on where this step actually got to; (2) NEXT — one sentence on what whoever takes over does next; (3) EVIDENCE POINTERS — version ids, file and log paths, what you verified YOURSELF versus what you are taking on someone's word, and the limits of what was NOT done. Long narrative does not live here: reasoning and scope belong in the task description, reports and diffs belong on the task as artifacts. The note is the current state — not a report, not an append-only log. Accepted in ANY STEP status — the note records where the work stands, which is orthogonal to the step state machine. Same executor/admin gate as every other task-driving write (403 otherwise), 404 for an unknown task, a step that does not belong to it, or a step a concurrent replan deleted; 400 when the note is over the 4,000-character limit (counted in runes); and 409 once the TASK is terminal — a task auto-closes when its last step is reported done, so a done step is writable while its task is still open and not after (a closed task's timeline is history, consistent with the frozen artifact set). The write also moves the task's updated_ts, which is what makes an already-open cockpit card re-read its steps. The write is wholesale: the body's ``note`` replaces whatever was there, and ``""`` clears it. Its own endpoint and its own MCP tool by charter §14 (intent-per-tool) — writing a note is a different intent from reporting a transition.
          */
         post: operations["handle_update_task_step_note_api_tasks__task_id__steps__step_id__note_post"];
@@ -3198,7 +3204,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Report a step status (pending/in_progress/done).
+         * Report a step status (pending/in_progress/waiting_external/done). Entering waiting_external requires a non-blank waiting_reason (422 otherwise); the task status is derived from its steps. T-74f8 交棒閘: if this report would CLOSE the task (every step done) AND the task's creator is not its executor, the call is REFUSED with 422 unless you say where the ball goes IN THIS SAME CALL — handoff='return_to_creator' (the server opens a durable follow-up task on the creator), handoff='follow_up' + handoff_task_id=<a successor task you already created> (the server hangs this task off it as a dependency, and closing this one releases it), or handoff='none' + handoff_note=<why nothing follows>. The gate stands aside by itself when a non-terminal task already depends on this one — you never see it if the handover is already real. It refuses BEFORE writing anything, so a refused report leaves the plan fully editable: create the successor task, then re-send this same report with the declaration. This is your LAST chance — once the task closes it can never be replanned (submit_plan becomes a permanent 409).
          * @description Agent-reported step status (MCP ``update_step_status``): ``pending`` → ``in_progress`` → ``done`` — ``waiting_owner`` is NOT agent-reportable on either side (a step enters it only by opening a reply card: open_gate / create_reply_card auto-bind, and leaves it only when that card is answered, where the server restores in_progress), so reporting ``waiting_owner`` is a 400 and a move out of it is a 409; other illegal transitions are a 409. ``superseded`` is likewise not the agent's lever: the server freezes a replaced answered-card step itself on submit_plan (T-1aea), so reporting ``superseded`` is a 400 and no report moves a step out of it (409 — terminal).
          */
         post: operations["handle_update_task_step_status_api_tasks__task_id__steps__step_id__status_post"];
@@ -3238,7 +3244,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Correct a task's title (executor/admin; closed tasks included).
+         * Correct THIS task's title — the one line the task list shows. T-2ebe: until this tool existed a title could never be changed after creation, so a card whose scope was later overturned kept advertising its first wording forever — the description could correct itself, the title could not, and whoever scanned the list saw only the stale half. If you have just corrected a description because the scope moved, ask whether the title still says the same thing. WHO: the task's own executor, or an admin/owner; anyone else is a flat 403. Creating a task grants NO standing to keep rewriting it — if you handed the task over, it is the new executor's title now. PARTIAL like update_task_description: omitting `title` changes nothing (a safe no-op); unknown keys are refused rather than dropped. ⚠️ ONE DIFFERENCE FROM ITS DESCRIPTION TWIN: a blank title ("" or only whitespace) is REFUSED with 400, it does NOT clear the field — create_task refuses a blank title too, and a task with no title is a blank row on the list. Surrounding whitespace is trimmed. The write is wholesale within that field: send the full corrected title, not a fragment. A CLOSED task (completed / terminated / duplicated) is STILL editable, on the same terms — a ticket is usually found to be worded wrongly after it closed, and freezing the text would preserve a known falsehood; its artifact set is the opposite and freezes at close. Every change that actually alters the text retains the previous one as a document version (kind `task_title`, key = the task id) — list it with list_document_history, so a correction is recoverable.
          * @description Correct one task's title in place (MCP ``update_task_title``, T-2ebe). The title is the ONLY cell of a task that the task list shows, so before this row existed a card whose scope was later overturned went on advertising its first wording forever: the description could correct itself, the title could not, and the two drifted apart until the card said one thing on the list and the opposite inside. Admitted for the task's EXECUTOR or an admin/owner — the same ``callerMayDriveTask`` gate every other task-driving write uses, 403 otherwise; the CREATOR gets no standing from having created it, exactly as on the description twin. Partial update: a body that omits ``title`` is a legal no-op that versions nothing, and unknown keys are refused rather than dropped. An explicit BLANK (``""`` or whitespace-only) is a 400, NOT a clear — this is the one place this route parts company with the description twin, because ``create_task`` refuses a blank title too and an edit door looser than the create door would let a caller reach a list row with nothing in it. The stored value is trimmed, matching create. DELIBERATELY accepted while the task is CLOSED (completed / terminated / duplicated), for the reason the description twin states at length: a ticket worded wrongly is usually discovered to be wrong after it closed, and correcting its text changes nothing about what it produced — the artifact set, which IS the outcome, stays frozen in both directions. Every write that actually changes the text retains the previous one in the SHARED document-history series (kind ``task_title``, key = the task id), so the newest three revisions stay listable and restorable. 404 for an unknown task.
          */
         post: operations["handle_update_task_title_api_tasks__task_id__title_post"];
@@ -3313,7 +3319,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Build identity: version + git sha + MCP catalog hash.
+         * 讀取目前執行中的 build identity：version、git sha、git time 與 MCP catalog hash，並附上快取的更新狀態；確認是否已部署應以 git sha ancestry 判斷，不以 version 字串判斷。
          * @description Report version, git sha/time, and the derived MCP catalog hash.
          *
          *     `update_available` / `latest_version` reflect the newest admissible GitHub
