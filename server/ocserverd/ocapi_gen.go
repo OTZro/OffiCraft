@@ -3338,10 +3338,22 @@ type ServerInterface interface {
 	// Read one product-guide doc in full (markdown; unknown slug → 404).
 	// (GET /api/docs/{slug})
 	HandleGetDocApiDocsSlugGet(w http.ResponseWriter, r *http.Request, slug string)
-	// 讀取一份 editable document 保留的最新 3 筆歷史（支援 global_context、role_definition、lessons、insight、task_manual_sop/learnings、task_description/title）；此 endpoint 只讀、不提供 restore，退休的 `task_manual` kind 會以 400 指向兩個替代 series。
+	// READ the retained versions of one editable document: what each version held, when it was replaced and by whom. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.
+	//
+	// WHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.
+	//
+	// ADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.
+	//
+	// COVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.
 	// (GET /api/document-history/{kind}/{key})
 	HandleListDocumentHistoryApiDocumentHistoryKindKeyGet(w http.ResponseWriter, r *http.Request, kind string, key string)
-	// 讀取 global_context、seeded role_definition 或 seeded per-role insight 的 shipped default；唯讀，沒有對應 seed 時回 404（包括 task manual 與 per-role lessons），回傳 kind/key/content，且此 tool 不提供 restore。
+	// READ the SHIPPED DEFAULT of one editable document — the text a reset would put back, i.e. the 初始版本 entry of that document's version list. Read-only: this tool writes nothing, so reading the default can never replace the live document. Putting the default BACK is deliberately not an agent tool — the owner does that from the cockpit — exactly as with list_document_history. “content“ carries the SAME field names a retained version carries, so the same reader can compare a default against the live document.
+	//
+	// WHICH DOCUMENTS THIS COVERS IS DELIBERATELY NOT LISTED HERE. A list of kinds written into a description goes stale the moment a new editable document ships and NOTHING turns red when it does — this one had gone wrong about three kinds before the list was taken out. Two rules you can actually execute replace it.
+	//
+	// ADDRESSING: “kind“ and “key“ name a document exactly as they do for list_document_history — the same server-side gate answers both routes, so whatever that tool addresses is addressable here, and a “kind“ this server does not know is refused with 400 while a “key“ that names no document of that kind is refused with 404 that names it. Neither is something to guess at: ask and read the answer.
+	//
+	// COVERAGE: whether THAT document ships a default is answered by asking for it. 200 means it does, and “content“ is that text. 404 means it has none at all — a role the owner created, a task manual, per-role lessons — which is the same set whose reset the server also 404s, so it is the honest 'there is nothing to go back to', not a gap to work around. 400 on a retired kind names the series that replaced it.
 	// (GET /api/document-history/{kind}/{key}/seed)
 	HandleGetDocumentSeedApiDocumentHistoryKindKeySeedGet(w http.ResponseWriter, r *http.Request, kind string, key string)
 	// Restore a retained document version as a new write.
@@ -3377,7 +3389,7 @@ type ServerInterface interface {
 	// Read a per-role lessons doc (per role_key; overlay ⊕ seed).
 	// (GET /api/lessons/{role_key}/{task_type})
 	HandleGetLessonsApiLessonsRoleKeyTaskTypeGet(w http.ResponseWriter, r *http.Request, roleKey string, taskType string)
-	// 整份替換 per-role lessons 文件；`text` 必填且 unknown keys 拒絕，只有該 role 的 agent/admin 可寫，清空或大幅縮減須 `allow_shrink=true`，結果仍受 lessons cap 限制。
+	// Replace the WHOLE per-role lessons document. text is REQUIRED and unknown keys are rejected; only that role's agent or an admin may write it; emptying or sharply shrinking it needs allow_shrink=true; and the result is still judged against the lessons cap.
 	// (POST /api/lessons/{role_key}/{task_type})
 	HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.ResponseWriter, r *http.Request, roleKey string, taskType string)
 	// Patch a per-role lessons doc by unique anchors ({edits:[{old,new}]}).
@@ -3419,10 +3431,10 @@ type ServerInterface interface {
 	// MCP JSON-RPC transport (tools/list + tools/call over the routes).
 	// (POST /api/mcp)
 	HandleMcpApiMcpPost(w http.ResponseWriter, r *http.Request)
-	// 列出所有未移除的成員，預設包含 outsource 成員；回傳 presence-derived MemberDTO[]，`fields=light` 則回傳保留 kind 的 identity-only projection。
+	// List every member that has not been removed, including outsource members by default (presence-derived MemberDTO[]). fields=light returns an identity-only projection that preserves kind.
 	// (GET /api/members)
 	HandleListMembersApiMembersGet(w http.ResponseWriter, r *http.Request, params HandleListMembersApiMembersGetParams)
-	// 雇用成員（id 由 server 產生）；runtime 預設為 claude 且只接受 claude/codex，effort 預設為 medium 且須通過驗證，指定 kind 或 role_key 的雇用受 admin 權限保護。
+	// Hire a member (server mints the id). runtime defaults to claude and only claude/codex are accepted; effort defaults to medium and is validated; a hire that names kind or role_key is admin-gated.
 	// (POST /api/members)
 	HandleHireMemberApiMembersPost(w http.ResponseWriter, r *http.Request)
 	// Dismiss a member (soft delete). Pure seam, no UI (§9.1).
@@ -3431,7 +3443,7 @@ type ServerInterface interface {
 	// Read one roster member (removed → 404).
 	// (GET /api/members/{member_id})
 	HandleGetMemberApiMembersMemberIdGet(w http.ResponseWriter, r *http.Request, memberId string)
-	// 部分更新成員的 name/runtime/model/effort；空 name、無效 runtime 或無效 effort 回 422，且變更 launch-intent 欄位時會啟動 graceful handover。
+	// Partially update a member's name / runtime / model / effort. Blank name, invalid runtime or invalid effort → 422, and changing a launch-intent field arms a graceful handover.
 	// (PATCH /api/members/{member_id})
 	HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWriter, r *http.Request, memberId string)
 	// Activate: write desired_state=online intent (does NOT flip online).
@@ -3530,7 +3542,7 @@ type ServerInterface interface {
 	// Check GitHub Releases for a newer official OffiCraft version.
 	// (GET /api/release/check)
 	HandleCheckReleaseApiReleaseCheckGet(w http.ResponseWriter, r *http.Request)
-	// 列出 light reply-card rows（summary 與 decision digest，不含完整 body/options）；`status` 可為 waiting（預設，最久等待優先）、answered（近 24 小時）或 expired（近 24 小時），positive limit 在各 pane 排序後套用；要讀單一卡片全文請用 get_reply_card。
+	// List light reply-card rows (summary and decision digest, without the full body/options). status is waiting (the default, longest-waiting first), answered (the last 24 hours) or expired (the last 24 hours); a positive limit is applied after each pane is ordered. Read one card in full with get_reply_card.
 	// (GET /api/reply-cards)
 	HandleListReplyCardsApiReplyCardsGet(w http.ResponseWriter, r *http.Request, params HandleListReplyCardsApiReplyCardsGetParams)
 	// Open a reply card: an ask the owner must answer (options ≤4, [0]=AI pick). Auto-binds to your single active task's CURRENT step — that step (and the task) enters waiting_owner until the owner answers; several lanes of one parallel_group running at once is fine (the lowest order_idx lane carries the card, and the whole task holds either way). If that task has NO resolvable current step the call is REFUSED with 409 and no card is opened: binding the task without a step places no hold, so the task would finish underneath your question and the owner's answer would then be rejected. Fix what the error names — report the step you are on (update_step_status in_progress), use open_gate with an explicit task_id + step_id, or send bind="none" if the ask is not about the task. With no single clear active task, a plain unbound 請示 opens as before. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).
@@ -3554,7 +3566,7 @@ type ServerInterface interface {
 	// Bounded LIGHT wake snapshot for the caller (identity-locked; recent chat + light open-task rows + size overview — peek sizes first, pull detail via get_task). CHAT is packed newest-first under a CHARACTER BUDGET, not a fixed message count, and stopping at the last message that still fits; each message carries from_name/to_name beside the ids and ts_display (full date + time + zone offset) beside the epoch ts, and folds in its reply card as `card` when it has one — read every ts_display against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked DIFFERENTLY: `body_omitted_chars` > 0 means THAT message is here with that many characters COLLAPSED away (another agent's line — the owner's line and your own hand-off notes to yourself are carried in full), re-read it with get_chat; `chat_earlier_omitted` is the other kind and it is a MAYBE, not a fact: that line was cut at a read or budget limit and nothing looked past the cut, so whole messages may be missing from this payload entirely — it is raised even when there is in fact nothing older. Its hint tells you how to CHECK and fetch them. The two are asymmetric ON PURPOSE: the collapse marker is CERTAIN (that message IS here, shortened, exact count); this one is not, and only the fetch settles it. Also carries the STUDIO FLOOR you wake up onto: roster (every member and contractor, each with online/offline status, the machine it runs on, and its duty capped at 1000 chars with `…` marking a cut, the cap applied after the doc's own leading title line is removed — who to ask for help; no insight/learning by owner ruling. Contractors additionally carry their bound task's status, waiting_reason, and step progress (progress_done/progress_total) — members leave these at their zero value; a contractor's 0/0 is ambiguous (a task with no steps yet, or no task at all) and task_status is what tells them apart, non-empty vs empty) and machines (the machine list plus you_are_on, your server-recorded machine binding — never derive it from a hostname).
 	// (GET /api/resume-summary)
 	HandleResumeSummaryApiResumeSummaryGet(w http.ResponseWriter, r *http.Request)
-	// 回傳 identity-locked resume_summary 的 size estimate/overview（含 chat、task、roster、machine 大小），不含 chat/task 內容；這是 sizing peek，不是 snapshot 本身。
+	// Size-only PEEK of the wake snapshot (identity-locked; overview counts/sizes + estimated_total_chars, NO chat/task content). estimated_total_chars is exactly chat_chars + tasks_detail_chars + roster_chars + machines_chars, all four reported in overview: the WHOLE chat block as the snapshot renders it (chat_chars is the rendered block's cost, NOT the sum of the message bodies), plus the plan text its task rows omit and the two studio-floor blocks — what pulling the snapshot actually costs. Step one of the two-step boot: call this FIRST to size resume_summary, then either call resume_summary directly (small) or hand the pull to a cheap sub-agent that returns a digest (large).
 	// (GET /api/resume-summary-size)
 	HandlePeekResumeSummarySizeApiResumeSummarySizeGet(w http.ResponseWriter, r *http.Request)
 	// List role definitions (seed defaults + owner edits).
@@ -3653,7 +3665,7 @@ type ServerInterface interface {
 	// Correct THIS task's description — the ticket's own text (what the task IS: scope, origin, acceptance). T-e271: until this tool existed there was NO way to change a description after creation — create_task takes one only at birth, submit_plan writes steps, update_task_manual writes the TYPE's manual — so a decision to reword a card had nowhere to land. WHO: the task's own executor, or an admin/owner; anyone else is a flat 403. Creating a task grants NO standing to keep rewriting it — if you handed the task over, it is the new executor's text now. PARTIAL like update_task_manual: omitting `description` changes nothing (a safe no-op), while an explicit "" CLEARS it — absent and empty are different on purpose; unknown keys are refused rather than dropped. The write is wholesale within that field: the value replaces whatever was there, so send the full corrected text, not a fragment. ⚠️ Division of labour with update_step_note: the DESCRIPTION says what this task IS (stable); the step NOTE says where a step is RIGHT NOW (volatile, handover-facing) — do not put progress here. A CLOSED task (completed / terminated / duplicated) is STILL editable, on the same terms — unlike its artifact set, which freezes at close. The reason they differ: artifacts are the record of what the task PRODUCED and must stop moving, while a ticket worded wrongly is usually found to be wrong after it closed, and freezing the text would preserve a known falsehood in the permanent record. Every change that actually alters the text retains the previous one as a document version (kind `task_description`, key = the task id) — list it with list_document_history, so a correction is recoverable and the older wording is never simply gone.
 	// (POST /api/tasks/{task_id}/description)
 	HandleUpdateTaskDescriptionApiTasksTaskIdDescriptionPost(w http.ResponseWriter, r *http.Request, taskId string)
-	// 將尚未終結的 task 標為 duplicated，指向已存在的 final original（executor/owner 可操作）；空白、找不到 original、自指、chained 或已被指向的 target 會被拒絕，跨 executor 關閉時建立 handoff_follow_up，但不新增 dependency。
+	// Mark a not-yet-terminal task duplicated, pointing at an existing final original (executor/owner). A blank original, an original that cannot be found, a self-reference, a chained duplicate and a target that is already pointed at are all refused. Closing across executors creates a handoff_follow_up, and no dependency is added.
 	// (POST /api/tasks/{task_id}/duplicate)
 	HandleMarkTaskDuplicateApiTasksTaskIdDuplicatePost(w http.ResponseWriter, r *http.Request, taskId string)
 	// Message the task's executor (owner/admin agent; task context auto-attached).
@@ -3689,7 +3701,7 @@ type ServerInterface interface {
 	// Trigger a software upgrade to the latest GitHub release.
 	// (POST /api/update/upgrade)
 	HandleUpgradeApiUpdateUpgradePost(w http.ResponseWriter, r *http.Request)
-	// 讀取目前執行中的 build identity：version、git sha、git time 與 MCP catalog hash，並附上快取的更新狀態；確認是否已部署應以 git sha ancestry 判斷，不以 version 字串判斷。
+	// Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status. Settle whether something has shipped by git sha ancestry, never by the version string.
 	// (GET /api/version)
 	HandleVersionApiVersionGet(w http.ResponseWriter, r *http.Request)
 	// Download the prebuilt ocwarden binary (octet-stream) for a machine.

@@ -107,11 +107,11 @@ func TestDocumentSeedReadIsOnTheAgentToolSurface(t *testing.T) {
 		// The description is what an agent decides from, so it must say the two
 		// things that stop it being mistaken for the restore: read-only, and
 		// putting the default back is not its job.
-		if !strings.Contains(tool.Description, "唯讀") {
+		if !strings.Contains(tool.Description, "Read-only") {
 			t.Errorf("catalog %q description must say it is read-only: %q",
 				seedToolName, tool.Description)
 		}
-		if !strings.Contains(tool.Description, "不提供 restore") {
+		if !strings.Contains(tool.Description, "not an agent tool") {
 			t.Errorf("catalog %q description must say restoring the default is "+
 				"NOT an agent tool, as list_document_history's does: %q",
 				seedToolName, tool.Description)

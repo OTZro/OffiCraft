@@ -93,7 +93,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleVersionApiVersionGet,
 			Auth:     authPublic,
 			Requires: requiresPublic,
-			Summary:  "讀取目前執行中的 build identity：version、git sha、git time 與 MCP catalog hash，並附上快取的更新狀態；確認是否已部署應以 git sha ancestry 判斷，不以 version 字串判斷。",
+			Summary:  "Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status. Settle whether something has shipped by git sha ancestry, never by the version string.",
 		},
 		{
 			Method:     "GET",
@@ -289,7 +289,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleListMembersApiMembersGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "列出所有未移除的成員，預設包含 outsource 成員；回傳 presence-derived MemberDTO[]，`fields=light` 則回傳保留 kind 的 identity-only projection。",
+			Summary:  "List every member that has not been removed, including outsource members by default (presence-derived MemberDTO[]). fields=light returns an identity-only projection that preserves kind.",
 		},
 		{
 			Method:   "POST",
@@ -297,7 +297,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleHireMemberApiMembersPost,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "雇用成員（id 由 server 產生）；runtime 預設為 claude 且只接受 claude/codex，effort 預設為 medium 且須通過驗證，指定 kind 或 role_key 的雇用受 admin 權限保護。",
+			Summary:  "Hire a member (server mints the id). runtime defaults to claude and only claude/codex are accepted; effort defaults to medium and is validated; a hire that names kind or role_key is admin-gated.",
 			MCPTool:  "hire_member",
 		},
 		{
@@ -330,7 +330,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleUpdateMemberApiMembersMemberIdPatch,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "部分更新成員的 name/runtime/model/effort；空 name、無效 runtime 或無效 effort 回 422，且變更 launch-intent 欄位時會啟動 graceful handover。",
+			Summary:  "Partially update a member's name / runtime / model / effort. Blank name, invalid runtime or invalid effort → 422, and changing a launch-intent field arms a graceful handover.",
 			MCPTool:  "update_member",
 		},
 		{
@@ -696,7 +696,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleListReplyCardsApiReplyCardsGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "列出 light reply-card rows（summary 與 decision digest，不含完整 body/options）；`status` 可為 waiting（預設，最久等待優先）、answered（近 24 小時）或 expired（近 24 小時），positive limit 在各 pane 排序後套用；要讀單一卡片全文請用 get_reply_card。",
+			Summary:  "List light reply-card rows (summary and decision digest, without the full body/options). status is waiting (the default, longest-waiting first), answered (the last 24 hours) or expired (the last 24 hours); a positive limit is applied after each pane is ordered. Read one card in full with get_reply_card.",
 			MCPTool:  "list_reply_cards",
 		},
 		{
@@ -1210,7 +1210,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			// Per-ROLE authz stays in the handler (lessonsWriteAuthz) — the
 			// ladder cannot express "own role only".
 			Requires: principalAgent,
-			Summary:  "整份替換 per-role lessons 文件；`text` 必填且 unknown keys 拒絕，只有該 role 的 agent/admin 可寫，清空或大幅縮減須 `allow_shrink=true`，結果仍受 lessons cap 限制。",
+			Summary:  "Replace the WHOLE per-role lessons document. text is REQUIRED and unknown keys are rejected; only that role's agent or an admin may write it; emptying or sharply shrinking it needs allow_shrink=true; and the result is still judged against the lessons cap.",
 			MCPTool:  "replace_lessons",
 		},
 		{
@@ -1240,7 +1240,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandlePeekResumeSummarySizeApiResumeSummarySizeGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "回傳 identity-locked resume_summary 的 size estimate/overview（含 chat、task、roster、machine 大小），不含 chat/task 內容；這是 sizing peek，不是 snapshot 本身。",
+			Summary:  "Size-only PEEK of the wake snapshot (identity-locked; overview counts/sizes + estimated_total_chars, NO chat/task content). estimated_total_chars is exactly chat_chars + tasks_detail_chars + roster_chars + machines_chars, all four reported in overview: the WHOLE chat block as the snapshot renders it (chat_chars is the rendered block's cost, NOT the sum of the message bodies), plus the plan text its task rows omit and the two studio-floor blocks — what pulling the snapshot actually costs. Step one of the two-step boot: call this FIRST to size resume_summary, then either call resume_summary directly (small) or hand the pull to a cheap sub-agent that returns a digest (large).",
 			MCPTool:  "peek_resume_summary_size",
 		},
 		{
@@ -1376,7 +1376,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleMarkTaskDuplicateApiTasksTaskIdDuplicatePost,
 			Auth:     authGated,
 			Requires: principalAgent,
-			Summary:  "將尚未終結的 task 標為 duplicated，指向已存在的 final original（executor/owner 可操作）；空白、找不到 original、自指、chained 或已被指向的 target 會被拒絕，跨 executor 關閉時建立 handoff_follow_up，但不新增 dependency。",
+			Summary:  "Mark a not-yet-terminal task duplicated, pointing at an existing final original (executor/owner). A blank original, an original that cannot be found, a self-reference, a chained duplicate and a target that is already pointed at are all refused. Closing across executors creates a handoff_follow_up, and no dependency is added.",
 			MCPTool:  "mark_duplicate",
 		},
 		{
@@ -1652,7 +1652,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleListDocumentHistoryApiDocumentHistoryKindKeyGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "讀取一份 editable document 保留的最新 3 筆歷史（支援 global_context、role_definition、lessons、insight、task_manual_sop/learnings、task_description/title）；此 endpoint 只讀、不提供 restore，退休的 `task_manual` kind 會以 400 指向兩個替代 series。",
+			Summary:  "READ the retained versions of one editable document: what each version held, when it was replaced and by whom. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.\n\nWHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.\n\nADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.\n\nCOVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.",
 			MCPTool:  "list_document_history",
 		},
 		{
@@ -1661,7 +1661,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleGetDocumentSeedApiDocumentHistoryKindKeySeedGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "讀取 global_context、seeded role_definition 或 seeded per-role insight 的 shipped default；唯讀，沒有對應 seed 時回 404（包括 task manual 與 per-role lessons），回傳 kind/key/content，且此 tool 不提供 restore。",
+			Summary:  "READ the SHIPPED DEFAULT of one editable document — the text a reset would put back, i.e. the 初始版本 entry of that document's version list. Read-only: this tool writes nothing, so reading the default can never replace the live document. Putting the default BACK is deliberately not an agent tool — the owner does that from the cockpit — exactly as with list_document_history. ``content`` carries the SAME field names a retained version carries, so the same reader can compare a default against the live document.\n\nWHICH DOCUMENTS THIS COVERS IS DELIBERATELY NOT LISTED HERE. A list of kinds written into a description goes stale the moment a new editable document ships and NOTHING turns red when it does — this one had gone wrong about three kinds before the list was taken out. Two rules you can actually execute replace it.\n\nADDRESSING: ``kind`` and ``key`` name a document exactly as they do for list_document_history — the same server-side gate answers both routes, so whatever that tool addresses is addressable here, and a ``kind`` this server does not know is refused with 400 while a ``key`` that names no document of that kind is refused with 404 that names it. Neither is something to guess at: ask and read the answer.\n\nCOVERAGE: whether THAT document ships a default is answered by asking for it. 200 means it does, and ``content`` is that text. 404 means it has none at all — a role the owner created, a task manual, per-role lessons — which is the same set whose reset the server also 404s, so it is the honest 'there is nothing to go back to', not a gap to work around. 400 on a retired kind names the series that replaced it.",
 			// A TOOL, by owner ruling rc-b7d29de0eb9c ("開放,照你 7/30 那句話
 			// 一律給"). This row first landed MCPExclude, argued from "an agent
 			// gains nothing here" — a role definition's seed is the very text

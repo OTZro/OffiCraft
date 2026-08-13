@@ -726,7 +726,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 讀取一份 editable document 保留的最新 3 筆歷史（支援 global_context、role_definition、lessons、insight、task_manual_sop/learnings、task_description/title）；此 endpoint 只讀、不提供 restore，退休的 `task_manual` kind 會以 400 指向兩個替代 series。 */
+        /**
+         * READ the retained versions of one editable document: what each version held, when it was replaced and by whom. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.
+         *
+         *     WHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.
+         *
+         *     ADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.
+         *
+         *     COVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.
+         */
         get: operations["handle_list_document_history_api_document_history__kind___key__get"];
         put?: never;
         post?: never;
@@ -744,7 +752,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * 讀取 global_context、seeded role_definition 或 seeded per-role insight 的 shipped default；唯讀，沒有對應 seed 時回 404（包括 task manual 與 per-role lessons），回傳 kind/key/content，且此 tool 不提供 restore。
+         * READ the SHIPPED DEFAULT of one editable document — the text a reset would put back, i.e. the 初始版本 entry of that document's version list. Read-only: this tool writes nothing, so reading the default can never replace the live document. Putting the default BACK is deliberately not an agent tool — the owner does that from the cockpit — exactly as with list_document_history. ``content`` carries the SAME field names a retained version carries, so the same reader can compare a default against the live document.
+         *
+         *     WHICH DOCUMENTS THIS COVERS IS DELIBERATELY NOT LISTED HERE. A list of kinds written into a description goes stale the moment a new editable document ships and NOTHING turns red when it does — this one had gone wrong about three kinds before the list was taken out. Two rules you can actually execute replace it.
+         *
+         *     ADDRESSING: ``kind`` and ``key`` name a document exactly as they do for list_document_history — the same server-side gate answers both routes, so whatever that tool addresses is addressable here, and a ``kind`` this server does not know is refused with 400 while a ``key`` that names no document of that kind is refused with 404 that names it. Neither is something to guess at: ask and read the answer.
+         *
+         *     COVERAGE: whether THAT document ships a default is answered by asking for it. 200 means it does, and ``content`` is that text. 404 means it has none at all — a role the owner created, a task manual, per-role lessons — which is the same set whose reset the server also 404s, so it is the honest 'there is nothing to go back to', not a gap to work around. 400 on a retired kind names the series that replaced it.
          * @description Read the document's shipped default — the 初始版本 row of the cockpit's version list. It exists so that row can be COMPARED against the live document before anyone decides to go back to it; before this route the seed text only ever reached a client AFTER a reset had already overwritten the document, so "look first" was impossible for exactly the one entry whose restore is least reversible. Read-only, same floor as reading the retained versions. 404 where no seed exists.
          */
         get: operations["handle_get_document_seed_api_document_history__kind___key__seed_get"];
@@ -967,7 +981,7 @@ export interface paths {
         get: operations["handle_get_lessons_api_lessons__role_key___task_type__get"];
         put?: never;
         /**
-         * 整份替換 per-role lessons 文件；`text` 必填且 unknown keys 拒絕，只有該 role 的 agent/admin 可寫，清空或大幅縮減須 `allow_shrink=true`，結果仍受 lessons cap 限制。
+         * Replace the WHOLE per-role lessons document. text is REQUIRED and unknown keys are rejected; only that role's agent or an admin may write it; emptying or sharply shrinking it needs allow_shrink=true; and the result is still judged against the lessons cap.
          * @description Whole-doc replace of a PER-ROLE lessons doc (§3.4 #28).
          *
          *     Per-role WRITE authz (load-bearing): a caller BELOW admin capability may write
@@ -1463,7 +1477,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * 列出所有未移除的成員，預設包含 outsource 成員；回傳 presence-derived MemberDTO[]，`fields=light` 則回傳保留 kind 的 identity-only projection。
+         * List every member that has not been removed, including outsource members by default (presence-derived MemberDTO[]). fields=light returns an identity-only projection that preserves kind.
          * @description List the owner's roster (§3.4 #8). Soft-removed members are omitted (the
          *     audit row survives). ``online`` is the live SSE-connection projection
          *     (``hub.online_members``) — the single online source, not the durable field.
@@ -1486,7 +1500,7 @@ export interface paths {
         get: operations["handle_list_members_api_members_get"];
         put?: never;
         /**
-         * 雇用成員（id 由 server 產生）；runtime 預設為 claude 且只接受 claude/codex，effort 預設為 medium 且須通過驗證，指定 kind 或 role_key 的雇用受 admin 權限保護。
+         * Hire a member (server mints the id). runtime defaults to claude and only claude/codex are accepted; effort defaults to medium and is validated; a hire that names kind or role_key is admin-gated.
          * @description Hire a roster member (§3.4 #9; pure seam, no UI). The owner assigns the
          *     display ``name``; the server mints the ``id`` (``m-<hex>`` — never client
          *     supplied, it is the attribution key). The member starts offline/active; hiring
@@ -1540,7 +1554,7 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * 部分更新成員的 name/runtime/model/effort；空 name、無效 runtime 或無效 effort 回 422，且變更 launch-intent 欄位時會啟動 graceful handover。
+         * Partially update a member's name / runtime / model / effort. Blank name, invalid runtime or invalid effort → 422, and changing a launch-intent field arms a graceful handover.
          * @description Partially update a member's owner-editable fields (§3.4 #11: name / runtime /
          *     model / effort). PATCH semantics — only supplied fields change. A blank ``name``
          *     is a 422; a runtime outside claude/codex or effort outside low/medium/high/max is a
@@ -2204,7 +2218,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * 列出 light reply-card rows（summary 與 decision digest，不含完整 body/options）；`status` 可為 waiting（預設，最久等待優先）、answered（近 24 小時）或 expired（近 24 小時），positive limit 在各 pane 排序後套用；要讀單一卡片全文請用 get_reply_card。
+         * List light reply-card rows (summary and decision digest, without the full body/options). status is waiting (the default, longest-waiting first), answered (the last 24 hours) or expired (the last 24 hours); a positive limit is applied after each pane is ordered. Read one card in full with get_reply_card.
          * @description The reply-card list — LIGHT rows (``list_reply_cards`` MCP tool; owner ruling:
          *     卡只需要 title+決策). ``?status=waiting`` (the default) returns cards still
          *     waiting on the owner, longest-waiting first; ``?status=answered`` returns cards
@@ -2393,7 +2407,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * 回傳 identity-locked resume_summary 的 size estimate/overview（含 chat、task、roster、machine 大小），不含 chat/task 內容；這是 sizing peek，不是 snapshot 本身。
+         * Size-only PEEK of the wake snapshot (identity-locked; overview counts/sizes + estimated_total_chars, NO chat/task content). estimated_total_chars is exactly chat_chars + tasks_detail_chars + roster_chars + machines_chars, all four reported in overview: the WHOLE chat block as the snapshot renders it (chat_chars is the rendered block's cost, NOT the sum of the message bodies), plus the plan text its task rows omit and the two studio-floor blocks — what pulling the snapshot actually costs. Step one of the two-step boot: call this FIRST to size resume_summary, then either call resume_summary directly (small) or hand the pull to a cheap sub-agent that returns a digest (large).
          * @description The size-only PEEK of the wake snapshot (``peek_resume_summary_size`` MCP
          *     tool, zero params; ``GET /api/resume-summary-size``) — step ONE of the two-step
          *     boot.
@@ -3064,7 +3078,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 將尚未終結的 task 標為 duplicated，指向已存在的 final original（executor/owner 可操作）；空白、找不到 original、自指、chained 或已被指向的 target 會被拒絕，跨 executor 關閉時建立 handoff_follow_up，但不新增 dependency。
+         * Mark a not-yet-terminal task duplicated, pointing at an existing final original (executor/owner). A blank original, an original that cannot be found, a self-reference, a chained duplicate and a target that is already pointed at are all refused. Closing across executors creates a handoff_follow_up, and no dependency is added.
          * @description Mark a task duplicated (MCP ``mark_duplicate``), pointing at the ORIGINAL it duplicates so the finder can close it without troubling the owner to terminate each one. The caller must be the task's executor (owner/admin may act on any task). ``duplicated`` becomes a terminal status alongside done/terminated (closed_ts stamps, bound outsource workers release), but this dedicated action is NOT the agent status-report path. Validation: the task must be non-terminal (409 otherwise); ``duplicate_of`` is required (422) and must name an EXISTING task (404) that is not this one (409 self-reference) and is not itself already ``duplicated`` (409 — point at the FINAL original; the server never chases a chain); a task already pointed at as an original cannot itself be marked duplicated (409). Unlike done/terminated, a duplicated close does NOT nudge the learnings write-back (a duplicate has no lessons to fold back).
          */
         post: operations["handle_mark_task_duplicate_api_tasks__task_id__duplicate_post"];
@@ -3319,7 +3333,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * 讀取目前執行中的 build identity：version、git sha、git time 與 MCP catalog hash，並附上快取的更新狀態；確認是否已部署應以 git sha ancestry 判斷，不以 version 字串判斷。
+         * Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status. Settle whether something has shipped by git sha ancestry, never by the version string.
          * @description Report version, git sha/time, and the derived MCP catalog hash.
          *
          *     `update_available` / `latest_version` reflect the newest admissible GitHub
