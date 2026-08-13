@@ -242,12 +242,22 @@ def _expected_context(client, owner_token, role_key: str, task_type: str, user_t
     lessons = client.get(
         f"/api/lessons/{role_key}/{task_type}", headers=_auth(owner_token)
     ).json()
-    # §2.2 order (T-4595): 系統互動 → 使用者自訂 → Role → Lessons → 啟動程序.
+    insight = client.get(
+        f"/api/insight/{role_key}", headers=_auth(owner_token)
+    ).json()
+    # §2.2 order: 系統互動 → 使用者自訂 → Role → Insight → Lessons → 啟動程序.
+    # Insight, like the user-custom block, is skipped ENTIRELY when its folded
+    # text is blank — a role that never wrote one (and has no seed) must not
+    # grow an orphan header.
     parts = [_seed("system_interaction.md").strip()]
     if user_text.strip():
         parts.append(f"# 使用者自訂（Owner Additions）\n\n{user_text.strip()}")
+    parts.append(
+        f"# Role: {role['name'] or role['key']}\n\n{role['definition_md'].strip()}"
+    )
+    if insight["text"].strip():
+        parts.append(f"# Insight ({role_key})\n\n{insight['text'].strip()}")
     parts += [
-        f"# Role: {role['name'] or role['key']}\n\n{role['definition_md'].strip()}",
         f"# Lessons ({role_key} / {task_type})\n\n{lessons['text'].strip()}",
         _seed("boot_sequence.md").strip(),
     ]

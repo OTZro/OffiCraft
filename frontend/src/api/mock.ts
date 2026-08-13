@@ -4386,9 +4386,13 @@ export const mockApi: Api = {
     // (spec/lifecycle.md §2.2, as re-ordered by T-4595):
     //   1. 系統互動 — the read-only file seed, FIRST;
     //   2. 使用者自訂 — the owner's ADDITIVE block, SKIPPED entirely when empty;
-    //   3. `# Role:` + `# Lessons (role / task_type)` — the persona, and the
-    //      ONLY slot an outsource worker has nothing in (see
-    //      getWorkerBootContext below);
+    //   3. `# Role:` + `# Insight (role)` + `# Lessons (role / task_type)` —
+    //      the persona (Duty → Insight → Learning, the order the three blocks
+    //      are defined in), and the ONLY slot an outsource worker has nothing
+    //      in (see getWorkerBootContext below). The Insight section is SKIPPED
+    //      ENTIRELY when the folded text is blank, exactly like the owner block
+    //      — the gate is the TEXT, never is_default/has_seed (those answer
+    //      different questions and would emit an orphan header);
     //   4. 啟動程序 — the read-only file seed, LAST (recency-authoritative tail).
     // The owner block moved from 4th to 2nd so the two assemblies line up: a
     // worker's boot context is this list minus slot 3, and with the owner block
@@ -4405,6 +4409,13 @@ export const mockApi: Api = {
     }
     parts.push(
       `# Role: ${roleDef.name || roleDef.key}\n\n${roleDef.definition_md.trim()}`,
+    );
+    const insightText =
+      insightOverlays.get(role)?.text ?? INSIGHT_SEEDS[role] ?? "";
+    if (insightText.trim()) {
+      parts.push(`# Insight (${role})\n\n${insightText.trim()}`);
+    }
+    parts.push(
       `# Lessons (${role} / ${taskType})\n\n${lessons.trim()}`,
       SEED_BOOT_SEQUENCE_MD.trim(),
     );
