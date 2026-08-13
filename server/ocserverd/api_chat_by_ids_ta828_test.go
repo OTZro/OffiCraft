@@ -20,11 +20,14 @@ package main
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // seedFoldableThreads lays down two conversations that do NOT overlap: the
@@ -361,4 +364,59 @@ func idsParameterDescription(t *testing.T) string {
 	}
 	t.Fatalf("GET /api/chat declares no ids parameter")
 	return ""
+}
+
+// ── the wiring half ─────────────────────────────────────────────────────────
+//
+// Every test above hands the handler a params struct BY HAND, so all of them
+// stay green if `?ids=` never reaches it — the repeated query parameter is
+// bound by the GENERATED wrapper (ocapi_gen.go), and a lever the wrapper does
+// not bind is a lever no caller has. This drives real HTTP through the real
+// mux instead, which is also the only place the route's own floor is
+// exercised: an ordinary agent has to get through it.
+func TestChatByIDs_RepeatedQueryParameterReachesTheHandler(t *testing.T) {
+	srv, dal, secret := newLessonsTestServer(t)
+	seedFoldableThreads(t, &apiServer{dal: dal, hub: NewHub()})
+
+	ask := func(sub, query string) (int, string) {
+		t.Helper()
+		tok, err := mintJWT(sub, "agent", 3600, secret, time.Now().Unix(), "")
+		if err != nil {
+			t.Fatalf("mint: %v", err)
+		}
+		req, err := http.NewRequest("GET", srv.URL+"/api/chat?"+query, nil)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do: %v", err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		return resp.StatusCode, string(body)
+	}
+
+	code, body := ask("m-1", "ids=c-mine-1&ids=c-mine-2")
+	if code != 200 {
+		t.Fatalf("a repeated ?ids= must bind and answer: %d %s", code, body)
+	}
+	if !strings.Contains(body, "c-mine-1") || !strings.Contains(body, "c-mine-2") {
+		t.Fatalf("both repetitions must reach the handler, got %s", body)
+	}
+	// …and it really is the by-id path, not the ordinary listing answering with
+	// everything this member can see: c-theirs involves m-1 too, so a DROPPED
+	// ?ids= would put it in the answer.
+	if strings.Contains(body, "c-theirs") {
+		t.Fatalf("?ids= was ignored — this is the ordinary stream, not a by-id read: %s", body)
+	}
+	// The boundary holds over real HTTP too. m-1 is one end of c-theirs, so the
+	// bystander has to be a third member.
+	if code, body := ask("m-3", "ids=c-theirs"); code != 403 {
+		t.Fatalf("a bystander must be refused over the wire too: %d %s", code, body)
+	}
 }
