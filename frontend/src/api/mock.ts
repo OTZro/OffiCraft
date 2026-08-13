@@ -4394,7 +4394,8 @@ export const mockApi: Api = {
     //      — the gate is the TEXT, never is_default/has_seed (those answer
     //      different questions and would emit an orphan header);
     //   4. 啟動程序 — the read-only file seed, LAST (recency-authoritative tail).
-    // The owner block moved from 4th to 2nd so the two assemblies line up: a
+    // The owner block moved from below the persona to above it so the two
+    // assemblies line up: a
     // worker's boot context is this list minus slot 3, and with the owner block
     // wedged between the lessons and the boot sequence it could not be.
     // NO token (a UI preview mints none).

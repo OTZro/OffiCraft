@@ -17,9 +17,11 @@ Third conformance batch. What this file pins, MUST by MUST:
         member (claim = desired_machine_id); wrong password → flat 401;
   * §2  boot-context assembly reproduced BYTE-FOR-BYTE from the seed files
         (language-neutral assets under seeds/ — data, not code)
-        plus API-visible overlay state: part order, "\\n\\n" joins, the single
-        trailing "\\n", the exact block headers, and the user-custom block
-        skipped entirely when blank;
+        plus API-visible overlay state: block order, "\\n\\n" joins, the single
+        trailing "\\n", the exact block headers, and the two blocks that are
+        skipped entirely when they fold blank (使用者自訂 and 判準/# Insight).
+        This suite is the VERBATIM authority for that assembly — spec §2.2
+        carries the shape and delegates the exact formatting here;
   * §2  bootstrap == the same fold regardless of overlay state (overlay-wins
         exercised via a lessons overlay written through the API);
   * in-memory #2 observed position: agents_on_machine drives the machine
@@ -230,10 +232,11 @@ def test_expired_exp_is_401(client, owner_token) -> None:
 
 
 def _seed(name: str) -> str:
-    # OBSERVED WIRE (spec gap — reported): the seed loader substitutes the
-    # `{OWNER_ID}` placeholder with the fixed single-tenant owner id "owner"
-    # before the fold; spec/lifecycle.md §2.2 says "byte-for-byte block content
-    # equality" over the seed files without mentioning the substitution.
+    # The seed loader substitutes the `{OWNER_ID}` placeholder with the fixed
+    # single-tenant owner id "owner" before the fold. This used to be logged
+    # here as a spec gap; it is now BY DESIGN that §2.2 does not state it —
+    # that section carries the shape only and delegates every verbatim rule,
+    # this one included, to buildBootContext and to this suite.
     return (SEEDS / name).read_text(encoding="utf-8").replace("{OWNER_ID}", "owner")
 
 
@@ -245,15 +248,20 @@ def _expected_context(client, owner_token, role_key: str, task_type: str, user_t
     insight = client.get(
         f"/api/insight/{role_key}", headers=_auth(owner_token)
     ).json()
-    # spec/lifecycle.md §2.2 parts 1-6, in order:
-    #   1 系統互動 · 2 使用者自訂 (skipped when blank) · 3 # Role ·
-    #   4 # Insight (skipped when blank) · 5 # Lessons · 6 啟動程序.
-    # This reconstruction is written FROM that list, so the part numbering above
-    # is load-bearing: if §2.2 gains or reorders a part and this list does not
-    # move with it, the two drift and the byte-for-byte assertion stops meaning
-    # what it claims to mean.
-    # Part 4's skip condition is the FOLDED TEXT being blank — normatively NOT
-    # is_default and NOT has_seed (§2.2 part 4 spells out why).
+    # 🔴 THIS FUNCTION IS THE VERBATIM AUTHORITY. spec/lifecycle.md §2.2 gives
+    # the SHAPE only — which blocks, in what order — and explicitly delegates
+    # the exact titles, string formats, separator and trailing newline here and
+    # to buildBootContext. So do not "fix" this to match a prose description:
+    # if this file and §2.2 ever disagree about the ORDER, that is a real bug in
+    # one of them; if they disagree about FORMATTING, this file wins by design.
+    #
+    # Order (must match §2.2): 系統互動 → 使用者自訂 → 角色定義 → 判準 →
+    # 學習筆記 → 啟動程序.
+    #
+    # 使用者自訂 and 判準 are each dropped entirely when they fold blank. The
+    # gate is the FOLDED TEXT — deliberately not is_default and not has_seed,
+    # which answer different questions and would each drop or emit the section
+    # for the wrong roles.
     parts = [_seed("system_interaction.md").strip()]
     if user_text.strip():
         parts.append(f"# 使用者自訂（Owner Additions）\n\n{user_text.strip()}")
@@ -297,8 +305,8 @@ def test_boot_fold_bytes_with_owner_additions(client, owner_token) -> None:
 
 
 def test_boot_fold_bytes_blank_user_block_skipped(client, owner_token) -> None:
-    """§2.2 part 2: a blank owner text drops the ENTIRE user-custom block —
-    no noise header — and the fold is byte-identical to the 4-part form."""
+    """The 使用者自訂 block: a blank owner text drops it ENTIRELY — no noise
+    header — and the fold is byte-identical to the form without it."""
     r = client.post("/api/global-context/reset", headers=_auth(owner_token))
     assert r.status_code == 200, r.text
     context, role_key, task_type = _bootstrap_context(client, owner_token)

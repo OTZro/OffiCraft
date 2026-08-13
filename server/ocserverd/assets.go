@@ -422,8 +422,9 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 		}
 		lessonsBody = strings.TrimSpace(rest)
 	}
-	// T-4595 — the user-custom block moved from 4th to 2nd. Staff and outsource
-	// boot contexts are now the SAME FOUR SLOTS in the same order:
+	// T-4595 — the user-custom block moved from below the persona to above it
+	// (it used to sit between the lessons and the boot sequence). Staff and
+	// outsource boot contexts are now the SAME FOUR SLOTS in the same order:
 	//
 	//	1. 系統互動 (shared seed)
 	//	2. 使用者自訂 (shared, skipped entirely when blank)
