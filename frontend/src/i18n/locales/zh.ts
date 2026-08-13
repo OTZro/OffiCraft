@@ -1027,6 +1027,41 @@ export const zh = {
       chatEmpty: "尚無聊天訊息",
       tasksSection: "進行中任務",
       tasksEmpty: "尚無進行中任務",
+      // 抬頭:這份快照是什麼時候拍的。它是把底下每一個 ts_display 讀成
+      // 「多久以前」的唯一錨點——讀的人(不論是 agent 還是 owner)沒有
+      // 一個可信的時鐘可以拿來對。
+      generatedAtLabel: "本份產生於",
+      // 🔴 折疊 ≠ 截斷,兩者的文案不共用任何一個詞。
+      // 這一組講的是「這則在這裡,只是被折起來了,東西還在」。
+      bodyOmittedLead: "此則已折起",
+      bodyOmittedTail: "字元(內容仍在,用 get_chat 重讀這則)",
+      // 這一組講的是「更早的訊息根本沒有被帶進來」——要去撈。
+      chatCutLabel: "更早的訊息沒有被帶進來:",
+      // 就地顯示的回覆卡:owner 選了哪個、打了什麼、什麼時候回的。
+      cardOptionsLabel: "提供的選項",
+      cardAiPickTag: "AI 建議",
+      cardPickedTag: "已選",
+      cardAnswerTextLabel: "補充文字",
+      cardAnsweredAtLabel: "回覆於",
+      cardUnanswered: "尚未回覆",
+      cardAttachmentsLabel: "附件",
+      replyCardStatusLabel: "回覆卡狀態",
+      // studio floor 兩段:名冊與機器。
+      rosterSection: "名冊",
+      rosterEmpty: "這份快照沒有名冊區段",
+      rosterDutyLabel: "職責",
+      rosterCurrentTaskLabel: "手上的任務",
+      machinesSection: "機器",
+      machinesEmpty: "這份快照沒有機器區段",
+      machinesYouAreOnLabel: "這位站在",
+      machinesYouAreOnNone: "尚無機器綁定",
+      machineOnline: "線上",
+      machineOffline: "離線",
+      rosterChars: "名冊字數",
+      machinesChars: "機器字數",
+      // 長區段可收合,但預設看得到有哪些區段。
+      collapse: "收合",
+      expand: "展開",
     },
     dash: "—",
   },

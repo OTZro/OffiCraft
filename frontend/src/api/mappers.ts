@@ -82,6 +82,9 @@ import type {
   WireResumeOverview,
   WireResumeTask,
   WireResumeSummary,
+  WireResumeRosterMember,
+  WireResumeMachines,
+  WireChatInlineReplyCard,
 } from "./wire";
 import type {
   ChatMessage,
@@ -106,6 +109,9 @@ import type {
   ResumeOverviewView,
   ResumeTaskView,
   MemberResumeSummaryView,
+  ResumeRosterMemberView,
+  ResumeMachinesView,
+  ChatInlineReplyCardView,
 } from "./adapter";
 
 /** The five real presence words, as a runtime set — the type union's twin. */
@@ -289,6 +295,36 @@ export function toChatMessage(w: WireChatMessage): ChatMessage {
       mime: a.mime ?? "",
       isImage: a.is_image ?? false,
     })),
+    // Display names beside the ids, and the SERVER-rendered timestamp beside
+    // the epoch one. All honest passthrough: an absent/defaulted wire field
+    // reads as "" (or 0), NEVER back-filled from the id — a name the server
+    // could not resolve is a name nobody has, and printing the address in its
+    // place would make an unresolved sender indistinguishable from one whose
+    // display name happens to equal its id.
+    fromName: w.from_name ?? "",
+    toName: w.to_name ?? "",
+    tsDisplay: w.ts_display ?? "",
+    bodyOmittedChars: w.body_omitted_chars ?? 0,
+    // The reply card folded onto this message (wake snapshot only). Absent on
+    // every other chat read, so the honest null — the message carries no card.
+    card: w.card ? toChatInlineReplyCard(w.card) : null,
+  };
+}
+
+/** Map one wire in-place reply card (`ChatMessageDTO.card`) → the view model.
+ * Pure passthrough of the DECISION fields; `answer_option_idx` keeps its
+ * three-way meaning (a number = that option was picked, null = free text only
+ * or not answered yet), so it is NOT coerced to a sentinel index. */
+export function toChatInlineReplyCard(
+  w: WireChatInlineReplyCard,
+): ChatInlineReplyCardView {
+  return {
+    options: w.options ?? [],
+    answerOptionIdx:
+      typeof w.answer_option_idx === "number" ? w.answer_option_idx : null,
+    answerText: w.answer_text ?? "",
+    answeredTs: w.answered_ts ?? 0,
+    answeredAtDisplay: w.answered_at_display ?? "",
   };
 }
 
@@ -1366,6 +1402,8 @@ const EMPTY_RESUME_OVERVIEW: ResumeOverviewView = {
   tasksDetailChars: 0,
   cardsWaiting: 0,
   cardsAnsweredRecent: 0,
+  rosterChars: 0,
+  machinesChars: 0,
 };
 
 /** Map one wire resume-snapshot overview block → the view model (pure
@@ -1379,6 +1417,11 @@ export function toResumeOverview(w: WireResumeOverview): ResumeOverviewView {
     tasksDetailChars: w.tasks_detail_chars,
     cardsWaiting: w.cards_waiting,
     cardsAnsweredRecent: w.cards_answered_recent,
+    // The two studio-floor block sizes (T-1b09). Optional on the wire, so an
+    // older server reads as 0 — that is "this snapshot carries no such block",
+    // which is exactly what a 0-length block means.
+    rosterChars: w.roster_chars ?? 0,
+    machinesChars: w.machines_chars ?? 0,
   };
 }
 
@@ -1401,11 +1444,57 @@ export function toResumeTask(w: WireResumeTask): ResumeTaskView {
   };
 }
 
+/** Map one wire roster row of the wake snapshot → the view model. Pure
+ * passthrough; every "" is the server's own honest empty (a contractor carries
+ * no role, a member carries no bound task) and is never substituted. */
+export function toResumeRosterMember(
+  w: WireResumeRosterMember,
+): ResumeRosterMemberView {
+  return {
+    id: w.id,
+    name: w.name,
+    kind: w.kind,
+    roleName: w.role_name,
+    duty: w.duty,
+    currentTask: w.current_task,
+    taskStatus: w.task_status,
+    waitingReason: w.waiting_reason,
+    progressDone: w.progress_done,
+    progressTotal: w.progress_total,
+    machine: w.machine,
+    presence: w.presence,
+  };
+}
+
+/** Map the wire machine block of the wake snapshot → the view model. */
+export function toResumeMachines(
+  w: WireResumeMachines,
+): ResumeMachinesView {
+  return {
+    list: (w.list ?? []).map((m) => ({
+      machineId: m.machine_id,
+      displayName: m.display_name,
+      online: m.online,
+    })),
+    youAreOn: w.you_are_on ?? "",
+  };
+}
+
 /** Map a target member's wire resume snapshot → the view model (RESUME
  * SUMMARY panel section). `identity`/`overview` are optional on the wire only
  * to keep old hand-built fixtures valid — a real snapshot always sets them;
  * `overview` falls back to all-zero counts rather than `undefined` so the
- * panel never has to null-check the size figures it renders. */
+ * panel never has to null-check the size figures it renders.
+ *
+ * 🔴 EVERY section the server assembles is carried across. This mapper used to
+ * drop `roster` and `machines` on the floor — the payload had them, the view
+ * model did not declare them, and nothing was red — so the cockpit could not
+ * show a snapshot section the agent reading the same payload could see. The
+ * whole point of this panel is that the two line up section by section, and a
+ * seam that silently narrows the payload defeats it before the component is
+ * ever reached. `machines` stays NULLABLE (the wire distinguishes "no machine
+ * block" from "a block with an empty list"); `roster` collapses an absent list
+ * to `[]`, which is the same statement the wire's empty list makes. */
 export function toMemberResumeSummary(
   w: WireResumeSummary,
 ): MemberResumeSummaryView {
@@ -1415,5 +1504,12 @@ export function toMemberResumeSummary(
     tasks: (w.tasks ?? []).map(toResumeTask),
     overview: w.overview ? toResumeOverview(w.overview) : EMPTY_RESUME_OVERVIEW,
     note: w.note ?? "",
+    generatedAt: w.generated_at ?? "",
+    chatEarlierOmitted: {
+      omitted: w.chat_earlier_omitted?.omitted ?? false,
+      hint: w.chat_earlier_omitted?.hint ?? "",
+    },
+    roster: (w.roster ?? []).map(toResumeRosterMember),
+    machines: w.machines ? toResumeMachines(w.machines) : null,
   };
 }

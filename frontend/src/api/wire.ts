@@ -298,3 +298,23 @@ export type WireResumeTask = components["schemas"]["ResumeTaskDTO"];
  * caller, assembled by the identical `resumeSnapshotParts(actor)`, here for a
  * TARGET member (owner / admin-agent only). */
 export type WireResumeSummary = components["schemas"]["ResumeSummaryDTO"];
+
+/** Mirrors `ResumeChatCutDTO`: whether whole messages are ABSENT from the
+ * snapshot's chat, and the server's own hint for fetching them. Distinct from
+ * `ChatMessageDTO.body_omitted_chars` (a message that IS here, shortened). */
+export type WireResumeChatCut = components["schemas"]["ResumeChatCutDTO"];
+
+/** Mirrors `ResumeRosterMemberDTO`: one roster entry in the wake snapshot —
+ * id (the address) + name, kind, role/duty for members, bound task + progress
+ * for contractors, plus machine binding and presence. */
+export type WireResumeRosterMember =
+  components["schemas"]["ResumeRosterMemberDTO"];
+
+/** Mirrors `ResumeMachinesDTO`: the machine LIST plus the subject's own
+ * server-recorded machine binding (`you_are_on`). */
+export type WireResumeMachines = components["schemas"]["ResumeMachinesDTO"];
+
+/** Mirrors `ChatInlineReplyCardDTO`: the reply card folded in place onto the
+ * chat message that opened it — options, pick, free text, and when. */
+export type WireChatInlineReplyCard =
+  components["schemas"]["ChatInlineReplyCardDTO"];

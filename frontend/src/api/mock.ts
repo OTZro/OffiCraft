@@ -67,6 +67,8 @@ import type {
   DocSummaryView,
   DocView,
   MemberResumeSummaryView,
+  ResumeRosterMemberView,
+  ResumeMachinesView,
   ResumeTaskView,
 } from "./adapter";
 import type {
@@ -1291,6 +1293,41 @@ function findResumeSummaryTarget(memberId: string): void {
   );
 }
 
+/** Render an epoch second the way the SERVER renders `ts_display` /
+ * `generated_at`: `YYYY-MM-DD HH:MM:SS ±HH:MM`, date ALWAYS written (a reader
+ * of a hand-off must be able to tell 昨天 from 上週 without knowing what day
+ * the snapshot was taken), and the zone offset carried IN the string because
+ * the studio has no configured timezone setting.
+ *
+ * 🔴 This lives in the mock — the API seam — precisely so the COMPONENT never
+ * grows one. The panel prints the string it is given; the only formatter in
+ * the cockpit is the one that stands in for the server. */
+function mockTsDisplay(ts: number): string {
+  const d = new Date(ts * 1000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  const offMin = -d.getTimezoneOffset();
+  const sign = offMin < 0 ? "-" : "+";
+  const abs = Math.abs(offMin);
+  return (
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} ` +
+    `${sign}${p(Math.floor(abs / 60))}:${p(abs % 60)}`
+  );
+}
+
+/** Resolve a chat participant id to its DISPLAY name the way the server's
+ * `from_name` / `to_name` do: through the roster, ANY status (a dismissed
+ * member still reads by name). Returns "" when the id resolves to nothing —
+ * the HONEST empty. It deliberately does NOT fall back to the id: a reader
+ * could then not tell "no name on file" from "the name really is that id". */
+function resumeDisplayNameOf(id: string): string {
+  const m = wireMembers.find((w) => w.id === id);
+  if (m) return m.name;
+  const w = outsourceWorkers.find((o) => o.id === id);
+  if (w) return w.codename;
+  return "";
+}
+
 // ── mock owner credential + settings state (B3) ─────────────────────────────
 // The mock boots "installed": password set (AuthGate's mock mode never shows
 // the first-run page anyway), default settings. Same validation rules as the
@@ -2281,18 +2318,45 @@ export const mockApi: Api = {
     // shared assembly gives). READ-ONLY: unlike listChat, this never advances a
     // read watermark.
     //
-    // NOT mocked: the T-1b09 studio-floor blocks (roster / machines) and their
-    // roster_chars / machines_chars sizes. Said explicitly because "mirrors the
-    // server" is exactly the kind of claim a reader trusts without checking —
-    // a mock that silently covers less than it says it does is worse than one
-    // that admits the gap.
+    // The T-1b09 studio-floor blocks (roster / machines) ARE mocked now, and
+    // so are their roster_chars / machines_chars sizes — see below. They used
+    // to be the admitted gap in this comment; the panel now renders them, and
+    // a mock that does not carry a section the panel draws would make the
+    // offline cockpit disagree with the real one exactly where this section's
+    // whole purpose is that the two agree.
     const RESUME_CHAT_N = 5;
     const RESUME_TASKS_N = 5;
 
     const chatAll = chatLog
       .filter((m) => m.from === memberId || m.to === memberId)
       .sort((a, b) => a.ts - b.ts);
-    const chat = chatAll.slice(-RESUME_CHAT_N).map((m) => ({ ...m }));
+    // The cut point: whole messages this payload does NOT carry. TRUNCATION —
+    // a different thing from a message that IS here with its body folded, and
+    // the hint is the SERVER's own recovery instruction, carried verbatim.
+    const chatCut = chatAll.slice(0, Math.max(0, chatAll.length - RESUME_CHAT_N));
+    const chatWindow = chatAll.slice(-RESUME_CHAT_N);
+    const oldestCarried = chatWindow[0];
+    const chatEarlierOmitted = {
+      omitted: chatCut.length > 0,
+      hint:
+        chatCut.length > 0 && oldestCarried
+          ? `call get_chat with with='${oldestCarried.from === memberId ? oldestCarried.to : oldestCarried.from}' and BOTH before_ts=${oldestCarried.ts} and before_id='${oldestCarried.id}' (sending only one is a 422)`
+          : "",
+    };
+
+    // Display names beside the ids, and a rendered timestamp beside the epoch
+    // one — the same two-fields-not-one shape the server serves. `fromName` /
+    // `toName` resolve through the roster; an id that resolves to nothing keeps
+    // the HONEST "" (the panel then shows the id alone rather than a name it
+    // invented).
+    const chat = chatWindow.map((m) => ({
+      ...m,
+      fromName: resumeDisplayNameOf(m.from),
+      toName: resumeDisplayNameOf(m.to),
+      tsDisplay: mockTsDisplay(m.ts),
+      bodyOmittedChars: m.bodyOmittedChars ?? 0,
+      card: m.card ?? null,
+    }));
 
     // EXECUTOR MATCH IS BY ID ALONE — no executorKind gate. That mirrors the
     // server exactly: `resumeTasksFor` → `ListOpenTasksByExecutor` filters on
@@ -2345,6 +2409,66 @@ export const mockApi: Api = {
       (c) => c.status === "answered" && (c.answeredTs ?? 0) >= dayAgoTs
     ).length;
 
+    // ── studio-floor blocks (T-1b09) ────────────────────────────────────────
+    // roster: every member AND every contractor, with the presence the ruling
+    // rc-4e98c0481852 asks for. Members carry `duty` and leave `currentTask`
+    // empty; contractors carry the bound task's TITLE and its progress and
+    // leave `duty` empty (正職給職責、外包給任務標題) — the same asymmetry the
+    // server serves, so a reader that learns the rule here reads the real one.
+    const roster: ResumeRosterMemberView[] = [
+      ...wireMembers
+        .filter((m) => m.kind !== "warden")
+        .map((m) => ({
+          id: m.id,
+          name: m.name,
+          kind: "member",
+          roleName: m.role_name ?? "",
+          duty: m.role_key ? `職責定義：${m.role_key}` : "",
+          currentTask: "",
+          taskStatus: "",
+          waitingReason: "",
+          progressDone: 0,
+          progressTotal: 0,
+          machine: m.machine ?? "",
+          presence: m.presence ?? "offline",
+        })),
+      ...outsourceWorkers.map((w) => {
+        const bound = tasks.find((t) => t.executorId === w.id);
+        return {
+          id: w.id,
+          name: w.codename,
+          kind: "outsource",
+          roleName: "",
+          duty: "",
+          currentTask: bound?.title ?? "",
+          taskStatus: bound?.status ?? "",
+          waitingReason: bound?.waitingReason ?? "",
+          progressDone: bound?.progressDone ?? 0,
+          progressTotal: bound?.progressTotal ?? 0,
+          machine: w.machine ?? "",
+          presence: w.presence ?? "offline",
+        };
+      }),
+    ];
+
+    // machines: the fleet, keyed by the STABLE machine id (never the name a
+    // host reports for itself). `youAreOn` is the subject's SERVER-RECORDED
+    // binding — "" when it has none, never guessed from anything else.
+    const machineRows = wireMembers.filter(
+      (m) => m.kind === "warden" && m.roster_status !== "removed"
+    );
+    const machines: ResumeMachinesView = {
+      list: machineRows.map((m) => ({
+        machineId: m.id,
+        displayName: m.name,
+        online: m.presence === "online",
+      })),
+      youAreOn:
+        wireMembers.find((m) => m.id === memberId)?.machine ??
+        outsourceWorkers.find((w) => w.id === memberId)?.machine ??
+        "",
+    };
+
     return {
       identity: memberId,
       chat,
@@ -2357,7 +2481,23 @@ export const mockApi: Api = {
         tasksDetailChars: tasksOut.reduce((sum, t) => sum + t.detailChars, 0),
         cardsWaiting,
         cardsAnsweredRecent,
+        // Sized FROM the blocks actually returned, never fabricated — the same
+        // honesty contract the counts above already keep.
+        rosterChars: roster.reduce(
+          (sum, r) =>
+            sum + r.id.length + r.name.length + r.duty.length +
+            r.currentTask.length + r.roleName.length,
+          0
+        ),
+        machinesChars: machines.list.reduce(
+          (sum: number, m) => sum + m.machineId.length + m.displayName.length,
+          0
+        ),
       },
+      generatedAt: mockTsDisplay(Math.floor(Date.now() / 1000)),
+      chatEarlierOmitted,
+      roster,
+      machines,
       note:
         "BOUNDED snapshot — recent chat + open tasks only; page the rest with list_chat / list_tasks / get_task.",
     };
