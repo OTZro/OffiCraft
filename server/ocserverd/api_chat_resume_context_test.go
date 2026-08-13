@@ -2,7 +2,8 @@ package main
 
 // api_chat_resume_context_test.go — the wake snapshot's CONTEXT format: names
 // beside ids, a timestamp a reader can read, reply cards folded onto the
-// message that opened them, per-line budget packing with a floor, and the two
+// message that opened them, global newest-first budget packing under a real
+// ceiling, and the two
 // DIFFERENT ways material can be missing (a message that is here with text
 // collapsed away, versus messages that are not here at all).
 //
@@ -13,6 +14,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -301,78 +303,231 @@ func TestResumeChat_OwnerLineAndSelfHandoffAreNeverCollapsed(t *testing.T) {
 
 // ── ⑥ the budget, and the floor that keeps a quiet line alive ───────────────
 
-// TestResumeChat_BudgetLeavesEveryLineItsFloor is the one that pays for the
-// whole packing rewrite.
+// TestResumeChat_BudgetIsACeilingAndTheBoundaryIsTight is THE assertion this
+// change exists to make true, and it is stated on the number a caller actually
+// pays: overview.chat_chars — the messages, their folded cards, the snapshot
+// header AND the cut hint, i.e. everything resumeSnapshotParts bills.
 //
-// The fixture is arranged so the arithmetic is decisive, not marginal. The loud
-// line is the OWNER's, whose bodies are carried in full, so 40 of them alone
-// exceed the budget several times over. The two quiet lines are third parties
-// (collapsed, and therefore cheap) whose messages are all OLDER than every loud
-// one, so newest-first packing reaches them last. Packed with NO floor, the
-// budget is spent on the owner line and at most ONE cheap message from the six
-// quiet ones survives — so requiring BOTH quiet lines to keep three is a
-// four-message margin, not a one-message coincidence.
+// 🔴 Before 2026-08-13 this could not hold and did not: every conversation
+// line reserved its newest few messages, those were charged to the budget and
+// then never evicted by it, so the block grew with the number of lines and
+// nothing bounded it. Measured on one real member: 80,140 chat_chars across 496
+// messages against a 12,000 ceiling. The floor is gone (owner: 「不要管每條對話
+// 線」) and the ceiling is now real.
 //
-// MUTANT: drop the reserve pass in resumeChatBlock (the `for _, p := range
-// peers` loop that pre-keeps the newest resumeChatPeerFloor of each line) → the
-// quiet-line assertion goes red. The positive controls below are what stop this
-// from passing because nothing was packed at all, or because the fix was "starve
-// whoever talks most".
-func TestResumeChat_BudgetLeavesEveryLineItsFloor(t *testing.T) {
+// TWO HALVES, because either alone is satisfiable by a bug:
+//   - CEILING: chat_chars <= resumeChatBudgetChars. An empty chat block passes
+//     this trivially, hence the anti-vacuity checks.
+//   - TIGHT: one more message would have exceeded it. This is what stops a
+//     packer that "fixes" the ceiling by simply serving less — the block has to
+//     be at the ceiling, not merely under it.
+func TestResumeChat_BudgetIsACeilingAndTheBoundaryIsTight(t *testing.T) {
 	api := resumeCtxServer(t)
-	chunk := strings.Repeat("字", 700)
-
-	// Two quiet third-party lines, OLDEST in the stream.
-	for _, peer := range []string{"m-quiet", "m-peer"} {
-		for i := 0; i < resumeChatPeerFloor; i++ {
-			putChat(t, api, "c-"+peer+strconv.Itoa(i), peer, "m-exec", chunk, float64(1+i), nil)
+	// Uniform, modest messages from several peers so the stream is long enough
+	// to overrun the budget many times over. Uniform size is what makes "one
+	// more message" a well-defined quantity below.
+	chunk := strings.Repeat("字", 200)
+	peers := []string{"m-quiet", "m-peer", "m-third", wireOwnerID}
+	ts := 1.0
+	for i := 0; i < 120; i++ {
+		for _, peer := range peers {
+			putChat(t, api, fmt.Sprintf("c-%s-%d", peer, i), peer, "m-exec", chunk, ts, nil)
+			ts++
 		}
-	}
-	// The loud line: the owner, carried in full, far more than the budget holds.
-	for i := 0; i < resumeChatPerPeerFetch; i++ {
-		putChat(t, api, "c-l"+strconv.Itoa(i), wireOwnerID, "m-exec", chunk, float64(100+i), nil)
 	}
 
 	snap := resumeSnapshot(t, api, "m-exec")
 
-	byLine := map[string]int{}
-	for _, m := range snap.Chat {
-		byLine[m.From]++
+	// ── anti-vacuity ────────────────────────────────────────────────────────
+	// The corpus is far bigger than the budget, so the packer must have had to
+	// choose. Without these, "chat_chars <= budget" is satisfied by serving
+	// nothing at all.
+	if len(snap.Chat) == 0 {
+		t.Fatalf("fixture bug: the packer served nothing, so the ceiling proves nothing")
 	}
-	for _, peer := range []string{"m-quiet", "m-peer"} {
-		if byLine[peer] < resumeChatPeerFloor {
-			t.Fatalf("every line keeps its floor: want >= %d from %s, got %d (lines=%v)",
-				resumeChatPeerFloor, peer, byLine[peer], byLine)
+	if len(snap.Chat) >= 120*len(peers) {
+		t.Fatalf("fixture bug: nothing was left out (%d seeded, %d carried) — "+
+			"the budget never bound", 120*len(peers), len(snap.Chat))
+	}
+	if !snap.ChatEarlierOmitted.Omitted || snap.ChatEarlierOmitted.Hint == "" {
+		t.Fatalf("messages were dropped, so the cut must be reported with its hint: %+v",
+			snap.ChatEarlierOmitted)
+	}
+
+	// ── half 1: the CEILING holds, on the number the caller pays ────────────
+	if snap.Overview.ChatChars > resumeChatBudgetChars {
+		t.Fatalf("chat_chars must never exceed the budget: got %d, budget %d "+
+			"(messages=%d)", snap.Overview.ChatChars, resumeChatBudgetChars, len(snap.Chat))
+	}
+
+	// ── half 2: the boundary is TIGHT ───────────────────────────────────────
+	// Re-derive what ONE more message would have cost, from the WIRE VALUES of
+	// the oldest message that made it in (every message here is the same size,
+	// so the next one back costs the same). Deliberately not asking the
+	// production accountant: an assertion written against resumeChatMessageChars
+	// is true by construction and survives every mutant of it.
+	oldest := snap.Chat[0]
+	oneMore := len([]rune(oldest.Body)) +
+		len([]rune(oldest.FromName)) + len([]rune(oldest.ToName)) +
+		len([]rune(oldest.TSDisplay)) +
+		len(strconv.Itoa(oldest.BodyOmittedChars))
+	if oneMore <= 0 {
+		t.Fatalf("fixture bug: a message that costs nothing cannot pin a boundary")
+	}
+	if snap.Overview.ChatChars+oneMore <= resumeChatBudgetChars {
+		t.Fatalf("the block must be AT the ceiling, not merely under it: "+
+			"chat_chars=%d + one more message (%d) = %d, still <= budget %d",
+			snap.Overview.ChatChars, oneMore, snap.Overview.ChatChars+oneMore,
+			resumeChatBudgetChars)
+	}
+}
+
+// TestResumeChat_PackingStopsAtTheFirstMessageThatDoesNotFit pins the SHAPE of
+// the walk, which the ceiling test above cannot see.
+//
+// 🔴 WHY THIS NEEDS ITS OWN TEST — stated because the gap was real and measured.
+// The obvious mutant (turn the `break` into a `continue`, i.e. skip the message
+// that does not fit and keep looking for a smaller older one) leaves the ceiling
+// test GREEN: the block is still under budget and still at the boundary, only
+// now with a HOLE in it. Verified by running that mutant against the whole
+// TestResumeChat_ suite before this test existed — every case passed.
+//
+// The owner's ruling is a PREFIX, not a knapsack: 「只管從最新一則訊息往前推,
+// 直到超出我們 budget 上限前最後一則」. A stream with gaps at unpredictable places
+// is worse than a shorter one — the reader cannot tell an exchange that did not
+// happen from one that was skipped over because it happened to be cheap.
+//
+// The fixture is built so the two behaviours DIVERGE: a big message sits exactly
+// at the point where the budget runs out, and two cheap ones sit OLDER than it.
+// Uniform-size corpora cannot tell them apart (if the next one does not fit,
+// none of the older equal-sized ones do either), which is exactly why the
+// ceiling test — whose corpus is uniform by design — is blind to this.
+func TestResumeChat_PackingStopsAtTheFirstMessageThatDoesNotFit(t *testing.T) {
+	api := resumeCtxServer(t)
+
+	// Everything is on the OWNER's line so nothing is collapsed for length —
+	// this case is about the packer's walk, not about body folding.
+	putChat(t, api, "c-tiny-1", wireOwnerID, "m-exec", "短", 1, nil)
+	putChat(t, api, "c-tiny-2", wireOwnerID, "m-exec", "短", 2, nil)
+	putChat(t, api, "c-wall", wireOwnerID, "m-exec", strings.Repeat("牆", 4000), 3, nil)
+	for i := 0; i < 30; i++ {
+		putChat(t, api, fmt.Sprintf("c-mid-%02d", i), wireOwnerID, "m-exec",
+			strings.Repeat("中", 150), float64(10+i), nil)
+	}
+
+	snap := resumeSnapshot(t, api, "m-exec")
+
+	got := map[string]bool{}
+	for _, m := range snap.Chat {
+		got[m.ID] = true
+	}
+
+	// Anti-vacuity, both directions: the walk really did stop somewhere in the
+	// middle. Without these, "the tiny ones are absent" is also satisfied by a
+	// packer that served nothing, and "some mid ones are present" by one that
+	// served everything.
+	if len(snap.Chat) == 0 {
+		t.Fatalf("fixture bug: nothing was served")
+	}
+	if got["c-wall"] {
+		t.Fatalf("fixture bug: the wall message FIT, so it cannot mark a stop "+
+			"point (served %d messages)", len(snap.Chat))
+	}
+
+	// 🔴 THE ASSERTION: nothing OLDER than the wall came through. A skip-and-
+	// continue packer would have taken these two — they are cheap — and left a
+	// hole where the wall is.
+	for _, id := range []string{"c-tiny-1", "c-tiny-2"} {
+		if got[id] {
+			t.Fatalf("%s is older than the message that did not fit, so the walk "+
+				"must have stopped before it: served=%d", id, len(snap.Chat))
 		}
 	}
-	// Positive control A: the budget really did bind — otherwise "the quiet lines
-	// survived" is just "nothing was dropped".
-	if byLine[wireOwnerID] >= resumeChatPerPeerFetch {
-		t.Fatalf("the loud line must have been squeezed by the budget, got all %d (lines=%v)",
-			byLine[wireOwnerID], byLine)
+
+	// And what WAS served is a contiguous run of the newest messages — no gaps
+	// anywhere inside it either.
+	seenNewer := false
+	for i := 29; i >= 0; i-- {
+		id := fmt.Sprintf("c-mid-%02d", i)
+		if got[id] {
+			seenNewer = true
+			continue
+		}
+		if !seenNewer {
+			continue // still walking back through the tail that did not fit
+		}
+		// A message absent while a NEWER one is present is fine only if every
+		// older one is absent too — which is what the loop shape enforces from
+		// here on.
+		for j := i; j >= 0; j-- {
+			if got[fmt.Sprintf("c-mid-%02d", j)] {
+				t.Fatalf("gap in the served stream: c-mid-%02d is absent but the "+
+					"older c-mid-%02d is present", i, j)
+			}
+		}
+		break
 	}
-	// Positive control B: the loud line kept its own floor too; the fix must not
-	// be "starve whoever talks most".
-	if byLine[wireOwnerID] < resumeChatPeerFloor {
-		t.Fatalf("the loud line keeps a floor as well, got %d", byLine[wireOwnerID])
+}
+
+// TestResumeChat_ACollapseThatSavesNothingIsNotMade pins the other half of the
+// "this payload is too big" ruling (owner 2026-08-13: 「省不到就不要折」).
+//
+// Folding is not free: the payload pays the ellipsis plus the digits of
+// body_omitted_chars, and the reader pays a mark beside the message and a
+// possible get_chat to get the text back. A body barely over the preview buys a
+// handful of runes for all of that.
+//
+// 🔴 THE CASE IS DELIBERATELY THE BREAK-EVEN ONE, because that is the only place
+// the rule is observable. MUTANT: delete the resumeChatCollapseIsWorthIt guard
+// in resumeChatMessageDTO → the break-even message comes back folded and this
+// goes red. The over-threshold message is the positive control: without it,
+// "nothing was folded" would also pass on a build that never folds at all.
+func TestResumeChat_ACollapseThatSavesNothingIsNotMade(t *testing.T) {
+	api := resumeCtxServer(t)
+
+	// Break-even: omitted == 2, and the marker costs 1 (the …) + 1 digit = 2.
+	// Equal is not a saving, so this body must be carried WHOLE.
+	breakEven := strings.Repeat("字", resumeChatOtherPreview+2)
+	// One rune more: omitted == 3 > 2, so this one is worth folding. It is the
+	// positive control — it proves the collapse machinery is still alive.
+	worthIt := strings.Repeat("字", resumeChatOtherPreview+3)
+
+	putChat(t, api, "c-even", "m-peer", "m-exec", breakEven, 1, nil)
+	putChat(t, api, "c-worth", "m-peer", "m-exec", worthIt, 2, nil)
+
+	snap := resumeSnapshot(t, api, "m-exec")
+
+	even := chatByID(t, snap, "c-even")
+	if even.BodyOmittedChars != 0 {
+		t.Fatalf("a fold that breaks even must not be made: body_omitted_chars=%d",
+			even.BodyOmittedChars)
 	}
-	// Positive control C: the cut is REPORTED. A budget that drops messages
-	// silently is the failure this whole format exists to remove.
-	if !snap.ChatEarlierOmitted.Omitted {
-		t.Fatalf("messages were dropped, so the cut must be reported: %+v",
-			snap.ChatEarlierOmitted)
+	if even.Body != breakEven {
+		t.Fatalf("an unfolded body must be carried verbatim: got %d runes, want %d",
+			len([]rune(even.Body)), len([]rune(breakEven)))
+	}
+
+	// Positive control: the machinery still folds when folding actually saves.
+	worth := chatByID(t, snap, "c-worth")
+	if worth.BodyOmittedChars != 3 {
+		t.Fatalf("a fold that saves must still be made: body_omitted_chars=%d, want 3",
+			worth.BodyOmittedChars)
 	}
 }
 
 // ── ⑦ the merged stream is one chronological stream, not per-peer blocks ────
 
-// TestResumeChat_MergedStreamIsChronological pins the risk the per-line packing
-// introduced: the block is now collected line by line, so chronological order
-// is something the assembly has to produce rather than inherit.
+// TestResumeChat_MergedStreamIsChronological pins that the served block is ONE
+// chronological stream.
 //
-// MUTANT: drop the sort.SliceStable in resumeChatBlock → the served array comes
-// out grouped by peer and this goes red. The DAL half below is red instead if
-// the outer `ORDER BY ts, id` is removed from ListChatPerPeerInvolving.
+// ⚠️ It used to guard the re-sort the per-line packing needed. That packing is
+// gone (2026-08-13) and with it the re-sort: the read is a single global
+// newest-N and the packer keeps a contiguous suffix of it, so order is now
+// INHERITED rather than produced. This test therefore moved down a layer — the
+// DAL half is where the mutant lives now (`ORDER BY ts DESC` re-sorted back to
+// ascending in ListChatInvolving), and the served half is a cheap end-to-end
+// restatement of it rather than an independent guard. Said out loud instead of
+// leaving a comment claiming a discrimination it no longer has.
 func TestResumeChat_MergedStreamIsChronological(t *testing.T) {
 	api := resumeCtxServer(t)
 	// Interleave two lines so grouping and ordering are DISTINGUISHABLE — with
@@ -396,13 +551,13 @@ func TestResumeChat_MergedStreamIsChronological(t *testing.T) {
 	}
 
 	// The DAL half of the same guarantee, asserted at its own source.
-	msgs, err := api.dal.ListChatPerPeerInvolving("m-exec", resumeChatPerPeerFetch)
+	msgs, err := api.dal.ListChatInvolving("m-exec", resumeChatFetch)
 	if err != nil {
-		t.Fatalf("per-peer read: %v", err)
+		t.Fatalf("snapshot read: %v", err)
 	}
 	for i := 1; i < len(msgs); i++ {
 		if msgs[i].TS < msgs[i-1].TS {
-			t.Fatalf("the per-line read must merge oldest→newest: %v after %v",
+			t.Fatalf("the snapshot read must come back oldest→newest: %v after %v",
 				msgs[i].TS, msgs[i-1].TS)
 		}
 	}
@@ -431,9 +586,11 @@ func TestResumeChat_CutMarkerIsActionableAndDistinctFromCollapse(t *testing.T) {
 		t.Fatalf("no cut means no hint, got %q", clean.ChatEarlierOmitted.Hint)
 	}
 
-	// Now overflow the budget so whole messages are left out.
+	// Now overflow the budget so whole messages are left out. Each of these is
+	// from a third party, so its body is collapsed to the preview first — the
+	// count has to be big enough that the COLLAPSED corpus still overruns.
 	chunk := strings.Repeat("字", 700)
-	for i := 0; i < resumeChatPerPeerFetch; i++ {
+	for i := 0; i < 100; i++ {
 		putChat(t, api, "c-x"+strconv.Itoa(i), "m-loud", "m-exec", chunk, float64(100+i), nil)
 	}
 	cut := resumeSnapshot(t, api, "m-exec").ChatEarlierOmitted
@@ -497,8 +654,7 @@ func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T)
 			peek.Overview, full.Overview)
 	}
 
-	want := len([]rune(full.GeneratedAt)) + len([]rune(full.ChatEarlierOmitted.Hint)) +
-		resumeOverrunWireChars(full.ChatBudgetOverrun)
+	want := len([]rune(full.GeneratedAt)) + len([]rune(full.ChatEarlierOmitted.Hint))
 	sawCard, sawCollapse := false, false
 	for _, m := range full.Chat {
 		want += len([]rune(m.Body)) +
@@ -534,348 +690,5 @@ func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T)
 		full.Overview.RosterChars + full.Overview.MachinesChars
 	if peek.EstimatedTotalChars != wantEstimate {
 		t.Fatalf("estimated_total_chars: want %d, got %d", wantEstimate, peek.EstimatedTotalChars)
-	}
-}
-
-// ── ⑨ the OVER-BUDGET marker: size, not absence ─────────────────────────────
-
-// resumeOverrunWireChars re-derives what the overrun marker costs a reader, from
-// the WIRE VALUES only. It is deliberately NOT resumeChatOverrunChars — an
-// assertion written against the production accountant is true by construction
-// and survives every mutant of it (the same rule the estimate test above
-// already runs on).
-func resumeOverrunWireChars(o resumeChatBudgetOverrunDTO) int {
-	if !o.Over {
-		return 0
-	}
-	return len([]rune(o.Note)) +
-		len(strconv.Itoa(o.BudgetChars)) +
-		len(strconv.Itoa(o.BlockChars)) +
-		len(strconv.Itoa(o.OverByChars))
-}
-
-// overBudgetSnapshot seeds `lines` SEPARATE conversation lines with `perLine`
-// messages each, so the reserved floors alone outgrow the budget, and returns
-// the resulting snapshot.
-//
-// 🔴 The fixture is the fault itself, not a stand-in for it. Every line's
-// messages are SHORT — well inside every per-message bound — so nothing here is
-// collapsed for length; the block is over budget PURELY because reserved
-// messages are charged to the budget and then never evicted by it. That is the
-// mechanism the marker exists to make visible, so a fixture that overran for any
-// other reason would be testing the wrong thing.
-//
-// 🔴 `perLine` IS A PARAMETER BECAUSE FIXING IT AT THE FLOOR HID A CONTRADICTION
-// FOR A WHOLE ROUND. With perLine == resumeChatPeerFloor there are no
-// non-reserved messages at all, so nothing can be refused and
-// chat_earlier_omitted is structurally ALWAYS false — the fixture could only
-// ever produce a tidy overrun with nothing missing, which is the RARE case. Set
-// perLine above the floor and the ordinary case appears: see
-// TestResumeChat_OverBudgetAndCutAreSimultaneous for why it is the ordinary one.
-// A fixture that can only reach the happy shape of a fault is not a test of the
-// fault; an independent review found the resulting false cockpit label, not this
-// suite.
-func overBudgetSnapshot(t *testing.T, lines, perLine int) (*apiServer, resumeSummaryDTO) {
-	t.Helper()
-	api := newTasksTestServer(t)
-	// The subject's own line is not one of the `lines` — it is not seeded at all.
-	// Exactly at the collapse threshold, so NOTHING here is folded: this
-	// overrun must be attributable to the floor and to nothing else.
-	body := strings.Repeat("字", resumeChatOtherPreview)
-	ts := 1.0
-	for i := 0; i < lines; i++ {
-		peer := "m-line" + strconv.Itoa(i)
-		if err := api.dal.PutMember(Member{
-			ID: peer, Name: "線" + strconv.Itoa(i), Kind: "assistant",
-			RosterStatus: RosterStatusActive,
-		}); err != nil {
-			t.Fatalf("seed member %s: %v", peer, err)
-		}
-		for j := 0; j < perLine; j++ {
-			ts++
-			putChat(t, api, "c-"+peer+"-"+strconv.Itoa(j), peer, "m-exec", body, ts, nil)
-		}
-	}
-	if err := api.dal.PutMember(Member{
-		ID: "m-exec", Name: "阿執", Kind: "assistant", RosterStatus: RosterStatusActive,
-	}); err != nil {
-		t.Fatalf("seed subject: %v", err)
-	}
-	return api, resumeSnapshot(t, api, "m-exec")
-}
-
-// TestResumeChat_OverBudgetIsMarkedAndTheFloorIsNotEvicted is the discriminating
-// test for the marker the owner ruled onto this payload (rc-b1fb7f1be05d,
-// 2026-08-13, option ①: 「超出預算時在快照上標一行,不改任何行為。」).
-//
-// It asserts BOTH directions, because only the pair has any discrimination:
-//   - over budget  → the marker is up, with figures that agree with each other
-//     and with the block, AND every RESERVED message is still carried (the
-//     ruling was "change no behaviour", so a marker that arrived alongside a
-//     silent eviction of the floor would be the wrong change wearing the right
-//     label).
-//
-// 🔴 THE NAME IS NARROW ON PURPOSE — it used to be
-// "…AndNothingIsDropped", which over-claims. In THIS fixture every line holds
-// exactly its floor, so there are no non-reserved messages and nothing CAN be
-// dropped; that is a property of the fixture, not of an overrun. The general
-// case is the opposite and lives next door in
-// TestResumeChat_OverBudgetAndCutAreSimultaneous. A test name that generalises
-// its own fixture is how "over budget ⇒ nothing missing" became a belief, and
-// then a cockpit label.
-//   - inside budget → the marker is DOWN and every field is at its zero value.
-//     An orphan line on the ordinary snapshot is the failure mode of a marker.
-//
-// MUTANT A: make resumeChatBudgetOverrun return Over unconditionally (drop the
-// `if blockChars <= resumeChatBudgetChars` guard) → the inside-budget half goes
-// red; the over-budget half stays green.
-// MUTANT B: make it always return the zero value → the over-budget half goes
-// red; the inside-budget half stays green.
-// Neither mutant can be hidden by the other half, which is why both are here.
-func TestResumeChat_OverBudgetIsMarkedAndTheFloorIsNotEvicted(t *testing.T) {
-	// ── inside budget: no marker, and no orphan fields ──────────────────────
-	_, small := overBudgetSnapshot(t, 1, resumeChatPeerFloor)
-	if small.Overview.ChatChars > resumeChatBudgetChars {
-		t.Fatalf("fixture bug: the small snapshot must be INSIDE the budget, "+
-			"chat_chars=%d budget=%d", small.Overview.ChatChars, resumeChatBudgetChars)
-	}
-	if small.ChatBudgetOverrun.Over {
-		t.Fatalf("a snapshot inside its budget must not raise the overrun marker: %+v",
-			small.ChatBudgetOverrun)
-	}
-	if small.ChatBudgetOverrun != (resumeChatBudgetOverrunDTO{}) {
-		t.Fatalf("a marker that is down carries NO figures and NO text — an "+
-			"orphan line is how a marker stops being read: %+v", small.ChatBudgetOverrun)
-	}
-
-	// ── over budget: marker up, arithmetic sound, nothing dropped ───────────
-	//
-	// The line count is derived, not guessed: each line reserves
-	// resumeChatPeerFloor short messages, so this is comfortably past the
-	// budget rather than one message either side of it.
-	const lines = 40
-	_, big := overBudgetSnapshot(t, lines, resumeChatPeerFloor)
-	o := big.ChatBudgetOverrun
-	if !o.Over {
-		t.Fatalf("%d conversation lines each reserving %d messages overruns the "+
-			"budget, so the marker must be up: chat_chars=%d %+v",
-			lines, resumeChatPeerFloor, big.Overview.ChatChars, o)
-	}
-	if o.BudgetChars != resumeChatBudgetChars {
-		t.Fatalf("the marker must report the ceiling it was measured against: "+
-			"want %d, got %d", resumeChatBudgetChars, o.BudgetChars)
-	}
-	if o.BlockChars <= o.BudgetChars {
-		t.Fatalf("an overrun means the block cost MORE than the budget, got "+
-			"block=%d budget=%d", o.BlockChars, o.BudgetChars)
-	}
-	if o.OverByChars != o.BlockChars-o.BudgetChars {
-		t.Fatalf("over_by_chars must be block - budget: %d - %d = %d, got %d",
-			o.BlockChars, o.BudgetChars, o.BlockChars-o.BudgetChars, o.OverByChars)
-	}
-	// 🔴 THE BEHAVIOUR-UNCHANGED HALF. The reserved messages of every line are
-	// still all here — the marker reports the overrun, it does not resolve it.
-	if want := lines * resumeChatPeerFloor; len(big.Chat) != want {
-		t.Fatalf("the ruling was to MARK the overrun and change no behaviour, so "+
-			"every reserved message must still be carried: want %d, got %d",
-			want, len(big.Chat))
-	}
-	// 🔴 SIZE, NOT ABSENCE. The marker must not be readable as a third kind of
-	// missing material: no body here was folded, and the payload says so.
-	for _, m := range big.Chat {
-		if m.BodyOmittedChars != 0 {
-			t.Fatalf("fixture bug: this overrun must come from the FLOOR, not from "+
-				"collapsed bodies — %s reports %d folded",
-				m.ID, m.BodyOmittedChars)
-		}
-	}
-	// The note has to say, in the payload, what it is NOT — otherwise a reader
-	// files it beside the other two markers and hunts for material that was
-	// never missing. The POINTER is on this list for the same reason: the long
-	// explanation was deleted from the note (see resumeChatOverrunNote), so the
-	// note has to say where it went or the deletion is just a loss.
-	//
-	// ⚠️ WHAT THIS LIST DOES NOT GUARD — do not read it as more than it is. It
-	// checks that each token is PRESENT, nothing else. A note replaced wholesale
-	// by "SIZE over_by_chars budget seeds/system_interaction.md" satisfies every
-	// entry and says nothing at all (an independent review demonstrated exactly
-	// that, and it stayed green). It catches "the pointer is GONE"; it cannot
-	// catch "the pointer is MEANINGLESS". Making it catch the second is a new
-	// mechanism, not a longer list, and it is deliberately not in this round.
-	for _, want := range []string{"SIZE", "over_by_chars", "budget", "seeds/system_interaction.md"} {
-		if !strings.Contains(o.Note, want) {
-			t.Fatalf("the overrun note must mention %q so it can be read correctly: %q",
-				want, o.Note)
-		}
-	}
-	// 🔴 AND IT HAS TO BE SHORT. This marker fires only when the block is
-	// ALREADY over its budget, so every rune it spends is spent at the most
-	// expensive moment there is — the first draft of this note was 860 runes,
-	// 14% of the overrun it was reporting, which is a notice demonstrating the
-	// problem it describes. The owner's ruling was 「標一行」. The bound is a
-	// number rather than a vibe so that re-growing it is a red test and not a
-	// judgement call in review.
-	// ⚠️ The note is EXACTLY 200 runes, and this bound is `> 200`. Zero headroom
-	// is deliberate, not an accident of drafting: the budget is the whole point
-	// of this marker, so the note gets a hard ceiling rather than a comfortable
-	// one, and any word added to it must displace a word. If you need room, take
-	// it from the note — do not raise this number without saying why in the
-	// commit, because "it only needs a few more" is how 200 becomes 860 again.
-	if n := len([]rune(o.Note)); n > 200 {
-		t.Fatalf("the overrun note must stay ≤200 runes — it is paid exactly "+
-			"when the payload is already too big — got %d: %q", n, o.Note)
-	}
-}
-
-// TestResumeChat_OverBudgetMarkerIsBilledToTheSizeEstimate pins the half a
-// reader of peek_resume_summary_size depends on: the marker's own text and
-// figures are runes that ride the payload, so estimated_total_chars must
-// include them. A marker that is invisible to the peek makes the peek
-// understate the payload by exactly the amount the marker was raised to report.
-//
-// MUTANT: drop the resumeChatOverrunChars term from overview.ChatChars in
-// resumeSnapshotParts → the first comparison goes red. The zero-contribution
-// half below is what stops "add a constant" from passing.
-func TestResumeChat_OverBudgetMarkerIsBilledToTheSizeEstimate(t *testing.T) {
-	api, big := overBudgetSnapshot(t, 40, resumeChatPeerFloor)
-	if !big.ChatBudgetOverrun.Over {
-		t.Fatalf("fixture bug: this snapshot must be over budget, %+v",
-			big.ChatBudgetOverrun)
-	}
-	marker := resumeOverrunWireChars(big.ChatBudgetOverrun)
-	if marker <= 0 {
-		t.Fatalf("a raised marker costs a reader real runes, got %d", marker)
-	}
-	// chat_chars = the packer's block + the header + the cut hint + the marker.
-	// Stated as a subtraction so the assertion names the term under test.
-	rest := big.Overview.ChatChars - marker
-	if rest != big.ChatBudgetOverrun.BlockChars+
-		len([]rune(big.GeneratedAt))+
-		len([]rune(big.ChatEarlierOmitted.Hint)) {
-		t.Fatalf("chat_chars must carry the overrun marker's own cost: "+
-			"chat_chars=%d marker=%d block=%d header=%d hint=%d",
-			big.Overview.ChatChars, marker, big.ChatBudgetOverrun.BlockChars,
-			len([]rune(big.GeneratedAt)), len([]rune(big.ChatEarlierOmitted.Hint)))
-	}
-	// The peek is the reader this number exists for, and it must land on the
-	// SAME total — including the marker — because both go through the one
-	// assembly. (The peek/full overview equality itself is pinned in ⑧; this is
-	// the headline number on an OVER-BUDGET payload, which ⑧'s fixture is not.)
-	peek := peekResumeSize(t, api, "m-exec")
-	if peek.Overview != big.Overview {
-		t.Fatalf("peek overview must equal the snapshot's on an over-budget "+
-			"payload too:\n peek=%+v\n full=%+v", peek.Overview, big.Overview)
-	}
-	wantEstimate := big.Overview.ChatChars + big.Overview.TasksDetailChars +
-		big.Overview.RosterChars + big.Overview.MachinesChars
-	if peek.EstimatedTotalChars != wantEstimate {
-		t.Fatalf("estimated_total_chars: want %d, got %d",
-			wantEstimate, peek.EstimatedTotalChars)
-	}
-
-	// And a snapshot INSIDE its budget is billed nothing for a marker it does
-	// not carry — the term must be conditional, not a constant.
-	_, small := overBudgetSnapshot(t, 1, resumeChatPeerFloor)
-	if got := resumeOverrunWireChars(small.ChatBudgetOverrun); got != 0 {
-		t.Fatalf("a marker that is down costs nothing, got %d", got)
-	}
-}
-
-// TestResumeChatBudgetOverrun_IsStrictlyGreater pins the boundary on its own,
-// at the one pure function that decides it. A block that lands EXACTLY on the
-// budget spent every rune it was allowed and overspent none, so it is not an
-// overrun — marking it there would put a line on a snapshot with nothing to
-// report, and the ordinary snapshot is the one that must stay quiet.
-//
-// MUTANT: relax `blockChars <= resumeChatBudgetChars` to `<` → the first half
-// goes red. Widen it to `<= budget+1` → the second half goes red.
-func TestResumeChatBudgetOverrun_IsStrictlyGreater(t *testing.T) {
-	for _, at := range []int{0, 1, resumeChatBudgetChars - 1, resumeChatBudgetChars} {
-		if got := resumeChatBudgetOverrun(at); got != (resumeChatBudgetOverrunDTO{}) {
-			t.Fatalf("%d runes is within a %d budget, so no marker: %+v",
-				at, resumeChatBudgetChars, got)
-		}
-	}
-	one := resumeChatBudgetOverrun(resumeChatBudgetChars + 1)
-	if !one.Over || one.OverByChars != 1 || one.BlockChars != resumeChatBudgetChars+1 {
-		t.Fatalf("one rune past the budget IS an overrun, by exactly one: %+v", one)
-	}
-	if one.Note == "" {
-		t.Fatalf("a raised marker must carry its own explanation: %+v", one)
-	}
-	if resumeChatOverrunChars(one) != resumeOverrunWireChars(one) {
-		t.Fatalf("the production accountant and the wire re-derivation must "+
-			"agree: %d vs %d", resumeChatOverrunChars(one), resumeOverrunWireChars(one))
-	}
-}
-
-// TestResumeChat_OverBudgetAndCutAreSimultaneous pins the state every piece of
-// wording on this payload has to survive, and that the previous cockpit label
-// did not: OVER BUDGET and MATERIAL GENUINELY ABSENT, both true at once.
-//
-// 🔴 THEY ARE NOT ALTERNATIVES, THEY ARE THE ORDINARY CASE, and the mechanism is
-// two lines of resumeChatBlock that disagree with each other on purpose:
-//
-//	reserve pass:  used += all[i].cost                      // UNCONDITIONAL
-//	fill pass:     if used+all[i].cost <= budget { keep }   // CONDITIONAL
-//
-// So the moment the floors alone carry `used` past the budget, the fill pass can
-// never succeed again: EVERY non-reserved message is refused, `dropped` is set,
-// and chat_earlier_omitted is raised. An overrun with nothing missing requires
-// every line to hold exactly its floor and not one message more — which is the
-// exception, not the rule, and was the only shape the fixture could produce
-// before perLine became a parameter.
-//
-// What this earns: any sentence on this payload that says "nothing is missing"
-// is FALSE here. The surviving form is the narrow one every server-side copy
-// already uses — nothing was dropped TO MAKE ROOM — and the cockpit labels are
-// held to it by the wording guard in
-// ResumeSummaryCard.payload-parity.test.tsx.
-//
-// MUTANT: make the reserve pass charge nothing (drop `used += all[i].cost`) →
-// the overrun stops happening and the first assertion goes red. Make the fill
-// pass unconditional → the cut stops being raised and the second goes red.
-func TestResumeChat_OverBudgetAndCutAreSimultaneous(t *testing.T) {
-	// Above the floor, so there ARE non-reserved messages for the budget to
-	// refuse. 40 lines × 6 = 240 seeded, floors reserve 40 × 3 = 120.
-	const lines, perLine = 40, resumeChatPeerFloor * 2
-	_, snap := overBudgetSnapshot(t, lines, perLine)
-
-	if !snap.ChatBudgetOverrun.Over {
-		t.Fatalf("%d lines × %d reserve %d messages, which is past the budget: %+v",
-			lines, perLine, lines*resumeChatPeerFloor, snap.ChatBudgetOverrun)
-	}
-	if !snap.ChatEarlierOmitted.Omitted {
-		t.Fatalf("once the floors alone exceed the budget the fill pass can never "+
-			"succeed, so whole messages ARE left out and the cut must say so: %+v",
-			snap.ChatEarlierOmitted)
-	}
-	// 🔴 The two are not the same fact wearing two hats. The cut is raised
-	// because messages were REFUSED; the overrun is raised because what was
-	// KEPT costs more than the budget. Both numbers are checked so this cannot
-	// pass on a snapshot that merely happens to set both booleans.
-	if want := lines * resumeChatPeerFloor; len(snap.Chat) != want {
-		t.Fatalf("exactly the reserved messages survive — the floors, and nothing "+
-			"the fill pass could add: want %d of %d seeded, got %d",
-			want, lines*perLine, len(snap.Chat))
-	}
-	if snap.ChatBudgetOverrun.BlockChars <= snap.ChatBudgetOverrun.BudgetChars {
-		t.Fatalf("the kept block must still cost more than the budget: %+v",
-			snap.ChatBudgetOverrun)
-	}
-	// Anti-vacuity: the seeded corpus really was bigger than what came back, so
-	// "messages are absent" is a fact about this payload and not a flag someone
-	// set. Half of what was seeded is gone.
-	if len(snap.Chat) >= lines*perLine {
-		t.Fatalf("fixture bug: nothing was actually left out (%d seeded, %d carried)",
-			lines*perLine, len(snap.Chat))
-	}
-	// And nothing was folded for LENGTH either, so the only two things this
-	// payload reports are the two under test.
-	for _, m := range snap.Chat {
-		if m.BodyOmittedChars != 0 {
-			t.Fatalf("fixture bug: %s reports %d folded — this case must isolate "+
-				"the cut and the overrun", m.ID, m.BodyOmittedChars)
-		}
 	}
 }

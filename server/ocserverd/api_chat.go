@@ -35,45 +35,53 @@ const (
 	//     600 characters or 60,000 depending on who was talking — and it does
 	//     not spend the room where it is worth spending. What a waking agent
 	//     needs is a CHARACTER budget, filled newest-first.
-	//  2. One global newest-N has no notion of a conversation LINE, so the
-	//     chattiest peer can occupy the whole window and a quiet correspondent
-	//     vanishes entirely. Vanishing silently is the bad part: the agent
-	//     cannot tell "nobody said anything" from "I was not shown it".
+	//  2. ~~One global newest-N has no notion of a conversation LINE~~ — this
+	//     used to be listed as the second fault, and the per-line FLOOR built to
+	//     answer it is what the owner removed on 2026-08-13. The floor's reserved
+	//     messages were billed to the budget and then never evicted by it, so the
+	//     block grew without any upper bound at all: measured on one real member,
+	//     chat_chars 80,140 across 496 messages (~165 lines × 3) against the
+	//     ceiling of the day — 6.7× over, paid by every agent on every single
+	//     wake. Owner ruling, verbatim: 「不要管每條對話線」/「只管從最新一則訊息
+	//     往前推,直到超出我們 budget 上限前最後一則」. So the budget is now a real
+	//     CEILING: global newest-first, stop at the last message that still fits.
 	//
-	// resumeChatBudgetChars is the total the chat block (messages AND the cards
-	// folded into them) may spend, counted in RUNES — one CJK character is one,
-	// matching every other cap in this file (see chatBodyMaxChars). It is a
-	// budget, not a target: a quiet studio produces a much smaller payload.
-	resumeChatBudgetChars = 12000
-	// resumeChatPeerFloor is the number of newest messages RESERVED for every
-	// conversation line before the budget is spent on anything else. It is the
-	// answer to fault 2 above: without a floor, packing newest-first is just the
-	// global newest-N in another costume, because the loudest line still fills
-	// the budget before a quiet line is ever reached. Three is the smallest
-	// number that can carry an exchange rather than an isolated remark (ask →
-	// answer → acknowledgement).
+	// resumeChatBudgetChars is the total the chat block may spend, counted in
+	// RUNES — one CJK character is one, matching every other cap in this file
+	// (see chatBodyMaxChars). 🔴 It covers EVERYTHING overview.chat_chars counts:
+	// the messages and their folded cards, plus the snapshot header and the cut
+	// hint that ride outside the array. Nothing is exempt from it any more —
+	// that exemption WAS the defect. It is a budget, not a target: a quiet studio
+	// produces a much smaller payload.
 	//
-	// 🔴 The floor OUTRANKS the budget: reserved messages are counted against
-	// the budget but never dropped by it, so a single enormous thread cannot
-	// squeeze another line to zero. The alternative (floor yields to budget)
-	// re-introduces exactly the silent disappearance the floor exists to
-	// prevent.
+	// 8000 is the owner's number (2026-08-13, verbatim: 「聊天區塊字數留 8000 就
+	// 好」), set in the same breath as the ruling above. It replaced 12000, which
+	// was the ceiling the block was OVERSHOOTING by 6.7× — a number nothing was
+	// actually holding it to.
+	resumeChatBudgetChars = 8000
+	// resumeChatFetch caps how many of the caller's newest messages are READ
+	// before packing — GLOBALLY, not per conversation line (see
+	// ListChatInvolving). It bounds the read itself so a busy studio cannot drag
+	// its whole history into memory just to have it dropped by the budget.
 	//
-	// 🔴 What is deliberate is the DIRECTION of that trade — never the amount.
-	// The reserved messages are charged to resumeChatBudgetChars and then never
-	// evicted by it, so the block can exceed the budget, and by HOW MUCH is
-	// bounded by nothing here: it grows with the caller's number of
-	// conversation lines and with the size of the reserved messages on each
-	// (each body is capped by chatBodyMaxChars, the line count is not capped at
-	// all). "It can exceed the budget" is true; "it exceeds it by a little" is
-	// not something this constant, or anything else on this path, establishes.
-	resumeChatPeerFloor = 3
-	// resumeChatPerPeerFetch caps how many of a line's newest messages are READ
-	// before packing. It bounds the read itself (the quota is applied in SQL —
-	// see ListChatPerPeerInvolving), so a long-running conversation cannot drag
-	// its whole history into memory just to have it dropped by the budget. A
-	// line at this cap always reports the cut through chat_earlier_omitted.
-	resumeChatPerPeerFetch = 40
+	// 🔴 WHY 500, and why the number is a FLOOR-derived one rather than a taste
+	// call: the packer must never run out of candidates before it runs out of
+	// budget, or the snapshot would silently under-fill. The CHEAPEST possible
+	// message costs 27 runes (resumeChatMessageChars counts ts_display — always
+	// 26 runes of resumeTimeLayout — plus at least one rune for the "0" of
+	// body_omitted_chars; body and both names can be empty). 500 × 27 = 13,500 >
+	// resumeChatBudgetChars, so even an all-minimum stream fills the budget with
+	// rows to spare. Realistic messages cost far more, so the loop almost always
+	// stops on the budget long before this cap.
+	//
+	// 🔴 It replaces a PER-LINE quota of 40. On the measured member (~165 lines)
+	// that read 6,600 rows to fill one budget's worth; this reads at most 500. It is
+	// still ONE query and still a full chat_message scan (sender/recipient carry
+	// no index) — what changed is how many rows come back.
+	//
+	// A caller whose stream fills this cap always reports the cut through
+	// chat_earlier_omitted.
+	resumeChatFetch = 500
 	// resumeChatOtherPreview is where ANOTHER AGENT's message body is COLLAPSED.
 	// 120 runes is a lead, not a summary: enough to recognise which exchange
 	// this is and decide whether to go and read it, which is all a third party's
@@ -122,62 +130,13 @@ const (
 	// because that is the failure a first attempt actually hits (see
 	// HandleListChatApiChatGet).
 	//
-	// 🔴 It says MAY, not DOES. The marker is raised when a line filled its read
-	// window as well as when the budget dropped something, and the read never
-	// looks past the window — so a line holding exactly resumeChatPerPeerFetch
+	// 🔴 It says MAY, not DOES. The marker is raised when the read filled its
+	// window as well as when the budget stopped the pack, and the read never
+	// looks past the window — so a caller holding exactly resumeChatFetch
 	// messages and nothing older raises it too (see resumeChatBlock for why that
 	// one-sidedness is the right side to err on). Wording it as a fact would
 	// make this text false in exactly that case.
 	resumeChatCutHint = "Earlier messages MAY NOT have been carried here — this line was cut at a read or budget limit and nothing looked past the cut, so there may be whole messages missing (a different thing from `body_omitted_chars`, which marks a message that IS here with part of its text folded away). To check, and to read any that are there: call get_chat with `with` = the peer's id, plus BOTH `before_ts` and `before_id` copied from the OLDEST message of that peer's line in this payload. The two cursor fields must be sent TOGETHER — supplying only one is rejected with 422."
-	// resumeChatOverrunNote is the THIRD marker's text, and the only reason it
-	// exists is that the second paragraph of resumeChatPeerFloor was true and
-	// INVISIBLE: the floor outranks the budget, reserved messages are charged to
-	// the budget and then never evicted by it, so the block grows past the budget
-	// as soon as there are enough conversation lines — with no upper bound
-	// anywhere on this path, no time window, and no cap on the line count.
-	//
-	// 🔴 IT REPORTS SIZE, NOT LOSS, and that is the whole point of wording it
-	// away from the other two markers. `body_omitted_chars` is a COLLAPSE (this
-	// message is here, folded, certain). `chat_earlier_omitted` is a CUT (whole
-	// messages MAY be absent, only a fetch settles it). This one says neither:
-	// nothing was thrown away TO MAKE ROOM, and the bill is simply larger than
-	// the budget. It is a cost statement.
-	//
-	// 🔴 IT IS SILENT ABOUT COMPLETENESS, AND THE TWO USUALLY FIRE TOGETHER. An
-	// earlier draft of this comment ended "a reader that files it under the
-	// other two draws exactly the wrong conclusion — that something is missing",
-	// which is FALSE: in the typical overrun chat_earlier_omitted is raised as
-	// well, because the reserve pass charges the budget unconditionally while
-	// the fill pass only spends what is left — once the floors alone exceed the
-	// budget every non-reserved message is refused (pinned by
-	// TestResumeChat_OverBudgetAndCutAreSimultaneous). "Something is missing" is
-	// normally the CORRECT reading of the payload. What is wrong is reading it
-	// off THIS field, or concluding the loss was made to save room.
-	//
-	// 🔴 NO BEHAVIOUR HANGS OFF THIS. Owner ruling on rc-b1fb7f1be05d
-	// (2026-08-13), option ①, verbatim: 「超出預算時在快照上標一行,不改任何行為。
-	// 踩到時我們會知道,那時再決定怎麼砍。」 He did NOT pick a time window, he did
-	// NOT pick a cap on conversation lines, and he did NOT pick "leave it alone".
-	// So: this string, the three numbers beside it, and nothing else. Anyone who
-	// later makes the packer act on the overrun is deciding the thing this marker
-	// was raised to let him decide with real numbers in hand.
-	//
-	// 🔴 IT IS SHORT ON PURPOSE, AND THE FIRST DRAFT WAS NOT — 860 runes of it,
-	// which is the mistake worth recording rather than quietly fixing. This
-	// marker fires ONLY when the block is already over budget, so a long note
-	// spends its words at the single most expensive moment there is: on the
-	// measured payload below it was 14% of the overrun it was reporting. A notice
-	// that says "this is too big" by making it bigger is demonstrating the
-	// problem instead of reporting it. 「標一行」 was also the literal ruling.
-	//
-	// What stays: SIZE-not-loss (the misreading that does damage), the three
-	// numbers, and a POINTER. What went: the mechanism ("each line reserves its
-	// newest few, billed but never evicted…") and a second explanation of the
-	// other two markers. Those are documentation, and documentation is not paid
-	// for on every wake — seeds/system_interaction.md §10.4 carries them, and it
-	// is a pointer rather than a summary precisely because a summary in here goes
-	// stale against that section with nothing to notice.
-	resumeChatOverrunNote = "SIZE notice, not a loss notice: this block cost `block_chars` against a `budget_chars` ceiling, `over_by_chars` over. Nothing was dropped or abbreviated for it. Why: seeds/system_interaction.md §10.4."
 	// resumeDutyPreview caps a roster row's duty and resumeTaskTitlePreview
 	// caps a contractor's task title (T-1b09). Both exist because this
 	// payload is read by EVERY member on EVERY wake, so an unbounded field
@@ -241,7 +200,7 @@ const (
 	// whole), and the thing it did not mention — whole messages left out — is
 	// the one a reader most needs told. The note now names both, in the two
 	// different words the payload uses for them.
-	resumeNote = "This is a BOUNDED wake snapshot. Chat: the recent messages involving you, packed newest-first under a CHARACTER budget (not a fixed message count) with a few newest messages reserved for EVERY conversation line, oldest→newest. Each message carries `from_name`/`to_name` beside the ids and `ts_display` beside the epoch `ts`, and folds in its reply card as `card` when it has one; read every `ts_display` against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked differently: `body_omitted_chars` > 0 means THIS message is here with that many characters COLLAPSED away (another agent's line; the owner's line and your own hand-off notes to yourself are carried in full) — re-read it with get_chat; `chat_earlier_omitted` means whole messages MAY be missing from this payload entirely — it is raised whenever a line was cut at a read or budget limit, and nothing looked past the cut, so it can be raised when there is in fact nothing older — and it tells you how to check and fetch them. A THIRD marker, `chat_budget_overrun`, is NOT one of those two: it reports SIZE — this block cost more than its budget, and nothing is absent or folded because of that. Also: your open tasks as LIGHT rows — no plan detail; `roster` = everyone in the studio with their status, machine and their duty (capped, `…` marks a cut); `machines` = the machine list plus which one you are on). Peek `overview` first (sizes/counts), then pull only what you need: get_task per task (hand a big detail_chars pull to a sub-agent), list_reply_cards (use `limit`) for your cards, list_chat / list_tasks for more."
+	resumeNote = "This is a BOUNDED wake snapshot. Chat: the recent messages involving you, packed newest-first under a CHARACTER budget (not a fixed message count) and stopping at the last message that still fits, oldest→newest. Each message carries `from_name`/`to_name` beside the ids and `ts_display` beside the epoch `ts`, and folds in its reply card as `card` when it has one; read every `ts_display` against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked differently: `body_omitted_chars` > 0 means THIS message is here with that many characters COLLAPSED away (another agent's line; the owner's line and your own hand-off notes to yourself are carried in full) — re-read it with get_chat; `chat_earlier_omitted` means whole messages MAY be missing from this payload entirely — it is raised whenever a line was cut at a read or budget limit, and nothing looked past the cut, so it can be raised when there is in fact nothing older — and it tells you how to check and fetch them. Also: your open tasks as LIGHT rows — no plan detail; `roster` = everyone in the studio with their status, machine and their duty (capped, `…` marks a cut); `machines` = the machine list plus which one you are on). Peek `overview` first (sizes/counts), then pull only what you need: get_task per task (hand a big detail_chars pull to a sub-agent), list_reply_cards (use `limit`) for your cards, list_chat / list_tasks for more."
 	// peekNote guides the two-step boot (T-7974): peek_resume_summary_size is
 	// size-only (no content); the agent reads estimated_total_chars and, when
 	// it is small, calls resume_summary directly in its own context, else has
@@ -986,7 +945,6 @@ func (s *apiServer) HandleResumeSummaryApiResumeSummaryGet(w http.ResponseWriter
 		GeneratedAt:        snap.GeneratedAt,
 		Chat:               snap.Chat,
 		ChatEarlierOmitted: snap.ChatCut,
-		ChatBudgetOverrun:  snap.ChatOverBudget,
 		Tasks:              snap.Tasks,
 		Roster:             snap.Roster,
 		Machines:           &snap.Machines,
@@ -1005,15 +963,10 @@ type resumeWakeSnapshot struct {
 	GeneratedAt string
 	Chat        []chatMessageDTO
 	ChatCut     resumeChatCutDTO
-	// ChatOverBudget is the SIZE marker (resumeChatBudgetOverrunDTO). It sits
-	// beside ChatCut and is emphatically not a second copy of it: ChatCut says
-	// material may be absent, this says the material that IS here cost more
-	// than the budget allowed.
-	ChatOverBudget resumeChatBudgetOverrunDTO
-	Tasks          []resumeTaskDTO
-	Roster         []resumeRosterMemberDTO
-	Machines       resumeMachinesDTO
-	Overview       resumeOverviewDTO
+	Tasks       []resumeTaskDTO
+	Roster      []resumeRosterMemberDTO
+	Machines    resumeMachinesDTO
+	Overview    resumeOverviewDTO
 }
 
 // resumeSnapshotParts assembles the caller's wake snapshot: the recent chat
@@ -1084,17 +1037,13 @@ func (s *apiServer) resumeSnapshotParts(actor string) (resumeWakeSnapshot, error
 		}
 	}
 
-	msgs, err := s.dal.ListChatPerPeerInvolving(actor, resumeChatPerPeerFetch)
+	msgs, err := s.dal.ListChatInvolving(actor, resumeChatFetch)
 	if err != nil {
 		return resumeWakeSnapshot{}, err
 	}
-	chat, cut, chatChars := resumeChatBlock(actor, msgs, names, cardsByID)
+	chat, cut, chatChars := resumeChatBlock(
+		actor, msgs, names, cardsByID, resumeChatPackBudget(snap.GeneratedAt))
 	snap.Chat, snap.ChatCut = chat, cut
-	// The overrun is DERIVED from what the packer already spent — it is not a
-	// second pass and it does not touch `chat`. resumeChatBlock above is
-	// unchanged: the whole point of the ruling is that the packing is identical
-	// and only the reporting is new.
-	snap.ChatOverBudget = resumeChatBudgetOverrun(chatChars)
 
 	tasks, tasksOpenTotal, err := s.resumeTasksFor(actor)
 	if err != nil {
@@ -1112,14 +1061,12 @@ func (s *apiServer) resumeSnapshotParts(actor string) (resumeWakeSnapshot, error
 		// the snapshot header (generated_at) and the cut hint, which are part
 		// of what a caller must read even though they sit outside the array.
 		// It is NOT "the sum of the bodies" any more; peekNote says so too.
-		// The overrun marker's own text and numbers are added for the same
-		// reason the cut hint is: they are runes the caller must read, they
-		// ride this payload, and a peek that leaves them out understates what
-		// pulling the snapshot costs. They contribute 0 whenever the marker is
-		// down, which is the ordinary case.
+		//
+		// 🔴 This sum is what resumeChatBudgetChars bounds, and the packer was
+		// handed its budget with exactly these two addends already subtracted
+		// (resumeChatPackBudget) — so it can never come out above the ceiling.
 		ChatChars: chatChars + utf8.RuneCountInString(snap.GeneratedAt) +
-			utf8.RuneCountInString(cut.Hint) +
-			resumeChatOverrunChars(snap.ChatOverBudget),
+			utf8.RuneCountInString(cut.Hint),
 		TasksReturned:       len(tasks),
 		TasksOpenTotal:      tasksOpenTotal,
 		TasksDetailChars:    detailChars,
@@ -1179,8 +1126,11 @@ func resumeChatMessageDTO(subject string, m ChatMessage, names map[string]string
 		if r := []rune(d.Body); len(r) > resumeChatOtherPreview {
 			// body_omitted_chars counts what was FOLDED AWAY, not what is left:
 			// the reader already has what is left, in front of it.
-			d.BodyOmittedChars = len(r) - resumeChatOtherPreview
-			d.Body = string(r[:resumeChatOtherPreview]) + "…"
+			omitted := len(r) - resumeChatOtherPreview
+			if resumeChatCollapseIsWorthIt(omitted) {
+				d.BodyOmittedChars = omitted
+				d.Body = string(r[:resumeChatOtherPreview]) + "…"
+			}
 		}
 	}
 	if id := replyCardIDFromMeta(m.Meta); id != "" {
@@ -1205,6 +1155,31 @@ func resumeChatMessageDTO(subject string, m ChatMessage, names map[string]string
 		}
 	}
 	return d
+}
+
+// resumeChatCollapseIsWorthIt answers whether folding a body actually SAVES
+// anything, and it exists because for a while it did not have to.
+//
+// 🔴 A COLLAPSE IS NOT FREE. Marking a message as folded costs the payload the
+// ellipsis that replaces the cut text (1 rune) plus the digits of
+// body_omitted_chars (resumeChatMessageChars counts exactly those), and it costs
+// the READER a marker beside the message and, if it matters, a get_chat round
+// trip to recover what was taken. Folding a body that was barely over the
+// preview therefore buys a handful of runes and pays for them twice — owner,
+// 2026-08-13: 「省不到就不要折」.
+//
+// So the rule is the literal one: fold only when the saving is STRICTLY GREATER
+// than what the marker itself costs. The marker cost is DERIVED here rather than
+// written down as a constant, because it is the same arithmetic
+// resumeChatMessageChars bills — a constant would be a second copy of it and
+// would go stale the first time the marker changes shape.
+//
+// Boundary: equal is NOT worth it. A fold that breaks even has made the payload
+// no smaller and the message harder to read, which is a pure loss.
+func resumeChatCollapseIsWorthIt(omitted int) bool {
+	markerCost := 1 /* the … that replaces the cut text */ +
+		len(strconv.Itoa(omitted))
+	return omitted > markerCost
 }
 
 // resumeChatMessageChars is the rune cost ONE projected message puts on the
@@ -1234,110 +1209,73 @@ func resumeChatMessageChars(d chatMessageDTO) int {
 
 // resumeChatBlock packs the wake snapshot's chat and reports what it left out.
 //
-// msgs arrives per-line-quota'd and oldest→newest (ListChatPerPeerInvolving).
-// Packing is:
-//   - RESERVE: the newest resumeChatPeerFloor messages of EVERY line, kept
-//     unconditionally. Their cost is charged to the budget but they are never
-//     evicted by it (see resumeChatPeerFloor).
-//   - FILL: everything else, offered NEWEST FIRST across all lines, taken while
-//     it fits. A message that does not fit does not stop the loop — a smaller,
-//     older one may still fit — so the budget is spent, not merely capped.
+// msgs arrives oldest→newest and is the caller's GLOBAL newest window
+// (ListChatInvolving, capped at resumeChatFetch). Packing is one pass:
+// walk NEWEST FIRST and take messages while they fit; the first one that would
+// push the block past `budget` STOPS the walk and everything older is left out.
+//
+// 🔴 STOP, not skip. The previous packer kept going past a message that did not
+// fit, hoping a smaller older one would — which spends the budget more fully but
+// hands the reader a stream with holes punched in it at unpredictable places.
+// The owner's ruling is literally a prefix: 「只管從最新一則訊息往前推,直到超出
+// 我們 budget 上限前最後一則」. A contiguous newest-first run is also what makes
+// the boundary checkable: the block is at the budget, and the very next message
+// would exceed it.
+//
+// 🔴 There is NO per-line reserve any more. It was removed on 2026-08-13
+// (「不要管每條對話線」) because its reserved messages were billed to the budget
+// and never evicted by it, so the block had no upper bound at all — see
+// resumeChatBudgetChars. The cost is real and is not hidden: a quiet
+// correspondent whose last message is older than the budget reaches now falls
+// off the snapshot entirely. It is not SILENT, though — that is what
+// chat_earlier_omitted and its hint are for, and dropping anything raises them.
+//
+// `budget` is passed in rather than read from resumeChatBudgetChars directly,
+// because the caller must subtract what rides OUTSIDE this array yet still
+// counts against the same ceiling (the snapshot header and the cut hint). A
+// packer that spent the whole constant would put overview.chat_chars over it by
+// construction, which is the defect this whole change exists to remove.
 //
 // Returns the messages oldest→newest, the cut marker, and the block's rune cost.
-func resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string, cards map[string]ReplyCard) ([]chatMessageDTO, resumeChatCutDTO, int) {
+func resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string, cards map[string]ReplyCard, budget int) ([]chatMessageDTO, resumeChatCutDTO, int) {
 	type packedMsg struct {
 		dto  chatMessageDTO
 		cost int
 	}
 	all := make([]packedMsg, 0, len(msgs))
-	idxByPeer := map[string][]int{}
-	peers := []string{}
 	for _, m := range msgs {
-		// The peer is the OTHER end. A message the subject sent to itself has
-		// no other end, so it lines up under the subject's own id — which is
-		// what makes the self hand-off a line of its own with its own floor,
-		// rather than something that competes with the owner's line.
-		peer := m.Sender
-		if peer == subject {
-			peer = m.Recipient
-		}
 		d := resumeChatMessageDTO(subject, m, names, cards)
-		if _, seen := idxByPeer[peer]; !seen {
-			peers = append(peers, peer)
-		}
-		idxByPeer[peer] = append(idxByPeer[peer], len(all))
 		all = append(all, packedMsg{dto: d, cost: resumeChatMessageChars(d)})
 	}
-	// Deterministic line order: same server state → same snapshot, which is what
-	// the DTO doc promises. Map iteration order would break that.
-	sort.Strings(peers)
 
-	keep := make([]bool, len(all))
+	// The read filled its window, so older messages MAY exist that were never
+	// even fetched. Reported as a cut whether or not the budget stopped the walk.
+	//
+	// Deliberately one-sided: a caller with exactly resumeChatFetch messages and
+	// nothing older reports a cut that is not there. That costs a reader one
+	// wasted get_chat; the opposite error costs it a conversation it never learns
+	// exists.
+	atFetchCap := len(all) >= resumeChatFetch
+
 	used := 0
-	atFetchCap := false
-	for _, p := range peers {
-		ids := idxByPeer[p]
-		if len(ids) >= resumeChatPerPeerFetch {
-			// This line filled its read window, so older messages MAY exist
-			// that were never even fetched — the read stopped at the cap and
-			// did not look past it. Reported as a cut whether or not the budget
-			// dropped anything.
-			//
-			// Deliberately one-sided: a line with exactly resumeChatPerPeerFetch
-			// messages and nothing older reports a cut that is not there. That
-			// costs a reader one wasted get_chat; the opposite error costs it a
-			// conversation it never learns exists. Answering it exactly would
-			// take a second query per line on the boot path, which this whole
-			// read is shaped to avoid.
-			atFetchCap = true
-		}
-		start := len(ids) - resumeChatPeerFloor
-		if start < 0 {
-			start = 0
-		}
-		for _, i := range ids[start:] {
-			keep[i] = true
-			used += all[i].cost
-		}
-	}
+	first := len(all) // index of the OLDEST message that made it in
 	dropped := false
 	for i := len(all) - 1; i >= 0; i-- { // newest first: `all` is oldest→newest
-		if keep[i] {
-			continue
+		if used+all[i].cost > budget {
+			// Everything from here back is older, so the walk is over.
+			dropped = true
+			break
 		}
-		if used+all[i].cost <= resumeChatBudgetChars {
-			keep[i] = true
-			used += all[i].cost
-			continue
-		}
-		dropped = true
+		used += all[i].cost
+		first = i
 	}
 
-	// Collected LINE BY LINE, so what comes out of this loop is grouped by peer
-	// — NOT a stream. The re-sort below is what turns it back into one.
+	// `all` is already the one chronological stream the chat surface serves, so
+	// the surviving suffix is in order with no re-sort needed.
 	chat := []chatMessageDTO{}
-	for _, p := range peers {
-		for _, i := range idxByPeer[p] {
-			if keep[i] {
-				chat = append(chat, all[i].dto)
-			}
-		}
+	for i := first; i < len(all); i++ {
+		chat = append(chat, all[i].dto)
 	}
-	// 🔴 The merge back to ONE stream is sorted EXPLICITLY, and it is
-	// LOAD-BEARING, not belt-and-braces. Before this change the order was a
-	// property of the single query that produced it; now the block is assembled
-	// from per-line groups, so without this line the payload would arrive
-	// grouped by conversation partner instead of chronological — a wake would
-	// read every peer's thread end-to-end and lose the interleaving that says
-	// what happened in what order. Stable, so equal (ts,id) rows — which the id
-	// tiebreak already makes impossible for distinct messages — keep their read
-	// order regardless.
-	sort.SliceStable(chat, func(i, j int) bool {
-		if chat[i].TS != chat[j].TS {
-			return chat[i].TS < chat[j].TS
-		}
-		return chat[i].ID < chat[j].ID
-	})
 
 	cut := resumeChatCutDTO{}
 	if dropped || atFetchCap {
@@ -1347,41 +1285,29 @@ func resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string
 	return chat, cut, used
 }
 
-// resumeChatBudgetOverrun turns the block cost resumeChatBlock just reported
-// into the payload's THIRD marker. Pure, and deliberately separate from the
-// packer: this function can be deleted, inverted or blanked without the packing
-// changing by one message, which is exactly the property the owner asked for
-// (rc-b1fb7f1be05d ①: 標一行,不改任何行為).
+// resumeChatPackBudget is what resumeChatBlock may spend on MESSAGES, once the
+// runes that ride outside the array but inside overview.chat_chars are set
+// aside: the snapshot header (generated_at) and the cut hint.
 //
-// 🔴 STRICTLY GREATER. A block that lands exactly ON the budget spent every
-// rune it was allowed and overspent none, so it is not an overrun; raising the
-// marker there would put a line on a snapshot that has nothing to report, and
-// an orphan marker is how a marker stops being read.
-func resumeChatBudgetOverrun(blockChars int) resumeChatBudgetOverrunDTO {
-	if blockChars <= resumeChatBudgetChars {
-		return resumeChatBudgetOverrunDTO{}
-	}
-	return resumeChatBudgetOverrunDTO{
-		Over:        true,
-		BudgetChars: resumeChatBudgetChars,
-		BlockChars:  blockChars,
-		OverByChars: blockChars - resumeChatBudgetChars,
-		Note:        resumeChatOverrunNote,
-	}
-}
-
-// resumeChatOverrunChars is what the marker itself costs a reader: its note
-// plus the three numbers printed beside it. Zero when the marker is down —
-// counted the same way resumeChatMessageChars counts an option index, so the
-// peek and the snapshot agree on it as they do on everything else.
-func resumeChatOverrunChars(o resumeChatBudgetOverrunDTO) int {
-	if !o.Over {
+// 🔴 The hint is reserved UNCONDITIONALLY, even though it is only emitted when
+// something was actually left out. Reserving it only when needed is circular —
+// whether the hint appears depends on whether the pack overflowed, which depends
+// on the budget. Reserving it always makes `chat_chars <= resumeChatBudgetChars`
+// true in every case, and makes the bound TIGHT in exactly the case that matters
+// (the block that dropped something carries the hint, so it lands on the ceiling
+// rather than under it). A snapshot that dropped nothing simply comes in a few
+// hundred runes under — which is the cheap side to err on.
+//
+// Never negative: a pathologically long hint would otherwise make the budget
+// negative and empty the chat block silently.
+func resumeChatPackBudget(generatedAt string) int {
+	b := resumeChatBudgetChars -
+		utf8.RuneCountInString(generatedAt) -
+		utf8.RuneCountInString(resumeChatCutHint)
+	if b < 0 {
 		return 0
 	}
-	return utf8.RuneCountInString(o.Note) +
-		len(strconv.Itoa(o.BudgetChars)) +
-		len(strconv.Itoa(o.BlockChars)) +
-		len(strconv.Itoa(o.OverByChars))
+	return b
 }
 
 // resumeFloorParts assembles the studio floor a waking agent lands on: the
@@ -1786,7 +1712,6 @@ func (s *apiServer) HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryG
 		GeneratedAt:        snap.GeneratedAt,
 		Chat:               snap.Chat,
 		ChatEarlierOmitted: snap.ChatCut,
-		ChatBudgetOverrun:  snap.ChatOverBudget,
 		Tasks:              snap.Tasks,
 		Roster:             snap.Roster,
 		// machines.you_are_on resolves for the TARGET member, not for the

@@ -1833,15 +1833,13 @@
   font-weight: 600;
   color: var(--color-text-strong);
 }
-.mp-resume__chatoverbudget {
-  /* Same treatment as .mp-resume__chatcut: both sit under the message list as
-     a note about the block as a whole rather than about any one row. It is NOT
-     given a warning colour — this marker reports SIZE, not loss, and dressing
-     it as an alarm is precisely the misreading its wording works to prevent. */
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed color-mix(in srgb, var(--color-overlay) 14%, transparent);
+.mp-resume__foldednote {
+  /* The collapse LEGEND, drawn once above the message list. Quieter than a
+     message row: it explains a mark rather than reporting anything about the
+     conversation. */
+  margin-bottom: 8px;
   font-size: 11.5px;
+  color: var(--color-text-muted);
   overflow-wrap: anywhere;
 }
 .mp-resume__attachments {

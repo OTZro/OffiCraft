@@ -246,11 +246,13 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     agentWindDownForChange: (by) =>
       `${mp.windDownForChangeLabel}${sp}·${sp}${mp.windDownByLabel} ${by} ${mp.windDownEffectSuffix}`,
 
-    // LEAD/TAIL shape: the number sits mid-sentence and the two languages
-    // punctuate it differently (zh runs 「字元(…)」 straight on, en needs a
-    // space before "characters"), so each fragment carries its own punctuation.
-    resumeBodyOmitted: (chars) =>
-      `${resume.bodyOmittedLead} ${chars}${sp}${resume.bodyOmittedTail}`,
+    // MARK shape, not sentence shape: one word plus the count, and nothing
+    // else. What "folded" MEANS is stated once per chat block
+    // (`bodyOmittedNote`) instead of once per message — the template used to be
+    // repeated under every folded row and cost more than the folds saved
+    // (owner, 2026-08-13). `sp` still separates the two so a theme that
+    // re-words the mark cannot glue it to the digits.
+    resumeBodyOmitted: (chars) => `${resume.bodyOmittedMark}${sp}${chars}`,
 
     // 定期訊息 · 自訂頻率 (T-49e7 round 2). The whole-set day phrase reuses the
     // cadence menu's own 每天 / Daily rather than keeping a second word for the
