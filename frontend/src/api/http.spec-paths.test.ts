@@ -1,7 +1,7 @@
-// Every `/api/...` path this adapter spells must exist VERBATIM in the frozen
-// spec (T-791e).
+// Every `/api/...` path this adapter spells must exist in the frozen spec
+// (T-791e).
 //
-// 🔴 WHY THIS EXISTS. The boot-context blocks shipped with three hand-typed
+// 🔴 WHY THIS EXISTS. The boot-context routes shipped with three hand-typed
 // path strings on a bare fetch — `/api/system-interaction/${key}` — against a
 // backend that serves `/api/system-interaction` with no key segment. Nothing
 // went red: tsc cannot see inside a template string, and every test in the
@@ -18,6 +18,42 @@
 //
 // It is deliberately a source scan, not a call-site scan: a path that is
 // written down but not yet called is exactly the shape that ships broken.
+//
+// ── WHAT THE SCAN COVERS, AND WHAT IT STILL DOES NOT ────────────────────────
+// The first version of this file read ONLY double-quoted literals
+// (`/"\/api\/[^"]*"/g`), which is to say it could not see the exact shape of
+// the accident it was written for. A template string sailed through it. So the
+// scan now has two halves, and each half is anchored by an assertion below:
+//
+//   COVERED (a) double-quoted literals — `"/api/system-interaction"` — matched
+//     verbatim against the declared paths. Unchanged from the first version.
+//   COVERED (b) backtick template literals whose static text is path-shaped —
+//     `` `/api/boot-sequence/${runtimeKey}` `` . Each `${…}` interpolation
+//     normalises to the spec's own parameter notation and the whole string is
+//     matched against the declared paths under that same normalisation, so
+//     `/api/boot-sequence/{runtime_key}` is a hit and the original accident,
+//     `/api/system-interaction/${key}`, is not. A `?query` or `#hash` tail is
+//     trimmed before matching (the SSE downlink carries `?token=`).
+//
+// NOT COVERED, stated so the next reader can falsify it rather than trust it.
+// Each of these can be pasted into http.ts and this file stays GREEN — all
+// three were measured, not reasoned about:
+//   • a path whose `/api/` prefix is never spelled adjacent to the route, so
+//     no `/api/<something>` string exists to read at all:
+//         const base = "/api";
+//         const p = `${base}/${kind}/reset`;
+//     This is the residual, and it is the shape both permanently hand-written
+//     seams already have: `authedAttachmentUrl` appends a token to a URL it is
+//     handed and never spells a route.
+//     ⚠️ The neighbouring shape `"/api/" + kind` is NOT in this hole — it goes
+//     red, because the fragment `"/api/"` is itself a quoted `/api/…` literal
+//     and the spec declares no such path. Do not generalise "concatenation
+//     escapes the scan"; only losing the prefix does.
+//   • a template whose static text is not path-shaped (spaces, `<id>`, an
+//     interpolation containing a `}`) — it is skipped rather than guessed at,
+//     which is also why prose in a comment does not produce a false red.
+//   • a path spelled in any file other than http.ts. This scan reads one file.
+// Closing any of those means widening the scan, not widening this paragraph.
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -38,16 +74,47 @@ const spec = JSON.parse(
  * can never be typed — say why. */
 const OUTSIDE_THE_CONTRACT = new Map<string, string>([
   // Empty, and that is the current fact rather than an oversight: every
-  // `/api/...` string this file spells today is a declared path. The two
-  // permanently hand-written seams do not put a path literal here — the SSE
-  // downlink and the attachment rewrite compose their URLs from values, so
-  // they never reach this scan.
+  // `/api/...` string this file spells today — quoted or interpolated — is a
+  // declared path. The SSE downlink is hand-written and will stay that way
+  // (EventSource cannot carry a header), but `/api/events` IS declared, so it
+  // needs no exemption; it only needed the scan to stop being blind to the
+  // template string it is written as.
 ]);
+
+/** The spec writes a path parameter as `{runtime_key}`; a template string
+ * writes the same segment as `${runtimeKey}`. Both mean "one segment supplied
+ * at call time", so both collapse to one token and are compared under it.
+ * Note what this deliberately does NOT do: it collapses the parameter, not the
+ * path. `/api/boot-sequence/${x}/nope` normalises to
+ * `/api/boot-sequence/{param}/nope`, which the spec does not declare — a
+ * legal-looking parameter position does not buy a route. */
+const PARAM = "{param}";
+
+function normalizeDeclared(path: string): string {
+  return path.replace(/\{[^{}]*\}/g, PARAM);
+}
+
+/** A normalised template must still look like a path. Anything else (prose,
+ * spaces, an interpolation we could not parse) is not something this scan can
+ * judge, so it is skipped rather than reported as unknown. */
+const PATH_SHAPE = new RegExp(
+  `^/api/[A-Za-z0-9._~/-]*(?:${PARAM.replace(/[{}]/g, "\\$&")}[A-Za-z0-9._~/-]*)*$`
+);
 
 function pathLiterals(source: string): string[] {
   return [...new Set(source.match(/"\/api\/[^"]*"/g) ?? [])].map((s) =>
     s.slice(1, -1)
   );
+}
+
+function templatePaths(source: string): string[] {
+  const raw = source.match(/`\/api\/[^`]*`/g) ?? [];
+  const out = raw
+    .map((s) => s.slice(1, -1))
+    .map((s) => s.split(/[?#]/, 1)[0])
+    .map((s) => s.replace(/\$\{[^{}]*\}/g, PARAM))
+    .filter((s) => PATH_SHAPE.test(s));
+  return [...new Set(out)];
 }
 
 describe("httpApi path strings", () => {
@@ -68,9 +135,26 @@ describe("httpApi path strings", () => {
     // An exemption that outlived its call site is how a roll call rots into a
     // list nobody reads: it keeps granting permission for a path that is gone.
     const stale = [...OUTSIDE_THE_CONTRACT.keys()].filter(
-      (p) => !used.includes(p)
+      (p) => !used.includes(p) && !templatePaths(httpSource).includes(p)
     );
     expect(stale).toEqual([]);
+  });
+
+  it("names only paths the frozen spec declares, interpolations included", () => {
+    const used = templatePaths(httpSource);
+    // Anti-vacuity, and it names a route rather than counting: templates are
+    // rare here by design (the typed client spells its paths as quoted
+    // literals), so a floor of "more than N" would be a floor of zero or one
+    // either way. The SSE downlink is the one path that MUST stay hand-written
+    // — EventSource cannot carry an Authorization header — so it is the anchor
+    // that goes red if this extractor ever stops matching.
+    expect(used).toContain("/api/events");
+
+    const declared = new Set(Object.keys(spec.paths).map(normalizeDeclared));
+    const unknown = used.filter(
+      (p) => !declared.has(p) && !OUTSIDE_THE_CONTRACT.has(p)
+    );
+    expect(unknown).toEqual([]);
   });
 
   it("spells each boot-context route the way the backend serves it", () => {

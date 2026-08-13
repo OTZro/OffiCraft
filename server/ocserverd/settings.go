@@ -90,9 +90,10 @@ const (
 	settingDocCapCharsLearning        = "doc.cap_chars.learning"
 	settingDocCapCharsManualSop       = "doc.cap_chars.manual_sop"
 	settingDocCapCharsManualLearnings = "doc.cap_chars.manual_learnings"
-	// The two boot-context blocks (T-791e). Same shape as the five above, and
-	// deliberately suffixed the same way: a bare `doc.cap_chars` would read as a
-	// global default beside them, and an agent looking at get_settings sees key
+	// The two boot-context document kinds (T-791e). Same shape as the five
+	// above, and deliberately suffixed the same way: a bare `doc.cap_chars`
+	// would read as a global default beside them, and an agent looking at
+	// get_settings sees key
 	// names only — never a description.
 	settingDocCapCharsSystemInteraction = "doc.cap_chars.system_interaction"
 	settingDocCapCharsBootSequence      = "doc.cap_chars.boot_sequence"

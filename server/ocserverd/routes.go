@@ -977,7 +977,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Reset the user-custom block to empty (idempotent tombstone).",
 			MCPTool:  "reset_global_context",
 		},
-		// ── the two boot-context blocks that became editable (T-791e) ───────
+		// ── the two boot-context document kinds that became editable (T-791e) ──
 		//
 		// 系統互動 and 啟動程序 used to be go:embed seeds with no editable
 		// representation at all: one wrong sentence cost a release. They now

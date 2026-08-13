@@ -70,7 +70,7 @@ type apiServer struct {
 	docCapCharsLearning        int
 	docCapCharsManualSop       int
 	docCapCharsManualLearnings int
-	// The two boot-context blocks, editable since T-791e (DB
+	// The two boot-context document kinds, editable since T-791e (DB
 	// doc.cap_chars.{system_interaction,boot_sequence}). bootSequence is ONE cap
 	// serving both runtimes.
 	docCapCharsSystemInteraction int
@@ -402,11 +402,11 @@ func (s *apiServer) manualLearningsCap() int {
 	return s.docCapCharsManualLearnings
 }
 
-// systemInteractionCap / bootSequenceCap are the same accessor shape for the two
-// boot-context blocks that became editable in T-791e. bootSequenceCap is ONE
-// number serving BOTH runtimes — each document is measured on its own text, but
-// the budget is shared, because the two are the same short checklist rendered
-// for two runtimes.
+// systemInteractionCap / bootSequenceCap are the same accessor shape for the
+// two boot-context document kinds that became editable in T-791e.
+// bootSequenceCap is ONE number serving BOTH runtimes — each document is
+// measured on its own text, but the budget is shared, because the two are the
+// same short checklist rendered for two runtimes.
 func (s *apiServer) systemInteractionCap() int {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()

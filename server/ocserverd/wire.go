@@ -67,9 +67,9 @@ type settingsDTO struct {
 	DocCapCharsLearning        int `json:"doc_cap_chars_learning"`
 	DocCapCharsManualSop       int `json:"doc_cap_chars_manual_sop"`
 	DocCapCharsManualLearnings int `json:"doc_cap_chars_manual_learnings"`
-	// The two boot-context blocks, editable since T-791e. One knob per block,
-	// and the boot-sequence one is shared by the claude and codex documents
-	// (each measured on its own text).
+	// The two boot-context document kinds, editable since T-791e. One knob per
+	// kind, and the boot-sequence one is shared by the claude and codex
+	// documents (each measured on its own text).
 	DocCapCharsSystemInteraction int `json:"doc_cap_chars_system_interaction"`
 	DocCapCharsBootSequence      int `json:"doc_cap_chars_boot_sequence"`
 	// UpdaterReceiveBeta / UpdaterAutoUpdate are the two software-update

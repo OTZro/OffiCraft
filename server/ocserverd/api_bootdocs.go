@@ -1,12 +1,13 @@
 package main
 
-// api_bootdocs.go — the two boot-context blocks the owner may now edit (T-791e):
+// api_bootdocs.go — the two boot-context document kinds the owner may now
+// edit (T-791e):
 // 系統互動 (system_interaction/global) and 啟動程序 (boot_sequence/claude,
 // boot_sequence/codex).
 //
 // WHY THIS EXISTS (owner, 2026-08-13, verbatim): 「我們可以把系統互動改成可以修改
 // 嗎 跟銀月的 insight 一樣是有 history / restore to default」「不用每次都改 code」
-// 「啟動程序也是一樣」. Of the three blocks the boot context is assembled from,
+// 「啟動程序也是一樣」. Of the three segments the boot context is assembled from,
 // only the middle one (使用者自訂) had an owner-editable representation; the other
 // two were go:embed seeds, so correcting one sentence cost a release.
 //

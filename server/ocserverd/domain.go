@@ -1038,8 +1038,9 @@ const contextDocMaxCharsDefault = 15000
 const dutyCapCharsDefault = 1000
 
 // systemInteractionCapCharsDefault / bootSequenceCapCharsDefault are the
-// shipped defaults of the two boot-context blocks that became editable in
-// T-791e. Both are sized against the SEEDS THEY SHIP WITH, not picked round:
+// shipped defaults of the two boot-context document kinds that became
+// editable in T-791e. Both are sized against the SEEDS THEY SHIP WITH, not
+// picked round:
 // the system-interaction seed is a long studio handbook and the two boot
 // sequences are short checklists, so one shared number would either strand the
 // handbook in shrink-only mode on day one or hand the checklists a budget forty
@@ -1057,8 +1058,8 @@ const (
 // segment's own default by design (see above), not a coincidence to be "tidied
 // up" into one shared number — putting the other segments' floor on Duty would
 // make dutyCapCharsDefault unreachable from the settings surface. The same
-// applies to the two boot-context blocks: their floors are their own defaults,
-// so an owner can only ever RAISE them.
+// applies to the two boot-context document kinds: their floors are their own
+// defaults, so an owner can only ever RAISE them.
 const (
 	minDocCapChars               = contextDocMaxCharsDefault
 	minDutyCapChars              = dutyCapCharsDefault
