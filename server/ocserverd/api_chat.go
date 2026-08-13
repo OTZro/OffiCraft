@@ -1597,8 +1597,11 @@ func (s *apiServer) HandlePeekResumeSummarySizeApiResumeSummarySizeGet(w http.Re
 		Identity: &actor,
 		Overview: overview,
 		// estimated_total_chars ≈ the context cost of pulling resume_summary
-		// AND then expanding every task via get_task: the chat bodies the
-		// snapshot carries plus the plan text those rows omit. The single
+		// AND then expanding every task via get_task: the WHOLE chat block the
+		// snapshot carries (bodies after collapsing, plus the display names,
+		// the rendered timestamps, the cards folded into messages, the collapse
+		// markers and the snapshot's own header — that is what chat_chars
+		// counts) plus the plan text those rows omit. The single
 		// number the boot threshold gates on (see the note / boot_sequence).
 		//
 		// T-1b09: the roster and machine blocks are ADDED here because they are

@@ -1782,14 +1782,17 @@ type ResumeSummaryDTO struct {
 // Identity-locked to the caller's VERIFIED JWT “sub“, it returns the SAME
 // “overview“ counts/sizes a full “resume_summary“ would report (assembled
 // through the shared server path, so they cannot drift) plus
-// “estimated_total_chars“ — a derived single number (the snapshot's chat body
-// chars, the plan text its task rows omit, and the roster + machine blocks it
-// carries) the boot threshold gates on — and
+// “estimated_total_chars“ — a derived single number (the WHOLE chat block the
+// snapshot would carry: bodies AFTER collapsing, plus the display names, the
+// rendered timestamps, the reply cards folded into messages, the collapse markers
+// and the snapshot's own header — plus the plan text its task rows omit, and the
+// roster + machine blocks it carries) the boot threshold gates on — and
 // a fixed guidance “note“. It carries NO chat bodies and NO task rows: peeking
 // it costs a few hundred bytes, so a waking agent can size “resume_summary“
 // BEFORE deciding whether to pull it into its own context or hand the pull to a
 // cheap sub-agent. DETERMINISTIC and read-only; a caller with no chat and no
-// tasks gets zeroes, never an error.
+// tasks gets an EMPTY snapshot's sizes, never an error — every COUNT is zero, and
+// the only non-zero size is the header that rides every payload.
 type ResumeSummarySizeDTO struct {
 	EstimatedTotalChars int     `json:"estimated_total_chars"`
 	Identity            *string `json:"identity,omitempty"`
