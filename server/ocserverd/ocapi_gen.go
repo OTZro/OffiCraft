@@ -568,20 +568,64 @@ type ChatGalleryEntryDTO struct {
 	Url       string   `json:"url"`
 }
 
+// ChatInlineReplyCardDTO One reply card FOLDED IN PLACE onto the chat message that opened it
+// (“ChatMessageDTO.card“), so the wake snapshot reads as a single stream and
+// not as a chat list plus a card list to be joined by hand.
+//
+// This is deliberately NOT a second top-level “cards“ section: a card already
+// HAS a home in the stream (its “chat_message_id“), and giving it a second one
+// would carry the same decision twice in one payload.
+//
+// It carries the DECISION and nothing else — the options offered, which one was
+// picked, the free text, and when. The card's “summary“ / “body“ / kind /
+// attachments are NOT here: the chat message this rides on already carries the
+// ask, and “get_reply_card“ serves the rest.
+type ChatInlineReplyCardDTO struct {
+	// AnswerOptionIdx Index into ``options`` of the option that was picked; ``null`` when the card was answered with free text only, or is not answered yet.
+	AnswerOptionIdx *int `json:"answer_option_idx,omitempty"`
+
+	// AnswerText The free-text answer, ``""`` when none was given.
+	AnswerText *string `json:"answer_text,omitempty"`
+
+	// AnsweredAtDisplay ``answered_ts`` rendered as ``YYYY-MM-DD HH:MM:SS ±HH:MM`` in the server's local zone — the same full date + time + offset form as ``ChatMessageDTO.ts_display``, for the same reason. ``""`` while the card is unanswered.
+	AnsweredAtDisplay *string `json:"answered_at_display,omitempty"`
+
+	// AnsweredTs Epoch seconds the card was answered; ``0`` while it is still waiting.
+	AnsweredTs *float64 `json:"answered_ts,omitempty"`
+
+	// Options The frozen quick-reply wording as it was offered (``options[0]`` is the AI pick). Empty for a card opened without options.
+	Options *[]string `json:"options,omitempty"`
+}
+
 // ChatMessageDTO API representation of one “domain.ChatMessage“. The wire uses “from“ /
 // “to“; “from“ is a Python reserved word so the field is “from_“ carrying
 // the alias “from“ (FastAPI serialises by alias).
 type ChatMessageDTO struct {
-	Attachments *[]ChatAttachmentDTO    `json:"attachments,omitempty"`
-	Body        *string                 `json:"body,omitempty"`
-	From        string                  `json:"from"`
-	Id          string                  `json:"id"`
-	Meta        *map[string]interface{} `json:"meta,omitempty"`
+	Attachments *[]ChatAttachmentDTO `json:"attachments,omitempty"`
+	Body        *string              `json:"body,omitempty"`
+
+	// BodyOmittedChars COLLAPSE marker: how many characters of THIS message's body were folded away when the wake snapshot shortened it; ``0`` = the body is carried in full. The folded text is still on the server — re-read the message with ``get_chat`` to see it. This is NOT the same thing as ``ResumeSummaryDTO.chat_earlier_omitted``, which reports whole messages that are ABSENT from the payload: one message shortened, versus messages not carried at all. Always ``0`` outside the wake snapshot (``list_chat`` never collapses a body).
+	BodyOmittedChars *int `json:"body_omitted_chars,omitempty"`
+
+	// Card The reply card this message carries, FOLDED IN PLACE onto the message that opened it — the options offered and the answer given, so a waking agent reads the decision in the chat stream instead of joining a second list. Omitted (``null``) when the message carries no card, and only ever filled for cards the snapshot's own subject INITIATED.
+	Card *ChatInlineReplyCardDTO `json:"card,omitempty"`
+	From string                  `json:"from"`
+
+	// FromName The sender's DISPLAY name, resolved server-side from the roster (ANY roster status, so a dismissed member still reads by name). ``from`` stays the ADDRESS and never changes meaning — this field is carried IN ADDITION so a reader gets both the human name and the id it must reply to. ``""`` when the sender does not resolve to a roster row (honest empty — never fabricated).
+	FromName *string                 `json:"from_name,omitempty"`
+	Id       string                  `json:"id"`
+	Meta     *map[string]interface{} `json:"meta,omitempty"`
 
 	// ReplyCardStatus Read-time join: the CURRENT status (``waiting`` | ``answered``) of the reply card this message carries (``meta.reply_card_id``); ``""`` when the message carries no card. Lets the inline chat card (ChatReplyCard) decide AT MOUNT whether to load eagerly (waiting — show the answer composer) or lazily (answered — collapse, fetch the full card only when the owner expands it) WITHOUT a per-card GET. NOT stored — computed each read from the card's live status (the stored ``meta`` only ever holds the id, stamped ``waiting`` at open and never updated on answer).
-	ReplyCardStatus *string  `json:"reply_card_status,omitempty"`
-	To              string   `json:"to"`
-	Ts              *float64 `json:"ts,omitempty"`
+	ReplyCardStatus *string `json:"reply_card_status,omitempty"`
+	To              string  `json:"to"`
+
+	// ToName The addressee's DISPLAY name, resolved the same way as ``from_name``. ``to`` remains the address; this rides alongside it, never instead of it.
+	ToName *string  `json:"to_name,omitempty"`
+	Ts     *float64 `json:"ts,omitempty"`
+
+	// TsDisplay ``ts`` rendered for a READER as ``YYYY-MM-DD HH:MM:SS ±HH:MM`` in the SERVER's local zone, e.g. ``2026-08-13 09:47:11 +08:00``. The offset is part of the string because the studio has no configured timezone setting — the string must carry its own zone or it cannot be read. The DATE IS ALWAYS WRITTEN, including for messages sent today: an agent reading a hand-off must be able to tell 「昨天」 from 「上週」 without knowing what day the snapshot was taken. ``ts`` (epoch seconds) is untouched and stays the machine-readable field.
+	TsDisplay *string `json:"ts_display,omitempty"`
 }
 
 // ChatPostDTO Post one chat message (§3.4 #16). “to“ is the addressee. The sender / “id“ /
@@ -1600,6 +1644,22 @@ type RestartSelfDTO struct {
 	Reason *string `json:"reason,omitempty"`
 }
 
+// ResumeChatCutDTO The CUT POINT of the wake snapshot's chat: whether messages exist that this
+// payload does NOT carry, and how to go and get them.
+//
+// TRUNCATION, NOT COLLAPSE — the two are different failures and the payload names
+// them with different words on purpose. “ChatMessageDTO.body_omitted_chars“
+// reports a message that IS here with part of its text folded away. This reports
+// whole messages that are NOT here at all. Reading one as the other is how an
+// agent concludes it has seen a conversation it has not seen.
+type ResumeChatCutDTO struct {
+	// Hint How to retrieve what was cut, stated concretely enough to act on without reading the API reference: call ``get_chat`` with ``with`` set to the peer id and BOTH ``before_ts`` and ``before_id`` taken from the OLDEST message of that peer's line in this payload. The two cursor fields must be supplied TOGETHER — sending only one is a 422. ``""`` when nothing was cut.
+	Hint *string `json:"hint,omitempty"`
+
+	// Omitted ``true`` when at least one message involving the subject was left out of this payload (older than the budget's cut point, or beyond a conversation line's fetch window). ``false`` means the snapshot carries every message it knows about.
+	Omitted *bool `json:"omitted,omitempty"`
+}
+
 // ResumeMachineDTO One machine in the wake snapshot's machine block — the fleet a waking agent can reason about. “machine_id“ is the STABLE id: address a machine by id, never by the name a host reports for itself (our hosts report the SAME name as each other, so a hostname-derived answer silently picks the wrong box and every path/dispatch downstream is wrong without erroring). “display_name“ is the human label; “online“ is whether that machine's warden is connected right now.
 type ResumeMachineDTO struct {
 	DisplayName string `json:"display_name"`
@@ -1650,11 +1710,22 @@ type ResumeRosterMemberDTO struct {
 //
 //   - “identity“: the caller id (the verified “sub“). “None“ for a bare /
 //     unauthenticated request (degrades to an empty snapshot, never an error).
-//   - “chat“: the most recent messages INVOLVING the caller (sender == caller OR
-//     recipient == caller), oldest→newest, each “body“ truncated to the tighter
-//     wake-snapshot cap (this batch catch-up stays small; UNLIKE “list_chat“ which
-//     returns full bodies for reading a single coordination message). Empty when the
-//     caller has no chat — never an error.
+//   - “chat“: the recent messages INVOLVING the caller (sender == caller OR
+//     recipient == caller), oldest→newest, packed newest-first under a CHARACTER
+//     BUDGET rather than a fixed message count, with a minimum number of messages
+//     reserved for EVERY conversation line so one long thread cannot squeeze the
+//     others to zero. Each message carries “from_name“ / “to_name“ beside the
+//     ids and “ts_display“ beside the epoch “ts“, and folds in its reply card
+//     (“card“) when it has one. Bodies from OTHER AGENTS are COLLAPSED to a short
+//     lead with “body_omitted_chars“ saying how much was folded; the owner's line
+//     and the caller's own hand-off notes to itself are carried IN FULL, because
+//     those are the two lines a wake actually resumes from. Empty when the caller
+//     has no chat — never an error.
+//   - “chat_earlier_omitted“: the CUT POINT — whether messages exist that this
+//     payload does not carry at all, and how to fetch them. Distinct from
+//     “body_omitted_chars“, which is a shortened message that IS here.
+//   - “generated_at“: when the snapshot was taken, with date, time and zone
+//     offset — the anchor for reading every “ts_display“ as an elapsed time.
 //   - “tasks“: the NON-TERMINAL tasks the caller EXECUTES (SPEC §6.2 — a handover
 //     resumes in-flight tasks, not just chat), most recently updated first, capped to
 //     a small N — LIGHT rows only (owner ruling: 任務不該包含細節): task_no / title /
@@ -1680,10 +1751,23 @@ type ResumeRosterMemberDTO struct {
 //
 // DETERMINISTIC (same server state → same output; no LLM) and read-only.
 type ResumeSummaryDTO struct {
-	Chat     *[]ChatMessageDTO  `json:"chat,omitempty"`
-	Identity *string            `json:"identity,omitempty"`
-	Machines *ResumeMachinesDTO `json:"machines,omitempty"`
-	Note     *string            `json:"note,omitempty"`
+	Chat *[]ChatMessageDTO `json:"chat,omitempty"`
+
+	// ChatEarlierOmitted The CUT POINT of the wake snapshot's chat: whether messages exist that this
+	// payload does NOT carry, and how to go and get them.
+	//
+	// TRUNCATION, NOT COLLAPSE — the two are different failures and the payload names
+	// them with different words on purpose. ``ChatMessageDTO.body_omitted_chars``
+	// reports a message that IS here with part of its text folded away. This reports
+	// whole messages that are NOT here at all. Reading one as the other is how an
+	// agent concludes it has seen a conversation it has not seen.
+	ChatEarlierOmitted *ResumeChatCutDTO `json:"chat_earlier_omitted,omitempty"`
+
+	// GeneratedAt When this snapshot was assembled, as ``YYYY-MM-DD HH:MM:SS ±HH:MM`` in the server's local zone. It is the ONLY anchor for turning any ``ts_display`` in this payload into 「多久以前」: a waking agent has no reliable clock of its own and must not assume its own wall clock matches the server's.
+	GeneratedAt *string            `json:"generated_at,omitempty"`
+	Identity    *string            `json:"identity,omitempty"`
+	Machines    *ResumeMachinesDTO `json:"machines,omitempty"`
+	Note        *string            `json:"note,omitempty"`
 
 	// Overview The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). ``chat_count`` / ``tasks_returned`` count what THIS snapshot carries; ``tasks_open_total`` is ALL the caller's open tasks (may exceed the bounded rows — page with ``list_tasks``); ``tasks_detail_chars`` sums every returned row's ``detail_chars`` (the plan text a full ``get_task`` pull would load); ``cards_waiting`` / ``cards_answered_recent`` count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with ``list_reply_cards``, cap with its ``limit``). ``roster_chars`` / ``machines_chars`` (T-1b09) size the two studio-floor blocks THIS snapshot carries — reported separately, and deliberately NOT folded into ``tasks_detail_chars``: that one counts text the snapshot does NOT carry (the plan text a later ``get_task`` would load), so mixing the two kinds of number is what made ``estimated_total_chars`` ambiguous in the first place.
 	Overview *ResumeOverviewDTO       `json:"overview,omitempty"`
