@@ -671,7 +671,44 @@ export type DocumentKind =
   // T-2ebe: the description's twin, keyed on the task id in the same way. A
   // SEPARATE series over that shared key — restoring a title never disturbs the
   // description's own three retained revisions, and the other way round.
-  | "task_title";
+  | "task_title"
+  // T-791e: the two boot-context blocks that used to be read-only seed
+  // previews. `system_interaction` is keyed "global" (one document for the
+  // whole studio); `boot_sequence` is keyed by RUNTIME ("claude" / "codex")
+  // and the two keys are DIFFERENT DOCUMENTS, not two views of one — their
+  // third step means opposite things, so nothing may copy one over the other.
+  | "system_interaction"
+  | "boot_sequence";
+
+/** The DocumentKinds that carry a seeded, owner-editable boot-context block
+ * (T-791e). Narrower than DocumentKind on purpose: the adapter's three boot-doc
+ * methods take THIS, so no caller can address `lessons` through them. */
+export type BootDocKind = "system_interaction" | "boot_sequence";
+
+/**
+ * One seeded boot-context block as the cockpit reads it (T-791e) — the folded
+ * GET of `system_interaction/global`, `boot_sequence/claude` or
+ * `boot_sequence/codex`. Three INDEPENDENT streams: nothing is shared between
+ * them, and in particular the two boot_sequence keys are separate documents.
+ *
+ * `isDefault` true = the shipped seed is what agents boot with (nobody has
+ * written this block). `hasSeed` says a factory version exists to restore to;
+ * it is what makes the 還原出廠版 affordance honest rather than a button that
+ * 404s.
+ */
+export interface BootDocView {
+  kind: BootDocKind;
+  key: string;
+  text: string;
+  /** Size of `text` in CHARACTERS (Unicode code points) — capChars' unit. */
+  sizeChars: number;
+  /** The cap the SERVER enforces for this kind, in the same unit. The cockpit
+   * blocks over-cap saves against this number rather than a local constant, so
+   * a raised cap does not need a frontend release to take effect. */
+  capChars: number;
+  isDefault: boolean;
+  hasSeed: boolean;
+}
 
 /**
  * ONE retained revision of an editable long-form document. `content` is the

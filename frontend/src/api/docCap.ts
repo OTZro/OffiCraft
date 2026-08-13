@@ -35,7 +35,7 @@
 // number into two, so the manual's two streams no longer share an answer here
 // either.
 
-import type { DocumentKind } from "../types";
+import type { BootDocKind, DocumentKind } from "../types";
 
 /** The five SHIPPED DEFAULTS (server/ocserverd/domain.go:
  * dutyCapCharsDefault + contextDocMaxCharsDefault) — defaults, NOT the caps
@@ -57,6 +57,38 @@ export const DOC_CAP_CHARS_DEFAULTS: DocCaps = {
   learning: 15000,
   manualSop: 15000,
   manualLearnings: 15000,
+};
+
+/**
+ * The SHIPPED DEFAULT cap of each boot-context block, in the same rune unit
+ * (T-791e). Sized off the seeds actually in the tree, measured rather than
+ * guessed: `seeds/system_interaction.md` is 45,045 chars, and the two boot
+ * sequences 1,198 / 1,632 — so 60000 leaves the system block real room to grow
+ * while 15000 is roughly ten times what a boot SOP has ever needed.
+ *
+ * 🔴 A DEFAULT, not the cap: the number in force arrives on the document's own
+ * read (`BootDocView.capChars`), and every enforcement point reads THAT. This
+ * constant exists for the mock adapter (which has to answer with something) and
+ * as the anchor these numbers are stated once. Do not inline them elsewhere.
+ */
+/**
+ * How many retained revisions a boot-context block keeps (T-791e). TEN, where
+ * every other document keeps three — the owner's ruling, for the workflow this
+ * surface is for: proposals land one section at a time, so an afternoon is a
+ * dozen small saves and three slots would lose the version the afternoon
+ * started from before it ended.
+ *
+ * 🔴 Counted in WRITES, not in time, and the cockpit has to SAY so — an owner
+ * who reads it as "the last ten days" reads a normal editing session as the
+ * cockpit throwing his work away. The page's own note is composed from this
+ * constant (i18n/compose.ts `bootDocNoteHistory`) rather than restating the
+ * number, so the sentence cannot end up describing a retention nobody applies.
+ */
+export const BOOT_DOC_HISTORY_KEPT = 10;
+
+export const BOOT_DOC_CAP_CHARS_DEFAULTS: Record<BootDocKind, number> = {
+  system_interaction: 60000,
+  boot_sequence: 15000,
 };
 
 /** The single number the shared fixture (bin/tests/fixtures/doc-cap-cases.tsv)
@@ -126,6 +158,14 @@ export const CAPPED_FIELDS: Record<DocumentKind, readonly string[]> = {
   // edit route deliberately declines to introduce a ceiling only the edit door
   // would enforce — so its restore runs no cap either.
   task_title: [],
+  // T-791e. Both boot-context blocks ARE capped on their restore, on `text`,
+  // and both are named here truthfully — but `capForKind` abstains for them
+  // (see there). The pair therefore marks nothing today; naming the field is
+  // still the right entry, because the day the cap arrives as a setting the
+  // only edit needed is in capForKind, not a second discovery of which field
+  // the server measures.
+  system_interaction: ["text"],
+  boot_sequence: ["text"],
 };
 
 /**
@@ -192,6 +232,18 @@ export function capForKind(
     case "global_context":
     case "task_description":
     case "task_title":
+      return undefined;
+    // T-791e — ABSTAIN, and deliberately, not by oversight. The two blocks'
+    // caps are NOT `doc.cap_chars.*` settings: the server reports the number in
+    // force on the document's OWN read (`cap_chars` on BootDocView), and the
+    // editing surface enforces against that. There is therefore no live value
+    // to hand this table, and inventing one — the shipped 60000/15000 — could
+    // only ever grey out a revision the server would accept, which is the
+    // "greyed out for a reason that is not true" failure this module's header
+    // calls the worse of the two. When the caps become settings, return them
+    // here and the marking starts working with no other change.
+    case "system_interaction":
+    case "boot_sequence":
       return undefined;
   }
 }

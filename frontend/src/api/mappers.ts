@@ -22,6 +22,8 @@ import type {
   BackupHealthStatus,
   BackupHealthCode,
   GlobalContextView,
+  BootDocView,
+  BootDocKind,
   DocumentHistoryView,
   DocumentSeedView,
   DocumentKind,
@@ -52,6 +54,7 @@ import type {
   WireReleaseCheck,
   WireBackupHealth,
   WireGlobalContext,
+  WireBootDoc,
   WireDocumentHistory,
   WireDocumentSeed,
   WireRoleDef,
@@ -1082,6 +1085,32 @@ export function toGlobalContext(w: WireGlobalContext): GlobalContextView {
     ownerId: w.owner_id,
     schemaVersion: w.schema_version,
     isDefault: w.is_default,
+  };
+}
+
+/**
+ * Map one folded boot-context block → the view model (T-791e).
+ *
+ * `kind` is narrowed rather than passed through: the wire field is a bare
+ * string (see WireBootDoc's note on the frozen spec), and every cockpit surface
+ * that reads it branches on the closed pair. An unrecognised value would sail
+ * into a `switch` with no arm for it and render as a boot_sequence page for a
+ * document that is not one, so it is refused at the seam instead — the same
+ * "narrow at the mapper, never downstream" rule toPresence follows.
+ */
+export function toBootDoc(w: WireBootDoc): BootDocView {
+  if (w.kind !== "system_interaction" && w.kind !== "boot_sequence") {
+    throw new Error(`toBootDoc: unknown boot document kind ${JSON.stringify(w.kind)}`);
+  }
+  const kind: BootDocKind = w.kind;
+  return {
+    kind,
+    key: w.key,
+    text: w.text,
+    sizeChars: w.size_chars,
+    capChars: w.cap_chars,
+    isDefault: w.is_default,
+    hasSeed: w.has_seed,
   };
 }
 

@@ -1414,18 +1414,57 @@ export const zh = {
     upgrade: "升級到最新版",
     catalogHash: "MCP 目錄雜湊",
     // ── 角色誌 ──
-    // 全域情境 = boot context 的三塊（依組裝順序）：系統互動（唯讀 seed）→
-    // 使用者自訂（owner 可編輯的追加塊）→ 啟動程序（唯讀 seed）。UI 不露檔名。
+    // 全域情境 = boot context 的區塊，依組裝順序：系統互動 → 使用者自訂 →
+    // 啟動程序。T-791e 起**四列**、而且**全部可編輯**——啟動程序是 claude 與
+    // codex 兩份不同的文件，各佔一列。UI 不露檔名。
     globalSection: "全域情境（GLOBAL CONTEXT）",
     systemName: "系統互動",
-    systemSub: "系統運作說明，注入給每個 agent · 唯讀",
-    readOnlyBadge: "系統唯讀",
+    systemSub: "系統運作說明，注入給每個 agent · 可編輯",
     customName: "使用者自訂",
     customSub: "追加到每個 agent 開機情境的自訂內容 · 可編輯",
     roleDefsSection: "角色定義",
-    bootName: "啟動程序",
-    bootSub: "工作室固定 SOP · 唯讀",
-    bootBadge: "工作室 SOP",
+    // 兩份**不同**的文件，分別開自己的頁：它們的第 3 步語意相反，
+    // 所以清單上不併成一列、詳情頁也不並排。
+    bootClaudeName: "啟動程序（Claude Code）",
+    bootClaudeSub: "Claude Code 執行環境的開機 SOP · 可編輯",
+    bootCodexName: "啟動程序（Codex CLI）",
+    bootCodexSub: "Codex App Server 執行環境的開機 SOP · 可編輯",
+    // ── 開機情境區塊：可編輯面（T-791e）──
+    bootDocNoteEffective:
+      "改動只影響「之後才開機」的 agent；正在執行中的成員不會改變。",
+    bootDocNoteHistoryLead: "版本紀錄只保留最近 ",
+    bootDocNoteHistoryTail:
+      " 版，而且是以「存檔次數」計、不是以時間計——連按幾次小修就會把較舊的版本沖掉。「還原出廠版」不受影響，永遠在。",
+    bootDocNoteCap:
+      "超過字數上限會被擋下來，不會被默默截斷；卡片右上角隨時顯示現在幾字／上限幾字。",
+    bootDocReset: "還原出廠版",
+    bootDocResetNote: "不需要先載入成功，也不需要任何 agent 在線上。",
+    bootDocResetConfirm:
+      "要把這份文件整份還原成出廠版嗎？目前的內容會被取代（會留成一個版本紀錄）。",
+    bootDocResetConfirmAction: "還原出廠版",
+    bootDocSave: "儲存",
+    bootDocActionFailed: "動作失敗，請稍後重試",
+    bootDocSaveConfirmBoot:
+      "要儲存這份啟動程序嗎？啟動程序改壞會讓之後開機的 agent 掛不上 SSE、因此永遠不會上線，而且不會有任何錯誤訊息——到時候也沒有人在線上可以救。存檔前請確認你看過預覽；真的出事就按「還原出廠版」。",
+    bootDocSaveConfirmSystem:
+      "要儲存這份系統互動說明嗎？之後開機的每一個 agent 都會讀到這份內容。",
+    bootDocSaveConfirmAction: "確認儲存",
+    bootDocOverCapLead: "現在 ",
+    bootDocOverCapMid: " 字，超過上限 ",
+    bootDocOverCapTail: " 字，請先刪掉一些再儲存。",
+    bootDocPasteSection: "貼上新版本",
+    bootDocApplySection: "套用這一段",
+    bootDocDiscardSection: "還原這一段",
+    bootDocCancelSection: "取消",
+    bootDocPreview: "預覽",
+    bootDocBackToEdit: "回到編輯",
+    bootDocPending: "待儲存",
+    bootDocPreamble: "（開頭）",
+    bootDocEditorPlaceholder: "把整段新版本貼進來，取代這一段的全部內容",
+    bootDocDirtyNote: "已套用的段落還沒儲存；離開這一頁會遺失。",
+    historyBootSystemTitle: "系統互動的版本紀錄",
+    historyBootClaudeTitle: "啟動程序（Claude Code）的版本紀錄",
+    historyBootCodexTitle: "啟動程序（Codex CLI）的版本紀錄",
     // seed vs owner-edited
     defaultBadge: "預設",
     // ── detail: view / edit ──

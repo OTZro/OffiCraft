@@ -30,13 +30,9 @@ import {
   TaskManualLearningsPage,
 } from "./TaskManualsPage";
 import type { TaskManualPatch } from "../api/adapter";
-import {
-  SEED_BOOT_SEQUENCE_MD,
-  SEED_BOOT_SEQUENCE_CODEX_MD,
-  SEED_SYSTEM_INTERACTION_MD,
-} from "../api/seeds";
 import { isHttpStatus } from "../api/errors";
 import { Markdown } from "./Markdown";
+import { BootDocPage } from "./BootDocPage";
 import { LessonsCard } from "./LessonsCard";
 import { InsightCard } from "./InsightCard";
 import {
@@ -105,10 +101,12 @@ import "./settings.css";
 
 // Which settings sub-view is showing. Navigation is internal to the page; the
 // user leaves Settings entirely by clicking a nav tab (App owns that).
-// The old single "global" doc is now the THREE blocks of the assembled boot
-// context (global-context-3block-restructure): "system" (系統互動, read-only
-// seed) / "custom" (使用者自訂, the owner-editable additive block behind
-// /api/global-context) / "boot" (啟動程序, read-only seed).
+// The old single "global" doc is the blocks of the assembled boot context
+// (global-context-3block-restructure): "system" (系統互動) / "custom"
+// (使用者自訂, the additive block behind /api/global-context) / "boot"
+// (啟動程序, ONE VIEW PER RUNTIME — see the boot view below). T-791e: all of
+// them are owner-editable now; "read-only seed" no longer describes any of
+// them, and the two boot sequences are separate documents.
 type View =
   | { kind: "landing" }
   | { kind: "software" }
@@ -117,7 +115,10 @@ type View =
   | { kind: "theme" }
   | { kind: "system" }
   | { kind: "custom" }
-  | { kind: "boot" }
+  // T-791e: 啟動程序 is TWO documents, so it is two views keyed on the runtime.
+  // There is deliberately no keyless `{kind:"boot"}` any more — it would be a
+  // page for "the boot sequence", and there is no such document.
+  | { kind: "boot"; runtime: "claude" | "codex" }
   | { kind: "role"; key: string }
   | { kind: "manuals" }
   // 任務手冊詳情 = hub (摘要卡 + 任務規劃入口卡): the two 任務規劃 cards
@@ -236,7 +237,7 @@ export function SettingsPage({
         crumbs={[crumbRoot, { label: t.settings.roles }]}
         onOpenSystem={() => setView({ kind: "system" })}
         onOpenCustom={() => setView({ kind: "custom" })}
-        onOpenBoot={() => setView({ kind: "boot" })}
+        onOpenBoot={(runtime) => setView({ kind: "boot", runtime })}
         onOpenRole={(key) => setView({ kind: "role", key })}
         onCreate={rolesH.create}
         onDelete={rolesH.remove}
@@ -378,18 +379,18 @@ export function SettingsPage({
   }
 
   if (view.kind === "system") {
-    // 系統互動 — the read-only FIRST block of every agent's boot context. The
-    // backend has NO write endpoint for it BY CONSTRUCTION (enforcement by
-    // construction, not validation), so the card is READ-ONLY and the text
-    // mirrors dal/seeds/system_interaction.md via SEED_SYSTEM_INTERACTION_MD —
-    // the same constant assemble_boot_context heads with. No filename: blocks
-    // are presented as content, not files.
+    // 系統互動 — the FIRST block of every agent's boot context, and editable
+    // since T-791e. It used to be a read-only render of SEED_SYSTEM_INTERACTION_MD
+    // ("the backend has NO write endpoint BY CONSTRUCTION"); it now has one, so
+    // the page reads the LIVE document through the api seam. The seed still
+    // exists — as the FACTORY version behind 還原出廠版 and the history list's
+    // 初始版本 row — but it is no longer what the page body renders.
     return (
-      <DocDetail
+      <BootDocPage
+        kind="system_interaction"
+        docKey="global"
         title={t.settings.systemName}
-        doc={{ text: SEED_SYSTEM_INTERACTION_MD.trim(), isDefault: false }}
-        badge={t.settings.readOnlyBadge}
-        readOnly
+        historyTitle={t.settings.historyBootSystemTitle}
         crumbs={[crumbRoot, crumbRoles, { label: t.settings.systemName }]}
       />
     );
@@ -425,23 +426,35 @@ export function SettingsPage({
   }
 
   if (view.kind === "boot") {
-    // Boot sequence is a FIXED, runtime-selected studio SOP. Both read-only
-    // variants are shown here so the cockpit exposes exactly what Claude and
-    // Codex members receive; the server selects only one for each persona.
-    const bootPreview = [
-      "## Claude Code",
-      SEED_BOOT_SEQUENCE_MD.trim(),
-      "---",
-      "## Codex CLI",
-      SEED_BOOT_SEQUENCE_CODEX_MD.trim(),
-    ].join("\n\n");
+    // 🔴 ONE RUNTIME PER PAGE. This used to concatenate both seeds into a single
+    // read-only preview ("## Claude Code" … "---" … "## Codex CLI"). That was
+    // acceptable while nothing could be written; it is not now. The two boot
+    // sequences are DIFFERENT DOCUMENTS whose third step means opposite things
+    // (claude attaches `ocagent listen` itself; codex must NOT and hands that
+    // to the sidecar), so one text stacked above the other invites exactly the
+    // copy that would silently stop one runtime's agents ever coming online.
+    // Each opens from its own list row into its own page, and the two are never
+    // rendered together.
+    const isClaude = view.runtime === "claude";
     return (
-      <DocDetail
-        title={t.settings.bootName}
-        doc={{ text: bootPreview, isDefault: false }}
-        badge={t.settings.bootBadge}
-        readOnly
-        crumbs={[crumbRoot, crumbRoles, { label: t.settings.bootName }]}
+      <BootDocPage
+        kind="boot_sequence"
+        docKey={view.runtime}
+        title={isClaude ? t.settings.bootClaudeName : t.settings.bootCodexName}
+        historyTitle={
+          isClaude
+            ? t.settings.historyBootClaudeTitle
+            : t.settings.historyBootCodexTitle
+        }
+        crumbs={[
+          crumbRoot,
+          crumbRoles,
+          {
+            label: isClaude
+              ? t.settings.bootClaudeName
+              : t.settings.bootCodexName,
+          },
+        ]}
       />
     );
   }
@@ -1436,7 +1449,10 @@ function RolesLog({
   crumbs: Crumb[];
   onOpenSystem: () => void;
   onOpenCustom: () => void;
-  onOpenBoot: () => void;
+  /** 🔴 Takes the RUNTIME. A no-argument opener would have to pick one, and
+   * whichever it picked would be the wrong document half the time — with no
+   * way for the reader to tell, because the two pages look identical. */
+  onOpenBoot: (runtime: "claude" | "codex") => void;
   onOpenRole: (key: string) => void;
   onCreate: (input: { name: string }) => Promise<unknown>;
   onDelete: (key: string) => Promise<void>;
@@ -1532,10 +1548,11 @@ function RolesLog({
        * bounced to login) never masquerades as an empty role journal. */}
       {error && <div className="set-error">{t.settings.loadError}</div>}
 
-      {/* zone 1: the THREE global-context blocks, in boot-assembly order:
-       * 系統互動 (read-only seed, heads the boot context) → 使用者自訂 (the
-       * owner-editable additive block) → 啟動程序 (read-only seed, appended
-       * LAST). No filenames — the blocks are content, not files. */}
+      {/* zone 1: the global-context blocks, in boot-assembly order:
+       * 系統互動 (heads the boot context) → 使用者自訂 (the additive block) →
+       * 啟動程序, which is TWO rows because it is two documents (claude and
+       * codex). All four are editable since T-791e. No filenames — the blocks
+       * are content, not files. */}
       <div className="set-group-label">{t.settings.globalSection}</div>
       <div className="set-entries">
         <button type="button" className="set-entry" onClick={onOpenSystem}>
@@ -1558,13 +1575,35 @@ function RolesLog({
           </span>
           <ChevronRightIcon size={18} className="set-entry__chev" />
         </button>
-        <button type="button" className="set-entry" onClick={onOpenBoot}>
+        {/* TWO rows, one per runtime — never one row that opens "the boot
+          * sequence". They are different documents (see the boot view in this
+          * file), and the list is the last place a reader can still tell them
+          * apart before the two pages start looking identical. */}
+        <button
+          type="button"
+          className="set-entry"
+          onClick={() => onOpenBoot("claude")}
+        >
           <span className="set-entry__icon set-entry__icon--violet">
             <BoltIcon size={18} />
           </span>
           <span className="set-entry__body">
-            <span className="set-entry__name">{t.settings.bootName}</span>
-            <span className="set-entry__sub">{t.settings.bootSub}</span>
+            <span className="set-entry__name">{t.settings.bootClaudeName}</span>
+            <span className="set-entry__sub">{t.settings.bootClaudeSub}</span>
+          </span>
+          <ChevronRightIcon size={18} className="set-entry__chev" />
+        </button>
+        <button
+          type="button"
+          className="set-entry"
+          onClick={() => onOpenBoot("codex")}
+        >
+          <span className="set-entry__icon set-entry__icon--violet">
+            <BoltIcon size={18} />
+          </span>
+          <span className="set-entry__body">
+            <span className="set-entry__name">{t.settings.bootCodexName}</span>
+            <span className="set-entry__sub">{t.settings.bootCodexSub}</span>
           </span>
           <ChevronRightIcon size={18} className="set-entry__chev" />
         </button>

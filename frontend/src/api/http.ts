@@ -31,6 +31,8 @@ import type {
   ReleaseCheckView,
   BackupHealthView,
   GlobalContextView,
+  BootDocKind,
+  BootDocView,
   DocumentKind,
   DocumentHistoryView,
   DocumentSeedView,
@@ -99,6 +101,7 @@ import {
   toReleaseCheck,
   toBackupHealth,
   toGlobalContext,
+  toBootDoc,
   toDocumentHistory,
   toDocumentSeed,
   toRoleDef,
@@ -127,10 +130,10 @@ import {
 // The one wire type this seam names directly: GET /api/reply-cards serves a
 // UNION (light rows | full cards) and `?view=full` is what picks the second
 // arm, so listReplyCards has to narrow to it. See that function.
-import type { WireReplyCard } from "./wire";
+import type { WireReplyCard, WireBootDoc } from "./wire";
 import { ownerToken, setToken } from "./auth";
 import { ApiError } from "./errors";
-import { client } from "./client";
+import { client, handleUnauthorized } from "./client";
 
 // Auth is cross-cutting and lives in ONE place each: owner-JWT sourcing
 // (localStorage `oc_token` + VITE_OC_TOKEN fallback) is api/auth.ts
@@ -198,6 +201,75 @@ async function credentialPost(
     );
   }
   return (await res.json()) as { token: string };
+}
+
+// ── boot-context blocks: schema-external until the spec is unfrozen (T-791e) ─
+//
+// The three routes below are NOT in `spec/openapi.json` yet, so `client` cannot
+// type them and every other method in this file deliberately would not compile
+// against an unknown path. They ride a bare fetch instead — the SAME escape
+// hatch `credentialPost` uses, and for a comparable reason: something about
+// these calls is outside what the generated client can express.
+//
+// 🔴 THE DIFFERENCE IS THAT THIS ONE IS TEMPORARY, and losing that distinction
+// is how a stopgap becomes the architecture. `credentialPost` is permanently
+// hand-written (its whole point is NOT getting the middleware's 401 reaction);
+// this exists only because the wire freeze (root CLAUDE.md §13) means the spec
+// change needs owner sign-off first. The moment those routes are in the spec,
+// DELETE this helper and route the three methods through `client` like
+// everything else — otherwise a BE path or verb rename becomes a runtime 404
+// here instead of the tsc error the rest of the adapter gets.
+//
+// Auth and error shape are reproduced rather than skipped: the owner JWT rides
+// as `Authorization: Bearer` and a non-2xx throws the same ApiError off the
+// same `{"error":{"code","message"}}` envelope, so callers branch on `.status`
+// exactly as they do everywhere else. 401 clears the token and fires
+// oc-auth-expired, matching the middleware — these ARE gated routes (admin and
+// above), so an expired session must bounce to login here too.
+async function bootDocFetch(
+  method: "GET" | "POST",
+  path: string,
+  body?: unknown
+): Promise<WireBootDoc> {
+  const headers: Record<string, string> = {};
+  const t = ownerToken();
+  if (t) headers.Authorization = `Bearer ${t}`;
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const res = await fetch(path, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    let code = "";
+    let serverMessage = "";
+    try {
+      const parsed: unknown = await res.json();
+      const err = (parsed as { error?: { code?: unknown; message?: unknown } })
+        ?.error;
+      if (typeof err?.code === "string") code = err.code;
+      if (typeof err?.message === "string") serverMessage = err.message;
+    } catch {
+      // Not JSON — keep the honest empties.
+    }
+    throw new ApiError(
+      `http ${res.status} for ${method} ${path}`,
+      res.status,
+      code,
+      serverMessage
+    );
+  }
+  return (await res.json()) as WireBootDoc;
+}
+
+/** The route prefix of one boot-document kind. Spelled ONCE: the two kinds have
+ * different paths and different key spaces, and a caller composing the path
+ * itself is a caller that can write the claude document to the codex route. */
+function bootDocPath(kind: BootDocKind, key: string): string {
+  return kind === "system_interaction"
+    ? `/api/system-interaction/${encodeURIComponent(key)}`
+    : `/api/boot-sequence/${encodeURIComponent(key)}`;
 }
 
 // ── shared SSE downlink (connection pool fix) ──────────────────────────────
@@ -1792,6 +1864,28 @@ export const httpApi: Api = {
     // the doc path (405 against the real backend, compile error against schema).
     const wire = unwrap(await client.POST("/api/global-context/reset"));
     return toGlobalContext(wire);
+  },
+
+  async getBootDoc(kind: BootDocKind, key: string): Promise<BootDocView> {
+    return toBootDoc(await bootDocFetch("GET", bootDocPath(kind, key)));
+  },
+
+  async saveBootDoc(
+    kind: BootDocKind,
+    key: string,
+    text: string,
+  ): Promise<BootDocView> {
+    // Whole-document replace, POST — same verb contract as
+    // /api/global-context: NOT a PUT and NOT a DELETE-then-write.
+    return toBootDoc(
+      await bootDocFetch("POST", bootDocPath(kind, key), { text }),
+    );
+  },
+
+  async resetBootDoc(kind: BootDocKind, key: string): Promise<BootDocView> {
+    return toBootDoc(
+      await bootDocFetch("POST", `${bootDocPath(kind, key)}/reset`),
+    );
   },
 
   async listDocumentHistory(

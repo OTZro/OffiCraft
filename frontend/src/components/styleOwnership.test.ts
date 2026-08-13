@@ -51,6 +51,13 @@ const OWNED_SHEETS = [
   // which imports settings.css — so it would free-ride exactly like the two
   // above until the day something else opens it.
   "doc-hist-modal.css",
+  // T-791e: the editable boot-context block page. Its two blocks share the
+  // `boot-doc` prefix on purpose (`.boot-doc__*` for the page chrome,
+  // `.boot-doc-sec__*` for one section) so ONE entry here really covers both —
+  // a second block named `.boot-sec__*` would have sat outside this check while
+  // looking registered, which is the nearly-vacuous shape BLOCK_OVERRIDES's
+  // note above is about.
+  "boot-doc.css",
 ] as const;
 
 /** Sheets whose BEM block is not just the filename. `member-detail.css` owns the
