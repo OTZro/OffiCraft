@@ -546,6 +546,63 @@ func (d *DAL) ListChatInvolving(participant string, limit int) ([]ChatMessage, e
 	return out, nil
 }
 
+// ListChatPerPeerInvolving returns the newest `perPeer` messages of EVERY
+// conversation line `participant` has (its peer being the other end of the
+// message; a message the participant sent to ITSELF — the agent hand-off baton
+// — lines up under the participant's own id), all merged into one
+// oldest→newest stream.
+//
+// WHY A PER-LINE QUOTA AND NOT "the newest N overall": the wake snapshot packs
+// under a character budget with a floor reserved for each line, and a single
+// global newest-N cannot serve that. If one peer sent the last N messages, a
+// global window returns ZERO rows for every other line — the floor then has
+// nothing to reserve and the quietest, most easily forgotten correspondent is
+// the one that disappears. The quota has to be applied by the query that reads
+// the rows, or the guarantee is unimplementable above it.
+//
+// 🔴 COST: this is ONE query, not one per peer. The partitioned ROW_NUMBER does
+// the per-line cut inside SQLite, so adding a conversation partner does not add
+// a round trip — which matters because this sits on the path EVERY agent runs
+// on EVERY wake. It replaces (does not add to) the single ListChatInvolving the
+// snapshot used to run, so the boot path's query COUNT is unchanged. The scan
+// shape is also unchanged: `sender`/`recipient` carry no index, so the old
+// newest-N read was already a full chat_message scan and so is this one.
+//
+// A blank participant / non-positive perPeer reads nothing.
+func (d *DAL) ListChatPerPeerInvolving(participant string, perPeer int) ([]ChatMessage, error) {
+	if participant == "" || perPeer <= 0 {
+		return nil, nil
+	}
+	// ORDER BY ts, id (ASC) is the stream's total order and the order the whole
+	// chat surface serves. The inner ORDER BY ts DESC, id DESC is what picks
+	// WHICH rows survive the per-line cut (the newest ones); the outer one is
+	// what the caller reads. They are deliberately opposite.
+	rows, err := d.rdb.Query(`
+		SELECT id, sender, recipient, body, ts, meta FROM (
+			SELECT id, sender, recipient, body, ts, meta,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY CASE WHEN sender = ? THEN recipient ELSE sender END
+			           ORDER BY ts DESC, id DESC
+			       ) AS rn
+			FROM chat_message
+			WHERE sender = ? OR recipient = ?
+		) WHERE rn <= ?
+		ORDER BY ts, id`, participant, participant, participant, perPeer)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ChatMessage
+	for rows.Next() {
+		m, err := scanChat(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // sqlExecer is the write seam shared by the standalone (d.wdb) and the
 // transactional (*sql.Tx) forms of every chat-side upsert — ONE statement per
 // record, reachable both ways, so the atomic variants below cannot drift from
