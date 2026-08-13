@@ -4005,6 +4005,48 @@ export interface components {
             url: string;
         };
         /**
+         * ChatInlineReplyCardDTO
+         * @description One reply card FOLDED IN PLACE onto the chat message that opened it
+         *     (``ChatMessageDTO.card``), so the wake snapshot reads as a single stream and
+         *     not as a chat list plus a card list to be joined by hand.
+         *
+         *     This is deliberately NOT a second top-level ``cards`` section: a card already
+         *     HAS a home in the stream (its ``chat_message_id``), and giving it a second one
+         *     would carry the same decision twice in one payload.
+         *
+         *     It carries the DECISION and nothing else — the options offered, which one was
+         *     picked, the free text, and when. The card's ``summary`` / ``body`` / kind /
+         *     attachments are NOT here: the chat message this rides on already carries the
+         *     ask, and ``get_reply_card`` serves the rest.
+         */
+        ChatInlineReplyCardDTO: {
+            /** @description Index into ``options`` of the option that was picked; ``null`` when the card was answered with free text only, or is not answered yet. */
+            answer_option_idx?: number | null;
+            /**
+             * Answer Text
+             * @description The free-text answer, ``""`` when none was given.
+             * @default
+             */
+            answer_text: string;
+            /**
+             * Answered At Display
+             * @description ``answered_ts`` rendered as ``YYYY-MM-DD HH:MM:SS ±HH:MM`` in the server's local zone — the same full date + time + offset form as ``ChatMessageDTO.ts_display``, for the same reason. ``""`` while the card is unanswered.
+             * @default
+             */
+            answered_at_display: string;
+            /**
+             * Answered Ts
+             * @description Epoch seconds the card was answered; ``0`` while it is still waiting.
+             * @default 0
+             */
+            answered_ts: number;
+            /**
+             * Options
+             * @description The frozen quick-reply wording as it was offered (``options[0]`` is the AI pick). Empty for a card opened without options.
+             */
+            options?: string[];
+        };
+        /**
          * ChatMessageDTO
          * @description API representation of one ``domain.ChatMessage``. The wire uses ``from`` /
          *     ``to``; ``from`` is a Python reserved word so the field is ``from_`` carrying
@@ -4018,8 +4060,22 @@ export interface components {
              * @default
              */
             body: string;
+            /**
+             * Body Omitted Chars
+             * @description COLLAPSE marker: how many characters of THIS message's body were folded away when the wake snapshot shortened it; ``0`` = the body is carried in full. The folded text is still on the server — re-read the message with ``get_chat`` to see it. This is NOT the same thing as ``ResumeSummaryDTO.chat_earlier_omitted``, which reports whole messages that are ABSENT from the payload: one message shortened, versus messages not carried at all. Always ``0`` outside the wake snapshot (``list_chat`` never collapses a body).
+             * @default 0
+             */
+            body_omitted_chars: number;
+            /** @description The reply card this message carries, FOLDED IN PLACE onto the message that opened it — the options offered and the answer given, so a waking agent reads the decision in the chat stream instead of joining a second list. Omitted (``null``) when the message carries no card, and only ever filled for cards the snapshot's own subject INITIATED. */
+            card?: components["schemas"]["ChatInlineReplyCardDTO"] | null;
             /** From */
             from: string;
+            /**
+             * From Name
+             * @description The sender's DISPLAY name, resolved server-side from the roster (ANY roster status, so a dismissed member still reads by name). ``from`` stays the ADDRESS and never changes meaning — this field is carried IN ADDITION so a reader gets both the human name and the id it must reply to. ``""`` when the sender does not resolve to a roster row (honest empty — never fabricated).
+             * @default
+             */
+            from_name: string;
             /** Id */
             id: string;
             /** Meta */
@@ -4035,10 +4091,22 @@ export interface components {
             /** To */
             to: string;
             /**
+             * To Name
+             * @description The addressee's DISPLAY name, resolved the same way as ``from_name``. ``to`` remains the address; this rides alongside it, never instead of it.
+             * @default
+             */
+            to_name: string;
+            /**
              * Ts
              * @default 0
              */
             ts: number;
+            /**
+             * Ts Display
+             * @description ``ts`` rendered for a READER as ``YYYY-MM-DD HH:MM:SS ±HH:MM`` in the SERVER's local zone, e.g. ``2026-08-13 09:47:11 +08:00``. The offset is part of the string because the studio has no configured timezone setting — the string must carry its own zone or it cannot be read. The DATE IS ALWAYS WRITTEN, including for messages sent today: an agent reading a hand-off must be able to tell 「昨天」 from 「上週」 without knowing what day the snapshot was taken. ``ts`` (epoch seconds) is untouched and stays the machine-readable field.
+             * @default
+             */
+            ts_display: string;
         };
         /**
          * ChatPostDTO
@@ -5961,6 +6029,31 @@ export interface components {
             reason?: string | null;
         };
         /**
+         * ResumeChatCutDTO
+         * @description The CUT POINT of the wake snapshot's chat: whether messages exist that this
+         *     payload does NOT carry, and how to go and get them.
+         *
+         *     TRUNCATION, NOT COLLAPSE — the two are different failures and the payload names
+         *     them with different words on purpose. ``ChatMessageDTO.body_omitted_chars``
+         *     reports a message that IS here with part of its text folded away. This reports
+         *     whole messages that are NOT here at all. Reading one as the other is how an
+         *     agent concludes it has seen a conversation it has not seen.
+         */
+        ResumeChatCutDTO: {
+            /**
+             * Hint
+             * @description How to retrieve what was cut, stated concretely enough to act on without reading the API reference: call ``get_chat`` with ``with`` set to the peer id and BOTH ``before_ts`` and ``before_id`` taken from the OLDEST message of that peer's line in this payload. The two cursor fields must be supplied TOGETHER — sending only one is a 422. ``""`` when nothing was cut.
+             * @default
+             */
+            hint: string;
+            /**
+             * Omitted
+             * @description ``true`` when at least one message involving the subject was left out of this payload (older than the budget's cut point, or beyond a conversation line's fetch window). ``false`` means the snapshot carries every message it knows about.
+             * @default false
+             */
+            omitted: boolean;
+        };
+        /**
          * ResumeMachineDTO
          * @description One machine in the wake snapshot's machine block — the fleet a waking agent can reason about. ``machine_id`` is the STABLE id: address a machine by id, never by the name a host reports for itself (our hosts report the SAME name as each other, so a hostname-derived answer silently picks the wrong box and every path/dispatch downstream is wrong without erroring). ``display_name`` is the human label; ``online`` is whether that machine's warden is connected right now.
          */
@@ -6046,11 +6139,22 @@ export interface components {
          *
          *       - ``identity``: the caller id (the verified ``sub``). ``None`` for a bare /
          *         unauthenticated request (degrades to an empty snapshot, never an error).
-         *       - ``chat``: the most recent messages INVOLVING the caller (sender == caller OR
-         *         recipient == caller), oldest→newest, each ``body`` truncated to the tighter
-         *         wake-snapshot cap (this batch catch-up stays small; UNLIKE ``list_chat`` which
-         *         returns full bodies for reading a single coordination message). Empty when the
-         *         caller has no chat — never an error.
+         *       - ``chat``: the recent messages INVOLVING the caller (sender == caller OR
+         *         recipient == caller), oldest→newest, packed newest-first under a CHARACTER
+         *         BUDGET rather than a fixed message count, with a minimum number of messages
+         *         reserved for EVERY conversation line so one long thread cannot squeeze the
+         *         others to zero. Each message carries ``from_name`` / ``to_name`` beside the
+         *         ids and ``ts_display`` beside the epoch ``ts``, and folds in its reply card
+         *         (``card``) when it has one. Bodies from OTHER AGENTS are COLLAPSED to a short
+         *         lead with ``body_omitted_chars`` saying how much was folded; the owner's line
+         *         and the caller's own hand-off notes to itself are carried IN FULL, because
+         *         those are the two lines a wake actually resumes from. Empty when the caller
+         *         has no chat — never an error.
+         *       - ``chat_earlier_omitted``: the CUT POINT — whether messages exist that this
+         *         payload does not carry at all, and how to fetch them. Distinct from
+         *         ``body_omitted_chars``, which is a shortened message that IS here.
+         *       - ``generated_at``: when the snapshot was taken, with date, time and zone
+         *         offset — the anchor for reading every ``ts_display`` as an elapsed time.
          *       - ``tasks``: the NON-TERMINAL tasks the caller EXECUTES (SPEC §6.2 — a handover
          *         resumes in-flight tasks, not just chat), most recently updated first, capped to
          *         a small N — LIGHT rows only (owner ruling: 任務不該包含細節): task_no / title /
@@ -6079,6 +6183,13 @@ export interface components {
         ResumeSummaryDTO: {
             /** Chat */
             chat?: components["schemas"]["ChatMessageDTO"][];
+            chat_earlier_omitted?: components["schemas"]["ResumeChatCutDTO"];
+            /**
+             * Generated At
+             * @description When this snapshot was assembled, as ``YYYY-MM-DD HH:MM:SS ±HH:MM`` in the server's local zone. It is the ONLY anchor for turning any ``ts_display`` in this payload into 「多久以前」: a waking agent has no reliable clock of its own and must not assume its own wall clock matches the server's.
+             * @default
+             */
+            generated_at: string;
             /** Identity */
             identity?: string | null;
             machines?: components["schemas"]["ResumeMachinesDTO"] | null;

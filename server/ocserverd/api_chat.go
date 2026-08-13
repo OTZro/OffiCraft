@@ -1211,19 +1211,25 @@ func resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string
 		dropped = true
 	}
 
+	// Collected LINE BY LINE, so what comes out of this loop is grouped by peer
+	// — NOT a stream. The re-sort below is what turns it back into one.
 	chat := []chatMessageDTO{}
-	for i := range all {
-		if keep[i] {
-			chat = append(chat, all[i].dto)
+	for _, p := range peers {
+		for _, i := range idxByPeer[p] {
+			if keep[i] {
+				chat = append(chat, all[i].dto)
+			}
 		}
 	}
-	// 🔴 The merge back to ONE stream is re-sorted EXPLICITLY, and this is not
-	// belt-and-braces. Before this change the order was a property of the single
-	// query that produced it; now the block is assembled from per-line groups
-	// and a selection pass, so ascending (ts, id) is something this function has
-	// to GUARANTEE rather than inherit. Stable, so equal (ts,id) rows — which
-	// the id tiebreak already makes impossible for distinct messages — keep
-	// their read order regardless.
+	// 🔴 The merge back to ONE stream is sorted EXPLICITLY, and it is
+	// LOAD-BEARING, not belt-and-braces. Before this change the order was a
+	// property of the single query that produced it; now the block is assembled
+	// from per-line groups, so without this line the payload would arrive
+	// grouped by conversation partner instead of chronological — a wake would
+	// read every peer's thread end-to-end and lose the interleaving that says
+	// what happened in what order. Stable, so equal (ts,id) rows — which the id
+	// tiebreak already makes impossible for distinct messages — keep their read
+	// order regardless.
 	sort.SliceStable(chat, func(i, j int) bool {
 		if chat[i].TS != chat[j].TS {
 			return chat[i].TS < chat[j].TS
