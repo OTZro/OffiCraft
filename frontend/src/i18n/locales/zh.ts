@@ -1039,8 +1039,11 @@ export const zh = {
       // 這一組講的是「這則在這裡,只是被折起來了,東西還在」。
       bodyOmittedLead: "此則已折起",
       bodyOmittedTail: "字元(內容仍在,用 get_chat 重讀這則)",
-      // 這一組講的是「更早的訊息根本沒有被帶進來」——要去撈。
-      chatCutLabel: "更早的訊息沒有被帶進來:",
+      // 這一組講的是「更早的往來可能根本沒有被帶進來」——要去撈才知道。
+      // 🔴 措辭是「可能」而不是「一定」:server 端只要那條線被截在切點上就
+      // 亮這個標記,而它不會再往切點外看一眼,所以就算其實沒有更舊的往來,
+      // 標記一樣會亮(見 api_chat.go 的 resumeChatCutHint)。
+      chatCutLabel: "可能還有更早的往來沒被帶進來:",
       // 就地顯示的回覆卡:owner 選了哪個、打了什麼、什麼時候回的。
       cardOptionsLabel: "提供的選項",
       cardAiPickTag: "AI 建議",

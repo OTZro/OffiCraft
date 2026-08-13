@@ -109,11 +109,19 @@ const (
 	// and that is the role, not the human's chosen nickname.
 	resumeOwnerDisplayName = "Owner"
 	// resumeChatCutHint tells a reader how to get back what chat_earlier_omitted
-	// says is missing. It names the tool AND the exact parameter pairing because
-	// the reader is mid-wake with nothing loaded: a hint that requires looking
-	// something up is not a hint. The 422-on-one-of-two is stated because that
-	// is the failure a first attempt actually hits (see HandleListChatApiChatGet).
-	resumeChatCutHint = "Earlier messages exist that are NOT CARRIED here — whole messages left out, which is a different thing from `body_omitted_chars` (that one marks a message that IS here with part of its text folded away). To read them: call get_chat with `with` = the peer's id, plus BOTH `before_ts` and `before_id` copied from the OLDEST message of that peer's line in this payload. The two cursor fields must be sent TOGETHER — supplying only one is rejected with 422."
+	// says MAY be missing. It names the tool AND the exact parameter pairing
+	// because the reader is mid-wake with nothing loaded: a hint that requires
+	// looking something up is not a hint. The 422-on-one-of-two is stated
+	// because that is the failure a first attempt actually hits (see
+	// HandleListChatApiChatGet).
+	//
+	// 🔴 It says MAY, not DOES. The marker is raised when a line filled its read
+	// window as well as when the budget dropped something, and the read never
+	// looks past the window — so a line holding exactly resumeChatPerPeerFetch
+	// messages and nothing older raises it too (see resumeChatBlock for why that
+	// one-sidedness is the right side to err on). Wording it as a fact would
+	// make this text false in exactly that case.
+	resumeChatCutHint = "Earlier messages MAY NOT have been carried here — this line was cut at a read or budget limit and nothing looked past the cut, so there may be whole messages missing (a different thing from `body_omitted_chars`, which marks a message that IS here with part of its text folded away). To check, and to read any that are there: call get_chat with `with` = the peer's id, plus BOTH `before_ts` and `before_id` copied from the OLDEST message of that peer's line in this payload. The two cursor fields must be sent TOGETHER — supplying only one is rejected with 422."
 	// resumeDutyPreview caps a roster row's duty and resumeTaskTitlePreview
 	// caps a contractor's task title (T-1b09). Both exist because this
 	// payload is read by EVERY member on EVERY wake, so an unbounded field
@@ -177,7 +185,7 @@ const (
 	// whole), and the thing it did not mention — whole messages left out — is
 	// the one a reader most needs told. The note now names both, in the two
 	// different words the payload uses for them.
-	resumeNote = "This is a BOUNDED wake snapshot. Chat: the recent messages involving you, packed newest-first under a CHARACTER budget (not a fixed message count) with a few newest messages reserved for EVERY conversation line, oldest→newest. Each message carries `from_name`/`to_name` beside the ids and `ts_display` beside the epoch `ts`, and folds in its reply card as `card` when it has one; read every `ts_display` against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked differently: `body_omitted_chars` > 0 means THIS message is here with that many characters COLLAPSED away (another agent's line; the owner's line and your own hand-off notes to yourself are carried in full) — re-read it with get_chat; `chat_earlier_omitted` means whole messages are NOT HERE AT ALL and tells you how to fetch them. Also: your open tasks as LIGHT rows — no plan detail; `roster` = everyone in the studio with their status, machine and their duty (capped, `…` marks a cut); `machines` = the machine list plus which one you are on). Peek `overview` first (sizes/counts), then pull only what you need: get_task per task (hand a big detail_chars pull to a sub-agent), list_reply_cards (use `limit`) for your cards, list_chat / list_tasks for more."
+	resumeNote = "This is a BOUNDED wake snapshot. Chat: the recent messages involving you, packed newest-first under a CHARACTER budget (not a fixed message count) with a few newest messages reserved for EVERY conversation line, oldest→newest. Each message carries `from_name`/`to_name` beside the ids and `ts_display` beside the epoch `ts`, and folds in its reply card as `card` when it has one; read every `ts_display` against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked differently: `body_omitted_chars` > 0 means THIS message is here with that many characters COLLAPSED away (another agent's line; the owner's line and your own hand-off notes to yourself are carried in full) — re-read it with get_chat; `chat_earlier_omitted` means whole messages MAY be missing from this payload entirely — it is raised whenever a line was cut at a read or budget limit, and nothing looked past the cut, so it can be raised when there is in fact nothing older — and it tells you how to check and fetch them. Also: your open tasks as LIGHT rows — no plan detail; `roster` = everyone in the studio with their status, machine and their duty (capped, `…` marks a cut); `machines` = the machine list plus which one you are on). Peek `overview` first (sizes/counts), then pull only what you need: get_task per task (hand a big detail_chars pull to a sub-agent), list_reply_cards (use `limit`) for your cards, list_chat / list_tasks for more."
 	// peekNote guides the two-step boot (T-7974): peek_resume_summary_size is
 	// size-only (no content); the agent reads estimated_total_chars and, when
 	// it is small, calls resume_summary directly in its own context, else has

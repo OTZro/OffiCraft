@@ -970,7 +970,10 @@ export const en: Dict = {
       generatedAtLabel: "This snapshot was taken at",
       bodyOmittedLead: "This message is folded —",
       bodyOmittedTail: "characters kept on the server (re-read it with get_chat)",
-      chatCutLabel: "Older messages were not carried into this payload:",
+      // 🔴 "may", not "were": the server raises this marker as soon as a line
+      // was cut at its read window, and it never looks past the cut — so it is
+      // raised even when nothing older exists (see resumeChatCutHint).
+      chatCutLabel: "Earlier exchanges may be absent — fetch to confirm:",
       cardOptionsLabel: "Options offered",
       cardAiPickTag: "AI pick",
       cardPickedTag: "Picked",
