@@ -35,6 +35,33 @@
 //     `/api/system-interaction/${key}`, is not. A `?query` or `#hash` tail is
 //     trimmed before matching (the SSE downlink carries `?token=`).
 //
+// ── WHY THE FIXED-SAMPLE ANCHOR BELOW EXISTS ────────────────────────────────
+// The interpolation half of this scan (COVERED (b) above) has exactly one
+// positive sample in http.ts today — the SSE downlink, `/api/events` — and
+// that sample has no `${…}` in it at all. Nothing here proves PATH_SHAPE
+// still recognises a *parameterised* template as path-shaped once it is
+// normalised. If PATH_SHAPE is ever tightened enough to filter out a real
+// parameterised route (e.g. by requiring the whole string to be non-empty
+// after stripping PARAM, or by rejecting PARAM adjacent to another PARAM,
+// or any other narrowing that looks like a reasonable shape check), every
+// template in http.ts could quietly stop being scanned and the assertion in
+// "names only paths the frozen spec declares, interpolations included"
+// would still pass — vacuously, since `used` would just be smaller. The
+// one-off "six real routes rewritten as templates must not go red" check
+// that surfaced this gap during review is not a fixture that stays on the
+// tree, so it buys no protection tomorrow.
+//
+// The block below is that guard, made permanent: it feeds FIXED, hand-typed
+// sample strings (not read out of http.ts) — one parameterised
+// (`` `/api/boot-sequence/${runtimeKey}` ``) and one bare
+// (`/api/system-interaction`) — through the exact same
+// extract → normalise → PATH_SHAPE-filter pipeline the real scan uses, and
+// requires both to come out recognised as spec-declared. It is falsifiable
+// in one specific way: if PATH_SHAPE (or the extraction/normalisation
+// around it) is ever written strict enough to drop a parameterised real
+// path, THIS test goes red on its own line, independent of whatever
+// http.ts happens to spell that day.
+//
 // NOT COVERED, stated so the next reader can falsify it rather than trust it.
 // Each of these can be pasted into http.ts and this file stays GREEN — all
 // three were measured, not reasoned about:
@@ -176,6 +203,35 @@ describe("httpApi path strings", () => {
       expect(spec.paths, `spec does not declare ${route}`).toHaveProperty([
         route,
       ]);
+    }
+  });
+
+  it("recognises fixed parameterised and bare route samples as spec-declared, independent of http.ts", () => {
+    // These strings are hand-typed here, not read out of http.ts. If PATH_SHAPE
+    // (or the extraction/normalisation feeding it) is ever tightened enough to
+    // filter out a real parameterised route, this assertion goes red on its
+    // own line — see the header comment for why the SSE-only anchor above
+    // cannot catch that.
+    const FIXTURE_SOURCE = [
+      "const boot = `/api/boot-sequence/${runtimeKey}`;",
+      'const interaction = "/api/system-interaction";',
+    ].join("\n");
+
+    const templated = templatePaths(FIXTURE_SOURCE);
+    expect(templated).toContain(`/api/boot-sequence/${PARAM}`);
+
+    const declaredNormalized = new Set(
+      Object.keys(spec.paths).map(normalizeDeclared)
+    );
+    for (const p of templated) {
+      expect(declaredNormalized.has(p), `${p} is not declared`).toBe(true);
+    }
+
+    const literal = pathLiterals(FIXTURE_SOURCE);
+    expect(literal).toContain("/api/system-interaction");
+    const declared = new Set(Object.keys(spec.paths));
+    for (const p of literal) {
+      expect(declared.has(p), `${p} is not declared`).toBe(true);
     }
   });
 });
