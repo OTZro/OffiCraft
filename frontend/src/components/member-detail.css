@@ -1744,3 +1744,155 @@
   flex: none;
   color: var(--color-text-muted);
 }
+
+/* ---- resume summary: the sections that line up with the agent's copy ----
+ * (roster / machines / in-place reply card / the two ABSENCE markers). The
+ * two absence markers are styled DIFFERENTLY on purpose: a folded message and
+ * a message that is not here at all are different statements, and giving them
+ * one look would undo the wording that keeps them apart. */
+.mp-resume__generated {
+  margin-bottom: 10px;
+  font-size: 12.5px;
+  color: var(--color-text-strong);
+}
+.mp-resume__generatedlabel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.mp-resume__sectionhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.mp-resume__sectiontoggle {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mp-resume__chatmeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 2px;
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+.mp-resume__party {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.mp-resume__partyname {
+  color: var(--color-text-strong);
+  overflow-wrap: anywhere;
+}
+.mp-resume__partyid {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--color-overlay) 6%, transparent);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.mp-resume__arrow {
+  flex: none;
+}
+.mp-resume__chatts {
+  font-variant-numeric: tabular-nums;
+}
+.mp-resume__cardstatus {
+  font-size: 11px;
+}
+/* COLLAPSE marker — the text is still on the server. Muted: nothing is lost. */
+.mp-resume__folded {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+/* TRUNCATION marker — messages are ABSENT and must be fetched. Set apart from
+ * the list with a rule and its own block, because it is a statement about the
+ * payload rather than about any one message in it. */
+.mp-resume__chatcut {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed color-mix(in srgb, var(--color-overlay) 14%, transparent);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.mp-resume__chatcutlabel {
+  font-weight: 600;
+  color: var(--color-text-strong);
+}
+.mp-resume__attachments {
+  margin-top: 2px;
+  font-size: 11.5px;
+}
+.mp-resume__card {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-overlay) 5%, transparent);
+  font-size: 12px;
+}
+.mp-resume__cardoptions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+.mp-resume__cardoption {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-overlay) 7%, transparent);
+  overflow-wrap: anywhere;
+}
+.mp-resume__cardoption[data-picked="true"] {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+  color: var(--color-text-strong);
+}
+.mp-resume__cardtag {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.mp-resume__cardtag--picked {
+  color: var(--color-text-strong);
+}
+.mp-resume__rosterrow,
+.mp-resume__machinerow {
+  padding: 6px 0;
+  font-size: 12.5px;
+}
+.mp-resume__machinerow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.mp-resume__machinename {
+  overflow-wrap: anywhere;
+}
+.mp-resume__machineonline,
+.mp-resume__rosterkind,
+.mp-resume__rosterpresence {
+  color: var(--color-text-muted);
+  font-size: 11.5px;
+}
+.mp-resume__youareon {
+  padding: 4px 0 6px;
+  font-size: 12.5px;
+}

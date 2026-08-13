@@ -108,8 +108,14 @@ function mkSnapshot(): MemberResumeSummaryView {
       tasksDetailChars: 375,
       cardsWaiting: 264,
       cardsAnsweredRecent: 718,
+      rosterChars: 4196,
+      machinesChars: 1583,
     },
     note: "BOUNDED snapshot",
+    generatedAt: "2026-08-13 09:47:11 +08:00",
+    chatEarlierOmitted: { omitted: false, hint: "" },
+    roster: [],
+    machines: null,
   };
 }
 

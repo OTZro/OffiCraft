@@ -1,7 +1,12 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../api";
-import type { MemberResumeSummaryView } from "../api/adapter";
+import type {
+  MemberResumeSummaryView,
+  ChatMessage,
+  ResumeRosterMemberView,
+} from "../api/adapter";
+import { Markdown } from "./Markdown";
 import { ChevronDownIcon, ChevronRightIcon, ClockIcon } from "./icons";
 // 🔴 This component draws itself with the `.mp-resume__*` block, so it OWNS
 // that stylesheet's import (styleOwnership.test.ts). Both detail panels
@@ -31,8 +36,299 @@ import "./member-detail.css";
 // inside MemberDetailPanel: the existing staff-panel tests are the regression
 // net for the extraction itself, and renaming them would have thrown that net
 // away in the same commit that needed it most.
+//
+// ── 🔴 THE RENDERING CONTRACT ────────────────────────────────────────────────
+// Owner, verbatim: 「就是你怎麼給 agent 的就怎麼給我,格式應該要我們兩個雙方都
+// 看得懂」 and 「我不要規則 我要看到到時候 agent 實際看到的 魔鬼藏在細節裡」.
+//
+// So: WHAT THIS DRAWS MUST LINE UP, SECTION BY SECTION, WITH THE SNAPSHOT THE
+// AGENT RECEIVES AT THE SAME MOMENT. Three rules fall out of that, and they are
+// the reason this component looks the way it does:
+//
+//   1. NO SECOND ANSWER. Anything the server already decided is PRINTED, never
+//      re-derived here. `ts_display` and `generated_at` come rendered — this
+//      component owns NO date formatter, because a browser-side one would state
+//      the same instant in the viewer's zone while the agent reads the
+//      server's: same payload, two different times, and nothing red.
+//      Same for `from_name` — unresolved is "", and "" renders as the id ALONE.
+//      Back-filling the id into the name slot would make "no name on file"
+//      indistinguishable from "the name really is that id".
+//   2. TWO KINDS OF ABSENCE, TWO SETS OF WORDS. `body_omitted_chars` > 0 means
+//      THIS message IS here, folded, and the text is still on the server.
+//      `chat_earlier_omitted` means whole messages are NOT HERE AT ALL and you
+//      must go and fetch them — its `hint` says how, and is shown VERBATIM.
+//      Reading one as the other is how a reader concludes it has seen a
+//      conversation it has not seen, so the two must never share a word.
+//   3. EVERY SECTION SHOWS. Long ones may be collapsed, but which sections
+//      EXIST is always visible — a section that renders nothing at all is
+//      indistinguishable from a section the payload never carried.
+//
+// Content here is agent- and outsider-authored, so bodies go through
+// `Markdown`, which builds React elements only and never touches
+// dangerouslySetInnerHTML — inline HTML in a snapshot stays inert text.
+
+/** Render a chat participant as BOTH its display name and its id.
+ *
+ * 🔴 The id is never dropped (it is the ADDRESS you must reply to; names are
+ * editable and repeat) and the name is never FABRICATED: `name === ""` is the
+ * server saying the id resolves to no roster row, and that renders as the id
+ * alone. Filling the id into the name slot would erase that distinction. */
+function Party({
+  name,
+  id,
+  testid,
+}: {
+  name: string;
+  id: string;
+  testid: string;
+}) {
+  return (
+    <span className="mp-resume__party" data-testid={testid}>
+      {name !== "" && <span className="mp-resume__partyname">{name}</span>}
+      <code className="mp-resume__partyid">{id}</code>
+    </span>
+  );
+}
+
+/** A section whose title is ALWAYS rendered and whose body can be folded away.
+ * The title stays put on purpose: which sections the snapshot carries is part
+ * of what the owner is checking against the agent's copy, so a collapsed
+ * section must still announce that it exists. */
+function Section({
+  title,
+  testid,
+  collapseLabel,
+  expandLabel,
+  children,
+}: {
+  title: string;
+  testid: string;
+  collapseLabel: string;
+  expandLabel: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="mp-resume__section" data-testid={testid}>
+      <div className="mp-resume__sectionhead">
+        <span className="mp-resume__sectiontitle">{title}</span>
+        <button
+          type="button"
+          className="mp-resume__sectiontoggle"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          data-testid={`${testid}-toggle`}
+        >
+          {open ? collapseLabel : expandLabel}
+        </button>
+      </div>
+      {open && children}
+    </div>
+  );
+}
+
+
+/** One chat message, rendered as the snapshot carries it: who (name AND id) →
+ * who, WHEN (the server's own rendered stamp), the body, and — folded in place
+ * on the very message that opened it — the reply card's decision.
+ *
+ * 🔴 The card is drawn HERE, inline, and not in a separate card section. The
+ * payload deliberately gives a card ONE home (the message id it rides on);
+ * giving it a second one on screen would carry the same decision twice and
+ * leave the reader joining two lists by hand — the exact chore the inline
+ * shape was chosen to remove. */
+function ChatRow({
+  m,
+  t,
+  msg,
+}: {
+  m: ChatMessage;
+  t: ReturnType<typeof useI18n>["t"];
+  msg: ReturnType<typeof useI18n>["msg"];
+}) {
+  const r = t.mp.resumeSummary;
+  const card = m.card ?? null;
+  return (
+    <div className="mp-resume__chatrow" data-testid="mp-resume-chat-row">
+      <div className="mp-resume__chatmeta">
+        <Party
+          name={m.fromName ?? ""}
+          id={m.from}
+          testid="mp-resume-chat-from"
+        />
+        <span className="mp-resume__arrow" aria-hidden="true">
+          →
+        </span>
+        <Party name={m.toName ?? ""} id={m.to} testid="mp-resume-chat-to" />
+        {/* PRINTED, never formatted here. See rule 1 in the file header. */}
+        {(m.tsDisplay ?? "") !== "" && (
+          <span className="mp-resume__chatts" data-testid="mp-resume-chat-ts">
+            {m.tsDisplay}
+          </span>
+        )}
+        {m.replyCardStatus != null && (
+          <span
+            className="mp-resume__cardstatus"
+            data-testid="mp-resume-chat-cardstatus"
+          >
+            {r.replyCardStatusLabel}
+            {": "}
+            {m.replyCardStatus}
+          </span>
+        )}
+      </div>
+      <Markdown
+        source={m.body}
+        breaks
+        className="mp-resume__chatbody doc-md"
+      />
+      {/* COLLAPSE — this message IS here, shortened, and the rest is still on
+        * the server. Its wording shares no word with the truncation notice
+        * under the list; see rule 2 in the file header. */}
+      {(m.bodyOmittedChars ?? 0) > 0 && (
+        <div
+          className="mp-resume__folded"
+          data-testid="mp-resume-chat-body-omitted"
+        >
+          {msg.resumeBodyOmitted(m.bodyOmittedChars ?? 0)}
+        </div>
+      )}
+      {(m.attachments ?? []).length > 0 && (
+        <div
+          className="mp-resume__attachments"
+          data-testid="mp-resume-chat-attachments"
+        >
+          <span className="mp-resume__generatedlabel">
+            {r.cardAttachmentsLabel}
+          </span>{" "}
+          {m.attachments.map((a) => (
+            <code className="mp-resume__partyid" key={a.id}>
+              {a.filename !== "" ? a.filename : a.id}
+            </code>
+          ))}
+        </div>
+      )}
+      {card && (
+        <div className="mp-resume__card" data-testid="mp-resume-chat-card">
+          {card.options.length > 0 && (
+            <div className="mp-resume__cardoptions">
+              <span className="mp-resume__generatedlabel">
+                {r.cardOptionsLabel}
+              </span>
+              {card.options.map((opt, i) => (
+                <span
+                  className="mp-resume__cardoption"
+                  key={`${i}-${opt}`}
+                  data-testid="mp-resume-card-option"
+                  data-picked={i === card.answerOptionIdx ? "true" : "false"}
+                >
+                  {opt}
+                  {/* options[0] is the AI pick — a property of how the card
+                    * was OFFERED, which is why it is tagged separately from
+                    * which option was actually chosen. */}
+                  {i === 0 && (
+                    <span className="mp-resume__cardtag">{r.cardAiPickTag}</span>
+                  )}
+                  {i === card.answerOptionIdx && (
+                    <span
+                      className="mp-resume__cardtag mp-resume__cardtag--picked"
+                      data-testid="mp-resume-card-picked"
+                    >
+                      {r.cardPickedTag}
+                    </span>
+                  )}
+                </span>
+              ))}
+            </div>
+          )}
+          {card.answerText !== "" && (
+            <div data-testid="mp-resume-card-answer-text">
+              <span className="mp-resume__generatedlabel">
+                {r.cardAnswerTextLabel}
+              </span>{" "}
+              <Markdown
+                source={card.answerText}
+                breaks
+                className="mp-resume__chatbody doc-md"
+              />
+            </div>
+          )}
+          {/* Rendered by the server, in the same form as ts_display and for
+            * the same reason. "" means still waiting — said as a sentence,
+            * not as a blank. */}
+          {card.answeredAtDisplay !== "" ? (
+            <div data-testid="mp-resume-card-answered-at">
+              <span className="mp-resume__generatedlabel">
+                {r.cardAnsweredAtLabel}
+              </span>{" "}
+              {card.answeredAtDisplay}
+            </div>
+          ) : (
+            <div data-testid="mp-resume-card-unanswered">
+              {r.cardUnanswered}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One roster row: the id you address, the name you read, and — depending on
+ * kind — the member's duty or the contractor's bound task and progress. The
+ * asymmetry is the server's (正職給職責、外包給任務標題), so the row shows
+ * whichever field the payload actually filled rather than laying out empty
+ * slots for both. */
+function RosterRow({
+  r,
+  t,
+}: {
+  r: ResumeRosterMemberView;
+  t: ReturnType<typeof useI18n>["t"];
+}) {
+  const d = t.mp.resumeSummary;
+  return (
+    <div className="mp-resume__rosterrow" data-testid="mp-resume-roster-row">
+      <div className="mp-resume__chatmeta">
+        <Party name={r.name} id={r.id} testid="mp-resume-roster-party" />
+        <span className="mp-resume__rosterkind">{r.kind}</span>
+        {r.roleName !== "" && (
+          <span className="mp-resume__rosterkind">{r.roleName}</span>
+        )}
+        <span className="mp-resume__rosterpresence">{r.presence}</span>
+        {r.machine !== "" && (
+          <code className="mp-resume__partyid">{r.machine}</code>
+        )}
+      </div>
+      {r.duty !== "" && (
+        <div data-testid="mp-resume-roster-duty">
+          <span className="mp-resume__generatedlabel">{d.rosterDutyLabel}</span>{" "}
+          <Markdown
+            source={r.duty}
+            className="mp-resume__chatbody doc-md"
+          />
+        </div>
+      )}
+      {r.currentTask !== "" && (
+        <div data-testid="mp-resume-roster-task">
+          <span className="mp-resume__generatedlabel">
+            {d.rosterCurrentTaskLabel}
+          </span>{" "}
+          <span className="mp-resume__chatbody">{r.currentTask}</span>{" "}
+          {/* 0/0 is AMBIGUOUS on its own — a bound task with no steps yet, or
+            * no bound task at all — and task_status is the field that tells
+            * them apart, so the two are never shown without each other. */}
+          <span className="mp-resume__rosterpresence">
+            {r.taskStatus} {r.progressDone}/{r.progressTotal}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ResumeSummaryCard({ agentId }: { agentId: string }) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   const [show, setShow] = useState(false);
   const [state, setState] = useState<{
     data: MemberResumeSummaryView | null;
@@ -105,6 +401,20 @@ export function ResumeSummaryCard({ agentId }: { agentId: string }) {
           t.mp.resumeSummary.cardsAnsweredRecent,
           state.data.overview.cardsAnsweredRecent,
         ],
+        // The two studio-floor block sizes. They belong next to the other
+        // figures for the same reason the blocks themselves belong on screen:
+        // the agent's copy reports them, so hiding them here would be one more
+        // place the two views could disagree without anything noticing.
+        [
+          "rosterChars",
+          t.mp.resumeSummary.rosterChars,
+          state.data.overview.rosterChars,
+        ],
+        [
+          "machinesChars",
+          t.mp.resumeSummary.machinesChars,
+          state.data.overview.machinesChars,
+        ],
       ]
     : [];
 
@@ -146,6 +456,24 @@ export function ResumeSummaryCard({ agentId }: { agentId: string }) {
             </div>
           ) : state.data ? (
             <>
+              {/* The anchor for every ts_display below it. Rendered FIRST and
+                * as the server wrote it — without it, "2026-08-13 09:47" is a
+                * timestamp the reader has nothing to measure against. Skipped
+                * only when the server sent nothing, which is honest silence
+                * rather than a time this component invented. */}
+              {state.data.generatedAt !== "" && (
+                <div
+                  className="mp-resume__generated"
+                  data-testid="mp-resume-generated-at"
+                >
+                  <span className="mp-resume__generatedlabel">
+                    {t.mp.resumeSummary.generatedAtLabel}
+                  </span>{" "}
+                  <span data-testid="mp-resume-generated-at-value">
+                    {state.data.generatedAt}
+                  </span>
+                </div>
+              )}
               <div className="mp-resume__note">{state.data.note}</div>
               <div
                 className="mp-resume__statsgrid"
@@ -164,30 +492,47 @@ export function ResumeSummaryCard({ agentId }: { agentId: string }) {
                 ))}
               </div>
 
-              <div className="mp-resume__section">
-                <div className="mp-resume__sectiontitle">
-                  {t.mp.resumeSummary.chatSection}
-                </div>
+              <Section
+                title={t.mp.resumeSummary.chatSection}
+                testid="mp-resume-chat-section"
+                collapseLabel={t.mp.resumeSummary.collapse}
+                expandLabel={t.mp.resumeSummary.expand}
+              >
                 {state.data.chat.length === 0 ? (
                   <div className="mp-resume__empty">
                     {t.mp.resumeSummary.chatEmpty}
                   </div>
                 ) : (
                   state.data.chat.map((m) => (
-                    <div className="mp-resume__chatrow" key={m.id}>
-                      <span className="mp-resume__chatfrom">
-                        {m.from === agentId ? "→" : "←"}
-                      </span>
-                      <span className="mp-resume__chatbody">{m.body}</span>
-                    </div>
+                    <ChatRow key={m.id} m={m} t={t} msg={msg} />
                   ))
                 )}
-              </div>
+                {/* TRUNCATION, not collapse: whole messages that are NOT in
+                  * this payload. The hint is the SERVER's own recovery
+                  * instruction and is printed verbatim — re-writing it here
+                  * would be the cockpit inventing a procedure it cannot keep
+                  * in step with the endpoint. */}
+                {state.data.chatEarlierOmitted.omitted && (
+                  <div
+                    className="mp-resume__chatcut"
+                    data-testid="mp-resume-chat-earlier-omitted"
+                  >
+                    <span className="mp-resume__chatcutlabel">
+                      {t.mp.resumeSummary.chatCutLabel}
+                    </span>{" "}
+                    <span data-testid="mp-resume-chat-earlier-omitted-hint">
+                      {state.data.chatEarlierOmitted.hint}
+                    </span>
+                  </div>
+                )}
+              </Section>
 
-              <div className="mp-resume__section">
-                <div className="mp-resume__sectiontitle">
-                  {t.mp.resumeSummary.tasksSection}
-                </div>
+              <Section
+                title={t.mp.resumeSummary.tasksSection}
+                testid="mp-resume-tasks-section"
+                collapseLabel={t.mp.resumeSummary.collapse}
+                expandLabel={t.mp.resumeSummary.expand}
+              >
                 {state.data.tasks.length === 0 ? (
                   <div className="mp-resume__empty">
                     {t.mp.resumeSummary.tasksEmpty}
@@ -201,7 +546,87 @@ export function ResumeSummaryCard({ agentId }: { agentId: string }) {
                     </div>
                   ))
                 )}
-              </div>
+              </Section>
+
+              {/* ── the two studio-floor blocks ──────────────────────────────
+                * These are the sections the seam used to drop on the floor.
+                * They render UNCONDITIONALLY (the empty state is a sentence,
+                * not an absence) because "this snapshot carries no roster" and
+                * "the cockpit forgot to draw the roster" looked identical for
+                * as long as the bug lived, and that is precisely the failure
+                * this panel exists to make impossible. */}
+              <Section
+                title={t.mp.resumeSummary.rosterSection}
+                testid="mp-resume-roster-section"
+                collapseLabel={t.mp.resumeSummary.collapse}
+                expandLabel={t.mp.resumeSummary.expand}
+              >
+                {state.data.roster.length === 0 ? (
+                  <div className="mp-resume__empty">
+                    {t.mp.resumeSummary.rosterEmpty}
+                  </div>
+                ) : (
+                  state.data.roster.map((r) => (
+                    <RosterRow key={r.id} r={r} t={t} />
+                  ))
+                )}
+              </Section>
+
+              <Section
+                title={t.mp.resumeSummary.machinesSection}
+                testid="mp-resume-machines-section"
+                collapseLabel={t.mp.resumeSummary.collapse}
+                expandLabel={t.mp.resumeSummary.expand}
+              >
+                {state.data.machines === null ? (
+                  <div className="mp-resume__empty">
+                    {t.mp.resumeSummary.machinesEmpty}
+                  </div>
+                ) : (
+                  <>
+                    <div
+                      className="mp-resume__youareon"
+                      data-testid="mp-resume-you-are-on"
+                    >
+                      <span className="mp-resume__generatedlabel">
+                        {t.mp.resumeSummary.machinesYouAreOnLabel}
+                      </span>{" "}
+                      {/* "" is the SERVER-RECORDED absence of a binding, said
+                        * as a sentence. It is never guessed from the machine
+                        * list — a host's own idea of its name is exactly the
+                        * thing machine_id exists to stop us trusting. */}
+                      {state.data.machines.youAreOn !== "" ? (
+                        <code className="mp-resume__partyid">
+                          {state.data.machines.youAreOn}
+                        </code>
+                      ) : (
+                        <span className="mp-resume__empty">
+                          {t.mp.resumeSummary.machinesYouAreOnNone}
+                        </span>
+                      )}
+                    </div>
+                    {state.data.machines.list.map((mc) => (
+                      <div
+                        className="mp-resume__machinerow"
+                        key={mc.machineId}
+                        data-testid="mp-resume-machine-row"
+                      >
+                        <code className="mp-resume__partyid">
+                          {mc.machineId}
+                        </code>
+                        <span className="mp-resume__machinename">
+                          {mc.displayName}
+                        </span>
+                        <span className="mp-resume__machineonline">
+                          {mc.online
+                            ? t.mp.resumeSummary.machineOnline
+                            : t.mp.resumeSummary.machineOffline}
+                        </span>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </Section>
             </>
           ) : (
             <div className="mp-resume__empty" data-testid="mp-resume-empty">

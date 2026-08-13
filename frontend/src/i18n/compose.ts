@@ -72,6 +72,13 @@ export interface Messages {
   agentPendingChange: (value: string) => string;
   workerMachineMovingTo: (machine: string) => string;
   agentWindDownForChange: (by: string) => string;
+  // ── RESUME SUMMARY · the COLLAPSE marker (T-8b0d follow-up) ──
+  // 🔴 There is deliberately NO composer for the TRUNCATION marker beside it.
+  // A shared composer is exactly how the two would drift into sharing a word,
+  // and "this message is folded" vs "older messages are not here at all" are
+  // the two statements a reader must never confuse. The cut point is a plain
+  // label leaf plus the SERVER's own hint, shown verbatim.
+  resumeBodyOmitted: (chars: number) => string;
   // ── 定期訊息 · custom cadence (T-49e7) ──
   schedCustomMonths: (months: number[]) => string;
   schedCustomDays: (days: number[]) => string;
@@ -141,6 +148,7 @@ export function makeMessages(t: Dict, language: Lang): Messages {
   const chat = t.chat;
   const mp = t.mp;
   const sched = t.mp.schedmsg;
+  const resume = t.mp.resumeSummary;
   const mon = t.monitor;
   const mach = t.monitor.machine;
   const set = t.settings;
@@ -237,6 +245,12 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     // says 最晚 rather than promising a time.
     agentWindDownForChange: (by) =>
       `${mp.windDownForChangeLabel}${sp}·${sp}${mp.windDownByLabel} ${by} ${mp.windDownEffectSuffix}`,
+
+    // LEAD/TAIL shape: the number sits mid-sentence and the two languages
+    // punctuate it differently (zh runs 「字元(…)」 straight on, en needs a
+    // space before "characters"), so each fragment carries its own punctuation.
+    resumeBodyOmitted: (chars) =>
+      `${resume.bodyOmittedLead} ${chars}${sp}${resume.bodyOmittedTail}`,
 
     // 定期訊息 · 自訂頻率 (T-49e7 round 2). The whole-set day phrase reuses the
     // cadence menu's own 每天 / Daily rather than keeping a second word for the
