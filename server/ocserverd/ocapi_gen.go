@@ -429,6 +429,42 @@ type BootCommandResultDTO struct {
 	Token          string `json:"token"`
 }
 
+// BootDocumentDTO ONE editable block of the boot context (T-791e): the 系統互動 handbook (“kind="system_interaction"“, “key="global"“) or one runtime's 啟動程序 checklist (“kind="boot_sequence"“, “key="claude"“/“"codex"“).
+//
+// The served text is FOLDED: the owner's overlay when one exists, otherwise the seed compiled into this binary. Editing writes only the overlay — the seed is never modified, which is what lets the reset route reach factory text without depending on anything the editor could have corrupted.
+//
+// “is_default“ and “has_seed“ answer DIFFERENT questions: the first is "has anybody edited this block", the second is "does a factory version exist to go back TO" (the reset's precondition — that route 404s when it is false).
+type BootDocumentDTO struct {
+	// CapChars The size cap now in force on THIS document, in CHARACTERS (the doc.cap_chars.system_interaction or doc.cap_chars.boot_sequence setting). Served on the read face so an edit can be sized BEFORE it is written — the settings surface holding the cap is admin-only, so otherwise being refused is the only way to learn it.
+	CapChars *int `json:"cap_chars,omitempty"`
+
+	// HasSeed True when a FACTORY version of this block ships in this binary, i.e. there is something for the reset route to restore. It says nothing about whether what you are holding IS that factory text — is_default answers that. True in every shipped build; served rather than assumed so a build whose seeds were not staged cannot be offered a 還原 button that 404s.
+	HasSeed *bool `json:"has_seed,omitempty"`
+
+	// IsDefault True while nobody has edited this block (or it has been reset), i.e. the text you are reading is the shipped seed. False means you are reading somebody's edit.
+	IsDefault *bool `json:"is_default,omitempty"`
+
+	// Key Which document within the kind: "global" for system_interaction; the RUNTIME ("claude" or "codex") for boot_sequence. The two boot sequences are separate documents because step 3 of each says the opposite of the other.
+	Key *string `json:"key,omitempty"`
+
+	// Kind "system_interaction" or "boot_sequence" — also the document-history kind of this document's retained versions.
+	Kind          *string `json:"kind,omitempty"`
+	OwnerId       *string `json:"owner_id,omitempty"`
+	SchemaVersion *int    `json:"schema_version,omitempty"`
+
+	// SizeChars Size of `text` in CHARACTERS (Unicode code points) — the same unit as cap_chars.
+	SizeChars *int `json:"size_chars,omitempty"`
+
+	// Text The folded document: the overlay when one exists, otherwise the shipped seed.
+	Text *string `json:"text,omitempty"`
+}
+
+// BootDocumentReplaceDTO Whole-document replace of one boot-context block: “{text}“. “text“ is REQUIRED — a whole-document replace must never infer "empty" from a missing key. “allow_shrink“ (default false) must be set explicitly to replace existing content with an empty document, the same wipe-guard posture “replace_global_context“ carries.
+type BootDocumentReplaceDTO struct {
+	AllowShrink *bool  `json:"allow_shrink,omitempty"`
+	Text        string `json:"text"`
+}
+
 // BootstrapDTO The agent boot package (§3.4 #29, §2.4). “context“ is the assembled agent
 // persona — role definition + global context + lessons, folded and concatenated
 // into one readable markdown block (the North Star's "rich enough to converse and
@@ -2179,6 +2215,9 @@ type SettingsDTO struct {
 	// DisplayWide Whether the cockpit uses the WIDE layout — the centred ~1040px content column is lifted, the side gutters stay (T-756f). false (the default) = the narrow centred column, the shipped look. Same dual-layer contract as display_theme: the frontend keeps a localStorage cache for the pre-auth paint and reconciles this server value in at login as the cross-device source of truth.
 	DisplayWide *bool `json:"display_wide,omitempty"`
 
+	// DocCapCharsBootSequence The size cap on a 啟動程序 block of the boot context, in CHARACTERS (Unicode code points). ONE knob for BOTH runtimes (claude and codex), each document measured on its own text — they are two renderings of one short checklist, so a studio that needs more room for one needs it for the other. The floor of the adjustable range is this document's shipped default (the `default` field above), the ceiling is 100000.
+	DocCapCharsBootSequence *int `json:"doc_cap_chars_boot_sequence,omitempty"`
+
 	// DocCapCharsDuty The size cap on a role's DUTY doc (the role definition), in CHARACTERS (Unicode code points — Chinese prose counts one per character). The floor of the adjustable range is this segment's OWN shipped default (the `default` field above), which is smaller than the other three segments'; the ceiling is 100000. Duty had no cap at all before T-ae38.
 	DocCapCharsDuty *int `json:"doc_cap_chars_duty,omitempty"`
 
@@ -2193,7 +2232,10 @@ type SettingsDTO struct {
 
 	// DocCapCharsManualSop The size cap on a TASK MANUAL's SOP doc (sop_md), in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000. Independent of doc_cap_chars_manual_learnings: the SOP is a written-once-then-refined blueprint while learnings accumulate, so the two documents are sized against separate budgets since T-30f1.
 	DocCapCharsManualSop *int `json:"doc_cap_chars_manual_sop,omitempty"`
-	HandoverPct          int  `json:"handover_pct"`
+
+	// DocCapCharsSystemInteraction The size cap on the 系統互動 block of the boot context, in CHARACTERS (Unicode code points). The floor of the adjustable range is this document's shipped default (the `default` field above), the ceiling is 100000. It is far larger than the role-journal caps because the block it governs is the studio handbook every agent reads at boot, and it is sized against the seed that ships with it.
+	DocCapCharsSystemInteraction *int `json:"doc_cap_chars_system_interaction,omitempty"`
+	HandoverPct                  int  `json:"handover_pct"`
 
 	// MonitoringRefreshSeconds Minimum interval between monitoring and machine refreshes, in seconds (1 through 60).
 	MonitoringRefreshSeconds *int `json:"monitoring_refresh_seconds,omitempty"`
@@ -2252,6 +2294,9 @@ type SettingsUpdateDTO struct {
 	// DisplayWide Turn the WIDE cockpit layout on/off (T-756f) — true lifts the centred ~1040px content column (the side gutters stay), false restores it. A plain boolean with no unset state: omit the field to leave it unchanged.
 	DisplayWide *bool `json:"display_wide,omitempty"`
 
+	// DocCapCharsBootSequence The size cap on a 啟動程序 block of the boot context, in CHARACTERS (Unicode code points). One knob for both runtimes, each measured on its own text. Must be at least this document's shipped default (see `SettingsDTO.doc_cap_chars_boot_sequence`, whose `default` is that floor) and at most 100000.
+	DocCapCharsBootSequence *int `json:"doc_cap_chars_boot_sequence,omitempty"`
+
 	// DocCapCharsDuty The size cap on a role's DUTY doc (the role definition), in CHARACTERS (Unicode code points). Must be at least this segment's own shipped default (see `SettingsDTO.doc_cap_chars_duty`, whose `default` is that floor) and at most 100000.
 	DocCapCharsDuty *int `json:"doc_cap_chars_duty,omitempty"`
 
@@ -2266,7 +2311,10 @@ type SettingsUpdateDTO struct {
 
 	// DocCapCharsManualSop The size cap on a TASK MANUAL's sop_md doc, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_manual_sop`, whose `default` is that floor) and at most 100000.
 	DocCapCharsManualSop *int `json:"doc_cap_chars_manual_sop,omitempty"`
-	HandoverPct          *int `json:"handover_pct,omitempty"`
+
+	// DocCapCharsSystemInteraction The size cap on the 系統互動 block of the boot context, in CHARACTERS (Unicode code points). Must be at least this document's shipped default (see `SettingsDTO.doc_cap_chars_system_interaction`, whose `default` is that floor) and at most 100000.
+	DocCapCharsSystemInteraction *int `json:"doc_cap_chars_system_interaction,omitempty"`
+	HandoverPct                  *int `json:"handover_pct,omitempty"`
 
 	// MonitoringRefreshSeconds Minimum interval between monitoring and machine refreshes, in seconds. Must be 1 through 60.
 	MonitoringRefreshSeconds *int `json:"monitoring_refresh_seconds,omitempty"`
@@ -2992,6 +3040,9 @@ type HandleChangePasswordApiAuthChangePasswordPostJSONRequestBody = ChangePasswo
 // HandleSetPasswordApiAuthSetPasswordPostJSONRequestBody defines body for HandleSetPasswordApiAuthSetPasswordPost for application/json ContentType.
 type HandleSetPasswordApiAuthSetPasswordPostJSONRequestBody = SetPasswordDTO
 
+// HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPostJSONRequestBody defines body for HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPost for application/json ContentType.
+type HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPostJSONRequestBody = BootDocumentReplaceDTO
+
 // HandleBootstrapApiBootstrapPostJSONRequestBody defines body for HandleBootstrapApiBootstrapPost for application/json ContentType.
 type HandleBootstrapApiBootstrapPostJSONRequestBody = BootstrapRequestDTO
 
@@ -3093,6 +3144,9 @@ type HandleReportWakingApiSelfWakingPostJSONRequestBody = ReportWakingDTO
 
 // HandleUpdateSettingsApiSettingsPatchJSONRequestBody defines body for HandleUpdateSettingsApiSettingsPatch for application/json ContentType.
 type HandleUpdateSettingsApiSettingsPatchJSONRequestBody = SettingsUpdateDTO
+
+// HandleReplaceSystemInteractionApiSystemInteractionPostJSONRequestBody defines body for HandleReplaceSystemInteractionApiSystemInteractionPost for application/json ContentType.
+type HandleReplaceSystemInteractionApiSystemInteractionPostJSONRequestBody = BootDocumentReplaceDTO
 
 // HandleCreateTaskManualApiTaskManualsPostJSONRequestBody defines body for HandleCreateTaskManualApiTaskManualsPost for application/json ContentType.
 type HandleCreateTaskManualApiTaskManualsPostJSONRequestBody = TaskManualCreateDTO
@@ -3233,6 +3287,15 @@ type ServerInterface interface {
 	// Backup health: is the scheduled backup still producing retreat points?
 	// (GET /api/backup-health)
 	HandleGetBackupHealthApiBackupHealthGet(w http.ResponseWriter, r *http.Request)
+	// Read one runtime's 啟動程序 block — the boot checklist that ends that runtime's boot context. runtime_key is 'claude' or 'codex'; they are separate documents because step 3 of the two says opposite things (claude mounts its own `ocagent listen`, codex must not — the sidecar owns it), so any other value is a 404 rather than a silent fallback to claude. Folded: the owner's edit when one exists, otherwise the shipped factory seed. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.
+	// (GET /api/boot-sequence/{runtime_key})
+	HandleGetBootSequenceApiBootSequenceRuntimeKeyGet(w http.ResponseWriter, r *http.Request, runtimeKey string)
+	// Replace the WHOLE 啟動程序 block of ONE runtime ({runtime_key, text}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. Judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.
+	// (POST /api/boot-sequence/{runtime_key})
+	HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPost(w http.ResponseWriter, r *http.Request, runtimeKey string)
+	// Restore ONE runtime's 啟動程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). runtime_key is 'claude' or 'codex'; anything else is a 404. No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it, which is what makes this the recovery route when a bad edit has stopped agents from booting. The overlay being discarded is retained in the document history. Owner or admin assistant only.
+	// (POST /api/boot-sequence/{runtime_key}/reset)
+	HandleResetBootSequenceApiBootSequenceRuntimeKeyResetPost(w http.ResponseWriter, r *http.Request, runtimeKey string)
 	// Assemble an agent boot context + mint the member JWT (spawn seam).
 	// (POST /api/bootstrap)
 	HandleBootstrapApiBootstrapPost(w http.ResponseWriter, r *http.Request)
@@ -3530,6 +3593,15 @@ type ServerInterface interface {
 	// Edit settings (owner-login and agent token TTLs / handover threshold); live immediately.
 	// (PATCH /api/settings)
 	HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, r *http.Request)
+	// Read the 系統互動 block of the boot context — the shared studio handbook every agent reads at boot. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.
+	// (GET /api/system-interaction)
+	HandleGetSystemInteractionApiSystemInteractionGet(w http.ResponseWriter, r *http.Request)
+	// Replace the WHOLE 系統互動 block of the boot context ({text}) — the handbook every agent reads at boot. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. The write is judged against the doc.cap_chars.system_interaction cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_system_interaction always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.
+	// (POST /api/system-interaction)
+	HandleReplaceSystemInteractionApiSystemInteractionPost(w http.ResponseWriter, r *http.Request)
+	// Restore the 系統互動 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.
+	// (POST /api/system-interaction/reset)
+	HandleResetSystemInteractionApiSystemInteractionResetPost(w http.ResponseWriter, r *http.Request)
 	// List task types (match by display_name/purpose; address by type_key).
 	// (GET /api/task-manuals)
 	HandleListTaskManualsApiTaskManualsGet(w http.ResponseWriter, r *http.Request, params HandleListTaskManualsApiTaskManualsGetParams)
@@ -3747,6 +3819,84 @@ func (siw *ServerInterfaceWrapper) HandleGetBackupHealthApiBackupHealthGet(w htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.HandleGetBackupHealthApiBackupHealthGet(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleGetBootSequenceApiBootSequenceRuntimeKeyGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleGetBootSequenceApiBootSequenceRuntimeKeyGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "runtime_key" -------------
+	var runtimeKey string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "runtime_key", r.PathValue("runtime_key"), &runtimeKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "runtime_key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleGetBootSequenceApiBootSequenceRuntimeKeyGet(w, r, runtimeKey)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "runtime_key" -------------
+	var runtimeKey string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "runtime_key", r.PathValue("runtime_key"), &runtimeKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "runtime_key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPost(w, r, runtimeKey)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleResetBootSequenceApiBootSequenceRuntimeKeyResetPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleResetBootSequenceApiBootSequenceRuntimeKeyResetPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "runtime_key" -------------
+	var runtimeKey string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "runtime_key", r.PathValue("runtime_key"), &runtimeKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "runtime_key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleResetBootSequenceApiBootSequenceRuntimeKeyResetPost(w, r, runtimeKey)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -6182,6 +6332,48 @@ func (siw *ServerInterfaceWrapper) HandleUpdateSettingsApiSettingsPatch(w http.R
 	handler.ServeHTTP(w, r)
 }
 
+// HandleGetSystemInteractionApiSystemInteractionGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleGetSystemInteractionApiSystemInteractionGet(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleGetSystemInteractionApiSystemInteractionGet(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleReplaceSystemInteractionApiSystemInteractionPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleReplaceSystemInteractionApiSystemInteractionPost(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleReplaceSystemInteractionApiSystemInteractionPost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleResetSystemInteractionApiSystemInteractionResetPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleResetSystemInteractionApiSystemInteractionResetPost(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleResetSystemInteractionApiSystemInteractionResetPost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleListTaskManualsApiTaskManualsGet operation middleware
 func (siw *ServerInterfaceWrapper) HandleListTaskManualsApiTaskManualsGet(w http.ResponseWriter, r *http.Request) {
 
@@ -7240,6 +7432,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/set-password", wrapper.HandleSetPasswordApiAuthSetPasswordPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/auth/status", wrapper.HandleAuthStatusApiAuthStatusGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/backup-health", wrapper.HandleGetBackupHealthApiBackupHealthGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/boot-sequence/{runtime_key}", wrapper.HandleGetBootSequenceApiBootSequenceRuntimeKeyGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/boot-sequence/{runtime_key}", wrapper.HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/boot-sequence/{runtime_key}/reset", wrapper.HandleResetBootSequenceApiBootSequenceRuntimeKeyResetPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/bootstrap", wrapper.HandleBootstrapApiBootstrapPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/chat", wrapper.HandleListChatApiChatGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/chat", wrapper.HandlePostChatApiChatPost)
@@ -7339,6 +7534,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/self/waking", wrapper.HandleReportWakingApiSelfWakingPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/settings", wrapper.HandleGetSettingsApiSettingsGet)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/settings", wrapper.HandleUpdateSettingsApiSettingsPatch)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/system-interaction", wrapper.HandleGetSystemInteractionApiSystemInteractionGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/system-interaction", wrapper.HandleReplaceSystemInteractionApiSystemInteractionPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/system-interaction/reset", wrapper.HandleResetSystemInteractionApiSystemInteractionResetPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/task-manuals", wrapper.HandleListTaskManualsApiTaskManualsGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/task-manuals", wrapper.HandleCreateTaskManualApiTaskManualsPost)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/task-manuals/{type_key}", wrapper.HandleDeleteTaskManualApiTaskManualsTypeKeyDelete)

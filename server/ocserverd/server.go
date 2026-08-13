@@ -347,37 +347,39 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 		hub.BindWardenCommandStore(dal)
 	}
 	return &apiServer{
-		processSHA:                 gitSHA(),
-		processTime:                gitTime(),
-		dal:                        dal,
-		hub:                        hub,
-		telemetry:                  newMemStore(),
-		gauge:                      newMemStore(),
-		machineClaims:              newMachineClaimStore(),
-		secret:                     secret,
-		ownerTokenTTL:              tokenTTL,
-		agentTokenTTL:              defaultAgentTokenTTL,
-		outsourceMaxParallel:       defaultOutsourceMaxParallel,
-		docCapCharsDuty:            dutyCapCharsDefault,
-		docCapCharsInsight:         contextDocMaxCharsDefault,
-		docCapCharsLearning:        contextDocMaxCharsDefault,
-		docCapCharsManualSop:       contextDocMaxCharsDefault,
-		docCapCharsManualLearnings: contextDocMaxCharsDefault,
-		ctxhigh:                    defaultSseContextHigh(),
-		root:                       root,
-		binHashes:                  bindistBinaryHashesFrom(bindistFS()),
-		reconcileStates:            map[string]reconcileState{},
-		reconcileCfg:               defaultReconcileConfig(),
-		identitySweepAt:            map[string]float64{},
-		receiptPending:             map[string]pendingReceipt{},
-		workerSpawnAt:              map[string]float64{},
-		workerSpawnTarget:          map[string]string{},
-		workerSpawnAttempts:        map[string]int{},
-		workerReclaimed:            map[string]bool{},
-		workerStopPending:          map[string]string{},
-		workerMachinePref:          map[string]string{},
-		workerReconcileStates:      map[string]reconcileState{},
-		workerMachineCooldown:      map[string]float64{},
+		processSHA:                   gitSHA(),
+		processTime:                  gitTime(),
+		dal:                          dal,
+		hub:                          hub,
+		telemetry:                    newMemStore(),
+		gauge:                        newMemStore(),
+		machineClaims:                newMachineClaimStore(),
+		secret:                       secret,
+		ownerTokenTTL:                tokenTTL,
+		agentTokenTTL:                defaultAgentTokenTTL,
+		outsourceMaxParallel:         defaultOutsourceMaxParallel,
+		docCapCharsDuty:              dutyCapCharsDefault,
+		docCapCharsInsight:           contextDocMaxCharsDefault,
+		docCapCharsLearning:          contextDocMaxCharsDefault,
+		docCapCharsManualSop:         contextDocMaxCharsDefault,
+		docCapCharsManualLearnings:   contextDocMaxCharsDefault,
+		docCapCharsSystemInteraction: systemInteractionCapCharsDefault,
+		docCapCharsBootSequence:      bootSequenceCapCharsDefault,
+		ctxhigh:                      defaultSseContextHigh(),
+		root:                         root,
+		binHashes:                    bindistBinaryHashesFrom(bindistFS()),
+		reconcileStates:              map[string]reconcileState{},
+		reconcileCfg:                 defaultReconcileConfig(),
+		identitySweepAt:              map[string]float64{},
+		receiptPending:               map[string]pendingReceipt{},
+		workerSpawnAt:                map[string]float64{},
+		workerSpawnTarget:            map[string]string{},
+		workerSpawnAttempts:          map[string]int{},
+		workerReclaimed:              map[string]bool{},
+		workerStopPending:            map[string]string{},
+		workerMachinePref:            map[string]string{},
+		workerReconcileStates:        map[string]reconcileState{},
+		workerMachineCooldown:        map[string]float64{},
 	}
 }
 
@@ -525,6 +527,8 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 	api.docCapCharsLearning = auth.docCapCharsLearning
 	api.docCapCharsManualSop = auth.docCapCharsManualSop
 	api.docCapCharsManualLearnings = auth.docCapCharsManualLearnings
+	api.docCapCharsSystemInteraction = auth.docCapCharsSystemInteraction
+	api.docCapCharsBootSequence = auth.docCapCharsBootSequence
 	api.updaterReceiveBeta = auth.updaterReceiveBeta
 	api.updaterAutoUpdate = auth.updaterAutoUpdate
 	// $OC_RELEASE_API_BASE is a HARNESS seam (conformance/e2e): it re-points

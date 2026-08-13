@@ -423,8 +423,11 @@ func TestTaskManualStreamsAreTrimmedToThreeIndependently(t *testing.T) {
 	}
 
 	sop := m.versions(docKindTaskManualSop)
-	if len(sop) != documentHistoryKeep {
-		t.Fatalf("sop stream kept %d versions, want %d", len(sop), documentHistoryKeep)
+	// The depth is per-kind since T-791e; the manual series is one of the kinds
+	// that deliberately stayed at the default, so this asks the table rather
+	// than a literal.
+	if want := documentHistoryKeepFor(docKindTaskManualSop); len(sop) != want {
+		t.Fatalf("sop stream kept %d versions, want %d", len(sop), want)
 	}
 	if sop[0].Content["sop_md"] != "sop v4" || sop[2].Content["sop_md"] != "sop v2" {
 		t.Fatalf("sop stream = %+v, want sop v4 down to sop v2 — the trim dropped the wrong end", sop)
