@@ -713,11 +713,16 @@ func fmtAgo(secs float64) string {
 // drainChat refetches chat and prints the unread-for-me — ONE LINE per message so the
 // spawned session's Monitor reads exactly '誰、多久前、說了什麼':
 //
-//	[ocagent] chat from MB-ABC123 (id, 2m ago): ...
+//	[ocagent] chat from MB-ABC123 (#CM-9F2A11, 2m ago): ...
 //
-// The `(id, …)` tag spells out that `from` is the STABLE member id (server-stamped,
-// never a display name) — reply straight to it with post_chat; the relative age is
-// computed client-side from the message ts (dropped when the wire carries no ts).
+// `from` is the STABLE member id (server-stamped, never a display name) — reply
+// straight to it with post_chat. The `#…` tag is the MESSAGE id: the handle to
+// name this exact message when calling get_chat for the full body/attachments.
+// Only the id goes in — filenames, attachment ids and mimes stay OUT, because
+// this line is a token cost every agent pays on every message; get_chat is where
+// that detail belongs. The relative age is computed client-side from the message
+// ts. Either tag half is dropped when the wire carries no id / no ts, and a
+// message with neither prints without the parenthesised tag at all.
 // Advances the seen-id cursor and returns the unread count. `silent` (the boot
 // baseline) advances the cursor WITHOUT printing so connecting does not re-print
 // history. R7: reads ONLY the refetched authority, never a delta. Mirrors drain_chat.
@@ -769,9 +774,12 @@ func drainChat(client httpClient, cfg Config, seen map[string]bool, out io.Write
 			continue
 		}
 		if !silent {
-			tag := "id"
+			tag := make([]string, 0, 2)
+			if mid != "" {
+				tag = append(tag, "#"+mid)
+			}
 			if ts, ok := m["ts"].(float64); ok && ts > 0 {
-				tag = "id, " + fmtAgo(now-ts) + " ago"
+				tag = append(tag, fmtAgo(now-ts)+" ago")
 			}
 			content := renderMessageBody(strOrEmpty(m["body"]), chatBodyAuthority)
 			if badge := attachmentSummary(m); badge != "" {
@@ -781,8 +789,12 @@ func drainChat(client httpClient, cfg Config, seen map[string]bool, out io.Write
 					content += " " + badge
 				}
 			}
-			fmt.Fprintf(out, "[ocagent] chat from %s (%s): %s\n",
-				pyStr(m["from"]), tag, content)
+			if len(tag) == 0 {
+				fmt.Fprintf(out, "[ocagent] chat from %s: %s\n", pyStr(m["from"]), content)
+			} else {
+				fmt.Fprintf(out, "[ocagent] chat from %s (%s): %s\n",
+					pyStr(m["from"]), strings.Join(tag, ", "), content)
+			}
 		}
 		if mid != "" {
 			seen[mid] = true

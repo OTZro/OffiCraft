@@ -364,7 +364,7 @@ func TestDrainChat_UnreadForMeOnly_AdvancesSeen(t *testing.T) {
 	if *gotWith != "kyle" {
 		t.Fatalf("with= param = %q want kyle", *gotWith)
 	}
-	if got := out.String(); got != "[ocagent] chat from boss (id, 2m ago): hello\n" {
+	if got := out.String(); got != "[ocagent] chat from boss (#m1, 2m ago): hello\n" {
 		t.Fatalf("drain out = %q", got)
 	}
 	if !seen["m1"] {
@@ -396,19 +396,44 @@ func TestDrainChat_MissingTsPrintsIdTagOnly(t *testing.T) {
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
-	if got := out.String(); got != "[ocagent] chat from boss (id): hi\n" {
+	if got := out.String(); got != "[ocagent] chat from boss (#m1): hi\n" {
 		t.Fatalf("no-ts drain out = %q", got)
 	}
 }
 
+// A message with NEITHER an id nor a ts has nothing to put in the tag, so the
+// parenthesised tag is dropped entirely rather than printed empty as "()".
+func TestDrainChat_NoIdNoTsDropsTheTagEntirely(t *testing.T) {
+	srv, _ := chatServer(t, `[{"from":"boss","to":"kyle","body":"hi"}]`)
+	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
+	var out bytes.Buffer
+	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
+	if got := out.String(); got != "[ocagent] chat from boss: hi\n" {
+		t.Fatalf("id-less drain out = %q", got)
+	}
+}
+
+// T-a828 ①: an attachment-bearing notification carries BOTH halves — the real
+// message id (the handle for get_chat) AND the attachment badge. The id half is
+// asserted against the fixture's actual id value: a "does it mention id" check
+// would have passed against the old literal "id" tag, which named nothing.
 func TestDrainChat_ImageAttachmentAppendsBadge(t *testing.T) {
-	srv, _ := chatServer(t, `[{"id":"m1","from":"boss","to":"kyle","body":"看這張",
+	const wireID = "CM-7QW3ZK" // distinctive: cannot be matched by accident
+	srv, _ := chatServer(t, `[{"id":"`+wireID+`","from":"boss","to":"kyle","body":"看這張",
 		"attachments":[{"id":"a1","mime":"image/png","is_image":true,"filename":"x.png"}]}]`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
-	if got := out.String(); got != "[ocagent] chat from boss (id): 看這張 📎1圖\n" {
-		t.Fatalf("image attachment drain out = %q", got)
+	got := out.String()
+	if !strings.Contains(got, "#"+wireID) {
+		t.Errorf("notification must name the message id %q so the agent can get_chat it: %q",
+			wireID, got)
+	}
+	if !strings.Contains(got, "📎1圖") {
+		t.Errorf("attachment badge must survive alongside the id: %q", got)
+	}
+	if want := "[ocagent] chat from boss (#" + wireID + "): 看這張 📎1圖\n"; got != want {
+		t.Fatalf("image attachment drain out = %q want %q", got, want)
 	}
 }
 
@@ -418,7 +443,7 @@ func TestDrainChat_EmptyBodyWithAttachmentsPrintsBadgeOnly(t *testing.T) {
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
-	if got := out.String(); got != "[ocagent] chat from boss (id): 📎2圖\n" {
+	if got := out.String(); got != "[ocagent] chat from boss (#m1): 📎2圖\n" {
 		t.Fatalf("empty-body attachment drain out = %q", got)
 	}
 }
@@ -431,18 +456,33 @@ func TestDrainChat_MixedAttachmentsCountsImagesAndFiles(t *testing.T) {
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
-	if got := out.String(); got != "[ocagent] chat from boss (id): 附件 📎1圖 2檔\n" {
+	if got := out.String(); got != "[ocagent] chat from boss (#m1): 附件 📎1圖 2檔\n" {
 		t.Fatalf("mixed attachment drain out = %q", got)
 	}
 }
 
-func TestDrainChat_NoAttachmentsByteIdentical(t *testing.T) {
-	srv, _ := chatServer(t, `[{"id":"m1","from":"boss","to":"kyle","body":"hi","attachments":[]}]`)
+// T-a828 ②: a zero-attachment notification carries the real message id and NO
+// badge — the two halves stay tellable apart. ⚠️ This test used to pin the
+// zero-attachment line byte-for-byte as it stood BEFORE the id landed (that was
+// the badge work's guard against widening every line). T-a828 changes that line
+// on purpose, so the expectation moved with it; what must NOT be lost is the
+// discrimination it buys: with-attachment vs without still differ.
+func TestDrainChat_NoAttachmentsPrintsIdWithoutBadge(t *testing.T) {
+	const wireID = "CM-4KD9XP" // distinctive: cannot be matched by accident
+	srv, _ := chatServer(t, `[{"id":"`+wireID+`","from":"boss","to":"kyle","body":"hi","attachments":[]}]`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
-	if got := out.String(); got != "[ocagent] chat from boss (id): hi\n" {
-		t.Fatalf("zero-attachment drain out = %q", got)
+	got := out.String()
+	if !strings.Contains(got, "#"+wireID) {
+		t.Errorf("an attachment-less notification must still name the message id %q: %q",
+			wireID, got)
+	}
+	if strings.Contains(got, "📎") {
+		t.Errorf("zero attachments must print NO badge: %q", got)
+	}
+	if want := "[ocagent] chat from boss (#" + wireID + "): hi\n"; got != want {
+		t.Fatalf("zero-attachment drain out = %q want %q", got, want)
 	}
 }
 
@@ -1265,7 +1305,7 @@ func TestListener_EndToEnd_DispatchAndCursor(t *testing.T) {
 
 	waitForCond(t, func() bool {
 		return strings.Contains(out.String(), "wake seq=3 topic=task") &&
-			strings.Contains(out.String(), "chat from boss (id): ping") &&
+			strings.Contains(out.String(), "chat from boss (#c1): ping") &&
 			strings.Contains(out.String(),
 				"reply-card rc-9 answered: picked [0] \"ship\" | asked: ship it?")
 	}, "work wake + chat refetch + reply-card wake dispatched over the wire")
@@ -2023,7 +2063,7 @@ func TestDrainChat_UndersizeBodyPrintedInFull(t *testing.T) {
 		t.Fatalf("drain = %d", n)
 	}
 	line := out.String()
-	if want := "[ocagent] chat from boss (id): " + full + "\n"; line != want {
+	if want := "[ocagent] chat from boss (#c-full): " + full + "\n"; line != want {
 		t.Fatalf("under-cap body must print verbatim:\n got %q\nwant %q", line, want)
 	}
 	// Positive control for the truncation assertions below: an under-cap body
@@ -2046,7 +2086,7 @@ func TestDrainChat_MultiLineBodyPrintedIndentedAsOneBlock(t *testing.T) {
 	cfg := Config{Base: srv.URL, ID: "kyle", Token: "tok"}
 	var out bytes.Buffer
 	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
-	want := "[ocagent] chat from boss (id): 交接 SOP:\n" +
+	want := "[ocagent] chat from boss (#c-ml): 交接 SOP:\n" +
 		"    1. 先接手 listen\n" +
 		"    [ocagent] 這行看起來像事件但其實是內文\n"
 	if got := out.String(); got != want {
@@ -2077,7 +2117,7 @@ func TestDrainChat_LongMustReadBodyPrintedInFull(t *testing.T) {
 	cfg := Config{Base: srv.URL, ID: "kyle", Token: "tok"}
 	var out bytes.Buffer
 	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
-	if want := "[ocagent] chat from boss (id): " + long + "\n"; out.String() != want {
+	if want := "[ocagent] chat from boss (#c-5k): " + long + "\n"; out.String() != want {
 		t.Fatalf("5k-char must-read body must print verbatim (len got %d want %d)",
 			len(out.String()), len(want))
 	}
@@ -2104,7 +2144,7 @@ func TestDrainChat_PathologicalBodyTrippedBySafetyValve(t *testing.T) {
 	if strings.Contains(line, huge) {
 		t.Fatal("a valve-tripped body must not print the full text")
 	}
-	if !strings.HasPrefix(line, "[ocagent] chat from boss (id): 囉嗦") {
+	if !strings.HasPrefix(line, "[ocagent] chat from boss (#c-huge): 囉嗦") {
 		t.Fatal("a valve-tripped body must still print the head")
 	}
 	if len(line) > messageBodyValve+256 { // head (≤valve) + prefix + hint
