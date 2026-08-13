@@ -250,9 +250,15 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     // else. What "folded" MEANS is stated once per chat block
     // (`bodyOmittedNote`) instead of once per message — the template used to be
     // repeated under every folded row and cost more than the folds saved
-    // (owner, 2026-08-13). `sp` still separates the two so a theme that
-    // re-words the mark cannot glue it to the digits.
-    resumeBodyOmitted: (chars) => `${resume.bodyOmittedMark}${sp}${chars}`,
+    // (owner, 2026-08-13).
+    //
+    // 🔴 A LITERAL SPACE, deliberately NOT `sp`. `sp` is "" for zh, which is
+    // right where a fragment runs into CJK punctuation — and wrong here. Seen
+    // on the trial station it rendered 「折起188」, where the numeral abuts the
+    // word and the whole thing reads as one token. A space between CJK text and
+    // a Latin numeral is correct in both languages, so this separator is not
+    // locale-dependent and must not be routed through `sp`.
+    resumeBodyOmitted: (chars) => `${resume.bodyOmittedMark} ${chars}`,
 
     // 定期訊息 · 自訂頻率 (T-49e7 round 2). The whole-set day phrase reuses the
     // cadence menu's own 每天 / Daily rather than keeping a second word for the

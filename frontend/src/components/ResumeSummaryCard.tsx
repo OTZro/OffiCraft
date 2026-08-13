@@ -148,7 +148,17 @@ function Section({
  * giving it a second one on screen would carry the same decision twice and
  * leave the reader joining two lists by hand — the exact chore the inline
  * shape was chosen to remove. */
-function ChatRow({
+/** One message row of the wake snapshot's chat block.
+ *
+ * 🔴 EXPORTED FOR THE LAYOUT GUARD, and that is the only reason. The alignment
+ * contract this row carries (body and marks on the section's own left edge, the
+ * fold mark beside its message, the timestamp always in one place) is a
+ * GEOMETRY statement, and geometry is exactly what jsdom cannot see. The
+ * Playwright CT guard therefore mounts THIS component rather than a hand-copied
+ * skeleton of it — a copy would keep passing while the real row drifted, which
+ * is the failure mode the guard exists to remove.
+ * See visual-guards/resume-chat-row-align.ct.spec.tsx. */
+export function ChatRow({
   m,
   t,
   msg,
@@ -162,31 +172,39 @@ function ChatRow({
   return (
     <div className="mp-resume__chatrow" data-testid="mp-resume-chat-row">
       <div className="mp-resume__chatmeta">
-        <Party
-          name={m.fromName ?? ""}
-          id={m.from}
-          testid="mp-resume-chat-from"
-        />
-        <span className="mp-resume__arrow" aria-hidden="true">
-          →
-        </span>
-        <Party name={m.toName ?? ""} id={m.to} testid="mp-resume-chat-to" />
-        {/* PRINTED, never formatted here. See rule 1 in the file header. */}
-        {(m.tsDisplay ?? "") !== "" && (
-          <span className="mp-resume__chatts" data-testid="mp-resume-chat-ts">
-            {m.tsDisplay}
+        {/* TWO LINES, in the markup rather than left to wrapping. The parties
+          * line may wrap when the names are long; the stamp line below it may
+          * not be affected by that, because "where is the time" must have the
+          * same answer on every row. It used to depend on leftover width. */}
+        <div className="mp-resume__chatparties">
+          <Party
+            name={m.fromName ?? ""}
+            id={m.from}
+            testid="mp-resume-chat-from"
+          />
+          <span className="mp-resume__arrow" aria-hidden="true">
+            →
           </span>
-        )}
-        {m.replyCardStatus != null && (
-          <span
-            className="mp-resume__cardstatus"
-            data-testid="mp-resume-chat-cardstatus"
-          >
-            {r.replyCardStatusLabel}
-            {": "}
-            {m.replyCardStatus}
-          </span>
-        )}
+          <Party name={m.toName ?? ""} id={m.to} testid="mp-resume-chat-to" />
+        </div>
+        <div className="mp-resume__chatstamp">
+          {/* PRINTED, never formatted here. See rule 1 in the file header. */}
+          {(m.tsDisplay ?? "") !== "" && (
+            <span className="mp-resume__chatts" data-testid="mp-resume-chat-ts">
+              {m.tsDisplay}
+            </span>
+          )}
+          {m.replyCardStatus != null && (
+            <span
+              className="mp-resume__cardstatus"
+              data-testid="mp-resume-chat-cardstatus"
+            >
+              {r.replyCardStatusLabel}
+              {": "}
+              {m.replyCardStatus}
+            </span>
+          )}
+        </div>
       </div>
       <Markdown
         source={m.body}

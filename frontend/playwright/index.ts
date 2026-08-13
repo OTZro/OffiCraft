@@ -20,3 +20,8 @@ import "../src/components/settings.css";
 // the popover's old over-wide box happens to fit, and the guard is a false
 // green (the precise reason the pre-existing 390px guards missed the bug).
 import "../src/components/chrome.css";
+// The wake-snapshot panel's own sheet. The resume-chat-row-align guard measures
+// `.mp-resume__chatrow` and its children against the production rules; without
+// this import it would measure browser-default block layout, in which the body
+// already sits at the left edge — a false GREEN on exactly the bug it is for.
+import "../src/components/member-detail.css";
