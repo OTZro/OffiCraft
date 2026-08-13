@@ -14,6 +14,13 @@ import "../src/components/office.css";
 // wide code keeps its OWN horizontal scroll, so the guard must measure with this
 // sheet loaded too — else it measures a browser-default <pre> that never ships.
 import "../src/components/settings.css";
+// T-ee17: the reply card's 任務資訊 row is measured by
+// reply-task-title-truncate.ct.spec.tsx, and the whole thing under test —
+// which element gives way when the task title is too long — lives in
+// replies.css. Without this sheet that guard measures an unstyled row, where
+// nothing shrinks and nothing is clipped, and reports a layout that never
+// ships.
+import "../src/components/replies.css";
 // T-49fb: the artifact-popover overflow guard measures the card at its REAL
 // x-offset, which comes from `.app__main`'s 22px side padding — an app-shell
 // rule that lives here. Without this sheet the card mounts ~22px further left,
