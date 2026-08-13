@@ -524,34 +524,19 @@
   }
 }
 
-/* ---- §3.6 請示 → 任務: the 精簡任務資訊 row on a TASK-derived ask (type
- * badge + 查看任務詳情 jump). Adjudicated: never the task number/識別鍵. ---- */
+/* ---- §3.6 請示 → 任務: the 精簡任務資訊 row on a TASK-derived ask (task title
+ * + 查看任務詳情 jump). Adjudicated: never the task number/識別鍵. The type
+ * chip was removed in T-ee17 acceptance. ---- */
 .reply-card__task {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-top: 2px;
 }
-.reply-card__task-type {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 9px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--color-overlay) 10%, transparent);
-  font-size: 12px;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  color: var(--color-text);
-}
-.reply-card__task-label {
-  font-family: inherit;
-  font-size: 11px;
-  color: var(--color-text-muted);
-}
 /* The task's own title (T-ee17). It is the only free-length thing on this row,
  * so it is the one that shrinks; the ellipsis says a title was cut rather than
- * ending mid-word as if that were the whole name. The badge and the jump keep
- * their intrinsic width — a cut type or a cut 查看任務詳情 helps nobody.
+ * ending mid-word as if that were the whole name. The jump keeps its intrinsic
+ * width — a cut 查看任務詳情 helps nobody.
  *
  * `overflow: hidden` is doing TWO jobs and both are load-bearing: it clips the
  * text, AND it is what lets this flex item go below its content width at all

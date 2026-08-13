@@ -111,7 +111,7 @@ beforeEach(() => {
 });
 
 describe("請示卡的任務資訊 (RepliesPage)", () => {
-  it("task-derived ask: TYPE + 查看任務詳情, never the task number", async () => {
+  it("task-derived ask: TITLE + 查看任務詳情, never the typeKey nor the task number", async () => {
     __injectMockReplyCard(
       mkCard({
         // The title deliberately carries a "T-" — it is free prose the owner
@@ -129,7 +129,11 @@ describe("請示卡的任務資訊 (RepliesPage)", () => {
       </I18nProvider>
     );
     const ref = await findByTestId("reply-task-ref");
-    expect(ref.textContent).toContain("sync-jira");
+    // The type chip is gone (T-ee17 acceptance): the row names the work by its
+    // title, never by the internal type key.
+    expect(ref.textContent).not.toContain("sync-jira");
+    expect(ref.querySelector(".reply-card__task-type")).toBeNull();
+    expect(ref.textContent).toContain("同步 PROJ-1421 到 T-9 的排程");
     expect(ref.textContent).toContain("查看任務詳情");
     // Adjudicated: no task number / raw id leaks onto the card. Scanned over
     // the cells that may NOT carry one — the title cell is excluded because a
@@ -142,7 +146,7 @@ describe("請示卡的任務資訊 (RepliesPage)", () => {
     expect(window.location.hash).toBe("#tasks/t-77");
   });
 
-  it("ad-hoc task ref labels as 自由代辦; a pure chat ask shows NO task row", async () => {
+  it("ad-hoc task ref shows no type chip at all; a pure chat ask shows NO task row", async () => {
     __injectMockReplyCard(
       mkCard({ task: { id: "t-88", typeKey: "", title: "散事" } })
     );
@@ -155,12 +159,16 @@ describe("請示卡的任務資訊 (RepliesPage)", () => {
     await findAllByTestId("waiting-card");
     const refs = await findAllByTestId("reply-task-ref");
     expect(refs).toHaveLength(1); // only the task-derived one
-    expect(refs[0].textContent).toContain("自由代辦");
+    // A blank typeKey used to fall back to 自由代辦 inside the chip; with the
+    // chip gone neither the fallback word nor the label is drawn.
+    expect(refs[0].querySelector(".reply-card__task-type")).toBeNull();
+    expect(refs[0].textContent).not.toContain("自由代辦");
+    expect(refs[0].textContent).toContain("散事");
   });
 });
 
 describe("請示卡的任務資訊 (ChatReplyCard)", () => {
-  it("the chat inline card carries the same type + jump", async () => {
+  it("the chat inline card carries the same title + jump, and no type chip either", async () => {
     __injectMockReplyCard(
       mkCard({
         id: "rc-chat",
@@ -173,9 +181,39 @@ describe("請示卡的任務資訊 (ChatReplyCard)", () => {
       </I18nProvider>
     );
     const ref = await findByTestId("reply-task-ref");
-    expect(ref.textContent).toContain("review-pr");
+    // Both surfaces render the one shared row, so the chip's removal has to
+    // hold here too — asserted on this surface rather than assumed from it.
+    expect(ref.textContent).not.toContain("review-pr");
+    expect(ref.querySelector(".reply-card__task-type")).toBeNull();
+    expect(ref.textContent).toContain("修 PR");
     fireEvent.click(await findByTestId("reply-task-jump"));
     expect(window.location.hash).toBe("#tasks/t-99");
+  });
+
+  // The move to the head of the card (owner 2026-08-14) has to happen on BOTH
+  // surfaces or the shared row has drifted in the one way it exists to prevent.
+  // The Ask page half is asserted in RepliesPage.test.tsx; this is the chat
+  // half. DOM order, not geometry — CSS can paint a later element higher.
+  it("leads the chat inline card with the task row, ahead of the summary", async () => {
+    __injectMockReplyCard(
+      mkCard({
+        id: "rc-chat-order",
+        summary: "要現在同步嗎？",
+        task: { id: "t-order", typeKey: "review-pr", title: "修 PR" },
+      })
+    );
+    const { findByTestId } = render(
+      <I18nProvider>
+        <ChatReplyCard replyCardId="rc-chat-order" fallbackSummary="…" />
+      </I18nProvider>
+    );
+    const ref = await findByTestId("reply-task-ref");
+    const card = await findByTestId("chat-reply-card");
+    const summary = card.querySelector(".reply-card__summary")!;
+    expect(summary).toBeTruthy();
+    expect(
+      ref.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 });
 

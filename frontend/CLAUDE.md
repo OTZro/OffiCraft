@@ -655,9 +655,19 @@ machines.online × monitoring agents 誠實映射:閒置/忙碌/離線;說明「
 `ReplyCard.task`(wire `ReplyCardDTO.task` = TaskRefDTO,mapper 恆置
 null-when-absent;view 欄位 OPTIONAL 保測試 fixture,先例 Member.roleName)。
 任務衍生的請示卡(task 非 null)在 RepliesPage 與 ChatReplyCard 都顯**精簡任務
-資訊 row**:類型 badge(typeKey;"" → 自由代辦)+「查看任務詳情」——**不露任務
-編號/識別鍵**(裁定);點 → `#tasks/<taskId>`(hashRoute 新 `taskId` 段)。純聊
-天請示無此 row。TasksPage 端 = **settle loop**(每個 effect pass 修一件事再
+資訊 row**:任務標題 +「查看任務詳情」——**不露任務編號/識別鍵**(裁定);點 →
+`#tasks/<taskId>`(hashRoute 新 `taskId` 段)。純聊天請示無此 row。
+🔴 **類型 badge(typeKey;"" → 自由代辦)已在 T-ee17 驗收整顆移除**(owner
+2026-08-14 圈住那顆 chip:螢幕上一串 `tm-05f7c776d6ff` 這種內部代號答不出任何
+標題答不出的事)。`task.typeKey` **仍留在 DTO 上**(別人可能在用)——這只是不再
+顯示,不是把欄位拿掉;`t.replies.taskBadge` 因此成孤兒 key、已刪(`t.tasks.adhoc`
+有別的使用者,留著)。
+🔴 **這一列在卡片最上面,就在卡頭底下、正文之前**(同一輪驗收,owner:「這個不能
+夠放到最一開始嗎?」)——擺在底部時,要讀完整張卡才知道這是哪件工作的問題。
+**兩個畫面同一批搬**(這正是這個元件被抽出來的理由);順序由 **DOM 順序**斷言守
+(`RepliesPage.test.tsx` + `TasksPage.jump.test.tsx`),版面那半由真瀏覽器的
+`visual-guards/reply-task-title-truncate.ct.spec.tsx` 在 320/390 量幾何——兩層
+mount 的都是真元件,所以把它搬回底部兩層都會紅(實測 jsdom 紅 2、CT 紅 2)。TasksPage 端 = **settle loop**(每個 effect pass 修一件事再
 re-run):終態目標 → 自動展開已結束;**錨點直接壓過三個篩選軸**(`matches` 對
 `taskIdFilter` 短路成 `task.id === taskIdFilter`,不是逐維度去清)、那一張則由
 `useTasks` 的 `anchorTaskId` 單張補抓進來(見上方任務頁節);card 進 DOM →

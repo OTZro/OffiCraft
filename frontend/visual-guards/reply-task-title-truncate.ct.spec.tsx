@@ -28,7 +28,10 @@
 // The short-title control (3) stays green under the real mutant — it is there
 // so "everything is clipped" cannot pass as a fix.
 import { test, expect } from "@playwright/experimental-ct-react";
-import { ReplyTaskRefStory } from "./stories/ReplyTaskRefStory";
+import {
+  ReplyTaskRefStory,
+  ReplyCardLeadRowStory,
+} from "./stories/ReplyTaskRefStory";
 
 // Two widths on purpose: the owner reads the Ask page on both a phone and a
 // desktop, and a title that fits at 1040 can still burst the row at 390.
@@ -125,5 +128,74 @@ for (const viewport of WIDTHS) {
       shortOverflow,
       "a title that fits must be shown whole",
     ).toBeLessThanOrEqual(1);
+  });
+}
+
+// T-ee17 acceptance round — the 任務資訊 row LEADS the card (owner 2026-08-14:
+//「這個不能夠放到最一開始嗎？」). Moving a row changes layout, so the narrow
+// widths get their own real-browser witness: the row now shares the top of the
+// card with nothing above it, and it still has to fit and still has to clip its
+// own title rather than push the card sideways.
+//
+// The DOM-order half of the contract is asserted in jsdom
+// (RepliesPage.test.tsx / TasksPage.jump.test.tsx). Here it is asserted as
+// GEOMETRY — where the owner's eye actually lands — because those are two
+// different claims: CSS can paint a later element higher, and a DOM-order
+// assertion cannot see that. Both halves mount the real component, so moving
+// the row back below the summary reddens both.
+const LEAD_WIDTHS = [320, 390];
+
+for (const viewport of LEAD_WIDTHS) {
+  test(`${viewport}px: the task row sits at the TOP of the card, above the summary`, async ({
+    mount,
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport, height: 720 });
+    const cmp = await mount(<ReplyCardLeadRowStory />);
+
+    const card = cmp.getByTestId("chat-reply-card");
+    const row = cmp.getByTestId("reply-task-ref");
+    const summary = card.locator(".reply-card__summary");
+    await expect(row).toBeVisible();
+    await expect(summary).toBeVisible();
+
+    // (1) CORE red→green: the row's whole box is ABOVE the summary's first
+    // pixel. Measured, so "it is earlier in the DOM but painted below" cannot
+    // pass here — and so a row moved back under the body fails at both widths.
+    const rowBox = (await row.boundingBox())!;
+    const summaryBox = (await summary.boundingBox())!;
+    const cardBox = (await card.boundingBox())!;
+    expect(
+      rowBox.y + rowBox.height,
+      "the task row must end before the summary starts",
+    ).toBeLessThanOrEqual(summaryBox.y + 1);
+
+    // (2) Nothing else is above it either: it is the card's first content, not
+    // merely somewhere above the summary.
+    expect(
+      rowBox.y - cardBox.y,
+      "the task row must be the first thing in the card",
+    ).toBeLessThanOrEqual(rowBox.height + 2);
+
+    // (3) The move must not have cost the row its fit. Same contract as the
+    // truncation tests above, re-asserted in its new position and at the
+    // narrowest width the cockpit supports: the title is the element that
+    // gives way, and nothing pans sideways.
+    const titleOverflow = await card
+      .locator(".reply-card__task-title")
+      .evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(
+      titleOverflow,
+      "the long title must still be the clipped element",
+    ).toBeGreaterThan(0);
+
+    const pageOver = await page.evaluate(
+      () =>
+        document.scrollingElement!.scrollWidth -
+        document.scrollingElement!.clientWidth,
+    );
+    expect(pageOver, "the page must not pan sideways").toBeLessThanOrEqual(1);
+    const rowOver = await row.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(rowOver, "the row must not overflow").toBeLessThanOrEqual(1);
   });
 }
