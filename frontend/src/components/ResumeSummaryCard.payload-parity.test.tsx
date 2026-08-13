@@ -31,6 +31,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
+import { en } from "../i18n/locales/en";
 import { toMemberResumeSummary } from "../api/mappers";
 import type { WireResumeSummary } from "../api/wire";
 import { ResumeSummaryCard } from "./ResumeSummaryCard";
@@ -286,26 +287,55 @@ describe("ResumeSummaryCard renders the SAME snapshot the agent receives", () =>
     );
   });
 
-  it("🔴 words a FOLDED message and an ABSENT one with no vocabulary in common", async () => {
-    // The two are different failures. One says "this is here, shortened, the
-    // rest is on the server"; the other says "these are not here at all, go
-    // and fetch them". A reader who reads one as the other concludes it has
-    // seen a conversation it has not seen — so this asserts not just that
-    // both are shown, but that they do not share a word.
+  it("draws BOTH the folded marker and the absent marker", async () => {
     const u = await open();
     const folded = txt(u.getByTestId("mp-resume-chat-body-omitted"));
     const cut = txt(u.getByTestId("mp-resume-chat-earlier-omitted"));
 
     expect(folded).toContain(String(WIRE.chat![1].body_omitted_chars));
     expect(cut).toContain(R.chatCutLabel);
-
-    const words = (s: string) =>
-      new Set(s.split(/[\s、,,。()()::——]+/u).filter((w) => w.length > 1));
-    const shared = [...words(R.bodyOmittedLead + R.bodyOmittedTail)].filter(
-      (w) => words(R.chatCutLabel).has(w),
-    );
-    expect(shared).toEqual([]);
   });
+
+  // 🔴 A FOLDED message and an ABSENT one must not be described with shared
+  // vocabulary. They are different failures. One says "this is here, shortened,
+  // the rest is on the server"; the other says "these may not be here at all,
+  // go and fetch them". A reader who reads one as the other concludes it has
+  // seen a conversation it has not seen.
+  //
+  // 🔴 WHY THE COMPARISON UNIT IS NOT "split on spaces and punctuation".
+  // That was the previous shape of this guard and it was NEAR-VACUOUS: Chinese
+  // writes no word boundaries, so two zh strings come out as one token each and
+  // can only collide by being character-for-character identical. It was PROVED
+  // vacuous — an independent review re-worded `bodyOmittedLead` to share six
+  // characters and the whole of its meaning with the cut label, and this file
+  // stayed green. And `en`, which is the half a whitespace split would actually
+  // work on, was never compared at all.
+  //
+  // So: Han text is compared CHARACTER by character (the smallest unit zh
+  // actually has), Latin text WORD by word, case-folded, and BOTH shipped
+  // locales are checked. Overlap in either alphabet, in either locale, is red.
+  const units = (s: string) => {
+    const out = new Set<string>();
+    for (const w of s.toLowerCase().match(/[a-z0-9_]{2,}/g) ?? []) out.add(w);
+    for (const ch of s) if (/\p{Script=Han}/u.test(ch)) out.add(ch);
+    return out;
+  };
+
+  it.each([
+    ["zh", zh.mp.resumeSummary],
+    ["en", en.mp.resumeSummary],
+  ])(
+    "🔴 [%s] words a FOLDED message and an ABSENT one with no vocabulary in common",
+    (_locale, r) => {
+      const folded = units(r.bodyOmittedLead + " " + r.bodyOmittedTail);
+      const cut = units(r.chatCutLabel);
+      // A guard that compares empty sets proves nothing — the two vocabularies
+      // have to exist before "they do not overlap" means anything.
+      expect(folded.size).toBeGreaterThan(2);
+      expect(cut.size).toBeGreaterThan(2);
+      expect([...folded].filter((u) => cut.has(u))).toEqual([]);
+    },
+  );
 
   it("shows the server's own recovery hint VERBATIM, not a cockpit paraphrase", async () => {
     // The hint names the exact cursor pair to send. A re-worded copy here
