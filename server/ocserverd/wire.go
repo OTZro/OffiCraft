@@ -312,13 +312,64 @@ type chatAttachmentUploadDTO struct {
 	Filename string `json:"filename"`
 }
 
+// chatInlineReplyCardDTO is one reply card FOLDED IN PLACE onto the chat
+// message that opened it (chatMessageDTO.Card). It exists so the wake snapshot
+// reads as ONE stream: the card already has a home in the chat (its
+// ChatMessageID), so a second top-level `cards` section would carry the same
+// decision twice in one payload.
+//
+// It carries the DECISION only — options offered, which was picked, the free
+// text, and when. Summary / body / kind / attachments are deliberately absent:
+// the message this rides on already carries the ask, and get_reply_card serves
+// the rest.
+type chatInlineReplyCardDTO struct {
+	Options         []string `json:"options"`
+	AnswerOptionIdx *int     `json:"answer_option_idx"`
+	AnswerText      string   `json:"answer_text"`
+	AnsweredTS      float64  `json:"answered_ts"`
+	// AnsweredAtDisplay is AnsweredTS in the same full date+time+offset form as
+	// chatMessageDTO.TSDisplay; "" while the card is unanswered.
+	AnsweredAtDisplay string `json:"answered_at_display"`
+}
+
 type chatMessageDTO struct {
-	ID   string         `json:"id"`
-	From string         `json:"from"`
-	To   string         `json:"to"`
-	Body string         `json:"body"`
-	TS   float64        `json:"ts"`
-	Meta map[string]any `json:"meta"`
+	ID   string `json:"id"`
+	From string `json:"from"`
+	// FromName / ToName are the DISPLAY names beside the ids, never instead of
+	// them: From/To stay the ADDRESS a reply must be sent to, and a name is
+	// editable and repeats across the roster. Both are carried so a reader gets
+	// the human name AND the id in one row. "" when the id does not resolve to
+	// a roster row — honest empty, never fabricated.
+	FromName string `json:"from_name"`
+	To       string `json:"to"`
+	ToName   string `json:"to_name"`
+	Body     string `json:"body"`
+	// BodyOmittedChars is the COLLAPSE marker: how many runes of THIS body were
+	// folded away, 0 when the body is whole. The folded text is still on the
+	// server — get_chat re-reads the message.
+	//
+	// 🔴 This is NOT resumeSummaryDTO.ChatEarlierOmitted, and the two must never
+	// borrow each other's wording. This one = one message that IS in the payload
+	// with part of its text shortened. That one = whole messages ABSENT from the
+	// payload. Before this split both showed up as a bare "…" and a reader had
+	// no way to tell "I have this message, shortened" from "I do not have this
+	// message" — which is exactly how an agent concludes it has read a
+	// conversation it has not read.
+	BodyOmittedChars int     `json:"body_omitted_chars"`
+	TS               float64 `json:"ts"`
+	// TSDisplay renders TS for a READER as "2006-01-02 15:04:05 +08:00" in the
+	// SERVER's local zone. The offset is IN the string because the studio has no
+	// timezone setting to read it from — a bare local time would be unreadable
+	// by anyone who is not the server. The DATE IS ALWAYS WRITTEN, same-day
+	// included: a waking agent must be able to tell 昨天 from 上週 without first
+	// knowing what day the snapshot was taken, and "drop the date when it is
+	// today" makes that impossible for exactly the messages a wake cares about.
+	// TS (epoch seconds) is untouched and stays the machine-readable field.
+	TSDisplay string         `json:"ts_display"`
+	Meta      map[string]any `json:"meta"`
+	// Card is the reply card this message carries, folded in place; nil (key
+	// omitted) when there is none.
+	Card *chatInlineReplyCardDTO `json:"card,omitempty"`
 	// ReplyCardStatus: read-time join of the card this message carries
 	// (meta.reply_card_id) — "waiting" | "answered", or "" when no card. Filled
 	// by servedChatMessageDTO; the inline ChatReplyCard reads it to lazy-load
@@ -803,14 +854,33 @@ type chatUnreadCountDTO struct {
 	Unread int `json:"unread"`
 }
 
+// resumeChatCutDTO is the CUT POINT of the wake snapshot's chat: whether
+// messages exist that this payload does NOT carry, and how to go and get them.
+//
+// 🔴 TRUNCATION, NOT COLLAPSE. See chatMessageDTO.BodyOmittedChars for the other
+// half of this split — that one is a message that is HERE, shortened; this one
+// is messages that are NOT HERE. Hint must stay actionable on its own (it names
+// the tool and the exact parameter pairing), because the agent reading it is
+// mid-wake and has no context to look anything up with.
+type resumeChatCutDTO struct {
+	Omitted bool   `json:"omitted"`
+	Hint    string `json:"hint"`
+}
+
 type resumeSummaryDTO struct {
-	Identity *string                 `json:"identity"`
-	Chat     []chatMessageDTO        `json:"chat"`
-	Tasks    []resumeTaskDTO         `json:"tasks"`
-	Roster   []resumeRosterMemberDTO `json:"roster"`
-	Machines *resumeMachinesDTO      `json:"machines"`
-	Overview resumeOverviewDTO       `json:"overview"`
-	Note     string                  `json:"note"`
+	Identity *string `json:"identity"`
+	// GeneratedAt is when this snapshot was assembled, with date, time AND zone
+	// offset. It is the ONLY anchor in the payload for turning a ts_display into
+	// 「多久以前」 — a waking agent must not assume its own wall clock agrees with
+	// the server's.
+	GeneratedAt        string                  `json:"generated_at"`
+	Chat               []chatMessageDTO        `json:"chat"`
+	ChatEarlierOmitted resumeChatCutDTO        `json:"chat_earlier_omitted"`
+	Tasks              []resumeTaskDTO         `json:"tasks"`
+	Roster             []resumeRosterMemberDTO `json:"roster"`
+	Machines           *resumeMachinesDTO      `json:"machines"`
+	Overview           resumeOverviewDTO       `json:"overview"`
+	Note               string                  `json:"note"`
 }
 
 // resumeRosterMemberDTO is one entry of the studio floor a waking agent lands

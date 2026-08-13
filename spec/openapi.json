@@ -1047,6 +1047,51 @@
         "additionalProperties": false,
         "type": "object"
       },
+      "ChatInlineReplyCardDTO": {
+        "description": "One reply card FOLDED IN PLACE onto the chat message that opened it\n(``ChatMessageDTO.card``), so the wake snapshot reads as a single stream and\nnot as a chat list plus a card list to be joined by hand.\n\nThis is deliberately NOT a second top-level ``cards`` section: a card already\nHAS a home in the stream (its ``chat_message_id``), and giving it a second one\nwould carry the same decision twice in one payload.\n\nIt carries the DECISION and nothing else — the options offered, which one was\npicked, the free text, and when. The card's ``summary`` / ``body`` / kind /\nattachments are NOT here: the chat message this rides on already carries the\nask, and ``get_reply_card`` serves the rest.",
+        "properties": {
+          "answer_option_idx": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Index into ``options`` of the option that was picked; ``null`` when the card was answered with free text only, or is not answered yet."
+          },
+          "answer_text": {
+            "default": "",
+            "description": "The free-text answer, ``\"\"`` when none was given.",
+            "title": "Answer Text",
+            "type": "string"
+          },
+          "answered_at_display": {
+            "default": "",
+            "description": "``answered_ts`` rendered as ``YYYY-MM-DD HH:MM:SS ±HH:MM`` in the server's local zone — the same full date + time + offset form as ``ChatMessageDTO.ts_display``, for the same reason. ``\"\"`` while the card is unanswered.",
+            "title": "Answered At Display",
+            "type": "string"
+          },
+          "answered_ts": {
+            "default": 0.0,
+            "description": "Epoch seconds the card was answered; ``0`` while it is still waiting.",
+            "title": "Answered Ts",
+            "type": "number"
+          },
+          "options": {
+            "description": "The frozen quick-reply wording as it was offered (``options[0]`` is the AI pick). Empty for a card opened without options.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Options",
+            "type": "array"
+          }
+        },
+        "title": "ChatInlineReplyCardDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
       "ChatMessageDTO": {
         "description": "API representation of one ``domain.ChatMessage``. The wire uses ``from`` /\n``to``; ``from`` is a Python reserved word so the field is ``from_`` carrying\nthe alias ``from`` (FastAPI serialises by alias).",
         "properties": {
@@ -1062,8 +1107,31 @@
             "title": "Body",
             "type": "string"
           },
+          "body_omitted_chars": {
+            "default": 0,
+            "description": "COLLAPSE marker: how many characters of THIS message's body were folded away when the wake snapshot shortened it; ``0`` = the body is carried in full. The folded text is still on the server — re-read the message with ``get_chat`` to see it. This is NOT the same thing as ``ResumeSummaryDTO.chat_earlier_omitted``, which reports whole messages that are ABSENT from the payload: one message shortened, versus messages not carried at all. Always ``0`` outside the wake snapshot (``list_chat`` never collapses a body).",
+            "title": "Body Omitted Chars",
+            "type": "integer"
+          },
+          "card": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatInlineReplyCardDTO"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The reply card this message carries, FOLDED IN PLACE onto the message that opened it — the options offered and the answer given, so a waking agent reads the decision in the chat stream instead of joining a second list. Omitted (``null``) when the message carries no card, and only ever filled for cards the snapshot's own subject INITIATED."
+          },
           "from": {
             "title": "From",
+            "type": "string"
+          },
+          "from_name": {
+            "default": "",
+            "description": "The sender's DISPLAY name, resolved server-side from the roster (ANY roster status, so a dismissed member still reads by name). ``from`` stays the ADDRESS and never changes meaning — this field is carried IN ADDITION so a reader gets both the human name and the id it must reply to. ``\"\"`` when the sender does not resolve to a roster row (honest empty — never fabricated).",
+            "title": "From Name",
             "type": "string"
           },
           "id": {
@@ -1085,10 +1153,22 @@
             "title": "To",
             "type": "string"
           },
+          "to_name": {
+            "default": "",
+            "description": "The addressee's DISPLAY name, resolved the same way as ``from_name``. ``to`` remains the address; this rides alongside it, never instead of it.",
+            "title": "To Name",
+            "type": "string"
+          },
           "ts": {
             "default": 0.0,
             "title": "Ts",
             "type": "number"
+          },
+          "ts_display": {
+            "default": "",
+            "description": "``ts`` rendered for a READER as ``YYYY-MM-DD HH:MM:SS ±HH:MM`` in the SERVER's local zone, e.g. ``2026-08-13 09:47:11 +08:00``. The offset is part of the string because the studio has no configured timezone setting — the string must carry its own zone or it cannot be read. The DATE IS ALWAYS WRITTEN, including for messages sent today: an agent reading a hand-off must be able to tell 「昨天」 from 「上週」 without knowing what day the snapshot was taken. ``ts`` (epoch seconds) is untouched and stays the machine-readable field.",
+            "title": "Ts Display",
+            "type": "string"
           }
         },
         "required": [
@@ -3869,6 +3949,26 @@
         "additionalProperties": false,
         "type": "object"
       },
+      "ResumeChatCutDTO": {
+        "description": "The CUT POINT of the wake snapshot's chat: whether messages exist that this\npayload does NOT carry, and how to go and get them.\n\nTRUNCATION, NOT COLLAPSE — the two are different failures and the payload names\nthem with different words on purpose. ``ChatMessageDTO.body_omitted_chars``\nreports a message that IS here with part of its text folded away. This reports\nwhole messages that are NOT here at all. Reading one as the other is how an\nagent concludes it has seen a conversation it has not seen.",
+        "properties": {
+          "hint": {
+            "default": "",
+            "description": "How to retrieve what was cut, stated concretely enough to act on without reading the API reference: call ``get_chat`` with ``with`` set to the peer id and BOTH ``before_ts`` and ``before_id`` taken from the OLDEST message of that peer's line in this payload. The two cursor fields must be supplied TOGETHER — sending only one is a 422. ``\"\"`` when nothing was cut.",
+            "title": "Hint",
+            "type": "string"
+          },
+          "omitted": {
+            "default": false,
+            "description": "``true`` when at least one message involving the subject was left out of this payload (older than the budget's cut point, or beyond a conversation line's fetch window). ``false`` means the snapshot carries every message it knows about.",
+            "title": "Omitted",
+            "type": "boolean"
+          }
+        },
+        "title": "ResumeChatCutDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
       "ResumeMachineDTO": {
         "description": "One machine in the wake snapshot's machine block — the fleet a waking agent can reason about. ``machine_id`` is the STABLE id: address a machine by id, never by the name a host reports for itself (our hosts report the SAME name as each other, so a hostname-derived answer silently picks the wrong box and every path/dispatch downstream is wrong without erroring). ``display_name`` is the human label; ``online`` is whether that machine's warden is connected right now.",
         "properties": {
@@ -4041,7 +4141,7 @@
         "type": "object"
       },
       "ResumeSummaryDTO": {
-        "description": "A BOUNDED, deterministic wake snapshot for the CALLER (the ``resume_summary``\nMCP tool, zero params).\n\nIdentity-locked to the caller's VERIFIED JWT ``sub``: a waking / handed-over\nagent pulls ONE bounded block instead of paging every plane by hand. Fields:\n\n  - ``identity``: the caller id (the verified ``sub``). ``None`` for a bare /\n    unauthenticated request (degrades to an empty snapshot, never an error).\n  - ``chat``: the most recent messages INVOLVING the caller (sender == caller OR\n    recipient == caller), oldest→newest, each ``body`` truncated to the tighter\n    wake-snapshot cap (this batch catch-up stays small; UNLIKE ``list_chat`` which\n    returns full bodies for reading a single coordination message). Empty when the\n    caller has no chat — never an error.\n  - ``tasks``: the NON-TERMINAL tasks the caller EXECUTES (SPEC §6.2 — a handover\n    resumes in-flight tasks, not just chat), most recently updated first, capped to\n    a small N — LIGHT rows only (owner ruling: 任務不該包含細節): task_no / title /\n    status / priority / current node NAME + progress, NO steps and NO DoD text.\n    Each row carries ``detail_chars``, the size of the plan text it omits — pull\n    detail per task with ``get_task`` (hand a large pull to a sub-agent), page the\n    rest with ``list_tasks``.\n  - ``overview``: the size/概要 block (counts + character sizes; the caller's\n    waiting / recently-answered reply-card counts included) — peek it FIRST to\n    decide what to pull and whether to digest via a sub-agent.\n  - ``roster``: WHO ELSE is in the studio — every member AND every contractor,\n    each with its online/offline status, the machine it runs on, and its duty\n    capped at 1000 chars — the cap applied AFTER the role doc's own leading\n    title line is removed (owner ruling rc-4e98c0481852, 2026-08-03). The\n    point is knowing who to ask for help on waking, so it carries NO insight and\n    NO learning — see ``ResumeRosterMemberDTO``, whose absence of those two is a\n    deliberate ruling, not a missing feature.\n  - ``machines``: the machine LIST plus ``you_are_on``, the caller's\n    server-recorded machine binding (owner ruling rc-09476f535b59, 2026-08-03).\n    Never derive \"which machine am I on\" from a hostname — our hosts report the\n    same name as each other.\n  - ``note``: a fixed reminder that this is a BOUNDED snapshot.\n\nDETERMINISTIC (same server state → same output; no LLM) and read-only.",
+        "description": "A BOUNDED, deterministic wake snapshot for the CALLER (the ``resume_summary``\nMCP tool, zero params).\n\nIdentity-locked to the caller's VERIFIED JWT ``sub``: a waking / handed-over\nagent pulls ONE bounded block instead of paging every plane by hand. Fields:\n\n  - ``identity``: the caller id (the verified ``sub``). ``None`` for a bare /\n    unauthenticated request (degrades to an empty snapshot, never an error).\n  - ``chat``: the recent messages INVOLVING the caller (sender == caller OR\n    recipient == caller), oldest→newest, packed newest-first under a CHARACTER\n    BUDGET rather than a fixed message count, with a minimum number of messages\n    reserved for EVERY conversation line so one long thread cannot squeeze the\n    others to zero. Each message carries ``from_name`` / ``to_name`` beside the\n    ids and ``ts_display`` beside the epoch ``ts``, and folds in its reply card\n    (``card``) when it has one. Bodies from OTHER AGENTS are COLLAPSED to a short\n    lead with ``body_omitted_chars`` saying how much was folded; the owner's line\n    and the caller's own hand-off notes to itself are carried IN FULL, because\n    those are the two lines a wake actually resumes from. Empty when the caller\n    has no chat — never an error.\n  - ``chat_earlier_omitted``: the CUT POINT — whether messages exist that this\n    payload does not carry at all, and how to fetch them. Distinct from\n    ``body_omitted_chars``, which is a shortened message that IS here.\n  - ``generated_at``: when the snapshot was taken, with date, time and zone\n    offset — the anchor for reading every ``ts_display`` as an elapsed time.\n  - ``tasks``: the NON-TERMINAL tasks the caller EXECUTES (SPEC §6.2 — a handover\n    resumes in-flight tasks, not just chat), most recently updated first, capped to\n    a small N — LIGHT rows only (owner ruling: 任務不該包含細節): task_no / title /\n    status / priority / current node NAME + progress, NO steps and NO DoD text.\n    Each row carries ``detail_chars``, the size of the plan text it omits — pull\n    detail per task with ``get_task`` (hand a large pull to a sub-agent), page the\n    rest with ``list_tasks``.\n  - ``overview``: the size/概要 block (counts + character sizes; the caller's\n    waiting / recently-answered reply-card counts included) — peek it FIRST to\n    decide what to pull and whether to digest via a sub-agent.\n  - ``roster``: WHO ELSE is in the studio — every member AND every contractor,\n    each with its online/offline status, the machine it runs on, and its duty\n    capped at 1000 chars — the cap applied AFTER the role doc's own leading\n    title line is removed (owner ruling rc-4e98c0481852, 2026-08-03). The\n    point is knowing who to ask for help on waking, so it carries NO insight and\n    NO learning — see ``ResumeRosterMemberDTO``, whose absence of those two is a\n    deliberate ruling, not a missing feature.\n  - ``machines``: the machine LIST plus ``you_are_on``, the caller's\n    server-recorded machine binding (owner ruling rc-09476f535b59, 2026-08-03).\n    Never derive \"which machine am I on\" from a hostname — our hosts report the\n    same name as each other.\n  - ``note``: a fixed reminder that this is a BOUNDED snapshot.\n\nDETERMINISTIC (same server state → same output; no LLM) and read-only.",
         "properties": {
           "chat": {
             "items": {
@@ -4049,6 +4149,15 @@
             },
             "title": "Chat",
             "type": "array"
+          },
+          "chat_earlier_omitted": {
+            "$ref": "#/components/schemas/ResumeChatCutDTO"
+          },
+          "generated_at": {
+            "default": "",
+            "description": "When this snapshot was assembled, as ``YYYY-MM-DD HH:MM:SS ±HH:MM`` in the server's local zone. It is the ONLY anchor for turning any ``ts_display`` in this payload into 「多久以前」: a waking agent has no reliable clock of its own and must not assume its own wall clock matches the server's.",
+            "title": "Generated At",
+            "type": "string"
           },
           "identity": {
             "anyOf": [
@@ -13427,7 +13536,7 @@
     },
     "/api/resume-summary": {
       "get": {
-        "description": "A BOUNDED, deterministic wake snapshot for the caller (``resume_summary`` MCP\ntool, zero params; ``GET /api/resume-summary``).\n\nIdentity-locked to the caller's VERIFIED JWT ``sub`` (``actor``): assembles ONE\nbounded block so a waking / handed-over agent resumes without paging every plane\nby hand. It surfaces the caller's recent chat (the most recent ``RESUME_CHAT_N``\nmessages where sender == caller OR recipient == caller, oldest→newest, each body\ntruncated to ``RESUME_CHAT_BODY_PREVIEW``), the caller's OPEN tasks as LIGHT rows\n(executor == caller, non-terminal, most recently updated first, capped to\n``RESUME_TASKS_N`` — owner ruling: 任務不該包含細節; each row names the task, its\nstatus/priority, the current node NAME and progress, plus ``detail_chars`` — the\nsize of the plan text it omits; NO steps / DoD ride the snapshot, ``get_task``\npulls them per task), an ``overview`` size/概要 block (counts + character sizes,\nthe caller's reply-card counts included — peek it FIRST, then decide what to pull\nand whether to digest via a sub-agent), the caller's ``identity`` and a fixed\nbounded-snapshot ``note``. DETERMINISTIC and read-only; a caller with no chat and\nno tasks gets EMPTY lists, never an error.",
+        "description": "A BOUNDED, deterministic wake snapshot for the caller (``resume_summary`` MCP\ntool, zero params; ``GET /api/resume-summary``).\n\nIdentity-locked to the caller's VERIFIED JWT ``sub`` (``actor``): assembles ONE\nbounded block so a waking / handed-over agent resumes without paging every plane\nby hand. It surfaces the caller's recent CHAT (sender == caller OR recipient == caller,\noldest→newest), packed newest-first under a CHARACTER BUDGET rather than a fixed\nmessage count, with a few newest messages RESERVED for every conversation line\nso one long thread cannot squeeze the others to zero. Every message carries\n``from_name`` / ``to_name`` beside the ids and ``ts_display`` (full date + time +\nzone offset) beside the epoch ``ts``, and folds in its reply card as ``card``\nwhen it has one; read every ``ts_display`` against the top-level\n``generated_at``. TWO DIFFERENT kinds of absence are named with DIFFERENT words:\n``body_omitted_chars`` > 0 means THAT message IS here with that many characters\nCOLLAPSED away (another agent's line — the owner's line and the caller's own\nhand-off notes to itself are carried IN FULL), re-read it with ``get_chat``;\n``chat_earlier_omitted`` means whole messages are NOT HERE AT ALL and its\n``hint`` says how to fetch them. It also surfaces the caller's OPEN tasks as LIGHT rows\n(executor == caller, non-terminal, most recently updated first, capped to\n``RESUME_TASKS_N`` — owner ruling: 任務不該包含細節; each row names the task, its\nstatus/priority, the current node NAME and progress, plus ``detail_chars`` — the\nsize of the plan text it omits; NO steps / DoD ride the snapshot, ``get_task``\npulls them per task), an ``overview`` size/概要 block (counts + character sizes,\nthe caller's reply-card counts included — peek it FIRST, then decide what to pull\nand whether to digest via a sub-agent), the caller's ``identity`` and a fixed\nbounded-snapshot ``note``. DETERMINISTIC and read-only; a caller with no chat and\nno tasks gets EMPTY lists, never an error.",
         "operationId": "handle_resume_summary_api_resume_summary_get",
         "responses": {
           "200": {
@@ -13476,16 +13585,16 @@
           "include": true,
           "order": 61,
           "name": "resume_summary",
-          "description": "Bounded LIGHT wake snapshot for the caller (identity-locked; recent chat + light open-task rows + size overview — peek sizes first, pull detail via get_task). Also carries the STUDIO FLOOR you wake up onto: roster (every member and contractor, each with online/offline status, the machine it runs on, and its duty capped at 1000 chars with `…` marking a cut, the cap applied after the doc's own leading title line is removed — who to ask for help; no insight/learning by owner ruling. Contractors additionally carry their bound task's status, waiting_reason, and step progress (progress_done/progress_total) — members leave these at their zero value; a contractor's 0/0 is ambiguous (a task with no steps yet, or no task at all) and task_status is what tells them apart, non-empty vs empty) and machines (the machine list plus you_are_on, your server-recorded machine binding — never derive it from a hostname).",
+          "description": "Bounded LIGHT wake snapshot for the caller (identity-locked; recent chat + light open-task rows + size overview — peek sizes first, pull detail via get_task). CHAT is packed newest-first under a CHARACTER BUDGET, not a fixed message count, with a few newest messages reserved for EVERY conversation line so one long thread cannot squeeze the others to zero; each message carries from_name/to_name beside the ids and ts_display (full date + time + zone offset) beside the epoch ts, and folds in its reply card as `card` when it has one — read every ts_display against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked DIFFERENTLY: `body_omitted_chars` > 0 means THAT message is here with that many characters COLLAPSED away (another agent's line — the owner's line and your own hand-off notes to yourself are carried in full), re-read it with get_chat; `chat_earlier_omitted` means whole messages are NOT HERE AT ALL and its hint tells you how to fetch them. Also carries the STUDIO FLOOR you wake up onto: roster (every member and contractor, each with online/offline status, the machine it runs on, and its duty capped at 1000 chars with `…` marking a cut, the cap applied after the doc's own leading title line is removed — who to ask for help; no insight/learning by owner ruling. Contractors additionally carry their bound task's status, waiting_reason, and step progress (progress_done/progress_total) — members leave these at their zero value; a contractor's 0/0 is ambiguous (a task with no steps yet, or no task at all) and task_status is what tells them apart, non-empty vs empty) and machines (the machine list plus you_are_on, your server-recorded machine binding — never derive it from a hostname).",
           "legacy": {
-            "descriptor": "{\n      \"description\": \"Bounded LIGHT wake snapshot for the caller (identity-locked; recent chat + light open-task rows + size overview — peek sizes first, pull detail via get_task). Also carries the STUDIO FLOOR you wake up onto: roster (every member and contractor, each with online/offline status, the machine it runs on, and its duty capped at 1000 chars with `…` marking a cut, the cap applied after the doc's own leading title line is removed — who to ask for help; no insight/learning by owner ruling. Contractors additionally carry their bound task's status, waiting_reason, and step progress (progress_done/progress_total) — members leave these at their zero value; a contractor's 0/0 is ambiguous (a task with no steps yet, or no task at all) and task_status is what tells them apart, non-empty vs empty) and machines (the machine list plus you_are_on, your server-recorded machine binding — never derive it from a hostname).\",\n      \"inputSchema\": {\n        \"properties\": {},\n        \"type\": \"object\"\n      },\n      \"name\": \"resume_summary\"\n    }"
+            "descriptor": "{\n      \"description\": \"Bounded LIGHT wake snapshot for the caller (identity-locked; recent chat + light open-task rows + size overview — peek sizes first, pull detail via get_task). CHAT is packed newest-first under a CHARACTER BUDGET, not a fixed message count, with a few newest messages reserved for EVERY conversation line so one long thread cannot squeeze the others to zero; each message carries from_name/to_name beside the ids and ts_display (full date + time + zone offset) beside the epoch ts, and folds in its reply card as `card` when it has one — read every ts_display against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked DIFFERENTLY: `body_omitted_chars` > 0 means THAT message is here with that many characters COLLAPSED away (another agent's line — the owner's line and your own hand-off notes to yourself are carried in full), re-read it with get_chat; `chat_earlier_omitted` means whole messages are NOT HERE AT ALL and its hint tells you how to fetch them. Also carries the STUDIO FLOOR you wake up onto: roster (every member and contractor, each with online/offline status, the machine it runs on, and its duty capped at 1000 chars with `…` marking a cut, the cap applied after the doc's own leading title line is removed — who to ask for help; no insight/learning by owner ruling. Contractors additionally carry their bound task's status, waiting_reason, and step progress (progress_done/progress_total) — members leave these at their zero value; a contractor's 0/0 is ambiguous (a task with no steps yet, or no task at all) and task_status is what tells them apart, non-empty vs empty) and machines (the machine list plus you_are_on, your server-recorded machine binding — never derive it from a hostname).\",\n      \"inputSchema\": {\n        \"properties\": {},\n        \"type\": \"object\"\n      },\n      \"name\": \"resume_summary\"\n    }"
           }
         }
       }
     },
     "/api/resume-summary-size": {
       "get": {
-        "description": "The size-only PEEK of the wake snapshot (``peek_resume_summary_size`` MCP\ntool, zero params; ``GET /api/resume-summary-size``) — step ONE of the two-step\nboot.\n\nIdentity-locked to the caller's VERIFIED JWT ``sub`` (``actor``): returns the\nSAME ``overview`` counts/sizes a full ``resume_summary`` would report (both go\nthrough one shared server assembly, so the reported sizes cannot drift from what\nresume_summary actually carries) plus ``estimated_total_chars`` — a derived\nsingle number (the snapshot's chat body chars plus the plan text its task rows\nomit) to gate the boot decision on — and a fixed guidance ``note``. It carries\nNO chat bodies and NO task rows of any kind: peeking it costs a few hundred\nbytes, so a waking agent sizes ``resume_summary`` BEFORE deciding whether to\npull it into its own context or hand the pull to a cheap sub-agent (e.g. haiku)\nthat returns a compressed digest. DETERMINISTIC and read-only; a caller with no\nchat and no tasks gets zeroes, never an error.",
+        "description": "The size-only PEEK of the wake snapshot (``peek_resume_summary_size`` MCP\ntool, zero params; ``GET /api/resume-summary-size``) — step ONE of the two-step\nboot.\n\nIdentity-locked to the caller's VERIFIED JWT ``sub`` (``actor``): returns the\nSAME ``overview`` counts/sizes a full ``resume_summary`` would report (both go\nthrough one shared server assembly, so the reported sizes cannot drift from what\nresume_summary actually carries) plus ``estimated_total_chars`` — a derived\nsingle number to gate the boot decision on — and a fixed guidance ``note``.\n``estimated_total_chars`` covers the WHOLE chat block resume_summary would carry\n(bodies AFTER collapsing, plus the display names, the rendered timestamps, the\nreply cards folded into messages, the collapse markers and the snapshot's own\nheader) plus the plan text its task rows omit and the roster / machine blocks —\nwhat pulling the snapshot actually costs, not just the message bodies. It carries\nNO chat bodies and NO task rows of any kind: peeking it costs a few hundred\nbytes, so a waking agent sizes ``resume_summary`` BEFORE deciding whether to\npull it into its own context or hand the pull to a cheap sub-agent (e.g. haiku)\nthat returns a compressed digest. DETERMINISTIC and read-only; a caller with no\nchat and no tasks gets an EMPTY snapshot's sizes, never an error.",
         "operationId": "handle_peek_resume_summary_size_api_resume_summary_size_get",
         "responses": {
           "200": {
@@ -13534,9 +13643,9 @@
           "include": true,
           "order": 62,
           "name": "peek_resume_summary_size",
-          "description": "Size-only PEEK of the wake snapshot (identity-locked; overview counts/sizes + estimated_total_chars, NO chat/task content). Step one of the two-step boot: call this FIRST to size resume_summary, then either call resume_summary directly (small) or hand the pull to a cheap sub-agent that returns a digest (large).",
+          "description": "Size-only PEEK of the wake snapshot (identity-locked; overview counts/sizes + estimated_total_chars, NO chat/task content). estimated_total_chars covers the WHOLE chat block resume_summary would carry — bodies after collapsing, plus the display names, the rendered timestamps, the reply cards folded into messages, the collapse markers and the snapshot's own header — so it is what pulling the snapshot actually costs, not just the message bodies. Step one of the two-step boot: call this FIRST to size resume_summary, then either call resume_summary directly (small) or hand the pull to a cheap sub-agent that returns a digest (large).",
           "legacy": {
-            "descriptor": "{\n      \"description\": \"Size-only PEEK of the wake snapshot (identity-locked; overview counts/sizes + estimated_total_chars, NO chat/task content). Step one of the two-step boot: call this FIRST to size resume_summary, then either call resume_summary directly (small) or hand the pull to a cheap sub-agent that returns a digest (large).\",\n      \"inputSchema\": {\n        \"properties\": {},\n        \"type\": \"object\"\n      },\n      \"name\": \"peek_resume_summary_size\"\n    }"
+            "descriptor": "{\n      \"description\": \"Size-only PEEK of the wake snapshot (identity-locked; overview counts/sizes + estimated_total_chars, NO chat/task content). estimated_total_chars covers the WHOLE chat block resume_summary would carry — bodies after collapsing, plus the display names, the rendered timestamps, the reply cards folded into messages, the collapse markers and the snapshot's own header — so it is what pulling the snapshot actually costs, not just the message bodies. Step one of the two-step boot: call this FIRST to size resume_summary, then either call resume_summary directly (small) or hand the pull to a cheap sub-agent that returns a digest (large).\",\n      \"inputSchema\": {\n        \"properties\": {},\n        \"type\": \"object\"\n      },\n      \"name\": \"peek_resume_summary_size\"\n    }"
           }
         }
       }
