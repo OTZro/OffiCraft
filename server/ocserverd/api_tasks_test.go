@@ -2363,12 +2363,19 @@ func TestPeekResumeSummarySizeIsLightAndConsistent(t *testing.T) {
 }
 
 // TestPeekResumeSummarySizeEmptyCallerIsZeroesNotError pins the degrade path:
-// a caller with no chat and no tasks peeks zeroes, never an error.
+// a caller with no chat and no tasks peeks an EMPTY snapshot, never an error.
+//
+// "Empty" is not literally zero characters any more: the payload still carries
+// its own generated_at header, and the estimate would be lying if it pretended
+// otherwise. Every COUNT is still zero, and the only non-zero size is exactly
+// that header — asserted against the header's own length, not a magic number.
 func TestPeekResumeSummarySizeEmptyCallerIsZeroesNotError(t *testing.T) {
 	api := newTasksTestServer(t)
 	peek := peekResumeSize(t, api, "m-nobody")
-	if peek.Overview != (resumeOverviewDTO{}) || peek.EstimatedTotalChars != 0 {
-		t.Fatalf("empty caller must peek zeroes: %+v", peek)
+	headerChars := len([]rune(resumeSnapshot(t, api, "m-nobody").GeneratedAt))
+	want := resumeOverviewDTO{ChatChars: headerChars}
+	if peek.Overview != want || peek.EstimatedTotalChars != headerChars {
+		t.Fatalf("empty caller must peek an empty snapshot: %+v", peek)
 	}
 	if peek.Note == "" {
 		t.Fatalf("peek must carry the guidance note")
