@@ -302,52 +302,65 @@ func TestResumeChat_OwnerLineAndSelfHandoffAreNeverCollapsed(t *testing.T) {
 // ── ⑥ the budget, and the floor that keeps a quiet line alive ───────────────
 
 // TestResumeChat_BudgetLeavesEveryLineItsFloor is the one that pays for the
-// whole packing rewrite. The loud line is seeded so that, packed newest-first
-// with no floor, it consumes the ENTIRE budget before the quiet line — whose
-// messages are all older — is ever reached.
+// whole packing rewrite.
+//
+// The fixture is arranged so the arithmetic is decisive, not marginal. The loud
+// line is the OWNER's, whose bodies are carried in full, so 40 of them alone
+// exceed the budget several times over. The two quiet lines are third parties
+// (collapsed, and therefore cheap) whose messages are all OLDER than every loud
+// one, so newest-first packing reaches them last. Packed with NO floor, the
+// budget is spent on the owner line and at most ONE cheap message from the six
+// quiet ones survives — so requiring BOTH quiet lines to keep three is a
+// four-message margin, not a one-message coincidence.
 //
 // MUTANT: drop the reserve pass in resumeChatBlock (the `for _, p := range
 // peers` loop that pre-keeps the newest resumeChatPeerFloor of each line) → the
-// quiet-line assertion goes red. The positive controls below (the loud line was
-// really squeezed; the budget really bound) are what stop this from passing
-// because nothing was packed at all.
+// quiet-line assertion goes red. The positive controls below are what stop this
+// from passing because nothing was packed at all, or because the fix was "starve
+// whoever talks most".
 func TestResumeChat_BudgetLeavesEveryLineItsFloor(t *testing.T) {
 	api := resumeCtxServer(t)
 	chunk := strings.Repeat("字", 700)
 
-	// Quiet line: OLDEST in the stream, so newest-first packing reaches it last.
-	for i := 0; i < 3; i++ {
-		putChat(t, api, "c-q"+strconv.Itoa(i), "m-quiet", "m-exec", chunk, float64(1+i), nil)
+	// Two quiet third-party lines, OLDEST in the stream.
+	for _, peer := range []string{"m-quiet", "m-peer"} {
+		for i := 0; i < resumeChatPeerFloor; i++ {
+			putChat(t, api, "c-"+peer+strconv.Itoa(i), peer, "m-exec", chunk, float64(1+i), nil)
+		}
 	}
-	// Loud line: far more than the budget can hold, and all newer.
+	// The loud line: the owner, carried in full, far more than the budget holds.
 	for i := 0; i < resumeChatPerPeerFetch; i++ {
-		putChat(t, api, "c-l"+strconv.Itoa(i), "m-loud", "m-exec", chunk, float64(100+i), nil)
+		putChat(t, api, "c-l"+strconv.Itoa(i), wireOwnerID, "m-exec", chunk, float64(100+i), nil)
 	}
 
 	snap := resumeSnapshot(t, api, "m-exec")
 
-	quiet, loud := 0, 0
+	byLine := map[string]int{}
 	for _, m := range snap.Chat {
-		switch m.From {
-		case "m-quiet":
-			quiet++
-		case "m-loud":
-			loud++
+		byLine[m.From]++
+	}
+	for _, peer := range []string{"m-quiet", "m-peer"} {
+		if byLine[peer] < resumeChatPeerFloor {
+			t.Fatalf("every line keeps its floor: want >= %d from %s, got %d (lines=%v)",
+				resumeChatPeerFloor, peer, byLine[peer], byLine)
 		}
 	}
-	if quiet < resumeChatPeerFloor {
-		t.Fatalf("every line keeps its floor: want >= %d from the quiet peer, got %d (loud=%d)",
-			resumeChatPeerFloor, quiet, loud)
-	}
-	// Positive control A: the budget really did bind — otherwise "the quiet line
+	// Positive control A: the budget really did bind — otherwise "the quiet lines
 	// survived" is just "nothing was dropped".
-	if loud >= resumeChatPerPeerFetch {
-		t.Fatalf("the loud line must have been squeezed by the budget, got all %d", loud)
+	if byLine[wireOwnerID] >= resumeChatPerPeerFetch {
+		t.Fatalf("the loud line must have been squeezed by the budget, got all %d (lines=%v)",
+			byLine[wireOwnerID], byLine)
 	}
 	// Positive control B: the loud line kept its own floor too; the fix must not
 	// be "starve whoever talks most".
-	if loud < resumeChatPeerFloor {
-		t.Fatalf("the loud line keeps a floor as well, got %d", loud)
+	if byLine[wireOwnerID] < resumeChatPeerFloor {
+		t.Fatalf("the loud line keeps a floor as well, got %d", byLine[wireOwnerID])
+	}
+	// Positive control C: the cut is REPORTED. A budget that drops messages
+	// silently is the failure this whole format exists to remove.
+	if !snap.ChatEarlierOmitted.Omitted {
+		t.Fatalf("messages were dropped, so the cut must be reported: %+v",
+			snap.ChatEarlierOmitted)
 	}
 }
 

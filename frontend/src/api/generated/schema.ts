@@ -2288,9 +2288,19 @@ export interface paths {
          *
          *     Identity-locked to the caller's VERIFIED JWT ``sub`` (``actor``): assembles ONE
          *     bounded block so a waking / handed-over agent resumes without paging every plane
-         *     by hand. It surfaces the caller's recent chat (the most recent ``RESUME_CHAT_N``
-         *     messages where sender == caller OR recipient == caller, oldest→newest, each body
-         *     truncated to ``RESUME_CHAT_BODY_PREVIEW``), the caller's OPEN tasks as LIGHT rows
+         *     by hand. It surfaces the caller's recent CHAT (sender == caller OR recipient == caller,
+         *     oldest→newest), packed newest-first under a CHARACTER BUDGET rather than a fixed
+         *     message count, with a few newest messages RESERVED for every conversation line
+         *     so one long thread cannot squeeze the others to zero. Every message carries
+         *     ``from_name`` / ``to_name`` beside the ids and ``ts_display`` (full date + time +
+         *     zone offset) beside the epoch ``ts``, and folds in its reply card as ``card``
+         *     when it has one; read every ``ts_display`` against the top-level
+         *     ``generated_at``. TWO DIFFERENT kinds of absence are named with DIFFERENT words:
+         *     ``body_omitted_chars`` > 0 means THAT message IS here with that many characters
+         *     COLLAPSED away (another agent's line — the owner's line and the caller's own
+         *     hand-off notes to itself are carried IN FULL), re-read it with ``get_chat``;
+         *     ``chat_earlier_omitted`` means whole messages are NOT HERE AT ALL and its
+         *     ``hint`` says how to fetch them. It also surfaces the caller's OPEN tasks as LIGHT rows
          *     (executor == caller, non-terminal, most recently updated first, capped to
          *     ``RESUME_TASKS_N`` — owner ruling: 任務不該包含細節; each row names the task, its
          *     status/priority, the current node NAME and progress, plus ``detail_chars`` — the
@@ -2327,13 +2337,17 @@ export interface paths {
          *     SAME ``overview`` counts/sizes a full ``resume_summary`` would report (both go
          *     through one shared server assembly, so the reported sizes cannot drift from what
          *     resume_summary actually carries) plus ``estimated_total_chars`` — a derived
-         *     single number (the snapshot's chat body chars plus the plan text its task rows
-         *     omit) to gate the boot decision on — and a fixed guidance ``note``. It carries
+         *     single number to gate the boot decision on — and a fixed guidance ``note``.
+         *     ``estimated_total_chars`` covers the WHOLE chat block resume_summary would carry
+         *     (bodies AFTER collapsing, plus the display names, the rendered timestamps, the
+         *     reply cards folded into messages, the collapse markers and the snapshot's own
+         *     header) plus the plan text its task rows omit and the roster / machine blocks —
+         *     what pulling the snapshot actually costs, not just the message bodies. It carries
          *     NO chat bodies and NO task rows of any kind: peeking it costs a few hundred
          *     bytes, so a waking agent sizes ``resume_summary`` BEFORE deciding whether to
          *     pull it into its own context or hand the pull to a cheap sub-agent (e.g. haiku)
          *     that returns a compressed digest. DETERMINISTIC and read-only; a caller with no
-         *     chat and no tasks gets zeroes, never an error.
+         *     chat and no tasks gets an EMPTY snapshot's sizes, never an error.
          */
         get: operations["handle_peek_resume_summary_size_api_resume_summary_size_get"];
         put?: never;
