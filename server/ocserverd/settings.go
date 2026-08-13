@@ -90,6 +90,13 @@ const (
 	settingDocCapCharsLearning        = "doc.cap_chars.learning"
 	settingDocCapCharsManualSop       = "doc.cap_chars.manual_sop"
 	settingDocCapCharsManualLearnings = "doc.cap_chars.manual_learnings"
+	// The two boot-context document kinds (T-791e). Same shape as the five
+	// above, and deliberately suffixed the same way: a bare `doc.cap_chars`
+	// would read as a global default beside them, and an agent looking at
+	// get_settings sees key
+	// names only — never a description.
+	settingDocCapCharsSystemInteraction = "doc.cap_chars.system_interaction"
+	settingDocCapCharsBootSequence      = "doc.cap_chars.boot_sequence"
 	// The retired updater.url / updater.invite_code keys belonged to the
 	// removed ocupdaterd updater-server chain (updates now ship as GitHub
 	// Releases on pkyosx/OffiCraft — update_check.go). They are no longer
@@ -172,29 +179,31 @@ const defaultMonitoringRefreshSeconds = 5
 
 // authSettings is the boot-time snapshot cmdServe stamps onto the apiServer.
 type authSettings struct {
-	secret                     []byte
-	passwordHash               string // "" = not set in DB (first-run: set-password flow)
-	passwordChangedAt          int64  // epoch secs; owner tokens with iat before it are refused
-	ownerTokenTTL              int64
-	agentTokenTTL              int64
-	ctxhigh                    SseContextHighConfig
-	codexCompactionThreshold   int
-	monitoringRefreshSeconds   int
-	outsourceMaxParallel       int              // task.outsource_max_parallel (default 3)
-	docCapCharsDuty            int              // doc.cap_chars.duty (default dutyCapCharsDefault)
-	docCapCharsInsight         int              // doc.cap_chars.insight (default contextDocMaxCharsDefault)
-	docCapCharsLearning        int              // doc.cap_chars.learning (default contextDocMaxCharsDefault)
-	docCapCharsManualSop       int              // doc.cap_chars.manual_sop (default contextDocMaxCharsDefault)
-	docCapCharsManualLearnings int              // doc.cap_chars.manual_learnings (default contextDocMaxCharsDefault)
-	updaterReceiveBeta         bool             // updater.receive_beta (default false = official releases only)
-	updaterAutoUpdate          bool             // updater.auto_update (default false = manual upgrades only)
-	orgName                    string           // org.name ("" = never set → localized default in the topbar)
-	ownerName                  string           // owner.name ("" = never set → localized default in the profile pill)
-	pushContactEmail           string           // push.contact_email ("" = never set → Web Push delivery is refused)
-	displayTheme               string           // display.theme ("" = never set → frontend cache/default)
-	displayLanguage            string           // display.language ("" = never set → frontend cache/default)
-	displayWide                bool             // display.wide (default false = the narrow centred column)
-	displayCustomThemes        []ThemeBundleDTO // display.custom_themes (nil = none saved)
+	secret                       []byte
+	passwordHash                 string // "" = not set in DB (first-run: set-password flow)
+	passwordChangedAt            int64  // epoch secs; owner tokens with iat before it are refused
+	ownerTokenTTL                int64
+	agentTokenTTL                int64
+	ctxhigh                      SseContextHighConfig
+	codexCompactionThreshold     int
+	monitoringRefreshSeconds     int
+	outsourceMaxParallel         int              // task.outsource_max_parallel (default 3)
+	docCapCharsDuty              int              // doc.cap_chars.duty (default dutyCapCharsDefault)
+	docCapCharsInsight           int              // doc.cap_chars.insight (default contextDocMaxCharsDefault)
+	docCapCharsLearning          int              // doc.cap_chars.learning (default contextDocMaxCharsDefault)
+	docCapCharsManualSop         int              // doc.cap_chars.manual_sop (default contextDocMaxCharsDefault)
+	docCapCharsManualLearnings   int              // doc.cap_chars.manual_learnings (default contextDocMaxCharsDefault)
+	docCapCharsSystemInteraction int              // doc.cap_chars.system_interaction (default systemInteractionCapCharsDefault)
+	docCapCharsBootSequence      int              // doc.cap_chars.boot_sequence (default bootSequenceCapCharsDefault; ONE cap, both runtimes)
+	updaterReceiveBeta           bool             // updater.receive_beta (default false = official releases only)
+	updaterAutoUpdate            bool             // updater.auto_update (default false = manual upgrades only)
+	orgName                      string           // org.name ("" = never set → localized default in the topbar)
+	ownerName                    string           // owner.name ("" = never set → localized default in the profile pill)
+	pushContactEmail             string           // push.contact_email ("" = never set → Web Push delivery is refused)
+	displayTheme                 string           // display.theme ("" = never set → frontend cache/default)
+	displayLanguage              string           // display.language ("" = never set → frontend cache/default)
+	displayWide                  bool             // display.wide (default false = the narrow centred column)
+	displayCustomThemes          []ThemeBundleDTO // display.custom_themes (nil = none saved)
 }
 
 // loadAuthSettings loads the snapshot from the migrated DB, running the
@@ -407,6 +416,14 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 	}
 	if err := loadCap(settingDocCapCharsManualLearnings, minDocCapChars,
 		&out.docCapCharsManualLearnings, contextDocMaxCharsDefault); err != nil {
+		return out, err
+	}
+	if err := loadCap(settingDocCapCharsSystemInteraction, minSystemInteractionCapChars,
+		&out.docCapCharsSystemInteraction, systemInteractionCapCharsDefault); err != nil {
+		return out, err
+	}
+	if err := loadCap(settingDocCapCharsBootSequence, minBootSequenceCapChars,
+		&out.docCapCharsBootSequence, bootSequenceCapCharsDefault); err != nil {
 		return out, err
 	}
 

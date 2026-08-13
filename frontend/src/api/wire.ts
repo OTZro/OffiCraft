@@ -234,6 +234,15 @@ export type WireReleaseCheck = components["schemas"]["ReleaseCheckDTO"];
  * doc. `is_default` = seed (true) vs owner-edited (false). */
 export type WireGlobalContext = components["schemas"]["GlobalContextDTO"];
 
+/**
+ * Mirrors `BootDocumentDTO` — one folded boot-context block (T-791e):
+ * `system_interaction/global`, `boot_sequence/claude`, `boot_sequence/codex`.
+ * `text` is the overlay when one exists and the shipped seed otherwise;
+ * `is_default` says which of the two you are holding, `has_seed` says whether
+ * there is a factory version to go back to.
+ */
+export type WireBootDoc = components["schemas"]["BootDocumentDTO"];
+
 /** Mirrors `DocumentHistoryDTO` — ONE retained revision of an editable
  * long-form document (`GET /api/document-history/{kind}/{key}`). `content` is
  * the field→value snapshot of the document as it stood BEFORE the write that

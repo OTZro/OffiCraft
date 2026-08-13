@@ -592,6 +592,57 @@ def _check_reset_insight(ctx: HCtx, r: httpx.Response) -> None:
     assert g.json()["is_default"] is True, g.text
 
 
+# ── the two editable boot-context blocks (T-791e) ────────────────────────────
+
+_BOOT_DOC_EDIT = "# conformance edit — 系統互動 / 啟動程序\n\nnot the factory text\n"
+
+
+def _boot_doc_written(ctx: HCtx, r: httpx.Response) -> None:
+    """The edit came back verbatim and the block stopped reading as default."""
+    d = r.json()
+    assert d["text"] == _BOOT_DOC_EDIT, d
+    assert d["is_default"] is False, d
+    assert d["size_chars"] == len(d["text"]), d
+    assert d["cap_chars"] >= d["size_chars"], d
+    assert d["has_seed"] is True, d
+
+
+def _boot_doc_reset(path: str):
+    """Reset check: the factory text is back and the edit is provably gone.
+
+    🔴 Deliberately does NOT compare against the seed's TEXT — the suite is
+    black-box and must not read seeds/*.md. What it can state order-independently
+    is that the answer is no longer the edit, that is_default flipped, and that
+    the document is NOT EMPTY: these blocks are the ones every agent boots from,
+    so an empty answer would mean the fold stopped finding the shipped seed.
+    """
+
+    def check(ctx: HCtx, r: httpx.Response) -> None:
+        d = r.json()
+        assert d["is_default"] is True, d
+        assert d["text"] != _BOOT_DOC_EDIT, "reset left the edit in place"
+        assert d["text"].strip(), "reset served an EMPTY block — the shipped seed was not restored"
+        assert d["has_seed"] is True, d
+        g = ctx.client.get(path, headers={"Authorization": f"Bearer {ctx.owner_token}"})
+        assert g.status_code == 200, f"{g.status_code} {g.text}"
+        assert g.json()["text"] == d["text"], "GET after reset disagrees with the reset response"
+
+    return check
+
+
+def _boot_doc_read(kind: str, key: str):
+    def check(_ctx: HCtx, r: httpx.Response) -> None:
+        d = r.json()
+        assert d["kind"] == kind and d["key"] == key, d
+        assert d["text"].strip(), "the block is empty — the shipped seed was not folded in"
+        assert d["size_chars"] == len(d["text"]), d
+        assert d["cap_chars"] >= d["size_chars"], d
+        assert isinstance(d["is_default"], bool), d
+        assert d["has_seed"] is True, d
+
+    return check
+
+
 HAPPY: dict[str, Happy] = {
     # ── public ───────────────────────────────────────────────────────────────
     "GET /api/health": Happy(identity="none"),
@@ -1077,6 +1128,32 @@ HAPPY: dict[str, Happy] = {
     ),
     "POST /api/global-context/reset": Happy(
         check=lambda _c, r: _expect(r, lambda d: d["is_default"] is True),
+    ),
+    # ── the boot context's other two blocks, editable since T-791e ───────────
+    # The reset rows run against a block the replace rows may or may not have
+    # edited first: reset is idempotent and replace is a whole document, so
+    # neither row depends on the other's order.
+    "GET /api/system-interaction": Happy(
+        check=lambda _c, r: _boot_doc_read("system_interaction", "global")(_c, r)
+    ),
+    "POST /api/system-interaction": Happy(
+        body={"text": _BOOT_DOC_EDIT}, check=_boot_doc_written
+    ),
+    "POST /api/system-interaction/reset": Happy(
+        check=_boot_doc_reset("/api/system-interaction")
+    ),
+    "GET /api/boot-sequence/{runtime_key}": Happy(
+        path="/api/boot-sequence/claude",
+        check=lambda _c, r: _boot_doc_read("boot_sequence", "claude")(_c, r),
+    ),
+    "POST /api/boot-sequence/{runtime_key}": Happy(
+        path="/api/boot-sequence/codex",
+        body={"text": _BOOT_DOC_EDIT},
+        check=_boot_doc_written,
+    ),
+    "POST /api/boot-sequence/{runtime_key}/reset": Happy(
+        path="/api/boot-sequence/codex/reset",
+        check=_boot_doc_reset("/api/boot-sequence/codex"),
     ),
     "GET /api/roles": Happy(check=_nonempty_list),
     "GET /api/doc-sizes": Happy(

@@ -45,6 +45,18 @@ const TOPIC_OF: Record<DocumentKind, string> = {
   task_description: "task",
   // T-2ebe: a title belongs to the same TASK, so it fans the same topic.
   task_title: "task",
+  // T-791e: both boot-context blocks ride the EXISTING `global_context` topic
+  // rather than a topic named after themselves. The SSE vocabulary is a CLOSED
+  // set declared in spec/sse.md §3.1 (SSE_RESYNC_TOPICS, pinned against that
+  // file by api/sseResyncTopics.test.ts), and the server drops anything outside
+  // it at the publish seam — a `boot_sequence` topic would fan NOTHING and the
+  // failure would be perfectly silent: the write lands, and every other open
+  // surface simply never hears. These blocks are parts of the assembled boot
+  // context, so the topic is honest as well as available; the cost is that a
+  // write to one block makes the other two re-read, which is a wasted request,
+  // not a wrong screen.
+  system_interaction: "global_context",
+  boot_sequence: "global_context",
 };
 
 interface UseDocumentHistory {

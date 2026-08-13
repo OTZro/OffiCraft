@@ -70,6 +70,11 @@ type apiServer struct {
 	docCapCharsLearning        int
 	docCapCharsManualSop       int
 	docCapCharsManualLearnings int
+	// The two boot-context document kinds, editable since T-791e (DB
+	// doc.cap_chars.{system_interaction,boot_sequence}). bootSequence is ONE cap
+	// serving both runtimes.
+	docCapCharsSystemInteraction int
+	docCapCharsBootSequence      int
 	// updaterReceiveBeta picks which GitHub releases the update check follows
 	// (false = official only, true = prereleases too); updaterAutoUpdate arms
 	// the background self-upgrade cadence (auto_update.go). Both default OFF
@@ -395,6 +400,23 @@ func (s *apiServer) manualLearningsCap() int {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
 	return s.docCapCharsManualLearnings
+}
+
+// systemInteractionCap / bootSequenceCap are the same accessor shape for the
+// two boot-context document kinds that became editable in T-791e.
+// bootSequenceCap is ONE number serving BOTH runtimes — each document is
+// measured on its own text, but the budget is shared, because the two are the
+// same short checklist rendered for two runtimes.
+func (s *apiServer) systemInteractionCap() int {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.docCapCharsSystemInteraction
+}
+
+func (s *apiServer) bootSequenceCap() int {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.docCapCharsBootSequence
 }
 
 // orgNameSnapshot returns the live studio display name (org.name; T-d693).

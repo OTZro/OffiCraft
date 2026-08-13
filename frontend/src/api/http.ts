@@ -31,6 +31,8 @@ import type {
   ReleaseCheckView,
   BackupHealthView,
   GlobalContextView,
+  BootDocKind,
+  BootDocView,
   DocumentKind,
   DocumentHistoryView,
   DocumentSeedView,
@@ -99,6 +101,7 @@ import {
   toReleaseCheck,
   toBackupHealth,
   toGlobalContext,
+  toBootDoc,
   toDocumentHistory,
   toDocumentSeed,
   toRoleDef,
@@ -1661,6 +1664,8 @@ export const httpApi: Api = {
       doc_cap_chars_learning?: number;
       doc_cap_chars_manual_sop?: number;
       doc_cap_chars_manual_learnings?: number;
+      doc_cap_chars_system_interaction?: number;
+      doc_cap_chars_boot_sequence?: number;
       updater_receive_beta?: boolean;
       updater_auto_update?: boolean;
       org_name?: string;
@@ -1696,6 +1701,12 @@ export const httpApi: Api = {
     }
     if (patch.docCapCharsManualLearnings !== undefined) {
       body.doc_cap_chars_manual_learnings = patch.docCapCharsManualLearnings;
+    }
+    if (patch.docCapCharsSystemInteraction !== undefined) {
+      body.doc_cap_chars_system_interaction = patch.docCapCharsSystemInteraction;
+    }
+    if (patch.docCapCharsBootSequence !== undefined) {
+      body.doc_cap_chars_boot_sequence = patch.docCapCharsBootSequence;
     }
     if (patch.updaterReceiveBeta !== undefined) {
       body.updater_receive_beta = patch.updaterReceiveBeta;
@@ -1765,8 +1776,9 @@ export const httpApi: Api = {
   async getGlobalContext(): Promise<GlobalContextView> {
     // GET /api/global-context -> GlobalContextDTO — the 使用者自訂 (user-custom)
     // ADDITIVE block of the 3-block boot context (empty text/is_default=true when
-    // never written). The read-only system-interaction / boot-sequence blocks
-    // have NO endpoint by construction.
+    // never written). The other two blocks — system-interaction and
+    // boot-sequence — became editable in T-791e and have their own routes; see
+    // getBootDoc below.
     const wire = unwrap(await client.GET("/api/global-context"));
     return toGlobalContext(wire);
   },
@@ -1792,6 +1804,77 @@ export const httpApi: Api = {
     // the doc path (405 against the real backend, compile error against schema).
     const wire = unwrap(await client.POST("/api/global-context/reset"));
     return toGlobalContext(wire);
+  },
+
+  // ── boot-context blocks (T-791e) ────────────────────────────────────────
+  // The two kinds have DIFFERENT route shapes, and collapsing them into one
+  // composed path string is what produced the 404 these three methods used to
+  // ship with. `system_interaction` is a singleton — one document, so its key
+  // ("global") is implied by the kind and appears nowhere in the URL;
+  // `boot_sequence` is two documents, so its key IS the `{runtime_key}` path
+  // parameter. Both now ride the schema-typed client: a BE path or verb rename
+  // is a tsc error here, the same protection every other method in this file
+  // gets.
+
+  async getBootDoc(kind: BootDocKind, key: string): Promise<BootDocView> {
+    if (kind === "system_interaction") {
+      return toBootDoc(unwrap(await client.GET("/api/system-interaction")));
+    }
+    return toBootDoc(
+      unwrap(
+        await client.GET("/api/boot-sequence/{runtime_key}", {
+          params: { path: { runtime_key: key } },
+        }),
+      ),
+    );
+  },
+
+  async saveBootDoc(
+    kind: BootDocKind,
+    key: string,
+    text: string,
+  ): Promise<BootDocView> {
+    // Whole-document replace, POST — same verb contract as
+    // /api/global-context: NOT a PUT and NOT a DELETE-then-write.
+    //
+    // allow_shrink stays FALSE here, the opposite of saveGlobalContext. There
+    // the owner clearing a textarea of their own additions is explicit intent
+    // worth honouring; here the same gesture ships agents a boot sequence with
+    // no instructions, and the server's refusal names the recovery path (reset
+    // to the shipped default) instead. Emptying is not what this surface is
+    // for — the 還原出廠版 button is.
+    if (kind === "system_interaction") {
+      return toBootDoc(
+        unwrap(
+          await client.POST("/api/system-interaction", {
+            body: { text, allow_shrink: false },
+          }),
+        ),
+      );
+    }
+    return toBootDoc(
+      unwrap(
+        await client.POST("/api/boot-sequence/{runtime_key}", {
+          params: { path: { runtime_key: key } },
+          body: { text, allow_shrink: false },
+        }),
+      ),
+    );
+  },
+
+  async resetBootDoc(kind: BootDocKind, key: string): Promise<BootDocView> {
+    if (kind === "system_interaction") {
+      return toBootDoc(
+        unwrap(await client.POST("/api/system-interaction/reset")),
+      );
+    }
+    return toBootDoc(
+      unwrap(
+        await client.POST("/api/boot-sequence/{runtime_key}/reset", {
+          params: { path: { runtime_key: key } },
+        }),
+      ),
+    );
   },
 
   async listDocumentHistory(

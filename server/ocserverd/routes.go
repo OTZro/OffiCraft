@@ -977,6 +977,74 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Reset the user-custom block to empty (idempotent tombstone).",
 			MCPTool:  "reset_global_context",
 		},
+		// ── the two boot-context document kinds that became editable (T-791e) ──
+		//
+		// 系統互動 and 啟動程序 used to be go:embed seeds with no editable
+		// representation at all: one wrong sentence cost a release. They now
+		// carry the same read / whole-document replace / reset-to-factory shape
+		// the 使用者自訂 block above has, plus document history.
+		//
+		// FLOORS: read at the machine floor (an agent already reads both blocks
+		// in its own boot context — nothing here is new to it); WRITE at
+		// admin_agent, because this text lands in EVERY agent's boot context and
+		// a broken 啟動程序 keeps them from coming online at all. That failure is
+		// silent: an agent that never boots is never there to report it, which is
+		// also why the reset route has to work from the cockpit alone, with no
+		// live agent and no MCP client anywhere in the path.
+		{
+			Method:   "GET",
+			Path:     "/api/system-interaction",
+			Handler:  w.HandleGetSystemInteractionApiSystemInteractionGet,
+			Auth:     authGated,
+			Requires: principalMachine,
+			Summary:  "Read the 系統互動 block of the boot context — the shared studio handbook every agent reads at boot. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
+			MCPTool:  "get_system_interaction",
+		},
+		{
+			Method:   "POST",
+			Path:     "/api/system-interaction",
+			Handler:  w.HandleReplaceSystemInteractionApiSystemInteractionPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Replace the WHOLE 系統互動 block of the boot context ({text}) — the handbook every agent reads at boot. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. The write is judged against the doc.cap_chars.system_interaction cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_system_interaction always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.",
+			MCPTool:  "replace_system_interaction",
+		},
+		{
+			Method:   "POST",
+			Path:     "/api/system-interaction/reset",
+			Handler:  w.HandleResetSystemInteractionApiSystemInteractionResetPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Restore the 系統互動 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.",
+			MCPTool:  "reset_system_interaction",
+		},
+		{
+			Method:   "GET",
+			Path:     "/api/boot-sequence/{runtime_key}",
+			Handler:  w.HandleGetBootSequenceApiBootSequenceRuntimeKeyGet,
+			Auth:     authGated,
+			Requires: principalMachine,
+			Summary:  "Read one runtime's 啟動程序 block — the boot checklist that ends that runtime's boot context. runtime_key is 'claude' or 'codex'; they are separate documents because step 3 of the two says opposite things (claude mounts its own `ocagent listen`, codex must not — the sidecar owns it), so any other value is a 404 rather than a silent fallback to claude. Folded: the owner's edit when one exists, otherwise the shipped factory seed. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
+			MCPTool:  "get_boot_sequence",
+		},
+		{
+			Method:   "POST",
+			Path:     "/api/boot-sequence/{runtime_key}",
+			Handler:  w.HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Replace the WHOLE 啟動程序 block of ONE runtime ({runtime_key, text}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. Judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.",
+			MCPTool:  "replace_boot_sequence",
+		},
+		{
+			Method:   "POST",
+			Path:     "/api/boot-sequence/{runtime_key}/reset",
+			Handler:  w.HandleResetBootSequenceApiBootSequenceRuntimeKeyResetPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Restore ONE runtime's 啟動程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). runtime_key is 'claude' or 'codex'; anything else is a 404. No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it, which is what makes this the recovery route when a bad edit has stopped agents from booting. The overlay being discarded is retained in the document history. Owner or admin assistant only.",
+			MCPTool:  "reset_boot_sequence",
+		},
 		{
 			Method:   "GET",
 			Path:     "/api/roles",

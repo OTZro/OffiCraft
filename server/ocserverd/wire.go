@@ -67,6 +67,11 @@ type settingsDTO struct {
 	DocCapCharsLearning        int `json:"doc_cap_chars_learning"`
 	DocCapCharsManualSop       int `json:"doc_cap_chars_manual_sop"`
 	DocCapCharsManualLearnings int `json:"doc_cap_chars_manual_learnings"`
+	// The two boot-context document kinds, editable since T-791e. One knob per
+	// kind, and the boot-sequence one is shared by the claude and codex
+	// documents (each measured on its own text).
+	DocCapCharsSystemInteraction int `json:"doc_cap_chars_system_interaction"`
+	DocCapCharsBootSequence      int `json:"doc_cap_chars_boot_sequence"`
 	// UpdaterReceiveBeta / UpdaterAutoUpdate are the two software-update
 	// toggles (default false): follow GitHub prereleases too / self-upgrade
 	// in the background when a newer release exists.
@@ -593,6 +598,35 @@ type globalContextDTO struct {
 	// secret; "" = the owner has not named the studio. Read-only here (writes
 	// go through the owner-gated settings surface).
 	OrgName string `json:"org_name"`
+}
+
+// bootDocDTO is ONE editable boot-context block on the wire (T-791e): the
+// 系統互動 block, or one runtime's 啟動程序 block.
+//
+// The four judgement fields are the pair the capped documents already carry
+// (SizeChars/CapChars — the settings surface holding the cap is admin-only, so
+// without them being refused is the only way to learn the limit) plus the pair
+// the insight doc carries (IsDefault/HasSeed), and they answer DIFFERENT
+// questions:
+//
+//	IsDefault — has anybody edited this block? (false = you are reading an edit)
+//	HasSeed   — does a factory version exist to go back TO? (the reset's
+//	            precondition; that route 404s when it is false)
+//
+// For these three documents HasSeed is true in every shipped build, which is
+// exactly why it must be SERVED rather than assumed: a build whose seedsdist was
+// not staged answers false, and a cockpit that offered 還原 anyway would hand the
+// owner a button that 404s at the one moment it matters.
+type bootDocDTO struct {
+	SizeChars     int    `json:"size_chars"`
+	CapChars      int    `json:"cap_chars"`
+	Kind          string `json:"kind"`
+	Key           string `json:"key"`
+	Text          string `json:"text"`
+	OwnerID       string `json:"owner_id"`
+	SchemaVersion int    `json:"schema_version"`
+	IsDefault     bool   `json:"is_default"`
+	HasSeed       bool   `json:"has_seed"`
 }
 
 type roleDefDTO struct {

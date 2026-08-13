@@ -32,6 +32,11 @@ export const DOC_FIELD_ORDER: Record<DocumentKind, readonly string[]> = {
   task_description: ["description"],
   // T-2ebe. Same shape as the description's, one field for the same reason.
   task_title: ["title"],
+  // T-791e. One field each — a boot-context block IS its text. `tombstoned`
+  // rides alongside on both (they are overlay kinds with a factory version to
+  // fall back to) and is a flag, not content, so it is not listed.
+  system_interaction: ["text"],
+  boot_sequence: ["text"],
 };
 
 /** Keys a revision may CARRY but that are not content of the document.
