@@ -201,10 +201,12 @@ const (
 	//
 	// 🔴 It states the SUM, not a list of ingredients. Three prose copies of
 	// this used to itemise what the number covers, each with a DIFFERENT
-	// incomplete subset, and all three left out the cut hint — ~430 chars, the
-	// single largest item, added to chat_chars in resumeSnapshotParts. An
-	// itemised list can only go stale against that function; the four addends
-	// are checkable against the code that computes them.
+	// incomplete subset, and all three left out the same item: the cut hint,
+	// which resumeSnapshotParts adds to chat_chars and which is a FIXED block
+	// of several hundred runes (measured 560 at the time of writing — it is a
+	// constant in this file, so re-measure it there rather than trusting this
+	// number). An itemised list can only go stale against that function; the
+	// four addends are checkable against the code that computes them.
 	peekNote                     = "Size-only preview of resume_summary — counts/sizes ONLY, no chat or task content. estimated_total_chars is exactly chat_chars + tasks_detail_chars + roster_chars + machines_chars, all four reported in overview: the WHOLE chat block as the snapshot renders it (chat_chars is the rendered block's cost, NOT the sum of the message bodies), plus the plan text its task rows omit and the two studio-floor blocks. So it is what pulling the snapshot actually costs. Use it to decide: if small (rule of thumb < 20000 chars, ≈ 5k tokens) call resume_summary directly in your main session; if large, spawn a cheap sub-agent (e.g. haiku) to call resume_summary and return a compressed digest, so the full payload never burns your own context."
 	attachmentOctetStream        = "application/octet-stream"
 	attachmentDefaultPastedImage = "pasted-image"
