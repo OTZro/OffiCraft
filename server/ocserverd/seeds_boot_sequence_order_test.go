@@ -65,11 +65,22 @@ func TestBootSequenceSeedsPutTheRuntimeNoteBeforeStepOne(t *testing.T) {
 					"(env=%d, step1=%d) — a reader doing step 1 in order never "+
 					"reaches it in time, and skipping it is silent", tc.file, env, step1)
 			}
-			// It must also sit below the H1 + preamble, not above them.
-			h1 := strings.Index(text, "# 啟動程序")
-			if h1 < 0 || h1 > env {
-				t.Fatalf("%s: runtime note is not under the H1 (h1=%d env=%d)",
-					tc.file, h1, env)
+			// It must also sit BELOW the preamble, not above it: the preamble
+			// is what tells the reader there is an ordered list at all, so a
+			// block hoisted above it reads as front-matter and gets skipped.
+			//
+			// (This deliberately anchors on the PREAMBLE, not on the H1. An
+			// earlier draft asserted `h1 < env`, which was near-tautological —
+			// the H1 is the first line of the file, so strings.Index returns 0
+			// and the comparison could essentially never fail. It looked like a
+			// guard and guarded nothing.)
+			pre := strings.Index(text, "依序做這四步")
+			if pre < 0 {
+				t.Fatalf("%s: no preamble anchor found", tc.file)
+			}
+			if pre > env {
+				t.Fatalf("%s: runtime note sits ABOVE the preamble (preamble=%d env=%d) — "+
+					"it reads as front-matter there and gets skipped", tc.file, pre, env)
 			}
 		})
 	}
@@ -80,7 +91,7 @@ func TestBootSequenceSeedsNumberTheInventoryAsStepFour(t *testing.T) {
 		t.Run(file, func(t *testing.T) {
 			text := bootSeedFor(t, file)
 
-			if !strings.Contains(text, "\n4. **啟動後任務盤點與排程（僅 member）。**") {
+			if !strings.Contains(text, "\n4. **啟動後任務盤點與排程") {
 				t.Fatalf("%s: 啟動後任務盤點與排程 is not the 4th numbered item", file)
 			}
 			// Positive control: items 1..3 are still there, so "item 4 exists"
@@ -92,8 +103,14 @@ func TestBootSequenceSeedsNumberTheInventoryAsStepFour(t *testing.T) {
 			}
 			// The preamble must agree: promoting the note to a step and leaving
 			// the count at 三 makes the file contradict itself.
-			if strings.Contains(text, "三步") {
-				t.Fatalf("%s: preamble still says 三步 after the promotion to four steps", file)
+			// Ban the STALE PHRASES, not the bare substring "三步": the codex
+			// preamble legitimately says 「開機這個 turn 只做得完前三步」 now,
+			// and a substring ban would have made that true sentence unsayable.
+			for _, stale := range []string{"依序做這三步", "三步順序不可換"} {
+				if strings.Contains(text, stale) {
+					t.Fatalf("%s: preamble still says %q after the promotion to four steps",
+						file, stale)
+				}
 			}
 			if !strings.Contains(text, "依序做這四步") || !strings.Contains(text, "四步順序不可換") {
 				t.Fatalf("%s: preamble does not say 四步 in both places", file)
@@ -144,5 +161,47 @@ func TestBootSequencePreambleNeverSaysWhereHangingSSESits(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The codex seed MUST say that the inventory step falls OUTSIDE the boot turn.
+//
+// 🔴 WHY THIS IS CODEX-ONLY AND WHY IT MATTERS. Under codex, the third step IS
+// "finish this boot turn" — the App Server sidecar only takes over `ocagent
+// listen` after the turn ends, and step 4's own precondition is "the sidecar's
+// SSE is already connected". So step 4 is NOT reachable inside the boot turn;
+// an agent reading the list as one continuous turn would either stall waiting
+// for an SSE that cannot arrive yet, or skip the step. The claude seed has no
+// such boundary (its step 3 hangs the listener in the background via Monitor
+// and step 4 follows in the same turn), so this is asserted for codex ONLY —
+// asserting it for both would force false text into the claude seed.
+func TestCodexSeedPutsTheInventoryStepAfterTheBootTurn(t *testing.T) {
+	text := bootSeedFor(t, "boot_sequence_codex.md")
+
+	// The step itself must carry the caveat — the preamble alone is not enough,
+	// because a reader working the list top-down meets the step, not the intro.
+	step4 := strings.Index(text, "\n4. **啟動後任務盤點與排程")
+	if step4 < 0 {
+		t.Fatal("codex seed: no step 4 found")
+	}
+	tail := text[step4:]
+	if !strings.Contains(tail, "不在 boot turn 之內") {
+		t.Fatal("codex step 4 does not say it falls OUTSIDE the boot turn. " +
+			"Under codex the previous step ENDS the turn and the sidecar only " +
+			"then takes over SSE, so this step cannot run in the same turn — " +
+			"a reader working the list straight through would wait for an SSE " +
+			"that cannot arrive yet.")
+	}
+	// And the preamble must not claim all four fit in the boot turn.
+	pre := bootSeedPreamble(t, "boot_sequence_codex.md")
+	if !strings.Contains(pre, "開機這個 turn 只做得完前三步") {
+		t.Fatalf("codex preamble does not scope the boot turn to the first three "+
+			"steps.\npreamble: %s", pre)
+	}
+	// The claude seed must NOT carry this caveat — it has no such boundary, and
+	// copying it there would be false.
+	if strings.Contains(bootSeedFor(t, "boot_sequence.md"), "不在 boot turn 之內") {
+		t.Fatal("the claude seed grew the codex-only boot-turn caveat; under claude " +
+			"the listener is hung in the background and step 4 follows in the same turn")
 	}
 }

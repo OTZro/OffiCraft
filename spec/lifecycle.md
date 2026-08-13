@@ -163,13 +163,23 @@ Blocks 3-5 are the persona. Two blocks are dropped entirely when they fold blank
 使用者自訂 and 判準 — so a role that has never written a 判準 simply has no such section,
 rather than an empty heading.
 
-**The verbatim assembly rules are deliberately not restated here.** The exact section
-titles, string formats, separator and trailing newline, the seed placeholder
-substitution, and the lessons-title de-duplication live in the implementation
-(`buildBootContext`) and are pinned byte-for-byte by `conformance/test_lifecycle.py`.
-That suite is what a rewrite must satisfy; this list is only the shape. A prose copy of
-those details is a second source that goes stale in silence — this very section did
-exactly that when 判準 was added to the fold and the list here was not updated.
+One normative BEHAVIOUR of the 學習筆記 block is stated here rather than delegated,
+because it is a contract and not a formatting detail: the title injection MUST be
+**idempotent** (T-8327). A generation that treats its own boot segment as the document
+base and writes it back turns the injected title into document content, so an assembler
+that blindly prepends stacks one more title per generation. The assembler MUST strip any
+leading copies of the exact title line before prepending exactly one. ⚠️ This rule is
+pinned by `server/ocserverd/api_lessons_patch_test.go`, **not** by the conformance suite —
+no conformance case feeds in a lessons doc that already starts with its own title, so
+satisfying conformance alone does NOT get you this behaviour.
+
+**The remaining assembly rules are deliberately not restated here.** The exact section
+titles, string formats, separator and trailing newline, and the seed placeholder
+substitution live in the implementation (`buildBootContext`) and are pinned byte-for-byte
+by `conformance/test_lifecycle.py`. That suite is what a rewrite must satisfy for those;
+this list is only the shape. A prose copy of formatting details is a second source that
+goes stale in silence — this very section did exactly that when 判準 was added to the
+fold and the list here was not updated.
 
 An outsource worker's boot context is this same document **with the persona removed** —
 it has no role, so it carries no 角色定義, no 判準 and no 學習筆記 — in this same order,
