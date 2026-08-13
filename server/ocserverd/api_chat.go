@@ -129,6 +129,46 @@ const (
 	// one-sidedness is the right side to err on). Wording it as a fact would
 	// make this text false in exactly that case.
 	resumeChatCutHint = "Earlier messages MAY NOT have been carried here — this line was cut at a read or budget limit and nothing looked past the cut, so there may be whole messages missing (a different thing from `body_omitted_chars`, which marks a message that IS here with part of its text folded away). To check, and to read any that are there: call get_chat with `with` = the peer's id, plus BOTH `before_ts` and `before_id` copied from the OLDEST message of that peer's line in this payload. The two cursor fields must be sent TOGETHER — supplying only one is rejected with 422."
+	// resumeChatOverrunNote is the THIRD marker's text, and the only reason it
+	// exists is that the second paragraph of resumeChatPeerFloor was true and
+	// INVISIBLE: the floor outranks the budget, reserved messages are charged to
+	// the budget and then never evicted by it, so the block grows past the budget
+	// as soon as there are enough conversation lines — with no upper bound
+	// anywhere on this path, no time window, and no cap on the line count.
+	//
+	// 🔴 IT REPORTS SIZE, NOT LOSS, and that is the whole point of wording it
+	// away from the other two markers. `body_omitted_chars` is a COLLAPSE (this
+	// message is here, folded, certain). `chat_earlier_omitted` is a CUT (whole
+	// messages MAY be absent, only a fetch settles it). This one says the
+	// opposite of both: everything the packer kept is here, nothing was thrown
+	// away to make room, and the bill is simply larger than the budget. A reader
+	// that files it under either of the other two draws exactly the wrong
+	// conclusion — that something is missing.
+	//
+	// 🔴 NO BEHAVIOUR HANGS OFF THIS. Owner ruling on rc-b1fb7f1be05d
+	// (2026-08-13), option ①, verbatim: 「超出預算時在快照上標一行,不改任何行為。
+	// 踩到時我們會知道,那時再決定怎麼砍。」 He did NOT pick a time window, he did
+	// NOT pick a cap on conversation lines, and he did NOT pick "leave it alone".
+	// So: this string, the three numbers beside it, and nothing else. Anyone who
+	// later makes the packer act on the overrun is deciding the thing this marker
+	// was raised to let him decide with real numbers in hand.
+	//
+	// 🔴 IT IS SHORT ON PURPOSE, AND THE FIRST DRAFT WAS NOT — 860 runes of it,
+	// which is the mistake worth recording rather than quietly fixing. This
+	// marker fires ONLY when the block is already over budget, so a long note
+	// spends its words at the single most expensive moment there is: on the
+	// measured payload below it was 14% of the overrun it was reporting. A notice
+	// that says "this is too big" by making it bigger is demonstrating the
+	// problem instead of reporting it. 「標一行」 was also the literal ruling.
+	//
+	// What stays: SIZE-not-loss (the misreading that does damage), the three
+	// numbers, and a POINTER. What went: the mechanism ("each line reserves its
+	// newest few, billed but never evicted…") and a second explanation of the
+	// other two markers. Those are documentation, and documentation is not paid
+	// for on every wake — seeds/system_interaction.md §10.4 carries them, and it
+	// is a pointer rather than a summary precisely because a summary in here goes
+	// stale against that section with nothing to notice.
+	resumeChatOverrunNote = "SIZE notice, not a loss notice: this block cost `block_chars` against a `budget_chars` ceiling, `over_by_chars` over. Nothing was dropped or abbreviated for it. Why: seeds/system_interaction.md §10.4."
 	// resumeDutyPreview caps a roster row's duty and resumeTaskTitlePreview
 	// caps a contractor's task title (T-1b09). Both exist because this
 	// payload is read by EVERY member on EVERY wake, so an unbounded field
@@ -192,7 +232,7 @@ const (
 	// whole), and the thing it did not mention — whole messages left out — is
 	// the one a reader most needs told. The note now names both, in the two
 	// different words the payload uses for them.
-	resumeNote = "This is a BOUNDED wake snapshot. Chat: the recent messages involving you, packed newest-first under a CHARACTER budget (not a fixed message count) with a few newest messages reserved for EVERY conversation line, oldest→newest. Each message carries `from_name`/`to_name` beside the ids and `ts_display` beside the epoch `ts`, and folds in its reply card as `card` when it has one; read every `ts_display` against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked differently: `body_omitted_chars` > 0 means THIS message is here with that many characters COLLAPSED away (another agent's line; the owner's line and your own hand-off notes to yourself are carried in full) — re-read it with get_chat; `chat_earlier_omitted` means whole messages MAY be missing from this payload entirely — it is raised whenever a line was cut at a read or budget limit, and nothing looked past the cut, so it can be raised when there is in fact nothing older — and it tells you how to check and fetch them. Also: your open tasks as LIGHT rows — no plan detail; `roster` = everyone in the studio with their status, machine and their duty (capped, `…` marks a cut); `machines` = the machine list plus which one you are on). Peek `overview` first (sizes/counts), then pull only what you need: get_task per task (hand a big detail_chars pull to a sub-agent), list_reply_cards (use `limit`) for your cards, list_chat / list_tasks for more."
+	resumeNote = "This is a BOUNDED wake snapshot. Chat: the recent messages involving you, packed newest-first under a CHARACTER budget (not a fixed message count) with a few newest messages reserved for EVERY conversation line, oldest→newest. Each message carries `from_name`/`to_name` beside the ids and `ts_display` beside the epoch `ts`, and folds in its reply card as `card` when it has one; read every `ts_display` against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked differently: `body_omitted_chars` > 0 means THIS message is here with that many characters COLLAPSED away (another agent's line; the owner's line and your own hand-off notes to yourself are carried in full) — re-read it with get_chat; `chat_earlier_omitted` means whole messages MAY be missing from this payload entirely — it is raised whenever a line was cut at a read or budget limit, and nothing looked past the cut, so it can be raised when there is in fact nothing older — and it tells you how to check and fetch them. A THIRD marker, `chat_budget_overrun`, is NOT one of those two: it reports SIZE — this block cost more than its budget, and nothing is absent or folded because of that. Also: your open tasks as LIGHT rows — no plan detail; `roster` = everyone in the studio with their status, machine and their duty (capped, `…` marks a cut); `machines` = the machine list plus which one you are on). Peek `overview` first (sizes/counts), then pull only what you need: get_task per task (hand a big detail_chars pull to a sub-agent), list_reply_cards (use `limit`) for your cards, list_chat / list_tasks for more."
 	// peekNote guides the two-step boot (T-7974): peek_resume_summary_size is
 	// size-only (no content); the agent reads estimated_total_chars and, when
 	// it is small, calls resume_summary directly in its own context, else has
@@ -937,6 +977,7 @@ func (s *apiServer) HandleResumeSummaryApiResumeSummaryGet(w http.ResponseWriter
 		GeneratedAt:        snap.GeneratedAt,
 		Chat:               snap.Chat,
 		ChatEarlierOmitted: snap.ChatCut,
+		ChatBudgetOverrun:  snap.ChatOverBudget,
 		Tasks:              snap.Tasks,
 		Roster:             snap.Roster,
 		Machines:           &snap.Machines,
@@ -955,10 +996,15 @@ type resumeWakeSnapshot struct {
 	GeneratedAt string
 	Chat        []chatMessageDTO
 	ChatCut     resumeChatCutDTO
-	Tasks       []resumeTaskDTO
-	Roster      []resumeRosterMemberDTO
-	Machines    resumeMachinesDTO
-	Overview    resumeOverviewDTO
+	// ChatOverBudget is the SIZE marker (resumeChatBudgetOverrunDTO). It sits
+	// beside ChatCut and is emphatically not a second copy of it: ChatCut says
+	// material may be absent, this says the material that IS here cost more
+	// than the budget allowed.
+	ChatOverBudget resumeChatBudgetOverrunDTO
+	Tasks          []resumeTaskDTO
+	Roster         []resumeRosterMemberDTO
+	Machines       resumeMachinesDTO
+	Overview       resumeOverviewDTO
 }
 
 // resumeSnapshotParts assembles the caller's wake snapshot: the recent chat
@@ -1035,6 +1081,11 @@ func (s *apiServer) resumeSnapshotParts(actor string) (resumeWakeSnapshot, error
 	}
 	chat, cut, chatChars := resumeChatBlock(actor, msgs, names, cardsByID)
 	snap.Chat, snap.ChatCut = chat, cut
+	// The overrun is DERIVED from what the packer already spent — it is not a
+	// second pass and it does not touch `chat`. resumeChatBlock above is
+	// unchanged: the whole point of the ruling is that the packing is identical
+	// and only the reporting is new.
+	snap.ChatOverBudget = resumeChatBudgetOverrun(chatChars)
 
 	tasks, tasksOpenTotal, err := s.resumeTasksFor(actor)
 	if err != nil {
@@ -1052,7 +1103,14 @@ func (s *apiServer) resumeSnapshotParts(actor string) (resumeWakeSnapshot, error
 		// the snapshot header (generated_at) and the cut hint, which are part
 		// of what a caller must read even though they sit outside the array.
 		// It is NOT "the sum of the bodies" any more; peekNote says so too.
-		ChatChars:           chatChars + utf8.RuneCountInString(snap.GeneratedAt) + utf8.RuneCountInString(cut.Hint),
+		// The overrun marker's own text and numbers are added for the same
+		// reason the cut hint is: they are runes the caller must read, they
+		// ride this payload, and a peek that leaves them out understates what
+		// pulling the snapshot costs. They contribute 0 whenever the marker is
+		// down, which is the ordinary case.
+		ChatChars: chatChars + utf8.RuneCountInString(snap.GeneratedAt) +
+			utf8.RuneCountInString(cut.Hint) +
+			resumeChatOverrunChars(snap.ChatOverBudget),
 		TasksReturned:       len(tasks),
 		TasksOpenTotal:      tasksOpenTotal,
 		TasksDetailChars:    detailChars,
@@ -1278,6 +1336,43 @@ func resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string
 		cut.Hint = resumeChatCutHint
 	}
 	return chat, cut, used
+}
+
+// resumeChatBudgetOverrun turns the block cost resumeChatBlock just reported
+// into the payload's THIRD marker. Pure, and deliberately separate from the
+// packer: this function can be deleted, inverted or blanked without the packing
+// changing by one message, which is exactly the property the owner asked for
+// (rc-b1fb7f1be05d ①: 標一行,不改任何行為).
+//
+// 🔴 STRICTLY GREATER. A block that lands exactly ON the budget spent every
+// rune it was allowed and overspent none, so it is not an overrun; raising the
+// marker there would put a line on a snapshot that has nothing to report, and
+// an orphan marker is how a marker stops being read.
+func resumeChatBudgetOverrun(blockChars int) resumeChatBudgetOverrunDTO {
+	if blockChars <= resumeChatBudgetChars {
+		return resumeChatBudgetOverrunDTO{}
+	}
+	return resumeChatBudgetOverrunDTO{
+		Over:        true,
+		BudgetChars: resumeChatBudgetChars,
+		BlockChars:  blockChars,
+		OverByChars: blockChars - resumeChatBudgetChars,
+		Note:        resumeChatOverrunNote,
+	}
+}
+
+// resumeChatOverrunChars is what the marker itself costs a reader: its note
+// plus the three numbers printed beside it. Zero when the marker is down —
+// counted the same way resumeChatMessageChars counts an option index, so the
+// peek and the snapshot agree on it as they do on everything else.
+func resumeChatOverrunChars(o resumeChatBudgetOverrunDTO) int {
+	if !o.Over {
+		return 0
+	}
+	return utf8.RuneCountInString(o.Note) +
+		len(strconv.Itoa(o.BudgetChars)) +
+		len(strconv.Itoa(o.BlockChars)) +
+		len(strconv.Itoa(o.OverByChars))
 }
 
 // resumeFloorParts assembles the studio floor a waking agent lands on: the
@@ -1682,6 +1777,7 @@ func (s *apiServer) HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryG
 		GeneratedAt:        snap.GeneratedAt,
 		Chat:               snap.Chat,
 		ChatEarlierOmitted: snap.ChatCut,
+		ChatBudgetOverrun:  snap.ChatOverBudget,
 		Tasks:              snap.Tasks,
 		Roster:             snap.Roster,
 		// machines.you_are_on resolves for the TARGET member, not for the

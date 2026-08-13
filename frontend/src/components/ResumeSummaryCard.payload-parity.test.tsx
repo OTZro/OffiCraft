@@ -33,6 +33,7 @@ import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
 import { en } from "../i18n/locales/en";
 import { toMemberResumeSummary } from "../api/mappers";
+import type { MemberResumeSummaryView } from "../api/adapter";
 import type { WireResumeSummary } from "../api/wire";
 import { ResumeSummaryCard } from "./ResumeSummaryCard";
 
@@ -108,6 +109,18 @@ const WIRE: WireResumeSummary = {
     omitted: true,
     hint: "call get_chat with with='m-planner' and BOTH before_ts=1786000001 and before_id='cm-1'",
   },
+  // OVER BUDGET: everything the packer kept is here — nothing folded away
+  // because of this and nothing left out because of this. The block simply
+  // cost more than the budget it was packed under. Third marker, third
+  // statement; the figures are deliberately non-substring of every other
+  // number in this fixture so a mis-slotted one stays visible.
+  chat_budget_overrun: {
+    over: true,
+    budget_chars: 12000,
+    block_chars: 19461,
+    over_by_chars: 7461,
+    note: "SIZE NOTICE, not a loss notice: this block came out larger than its budget. Nothing was discarded to make room.",
+  },
   tasks: [
     {
       id: "t-1",
@@ -166,9 +179,15 @@ const WIRE: WireResumeSummary = {
 
 const MAPPED = () => toMemberResumeSummary(WIRE);
 
+/** One test needs the SAME snapshot with a single marker down, to prove the
+ * cockpit draws nothing rather than an empty line. Everything else reads the
+ * fixture unchanged, so the override is a null-by-default slot rather than a
+ * second mock. */
+const OVERRIDE: { value: MemberResumeSummaryView | null } = { value: null };
+
 vi.mock("../api", () => ({
   api: {
-    getMemberResumeSummary: () => Promise.resolve(MAPPED()),
+    getMemberResumeSummary: () => Promise.resolve(OVERRIDE.value ?? MAPPED()),
   },
 }));
 
@@ -191,6 +210,9 @@ const txt = (el: Element | null) => (el?.textContent ?? "").replace(/\s+/g, " ")
 
 beforeEach(() => {
   document.body.innerHTML = "";
+  // Every test but one reads the fixture unchanged; reset here so an override
+  // cannot leak into the next test and quietly weaken it.
+  OVERRIDE.value = null;
 });
 
 describe("ResumeSummaryCard renders the SAME snapshot the agent receives", () => {
@@ -296,6 +318,67 @@ describe("ResumeSummaryCard renders the SAME snapshot the agent receives", () =>
     expect(cut).toContain(R.chatCutLabel);
   });
 
+  it("🔴 draws the OVER-BUDGET marker — the third one, and the one that is not an absence", async () => {
+    // The cockpit's whole claim is that it shows what the agent shows. The
+    // agent's copy carries this marker, so a cockpit that drew only the other
+    // two would be understating the payload by exactly the fact the owner asked
+    // to be able to see.
+    const u = await open();
+    const over = txt(u.getByTestId("mp-resume-chat-budget-overrun"));
+    const o = WIRE.chat_budget_overrun!;
+
+    expect(over).toContain(R.budgetOverLabel);
+    // All THREE figures. `over_by_chars` alone would pass on a marker that
+    // cannot say what the ceiling was or what the block actually cost.
+    const figures = txt(u.getByTestId("mp-resume-chat-budget-overrun-figures"));
+    expect(figures).toContain(String(o.block_chars));
+    expect(figures).toContain(String(o.budget_chars));
+    expect(figures).toContain(String(o.over_by_chars));
+    // The server's own sentence, VERBATIM — same rule as the cut hint: the
+    // cockpit does not get to restate what the endpoint decided.
+    expect(txt(u.getByTestId("mp-resume-chat-budget-overrun-note"))).toBe(o.note);
+  });
+
+  it("🔴 draws NO over-budget line when the snapshot is INSIDE its budget", async () => {
+    // The orphan-marker direction. A marker that is always on screen — reading
+    // "0 over" on every ordinary snapshot — is a marker nobody reads by the
+    // time it matters, and the ordinary case is every snapshot the studio takes
+    // until the line count climbs. MUTANT: drop the `.over &&` condition in the
+    // component (or make `resumeChatBudgetOverrun` return Over unconditionally
+    // on the server) → this goes red while every assertion above stays green.
+    const inBudget = {
+      ...MAPPED(),
+      chatBudgetOverrun: {
+        over: false,
+        budgetChars: 0,
+        blockChars: 0,
+        overByChars: 0,
+        note: "",
+      },
+    };
+    // Swap what the mocked api hands back for this one render only. Set BEFORE
+    // the render so there is no window in which the component could read the
+    // fixture instead.
+    OVERRIDE.value = inBudget;
+    const u = render(
+      <I18nProvider>
+        <ResumeSummaryCard agentId="mira" />
+      </I18nProvider>,
+    );
+    fireEvent.click(u.getByTestId("mp-resume-toggle"));
+    await waitFor(() =>
+      expect(u.queryByTestId("mp-resume-overview")).not.toBeNull(),
+    );
+    expect(u.queryByTestId("mp-resume-chat-budget-overrun")).toBeNull();
+    // Anti-vacuity: the section itself really did render, so "the marker is
+    // absent" is a statement about the marker and not about a blank screen.
+    expect(u.queryByTestId("mp-resume-chat-section")).not.toBeNull();
+    // …and the OTHER two markers are untouched by the overrun being down —
+    // they are independent, which is the whole reason the three are separate.
+    expect(u.queryByTestId("mp-resume-chat-earlier-omitted")).not.toBeNull();
+    expect(u.queryByTestId("mp-resume-chat-body-omitted")).not.toBeNull();
+  });
+
   // 🔴 A FOLDED message and an ABSENT one must not be described with shared
   // vocabulary. They are different failures. One says "this is here, shortened,
   // the rest is on the server"; the other says "these may not be here at all,
@@ -321,19 +404,36 @@ describe("ResumeSummaryCard renders the SAME snapshot the agent receives", () =>
     return out;
   };
 
+  // 🔴 THREE markers now, so the comparison is PAIRWISE over all three and not
+  // the original single pair. The newcomer is `budgetOverLabel` — OVER BUDGET —
+  // and it is the easiest of the three to misfile, because a marker attached to
+  // a chat block reads as "something is wrong with the chat" when what it
+  // actually says is the opposite: everything is here, it just cost more than
+  // the budget. Sharing a word with either of the other two would make a reader
+  // hunt for material that was never missing.
   it.each([
     ["zh", zh.mp.resumeSummary],
     ["en", en.mp.resumeSummary],
   ])(
-    "🔴 [%s] words a FOLDED message and an ABSENT one with no vocabulary in common",
+    "🔴 [%s] words FOLDED, ABSENT and OVER-BUDGET with no vocabulary in common between any two",
     (_locale, r) => {
-      const folded = units(r.bodyOmittedLead + " " + r.bodyOmittedTail);
-      const cut = units(r.chatCutLabel);
-      // A guard that compares empty sets proves nothing — the two vocabularies
-      // have to exist before "they do not overlap" means anything.
-      expect(folded.size).toBeGreaterThan(2);
-      expect(cut.size).toBeGreaterThan(2);
-      expect([...folded].filter((u) => cut.has(u))).toEqual([]);
+      const sets: [string, Set<string>][] = [
+        ["folded", units(r.bodyOmittedLead + " " + r.bodyOmittedTail)],
+        ["absent", units(r.chatCutLabel)],
+        ["overBudget", units(r.budgetOverLabel)],
+      ];
+      // A guard that compares empty sets proves nothing — every vocabulary has
+      // to exist before "they do not overlap" means anything.
+      for (const [name, set] of sets) {
+        expect(`${name}:${set.size > 2}`).toBe(`${name}:true`);
+      }
+      for (const [aName, a] of sets) {
+        for (const [bName, b] of sets) {
+          if (aName >= bName) continue;
+          expect(`${aName}∩${bName}=${[...a].filter((u) => b.has(u)).join(",")}`)
+            .toBe(`${aName}∩${bName}=`);
+        }
+      }
     },
   );
 
@@ -451,6 +551,7 @@ describe("the roll-call: a field the seam gains cannot stay undrawn", () => {
     expect(Object.keys(MAPPED()).sort()).toEqual(
       [
         "chat",
+        "chatBudgetOverrun",
         "chatEarlierOmitted",
         "generatedAt",
         "identity",
@@ -518,5 +619,15 @@ describe("the roll-call: a field the seam gains cannot stay undrawn", () => {
     );
     expect(m.generatedAt).toBe(WIRE.generated_at);
     expect(m.chatEarlierOmitted.hint).toBe(WIRE.chat_earlier_omitted!.hint);
+    // Same statement for the third marker, at the same layer. The seam is
+    // where roster and machines were lost; a new block is exactly the shape of
+    // thing that gets lost there next.
+    expect(m.chatBudgetOverrun).toEqual({
+      over: WIRE.chat_budget_overrun!.over,
+      budgetChars: WIRE.chat_budget_overrun!.budget_chars,
+      blockChars: WIRE.chat_budget_overrun!.block_chars,
+      overByChars: WIRE.chat_budget_overrun!.over_by_chars,
+      note: WIRE.chat_budget_overrun!.note,
+    });
   });
 });

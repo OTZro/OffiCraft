@@ -867,20 +867,70 @@ type resumeChatCutDTO struct {
 	Hint    string `json:"hint"`
 }
 
+// resumeChatBudgetOverrunDTO is the wake snapshot's THIRD marker, and the one
+// that is NOT about absent material.
+//
+// 🔴 THREE MARKERS, THREE DIFFERENT STATEMENTS. Keep them apart when reading
+// this struct, because two of them are about what you do NOT have and this one
+// is not:
+//   - chatMessageDTO.BodyOmittedChars — COLLAPSE. That message IS here, folded,
+//     by an exact count. Certain.
+//   - resumeChatCutDTO — CUT. Whole messages MAY be absent from the payload.
+//     A maybe; only a get_chat settles it.
+//   - this one — OVERRUN. Everything the packer kept is here and nothing was
+//     discarded or shortened to make room; the block is simply BIGGER than the
+//     budget it was packed under. A cost statement, not an absence.
+//
+// Why the overrun can happen at all is resumeChatPeerFloor's second paragraph:
+// each conversation line's reserved newest messages are charged to the budget
+// and then never evicted by it, so the block exceeds the budget once enough
+// lines exist, and by an amount nothing on this path bounds.
+//
+// 🔴 NOTHING BRANCHES ON THIS FIELD. It was added under owner ruling
+// rc-b1fb7f1be05d option ① (2026-08-13): make the overrun VISIBLE and change no
+// behaviour. The packer is byte-for-byte the packer it was; this struct only
+// reports on it.
+type resumeChatBudgetOverrunDTO struct {
+	// Over is false — and every other field zero — for a snapshot inside its
+	// budget, which is the ordinary case. A reader must gate on this rather
+	// than on OverByChars: the two agree, but only one of them says WHY.
+	Over bool `json:"over"`
+	// BudgetChars is the ceiling that was intended (resumeChatBudgetChars).
+	BudgetChars int `json:"budget_chars"`
+	// BlockChars is what the packer actually spent — the same number
+	// resumeChatBlock returns as the block's cost, BEFORE the snapshot header
+	// and the marker texts that overview.chat_chars adds on top. It is
+	// deliberately NOT chat_chars: chat_chars answers "what does pulling this
+	// cost me", this one answers "what did the packer bill against the budget",
+	// and only the second is comparable to BudgetChars.
+	BlockChars int `json:"block_chars"`
+	// OverByChars is BlockChars - BudgetChars, and it is carried rather than
+	// left for the reader to subtract because it is the number the decision
+	// will be made on.
+	OverByChars int `json:"over_by_chars"`
+	// Note states, in the payload itself, that this is a size report and not a
+	// loss report — the misreading that would do real damage. "" when Over is
+	// false, so a snapshot inside its budget carries no orphan line.
+	Note string `json:"note"`
+}
+
 type resumeSummaryDTO struct {
 	Identity *string `json:"identity"`
 	// GeneratedAt is when this snapshot was assembled, with date, time AND zone
 	// offset. It is the ONLY anchor in the payload for turning a ts_display into
 	// 「多久以前」 — a waking agent must not assume its own wall clock agrees with
 	// the server's.
-	GeneratedAt        string                  `json:"generated_at"`
-	Chat               []chatMessageDTO        `json:"chat"`
-	ChatEarlierOmitted resumeChatCutDTO        `json:"chat_earlier_omitted"`
-	Tasks              []resumeTaskDTO         `json:"tasks"`
-	Roster             []resumeRosterMemberDTO `json:"roster"`
-	Machines           *resumeMachinesDTO      `json:"machines"`
-	Overview           resumeOverviewDTO       `json:"overview"`
-	Note               string                  `json:"note"`
+	GeneratedAt        string           `json:"generated_at"`
+	Chat               []chatMessageDTO `json:"chat"`
+	ChatEarlierOmitted resumeChatCutDTO `json:"chat_earlier_omitted"`
+	// ChatBudgetOverrun is the SIZE marker, not a third flavour of absence —
+	// see resumeChatBudgetOverrunDTO for why the three are worded apart.
+	ChatBudgetOverrun resumeChatBudgetOverrunDTO `json:"chat_budget_overrun"`
+	Tasks             []resumeTaskDTO            `json:"tasks"`
+	Roster            []resumeRosterMemberDTO    `json:"roster"`
+	Machines          *resumeMachinesDTO         `json:"machines"`
+	Overview          resumeOverviewDTO          `json:"overview"`
+	Note              string                     `json:"note"`
 }
 
 // resumeRosterMemberDTO is one entry of the studio floor a waking agent lands

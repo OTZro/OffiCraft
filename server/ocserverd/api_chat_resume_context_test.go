@@ -497,7 +497,8 @@ func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T)
 			peek.Overview, full.Overview)
 	}
 
-	want := len([]rune(full.GeneratedAt)) + len([]rune(full.ChatEarlierOmitted.Hint))
+	want := len([]rune(full.GeneratedAt)) + len([]rune(full.ChatEarlierOmitted.Hint)) +
+		resumeOverrunWireChars(full.ChatBudgetOverrun)
 	sawCard, sawCollapse := false, false
 	for _, m := range full.Chat {
 		want += len([]rune(m.Body)) +
@@ -533,5 +534,241 @@ func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T)
 		full.Overview.RosterChars + full.Overview.MachinesChars
 	if peek.EstimatedTotalChars != wantEstimate {
 		t.Fatalf("estimated_total_chars: want %d, got %d", wantEstimate, peek.EstimatedTotalChars)
+	}
+}
+
+// ── ⑨ the OVER-BUDGET marker: size, not absence ─────────────────────────────
+
+// resumeOverrunWireChars re-derives what the overrun marker costs a reader, from
+// the WIRE VALUES only. It is deliberately NOT resumeChatOverrunChars — an
+// assertion written against the production accountant is true by construction
+// and survives every mutant of it (the same rule the estimate test above
+// already runs on).
+func resumeOverrunWireChars(o resumeChatBudgetOverrunDTO) int {
+	if !o.Over {
+		return 0
+	}
+	return len([]rune(o.Note)) +
+		len(strconv.Itoa(o.BudgetChars)) +
+		len(strconv.Itoa(o.BlockChars)) +
+		len(strconv.Itoa(o.OverByChars))
+}
+
+// overBudgetSnapshot seeds enough SEPARATE conversation lines that the reserved
+// floors alone outgrow the budget, and returns the resulting snapshot.
+//
+// 🔴 The fixture is the fault itself, not a stand-in for it. Every line's
+// messages are SHORT — well inside every per-message bound — so nothing here is
+// collapsed for length and nothing is dropped for room; the block is over budget
+// PURELY because reserved messages are charged to the budget and then never
+// evicted by it. That is the mechanism the marker exists to make visible, so a
+// fixture that overran for any other reason would be testing the wrong thing.
+func overBudgetSnapshot(t *testing.T, lines int) (*apiServer, resumeSummaryDTO) {
+	t.Helper()
+	api := newTasksTestServer(t)
+	// The subject's own line is not one of the `lines` — it is not seeded at all.
+	// Exactly at the collapse threshold, so NOTHING here is folded: this
+	// overrun must be attributable to the floor and to nothing else.
+	body := strings.Repeat("字", resumeChatOtherPreview)
+	ts := 1.0
+	for i := 0; i < lines; i++ {
+		peer := "m-line" + strconv.Itoa(i)
+		if err := api.dal.PutMember(Member{
+			ID: peer, Name: "線" + strconv.Itoa(i), Kind: "assistant",
+			RosterStatus: RosterStatusActive,
+		}); err != nil {
+			t.Fatalf("seed member %s: %v", peer, err)
+		}
+		for j := 0; j < resumeChatPeerFloor; j++ {
+			ts++
+			putChat(t, api, "c-"+peer+"-"+strconv.Itoa(j), peer, "m-exec", body, ts, nil)
+		}
+	}
+	if err := api.dal.PutMember(Member{
+		ID: "m-exec", Name: "阿執", Kind: "assistant", RosterStatus: RosterStatusActive,
+	}); err != nil {
+		t.Fatalf("seed subject: %v", err)
+	}
+	return api, resumeSnapshot(t, api, "m-exec")
+}
+
+// TestResumeChat_OverBudgetIsMarkedAndNothingIsDropped is the discriminating
+// test for the marker the owner ruled onto this payload (rc-b1fb7f1be05d,
+// 2026-08-13, option ①: 「超出預算時在快照上標一行,不改任何行為。」).
+//
+// It asserts BOTH directions, because only the pair has any discrimination:
+//   - over budget  → the marker is up, with figures that agree with each other
+//     and with the block, AND every seeded message is still carried (the ruling
+//     was "change no behaviour", so a marker that arrived alongside a silent
+//     eviction would be the wrong change wearing the right label).
+//   - inside budget → the marker is DOWN and every field is at its zero value.
+//     An orphan line on the ordinary snapshot is the failure mode of a marker.
+//
+// MUTANT A: make resumeChatBudgetOverrun return Over unconditionally (drop the
+// `if blockChars <= resumeChatBudgetChars` guard) → the inside-budget half goes
+// red; the over-budget half stays green.
+// MUTANT B: make it always return the zero value → the over-budget half goes
+// red; the inside-budget half stays green.
+// Neither mutant can be hidden by the other half, which is why both are here.
+func TestResumeChat_OverBudgetIsMarkedAndNothingIsDropped(t *testing.T) {
+	// ── inside budget: no marker, and no orphan fields ──────────────────────
+	_, small := overBudgetSnapshot(t, 1)
+	if small.Overview.ChatChars > resumeChatBudgetChars {
+		t.Fatalf("fixture bug: the small snapshot must be INSIDE the budget, "+
+			"chat_chars=%d budget=%d", small.Overview.ChatChars, resumeChatBudgetChars)
+	}
+	if small.ChatBudgetOverrun.Over {
+		t.Fatalf("a snapshot inside its budget must not raise the overrun marker: %+v",
+			small.ChatBudgetOverrun)
+	}
+	if small.ChatBudgetOverrun != (resumeChatBudgetOverrunDTO{}) {
+		t.Fatalf("a marker that is down carries NO figures and NO text — an "+
+			"orphan line is how a marker stops being read: %+v", small.ChatBudgetOverrun)
+	}
+
+	// ── over budget: marker up, arithmetic sound, nothing dropped ───────────
+	//
+	// The line count is derived, not guessed: each line reserves
+	// resumeChatPeerFloor short messages, so this is comfortably past the
+	// budget rather than one message either side of it.
+	const lines = 40
+	_, big := overBudgetSnapshot(t, lines)
+	o := big.ChatBudgetOverrun
+	if !o.Over {
+		t.Fatalf("%d conversation lines each reserving %d messages overruns the "+
+			"budget, so the marker must be up: chat_chars=%d %+v",
+			lines, resumeChatPeerFloor, big.Overview.ChatChars, o)
+	}
+	if o.BudgetChars != resumeChatBudgetChars {
+		t.Fatalf("the marker must report the ceiling it was measured against: "+
+			"want %d, got %d", resumeChatBudgetChars, o.BudgetChars)
+	}
+	if o.BlockChars <= o.BudgetChars {
+		t.Fatalf("an overrun means the block cost MORE than the budget, got "+
+			"block=%d budget=%d", o.BlockChars, o.BudgetChars)
+	}
+	if o.OverByChars != o.BlockChars-o.BudgetChars {
+		t.Fatalf("over_by_chars must be block - budget: %d - %d = %d, got %d",
+			o.BlockChars, o.BudgetChars, o.BlockChars-o.BudgetChars, o.OverByChars)
+	}
+	// 🔴 THE BEHAVIOUR-UNCHANGED HALF. The reserved messages of every line are
+	// still all here — the marker reports the overrun, it does not resolve it.
+	if want := lines * resumeChatPeerFloor; len(big.Chat) != want {
+		t.Fatalf("the ruling was to MARK the overrun and change no behaviour, so "+
+			"every reserved message must still be carried: want %d, got %d",
+			want, len(big.Chat))
+	}
+	// 🔴 SIZE, NOT ABSENCE. The marker must not be readable as a third kind of
+	// missing material: no body here was folded, and the payload says so.
+	for _, m := range big.Chat {
+		if m.BodyOmittedChars != 0 {
+			t.Fatalf("fixture bug: this overrun must come from the FLOOR, not from "+
+				"collapsed bodies — %s reports %d folded",
+				m.ID, m.BodyOmittedChars)
+		}
+	}
+	// The note has to say, in the payload, what it is NOT — otherwise a reader
+	// files it beside the other two markers and hunts for material that was
+	// never missing. The POINTER is on this list for the same reason: the long
+	// explanation was deleted from the note (see resumeChatOverrunNote), so the
+	// note has to say where it went or the deletion is just a loss.
+	for _, want := range []string{"SIZE", "over_by_chars", "budget", "seeds/system_interaction.md"} {
+		if !strings.Contains(o.Note, want) {
+			t.Fatalf("the overrun note must mention %q so it can be read correctly: %q",
+				want, o.Note)
+		}
+	}
+	// 🔴 AND IT HAS TO BE SHORT. This marker fires only when the block is
+	// ALREADY over its budget, so every rune it spends is spent at the most
+	// expensive moment there is — the first draft of this note was 860 runes,
+	// 14% of the overrun it was reporting, which is a notice demonstrating the
+	// problem it describes. The owner's ruling was 「標一行」. The bound is a
+	// number rather than a vibe so that re-growing it is a red test and not a
+	// judgement call in review.
+	if n := len([]rune(o.Note)); n > 200 {
+		t.Fatalf("the overrun note must stay ≤200 runes — it is paid exactly "+
+			"when the payload is already too big — got %d: %q", n, o.Note)
+	}
+}
+
+// TestResumeChat_OverBudgetMarkerIsBilledToTheSizeEstimate pins the half a
+// reader of peek_resume_summary_size depends on: the marker's own text and
+// figures are runes that ride the payload, so estimated_total_chars must
+// include them. A marker that is invisible to the peek makes the peek
+// understate the payload by exactly the amount the marker was raised to report.
+//
+// MUTANT: drop the resumeChatOverrunChars term from overview.ChatChars in
+// resumeSnapshotParts → the first comparison goes red. The zero-contribution
+// half below is what stops "add a constant" from passing.
+func TestResumeChat_OverBudgetMarkerIsBilledToTheSizeEstimate(t *testing.T) {
+	api, big := overBudgetSnapshot(t, 40)
+	if !big.ChatBudgetOverrun.Over {
+		t.Fatalf("fixture bug: this snapshot must be over budget, %+v",
+			big.ChatBudgetOverrun)
+	}
+	marker := resumeOverrunWireChars(big.ChatBudgetOverrun)
+	if marker <= 0 {
+		t.Fatalf("a raised marker costs a reader real runes, got %d", marker)
+	}
+	// chat_chars = the packer's block + the header + the cut hint + the marker.
+	// Stated as a subtraction so the assertion names the term under test.
+	rest := big.Overview.ChatChars - marker
+	if rest != big.ChatBudgetOverrun.BlockChars+
+		len([]rune(big.GeneratedAt))+
+		len([]rune(big.ChatEarlierOmitted.Hint)) {
+		t.Fatalf("chat_chars must carry the overrun marker's own cost: "+
+			"chat_chars=%d marker=%d block=%d header=%d hint=%d",
+			big.Overview.ChatChars, marker, big.ChatBudgetOverrun.BlockChars,
+			len([]rune(big.GeneratedAt)), len([]rune(big.ChatEarlierOmitted.Hint)))
+	}
+	// The peek is the reader this number exists for, and it must land on the
+	// SAME total — including the marker — because both go through the one
+	// assembly. (The peek/full overview equality itself is pinned in ⑧; this is
+	// the headline number on an OVER-BUDGET payload, which ⑧'s fixture is not.)
+	peek := peekResumeSize(t, api, "m-exec")
+	if peek.Overview != big.Overview {
+		t.Fatalf("peek overview must equal the snapshot's on an over-budget "+
+			"payload too:\n peek=%+v\n full=%+v", peek.Overview, big.Overview)
+	}
+	wantEstimate := big.Overview.ChatChars + big.Overview.TasksDetailChars +
+		big.Overview.RosterChars + big.Overview.MachinesChars
+	if peek.EstimatedTotalChars != wantEstimate {
+		t.Fatalf("estimated_total_chars: want %d, got %d",
+			wantEstimate, peek.EstimatedTotalChars)
+	}
+
+	// And a snapshot INSIDE its budget is billed nothing for a marker it does
+	// not carry — the term must be conditional, not a constant.
+	_, small := overBudgetSnapshot(t, 1)
+	if got := resumeOverrunWireChars(small.ChatBudgetOverrun); got != 0 {
+		t.Fatalf("a marker that is down costs nothing, got %d", got)
+	}
+}
+
+// TestResumeChatBudgetOverrun_IsStrictlyGreater pins the boundary on its own,
+// at the one pure function that decides it. A block that lands EXACTLY on the
+// budget spent every rune it was allowed and overspent none, so it is not an
+// overrun — marking it there would put a line on a snapshot with nothing to
+// report, and the ordinary snapshot is the one that must stay quiet.
+//
+// MUTANT: relax `blockChars <= resumeChatBudgetChars` to `<` → the first half
+// goes red. Widen it to `<= budget+1` → the second half goes red.
+func TestResumeChatBudgetOverrun_IsStrictlyGreater(t *testing.T) {
+	for _, at := range []int{0, 1, resumeChatBudgetChars - 1, resumeChatBudgetChars} {
+		if got := resumeChatBudgetOverrun(at); got != (resumeChatBudgetOverrunDTO{}) {
+			t.Fatalf("%d runes is within a %d budget, so no marker: %+v",
+				at, resumeChatBudgetChars, got)
+		}
+	}
+	one := resumeChatBudgetOverrun(resumeChatBudgetChars + 1)
+	if !one.Over || one.OverByChars != 1 || one.BlockChars != resumeChatBudgetChars+1 {
+		t.Fatalf("one rune past the budget IS an overrun, by exactly one: %+v", one)
+	}
+	if one.Note == "" {
+		t.Fatalf("a raised marker must carry its own explanation: %+v", one)
+	}
+	if resumeChatOverrunChars(one) != resumeOverrunWireChars(one) {
+		t.Fatalf("the production accountant and the wire re-derivation must "+
+			"agree: %d vs %d", resumeChatOverrunChars(one), resumeOverrunWireChars(one))
 	}
 }

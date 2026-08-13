@@ -976,6 +976,15 @@ export const en: Dict = {
       // was cut at its read window, and it never looks past the cut — so it is
       // raised even when nothing older exists (see resumeChatCutHint).
       chatCutLabel: "Earlier exchanges may be absent — fetch to confirm:",
+      // 🔴 The THIRD marker, and it is NOT a third flavour of the two above.
+      // Those two say material is missing; this one says everything is here and
+      // the block simply cost more than its budget. Each line's reserved
+      // messages are billed to the budget yet never evicted by it, so enough
+      // lines push the total past it — with no cap on the line count. Worded as
+      // "nothing lost" because a reader who files it with the other two draws
+      // the exact opposite conclusion. Marker only; the packing is unchanged
+      // (owner ruling rc-b1fb7f1be05d, option ①).
+      budgetOverLabel: "Block size overrun, nothing lost —",
       cardOptionsLabel: "Options offered",
       cardAiPickTag: "AI pick",
       cardPickedTag: "Picked",
