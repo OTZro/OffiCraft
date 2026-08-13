@@ -663,9 +663,19 @@ const (
 	// no other endpoint that widens a by-id read past the caller's own
 	// conversations, and a refusal that hints at one teaches a bypass that
 	// either does not exist or should not be used.
-	chatByIDsNotYoursMsg = "message %s is between other members — get_chat returns only " +
-		"messages you sent or received, and holding an id is not permission to read " +
-		"someone else's conversation"
+	//
+	// 🔴 IT SPEAKS FOR THIS PATH, NOT FOR THE WHOLE TOOL. It used to open by
+	// naming the endpoint as the thing that is bounded to the caller's own
+	// messages, and that claim is FALSE: the ordinary listing filters on `with`
+	// — a PARTICIPANT — not on the caller, so a plain read of a peer's line
+	// answers with a conversation the caller was never in, and that is the
+	// designed behaviour, not a leak (`caller_only` is what narrows a listing to
+	// the caller). Only the by-ids read is bounded to the caller's own ends. A
+	// refusal that overstates its own reach teaches every agent that reads it a
+	// rule the server does not enforce, which is worse than saying nothing.
+	chatByIDsNotYoursMsg = "message %s is between other members — a by-ids read returns only " +
+		"messages you sent or received (one such id refuses the whole call), and holding " +
+		"an id is not permission to read someone else's conversation"
 )
 
 // requestedChatIDs normalises the repeatable ?ids= parameter: blanks dropped,
