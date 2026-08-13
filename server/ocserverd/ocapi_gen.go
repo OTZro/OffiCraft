@@ -1644,6 +1644,51 @@ type RestartSelfDTO struct {
 	Reason *string `json:"reason,omitempty"`
 }
 
+// ResumeChatBudgetOverrunDTO The SIZE marker of the wake snapshot's chat block — and the ONE of the three
+// markers on this payload that does not report absent material.
+//
+// OVERRUN, NOT COLLAPSE AND NOT CUT. “ChatMessageDTO.body_omitted_chars“ is a
+// COLLAPSE: that message is here, folded, by an exact count. “ResumeChatCutDTO“
+// is a CUT: whole messages MAY be absent and only a “get_chat“ settles it. This
+// one says neither — nothing was discarded or shortened TO MAKE ROOM, and the
+// block simply came out BIGGER than the budget it was packed under. It is a cost
+// statement.
+//
+// IT IS SILENT ABOUT COMPLETENESS, AND THE TWO MARKERS USUALLY FIRE TOGETHER. It
+// does not say material is present and it does not say material is absent — it
+// says this block cost more than its budget. In the TYPICAL overrun
+// “chat_earlier_omitted“ is raised as well, because the reserve pass charges the
+// budget unconditionally while the fill pass only spends what is left: once the
+// floors alone exceed the budget, every non-reserved message is refused. So
+// 'something is missing' is normally the CORRECT reading of the payload — it is
+// just not what THIS field reports, and it was not caused by making room.
+//
+// WHY IT CAN HAPPEN AT ALL: each conversation line reserves its newest few
+// messages before the budget is spent on anything else, and those reserved
+// messages are charged to the budget yet never evicted by it. Once enough separate
+// lines exist the total climbs past the budget, and nothing on this path bounds
+// how far — there is no time window and no cap on the number of lines.
+//
+// NOTHING BRANCHES ON THIS. It reports; it does not change how the chat block is
+// packed (owner ruling rc-b1fb7f1be05d, 2026-08-13, option ①: mark the overrun on
+// the snapshot and change no behaviour).
+type ResumeChatBudgetOverrunDTO struct {
+	// BlockChars What the packer actually spent, in runes — the chat block's own cost, BEFORE the snapshot header and the marker texts that ``ResumeOverviewDTO.chat_chars`` adds on top. Deliberately NOT ``chat_chars``: that one answers "what does pulling this payload cost me", this one answers "what did the packer bill against the budget", and only the second is comparable to ``budget_chars``. ``0`` when ``over`` is false.
+	BlockChars *int `json:"block_chars,omitempty"`
+
+	// BudgetChars The ceiling the chat block was packed under, in runes. ``0`` when ``over`` is false.
+	BudgetChars *int `json:"budget_chars,omitempty"`
+
+	// Note Says in the payload itself that this is a SIZE report and not a loss report — that nothing was discarded or shortened on account of it. Deliberately SHORT (a marker that only fires when the payload is already too big must not spend words at that moment) and it POINTS rather than explains: the mechanism behind the overrun lives in ``seeds/system_interaction.md`` §10.4. ``""`` when ``over`` is false, so a snapshot inside its budget carries no orphan line.
+	Note *string `json:"note,omitempty"`
+
+	// Over ``true`` when the chat block came out LARGER than its budget. Strictly greater: a block that lands exactly on the budget overspent nothing and does not raise this. ``false`` — the ordinary case — leaves every other field on this object at its zero value.
+	Over *bool `json:"over,omitempty"`
+
+	// OverByChars ``block_chars`` minus ``budget_chars`` — how far over the block went, in runes. Carried rather than left for the reader to subtract because it is the number the decision gets made on. ``0`` when ``over`` is false.
+	OverByChars *int `json:"over_by_chars,omitempty"`
+}
+
 // ResumeChatCutDTO The CUT POINT of the wake snapshot's chat: whether messages exist that this
 // payload does NOT carry, and how to go and get them.
 //
@@ -1724,6 +1769,12 @@ type ResumeRosterMemberDTO struct {
 //   - “chat_earlier_omitted“: the CUT POINT — whether messages exist that this
 //     payload does not carry at all, and how to fetch them. Distinct from
 //     “body_omitted_chars“, which is a shortened message that IS here.
+//   - “chat_budget_overrun“: the SIZE marker, and NOT a third flavour of absence.
+//     Raised when the chat block came out LARGER than the budget it was packed
+//     under; nothing was discarded or shortened on account of it. The overrun is
+//     structural — every line's reserved messages are billed to the budget and
+//     never evicted by it — and unbounded in the number of conversation lines.
+//     See “ResumeChatBudgetOverrunDTO“.
 //   - “generated_at“: when the snapshot was taken, with date, time and zone
 //     offset — the anchor for reading every “ts_display“ as an elapsed time.
 //   - “tasks“: the NON-TERMINAL tasks the caller EXECUTES (SPEC §6.2 — a handover
@@ -1752,6 +1803,36 @@ type ResumeRosterMemberDTO struct {
 // DETERMINISTIC (same server state → same output; no LLM) and read-only.
 type ResumeSummaryDTO struct {
 	Chat *[]ChatMessageDTO `json:"chat,omitempty"`
+
+	// ChatBudgetOverrun The SIZE marker of the wake snapshot's chat block — and the ONE of the three
+	// markers on this payload that does not report absent material.
+	//
+	// OVERRUN, NOT COLLAPSE AND NOT CUT. ``ChatMessageDTO.body_omitted_chars`` is a
+	// COLLAPSE: that message is here, folded, by an exact count. ``ResumeChatCutDTO``
+	// is a CUT: whole messages MAY be absent and only a ``get_chat`` settles it. This
+	// one says neither — nothing was discarded or shortened TO MAKE ROOM, and the
+	// block simply came out BIGGER than the budget it was packed under. It is a cost
+	// statement.
+	//
+	// IT IS SILENT ABOUT COMPLETENESS, AND THE TWO MARKERS USUALLY FIRE TOGETHER. It
+	// does not say material is present and it does not say material is absent — it
+	// says this block cost more than its budget. In the TYPICAL overrun
+	// ``chat_earlier_omitted`` is raised as well, because the reserve pass charges the
+	// budget unconditionally while the fill pass only spends what is left: once the
+	// floors alone exceed the budget, every non-reserved message is refused. So
+	// 'something is missing' is normally the CORRECT reading of the payload — it is
+	// just not what THIS field reports, and it was not caused by making room.
+	//
+	// WHY IT CAN HAPPEN AT ALL: each conversation line reserves its newest few
+	// messages before the budget is spent on anything else, and those reserved
+	// messages are charged to the budget yet never evicted by it. Once enough separate
+	// lines exist the total climbs past the budget, and nothing on this path bounds
+	// how far — there is no time window and no cap on the number of lines.
+	//
+	// NOTHING BRANCHES ON THIS. It reports; it does not change how the chat block is
+	// packed (owner ruling rc-b1fb7f1be05d, 2026-08-13, option ①: mark the overrun on
+	// the snapshot and change no behaviour).
+	ChatBudgetOverrun *ResumeChatBudgetOverrunDTO `json:"chat_budget_overrun,omitempty"`
 
 	// ChatEarlierOmitted The CUT POINT of the wake snapshot's chat: whether messages exist that this
 	// payload does NOT carry, and how to go and get them.
@@ -1782,14 +1863,18 @@ type ResumeSummaryDTO struct {
 // Identity-locked to the caller's VERIFIED JWT “sub“, it returns the SAME
 // “overview“ counts/sizes a full “resume_summary“ would report (assembled
 // through the shared server path, so they cannot drift) plus
-// “estimated_total_chars“ — a derived single number (the snapshot's chat body
-// chars, the plan text its task rows omit, and the roster + machine blocks it
-// carries) the boot threshold gates on — and
+// “estimated_total_chars“ — a derived single number the boot threshold gates on:
+// exactly “chat_chars“ + “tasks_detail_chars“ + “roster_chars“ +
+// “machines_chars“, all four reported in “overview“. That is the WHOLE chat
+// block as the snapshot renders it (“chat_chars“ is the rendered block's cost,
+// NOT the sum of the message bodies), plus the plan text its task rows omit and
+// the two studio-floor blocks it carries — and
 // a fixed guidance “note“. It carries NO chat bodies and NO task rows: peeking
 // it costs a few hundred bytes, so a waking agent can size “resume_summary“
 // BEFORE deciding whether to pull it into its own context or hand the pull to a
 // cheap sub-agent. DETERMINISTIC and read-only; a caller with no chat and no
-// tasks gets zeroes, never an error.
+// tasks gets an EMPTY snapshot's sizes, never an error — every COUNT is zero, and
+// the only non-zero size is the header that rides every payload.
 type ResumeSummarySizeDTO struct {
 	EstimatedTotalChars int     `json:"estimated_total_chars"`
 	Identity            *string `json:"identity,omitempty"`

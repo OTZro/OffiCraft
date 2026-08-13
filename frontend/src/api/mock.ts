@@ -2496,6 +2496,21 @@ export const mockApi: Api = {
       },
       generatedAt: mockTsDisplay(Math.floor(Date.now() / 1000)),
       chatEarlierOmitted,
+      // The SIZE marker. The offline cockpit's five-message window never gets
+      // anywhere near the real budget, so this is permanently DOWN here — and
+      // that is the honest answer, not a stub: an all-zero / false marker is
+      // exactly what the server sends for a snapshot inside its budget, so the
+      // mock draws the same nothing the real one does. It is spelled out
+      // rather than omitted because the view model requires it, and a mock
+      // that quietly lacks a field is how the offline cockpit starts
+      // disagreeing with the real one.
+      chatBudgetOverrun: {
+        over: false,
+        budgetChars: 0,
+        blockChars: 0,
+        overByChars: 0,
+        note: "",
+      },
       roster,
       machines,
       note:

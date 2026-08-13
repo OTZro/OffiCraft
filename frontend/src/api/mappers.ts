@@ -1509,6 +1509,16 @@ export function toMemberResumeSummary(
       omitted: w.chat_earlier_omitted?.omitted ?? false,
       hint: w.chat_earlier_omitted?.hint ?? "",
     },
+    // The SIZE marker. An absent block maps to all-zero / false — the same
+    // statement the server makes for a snapshot inside its budget — so the
+    // panel never has to distinguish "no marker" from "marker down".
+    chatBudgetOverrun: {
+      over: w.chat_budget_overrun?.over ?? false,
+      budgetChars: w.chat_budget_overrun?.budget_chars ?? 0,
+      blockChars: w.chat_budget_overrun?.block_chars ?? 0,
+      overByChars: w.chat_budget_overrun?.over_by_chars ?? 0,
+      note: w.chat_budget_overrun?.note ?? "",
+    },
     roster: (w.roster ?? []).map(toResumeRosterMember),
     machines: w.machines ? toResumeMachines(w.machines) : null,
   };

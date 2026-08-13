@@ -952,7 +952,14 @@ export const en: Dict = {
       error: "Failed to load the wake snapshot",
       retry: "Retry",
       chatCount: "Recent messages",
-      chatChars: "Message chars",
+      // Sizes the WHOLE chat block, not the bodies. Deliberately NOT itemised
+      // here: the server's resumeSnapshotParts is the only place that says what
+      // goes into it, and every prose copy that listed the ingredients listed
+      // an incomplete set (all of them dropped the same one, the cut hint — a
+      // fixed block of several hundred runes). "Message chars" was not wrong, but the owner reads these numbers
+      // to budget context and would take it for body length — i.e. under-read
+      // the real cost.
+      chatChars: "Chat block chars",
       tasksReturned: "Tasks returned",
       tasksOpenTotal: "Open tasks total",
       tasksDetailChars: "Task detail chars",
@@ -965,7 +972,38 @@ export const en: Dict = {
       generatedAtLabel: "This snapshot was taken at",
       bodyOmittedLead: "This message is folded —",
       bodyOmittedTail: "characters kept on the server (re-read it with get_chat)",
-      chatCutLabel: "Older messages were not carried into this payload:",
+      // 🔴 "may", not "were": the server raises this marker as soon as a line
+      // was cut at its read window, and it never looks past the cut — so it is
+      // raised even when nothing older exists (see resumeChatCutHint).
+      chatCutLabel: "Earlier exchanges may be absent — fetch to confirm:",
+      // 🔴 The THIRD marker, and it is NOT a third flavour of the two above.
+      // Those two say material is missing; this one says the block cost more
+      // than its own budget — it reports COST, not loss. Why it happens: each
+      // line's reserved messages are billed to the budget yet never evicted by
+      // it, so enough lines push the total past it, with no cap on the line
+      // count. Marker only; the packing is unchanged (owner ruling
+      // rc-b1fb7f1be05d, option ①).
+      //
+      // 🔴 The label describes THIS LINE and asserts NOTHING about the payload's
+      // completeness — in particular it must never be read as "so everything is
+      // here". The two are not alternatives: the packer takes a non-reserved
+      // message only `if used+cost <= budget`, while the reserve pass adds
+      // `used += cost` unconditionally, so once the floors alone push `used`
+      // past the budget every non-reserved message after them is refused and
+      // `chat_earlier_omitted` is necessarily raised. Over budget and
+      // genuinely-missing-material almost always occur TOGETHER; the two lines
+      // then sit side by side on one screen, and any label claiming
+      // completeness contradicts its neighbour on sight.
+      // The narrow statement is the one that holds: whatever is missing was not
+      // dropped TO MAKE ROOM. Every server-side copy already carries that
+      // qualifier, so the current wording stays inside the same fence and
+      // describes only what kind of line this is.
+      //
+      // ⚠️ HISTORY, NOT THE CURRENT CHOICE: the FIRST DRAFT said "nothing lost",
+      // which is false in the typical state above; it was replaced in T-3970.
+      // It is recorded so the next reader knows the road was taken and was
+      // wrong — do NOT read it as the wording to use.
+      budgetOverLabel: "Block size overrun — a cost notice, not a loss —",
       cardOptionsLabel: "Options offered",
       cardAiPickTag: "AI pick",
       cardPickedTag: "Picked",

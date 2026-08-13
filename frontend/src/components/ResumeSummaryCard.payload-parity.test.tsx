@@ -31,7 +31,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
+import { en } from "../i18n/locales/en";
 import { toMemberResumeSummary } from "../api/mappers";
+import type { MemberResumeSummaryView } from "../api/adapter";
 import type { WireResumeSummary } from "../api/wire";
 import { ResumeSummaryCard } from "./ResumeSummaryCard";
 
@@ -107,6 +109,20 @@ const WIRE: WireResumeSummary = {
     omitted: true,
     hint: "call get_chat with with='m-planner' and BOTH before_ts=1786000001 and before_id='cm-1'",
   },
+  // OVER BUDGET: the block cost more than the budget it was packed under.
+  // Nothing was folded or left out BECAUSE OF THAT — note the qualifier, and
+  // note that this fixture ALSO raises `chat_earlier_omitted` directly above:
+  // material genuinely is absent here, which is the ordinary pairing and the
+  // state every label on this screen has to stay true in. Third marker, third
+  // statement; the figures are deliberately non-substring of every other
+  // number in this fixture so a mis-slotted one stays visible.
+  chat_budget_overrun: {
+    over: true,
+    budget_chars: 12000,
+    block_chars: 19461,
+    over_by_chars: 7461,
+    note: "SIZE NOTICE, not a loss notice: this block came out larger than its budget. Nothing was discarded to make room.",
+  },
   tasks: [
     {
       id: "t-1",
@@ -165,9 +181,15 @@ const WIRE: WireResumeSummary = {
 
 const MAPPED = () => toMemberResumeSummary(WIRE);
 
+/** One test needs the SAME snapshot with a single marker down, to prove the
+ * cockpit draws nothing rather than an empty line. Everything else reads the
+ * fixture unchanged, so the override is a null-by-default slot rather than a
+ * second mock. */
+const OVERRIDE: { value: MemberResumeSummaryView | null } = { value: null };
+
 vi.mock("../api", () => ({
   api: {
-    getMemberResumeSummary: () => Promise.resolve(MAPPED()),
+    getMemberResumeSummary: () => Promise.resolve(OVERRIDE.value ?? MAPPED()),
   },
 }));
 
@@ -190,6 +212,9 @@ const txt = (el: Element | null) => (el?.textContent ?? "").replace(/\s+/g, " ")
 
 beforeEach(() => {
   document.body.innerHTML = "";
+  // Every test but one reads the fixture unchanged; reset here so an override
+  // cannot leak into the next test and quietly weaken it.
+  OVERRIDE.value = null;
 });
 
 describe("ResumeSummaryCard renders the SAME snapshot the agent receives", () => {
@@ -286,26 +311,217 @@ describe("ResumeSummaryCard renders the SAME snapshot the agent receives", () =>
     );
   });
 
-  it("🔴 words a FOLDED message and an ABSENT one with no vocabulary in common", async () => {
-    // The two are different failures. One says "this is here, shortened, the
-    // rest is on the server"; the other says "these are not here at all, go
-    // and fetch them". A reader who reads one as the other concludes it has
-    // seen a conversation it has not seen — so this asserts not just that
-    // both are shown, but that they do not share a word.
+  it("draws BOTH the folded marker and the absent marker", async () => {
     const u = await open();
     const folded = txt(u.getByTestId("mp-resume-chat-body-omitted"));
     const cut = txt(u.getByTestId("mp-resume-chat-earlier-omitted"));
 
     expect(folded).toContain(String(WIRE.chat![1].body_omitted_chars));
     expect(cut).toContain(R.chatCutLabel);
-
-    const words = (s: string) =>
-      new Set(s.split(/[\s、,,。()()::——]+/u).filter((w) => w.length > 1));
-    const shared = [...words(R.bodyOmittedLead + R.bodyOmittedTail)].filter(
-      (w) => words(R.chatCutLabel).has(w),
-    );
-    expect(shared).toEqual([]);
   });
+
+  it("🔴 draws the OVER-BUDGET marker — the third one, and the one that is not an absence", async () => {
+    // The cockpit's whole claim is that it shows what the agent shows. The
+    // agent's copy carries this marker, so a cockpit that drew only the other
+    // two would be understating the payload by exactly the fact the owner asked
+    // to be able to see.
+    const u = await open();
+    const over = txt(u.getByTestId("mp-resume-chat-budget-overrun"));
+    const o = WIRE.chat_budget_overrun!;
+
+    expect(over).toContain(R.budgetOverLabel);
+    // All THREE figures. `over_by_chars` alone would pass on a marker that
+    // cannot say what the ceiling was or what the block actually cost.
+    const figures = txt(u.getByTestId("mp-resume-chat-budget-overrun-figures"));
+    expect(figures).toContain(String(o.block_chars));
+    expect(figures).toContain(String(o.budget_chars));
+    expect(figures).toContain(String(o.over_by_chars));
+    // The server's own sentence, VERBATIM — same rule as the cut hint: the
+    // cockpit does not get to restate what the endpoint decided.
+    expect(txt(u.getByTestId("mp-resume-chat-budget-overrun-note"))).toBe(o.note);
+  });
+
+  it("🔴 draws NO over-budget line when the snapshot is INSIDE its budget", async () => {
+    // The orphan-marker direction. A marker that is always on screen — reading
+    // "0 over" on every ordinary snapshot — is a marker nobody reads by the
+    // time it matters, and the ordinary case is every snapshot the studio takes
+    // until the line count climbs. MUTANT: drop the `.over &&` condition in the
+    // component (or make `resumeChatBudgetOverrun` return Over unconditionally
+    // on the server) → this goes red while every assertion above stays green.
+    const inBudget = {
+      ...MAPPED(),
+      chatBudgetOverrun: {
+        over: false,
+        budgetChars: 0,
+        blockChars: 0,
+        overByChars: 0,
+        note: "",
+      },
+    };
+    // Swap what the mocked api hands back for this one render only. Set BEFORE
+    // the render so there is no window in which the component could read the
+    // fixture instead.
+    OVERRIDE.value = inBudget;
+    const u = render(
+      <I18nProvider>
+        <ResumeSummaryCard agentId="mira" />
+      </I18nProvider>,
+    );
+    fireEvent.click(u.getByTestId("mp-resume-toggle"));
+    await waitFor(() =>
+      expect(u.queryByTestId("mp-resume-overview")).not.toBeNull(),
+    );
+    expect(u.queryByTestId("mp-resume-chat-budget-overrun")).toBeNull();
+    // Anti-vacuity: the section itself really did render, so "the marker is
+    // absent" is a statement about the marker and not about a blank screen.
+    expect(u.queryByTestId("mp-resume-chat-section")).not.toBeNull();
+    // …and the OTHER two markers are untouched by the overrun being down —
+    // they are independent, which is the whole reason the three are separate.
+    expect(u.queryByTestId("mp-resume-chat-earlier-omitted")).not.toBeNull();
+    expect(u.queryByTestId("mp-resume-chat-body-omitted")).not.toBeNull();
+  });
+
+  // 🔴 A FOLDED message and an ABSENT one must not be described with shared
+  // vocabulary. They are different failures. One says "this is here, shortened,
+  // the rest is on the server"; the other says "these may not be here at all,
+  // go and fetch them". A reader who reads one as the other concludes it has
+  // seen a conversation it has not seen.
+  //
+  // 🔴 WHY THE COMPARISON UNIT IS NOT "split on spaces and punctuation".
+  // That was the previous shape of this guard and it was NEAR-VACUOUS: Chinese
+  // writes no word boundaries, so two zh strings come out as one token each and
+  // can only collide by being character-for-character identical. It was PROVED
+  // vacuous — an independent review re-worded `bodyOmittedLead` to share six
+  // characters and the whole of its meaning with the cut label, and this file
+  // stayed green. And `en`, which is the half a whitespace split would actually
+  // work on, was never compared at all.
+  //
+  // So: Han text is compared CHARACTER by character (the smallest unit zh
+  // actually has), Latin text WORD by word, case-folded, and BOTH shipped
+  // locales are checked. Overlap in either alphabet, in either locale, is red.
+  const units = (s: string) => {
+    const out = new Set<string>();
+    for (const w of s.toLowerCase().match(/[a-z0-9_]{2,}/g) ?? []) out.add(w);
+    for (const ch of s) if (/\p{Script=Han}/u.test(ch)) out.add(ch);
+    return out;
+  };
+
+  // 🔴 THREE markers now, so the comparison is PAIRWISE over all three and not
+  // the original single pair. The newcomer is `budgetOverLabel` — OVER BUDGET —
+  // and it is the easiest of the three to misfile, because a marker attached to
+  // a chat block reads as "something is wrong with the chat" when what it
+  // reports is only that the block cost more than its budget. ⚠️ NOT "so
+  // everything is here" — that is the very claim this round had to delete from
+  // the label, and it is false in the typical overrun (the two markers fire
+  // together; see the co-occurrence test above). Sharing a word with either of
+  // the other two would make a reader read a COST line as a LOSS line.
+  it.each([
+    ["zh", zh.mp.resumeSummary],
+    ["en", en.mp.resumeSummary],
+  ])(
+    "🔴 [%s] words FOLDED, ABSENT and OVER-BUDGET with no vocabulary in common between any two",
+    (_locale, r) => {
+      const sets: [string, Set<string>][] = [
+        ["folded", units(r.bodyOmittedLead + " " + r.bodyOmittedTail)],
+        ["absent", units(r.chatCutLabel)],
+        ["overBudget", units(r.budgetOverLabel)],
+      ];
+      // A guard that compares empty sets proves nothing — every vocabulary has
+      // to exist before "they do not overlap" means anything.
+      for (const [name, set] of sets) {
+        expect(`${name}:${set.size > 2}`).toBe(`${name}:true`);
+      }
+      for (const [aName, a] of sets) {
+        for (const [bName, b] of sets) {
+          if (aName >= bName) continue;
+          expect(`${aName}∩${bName}=${[...a].filter((u) => b.has(u)).join(",")}`)
+            .toBe(`${aName}∩${bName}=`);
+        }
+      }
+    },
+  );
+
+  // 🔴 THE TWO MARKERS CO-OCCUR — this is the state the wording has to survive,
+  // and the reason the previous label was false.
+  //
+  // The packer takes a NON-reserved message only `if used+cost <= budget`, while
+  // the reserve pass adds `used += cost` UNCONDITIONALLY. So the moment the
+  // per-line floors carry `used` past the budget, every non-reserved message
+  // after them is refused and `chat_earlier_omitted` is necessarily raised.
+  // "Over budget" and "material really is absent" are therefore near-ALWAYS
+  // simultaneous, not alternatives — and the two lines land next to each other
+  // on one screen, where a reader reads them as one paragraph.
+  //
+  // This fixture already had both markers up. What was missing was an assertion
+  // that they are on screen TOGETHER, which is what makes the wording rule below
+  // load-bearing rather than a style preference.
+  it("🔴 draws the ABSENT line and the OVER-BUDGET line at the same time", async () => {
+    const u = await open();
+    const cut = u.getByTestId("mp-resume-chat-earlier-omitted");
+    const over = u.getByTestId("mp-resume-chat-budget-overrun");
+    expect(cut).not.toBeNull();
+    expect(over).not.toBeNull();
+    // Both inside the chat section, so they really are read as one block.
+    const section = u.getByTestId("mp-resume-chat-section");
+    expect(section.contains(cut)).toBe(true);
+    expect(section.contains(over)).toBe(true);
+  });
+
+  // 🔴 The OVER-BUDGET label describes THIS LINE. It must not make a claim about
+  // the payload's completeness, because in the co-occurring state pinned above
+  // any such claim is FALSE: material genuinely is absent, it just was not
+  // dropped to make room. Every server-side copy carries that qualifier already
+  // (the note's "for it", the schema's "to make room", seeds §10.4's 「因此」);
+  // the cockpit labels are the only two that had shed it — on the one rendering
+  // the owner actually looks at.
+  //
+  // ⚠️ HOW MUCH THIS ACTUALLY GUARDS, stated plainly so nobody over-trusts it.
+  // "Is this sentence true?" is not mechanically checkable. What IS checkable is
+  // the structural difference between the two kinds of sentence, and that is all
+  // this asserts:
+  //   - POSITIVE: the label categorises itself (通知 / "notice") rather than
+  //     quantifying over the payload. The retired wording could not satisfy this.
+  //   - NEGATIVE: a named blacklist of the exact phrasings that WERE wrong. A
+  //     blacklist catches the regression that happened and nothing else; a new
+  //     false sentence in new words walks straight past it.
+  //
+  // ⚠️ AND IT GUARDS THE LABEL, NOT THE PROSE AROUND THE LABEL. This was not a
+  // hypothetical: the round that introduced this guard fixed both labels and
+  // left the COMMENT two lines above `budgetOverLabel` still arguing, in the
+  // present tense, that the retired wording was the deliberate choice — so a
+  // green suite sat directly beneath a comment instructing the next reader to
+  // undo the fix, and he would have felt he was following the file. Nothing
+  // here reads comments, and widening it to do so would be a new mechanism.
+  // The countermeasure is procedural and belongs in the reviewer's head: after
+  // changing a string, grep the tree for whatever ARGUED for the old one.
+  it.each([
+    ["zh", zh.mp.resumeSummary, "通知", ["無一遺失", "沒有遺失", "都在"]],
+    [
+      "en",
+      en.mp.resumeSummary,
+      "notice",
+      ["nothing lost", "nothing is missing", "nothing was lost", "all here"],
+    ],
+  ])(
+    "🔴 [%s] the OVER-BUDGET label describes ITSELF and claims nothing about what the payload contains",
+    (_locale, r, selfWord, forbidden) => {
+      const label = r.budgetOverLabel;
+      // Positive: it says what KIND of line this is, and the failure message
+      // shows the label rather than a bare `false`.
+      expect(
+        `${_locale}: ${label} — self-describing=${label
+          .toLowerCase()
+          .includes(selfWord.toLowerCase())}`,
+      ).toBe(`${_locale}: ${label} — self-describing=true`);
+      // Negative: none of the completeness claims this label used to make.
+      const hits = forbidden.filter((f) =>
+        label.toLowerCase().includes(f.toLowerCase()),
+      );
+      expect(`forbidden-in-${_locale}=${hits.join(",")}`).toBe(
+        `forbidden-in-${_locale}=`,
+      );
+    },
+  );
 
   it("shows the server's own recovery hint VERBATIM, not a cockpit paraphrase", async () => {
     // The hint names the exact cursor pair to send. A re-worded copy here
@@ -421,6 +637,7 @@ describe("the roll-call: a field the seam gains cannot stay undrawn", () => {
     expect(Object.keys(MAPPED()).sort()).toEqual(
       [
         "chat",
+        "chatBudgetOverrun",
         "chatEarlierOmitted",
         "generatedAt",
         "identity",
@@ -488,5 +705,15 @@ describe("the roll-call: a field the seam gains cannot stay undrawn", () => {
     );
     expect(m.generatedAt).toBe(WIRE.generated_at);
     expect(m.chatEarlierOmitted.hint).toBe(WIRE.chat_earlier_omitted!.hint);
+    // Same statement for the third marker, at the same layer. The seam is
+    // where roster and machines were lost; a new block is exactly the shape of
+    // thing that gets lost there next.
+    expect(m.chatBudgetOverrun).toEqual({
+      over: WIRE.chat_budget_overrun!.over,
+      budgetChars: WIRE.chat_budget_overrun!.budget_chars,
+      blockChars: WIRE.chat_budget_overrun!.block_chars,
+      overByChars: WIRE.chat_budget_overrun!.over_by_chars,
+      note: WIRE.chat_budget_overrun!.note,
+    });
   });
 });

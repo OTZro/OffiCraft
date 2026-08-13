@@ -2332,7 +2332,9 @@ func TestPeekResumeSummarySizeIsLightAndConsistent(t *testing.T) {
 	if peek.Overview.ChatChars != wantChatChars {
 		t.Fatalf("chat_chars: want %d, got %d", wantChatChars, peek.Overview.ChatChars)
 	}
-	// estimated_total_chars = chat bodies + the plan text the rows omit.
+	// estimated_total_chars = the whole chat block (chat_chars, whose exact
+	// composition is asserted just above from the code's own addends rather
+	// than restated in prose) + the plan text the rows omit.
 	wantEstimate := peek.Overview.ChatChars + peek.Overview.TasksDetailChars
 	if peek.EstimatedTotalChars != wantEstimate {
 		t.Fatalf("estimated_total_chars: want %d, got %d",
@@ -2362,14 +2364,15 @@ func TestPeekResumeSummarySizeIsLightAndConsistent(t *testing.T) {
 	}
 }
 
-// TestPeekResumeSummarySizeEmptyCallerIsZeroesNotError pins the degrade path:
+// TestPeekResumeSummarySizeEmptyCallerCountsAreZeroButHeaderIsNot pins the
+// degrade path:
 // a caller with no chat and no tasks peeks an EMPTY snapshot, never an error.
 //
 // "Empty" is not literally zero characters any more: the payload still carries
 // its own generated_at header, and the estimate would be lying if it pretended
 // otherwise. Every COUNT is still zero, and the only non-zero size is exactly
 // that header — asserted against the header's own length, not a magic number.
-func TestPeekResumeSummarySizeEmptyCallerIsZeroesNotError(t *testing.T) {
+func TestPeekResumeSummarySizeEmptyCallerCountsAreZeroButHeaderIsNot(t *testing.T) {
 	api := newTasksTestServer(t)
 	peek := peekResumeSize(t, api, "m-nobody")
 	headerChars := len([]rune(resumeSnapshot(t, api, "m-nobody").GeneratedAt))
