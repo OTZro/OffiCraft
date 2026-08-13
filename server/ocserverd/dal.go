@@ -511,6 +511,50 @@ func (d *DAL) listChatBefore(participant, caller string, beforeTS float64, befor
 	return out, nil
 }
 
+// ListChatByIDs returns the messages carrying the given ids, oldest→newest in
+// the stream's total (ts, id) order — the by-id re-read behind
+// `get_chat?ids=` (T-a828). A blank id list reads nothing.
+//
+// 🔴 IT DOES NOT FILTER BY CALLER, AND THAT IS THE POINT. The handler has to
+// tell "no such message" (404) apart from "that conversation is not yours"
+// (403), and a query that filtered here would collapse both into an empty row
+// set — leaving the handler to guess, which is how a permission refusal ends up
+// worded as "not found" and a caller goes hunting for a message that is right
+// there. The participation check lives at the seam that knows who is asking
+// (chatMessagesTheCallerWasIn).
+//
+// Ids are matched exactly and the result carries at most one row per id, so a
+// duplicated id cannot inflate the answer. Rows are returned for whichever ids
+// exist; the caller compares the returned set against what it asked for.
+func (d *DAL) ListChatByIDs(ids []string) ([]ChatMessage, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	rows, err := d.rdb.Query(`
+		SELECT id, sender, recipient, body, ts, meta FROM chat_message
+		WHERE id IN (`+strings.Join(placeholders, ", ")+`)
+		ORDER BY ts, id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ChatMessage
+	for rows.Next() {
+		m, err := scanChat(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // ListChatInvolving returns the most recent `limit` messages involving
 // `participant` (sender OR recipient), oldest→newest — the bounded
 // wake-snapshot read. A blank participant / non-positive limit reads nothing.

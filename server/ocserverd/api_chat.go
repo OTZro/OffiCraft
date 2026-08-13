@@ -9,6 +9,7 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -200,7 +201,7 @@ const (
 	// whole), and the thing it did not mention — whole messages left out — is
 	// the one a reader most needs told. The note now names both, in the two
 	// different words the payload uses for them.
-	resumeNote = "This is a BOUNDED wake snapshot. Chat: the recent messages involving you, packed newest-first under a CHARACTER budget (not a fixed message count) and stopping at the last message that still fits, oldest→newest. Each message carries `from_name`/`to_name` beside the ids and `ts_display` beside the epoch `ts`, and folds in its reply card as `card` when it has one; read every `ts_display` against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked differently: `body_omitted_chars` > 0 means THIS message is here with that many characters COLLAPSED away (another agent's line; the owner's line and your own hand-off notes to yourself are carried in full) — re-read it with get_chat; `chat_earlier_omitted` means whole messages MAY be missing from this payload entirely — it is raised whenever a line was cut at a read or budget limit, and nothing looked past the cut, so it can be raised when there is in fact nothing older — and it tells you how to check and fetch them. Also: your open tasks as LIGHT rows — no plan detail; `roster` = everyone in the studio with their status, machine and their duty (capped, `…` marks a cut); `machines` = the machine list plus which one you are on). Peek `overview` first (sizes/counts), then pull only what you need: get_task per task (hand a big detail_chars pull to a sub-agent), list_reply_cards (use `limit`) for your cards, list_chat / list_tasks for more."
+	resumeNote = "This is a BOUNDED wake snapshot. Chat: the recent messages involving you, packed newest-first under a CHARACTER budget (not a fixed message count) and stopping at the last message that still fits, oldest→newest. Each message carries `from_name`/`to_name` beside the ids and `ts_display` beside the epoch `ts`, and folds in its reply card as `card` when it has one; read every `ts_display` against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked differently: `body_omitted_chars` > 0 means THIS message is here with that many characters COLLAPSED away (another agent's line; the owner's line and your own hand-off notes to yourself are carried in full) — re-read it WHOLE by naming that message's `id` in get_chat's `ids`; `chat_earlier_omitted` means whole messages MAY be missing from this payload entirely — it is raised whenever a line was cut at a read or budget limit, and nothing looked past the cut, so it can be raised when there is in fact nothing older — and it tells you how to check and fetch them. Also: your open tasks as LIGHT rows — no plan detail; `roster` = everyone in the studio with their status, machine and their duty (capped, `…` marks a cut); `machines` = the machine list plus which one you are on). Peek `overview` first (sizes/counts), then pull only what you need: get_task per task (hand a big detail_chars pull to a sub-agent), list_reply_cards (use `limit`) for your cards, list_chat / list_tasks for more."
 	// peekNote guides the two-step boot (T-7974): peek_resume_summary_size is
 	// size-only (no content); the agent reads estimated_total_chars and, when
 	// it is small, calls resume_summary directly in its own context, else has
@@ -620,6 +621,148 @@ func (s *apiServer) servedChatMessageDTO(m ChatMessage) chatMessageDTO {
 	return dto
 }
 
+// ── by-id re-read (T-a828) ───────────────────────────────────────────────────
+//
+// The wake snapshot COLLAPSES other agents' long messages and marks each one
+// with `body_omitted_chars` > 0, whose whole meaning is "the text is still
+// here, go and re-read it with get_chat". Until this seam existed get_chat took
+// a PEER plus a paging CURSOR and nothing else — there was no way to name one
+// message — so that marker pointed at a door with no handle, and a fold was in
+// practice a silent drop. `?ids=` is the handle.
+const (
+	// chatByIDsMax is the hard ceiling on how many messages one call may name.
+	//
+	// It is a RESPONSE BOUND, not a taste: these messages come back with their
+	// bodies WHOLE (that is the entire point), and a body is capped at
+	// chatBodyMaxChars, so this constant times that cap is the worst case a
+	// single call can be made to emit — 20 × 4,000 = 80,000 runes.
+	//
+	// 🔴 It is deliberately NOT "enough to unfold a whole snapshot in one call".
+	// The snapshot's own chat block is capped at resumeChatBudgetChars and a
+	// folded message costs it very little, so a busy line can carry more folds
+	// than this; unfolding all of them at once would hand back a payload many
+	// times the budget the snapshot was shrunk to. The reader is meant to name
+	// the ones that matter and call again — the refusal below says so.
+	chatByIDsMax = 20
+	// chatByIDsTooManyMsg states the limit, because a refusal that does not say
+	// what the limit is leaves the caller to bisect for it.
+	chatByIDsTooManyMsg = "get_chat accepts at most %d ids per call (asked for %d) — " +
+		"messages come back with their bodies whole, so the count is what bounds " +
+		"the response; name the ones you actually need and call again for the rest"
+	// chatByIDsNotFoundMsg is the ALL-OR-NOTHING refusal for an id no message
+	// carries. Skipping the unknown one and returning the rest was the obvious
+	// alternative and it is wrong HERE specifically: a short array is exactly
+	// what a fold looks like, so the caller could not tell "that message is
+	// gone" from "I mistyped one id" from "the server dropped it" — and this
+	// seam exists to end that ambiguity, not to reproduce it one level up.
+	chatByIDsNotFoundMsg = "no message carries id %s — the whole call is refused rather " +
+		"than answered short, because a shortened answer is indistinguishable from the " +
+		"folded message you are trying to read back; drop that id and ask again"
+	// chatByIDsNotYoursMsg is the permission refusal. It states the rule and
+	// offers NO way around it, deliberately: there is no parameter, no flag and
+	// no other endpoint that widens a by-id read past the caller's own
+	// conversations, and a refusal that hints at one teaches a bypass that
+	// either does not exist or should not be used.
+	chatByIDsNotYoursMsg = "message %s is between other members — get_chat returns only " +
+		"messages you sent or received, and holding an id is not permission to read " +
+		"someone else's conversation"
+)
+
+// requestedChatIDs normalises the repeatable ?ids= parameter: blanks dropped,
+// duplicates collapsed, request order preserved. An empty result means the
+// parameter was not usefully sent, and the caller falls through to the ordinary
+// listing path — `?ids=` alone is the same request as no `?ids=` at all, the
+// same way `?statuses=` is on the task list.
+func requestedChatIDs(ids *[]string) []string {
+	if ids == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, raw := range *ids {
+		id := strings.TrimSpace(raw)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// chatMessageInvolvesCaller is the participation boundary, and it is one
+// expression on purpose: a caller may read a message back only when it is one
+// of the two ends of it.
+//
+// The comparison is against the VERIFIED JWT sub (§14 — identity comes from
+// auth, never from a parameter) and against the STORED sender/recipient, so
+// nothing in the request can move this line. It is written against
+// currentActor(r) rather than a hoisted local so that it is VISIBLE to
+// authz_surface_gate_test.go: this is authorisation living outside the route
+// table's Requires column, and that gate exists precisely so such a predicate
+// has to be enumerated with a reason rather than added quietly.
+func chatMessageInvolvesCaller(r *http.Request, m ChatMessage) bool {
+	return m.Sender == currentActor(r) || m.Recipient == currentActor(r)
+}
+
+// chatMessagesTheCallerWasIn returns the first named id the caller was not a
+// party to, so the refusal can name it.
+func chatMessagesTheCallerWasIn(r *http.Request, byID map[string]ChatMessage, ids []string) (foreign string, ok bool) {
+	for _, id := range ids {
+		if !chatMessageInvolvesCaller(r, byID[id]) {
+			return id, false
+		}
+	}
+	return "", true
+}
+
+// serveChatByIDs answers `?ids=` — the named messages IN FULL, oldest→newest.
+//
+// 🔴 NO WATERMARK ADVANCE. Re-reading a message the snapshot already showed you
+// (shortened) is not reading the conversation, and sliding a read receipt from
+// here would mark a whole thread read on the strength of one unfolded line —
+// the same reasoning that keeps a history page from advancing it.
+//
+// REFUSAL ORDER is cap → unknown id → not yours, and each refusal names the id
+// it is about. The unknown-before-foreign order means an id that exists but
+// belongs to two other members answers 403 while an id that exists nowhere
+// answers 404, so a caller CAN learn that some id exists. That is accepted with
+// eyes open: ids are server-minted `c-` + 12 random hex (48 bits), so they are
+// not enumerable, and the case this seam was built for is an agent holding an
+// id it was already shown. The alternative — one indistinguishable refusal —
+// costs every honest caller the ability to tell a typo from a boundary.
+func (s *apiServer) serveChatByIDs(w http.ResponseWriter, r *http.Request, ids []string) {
+	if len(ids) > chatByIDsMax {
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf(chatByIDsTooManyMsg, chatByIDsMax, len(ids)))
+		return
+	}
+	msgs, err := s.dal.ListChatByIDs(ids)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	byID := make(map[string]ChatMessage, len(msgs))
+	for _, m := range msgs {
+		byID[m.ID] = m
+	}
+	for _, id := range ids {
+		if _, found := byID[id]; !found {
+			writeError(w, http.StatusNotFound, fmt.Sprintf(chatByIDsNotFoundMsg, id))
+			return
+		}
+	}
+	if foreign, ok := chatMessagesTheCallerWasIn(r, byID, ids); !ok {
+		writeError(w, http.StatusForbidden, fmt.Sprintf(chatByIDsNotYoursMsg, foreign))
+		return
+	}
+	out := []chatMessageDTO{}
+	for _, m := range msgs {
+		out = append(out, s.servedChatMessageDTO(m))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // GET /api/chat — the stream oldest→newest, capped to the most recent limit
 // (default 30; negative = uncapped; 0 = empty). ?with= filters to a
 // participant, and listing a specific conversation ADVANCES the caller's read
@@ -642,7 +785,17 @@ func (s *apiServer) servedChatMessageDTO(m ChatMessage) chatMessageDTO {
 // browser: the payload was the entire chat history, growing without bound.
 // Omitting peek (or any value other than "true") is byte-for-byte the old
 // behaviour — the marking auto-receipt still fires on a plain ?with= list.
+//
+// ?ids= (T-a828) is answered FIRST and ON ITS OWN — see serveChatByIDs. It is
+// not a filter layered on the listing below: with/limit/before_*/peek are not
+// consulted at all, so nothing about the paths above changes for a caller that
+// does not send it. A request whose ids are all blank is not a by-id read and
+// falls through here unchanged.
 func (s *apiServer) HandleListChatApiChatGet(w http.ResponseWriter, r *http.Request, params HandleListChatApiChatGetParams) {
+	if ids := requestedChatIDs(params.Ids); len(ids) > 0 {
+		s.serveChatByIDs(w, r, ids)
+		return
+	}
 	with := strOrEmpty(params.With)
 	peek := trimmedOrEmpty(params.Peek) == "true"
 	callerOnly := params.CallerOnly != nil && *params.CallerOnly
