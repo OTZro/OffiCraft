@@ -23,6 +23,7 @@ import {
   ReplyCardAnsweredBody,
   ReplyCardExpiredBody,
   ReplyCardQuestionAttachments,
+  ReplyCardTaskRef,
   ReplyCardWaitingBody,
 } from "./ReplyCardBody";
 import { ChevronRightIcon } from "./icons";
@@ -266,27 +267,14 @@ export function ChatReplyCard({
         <ReplyCardQuestionAttachments card={card} />
       )}
 
-      {/* §3.6 請示 → 任務 (chat surface, same rule as RepliesPage): a
-       * TASK-derived ask shows the 精簡任務資訊 row — TYPE + 查看任務詳情
-       * (never the task number/識別鍵); a pure chat ask shows nothing. */}
+      {/* §3.6 請示 → 任務 (chat surface): the SAME row RepliesPage renders —
+       * one component, so TYPE, TITLE and 查看任務詳情 can never drift between
+       * the two surfaces. Only the route is ours. */}
       {card?.task && (
-        <div className="reply-card__task" data-testid="reply-task-ref">
-          <span className="reply-card__task-type">
-            <span className="reply-card__task-label">
-              {t.replies.taskBadge}
-            </span>
-            {card.task.typeKey || t.tasks.adhoc}
-          </span>
-          <button
-            type="button"
-            className="reply-card__task-jump"
-            data-testid="reply-task-jump"
-            onClick={() => setRoute({ page: "tasks", taskId: card.task!.id })}
-          >
-            {t.replies.viewTask}
-            <ChevronRightIcon size={12} />
-          </button>
-        </div>
+        <ReplyCardTaskRef
+          task={card.task}
+          onJump={() => setRoute({ page: "tasks", taskId: card.task!.id })}
+        />
       )}
 
       {loadError && (

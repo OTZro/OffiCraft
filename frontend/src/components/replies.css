@@ -548,7 +548,23 @@
   font-size: 11px;
   color: var(--color-text-muted);
 }
+/* The task's own title (T-ee17). It is the only free-length thing on this row,
+ * so it is the one that shrinks: `min-width: 0` lets the flex item go below its
+ * content width (without it the ellipsis never engages and the row pushes the
+ * jump button out), and the ellipsis says a title was cut rather than ending
+ * mid-word as if that were the whole name. The badge and the jump keep their
+ * intrinsic width — a cut type or a cut 查看任務詳情 helps nobody. */
+.reply-card__task-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
 .reply-card__task-jump {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 3px;

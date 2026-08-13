@@ -49,6 +49,7 @@ import {
   ReplyCardAnsweredBody,
   ReplyCardExpiredBody,
   ReplyCardQuestionAttachments,
+  ReplyCardTaskRef,
   ReplyCardWaitingBody,
 } from "./ReplyCardBody";
 import { formatDuration } from "../lib/duration";
@@ -220,29 +221,20 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
   }
 
   // §3.6 請示 → 任務: a TASK-derived ask (card.task non-null) shows the 精簡
-  // 任務資訊 row — the TYPE plus a 查看任務詳情 jump (adjudicated: never the
-  // task number / 識別鍵). The route carries the task id so the tasks page can
-  // locate the card (auto-expanding 已結束 / clearing hiding filters). A pure
-  // chat ask renders nothing here.
+  // 任務資訊 row — TYPE + the task's own TITLE + a 查看任務詳情 jump
+  // (adjudicated: still never the task number / 識別鍵). The row itself lives
+  // in ReplyCardBody, shared with the inline chat card; only the route is ours.
+  // The route carries the task id so the tasks page can locate the card
+  // (auto-expanding 已結束 / clearing hiding filters). A pure chat ask renders
+  // nothing here.
   function renderTaskRef(card: ReplyCard) {
     const task = card.task;
     if (!task) return null;
     return (
-      <div className="reply-card__task" data-testid="reply-task-ref">
-        <span className="reply-card__task-type">
-          <span className="reply-card__task-label">{t.replies.taskBadge}</span>
-          {task.typeKey || t.tasks.adhoc}
-        </span>
-        <button
-          type="button"
-          className="reply-card__task-jump"
-          data-testid="reply-task-jump"
-          onClick={() => setRoute({ page: "tasks", taskId: task.id })}
-        >
-          {t.replies.viewTask}
-          <ChevronRightIcon size={12} />
-        </button>
-      </div>
+      <ReplyCardTaskRef
+        task={task}
+        onJump={() => setRoute({ page: "tasks", taskId: task.id })}
+      />
     );
   }
 
