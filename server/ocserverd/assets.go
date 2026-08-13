@@ -359,11 +359,11 @@ func bootSequenceSeedName(runtime string) string {
 	return "boot_sequence.md"
 }
 
-// buildBootContext resolves the role + folds the three docs + assembles the
+// buildBootContext resolves the role + folds the role docs + assembles the
 // boot context (lifecycle.md §2.2 normative order: system-interaction seed,
-// user-custom block when non-blank, # Role, # Lessons, boot-sequence seed —
-// joined "\n\n" + one trailing "\n"). nil = unknown role (caller maps to 404 /
-// fail-closed).
+// user-custom block when non-blank, # Role, # Insight when non-blank, # Lessons,
+// boot-sequence seed — joined "\n\n" + one trailing "\n"). nil = unknown role
+// (caller maps to 404 / fail-closed).
 func (s *apiServer) buildBootContext(role string, member *Member, taskType string) (*bootContext, error) {
 	roleKey := resolveBootRoleKey(role, member)
 	roleDTO, err := s.foldRoleDefDTO(roleKey)
@@ -381,6 +381,10 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 		return nil, err
 	}
 	lessons, err := s.foldLessonsDTO(roleKey, taskType)
+	if err != nil {
+		return nil, err
+	}
+	insight, err := s.foldInsightDTO(roleKey)
 	if err != nil {
 		return nil, err
 	}
@@ -423,7 +427,8 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 	//
 	//	1. 系統互動 (shared seed)
 	//	2. 使用者自訂 (shared, skipped entirely when blank)
-	//	3. the persona — staff: 角色說明 → 長期筆記; outsource: NOTHING (no role)
+	//	3. the persona — staff: 角色說明 → 判準（when non-blank）→ 長期筆記;
+	//	   outsource: NOTHING (no role)
 	//	4. 啟動程序 (shared seed, recency-authoritative tail)
 	//
 	// Only slot 3 differs between the two, and that is the whole difference.
@@ -436,7 +441,22 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 			"# 使用者自訂（Owner Additions）\n\n"+strings.TrimSpace(userCtx.Text))
 	}
 	parts = append(parts,
-		"# Role: "+roleTitle+"\n\n"+strings.TrimSpace(roleDTO.DefinitionMD),
+		"# Role: "+roleTitle+"\n\n"+strings.TrimSpace(roleDTO.DefinitionMD))
+	// Insight (T-3809) — the persona's third block, between Duty (# Role) and
+	// Learning (# Lessons), which is the order the three documents are defined
+	// in: what she does → how she works → what she learned doing it.
+	//
+	// 🔴 The condition is the FOLDED TEXT being non-blank, exactly like the
+	// 使用者自訂 block above — deliberately NOT insight.IsDefault and NOT
+	// insight.HasSeed. Those two answer different questions (whether the text
+	// came from the factory seed rather than an overlay, and whether a seed FILE
+	// exists for this role at all), so either one used as the gate would emit
+	// the section for roles whose insight is genuinely empty — an orphan title
+	// with nothing under it — or suppress it for a role that has written one.
+	if insightBody := strings.TrimSpace(insight.Text); insightBody != "" {
+		parts = append(parts, "# Insight ("+roleKey+")\n\n"+insightBody)
+	}
+	parts = append(parts,
 		lessonsTitle+"\n\n"+lessonsBody,
 		strings.TrimSpace(bootSeed))
 	name := roleDTO.Name
