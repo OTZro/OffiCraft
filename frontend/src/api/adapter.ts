@@ -62,6 +62,62 @@ export interface ChatMessage {
    * `ReplyCard.task`); the mapper always sets it (null when the wire carries
    * ""). */
   replyCardStatus?: "waiting" | "answered" | "expired" | null;
+  /** The sender's DISPLAY name, resolved server-side from the roster (wire
+   * `from_name`). `from` stays the ADDRESS and never changes meaning — this
+   * rides ALONGSIDE it, never instead of it. `""` when the sender does not
+   * resolve to a roster row: an HONEST empty, and a reader that back-fills the
+   * id into it is fabricating a name. OPTIONAL so hand-built fixtures stay
+   * valid (same precedent as `replyCardStatus`); the mapper always sets it. */
+  fromName?: string;
+  /** The addressee's DISPLAY name (wire `to_name`), resolved the same way and
+   * carrying the same honest-empty rule as `fromName`. */
+  toName?: string;
+  /** `ts` rendered BY THE SERVER for a reader as `YYYY-MM-DD HH:MM:SS ±HH:MM`
+   * in the server's own zone (wire `ts_display`).
+   *
+   * 🔴 The cockpit renders THIS STRING and never formats `ts` itself. A second
+   * formatter here would be a second answer to "when was this" — and it would
+   * be the WRONG one: the studio has no configured timezone, so a browser-side
+   * format silently re-states the message in the viewer's zone while the agent
+   * reading the same snapshot sees the server's. Same payload, two different
+   * times. `""` outside the wake snapshot (`list_chat` does not render one). */
+  tsDisplay?: string;
+  /** COLLAPSE marker (wire `body_omitted_chars`): how many characters of THIS
+   * message's body the wake snapshot folded away; `0` = the body is here in
+   * full. The folded text is STILL ON THE SERVER — `get_chat` re-reads it.
+   *
+   * 🔴 This is NOT `MemberResumeSummaryView.chatEarlierOmitted`. That one
+   * reports whole messages that are ABSENT from the payload. One shortened
+   * message versus messages not carried at all — reading one as the other is
+   * how a reader concludes it has seen a conversation it has not seen, so the
+   * two must never share a word on screen. */
+  bodyOmittedChars?: number;
+  /** The reply card this message carries, FOLDED IN PLACE onto the message
+   * that opened it (wire `card`) — so the decision reads IN the chat stream
+   * rather than in a second, separately-joined card list. null ⇒ no card. */
+  card?: ChatInlineReplyCardView | null;
+}
+
+/** One reply card folded onto the chat message that opened it (view model of
+ * `ChatInlineReplyCardDTO`) — the DECISION and nothing else: the options as
+ * they were offered, which one was picked, the free text, and when. The card's
+ * summary/body/kind/attachments are deliberately NOT here (the message this
+ * rides on already carries the ask). */
+export interface ChatInlineReplyCardView {
+  /** The frozen quick-reply wording as offered (`options[0]` is the AI pick).
+   * Empty for a card opened without options. */
+  options: string[];
+  /** Index into `options` of the option that was picked; null when answered
+   * with free text only, or not answered yet. */
+  answerOptionIdx: number | null;
+  /** The free-text answer; "" when none was given. */
+  answerText: string;
+  /** Epoch seconds the card was answered; 0 while still waiting. */
+  answeredTs: number;
+  /** `answeredTs` rendered by the SERVER in the same full date + time + offset
+   * form as `ChatMessage.tsDisplay`, for the same reason. "" while unanswered.
+   * The cockpit prints it as given and never re-formats `answeredTs`. */
+  answeredAtDisplay: string;
 }
 
 /** ONE attachment on a chat message, in view-model form. `url` is the served
@@ -1046,6 +1102,78 @@ export interface ResumeOverviewView {
   tasksDetailChars: number;
   cardsWaiting: number;
   cardsAnsweredRecent: number;
+  /** Size of the roster block THIS snapshot carries (T-1b09). Reported
+   * separately from `tasksDetailChars` on purpose: that one counts text the
+   * snapshot does NOT carry. */
+  rosterChars: number;
+  /** Size of the machine block THIS snapshot carries (T-1b09). */
+  machinesChars: number;
+}
+
+/** The CUT POINT of the snapshot's chat (view model of `ResumeChatCutDTO`):
+ * whether whole messages exist that this payload does NOT carry, and how to go
+ * and get them.
+ *
+ * 🔴 TRUNCATION, not collapse. `ChatMessage.bodyOmittedChars` reports a message
+ * that IS here with part of its text folded away; this reports messages that
+ * are NOT here at all. The panel must word the two differently — see the
+ * `chatEarlierOmitted` / `bodyOmitted` i18n leaves. */
+export interface ResumeChatCutView {
+  /** true ⇒ at least one message involving the subject was left out. */
+  omitted: boolean;
+  /** How to retrieve what was cut, stated concretely by the SERVER. The panel
+   * shows it VERBATIM — re-writing it here would be the cockpit inventing a
+   * recovery procedure it cannot keep in step with the endpoint. "" when
+   * nothing was cut. */
+  hint: string;
+}
+
+/** One roster entry in the wake snapshot (view model of
+ * `ResumeRosterMemberDTO`) — who else is in the studio and how to reach them.
+ * `id` is what you address a message to; names are editable and roles repeat,
+ * so the panel shows BOTH and never treats the name as an address. */
+export interface ResumeRosterMemberView {
+  id: string;
+  name: string;
+  /** `member` | `outsource` — permanent members vs disposable contractors. */
+  kind: string;
+  /** The role's display name. The wire carries NO `role_key` on this row —
+   * only the name — so the panel shows what the server sends and does not
+   * synthesise a key. "" for contractors, which carry no role. */
+  roleName: string;
+  /** The role's own definition text (capped server-side). "" for contractors,
+   * which carry `currentTask` instead. */
+  duty: string;
+  /** The TITLE of the one task a contractor is bound to; "" for members. */
+  currentTask: string;
+  /** The bound task's status — contractors only. It is also what tells a
+   * `0/0` progress apart: non-empty ⇒ a bound task with no steps yet, "" ⇒ no
+   * bound task at all. */
+  taskStatus: string;
+  waitingReason: string;
+  progressDone: number;
+  progressTotal: number;
+  /** Which machine that member runs on (live binding); "" when unbound. */
+  machine: string;
+  /** The online/offline status the roster block reports. */
+  presence: string;
+}
+
+/** One machine in the wake snapshot's machine block (view model of
+ * `ResumeMachineDTO`). `machineId` is the STABLE id — address a machine by id,
+ * never by the name a host reports for itself. */
+export interface ResumeMachineView {
+  machineId: string;
+  displayName: string;
+  online: boolean;
+}
+
+/** The machine block of the wake snapshot (view model of `ResumeMachinesDTO`):
+ * the machine LIST plus which one the subject is standing on. `youAreOn` is the
+ * SERVER-RECORDED binding, "" when there is none yet. */
+export interface ResumeMachinesView {
+  list: ResumeMachineView[];
+  youAreOn: string;
 }
 
 /** One LIGHT open-task row inside a resume snapshot (view model of
@@ -1077,6 +1205,19 @@ export interface MemberResumeSummaryView {
   tasks: ResumeTaskView[];
   overview: ResumeOverviewView;
   note: string;
+  /** When the snapshot was assembled, `YYYY-MM-DD HH:MM:SS ±HH:MM` in the
+   * server's zone. It is the ONLY anchor that turns any `tsDisplay` in this
+   * payload into "how long ago", so the panel shows it at the TOP: a reader
+   * (agent or owner) has no reliable clock of its own to measure against. */
+  generatedAt: string;
+  /** The chat CUT POINT — whole messages this payload does not carry. */
+  chatEarlierOmitted: ResumeChatCutView;
+  /** Who else is in the studio (owner ruling rc-4e98c0481852: "All members and
+   * contractors and their online / offline status"). Empty ⇒ the snapshot
+   * carries no roster block. */
+  roster: ResumeRosterMemberView[];
+  /** The fleet the subject can reason about; null ⇒ no machine block. */
+  machines: ResumeMachinesView | null;
 }
 
 /** Partial edit of a webhook endpoint (status toggle, purpose, and/or a
