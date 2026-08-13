@@ -50,7 +50,7 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
     // 🔴 折疊,不是截斷。這一句只可以講「這則還在、只是折起來了」;
     // 「更早的訊息沒有被帶進來」是另一件事,而且刻意沒有 composer——
     // 共用一個組裝器正是兩者會開始共用詞彙的那條路。
-    ["zh", "resumeBodyOmitted", [1284], "折起1284"],
+    ["zh", "resumeBodyOmitted", [1284], "折起 1284"],
     ["zh", "chatOfflineTitle", ["Mira"], "Mira 目前離線"],
     ["zh", "chatOfflineQueueHint", ["Mira"], "你仍可在下方留言，Mira 上線後就會讀到。"],
     ["zh", "chatWakeQueueHint", ["Mira"], "Mira 目前離線中 — 訊息會排隊，或立即喚醒上線"],
