@@ -192,6 +192,17 @@ func TestCodexSeedPutsTheInventoryStepAfterTheBootTurn(t *testing.T) {
 			"a reader working the list straight through would wait for an SSE " +
 			"that cannot arrive yet.")
 	}
+	// 🔴 BIND THE NUMBER TO THE FACT. The preamble sentence checked below is a
+	// POSITIONAL claim — 「只做得完前三步」 is true only while the step that ENDS
+	// the boot turn really is item 3. Pinning the sentence as a literal string
+	// pins nothing about the list: swapping the contents of items 2 and 3 makes
+	// the boot turn end at item 2 and the preamble false, and every other
+	// assertion in this file stays green. So assert the position itself.
+	if !strings.Contains(text, "\n3. **全部就緒後，完成這個 boot turn") {
+		t.Fatal("codex seed: the step that ENDS the boot turn is not item 3. " +
+			"The preamble's 「開機這個 turn 只做得完前三步」 is a claim about WHERE " +
+			"that step sits, so moving it renumbers the preamble into a lie.")
+	}
 	// And the preamble must not claim all four fit in the boot turn.
 	pre := bootSeedPreamble(t, "boot_sequence_codex.md")
 	if !strings.Contains(pre, "開機這個 turn 只做得完前三步") {

@@ -235,8 +235,11 @@ def _seed(name: str) -> str:
     # The seed loader substitutes the `{OWNER_ID}` placeholder with the fixed
     # single-tenant owner id "owner" before the fold. This used to be logged
     # here as a spec gap; it is now BY DESIGN that §2.2 does not state it —
-    # that section carries the shape only and delegates every verbatim rule,
-    # this one included, to buildBootContext and to this suite.
+    # that section carries the shape plus ONE stated behaviour (the lessons-title
+    # idempotency rule, which §2.2 states itself and which
+    # `server/ocserverd/api_lessons_patch_test.go` pins, NOT this suite), and
+    # delegates every other verbatim rule — this one included — to
+    # buildBootContext and to this suite.
     return (SEEDS / name).read_text(encoding="utf-8").replace("{OWNER_ID}", "owner")
 
 
@@ -249,7 +252,9 @@ def _expected_context(client, owner_token, role_key: str, task_type: str, user_t
         f"/api/insight/{role_key}", headers=_auth(owner_token)
     ).json()
     # 🔴 THIS FUNCTION IS THE VERBATIM AUTHORITY. spec/lifecycle.md §2.2 gives
-    # the SHAPE only — which blocks, in what order — and explicitly delegates
+    # the SHAPE — which blocks, in what order — plus one stated behaviour that
+    # is NOT pinned here (lessons-title idempotency; its guard lives in
+    # `server/ocserverd/api_lessons_patch_test.go`), and explicitly delegates
     # the exact titles, string formats, separator and trailing newline here and
     # to buildBootContext. So do not "fix" this to match a prose description:
     # if this file and §2.2 ever disagree about the ORDER, that is a real bug in
