@@ -729,8 +729,10 @@ func fmtAgo(secs float64) string {
 // attachmentSummary renders a message's attachments as a terse badge appended
 // after the body: "📎2圖" (2 images), "📎1檔" (1 non-image file), or the mixed
 // "📎1圖 2檔". Images are counted by the server-computed is_image flag. Returns
-// "" when the message carries no attachments, so a zero-attachment line stays
-// byte-for-byte unchanged. Junk-safe: a non-array attachments field or non-map
+// "" when the message carries no attachments, so a zero-attachment line carries
+// no badge at all — not a badge that says zero. (This says nothing about the
+// rest of the line: it also carries the `#<message id>` tag, which is not this
+// function's business.) Junk-safe: a non-array attachments field or non-map
 // elements degrade to "" / are skipped, never a panic.
 func attachmentSummary(m map[string]any) string {
 	refs, ok := m["attachments"].([]any)
