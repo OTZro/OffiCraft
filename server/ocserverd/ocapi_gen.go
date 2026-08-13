@@ -3701,7 +3701,7 @@ type ServerInterface interface {
 	// Trigger a software upgrade to the latest GitHub release.
 	// (POST /api/update/upgrade)
 	HandleUpgradeApiUpdateUpgradePost(w http.ResponseWriter, r *http.Request)
-	// Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status. Settle whether something has shipped by git sha ancestry, never by the version string.
+	// Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status. Settle whether something is deployed by git sha ancestry, never by the version string.
 	// (GET /api/version)
 	HandleVersionApiVersionGet(w http.ResponseWriter, r *http.Request)
 	// Download the prebuilt ocwarden binary (octet-stream) for a machine.

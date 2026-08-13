@@ -3333,7 +3333,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status. Settle whether something has shipped by git sha ancestry, never by the version string.
+         * Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status. Settle whether something is deployed by git sha ancestry, never by the version string.
          * @description Report version, git sha/time, and the derived MCP catalog hash.
          *
          *     `update_available` / `latest_version` reflect the newest admissible GitHub
