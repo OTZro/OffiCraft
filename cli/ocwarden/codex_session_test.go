@@ -284,7 +284,7 @@ func TestActionableCodexListenerLineFiltersTransportDiagnostics(t *testing.T) {
 	for line, want := range map[string]bool{
 		"[ocagent] listen: connected — streaming http://127.0.0.1": false,
 		"[ocagent] listen: stream ended: EOF":                      false,
-		"[ocagent] chat from owner (id, 1s ago): hello":            true,
+		"[ocagent] chat from owner (#CM-9F2A11, 1s ago): hello":    true,
 		"[ocagent] task T-1 updated · by owner":                    true,
 	} {
 		if got := actionableCodexListenerLine(line); got != want {
