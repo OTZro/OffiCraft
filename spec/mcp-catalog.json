@@ -1,7 +1,7 @@
 {
   "tools": [
     {
-      "description": "The station's own build identity: which version and git sha it is RUNNING right now. Settle \"has my change shipped?\" against git_sha (an ancestry test), never the version string - a self-build honestly reports 0.0.0. Distinct from check_release, which asks GitHub whether a NEWER release exists.",
+      "description": "Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status. Settle whether something is deployed by git sha ancestry, never by the version string.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -375,7 +375,7 @@
       "name": "upgrade_station"
     },
     {
-      "description": "List all members, including outsource members by default. fields=light preserves kind for every row (presence-derived MemberDTO[]).",
+      "description": "List every member that has not been removed, including outsource members by default (presence-derived MemberDTO[]). fields=light returns an identity-only projection that preserves kind.",
       "inputSchema": {
         "properties": {
           "fields": {
@@ -388,7 +388,7 @@
       "name": "get_members"
     },
     {
-      "description": "Hire a member (server mints the id). runtime is claude/codex (absent = claude); model is provider-specific. Pure seam, no UI (\u00a79.1).",
+      "description": "Hire a member (server mints the id). runtime defaults to claude and only claude/codex are accepted; effort defaults to medium and is validated; a hire that names kind or role_key is admin-gated.",
       "inputSchema": {
         "properties": {
           "effort": {
@@ -484,7 +484,7 @@
       "name": "get_member"
     },
     {
-      "description": "Edit a member (name / runtime / model / effort). runtime is claude/codex; blank name / bad runtime / bad effort \u2192 422.",
+      "description": "Partially update a member's name / runtime / model / effort. Blank name, invalid runtime or invalid effort → 422, and changing a launch-intent field arms a graceful handover.",
       "inputSchema": {
         "properties": {
           "effort": {
@@ -1047,7 +1047,7 @@
       "name": "create_reply_card"
     },
     {
-      "description": "List reply cards — LIGHT rows: summary (title) + decision digest only, NO body/options full text (?status=waiting longest-first | answered last-24h; ?limit=N caps the rows). Full card via get_reply_card.",
+      "description": "List light reply-card rows (summary and decision digest, without the full body/options). status is waiting (the default, longest-waiting first), answered (the last 24 hours) or expired (the last 24 hours); a positive limit is applied after each pane is ordered. Read one card in full with get_reply_card.",
       "inputSchema": {
         "properties": {
           "limit": {
@@ -1848,7 +1848,7 @@
       "name": "get_lessons"
     },
     {
-      "description": "Whole-doc replace of a per-role lessons doc ({text}). text is REQUIRED; unknown keys are rejected. Replacing existing content with an empty doc needs allow_shrink=true.",
+      "description": "Replace the WHOLE per-role lessons document. text is REQUIRED and unknown keys are rejected; only that role's agent or an admin may write it; emptying or sharply shrinking it needs allow_shrink=true; and the result is still judged against the lessons cap.",
       "inputSchema": {
         "properties": {
           "allow_shrink": {
@@ -2409,7 +2409,7 @@
       "name": "update_task_title"
     },
     {
-      "description": "Mark a task duplicated, pointing at the original (executor/owner; terminal). T-74f8 交棒閘 (third door): ``duplicated`` is terminal, so this closes the task; it is never refused. A duplicate's ball is on the ORIGINAL by construction, so the server records that itself — a cross-executor task marked duplicate lands ``handoff='follow_up'`` with ``handoff_task_id`` = ``duplicate_of``. No task_dep edge is added (the original is not blocked by its duplicate).",
+      "description": "Mark a not-yet-terminal task duplicated, pointing at an existing final original (executor/owner). A blank original, an original that cannot be found, a self-reference, a chained duplicate and a target that is already pointed at are all refused. Closing across executors creates a handoff_follow_up, and no dependency is added.",
       "inputSchema": {
         "properties": {
           "duplicate_of": {
