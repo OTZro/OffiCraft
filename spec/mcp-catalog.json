@@ -1025,6 +1025,7 @@
           },
           "body": {
             "default": "",
+            "description": "The question's full text - the part that lets the owner decide without going and looking things up. It is stored as sent with NO validation, so OMITTING it is not an error: the card is created with an empty body and answers 200, and what reaches the owner is a summary line and some options with no reasoning attached. Nothing warns you; the card simply arrives thinner than you meant it to.",
             "title": "Body",
             "type": "string"
           },
@@ -1182,6 +1183,7 @@
           },
           "text": {
             "default": "",
+            "description": "Free-text answer. An answer must carry at least one of option_idx, text or an attachment (400 otherwise), but text and option_idx are stored INDEPENDENTLY and nothing cross-checks them. So pasting an option's wording in here instead of sending its option_idx succeeds with 200 and records option_idx as null - byte for byte what a deliberate free-text answer looks like. The reader cannot tell that a listed option was chosen. If you mean to pick one of the options, send its index.",
             "title": "Text",
             "type": "string"
           }
@@ -1270,6 +1272,7 @@
           },
           "text": {
             "default": "",
+            "description": "Free-text replacement answer, sharing the answer path with answer_reply_card and its pitfall: text and option_idx are stored independently, so putting an option's wording here rather than sending its option_idx answers 200 with option_idx null, indistinguishable from a deliberate free-text reply. Send the index when you mean to pick a listed option.",
             "title": "Text",
             "type": "string"
           }
@@ -2516,6 +2519,7 @@
               }
             ],
             "default": null,
+            "description": "Why this step is blocked on the outside world. It is read ONLY when the status being reported is waiting_external, where it is REQUIRED and a blank one is refused (422). Under EVERY OTHER status the field is not merely ignored - the reason is actively CLEARED, so a report that carries a perfectly good reason alongside, say, in_progress both discards what you sent and erases the reason already recorded, answering 200 either way. Leaving waiting_external is meant to clear it; the surprise is that any other report does too.",
             "title": "Waiting Reason"
           }
         },
@@ -2620,6 +2624,7 @@
           },
           "body": {
             "default": "",
+            "description": "The gate's full text - the background, the consequences and the trade-offs behind the approval being asked for. It is stored as sent with NO validation, so omitting it is not an error: the gate opens with an empty body and answers 200, leaving the owner a summary and some buttons with nothing explaining what he is approving. Nothing warns you that it went out empty.",
             "title": "Body",
             "type": "string"
           },
