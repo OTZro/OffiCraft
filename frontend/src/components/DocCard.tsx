@@ -16,9 +16,8 @@
 // under it. Today's callers:
 //   * 角色定義 / 使用者自訂 (SettingsPage) — the original two, unchanged apart
 //     from the over-cap fix below.
-//   * 系統互動 / 啟動程序 ×2 (BootDocPage) — which pass `above`, `factoryReset`,
-//     `confirmSave`, `replaceNote` and `requireDirty`, and hold no editor state
-//     of their own.
+//   * 系統互動 / 啟動程序 ×2 (BootDocPage) — which pass `confirmSave`,
+//     `replaceNote` and `requireDirty`, and hold no editor state of their own.
 // InsightCard / LessonsCard / the two task-manual documents are NOT migrated
 // here yet (a separate ticket); the shell is shaped so they can be, which is
 // why `renderBody` exists at all.
@@ -86,11 +85,7 @@ export interface DocCardProps {
   /** Optional content rendered BELOW the card (e.g. the persona page's
    * <InsightCard> / <LessonsCard>). */
   extra?: ReactNode;
-  /** Optional content rendered ABOVE the card, between the title and the
-   * recovery row — the boot-context pages' three standing notes. Symmetrical
-   * with `extra`; absent for every other document. */
-  /** An honest load-failure line, rendered above the card. The card itself
-   * still renders, because 還原出廠版 must not need a successful read. */
+  /** An honest load-failure line, rendered above the card. */
   errorNote?: ReactNode;
   /** Read-only mode: no edit/reset affordances, just the rendered markdown. */
   readOnly?: boolean;
@@ -114,15 +109,6 @@ export interface DocCardProps {
    * a mangled boot sequence means agents never come online and nobody is left
    * to fix it, and that sentence is FALSE of the system-interaction block. */
   confirmSave?: { body: string; confirmLabel: string };
-  /** The recovery path: a top-level 還原出廠版, rendered before the document
-   * and independent of it — not behind edit mode, not behind a successful read.
-   * Runs `onReset`, the same call the history list's 初始版本 row makes. */
-  factoryReset?: {
-    label: string;
-    note?: string;
-    confirmBody: string;
-    confirmLabel: string;
-  };
   /** Refuse to save a draft identical to the stored text. Off by default: the
    * two original callers have always let 完成編輯 through unconditionally, and
    * a no-op write there is harmless. The boot-context pages turn it on because
@@ -133,9 +119,10 @@ export interface DocCardProps {
   renderBody?: (props: DocCardBodyProps) => ReactNode;
 }
 
-/** Which confirmation is open. A union rather than two booleans: "both at once"
- * is not a state this card can be in, so it must not be representable. */
-type Pending = { kind: "save" } | { kind: "reset" } | null;
+/** Which confirmation is open. Saving is the only one this card raises: the
+ * factory restore lives in the history list's 初始版本 row (owner 2026-08-14,
+ * card rc-f1950f4d286e — "完全照 insight"), and that row carries its own. */
+type Pending = { kind: "save" } | null;
 
 export function DocCard({
   title,
@@ -146,14 +133,12 @@ export function DocCard({
   onReset,
   history,
   extra,
-  above,
   errorNote,
   readOnly = false,
   badge,
   usage,
   replaceNote,
   confirmSave,
-  factoryReset,
   requireDirty = false,
   renderBody,
 }: DocCardProps) {
@@ -252,8 +237,6 @@ export function DocCard({
           title
         )}
       </h1>
-
-      {above}
 
       {/* There is no top-level reset button. It used to stand here with no
         * prerequisites, on the argument that a document booting every agent
@@ -383,39 +366,19 @@ export function DocCard({
 
       {pending && (
         <ConfirmModal
-          testId={
-            pending.kind === "save" ? "doc-card-save-confirm" : "doc-card-reset-confirm"
-          }
-          confirmTestId={
-            pending.kind === "save"
-              ? "doc-card-save-confirm-btn"
-              : "doc-card-reset-confirm-btn"
-          }
+          testId="doc-card-save-confirm"
+          confirmTestId="doc-card-save-confirm-btn"
           danger
-          body={
-            pending.kind === "save"
-              ? (confirmSave?.body ?? "")
-              : (factoryReset?.confirmBody ?? "")
-          }
+          body={confirmSave?.body ?? ""}
           error={failed}
           busy={busy}
           cancelLabel={t.settings.cancel}
-          confirmLabel={
-            pending.kind === "save"
-              ? (confirmSave?.confirmLabel ?? t.settings.doneEdit)
-              : (factoryReset?.confirmLabel ?? "")
-          }
+          confirmLabel={confirmSave?.confirmLabel ?? t.settings.doneEdit}
           onCancel={() => {
             setPending(null);
             setFailed(null);
           }}
-          onConfirm={() =>
-            void run(
-              pending.kind === "save"
-                ? () => onSave?.(draft)
-                : () => onReset?.()
-            )
-          }
+          onConfirm={() => void run(() => onSave?.(draft))}
         />
       )}
     </div>

@@ -238,7 +238,7 @@ describe("BootDocPage", () => {
     expect(list.textContent ?? "").toContain("10");
   });
 
-  it("the restore button calls the RESTORE endpoint, not the replace one", async () => {
+  it("the restore calls the RESTORE endpoint, not the replace one — and lives only in the history list", async () => {
     await api.saveBootDoc("boot_sequence", "claude", "被改壞的啟動程序\n");
     const reset = vi.spyOn(api, "resetBootDoc");
     const save = vi.spyOn(api, "saveBootDoc");
@@ -246,8 +246,20 @@ describe("BootDocPage", () => {
     const utils = renderClaude();
     await utils.findAllByText(/被改壞的啟動程序/);
 
-    fireEvent.click(utils.getByTestId("doc-card-reset"));
-    fireEvent.click(await utils.findByTestId("doc-card-reset-confirm-btn"));
+    // 還原出廠版 is NOT a control of its own on this page. It stood here as a
+    // top-level button until the owner overrode that on 2026-08-14 (card
+    // rc-f1950f4d286e, option 2: "完全照 insight"), so the only door is the one
+    // every other editable document uses. Without this line the row below could
+    // be a second door and the case would not notice.
+    expect(utils.queryByTestId("doc-card-reset")).toBeNull();
+
+    fireEvent.click(await utils.findByTestId("doc-card-edit"));
+    fireEvent.click(utils.getByTestId("doc-history-entry-boot_sequence"));
+    fireEvent.click(await utils.findByTestId("doc-history-seed-open"));
+    fireEvent.click(await utils.findByTestId("doc-history-modal-restore"));
+    // Destructive, so it is confirmed — moving it must not have made it cheaper.
+    expect(reset).not.toHaveBeenCalled();
+    fireEvent.click(utils.getByTestId("doc-history-restore-confirm-btn"));
 
     await waitFor(() => expect(reset).toHaveBeenCalledTimes(1));
     expect(reset.mock.calls[0]).toEqual(["boot_sequence", "claude"]);
@@ -261,26 +273,34 @@ describe("BootDocPage", () => {
     await utils.findByText(s.defaultBadge);
   });
 
-  it("offers the factory restore WITHOUT a successful read, and outside edit mode", async () => {
-    // The recovery path may not have prerequisites: a broken boot sequence
-    // means agents never come online, so there is nobody left to fix it. A
-    // button that needs the document to have loaded is not a recovery path.
+  it("a failed read says so and offers NO recovery door — the accepted cost of putting the restore behind edit mode", async () => {
+    // ⚠️ This case asserts a COST, not a virtue, and the sentence matters
+    // because the next person will read the gap as a bug and "fix" it. The
+    // restore used to stand outside edit mode precisely because a broken boot
+    // sequence means agents never come online, so there is nobody left to fix
+    // it. The owner was shown that on card rc-f1950f4d286e and chose option 2
+    // ("完全照 insight") anyway. So: read fails ⇒ no editor ⇒ no history entry
+    // ⇒ no restore, and the page says only that the read failed.
     vi.spyOn(api, "getBootDoc").mockRejectedValue(new Error("boom"));
-    const reset = vi.spyOn(api, "resetBootDoc");
     const utils = renderClaude();
 
     await utils.findByText(s.loadError);
-    // The editor is correctly refused (you cannot edit what never arrived)…
     expect((utils.getByTestId("doc-card-edit") as HTMLButtonElement).disabled).toBe(
       true
     );
-    // …and the standing notes are on screen anyway, because they are true of a
-    // page whose read failed too.
-    expect(utils.getByTestId("boot-doc-notes")).toBeTruthy();
-    // …but the restore still works.
-    fireEvent.click(utils.getByTestId("doc-card-reset"));
-    fireEvent.click(await utils.findByTestId("doc-card-reset-confirm-btn"));
-    await waitFor(() => expect(reset).toHaveBeenCalledTimes(1));
+    expect(utils.queryByTestId("doc-card-reset")).toBeNull();
+    expect(utils.queryByTestId("doc-history-entry-boot_sequence")).toBeNull();
+    utils.unmount();
+    vi.restoreAllMocks();
+
+    // PAIRED CONTROL. Every assertion above is an absence, and a page that
+    // rendered nothing at all would satisfy all of them. So a second page whose
+    // read SUCCEEDS must reach the restore — otherwise this case would stay
+    // green with the recovery path deleted outright rather than merely gated.
+    const ok = renderClaude();
+    fireEvent.click(await ok.findByTestId("doc-card-edit"));
+    fireEvent.click(ok.getByTestId("doc-history-entry-boot_sequence"));
+    expect(await ok.findByTestId("doc-history-seed-open")).toBeTruthy();
   });
 
   it("editing the claude document never sends the codex key", async () => {
@@ -415,18 +435,24 @@ describe("BootDocPage", () => {
     ).toMatchObject({ content: { text: SEED_SYSTEM_INTERACTION_MD.trim() } });
   });
 
-  it("states the three things a quiet page would let the owner misread", async () => {
-    // Effective-from, retention-in-saves, and the limit. All three are shown
-    // BEFORE the document and without waiting for it: a page whose read failed
-    // is exactly when an owner most needs to know the factory restore is still
-    // there and does not need anything to have loaded.
+  it("says nothing above the card — the standing notes block is gone, and its one surviving fact moved into the history list", async () => {
+    // Three bullets used to stand here (what a save affects, how many revisions
+    // are kept, what the cap does). The owner asked for them out on 2026-08-14
+    // with an argument that generalises: if that explanation were needed, EVERY
+    // editable context block would need one — and none of the others carry it.
+    // So this page must not be special.
     const utils = renderSystem();
-    const notes = utils.getByTestId("boot-doc-notes").textContent ?? "";
-    expect(notes).toContain(s.bootDocNoteEffective);
-    expect(notes).toContain(s.bootDocNoteCap);
-    expect(notes).toContain("10");
-    expect(notes).toContain("存檔次數");
-    expect(utils.getByTestId("doc-card-reset")).toBeTruthy();
+    expect(utils.queryByTestId("boot-doc-notes")).toBeNull();
+    expect(utils.container.querySelector(".boot-doc__notes")).toBeNull();
+
+    // PAIRED CONTROL, because the two lines above are absences. The retention
+    // number was the one bullet stating something the reader genuinely cannot
+    // derive (these three keep 10, everything else keeps 3), and it did not
+    // vanish with the block — it is on the surface that USES it.
+    fireEvent.click(await utils.findByTestId("doc-card-edit"));
+    fireEvent.click(utils.getByTestId("doc-history-entry-system_interaction"));
+    const list = await utils.findByTestId("doc-history-list");
+    expect(list.textContent ?? "").toContain("10");
   });
 
   it("warns about the silent boot failure before saving a boot sequence, and does not cry wolf on the system block", async () => {

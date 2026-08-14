@@ -422,13 +422,8 @@ export function SettingsPage({
   if (view.kind === "boot") {
     // 🔴 ONE RUNTIME PER PAGE. This used to concatenate both seeds into a single
     // read-only preview ("## Claude Code" … "---" … "## Codex CLI"). That was
-    // acceptable while nothing could be written; it is not now. The two boot
-    // sequences are DIFFERENT DOCUMENTS whose third step means opposite things
-    // (claude attaches `ocagent listen` itself; codex must NOT and hands that
-    // to the sidecar), so one text stacked above the other invites exactly the
-    // copy that would silently stop one runtime's agents ever coming online.
-    // Each opens from its own list row into its own page, and the two are never
-    // rendered together.
+    // acceptable while nothing could be written; it is not now.
+    //
     // ONE page, BOTH documents, each with its own editor (owner 2026-08-14:
     // 「啟動程序進去以後可以看到兩份可以分開編輯的」). `view.runtime` is no
     // longer read — the row that used to carry it now opens this page.
@@ -1553,9 +1548,9 @@ function RolesLog({
 
       {/* zone 1: the global-context blocks, in boot-assembly order:
        * 系統互動 (heads the boot context) → 使用者自訂 (the additive block) →
-       * 啟動程序, which is TWO rows because it is two documents (claude and
-       * codex). All four are editable since T-791e. No filenames — the blocks
-       * are content, not files. */}
+       * 啟動程序, ONE row that opens a page holding both runtimes' documents.
+       * All of them are editable since T-791e. No filenames — the blocks are
+       * content, not files. */}
       <div className="set-group-label">{t.settings.globalSection}</div>
       <div className="set-entries">
         <button type="button" className="set-entry" onClick={onOpenSystem}>
@@ -1578,10 +1573,6 @@ function RolesLog({
           </span>
           <ChevronRightIcon size={18} className="set-entry__chev" />
         </button>
-        {/* TWO rows, one per runtime — never one row that opens "the boot
-          * sequence". They are different documents (see the boot view in this
-          * file), and the list is the last place a reader can still tell them
-          * apart before the two pages start looking identical. */}
         {/* ONE row, not one per runtime (owner 2026-08-14, card rc-e1abbc506b70
           * option 1). He asked why this had been "split into so many", and he
           * was right about the half that matters: the two seed FILES predate

@@ -85,26 +85,28 @@ describe("SettingsPage · unified breadcrumb header (T-8f6e)", () => {
     expectHeader(utils, [s.title, s.roles, zh.office.role.assistant]);
   });
 
-  it("系統互動 / 使用者自訂 / 兩份啟動程序: 設定 › 角色誌 › <doc>", async () => {
+  it("系統互動 / 使用者自訂 / 啟動程序: 設定 › 角色誌 › <doc>", async () => {
     const utils = renderSettings();
     fireEvent.click(utils.getByText(s.roles));
     await utils.findByText(s.systemName);
 
-    // The two boot sequences are separate documents with separate rows, so
-    // each has to carry its OWN crumb — one shared 啟動程序 crumb would leave
-    // the reader unable to tell which runtime's page he is on.
-    for (const name of [
-      s.systemName,
-      s.customName,
-      s.bootClaudeName,
-      s.bootCodexName,
-    ]) {
+    for (const name of [s.systemName, s.customName, s.bootName]) {
       fireEvent.click(utils.getByText(name));
       expectHeader(utils, [s.title, s.roles, name]);
       // Back up to the roles list via the 角色誌 crumb for the next doc.
       fireEvent.click(utils.getByRole("button", { name: s.roles }));
       await utils.findByText(s.systemName);
     }
+
+    // 啟動程序 is ONE entry holding TWO documents (owner 2026-08-14,
+    // rc-e1abbc506b70 option 1 + 「進去以後可以看到兩份可以分開編輯的」), so it
+    // gets ONE trail — and the second card must not add a second one. Without
+    // this half the loop above is satisfied by a page that dropped the codex
+    // document altogether.
+    fireEvent.click(utils.getByText(s.bootName));
+    expect(await utils.findByText(s.bootClaudeName)).toBeTruthy();
+    expect(utils.getByText(s.bootCodexName)).toBeTruthy();
+    expect(utils.getAllByText(s.bootName).length).toBe(1);
   });
 
   it("任務手冊列表: 設定 › 任務手冊 + title; hub: 設定 › 任務手冊 › <type>", async () => {

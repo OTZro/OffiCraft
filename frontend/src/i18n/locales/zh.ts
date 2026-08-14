@@ -1436,18 +1436,9 @@ export const zh = {
     bootCodexName: "啟動程序（Codex CLI）",
     bootCodexSub: "Codex App Server 執行環境的開機 SOP · 可編輯",
     // ── 開機情境區塊：可編輯面（T-791e）──
-    bootDocNoteEffective:
-      "改動只影響「之後才開機」的 agent；正在執行中的成員不會改變。",
     bootDocNoteHistoryLead: "版本紀錄只保留最近 ",
     bootDocNoteHistoryTail:
       " 版，而且是以「存檔次數」計、不是以時間計——連按幾次小修就會把較舊的版本沖掉。「還原出廠版」不受影響，永遠在。",
-    bootDocNoteCap:
-      "超過字數上限會被擋下來，不會被默默截斷；卡片右上角隨時顯示現在幾字／上限幾字。",
-    bootDocReset: "還原出廠版",
-    bootDocResetNote: "不需要先載入成功，也不需要任何 agent 在線上。",
-    bootDocResetConfirm:
-      "要把這份文件整份還原成出廠版嗎？目前的內容會被取代（會留成一個版本紀錄）。",
-    bootDocResetConfirmAction: "還原出廠版",
     bootDocSaveConfirmBoot:
       "要儲存這份啟動程序嗎？啟動程序改壞會讓之後開機的 agent 掛不上 SSE、因此永遠不會上線，而且不會有任何錯誤訊息——到時候也沒有人在線上可以救。存檔前請確認你看過預覽；真的出事就按「還原出廠版」。",
     bootDocSaveConfirmSystem:

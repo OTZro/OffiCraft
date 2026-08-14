@@ -26,15 +26,15 @@
 //
 // 🔴 THE FAILURE THIS SURFACE RISKS IS SILENT. A broken boot sequence means the
 // agent never attaches to SSE, so it never comes online, so there is NOBODY
-// ONLINE TO FIX IT. Two consequences are load-bearing and must not be
-// "tidied up":
-//   * 還原出廠版 is a TOP-LEVEL button, rendered before the document and
-//     independent of it — not behind edit mode, not behind a successful read,
-//     not behind any agent being up. (It ALSO exists as the history list's
-//     初始版本 row: that one is the comparison path, this one is the recovery
-//     path, and the recovery path may not have prerequisites.) DocCard renders
-//     it from `factoryReset`.
-//   * Saving goes through a confirmation that STATES that consequence.
+// ONLINE TO FIX IT. So saving goes through a confirmation that STATES that
+// consequence.
+//
+// ⚠️ 還原出廠版 used to ALSO stand here as a top-level button, on the argument
+// that a recovery path may not have prerequisites. The owner OVERRODE that on
+// 2026-08-14 (card rc-f1950f4d286e, option 2: "完全照 insight") with the cost
+// spelled out on the card — the restore now lives only inside edit mode, in the
+// history list's 初始版本 row, exactly like every other editable document.
+// Do not "restore" it here; that decision was made with the trade-off in view.
 //
 // 🔴 SAVING REPLACES THE WHOLE DOCUMENT, and this page says so on screen
 // (`replaceNote`). The editor here used to be per-section — paste one block,
@@ -58,7 +58,6 @@ import { DocCard } from "./DocCard";
 import { type Crumb } from "./Breadcrumbs";
 import { BOOT_DOC_HISTORY_KEPT, runeLength } from "../api/docCap";
 import "./settings.css";
-import "./boot-doc.css";
 
 export function BootDocPage({
   kind,
@@ -108,12 +107,6 @@ export function BootDocPage({
             ? t.settings.bootDocSaveConfirmBoot
             : t.settings.bootDocSaveConfirmSystem,
         confirmLabel: t.settings.bootDocSaveConfirmAction,
-      }}
-      factoryReset={{
-        label: t.settings.bootDocReset,
-        note: t.settings.bootDocResetNote,
-        confirmBody: t.settings.bootDocResetConfirm,
-        confirmLabel: t.settings.bootDocResetConfirmAction,
       }}
       // No explanatory notes block above the card. There used to be three
       // bullets here (what a save affects, how many revisions are kept, what

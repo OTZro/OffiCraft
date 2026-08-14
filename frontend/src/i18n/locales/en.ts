@@ -1370,18 +1370,9 @@ export const en: Dict = {
     bootClaudeSub: "Boot SOP for the Claude Code runtime · editable",
     bootCodexName: "Boot sequence (Codex CLI)",
     bootCodexSub: "Boot SOP for the Codex App Server runtime · editable",
-    bootDocNoteEffective:
-      "Changes only affect agents that boot AFTER the save; members already running are unaffected.",
     bootDocNoteHistoryLead: "Version history keeps the last ",
     bootDocNoteHistoryTail:
       " versions, counted in SAVES rather than in time — a run of small saves pushes the older ones out. Restoring the factory version is never affected and is always available.",
-    bootDocNoteCap:
-      "Going over the character limit is refused, never silently truncated; the card header always shows the current count against the limit.",
-    bootDocReset: "Restore factory version",
-    bootDocResetNote: "Works without a successful load and without any agent being online.",
-    bootDocResetConfirm:
-      "Restore this whole document to its factory version? The current content is replaced (it is kept as one history version).",
-    bootDocResetConfirmAction: "Restore factory version",
     bootDocSaveConfirmBoot:
       "Save this boot sequence? A broken boot sequence stops agents booting after it from attaching to SSE, so they never come online — silently, with no error anywhere, and with nobody online to fix it. Check the preview first; if it does go wrong, press Restore factory version.",
     bootDocSaveConfirmSystem:
