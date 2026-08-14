@@ -75,6 +75,11 @@ type apiServer struct {
 	// serving both runtimes.
 	docCapCharsSystemInteraction int
 	docCapCharsBootSequence      int
+	// chatBudgetChars is the live budget of the wake snapshot's chat block (DB
+	// chat.budget_chars; T-c9b4). Read through chatBudget() by
+	// resumeSnapshotParts — the ONE place the number enters the packer, which is
+	// why resume_summary and peek_resume_summary_size cannot disagree about it.
+	chatBudgetChars int
 	// updaterReceiveBeta picks which GitHub releases the update check follows
 	// (false = official only, true = prereleases too); updaterAutoUpdate arms
 	// the background self-upgrade cadence (auto_update.go). Both default OFF
@@ -417,6 +422,22 @@ func (s *apiServer) bootSequenceCap() int {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
 	return s.docCapCharsBootSequence
+}
+
+// chatBudget is the live wake-snapshot chat budget (chat.budget_chars;
+// T-c9b4). Read at request time like every cap above, so a PATCH takes effect
+// on the next snapshot with no restart.
+//
+// 🔴 It has exactly ONE caller — resumeSnapshotParts — and that is the point:
+// GET /api/resume-summary, GET /api/resume-summary-size and
+// GET /api/members/{id}/resume-summary are all assembled by that one function,
+// so the peek's estimated_total_chars and the snapshot's own chat_chars are
+// bounded by the same read of the same setting. Adding a second call site is
+// how the two faces start disagreeing.
+func (s *apiServer) chatBudget() int {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.chatBudgetChars
 }
 
 // orgNameSnapshot returns the live studio display name (org.name; T-d693).

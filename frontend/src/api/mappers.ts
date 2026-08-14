@@ -6,6 +6,7 @@
 
 import type { ThemeBundle } from "../lib/themeBundle";
 import { DOC_CAP_CHARS_DEFAULTS } from "./docCap";
+import { CHAT_BUDGET_CHARS_DEFAULT } from "./chatBudget";
 import type {
   Member,
   MemberStatus,
@@ -967,6 +968,10 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
       DOC_CAP_CHARS_DEFAULTS.systemInteraction,
     docCapCharsBootSequence:
       w.doc_cap_chars_boot_sequence ?? DOC_CAP_CHARS_DEFAULTS.bootSequence,
+    // T-c9b4 chat budget. Same "?? the shipped default, never 0" reasoning as
+    // the caps above: against a server too old to send the field, 0 would read
+    // as "no chat at all", which is the one answer that is never right.
+    chatBudgetChars: w.chat_budget_chars ?? CHAT_BUDGET_CHARS_DEFAULT,
     // The two software-update toggles (schema-optional for DTO-compat; the
     // Go wire always emits both — `?? false` only fires against an older
     // server, where OFF is exactly the honest reading).

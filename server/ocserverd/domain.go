@@ -1068,6 +1068,31 @@ const (
 	maxDocCapChars               = 100000
 )
 
+// chatBudgetCharsDefault / minChatBudgetChars / maxChatBudgetChars bound the
+// wake snapshot's chat block budget (T-c9b4; the number resumeChatPackBudget
+// spends, see api_chat.go). It was the hard-coded constant 8000 until this
+// change made it the `chat.budget_chars` setting.
+//
+// 🔴 THE FLOOR IS NOT THE DEFAULT, unlike every doc.cap_chars.* above. Those
+// floors equal their own defaults because LOWERING a document cap puts existing
+// legal documents into shrink-only mode — a real, permanent cost. The chat
+// block carries no such state: it is repacked from scratch on every read, so a
+// smaller budget just returns fewer messages next time. Copying the doc-cap
+// rule here would mean the knob could only ever go up, which is not "adjustable".
+//
+// 🔴 THE CEILING IS TIED TO resumeChatFetch, not picked round. That constant's
+// own comment derives 500 as a FLOOR from this budget: the cheapest possible
+// message costs 27 runes, so 500 × 27 = 13,500 runes of candidates must exceed
+// the budget or the packer could run out of messages before it runs out of
+// budget and silently under-fill the snapshot. 13000 keeps that guarantee with
+// room to spare. To raise this ceiling past 13,500 you MUST raise
+// resumeChatFetch first.
+const (
+	chatBudgetCharsDefault = 6000
+	minChatBudgetChars     = 1000
+	maxChatBudgetChars     = 13000
+)
+
 // DocCapBlocked reports whether replacing before with after must be refused by
 // the hard cap. The three-line rule, boundaries included:
 //

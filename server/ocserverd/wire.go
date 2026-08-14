@@ -72,6 +72,11 @@ type settingsDTO struct {
 	// documents (each measured on its own text).
 	DocCapCharsSystemInteraction int `json:"doc_cap_chars_system_interaction"`
 	DocCapCharsBootSequence      int `json:"doc_cap_chars_boot_sequence"`
+	// ChatBudgetChars is the wake snapshot's chat block budget (chat.budget_chars;
+	// T-c9b4). NOT a doc cap: it bounds a block repacked on every read, so unlike
+	// the seven above it may be lowered as well as raised, and its ceiling is its
+	// own (tied to resumeChatFetch, see domain.go).
+	ChatBudgetChars int `json:"chat_budget_chars"`
 	// UpdaterReceiveBeta / UpdaterAutoUpdate are the two software-update
 	// toggles (default false): follow GitHub prereleases too / self-upgrade
 	// in the background when a newer release exists.
