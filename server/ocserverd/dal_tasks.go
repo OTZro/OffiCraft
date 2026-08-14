@@ -94,6 +94,13 @@ type Task struct {
 	// the executor may all freeze, it has to be RECORDED or the owner cannot
 	// tell their own 喊停 from an agent's.
 	FrozenBy string
+	// KickoffNotifiedTo is the de-duplication ledger of the outsource kickoff
+	// notice (T-e77f, migrations/00056): '' = no notice outstanding, else the
+	// executor id the kickoff was last posted to. refreshTaskKickoff stamps it on
+	// send and CLEARS it whenever the task is observed non-advanceable, so a
+	// freeze→unfreeze→freeze→unfreeze cycle notifies once per unfreeze while a
+	// repeated write of the same advanceable state notifies once in total.
+	KickoffNotifiedTo string
 }
 
 const taskColumns = `id, type_key, title, dedupe_key, inputs, description,
@@ -103,7 +110,7 @@ const taskColumns = `id, type_key, title, dedupe_key, inputs, description,
 	handover_note, handover_note_ts, handover_note_by,
 	outsource_runtime, outsource_model, outsource_effort, outsource_machine,
 	outsource_dispatched,
-	handoff, handoff_note, handoff_task_id, frozen_by`
+	handoff, handoff_note, handoff_task_id, frozen_by, kickoff_notified_to`
 
 // sqlTerminalStatuses is the SQL IN-list of the terminal statuses — every
 // "open task" filter (dedupe probe, resume block, open counts) excludes these.
@@ -125,6 +132,7 @@ func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 		&t.OutsourceRuntime, &t.OutsourceModel, &t.OutsourceEffort, &t.OutsourceMachine,
 		&dispatched,
 		&t.Handoff, &t.HandoffNote, &t.HandoffTaskID, &t.FrozenBy,
+		&t.KickoffNotifiedTo,
 	)
 	if err != nil {
 		return Task{}, err
@@ -310,7 +318,7 @@ func (d *DAL) PutTask(t Task) error {
 	}
 	_, err = d.wdb.Exec(`
 		INSERT INTO task (`+taskColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			type_key = excluded.type_key,
 			dedupe_key = excluded.dedupe_key, inputs = excluded.inputs,
@@ -337,7 +345,8 @@ func (d *DAL) PutTask(t Task) error {
 			handoff = excluded.handoff,
 			handoff_note = excluded.handoff_note,
 			handoff_task_id = excluded.handoff_task_id,
-			frozen_by = excluded.frozen_by`,
+			frozen_by = excluded.frozen_by,
+			kickoff_notified_to = excluded.kickoff_notified_to`,
 		t.ID, t.TypeKey, t.Title, t.DedupeKey, string(blob), t.Description,
 		t.Status, t.Lock, t.Priority, t.ExecutorKind, t.ExecutorID, t.CreatorID,
 		t.WaitingReason,
@@ -348,6 +357,7 @@ func (d *DAL) PutTask(t Task) error {
 		t.OutsourceModel, t.OutsourceEffort, t.OutsourceMachine,
 		dispatched,
 		t.Handoff, t.HandoffNote, t.HandoffTaskID, t.FrozenBy,
+		t.KickoffNotifiedTo,
 	)
 	return err
 }
@@ -421,6 +431,17 @@ func (d *DAL) ListTasksBlockedBy(blockerID string) ([]Task, error) {
 // AddTaskDep adds ONE blocked_by edge without disturbing the rest of the list
 // (set_task_deps' whole-list write would clobber deps the successor already
 // carries). Idempotent — INSERT OR IGNORE on the composite key.
+//
+// ⚠️ T-e77f: this writes the edge STRAIGHT to task_dep, bypassing the kickoff
+// seam — refreshTaskKickoff never runs, so kickoff_notified_to is not cleared
+// even though the task just became un-advanceable. Today's only callers are
+// applyHandoffPlan's HandoffFollowUp arms, where the blocker closes inside the
+// same request and releases the edge immediately, so the stale stamp never
+// outlives the call. Any FUTURE caller that leaves a blocker STANDING will
+// leave the task carrying a stamp it no longer earned, and when that blocker
+// eventually closes the seam will see stamp == executor and silently swallow
+// the kickoff. Such a caller must call refreshTaskKickoff (or clear the stamp)
+// after adding the edge.
 func (d *DAL) AddTaskDep(taskID, blockedBy string) error {
 	_, err := d.wdb.Exec(
 		`INSERT OR IGNORE INTO task_dep (task_id, blocked_by) VALUES (?, ?)`,

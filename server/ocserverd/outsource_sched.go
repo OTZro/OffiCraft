@@ -584,6 +584,11 @@ func (s *apiServer) runOutsourceTick(now float64) {
 			outsourceLog("assign %s: task bind failed: %v", t.ID, err)
 			continue
 		}
+		// T-e77f: the bind is the moment this task stops being "nobody's" — the
+		// worker's boot context carries the task too, but a worker that boots and
+		// then idles (or a bind that lands while it is already up) has no other
+		// durable prompt. Same ledger, so the cadence re-running does not re-post.
+		s.refreshTaskKickoff(t, kickoffChangeAssigned, triggerServer)
 		s.publishOutsourceWorker(worker, triggerServer)
 		s.publishTask(*t, triggerServer)
 		outsourceLog("assigned %s (%s) → task %s (type %q, model %q)",

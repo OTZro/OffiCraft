@@ -987,6 +987,7 @@ func (s *apiServer) HandleSetTaskPriorityApiTasksTaskIdPriorityPost(w http.Respo
 	// clear it on the way out, so frozen_by is never a stale name on a running
 	// task. A frozen→frozen re-write re-stamps the current actor (the last
 	// person to assert the freeze is the one answering for it).
+	wasFrozen := t.Priority == TaskPriorityFrozen
 	if priority == TaskPriorityFrozen {
 		t.FrozenBy = requestTrigger(r)
 	} else {
@@ -997,6 +998,13 @@ func (s *apiServer) HandleSetTaskPriorityApiTasksTaskIdPriorityPost(w http.Respo
 	if err := s.dal.PutTask(*t); err != nil {
 		internalError(w, err)
 		return
+	}
+	// T-e77f: an unfreeze is the transition an outsource executor is most likely
+	// to be sitting out — it correctly refused to advance a frozen task and has
+	// nothing that would tell it the freeze is gone. Freezing runs through the
+	// same call to CLEAR the ledger, so the NEXT unfreeze notifies again.
+	if wasFrozen || priority == TaskPriorityFrozen {
+		s.refreshTaskKickoff(t, kickoffChangeUnfrozen, requestTrigger(r))
 	}
 	s.publishTask(*t, requestTrigger(r))
 	writeJSON(w, http.StatusOK, taskPriorityReceiptDTO{
@@ -2531,6 +2539,11 @@ func (s *apiServer) HandleSetTaskDepsApiTasksTaskIdDepsPost(w http.ResponseWrite
 		internalError(w, err)
 		return
 	}
+	// T-e77f: a wholesale deps replacement is the OTHER way a blocker goes away —
+	// the blocker did not close, someone decided it no longer blocks. Both
+	// directions ride the same call: a write that ADDS a live blocker clears the
+	// ledger, so the eventual release notifies.
+	s.refreshTaskKickoff(t, kickoffChangeDepsEdited, requestTrigger(r))
 	s.publishTask(*t, requestTrigger(r))
 	s.writeTask(w, *t)
 }

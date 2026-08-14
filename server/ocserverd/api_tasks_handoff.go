@@ -379,7 +379,18 @@ func (s *apiServer) releaseDependentsOnClose(t Task, now float64, trigger string
 			outsourceLog("deps-release %s: touch of %s failed: %v", t.ID, d.ID, err)
 			continue
 		}
-		if d.ExecutorID != "" {
+		// T-e77f: an OUTSOURCE dependent goes through the kickoff seam instead of
+		// this notice. The seam refuses the cases this line never checked — a
+		// still-FROZEN dependent must not be told to start (the release only
+		// removed one of its two reasons to wait), and a departed worker must not
+		// be addressed — and it de-duplicates, which this line could not.
+		// A MEMBER dependent keeps the original notice unchanged: a member is a
+		// live session that was never asleep, and the kickoff is the outsource
+		// wake problem.
+		switch {
+		case d.ExecutorKind == TaskExecutorOutsource:
+			s.refreshTaskKickoff(&d, kickoffChangeUnblocked, trigger)
+		case d.ExecutorID != "":
 			s.postTaskChat(d, wireSystemSender, d.ExecutorID,
 				"["+TaskNo(d.ID)+"] 擋住這張任務的前置任務 "+TaskNo(t.ID)+
 					"「"+t.Title+"」已經"+t.Status+"了,它不再擋著你。"+
