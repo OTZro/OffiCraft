@@ -2861,6 +2861,7 @@
               }
             ],
             "default": null,
+            "description": "The link target, read ONLY when kind is 'link' - where it IS required, a blank one being a 400. It is never parsed and never fetched: any non-empty string is accepted as sent, so a typo is pinned as a deliverable that leads nowhere. With kind 'file' or 'image' this field is not merely optional but never looked at at all - those artifacts are taken from attachment_id and the url is dropped without a word, so a file artifact sent with a url and no attachment_id is refused for the MISSING attachment_id, not for the field you actually filled in.",
             "title": "Url"
           },
           "label": {
@@ -2873,6 +2874,7 @@
               }
             ],
             "default": null,
+            "description": "Human-readable caption for this deliverable. It is stored exactly as sent and never validated - blank, duplicated or wrong, nothing objects - and omitting it is not an error: the artifact is pinned with an empty label and answers 200. What the reader gets then is an untitled row whose only identity is its kind and the file or link behind it, which on a task carrying several artifacts is the difference between a list someone can act on and a list they have to open one by one.",
             "title": "Label"
           }
         },
