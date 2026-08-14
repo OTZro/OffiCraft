@@ -1077,6 +1077,7 @@
               }
             ],
             "default": null,
+            "description": "Maximum number of cards to return. It only ever truncates: 0, a negative value, or omitting the field all mean the WHOLE pane - never an empty result, never an error - and a value larger than the pane is silently harmless. So 'limit: 0' does not mean 'none'; if you pass 0 as a computed default you fetch everything. And since the answer is a plain list with no total and no truncation flag, a full pane and a truncated one look exactly the same.",
             "title": "Limit"
           },
           "status": {
@@ -2733,9 +2734,11 @@
               }
             ],
             "default": null,
+            "description": "What the successor needs in order to pick the work up. The only check is a length cap, and a blank or omitted note is not an error - but it is not neutral either: the note is written onto the task ONLY when it is non-blank, so omitting it leaves whatever handover_note an EARLIER reassign put there, still carrying that author and timestamp, sitting on the card as though it described this handover. The takeover message itself is server-authored and goes out either way; your note is simply appended to it when present. On an outsource reassign there is no successor to message yet - the worker has not been minted - so the note reaches the task row only.",
             "title": "Note"
           },
           "target": {
+            "description": "Where the task goes next. Unlike create_task's target - which quietly ignores a kind it does not recognise and carries on down the member path - this one is required and its kind is checked: anything but 'member' or 'outsource' is a 400. The two branches read DIFFERENT sub-fields and drop the other's without a word. kind 'member' needs member_id (owner or admin-agent only; the target must be an active, non-outsource, non-warden roster row, and naming the current executor is a 409) and never looks at runtime, model, effort or machine. kind 'outsource' reads runtime, model, effort and machine - a member_id sent here is silently dropped - validates runtime and effort, requires machine to resolve, and fills whatever you omit from the type manual or from you, the dispatcher. An outsource reassign names no successor: the task lands unassigned and the scheduler mints a worker for it later, under the global cap.",
             "properties": {
               "effort": {
                 "anyOf": [
