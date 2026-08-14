@@ -514,6 +514,7 @@
               }
             ],
             "default": null,
+            "description": "New launch model for the member. Unlike name - which is refused when blank - this field is written exactly as sent, with no whitelist and no blank check. And it is not a passive edit: a value DIFFERENT from the stored one arms the same graceful wind-down a refocus uses, so the member finishes what it is doing and comes back on the new value. A typo therefore does not just sit in a column, it recycles a working member onto a model nothing has checked. Re-sending the value the member already carries arms nothing.",
             "title": "Model"
           },
           "name": {
@@ -648,6 +649,7 @@
               }
             ],
             "default": null,
+            "description": "The model this session actually came up on. It is written verbatim into the member's actual_model - the value the roster and the monitoring view show as what this member is really running - with no validation and no comparison against the model that was requested. Omitting it is not an error and clears nothing: the field keeps whatever the previous session reported, so a session that wakes on a different model and stays quiet leaves the cockpit displaying a model nobody is running. Report what you are on, not what you were asked for.",
             "title": "Model"
           }
         },
@@ -3001,6 +3003,7 @@
           },
           "model": {
             "default": "",
+            "description": "New model for the outsource worker. It is trimmed and stored with no whitelist of any kind - runtime and effort in this same call ARE checked and 422 on an unknown value - and a blank string is a legal value meaning the launcher's default, not 'leave it as it is'; to leave it alone, omit the field. When the worker is active and online the change is not merely persisted: the worker is killed and respawned on the spot, so an unusable model name takes a live worker down while you hold a 200. An assigned or stopped worker picks the value up only at its next spawn.",
             "title": "Model",
             "type": "string"
           },
