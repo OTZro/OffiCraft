@@ -6,7 +6,9 @@
 // have a row EACH, never one row for "the boot sequence". The editable
 // behaviour of the three new pages lives in BootDocPage.test.tsx; what is
 // pinned here is the list itself, the routing into each page, and the
-// unchanged 使用者自訂 block.
+// unchanged 使用者自訂 block — "unchanged" now including through T-c33e, which
+// gave the three boot blocks the same <DocCard> shell this one has always used
+// and must not have moved anything under this one.
 //
 // Plus the presentation rule: no block surfaces a .md filename (blocks are
 // content, not files).
@@ -60,10 +62,12 @@ describe("SettingsPage · global-context 3 blocks", () => {
     const utils = await openRolesLog();
     fireEvent.click(utils.getByText(s.systemName));
     // The live document arrives from the api seam, and the page offers the
-    // affordances the read-only card had none of.
-    await utils.findByTestId("boot-doc-usage");
-    expect(utils.getAllByTestId(/^boot-doc-sec-\d+$/).length).toBeGreaterThan(1);
-    expect(utils.getByTestId("boot-doc-reset")).toBeTruthy();
+    // affordances the read-only card had none of. Since T-c33e it draws them
+    // with the SHARED <DocCard> — same testids as 角色定義 — plus the one thing
+    // that is genuinely its own: a top-level factory restore.
+    await utils.findByTestId("doc-card-usage");
+    expect(utils.getByTestId("doc-card-reset")).toBeTruthy();
+    expect(utils.getByTestId("doc-card-edit")).toBeTruthy();
     expect(utils.container.querySelector(".doc-card__file code")).toBeNull();
   });
 

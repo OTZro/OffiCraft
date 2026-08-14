@@ -1,13 +1,16 @@
-// CT story for T-791e — the boot-context block page's SECTION ROW at phone
-// widths.
+// CT story for the boot-context block page at phone widths.
 //
-// The row is a flex line holding a free-text label (a markdown heading, or a
-// numbered step's whole first line) and up to three action buttons. Its label
-// is owner/agent prose: long CJK headings normally, and — since these documents
-// name routes, ids and file paths — sometimes a long unbreakable token. That is
-// the `min-width:0` + `overflow-wrap:anywhere` chain in boot-doc.css, and it is
-// exactly the class of defect jsdom cannot see (no layout engine: the buttons
-// are in the DOM whether or not they are on screen).
+// Renamed from BootDocSectionRowStory (T-c33e): the page no longer has section
+// rows. What it still has — and what the guard beside it still measures — is
+// the 還原出廠版 recovery button and a card whose content is owner/agent prose:
+// long CJK headings normally, and, since these documents name routes, ids and
+// file paths, sometimes a long unbreakable token. That token used to sit in a
+// section LABEL (`.boot-doc-sec__label`); it now sits in the rendered document
+// (`.doc-md`), which is where the same defect class lives for every other
+// document surface in the cockpit (frontend/CLAUDE.md 〈長 token 溢出〉).
+//
+// jsdom cannot see any of this: it applies no layout engine, so the buttons are
+// in the DOM whether or not they are on screen.
 //
 // The ancestor chain is reproduced BY CLASS, per frontend/CLAUDE.md 〈浮層寬度
 // 不可用 vw 夾〉: a bare card mounted at x≈0 carries ~22px of slack it does not
@@ -26,7 +29,7 @@ import { BootDocPage } from "../../src/components/BootDocPage";
 import { api } from "../../src/api";
 import { zh } from "../../src/i18n/locales/zh";
 
-/** Long CJK headings (what these documents really look like) plus one heading
+/** Long CJK headings (what these documents really look like) plus one line
  * carrying an unbreakable token of the kind the boot docs actually cite. */
 const DOC = [
   "# 啟動程序（Boot Sequence · 版面守衛用）",
@@ -43,7 +46,7 @@ const DOC = [
   "",
 ].join("\n");
 
-export function BootDocSectionRowStory() {
+export function BootDocCardStory() {
   const [ready, setReady] = useState(false);
   useEffect(() => {
     let alive = true;

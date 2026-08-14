@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../i18n";
 import type {
-  GlobalContextView,
   RoleDefView,
   VersionView,
   ReleaseCheckView,
@@ -31,14 +30,10 @@ import {
 } from "./TaskManualsPage";
 import type { TaskManualPatch } from "../api/adapter";
 import { isHttpStatus } from "../api/errors";
-import { Markdown } from "./Markdown";
 import { BootDocPage } from "./BootDocPage";
+import { DocCard } from "./DocCard";
 import { LessonsCard } from "./LessonsCard";
 import { InsightCard } from "./InsightCard";
-import {
-  DocumentHistoryEntry,
-  type DocumentHistoryEntryProps,
-} from "./DocumentHistoryEntry";
 import { navigateHash } from "../lib/hashRoute";
 import { DOC_CAP_CHARS_DEFAULTS } from "../api/docCap";
 
@@ -96,7 +91,6 @@ import {
 } from "./icons";
 import { ThemeSettings } from "./ThemeSettings";
 import { ConfirmModal } from "./ConfirmModal";
-import { InlineEdit } from "./InlineEdit";
 import "./settings.css";
 
 // Which settings sub-view is showing. Navigation is internal to the page; the
@@ -401,7 +395,7 @@ export function SettingsPage({
     // Empty text + isDefault=true = never written; the assembled boot context
     // skips the block entirely. Save = whole-block replace, reset = tombstone.
     return (
-      <DocDetail
+      <DocCard
         title={t.settings.customName}
         doc={gc.ctx}
         crumbs={[crumbRoot, crumbRoles, { label: t.settings.customName }]}
@@ -465,7 +459,7 @@ export function SettingsPage({
     // (per-role-learnings step1). The lessons card is the SAME shared
     // <LessonsCard> the app uses everywhere — scoped here to view.key so the
     // owner edits exactly this persona's accumulated learnings. `extra` renders
-    // inside DocDetail's <div className="settings"> so the card inherits page
+    // inside DocCard's <div className="settings"> so the card inherits page
     // width/gutters and sits directly under the role_def card.
     //
     // Localized role label (matches the office/monitor roster + mockup 助理),
@@ -476,7 +470,7 @@ export function SettingsPage({
       role?.name ??
       view.key;
     return (
-      <DocDetail
+      <DocCard
         title={roleTitle}
         // 角色名 rename — CUSTOM roles only (seed titles are i18n-localized by
         // key AND server-side name-locked). Same pencil inline-edit pattern as
@@ -1779,220 +1773,3 @@ function RolesLog({
   );
 }
 
-// ── Doc detail (global context / role def): view + edit ─────────────────────
-interface DocDetailDoc {
-  text: string;
-  isDefault: boolean;
-}
-
-function DocDetail({
-  title,
-  onRenameTitle,
-  doc,
-  crumbs,
-  onSave,
-  onReset,
-  history,
-  extra,
-  readOnly = false,
-  badge,
-  usage,
-}: {
-  title: string;
-  /** Rename the doc's TITLE (custom roles only — the 角色名 is owner-editable
-   * there; seed roles pass none and keep the plain heading). Renders the shared
-   * pencil InlineEdit in the heading; commits ride the role PATCH choke. */
-  onRenameTitle?: (name: string) => Promise<void> | void;
-  doc: DocDetailDoc | GlobalContextView | null;
-  /** The unified settings breadcrumb (T-8f6e) — 設定 › 角色誌 › <this doc>. */
-  crumbs: Crumb[];
-  /** Save/reset are omitted for read-only docs (e.g. the boot sequence, a fixed
-   * studio SOP with no owner overlay). */
-  onSave?: (text: string) => Promise<void> | void;
-  onReset?: () => Promise<void> | void;
-  /** The document's 版本紀錄 (T-1f39). Rendered in the EDIT toolbar, in the
-   * slot 重置 used to hold; the reset itself survives as the list's 初始版本
-   * row and is wired from `onReset` here, so a document without a seed simply
-   * does not grow that row. */
-  history?: Omit<DocumentHistoryEntryProps, "onReset" | "disabled">;
-  /** Optional content rendered below the doc card (e.g. the persona page's
-   * per-role <LessonsCard>). The global-context view passes none. */
-  extra?: ReactNode;
-  /** Read-only mode: no edit/reset affordances, just the rendered markdown.
-   * Used by the boot-sequence card (fixed studio SOP, no owner overlay). */
-  readOnly?: boolean;
-  /** Overrides the "Default" is_default badge (e.g. "Studio SOP" for boot). */
-  badge?: string;
-  /** This document's size budget, `{size, cap}` in CHARACTERS (T-ae38).
-   *
-   * Passed only by documents that HAVE a cap — the role definition today. The
-   * global-context views omit it because they genuinely have none, and showing
-   * a "0 / 0" there would invent a limit the server does not enforce. The two
-   * role-journal cards below (Insight, Learning) carry their own readouts; this
-   * one is the Duty doc's, and it exists because an agent condensing its own
-   * role definition had no way to see how much room was left. */
-  usage?: { size: number; cap: number };
-}) {
-  const { t } = useI18n();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const text = doc ? doc.text : "";
-  const isDefault = doc ? doc.isDefault : true;
-
-  function startEdit() {
-    setDraft(text);
-    setEditing(true);
-  }
-
-  function cancelEdit() {
-    setEditing(false);
-    setDraft("");
-  }
-
-  async function commit() {
-    if (!onSave) return;
-    setBusy(true);
-    try {
-      await onSave(draft);
-      setEditing(false);
-      setDraft("");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function doReset() {
-    if (!onReset) return;
-    setBusy(true);
-    try {
-      await onReset();
-      setEditing(false);
-      setDraft("");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="settings">
-      <Breadcrumbs items={crumbs} />
-      <h1 className="settings__title settings__title--doc">
-        {onRenameTitle ? (
-          <InlineEdit
-            value={title}
-            onCommit={(next) => void onRenameTitle(next)}
-            ariaLabel={t.settings.renameRole}
-            placeholder={t.settings.addRoleName}
-          />
-        ) : (
-          title
-        )}
-      </h1>
-
-      <div className="doc-card">
-        <div className="doc-card__head">
-          {/* No filename chip here — docs are presented as CONTENT, not files
-           * (the role page's internal role-….md name was implementation detail
-           * the owner should never see). The head keeps only the badge. */}
-          <span className="doc-card__file">
-            {badge ? (
-              <span className="set-badge">{badge}</span>
-            ) : (
-              isDefault && (
-                <span className="set-badge">{t.settings.defaultBadge}</span>
-              )
-            )}
-            {/* Always rendered when this document has a cap — including while
-              * editing, which is precisely when the number is wanted, and
-              * including at 0 chars, since that is when someone is about to
-              * write the first thing into it. */}
-            {usage && (
-              <span
-                className="doc-card__usage"
-                data-testid="doc-card-usage"
-                title={t.settings.docUsage}
-              >
-                {usage.size} / {usage.cap}
-              </span>
-            )}
-          </span>
-          {readOnly ? null : editing ? (
-            <div className="doc-card__actions">
-              {/* 版本紀錄 stands where 重置 stood (owner 2026-07-31). The reset
-               * did not disappear — it is the 初始版本 row inside, and only
-               * where a seed exists (onReset omitted ⇒ no such row, e.g. a
-               * custom role whose reset the server 404s). */}
-              {history && (
-                <DocumentHistoryEntry
-                  {...history}
-                  // A restore rewrote the document under the editor, so the
-                  // editor's draft is now a pending overwrite of the version
-                  // just restored. Leave edit mode with it — the same exit the
-                  // reset has always made.
-                  onRestored={async () => {
-                    await history.onRestored?.();
-                    cancelEdit();
-                  }}
-                  onReset={onReset ? doReset : undefined}
-                  disabled={busy}
-                />
-              )}
-              <button
-                type="button"
-                className="doc-btn"
-                onClick={cancelEdit}
-                disabled={busy}
-              >
-                {t.settings.cancel}
-              </button>
-              <button
-                type="button"
-                className="doc-btn doc-btn--accent"
-                onClick={commit}
-                disabled={busy}
-              >
-                {t.settings.doneEdit}
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="doc-btn doc-btn--edit"
-              onClick={startEdit}
-              /* T-2d99: a null doc means the mount fetch has not landed (or
-               * failed) — NOT "an empty doc". Editing then seeds draft from
-               * text="" and the editor opens blank over content the user has
-               * never seen; committing that sends a whole-doc replace of ""
-               * which, because this call site passes allow_shrink, sails past
-               * the server's wipe guard. Gate the affordance on the load
-               * instead of weakening the guard: you cannot edit what has not
-               * arrived. */
-              disabled={doc === null}
-            >
-              <PencilIcon size={14} />
-              <span>{t.settings.edit}</span>
-            </button>
-          )}
-        </div>
-
-        <div className="doc-card__body">
-          {editing && !readOnly ? (
-            <textarea
-              className="doc-editor"
-              value={draft}
-              autoFocus
-              spellCheck={false}
-              placeholder={t.settings.editorPlaceholder}
-              onChange={(e) => setDraft(e.target.value)}
-            />
-          ) : (
-            <Markdown source={text} className="doc-md" />
-          )}
-        </div>
-      </div>
-      {extra}
-    </div>
-  );
-}

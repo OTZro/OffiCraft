@@ -1270,6 +1270,48 @@ mutant 紀錄:`docs/design/worker-panel-parity-mutants.md`。
     否則只證明了「有字」,沒證明「分得出來」。
 mutant 紀錄:`docs/design/worker-panel-parity-mutants.md` 第五、六批。
 
+## 可編輯文件 = 一個外殼 `DocCard`,body 才是可換的那一層(T-c33e)
+
+owner 2026-08-14:「一致性是最重要的 這樣會影響到使用者的觀感」「**我們甚至希望這些
+component 是同一個 component reuse,讓他成為 single source of truth**」。
+
+`components/DocCard.tsx` 是**設定頁上可編輯長文件的外殼**:breadcrumb、標題、
+`.doc-card__head`(預設徽章 / 字數 / 按鈕組)、版本紀錄入口、超上限擋下、還原出廠版、
+儲存確認、錯誤行。它就是以前藏在 `SettingsPage.tsx` 裡**沒有 export 的 `DocDetail`**
+——**沒有 export 正是第二份實作長出來的原因**:`BootDocPage` 拿不到它,只好把 markup
+抄一份,兩邊就這樣漂成同一張卡的兩個形狀。
+
+- **今天的 caller**:角色定義 / 使用者自訂(`SettingsPage`)、系統互動 / 兩份啟動程序
+  (`BootDocPage`,**自己零編輯器狀態**——沒有 draft、沒有 textarea、沒有按鈕組;
+  `BootDocPage.test.tsx` 有一條讀原始碼的守衛釘這件事,因為「又長回自己的編輯器」的頁
+  照樣 import 得到 `DocCard`,畫面層看不出來)。
+- **`InsightCard` / `LessonsCard` / 任務手冊那兩份還沒遷過來**(另一張票,owner 未點頭)。
+  外殼**已經接得住它們**(`renderBody` 就是為此存在),但**不要順手遷**。
+- 🔴 **新增能力一律是 optional prop,不傳 = 這張卡一直以來的行為**。`above` / `errorNote`
+  / `factoryReset` / `confirmSave` / `replaceNote` / `requireDirty` / `renderBody` 全部
+  如此,所以三塊開機說明帶進來的東西**不會落到角色定義頭上**。
+  對照斷言在 `DocCard.test.tsx`(透過真的 `SettingsPage` 走進去,不是自己組 props)。
+- 🔴 **超上限那一格是修 bug,不是順手改**。舊 `DocDetail.commit()` 是 `try/finally`
+  **沒有 `catch`**:實測(未改動的樹)角色定義草稿 4,000 字對上 1,000 字的上限,完成編輯
+  **按得下去**、字數讀數**凍在已存的 310 / 1000**、寫入照送、server 的 400 只變成一個
+  unhandled rejection,螢幕上**一個字都沒有**。現在:編輯中讀數跟著**草稿**走、超上限
+  在座艙就擋(兩個數字都在)、真的失敗了印 server 原話。**沒傳 `usage` 的文件完全不受
+  影響**(使用者自訂真的沒有 cap)。
+- **儲存語意沒動,仍是整份取代**;變的是**畫面上要講出來**(`replaceNote`)。三塊開機說明
+  的編輯器從逐段換成單一編輯框之後,原本由段落列隱含說出的事必須明講——把一段提案貼到
+  45,000 字的文件上再儲存,是靜默且只能靠版本紀錄救回來的。
+- **`lib/docSections.ts` 已刪**(連同它的測試):逐段 UI 是它唯一的消費者,沒有 splitter
+  也就沒有「split→join 不等長」這條資料損毀風險了。**不要因為那條 round-trip 斷言看起來
+  很重要就把檔案留著**——沒有消費者的碼不是防線。
+- **樣式**:`.doc-card*` 的家是 `settings.css`(含 T-c33e 搬過去的 `.doc-card__recover`
+  與新的 `.doc-card__note`);`boot-doc.css` 現在只剩 `.boot-doc__notes` 一個 block。
+- **真瀏覽器守衛換人不換題**:`visual-guards/boot-doc-section-row.ct.spec.tsx` →
+  `boot-doc-card.ct.spec.tsx`(320px 下**救援鈕必須在畫面內**——原封不動的那一條——
+  外加編輯框自己不撐破卡片);`boot-doc-real-seed.ct.spec.tsx` 留在原地,量的還是真 seed
+  的整條 ancestor chain,只是量的是渲染後的 `.doc-md` 而不是七十幾個段落列。兩支的鑑別力
+  現在都來自 `.doc-md` 的 `overflow-wrap: anywhere`(實測 mutant:card 那支 320/375 紅、
+  real-seed 那支 320 紅 +45px)。
+
 ## 差異呈現:三層各自只負責一件事(T-40f0;全文 `docs/design/T-40f0-history-diff-ux.md`)
 
 `lib/lineDiff.ts`(**哪幾行**不同)→ `lib/wordDiff.ts`(一對取代列之間**哪些字**動了)→

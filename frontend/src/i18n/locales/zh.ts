@@ -1441,26 +1441,11 @@ export const zh = {
     bootDocResetConfirm:
       "要把這份文件整份還原成出廠版嗎？目前的內容會被取代（會留成一個版本紀錄）。",
     bootDocResetConfirmAction: "還原出廠版",
-    bootDocSave: "儲存",
-    bootDocActionFailed: "動作失敗，請稍後重試",
     bootDocSaveConfirmBoot:
       "要儲存這份啟動程序嗎？啟動程序改壞會讓之後開機的 agent 掛不上 SSE、因此永遠不會上線，而且不會有任何錯誤訊息——到時候也沒有人在線上可以救。存檔前請確認你看過預覽；真的出事就按「還原出廠版」。",
     bootDocSaveConfirmSystem:
       "要儲存這份系統互動說明嗎？之後開機的每一個 agent 都會讀到這份內容。",
     bootDocSaveConfirmAction: "確認儲存",
-    bootDocOverCapLead: "現在 ",
-    bootDocOverCapMid: " 字，超過上限 ",
-    bootDocOverCapTail: " 字，請先刪掉一些再儲存。",
-    bootDocPasteSection: "貼上新版本",
-    bootDocApplySection: "套用這一段",
-    bootDocDiscardSection: "還原這一段",
-    bootDocCancelSection: "取消",
-    bootDocPreview: "預覽",
-    bootDocBackToEdit: "回到編輯",
-    bootDocPending: "待儲存",
-    bootDocPreamble: "（開頭）",
-    bootDocEditorPlaceholder: "把整段新版本貼進來，取代這一段的全部內容",
-    bootDocDirtyNote: "已套用的段落還沒儲存；離開這一頁會遺失。",
     historyBootSystemTitle: "系統互動的版本紀錄",
     historyBootClaudeTitle: "啟動程序（Claude Code）的版本紀錄",
     historyBootCodexTitle: "啟動程序（Codex CLI）的版本紀錄",
@@ -1472,6 +1457,16 @@ export const zh = {
     cancel: "取消",
     reset: "重置",
     editorPlaceholder: "以 Markdown 撰寫…",
+    // 「儲存＝整份取代」的提示（T-c33e）。開機情境那三塊的編輯器從逐段改成
+    // 單一編輯框，原本由段落列隱含說出的事就必須明講：按下去送出的是整份文件。
+    docReplaceNote:
+      "儲存會用編輯框裡的內容「整份取代」這份文件——沒有逐段合併，沒被貼進來的段落就不會留下。",
+    // 存檔失敗但伺服器沒有給任何可引用的理由時的墊底文案（T-c33e）。
+    docActionFailed: "動作失敗，請稍後重試",
+    // 超過字數上限的紅字，兩個數字都要在螢幕上（T-791e，T-c33e 起共用）。
+    docOverCapLead: "現在 ",
+    docOverCapMid: " 字，超過上限 ",
+    docOverCapTail: " 字，請先刪掉一些再儲存。",
     // ── 版本紀錄（T-7d33）——每份可編輯長文件保留最近 3 次修改，可還原 ──
     historyTitle: "版本紀錄",
     historySub: "系統保留最近 3 次修改；還原會覆蓋目前內容。",

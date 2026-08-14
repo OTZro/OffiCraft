@@ -1,7 +1,9 @@
-// components/BootDocPage.test.tsx — the seven assertions this surface is
-// bought on (T-791e). Each is written to fail on its own: they bind to seven
-// different pieces of behaviour, so one of them going green cannot be mistaken
-// for the others still being true.
+// components/BootDocPage.test.tsx — what the three boot-context blocks are
+// bought on (T-791e, re-cut by T-c33e).
+//
+// Each assertion is written to fail on its own: they bind to different pieces
+// of behaviour, so one of them going green cannot be mistaken for the others
+// still being true.
 //
 //   1. Saving calls the REPLACE endpoint and the new content comes back onto
 //      the page.
@@ -16,9 +18,14 @@
 //      with a string that is not the seed, and that string is what is on
 //      screen).
 //   7. A retained revision the server WOULD refuse is marked un-restorable
-//      before the click — the cap these blocks answer to is the
-//      `doc.cap_chars.*` SETTING, so the marking has to follow the owner's
-//      live value the way every other document's does.
+//      before the click.
+//
+// 🔴 AND THE T-c33e CLAIM, which is what the ticket is bought on: THESE THREE
+// PAGES HAVE NO EDITOR OF THEIR OWN. They draw the shared <DocCard> — one
+// textarea over the whole document, the same as 角色定義 and 使用者自訂 — and
+// the per-section paste/apply/preview surface is gone. Two of the cases below
+// assert that against the RENDERED page rather than against the source, because
+// a page that grew its own editor back would still import DocCard.
 //
 // Everything runs against `api/mock.ts` — the shared adapter, never a
 // hand-rolled fake. A fake that answered these calls itself would be measuring
@@ -26,6 +33,8 @@
 // written about.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { render, fireEvent, waitFor, within } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
@@ -83,17 +92,18 @@ function renderSystem() {
   );
 }
 
-/** Paste `text` over section `i` and apply it. */
-async function pasteSection(
+/** Open the editor once the document has landed and type `text` over the whole
+ * of it — which is the only editing gesture this surface has now. */
+async function typeWholeDoc(
   utils: ReturnType<typeof renderClaude>,
-  i: number,
   text: string
 ) {
-  fireEvent.click(await utils.findByTestId(`boot-doc-sec-paste-${i}`));
-  fireEvent.change(utils.getByTestId(`boot-doc-sec-editor-${i}`), {
+  const edit = await utils.findByTestId("doc-card-edit");
+  await waitFor(() => expect((edit as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(edit);
+  fireEvent.change(utils.getByTestId("doc-card-editor"), {
     target: { value: text },
   });
-  fireEvent.click(utils.getByTestId(`boot-doc-sec-apply-${i}`));
 }
 
 beforeEach(() => {
@@ -108,30 +118,89 @@ describe("BootDocPage", () => {
   it("save calls the REPLACE endpoint and renders the new content back", async () => {
     const save = vi.spyOn(api, "saveBootDoc");
     const utils = renderClaude();
-    await utils.findByTestId("boot-doc-sec-0");
 
-    await pasteSection(utils, 0, "# 全新的啟動程序標題\n\n");
-    fireEvent.click(utils.getByTestId("boot-doc-save"));
-    fireEvent.click(await utils.findByTestId("boot-doc-save-confirm-btn"));
+    const before = await api.getBootDoc("boot_sequence", "claude");
+    await typeWholeDoc(
+      utils,
+      `# 全新的啟動程序標題\n\n${before.text.split("\n").slice(1).join("\n")}`
+    );
+    fireEvent.click(utils.getByTestId("doc-card-save"));
+    fireEvent.click(await utils.findByTestId("doc-card-save-confirm-btn"));
 
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     const [kind, key, text] = save.mock.calls[0];
     expect(kind).toBe("boot_sequence");
     expect(key).toBe("claude");
     expect(text.startsWith("# 全新的啟動程序標題")).toBe(true);
-    // The rest of the document rode along untouched — a whole-document replace
-    // built from one edited section must not drop the sections nobody touched.
+    // The write is a WHOLE-DOCUMENT replace and always was — what the editor
+    // holds is what lands, so the rest of the document has to be in it.
     expect(text).toContain("Claude Code 執行環境");
 
     // And the page now RENDERS the saved document: the heading came back from
     // the adapter's response, not from local state that was never confirmed.
-    // findAllByText: the section LABEL and the rendered heading are both this
-    // string — the label is derived from the heading, so one match would mean
-    // the body did not re-render.
-    expect((await utils.findAllByText("全新的啟動程序標題")).length).toBe(2);
+    await utils.findByText("全新的啟動程序標題");
+    // Back out of edit mode, so a second save cannot ride the first one's draft.
     await waitFor(() =>
-      expect(utils.queryByTestId("boot-doc-dirty")).toBeNull()
+      expect(utils.queryByTestId("doc-card-editor")).toBeNull()
     );
+  });
+
+  it("says on screen that a save replaces the WHOLE document", async () => {
+    // 🔴 T-c33e. The per-section editor made this implicit — a row was the unit,
+    // so nothing else could be at risk. With one box over the whole text, the
+    // failure it prevents (pasting one proposed block over a 45,000-character
+    // document and saving the rest away) is silent and only recoverable through
+    // history, so the page has to SAY it. All three blocks, and before the
+    // editor is opened as well as after: the sentence is useless if it only
+    // appears once the paste has already happened.
+    for (const open of [renderSystem, renderClaude, renderCodex]) {
+      const utils = open();
+      const note = await utils.findByTestId("doc-card-replace-note");
+      expect(note.textContent).toBe(s.docReplaceNote);
+      fireEvent.click(await utils.findByTestId("doc-card-edit"));
+      expect(utils.getByTestId("doc-card-replace-note").textContent).toBe(
+        s.docReplaceNote
+      );
+      utils.unmount();
+    }
+  });
+
+  it("edits the whole document in ONE box — no per-section surface survives", async () => {
+    // 🔴 T-c33e's acceptance condition, asserted on the rendered page: these
+    // three blocks have no editor implementation of their own. One textarea,
+    // covering the whole document, reached the same way 角色定義 is — and none
+    // of the per-section affordances (paste / apply / discard / preview /
+    // pending badge) exist any more.
+    const utils = renderSystem();
+    const stored = (await api.getBootDoc("system_interaction", "global")).text;
+
+    // Nothing to edit per section, before or after the editor opens.
+    expect(utils.queryAllByTestId(/^boot-doc-sec/)).toEqual([]);
+    await typeWholeDoc(utils, "# 只有一個編輯框\n");
+    expect(utils.queryAllByTestId(/^boot-doc-sec/)).toEqual([]);
+
+    const boxes = utils.container.querySelectorAll("textarea");
+    expect(boxes.length).toBe(1);
+    // …and that box was seeded with the WHOLE document, not a slice of it.
+    fireEvent.click(utils.getByText(s.cancel));
+    fireEvent.click(utils.getByTestId("doc-card-edit"));
+    expect((utils.getByTestId("doc-card-editor") as HTMLTextAreaElement).value).toBe(
+      stored
+    );
+  });
+
+  it("holds no editor state of its own — the shell is the shared component", async () => {
+    // The rendered-page assertions above cannot see one thing: a page that
+    // re-grew its own editor while still importing DocCard. This is the source
+    // check for that, and it is the file the acceptance sentence names.
+    const src = readFileSync(join(__dirname, "BootDocPage.tsx"), "utf8");
+    expect(src).toContain('from "./DocCard"');
+    expect(src).toContain("<DocCard");
+    for (const forbidden of ["<textarea", "useState", "docSections", "renderBody"]) {
+      expect(src, `BootDocPage must not hold ${forbidden}`).not.toContain(
+        forbidden
+      );
+    }
   });
 
   it("version history lists the past versions", async () => {
@@ -143,6 +212,10 @@ describe("BootDocPage", () => {
     await api.saveBootDoc("boot_sequence", "claude", "第二版\n");
 
     const utils = renderClaude();
+    // 版本紀錄 stands in the EDIT toolbar, where 重置 used to — the same place
+    // every other document in 設定 keeps it (T-c33e made these three consistent
+    // with it; before, they had no edit mode to put it behind).
+    fireEvent.click(await utils.findByTestId("doc-card-edit"));
     fireEvent.click(await utils.findByText(s.historyTitle));
     const list = await utils.findByTestId("doc-history-list");
     await waitFor(() =>
@@ -155,13 +228,10 @@ describe("BootDocPage", () => {
     expect(rows.length).toBe(1);
     expect(within(list).getByTestId("doc-history-seed")).toBeTruthy();
 
-    // And the row really holds the version it claims to: the text the second
-    // write replaced, readable one click deeper.
+    // And the row really holds the version it claims to.
     fireEvent.click(rows[0]);
     const modal = await utils.findByTestId("doc-history-modal");
-    await waitFor(() =>
-      expect(modal.textContent ?? "").toContain("第一版")
-    );
+    await waitFor(() => expect(modal.textContent ?? "").toContain("第一版"));
 
     // The note states this document's OWN retention — the default sentence
     // says three, which is true of every other document and false of this one.
@@ -176,8 +246,8 @@ describe("BootDocPage", () => {
     const utils = renderClaude();
     await utils.findAllByText(/被改壞的啟動程序/);
 
-    fireEvent.click(utils.getByTestId("boot-doc-reset"));
-    fireEvent.click(await utils.findByTestId("boot-doc-reset-confirm-btn"));
+    fireEvent.click(utils.getByTestId("doc-card-reset"));
+    fireEvent.click(await utils.findByTestId("doc-card-reset-confirm-btn"));
 
     await waitFor(() => expect(reset).toHaveBeenCalledTimes(1));
     expect(reset.mock.calls[0]).toEqual(["boot_sequence", "claude"]);
@@ -191,13 +261,34 @@ describe("BootDocPage", () => {
     await utils.findByText(s.defaultBadge);
   });
 
+  it("offers the factory restore WITHOUT a successful read, and outside edit mode", async () => {
+    // The recovery path may not have prerequisites: a broken boot sequence
+    // means agents never come online, so there is nobody left to fix it. A
+    // button that needs the document to have loaded is not a recovery path.
+    vi.spyOn(api, "getBootDoc").mockRejectedValue(new Error("boom"));
+    const reset = vi.spyOn(api, "resetBootDoc");
+    const utils = renderClaude();
+
+    await utils.findByText(s.loadError);
+    // The editor is correctly refused (you cannot edit what never arrived)…
+    expect((utils.getByTestId("doc-card-edit") as HTMLButtonElement).disabled).toBe(
+      true
+    );
+    // …and the standing notes are on screen anyway, because they are true of a
+    // page whose read failed too.
+    expect(utils.getByTestId("boot-doc-notes")).toBeTruthy();
+    // …but the restore still works.
+    fireEvent.click(utils.getByTestId("doc-card-reset"));
+    fireEvent.click(await utils.findByTestId("doc-card-reset-confirm-btn"));
+    await waitFor(() => expect(reset).toHaveBeenCalledTimes(1));
+  });
+
   it("editing the claude document never sends the codex key", async () => {
     const save = vi.spyOn(api, "saveBootDoc");
     const claude = renderClaude();
-    await claude.findByTestId("boot-doc-sec-0");
-    await pasteSection(claude, 0, "# 只改 claude 這一份\n\n");
-    fireEvent.click(claude.getByTestId("boot-doc-save"));
-    fireEvent.click(await claude.findByTestId("boot-doc-save-confirm-btn"));
+    await typeWholeDoc(claude, "# 只改 claude 這一份\n");
+    fireEvent.click(claude.getByTestId("doc-card-save"));
+    fireEvent.click(await claude.findByTestId("doc-card-save-confirm-btn"));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
 
     expect(save.mock.calls.map((c) => c[1])).toEqual(["claude"]);
@@ -221,32 +312,31 @@ describe("BootDocPage", () => {
     const save = vi.spyOn(api, "saveBootDoc");
     const cap = BOOT_DOC_CAP_CHARS_DEFAULTS.boot_sequence;
     const utils = renderClaude();
-    await utils.findByTestId("boot-doc-sec-0");
 
-    await pasteSection(utils, 0, "超".repeat(cap + 50));
+    await typeWholeDoc(utils, "超".repeat(cap + 50));
 
-    const notice = await utils.findByTestId("boot-doc-over-cap");
-    const size = [...SEED_BOOT_SEQUENCE_MD.trim()].length; // untouched sections
+    const notice = await utils.findByTestId("doc-card-over-cap");
     // BOTH numbers on screen. "Too long" alone leaves the owner with nothing to
     // act on, and a cockpit that trimmed the text to fit would be worse still:
     // the agent would boot from a document the owner never wrote.
     expect(notice.textContent).toContain(String(cap));
-    expect(notice.textContent).toMatch(/\d{4,}/);
     const shown = Number(/\d{4,}/.exec(notice.textContent ?? "")?.[0]);
+    expect(shown).toBe(cap + 50);
     expect(shown).toBeGreaterThan(cap);
-    expect(shown).toBeGreaterThan(size);
+    expect(shown).toBeGreaterThan([...SEED_BOOT_SEQUENCE_MD.trim()].length);
 
     // Refused, not truncated: the save door is shut and clicking it sends
     // nothing.
-    const saveBtn = utils.getByTestId("boot-doc-save") as HTMLButtonElement;
+    const saveBtn = utils.getByTestId("doc-card-save") as HTMLButtonElement;
     expect(saveBtn.disabled).toBe(true);
     fireEvent.click(saveBtn);
-    expect(utils.queryByTestId("boot-doc-save-confirm")).toBeNull();
+    expect(utils.queryByTestId("doc-card-save-confirm")).toBeNull();
     expect(save).not.toHaveBeenCalled();
 
-    // The usage readout carries the same pair, so the number is on screen
-    // before anyone crosses the line as well as after.
-    expect(utils.getByTestId("boot-doc-usage").textContent).toBe(
+    // The usage readout carries the same pair, and it follows the DRAFT — a
+    // readout frozen at the stored size cannot say anything about the text
+    // about to be sent.
+    expect(utils.getByTestId("doc-card-usage").textContent).toBe(
       `${shown} / ${cap}`
     );
   });
@@ -268,6 +358,7 @@ describe("BootDocPage", () => {
     await api.patchServerSettings({ docCapCharsSystemInteraction: shipped });
 
     const utils = renderSystem();
+    fireEvent.click(await utils.findByTestId("doc-card-edit"));
     fireEvent.click(
       await utils.findByTestId("doc-history-entry-system_interaction")
     );
@@ -335,15 +426,14 @@ describe("BootDocPage", () => {
     expect(notes).toContain(s.bootDocNoteCap);
     expect(notes).toContain("10");
     expect(notes).toContain("存檔次數");
-    expect(utils.getByTestId("boot-doc-reset")).toBeTruthy();
+    expect(utils.getByTestId("doc-card-reset")).toBeTruthy();
   });
 
   it("warns about the silent boot failure before saving a boot sequence, and does not cry wolf on the system block", async () => {
     const claude = renderClaude();
-    await claude.findByTestId("boot-doc-sec-0");
-    await pasteSection(claude, 0, "# x\n\n");
-    fireEvent.click(claude.getByTestId("boot-doc-save"));
-    const bootConfirm = await claude.findByTestId("boot-doc-save-confirm");
+    await typeWholeDoc(claude, "# x\n");
+    fireEvent.click(claude.getByTestId("doc-card-save"));
+    const bootConfirm = await claude.findByTestId("doc-card-save-confirm");
     expect(bootConfirm.textContent).toContain(s.bootDocSaveConfirmBoot);
     claude.unmount();
 
@@ -352,57 +442,32 @@ describe("BootDocPage", () => {
     // comes online. A warning that is false for the document on screen teaches
     // the reader to dismiss the one that is true.
     const system = renderSystem();
-    await system.findByTestId("boot-doc-sec-0");
-    await pasteSection(system, 0, "# y\n\n");
-    fireEvent.click(system.getByTestId("boot-doc-save"));
-    const systemConfirm = await system.findByTestId("boot-doc-save-confirm");
+    await typeWholeDoc(system, "# y\n");
+    fireEvent.click(system.getByTestId("doc-card-save"));
+    const systemConfirm = await system.findByTestId("doc-card-save-confirm");
     expect(systemConfirm.textContent).toContain(s.bootDocSaveConfirmSystem);
     expect(systemConfirm.textContent).not.toContain(s.bootDocSaveConfirmBoot);
   });
 
-  it("edits one section without disturbing the others", async () => {
-    // The requirement behind the whole sectioned surface: the owner agrees with
-    // some of a proposal and not the rest, so applying one block must leave
-    // every other block exactly as it was.
+  it("refuses a save that would change nothing", async () => {
+    // A no-op write is not harmless here: it flips the document out of 預設 for
+    // ever, and "is this still the factory version" is the question people ask
+    // about these three. (角色定義 / 使用者自訂 keep their unconditional 完成
+    // 編輯 — `requireDirty` is opt-in precisely so this does not arrive under
+    // them.)
+    const save = vi.spyOn(api, "saveBootDoc");
     const utils = renderClaude();
-    await utils.findByTestId("boot-doc-sec-0");
-    const before = await api.getBootDoc("boot_sequence", "claude");
-    const others = utils.getAllByTestId(/^boot-doc-sec-\d+$/).length;
-
-    await pasteSection(utils, 1, "## 換掉的執行環境標題\n\n");
-    expect(utils.getByTestId("boot-doc-sec-pending-1")).toBeTruthy();
-    expect(utils.queryByTestId("boot-doc-sec-pending-0")).toBeNull();
-    expect(utils.getAllByTestId(/^boot-doc-sec-\d+$/).length).toBe(others);
-
-    // Nothing has been written yet — applying is not saving.
-    expect(await api.getBootDoc("boot_sequence", "claude")).toEqual(before);
-
-    // And it can be taken back one section at a time.
-    fireEvent.click(utils.getByTestId("boot-doc-sec-discard-1"));
-    expect(utils.queryByTestId("boot-doc-sec-pending-1")).toBeNull();
-    expect(utils.queryByTestId("boot-doc-save-confirm")).toBeNull();
-    expect((utils.getByTestId("boot-doc-save") as HTMLButtonElement).disabled).toBe(
+    fireEvent.click(await utils.findByTestId("doc-card-edit"));
+    expect((utils.getByTestId("doc-card-save") as HTMLButtonElement).disabled).toBe(
       true
     );
-  });
 
-  it("previews a pasted section as rendered markdown before it is applied", async () => {
-    // 「自己改、當場看結果」 — the reason the owner chose this direction over a
-    // code change. The preview shows the block the way the agent will read it,
-    // and it is reachable from inside the editor rather than after a save.
-    const utils = renderClaude();
-    await utils.findByTestId("boot-doc-sec-0");
-    fireEvent.click(utils.getByTestId("boot-doc-sec-paste-0"));
-    fireEvent.change(utils.getByTestId("boot-doc-sec-editor-0"), {
-      target: { value: "# 預覽得到的標題\n" },
+    fireEvent.change(utils.getByTestId("doc-card-editor"), {
+      target: { value: "# 真的改了\n" },
     });
-    // Still raw text while editing…
-    expect(utils.queryByText("預覽得到的標題")).toBeNull();
-
-    fireEvent.click(utils.getByTestId("boot-doc-sec-preview-0"));
-    expect(utils.queryByTestId("boot-doc-sec-editor-0")).toBeNull();
-    expect(utils.getByText("預覽得到的標題").tagName).toBe("H1");
-    // …and nothing was written to get there.
-    expect(utils.queryByTestId("boot-doc-sec-pending-0")).toBeNull();
+    expect((utils.getByTestId("doc-card-save") as HTMLButtonElement).disabled).toBe(
+      false
+    );
+    expect(save).not.toHaveBeenCalled();
   });
 });
