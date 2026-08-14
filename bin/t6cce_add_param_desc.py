@@ -12,73 +12,83 @@ The splice is checked by parsing before and after: the only difference the two
 objects may show is exactly the descriptions being added.
 """
 import json
+import re
 import sys
 
 SPEC = "spec/openapi.json"
 
 
-PROP_IND = " " * 10  # a parameter name inside inputSchema.properties
-KEY_IND = " " * 12  # that parameter's own keys
+def _match_brace(text, i):
+    """Index just past the `{` at text[i]'s matching `}` — string-aware."""
+    depth, j = 0, i
+    while j < len(text):
+        c = text[j]
+        if c == '"':
+            j += 1
+            while text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    raise ValueError("unbalanced braces")
+
+
+def _top_keys(text, lo, hi):
+    """(key, index) for each key directly inside the object spanning lo..hi."""
+    out, depth, j = [], 0, lo
+    while j < hi:
+        c = text[j]
+        if c == '"':
+            k = j + 1
+            while text[k] != '"':
+                k += 2 if text[k] == "\\" else 1
+            if depth == 1 and text[k + 1:k + 2] == ":":
+                out.append((json.loads(text[j:k + 1]), j))
+            j = k
+        elif c == "{" or c == "[":
+            depth += 1
+        elif c == "}" or c == "]":
+            depth -= 1
+        j += 1
+    return out
 
 
 def splice(raw, param, desc):
     """Insert a description key into `param`'s object inside the raw descriptor.
 
-    Alphabetical key order is preserved, and nothing outside the inserted line
-    is touched — the file's escaping is inconsistent enough that re-serializing
-    would rewrite bytes this change has no business rewriting.
+    Indentation is NOT uniform in these descriptors — hand edits have left a
+    property whose opening brace, keys and closing brace all sit at different
+    depths — so nothing here is derived from indentation. The object is found
+    by brace matching, and the inserted line copies the indentation of the
+    neighbouring key it is placed against.
     """
-    lines = raw.split("\n")
-    open_line = f'{PROP_IND}"{param}": {{'
     encoded = json.dumps(desc)
+    opener = re.compile(r'^(\s*)"' + re.escape(param) + r'": \{', re.M)
+    hits = list(opener.finditer(raw))
+    if len(hits) != 1:
+        sys.exit(f"{param}: property object is not uniquely locatable "
+                 f"({len(hits)} candidates)")
+    brace = raw.index("{", hits[0].start())
+    close = _match_brace(raw, brace)
 
-    # Some descriptors write a property inline: `"key": {"type": "string"},`.
-    inline = [i for i, l in enumerate(lines)
-              if l.startswith(open_line) and l.rstrip(",").endswith("}")]
-    if inline:
-        if len(inline) != 1:
-            sys.exit(f"{param}: property object is not uniquely locatable")
-        i = inline[0]
-        head, _, rest = lines[i].partition("{")
-        inner = rest.rstrip()[: rest.rstrip().rindex("}")]
-        tail = lines[i][len(head) + 1 + len(inner):]
-        keys = [k for k in json.loads("{" + inner + "}")]
-        after = [k for k in keys if k > "description"]
-        if after:
-            at = inner.index(f'"{after[0]}"')
-            inner = inner[:at] + f'"description": {encoded}, ' + inner[at:]
-        else:
-            inner = inner.rstrip() + f', "description": {encoded}'
-        return "\n".join(lines[:i] + [head + "{" + inner + tail] + lines[i + 1:])
+    keys = _top_keys(raw, brace, close)
+    after = [pos for key, pos in keys if key > "description"]
+    anchor = after[0] if after else (keys[-1][1] if keys else None)
+    if anchor is None:  # empty object: `{}`
+        return raw[:brace + 1] + f'"description": {encoded}' + raw[close:]
 
-    try:
-        start = lines.index(open_line)
-    except ValueError:
-        sys.exit(f"{param}: could not locate its property object")
-    if lines.count(open_line) != 1:
-        sys.exit(f"{param}: property object is not uniquely locatable")
-
-    close = f"{PROP_IND}}}"
-    end = next(i for i in range(start + 1, len(lines))
-               if lines[i] in (close, close + ","))
-
-    at = end  # default: after the last key
-    for i in range(start + 1, end):
-        line = lines[i]
-        if not line.startswith(KEY_IND + '"') or line[len(KEY_IND)] != '"':
-            continue
-        key = json.loads(line[len(KEY_IND):line.index('":', len(KEY_IND)) + 1])
-        if key > "description":
-            at = i
-            break
-
-    if at == end:  # appended last — the previous key now needs a comma
-        lines[end - 1] += ","
-        new = f'{KEY_IND}"description": {encoded}'
-    else:
-        new = f'{KEY_IND}"description": {encoded},'
-    lines.insert(at, new)
-    return "\n".join(lines)
+    line_start = raw.rfind("\n", 0, anchor) + 1
+    indent = raw[line_start:anchor]
+    if after:
+        return raw[:line_start] + f'{indent}"description": {encoded},\n' + raw[line_start:]
+    # appended last: the previous key's line now needs a trailing comma
+    key_end = raw.index("\n", anchor) if "\n" in raw[anchor:close] else close
+    return (raw[:key_end] + ",\n" + f'{indent}"description": {encoded}'
+            + raw[key_end:])
 
 
 def load():

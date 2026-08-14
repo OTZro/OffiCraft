@@ -1319,10 +1319,12 @@
         "properties": {
           "account": {
             "default": null,
+            "description": "Which billing account this session is drawing on. It is READ ONLY IN COMPANY WITH runtime, and the failure is worse than a dropped field: send a perfectly valid account WITHOUT runtime and the server does not merely ignore it, it CLEARS the account pairing already recorded for this entry and returns 200. A previously correct display therefore goes blank because of a report that carried the right value. A non-string value is dropped silently to empty by the same path. Always send runtime alongside account.",
             "title": "Account"
           },
           "account_label": {
             "default": null,
+            "description": "Human-readable label for the account. It rides the same path as account - read only in company with runtime, dropped silently when the value is not a string - and it is HARDER to notice going wrong than account is, because the ingest response does not echo it back at all. There is no field in the reply to compare against what you sent, so a dropped label is invisible from the call site; the only way to see it is to read the monitoring view afterwards.",
             "title": "Account Label"
           },
           "binaries": {
@@ -1338,30 +1340,37 @@
           },
           "command_result": {
             "default": null,
+            "description": "Receipt for a command this reporter was asked to run. The only check is that the value is an object. Everything inside is best-effort: an unknown member id, an unknown worker, or a receipt that matches no outstanding command is written to the server's stderr and then swallowed, and the call answers 200 either way. A 200 here means the report was accepted, NOT that it was matched to anything - if you need to know the result was recorded, read the state it should have changed.",
             "title": "Command Result"
           },
           "cost": {
             "default": null,
+            "description": "Accumulated cost for this session. The ONLY check is that the value is a number - there is no sign check, no unit check and no upper or lower bound, so a negative figure, a value in the wrong currency, or one off by a factor of a thousand is stored verbatim and answers 200. It becomes what the monitoring view reports, so the number is trusted exactly as far as the caller computing it.",
             "title": "Cost"
           },
           "effort": {
             "default": null,
+            "description": "The reasoning-effort level this session is actually running at. The ONLY check is that the value is a string: unlike hire_member and update_member, which validate against the known effort levels, this path deliberately does NOT, so any string at all is accepted and overwrites the recorded effort. A typo is not refused, it is displayed - the monitoring view will report whatever you sent as though it were a real level.",
             "title": "Effort"
           },
           "hardware": {
             "default": null,
+            "description": "Hardware readings for this machine. Nothing is validated AT INGEST: keys the schema does not declare are stored and then never read by anything, and a declared key carrying the wrong type is accepted here and only surfaces much later, on the READ side, as an entry in hardware_invalid. So a 200 from this call says nothing about whether the readings will be usable - the report and the complaint are separated by a whole round trip.",
             "title": "Hardware"
           },
           "machine": {
             "default": null,
+            "description": "Which machine this telemetry is about. It is CONSULTED ONLY IF the caller's token carries no machine claim: when the token does carry one, this field is not compared, not validated and not reported on - it is simply never read, and the call answers 200 exactly as if it had been honoured. So a wrong value here is undetectable from the response, and a right value is redundant. Send it only when reporting from a caller whose token is not already bound to a machine.",
             "title": "Machine"
           },
           "model": {
             "default": null,
+            "description": "The model this session is actually running. The only check is that the value is a string, and there is no allow-list - an unknown or misspelled model is stored and displayed as though real. An EMPTY string is a silent no-op: it is accepted, changes nothing, and answers 200 like any other report, so 'I reported the model' and 'the model was recorded' are not the same statement.",
             "title": "Model"
           },
         "rate_limits": {
           "default": null,
+          "description": "Rate-limit state for this account. The ONLY check is that the value is an object; every key and value inside is stored unvalidated, so a misspelled key or a wrong unit is accepted and answers 200. What is stored here drives the pacing figures a reader sees, so a wrong shape does not fail loudly - it produces a confident-looking number that is not true.",
           "title": "Rate Limits"
         },
         "runtime": {
@@ -1374,10 +1383,12 @@
         },
         "self_update": {
             "default": null,
+            "description": "Self-update status for the reporting binary. The ONLY check is that the value is an object; nothing inside it is validated, and the content is not stored as structured state - it is printed to the server's stderr with unknown substituted for anything missing. So there is no reader that will reject a wrong shape, and nothing downstream depends on it being right.",
             "title": "Self Update"
           },
           "tokens": {
             "default": null,
+            "description": "Token counters for this session. The ONLY check is that the value is an object - the shape INSIDE it is not validated at all, so a misspelled counter name, a missing field or a string where a number belongs is stored as sent and answers 200. Nothing downstream will tell you the shape was wrong; the counters simply do not add up wherever they are read.",
             "title": "Tokens"
           }
         },
@@ -1554,6 +1565,7 @@
           },
           "text": {
             "default": "",
+            "description": "The ENTIRE global context - the boot instructions every agent in the studio reads - not an addition to it. Sending a fragment answers 200 and permanently drops the rest, and the blast radius is the whole roster: every agent that boots after this write reads what you sent and nothing else. Read the current text first and fold your change into it. NOTE THE GUARD ASYMMETRY: emptying a document that had content is refused unless allow_shrink is set, but this document has NO CHARACTER CAP at all, so there is no upper bound and no refusal for a write that is merely far too long, or far too short without being empty.",
             "title": "Text",
             "type": "string"
           }
@@ -1689,6 +1701,7 @@
               }
             ],
             "default": null,
+            "description": "Replaces the WHOLE role definition, not an addition to it - a fragment answers 200 and permanently drops the rest. The only guard here is the character cap, and it is one-directional BY DESIGN: it refuses writes that are too long, and never refuses one for being too short. There is no wipe guard on this path, so an empty string is accepted and clears the definition. Read the current text first and fold your change into it.",
             "title": "Definition Md"
           },
           "name": {
@@ -1701,6 +1714,7 @@
               }
             ],
             "default": null,
+            "description": "The role's display name - and for a FACTORY role it is SILENTLY DISCARDED rather than refused. The write applies the name only when the role is not one that ships with the product; for a factory role the field is skipped, the rest of the write proceeds, and the response answers 200 carrying the OLD name. Nothing says the rename was dropped, so the only way to know is to compare the name you sent against the name you got back. On roles you created yourself the field behaves as you would expect.",
             "title": "Name"
           },
           "role": {
@@ -1771,9 +1785,11 @@
             "type": "boolean"
           },
           "role_key": {
+            "description": "Names WHOSE insight this replaces. Nothing checks the key against the roster - it becomes the storage key as sent - so who catches a typo depends on WHO YOU ARE. An ordinary member may only write its own role, so a misspelling is refused with 403. An admin or the owner may write any role, and for them a misspelling silently creates an insight document under a role nobody answers to, complete with its own version history and change notification, and answers 200. The role you meant is untouched and unmentioned.",
             "type": "string"
           },
           "text": {
+            "description": "The ENTIRE insight doc, not an addition to it. Sending a fragment answers 200 and permanently replaces everything else, so read the doc first and fold your change into it, or use patch_insight to edit by anchor. The two guards here catch only the extremes: emptying a doc that had content needs allow_shrink, and the character cap is enforced. A replace that simply loses most of the text is neither empty nor over cap and passes silently.",
             "type": "string"
           }
         },
@@ -1807,6 +1823,7 @@
             "type": "array"
           },
           "role_key": {
+            "description": "Names WHOSE insight to edit. Nothing checks the key against the roster, so who catches a typo depends on WHO YOU ARE: an ordinary member may write only its own role and is refused with 403, while an admin or the owner is not refused at all. For them, an edit with a non-empty old fails to find its anchor in an empty document and returns 400, but the APPEND form (empty old) has no anchor to miss - it creates an insight document under a role nobody answers to and answers 200, leaving the role you meant untouched.",
             "type": "string"
           }
         },
@@ -1864,6 +1881,7 @@
             "type": "boolean"
           },
           "role_key": {
+            "description": "Names WHOSE lessons this replaces. Nothing checks the key against the roster - it goes straight into the storage key - so who catches a typo depends entirely on WHO YOU ARE. An ordinary member is saved by authorization: it may only write its own role, so a misspelling is refused with 403 and the mistake announces itself. An ADMIN OR THE OWNER may write any role, and for them a misspelling is not refused at all: it creates a lessons document under a role nobody answers to, answers 200, and fans a delta for it. The role you meant is untouched and unmentioned. The higher your privilege, the quieter this fails.",
             "type": "string"
           },
           "task_type": {
@@ -1872,6 +1890,7 @@
           },
           "text": {
             "default": "",
+            "description": "The ENTIRE lessons doc, not an addition to it. Sending the paragraph you wanted to add answers 200 and permanently drops everything else, so read the doc first and send it back with your change folded in - or use patch_lessons, which edits by anchor. Two guards stand here and neither catches the ordinary version of this mistake: emptying a doc that had content is refused unless allow_shrink is set, and exceeding the character cap is refused. A replace that merely loses most of the text is neither empty nor over cap, so it passes without comment.",
             "title": "Text",
             "type": "string"
           }
@@ -1917,6 +1936,7 @@
             "type": "array"
           },
           "role_key": {
+            "description": "Names WHOSE lessons to edit. Nothing checks the key against the roster, so who catches a typo depends on WHO YOU ARE: an ordinary member may only write its own role and is refused with 403, while an admin or the owner may write any role and gets no refusal at all. For them the edit form decides what happens next - an edit with a non-empty old cannot find its anchor in an empty document and fails with 400, but an edit with an EMPTY old (the append form) has no anchor to miss and CREATES a lessons document under a role nobody answers to, answering 200 while the role you meant stays untouched.",
             "type": "string"
           },
           "task_type": {
@@ -3148,6 +3168,7 @@
               }
             ],
             "default": null,
+            "description": "Replaces the manual's whole purpose text. Nothing validates it - no cap, no wipe guard, no format check - so an empty string clears it and a fragment replaces the rest, both answering 200. Omit the field to leave it alone; send the full text when you do mean to write.",
             "title": "Purpose"
           },
           "sop_md": {
@@ -3160,6 +3181,7 @@
               }
             ],
             "default": null,
+            "description": "Replaces the WHOLE SOP of this manual, and it is the only way in - there is no patch-by-anchor counterpart for this document the way patch_task_learnings exists for the learnings half. The only guard is the character cap: unlike write_task_learnings, there is NO wipe guard here, so an empty string is accepted and clears the SOP, and a fragment silently replaces everything else. Both answer 200. Read the current SOP first and fold your change into it. Omit the field to leave it alone.",
             "title": "Sop Md"
           },
           "type_key": {
@@ -3323,6 +3345,7 @@
             "type": "boolean"
           },
           "text": {
+            "description": "The ENTIRE system-interaction document, not an addition to it - and this is the one every agent reads while booting. Sending a fragment answers 200 and permanently drops the rest, so read the current text first and fold your change into it. The guards catch only the extremes: emptying a document that had content needs allow_shrink, and the character cap is enforced. A write that keeps a few paragraphs and loses the rest is neither, and passes without comment - while every agent that boots afterwards reads the shortened version as though it were the whole rulebook.",
             "type": "string"
           }
         },
@@ -3367,6 +3390,7 @@
             "type": "string"
           },
           "text": {
+            "description": "The ENTIRE boot-sequence document for that runtime, not an addition to it. Sending a fragment answers 200 and permanently replaces the rest. This document is read by agents while they are starting up, so a bad write is felt at the worst possible moment: an agent missing a boot step does not report an error, it simply never finishes coming online, and an agent that never comes online cannot be asked what went wrong. Read the current text first and fold your change into it. The guards catch only the extremes (emptying a doc that had content needs allow_shrink; the character cap is enforced); losing most of the text is neither.",
             "type": "string"
           }
         },
