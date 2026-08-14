@@ -13,16 +13,18 @@
 // What it owes on top of "edit / version history / restore to factory" comes
 // from one sentence: THE PERSON PRESSING THE BUTTON IS THE OWNER, NOT US.
 //
-// 🔴 THREE THINGS THIS PAGE MUST SAY OUT LOUD, because a cockpit that stays
-// quiet about them makes correct behaviour look broken:
-//   * WHEN IT TAKES EFFECT — only agents that boot after the save; a member
-//     already running does not change. Without this line, saving and then
-//     watching a live agent behave the old way reads as "the save did nothing".
-//   * VERSION HISTORY KEEPS TEN, COUNTED IN SAVES — not in time. A run of small
-//     saves pushes the older ones out, which is alarming if you thought it kept
-//     a week. 還原出廠版 is never consumed by any of that, and says so.
-//   * THE CHARACTER LIMIT — over-limit is refused with both numbers on screen,
-//     never silently truncated.
+// ⚠️ THIS HEADER USED TO SAY THREE THINGS THIS PAGE "MUST SAY OUT LOUD" — when
+// it takes effect, that history keeps ten counted in saves, and what the cap
+// does. That block was rendered above the card, and the owner had it REMOVED on
+// 2026-08-14 with an argument that generalises: if that explanation were needed,
+// EVERY editable context block would need one, and none of the others carry it.
+// He was then offered two homes for the text (the usage guide, or a dialog after
+// saving) and answered 「先不用」 ⇒ removed, and nothing put in its place.
+//   * Of the three, only the retention number survives, and it moved to the
+//     surface that USES it: the history list's own note (`note:` below), which
+//     overrides a default sentence that says three and would be false here.
+//   * The other two are simply not stated any more. That is the decision, not an
+//     oversight — do not "restore" them, here or above the card.
 //
 // 🔴 THE FAILURE THIS SURFACE RISKS IS SILENT. A broken boot sequence means the
 // agent never attaches to SSE, so it never comes online, so there is NOBODY
