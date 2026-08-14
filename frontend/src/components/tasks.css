@@ -990,8 +990,11 @@ button.task-card__status-chip:hover {
   margin-bottom: 0;
 }
 
-/* ── description in-place editing (T-e271) ──────────────────────────────────
-   Colours come only from theme tokens — no literals, per the tokens gate. */
+/* ── description block (read-only since T-e5b1) ─────────────────────────────
+   The in-place editors (T-e271 description, T-2ebe title) and their whole
+   atom family — hint / input / actions / save / cancel / editbtn — were
+   removed with the affordances that used them. What is left is the read
+   surface. Colours come only from theme tokens, per the tokens gate. */
 .task-card__desc-block {
   display: flex;
   flex-direction: column;
@@ -1001,102 +1004,6 @@ button.task-card__status-chip:hover {
 .task-card__desc-empty {
   color: var(--color-text-muted);
   font-size: 12.5px;
-}
-.task-card__desc-editbtn {
-  border: 1px solid var(--color-border);
-  background: transparent;
-  color: var(--color-text-muted);
-  border-radius: 6px;
-  padding: 3px 10px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.task-card__desc-editbtn:hover {
-  color: var(--color-text);
-  background: color-mix(in srgb, var(--color-text) 8%, transparent);
-}
-.task-card__desc-edit {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 100%;
-}
-.task-card__desc-hint {
-  color: var(--color-text-muted);
-  font-size: 12px;
-  line-height: 1.5;
-  /* Free text with no markdown rendering, so it does not inherit `.doc-md`'s
-     long-token rule (T-d451) and has to declare it here. */
-  overflow-wrap: anywhere;
-}
-.task-card__desc-input {
-  width: 100%;
-  box-sizing: border-box;
-  min-height: 96px;
-  resize: vertical;
-  border-radius: 10px;
-  border: 1px solid var(--color-border);
-  background: var(--color-bg);
-  color: var(--color-text);
-  padding: 8px 10px;
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.55;
-}
-.task-card__desc-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-.task-card__desc-save,
-.task-card__desc-cancel {
-  border-radius: 6px;
-  padding: 3px 12px;
-  font-size: 12px;
-  cursor: pointer;
-  border: 1px solid var(--color-border);
-  background: transparent;
-  color: var(--color-text);
-}
-.task-card__desc-save {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
-}
-.task-card__desc-save:disabled,
-.task-card__desc-cancel:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-/* ── title in-place editing (T-2ebe) ────────────────────────────────────────
-   Reuses the description editor's hint / actions / button atoms verbatim so the
-   two editors cannot drift apart; only the container and the single-line input
-   are its own. Colours come only from theme tokens, per the tokens gate. */
-.task-card__title-edit {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 100%;
-  min-width: 0;
-}
-.task-card__title-input {
-  width: 100%;
-  box-sizing: border-box;
-  border-radius: 10px;
-  border: 1px solid var(--color-border);
-  background: var(--color-bg);
-  color: var(--color-text-strong);
-  padding: 6px 10px;
-  font: inherit;
-  font-size: 15px;
-  font-weight: 700;
-  line-height: 1.4;
-}
-/* The affordance sits next to the heading on a flex row, so it must not be
-   squeezed by a long title. */
-.task-card__title-editbtn {
-  flex: none;
 }
 
 /* ── progress + elapsed ── */
@@ -1691,6 +1598,37 @@ button.task-card__waiting--dep:focus-visible {
    alarm. Always-stack like the waiting row — the label takes line 1, the
    markdown note line 2 — because a handover note is routinely several lines
    and wrapping it around a leading label reads badly. */
+/* ── the note's disclosure button (T-e5b1) ── the note is COLLAPSED by
+   default (owner: 「不然太長了」), so this row is what a reader sees on a step
+   that HAS one. It is deliberately a visible, labelled control rather than a
+   bare chevron: while every note is closed, the presence of this button is the
+   ONLY thing separating a step someone wrote a note on from one nobody did.
+   Same atoms as .mp-lastop__toggle (member-detail.css) so the cockpit keeps
+   one disclosure vocabulary. */
+.task-step__notewrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
+.task-step__note-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.task-step__note-toggle:hover {
+  color: var(--color-text);
+}
+.task-step__notewrap .task-step__note {
+  width: 100%;
+}
 .task-step__note {
   display: flex;
   align-items: flex-start;
