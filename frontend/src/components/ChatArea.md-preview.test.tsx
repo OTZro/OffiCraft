@@ -104,7 +104,7 @@ describe("chat .md preview action (T-a1c4 / T-7bc2)", () => {
     fireEvent.click(container.querySelector("button.chat__msg-file")!);
     await waitFor(() => expect(getByRole("heading", { name: "Design" })).toBeTruthy());
     // Preview and download are separate: the overlay carries its own 下載 link.
-    const dl = container.querySelector("a.md-preview__download") as HTMLAnchorElement;
+    const dl = document.body.querySelector("a.md-preview__download") as HTMLAnchorElement;
     expect(dl.getAttribute("download")).toBe("design.md");
   });
 
@@ -134,7 +134,7 @@ describe("chat .md preview action (T-a1c4 / T-7bc2)", () => {
     fireEvent.click(container.querySelector("button.chat__msg-file")!);
     await waitFor(() => expect(getByRole("heading", { name: "Design" })).toBeTruthy());
 
-    const actions = container.querySelector(".md-preview__actions") as HTMLElement;
+    const actions = document.body.querySelector(".md-preview__actions") as HTMLElement;
     const share = within(actions).getByRole("button", { name: "複製分享連結" });
     fireEvent.click(share);
     await waitFor(() => expect(mint).toHaveBeenCalledWith("a-md"));

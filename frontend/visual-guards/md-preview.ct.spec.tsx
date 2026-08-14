@@ -33,9 +33,11 @@ const WIDE = { width: 1280, height: 800 };
 
 test("desktop 1024: overlay panel lays out with a rendered markdown body", async ({ mount, page }) => {
   await page.setViewportSize({ width: 1024, height: 800 });
-  const cmp = await mount(<MarkdownPreviewStory />);
+  // The overlay portals to `document.body`, so it is NOT under the mount root:
+  // every reach for it goes through `page` (T-76cd).
+  await mount(<MarkdownPreviewStory />);
 
-  const panel = cmp.locator(".md-preview__panel");
+  const panel = page.locator(".md-preview__panel");
   await expect(panel).toBeVisible();
   const box = await panel.boundingBox();
   expect(box).not.toBeNull();
@@ -46,10 +48,10 @@ test("desktop 1024: overlay panel lays out with a rendered markdown body", async
 
   // The markdown BODY rendered as real elements (heading present) — the whole
   // point of the in-cockpit preview vs the browser's raw-source tab.
-  await expect(cmp.getByRole("heading", { name: "產物顯示架構設計" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "產物顯示架構設計" })).toBeVisible();
 
   // Preview and download are two actions: the header keeps a 下載 link.
-  const dl = cmp.locator("a.md-preview__download");
+  const dl = page.locator("a.md-preview__download");
   await expect(dl).toBeVisible();
 });
 
@@ -90,10 +92,12 @@ test("narrow 390: the whole preview panel, close button included, is inside the 
   page,
 }) => {
   await page.setViewportSize(NARROW);
-  const cmp = await mount(<MarkdownPreviewLongStory />);
-  const panel = cmp.locator(".md-preview__panel");
+  // The overlay portals to `document.body`, so it is NOT under the mount root:
+  // every reach for it goes through `page` (T-76cd).
+  await mount(<MarkdownPreviewLongStory />);
+  const panel = page.locator(".md-preview__panel");
   await expect(panel).toBeVisible();
-  await expect(cmp.locator(".md-preview__md")).toBeVisible();
+  await expect(page.locator(".md-preview__md")).toBeVisible();
 
   const seen = await page.evaluate(() => {
     const r = (s: string) => document.querySelector(s)!.getBoundingClientRect();
@@ -127,8 +131,8 @@ test("narrow 390: the whole preview panel, close button included, is inside the 
   expect(seen.panelMaxHeight).not.toBe("none");
 
   // And it must be pressable, not merely painted.
-  await expect(cmp.locator(".md-preview__close")).toBeEnabled();
-  await cmp.locator(".md-preview__close").click();
+  await expect(page.locator(".md-preview__close")).toBeEnabled();
+  await page.locator(".md-preview__close").click();
 });
 
 // DoD ② — a document taller than one screen is readable to its LAST line. The
@@ -151,10 +155,12 @@ test("narrow 390: a document longer than the screen scrolls to its last line", a
   page,
 }) => {
   await page.setViewportSize(NARROW);
-  const cmp = await mount(<MarkdownPreviewLongStory />);
-  const body = cmp.locator(".md-preview__body");
+  // The overlay portals to `document.body`, so it is NOT under the mount root:
+  // every reach for it goes through `page` (T-76cd).
+  await mount(<MarkdownPreviewLongStory />);
+  const body = page.locator(".md-preview__body");
   await expect(body).toBeVisible();
-  const last = cmp.getByText("最後一行 LAST_LINE_T76CD");
+  const last = page.getByText("最後一行 LAST_LINE_T76CD");
   await expect(last).toBeAttached();
 
   // PREMISE: the fixture really is longer than the box, otherwise "it scrolls"
@@ -263,8 +269,10 @@ test("desktop 1280: the panel geometry is unchanged by the narrow-width fix", as
   page,
 }) => {
   await page.setViewportSize(WIDE);
-  const cmp = await mount(<MarkdownPreviewLongStory />);
-  await expect(cmp.locator(".md-preview__panel")).toBeVisible();
+  // The overlay portals to `document.body`, so it is NOT under the mount root:
+  // every reach for it goes through `page` (T-76cd).
+  await mount(<MarkdownPreviewLongStory />);
+  await expect(page.locator(".md-preview__panel")).toBeVisible();
 
   const seen = await page.evaluate(() => {
     const el = document.querySelector(".md-preview__panel")!;
@@ -279,7 +287,7 @@ test("desktop 1280: the panel geometry is unchanged by the narrow-width fix", as
 
   // The desktop overlay still scrolls its long body — the control is a control,
   // not a licence for the wide case to break quietly.
-  const overflow = await cmp
+  const overflow = await page
     .locator(".md-preview__body")
     .evaluate((el) => el.scrollHeight - el.clientHeight);
   expect(overflow).toBeGreaterThan(400);
@@ -308,9 +316,11 @@ test("landscape 844x390: the short-viewport rule gives the panel the screen, min
   page,
 }) => {
   await page.setViewportSize({ width: 844, height: 390 });
-  const cmp = await mount(<MarkdownPreviewLongStory />);
-  await expect(cmp.locator(".md-preview__panel")).toBeVisible();
-  await expect(cmp.locator(".md-preview__md")).toBeVisible();
+  // The overlay portals to `document.body`, so it is NOT under the mount root:
+  // every reach for it goes through `page` (T-76cd).
+  await mount(<MarkdownPreviewLongStory />);
+  await expect(page.locator(".md-preview__panel")).toBeVisible();
+  await expect(page.locator(".md-preview__md")).toBeVisible();
 
   const seen = await page.evaluate(() => {
     const r = (s: string) => document.querySelector(s)!.getBoundingClientRect();
@@ -342,7 +352,7 @@ test("landscape 844x390: the short-viewport rule gives the panel the screen, min
 
   // The body still scrolls at this height — a panel that fits by refusing to
   // show its content would satisfy every line above.
-  const overflow = await cmp
+  const overflow = await page
     .locator(".md-preview__body")
     .evaluate((el) => el.scrollHeight - el.clientHeight);
   expect(overflow).toBeGreaterThan(400);
