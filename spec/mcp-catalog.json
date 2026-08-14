@@ -836,7 +836,7 @@
           },
           "meta": {
             "additionalProperties": true,
-            "description": "Free-form metadata carried alongside the message. The map is copied through wholesale with NO validation of keys or values, so a misspelled key is stored rather than refused and simply never read by anything. One key is not yours to set: the handler OVERWRITES meta.attachments with what it computed from the attachments you actually sent, so anything you put there is discarded without comment.",
+            "description": "Free-form metadata carried alongside the message. The map is copied through wholesale with NO validation of keys or values, so a misspelled key is stored rather than refused and simply never read by anything. One key is different, and it is not simply taken from you: meta.attachments is the ONLY link a message has to its blobs. The handler overwrites it with what it computed - but ONLY when this call actually carried attachments. Send none, and whatever you put under that key is stored as this message's attachment refs; it also satisfies the 'must carry text or an attachment' check, so a message with no text and no real attachment gets through with a 200. If you are not sending attachments, do not put an attachments key in meta.",
             "title": "Meta",
             "type": "object"
           },
@@ -867,7 +867,7 @@
           },
           "caller_only": {
             "default": false,
-            "description": "The literal STRING \"true\" (any other value is ignored) narrows the listing to messages the caller itself sent or received. Because the ordinary listing filters on a PARTICIPANT rather than on you, this is how you exclude conversations you were not part of - but applied to a conversation you were never in, it filters everything away and answers 200 with an EMPTY list, which reads exactly like a conversation with no messages. If you set this and got nothing, check whether you were a participant before concluding the thread is empty.",
+            "description": "A real BOOLEAN - the schema declares it type boolean, default false - not a string. A value the parameter binder cannot read as a boolean is refused with 422 rather than ignored; do not copy the sibling peek, which really is a string compared literally against 'true'. Omitted or false leaves the listing exactly as it was. True narrows it to messages the caller itself sent or received. Because the ordinary listing filters on a PARTICIPANT rather than on you, this is how you exclude conversations you were not part of - but applied to a conversation you were never in, it filters everything away and answers 200 with an EMPTY list, which reads exactly like a conversation with no messages. If you set this and got nothing, check whether you were a participant before concluding the thread is empty.",
             "type": "boolean"
           },
           "ids": {
@@ -928,7 +928,7 @@
         "properties": {
           "last_read_ts": {
             "default": 0.0,
-            "description": "Mark everything up to this timestamp as read. The watermark only ever moves FORWARD: a value at or below the one already stored changes nothing. That makes two easy mistakes silent - a timestamp in the wrong unit (these are epoch SECONDS) and OMITTING the field entirely, which sends 0 and therefore cannot advance anything you have already read. Unlike most of this family the call does tell you: the response carries `advanced`, so read that rather than the status code to learn whether the watermark actually moved.",
+            "description": "Mark everything up to this timestamp as read. The watermark only ever moves FORWARD: a value at or below the one already stored changes nothing. That makes two easy mistakes silent - a timestamp in the wrong unit (these are epoch SECONDS, fractional) and OMITTING the field entirely, which sends 0 and therefore cannot advance anything you have already read. Nothing in the response announces whether it moved: the reply carries exactly three fields (reader_id, peer_id, last_read_ts) and the status is 200 either way. What it does give you is the EFFECTIVE stored watermark in last_read_ts, so compare that against the value you sent - getting back something higher than you sent means yours was stale and nothing happened.",
             "title": "Last Read Ts",
             "type": "number"
           },
