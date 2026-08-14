@@ -1401,7 +1401,7 @@
         },
         "self_update": {
             "default": null,
-            "description": "Self-update status for the reporting binary. The ONLY check is that the value is an object; nothing inside it is validated, and the content is not stored as structured state - it is printed to the server's stderr with unknown substituted for anything missing. So there is no reader that will reject a wrong shape, and nothing downstream depends on it being right.",
+            "description": "Self-update status for the reporting binary. The ONLY check is that the value is an object - anything else is a flat 400, 'self_update must be an object' - and nothing inside it is checked. What you send IS kept: it is merged onto this reporter's telemetry entry and echoed back on THIS response under self_update, so a misspelled sub-key reads back looking fine and is simply never used by anything. The one place a wrong shape shows up is a line on the SERVER's stderr, which prints binary, old_hash, new_hash and at, substituting '?' for whatever is missing - and you cannot see it. Two consequences worth planning for: that entry is an IN-MEMORY map, so everything here is gone the moment the server re-execs; and this endpoint MERGES, so omitting self_update does not clear it - the previous report's value stays on the entry and is echoed back to you again.",
             "title": "Self Update"
           },
           "tokens": {
@@ -1510,7 +1510,7 @@
       "inputSchema": {
         "properties": {
           "machine_id": {
-            "description": "Which machine the caller claims to be talking about - and today no value gets past the guard. An unknown or retired id is a 404; every id that resolves is a 409, in one of two ways. The server-local machine is refused because it cannot be retired at all. Any OTHER machine is refused because this verb carries no machine selector: it can only ever tear down the warden on the server's own host, so honouring the request would destroy this host's daemon under another machine's name. Both refusals name the route to use instead - the remote uninstall plus a delete to retire another machine, and install_warden_on_server_host, which force-overwrites, to repair this host.",
+            "description": "Which machine the caller claims to be talking about - and today no value gets past the guard. An unknown or retired id is a 404; every id that resolves is a 409, in one of two ways, and the two refusals do NOT tell you the same amount. Naming the server-local machine (its id is 'm-server-self') answers one bare sentence - the server-local machine cannot be deleted - with no route to try instead. Naming any OTHER machine answers a long refusal that DOES name the way out, because this verb carries no machine selector at all: it can only ever tear down the warden on the server's own host, so honouring the request would destroy this host's daemon under another machine's name. That second message is the one that points at the remote uninstall plus a delete to retire another machine, and at install_warden_on_server_host, which runs install --force to repair this host. Read it even when you meant the first one: the repair path for THIS host is only ever printed there.",
             "type": "string"
           }
         },
