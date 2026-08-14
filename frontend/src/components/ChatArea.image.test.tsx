@@ -106,10 +106,10 @@ describe("ChatArea image rendering", () => {
       "img.chat__msg-image"
     ) as HTMLImageElement;
 
-    expect(container.querySelector(".md-preview")).toBeNull();
+    expect(document.body.querySelector(".md-preview")).toBeNull();
 
     fireEvent.click(img);
-    const popup = container.querySelector(".md-preview");
+    const popup = document.body.querySelector(".md-preview");
     expect(popup).toBeTruthy();
     const full = popup?.querySelector(
       "img.md-preview__image"
@@ -119,7 +119,7 @@ describe("ChatArea image rendering", () => {
     );
 
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(container.querySelector(".md-preview")).toBeNull();
+    expect(document.body.querySelector(".md-preview")).toBeNull();
   });
 
   // T-f014: the staged composer thumbnail was the LAST surface still opening
@@ -141,7 +141,7 @@ describe("ChatArea image rendering", () => {
     expect(staged.startsWith("data:image/png;")).toBe(true);
 
     fireEvent.click(thumb);
-    const popup = container.querySelector(".md-preview");
+    const popup = document.body.querySelector(".md-preview");
     expect(popup, "the staged thumbnail must open the SHARED overlay").not.toBeNull();
     const full = popup!.querySelector<HTMLImageElement>("img.md-preview__image");
     expect(full, "the shared overlay must render the staged bytes as an image").not.toBeNull();

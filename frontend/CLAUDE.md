@@ -274,6 +274,31 @@ stylesheet 零 `.chat__lightbox` 規則,附正負對照與 corpus 非空檢查)�
   行為一致。**別假設某個引擎的觀察可以外推**:mutant 實測,壞版本在 WebKit 只紅 4 條、
   在 Chromium 紅 6 條。
 
+**這個 overlay `createPortal` 到 `document.body`(T-76cd),而那是正確性、不是整潔**。
+`z-index: 1100` 只值它「最近的 stacking context 祖先」那麼多:就地 render 時它住在任務
+產物彈窗裡,而 `.task-artifacts { z-index: 40 }` 把那個 1100 圈在那顆盒子內 ⇒ 頁首與
+分頁列畫在預覽上面、關閉鈕點不到(owner 的 iPhone:「看不到按關閉的按鈕, 被擋住了
+且上面的 tab 全部都不能按」)。**每一個宿主都有同樣的曝險,只是還沒發作**——祖先只要有
+z-index、opacity、`isolation`,或 `transform`(它連 fixed 的 containing block 都一起
+困住),就會再圈一次。portal 讓它的 root stacking context **構造上**就是根,所以沒有
+宿主圈得住它、也沒有宿主需要承諾不圈。
+- 🔴 **代價是 DOM containment 沒了,而有一個 caller 靠它**:`TaskArtifactsPopover` 的
+  click-outside 判定本來白吃這件事——overlay 住在 `anchorRef` 裡,點它的灰底就算
+  「在裡面」,產物面板因此不關(owner 2026-07-20:「點其他地方都不會自動關閉,一定要
+  點 X」)。portal 之後 `contains()` 對預覽的**每一個點**都是 false,所以那條規則改成
+  **按選擇器**認(`closest(".md-preview")`)。**任何用祖先關係推論這個 overlay 的地方
+  都要同樣改**。
+- ⚠️ **測試面一起變了,而失敗的樣子會誤導**:`render()` 交還的 `container`、CT 的
+  `cmp` 都不含這個 overlay,`container.querySelector(".md-preview…")` 回 null、讀起來
+  像「overlay 根本沒 render」。jsdom 走 `document.body` / `screen`,CT 走 `page`。
+- 護欄:`visual-guards/artifacts-stacking.ct.spec.tsx`(真 Chromium,量
+  `elementFromPoint`)。**它守的是兩件互相拉扯的事**——彈窗要壓過**自己那張卡**
+  (`z-index: 40` 必須在),預覽要壓過**頁首/分頁列**(不可被祖先圈住)。b59c753 只顧了
+  後者(把 z-index 拿掉)就把前者弄壞了:那顆 commit 的成本表量了卡片**外**的四個層、
+  卡片**內**一個都沒量,而 owner 截圖裡蓋在面板上的正是同一張卡的身分列、頭像與送出鈕。
+  所以那條斷言**列舉、不點名**:走遍 `.task-card` 的每一個後代,與面板矩形有交集的都
+  要 hit-test 回面板內部。
+
 **樣式所有權**:`.md-preview*` 已從 office.css 抽成 `md-preview.css`,由
 `MarkdownPreviewOverlay.tsx` **自己 import**。原本它是靠 OfficePage / RepliesPage /
 TasksPage 的 transitive import 搭便車拿到樣式,而這個彈窗還會從任務產物彈窗、任務卡上
@@ -318,6 +343,13 @@ DOM listener 依註冊順序觸發,覆蓋層先關掉自己、把 `false` 回報
   會**完全顛倒**(三層巢狀時 Esc 給最外層,最內層永遠收不到)。「巢狀面一定是後續互動
   才開的」**沒有任何東西在維持**,deep-link 就會踩到。註冊順序只留給**互不包含**的兩
   個面(兩個並排 dialog)當 tie-break:後開的在上。
+  ⚠️ **產物彈窗 + 預覽這一對自 T-76cd 起就是走 tie-break 那條,不是包含關係那條**:
+  overlay portal 到 `document.body` 之後,兩個根節點互不包含,`topLayer()` 因此落到
+  「後註冊的在上」。這一對今天答案仍然對(預覽是後續互動才開的,註冊在後),但**那是
+  巧合成立、不是結構保證**——正是上面那句「巢狀面一定是後續互動才開的沒有東西在維持」
+  講的情況。所以它被實測釘住:`artifacts-stacking.ct.spec.tsx` 的
+  「Esc closes the preview first and the popover second」(真瀏覽器,兩層都開著按兩次)
+  加上 `TaskArtifactsPopover.test.tsx` 既有的兩層用例。
 - **用法**:`useEscapeLayer(onEscape, ref)` —— `ref` 指向這個面的根節點,巢狀關係就是
   從它讀的,**會被別的面包住的都要傳**;常駐元件裡的子視窗傳第三個參數 `active`
   (關著就不佔位)。handler 身分每次 render 變都沒關係,**層的位置不會動**。
