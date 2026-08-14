@@ -3062,6 +3062,7 @@
               }
             ],
             "default": null,
+            "description": "Who executes tasks of this type. Supplying it at all is governance - a caller below admin-agent is a 403 - and the sub-keys the server KNOWS are checked properly: kind must be 'member' or 'outsource' (400 otherwise), an outsource runtime, effort and copies are each validated against their own range, and an outsource machine must actually resolve. What is not checked is anything else you put in the object: unknown sub-keys are neither rejected nor read, just marshalled into the stored blob, so 'copys', 'mashine' or 'modle' are accepted with 200 and then never take effect. The one known key that escapes real checking is member_id - it is only tested for being non-empty, never looked up in the roster.",
             "title": "Assignee"
           },
           "display_name": {
@@ -3074,6 +3075,7 @@
               }
             ],
             "default": null,
+            "description": "Human-readable label for the type. Whether a blank one is refused depends entirely on the OTHER field: with no type_key this is the only input there is, so blank is a 400; with a type_key supplied, a blank display_name is silently backfilled with that type_key and answers 200. The failure is therefore not an error message but a type list in which one row is labelled with its raw id while every other row carries a real name.",
             "title": "Display Name"
           },
           "type_key": {
@@ -3086,6 +3088,7 @@
               }
             ],
             "default": null,
+            "description": "Stable id for the new task type, and the legacy compatibility path: supply it and it is taken verbatim as the id, an existing one being a 409. OMITTING it is not a validation error - the server mints an id of its own ('tm-' plus twelve hex characters) and creates the manual under that, 200 - so a caller who meant to set a memorable key ends up with a random one and finds out only by reading type_key back out of the response. On that minting path display_name becomes mandatory (blank is a 400); on the legacy path a blank display_name is silently backfilled with this key.",
             "title": "Type Key"
           }
         },
@@ -3124,6 +3127,7 @@
               }
             ],
             "default": null,
+            "description": "Replacement assignee object for the type - governance, so a caller below admin-agent supplying it is a 403. It is a WHOLE-OBJECT replacement, not a merge: what you send becomes the entire assignee, so an outsource assignee re-sent as kind plus machine silently drops the copies and effort that were there before, and an empty object clears the assignee altogether. Both answer 200. The same checks as the create face apply - kind must be 'member' or 'outsource', an outsource runtime, effort and copies are range-checked and machine must resolve - and so does the same gap: unknown sub-keys are stored verbatim and never read, and member_id is only tested for being non-empty, never looked up.",
             "title": "Assignee"
           },
           "display_name": {
