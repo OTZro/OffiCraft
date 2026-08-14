@@ -72,6 +72,7 @@ import { copyText } from "../lib/clipboard";
 import { resolveStepBadge } from "../lib/stepBadge";
 import { autosizeTextarea } from "../lib/autosize";
 import { navigateHash } from "../lib/hashRoute";
+import { keepAnchored } from "../lib/scrollAnchor";
 import { deriveTaskNo } from "../lib/taskNo";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { enterShouldSend } from "../lib/composerKeys";
@@ -591,8 +592,47 @@ export function TaskCard({
   // owner asked for the simplest thing, not a remembered preference.
   const [openNotes, setOpenNotes] = useState<Record<string, boolean>>({});
   const noteOpen = (stepId: string) => openNotes[stepId] === true;
-  const toggleNote = (stepId: string) =>
+  // 展開後畫面停在你點開的那一則 (T-4e39, owner 2026-08-15「像在一疊紙中間插進去
+  // 十張」). Opening a note inserts a block of text into a column that is
+  // already taller than the window, and the reflow can carry the row that was
+  // just clicked off screen — measured on a 390×844 phone, the note's own
+  // bottom already sat at 853 with ONE note open, and opening a note above it
+  // moved it from top 521 to top 877. So the click records where the row was,
+  // and a layout effect puts it back before the browser paints.
+  //
+  // Only OPENING is corrected, and 🔴 that leaves a KNOWN HOLE rather than a
+  // solved case: collapsing a note ABOVE the one you are reading drags the one
+  // you are reading upward — MEASURED at 390×844, collapsing step 1 moved step
+  // 5 from top 375 to top 907, 532px and off screen, which is this ticket's
+  // defect on the other half. (The distance tracks the scroll position and the
+  // note's length — the CT story's own fixture gives 506px and 903px at its two
+  // lengths — so treat "it leaves the window", not 532, as the finding.)
+  // What is true with no code is only that the row
+  // you CLICKED keeps its y (what a collapse removes sits below its toggle),
+  // and that row is the one a collapse cannot move anyway. Leaving the rest is
+  // this ticket's scope ruling; the follow-up is T-6630, which is not
+  // automatically a yes — it has to be judged on how often this really happens,
+  // and closing it with a written reason is a legitimate outcome.
+  const noteAnchorRef = useRef<{ stepId: string; top: number } | null>(null);
+  const toggleNote = (stepId: string, from: HTMLElement | null) => {
+    const opening = openNotes[stepId] !== true;
+    const wrap = from?.closest(".task-step__notewrap") ?? null;
+    noteAnchorRef.current =
+      opening && wrap
+        ? { stepId, top: wrap.getBoundingClientRect().top }
+        : null;
     setOpenNotes((m) => ({ ...m, [stepId]: !m[stepId] }));
+  };
+  useLayoutEffect(() => {
+    const anchor = noteAnchorRef.current;
+    noteAnchorRef.current = null;
+    if (!anchor) return;
+    const step = Array.from(
+      rootRef.current?.querySelectorAll('[data-testid="task-step"]') ?? []
+    ).find((n) => n.getAttribute("data-step-id") === anchor.stepId);
+    const wrap = step?.querySelector(".task-step__notewrap");
+    if (wrap) keepAnchored(wrap, anchor.top);
+  }, [openNotes]);
   const prioRef = useRef<HTMLDivElement>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -893,7 +933,7 @@ export function TaskCard({
               className="task-step__note-toggle"
               data-testid="step-note-toggle"
               aria-expanded={noteOpen(step.id)}
-              onClick={() => toggleNote(step.id)}
+              onClick={(e) => toggleNote(step.id, e.currentTarget)}
             >
               {noteOpen(step.id) ? (
                 <ChevronDownIcon size={14} />
