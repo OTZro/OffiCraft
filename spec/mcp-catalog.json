@@ -2071,6 +2071,7 @@
               }
             ],
             "default": null,
+            "description": "The task's body text - what the executor reads to learn what is actually being asked. It is stored exactly as sent, with no validation and no length limit, and omitting it is not an error: the task is created with an empty description and answers 200. Nothing downstream fills it in and title is the only other free text the executor gets, so a task created without this arrives as a one-line instruction to whoever picks it up.",
             "title": "Description"
           },
           "executor_member_id": {
@@ -2083,6 +2084,7 @@
               }
             ],
             "default": null,
+            "description": "The member who is to execute the task. It is REQUIRED whenever the task ends up member-executed and the type manual names no assignee (blank is a 400), and it is ignored entirely when the manual assigns the type or when target routes the task to an outsource worker. What it never gets is a roster lookup - the id is stored as given. A plain agent is protected by the rule that it may only name ITSELF (anything else is a 403), so the silent failure belongs to owner and admin-agent callers: a mistyped id creates a task assigned to a member who does not exist, answers 200, and is then executed by nobody.",
             "title": "Executor Member Id"
           },
           "inputs": {
