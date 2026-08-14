@@ -115,16 +115,12 @@ export function BootDocPage({
         confirmBody: t.settings.bootDocResetConfirm,
         confirmLabel: t.settings.bootDocResetConfirmAction,
       }}
-      // The three things a quiet cockpit would let the owner misread. Rendered
-      // unconditionally — before the document, and regardless of whether it
-      // loaded — because all three are true of a page whose read failed too.
-      above={
-        <ul className="boot-doc__notes" data-testid="boot-doc-notes">
-          <li>{t.settings.bootDocNoteEffective}</li>
-          <li>{msg.bootDocNoteHistory(BOOT_DOC_HISTORY_KEPT)}</li>
-          <li>{t.settings.bootDocNoteCap}</li>
-        </ul>
-      }
+      // No explanatory notes block above the card. There used to be three
+      // bullets here (what a save affects, how many revisions are kept, what
+      // the cap does). The owner asked for them out on 2026-08-14 with an
+      // argument that generalises: if that explanation were needed, EVERY
+      // editable context block would need it — and none of the others carry
+      // one. So it was not this document being special, it was noise.
       errorNote={error ? <div className="set-error">{t.settings.loadError}</div> : null}
       history={{
         kind,

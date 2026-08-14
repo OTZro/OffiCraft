@@ -89,7 +89,6 @@ export interface DocCardProps {
   /** Optional content rendered ABOVE the card, between the title and the
    * recovery row — the boot-context pages' three standing notes. Symmetrical
    * with `extra`; absent for every other document. */
-  above?: ReactNode;
   /** An honest load-failure line, rendered above the card. The card itself
    * still renders, because 還原出廠版 must not need a successful read. */
   errorNote?: ReactNode;
