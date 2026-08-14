@@ -525,6 +525,12 @@ export function SettingsPage({
               }
             : null
         }
+        // 預設 comes off the ROSTER ROW, not off the document. The roster has
+        // carried `is_default` all along and it answers on its own request, so
+        // this stays true through the window where `getRole` is in flight or
+        // has failed — which is exactly the window in which reading it off the
+        // (absent) document badged an owner-edited role as shipped-default.
+        isDefault={role?.isDefault}
         // The roster answering while THIS read failed is a new state (they are
         // two requests now), and it has to say so instead of showing an empty
         // card under a real role's title.
@@ -533,13 +539,34 @@ export function SettingsPage({
             <div className="set-error" data-testid="role-doc-load-error">
               {t.settings.loadError}
             </div>
+          ) : roleDoc.loading ? (
+            // Loading and "this document is empty" are different screens, and
+            // an empty <Markdown> is indistinguishable from the second. The
+            // manuals page draws no card at all until the body lands
+            // (TaskManualsPage's `{manual && …}`); this page keeps its card
+            // because the title, the breadcrumb and 版本紀錄 are all readable
+            // without the body — so it says which state it is in instead.
+            <div className="doc-card__note" data-testid="role-doc-loading">
+              {t.settings.historyLoading}
+            </div>
           ) : undefined
         }
         crumbs={[crumbRoot, crumbRoles, { label: roleTitle }]}
         // The Duty doc has had a cap since T-ae38, and this is the only place
         // an owner or an agent sees how close it is to it. Omitted while the
         // role has not loaded — an invented 0/0 would read as a real budget.
-        usage={role ? { size: role.sizeChars, cap: role.capChars } : undefined}
+        //
+        // ⚠️ ALSO omitted while the DOCUMENT has not landed, even though the
+        // roster row (which carries both numbers) has. The two facts come from
+        // two requests now, and printing 「310 / 1000」 above a body that is
+        // blank because its own read failed puts two statements on screen that
+        // contradict each other — and the reader has no way to tell which one
+        // is the broken half.
+        usage={
+          role && roleDoc.role
+            ? { size: role.sizeChars, cap: role.capChars }
+            : undefined
+        }
         // Adopt the write echo: this page is no longer the roster's array, so
         // nothing else would put the saved text back on screen until an SSE
         // frame arrived — and a save must not depend on the stream being up.

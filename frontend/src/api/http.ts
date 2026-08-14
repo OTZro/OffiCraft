@@ -1960,7 +1960,7 @@ export const httpApi: Api = {
   },
 
   async listRoles(): Promise<RoleSummaryView[]> {
-    // GET /api/roles -> RoleDefDTO[]. T-1170: the roster answer is the
+    // GET /api/roles -> RoleDefListItemDTO[]. T-1170: the roster answer is the
     // DIRECTORY (no definition_md, only size_chars + cap_chars), so it maps to
     // the summary; the role page reads its document through getRole.
     const wire = unwrap(await client.GET("/api/roles"));

@@ -617,7 +617,7 @@ export interface paths {
          *     are reported by no listing on this station at any price, so before this route
          *     the only way to see them was one ``get_insight`` / ``get_lessons`` per role. The
          *     other three numbers exist elsewhere but scattered — a manual's sop_md/learnings
-         *     sizes and caps are on the ``list_task_manuals`` light view (``?view=list``), and
+         *     sizes and caps are on every ``list_task_manuals`` row, and
          *     a role definition's ``size_chars`` / ``cap_chars`` ride every ``list_roles``
          *     row. Read-only and deterministic; a station with no roles and no manuals gets
          *     empty arrays, never an error.

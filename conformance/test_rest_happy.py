@@ -258,6 +258,117 @@ def _nonempty_list(_ctx: HCtx, r: httpx.Response) -> None:
     assert isinstance(r.json(), list) and r.json(), "expected a non-empty list"
 
 
+def test_list_answers_carry_sizes_but_never_the_documents(client, owner_token):
+    """The three list endpoints answer a DIRECTORY, not the documents (T-1170).
+
+    This is the ticket's core promise and the ONLY thing this test looks at: a
+    list row must carry the SIZE of each long document and not the document.
+    It lives in the black-box suite because the promise is about the WIRE, and
+    the two halves that implement it — the Go handlers and the cockpit's
+    generated client — were each green against their own fixtures while
+    disagreeing with one another about a field name. A suite that only ever
+    asks one side cannot see that.
+
+    Every assertion is written to fail on the two DIFFERENT ways this regresses:
+      * the prose comes back (the key is present at all), and
+      * the size stops being real (0, or absent) — a size-shaped 0 is worse
+        than an honest omission, because it reads as a measurement.
+
+    The corpus is seeded here rather than assumed, so an empty station cannot
+    make this pass by having nothing to leak.
+    """
+    h = _auth(owner_token)
+    prose = "conformance directory probe — long enough to be worth omitting\n" * 4
+    n = len(prose)
+
+    # ── seed: one manual with both documents, one role definition, one
+    # retained revision. Absence has to mean "omitted", never "empty".
+    type_key = f"conf-dir-{uuid.uuid4().hex[:8]}"
+    r = client.post("/api/task-manuals", json={"type_key": type_key}, headers=h)
+    assert r.status_code == 200, r.text
+    r = client.post(
+        f"/api/task-manuals/{type_key}",
+        json={"sop_md": prose, "learnings": prose},
+        headers=h,
+    )
+    assert r.status_code == 200, r.text
+
+    r = client.post("/api/roles", json={"name": "conformance directory role"}, headers=h)
+    assert r.status_code == 200, r.text
+    role_key = r.json()["role"]["key"]
+    r = client.post(
+        f"/api/roles/{role_key}", json={"definition_md": "conf role prose"}, headers=h
+    )
+    assert r.status_code == 200, r.text
+
+    for text in ("conf directory history v1", "conf directory history v2"):
+        r = client.post("/api/global-context", json={"text": text}, headers=h)
+        assert r.status_code == 200, r.text
+
+    # ── list_task_manuals ───────────────────────────────────────────────────
+    r = client.get("/api/task-manuals", headers=h)
+    assert r.status_code == 200, r.text
+    rows = {m["type_key"]: m for m in r.json()}
+    assert type_key in rows, "the manual just created is not on its own listing"
+    m = rows[type_key]
+    for absent in ("sop_md", "learnings"):
+        assert absent not in m, (
+            f"list_task_manuals still carries {absent!r} — the default answer "
+            f"is the directory, and the body is GET /api/task-manuals/{{type_key}}"
+        )
+    assert m["sop_md_chars"] == n, f"sop_md_chars={m['sop_md_chars']!r}, want {n}"
+    assert m["learnings_chars"] == n, f"learnings_chars={m['learnings_chars']!r}, want {n}"
+
+    # ── list_roles ──────────────────────────────────────────────────────────
+    r = client.get("/api/roles", headers=h)
+    assert r.status_code == 200, r.text
+    roles = {x["key"]: x for x in r.json()}
+    assert role_key in roles, "the role just created is not on the roster"
+    role = roles[role_key]
+    assert "definition_md" not in role, (
+        "list_roles still carries definition_md — the document is GET /api/roles/{role}"
+    )
+    assert role["size_chars"] == len("conf role prose"), (
+        f"size_chars={role['size_chars']!r}, want {len('conf role prose')}"
+    )
+
+    # ── list_document_history ───────────────────────────────────────────────
+    r = client.get("/api/document-history/global_context/global", headers=h)
+    assert r.status_code == 200, r.text
+    versions = r.json()
+    assert versions, "two writes retained no version — this check would be vacuous"
+    v = versions[0]
+    assert "content" not in v, (
+        "list_document_history still carries content — the body is "
+        "GET /api/document-history/{kind}/{key}/{id}"
+    )
+    # `field_chars` is a MAP keyed by the kind's own field names, and
+    # `tombstoned` is its OWN boolean rather than an entry of that map: leaving
+    # it in would report the length of the string "true" — a 4 that looks like
+    # a measurement — where a reader looks for how long a field was.
+    assert isinstance(v["field_chars"], dict) and v["field_chars"], (
+        f"field_chars is not a populated map: {v.get('field_chars')!r}"
+    )
+    assert "tombstoned" not in v["field_chars"], (
+        f"tombstoned leaked into field_chars: {v['field_chars']!r}"
+    )
+    assert isinstance(v["tombstoned"], bool), (
+        f"tombstoned is not a boolean: {v['tombstoned']!r}"
+    )
+    want = len("conf directory history v1")
+    assert v["field_chars"]["text"] == want, (
+        f"field_chars.text={v['field_chars']['text']!r}, want {want} — a size "
+        f"that is not the real length is worse than no size at all"
+    )
+    # …and the text IS reachable, one revision at a time. Without this the
+    # assertions above would also pass against a server that lost the prose.
+    r = client.get(
+        f"/api/document-history/global_context/global/{v['id']}", headers=h
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["content"]["text"] == "conf directory history v1", r.text
+
+
 def test_members_default_includes_outsource_workers_and_light_preserves_kind(
     client, owner_token, hctx, fresh_machine
 ):

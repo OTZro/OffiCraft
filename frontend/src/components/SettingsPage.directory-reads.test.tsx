@@ -91,6 +91,11 @@ describe("設定 › 角色誌 · the roster is a directory (T-1170)", () => {
     // A state that could not exist before: two requests, one of which failed.
     // An empty card under a real role's title would read as "this role has no
     // definition", which is a different and false claim.
+    //
+    // The role is EDITED first, on purpose. That is what makes the badge
+    // assertion below discriminating: the roster row now says 預設 is false,
+    // so a badge on this page can only have come from the (absent) document.
+    await mockApi.saveRole("assistant", { definitionMd: DUTY_MD });
     vi.spyOn(mockApi, "getRole").mockRejectedValue(new Error("boom"));
 
     const utils = openSettings();
@@ -102,6 +107,72 @@ describe("設定 › 角色誌 · the roster is a directory (T-1170)", () => {
     // …and the editor stays shut rather than offering to overwrite a document
     // nobody managed to read.
     expect(utils.getByTestId("doc-card-edit")).toHaveProperty("disabled", true);
+
+    // 🔴 THE FAILURE PAGE MUST NOT ALSO MAKE CLAIMS IT CANNOT SUPPORT.
+    // The role above was EDITED by its owner, so 預設 is false — and the badge
+    // used to be derived from the document, which on this page is null. That
+    // turned "I could not read it" into the positive claim 預設, on the one
+    // screen where the reader has nothing else to go on.
+    expect(utils.queryByTestId("doc-card-default-badge")).toBeNull();
+    // Nor may it print a size budget over a body it failed to load: the roster
+    // row carries both numbers and answered fine, so 「N / cap」 would render
+    // above a blank document and the two would contradict each other.
+    expect(utils.queryByTestId("doc-card-usage")).toBeNull();
+  });
+
+  it("says it is LOADING rather than drawing an empty document", async () => {
+    // Loading and "this role has no definition" are different screens, and an
+    // empty <Markdown> is indistinguishable from the second — which is the
+    // shape the manuals page avoids by drawing no card until its body lands.
+    let release: (v: unknown) => void = () => {};
+    const held = new Promise((r) => {
+      release = r;
+    });
+    const real = mockApi.getRole.bind(mockApi);
+    vi.spyOn(mockApi, "getRole").mockImplementation(async (key: string) => {
+      await held;
+      return real(key);
+    });
+
+    const utils = openSettings();
+    fireEvent.click(utils.getByText(s.roles));
+    fireEvent.click(await utils.findByText(zh.office.role.assistant));
+
+    await utils.findByTestId("role-doc-loading");
+    // No fabricated budget while the document is still in flight, for the same
+    // reason as the failure case above.
+    expect(utils.queryByTestId("doc-card-usage")).toBeNull();
+
+    release(undefined);
+    await waitFor(() =>
+      expect(utils.queryByTestId("role-doc-loading")).toBeNull()
+    );
+    // …and once it lands the budget is back, so the assertion above is about
+    // the loading window and not about the number having been removed.
+    await utils.findByTestId("doc-card-usage");
+  });
+
+  it("keeps the 預設 badge honest off the ROSTER row while the document is still in flight", async () => {
+    // The seeded role IS shipped-default and its roster row says so, so the
+    // badge is readable before the body arrives. This is the other direction of
+    // the same rule: the page must not go silent about a fact it holds.
+    let release: (v: unknown) => void = () => {};
+    const held = new Promise((r) => {
+      release = r;
+    });
+    const real = mockApi.getRole.bind(mockApi);
+    vi.spyOn(mockApi, "getRole").mockImplementation(async (key: string) => {
+      await held;
+      return real(key);
+    });
+
+    const utils = openSettings();
+    fireEvent.click(utils.getByText(s.roles));
+    fireEvent.click(await utils.findByText(zh.office.role.assistant));
+
+    await utils.findByTestId("role-doc-loading");
+    await utils.findByTestId("doc-card-default-badge");
+    release(undefined);
   });
 });
 

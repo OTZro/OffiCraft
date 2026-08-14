@@ -218,9 +218,82 @@ func TestGetDocumentVersionSharesTheListingsGateAndRefusals(t *testing.T) {
 		}
 	}
 
-	// The address is the whole triple: an id that is not a version OF THIS
-	// document is a 404, never some other document's text.
+	// An id nothing retained is a 404.
 	if status, out := get("global_context", "global", id+9999, "owner", "owner"); status != http.StatusNotFound {
 		t.Fatalf("unknown version id = %d %s, want 404", status, out)
+	}
+
+	// 🔴 AND SO IS AN ID THAT IS REAL BUT BELONGS TO ANOTHER DOCUMENT — which
+	// is a different claim, and until now the only one nobody was checking.
+	// The line above passes an id NOTHING retained; a handler that looked up
+	// the revision by id alone and ignored the kind/key it was asked for would
+	// satisfy it perfectly and still serve one document's prose at another
+	// document's address. routes.go's summary promises this case by name
+	// ("including an id that belongs to some other document"), so it is a
+	// promise with no assertion under it.
+	//
+	// Revision ids come from one shared sequence, so an id minted for one
+	// document is a live id at the wrong address — exactly the shape that has
+	// to 404 rather than resolve.
+	roleA, roleB := "r-cross-a", "r-cross-b"
+	mintRoleRevision := func(role, text string) int64 {
+		t.Helper()
+		if err := api.dal.PutRoleDef(RoleDef{RoleKey: role, Name: role, DefinitionMD: text}); err != nil {
+			t.Fatal(err)
+		}
+		snapshot := func(sqlQuerier) (string, error) {
+			return roleDefHistorySnapshot(&RoleDef{RoleKey: role, Name: role, DefinitionMD: text})
+		}
+		if err := api.dal.SaveWithDocumentHistory("role_definition", role, "owner", snapshot,
+			func(ex sqlExecer) error {
+				return putRoleDefOn(ex, RoleDef{RoleKey: role, Name: role, DefinitionMD: text + " (next)"})
+			}); err != nil {
+			t.Fatal(err)
+		}
+		kept, err := api.dal.ListDocumentHistory("role_definition", role)
+		if err != nil || len(kept) == 0 {
+			t.Fatalf("role %s retained nothing: %v", role, err)
+		}
+		return kept[0].ID
+	}
+	secretA := "ROLE-A-ONLY-SECRET"
+	idA := mintRoleRevision(roleA, secretA)
+	idB := mintRoleRevision(roleB, "role-b-text")
+
+	// Control: each id IS readable at its OWN address. Without this the 404s
+	// below would also pass against a handler that simply refuses everything.
+	if status, out := get("role_definition", roleA, idA, "owner", "owner"); status != http.StatusOK {
+		t.Fatalf("role A revision at its own address = %d %s, want 200", status, out)
+	}
+	if !strings.Contains(func() string {
+		_, out := get("role_definition", roleA, idA, "owner", "owner")
+		return out
+	}(), secretA) {
+		t.Fatal("role A's own address did not return role A's text — the control is vacuous")
+	}
+
+	for _, tc := range []struct {
+		name      string
+		kind, key string
+		versionID int64
+	}{
+		// Different KIND, and the id belongs to the other kind's document.
+		{"role id asked for under global_context", "global_context", "global", idA},
+		// The reverse direction, so this is not one-way luck.
+		{"global id asked for under role_definition", "role_definition", roleA, id},
+		// Same KIND, different KEY — the narrowest miss, and the one a
+		// key-blind lookup would serve happily.
+		{"role A's id asked for under role B", "role_definition", roleB, idA},
+		{"role B's id asked for under role A", "role_definition", roleA, idB},
+	} {
+		status, out := get(tc.kind, tc.key, tc.versionID, "owner", "owner")
+		if status != http.StatusNotFound {
+			t.Fatalf("%s: status = %d %s, want 404 — an id is only valid at the address that minted it",
+				tc.name, status, out)
+		}
+		// A refusal must not leak what it refused to serve.
+		if strings.Contains(out, secretA) {
+			t.Fatalf("%s: the 404 body carried the OTHER document's text: %s", tc.name, out)
+		}
 	}
 }

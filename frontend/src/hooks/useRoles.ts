@@ -142,7 +142,15 @@ export function useRoles(): UseRoles {
               setError(false);
             }
           })
-          .catch((e) => console.warn("useRoles: SSE refetch failed", e));
+          // A refetch that REJECTS leaves the roster showing pre-write rows,
+          // so it sets `error` exactly as the initial load does. Swallowing it
+          // into a console line made the one visible symptom — a list that has
+          // silently stopped reconciling — indistinguishable from a list that
+          // is up to date.
+          .catch((e) => {
+            console.warn("useRoles: SSE refetch failed", e);
+            if (alive) setError(true);
+          });
       }
     });
 
@@ -231,7 +239,13 @@ export function useRole(key: string): UseRole {
 
     const unsubscribe = api.subscribeEvents((topic) => {
       if (topic.includes("role_def")) {
-        void load((e) => console.warn("useRole: SSE refetch failed", e));
+        void load((e) => {
+          console.warn("useRole: SSE refetch failed", e);
+          // Same rule as the roster above: a failed reconcile means what is on
+          // screen is stale, and stale-but-silent is the state this page has
+          // no way to recover from on its own.
+          if (alive) setError(true);
+        });
       }
     });
 
