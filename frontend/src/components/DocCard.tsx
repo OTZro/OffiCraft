@@ -217,15 +217,10 @@ export function DocCard({
     void run(() => onSave(draft));
   }
 
-  function requestReset() {
-    if (!onReset) return;
-    setFailed(null);
-    if (factoryReset) {
-      setPending({ kind: "reset" });
-      return;
-    }
-    void run(() => onReset());
-  }
+  // No requestReset here any more: the only reset affordance is the 初始版本
+  // row inside DocumentHistoryEntry (edit mode), which runs its OWN confirm.
+  // Removed with the top-level button rather than left dangling — a dead
+  // private function reads like a path something still takes.
 
   const body = renderBody ? (
     renderBody({ editing: editing && !readOnly, text, draft, setDraft })
@@ -261,25 +256,15 @@ export function DocCard({
 
       {above}
 
-      {/* The recovery path. Top level, no prerequisites: a document that boots
-        * every agent in the studio can be restored from a page whose read
-        * failed, because a failed read is exactly when it is needed. */}
-      {factoryReset && onReset && (
-        <div className="doc-card__recover">
-          <button
-            type="button"
-            className="doc-btn doc-btn--danger"
-            data-testid="doc-card-reset"
-            disabled={busy}
-            onClick={requestReset}
-          >
-            {factoryReset.label}
-          </button>
-          {factoryReset.note && (
-            <span className="doc-card__recover-note">{factoryReset.note}</span>
-          )}
-        </div>
-      )}
+      {/* There is no top-level reset button. It used to stand here with no
+        * prerequisites, on the argument that a document booting every agent
+        * must be restorable from a page whose read failed. The owner OVERRODE
+        * that on 2026-08-14 (card rc-f1950f4d286e, option 2: "完全照 insight")
+        * with the trade-off spelled out to him — insight keeps its reset inside
+        * edit mode, and he wants these blocks to look the same. The reset is
+        * therefore reached exactly as insight's is: the 初始版本 row inside
+        * DocumentHistoryEntry, in edit mode. Do not restore this button as a
+        * bug fix; T-791e's ticket carries the superseded red line and says so. */}
 
       {errorNote}
 

@@ -429,27 +429,36 @@ export function SettingsPage({
     // copy that would silently stop one runtime's agents ever coming online.
     // Each opens from its own list row into its own page, and the two are never
     // rendered together.
-    const isClaude = view.runtime === "claude";
+    // ONE page, BOTH documents, each with its own editor (owner 2026-08-14:
+    // 「啟動程序進去以後可以看到兩份可以分開編輯的」). `view.runtime` is no
+    // longer read — the row that used to carry it now opens this page.
+    //
+    // ⚠️ The earlier design deliberately kept these on separate pages, on the
+    // argument that stacking them invites copying one runtime's text over the
+    // other — and their third step means OPPOSITE things (claude attaches
+    // `ocagent listen` itself; codex must not, the sidecar does), so such a
+    // copy stops one runtime's agents ever coming online, silently. The owner
+    // asked for them together anyway and that is his call; what protects the
+    // invariant now is that they remain two SEPARATE documents with separate
+    // editors, save buttons and version histories. Nothing here writes both.
     return (
-      <BootDocPage
-        kind="boot_sequence"
-        docKey={view.runtime}
-        title={isClaude ? t.settings.bootClaudeName : t.settings.bootCodexName}
-        historyTitle={
-          isClaude
-            ? t.settings.historyBootClaudeTitle
-            : t.settings.historyBootCodexTitle
-        }
-        crumbs={[
-          crumbRoot,
-          crumbRoles,
-          {
-            label: isClaude
-              ? t.settings.bootClaudeName
-              : t.settings.bootCodexName,
-          },
-        ]}
-      />
+      <>
+        <BootDocPage
+          kind="boot_sequence"
+          docKey="claude"
+          title={t.settings.bootClaudeName}
+          historyTitle={t.settings.historyBootClaudeTitle}
+          crumbs={[crumbRoot, crumbRoles, { label: t.settings.bootName }]}
+        />
+        <BootDocPage
+          kind="boot_sequence"
+          docKey="codex"
+          title={t.settings.bootCodexName}
+          historyTitle={t.settings.historyBootCodexTitle}
+          // No crumbs on the second: one page, one breadcrumb trail.
+          crumbs={[]}
+        />
+      </>
     );
   }
 
@@ -1573,6 +1582,18 @@ function RolesLog({
           * sequence". They are different documents (see the boot view in this
           * file), and the list is the last place a reader can still tell them
           * apart before the two pages start looking identical. */}
+        {/* ONE row, not one per runtime (owner 2026-08-14, card rc-e1abbc506b70
+          * option 1). He asked why this had been "split into so many", and he
+          * was right about the half that matters: the two seed FILES predate
+          * this work, but the settings list carried a single 啟動程序 row until
+          * T-791e made both editable and gave each its own. The runtime is
+          * chosen INSIDE the page now.
+          *
+          * What did NOT change, and must not: the two documents stay separate.
+          * Their third step means opposite things (claude attaches `ocagent
+          * listen` itself; codex must NOT and hands that to the sidecar), so
+          * merging the TEXT would silently stop one runtime's agents ever
+          * coming online. One entry, two documents. */}
         <button
           type="button"
           className="set-entry"
@@ -1582,22 +1603,8 @@ function RolesLog({
             <BoltIcon size={18} />
           </span>
           <span className="set-entry__body">
-            <span className="set-entry__name">{t.settings.bootClaudeName}</span>
-            <span className="set-entry__sub">{t.settings.bootClaudeSub}</span>
-          </span>
-          <ChevronRightIcon size={18} className="set-entry__chev" />
-        </button>
-        <button
-          type="button"
-          className="set-entry"
-          onClick={() => onOpenBoot("codex")}
-        >
-          <span className="set-entry__icon set-entry__icon--violet">
-            <BoltIcon size={18} />
-          </span>
-          <span className="set-entry__body">
-            <span className="set-entry__name">{t.settings.bootCodexName}</span>
-            <span className="set-entry__sub">{t.settings.bootCodexSub}</span>
+            <span className="set-entry__name">{t.settings.bootName}</span>
+            <span className="set-entry__sub">{t.settings.bootSub}</span>
           </span>
           <ChevronRightIcon size={18} className="set-entry__chev" />
         </button>

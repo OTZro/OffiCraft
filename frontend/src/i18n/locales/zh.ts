@@ -1424,6 +1424,13 @@ export const zh = {
     roleDefsSection: "角色定義",
     // 兩份**不同**的文件，分別開自己的頁：它們的第 3 步語意相反，
     // 所以清單上不併成一列、詳情頁也不並排。
+    // The ONE list row. The runtime-specific names below still title the PAGE
+    // and its history list — the row no longer names a runtime because you
+    // pick one after you are inside.
+    bootName: "啟動程序",
+    bootSub: "AI 開機時照著做的步驟 · 兩種執行環境各一份 · 可編輯",
+    bootRuntimeClaude: "一般",
+    bootRuntimeCodex: "Codex",
     bootClaudeName: "啟動程序（Claude Code）",
     bootClaudeSub: "Claude Code 執行環境的開機 SOP · 可編輯",
     bootCodexName: "啟動程序（Codex CLI）",
