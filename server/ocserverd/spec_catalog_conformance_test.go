@@ -73,6 +73,13 @@ import (
 // gate, which needs its own ticket and its own conformance run. Baselining keeps
 // this test fail-closed for anything NEW while staying loud about the debt.
 //
+// ⚠️ The list_task_manuals.view paragraph below is HISTORY, not current state:
+// T-1170 retired that parameter outright — the light row is the only answer the
+// tool gives now, so there is no lever left to advertise or to hide. It is kept
+// because the reasoning ("a lever that is the sole escape from an unreadable
+// default does not exist at all while it is off tools/list") is what argued the
+// default itself should change.
+//
 // ONE OF THE SIX IS REPAID: list_task_manuals.view is now advertised (T-a98d).
 // It was the entry that cost the most to leave sitting here — that tool's
 // DEFAULT answer is every manual in full, six figures of characters, and

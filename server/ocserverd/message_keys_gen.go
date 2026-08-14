@@ -668,6 +668,8 @@ var messageKeys = map[string]bool{
 	"settings.cancel":                          true,
 	"settings.catalogHash":                     true,
 	"settings.chars":                           true,
+	"settings.chatBudget":                      true,
+	"settings.chatBudgetSub":                   true,
 	"settings.checkFailed":                     true,
 	"settings.checkUnknown":                    true,
 	"settings.checkUpdate":                     true,

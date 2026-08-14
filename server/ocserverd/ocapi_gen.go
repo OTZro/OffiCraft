@@ -744,12 +744,31 @@ type DocSummaryDTO struct {
 	Title string `json:"title"`
 }
 
-// DocumentHistoryDTO defines model for DocumentHistoryDTO.
+// DocumentHistoryDTO ONE retained revision of an editable document as a CATALOGUE ROW: which revision it is, when it was retained and by whom, whether it was a tombstone, and HOW LONG each of its fields was — never the text. A version list is how a reader CHOOSES a revision, and choosing does not need the prose: one list_document_history answer had a structural ceiling in the hundreds of thousands of characters and no narrowing of any kind. The body of a chosen revision is fetched one at a time (get_document_version).
+//
+// “field_chars“ is a MAP because the field names differ by kind (“text“ / “definition_md“ / “description“ / “title“) — the same keys that revision's “content“ carries, MINUS “tombstoned“, which is served as its own boolean rather than as a stringly-typed entry with a character count.
 type DocumentHistoryDTO struct {
+	ActorId    string         `json:"actor_id"`
+	CreatedTs  float64        `json:"created_ts"`
+	FieldChars map[string]int `json:"field_chars"`
+	Id         int64          `json:"id"`
+	Tombstoned bool           `json:"tombstoned"`
+}
+
+// DocumentHistoryRestoreDTO Receipt of a restore: the retained revision that was just written back, in the shape this route has always answered with — “content“ included. It is deliberately NOT the light catalogue row list_document_history now serves: a restore receipt names exactly one revision and its whole point is that this text is what the live document now holds.
+type DocumentHistoryRestoreDTO struct {
 	ActorId   string            `json:"actor_id"`
 	Content   map[string]string `json:"content"`
 	CreatedTs float64           `json:"created_ts"`
 	Id        int64             `json:"id"`
+}
+
+// DocumentHistoryVersionDTO The BODY of ONE named retained revision: the same “content“ map that revision was stored with (field names by kind — “text“ / “definition_md“ / “description“ / “title“, plus “tombstoned“), echoed alongside the address that was asked for. Read-only. It is the companion of list_document_history, which carries every revision's identity and sizes but no prose: choose from the list, then fetch exactly the one revision you mean to read.
+type DocumentHistoryVersionDTO struct {
+	Content map[string]string `json:"content"`
+	Id      int64             `json:"id"`
+	Key     string            `json:"key"`
+	Kind    string            `json:"kind"`
 }
 
 // DocumentSeedDTO The SHIPPED DEFAULT of an editable long-form document — what a reset puts back, expressed in the SAME field names a retained revision uses so one reader can compare either against the live document. READ-ONLY: this route writes nothing, so looking at 初始版本 can never overwrite anything. 404 when the document has no shipped default (a custom role, a task manual, per-role lessons) — exactly the documents whose reset the server also 404s.
@@ -1946,6 +1965,28 @@ type RoleDefDTO struct {
 	SizeChars *int `json:"size_chars,omitempty"`
 }
 
+// RoleDefListItemDTO One row of the ROLE LISTING: everything RoleDefDTO carries EXCEPT the persona
+// body. “definition_md“ is deliberately absent rather than served empty — an
+// empty string in a field that normally holds the persona reads as "this role
+// has no definition", which is a different and false claim.
+//
+// “size_chars“ / “cap_chars“ are measured on the STORED document, so the row
+// still answers "which role definition is nearly full" without carrying any of
+// the text. Read the one you picked with get_role.
+type RoleDefListItemDTO struct {
+	// CapChars The Duty (role definition) size cap now in force, in CHARACTERS (the doc.cap_chars.duty setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
+	CapChars      *int    `json:"cap_chars,omitempty"`
+	IsDefault     *bool   `json:"is_default,omitempty"`
+	IsSeed        *bool   `json:"is_seed,omitempty"`
+	Key           string  `json:"key"`
+	Name          *string `json:"name,omitempty"`
+	OwnerId       *string `json:"owner_id,omitempty"`
+	SchemaVersion *int    `json:"schema_version,omitempty"`
+
+	// SizeChars Size of the role definition in CHARACTERS (Unicode code points) — the same unit as cap_chars. Measured on the STORED document, which this row does not carry: a zero here would be a measurement, not an omission.
+	SizeChars *int `json:"size_chars,omitempty"`
+}
+
 // RoleDefUpdateDTO Partial edit of a role definition (§3.4 #25): “{name?, definition_md?}“.
 // A name-locked role ignores “name“ (per contract); every field is optional.
 type RoleDefUpdateDTO struct {
@@ -2200,6 +2241,9 @@ type SettingsDTO struct {
 	// AgentTokenTtl Agent and outsource-worker JWT lifetime in seconds. Fresh installs default to 7 days.
 	AgentTokenTtl int `json:"agent_token_ttl"`
 
+	// ChatBudgetChars The wake snapshot's chat block budget, in CHARACTERS (Unicode code points). It bounds EVERYTHING `overview.chat_chars` counts — the messages and their folded cards plus the snapshot header and the cut hint — and it is the same number `peek_resume_summary_size` sizes its `estimated_total_chars` against, because both faces are assembled by one code path. Unlike the `doc_cap_chars_*` knobs this one may be LOWERED as well as raised: the chat block is repacked from scratch on every read, so a smaller budget simply returns fewer messages next time, with `chat_earlier_omitted` reporting the cut. The adjustable range is 1000..13000; the ceiling is tied to how many messages the packer reads before packing, so it is not a number that can be raised on its own.
+	ChatBudgetChars *int `json:"chat_budget_chars,omitempty"`
+
 	// CodexCompactionThreshold Codex context-compaction threshold, 1 through 10.
 	CodexCompactionThreshold *int `json:"codex_compaction_threshold,omitempty"`
 
@@ -2278,6 +2322,9 @@ type SettingsDTO struct {
 // lowering one would turn documents that are legal today into shrink-only ones.
 type SettingsUpdateDTO struct {
 	AgentTokenTtl *int `json:"agent_token_ttl,omitempty"`
+
+	// ChatBudgetChars The wake snapshot's chat block budget, in CHARACTERS (Unicode code points). Must be between 1000 and 13000. Unlike the `doc_cap_chars_*` knobs the floor is NOT the shipped default — this budget may be lowered as well as raised, because the chat block is repacked on every read rather than stored. The ceiling is pinned to how many messages the packer reads before packing and cannot be raised on its own.
+	ChatBudgetChars *int `json:"chat_budget_chars,omitempty"`
 
 	// CodexCompactionThreshold Codex context-compaction threshold, 1 through 10.
 	CodexCompactionThreshold *int `json:"codex_compaction_threshold,omitempty"`
@@ -2562,7 +2609,7 @@ type TaskManualDTO struct {
 	// LearningsCapChars The cap on `learnings` now in force, in CHARACTERS (the doc.cap_chars.manual_learnings setting). Served on the READ face so an agent can size an edit BEFORE writing it. Independent of sop_md_cap_chars since T-30f1.
 	LearningsCapChars *int `json:"learnings_cap_chars,omitempty"`
 
-	// LearningsChars Size of `learnings` in CHARACTERS. Reported PER CAPPED DOCUMENT rather than as one total, because learnings and sop_md are judged separately — against their own caps since T-30f1. Carried on the light ?view=list projection too, where the bulky text itself is omitted but its size is not.
+	// LearningsChars Size of `learnings` in CHARACTERS. Reported PER CAPPED DOCUMENT rather than as one total, because learnings and sop_md are judged separately — against their own caps since T-30f1. The listing carries the same measurement without the text (TaskManualListItemDTO).
 	LearningsChars *int    `json:"learnings_chars,omitempty"`
 	Purpose        *string `json:"purpose,omitempty"`
 	SopMd          *string `json:"sop_md,omitempty"`
@@ -2624,6 +2671,40 @@ type TaskManualFieldDTO struct {
 	IsKey    *bool  `json:"is_key,omitempty"`
 	Name     string `json:"name"`
 	Required *bool  `json:"required,omitempty"`
+}
+
+// TaskManualListItemDTO One row of the TASK-MANUAL LISTING: the type's identity and its dispatch
+// setting — “type_key“ / “display_name“ / “purpose“ / “fields“ /
+// “assignee“ / “updated_ts“ — plus the SIZES of the two long documents it
+// does NOT carry and the cap each is judged against.
+//
+// “sop_md“ and “learnings“ are deliberately ABSENT rather than served empty:
+// they are the bulk that made a listing unreadable, and an empty string in a
+// field that normally holds the SOP reads as "this type has no SOP". Their
+// sizes are measured on the STORED rows, so the row still answers "which manual
+// is nearly full" — read the one you picked with get_task_manual.
+type TaskManualListItemDTO struct {
+	Assignee map[string]interface{} `json:"assignee"`
+
+	// CapChars DEPRECATED since T-30f1 — read learnings_cap_chars or sop_md_cap_chars instead. The manual's SOP and learnings are judged by two SEPARATE caps now, and one field cannot report both: this one carries the LEARNINGS cap (doc.cap_chars.manual_learnings) only, and says nothing about sop_md. Kept so existing clients keep reading a real number rather than a zero.
+	CapChars    *int                 `json:"cap_chars,omitempty"`
+	DisplayName string               `json:"display_name"`
+	Fields      []TaskManualFieldDTO `json:"fields"`
+
+	// LearningsCapChars The cap on the type's learnings now in force, in CHARACTERS (the doc.cap_chars.manual_learnings setting). Served on the READ face so an agent can size an edit BEFORE writing it. Independent of sop_md_cap_chars since T-30f1.
+	LearningsCapChars *int `json:"learnings_cap_chars,omitempty"`
+
+	// LearningsChars Size of the type's learnings in CHARACTERS, measured on the STORED document — which this row does not carry. Reported PER CAPPED DOCUMENT rather than as one total, because learnings and sop_md are judged against their own caps since T-30f1.
+	LearningsChars *int    `json:"learnings_chars,omitempty"`
+	Purpose        *string `json:"purpose,omitempty"`
+
+	// SopMdCapChars The cap on the type's sop_md now in force, in CHARACTERS (the doc.cap_chars.manual_sop setting). See learnings_cap_chars.
+	SopMdCapChars *int `json:"sop_md_cap_chars,omitempty"`
+
+	// SopMdChars Size of the type's sop_md in CHARACTERS, measured on the STORED document. See learnings_chars.
+	SopMdChars *int     `json:"sop_md_chars,omitempty"`
+	TypeKey    string   `json:"type_key"`
+	UpdatedTs  *float64 `json:"updated_ts,omitempty"`
 }
 
 // TaskManualUpdateDTO Partial manual edit — only supplied fields change. “assignee“ is {"kind":"member","member_id":…} or {"kind":"outsource","runtime":"claude|codex","model":…,"effort":…,"copies":N,"machine":…}; {} unsets it. Outsource runtime absent means claude; “copies“ MUST be a number >= 0 (0 = 無限 — unlimited per-type parallel copies; absent = 1); “machine“ MUST be a non-blank machine id when present, and must resolve to a real machine ("auto" is rejected — it names no machine); absent leaves the type without a placement.
@@ -3000,12 +3081,6 @@ type HandleListReplyCardsApiReplyCardsGet200JSONResponseBody struct {
 	union json.RawMessage
 }
 
-// HandleListTaskManualsApiTaskManualsGetParams defines parameters for HandleListTaskManualsApiTaskManualsGet.
-type HandleListTaskManualsApiTaskManualsGetParams struct {
-	// View ``list`` = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (``sop_md_chars``, ``learnings_chars``) and the caps each is judged against (``sop_md_cap_chars``, ``learnings_cap_chars`` — the older ``cap_chars`` is DEPRECATED: it carries the LEARNINGS cap only and says nothing about sop_md), with sop_md and learnings served empty and fields/assignee empty. Any other value, or omitting it, keeps the DEFAULT: the full manual of every type, SOP and learnings included. Reach for ``list`` whenever you are matching or choosing a type rather than executing one — the two answers differ by orders of magnitude in size, and the light row still carries the sizes, so you can see what you skipped and fetch just that type with get_task_manual.
-	View *string `form:"view,omitempty" json:"view,omitempty"`
-}
-
 // HandleListTasksApiTasksGetParams defines parameters for HandleListTasksApiTasksGet.
 type HandleListTasksApiTasksGetParams struct {
 	Executor *string `form:"executor,omitempty" json:"executor,omitempty"`
@@ -3326,7 +3401,7 @@ type ServerInterface interface {
 	// Total chat unread count (the office nav red dot).
 	// (GET /api/chat/unread-count)
 	HandleChatUnreadCountApiChatUnreadCountGet(w http.ResponseWriter, r *http.Request)
-	// Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on list_task_manuals ?view=list, and a role definition's size and cap are already on every list_roles row.
+	// Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.
 	// (GET /api/doc-sizes)
 	HandlePeekDocSizesApiDocSizesGet(w http.ResponseWriter, r *http.Request)
 	// List the product-guide docs (slug + title).
@@ -3338,7 +3413,7 @@ type ServerInterface interface {
 	// Read one product-guide doc in full (markdown; unknown slug → 404).
 	// (GET /api/docs/{slug})
 	HandleGetDocApiDocsSlugGet(w http.ResponseWriter, r *http.Request, slug string)
-	// READ the retained versions of one editable document: what each version held, when it was replaced and by whom. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.
+	// READ the CATALOGUE of retained versions of one editable document: which versions exist, when each was replaced and by whom, whether each was a tombstone, and HOW LONG each of its fields was. It does NOT carry the versions themselves — a version list is how you CHOOSE one, and choosing does not need the prose; fetch the one you picked with get_document_version. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.
 	//
 	// WHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.
 	//
@@ -3356,6 +3431,13 @@ type ServerInterface interface {
 	// COVERAGE: whether THAT document ships a default is answered by asking for it. 200 means it does, and “content“ is that text. 404 means it has none at all — a role the owner created, a task manual, per-role lessons — which is the same set whose reset the server also 404s, so it is the honest 'there is nothing to go back to', not a gap to work around. 400 on a retired kind names the series that replaced it.
 	// (GET /api/document-history/{kind}/{key}/seed)
 	HandleGetDocumentSeedApiDocumentHistoryKindKeySeedGet(w http.ResponseWriter, r *http.Request, kind string, key string)
+	// READ the BODY of one named retained version of an editable document — the “content“ map that version was stored with, exactly as it was stored. Read-only: this fetches text, it never puts it back; restoring stays out of the agent tool surface, as it does for list_document_history.
+	//
+	// THIS IS THE SECOND HALF OF A PAIR. list_document_history answers WHICH versions exist and how big each field of each one is, and carries no prose at all; this answers WHAT ONE OF THEM SAID. Name the “id“ you read off that list. Asking for every version's text is the cost that pairing exists to remove, so fetch the one you actually mean to read.
+	//
+	// ADDRESSING: “kind“ and “key“ name a document exactly as they do for list_document_history — the same server-side gate answers all three routes, so whatever that tool can address, this one can too, and they can never silently disagree. A “kind“ this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it; a “key“ that fails its kind's required shape is refused with 400 naming the problem. An “id“ that is not a retained version of THAT document is a 404 — including an id that belongs to some other document, which is why the address is the whole triple and not the id alone.
+	// (GET /api/document-history/{kind}/{key}/{id})
+	HandleGetDocumentVersionApiDocumentHistoryKindKeyIdGet(w http.ResponseWriter, r *http.Request, kind string, key string, id int64)
 	// Restore a retained document version as a new write.
 	// (POST /api/document-history/{kind}/{key}/{id}/restore)
 	HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost(w http.ResponseWriter, r *http.Request, kind string, key string, id int64)
@@ -3569,7 +3651,7 @@ type ServerInterface interface {
 	// Size-only PEEK of the wake snapshot (identity-locked; overview counts/sizes + estimated_total_chars, NO chat/task content). estimated_total_chars is exactly chat_chars + tasks_detail_chars + roster_chars + machines_chars, all four reported in overview: the WHOLE chat block as the snapshot renders it (chat_chars is the rendered block's cost, NOT the sum of the message bodies), plus the plan text its task rows omit and the two studio-floor blocks — what pulling the snapshot actually costs. Step one of the two-step boot: call this FIRST to size resume_summary, then either call resume_summary directly (small) or hand the pull to a cheap sub-agent that returns a digest (large).
 	// (GET /api/resume-summary-size)
 	HandlePeekResumeSummarySizeApiResumeSummarySizeGet(w http.ResponseWriter, r *http.Request)
-	// List role definitions (seed defaults + owner edits).
+	// List role definitions (seed defaults + owner edits) WITHOUT the persona bodies: each row is the role identity plus its definition size and cap, never definition_md itself. Read the one role you want with get_role.
 	// (GET /api/roles)
 	HandleListRolesApiRolesGet(w http.ResponseWriter, r *http.Request)
 	// Create a custom role + its founding member (one pair per call). runtime is claude/codex (absent = claude).
@@ -3614,9 +3696,9 @@ type ServerInterface interface {
 	// Restore the 系統互動 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.
 	// (POST /api/system-interaction/reset)
 	HandleResetSystemInteractionApiSystemInteractionResetPost(w http.ResponseWriter, r *http.Request)
-	// List task types (match by display_name/purpose; address by type_key). WITHOUT view=list this returns the FULL manual of every type — every SOP and every learnings blob in one answer, six figures of characters on a real roster. Pass view=list unless you actually need the text.
+	// List task types WITHOUT their long documents: each row is the type identity (type_key / display_name / purpose), its input fields and its assignee setting, plus the SIZES of sop_md and learnings and the cap each is judged against. The SOP and the learnings text are not on this answer at all — read the one type you picked with get_task_manual.
 	// (GET /api/task-manuals)
-	HandleListTaskManualsApiTaskManualsGet(w http.ResponseWriter, r *http.Request, params HandleListTaskManualsApiTaskManualsGetParams)
+	HandleListTaskManualsApiTaskManualsGet(w http.ResponseWriter, r *http.Request)
 	// Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate → 409; assignee = owner/admin agent). An outsource assignee may select runtime claude/codex; absent = claude.
 	// (POST /api/task-manuals)
 	HandleCreateTaskManualApiTaskManualsPost(w http.ResponseWriter, r *http.Request)
@@ -4390,6 +4472,50 @@ func (siw *ServerInterfaceWrapper) HandleGetDocumentSeedApiDocumentHistoryKindKe
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.HandleGetDocumentSeedApiDocumentHistoryKindKeySeedGet(w, r, kind, key)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleGetDocumentVersionApiDocumentHistoryKindKeyIdGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleGetDocumentVersionApiDocumentHistoryKindKeyIdGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "kind" -------------
+	var kind string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "kind", r.PathValue("kind"), &kind, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "kind", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "key" -------------
+	var key string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", r.PathValue("key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "id" -------------
+	var id int64
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleGetDocumentVersionApiDocumentHistoryKindKeyIdGet(w, r, kind, key, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -6389,27 +6515,8 @@ func (siw *ServerInterfaceWrapper) HandleResetSystemInteractionApiSystemInteract
 // HandleListTaskManualsApiTaskManualsGet operation middleware
 func (siw *ServerInterfaceWrapper) HandleListTaskManualsApiTaskManualsGet(w http.ResponseWriter, r *http.Request) {
 
-	var err error
-	_ = err
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params HandleListTaskManualsApiTaskManualsGetParams
-
-	// ------------- Optional query parameter "view" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "view", r.URL.Query(), &params.View, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		var requiredError *runtime.RequiredParameterError
-		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "view"})
-		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "view", Err: err})
-		}
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.HandleListTaskManualsApiTaskManualsGet(w, r, params)
+		siw.Handler.HandleListTaskManualsApiTaskManualsGet(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7463,6 +7570,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/docs/{slug}", wrapper.HandleGetDocApiDocsSlugGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/document-history/{kind}/{key}", wrapper.HandleListDocumentHistoryApiDocumentHistoryKindKeyGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/document-history/{kind}/{key}/seed", wrapper.HandleGetDocumentSeedApiDocumentHistoryKindKeySeedGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/document-history/{kind}/{key}/{id}", wrapper.HandleGetDocumentVersionApiDocumentHistoryKindKeyIdGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/document-history/{kind}/{key}/{id}/restore", wrapper.HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/events", wrapper.HandleEventsApiEventsGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/global-context", wrapper.HandleGetGlobalContextApiGlobalContextGet)

@@ -16,6 +16,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { mockApi, __resetMock, __injectMockTask } from "./mock";
 import { isHttpStatus } from "./errors";
 import type { TaskView } from "./adapter";
+import { documentRevisions } from "../test/documentHistory";
 
 beforeEach(() => {
   __resetMock();
@@ -104,7 +105,7 @@ describe("mockApi · updateTaskDescription", () => {
     // One real change happened, and it replaced an EMPTY description — which
     // retains nothing (see below). So: zero revisions, not one recording that
     // nothing changed.
-    expect(await mockApi.listDocumentHistory("task_description", id)).toEqual(
+    expect(await documentRevisions(mockApi, "task_description", id)).toEqual(
       []
     );
   });
@@ -117,7 +118,7 @@ describe("mockApi · updateTaskDescription", () => {
     const id = await anyTaskId();
     expect((await mockApi.getTask(id)).description).toBe("");
     await mockApi.updateTaskDescription(id, "第一版");
-    expect(await mockApi.listDocumentHistory("task_description", id)).toEqual(
+    expect(await documentRevisions(mockApi, "task_description", id)).toEqual(
       []
     );
   });
@@ -127,7 +128,7 @@ describe("mockApi · updateTaskDescription", () => {
     for (const text of ["第一版", "第二版", "第三版"]) {
       await mockApi.updateTaskDescription(id, text);
     }
-    const versions = await mockApi.listDocumentHistory("task_description", id);
+    const versions = await documentRevisions(mockApi, "task_description", id);
     // Two, not three: the first write replaced an empty description.
     expect(versions.map((v) => v.content.description)).toEqual([
       "第二版",
@@ -143,7 +144,7 @@ describe("mockApi · updateTaskDescription", () => {
     await mockApi.updateTaskDescription(id, "會被清掉的文字");
     const after = await mockApi.updateTaskDescription(id, "");
     expect(after.description).toBe("");
-    const versions = await mockApi.listDocumentHistory("task_description", id);
+    const versions = await documentRevisions(mockApi, "task_description", id);
     expect(versions[0].content.description).toBe("會被清掉的文字");
   });
 
@@ -151,14 +152,14 @@ describe("mockApi · updateTaskDescription", () => {
     const id = await anyTaskId();
     await mockApi.updateTaskDescription(id, "原本的說法");
     await mockApi.updateTaskDescription(id, "改壞的說法");
-    const [version] = await mockApi.listDocumentHistory("task_description", id);
+    const [version] = await documentRevisions(mockApi, "task_description", id);
     expect(version.content.description).toBe("原本的說法");
 
     await mockApi.restoreDocumentHistory("task_description", id, version.id);
     expect((await mockApi.getTask(id)).description).toBe("原本的說法");
     // The restore is itself a write, so what it overwrote is now retained —
     // server parity (SaveWithDocumentHistories wraps the restore too).
-    const after = await mockApi.listDocumentHistory("task_description", id);
+    const after = await documentRevisions(mockApi, "task_description", id);
     expect(after[0].content.description).toBe("改壞的說法");
   });
 
@@ -170,7 +171,7 @@ describe("mockApi · updateTaskDescription", () => {
     await mockApi.updateTaskDescription(id, "早期敘述");
     await mockApi.setTaskPriority(id, "low");
     await mockApi.updateTaskDescription(id, "後來的敘述");
-    const [version] = await mockApi.listDocumentHistory("task_description", id);
+    const [version] = await documentRevisions(mockApi, "task_description", id);
 
     await mockApi.restoreDocumentHistory("task_description", id, version.id);
     const task = await mockApi.getTask(id);

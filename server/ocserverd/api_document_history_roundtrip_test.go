@@ -28,7 +28,7 @@ func (f historyFixture) req(method, path string, body any) *http.Request {
 	return taskReq(f.t, method, path, body, "owner", "owner")
 }
 
-func (f historyFixture) list(kind, key string) []DocumentHistoryDTO {
+func (f historyFixture) list(kind, key string) []historyRow {
 	f.t.Helper()
 	rec := httptest.NewRecorder()
 	f.api.HandleListDocumentHistoryApiDocumentHistoryKindKeyGet(rec,
@@ -36,11 +36,11 @@ func (f historyFixture) list(kind, key string) []DocumentHistoryDTO {
 	if rec.Code != http.StatusOK {
 		f.t.Fatalf("list %s/%s: status=%d body=%s", kind, key, rec.Code, rec.Body.String())
 	}
-	var history []DocumentHistoryDTO
-	if err := json.Unmarshal(rec.Body.Bytes(), &history); err != nil {
+	var rows []DocumentHistoryDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
 		f.t.Fatal(err)
 	}
-	return history
+	return hydrateHistory(f.t, f.api, kind, key, "owner", "owner", rows)
 }
 
 func (f historyFixture) restore(kind, key string, id int64) {
@@ -275,7 +275,7 @@ func (m manualFixture) patchLearnings(old, replacement string) {
 	}
 }
 
-func (m manualFixture) versions(kind string) []DocumentHistoryDTO {
+func (m manualFixture) versions(kind string) []historyRow {
 	m.t.Helper()
 	return m.list(kind, m.typeKey)
 }

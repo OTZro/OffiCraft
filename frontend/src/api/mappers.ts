@@ -6,6 +6,7 @@
 
 import type { ThemeBundle } from "../lib/themeBundle";
 import { DOC_CAP_CHARS_DEFAULTS } from "./docCap";
+import { CHAT_BUDGET_CHARS_DEFAULT } from "./chatBudget";
 import type {
   Member,
   MemberStatus,
@@ -24,9 +25,12 @@ import type {
   GlobalContextView,
   BootDocView,
   BootDocKind,
+  DocumentHistoryEntryView,
   DocumentHistoryView,
+  DocumentRevisionView,
   DocumentSeedView,
   DocumentKind,
+  RoleSummaryView,
   RoleDefView,
   BootstrapView,
   LessonsView,
@@ -56,8 +60,11 @@ import type {
   WireGlobalContext,
   WireBootDoc,
   WireDocumentHistory,
+  WireDocumentHistoryVersion,
+  WireDocumentHistoryRestore,
   WireDocumentSeed,
   WireRoleDef,
+  WireRoleDefListItem,
   WireBootstrap,
   WireLessons,
   WireInsight,
@@ -80,6 +87,7 @@ import type {
   WireTaskArtifact,
   WireOutsourceWorker,
   WireTaskManual,
+  WireTaskManualListItem,
   WireTaskManualUpdate,
   WireTaskReassign,
   WireResumeOverview,
@@ -102,6 +110,7 @@ import type {
   TaskArtifactView,
   OutsourceWorkerView,
   TaskTypeView,
+  TaskManualSummaryView,
   TaskManualView,
   TaskManualPatch,
   TaskReassignInput,
@@ -640,7 +649,9 @@ export function toOutsourceWorker(w: WireOutsourceWorker): OutsourceWorkerView {
 /** Map one wire task manual → the LIGHT `TaskTypeView` the type filter reads.
  * DROPS fields/sop/learnings/assignee on purpose — the tasks page must not
  * grow a manual-editing surface (that is 設定 › 任務手冊's `toTaskManual`). */
-export function toTaskType(w: WireTaskManual): TaskTypeView {
+export function toTaskType(
+  w: WireTaskManualListItem | WireTaskManual
+): TaskTypeView {
   return {
     typeKey: w.type_key,
     displayName: w.display_name ?? "",
@@ -678,7 +689,9 @@ export function toManualAssignee(
 /** Map one wire task manual → the FULL `TaskManualView` (設定 › 任務手冊).
  * Pure snake→camel passthrough; the open assignee object narrows through
  * `toManualAssignee` (unset {} → null). */
-export function toTaskManual(w: WireTaskManual): TaskManualView {
+export function toTaskManualSummary(
+  w: WireTaskManualListItem | WireTaskManual,
+): TaskManualSummaryView {
   return {
     typeKey: w.type_key,
     displayName: w.display_name ?? "",
@@ -688,10 +701,25 @@ export function toTaskManual(w: WireTaskManual): TaskManualView {
       required: f.required ?? false,
       isKey: f.is_key ?? false,
     })),
-    sopMd: w.sop_md ?? "",
-    learnings: w.learnings ?? "",
     assignee: toManualAssignee(w.assignee as Record<string, unknown>),
     updatedTs: w.updated_ts ?? 0,
+    // The directory answer ALSO carries sop_md_chars / learnings_chars and
+    // their caps. They are deliberately NOT mapped: no manual surface renders
+    // a size budget today, and a view field with no reader is indistinguishable
+    // from a live one. Map them when something draws them.
+  };
+}
+
+/** Map one wire manual → the FULL view (`GET /{type_key}` and every write
+ * echo). `sop_md` / `learnings` are optional on the wire and ABSENT from the
+ * list answer since T-1170; `?? ""` here is the geometry of a manual that has
+ * never been written, not a stand-in for a projection that dropped them — this
+ * mapper is only ever handed a full-document response. */
+export function toTaskManual(w: WireTaskManual): TaskManualView {
+  return {
+    ...toTaskManualSummary(w),
+    sopMd: w.sop_md ?? "",
+    learnings: w.learnings ?? "",
   };
 }
 
@@ -940,6 +968,10 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
       DOC_CAP_CHARS_DEFAULTS.systemInteraction,
     docCapCharsBootSequence:
       w.doc_cap_chars_boot_sequence ?? DOC_CAP_CHARS_DEFAULTS.bootSequence,
+    // T-c9b4 chat budget. Same "?? the shipped default, never 0" reasoning as
+    // the caps above: against a server too old to send the field, 0 would read
+    // as "no chat at all", which is the one answer that is never right.
+    chatBudgetChars: w.chat_budget_chars ?? CHAT_BUDGET_CHARS_DEFAULT,
     // The two software-update toggles (schema-optional for DTO-compat; the
     // Go wire always emits both — `?? false` only fires against an older
     // server, where OFF is exactly the honest reading).
@@ -1120,17 +1152,64 @@ export function toBootDoc(w: WireBootDoc): BootDocView {
   };
 }
 
-/** Map one wire retained revision → the view model (snake→camel). `content`
- * keeps the kind's OWN field names verbatim — they are data, not a schema the
- * cockpit gets to rename. */
+/** Map the RESTORE RECEIPT → the view model (snake→camel). `content` keeps the
+ * kind's OWN field names verbatim — they are data, not a schema the cockpit
+ * gets to rename. Since T-1170 this is the only document-history answer that
+ * carries actor+time alongside text; the list carries no text and the
+ * named-revision read carries no actor (see `toDocumentRevision`). */
 export function toDocumentHistory(
-  w: WireDocumentHistory
+  w: WireDocumentHistoryRestore
 ): DocumentHistoryView {
   return {
     id: w.id,
     content: { ...w.content },
     createdTs: w.created_ts,
     actorId: w.actor_id,
+  };
+}
+
+/** Map ONE named revision's body → the view model (T-1170).
+ *
+ * `kind` / `key` are the address echoed back and are deliberately NOT mapped:
+ * the caller supplied both, and a view field with no reader is
+ * indistinguishable from a live one. What the reader needs from this read is
+ * the text — everything else about the revision (when, who, tombstoned, sizes)
+ * it already holds from the directory row it opened. */
+export function toDocumentRevision(
+  w: WireDocumentHistoryVersion
+): DocumentRevisionView {
+  return { id: w.id, content: { ...w.content } };
+}
+
+/**
+ * Map one wire revision → the DIRECTORY row (T-1170).
+ *
+ * 🔴 THE WIRE NAME IS `field_chars`, the view name is `sizes`, and the rename
+ * is the ONE line this mapper exists to hold. Reading a name the server does
+ * not send is the failure mode this seam is built to make impossible: the map
+ * would simply be absent, every size would read as 0, and NOTHING would throw
+ * — the version list would draw every revision as empty and `docCapBlockedFields`
+ * would clear every restore, both silently and both wrong.
+ *
+ * `tombstoned` is its OWN boolean on the wire, not an entry of `field_chars`:
+ * it is a flag, not a field of the document, and counting the characters of
+ * the string "true" would put a 4 in the size map where a reader looks for
+ * content.
+ *
+ * The counts are the SERVER's — code points, the unit `runeLength` and the
+ * server's cap both use (see api/docCap.ts). Nothing is derived here: a list
+ * row carries no text to derive from, which is what makes "read the revision
+ * off the list" impossible rather than merely discouraged.
+ */
+export function toDocumentHistoryEntry(
+  w: WireDocumentHistory
+): DocumentHistoryEntryView {
+  return {
+    id: w.id,
+    createdTs: w.created_ts,
+    actorId: w.actor_id,
+    tombstoned: w.tombstoned,
+    sizes: { ...w.field_chars },
   };
 }
 
@@ -1153,13 +1232,14 @@ export function toDocumentSeed(w: WireDocumentSeed): DocumentSeedView {
  * wire marks both optional for DTO-compat; a server too old to send them
  * reports 0, which the editor renders as an honest "not known" rather than as
  * a doc of length zero. */
-export function toRoleDef(w: WireRoleDef): RoleDefView {
+export function toRoleSummary(
+  w: WireRoleDefListItem | WireRoleDef
+): RoleSummaryView {
   return {
     sizeChars: w.size_chars ?? 0,
     capChars: w.cap_chars ?? 0,
     key: w.key,
     name: w.name,
-    definitionMd: w.definition_md,
     ownerId: w.owner_id,
     schemaVersion: w.schema_version,
     isDefault: w.is_default,
@@ -1167,6 +1247,15 @@ export function toRoleDef(w: WireRoleDef): RoleDefView {
     // on a doc we can't prove is custom; the server re-enforces anyway).
     isSeed: w.is_seed ?? true,
   };
+}
+
+/** Map one wire role-def doc → the FULL view (`GET /{key}` and every write
+ * echo). `definition_md` is optional on the wire and ABSENT from the roster
+ * answer since T-1170; `?? ""` is the empty document, not a stand-in for a
+ * projection that dropped it — this mapper is only ever handed a
+ * full-document response. */
+export function toRoleDef(w: WireRoleDef): RoleDefView {
+  return { ...toRoleSummary(w), definitionMd: w.definition_md ?? "" };
 }
 
 /** Map bootstrap wire → view. DROPS `token` on purpose: a UI preview must never
