@@ -57,10 +57,24 @@ test("desktop 1024: overlay panel lays out with a rendered markdown body", async
 // close button with it: an overlay you cannot dismiss is worse than one you
 // cannot read. Measured against the visual viewport, not against a class list.
 //
-// MUTANT (measured): `.md-preview__panel { max-height: none }` — the shape the
-// prior round's 35%-confidence hypothesis predicts — grows the panel to the full
-// document height, and `align-items: center` then spills it EQUALLY off both
-// ends ⇒ this test reddens on the negative panel top.
+// MUTANTS, and the exact declaration each one needs — this matters, see M-B0:
+//   · `.md-preview__panel { max-height: none }` (the shape the prior round's
+//     35%-confidence hypothesis predicts) ⇒ 3 failed / 11 passed. Within THIS
+//     test the line that reddens is `panel.bottom <= vh`, and `panel.top >= 0`
+//     PASSES — because the shipped stylesheet is `align-items: safe center`, so
+//     an overflowing panel keeps its top edge instead of spilling equally off
+//     both ends. That is positive evidence `safe center` does its job; do not
+//     "correct" this note back to "reddens on the negative panel top", which is
+//     what the world looked like BEFORE `safe center` and was never measured.
+//   · `@media(max-width:600px){ .md-preview__close{ position: relative;
+//     left: 100vw } }` ⇒ 1 failed / 13 passed — this test alone. The sibling
+//     `{ position: relative; top: -9999px }` also reddens it alone.
+//   · M-B0, the near-miss worth writing down: the same rule WITHOUT
+//     `position: relative` — bare `{ left: 100vw }` — is completely INERT,
+//     because `.md-preview__close` is `position: static` and `left` does not
+//     apply to it. Measured: 14 passed. A mutant that changes no geometry proves
+//     nothing about a geometry assertion, and it looks exactly like a guard with
+//     no discriminating power. Always name the declaration, not the intent.
 test("narrow 390: the whole preview panel, close button included, is inside the visible area", async ({
   mount,
   page,
@@ -184,7 +198,16 @@ test("narrow 390: a document longer than the screen scrolls to its last line", a
 //
 // MUTANT (measured): dropping the overlay's 32px inset (the "give the phone more
 // room" change one is tempted to make unconditionally) moves the panel to
-// 0..800 ⇒ red here while both narrow tests stay green.
+// 0..800 ⇒ 1 failed / 13 passed, red here while both narrow tests stay green.
+//
+// 🔴 WHAT THIS CONTROL CANNOT DO, stated because the narrative around it is
+// easy to oversell: reverting md-preview.css wholesale to the parent commit
+// leaves all three of these tests GREEN (measured). They are regression guards
+// for a fix whose mechanism lives in `dvh`/`lvh`, and Chromium — the only engine
+// this project's CT config runs — has dvh == lvh == vh, so the change is
+// invisible to it by construction. Four mutants reddening does NOT mean the CSS
+// change itself is covered here. The instrument that CAN see it is the
+// lvh/dvh-gap simulation described in md-preview.css's header comment.
 test("desktop 1280: the panel geometry is unchanged by the narrow-width fix", async ({
   mount,
   page,
