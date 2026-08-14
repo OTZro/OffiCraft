@@ -425,6 +425,7 @@
               }
             ],
             "default": null,
+            "description": "Model the new member launches with. There is no model whitelist anywhere in the server: runtime and effort are validated against closed sets and 422 on an unknown value, while this string is stored exactly as sent. A misspelt or retired model name is accepted with 200 and becomes visible only much later, when the member fails to spawn. Blank is legal and leaves the launcher's default.",
             "title": "Model"
           },
           "name": {
@@ -441,6 +442,7 @@
               }
             ],
             "default": null,
+            "description": "Role to hire the member into. Supplying it at all is privilege-bearing - a caller below admin-agent is a flat 403 - but the value itself is never checked against the role table: a key nobody defined is stored verbatim and the member is created, 200. Your role_key is echoed back unchanged, so the only thing in the response that separates a typo from a real role is role_name, which comes back as an empty string.",
             "title": "Role Key"
           },
           "runtime": {
@@ -1642,6 +1644,7 @@
               }
             ],
             "default": null,
+            "description": "Name for the first member created under the new role. Omitting it is neither an error nor a no-op: the server picks a name from its own pool (avoiding every name the roster has ever carried, removed rows included) and hires that member anyway, 200. Nothing tells you a name was chosen for you - the only place it appears is member.name in the response, so read that back rather than assuming the member is nameless or was not created at all.",
             "title": "Member Name"
           },
           "model": {
@@ -1654,9 +1657,11 @@
               }
             ],
             "default": null,
+            "description": "Model the new role's member launches with. There is NO model whitelist anywhere in the server: runtime and effort in this same call are checked against closed sets and 422 on anything else, but this string is trimmed and stored exactly as sent. A typo, a retired model name, or a model the chosen runtime cannot launch all answer 200 here and only surface much later, as a member that fails to spawn. Blank is legal and leaves the launcher's own default in place.",
             "title": "Model"
           },
           "name": {
+            "description": "The ROLE's name - the job, not the person. Blank is refused (422) and nothing else about it is checked, and the mistake this parameter invites is a silent one: put a person's name here and you get a role NAMED after a person plus a member whose own name the server picked out of its name pool, both created, 200. The member's name is member_name; this field is what the role is called. The duty document is not yours to set here either - the new role starts from the standard template and is written afterwards through update_role.",
             "title": "Name",
             "type": "string"
           },
