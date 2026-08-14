@@ -751,6 +751,11 @@ export interface ServerSettingsView {
    * (docCap.ts); same floor-is-the-default, ceiling-100000 rule as above. */
   docCapCharsSystemInteraction: number;
   docCapCharsBootSequence: number;
+  /** T-c9b4: the wake snapshot's chat block budget, in the same rune unit.
+   * NOT a document cap — it bounds a block the server repacks on every read, so
+   * it may be lowered as well as raised, and it has its own ceiling. Default and
+   * range in `chatBudget.ts` (mirroring server/ocserverd/domain.go). */
+  chatBudgetChars: number;
   /** Whether the GitHub-release update check also admits prereleases
    * (false = official releases only, the default). */
   updaterReceiveBeta: boolean;
@@ -832,6 +837,9 @@ export interface ServerSettingsPatch {
    * from the only surface that edits settings. */
   docCapCharsSystemInteraction?: number;
   docCapCharsBootSequence?: number;
+  /** T-c9b4 wake-snapshot chat budget; range 1000..13000 (chatBudget.ts). The
+   * floor is NOT the shipped default — this one may be turned down. */
+  chatBudgetChars?: number;
   /** Also admit GitHub prereleases in update checks (default false). */
   updaterReceiveBeta?: boolean;
   /** Arm unattended background self-upgrade (default false = manual-only). */

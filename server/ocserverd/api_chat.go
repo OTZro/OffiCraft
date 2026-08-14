@@ -47,19 +47,24 @@ const (
 	//     往前推,直到超出我們 budget 上限前最後一則」. So the budget is now a real
 	//     CEILING: global newest-first, stop at the last message that still fits.
 	//
-	// resumeChatBudgetChars is the total the chat block may spend, counted in
-	// RUNES — one CJK character is one, matching every other cap in this file
-	// (see chatBodyMaxChars). 🔴 It covers EVERYTHING overview.chat_chars counts:
-	// the messages and their folded cards, plus the snapshot header and the cut
-	// hint that ride outside the array. Nothing is exempt from it any more —
-	// that exemption WAS the defect. It is a budget, not a target: a quiet studio
-	// produces a much smaller payload.
+	// The total the chat block may spend is counted in RUNES — one CJK character
+	// is one, matching every other cap in this file (see chatBodyMaxChars).
+	// 🔴 It covers EVERYTHING overview.chat_chars counts: the messages and their
+	// folded cards, plus the snapshot header and the cut hint that ride outside
+	// the array. Nothing is exempt from it any more — that exemption WAS the
+	// defect. It is a budget, not a target: a quiet studio produces a much
+	// smaller payload.
 	//
-	// 8000 is the owner's number (2026-08-13, verbatim: 「聊天區塊字數留 8000 就
-	// 好」), set in the same breath as the ruling above. It replaced 12000, which
-	// was the ceiling the block was OVERSHOOTING by 6.7× — a number nothing was
-	// actually holding it to.
-	resumeChatBudgetChars = 8000
+	// 🔴 THE NUMBER ITSELF NO LONGER LIVES HERE. It was the constant 8000 (owner
+	// 2026-08-13, 「聊天區塊字數留 8000 就好」) until T-c9b4 made it the
+	// `chat.budget_chars` SETTING — default chatBudgetCharsDefault, adjustable
+	// from the settings page between minChatBudgetChars and maxChatBudgetChars
+	// (domain.go). There is exactly one source: the chat.budget_chars setting, read at
+	// request time by resumeSnapshotParts (s.chatBudget()) and handed to
+	// resumeChatPackBudget.
+	// Do not reintroduce a constant here — a second copy is how the peek and the
+	// snapshot start disagreeing about how big the block is.
+	//
 	// resumeChatFetch caps how many of the caller's newest messages are READ
 	// before packing — GLOBALLY, not per conversation line (see
 	// ListChatInvolving). It bounds the read itself so a busy studio cannot drag
@@ -71,8 +76,11 @@ const (
 	// message costs 27 runes (resumeChatMessageChars counts ts_display — always
 	// 26 runes of resumeTimeLayout — plus at least one rune for the "0" of
 	// body_omitted_chars; body and both names can be empty). 500 × 27 = 13,500 >
-	// resumeChatBudgetChars, so even an all-minimum stream fills the budget with
-	// rows to spare. Realistic messages cost far more, so the loop almost always
+	// maxChatBudgetChars — the CEILING of the adjustable budget, not the default,
+	// because the guarantee has to hold at every value the owner can dial in. That
+	// is exactly why maxChatBudgetChars is 13000 and not higher; raising it past
+	// 13,500 means raising this number FIRST. Even an all-minimum stream therefore
+	// fills the budget with rows to spare. Realistic messages cost far more, so the loop almost always
 	// stops on the budget long before this cap.
 	//
 	// 🔴 It replaces a PER-LINE quota of 40. On the measured member (~165 lines)
@@ -638,7 +646,7 @@ const (
 	// single call can be made to emit — 20 × 4,000 = 80,000 runes.
 	//
 	// 🔴 It is deliberately NOT "enough to unfold a whole snapshot in one call".
-	// The snapshot's own chat block is capped at resumeChatBudgetChars and a
+	// The snapshot's own chat block is capped at the chat budget setting and a
 	// folded message costs it very little, so a busy line can carry more folds
 	// than this; unfolding all of them at once would hand back a payload many
 	// times the budget the snapshot was shrunk to. The reader is meant to name
@@ -1205,7 +1213,8 @@ func (s *apiServer) resumeSnapshotParts(actor string) (resumeWakeSnapshot, error
 		return resumeWakeSnapshot{}, err
 	}
 	chat, cut, chatChars := resumeChatBlock(
-		actor, msgs, names, cardsByID, resumeChatPackBudget(snap.GeneratedAt))
+		actor, msgs, names, cardsByID,
+		resumeChatPackBudget(s.chatBudget(), snap.GeneratedAt))
 	snap.Chat, snap.ChatCut = chat, cut
 
 	tasks, tasksOpenTotal, err := s.resumeTasksFor(actor)
@@ -1225,7 +1234,7 @@ func (s *apiServer) resumeSnapshotParts(actor string) (resumeWakeSnapshot, error
 		// of what a caller must read even though they sit outside the array.
 		// It is NOT "the sum of the bodies" any more; peekNote says so too.
 		//
-		// 🔴 This sum is what resumeChatBudgetChars bounds, and the packer was
+		// 🔴 This sum is what the chat budget setting bounds, and the packer was
 		// handed its budget with exactly these two addends already subtracted
 		// (resumeChatPackBudget) — so it can never come out above the ceiling.
 		ChatChars: chatChars + utf8.RuneCountInString(snap.GeneratedAt) +
@@ -1388,12 +1397,12 @@ func resumeChatMessageChars(d chatMessageDTO) int {
 // 🔴 There is NO per-line reserve any more. It was removed on 2026-08-13
 // (「不要管每條對話線」) because its reserved messages were billed to the budget
 // and never evicted by it, so the block had no upper bound at all — see
-// resumeChatBudgetChars. The cost is real and is not hidden: a quiet
+// the chat budget setting. The cost is real and is not hidden: a quiet
 // correspondent whose last message is older than the budget reaches now falls
 // off the snapshot entirely. It is not SILENT, though — that is what
 // chat_earlier_omitted and its hint are for, and dropping anything raises them.
 //
-// `budget` is passed in rather than read from resumeChatBudgetChars directly,
+// `budget` is passed in rather than read from the setting directly,
 // because the caller must subtract what rides OUTSIDE this array yet still
 // counts against the same ceiling (the snapshot header and the cut hint). A
 // packer that spent the whole constant would put overview.chat_chars over it by
@@ -1455,7 +1464,7 @@ func resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string
 // 🔴 The hint is reserved UNCONDITIONALLY, even though it is only emitted when
 // something was actually left out. Reserving it only when needed is circular —
 // whether the hint appears depends on whether the pack overflowed, which depends
-// on the budget. Reserving it always makes `chat_chars <= resumeChatBudgetChars`
+// on the budget. Reserving it always makes `chat_chars <= budget`
 // true in every case, and makes the bound TIGHT in exactly the case that matters
 // (the block that dropped something carries the hint, so it lands on the ceiling
 // rather than under it). A snapshot that dropped nothing simply comes in a few
@@ -1463,8 +1472,13 @@ func resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string
 //
 // Never negative: a pathologically long hint would otherwise make the budget
 // negative and empty the chat block silently.
-func resumeChatPackBudget(generatedAt string) int {
-	b := resumeChatBudgetChars -
+//
+// `budget` is the LIVE `chat.budget_chars` setting, passed in rather than read
+// from a constant (T-c9b4). This function stays pure so the caller — which has
+// the *apiServer receiver and therefore the accessor — is the single place the
+// number is sourced.
+func resumeChatPackBudget(budget int, generatedAt string) int {
+	b := budget -
 		utf8.RuneCountInString(generatedAt) -
 		utf8.RuneCountInString(resumeChatCutHint)
 	if b < 0 {

@@ -316,7 +316,8 @@ func TestResumeChat_OwnerLineAndSelfHandoffAreNeverCollapsed(t *testing.T) {
 // 線」) and the ceiling is now real.
 //
 // TWO HALVES, because either alone is satisfiable by a bug:
-//   - CEILING: chat_chars <= resumeChatBudgetChars. An empty chat block passes
+//   - CEILING: chat_chars <= the live chat.budget_chars setting (T-c9b4 made it
+//     a setting; it was the constant 8000). An empty chat block passes
 //     this trivially, hence the anti-vacuity checks.
 //   - TIGHT: one more message would have exceeded it. This is what stops a
 //     packer that "fixes" the ceiling by simply serving less — the block has to
@@ -335,6 +336,10 @@ func TestResumeChat_BudgetIsACeilingAndTheBoundaryIsTight(t *testing.T) {
 			ts++
 		}
 	}
+
+	// The budget is a setting now, so the ceiling is asserted against what THIS
+	// server is actually running with — the same accessor the packer reads.
+	budget := api.chatBudget()
 
 	snap := resumeSnapshot(t, api, "m-exec")
 
@@ -355,9 +360,9 @@ func TestResumeChat_BudgetIsACeilingAndTheBoundaryIsTight(t *testing.T) {
 	}
 
 	// ── half 1: the CEILING holds, on the number the caller pays ────────────
-	if snap.Overview.ChatChars > resumeChatBudgetChars {
+	if snap.Overview.ChatChars > budget {
 		t.Fatalf("chat_chars must never exceed the budget: got %d, budget %d "+
-			"(messages=%d)", snap.Overview.ChatChars, resumeChatBudgetChars, len(snap.Chat))
+			"(messages=%d)", snap.Overview.ChatChars, budget, len(snap.Chat))
 	}
 
 	// ── half 2: the boundary is TIGHT ───────────────────────────────────────
@@ -374,11 +379,11 @@ func TestResumeChat_BudgetIsACeilingAndTheBoundaryIsTight(t *testing.T) {
 	if oneMore <= 0 {
 		t.Fatalf("fixture bug: a message that costs nothing cannot pin a boundary")
 	}
-	if snap.Overview.ChatChars+oneMore <= resumeChatBudgetChars {
+	if snap.Overview.ChatChars+oneMore <= budget {
 		t.Fatalf("the block must be AT the ceiling, not merely under it: "+
 			"chat_chars=%d + one more message (%d) = %d, still <= budget %d",
 			snap.Overview.ChatChars, oneMore, snap.Overview.ChatChars+oneMore,
-			resumeChatBudgetChars)
+			budget)
 	}
 }
 

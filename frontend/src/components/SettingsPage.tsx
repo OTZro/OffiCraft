@@ -36,6 +36,10 @@ import { LessonsCard } from "./LessonsCard";
 import { InsightCard } from "./InsightCard";
 import { navigateHash } from "../lib/hashRoute";
 import { DOC_CAP_CHARS_DEFAULTS } from "../api/docCap";
+import {
+  CHAT_BUDGET_CHARS_MAX,
+  CHAT_BUDGET_CHARS_MIN,
+} from "../api/chatBudget";
 
 /** The adjustable document caps (T-ae38, widened by T-30f1), in the order the
  * parameters card lists them: the three role-journal segments in journal order
@@ -660,6 +664,7 @@ function ServerParams({
   const [docCapDrafts, setDocCapDrafts] = useState<
     Partial<Record<DocCapField, string>>
   >({});
+  const [chatBudgetDraft, setChatBudgetDraft] = useState<string | null>(null);
   const [rangeError, setRangeError] = useState(false);
 
   const ttlLabel: Record<number, string> = {
@@ -706,6 +711,28 @@ function ServerParams({
   // cap (owner 2026-07-31; five of them since T-30f1) — the local guard mirrors
   // the server's 422 range exactly, INCLUDING Duty's own smaller floor. Reusing
   // the other four's floor here would locally reject the shipped Duty default.
+  // T-c9b4: the wake snapshot's chat budget. Deliberately its OWN row and its
+  // own commit rather than a sixth entry in DOC_CAP_FIELDS — that table's floor
+  // is each segment's shipped default and its ceiling is 100000, and neither is
+  // true here. This one may be turned DOWN (the block is repacked on every read,
+  // so a smaller budget just returns fewer messages), and its ceiling is pinned
+  // to how many messages the server reads before packing.
+  function commitChatBudget() {
+    if (!settings || chatBudgetDraft === null) return;
+    const n = Number(chatBudgetDraft);
+    if (
+      !Number.isInteger(n) ||
+      n < CHAT_BUDGET_CHARS_MIN ||
+      n > CHAT_BUDGET_CHARS_MAX
+    ) {
+      setRangeError(true);
+      setChatBudgetDraft(null);
+      return;
+    }
+    setChatBudgetDraft(null);
+    if (n !== settings.chatBudgetChars) void onSave({ chatBudgetChars: n });
+  }
+
   function commitDocCap(field: DocCapField) {
     const draft = docCapDrafts[field];
     if (!settings || draft === undefined) return;
@@ -861,6 +888,22 @@ function ServerParams({
               </div>
             );
           })}
+
+          <div className="param-row">
+            <div className="param-row__body">
+              <div className="param-row__name">{t.settings.chatBudget}</div>
+              <div className="param-row__sub">{t.settings.chatBudgetSub}</div>
+            </div>
+            <div className="param-pct">
+              <input id="param-chat-budget" className="param-input" type="number"
+                min={CHAT_BUDGET_CHARS_MIN} max={CHAT_BUDGET_CHARS_MAX}
+                aria-label={t.settings.chatBudget}
+                value={chatBudgetDraft ?? String(settings.chatBudgetChars)}
+                onChange={(e) => { setRangeError(false); onClearSaveError(); setChatBudgetDraft(e.target.value); }}
+                onBlur={commitChatBudget} onKeyDown={(e) => { if (e.key === "Enter") commitChatBudget(); }} />
+              <span className="param-pct__sign">{t.settings.chars}</span>
+            </div>
+          </div>
 
           {(saveError || rangeError) && (
             <div className="set-error param-error">

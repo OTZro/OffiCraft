@@ -97,6 +97,14 @@ const (
 	// names only — never a description.
 	settingDocCapCharsSystemInteraction = "doc.cap_chars.system_interaction"
 	settingDocCapCharsBootSequence      = "doc.cap_chars.boot_sequence"
+	// settingChatBudgetChars (T-c9b4) is the wake snapshot's chat block budget —
+	// what resumeChatPackBudget spends (api_chat.go). It is deliberately NOT a
+	// `doc.cap_chars.*` key: those cap a STORED document and their floors equal
+	// their own defaults so a cap can only be raised, while this one bounds a
+	// block that is repacked from scratch on every read and is therefore free to
+	// move in both directions. See domain.go for the range and why its ceiling is
+	// tied to resumeChatFetch.
+	settingChatBudgetChars = "chat.budget_chars"
 	// The retired updater.url / updater.invite_code keys belonged to the
 	// removed ocupdaterd updater-server chain (updates now ship as GitHub
 	// Releases on pkyosx/OffiCraft — update_check.go). They are no longer
@@ -195,6 +203,7 @@ type authSettings struct {
 	docCapCharsManualLearnings   int              // doc.cap_chars.manual_learnings (default contextDocMaxCharsDefault)
 	docCapCharsSystemInteraction int              // doc.cap_chars.system_interaction (default systemInteractionCapCharsDefault)
 	docCapCharsBootSequence      int              // doc.cap_chars.boot_sequence (default bootSequenceCapCharsDefault; ONE cap, both runtimes)
+	chatBudgetChars              int              // chat.budget_chars (default chatBudgetCharsDefault)
 	updaterReceiveBeta           bool             // updater.receive_beta (default false = official releases only)
 	updaterAutoUpdate            bool             // updater.auto_update (default false = manual upgrades only)
 	orgName                      string           // org.name ("" = never set → localized default in the topbar)
@@ -384,46 +393,58 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 	// `doc.cap_chars.manual` by migration 00048, and that row was in turn
 	// COPIED to `.manual_sop` and `.manual_learnings` and deleted by 00049 —
 	// the DB never holds a retired key beside its successors.
-	loadCap := func(key string, min int, dst *int, def int) error {
+	//
+	// The max is a parameter rather than maxDocCapChars because T-c9b4 added a
+	// bounded integer with its OWN ceiling (chat.budget_chars); baking one
+	// ceiling in would have forced a near-copy of this loader for it.
+	loadCap := func(key string, min, max int, dst *int, def int) error {
 		*dst = def
 		v, err := d.GetSetting(key)
 		if err != nil || v == nil {
 			return err
 		}
 		n, err := strconv.Atoi(*v)
-		if err != nil || n < min || n > maxDocCapChars {
+		if err != nil || n < min || n > max {
 			return fmt.Errorf("settings %s: must be %d..%d: %q",
-				key, min, maxDocCapChars, *v)
+				key, min, max, *v)
 		}
 		*dst = n
 		return nil
 	}
-	if err := loadCap(settingDocCapCharsDuty, minDutyCapChars,
+	if err := loadCap(settingDocCapCharsDuty, minDutyCapChars, maxDocCapChars,
 		&out.docCapCharsDuty, dutyCapCharsDefault); err != nil {
 		return out, err
 	}
-	if err := loadCap(settingDocCapCharsInsight, minDocCapChars,
+	if err := loadCap(settingDocCapCharsInsight, minDocCapChars, maxDocCapChars,
 		&out.docCapCharsInsight, contextDocMaxCharsDefault); err != nil {
 		return out, err
 	}
-	if err := loadCap(settingDocCapCharsLearning, minDocCapChars,
+	if err := loadCap(settingDocCapCharsLearning, minDocCapChars, maxDocCapChars,
 		&out.docCapCharsLearning, contextDocMaxCharsDefault); err != nil {
 		return out, err
 	}
-	if err := loadCap(settingDocCapCharsManualSop, minDocCapChars,
+	if err := loadCap(settingDocCapCharsManualSop, minDocCapChars, maxDocCapChars,
 		&out.docCapCharsManualSop, contextDocMaxCharsDefault); err != nil {
 		return out, err
 	}
-	if err := loadCap(settingDocCapCharsManualLearnings, minDocCapChars,
+	if err := loadCap(settingDocCapCharsManualLearnings, minDocCapChars, maxDocCapChars,
 		&out.docCapCharsManualLearnings, contextDocMaxCharsDefault); err != nil {
 		return out, err
 	}
-	if err := loadCap(settingDocCapCharsSystemInteraction, minSystemInteractionCapChars,
+	if err := loadCap(settingDocCapCharsSystemInteraction, minSystemInteractionCapChars, maxDocCapChars,
 		&out.docCapCharsSystemInteraction, systemInteractionCapCharsDefault); err != nil {
 		return out, err
 	}
-	if err := loadCap(settingDocCapCharsBootSequence, minBootSequenceCapChars,
+	if err := loadCap(settingDocCapCharsBootSequence, minBootSequenceCapChars, maxDocCapChars,
 		&out.docCapCharsBootSequence, bootSequenceCapCharsDefault); err != nil {
+		return out, err
+	}
+
+	// chat.budget_chars (T-c9b4) — range-checked at load for the same reason the
+	// caps above are: a hand-edited DB row must not install a value the PATCH
+	// face would have refused.
+	if err := loadCap(settingChatBudgetChars, minChatBudgetChars, maxChatBudgetChars,
+		&out.chatBudgetChars, chatBudgetCharsDefault); err != nil {
 		return out, err
 	}
 

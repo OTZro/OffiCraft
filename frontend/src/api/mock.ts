@@ -119,6 +119,11 @@ import {
   docCapBlocked,
 } from "./docCap";
 import {
+  CHAT_BUDGET_CHARS_DEFAULT,
+  CHAT_BUDGET_CHARS_MAX,
+  CHAT_BUDGET_CHARS_MIN,
+} from "./chatBudget";
+import {
   MOCK_OWNER_ID,
   SEED_SYSTEM_INTERACTION_MD,
   SEED_ROLE_ASSISTANT_MD,
@@ -1481,6 +1486,10 @@ const DEFAULT_MOCK_SETTINGS = {
   doc_cap_chars_system_interaction:
     BOOT_DOC_CAP_CHARS_DEFAULTS.system_interaction,
   doc_cap_chars_boot_sequence: BOOT_DOC_CAP_CHARS_DEFAULTS.boot_sequence,
+  // T-c9b4 wake-snapshot chat budget. Served here for the same reason as the
+  // caps above — a settings DTO missing a field the server always sends is a
+  // mock the page can go green against while the real one breaks.
+  chat_budget_chars: CHAT_BUDGET_CHARS_DEFAULT,
   // The two software-update toggles — both OFF out of the box, mirroring the
   // server (updates come from GitHub Releases; there is no updater server to
   // configure any more).
@@ -4255,6 +4264,21 @@ export const mockApi: Api = {
         );
       }
     }
+    // T-c9b4: checked on its own, NOT as a row above — it has its own ceiling,
+    // and the message above ("the floor is the shipped default … can only be
+    // raised") would be a lie about a knob that may be turned down.
+    if (
+      patch.chatBudgetChars !== undefined &&
+      (patch.chatBudgetChars < CHAT_BUDGET_CHARS_MIN ||
+        patch.chatBudgetChars > CHAT_BUDGET_CHARS_MAX)
+    ) {
+      throw new ApiError(
+        "http 422 for PATCH /api/settings",
+        422,
+        "validation_error",
+        `chat_budget_chars must be between ${CHAT_BUDGET_CHARS_MIN} and ${CHAT_BUDGET_CHARS_MAX} characters`
+      );
+    }
     if (
       patch.orgName !== undefined &&
       [...patch.orgName.trim()].length > 80
@@ -4362,6 +4386,9 @@ export const mockApi: Api = {
     if (patch.docCapCharsBootSequence !== undefined) {
       mockServerSettings.doc_cap_chars_boot_sequence =
         patch.docCapCharsBootSequence;
+    }
+    if (patch.chatBudgetChars !== undefined) {
+      mockServerSettings.chat_budget_chars = patch.chatBudgetChars;
     }
     if (patch.updaterReceiveBeta !== undefined) {
       mockServerSettings.updater_receive_beta = patch.updaterReceiveBeta;

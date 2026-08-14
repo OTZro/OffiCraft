@@ -2200,6 +2200,9 @@ type SettingsDTO struct {
 	// AgentTokenTtl Agent and outsource-worker JWT lifetime in seconds. Fresh installs default to 7 days.
 	AgentTokenTtl int `json:"agent_token_ttl"`
 
+	// ChatBudgetChars The wake snapshot's chat block budget, in CHARACTERS (Unicode code points). It bounds EVERYTHING `overview.chat_chars` counts — the messages and their folded cards plus the snapshot header and the cut hint — and it is the same number `peek_resume_summary_size` sizes its `estimated_total_chars` against, because both faces are assembled by one code path. Unlike the `doc_cap_chars_*` knobs this one may be LOWERED as well as raised: the chat block is repacked from scratch on every read, so a smaller budget simply returns fewer messages next time, with `chat_earlier_omitted` reporting the cut. The adjustable range is 1000..13000; the ceiling is tied to how many messages the packer reads before packing, so it is not a number that can be raised on its own.
+	ChatBudgetChars *int `json:"chat_budget_chars,omitempty"`
+
 	// CodexCompactionThreshold Codex context-compaction threshold, 1 through 10.
 	CodexCompactionThreshold *int `json:"codex_compaction_threshold,omitempty"`
 
@@ -2278,6 +2281,9 @@ type SettingsDTO struct {
 // lowering one would turn documents that are legal today into shrink-only ones.
 type SettingsUpdateDTO struct {
 	AgentTokenTtl *int `json:"agent_token_ttl,omitempty"`
+
+	// ChatBudgetChars The wake snapshot's chat block budget, in CHARACTERS (Unicode code points). Must be between 1000 and 13000. Unlike the `doc_cap_chars_*` knobs the floor is NOT the shipped default — this budget may be lowered as well as raised, because the chat block is repacked on every read rather than stored. The ceiling is pinned to how many messages the packer reads before packing and cannot be raised on its own.
+	ChatBudgetChars *int `json:"chat_budget_chars,omitempty"`
 
 	// CodexCompactionThreshold Codex context-compaction threshold, 1 through 10.
 	CodexCompactionThreshold *int `json:"codex_compaction_threshold,omitempty"`
