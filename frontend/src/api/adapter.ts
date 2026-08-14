@@ -21,8 +21,11 @@ import type {
   BootDocKind,
   BootDocView,
   DocumentKind,
+  DocumentHistoryEntryView,
   DocumentHistoryView,
+  DocumentRevisionView,
   DocumentSeedView,
+  RoleSummaryView,
   RoleDefView,
   BootstrapView,
   LessonsView,
@@ -632,11 +635,18 @@ export type ManualAssigneeView =
     }
   | null;
 
-/** One FULL task manual (任務手冊 — a task type / playbook): the guided
- * definition (Q1 purpose / Q2 fields / Q3 SOP markdown), the accumulated
- * 學習經驗, and the 負責成員 assignee setting. NO internal filename anywhere —
- * manuals are presented as content, not files (spec §5.2 note). */
-export interface TaskManualView {
+/** ONE ROW of the manuals list (任務手冊 — a task type / playbook) WITHOUT its
+ * two long documents: the guided definition's short answers (Q1 purpose / Q2
+ * fields), the 負責成員 assignee setting, and how big the SOP and the 學習經驗
+ * are. NO internal filename anywhere — manuals are presented as content, not
+ * files (spec §5.2 note).
+ *
+ * 🔴 T-1170 split this off `TaskManualView`. `GET /api/task-manuals` now
+ * answers what `?view=list` used to: `sop_md` / `learnings` are NOT on the
+ * wire, only their char counts and the caps in force. The two sub-pages that
+ * render those documents read them through `useTaskManual`
+ * (`GET /api/task-manuals/{type_key}`). */
+export interface TaskManualSummaryView {
   typeKey: string;
   /** Owner/agent-editable label; empty ⇒ the UI falls back to typeKey. */
   displayName: string;
@@ -644,12 +654,19 @@ export interface TaskManualView {
   purpose: string;
   /** Q2 需要哪些資訊 — the input-field list. */
   fields: TaskManualFieldView[];
+  assignee: ManualAssigneeView;
+  updatedTs: number;
+}
+
+/** One FULL task manual — a list row plus the two long documents it sizes
+ * (Q3 SOP markdown, and the accumulated 學習經驗 agents write back on task
+ * close). Answered by `GET /api/task-manuals/{type_key}` and by every manual
+ * write; never by the list. */
+export interface TaskManualView extends TaskManualSummaryView {
   /** Q3 該怎麼做 — the SOP markdown the AI plans the workflow from. */
   sopMd: string;
   /** 學習經驗 — agent write-back on task close; owner-editable too. */
   learnings: string;
-  assignee: ManualAssigneeView;
-  updatedTs: number;
 }
 
 /** One product-guide doc row (使用說明 tab landing): the addressable slug +
@@ -1751,9 +1768,11 @@ export interface Api {
    * the manual editor reads the FULL manuals below. */
   listTaskTypes(): Promise<TaskTypeView[]>;
   // ── Task manuals (設定 › 任務手冊, SPEC §5) ────────────────────────────────
-  /** List the FULL manuals (`GET /api/task-manuals`) — the 任務手冊 list page
-   * (type cards: 類型名 + 用途摘要). 出廠不含任何類型 (honest empty list). */
-  listTaskManuals(): Promise<TaskManualView[]>;
+  /** List the manuals as a DIRECTORY (`GET /api/task-manuals`) — the 任務手冊
+   * list page (type cards: 類型名 + 用途摘要). 出廠不含任何類型 (honest empty
+   * list). T-1170: `sop_md` / `learnings` are NOT in this answer, only their
+   * sizes; the body comes from `getTaskManual`. */
+  listTaskManuals(): Promise<TaskManualSummaryView[]>;
   /** Read ONE manual in full (`GET /api/task-manuals/{type_key}`) — the detail
    * page's 任務定義/學習經驗 tabs + 負責成員 card. Unknown → 404 (throws). */
   getTaskManual(typeKey: string): Promise<TaskManualView>;
@@ -1930,8 +1949,10 @@ export interface Api {
    * from the cockpit without a successful read and without any agent being up.
    */
   resetBootDoc(kind: BootDocKind, key: string): Promise<BootDocView>;
-  /** List the folded role definitions (seed defaults + owner edits). */
-  listRoles(): Promise<RoleDefView[]>;
+  /** List the role roster as a DIRECTORY (seed defaults + owner edits).
+   * T-1170: `definition_md` is NOT in this answer, only its size and the cap;
+   * the persona body comes from `getRole`. */
+  listRoles(): Promise<RoleSummaryView[]>;
   /** The folded role definition for `key`. */
   getRole(key: string): Promise<RoleDefView>;
   /** Partial edit of a role definition → returns the folded doc. */
@@ -2013,14 +2034,36 @@ export interface Api {
    */
   resetInsight(roleKey: string): Promise<InsightView>;
   /**
-   * The retained revisions of ONE editable long-form document, newest first
-   * (`GET /api/document-history/{kind}/{key}`). At most 3 are kept — the
-   * server prunes, the cockpit never has to.
+   * The retained revisions of ONE editable long-form document as a DIRECTORY,
+   * newest first (`GET /api/document-history/{kind}/{key}`). At most 3 are
+   * kept — the server prunes, the cockpit never has to.
+   *
+   * 🔴 T-1170: no `content`. Identity, actor, timestamp, the tombstone flag,
+   * and each field's size — enough to draw the picker and to mark a revision
+   * the server would refuse, and nothing more. Reading a revision means naming
+   * it: `getDocumentRevision`.
    */
   listDocumentHistory(
     kind: DocumentKind,
     key: string,
-  ): Promise<DocumentHistoryView[]>;
+  ): Promise<DocumentHistoryEntryView[]>;
+  /**
+   * The BODY of ONE named retained revision (T-1170). This is the only read
+   * that carries a revision's text, and it is deliberately per-revision: the
+   * reader opens exactly one at a time, so downloading three documents to show
+   * one was paying for two nobody asked for.
+   *
+   * It answers `content` and nothing else about the revision — actor, time,
+   * tombstone flag and sizes come from the directory row the reader opened.
+   *
+   * A pruned / unknown id rejects (404) — the caller says so rather than
+   * rendering the revision as empty, which is a different and false claim.
+   */
+  getDocumentRevision(
+    kind: DocumentKind,
+    key: string,
+    id: number,
+  ): Promise<DocumentRevisionView>;
   /**
    * The document's SHIPPED DEFAULT — the version list's 初始版本 row
    * (`GET /api/document-history/{kind}/{key}/seed`, T-40f0).
