@@ -83,12 +83,21 @@ def splice(raw, param, desc):
 
     line_start = raw.rfind("\n", 0, anchor) + 1
     indent = raw[line_start:anchor]
+    # An inline property (`"key": {"type": "string"}`) puts its keys mid-line,
+    # so there is no indentation to copy and no new line to open: splice the
+    # pair in beside its neighbour instead.
+    if indent.strip():
+        if after:
+            return raw[:anchor] + f'"description": {encoded}, ' + raw[anchor:]
+        tail = raw[:close].rstrip()
+        return raw[:len(tail)] + f', "description": {encoded}' + raw[len(tail):]
     if after:
         return raw[:line_start] + f'{indent}"description": {encoded},\n' + raw[line_start:]
-    # appended last: the previous key's line now needs a trailing comma
-    key_end = raw.index("\n", anchor) if "\n" in raw[anchor:close] else close
-    return (raw[:key_end] + ",\n" + f'{indent}"description": {encoded}'
-            + raw[key_end:])
+    # Appended last. The insertion point is the end of the LAST VALUE, not the
+    # end of the last key's line — a value can span many lines (an object, a
+    # multi-line anyOf), and splitting it mid-value produces invalid JSON.
+    tail = raw[:close].rstrip()
+    return raw[:len(tail)] + f',\n{indent}"description": {encoded}' + raw[len(tail):]
 
 
 def load():

@@ -686,6 +686,7 @@
               }
             ],
             "default": null,
+            "description": "Why you are restarting. It is used for exactly one thing - a single line in the server's log - and is never validated, stored or shown anywhere else. A wrong or missing reason does not fail and does not change what happens; the restart proceeds identically. Write it for the human who will read that log line, and do not expect to retrieve it from anywhere afterwards.",
             "title": "Reason"
           }
         },
@@ -825,11 +826,13 @@
           },
           "body": {
             "default": "",
+            "description": "The message text. Almost nothing is checked: only the character cap, and a refusal when the message is empty AND carries no attachments. Everything else - formatting, whether the content matches the recipient, whether you meant to send it here - is accepted as sent. Note the recipient bears the cost of whatever you write: the whole body enters their context, so keep it to what they must do or know and send bulk material as an attachment instead.",
             "title": "Body",
             "type": "string"
           },
           "meta": {
             "additionalProperties": true,
+            "description": "Free-form metadata carried alongside the message. The map is copied through wholesale with NO validation of keys or values, so a misspelled key is stored rather than refused and simply never read by anything. One key is not yours to set: the handler OVERWRITES meta.attachments with what it computed from the attachments you actually sent, so anything you put there is discarded without comment.",
             "title": "Meta",
             "type": "object"
           },
@@ -860,6 +863,7 @@
           },
           "caller_only": {
             "default": false,
+            "description": "The literal STRING \"true\" (any other value is ignored) narrows the listing to messages the caller itself sent or received. Because the ordinary listing filters on a PARTICIPANT rather than on you, this is how you exclude conversations you were not part of - but applied to a conversation you were never in, it filters everything away and answers 200 with an EMPTY list, which reads exactly like a conversation with no messages. If you set this and got nothing, check whether you were a participant before concluding the thread is empty.",
             "type": "boolean"
           },
           "ids": {
@@ -906,6 +910,7 @@
       "inputSchema": {
         "properties": {
           "with": {
+            "description": "Whose conversation's attachments to list. A blank value is refused (422), but any non-blank value is accepted without being checked against anything: an id nobody carries simply matches no messages and answers 200 with an EMPTY list, identical to a real conversation that has no attachments. Confirm the id before reading emptiness as an answer.",
             "type": "string"
           }
         },
@@ -919,10 +924,12 @@
         "properties": {
           "last_read_ts": {
             "default": 0.0,
+            "description": "Mark everything up to this timestamp as read. The watermark only ever moves FORWARD: a value at or below the one already stored changes nothing. That makes two easy mistakes silent - a timestamp in the wrong unit (these are epoch SECONDS) and OMITTING the field entirely, which sends 0 and therefore cannot advance anything you have already read. Unlike most of this family the call does tell you: the response carries `advanced`, so read that rather than the status code to learn whether the watermark actually moved.",
             "title": "Last Read Ts",
             "type": "number"
           },
           "peer": {
+            "description": "Whose conversation to mark as read. Only blankness is refused (422); the value is NEVER checked against the roster, so a misspelled peer is upserted as a read receipt for a conversation nobody is having and answers 200. The receipt you meant to file is not filed, and nothing in the response distinguishes the two cases.",
             "title": "Peer",
             "type": "string"
           }
@@ -940,6 +947,7 @@
       "inputSchema": {
         "properties": {
           "with": {
+            "description": "Whose read receipts to fetch. The value goes into the query as a plain equality condition with no validation, so a peer id nobody carries answers 200 with an EMPTY result - the same answer a real peer with no receipts gives. Emptiness here cannot tell you 'nobody has read this' apart from 'you named the wrong peer'.",
             "type": "string"
           }
         },
@@ -1410,6 +1418,7 @@
       "inputSchema": {
         "properties": {
           "account_id": {
+            "description": "Which account to give a display name to. NOTHING checks that the account exists - the id goes straight into an alias row and the call answers 200 echoing back the id you sent. A misspelled id therefore writes a perfectly valid-looking alias that will never join to anything: the name you set simply never appears, and the response gave you no way to tell. Copy the id from a monitoring read rather than typing it.",
             "type": "string"
           },
           "display_name": {
@@ -1450,6 +1459,7 @@
             "title": "Display Name"
           },
           "machine_id": {
+            "description": "Which machine to give a display name to. NOTHING checks that the machine exists - unlike most machine routes, this one does not resolve the id first; it writes the alias and answers 200 echoing back what you sent. A misspelled id leaves an orphan alias that will never be shown anywhere, and the successful-looking response is identical to the one a correct id produces. Copy the id from the machine list rather than typing it.",
             "type": "string"
           }
         },
@@ -1984,6 +1994,7 @@
               }
             ],
             "default": null,
+            "description": "Filter to one executor. It is a plain string comparison against each task's executor id - nothing resolves it, so an id nobody carries is not an error: you get 200 with an EMPTY list, which is exactly what a real executor with no tasks returns. An empty answer is therefore not evidence that someone has no work; it is equally evidence you misspelled them.",
             "title": "Executor"
           },
           "open": {
@@ -2028,6 +2039,7 @@
               }
             ],
             "default": null,
+            "description": "Filter to one task type. It is a plain string comparison against each task's type_key - no manual is looked up, so a type_key that names no manual answers 200 with an EMPTY list rather than an error, indistinguishable from a real type that currently has no tasks. Take the key from list_task_manuals rather than typing it.",
             "title": "Type"
           }
         },
@@ -3286,7 +3298,7 @@
       "description": "READ the retained versions of one editable document: what each version held, when it was replaced and by whom. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.\n\nWHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.\n\nADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.\n\nCOVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.",
       "inputSchema": {
         "properties": {
-          "key": {"type": "string"},
+          "key": {"description": "Which document of that kind to list revisions for. Apart from rejecting a blank, the value is used as a plain equality condition, so a key that names no document answers 200 with an EMPTY list rather than an error. That is the same answer a real document with no retained revisions gives, so an empty list cannot tell you 'this document has never been edited' apart from 'you named it wrong'.", "type": "string"},
           "kind": {"type": "string"}
         },
         "required": ["kind", "key"],
