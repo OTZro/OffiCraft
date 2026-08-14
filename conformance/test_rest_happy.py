@@ -540,6 +540,17 @@ def _happy_restorable_revision(ctx: HCtx) -> str:
     return f"/api/document-history/global_context/global/{versions[0]['id']}/restore"
 
 
+def _happy_document_version(ctx) -> str:
+    """The same retained revision, addressed for a READ of its body.
+
+    It reuses _happy_restorable_revision's seeding so both rows face a version
+    that really exists; the listing itself carries no text since T-1170, so the
+    id has to come from the listing and the prose from this route.
+    """
+    restore_path = _happy_restorable_revision(ctx)
+    return restore_path.removesuffix("/restore")
+
+
 _RESET_INSIGHT_OVERLAY = "conformance happy insight overlay to be discarded"
 
 
@@ -1111,6 +1122,20 @@ HAPPY: dict[str, Happy] = {
             and d["key"] == "global"
             and d["content"]["text"] == ""
             and d["content"]["tombstoned"] == "true",
+        ),
+    ),
+    # The BODY of one named revision (T-1170). It reuses the same seeded
+    # revision the restore row aims at, so the row exercises a version that
+    # REALLY EXISTS rather than a 404 dressed up as coverage — and it asserts
+    # the text, which is the whole point of the route: the listing above no
+    # longer carries any.
+    "GET /api/document-history/{kind}/{key}/{id}": Happy(
+        path=_happy_document_version,
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["kind"] == "global_context"
+            and d["key"] == "global"
+            and d["content"]["text"] == "conformance happy history v1",
         ),
     ),
     "POST /api/document-history/{kind}/{key}/{id}/restore": Happy(

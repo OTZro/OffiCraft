@@ -18,6 +18,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -610,15 +611,32 @@ func TestBootDoc_HistoryRefusesAKeyThisServerDoesNotServe(t *testing.T) {
 	}
 }
 
-func (f bootDocFixture) history(t *testing.T, kind, key string) []DocumentHistoryDTO {
+// history lists the retained versions and then fetches each body through the
+// real mux — which is also the only place this ticket's new route is exercised
+// as a ROUTE (pattern precedence: “/{id}“ must not swallow the “/seed“
+// sibling, and an in-process handler call would never notice if it did).
+func (f bootDocFixture) history(t *testing.T, kind, key string) []historyRow {
 	t.Helper()
 	status, body := f.do(t, http.MethodGet, "/api/document-history/"+kind+"/"+key, f.owner, nil)
 	if status != http.StatusOK {
 		t.Fatalf("history %s/%s: %d %s", kind, key, status, body)
 	}
-	var out []DocumentHistoryDTO
-	if err := json.Unmarshal([]byte(body), &out); err != nil {
+	var rows []DocumentHistoryDTO
+	if err := json.Unmarshal([]byte(body), &rows); err != nil {
 		t.Fatalf("decode history: %v (%s)", err, body)
+	}
+	out := make([]historyRow, 0, len(rows))
+	for _, row := range rows {
+		path := fmt.Sprintf("/api/document-history/%s/%s/%d", kind, key, row.Id)
+		vstatus, vbody := f.do(t, http.MethodGet, path, f.owner, nil)
+		if vstatus != http.StatusOK {
+			t.Fatalf("version %s: %d %s", path, vstatus, vbody)
+		}
+		var version DocumentHistoryVersionDTO
+		if err := json.Unmarshal([]byte(vbody), &version); err != nil {
+			t.Fatalf("decode version: %v (%s)", err, vbody)
+		}
+		out = append(out, historyRow{DocumentHistoryDTO: row, Content: version.Content})
 	}
 	return out
 }
