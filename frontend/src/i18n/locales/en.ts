@@ -315,7 +315,6 @@ export const en: Dict = {
     redecide: "Change my decision",
     redecideHint: "Pick again, or type a new reply",
     redecidePlaceholder: "Or type a new reply…",
-    taskBadge: "Task",
     viewTask: "View task details",
   },
   office: {

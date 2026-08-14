@@ -561,9 +561,43 @@ describe("RepliesPage", () => {
     expect(ref.textContent).toContain("把開機說明改成座艙可編輯");
   });
 
-  // An empty title falls back to the OLD header (type + jump only) — the cell
-  // is not drawn at all, so there is no empty box and no placeholder standing
-  // in for a title nobody wrote.
+  // Owner 2026-08-14, T-ee17 acceptance:「這個不能夠放到最一開始嗎？」— at the
+  // bottom of the card the row only answered WHICH work after the whole ask had
+  // been read. Judged by DOM order, not by geometry: a rendered-later row can
+  // still be painted high by CSS, and then the reading order screen readers and
+  // keyboards follow would disagree with the picture.
+  it("puts the task row ahead of the summary on both a waiting and a handled card", async () => {
+    __injectMockReplyCard(
+      mkCard({ task: { id: "t-4", typeKey: "review-pr", title: "改設定頁" } }),
+    );
+    __injectMockReplyCard(
+      mkCard({
+        status: "answered",
+        answer: { optionIdx: 0, text: "好", attachments: [] },
+        answeredTs: Date.now() / 1000 - 60,
+        task: { id: "t-5", typeKey: "review-pr", title: "改開機說明" },
+      }),
+    );
+    const { findByTestId } = renderPage();
+    fireEvent.click(await findByTestId("answered-toggle"));
+
+    for (const testId of ["waiting-card", "answered-card"]) {
+      const card = await findByTestId(testId);
+      const ref = card.querySelector('[data-testid="reply-task-ref"]')!;
+      const summary = card.querySelector(".reply-card__summary")!;
+      expect(ref).toBeTruthy();
+      expect(summary).toBeTruthy();
+      expect(
+        ref.compareDocumentPosition(summary) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+  });
+
+  // An empty title leaves the jump alone on the row — the cell is not drawn at
+  // all, so there is no empty box and no placeholder standing in for a title
+  // nobody wrote. The typeKey does NOT step in as a substitute: the chip is
+  // gone on every card, including the ones with nothing else to say.
   it("draws no title cell when the task's title is empty", async () => {
     __injectMockReplyCard(
       mkCard({ task: { id: "t-3", typeKey: "review-pr", title: "" } }),
@@ -571,7 +605,8 @@ describe("RepliesPage", () => {
     const { findByTestId } = renderPage();
     const ref = await findByTestId("reply-task-ref");
     expect(ref.querySelector(".reply-card__task-title")).toBeNull();
-    expect(ref.textContent).toContain("review-pr");
+    expect(ref.querySelector(".reply-card__task-type")).toBeNull();
+    expect(ref.textContent).not.toContain("review-pr");
     expect(ref.textContent).toContain("查看任務詳情");
   });
 

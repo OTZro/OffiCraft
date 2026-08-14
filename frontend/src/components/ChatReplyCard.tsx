@@ -253,6 +253,20 @@ export function ChatReplyCard({
       data-testid="chat-reply-card"
       data-reply-card-id={replyCardId}
     >
+      {/* §3.6 請示 → 任務 (chat surface): the SAME row RepliesPage renders —
+       * one component, so TITLE and 查看任務詳情 can never drift between the two
+       * surfaces. Only the route is ours. It leads the card (owner 2026-08-14,
+       * T-ee17:「這個不能夠放到最一開始嗎？」) — WHICH piece of work this asks
+       * about should not require reading the whole card first. Both surfaces
+       * moved together; a lead row on one and a trailing row on the other is
+       * exactly the drift this shared component exists to prevent. */}
+      {card?.task && (
+        <ReplyCardTaskRef
+          task={card.task}
+          onJump={() => setRoute({ page: "tasks", taskId: card.task!.id })}
+        />
+      )}
+
       {/* T-a20b: summary is agent-authored free text (markdown), like body. */}
       <Markdown
         source={card?.summary || fallbackSummary}
@@ -265,16 +279,6 @@ export function ChatReplyCard({
        * on every status — click an image to preview in the lightbox. */}
       {card && (
         <ReplyCardQuestionAttachments card={card} />
-      )}
-
-      {/* §3.6 請示 → 任務 (chat surface): the SAME row RepliesPage renders —
-       * one component, so TYPE, TITLE and 查看任務詳情 can never drift between
-       * the two surfaces. Only the route is ours. */}
-      {card?.task && (
-        <ReplyCardTaskRef
-          task={card.task}
-          onJump={() => setRoute({ page: "tasks", taskId: card.task!.id })}
-        />
       )}
 
       {loadError && (

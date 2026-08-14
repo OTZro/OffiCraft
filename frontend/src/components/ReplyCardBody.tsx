@@ -117,17 +117,15 @@ export function ReplyCardQuestionAttachments({
   );
 }
 
-/** §3.6 請示 → 任務: the 精簡任務資訊 row a TASK-derived ask wears — the TYPE,
- * the task's own TITLE, and the 查看任務詳情 jump. A pure chat ask (task
- * absent/null) renders NOTHING: an empty slot reads as "this ask has no task",
- * which is a different claim from "it has one and we would not say which".
+/** §3.6 請示 → 任務: the 精簡任務資訊 row a TASK-derived ask wears — the task's
+ * own TITLE and the 查看任務詳情 jump. A pure chat ask (task absent/null)
+ * renders NOTHING: an empty slot reads as "this ask has no task", which is a
+ * different claim from "it has one and we would not say which".
  *
- * The TITLE is here because the type alone does not answer the question the
- * owner actually asks of a card — WHICH piece of work is this about. A
- * contractor's card wore only「外勤支援 · X-79」while the very same worker
- * showed its task title in the roster panel (owner 2026-08-14, T-ee17). The
- * title already rode on the wire (TaskRefView.title, used for a11y labels);
- * nothing new is fetched.
+ * The TYPE chip (label +「tm-05f7c776d6ff」-shaped typeKey) is GONE — owner
+ * 2026-08-14, T-ee17 acceptance: an internal code on screen answers nothing the
+ * title does not already answer better. `task.typeKey` stays on the wire; it is
+ * simply no longer shown here.
  *
  * STILL never the task number/識別鍵 — that adjudication (請示卡不露任務編號)
  * is untouched: a title is not a number, and this change does not reopen it.
@@ -147,10 +145,6 @@ export function ReplyCardTaskRef({
   const { t } = useI18n();
   return (
     <div className="reply-card__task" data-testid="reply-task-ref">
-      <span className="reply-card__task-type">
-        <span className="reply-card__task-label">{t.replies.taskBadge}</span>
-        {task.typeKey || t.tasks.adhoc}
-      </span>
       {task.title && (
         <span className="reply-card__task-title" title={task.title}>
           {task.title}

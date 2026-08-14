@@ -610,7 +610,6 @@ var messageKeys = map[string]bool{
 	"replies.redecide":                         true,
 	"replies.redecideHint":                     true,
 	"replies.redecidePlaceholder":              true,
-	"replies.taskBadge":                        true,
 	"replies.viewOptions":                      true,
 	"replies.viewTask":                         true,
 	"replies.waitedLabel":                      true,

@@ -221,9 +221,13 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
   }
 
   // §3.6 請示 → 任務: a TASK-derived ask (card.task non-null) shows the 精簡
-  // 任務資訊 row — TYPE + the task's own TITLE + a 查看任務詳情 jump
-  // (adjudicated: still never the task number / 識別鍵). The row itself lives
-  // in ReplyCardBody, shared with the inline chat card; only the route is ours.
+  // 任務資訊 row — the task's own TITLE + a 查看任務詳情 jump (adjudicated:
+  // still never the task number / 識別鍵, and since T-ee17 acceptance not the
+  // typeKey either). It renders directly under the card head, ahead of the
+  // summary (owner 2026-08-14:「這個不能夠放到最一開始嗎？」) — at the bottom
+  // the owner had to read the whole card to learn which work it is about.
+  // The row itself lives in ReplyCardBody, shared with the inline chat card
+  // (which moved in the same breath); only the route is ours.
   // The route carries the task id so the tasks page can locate the card
   // (auto-expanding 已結束 / clearing hiding filters). A pure chat ask renders
   // nothing here.
@@ -359,6 +363,7 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
           </span>,
           true
         )}
+        {renderTaskRef(card)}
 
         {/* T-a20b: summary is agent-authored free text, same as body one line
          * down — it had no business rendering as plain text while its sibling
@@ -370,7 +375,6 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
         {/* QUESTION-side attachments (T-5e8a): thumbnails/chips under the
          * body — click an image to preview in the page's lightbox. */}
         <ReplyCardQuestionAttachments card={card} />
-        {renderTaskRef(card)}
 
         <ReplyCardWaitingBody
           card={card}
@@ -405,13 +409,13 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
             </span>
           ) : undefined
         )}
+        {renderTaskRef(card)}
 
         {/* T-a20b — same free-text contract as the waiting card above. */}
         <Markdown source={card.summary} className="reply-card__summary doc-md" />
         {/* The question's attachments outlive its settling — same strip on a
          * handled card (answered/expired). */}
         <ReplyCardQuestionAttachments card={card} />
-        {renderTaskRef(card)}
 
         {expired ? (
           <ReplyCardExpiredBody card={card} />
