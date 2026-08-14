@@ -57,9 +57,18 @@ test("desktop 1024: overlay panel lays out with a rendered markdown body", async
 // close button with it: an overlay you cannot dismiss is worse than one you
 // cannot read. Measured against the visual viewport, not against a class list.
 //
+// 🔴 EVERY TALLY BELOW IS "x failed / y passed" OUT OF THE 4 TESTS IN THIS FILE,
+// under exactly this command — the denominator is part of the measurement and an
+// earlier version of this file omitted it:
+//     npx playwright test -c playwright-ct.config.ts visual-guards/md-preview.ct.spec.tsx
+// (Passing the bare string `md-preview.ct.spec.tsx` instead is a SUBSTRING match
+// and also picks up chat-md-preview and reply-card-md-preview: 16 tests, 2
+// skipped, so a green run reads "14 passed". Those were the numbers an earlier
+// revision quoted with no command attached, which is why they matched nothing.)
+//
 // MUTANTS, and the exact declaration each one needs — this matters, see M-B0:
 //   · `.md-preview__panel { max-height: none }` (the shape the prior round's
-//     35%-confidence hypothesis predicts) ⇒ 3 failed / 11 passed. Within THIS
+//     35%-confidence hypothesis predicts) ⇒ 3 failed / 1 passed. Within THIS
 //     test the line that reddens is `panel.bottom <= vh`, and `panel.top >= 0`
 //     PASSES — because the shipped stylesheet is `align-items: safe center`, so
 //     an overflowing panel keeps its top edge instead of spilling equally off
@@ -67,12 +76,13 @@ test("desktop 1024: overlay panel lays out with a rendered markdown body", async
 //     "correct" this note back to "reddens on the negative panel top", which is
 //     what the world looked like BEFORE `safe center` and was never measured.
 //   · `@media(max-width:600px){ .md-preview__close{ position: relative;
-//     left: 100vw } }` ⇒ 1 failed / 13 passed — this test alone. The sibling
-//     `{ position: relative; top: -9999px }` also reddens it alone.
+//     left: 100vw } }` ⇒ 1 failed / 3 passed — this test alone, on
+//     `close.right <= vw`. The sibling `{ position: relative; top: -9999px }`
+//     also reddens it alone.
 //   · M-B0, the near-miss worth writing down: the same rule WITHOUT
 //     `position: relative` — bare `{ left: 100vw }` — is completely INERT,
 //     because `.md-preview__close` is `position: static` and `left` does not
-//     apply to it. Measured: 14 passed. A mutant that changes no geometry proves
+//     apply to it. Measured: 4 passed. A mutant that changes no geometry proves
 //     nothing about a geometry assertion, and it looks exactly like a guard with
 //     no discriminating power. Always name the declaration, not the intent.
 test("narrow 390: the whole preview panel, close button included, is inside the visible area", async ({
@@ -134,7 +144,8 @@ test("narrow 390: the whole preview panel, close button included, is inside the 
 // user's question instead, and the same mutant reddens.
 //
 // MUTANT (measured): `@media (max-width:600px){ .md-preview__body{ overflow-y:
-// hidden } }` ⇒ red on this test alone.
+// hidden } }` ⇒ 1 failed / 3 passed, red on this test alone (on
+// `reached.scrolled > 0`).
 test("narrow 390: a document longer than the screen scrolls to its last line", async ({
   mount,
   page,
@@ -196,18 +207,35 @@ test("narrow 390: a document longer than the screen scrolls to its last line", a
 // 1280x800: panel width min(760, 100%) = 760, height = 800 - 2*32 = 736,
 // horizontally centred at 260..1020.
 //
-// MUTANT (measured): dropping the overlay's 32px inset (the "give the phone more
-// room" change one is tempted to make unconditionally) moves the panel to
-// 0..800 ⇒ 1 failed / 13 passed, red here while both narrow tests stay green.
+// MUTANT (measured): `width: min(760px, 100%)` → `min(700px, 100%)` ⇒ 1 failed /
+// 3 passed, red here (on the width) while both narrow tests stay green.
+//
+// ⚠️ The mutant this note used to name — dropping the overlay's 32px inset — is
+// NO LONGER discriminating, and the reason is worth keeping: once the panel cap
+// became the literal `calc(100dvh - 64px)`, the inset stopped being load-bearing
+// for this geometry. At 1280x800 the panel is 736px tall either way, and
+// centring it in a 800px box still puts it at 32..768 — identical. Measured: 4
+// passed. A mutant retired by a refactor looks exactly like a mutant that was
+// never checked, so it is replaced here rather than quietly dropped.
 //
 // 🔴 WHAT THIS CONTROL CANNOT DO, stated because the narrative around it is
-// easy to oversell: reverting md-preview.css wholesale to the parent commit
-// leaves all three of these tests GREEN (measured). They are regression guards
+// easy to oversell: reverting md-preview.css wholesale to origin/main leaves all
+// three of these tests GREEN (measured: 4 passed). They are regression guards
 // for a fix whose mechanism lives in `dvh`/`lvh`, and Chromium — the only engine
 // this project's CT config runs — has dvh == lvh == vh, so the change is
-// invisible to it by construction. Four mutants reddening does NOT mean the CSS
-// change itself is covered here. The instrument that CAN see it is the
-// lvh/dvh-gap simulation described in md-preview.css's header comment.
+// invisible to it by construction. Mutants reddening does NOT mean the CSS
+// change itself is covered here.
+//
+// The instruments that CAN see it are both ad-hoc and NOT in CI, which is the
+// honest gap in this file:
+//   · an lvh/dvh-gap simulation (rewrite every `dvh` length to be N px shorter
+//     than its `vh` twin), which is what turns the image-frame unit split into
+//     a red "ONE scrollbar" run;
+//   · a no-`dvh`-engine probe (rewrite `dvh`→`xvh`, an unknown unit), which is
+//     what caught `var()` destroying the parse-time fallback.
+// Both are described in md-preview.css's header. Adding a WebKit project to
+// playwright-ct.config.ts would still not cover either one — WebKit-on-macOS
+// has no retracting browser chrome and does know `dvh`.
 test("desktop 1280: the panel geometry is unchanged by the narrow-width fix", async ({
   mount,
   page,
