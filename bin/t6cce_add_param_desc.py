@@ -57,6 +57,14 @@ def _top_keys(text, lo, hi):
     return out
 
 
+def _string_span(text, i):
+    """(start, end) of the JSON string literal beginning at text[i] == '"'."""
+    j = i + 1
+    while text[j] != '"':
+        j += 2 if text[j] == "\\" else 1
+    return i, j + 1
+
+
 def splice(raw, param, desc):
     """Insert a description key into `param`'s object inside the raw descriptor.
 
@@ -76,6 +84,23 @@ def splice(raw, param, desc):
     close = _match_brace(raw, brace)
 
     keys = _top_keys(raw, brace, close)
+    # An existing description is REPLACED IN PLACE — only the encoded string
+    # value is swapped, so the key's position, the surrounding indentation and
+    # every neighbouring byte survive untouched. Rewriting a wrong sentence and
+    # adding a missing one are the same surgery on the same object; doing the
+    # rewrite as delete+insert would move the key to alphabetical position and
+    # show up as a spurious diff on a line nobody meant to touch.
+    existing = [pos for key, pos in keys if key == "description"]
+    if existing:
+        colon = raw.index(":", existing[0])
+        vstart = colon + 1
+        while raw[vstart] in " \t\n":
+            vstart += 1
+        if raw[vstart] != '"':
+            sys.exit(f"{param}: existing description is not a plain string")
+        lo, hi = _string_span(raw, vstart)
+        return raw[:lo] + encoded + raw[hi:]
+
     after = [pos for key, pos in keys if key > "description"]
     anchor = after[0] if after else (keys[-1][1] if keys else None)
     if anchor is None:  # empty object: `{}`
@@ -120,7 +145,7 @@ def tools(spec):
             yield raw, json.loads(raw), x.get("name")
 
 
-def apply(descs):
+def apply(descs, overwrite=False):
     """descs: {tool: {param: description}} -> writes SPEC in place."""
     text = load()
     spec = json.loads(text)
@@ -140,18 +165,26 @@ def apply(descs):
 
         new_raw = raw
         for param, desc in params.items():
-            if props[param].get("description"):
+            if props[param].get("description") and not overwrite:
                 sys.exit(f"{tool}.{param}: already has a description; refusing to overwrite")
             new_raw = splice(new_raw, param, desc)
 
         # The splice is text surgery on a JSON blob: prove it changed exactly
-        # what it was asked to and nothing else.
+        # what it was asked to and nothing else. The baseline drops the SAME
+        # keys the check pops off the result, so an overwrite is held to the
+        # identical standard an insert is: after removing this batch's
+        # descriptions, the two objects must be equal. With nothing there
+        # before, `expected` is the untouched original, i.e. exactly the
+        # insert-only assertion this replaced.
+        expected = json.loads(raw)
+        for param in params:
+            expected["inputSchema"]["properties"][param].pop("description", None)
         after = json.loads(new_raw)
         for param, desc in params.items():
             got = after["inputSchema"]["properties"][param].pop("description", None)
             if got != desc:
                 sys.exit(f"{tool}.{param}: splice did not land the description")
-        if after != obj:
+        if after != expected:
             sys.exit(f"{tool}: splice changed something other than the descriptions")
 
         old_json = json.dumps(raw, ensure_ascii=False)
@@ -179,8 +212,11 @@ def audit():
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["audit"]:
+    argv = sys.argv[1:]
+    if argv == ["audit"]:
         audit()
     else:
-        payload = json.load(open(sys.argv[1], encoding="utf-8"))
-        print(f"rewrote {apply(payload)} descriptors")
+        overwrite = "--overwrite" in argv
+        rest = [a for a in argv if a != "--overwrite"]
+        payload = json.load(open(rest[0], encoding="utf-8"))
+        print(f"rewrote {apply(payload, overwrite)} descriptors")
