@@ -11,21 +11,60 @@
  *
  * A centered modal panel over a backdrop, with a header (title + share +
  * 下載 + close) and a scrolling body. */
+/* T-76cd — the two mobile-safety properties below. owner opened a long .md on an
+ * iPhone: the title was cut in half at the top, the bottom stopped mid-paragraph
+ * and nothing scrolled. Neither property changes anything on a desktop viewport
+ * (measured, see the CT guard's control), so both are unconditional rather than
+ * media-scoped — a `@media` here would only hide them from the width the fix was
+ * measured at.
+ *
+ * ⚠️ NOT REPRODUCED, so neither of these is a confirmed root cause. The report
+ * did not reproduce in Chromium/WebKit device emulation, and a full ancestor
+ * scan on the REAL running app (16 layers, .md-preview up to <html>) found ZERO
+ * transform/filter/backdrop-filter/perspective/contain/will-change/container-type
+ * — so "an ancestor is trapping the fixed box" is dead, and the panel measured
+ * 32..632 inside a 664 viewport with its body scrollable to the last line. What
+ * these two do is remove the two ways this layout could still fail on a real
+ * iPhone, in directions that cannot make anything worse. */
 .md-preview {
+  /* The overlay's breathing room, named because the panel's cap has to subtract
+   * exactly it — two hard-coded 32s that silently disagree is the bug this
+   * property exists to make impossible. */
+  --md-preview-inset: 32px;
   position: fixed;
   inset: 0;
   z-index: 1100;
   display: flex;
+  /* `safe center` degrades to `center` when the panel fits, and to flex-start
+   * when it does NOT — so an overflowing panel loses its BOTTOM rather than
+   * spilling equally off both ends and taking the header (and with it the ×,
+   * the only way out) off the top. A UA that does not understand it falls back
+   * to the plain `center` above, which is today's behaviour. */
   align-items: center;
+  align-items: safe center;
   justify-content: center;
-  padding: 32px;
+  padding: var(--md-preview-inset);
+  /* iOS resolves `inset: 0` on a fixed box against the LARGE viewport (URL bar
+   * retracted), which is TALLER than what is on screen while the bar is showing;
+   * a panel centred in that box hangs off both ends of the visible area. `dvh`
+   * tracks the viewport that is actually visible. `inset` stays for the backdrop
+   * and because over-constraint drops `bottom`, not this height. */
+  height: 100%;
+  height: 100dvh;
   background: color-mix(in srgb, var(--color-backdrop) 75%, transparent);
 }
 .md-preview__panel {
   display: flex;
   flex-direction: column;
   width: min(760px, 100%);
+  /* The cap is stated TWICE on purpose, and the second one is not a percentage:
+   * a percentage max-height needs its parent's height to resolve, and this panel
+   * has exactly one job it must never fail — staying inside the screen. The dvh
+   * form needs nothing from the parent, so the panel is capped even if the
+   * percentage resolves to `none`. The two agree by construction because both
+   * subtract the same `--md-preview-inset`. */
   max-height: 100%;
+  max-height: calc(100dvh - 2 * var(--md-preview-inset));
   border: 1px solid color-mix(in srgb, var(--color-overlay) 8%, transparent);
   border-radius: 14px;
   background: var(--color-card);

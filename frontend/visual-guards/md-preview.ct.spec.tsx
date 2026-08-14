@@ -2,8 +2,34 @@
 // the centered modal panel lays out inside the viewport, the markdown BODY
 // renders (a real heading box, proving Markdown.tsx ran — not the raw-source
 // tab), and the 下載 action sits in the header as a separate affordance.
+//
+// T-76cd — the three narrow-width guards below. owner opened a long .md on an
+// iPhone and got a panel whose title was cut in half at the top, whose bottom
+// stopped mid-paragraph, and which would not scroll at all.
+//
+// 🔴 WHAT THESE GUARDS ARE AND ARE NOT. A desktop Chromium at 390px wide is NOT
+// an iPhone: on iOS a `position: fixed; inset: 0` box resolves against the LARGE
+// viewport (the one with the URL bar retracted), so it can be taller than what
+// is on screen — and headless Chromium has no such split (measured on the real
+// running app under WebKit/iPhone-13 emulation: innerHeight === visualViewport
+// .height === 664, panel 32..632, body scrollHeight 36276 / clientHeight 545 and
+// scrollable to the last line ⇒ THE REPORT DOES NOT REPRODUCE HERE). So these
+// are REGRESSION guards for the fix, not a reproduction of the report. Their
+// discriminating power comes from mutants, recorded per test below.
+//
+// Every assertion measures GEOMETRY (rects, computed style) — never "is the
+// class attached". A stylesheet that carries the class names and lays out wrong
+// passes a class-name assertion and fails these.
 import { test, expect } from "@playwright/experimental-ct-react";
-import { MarkdownPreviewStory } from "./stories/MarkdownPreviewStory";
+import {
+  MarkdownPreviewStory,
+  MarkdownPreviewLongStory,
+} from "./stories/MarkdownPreviewStory";
+
+/** The phone width owner reads the cockpit at (iPhone 13 CSS pixels). */
+const NARROW = { width: 390, height: 664 };
+/** The control: a desktop viewport whose behaviour must not move at all. */
+const WIDE = { width: 1280, height: 800 };
 
 test("desktop 1024: overlay panel lays out with a rendered markdown body", async ({ mount, page }) => {
   await page.setViewportSize({ width: 1024, height: 800 });
@@ -25,4 +51,163 @@ test("desktop 1024: overlay panel lays out with a rendered markdown body", async
   // Preview and download are two actions: the header keeps a 下載 link.
   const dl = cmp.locator("a.md-preview__download");
   await expect(dl).toBeVisible();
+});
+
+// DoD ① — at phone width the whole panel lands inside the visible area, and the
+// close button with it: an overlay you cannot dismiss is worse than one you
+// cannot read. Measured against the visual viewport, not against a class list.
+//
+// MUTANT (measured): `.md-preview__panel { max-height: none }` — the shape the
+// prior round's 35%-confidence hypothesis predicts — grows the panel to the full
+// document height, and `align-items: center` then spills it EQUALLY off both
+// ends ⇒ this test reddens on the negative panel top.
+test("narrow 390: the whole preview panel, close button included, is inside the visible area", async ({
+  mount,
+  page,
+}) => {
+  await page.setViewportSize(NARROW);
+  const cmp = await mount(<MarkdownPreviewLongStory />);
+  const panel = cmp.locator(".md-preview__panel");
+  await expect(panel).toBeVisible();
+  await expect(cmp.locator(".md-preview__md")).toBeVisible();
+
+  const seen = await page.evaluate(() => {
+    const r = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+    const panel = r(".md-preview__panel");
+    const header = r(".md-preview__header");
+    const close = r(".md-preview__close");
+    return {
+      vh: window.innerHeight,
+      vw: window.innerWidth,
+      panel: { top: panel.top, bottom: panel.bottom, left: panel.left, right: panel.right },
+      header: { top: header.top, bottom: header.bottom },
+      close: { top: close.top, bottom: close.bottom, left: close.left, right: close.right },
+      panelMaxHeight: getComputedStyle(document.querySelector(".md-preview__panel")!).maxHeight,
+    };
+  });
+
+  // The panel itself — all four edges.
+  expect(seen.panel.top).toBeGreaterThanOrEqual(0);
+  expect(seen.panel.bottom).toBeLessThanOrEqual(seen.vh + 1);
+  expect(seen.panel.left).toBeGreaterThanOrEqual(0);
+  expect(seen.panel.right).toBeLessThanOrEqual(seen.vw + 1);
+
+  // The header is the half owner lost first, and the × inside it is the exit.
+  expect(seen.header.top).toBeGreaterThanOrEqual(0);
+  expect(seen.close.top).toBeGreaterThanOrEqual(0);
+  expect(seen.close.bottom).toBeLessThanOrEqual(seen.vh + 1);
+  expect(seen.close.right).toBeLessThanOrEqual(seen.vw + 1);
+
+  // The cap has to RESOLVE to a length, not sit there as an unresolved keyword:
+  // `none` is exactly the failure the hypothesis names.
+  expect(seen.panelMaxHeight).not.toBe("none");
+
+  // And it must be pressable, not merely painted.
+  await expect(cmp.locator(".md-preview__close")).toBeEnabled();
+  await cmp.locator(".md-preview__close").click();
+});
+
+// DoD ② — a document taller than one screen is readable to its LAST line. The
+// assertion is "the sentinel line is inside the body's own box after scrolling",
+// which is the user-facing question; `overflow-y: auto` in the stylesheet is a
+// property, not a reachability proof (T-7e68 learnt that the hard way).
+//
+// 🔴 THE SCROLLING HAS TO BE DRIVEN BY A GESTURE, not by `scrollIntoView`.
+// MEASURED: with `.md-preview__body { overflow-y: hidden }` planted at narrow
+// width, a `scrollIntoViewIfNeeded`-based version of this test stayed GREEN
+// (14 passed) — a clipped box is still programmatically scrollable, so the
+// script reaches a line the user's finger never can. Driving the wheel asks the
+// user's question instead, and the same mutant reddens.
+//
+// MUTANT (measured): `@media (max-width:600px){ .md-preview__body{ overflow-y:
+// hidden } }` ⇒ red on this test alone.
+test("narrow 390: a document longer than the screen scrolls to its last line", async ({
+  mount,
+  page,
+}) => {
+  await page.setViewportSize(NARROW);
+  const cmp = await mount(<MarkdownPreviewLongStory />);
+  const body = cmp.locator(".md-preview__body");
+  await expect(body).toBeVisible();
+  const last = cmp.getByText("最後一行 LAST_LINE_T76CD");
+  await expect(last).toBeAttached();
+
+  // PREMISE: the fixture really is longer than the box, otherwise "it scrolls"
+  // is satisfied by a document that never needed to.
+  const overflow = await body.evaluate((el) => el.scrollHeight - el.clientHeight);
+  expect(overflow).toBeGreaterThan(400);
+
+  // Ask the end question ("is the last line on screen yet"), with a bounded
+  // number of wheel deliveries — never a fixed count calibrated to one engine's
+  // scroll step, and never "until the offset stops changing" (that stops in the
+  // warm-up or mid-animation; see the image-zoom guard's notes).
+  await body.hover();
+  const onScreen = async () =>
+    page.evaluate(() => {
+      const b = document.querySelector(".md-preview__body")!;
+      const br = b.getBoundingClientRect();
+      const el = [...b.querySelectorAll("*")].find(
+        (e) => e.children.length === 0 && e.textContent?.includes("LAST_LINE_T76CD"),
+      )!;
+      const r = el.getBoundingClientRect();
+      return r.top >= br.top - 1 && r.bottom <= br.bottom + 1;
+    });
+  for (let i = 0; i < 200 && !(await onScreen()); i += 1) {
+    await page.mouse.wheel(0, 3000);
+  }
+
+  const reached = await page.evaluate(() => {
+    const b = document.querySelector(".md-preview__body")!;
+    const br = b.getBoundingClientRect();
+    const el = [...b.querySelectorAll("*")].find(
+      (e) => e.children.length === 0 && e.textContent?.includes("LAST_LINE_T76CD"),
+    )!;
+    const r = el.getBoundingClientRect();
+    return {
+      scrolled: b.scrollTop,
+      inside: r.top >= br.top - 1 && r.bottom <= br.bottom + 1,
+      insideViewport: r.top >= 0 && r.bottom <= window.innerHeight + 1,
+    };
+  });
+  expect(reached.scrolled).toBeGreaterThan(0);
+  expect(reached.inside).toBe(true);
+  expect(reached.insideViewport).toBe(true);
+});
+
+// DoD ③ — the CONTROL. The fix is deliberately NOT wrapped in a media query
+// (`dvh` equals `vh` where there is no retracting browser chrome, and
+// `safe center` equals `center` for a panel that fits), so the claim "only the
+// narrow width moved" has to be measured rather than asserted by construction.
+// These numbers are the desktop geometry read off the UNCHANGED stylesheet at
+// 1280x800: panel width min(760, 100%) = 760, height = 800 - 2*32 = 736,
+// horizontally centred at 260..1020.
+//
+// MUTANT (measured): dropping the overlay's 32px inset (the "give the phone more
+// room" change one is tempted to make unconditionally) moves the panel to
+// 0..800 ⇒ red here while both narrow tests stay green.
+test("desktop 1280: the panel geometry is unchanged by the narrow-width fix", async ({
+  mount,
+  page,
+}) => {
+  await page.setViewportSize(WIDE);
+  const cmp = await mount(<MarkdownPreviewLongStory />);
+  await expect(cmp.locator(".md-preview__panel")).toBeVisible();
+
+  const seen = await page.evaluate(() => {
+    const el = document.querySelector(".md-preview__panel")!;
+    const r = el.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width };
+  });
+  expect(seen.width).toBe(760);
+  expect(seen.left).toBe(260);
+  expect(seen.right).toBe(1020);
+  expect(seen.top).toBe(32);
+  expect(seen.bottom).toBe(768);
+
+  // The desktop overlay still scrolls its long body — the control is a control,
+  // not a licence for the wide case to break quietly.
+  const overflow = await cmp
+    .locator(".md-preview__body")
+    .evaluate((el) => el.scrollHeight - el.clientHeight);
+  expect(overflow).toBeGreaterThan(400);
 });
