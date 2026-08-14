@@ -79,6 +79,28 @@ export function documentFields(
 }
 
 /**
+ * Does this revision carry any content at all, judged from the DIRECTORY row's
+ * size map (T-1170) rather than from text the list no longer has?
+ *
+ * ⚠️ One honest difference from `documentFields`, which drops a value whose
+ * `trim()` is empty: a whitespace-only field has a non-zero size, so it counts
+ * as content here. The row would then say nothing instead of 「(當時是空白內容)」,
+ * and the reader one click deeper — which does hold the text — still gets it
+ * right. Nobody can tell whitespace from text by counting characters, and
+ * inventing an answer is the worse of the two.
+ */
+export function documentHasContent(
+  kind: DocumentKind,
+  sizes: Record<string, number>
+): boolean {
+  return Object.entries(sizes).some(
+    ([name, size]) =>
+      size > 0 &&
+      (DOC_FIELD_ORDER[kind].includes(name) || isContentField(kind, name))
+  );
+}
+
+/**
  * The fields a comparison must walk: everything either side carries, in one
  * order. A field the revision has and the current document does not (or the
  * other way round) is a DIFFERENCE, so taking one side's names alone would

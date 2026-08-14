@@ -91,6 +91,11 @@ export interface DocCardProps {
   readOnly?: boolean;
   /** Overrides the "Default" is_default badge. */
   badge?: string;
+  /** The 預設 verdict, when the caller knows it independently of `doc` (the
+   * roles page reads it off the roster row). Wins over the doc's own flag, and
+   * is what lets the badge stay honest while the body read is in flight or
+   * failed — without it a null `doc` can only say nothing. */
+  isDefault?: boolean;
   /** This document's size budget, `{size, cap}` in CHARACTERS (T-ae38). Passed
    * only by documents that HAVE a cap; the global-context views omit it because
    * they genuinely have none, and showing a "0 / 0" there would invent a limit
@@ -136,6 +141,7 @@ export function DocCard({
   errorNote,
   readOnly = false,
   badge,
+  isDefault: isDefaultOverride,
   usage,
   replaceNote,
   confirmSave,
@@ -153,7 +159,18 @@ export function DocCard({
   const [failed, setFailed] = useState<string | null>(null);
 
   const text = doc ? doc.text : "";
-  const isDefault = doc ? doc.isDefault : true;
+  // 🔴 A null doc means the body has NOT been read (loading, or the read
+  // failed) — it does not mean the document is untouched. The old fallback
+  // here was `true`, which turned "I do not know" into the positive claim 預設:
+  // an owner-EDITED role whose `getRole` failed was badged as shipped-default,
+  // beside an empty body, and nothing said otherwise. The badge is a claim, so
+  // an unknown document makes none.
+  //
+  // `isDefaultOverride` exists because a caller can often know this WITHOUT the
+  // body: the roles page holds the roster row, and the roster has carried
+  // `is_default` all along. Passing it keeps the badge true through exactly the
+  // window where the doc read is pending or broken.
+  const isDefault = isDefaultOverride ?? (doc ? doc.isDefault : false);
 
   // While editing, both the readout and the refusal judge the DRAFT. Mirrors
   // the server's own rule (docCapBlocked): over the cap is refused unless the
@@ -260,7 +277,12 @@ export function DocCard({
               <span className="set-badge">{badge}</span>
             ) : (
               isDefault && (
-                <span className="set-badge">{t.settings.defaultBadge}</span>
+                <span
+                  className="set-badge"
+                  data-testid="doc-card-default-badge"
+                >
+                  {t.settings.defaultBadge}
+                </span>
               )
             )}
             {/* Always rendered when this document has a cap — including while

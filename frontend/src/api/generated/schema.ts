@@ -598,7 +598,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on list_task_manuals ?view=list, and a role definition's size and cap are already on every list_roles row.
+         * Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.
          * @description The station-wide capped-document SIZE overview (``peek_doc_sizes`` MCP tool,
          *     zero params; ``GET /api/doc-sizes``).
          *
@@ -617,7 +617,7 @@ export interface paths {
          *     are reported by no listing on this station at any price, so before this route
          *     the only way to see them was one ``get_insight`` / ``get_lessons`` per role. The
          *     other three numbers exist elsewhere but scattered — a manual's sop_md/learnings
-         *     sizes and caps are on the ``list_task_manuals`` light view (``?view=list``), and
+         *     sizes and caps are on every ``list_task_manuals`` row, and
          *     a role definition's ``size_chars`` / ``cap_chars`` ride every ``list_roles``
          *     row. Read-only and deterministic; a station with no roles and no manuals gets
          *     empty arrays, never an error.
@@ -727,7 +727,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * READ the retained versions of one editable document: what each version held, when it was replaced and by whom. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.
+         * READ the CATALOGUE of retained versions of one editable document: which versions exist, when each was replaced and by whom, whether each was a tombstone, and HOW LONG each of its fields was. It does NOT carry the versions themselves — a version list is how you CHOOSE one, and choosing does not need the prose; fetch the one you picked with get_document_version. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.
          *
          *     WHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.
          *
@@ -762,6 +762,29 @@ export interface paths {
          * @description Read the document's shipped default — the 初始版本 row of the cockpit's version list. It exists so that row can be COMPARED against the live document before anyone decides to go back to it; before this route the seed text only ever reached a client AFTER a reset had already overwritten the document, so "look first" was impossible for exactly the one entry whose restore is least reversible. Read-only, same floor as reading the retained versions. 404 where no seed exists.
          */
         get: operations["handle_get_document_seed_api_document_history__kind___key__seed_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/document-history/{kind}/{key}/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * READ the BODY of one named retained version of an editable document — the ``content`` map that version was stored with, exactly as it was stored. Read-only: this fetches text, it never puts it back; restoring stays out of the agent tool surface, as it does for list_document_history.
+         *
+         *     THIS IS THE SECOND HALF OF A PAIR. list_document_history answers WHICH versions exist and how big each field of each one is, and carries no prose at all; this answers WHAT ONE OF THEM SAID. Name the ``id`` you read off that list. Asking for every version's text is the cost that pairing exists to remove, so fetch the one you actually mean to read.
+         *
+         *     ADDRESSING: ``kind`` and ``key`` name a document exactly as they do for list_document_history — the same server-side gate answers all three routes, so whatever that tool can address, this one can too, and they can never silently disagree. A ``kind`` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it; a ``key`` that fails its kind's required shape is refused with 400 naming the problem. An ``id`` that is not a retained version of THAT document is a 404 — including an id that belongs to some other document, which is why the address is the whole triple and not the id alone.
+         */
+        get: operations["handle_get_document_version_api_document_history__kind___key___id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2446,11 +2469,17 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List role definitions (seed defaults + owner edits).
-         * @description List every role definition (§3.4 #23): the seed roles (folded with any
-         *     owner edit) FIRST, then every owner-created CUSTOM role (M2-2 — an overlay
-         *     with no file seed, non-tombstoned). Custom roles are appended after the
-         *     seeds in stable roster order, so the settings list reads seed → custom.
+         * List role definitions (seed defaults + owner edits) WITHOUT the persona bodies: each row is the role identity plus its definition size and cap, never definition_md itself. Read the one role you want with get_role.
+         * @description List every role definition (§3.4 #23) WITHOUT the persona bodies: the seed roles
+         *     (folded with any owner edit) FIRST, then every owner-created CUSTOM role (M2-2 —
+         *     an overlay with no file seed, non-tombstoned). Custom roles are appended after
+         *     the seeds in stable roster order, so the settings list reads seed → custom.
+         *
+         *     ``definition_md`` is ABSENT from every row, not served empty: the persona body is
+         *     the bulk of a role document, and the listing is where a caller CHOOSES a role
+         *     rather than reads one. Each row still carries ``size_chars`` / ``cap_chars``
+         *     measured on the stored document, so "which definition is nearly full" is still
+         *     answerable here; read the role you picked with get_role.
          */
         get: operations["handle_list_roles_api_roles_get"];
         put?: never;
@@ -2796,8 +2825,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List task types (match by display_name/purpose; address by type_key). WITHOUT view=list this returns the FULL manual of every type — every SOP and every learnings blob in one answer, six figures of characters on a real roster. Pass view=list unless you actually need the text.
-         * @description List task manuals (the 設定 › 任務手冊 cards). Answers with the FULL manual of every type by default — every ``sop_md`` and every ``learnings`` blob in one response, which is measured in six figures of characters once a few types are authored. Pass ``view=list`` for the light row instead (T-ec2c) and pull the one manual you need with get_task_manual.
+         * List task types WITHOUT their long documents: each row is the type identity (type_key / display_name / purpose), its input fields and its assignee setting, plus the SIZES of sop_md and learnings and the cap each is judged against. The SOP and the learnings text are not on this answer at all — read the one type you picked with get_task_manual.
+         * @description List task manuals (the 設定 › 任務手冊 cards) as identity rows. ``sop_md`` and ``learnings`` are ABSENT from every row rather than served empty: those two blobs are what made this answer six figures of characters once a few types were authored, and an empty string in a field that normally holds the SOP reads as "this type has no SOP". Every row still carries ``sop_md_chars`` / ``learnings_chars`` measured on the STORED documents and the cap each is judged against, so "which manual is nearly full" stays answerable here; pull the one manual you need with get_task_manual.
          */
         get: operations["handle_list_task_manuals_api_task_manuals_get"];
         put?: never;
@@ -3485,7 +3514,23 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description ONE retained revision of an editable document as a CATALOGUE ROW: which revision it is, when it was retained and by whom, whether it was a tombstone, and HOW LONG each of its fields was — never the text. A version list is how a reader CHOOSES a revision, and choosing does not need the prose: one list_document_history answer had a structural ceiling in the hundreds of thousands of characters and no narrowing of any kind. The body of a chosen revision is fetched one at a time (get_document_version).
+         *
+         *     ``field_chars`` is a MAP because the field names differ by kind (``text`` / ``definition_md`` / ``description`` / ``title``) — the same keys that revision's ``content`` carries, MINUS ``tombstoned``, which is served as its own boolean rather than as a stringly-typed entry with a character count.
+         */
         DocumentHistoryDTO: {
+            actor_id: string;
+            created_ts: number;
+            field_chars: {
+                [key: string]: number;
+            };
+            /** Format: int64 */
+            id: number;
+            tombstoned: boolean;
+        };
+        /** @description Receipt of a restore: the retained revision that was just written back, in the shape this route has always answered with — ``content`` included. It is deliberately NOT the light catalogue row list_document_history now serves: a restore receipt names exactly one revision and its whole point is that this text is what the live document now holds. */
+        DocumentHistoryRestoreDTO: {
             actor_id: string;
             content: {
                 [key: string]: string;
@@ -3493,6 +3538,16 @@ export interface components {
             created_ts: number;
             /** Format: int64 */
             id: number;
+        };
+        /** @description The BODY of ONE named retained revision: the same ``content`` map that revision was stored with (field names by kind — ``text`` / ``definition_md`` / ``description`` / ``title``, plus ``tombstoned``), echoed alongside the address that was asked for. Read-only. It is the companion of list_document_history, which carries every revision's identity and sizes but no prose: choose from the list, then fetch exactly the one revision you mean to read. */
+        DocumentHistoryVersionDTO: {
+            content: {
+                [key: string]: string;
+            };
+            /** Format: int64 */
+            id: number;
+            key: string;
+            kind: string;
         };
         /** @description The SHIPPED DEFAULT of an editable long-form document — what a reset puts back, expressed in the SAME field names a retained revision uses so one reader can compare either against the live document. READ-ONLY: this route writes nothing, so looking at 初始版本 can never overwrite anything. 404 when the document has no shipped default (a custom role, a task manual, per-role lessons) — exactly the documents whose reset the server also 404s. */
         DocumentSeedDTO: {
@@ -6641,6 +6696,58 @@ export interface components {
             schema_version: number;
         };
         /**
+         * RoleDefListItemDTO
+         * @description One row of the ROLE LISTING: everything RoleDefDTO carries EXCEPT the persona
+         *     body. ``definition_md`` is deliberately absent rather than served empty — an
+         *     empty string in a field that normally holds the persona reads as "this role
+         *     has no definition", which is a different and false claim.
+         *
+         *     ``size_chars`` / ``cap_chars`` are measured on the STORED document, so the row
+         *     still answers "which role definition is nearly full" without carrying any of
+         *     the text. Read the one you picked with get_role.
+         */
+        RoleDefListItemDTO: {
+            /**
+             * Cap Chars
+             * @description The Duty (role definition) size cap now in force, in CHARACTERS (the doc.cap_chars.duty setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
+             * @default 0
+             */
+            cap_chars: number;
+            /**
+             * Size Chars
+             * @description Size of the role definition in CHARACTERS (Unicode code points) — the same unit as cap_chars. Measured on the STORED document, which this row does not carry: a zero here would be a measurement, not an omission.
+             * @default 0
+             */
+            size_chars: number;
+            /**
+             * Is Default
+             * @default true
+             */
+            is_default: boolean;
+            /**
+             * Is Seed
+             * @default true
+             */
+            is_seed: boolean;
+            /** Key */
+            key: string;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /**
+             * Owner Id
+             * @default
+             */
+            owner_id: string;
+            /**
+             * Schema Version
+             * @default 3
+             */
+            schema_version: number;
+        };
+        /**
          * RoleDefUpdateDTO
          * @description Partial edit of a role definition (§3.4 #25): ``{name?, definition_md?}``.
          *     A name-locked role ignores ``name`` (per contract); every field is optional.
@@ -7784,7 +7891,7 @@ export interface components {
             learnings_cap_chars: number;
             /**
              * Learnings Chars
-             * @description Size of `learnings` in CHARACTERS. Reported PER CAPPED DOCUMENT rather than as one total, because learnings and sop_md are judged separately — against their own caps since T-30f1. Carried on the light ?view=list projection too, where the bulky text itself is omitted but its size is not.
+             * @description Size of `learnings` in CHARACTERS. Reported PER CAPPED DOCUMENT rather than as one total, because learnings and sop_md are judged separately — against their own caps since T-30f1. The listing carries the same measurement without the text (TaskManualListItemDTO).
              * @default 0
              */
             learnings_chars: number;
@@ -7826,6 +7933,74 @@ export interface components {
              * @default
              */
             sop_md: string;
+            /** Type Key */
+            type_key: string;
+            /**
+             * Updated Ts
+             * @default 0
+             */
+            updated_ts: number;
+        };
+        /**
+         * TaskManualListItemDTO
+         * @description One row of the TASK-MANUAL LISTING: the type's identity and its dispatch
+         *     setting — ``type_key`` / ``display_name`` / ``purpose`` / ``fields`` /
+         *     ``assignee`` / ``updated_ts`` — plus the SIZES of the two long documents it
+         *     does NOT carry and the cap each is judged against.
+         *
+         *     ``sop_md`` and ``learnings`` are deliberately ABSENT rather than served empty:
+         *     they are the bulk that made a listing unreadable, and an empty string in a
+         *     field that normally holds the SOP reads as "this type has no SOP". Their
+         *     sizes are measured on the STORED rows, so the row still answers "which manual
+         *     is nearly full" — read the one you picked with get_task_manual.
+         */
+        TaskManualListItemDTO: {
+            /**
+             * Cap Chars
+             * @description DEPRECATED since T-30f1 — read learnings_cap_chars or sop_md_cap_chars instead. The manual's SOP and learnings are judged by two SEPARATE caps now, and one field cannot report both: this one carries the LEARNINGS cap (doc.cap_chars.manual_learnings) only, and says nothing about sop_md. Kept so existing clients keep reading a real number rather than a zero.
+             * @default 0
+             */
+            cap_chars: number;
+            /**
+             * Learnings Cap Chars
+             * @description The cap on the type's learnings now in force, in CHARACTERS (the doc.cap_chars.manual_learnings setting). Served on the READ face so an agent can size an edit BEFORE writing it. Independent of sop_md_cap_chars since T-30f1.
+             * @default 0
+             */
+            learnings_cap_chars: number;
+            /**
+             * Learnings Chars
+             * @description Size of the type's learnings in CHARACTERS, measured on the STORED document — which this row does not carry. Reported PER CAPPED DOCUMENT rather than as one total, because learnings and sop_md are judged against their own caps since T-30f1.
+             * @default 0
+             */
+            learnings_chars: number;
+            /**
+             * Sop Md Cap Chars
+             * @description The cap on the type's sop_md now in force, in CHARACTERS (the doc.cap_chars.manual_sop setting). See learnings_cap_chars.
+             * @default 0
+             */
+            sop_md_cap_chars: number;
+            /**
+             * Sop Md Chars
+             * @description Size of the type's sop_md in CHARACTERS, measured on the STORED document. See learnings_chars.
+             * @default 0
+             */
+            sop_md_chars: number;
+            /** Assignee */
+            assignee: {
+                [key: string]: unknown;
+            };
+            /**
+             * Display Name
+             * @default
+             */
+            display_name: string;
+            /** Fields */
+            fields: components["schemas"]["TaskManualFieldDTO"][];
+            /**
+             * Purpose
+             * @default
+             */
+            purpose: string;
             /** Type Key */
             type_key: string;
             /**
@@ -9749,6 +9924,30 @@ export interface operations {
             };
         };
     };
+    handle_get_document_version_api_document_history__kind___key___id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: string;
+                key: string;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentHistoryVersionDTO"];
+                };
+            };
+        };
+    };
     handle_restore_document_history_api_document_history__kind___key___id__restore_post: {
         parameters: {
             query?: never;
@@ -9768,7 +9967,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DocumentHistoryDTO"];
+                    "application/json": components["schemas"]["DocumentHistoryRestoreDTO"];
                 };
             };
         };
@@ -13224,7 +13423,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RoleDefDTO"][];
+                    "application/json": components["schemas"]["RoleDefListItemDTO"][];
                 };
             };
             /** @description Validation error (unified error envelope). */
@@ -13948,10 +14147,7 @@ export interface operations {
     };
     handle_list_task_manuals_api_task_manuals_get: {
         parameters: {
-            query?: {
-                /** @description ``list`` = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (``sop_md_chars``, ``learnings_chars``) and the caps each is judged against (``sop_md_cap_chars``, ``learnings_cap_chars`` — the older ``cap_chars`` is DEPRECATED: it carries the LEARNINGS cap only and says nothing about sop_md), with sop_md and learnings served empty and fields/assignee empty. Any other value, or omitting it, keeps the DEFAULT: the full manual of every type, SOP and learnings included. Reach for ``list`` whenever you are matching or choosing a type rather than executing one — the two answers differ by orders of magnitude in size, and the light row still carries the sizes, so you can see what you skipped and fetch just that type with get_task_manual. */
-                view?: string | null;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13964,7 +14160,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskManualDTO"][];
+                    "application/json": components["schemas"]["TaskManualListItemDTO"][];
                 };
             };
             /** @description Validation error (unified error envelope). */

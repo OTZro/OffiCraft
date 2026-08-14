@@ -960,6 +960,13 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": "get_document_version",
+    "method": "GET",
+    "path": "/api/document-history/{kind}/{key}/{id}",
+    "requires": "machine"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": null,
     "method": "POST",
     "path": "/api/document-history/{kind}/{key}/{id}/restore",

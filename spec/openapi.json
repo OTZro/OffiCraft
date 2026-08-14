@@ -2,6 +2,19 @@
   "components": {
     "schemas": {
       "DocumentHistoryDTO": {
+        "description": "ONE retained revision of an editable document as a CATALOGUE ROW: which revision it is, when it was retained and by whom, whether it was a tombstone, and HOW LONG each of its fields was — never the text. A version list is how a reader CHOOSES a revision, and choosing does not need the prose: one list_document_history answer had a structural ceiling in the hundreds of thousands of characters and no narrowing of any kind. The body of a chosen revision is fetched one at a time (get_document_version).\n\n``field_chars`` is a MAP because the field names differ by kind (``text`` / ``definition_md`` / ``description`` / ``title``) — the same keys that revision's ``content`` carries, MINUS ``tombstoned``, which is served as its own boolean rather than as a stringly-typed entry with a character count.",
+        "properties": {
+          "actor_id": {"type": "string"},
+          "created_ts": {"type": "number"},
+          "field_chars": {"additionalProperties": {"type": "integer"}, "type": "object"},
+          "id": {"type": "integer", "format": "int64"},
+          "tombstoned": {"type": "boolean"}
+        },
+        "required": ["id", "created_ts", "actor_id", "tombstoned", "field_chars"],
+        "type": "object"
+      },
+      "DocumentHistoryRestoreDTO": {
+        "description": "Receipt of a restore: the retained revision that was just written back, in the shape this route has always answered with — ``content`` included. It is deliberately NOT the light catalogue row list_document_history now serves: a restore receipt names exactly one revision and its whole point is that this text is what the live document now holds.",
         "properties": {
           "actor_id": {"type": "string"},
           "content": {"additionalProperties": {"type": "string"}, "type": "object"},
@@ -9,6 +22,17 @@
           "id": {"type": "integer", "format": "int64"}
         },
         "required": ["id", "content", "created_ts", "actor_id"],
+        "type": "object"
+      },
+      "DocumentHistoryVersionDTO": {
+        "description": "The BODY of ONE named retained revision: the same ``content`` map that revision was stored with (field names by kind — ``text`` / ``definition_md`` / ``description`` / ``title``, plus ``tombstoned``), echoed alongside the address that was asked for. Read-only. It is the companion of list_document_history, which carries every revision's identity and sizes but no prose: choose from the list, then fetch exactly the one revision you mean to read.",
+        "properties": {
+          "content": {"additionalProperties": {"type": "string"}, "type": "object"},
+          "id": {"type": "integer", "format": "int64"},
+          "key": {"type": "string"},
+          "kind": {"type": "string"}
+        },
+        "required": ["kind", "key", "id", "content"],
         "type": "object"
       },
       "DocumentSeedDTO": {
@@ -4568,6 +4592,58 @@
         "additionalProperties": false,
         "type": "object"
       },
+      "RoleDefListItemDTO": {
+        "description": "One row of the ROLE LISTING: everything RoleDefDTO carries EXCEPT the persona\nbody. ``definition_md`` is deliberately absent rather than served empty — an\nempty string in a field that normally holds the persona reads as \"this role\nhas no definition\", which is a different and false claim.\n\n``size_chars`` / ``cap_chars`` are measured on the STORED document, so the row\nstill answers \"which role definition is nearly full\" without carrying any of\nthe text. Read the one you picked with get_role.",
+        "properties": {
+          "cap_chars": {
+            "default": 0,
+            "description": "The Duty (role definition) size cap now in force, in CHARACTERS (the doc.cap_chars.duty setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.",
+            "title": "Cap Chars",
+            "type": "integer"
+          },
+          "size_chars": {
+            "default": 0,
+            "description": "Size of the role definition in CHARACTERS (Unicode code points) — the same unit as cap_chars. Measured on the STORED document, which this row does not carry: a zero here would be a measurement, not an omission.",
+            "title": "Size Chars",
+            "type": "integer"
+          },
+          "is_default": {
+            "default": true,
+            "title": "Is Default",
+            "type": "boolean"
+          },
+          "is_seed": {
+            "default": true,
+            "title": "Is Seed",
+            "type": "boolean"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "owner_id": {
+            "default": "",
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": 3,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "RoleDefListItemDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
       "RoleDefUpdateDTO": {
         "description": "Partial edit of a role definition (§3.4 #25): ``{name?, definition_md?}``.\nA name-locked role ignores ``name`` (per contract); every field is optional.",
         "properties": {
@@ -6451,7 +6527,7 @@
           },
           "learnings_chars": {
             "default": 0,
-            "description": "Size of `learnings` in CHARACTERS. Reported PER CAPPED DOCUMENT rather than as one total, because learnings and sop_md are judged separately — against their own caps since T-30f1. Carried on the light ?view=list projection too, where the bulky text itself is omitted but its size is not.",
+            "description": "Size of `learnings` in CHARACTERS. Reported PER CAPPED DOCUMENT rather than as one total, because learnings and sop_md are judged separately — against their own caps since T-30f1. The listing carries the same measurement without the text (TaskManualListItemDTO).",
             "title": "Learnings Chars",
             "type": "integer"
           },
@@ -6516,6 +6592,81 @@
           "display_name"
         ],
         "title": "TaskManualDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "TaskManualListItemDTO": {
+        "description": "One row of the TASK-MANUAL LISTING: the type's identity and its dispatch\nsetting — ``type_key`` / ``display_name`` / ``purpose`` / ``fields`` /\n``assignee`` / ``updated_ts`` — plus the SIZES of the two long documents it\ndoes NOT carry and the cap each is judged against.\n\n``sop_md`` and ``learnings`` are deliberately ABSENT rather than served empty:\nthey are the bulk that made a listing unreadable, and an empty string in a\nfield that normally holds the SOP reads as \"this type has no SOP\". Their\nsizes are measured on the STORED rows, so the row still answers \"which manual\nis nearly full\" — read the one you picked with get_task_manual.",
+        "properties": {
+          "cap_chars": {
+            "default": 0,
+            "description": "DEPRECATED since T-30f1 — read learnings_cap_chars or sop_md_cap_chars instead. The manual's SOP and learnings are judged by two SEPARATE caps now, and one field cannot report both: this one carries the LEARNINGS cap (doc.cap_chars.manual_learnings) only, and says nothing about sop_md. Kept so existing clients keep reading a real number rather than a zero.",
+            "title": "Cap Chars",
+            "type": "integer"
+          },
+          "learnings_cap_chars": {
+            "default": 0,
+            "description": "The cap on the type's learnings now in force, in CHARACTERS (the doc.cap_chars.manual_learnings setting). Served on the READ face so an agent can size an edit BEFORE writing it. Independent of sop_md_cap_chars since T-30f1.",
+            "title": "Learnings Cap Chars",
+            "type": "integer"
+          },
+          "learnings_chars": {
+            "default": 0,
+            "description": "Size of the type's learnings in CHARACTERS, measured on the STORED document — which this row does not carry. Reported PER CAPPED DOCUMENT rather than as one total, because learnings and sop_md are judged against their own caps since T-30f1.",
+            "title": "Learnings Chars",
+            "type": "integer"
+          },
+          "sop_md_cap_chars": {
+            "default": 0,
+            "description": "The cap on the type's sop_md now in force, in CHARACTERS (the doc.cap_chars.manual_sop setting). See learnings_cap_chars.",
+            "title": "Sop Md Cap Chars",
+            "type": "integer"
+          },
+          "sop_md_chars": {
+            "default": 0,
+            "description": "Size of the type's sop_md in CHARACTERS, measured on the STORED document. See learnings_chars.",
+            "title": "Sop Md Chars",
+            "type": "integer"
+          },
+          "assignee": {
+            "additionalProperties": true,
+            "title": "Assignee",
+            "type": "object"
+          },
+          "display_name": {
+            "default": "",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/TaskManualFieldDTO"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "purpose": {
+            "default": "",
+            "title": "Purpose",
+            "type": "string"
+          },
+          "type_key": {
+            "title": "Type Key",
+            "type": "string"
+          },
+          "updated_ts": {
+            "default": 0.0,
+            "title": "Updated Ts",
+            "type": "number"
+          }
+        },
+        "required": [
+          "type_key",
+          "fields",
+          "assignee",
+          "display_name"
+        ],
+        "title": "TaskManualListItemDTO",
         "additionalProperties": false,
         "type": "object"
       },
@@ -8000,7 +8151,7 @@
         "summary": "Read one runtime's 啟動程序 block — the boot checklist that ends that runtime's boot context. runtime_key is 'claude' or 'codex'; they are separate documents because step 3 of the two says opposite things (claude mounts its own `ocagent listen`, codex must not — the sidecar owns it), so any other value is a 404 rather than a silent fallback to claude. Folded: the owner's edit when one exists, otherwise the shipped factory seed. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
         "x-mcp": {
           "include": true,
-          "order": 102,
+          "order": 103,
           "name": "get_boot_sequence",
           "description": "Read one runtime's 啟動程序 block — the boot checklist that ends that runtime's boot context. runtime_key is 'claude' or 'codex'; they are separate documents because step 3 of the two says opposite things (claude mounts its own `ocagent listen`, codex must not — the sidecar owns it), so any other value is a 404 rather than a silent fallback to claude. Folded: the owner's edit when one exists, otherwise the shipped factory seed. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
           "legacy": {
@@ -8077,7 +8228,7 @@
         "summary": "Replace the WHOLE 啟動程序 block of ONE runtime ({runtime_key, text}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. Judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.",
         "x-mcp": {
           "include": true,
-          "order": 103,
+          "order": 104,
           "name": "replace_boot_sequence",
           "description": "Replace the WHOLE 啟動程序 block of ONE runtime ({runtime_key, text}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. Judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.",
           "legacy": {
@@ -8146,7 +8297,7 @@
         "summary": "Restore ONE runtime's 啟動程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). runtime_key is 'claude' or 'codex'; anything else is a 404. No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it, which is what makes this the recovery route when a bad edit has stopped agents from booting. The overlay being discarded is retained in the document history. Owner or admin assistant only.",
         "x-mcp": {
           "include": true,
-          "order": 104,
+          "order": 105,
           "name": "reset_boot_sequence",
           "description": "Restore ONE runtime's 啟動程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). runtime_key is 'claude' or 'codex'; anything else is a 404. No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it, which is what makes this the recovery route when a bad edit has stopped agents from booting. The overlay being discarded is retained in the document history. Owner or admin assistant only.",
           "legacy": {
@@ -8947,7 +9098,7 @@
     },
     "/api/doc-sizes": {
       "get": {
-        "description": "The station-wide capped-document SIZE overview (``peek_doc_sizes`` MCP tool,\nzero params; ``GET /api/doc-sizes``).\n\nOne call reports EVERY role's role definition, insight and DEFAULT lessons\nbucket, and EVERY task manual's sop_md and learnings, as ``size_chars`` plus the\n``cap_chars`` in force for THAT segment — the five segments have five separate\n``doc.cap_chars.*`` settings, so each document is reported against its own ruler\nand never against a shared one.\n\nLessons is reported for the DEFAULT bucket only. Nothing constrains the bucket\nname on the write side (the default is a fill-in for an absent argument), so\nlessons stored under any other bucket name spend the same lessons cap and do not\nappear here.\n\nIt carries NO document text. What it is FOR: a role's insight and lessons sizes\nare reported by no listing on this station at any price, so before this route\nthe only way to see them was one ``get_insight`` / ``get_lessons`` per role. The\nother three numbers exist elsewhere but scattered — a manual's sop_md/learnings\nsizes and caps are on the ``list_task_manuals`` light view (``?view=list``), and\na role definition's ``size_chars`` / ``cap_chars`` ride every ``list_roles``\nrow. Read-only and deterministic; a station with no roles and no manuals gets\nempty arrays, never an error.",
+        "description": "The station-wide capped-document SIZE overview (``peek_doc_sizes`` MCP tool,\nzero params; ``GET /api/doc-sizes``).\n\nOne call reports EVERY role's role definition, insight and DEFAULT lessons\nbucket, and EVERY task manual's sop_md and learnings, as ``size_chars`` plus the\n``cap_chars`` in force for THAT segment — the five segments have five separate\n``doc.cap_chars.*`` settings, so each document is reported against its own ruler\nand never against a shared one.\n\nLessons is reported for the DEFAULT bucket only. Nothing constrains the bucket\nname on the write side (the default is a fill-in for an absent argument), so\nlessons stored under any other bucket name spend the same lessons cap and do not\nappear here.\n\nIt carries NO document text. What it is FOR: a role's insight and lessons sizes\nare reported by no listing on this station at any price, so before this route\nthe only way to see them was one ``get_insight`` / ``get_lessons`` per role. The\nother three numbers exist elsewhere but scattered — a manual's sop_md/learnings\nsizes and caps are on every ``list_task_manuals`` row, and\na role definition's ``size_chars`` / ``cap_chars`` ride every ``list_roles``\nrow. Read-only and deterministic; a station with no roles and no manuals gets\nempty arrays, never an error.",
         "operationId": "handle_peek_doc_sizes_api_doc_sizes_get",
         "responses": {
           "200": {
@@ -8991,14 +9142,14 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on list_task_manuals ?view=list, and a role definition's size and cap are already on every list_roles row.",
+        "summary": "Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.",
         "x-mcp": {
           "include": true,
           "order": 48,
           "name": "peek_doc_sizes",
-          "description": "Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on list_task_manuals ?view=list, and a role definition's size and cap are already on every list_roles row.",
+          "description": "Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.",
           "legacy": {
-            "descriptor": "{\n      \"description\": \"Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on list_task_manuals ?view=list, and a role definition's size and cap are already on every list_roles row.\",\n      \"inputSchema\": {\n        \"properties\": {},\n        \"type\": \"object\"\n      },\n      \"name\": \"peek_doc_sizes\"\n    }"
+            "descriptor": "{\n      \"description\": \"Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.\",\n      \"inputSchema\": {\n        \"properties\": {},\n        \"type\": \"object\"\n      },\n      \"name\": \"peek_doc_sizes\"\n    }"
           }
         }
       }
@@ -9056,7 +9207,7 @@
         "summary": "List the product-guide docs (slug + title).",
         "x-mcp": {
           "include": true,
-          "order": 97,
+          "order": 98,
           "name": "list_docs",
           "description": "List the product-guide docs (slug + title).",
           "legacy": {
@@ -9190,7 +9341,7 @@
         "summary": "Read one product-guide doc in full (markdown; unknown slug → 404).",
         "x-mcp": {
           "include": true,
-          "order": 98,
+          "order": 99,
           "name": "get_doc",
           "description": "Read one product-guide doc in full (markdown; unknown slug → 404).",
           "legacy": {
@@ -9257,14 +9408,14 @@
           {"in": "path", "name": "key", "required": true, "schema": {"type": "string"}}
         ],
         "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/DocumentHistoryDTO"}}}}}},
-        "summary": "READ the retained versions of one editable document: what each version held, when it was replaced and by whom. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.\n\nWHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.\n\nADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.\n\nCOVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.",
+        "summary": "READ the CATALOGUE of retained versions of one editable document: which versions exist, when each was replaced and by whom, whether each was a tombstone, and HOW LONG each of its fields was. It does NOT carry the versions themselves — a version list is how you CHOOSE one, and choosing does not need the prose; fetch the one you picked with get_document_version. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.\n\nWHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.\n\nADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.\n\nCOVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.",
         "x-mcp": {
           "include": true,
           "order": 95,
           "name": "list_document_history",
-          "description": "READ the retained versions of one editable document: what each version held, when it was replaced and by whom. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.\n\nWHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.\n\nADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.\n\nCOVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.",
+          "description": "READ the CATALOGUE of retained versions of one editable document: which versions exist, when each was replaced and by whom, whether each was a tombstone, and HOW LONG each of its fields was. It does NOT carry the versions themselves — a version list is how you CHOOSE one, and choosing does not need the prose; fetch the one you picked with get_document_version. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.\n\nWHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.\n\nADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.\n\nCOVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.",
           "legacy": {
-            "descriptor": "{\n      \"description\": \"READ the retained versions of one editable document: what each version held, when it was replaced and by whom. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.\\n\\nWHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.\\n\\nADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.\\n\\nCOVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.\",\n      \"inputSchema\": {\n        \"properties\": {\n          \"key\": {\"description\": \"Which document of that kind to list revisions for. How strictly it is checked depends entirely on kind, so an empty list means different things in different places. For system_interaction and boot_sequence, a key this server does not serve is 400 and the message names the legal key(s). For lessons the key is 'role_key::task_type' and anything without both halves is 400 - but that is the ONLY check it gets: past the split nothing looks the bucket up (the one remaining gate there is a WRITE authorisation, which a list never reaches), so a well-formed name for a bucket nobody has ever written, 'r-nobody::typo', is 200 with an EMPTY list. The retired kind task_manual is 400 whatever the key, naming task_manual_sop and task_manual_learnings instead. For every REMAINING kind - global_context, role_definition, insight, the two task_manual series, task_description, task_title - the value is used as a plain equality condition and nothing checks that it names anything, so a key that names no document answers 200 with an EMPTY list too. That is the same answer a real document with no retained revisions gives, so on lessons and on all of those an empty list cannot tell you 'this document has never been edited' apart from 'you named it wrong'; only system_interaction, boot_sequence and the retired task_manual are loud about a WELL-FORMED name that points at nothing. A MALFORMED lessons key - one missing its '::' - is 400 and never reaches the empty list at all.\", \"type\": \"string\"},\n          \"kind\": {\"type\": \"string\"}\n        },\n        \"required\": [\"kind\", \"key\"],\n        \"type\": \"object\"\n      },\n      \"name\": \"list_document_history\"\n    }"
+            "descriptor": "{\n      \"description\": \"READ the CATALOGUE of retained versions of one editable document: which versions exist, when each was replaced and by whom, whether each was a tombstone, and HOW LONG each of its fields was. It does NOT carry the versions themselves — a version list is how you CHOOSE one, and choosing does not need the prose; fetch the one you picked with get_document_version. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.\\n\\nWHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.\\n\\nADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.\\n\\nCOVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.\",\n      \"inputSchema\": {\n        \"properties\": {\n          \"key\": {\"description\": \"Which document of that kind to list revisions for. How strictly it is checked depends entirely on kind, so an empty list means different things in different places. For system_interaction and boot_sequence, a key this server does not serve is 400 and the message names the legal key(s). For lessons the key is 'role_key::task_type' and anything without both halves is 400 - but that is the ONLY check it gets: past the split nothing looks the bucket up (the one remaining gate there is a WRITE authorisation, which a list never reaches), so a well-formed name for a bucket nobody has ever written, 'r-nobody::typo', is 200 with an EMPTY list. The retired kind task_manual is 400 whatever the key, naming task_manual_sop and task_manual_learnings instead. For every REMAINING kind - global_context, role_definition, insight, the two task_manual series, task_description, task_title - the value is used as a plain equality condition and nothing checks that it names anything, so a key that names no document answers 200 with an EMPTY list too. That is the same answer a real document with no retained revisions gives, so on lessons and on all of those an empty list cannot tell you 'this document has never been edited' apart from 'you named it wrong'; only system_interaction, boot_sequence and the retired task_manual are loud about a WELL-FORMED name that points at nothing. A MALFORMED lessons key - one missing its '::' - is 400 and never reaches the empty list at all.\", \"type\": \"string\"},\n          \"kind\": {\"type\": \"string\"}\n        },\n        \"required\": [\"kind\", \"key\"],\n        \"type\": \"object\"\n      },\n      \"name\": \"list_document_history\"\n    }"
           }
         }
       }
@@ -9290,6 +9441,27 @@
         }
       }
     },
+    "/api/document-history/{kind}/{key}/{id}": {
+      "get": {
+        "operationId": "handle_get_document_version_api_document_history__kind___key___id__get",
+        "parameters": [
+          {"in": "path", "name": "kind", "required": true, "schema": {"type": "string"}},
+          {"in": "path", "name": "key", "required": true, "schema": {"type": "string"}},
+          {"in": "path", "name": "id", "required": true, "schema": {"type": "integer", "format": "int64"}}
+        ],
+        "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DocumentHistoryVersionDTO"}}}}},
+        "summary": "READ the BODY of one named retained version of an editable document — the ``content`` map that version was stored with, exactly as it was stored. Read-only: this fetches text, it never puts it back; restoring stays out of the agent tool surface, as it does for list_document_history.\n\nTHIS IS THE SECOND HALF OF A PAIR. list_document_history answers WHICH versions exist and how big each field of each one is, and carries no prose at all; this answers WHAT ONE OF THEM SAID. Name the ``id`` you read off that list. Asking for every version's text is the cost that pairing exists to remove, so fetch the one you actually mean to read.\n\nADDRESSING: ``kind`` and ``key`` name a document exactly as they do for list_document_history — the same server-side gate answers all three routes, so whatever that tool can address, this one can too, and they can never silently disagree. A ``kind`` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it; a ``key`` that fails its kind's required shape is refused with 400 naming the problem. An ``id`` that is not a retained version of THAT document is a 404 — including an id that belongs to some other document, which is why the address is the whole triple and not the id alone.",
+        "x-mcp": {
+          "include": true,
+          "order": 97,
+          "name": "get_document_version",
+          "description": "READ the BODY of one named retained version of an editable document — the ``content`` map that version was stored with, exactly as it was stored. Read-only: this fetches text, it never puts it back; restoring stays out of the agent tool surface, as it does for list_document_history.\n\nTHIS IS THE SECOND HALF OF A PAIR. list_document_history answers WHICH versions exist and how big each field of each one is, and carries no prose at all; this answers WHAT ONE OF THEM SAID. Name the ``id`` you read off that list. Asking for every version's text is the cost that pairing exists to remove, so fetch the one you actually mean to read.\n\nADDRESSING: ``kind`` and ``key`` name a document exactly as they do for list_document_history — the same server-side gate answers all three routes, so whatever that tool can address, this one can too, and they can never silently disagree. A ``kind`` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it; a ``key`` that fails its kind's required shape is refused with 400 naming the problem. An ``id`` that is not a retained version of THAT document is a 404 — including an id that belongs to some other document, which is why the address is the whole triple and not the id alone.",
+          "legacy": {
+            "descriptor": "{\n      \"description\": \"READ the BODY of one named retained version of an editable document — the ``content`` map that version was stored with, exactly as it was stored. Read-only: this fetches text, it never puts it back; restoring stays out of the agent tool surface, as it does for list_document_history.\\n\\nTHIS IS THE SECOND HALF OF A PAIR. list_document_history answers WHICH versions exist and how big each field of each one is, and carries no prose at all; this answers WHAT ONE OF THEM SAID. Name the ``id`` you read off that list. Asking for every version's text is the cost that pairing exists to remove, so fetch the one you actually mean to read.\\n\\nADDRESSING: ``kind`` and ``key`` name a document exactly as they do for list_document_history — the same server-side gate answers all three routes, so whatever that tool can address, this one can too, and they can never silently disagree. A ``kind`` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it; a ``key`` that fails its kind's required shape is refused with 400 naming the problem. An ``id`` that is not a retained version of THAT document is a 404 — including an id that belongs to some other document, which is why the address is the whole triple and not the id alone.\",\n      \"inputSchema\": {\n        \"properties\": {\n          \"id\": {\"description\": \"WHICH retained version to read, as the id list_document_history reported for it. It is scoped to the kind/key pair you also send: an id that names a version of a DIFFERENT document is a 404, not that other document's text.\", \"type\": \"integer\"},\n          \"key\": {\"description\": \"Which document of that kind the version belongs to - addressed exactly as list_document_history addresses it, by the same server-side gate.\", \"type\": \"string\"},\n          \"kind\": {\"type\": \"string\"}\n        },\n        \"required\": [\"kind\", \"key\", \"id\"],\n        \"type\": \"object\"\n      },\n      \"name\": \"get_document_version\"\n    }"
+          }
+        }
+      }
+    },
     "/api/document-history/{kind}/{key}/{id}/restore": {
       "post": {
         "operationId": "handle_restore_document_history_api_document_history__kind___key___id__restore_post",
@@ -9298,7 +9470,7 @@
           {"in": "path", "name": "key", "required": true, "schema": {"type": "string"}},
           {"in": "path", "name": "id", "required": true, "schema": {"type": "integer", "format": "int64"}}
         ],
-        "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DocumentHistoryDTO"}}}}},
+        "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DocumentHistoryRestoreDTO"}}}}},
         "summary": "Restore a retained document version as a new write.",
         "x-mcp": {
           "include": false
@@ -13997,7 +14169,7 @@
     },
     "/api/roles": {
       "get": {
-        "description": "List every role definition (§3.4 #23): the seed roles (folded with any\nowner edit) FIRST, then every owner-created CUSTOM role (M2-2 — an overlay\nwith no file seed, non-tombstoned). Custom roles are appended after the\nseeds in stable roster order, so the settings list reads seed → custom.",
+        "description": "List every role definition (§3.4 #23) WITHOUT the persona bodies: the seed roles\n(folded with any owner edit) FIRST, then every owner-created CUSTOM role (M2-2 —\nan overlay with no file seed, non-tombstoned). Custom roles are appended after\nthe seeds in stable roster order, so the settings list reads seed → custom.\n\n``definition_md`` is ABSENT from every row, not served empty: the persona body is\nthe bulk of a role document, and the listing is where a caller CHOOSES a role\nrather than reads one. Each row still carries ``size_chars`` / ``cap_chars``\nmeasured on the stored document, so \"which definition is nearly full\" is still\nanswerable here; read the role you picked with get_role.",
         "operationId": "handle_list_roles_api_roles_get",
         "responses": {
           "200": {
@@ -14005,7 +14177,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/RoleDefDTO"
+                    "$ref": "#/components/schemas/RoleDefListItemDTO"
                   },
                   "title": "Response Handle List Roles Api Roles Get",
                   "type": "array"
@@ -14045,14 +14217,14 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "List role definitions (seed defaults + owner edits).",
+        "summary": "List role definitions (seed defaults + owner edits) WITHOUT the persona bodies: each row is the role identity plus its definition size and cap, never definition_md itself. Read the one role you want with get_role.",
         "x-mcp": {
           "include": true,
           "order": 47,
           "name": "list_roles",
-          "description": "List role definitions (seed defaults + owner edits).",
+          "description": "List role definitions (seed defaults + owner edits) WITHOUT the persona bodies: each row is the role identity plus its definition size and cap, never definition_md itself. Read the one role you want with get_role.",
           "legacy": {
-            "descriptor": "{\n      \"description\": \"List role definitions (seed defaults + owner edits).\",\n      \"inputSchema\": {\n        \"properties\": {},\n        \"type\": \"object\"\n      },\n      \"name\": \"list_roles\"\n    }"
+            "descriptor": "{\n      \"description\": \"List role definitions (seed defaults + owner edits) WITHOUT the persona bodies: each row is the role identity plus its definition size and cap, never definition_md itself. Read the one role you want with get_role.\",\n      \"inputSchema\": {\n        \"properties\": {},\n        \"type\": \"object\"\n      },\n      \"name\": \"list_roles\"\n    }"
           }
         }
       },
@@ -14830,7 +15002,7 @@
         "summary": "Read the 系統互動 block of the boot context — the shared studio handbook every agent reads at boot. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
         "x-mcp": {
           "include": true,
-          "order": 99,
+          "order": 100,
           "name": "get_system_interaction",
           "description": "Read the 系統互動 block of the boot context — the shared studio handbook every agent reads at boot. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
           "legacy": {
@@ -14896,7 +15068,7 @@
         "summary": "Replace the WHOLE 系統互動 block of the boot context ({text}) — the handbook every agent reads at boot. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. The write is judged against the doc.cap_chars.system_interaction cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_system_interaction always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.",
         "x-mcp": {
           "include": true,
-          "order": 100,
+          "order": 101,
           "name": "replace_system_interaction",
           "description": "Replace the WHOLE 系統互動 block of the boot context ({text}) — the handbook every agent reads at boot. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. The write is judged against the doc.cap_chars.system_interaction cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_system_interaction always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.",
           "legacy": {
@@ -14954,7 +15126,7 @@
         "summary": "Restore the 系統互動 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.",
         "x-mcp": {
           "include": true,
-          "order": 101,
+          "order": 102,
           "name": "reset_system_interaction",
           "description": "Restore the 系統互動 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.",
           "legacy": {
@@ -14965,34 +15137,15 @@
     },
     "/api/task-manuals": {
       "get": {
-        "description": "List task manuals (the 設定 › 任務手冊 cards). Answers with the FULL manual of every type by default — every ``sop_md`` and every ``learnings`` blob in one response, which is measured in six figures of characters once a few types are authored. Pass ``view=list`` for the light row instead (T-ec2c) and pull the one manual you need with get_task_manual.",
+        "description": "List task manuals (the 設定 › 任務手冊 cards) as identity rows. ``sop_md`` and ``learnings`` are ABSENT from every row rather than served empty: those two blobs are what made this answer six figures of characters once a few types were authored, and an empty string in a field that normally holds the SOP reads as \"this type has no SOP\". Every row still carries ``sop_md_chars`` / ``learnings_chars`` measured on the STORED documents and the cap each is judged against, so \"which manual is nearly full\" stays answerable here; pull the one manual you need with get_task_manual.",
         "operationId": "handle_list_task_manuals_api_task_manuals_get",
-        "parameters": [
-          {
-            "description": "``list`` = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (``sop_md_chars``, ``learnings_chars``) and the caps each is judged against (``sop_md_cap_chars``, ``learnings_cap_chars`` \u2014 the older ``cap_chars`` is DEPRECATED: it carries the LEARNINGS cap only and says nothing about sop_md), with sop_md and learnings served empty and fields/assignee empty. Any other value, or omitting it, keeps the DEFAULT: the full manual of every type, SOP and learnings included. Reach for ``list`` whenever you are matching or choosing a type rather than executing one — the two answers differ by orders of magnitude in size, and the light row still carries the sizes, so you can see what you skipped and fetch just that type with get_task_manual.",
-            "in": "query",
-            "name": "view",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "View"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/TaskManualDTO"
+                    "$ref": "#/components/schemas/TaskManualListItemDTO"
                   },
                   "title": "Response Handle List Task Manuals Api Task Manuals Get",
                   "type": "array"
@@ -15032,14 +15185,14 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "List task types (match by display_name/purpose; address by type_key). WITHOUT view=list this returns the FULL manual of every type — every SOP and every learnings blob in one answer, six figures of characters on a real roster. Pass view=list unless you actually need the text.",
+        "summary": "List task types WITHOUT their long documents: each row is the type identity (type_key / display_name / purpose), its input fields and its assignee setting, plus the SIZES of sop_md and learnings and the cap each is judged against. The SOP and the learnings text are not on this answer at all — read the one type you picked with get_task_manual.",
         "x-mcp": {
           "include": true,
           "order": 88,
           "name": "list_task_manuals",
-          "description": "List task types (match by display_name/purpose; address by type_key). WITHOUT view=list this returns the FULL manual of every type — every SOP and every learnings blob in one answer, six figures of characters on a real roster. Pass view=list unless you actually need the text.",
+          "description": "List task types WITHOUT their long documents: each row is the type identity (type_key / display_name / purpose), its input fields and its assignee setting, plus the SIZES of sop_md and learnings and the cap each is judged against. The SOP and the learnings text are not on this answer at all — read the one type you picked with get_task_manual.",
           "legacy": {
-            "descriptor": "{\n      \"description\": \"List task types (match by display_name/purpose; address by type_key). WITHOUT view=list this returns the FULL manual of every type — every SOP and every learnings blob in one answer, six figures of characters on a real roster. Pass view=list unless you actually need the text.\",\n      \"inputSchema\": {\n        \"properties\": {\n          \"view\": {\n            \"description\": \"\\\"list\\\" = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (sop_md_chars, learnings_chars) and the caps each is judged against (sop_md_cap_chars, learnings_cap_chars \\u2014 the older cap_chars is DEPRECATED: it carries the LEARNINGS cap only and says nothing about sop_md), with sop_md and learnings served empty. Omitted (the default) = the FULL manual of every type, SOP and learnings included. Use \\\"list\\\" whenever you are matching or choosing a type rather than executing one: the two answers differ by orders of magnitude, and the light row still tells you how big each manual is, so you can pull the one you picked with get_task_manual.\",\n            \"type\": \"string\"\n          }\n        },\n        \"type\": \"object\"\n      },\n      \"name\": \"list_task_manuals\"\n    }"
+            "descriptor": "{\n      \"description\": \"List task types WITHOUT their long documents: each row is the type identity (type_key / display_name / purpose), its input fields and its assignee setting, plus the SIZES of sop_md and learnings and the cap each is judged against. The SOP and the learnings text are not on this answer at all — read the one type you picked with get_task_manual.\",\n      \"inputSchema\": {\n        \"properties\": {},\n        \"type\": \"object\"\n      },\n      \"name\": \"list_task_manuals\"\n    }"
           }
         }
       },

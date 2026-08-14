@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../i18n";
 import type {
-  RoleDefView,
+  RoleSummaryView,
   VersionView,
   ReleaseCheckView,
 } from "../types";
@@ -17,10 +17,10 @@ import {
 import { formatDuration } from "../lib/duration";
 import { formatBuildVersion } from "../lib/versionFormat";
 import { useGlobalContext } from "../hooks/useGlobalContext";
-import { useRoles } from "../hooks/useRoles";
+import { useRole, useRoles } from "../hooks/useRoles";
 import { useServerSettings } from "../hooks/useServerSettings";
 import { refreshServerSettings } from "../hooks/sharedServerSettings";
-import { useTaskManuals } from "../hooks/useTaskManuals";
+import { useTaskManual, useTaskManuals } from "../hooks/useTaskManuals";
 import { useMembers } from "../hooks/useMembers";
 import {
   TaskManualsList,
@@ -180,6 +180,16 @@ export function SettingsPage({
   // the roster feeds the manual detail's 負責成員 member picker.
   const manualsH = useTaskManuals();
   const { members } = useMembers();
+  // T-1170: neither list answer carries its long documents any more, so the
+  // pages that RENDER one read it themselves — named, and only while that page
+  // is on screen (`""` requests nothing). Called unconditionally here because
+  // hooks must be; the branches below just consume the result.
+  const roleDoc = useRole(view.kind === "role" ? view.key : "");
+  const manualDoc = useTaskManual(
+    view.kind === "manualDef" || view.kind === "manualLearnings"
+      ? view.key
+      : ""
+  );
 
   // ── unified breadcrumb navigation (T-8f6e) ──
   // Crumb jumps move the internal view via setView; where the target segment
@@ -332,20 +342,35 @@ export function SettingsPage({
             : t.settings.manualTabLearnings,
       },
     ];
-    const onSave = (patch: TaskManualPatch) => manualsH.update(key, patch);
+    // The update echo is the manual AFTER the edit, so this page adopts it
+    // rather than waiting for the list refetch (which no longer carries either
+    // document) or for an SSE frame.
+    const onSave = async (patch: TaskManualPatch) => {
+      const next = await manualsH.update(key, patch);
+      manualDoc.adopt(next);
+      return next;
+    };
+    // A restore rewrites ONE of the manual's documents server-side, so this
+    // page re-reads its own manual; the list follows for the row it shows.
+    const onRestored = async () => {
+      await manualDoc.refetch();
+      await manualsH.refetch();
+    };
     return view.kind === "manualDef" ? (
       <TaskManualDefinitionPage
-        manual={manual}
+        manual={manualDoc.manual}
+        loadError={manualDoc.error}
         crumbs={subCrumbs}
         onSave={onSave}
-        onRestored={manualsH.refetch}
+        onRestored={onRestored}
       />
     ) : (
       <TaskManualLearningsPage
-        manual={manual}
+        manual={manualDoc.manual}
+        loadError={manualDoc.error}
         crumbs={subCrumbs}
         onSave={onSave}
-        onRestored={manualsH.refetch}
+        onRestored={onRestored}
       />
     );
   }
@@ -482,26 +507,84 @@ export function SettingsPage({
         // the roster's role display names follow (single truth: role.name).
         onRenameTitle={
           role && !role.isSeed
-            ? (name) => rolesH.save(view.key, { name })
+            ? async (name) => {
+                roleDoc.adopt(await rolesH.save(view.key, { name }));
+              }
             : undefined
         }
+        // T-1170: the persona body is NOT on the roster row any more, so the
+        // page's own read supplies it. `null` until it lands — DocCard already
+        // treats that as "not loaded" (edit stays disabled) rather than as an
+        // empty document, which is what stops 完成編輯 writing a blank over a
+        // real definition.
         doc={
-          role
-            ? { text: role.definitionMd, isDefault: role.isDefault }
+          roleDoc.role
+            ? {
+                text: roleDoc.role.definitionMd,
+                isDefault: roleDoc.role.isDefault,
+              }
             : null
+        }
+        // 預設 comes off the ROSTER ROW, not off the document. The roster has
+        // carried `is_default` all along and it answers on its own request, so
+        // this stays true through the window where `getRole` is in flight or
+        // has failed — which is exactly the window in which reading it off the
+        // (absent) document badged an owner-edited role as shipped-default.
+        isDefault={role?.isDefault}
+        // The roster answering while THIS read failed is a new state (they are
+        // two requests now), and it has to say so instead of showing an empty
+        // card under a real role's title.
+        errorNote={
+          roleDoc.error ? (
+            <div className="set-error" data-testid="role-doc-load-error">
+              {t.settings.loadError}
+            </div>
+          ) : roleDoc.loading ? (
+            // Loading and "this document is empty" are different screens, and
+            // an empty <Markdown> is indistinguishable from the second. The
+            // manuals page draws no card at all until the body lands
+            // (TaskManualsPage's `{manual && …}`); this page keeps its card
+            // because the title, the breadcrumb and 版本紀錄 are all readable
+            // without the body — so it says which state it is in instead.
+            <div className="doc-card__note" data-testid="role-doc-loading">
+              {t.settings.historyLoading}
+            </div>
+          ) : undefined
         }
         crumbs={[crumbRoot, crumbRoles, { label: roleTitle }]}
         // The Duty doc has had a cap since T-ae38, and this is the only place
         // an owner or an agent sees how close it is to it. Omitted while the
         // role has not loaded — an invented 0/0 would read as a real budget.
-        usage={role ? { size: role.sizeChars, cap: role.capChars } : undefined}
-        onSave={(text) => rolesH.save(view.key, { definitionMd: text })}
+        //
+        // ⚠️ ALSO omitted while the DOCUMENT has not landed, even though the
+        // roster row (which carries both numbers) has. The two facts come from
+        // two requests now, and printing 「310 / 1000」 above a body that is
+        // blank because its own read failed puts two statements on screen that
+        // contradict each other — and the reader has no way to tell which one
+        // is the broken half.
+        usage={
+          role && roleDoc.role
+            ? { size: role.sizeChars, cap: role.capChars }
+            : undefined
+        }
+        // Adopt the write echo: this page is no longer the roster's array, so
+        // nothing else would put the saved text back on screen until an SSE
+        // frame arrived — and a save must not depend on the stream being up.
+        onSave={async (text) => {
+          roleDoc.adopt(await rolesH.save(view.key, { definitionMd: text }));
+        }}
         // 重置 = "restore the FILE SEED" — only a seed role has one. A custom
         // role's doc IS its only truth (the server 404s its reset — verified
         // live), so the affordance is omitted rather than left half-dead: on a
         // seed role it becomes the list's 初始版本 row, on a custom one there
         // is no such row at all.
-        onReset={role?.isSeed ? () => rolesH.reset(view.key) : undefined}
+        onReset={
+          role?.isSeed
+            ? async () => {
+                roleDoc.adopt(await rolesH.reset(view.key));
+              }
+            : undefined
+        }
         history={{
           kind: "role_definition",
           docKey: view.key,
@@ -512,13 +595,18 @@ export function SettingsPage({
           // The definition text alone: the role's name is not versioned
           // (owner ruling 2026-07-31), so putting it on this side would make a
           // rename show up as a difference nothing can restore.
-          currentContent: role
-            ? { definition_md: role.definitionMd }
+          currentContent: roleDoc.role
+            ? { definition_md: roleDoc.role.definitionMd }
             : undefined,
           // Only a CUSTOM role has a delete affordance (seed roles are
           // server-refused), so only there is the scope note true.
           docDeletable: role ? !role.isSeed : false,
-          onRestored: rolesH.refetch,
+          onRestored: async () => {
+            // A restore rewrites the LIVE document, so the page re-reads its
+            // own doc; the roster follows for the size it shows.
+            await roleDoc.refetch();
+            await rolesH.refetch();
+          },
         }}
         // Duty (the role_def card above) → Insight → Learning: the three
         // blocks of the role journal, in the order the owner ruled on
@@ -1419,16 +1507,12 @@ function BackupHealthCard() {
 }
 
 // ── 角色誌 (list) ───────────────────────────────────────────────────────────
-/** First non-heading, non-empty line of a markdown doc, trimmed — an HONEST
- * preview drawn from the real seed (never the mockup's illustrative desc). */
-function firstBodyLine(md: string): string {
-  for (const raw of md.split("\n")) {
-    const line = raw.trim();
-    if (line === "" || line.startsWith("#") || line.startsWith(">")) continue;
-    return line.replace(/^[-*]\s+/, "").replace(/\*\*/g, "");
-  }
-  return "";
-}
+// `firstBodyLine` lived here — the roster row's one-line persona preview. It
+// went with T-1170: the roster answer no longer carries `definition_md`, so
+// there is no text to take a first line from, and the only way to keep the
+// preview would be one document fetch per row, which is the download the
+// directory exists to stop. Deleted rather than left dead: a helper with no
+// caller reads exactly like a live one.
 
 function RolesLog({
   roles,
@@ -1442,7 +1526,7 @@ function RolesLog({
   onDelete,
   autoCreate,
 }: {
-  roles: RoleDefView[];
+  roles: RoleSummaryView[];
   error: boolean;
   crumbs: Crumb[];
   onOpenSystem: () => void;
@@ -1605,7 +1689,6 @@ function RolesLog({
       <div className="set-group-label">{t.settings.roleDefsSection}</div>
       <div className="set-entries">
         {roles.map((r) => {
-          const preview = firstBodyLine(r.definitionMd);
           return (
             <div className="set-entry-row" key={r.key}>
               {/* __main is the visual role card: the open-detail button fills
@@ -1631,9 +1714,12 @@ function RolesLog({
                       <span className="set-badge">{t.settings.customBadge}</span>
                     )}
                   </span>
-                  {preview && (
-                    <span className="set-entry__sub">{preview}</span>
-                  )}
+                  {/* NO body preview any more (T-1170). The roster answer
+                    * carries no `definition_md`, so the first line of a
+                    * persona is not something this list has — and fetching
+                    * every role's document to print one line each is exactly
+                    * what the directory exists to stop. The row keeps the
+                    * name and its badges; the text is one click away. */}
                 </span>
                 <ChevronRightIcon size={18} className="set-entry__chev" />
               </button>

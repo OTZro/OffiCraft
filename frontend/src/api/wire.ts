@@ -200,6 +200,13 @@ export type WireOutsourceWorker = components["schemas"]["OutsourceWorkerDTO"];
  * manual editor (設定 › 任務手冊) reads the whole shape. */
 export type WireTaskManual = components["schemas"]["TaskManualDTO"];
 
+/** Mirrors `TaskManualListItemDTO` (`GET /api/task-manuals`) — the DIRECTORY
+ * row since T-1170: everything a picker needs plus `sop_md` / `learnings`
+ * CHAR COUNTS, and neither document's text. The bodies come from
+ * `GET /api/task-manuals/{type_key}`, one manual at a time. */
+export type WireTaskManualListItem =
+  components["schemas"]["TaskManualListItemDTO"];
+
 /** Mirrors `TaskManualFieldDTO`: one Q2 input field of a manual — name,
  * required/optional, and whether it is (part of) the 識別鍵 (is_key). */
 export type WireTaskManualField = components["schemas"]["TaskManualFieldDTO"];
@@ -244,11 +251,26 @@ export type WireGlobalContext = components["schemas"]["GlobalContextDTO"];
 export type WireBootDoc = components["schemas"]["BootDocumentDTO"];
 
 /** Mirrors `DocumentHistoryDTO` — ONE retained revision of an editable
- * long-form document (`GET /api/document-history/{kind}/{key}`). `content` is
- * the field→value snapshot of the document as it stood BEFORE the write that
- * retained it; the field names are the kind's own (text / name+definition_md /
- * purpose+fields+sop_md+learnings), plus `tombstoned` on the overlay kinds. */
+ * long-form document as a CATALOGUE ROW (`GET /api/document-history/{kind}/{key}`).
+ * Since T-1170 it carries NO text: identity, actor, time, the `tombstoned`
+ * flag, and `field_chars` — a per-field CHARACTER COUNT keyed by that kind's
+ * own field names (text / definition_md / description / title), `tombstoned`
+ * excluded because it is a flag rather than a field of the document. */
 export type WireDocumentHistory = components["schemas"]["DocumentHistoryDTO"];
+
+/** Mirrors `DocumentHistoryVersionDTO` — the BODY of ONE named revision
+ * (`GET /api/document-history/{kind}/{key}/{id}`). The only document-history
+ * read that carries text. */
+export type WireDocumentHistoryVersion =
+  components["schemas"]["DocumentHistoryVersionDTO"];
+
+/** Mirrors `DocumentHistoryRestoreDTO` — the receipt of a restore
+ * (`POST /api/document-history/{kind}/{key}/{id}/restore`): the revision that
+ * was just written back, `content` included. Deliberately NOT the catalogue
+ * row — the receipt's whole point is that this text is what the live document
+ * now holds. */
+export type WireDocumentHistoryRestore =
+  components["schemas"]["DocumentHistoryRestoreDTO"];
 
 /** Mirrors `DocumentSeedDTO` — the SHIPPED DEFAULT of an editable long-form
  * document (`GET /api/document-history/{kind}/{key}/seed`). `content` carries
@@ -257,6 +279,11 @@ export type WireDocumentSeed = components["schemas"]["DocumentSeedDTO"];
 
 /** Mirrors `service/dto.py :: RoleDefDTO`. The folded role-definition doc. */
 export type WireRoleDef = components["schemas"]["RoleDefDTO"];
+
+/** Mirrors `RoleDefListItemDTO` (`GET /api/roles`) — the roster row since
+ * T-1170: the role's identity plus its definition's `size_chars` / `cap_chars`,
+ * and NOT `definition_md`. The document comes from `GET /api/roles/{role}`. */
+export type WireRoleDefListItem = components["schemas"]["RoleDefListItemDTO"];
 
 /** Mirrors `service/dto.py :: RoleCreateResultDTO` — the created custom-role +
  * founding-member pair (`POST /api/roles`, M2-2). */

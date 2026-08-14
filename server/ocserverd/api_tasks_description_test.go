@@ -260,7 +260,7 @@ func TestTaskDescriptionEditRetainsThePreviousTextInSharedHistory(t *testing.T) 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list history: %d %s", rec.Code, rec.Body.String())
 	}
-	history := decodeBody[[]DocumentHistoryDTO](t, rec)
+	history := historyRowsFrom(t, api, docKindTaskDescription, task.ID, "m-exec", "agent", rec)
 	// Two revisions, not three: the FIRST write replaced an empty description,
 	// and an empty document is nothing to retain (the same rule every other
 	// kind gets from its row being absent).
@@ -307,7 +307,7 @@ func TestTaskDescriptionAbsentFieldIsANoOpButEmptyStringClears(t *testing.T) {
 		t.Fatalf("same-text status = %d, want 200", got)
 	}
 	rec := listTaskDescriptionHistory(t, api, task.ID, "m-exec", "agent")
-	if n := len(decodeBody[[]DocumentHistoryDTO](t, rec)); n != 0 {
+	if n := len(historyRowsFrom(t, api, docKindTaskDescription, task.ID, "m-exec", "agent", rec)); n != 0 {
 		t.Fatalf("no-op writes retained %d revisions, want 0", n)
 	}
 
@@ -320,7 +320,7 @@ func TestTaskDescriptionAbsentFieldIsANoOpButEmptyStringClears(t *testing.T) {
 		t.Fatalf("explicit empty string did not clear: %q", got)
 	}
 	rec = listTaskDescriptionHistory(t, api, task.ID, "m-exec", "agent")
-	history := decodeBody[[]DocumentHistoryDTO](t, rec)
+	history := historyRowsFrom(t, api, docKindTaskDescription, task.ID, "m-exec", "agent", rec)
 	if len(history) != 1 || history[0].Content["description"] != "the standing text" {
 		t.Fatalf("clear did not retain what it erased: %+v", history)
 	}
@@ -357,7 +357,7 @@ func TestTaskDescriptionRestoreIsGatedLikeTheEdit(t *testing.T) {
 		}
 	}
 	rec := listTaskDescriptionHistory(t, api, task.ID, "m-exec", "agent")
-	history := decodeBody[[]DocumentHistoryDTO](t, rec)
+	history := historyRowsFrom(t, api, docKindTaskDescription, task.ID, "m-exec", "agent", rec)
 	if len(history) != 1 {
 		t.Fatalf("history length = %d, want 1: %+v", len(history), history)
 	}
