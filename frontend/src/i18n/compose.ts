@@ -110,7 +110,7 @@ export interface Messages {
   docHistoryVersionLabel: (when: string) => string;
   docHistoryActor: (name: string, actorId: string) => string;
   bootDocNoteHistory: (kept: number) => string;
-  bootDocOverCap: (size: number, cap: number) => string;
+  docOverCap: (size: number, cap: number) => string;
   deleteManualConfirm: (key: string) => string;
   manualEditSection: (section: string) => string;
   // ── diff ──
@@ -406,8 +406,8 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     // BOTH numbers, always. "Too long" without the current size gives an owner
     // nothing to act on, and without the limit he cannot tell how far over he
     // is — that is the difference between this and a silent truncation.
-    bootDocOverCap: (size, cap) =>
-      `${set.bootDocOverCapLead}${size}${set.bootDocOverCapMid}${cap}${set.bootDocOverCapTail}`,
+    docOverCap: (size, cap) =>
+      `${set.docOverCapLead}${size}${set.docOverCapMid}${cap}${set.docOverCapTail}`,
 
     // Reports the longer side's line count, the only number the refused diff
     // still knows (lib/lineDiff returns the counts even when it declines).

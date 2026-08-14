@@ -95,7 +95,7 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
       [10],
       "版本紀錄只保留最近 10 版，而且是以「存檔次數」計、不是以時間計——連按幾次小修就會把較舊的版本沖掉。「還原出廠版」不受影響，永遠在。",
     ],
-    ["zh", "bootDocOverCap", [61234, 60000], "現在 61234 字，超過上限 60000 字，請先刪掉一些再儲存。"],
+    ["zh", "docOverCap", [61234, 60000], "現在 61234 字，超過上限 60000 字，請先刪掉一些再儲存。"],
     ["zh", "docHistoryActor", ["Kyle", "m-f663"], "Kyle（m-f663）"],
     ["zh", "docHistoryActor", ["", "ow-c975"], "ow-c975"],
     ["zh", "diffTooLarge", [2400], "內容太長，無法逐行比對（2400 行）。"],
@@ -204,7 +204,7 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
     ],
     [
       "en",
-      "bootDocOverCap",
+      "docOverCap",
       [61234, 60000],
       "Now 61234 characters, over the limit of 60000 — remove some before saving.",
     ],

@@ -1,18 +1,22 @@
-// HOTSPOT — T-791e: the boot-context block page rendering the REAL
+// HOTSPOT — the boot-context block page rendering the REAL
 // `seeds/system_interaction.md`, at phone widths.
 //
-// The gap this closes. `boot-doc-section-row.ct.spec.tsx` measures a
-// hand-written FOUR-section document. The system-interaction seed splits into
-// seventy-odd sections and carries what a synthetic fixture does not: fenced
-// blocks, tables, long CJK headings, cited routes and ids. That page — the one
-// an owner actually opens — had never been laid out by a browser. Four rows
-// staying inside the card says nothing about seventy-four.
+// The gap this closes. `boot-doc-card.ct.spec.tsx` measures a hand-written
+// eleven-line document. The system-interaction seed is 45,000 characters and
+// carries what a synthetic fixture does not: fenced blocks, tables, long CJK
+// headings, cited routes and ids. That page — the one an owner actually opens —
+// is the one worth laying out.
+//
+// T-c33e: the page renders that document as ONE markdown block now instead of
+// seventy-odd section rows. The claim being measured is UNCHANGED — no level of
+// the chain may pan — and the chain is the same one, minus the rows that no
+// longer exist.
 //
 // 🔴 MEASURE THE WHOLE CHAIN, NOT ONE ELEMENT. An element that refuses to
 // shrink does not overflow ITSELF — it simply grows, and the width it took has
 // to end up somewhere: an ancestor is dragged wide, and if any ancestor
 // scrolls it absorbs the spill and every number above it reads 0. So every
-// level from the section row up to the scrolling element is measured, and
+// level from inside the card up to the scrolling element is measured, and
 // `.settings` is named explicitly because it is `overflow-y: auto`, which the
 // overflow spec coerces into `overflow-x: auto` — exactly the silent
 // absorption that let an earlier page-only assertion sail over a broken phone
@@ -28,39 +32,38 @@
 // region is allowed to hold wider content, it is not allowed to make the card
 // or the page pan.
 //
-// Non-vacuity. The rendered row count is asserted against the story's own
-// count, derived from the same seed bytes and the same splitter — a hard-coded
-// 74 here would go stale on the next seed edit and would go stale quietly. A
-// floor of 40 is asserted too, so the guard cannot degrade into measuring a
-// four-row page and still read green.
+// Non-vacuity, in two directions. WHOLE: the wait is on the seed's LAST
+// heading, derived from the same bytes the mock serves, so a page that rendered
+// a prefix fails rather than being measured. LONG: floors on both the source
+// `#` count and the rendered heading count, so the guard cannot degrade into
+// measuring a short page and still read green. Neither number is written down
+// twice — the source-derived one lives in the story.
 //
 // CONTROL: 1040 (the desktop content column's max width) is expected green and
 // is NOT counted as coverage — it is there to say a fix did not simply move
 // the breakage to desktop. The measured set is 320 / 375 / 390, matching this
 // suite's existing widths.
 //
-// MEASURED ON THIS TREE (74 sections at all four widths; every level of the
-// chain reads 0, so the page is NOT broken today — this guard was written to
-// find out, and that is the answer):
+// MEASURED (the pre-T-c33e sectioned page read 0 at every level of its own
+// chain, and so does this one — the guard was written to find out, and that is
+// still the answer):
 //   drop `overflow-wrap: anywhere` from `.doc-md` (settings.css)
-//     → RED at 320 only: "section 21 horizontal overflow (+45px)", doc card
-//       +25, settings surface +24 — AND `.app__main`, `.app` and the PAGE all
-//       read 0. A page-level assertion is green under this mutant. That is the
-//       whole argument for walking the chain, measured rather than asserted:
-//       `.settings` (overflow-y:auto) absorbs the spill, and the level that
-//       actually spills is two below the first one anyone would think to
-//       check. Green at 375/390/1040.
-//   drop `overflow-wrap: anywhere` from `.boot-doc-sec__label` (boot-doc.css)
-//     → GREEN at all four widths. Reported because it did not bite: this seed's
-//       headings carry no unbreakable token, so the LABEL path is not covered
-//       here. It is covered by `boot-doc-section-row.ct.spec.tsx`, whose
-//       synthetic document exists partly to carry one — do not read this file
-//       as making that one redundant, and do not delete that fixture's long
-//       token thinking the real seed now supplies it.
+//     → RED at 320 only ("rendered document horizontal overflow … +45px"), and
+//       the failing level is INSIDE the card while `.app__main`, `.app` and the
+//       PAGE all read 0. A page-level assertion is green under this mutant.
+//       That is the whole argument for walking the chain, measured rather than
+//       asserted: `.settings` (overflow-y:auto) absorbs the spill. Green at
+//       375/390/1040 — the pre-T-c33e sectioned version of this guard measured
+//       the same +45 at the same width.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { BootDocRealSeedStory } from "./stories/BootDocRealSeedStory";
 
+/** The source must still hold at least this many `#` lines… */
 const FLOOR = 40;
+/** …and the browser must still render at least this many headings. Both are
+ * floors: the guard must never degrade into measuring a short page and reading
+ * green. Measured on this tree: 40 in the source, 38 rendered. */
+const RENDERED_FLOOR = 30;
 
 for (const width of [320, 375, 390, 1040]) {
   test(`width ${width}: the real system_interaction seed lays out with no level of the chain panning`, async ({
@@ -70,21 +73,32 @@ for (const width of [320, 375, 390, 1040]) {
     await page.setViewportSize({ width, height: 1200 });
     const cmp = await mount(<BootDocRealSeedStory />);
 
-    // The page reads its document through the adapter, so the first paint has
-    // no rows. Wait on the row count itself rather than a timer — and assert
-    // it against the story's derived expectation, so "found nothing to check"
-    // can never read as "found nothing wrong".
-    const expected = Number(
-      await cmp.getByTestId("story-expected-sections").innerText()
+    // The page reads its document through the adapter, so the first paint is
+    // empty. Wait on the rendered content itself rather than a timer — and
+    // assert it against the story's derived expectation, so "found nothing to
+    // check" can never read as "found nothing wrong".
+    const sourceHeadings = Number(
+      await cmp.getByTestId("story-heading-floor").innerText()
     );
     expect(
-      expected,
-      "the seed must still split into a genuinely long document"
+      sourceHeadings,
+      "the seed must still be a genuinely long document"
     ).toBeGreaterThanOrEqual(FLOOR);
-    const sections = cmp.locator(".boot-doc-sec");
-    await expect(sections).toHaveCount(expected);
-    await expect(cmp.getByTestId("boot-doc-reset")).toBeVisible();
-
+    // 🔴 THE WAIT IS THE LAST HEADING, and that is the point: the page reads its
+    // document through the adapter, so the first paint is empty, and waiting on
+    // the last thing in the document says the WHOLE of it arrived rather than a
+    // prefix. A count alone cannot say that.
+    await expect(cmp.locator(".doc-md")).toContainText(
+      await cmp.getByTestId("story-last-heading").innerText()
+    );
+    // …and it is long. A FLOOR, not parity with the source count: the renderer
+    // legitimately emits fewer headings than the source has `#` lines (one
+    // inside a list item is not a heading to it), and re-implementing markdown
+    // here to get an exact number would be a second grammar to keep in step.
+    expect(
+      await cmp.locator(".doc-md :is(h1,h2,h3,h4,h5,h6)").count(),
+      "rendered heading count"
+    ).toBeGreaterThanOrEqual(RENDERED_FLOOR);
     const m = await page.evaluate(() => {
       const over = (el: Element) => el.scrollWidth - el.clientWidth;
       const scrolls = (el: Element) => {
@@ -98,19 +112,9 @@ for (const width of [320, 375, 390, 1040]) {
         // reported as a distinct, failing value rather than as an absence.
         named.push({ where, over: el ? over(el) : 9999 });
       };
-      document
-        .querySelectorAll(".boot-doc-sec")
-        .forEach((el, i) => named.push({ where: `section ${i}`, over: over(el) }));
-      document
-        .querySelectorAll(".boot-doc-sec__head")
-        .forEach((el, i) =>
-          named.push({ where: `section ${i} head`, over: over(el) })
-        );
-      document
-        .querySelectorAll(".boot-doc-sec__body")
-        .forEach((el, i) =>
-          named.push({ where: `section ${i} body`, over: over(el) })
-        );
+      push("rendered document", ".doc-md");
+      push("doc card head", ".doc-card__head");
+      push("doc card note", ".doc-card__note");
       push("doc card body", ".doc-card__body");
       push("doc card", ".doc-card");
       push("settings surface", ".settings");
@@ -120,7 +124,7 @@ for (const width of [320, 375, 390, 1040]) {
       named.push({ where: "page", over: se.scrollWidth - se.clientWidth });
 
       // Worst offender anywhere under the card, for a message that names what
-      // to cap — "section 41 overflowed" alone is useless at this length.
+      // to cap — "something overflowed" alone is useless at this length.
       // Deliberate scroll regions and their descendants are skipped.
       let worst = { where: "(none)", over: 0 };
       const card = document.querySelector(".doc-card");

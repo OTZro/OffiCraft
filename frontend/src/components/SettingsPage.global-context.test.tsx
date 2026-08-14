@@ -6,7 +6,9 @@
 // have a row EACH, never one row for "the boot sequence". The editable
 // behaviour of the three new pages lives in BootDocPage.test.tsx; what is
 // pinned here is the list itself, the routing into each page, and the
-// unchanged 使用者自訂 block.
+// unchanged 使用者自訂 block — "unchanged" now including through T-c33e, which
+// gave the three boot blocks the same <DocCard> shell this one has always used
+// and must not have moved anything under this one.
 //
 // Plus the presentation rule: no block surfaces a .md filename (blocks are
 // content, not files).
@@ -38,17 +40,22 @@ beforeEach(() => {
 });
 
 describe("SettingsPage · global-context 3 blocks", () => {
-  it("lists the four blocks in boot-assembly order, without .md filenames", async () => {
+  it("lists the blocks in boot-assembly order as THREE rows, without .md filenames", async () => {
+    // 啟動程序 is ONE row, not one per runtime (owner 2026-08-14, card
+    // rc-e1abbc506b70 option 1: "我沒有想到被切割成這麼多份"). The runtime is
+    // chosen inside the page. The two DOCUMENTS stay separate — that is
+    // asserted on the page itself, in BootDocPage.test.tsx.
     const { container, getByText } = await openRolesLog();
     const text = container.textContent ?? "";
     const iSystem = text.indexOf(s.systemName);
     const iCustom = text.indexOf(s.customName);
-    const iClaude = text.indexOf(s.bootClaudeName);
-    const iCodex = text.indexOf(s.bootCodexName);
+    const iBoot = text.indexOf(s.bootName);
     expect(iSystem).toBeGreaterThanOrEqual(0);
     expect(iCustom).toBeGreaterThan(iSystem);
-    expect(iClaude).toBeGreaterThan(iCustom);
-    expect(iCodex).toBeGreaterThan(iClaude);
+    expect(iBoot).toBeGreaterThan(iCustom);
+    // The per-runtime names belong to the PAGE's two cards, never to this list.
+    expect(text).not.toContain(s.bootClaudeName);
+    expect(text).not.toContain(s.bootCodexName);
     expect(getByText(s.globalSection)).toBeTruthy();
     // Presentation rule: the blocks never expose their backing filenames.
     expect(text).not.toContain("global-context.md");
@@ -60,10 +67,12 @@ describe("SettingsPage · global-context 3 blocks", () => {
     const utils = await openRolesLog();
     fireEvent.click(utils.getByText(s.systemName));
     // The live document arrives from the api seam, and the page offers the
-    // affordances the read-only card had none of.
-    await utils.findByTestId("boot-doc-usage");
-    expect(utils.getAllByTestId(/^boot-doc-sec-\d+$/).length).toBeGreaterThan(1);
-    expect(utils.getByTestId("boot-doc-reset")).toBeTruthy();
+    // affordances the read-only card had none of. Since T-c33e it draws them
+    // with the SHARED <DocCard> — the same testids as 角色定義, and nothing of
+    // its own: the top-level 還原出廠版 that used to be its one difference went
+    // into edit mode with everything else (owner 2026-08-14, rc-f1950f4d286e).
+    await utils.findByTestId("doc-card-usage");
+    expect(utils.getByTestId("doc-card-edit")).toBeTruthy();
     expect(utils.container.querySelector(".doc-card__file code")).toBeNull();
   });
 

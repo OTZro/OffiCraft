@@ -473,6 +473,18 @@
   background: color-mix(in srgb, var(--color-danger) 20%, transparent);
 }
 
+/* T-c33e — one muted line under the head, for a fact about the SAVE the card
+   would otherwise leave implicit (today: that it replaces the whole document).
+   Muted, not a warning colour: nothing is wrong, it is the term of the
+   surface, and a red panel on every visit trains the reader to skip it. */
+.doc-card__note {
+  margin: 0 20px;
+  padding: 8px 0 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .doc-card__body {
   padding: 4px 20px 8px;
 }
