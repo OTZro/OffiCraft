@@ -1493,6 +1493,7 @@
       "inputSchema": {
         "properties": {
           "machine_id": {
+            "description": "Which machine's IDENTITY the installed warden runs as. An unknown or retired id is a 404, so the dangerous wrong value is the one that RESOLVES: the install always happens on the server's own host - the child process is addressed by the server's HOME and uid, never by this parameter - while the token it is handed is minted for the machine you named. Naming a valid but wrong machine therefore installs this host's warden under another machine's identity, answers 200 with ok true, and echoes your machine_id back as if it had been honoured. The install runs with --force, so it overwrites an existing one rather than refusing.",
             "type": "string"
           }
         },
@@ -1508,6 +1509,7 @@
       "inputSchema": {
         "properties": {
           "machine_id": {
+            "description": "Which machine the caller claims to be talking about - and today no value gets past the guard. An unknown or retired id is a 404; every id that resolves is a 409, in one of two ways. The server-local machine is refused because it cannot be retired at all. Any OTHER machine is refused because this verb carries no machine selector: it can only ever tear down the warden on the server's own host, so honouring the request would destroy this host's daemon under another machine's name. Both refusals name the route to use instead - the remote uninstall plus a delete to retire another machine, and install_warden_on_server_host, which force-overwrites, to repair this host.",
             "type": "string"
           }
         },
