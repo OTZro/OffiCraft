@@ -580,6 +580,25 @@ grouped COUNT,不是把清單重新拉寬。
   訊息)。已歷時自 created_ts ticking(`lib/duration.ts` 的 `formatDuration`,與
   RepliesPage 已等你共用)、終態凍結在 closed_ts。狀態文案照 spec 六態
   (尚未執行/進行中/等我回覆/等待外部/已完成/終止),不用 mockup 的變體。
+- 🔴 **任務卡是唯讀的標題與敘述,而且這是裁定不是遺漏(T-e5b1,owner 2026-08-15
+  「UI 不需要提供編輯標題或敘述的功能」)**。T-2ebe 的就地標題編輯器與 T-e271 的敘述
+  編輯器、它們的 `onUpdateTitle`/`onUpdateDescription` prop、共用的 hint/input/actions
+  CSS 家族、以及那兩個編輯面裡的 `DocumentHistoryEntry` 入口,**整族已移除**。
+  ⛔ **不要「順手」加回一顆編輯鈕**——`useTasks` 的 `updateTitle`/`updateDescription`
+  與 `api.updateTaskTitle`/`updateTaskDescription` 仍在(seam 完整、mock 與 http 測試
+  照舊全綠),所以接回去只要一行,而那一行會推翻 owner 的裁定。
+  ⚠️ **拿掉的是畫面入口,不是能力**:MCP `update_task_title` / `update_task_description`
+  與它們的路由一個位元組沒動,agent 照樣改得動;版本紀錄(`task_title`/`task_description`
+  兩個 kind)也還在 server 上,只是座艙目前沒有面去開它。
+- 🔴 **步驟備註預設收起,每一步一顆展開開關(T-e5b1,owner:「不然太長了」)**。
+  state 是 `TaskCard` 自己的 `openNotes` map、**刻意不跨頁記憶**(owner 指定最簡形狀);
+  形狀沿用 `AgentDetailPanel` 的 `mp-lastop__toggle`(chevron + 文字的 `<button>`),
+  **不是新造的折疊機制**——`<button>` 本來就在卡片 toggle 的 `closest()` 白名單裡,
+  所以開備註不會把卡片收起來。
+  🔴 **那顆按鈕只長在「有備註」的步驟上,而這是承重的、不是裝飾**:owner 靠這條時間軸
+  看「第 4 步做到哪」,收起之後「沒人寫」與「寫了但你看不到」必須分得出來,而**按鈕在不在
+  就是唯一的差別**。護欄:`TaskCard.step-note.test.tsx`(逐步斷言 toggle 的有無)+
+  `visual-guards/taskcard-note-disclosure.ct.spec.tsx`(真瀏覽器量兩列的高度差)。
 
 ## 外包面板 + 外包聊天(M3 Phase 4,SPEC §4;列形 2026-07-14 owner 截圖回報重裁)
 辦公室左欄的第二組(`OutsourcePanel`;左欄照 mockup 分「正職/外包」兩組——

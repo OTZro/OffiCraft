@@ -181,6 +181,11 @@ export const zh = {
     // T-cc3e:步驟備註 —— 這一步做到哪、下一步接什麼。同 waitingLabel,這裡
     // 只是標籤;備註本身是 agent 寫的自由文字(常帶 markdown),走 <Markdown>。
     stepNoteLabel: "備註",
+    // T-e5b1:備註預設收起(owner:「不然太長了」)。這兩句是每一步的展開開關。
+    // 收起時的字面留著「備註」兩字是刻意的 —— 有備註的步驟與沒備註的步驟,
+    // 在收起狀態下就靠這顆按鈕在不在分辨。
+    stepNoteExpand: "展開備註",
+    stepNoteCollapse: "收合備註",
     // deps:「等 T-xxxx」chip 可多筆(mockup 樣式,owner 2026-07-13)
     blockedByLabel: "等",
     // T-1d82:dep 指向的任務查不到(已刪 / 壞 id)。保留原始 id(那是僅剩的線索),
@@ -197,33 +202,10 @@ export const zh = {
     // ⋮ 本身隨後由 owner 裁示刪除);優先權改卡面 chip 就地編輯(v2)
     statusMenuLabel: "狀態操作",
     priorityLabel: "優先權",
-    // 描述就地編輯(T-e271)。descEditHint 講的是這個編輯面與步驟備註的分工——
-    // 描述說「這張票是什麼」,備註說「這一步現在做到哪」;沒有它,兩個都能打字的
-    // 欄位長得一樣,進度就會被寫進描述裡。
-    descLabel: "詳細敘述",
-    descEdit: "編輯敘述",
-    descEditHint: "描述說明這張任務「是什麼」(範圍、緣由、驗收);進度請寫在步驟備註。",
-    descPlaceholder: "這張任務要做什麼、為什麼要做、做到什麼程度算完成…",
-    descSave: "儲存",
-    descCancel: "取消",
+    // T-e5b1(owner 2026-08-15):任務 UI 的標題／敘述就地編輯面已移除,整族
+    // 文案跟著走。`update_task_title` / `update_task_description` 未動 ——
+    // 移掉的是畫面的詞彙,不是能力。
     descEmpty: "尚未填寫敘述",
-    descError: "敘述儲存失敗,請稍後重試",
-    descHistoryTitle: "任務敘述",
-    // 結案任務照樣改得動(裁定②)。這句只在終態卡的編輯面出現,講清楚它不是漏擋:
-    // 票寫錯常常是結案後才發現的,而產出物清單相反、結案即凍結。
-    descClosedNote: "已結案的任務仍可更正敘述(產出物則已凍結)。",
-    // 標題就地編輯(T-2ebe),敘述那一家的雙生兄弟。唯一不同的規則是 titleBlank:
-    // 標題不能清空——它是任務清單上唯一看得到的那一格,空的等於整列沒東西。
-    titleLabel: "標題",
-    titleEdit: "編輯標題",
-    titleEditHint: "標題是任務清單上唯一看得到的內容,請用一句話說明這張任務是什麼。",
-    titlePlaceholder: "用一句話說明這張任務是什麼…",
-    titleSave: "儲存",
-    titleCancel: "取消",
-    titleBlank: "標題不能空白。",
-    titleError: "標題儲存失敗,請稍後重試",
-    titleHistoryTitle: "任務標題",
-    titleClosedNote: "已結案的任務仍可更正標題(產出物則已凍結)。",
     // 任務編號 chip 點擊複製(owner 2026-07-19 圈截圖):點 chip 把顯示的任務
     // 編號寫進剪貼簿,給一個短暫「已複製」回饋。copyTaskNo 是 chip 的 aria-label
     // (帶顯示號),taskNoCopied 是複製成功後的短暫提示文字。

@@ -155,6 +155,12 @@ export const en: Dict = {
     // next. Label only; the note itself is agent-written free text and renders
     // through <Markdown>, same as the waiting reason above.
     stepNoteLabel: "Note",
+    // T-e5b1: the note is COLLAPSED by default (owner: the timeline got too
+    // long). These two label the per-step disclosure. The word "note" stays in
+    // the collapsed label on purpose — it is the only thing that tells a step
+    // WITH a note apart from one without while both are closed.
+    stepNoteExpand: "Show note",
+    stepNoteCollapse: "Hide note",
     blockedByLabel: "Waiting on",
     // T-1d82: a dep row whose task cannot be resolved (deleted / bad id). Keeps
     // the raw id — it is the only handle left — but says plainly that there is
@@ -167,39 +173,11 @@ export const en: Dict = {
     messageError: "Failed to send the message. Please try again.",
     statusMenuLabel: "Status actions",
     priorityLabel: "Priority",
-    // In-place description editing (T-e271). descEditHint states the division
-    // of labour with the step note — the description says what the task IS,
-    // the note says where a step is right now.
-    descLabel: "Description",
-    descEdit: "Edit description",
-    descEditHint:
-      "The description says what this task IS (scope, origin, acceptance). Put progress in the step note.",
-    descPlaceholder:
-      "What this task is for, why it exists, and what counts as done\u2026",
-    descSave: "Save",
-    descCancel: "Cancel",
+    // T-e5b1 (owner 2026-08-15): the in-place title / description editors were
+    // removed from the task UI, and their whole label family went with them.
+    // `update_task_title` / `update_task_description` are untouched — this is
+    // the screen's vocabulary, not the capability's.
     descEmpty: "No description yet",
-    descError: "Failed to save the description. Please try again.",
-    descHistoryTitle: "Task description",
-    // Shown only on a closed card's editor, so the absence of a terminal guard
-    // reads as the decision it is.
-    descClosedNote:
-      "A closed task's description can still be corrected (its artifacts are frozen).",
-    // In-place title editing (T-2ebe), the description family's twin. titleBlank
-    // is the ONE rule that differs: a title may not be emptied, because it is
-    // the only cell of the task the list shows.
-    titleLabel: "Title",
-    titleEdit: "Edit title",
-    titleEditHint:
-      "The title is the only part of this task the list shows. Keep it a short statement of what the task is.",
-    titlePlaceholder: "A short statement of what this task is…",
-    titleSave: "Save",
-    titleCancel: "Cancel",
-    titleBlank: "A title cannot be blank.",
-    titleError: "Failed to save the title. Please try again.",
-    titleHistoryTitle: "Task title",
-    titleClosedNote:
-      "A closed task's title can still be corrected (its artifacts are frozen).",
     // Click-to-copy task-no chip (owner 2026-07-19).
     copyTaskNoLabel: "Copy task number",
     taskNoCopied: "Copied",

@@ -11,6 +11,13 @@
 // 一步接什麼", routinely with markdown), so it takes the same treatment as the
 // DoD and the waiting reason: rendered through the shared, XSS-safe `Markdown`
 // component, with the i18n label kept OUTSIDE that container.
+//
+// T-e5b1 (owner 2026-08-15) put the note behind a per-step disclosure: it is
+// COLLAPSED by default and a 展開備註 button opens it. That does NOT weaken the
+// paragraph above — it makes one more thing load-bearing. While every note is
+// closed, the disclosure BUTTON is the only signal separating a step someone
+// wrote a note on from a step nobody did, so its presence/absence is asserted
+// here as a first-class contract, not as decoration.
 
 import { describe, it, expect, vi } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
@@ -60,12 +67,22 @@ async function renderExpanded(steps: TaskStepView[]) {
   return utils;
 }
 
+// Open every step's note. The tests that assert note CONTENT are about what
+// the note renders, not about the disclosure, so they go through this rather
+// than each re-deriving the click.
+async function openAllNotes(utils: { findAllByTestId: (id: string) => Promise<HTMLElement[]> }) {
+  const toggles = await utils.findAllByTestId("step-note-toggle");
+  toggles.forEach((b) => fireEvent.click(b));
+  return toggles;
+}
+
 describe("步驟備註 renders on the task card (T-cc3e)", () => {
   it("shows the note text of the step it belongs to", async () => {
     const { findAllByTestId } = await renderExpanded([
       mkStep({ name: "第一步", status: "done", note: "spec 三份重生一致" }),
       mkStep({ name: "第二步", status: "in_progress", note: "handler 寫完，測試還差負面案例" }),
     ]);
+    await openAllNotes({ findAllByTestId });
     const notes = await findAllByTestId("step-note");
     expect(notes).toHaveLength(2);
     expect(notes[0].textContent).toContain("spec 三份重生一致");
@@ -76,9 +93,11 @@ describe("步驟備註 renders on the task card (T-cc3e)", () => {
   });
 
   it("renders markdown as elements, and keeps the label out of the parser", async () => {
-    const { findByTestId } = await renderExpanded([
+    const utils = await renderExpanded([
       mkStep({ note: "卡在 **conformance**，下一步 `bin/ci.sh`" }),
     ]);
+    const { findByTestId } = utils;
+    await openAllNotes(utils);
     const block = await findByTestId("step-note");
 
     // positive control: the label is present in this block, so the negative
@@ -96,10 +115,12 @@ describe("步驟備註 renders on the task card (T-cc3e)", () => {
   });
 
   it("renders nothing at all when a step has no note — no empty shell", async () => {
-    const { queryAllByTestId, findAllByTestId } = await renderExpanded([
+    const utils = await renderExpanded([
       mkStep({ name: "沒備註", status: "pending" }),
       mkStep({ name: "有備註", status: "pending", note: "只有這一步有" }),
     ]);
+    const { queryAllByTestId, findAllByTestId } = utils;
+    await openAllNotes(utils);
     // positive control first: the one note that exists did render.
     expect((await findAllByTestId("step-note"))).toHaveLength(1);
     expect(queryAllByTestId("step-note")[0].textContent).toContain("只有這一步有");
@@ -109,15 +130,84 @@ describe("步驟備註 renders on the task card (T-cc3e)", () => {
     // waiting_reason is bound to waiting_external; the note is bound to
     // nothing. If a status condition ever creeps into the render, this reddens.
     const statuses = ["pending", "in_progress", "waiting_external", "done"];
-    const { findAllByTestId } = await renderExpanded(
+    const utils = await renderExpanded(
       statuses.map((status) =>
         mkStep({ status, note: `note-in-${status}`, waitingReason: "" }),
       ),
     );
+    const { findAllByTestId } = utils;
+    await openAllNotes(utils);
     const notes = await findAllByTestId("step-note");
     expect(notes).toHaveLength(statuses.length);
     statuses.forEach((status, i) => {
       expect(notes[i].textContent).toContain(`note-in-${status}`);
     });
+  });
+
+  it("hides every note until its own 展開備註 is clicked, and re-hides on a second click", async () => {
+    const { queryAllByTestId, findAllByTestId } = await renderExpanded([
+      mkStep({ name: "第一步", status: "done", note: "第一步的備註" }),
+      mkStep({ name: "第二步", status: "in_progress", note: "第二步的備註" }),
+    ]);
+
+    // ① default: both toggles are on screen, no note body is.
+    const toggles = await findAllByTestId("step-note-toggle");
+    expect(toggles).toHaveLength(2);
+    expect(queryAllByTestId("step-note")).toHaveLength(0);
+
+    // ② opening ONE step opens only that step's note — the disclosure is per
+    // step, which is the whole point of the owner's wording ("該 step 的備注").
+    fireEvent.click(toggles[0]);
+    let notes = queryAllByTestId("step-note");
+    expect(notes).toHaveLength(1);
+    expect(notes[0].textContent).toContain("第一步的備註");
+    expect(notes[0].textContent).not.toContain("第二步的備註");
+    expect(toggles[0].getAttribute("aria-expanded")).toBe("true");
+    expect(toggles[1].getAttribute("aria-expanded")).toBe("false");
+
+    // ③ the second step opens independently, leaving the first open.
+    fireEvent.click(toggles[1]);
+    expect(queryAllByTestId("step-note")).toHaveLength(2);
+
+    // ④ clicking again collapses it back.
+    fireEvent.click(toggles[0]);
+    notes = queryAllByTestId("step-note");
+    expect(notes).toHaveLength(1);
+    expect(notes[0].textContent).toContain("第二步的備註");
+  });
+
+  it("gives a step WITH a note a control a step without one does not have", async () => {
+    // 🔴 The owner reads this timeline to find out where a step got to. Once
+    // notes are collapsed, "nobody wrote anything" and "someone wrote
+    // something you cannot see" must not look the same. The toggle button is
+    // that difference, and it is asserted per step (not just counted) so a
+    // future change that renders the button on EVERY step reddens here.
+    // The step NAMES deliberately avoid the word 備註 — the assertion below is
+    // about what the disclosure control contributes, and a fixture name
+    // carrying the same word would make it pass (or fail) for the wrong reason.
+    const { findAllByTestId } = await renderExpanded([
+      mkStep({ name: "第一步", status: "pending" }),
+      mkStep({ name: "第二步", status: "pending", note: "只有這一步有" }),
+    ]);
+    const steps = await findAllByTestId("task-step");
+    expect(steps).toHaveLength(2);
+    expect(steps[0].querySelectorAll("[data-testid='step-note-toggle']")).toHaveLength(0);
+    expect(steps[1].querySelectorAll("[data-testid='step-note-toggle']")).toHaveLength(1);
+    // and the control says the word 備註, so what it opens is not a guess.
+    expect(steps[1].textContent).toContain("備註");
+    expect(steps[0].textContent).not.toContain("備註");
+  });
+
+  it("opening a note does not collapse the card it lives in", async () => {
+    // The whole card is a toggle surface; a click that lands on a <button> is
+    // exempted by the card's closest() filter. If that exemption ever stops
+    // covering this button, the note would open and the card would shut in the
+    // same click — the note would be unreadable.
+    const { findAllByTestId, findByTestId, queryAllByTestId } = await renderExpanded([
+      mkStep({ name: "第一步", status: "done", note: "第一步的備註" }),
+    ]);
+    fireEvent.click((await findAllByTestId("step-note-toggle"))[0]);
+    expect(queryAllByTestId("step-note")).toHaveLength(1);
+    expect((await findByTestId("task-card")).getAttribute("aria-expanded")).toBe("true");
   });
 });
