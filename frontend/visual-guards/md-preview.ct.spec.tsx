@@ -207,16 +207,23 @@ test("narrow 390: a document longer than the screen scrolls to its last line", a
 // 1280x800: panel width min(760, 100%) = 760, height = 800 - 2*32 = 736,
 // horizontally centred at 260..1020.
 //
-// MUTANT (measured): `width: min(760px, 100%)` → `min(700px, 100%)` ⇒ 1 failed /
-// 3 passed, red here (on the width) while both narrow tests stay green.
+// MUTANTS (measured, 5 tests in this file). TWO of them, and the pair is the
+// point — they fail this test for unrelated reasons:
+//   · `width: min(760px, 100%)` → `min(700px, 100%)` ⇒ 1 failed / 4 passed, on
+//     the width line.
+//   · `--md-preview-inset: 32px` → `0px` ON THE BASE RULE ONLY ⇒ 1 failed /
+//     4 passed, on `panel.top` (received 16).
 //
-// ⚠️ The mutant this note used to name — dropping the overlay's 32px inset — is
-// NO LONGER discriminating, and the reason is worth keeping: once the panel cap
-// became the literal `calc(100dvh - 64px)`, the inset stopped being load-bearing
-// for this geometry. At 1280x800 the panel is 736px tall either way, and
-// centring it in a 800px box still puts it at 32..768 — identical. Measured: 4
-// passed. A mutant retired by a refactor looks exactly like a mutant that was
-// never checked, so it is replaced here rather than quietly dropped.
+// ⚠️ THAT SECOND ONE WAS WRONGLY RECORDED AS RETIRED, and the correction is more
+// useful than the mutant. Zeroing the property alone leaves `padding-bottom:
+// calc(32px + …)` — a LITERAL since the var() fix — so only three sides go to
+// zero: the content box is 768px, not 800, and centring a 736px panel in it
+// gives top = 16. The earlier note claimed "4 passed, identical at 32..768"; that
+// was measured on a DIFFERENT mutant, one that zeroed the property AND the
+// padding-bottom literal (which does measure 4 passed, because then all four
+// sides go to zero and the panel really is centred at 32..768 again). Both runs
+// were real; the record named neither declaration, so it described neither. Name
+// the declarations.
 //
 // 🔴 WHAT THIS CONTROL CANNOT DO, stated because the narrative around it is
 // easy to oversell: reverting md-preview.css wholesale to origin/main leaves all
@@ -233,9 +240,24 @@ test("narrow 390: a document longer than the screen scrolls to its last line", a
 //     a red "ONE scrollbar" run;
 //   · a no-`dvh`-engine probe (rewrite `dvh`→`xvh`, an unknown unit), which is
 //     what caught `var()` destroying the parse-time fallback.
-// Both are described in md-preview.css's header. Adding a WebKit project to
-// playwright-ct.config.ts would still not cover either one — WebKit-on-macOS
-// has no retracting browser chrome and does know `dvh`.
+// Both are described in md-preview.css's header.
+//
+// 🔴 ADDING A WEBKIT PROJECT DOES NOT CLOSE EITHER GAP — AND IT IS WORSE THAN A
+// NO-OP, because it hands back numbers that look like the real thing. MEASURED
+// in WebKit 2311 against a page that HAS a viewport meta:
+//   · desktop 1280x720 — `lvh == dvh == svh == vh == 720`, `CSS.supports` true
+//     for both `100dvh` and `safe center`. No split to see, nothing to catch.
+//   · the `iPhone 13` device profile — also `lvh == dvh == svh == 664`. A
+//     retracting URL bar is a real-device behaviour; emulation does not have one.
+// And against a page with NO viewport meta — which is exactly what
+// `frontend/playwright/index.html` is — the same iPhone 13 profile reports
+// `lvh 664` but `dvh == vh == 1669` and `innerHeight 1668`: a split that is
+// INVERTED (dvh > lvh is impossible on a real device) and ~4x too large,
+// produced by mobile emulation falling back to the 980px layout viewport. That
+// is the number a WebKit CT project would actually give this repo today, and
+// building a guard on it would be building on noise. (Do not "fix" it by adding
+// the meta to the harness either — that changes the layout every existing CT
+// guard was calibrated against.)
 test("desktop 1280: the panel geometry is unchanged by the narrow-width fix", async ({
   mount,
   page,
@@ -257,6 +279,69 @@ test("desktop 1280: the panel geometry is unchanged by the narrow-width fix", as
 
   // The desktop overlay still scrolls its long body — the control is a control,
   // not a licence for the wide case to break quietly.
+  const overflow = await cmp
+    .locator(".md-preview__body")
+    .evaluate((el) => el.scrollHeight - el.clientHeight);
+  expect(overflow).toBeGreaterThan(400);
+});
+
+// DoD ④ (T-76cd round 3) — the SHORT-VIEWPORT rule gets its own direct
+// assertion. `@media (max-height: 500px)` cuts the overlay inset to 8px so a
+// phone held sideways has room for a usable image frame; until this test existed
+// NOTHING checked panel geometry under 500px tall — the three specs that measure
+// the panel run at 664, 800 and 844 CSS px of HEIGHT, all above the breakpoint —
+// and breaking the media query's numbers was caught only INDIRECTLY, by
+// image-zoom-pan's "ONE scrollbar" guards noticing the body had started to
+// overflow. Indirect coverage names the wrong file when it fails.
+//
+// MUTANTS (measured, `npx playwright test -c playwright-ct.config.ts
+// visual-guards/md-preview.ct.spec.tsx`, 5 tests in this file):
+//   · media block `--md-preview-inset: 8px` → `32px` ⇒ 1 failed / 4 passed here
+//     (panel.top 8 → 32), every other test green.
+//   · media block `max-height: calc(100dvh - 16px)` → `calc(100dvh - 64px)`
+//     ⇒ 1 failed / 4 passed here. It fires on `panel.top` (received 32), NOT on
+//     the height line: a 326px panel centred in a 374px content box starts at
+//     8 + 24 = 32. The height does change too (374 → 326); `top` is simply
+//     asserted first. Recorded as what fired, not as what one would predict.
+test("landscape 844x390: the short-viewport rule gives the panel the screen, minus 8px", async ({
+  mount,
+  page,
+}) => {
+  await page.setViewportSize({ width: 844, height: 390 });
+  const cmp = await mount(<MarkdownPreviewLongStory />);
+  await expect(cmp.locator(".md-preview__panel")).toBeVisible();
+  await expect(cmp.locator(".md-preview__md")).toBeVisible();
+
+  const seen = await page.evaluate(() => {
+    const r = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+    const p = r(".md-preview__panel");
+    const c = r(".md-preview__close");
+    return {
+      vh: window.innerHeight,
+      vw: window.innerWidth,
+      panel: { top: +p.top.toFixed(1), bottom: +p.bottom.toFixed(1), height: +p.height.toFixed(1) },
+      close: { top: +c.top.toFixed(1), bottom: +c.bottom.toFixed(1), right: +c.right.toFixed(1) },
+      overlayPadTop: getComputedStyle(document.querySelector(".md-preview")!).paddingTop,
+    };
+  });
+
+  // The inset really did shrink — asserted as GEOMETRY (where the panel starts),
+  // not as "the media query exists".
+  expect(seen.panel.top).toBe(8);
+  expect(seen.panel.bottom).toBe(382);
+  expect(seen.panel.height).toBe(374);
+  expect(seen.overlayPadTop).toBe("8px");
+
+  // …and the panel is still wholly on screen with a reachable close button,
+  // which is the whole point of spending the inset.
+  expect(seen.panel.top).toBeGreaterThanOrEqual(0);
+  expect(seen.panel.bottom).toBeLessThanOrEqual(seen.vh + 1);
+  expect(seen.close.top).toBeGreaterThanOrEqual(0);
+  expect(seen.close.bottom).toBeLessThanOrEqual(seen.vh + 1);
+  expect(seen.close.right).toBeLessThanOrEqual(seen.vw + 1);
+
+  // The body still scrolls at this height — a panel that fits by refusing to
+  // show its content would satisfy every line above.
   const overflow = await cmp
     .locator(".md-preview__body")
     .evaluate((el) => el.scrollHeight - el.clientHeight);

@@ -68,8 +68,19 @@
    * at the top of this file: `var()` suppresses parse-time validation, so on an
    * engine without `dvh` the cap becomes `none` instead of falling back. The
    * literals are the safety net; this property is only for lengths with NO
-   * viewport unit in them. If you change it, change 32 → 64 → 160 by hand and
-   * let the guards catch you. */
+   * viewport unit in them.
+   *
+   * ⚠️ SO IT ONLY CONTROLS THREE OF THE FOUR SIDES. `padding-bottom` below is a
+   * literal too (it carries a viewport unit), which means changing this property
+   * ALONE leaves the bottom inset behind and silently un-centres the panel —
+   * measured: setting it to 0 gives padding `0px` on three sides and `32px` on
+   * the bottom, a 768px content box, and a panel at 16..752 instead of 32..768.
+   * That is not hypothetical; it is a live mutant in md-preview.ct.spec.tsx.
+   * CHANGING THE INSET MEANS EDITING FOUR PLACES BY HAND: this property, the
+   * `padding-bottom` literal, the panel's 64 (= 2x), and the image frame's 160
+   * (= 2x + 96) — plus their counterparts inside the @media block at the bottom
+   * of this file. The guards are what catch you; there is no single knob, and
+   * making one is what broke the fallback in the first place. */
   --md-preview-inset: 32px;
   position: fixed;
   inset: 0;
@@ -270,10 +281,30 @@
  * properties have no natural fallback (unlike the panel's `max-height: 100%`),
  * so on an engine that drops the `dvh` declaration at parse time they would be
  * left at their INITIAL values — `min-height: 0`, `max-height: none`, i.e. no
- * caps at all. MEASURED on the dvh→xvh probe at 900x500: without the twins the
- * frame grew to 448.8px and the body overflowed by 61px (the two-scrollbar
- * defect, on engines where origin/main measured 340px and 0). With them: 350px
- * and 0. The `vh` line is what those engines get, and it is what main shipped.
+ * caps at all: the frame grows to the image's natural size and the body starts
+ * scrolling behind it.
+ *
+ * MEASURED on the dvh→xvh probe, four configurations at four sizes, because
+ * conflating the twins with the @media block below produced a misleading
+ * one-line summary once already. Frame height / body overflow:
+ *
+ *            900x700      900x500     900x420     844x390
+ *   main     448.8 / 0    340 / 0     260 / 0     230 / 0
+ *   A ship   448.8 / 0    350 / 0     294 / 0     273 / 0
+ *   B -media 448.8 / 0    340 / 0     260 / 0     230 / 0
+ *   C -twins 448.8 / 0    448.8 / 61  448.8 / 141 448.8 / 171
+ *   D neither 448.8 / 0   448.8 / 109 448.8 / 189 448.8 / 219
+ *
+ * Read it in two steps, because they are two separate effects:
+ *   · B (twins, @media removed) is IDENTICAL to origin/main in every cell, and
+ *     so are the overlay padding (32/32) and the panel rect. The twins alone do
+ *     not approximate main's behaviour on an old engine — they reproduce it.
+ *   · A (shipped) departs from main ONLY where the @media block applies, i.e.
+ *     viewport height <= 500px: the frame is 10-43px larger and the inset is 8px
+ *     instead of 32px. That deviation is the media query's, not the twins'.
+ * C and D are both the no-twins disaster, and they differ from each other only
+ * by the @media block — which is why "61" and "109" are both real numbers for
+ * the same defect at 900x500. Quote a cell, not a number.
  *
  * The 96 is still measured, so a header that changes height still invalidates
  * it — that half has not gotten safer, only the viewport half has.
@@ -347,7 +378,20 @@
  *
  * The caps are restated rather than derived, for the reason at the top of this
  * file: a `var()` in a declaration carrying a viewport unit destroys the
- * parse-time fallback. 16 = 2 * 8, 112 = 16 + the same 96px of panel chrome. */
+ * parse-time fallback. 16 = 2 * 8, 112 = 16 + the same 96px of panel chrome.
+ *
+ * ⚠️ THIS BLOCK IS THE ONE PLACE THE FILE STOPS MATCHING origin/main ON OLD
+ * ENGINES. `@media (max-height: 500px)` carries no viewport unit and is not
+ * gated behind `dvh`, so an engine that drops every `dvh` line still applies
+ * everything here. MEASURED on the dvh→xvh probe (identical with and without
+ * `safe center`): at 900x500 the overlay pads 8/8 and the panel sits 8..492
+ * where main gives 32/32 and 32..468; at 844x390, 8..382 against main's
+ * 32..358; the image frame is 350 vs 340 at 900x500, 294 vs 260 at 900x420, 273
+ * vs 230 at 844x390. Above 500px tall (checked at 1280x800, 390x664, 900x700,
+ * 390x745) every one of those readings is identical to main. The deviations are
+ * all in the roomier direction and every measured body overflow stayed 0 — but
+ * "old engines get exactly main" is false below the breakpoint, and this comment
+ * exists so nobody has to rediscover that. */
 @media (max-height: 500px) {
   .md-preview {
     --md-preview-inset: 8px;
