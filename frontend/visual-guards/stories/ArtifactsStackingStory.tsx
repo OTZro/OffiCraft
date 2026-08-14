@@ -18,25 +18,36 @@ import { mkTask, MIRA, NOOP, WORKERS } from "./taskFixtures";
 const MD = ["# Global Context", "", "AI 工作室・成員 boot context", "", "x".repeat(40)].join("\n");
 const DATA_URL = "data:text/markdown;charset=utf-8," + encodeURIComponent(MD);
 
+// `reassignedFrom` and `dedupeKey` are set on purpose: they are what put the
+// 前任 and 識別鍵 rows in the tree, and those two are named in owner's
+// regression screenshot alongside 負責探員 / 建立者. The default fixture omits
+// both, so a card built from it would let the stacking probe walk right past
+// half of what was reported.
 const TASK = mkTask({
   id: "t-76cd",
   taskNo: "T-76cd",
   title: "stacking",
-  artifactCount: 1,
-  artifacts: [
-    {
-      id: "ta-md",
-      kind: "file",
-      url: DATA_URL,
-      label: "Global Context.md",
-      filename: "Global Context.md",
-      mime: "text/markdown",
-      isImage: false,
-      attachmentId: "att-md",
-      createdTs: 0,
-      createdBy: "mira",
-    },
-  ],
+  reassignedFrom: "m-prev",
+  dedupeKey: "t-76cd-stacking",
+  // SIX artifacts, not one. The panel's height is its content's, so a
+  // single-row panel is a short box that reaches no further down the card than
+  // the 建立者 row — and the stacking probe can only speak about what the panel
+  // actually covers. owner's regression screenshot has the 送出 button drawn
+  // over the panel, so the panel has to be tall enough to reach it. Six rows is
+  // what puts the composer inside its rect at 390×780.
+  artifactCount: 6,
+  artifacts: [1, 2, 3, 4, 5, 6].map((n) => ({
+    id: `ta-md${n === 1 ? "" : n}`,
+    kind: "file" as const,
+    url: DATA_URL,
+    label: n === 1 ? "Global Context.md" : `產物-${n}.md`,
+    filename: n === 1 ? "Global Context.md" : `產物-${n}.md`,
+    mime: "text/markdown",
+    isImage: false,
+    attachmentId: `att-md${n}`,
+    createdTs: 0,
+    createdBy: "mira",
+  })),
 });
 
 export function ArtifactsStackingStory() {
