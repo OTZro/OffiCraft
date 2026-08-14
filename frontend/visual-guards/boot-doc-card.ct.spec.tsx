@@ -1,20 +1,25 @@
 // HOTSPOT — the boot-context block page at phone widths.
 //
 // SUCCESSOR TO `boot-doc-section-row.ct.spec.tsx` (T-c33e). That file measured
-// a surface that no longer exists — the per-section rows — but the two things
-// it was BOUGHT for are unchanged, and each is carried over here one for one:
+// a surface that no longer exists — the per-section rows — and this file has
+// since had to give up half of what it inherited, so read the history before
+// "restoring" anything:
 //
-//   1. 還原出廠版 MUST BE ON SCREEN. It is the recovery path for a failure that
-//      is silent by construction — a broken boot sequence means agents never
-//      attach to SSE, so they never come online, so nobody is left to fix it.
-//      A recovery button that is present but pushed off a phone viewport is not
-//      a recovery path, and nothing else in the suite can tell the difference.
-//      → the same assertion, on `doc-card-reset` (DocCard draws the button now;
-//        the testid moved with it, the geometry claim did not change).
+//   1. 還原出廠版 MUST BE ON SCREEN — RETIRED, NOT LOST. The claim was that a
+//      recovery button present but pushed off a phone viewport is not a
+//      recovery path. It was measured on a TOP-LEVEL restore button, and the
+//      owner removed that button on 2026-08-14 (card rc-f1950f4d286e, option 2:
+//      "完全照 insight") with the cost stated on the card. So the geometry
+//      claim now applies to where the restore actually lives: inside edit mode,
+//      in the history list's 初始版本 row. That is what this file measures, and
+//      it is a WEAKER guarantee than the retired one by exactly the amount the
+//      owner chose to give up — a page whose read failed reaches no restore at
+//      all. Do not add a top-level button back to satisfy this file.
 //   2. THE CARD MUST NOT SPILL on owner/agent prose carrying a long unbreakable
-//      token. The old guard measured that on the section-row LABEL; the token
-//      now lands in the rendered document (`.doc-md`), so the same fixture text
-//      is measured on the same chain — head, card, `.settings`, page.
+//      token — UNCHANGED. The old guard measured that on the section-row LABEL;
+//      the token now lands in the rendered document (`.doc-md`), so the same
+//      fixture text is measured on the same chain — head, card, `.settings`,
+//      page.
 //      → the mutant that used to bite (`overflow-wrap: anywhere` off
 //        `.boot-doc-sec__label`) is replaced by the same declaration on
 //        `.doc-md` in settings.css, which is where that class of defect has
@@ -38,7 +43,7 @@ import { test, expect } from "@playwright/experimental-ct-react";
 import { BootDocCardStory } from "./stories/BootDocCardStory";
 
 for (const width of [320, 375, 390, 1040]) {
-  test(`width ${width}: the factory-restore button is on screen and the card does not spill`, async ({
+  test(`width ${width}: the card does not spill and the restore stays reachable`, async ({
     mount,
     page,
   }) => {
@@ -46,25 +51,11 @@ for (const width of [320, 375, 390, 1040]) {
     const cmp = await mount(<BootDocCardStory />);
 
     // The story seeds the document through the real adapter before mounting the
-    // page. If that ever stops resolving, fail loudly rather than measure an
-    // empty surface — a guard that finds nothing to check must not read as a
-    // guard that found nothing wrong.
-    const reset = cmp.getByTestId("doc-card-reset");
-    await expect(reset).toBeVisible();
-    // The document really arrived: the heading carrying the unbreakable token
-    // is the whole reason this fixture exists, so measuring before it lands
-    // would measure an empty card.
+    // page. The document really arrived: the heading carrying the unbreakable
+    // token is the whole reason this fixture exists, so measuring before it
+    // lands would measure an empty card — a guard that finds nothing to check
+    // must not read as a guard that found nothing wrong.
     await expect(cmp.locator(".doc-md")).toContainText("abcdef0123456789");
-
-    // (1) The recovery path is really reachable: its box lies inside the
-    // viewport horizontally, with room to be pressed.
-    const resetBox = (await reset.boundingBox())!;
-    expect(resetBox.x, "還原出廠版 left edge").toBeGreaterThanOrEqual(-0.5);
-    expect(
-      resetBox.x + resetBox.width,
-      "還原出廠版 right edge vs viewport"
-    ).toBeLessThanOrEqual(width + 0.5);
-    expect(resetBox.width, "還原出廠版 tappable width").toBeGreaterThan(40);
 
     // (2) Nothing spills: not the card head, not the card, not the scrollable
     // settings surface, not the page. The surface is measured as well as the
@@ -75,7 +66,6 @@ for (const width of [320, 375, 390, 1040]) {
       const over = (el: Element) => el.scrollWidth - el.clientWidth;
       return {
         head: over(document.querySelector(".doc-card__head")!),
-        recover: over(document.querySelector(".doc-card__recover")!),
         note: over(document.querySelector(".doc-card__note")!),
         card: over(document.querySelector(".doc-card")!),
         surface: over(document.querySelector(".settings")!),
@@ -127,13 +117,29 @@ for (const width of [320, 375, 390, 1040]) {
     for (const [where, o] of Object.entries(editSpill)) {
       expect(o, `${where} horizontal overflow while editing`).toBeLessThanOrEqual(1);
     }
-    // The recovery path survives edit mode: it is not behind it, and a phone
-    // that can only reach it from the read view is a phone that cannot reach it
-    // when the document is half-rewritten.
-    const resetWhileEditing = (await reset.boundingBox())!;
+    // (4) The recovery path is reachable AT THIS WIDTH. It is behind edit mode
+    // now (see the header), so the walk starts here — and the point of doing it
+    // on a phone is that every box on the way must be pressable, not merely
+    // present: the history entry, then the 初始版本 row inside the list.
+    const entry = cmp.getByTestId("doc-history-entry-boot_sequence");
+    await expect(entry).toBeVisible();
+    const entryBox = (await entry.boundingBox())!;
+    expect(entryBox.x, "版本紀錄 left edge").toBeGreaterThanOrEqual(-0.5);
     expect(
-      resetWhileEditing.x + resetWhileEditing.width,
-      "還原出廠版 right edge vs viewport, while editing"
+      entryBox.x + entryBox.width,
+      "版本紀錄 right edge vs viewport"
     ).toBeLessThanOrEqual(width + 0.5);
+    expect(entryBox.width, "版本紀錄 tappable width").toBeGreaterThan(40);
+
+    await entry.click();
+    const seed = cmp.getByTestId("doc-history-seed-open");
+    await expect(seed).toBeVisible();
+    const seedBox = (await seed.boundingBox())!;
+    expect(seedBox.x, "初始版本 left edge").toBeGreaterThanOrEqual(-0.5);
+    expect(
+      seedBox.x + seedBox.width,
+      "初始版本 right edge vs viewport"
+    ).toBeLessThanOrEqual(width + 0.5);
+    expect(seedBox.width, "初始版本 tappable width").toBeGreaterThan(40);
   });
 }

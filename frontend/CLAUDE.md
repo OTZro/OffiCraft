@@ -1287,10 +1287,14 @@ component 是同一個 component reuse,讓他成為 single source of truth**」�
   照樣 import 得到 `DocCard`,畫面層看不出來)。
 - **`InsightCard` / `LessonsCard` / 任務手冊那兩份還沒遷過來**(另一張票,owner 未點頭)。
   外殼**已經接得住它們**(`renderBody` 就是為此存在),但**不要順手遷**。
-- 🔴 **新增能力一律是 optional prop,不傳 = 這張卡一直以來的行為**。`above` / `errorNote`
-  / `factoryReset` / `confirmSave` / `replaceNote` / `requireDirty` / `renderBody` 全部
-  如此,所以三塊開機說明帶進來的東西**不會落到角色定義頭上**。
+- 🔴 **新增能力一律是 optional prop,不傳 = 這張卡一直以來的行為**。`errorNote` /
+  `confirmSave` / `replaceNote` / `requireDirty` / `renderBody` 全部如此,所以三塊開機
+  說明帶進來的東西**不會落到角色定義頭上**。
   對照斷言在 `DocCard.test.tsx`(透過真的 `SettingsPage` 走進去,不是自己組 props)。
+  ⚠️ `above` 與 `factoryReset` 這兩個 prop **已經不存在**(見下面那條):`above` 畫的是
+  開機說明頂端那三條說明,`factoryReset` 畫的是頂層還原鈕,owner 兩件都收掉之後它們一個
+  呼叫端都不剩。**沒有呼叫端的 prop 與到不了的分支,看起來跟活碼一模一樣,而型別檢查與
+  測試都不會叫**——所以是跟著同一顆 commit 刪的,不是留著等下一個人。
 - 🔴 **超上限那一格是修 bug,不是順手改**。舊 `DocDetail.commit()` 是 `try/finally`
   **沒有 `catch`**:實測(未改動的樹)角色定義草稿 4,000 字對上 1,000 字的上限,完成編輯
   **按得下去**、字數讀數**凍在已存的 310 / 1000**、寫入照送、server 的 400 只變成一個
@@ -1303,14 +1307,26 @@ component 是同一個 component reuse,讓他成為 single source of truth**」�
 - **`lib/docSections.ts` 已刪**(連同它的測試):逐段 UI 是它唯一的消費者,沒有 splitter
   也就沒有「split→join 不等長」這條資料損毀風險了。**不要因為那條 round-trip 斷言看起來
   很重要就把檔案留著**——沒有消費者的碼不是防線。
-- **樣式**:`.doc-card*` 的家是 `settings.css`(含 T-c33e 搬過去的 `.doc-card__recover`
-  與新的 `.doc-card__note`);`boot-doc.css` 現在只剩 `.boot-doc__notes` 一個 block。
-- **真瀏覽器守衛換人不換題**:`visual-guards/boot-doc-section-row.ct.spec.tsx` →
-  `boot-doc-card.ct.spec.tsx`(320px 下**救援鈕必須在畫面內**——原封不動的那一條——
-  外加編輯框自己不撐破卡片);`boot-doc-real-seed.ct.spec.tsx` 留在原地,量的還是真 seed
-  的整條 ancestor chain,只是量的是渲染後的 `.doc-md` 而不是七十幾個段落列。兩支的鑑別力
-  現在都來自 `.doc-md` 的 `overflow-wrap: anywhere`(實測 mutant:card 那支 320/375 紅、
-  real-seed 那支 320 紅 +45px)。
+- 🔴 **owner 2026-08-14 收掉了兩樣東西,而兩樣都不要「順手」加回來**:
+  1. **頂端那三條說明**(生效範圍 / 保留期數 / 字數上限)。他的理由可一般化:「若這說明
+     有必要,每個 context 區塊都得加,而別的都沒有」。他隨後對兩個去處(搬進使用說明、
+     儲存後跳提醒視窗)回了**「先不用」** ⇒ **只移除、什麼都不補**。
+  2. **頂層的還原出廠版**(卡 `rc-f1950f4d286e` 選②「完全照 insight」)⇒ 還原只剩編輯
+     模式裡版本紀錄的**初始版本**那一列。**代價他知道且選了**:讀取失敗 ⇒ 進不了編輯
+     模式 ⇒ 那頁沒有任何救援出口,而這頁的失敗本來就是靜默的。**這是知情取捨,不是遺漏。**
+  隨之整族退場:`above` / `factoryReset` 兩個 prop、`ConfirmModal` 的 reset 分支、
+  **`boot-doc.css` 整份**(唯一 block `.boot-doc__notes` 沒人畫了)、`.doc-card__recover`
+  兩條規則、6 個孤兒 i18n 葉子。
+- **樣式**:`.doc-card*` 的家是 `settings.css`(含 T-c33e 新增的 `.doc-card__note`);
+  **`boot-doc.css` 已不存在**,`BootDocPage` 只 import `settings.css`。
+- **真瀏覽器守衛換人不換題,但其中一題縮水了**:
+  `visual-guards/boot-doc-section-row.ct.spec.tsx` → `boot-doc-card.ct.spec.tsx`。
+  它原本量的「**救援鈕必須在畫面內**」是量在頂層還原鈕上,那顆鈕沒了 ⇒ 現在量的是
+  **同一個幾何主張搬到還原真正住的地方**:編輯模式 → 版本紀錄入口 → 初始版本那一列,
+  每一格在手機寬度下都要按得到。**這比退休的那條弱,弱掉的正好是 owner 選擇放棄的那一段。**
+  `boot-doc-real-seed.ct.spec.tsx` 留在原地,量的還是真 seed 的整條 ancestor chain。
+  兩支的鑑別力現在都來自 `.doc-md` 的 `overflow-wrap: anywhere`(實測 mutant:card 那支
+  320/375 紅、real-seed 那支 320 紅 +45px)。
 
 ## 差異呈現:三層各自只負責一件事(T-40f0;全文 `docs/design/T-40f0-history-diff-ux.md`)
 

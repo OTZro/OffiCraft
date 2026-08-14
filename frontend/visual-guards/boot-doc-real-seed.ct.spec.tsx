@@ -99,8 +99,6 @@ for (const width of [320, 375, 390, 1040]) {
       await cmp.locator(".doc-md :is(h1,h2,h3,h4,h5,h6)").count(),
       "rendered heading count"
     ).toBeGreaterThanOrEqual(RENDERED_FLOOR);
-    await expect(cmp.getByTestId("doc-card-reset")).toBeVisible();
-
     const m = await page.evaluate(() => {
       const over = (el: Element) => el.scrollWidth - el.clientWidth;
       const scrolls = (el: Element) => {
@@ -119,8 +117,6 @@ for (const width of [320, 375, 390, 1040]) {
       push("doc card note", ".doc-card__note");
       push("doc card body", ".doc-card__body");
       push("doc card", ".doc-card");
-      push("recovery row", ".doc-card__recover");
-      push("standing notes", ".boot-doc__notes");
       push("settings surface", ".settings");
       push("app main column", ".app__main");
       push("app shell", ".app");
