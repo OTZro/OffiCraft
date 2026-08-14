@@ -16,8 +16,10 @@ import type {
   BootDocView,
   DocumentKind,
   InsightView,
+  DocumentHistoryEntryView,
   DocumentHistoryView,
   DocumentSeedView,
+  RoleSummaryView,
   RoleDefView,
   BootstrapView,
   LessonsView,
@@ -64,6 +66,7 @@ import type {
   OutsourceWorkerView,
   TaskTypeView,
   TaskCountView,
+  TaskManualSummaryView,
   TaskManualView,
   TaskManualPatch,
   DocSummaryView,
@@ -101,8 +104,10 @@ import {
   toGlobalContext,
   toBootDoc,
   toDocumentHistory,
+  toDocumentHistoryEntry,
   toDocumentSeed,
   toRoleDef,
+  toRoleSummary,
   toBootstrap,
   toLessons,
   toInsight,
@@ -3719,8 +3724,13 @@ export const mockApi: Api = {
     }));
   },
 
-  async listTaskManuals(): Promise<TaskManualView[]> {
-    return structuredClone(taskManuals);
+  async listTaskManuals(): Promise<TaskManualSummaryView[]> {
+    // T-1170: the DIRECTORY. The two long documents are DROPPED here, the way
+    // the server drops them — a mock that kept serving them would let the
+    // manual sub-pages keep reading a list row and stay green.
+    return taskManuals.map(({ sopMd: _sop, learnings: _learn, ...row }) =>
+      structuredClone(row)
+    );
   },
 
   async getTaskManual(typeKey: string): Promise<TaskManualView> {
@@ -4523,12 +4533,14 @@ export const mockApi: Api = {
     return toBootDoc(foldBootDoc(kind, key));
   },
 
-  async listRoles(): Promise<RoleDefView[]> {
+  async listRoles(): Promise<RoleSummaryView[]> {
     // Seeds first (stable), then the owner-created custom roles — mirrors
-    // handle_list_roles.
+    // handle_list_roles. T-1170: the DIRECTORY — `toRoleSummary` is what makes
+    // the mock stop handing out `definition_md` on this route, which is the
+    // half that keeps the tests honest about the new server.
     return [
-      ...MOCK_WIRE_ROLES_SEED.map((seed) => toRoleDef(foldRole(seed.key))),
-      ...[...customRoles.keys()].map((key) => toRoleDef(foldRole(key))),
+      ...MOCK_WIRE_ROLES_SEED.map((seed) => toRoleSummary(foldRole(seed.key))),
+      ...[...customRoles.keys()].map((key) => toRoleSummary(foldRole(key))),
     ];
   },
 
@@ -4882,12 +4894,43 @@ export const mockApi: Api = {
   async listDocumentHistory(
     kind: DocumentKind,
     key: string
-  ): Promise<DocumentHistoryView[]> {
+  ): Promise<DocumentHistoryEntryView[]> {
     refuseRetiredDocumentKind(kind, `GET /api/document-history/${kind}/${key}`);
     // Newest first, at most DOCUMENT_HISTORY_CAP — the retention the server
     // applies, so an offline cockpit sees the same bounded list.
+    //
+    // 🔴 T-1170: the DIRECTORY, and the mock serves it as the new server does
+    // — `sizes` + `tombstoned`, and the text NOT on the answer. That is the
+    // point of changing the mock at all: a mock that kept handing the text back
+    // would let every test in this repo pass against a fake server the real one
+    // no longer resembles, and the surfaces that read a revision off the list
+    // would stay green while being broken.
     const kept = documentHistories.get(historySlot(kind, key)) ?? [];
-    return kept.map((h) => toDocumentHistory(structuredClone(h)));
+    return kept.map((h) => toDocumentHistoryEntry(structuredClone(h)));
+  },
+
+  async getDocumentRevision(
+    kind: DocumentKind,
+    key: string,
+    id: number
+  ): Promise<DocumentHistoryView> {
+    const route = `GET /api/document-history/${kind}/${key}/${id}`;
+    refuseRetiredDocumentKind(kind, route);
+    // Named revision → its content, the only read that carries text (T-1170).
+    // A pruned or unknown id 404s exactly where the restore of that id would:
+    // the reader must be able to say "this version could not be read" instead
+    // of drawing an empty document next to a destructive button.
+    const kept = documentHistories.get(historySlot(kind, key)) ?? [];
+    const found = kept.find((h) => h.id === id);
+    if (!found) {
+      throw new ApiError(
+        `http 404 for ${route}`,
+        404,
+        "not_found",
+        `document revision ${id} is no longer retained`
+      );
+    }
+    return toDocumentHistory(structuredClone(found));
   },
 
   async getDocumentSeed(

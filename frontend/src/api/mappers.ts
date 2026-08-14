@@ -5,7 +5,7 @@
 // backend only has to return the frozen wire shape — the UI never changes.
 
 import type { ThemeBundle } from "../lib/themeBundle";
-import { DOC_CAP_CHARS_DEFAULTS } from "./docCap";
+import { DOC_CAP_CHARS_DEFAULTS, runeLength } from "./docCap";
 import type {
   Member,
   MemberStatus,
@@ -24,9 +24,11 @@ import type {
   GlobalContextView,
   BootDocView,
   BootDocKind,
+  DocumentHistoryEntryView,
   DocumentHistoryView,
   DocumentSeedView,
   DocumentKind,
+  RoleSummaryView,
   RoleDefView,
   BootstrapView,
   LessonsView,
@@ -102,6 +104,7 @@ import type {
   TaskArtifactView,
   OutsourceWorkerView,
   TaskTypeView,
+  TaskManualSummaryView,
   TaskManualView,
   TaskManualPatch,
   TaskReassignInput,
@@ -678,7 +681,9 @@ export function toManualAssignee(
 /** Map one wire task manual → the FULL `TaskManualView` (設定 › 任務手冊).
  * Pure snake→camel passthrough; the open assignee object narrows through
  * `toManualAssignee` (unset {} → null). */
-export function toTaskManual(w: WireTaskManual): TaskManualView {
+export function toTaskManualSummary(
+  w: WireTaskManual,
+): TaskManualSummaryView {
   return {
     typeKey: w.type_key,
     displayName: w.display_name ?? "",
@@ -688,10 +693,25 @@ export function toTaskManual(w: WireTaskManual): TaskManualView {
       required: f.required ?? false,
       isKey: f.is_key ?? false,
     })),
-    sopMd: w.sop_md ?? "",
-    learnings: w.learnings ?? "",
     assignee: toManualAssignee(w.assignee as Record<string, unknown>),
     updatedTs: w.updated_ts ?? 0,
+    // The directory answer ALSO carries sop_md_chars / learnings_chars and
+    // their caps. They are deliberately NOT mapped: no manual surface renders
+    // a size budget today, and a view field with no reader is indistinguishable
+    // from a live one. Map them when something draws them.
+  };
+}
+
+/** Map one wire manual → the FULL view (`GET /{type_key}` and every write
+ * echo). `sop_md` / `learnings` are optional on the wire and ABSENT from the
+ * list answer since T-1170; `?? ""` here is the geometry of a manual that has
+ * never been written, not a stand-in for a projection that dropped them — this
+ * mapper is only ever handed a full-document response. */
+export function toTaskManual(w: WireTaskManual): TaskManualView {
+  return {
+    ...toTaskManualSummary(w),
+    sopMd: w.sop_md ?? "",
+    learnings: w.learnings ?? "",
   };
 }
 
@@ -1134,6 +1154,56 @@ export function toDocumentHistory(
   };
 }
 
+/**
+ * Map one wire revision → the DIRECTORY row (T-1170).
+ *
+ * 🔴 TOLERANT OF BOTH SHAPES, and that is the point rather than a courtesy.
+ * The directory fields (`tombstoned`, the per-field `sizes` map) are the
+ * BACKEND half of T-1170 and land on a different branch; the frozen
+ * `DocumentHistoryDTO` this file is typed against declares neither yet. So:
+ *   - a server that SENDS them is believed (it measured the row it stored);
+ *   - a server that still sends `content` has both DERIVED from it here.
+ * Neither path lets a caller read the text off a list row — the derivation
+ * happens in this mapper and the text is dropped on the way out, which is what
+ * makes the cockpit behave identically against both servers.
+ *
+ * ⚠️ `sizes` is measured in `runeLength`, NOT `String.length`: it feeds the cap
+ * verdict, and the server counts code points (see api/docCap.ts). Deriving it
+ * with `.length` would mark an emoji-heavy revision as over-cap that the server
+ * accepts.
+ */
+export function toDocumentHistoryEntry(
+  w: WireDocumentHistory
+): DocumentHistoryEntryView {
+  // The wire types are generated from the frozen spec, which does not declare
+  // the directory fields yet. Read them through a widened view rather than
+  // pretending the DTO has them — when the spec lands, this cast is the one
+  // line that goes away.
+  const directory = w as WireDocumentHistory & {
+    tombstoned?: boolean;
+    sizes?: Record<string, number>;
+  };
+  const content: Record<string, string> | undefined = w.content;
+  const sizes: Record<string, number> = {};
+  if (directory.sizes) {
+    Object.assign(sizes, directory.sizes);
+  } else if (content) {
+    for (const [field, value] of Object.entries(content)) {
+      // `tombstoned` is a flag, not a field of the document — it must not show
+      // up in the size map, where a caller would read it as content.
+      if (field !== "tombstoned") sizes[field] = runeLength(value);
+    }
+  }
+  return {
+    id: w.id,
+    createdTs: w.created_ts,
+    actorId: w.actor_id,
+    tombstoned:
+      directory.tombstoned ?? content?.["tombstoned"] === "true",
+    sizes,
+  };
+}
+
 /** Map one wire shipped default → the view model. `kind` is narrowed to the
  * closed union rather than trusted as a bare string: the caller ASKED for a
  * kind, so the echo is a consistency check, not a new vocabulary. */
@@ -1153,13 +1223,12 @@ export function toDocumentSeed(w: WireDocumentSeed): DocumentSeedView {
  * wire marks both optional for DTO-compat; a server too old to send them
  * reports 0, which the editor renders as an honest "not known" rather than as
  * a doc of length zero. */
-export function toRoleDef(w: WireRoleDef): RoleDefView {
+export function toRoleSummary(w: WireRoleDef): RoleSummaryView {
   return {
     sizeChars: w.size_chars ?? 0,
     capChars: w.cap_chars ?? 0,
     key: w.key,
     name: w.name,
-    definitionMd: w.definition_md,
     ownerId: w.owner_id,
     schemaVersion: w.schema_version,
     isDefault: w.is_default,
@@ -1167,6 +1236,15 @@ export function toRoleDef(w: WireRoleDef): RoleDefView {
     // on a doc we can't prove is custom; the server re-enforces anyway).
     isSeed: w.is_seed ?? true,
   };
+}
+
+/** Map one wire role-def doc → the FULL view (`GET /{key}` and every write
+ * echo). `definition_md` is optional on the wire and ABSENT from the roster
+ * answer since T-1170; `?? ""` is the empty document, not a stand-in for a
+ * projection that dropped it — this mapper is only ever handed a
+ * full-document response. */
+export function toRoleDef(w: WireRoleDef): RoleDefView {
+  return { ...toRoleSummary(w), definitionMd: w.definition_md ?? "" };
 }
 
 /** Map bootstrap wire → view. DROPS `token` on purpose: a UI preview must never

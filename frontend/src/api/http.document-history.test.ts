@@ -56,7 +56,7 @@ async function lastCall(): Promise<{
 }
 
 describe("httpApi · document-history wire methods", () => {
-  it("listDocumentHistory GETs the kind/key path and maps snake→camel", async () => {
+  it("listDocumentHistory GETs the kind/key path and answers the DIRECTORY, never the text", async () => {
     const versions = await httpApi.listDocumentHistory(
       "global_context",
       "global"
@@ -64,14 +64,38 @@ describe("httpApi · document-history wire methods", () => {
     const { url, method } = await lastCall();
     expect(url).toBe("/api/document-history/global_context/global");
     expect(method).toBe("GET");
+    // T-1170. The wire this fixture speaks is the OLD one — it still carries
+    // `content` — and the point of the assertion is that the adapter drops it
+    // ANYWAY, deriving the flag and the sizes on the way past. That is what
+    // makes the cockpit above this seam behave the same against both servers,
+    // and it is why nothing upstream can quietly go on reading list text.
     expect(versions).toEqual([
       {
         id: 7,
-        content: { text: "an earlier draft", tombstoned: "false" },
         createdTs: 1_753_000_000,
         actorId: "owner",
+        tombstoned: false,
+        sizes: { text: "an earlier draft".length },
       },
     ]);
+  });
+
+  it("getDocumentRevision answers the NAMED revision's text, and rejects an id the server no longer keeps", async () => {
+    const revision = await httpApi.getDocumentRevision(
+      "global_context",
+      "global",
+      7
+    );
+    expect(revision).toEqual({
+      id: 7,
+      content: { text: "an earlier draft", tombstoned: "false" },
+      createdTs: 1_753_000_000,
+      actorId: "owner",
+    });
+
+    await expect(
+      httpApi.getDocumentRevision("global_context", "global", 999)
+    ).rejects.toMatchObject({ status: 404 });
   });
 
   it("listDocumentHistory keeps a lessons composite key in one path segment", async () => {

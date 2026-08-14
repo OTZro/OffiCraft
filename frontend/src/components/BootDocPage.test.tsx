@@ -47,6 +47,7 @@ import {
   SEED_SYSTEM_INTERACTION_MD,
 } from "../api/seeds";
 import { BOOT_DOC_CAP_CHARS_DEFAULTS } from "../api/docCap";
+import { runeLength } from "../api/docCap";
 
 const s = zh.settings;
 
@@ -391,7 +392,9 @@ describe("BootDocPage", () => {
       "system_interaction",
       "global"
     );
-    expect(target.content.text).toBe(overCap);
+    // The DIRECTORY row is what the marking reads since T-1170 — the list
+    // never sees this text, only how much of it there is.
+    expect(target.sizes.text).toBe(runeLength(overCap));
 
     const row = await utils.findByTestId(`doc-history-item-${target.id}`);
     expect(within(row).getByText(s.historyBlockedBadge)).toBeTruthy();

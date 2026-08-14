@@ -34,8 +34,10 @@ import type {
   BootDocKind,
   BootDocView,
   DocumentKind,
+  DocumentHistoryEntryView,
   DocumentHistoryView,
   DocumentSeedView,
+  RoleSummaryView,
   RoleDefView,
   BootstrapView,
   LessonsView,
@@ -77,6 +79,7 @@ import type {
   OutsourceWorkerView,
   TaskTypeView,
   TaskCountView,
+  TaskManualSummaryView,
   TaskManualView,
   TaskManualPatch,
   DocSummaryView,
@@ -103,8 +106,10 @@ import {
   toGlobalContext,
   toBootDoc,
   toDocumentHistory,
+  toDocumentHistoryEntry,
   toDocumentSeed,
   toRoleDef,
+  toRoleSummary,
   toBootstrap,
   toLessons,
   toInsight,
@@ -120,6 +125,7 @@ import {
   toOutsourceWorker,
   toTaskType,
   toTaskManual,
+  toTaskManualSummary,
   toWebhookEndpoint,
   toWebhookRequestLog,
   toScheduledMessage,
@@ -1377,11 +1383,14 @@ export const httpApi: Api = {
     return wire.map(toTaskType);
   },
 
-  async listTaskManuals(): Promise<TaskManualView[]> {
+  async listTaskManuals(): Promise<TaskManualSummaryView[]> {
     // GET /api/task-manuals -> TaskManualDTO[] — the SAME wire read as
-    // listTaskTypes, mapped FULL for the 設定 › 任務手冊 list page.
+    // listTaskTypes. T-1170: this answer is the DIRECTORY (sop_md / learnings
+    // absent, their char counts and caps present), so it is mapped to the
+    // summary; the 任務定義 / 學習經驗 sub-pages read their document through
+    // getTaskManual.
     const wire = unwrap(await client.GET("/api/task-manuals"));
-    return wire.map(toTaskManual);
+    return wire.map(toTaskManualSummary);
   },
 
   async getTaskManual(typeKey: string): Promise<TaskManualView> {
@@ -1880,16 +1889,76 @@ export const httpApi: Api = {
   async listDocumentHistory(
     kind: DocumentKind,
     key: string,
-  ): Promise<DocumentHistoryView[]> {
+  ): Promise<DocumentHistoryEntryView[]> {
     // GET /api/document-history/{kind}/{key} -> DocumentHistoryDTO[], newest
     // first, at most 3 (the server prunes). `key` carries the "::" composite
     // for lessons verbatim — openapi-fetch encodes it as one path segment.
+    //
+    // T-1170: mapped to the DIRECTORY row. Against a server that still sends
+    // `content`, `toDocumentHistoryEntry` derives the sizes and the tombstone
+    // flag from it and DROPS the text here — so the cockpit above this seam
+    // behaves identically on both servers, and cannot regress into reading a
+    // revision off the list.
     const wire = unwrap(
       await client.GET("/api/document-history/{kind}/{key}", {
         params: { path: { kind, key } },
       }),
     );
-    return wire.map(toDocumentHistory);
+    return wire.map(toDocumentHistoryEntry);
+  },
+
+  async getDocumentRevision(
+    kind: DocumentKind,
+    key: string,
+    id: number,
+  ): Promise<DocumentHistoryView> {
+    // 🔴 THE ONE SEAM T-1170 COULD NOT FINISH ON THE FRONTEND'S OWN.
+    //
+    // The named-revision route (`GET /api/document-history/{kind}/{key}/{id}`)
+    // is the BACKEND half of this change and lands on its own branch. Until
+    // `spec/openapi.json` declares it, this adapter cannot spell it: the typed
+    // client would not compile, and `http.spec-paths.test.ts` exists precisely
+    // to stay RED for a route that ships ahead of the contract. Writing it as a
+    // bare fetch, or buying an exemption in that file's roll call, is the
+    // accident that assertion was written for — so neither is done here.
+    //
+    // What this does instead is the honest interim: re-read the list and take
+    // the revision that was NAMED. Against today's server (which still carries
+    // `content`) that is a real read of a real document — not a cached list row
+    // the cockpit kept, which is the failure this whole change is about.
+    //
+    // 🔴 AND IT FAILS LOUD, deliberately. The moment the backend half lands,
+    // this answer stops carrying text, and a blank reader next to a destructive
+    // 還原 button is the worst screen this surface can show. So a revision that
+    // comes back without content REJECTS: the reader renders "this version's
+    // content could not be read" and the restore stays live, which is true.
+    //
+    // ⚠️ REPLACING THIS IS A ONE-FUNCTION EDIT — the whole cockpit above it
+    // already asks for exactly one revision at a time. Point it at the route
+    // and delete this comment.
+    const wire = unwrap(
+      await client.GET("/api/document-history/{kind}/{key}", {
+        params: { path: { kind, key } },
+      }),
+    );
+    const found = wire.find((w) => w.id === id);
+    if (!found) {
+      throw new ApiError(
+        `http 404 for GET /api/document-history/${kind}/${key}`,
+        404,
+        "not_found",
+        `document revision ${id} is no longer retained`,
+      );
+    }
+    if (!found.content) {
+      throw new ApiError(
+        `http 501 for GET /api/document-history/${kind}/${key}`,
+        501,
+        "not_implemented",
+        "this server does not serve a document revision's content",
+      );
+    }
+    return toDocumentHistory(found);
   },
 
   async getDocumentSeed(
@@ -1926,10 +1995,12 @@ export const httpApi: Api = {
     return toDocumentHistory(wire);
   },
 
-  async listRoles(): Promise<RoleDefView[]> {
-    // GET /api/roles -> RoleDefDTO[]
+  async listRoles(): Promise<RoleSummaryView[]> {
+    // GET /api/roles -> RoleDefDTO[]. T-1170: the roster answer is the
+    // DIRECTORY (no definition_md, only size_chars + cap_chars), so it maps to
+    // the summary; the role page reads its document through getRole.
     const wire = unwrap(await client.GET("/api/roles"));
-    return wire.map(toRoleDef);
+    return wire.map(toRoleSummary);
   },
 
   async getRole(key: string): Promise<RoleDefView> {
