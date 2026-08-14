@@ -1,24 +1,17 @@
 ---
 paths:
   - "src/api/**"
-  - "frontend/src/api/**"
   - "src/hooks/**"
-  - "frontend/src/hooks/**"
   - "src/lib/deltaSink.ts"
-  - "frontend/src/lib/deltaSink.ts"
   - "src/lib/ownerUnread.ts"
-  - "frontend/src/lib/ownerUnread.ts"
   - "src/lib/sharedSnapshot.ts"
-  - "frontend/src/lib/sharedSnapshot.ts"
   - "src/components/OnboardingBanner*"
-  - "frontend/src/components/OnboardingBanner*"
   - "src/types.ts"
-  - "frontend/src/types.ts"
 ---
 
 # frontend 資料層:seam、API 錯誤、SSE reconcile、共享設定快取
 
-> 本檔由 `frontend/CLAUDE.md` 拆出(T-9b5d)。`paths:` 的 glob **相對 `frontend/`**(rules 檔所在目錄),另外並列一組 `frontend/` 開頭的同義 glob 當保險。
+> 本檔由 `frontend/CLAUDE.md` 拆出(T-9b5d)。`paths:` 的 glob **相對 `frontend/`**(rules 檔所在目錄),所以一律寫成 `src/…`;**不要寫 `frontend/…`**——那種寫法在這個位置永遠不命中(實測 89 條對 565 個真檔零命中,已整批刪除)。
 > 標 📎 的段落表示「當時的量測證據已搬回該票」,本檔只留規則。
 
 ## seam 分層(單向)

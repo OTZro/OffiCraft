@@ -1,42 +1,26 @@
 ---
 paths:
   - "src/components/Chat*"
-  - "frontend/src/components/Chat*"
   - "src/components/Reply*"
-  - "frontend/src/components/Reply*"
   - "src/components/RepliesPage*"
-  - "frontend/src/components/RepliesPage*"
   - "src/components/TaskReplyCard*"
-  - "frontend/src/components/TaskReplyCard*"
   - "src/components/TaskCardMessageBox*"
-  - "frontend/src/components/TaskCardMessageBox*"
   - "src/components/ScheduledMessagesCard*"
-  - "frontend/src/components/ScheduledMessagesCard*"
   - "src/components/replies.css"
-  - "frontend/src/components/replies.css"
   - "src/hooks/useChat*"
-  - "frontend/src/hooks/useChat*"
   - "src/hooks/useReplyCard*"
-  - "frontend/src/hooks/useReplyCard*"
   - "src/hooks/useScheduledMessages.ts"
-  - "frontend/src/hooks/useScheduledMessages.ts"
   - "src/lib/composerKeys.ts"
-  - "frontend/src/lib/composerKeys.ts"
   - "src/lib/autosize.ts"
-  - "frontend/src/lib/autosize.ts"
   - "src/lib/chatDraftStore.ts"
-  - "frontend/src/lib/chatDraftStore.ts"
   - "src/lib/hashRoute.ts"
-  - "frontend/src/lib/hashRoute.ts"
   - "src/api/mock.scheduled-messages.test.ts"
-  - "frontend/src/api/mock.scheduled-messages.test.ts"
   - "visual-guards/scheduled-message-*"
-  - "frontend/visual-guards/scheduled-message-*"
 ---
 
 # 聊天、composer、定期訊息、回覆卡、請示↔任務跳轉
 
-> 本檔由 `frontend/CLAUDE.md` 拆出(T-9b5d)。`paths:` 的 glob **相對 `frontend/`**(rules 檔所在目錄),另外並列一組 `frontend/` 開頭的同義 glob 當保險。
+> 本檔由 `frontend/CLAUDE.md` 拆出(T-9b5d)。`paths:` 的 glob **相對 `frontend/`**(rules 檔所在目錄),所以一律寫成 `src/…`;**不要寫 `frontend/…`**——那種寫法在這個位置永遠不命中(實測 89 條對 565 個真檔零命中,已整批刪除)。
 > 標 📎 的段落表示「當時的量測證據已搬回該票」,本檔只留規則。
 
 ## 定期訊息 · `custom` 頻率 = 四個 EXPLICIT 集合的交集(T-49e7,第二輪加月)

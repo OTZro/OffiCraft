@@ -1,50 +1,30 @@
 ---
 paths:
   - "src/components/MarkdownPreviewOverlay*"
-  - "frontend/src/components/MarkdownPreviewOverlay*"
   - "src/components/AttachmentStrip*"
-  - "frontend/src/components/AttachmentStrip*"
   - "src/components/ComposerAttachmentPreview*"
-  - "frontend/src/components/ComposerAttachmentPreview*"
   - "src/components/md-preview.css"
-  - "frontend/src/components/md-preview.css"
   - "src/components/ConfirmModal*"
-  - "frontend/src/components/ConfirmModal*"
   - "src/components/*Modal*"
-  - "frontend/src/components/*Modal*"
   - "src/components/*Popover*"
-  - "frontend/src/components/*Popover*"
   - "src/components/DocCard*"
-  - "frontend/src/components/DocCard*"
   - "src/components/BootDocPage*"
-  - "frontend/src/components/BootDocPage*"
   - "src/components/SettingsPage*"
-  - "frontend/src/components/SettingsPage*"
   - "src/components/DiffView*"
-  - "frontend/src/components/DiffView*"
   - "src/components/diff-view.css"
-  - "frontend/src/components/diff-view.css"
   - "src/components/DocumentHistory*"
-  - "frontend/src/components/DocumentHistory*"
   - "src/lib/escapeLayers.ts"
-  - "frontend/src/lib/escapeLayers.ts"
   - "src/lib/useEscapeLayer.ts"
-  - "frontend/src/lib/useEscapeLayer.ts"
   - "src/lib/escapeLayerOwnership.test.ts"
-  - "frontend/src/lib/escapeLayerOwnership.test.ts"
   - "src/lib/lineDiff.ts"
-  - "frontend/src/lib/lineDiff.ts"
   - "src/lib/wordDiff.ts"
-  - "frontend/src/lib/wordDiff.ts"
   - "src/lib/shareLink.ts"
-  - "frontend/src/lib/shareLink.ts"
   - "visual-guards/image-zoom-pan.ct.spec.tsx"
-  - "frontend/visual-guards/image-zoom-pan.ct.spec.tsx"
 ---
 
 # 全幅閱覽 overlay、Esc 分層、DocCard、差異呈現
 
-> 本檔由 `frontend/CLAUDE.md` 拆出(T-9b5d)。`paths:` 的 glob **相對 `frontend/`**(rules 檔所在目錄),另外並列一組 `frontend/` 開頭的同義 glob 當保險。
+> 本檔由 `frontend/CLAUDE.md` 拆出(T-9b5d)。`paths:` 的 glob **相對 `frontend/`**(rules 檔所在目錄),所以一律寫成 `src/…`;**不要寫 `frontend/…`**——那種寫法在這個位置永遠不命中(實測 89 條對 565 個真檔零命中,已整批刪除)。
 > 標 📎 的段落表示「當時的量測證據已搬回該票」,本檔只留規則。
 
 ## 全幅閱覽 = 一個 overlay、三種來源(owner 2026-07-28;T-f014 收編圖片)

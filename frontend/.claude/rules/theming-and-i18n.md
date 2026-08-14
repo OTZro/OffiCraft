@@ -1,40 +1,25 @@
 ---
 paths:
   - "src/i18n/**"
-  - "frontend/src/i18n/**"
   - "src/paint/**"
-  - "frontend/src/paint/**"
   - "paint-guards/**"
-  - "frontend/paint-guards/**"
   - "scripts/**"
-  - "frontend/scripts/**"
   - "src/lib/theme*"
-  - "frontend/src/lib/theme*"
   - "src/lib/paint*"
-  - "frontend/src/lib/paint*"
   - "src/lib/imageCap*"
-  - "frontend/src/lib/imageCap*"
   - "src/components/ThemeSettings*"
-  - "frontend/src/components/ThemeSettings*"
   - "src/components/theme-settings.css"
-  - "frontend/src/components/theme-settings.css"
   - "src/components/FirstRunPage*"
-  - "frontend/src/components/FirstRunPage*"
   - "src/components/LoginPage*"
-  - "frontend/src/components/LoginPage*"
   - "src/components/ProfileDropdown*"
-  - "frontend/src/components/ProfileDropdown*"
   - "src/AuthGate.tsx"
-  - "frontend/src/AuthGate.tsx"
   - "src/api/auth.ts"
-  - "frontend/src/api/auth.ts"
   - "src/styles/**"
-  - "frontend/src/styles/**"
 ---
 
 # 首設密碼 / 伺服器設定、i18n 可覆寫文案、主題包、用詞清單、pre-paint 守衛
 
-> 本檔由 `frontend/CLAUDE.md` 拆出(T-9b5d)。`paths:` 的 glob **相對 `frontend/`**(rules 檔所在目錄),另外並列一組 `frontend/` 開頭的同義 glob 當保險。
+> 本檔由 `frontend/CLAUDE.md` 拆出(T-9b5d)。`paths:` 的 glob **相對 `frontend/`**(rules 檔所在目錄),所以一律寫成 `src/…`;**不要寫 `frontend/…`**——那種寫法在這個位置永遠不命中(實測 89 條對 565 個真檔零命中,已整批刪除)。
 > 標 📎 的段落表示「當時的量測證據已搬回該票」,本檔只留規則。
 
 ## 首設密碼 + 伺服器設定(B3)
@@ -44,7 +29,8 @@ paths:
 
 ## i18n 語系是封閉聯集(自 `設計 token` 節保留)
 
-i18n 兩語 `zh` / `en`(`Locale` 是封閉聯集,`locales/` 只有這兩份;`xian` 是**佈景主題**不是語系)。其餘設計 token 的字面值讀 `theme.css` / `global.css` 即可,不在本檔重述。
+i18n 兩語 `zh` / `en`(`Locale` 是封閉聯集,`locales/` 只有這兩份;`xian` 是**佈景主題**不是語系)。其餘**顏色** token 的字面值讀 `theme.css` / `global.css` 即可,不在本檔重述。
+⚠️ **同一節裡的 `mobile 斷點 720px` 不在那兩支裡**(實測 `grep -n 720 src/styles/theme.css src/styles/global.css` 回 0 行):它的字面值在 `frontend/src/hooks/useIsMobile.ts:13`(`export const MOBILE_BREAKPOINT = 720`),CSS 側是各 `.css` 自己寫的 `@media (max-width: 720px)`。**改斷點要兩邊一起改**,否則 JS 樞紐與 CSS 樞紐會在不同寬度翻面。
 
 ## i18n 帶參數文案 = 可覆寫片段 + `compose.ts`(T-081b)
 字典葉子**不再寫 interpolation 函式**。白名單產生器只收字串葉子,所以任何寫成

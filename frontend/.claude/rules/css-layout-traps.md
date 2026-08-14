@@ -1,18 +1,14 @@
 ---
 paths:
   - "src/**/*.css"
-  - "frontend/src/**/*.css"
   - "src/styles/**"
-  - "frontend/src/styles/**"
   - "src/components/**"
-  - "frontend/src/components/**"
   - "visual-guards/**"
-  - "frontend/visual-guards/**"
 ---
 
 # CSS / 版面陷阱:長 token、CJK nowrap、vw 夾、樣式所有權、effect deps、動作列
 
-> 本檔由 `frontend/CLAUDE.md` 拆出(T-9b5d)。`paths:` 的 glob **相對 `frontend/`**(rules 檔所在目錄),另外並列一組 `frontend/` 開頭的同義 glob 當保險。
+> 本檔由 `frontend/CLAUDE.md` 拆出(T-9b5d)。`paths:` 的 glob **相對 `frontend/`**(rules 檔所在目錄),所以一律寫成 `src/…`;**不要寫 `frontend/…`**——那種寫法在這個位置永遠不命中(實測 89 條對 565 個真檔零命中,已整批刪除)。
 > 標 📎 的段落表示「當時的量測證據已搬回該票」,本檔只留規則。
 
 ## 長 token 溢出:單一來源在 `.doc-md` 基底(T-d451)

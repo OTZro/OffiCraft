@@ -1,42 +1,26 @@
 ---
 paths:
   - "src/components/LifecycleDot.tsx"
-  - "frontend/src/components/LifecycleDot.tsx"
   - "src/components/PresenceBadge.tsx"
-  - "frontend/src/components/PresenceBadge.tsx"
   - "src/components/MemberCard*"
-  - "frontend/src/components/MemberCard*"
   - "src/components/MemberActionButtons*"
-  - "frontend/src/components/MemberActionButtons*"
   - "src/components/*DetailPanel*"
-  - "frontend/src/components/*DetailPanel*"
   - "src/components/MonitorPage*"
-  - "frontend/src/components/MonitorPage*"
   - "src/components/ModelEffortEditor*"
-  - "frontend/src/components/ModelEffortEditor*"
   - "src/components/OfficeSidebarTabs*"
-  - "frontend/src/components/OfficeSidebarTabs*"
   - "src/components/badgeRing*"
-  - "frontend/src/components/badgeRing*"
   - "src/components/office.css"
-  - "frontend/src/components/office.css"
   - "src/components/chrome.css"
-  - "frontend/src/components/chrome.css"
   - "src/components/monitor.css"
-  - "frontend/src/components/monitor.css"
   - "src/api/mappers*"
-  - "frontend/src/api/mappers*"
   - "src/lib/runtime.ts"
-  - "frontend/src/lib/runtime.ts"
   - "scripts/check-token-roles.mjs"
-  - "frontend/scripts/check-token-roles.mjs"
   - "visual-guards/badge-ring-token.ct.spec.tsx"
-  - "frontend/visual-guards/badge-ring-token.ct.spec.tsx"
 ---
 
 # presence 點、未讀 badge、自報值 vs 設定值、機器表時效
 
-> 本檔由 `frontend/CLAUDE.md` 拆出(T-9b5d)。`paths:` 的 glob **相對 `frontend/`**(rules 檔所在目錄),另外並列一組 `frontend/` 開頭的同義 glob 當保險。
+> 本檔由 `frontend/CLAUDE.md` 拆出(T-9b5d)。`paths:` 的 glob **相對 `frontend/`**(rules 檔所在目錄),所以一律寫成 `src/…`;**不要寫 `frontend/…`**——那種寫法在這個位置永遠不命中(實測 89 條對 565 個真檔零命中,已整批刪除)。
 > 標 📎 的段落表示「當時的量測證據已搬回該票」,本檔只留規則。
 
 ## presence

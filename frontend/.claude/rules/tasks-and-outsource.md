@@ -1,32 +1,21 @@
 ---
 paths:
   - "src/components/Task*"
-  - "frontend/src/components/Task*"
   - "src/components/Outsource*"
-  - "frontend/src/components/Outsource*"
   - "src/components/WorkerDetailPanel*"
-  - "frontend/src/components/WorkerDetailPanel*"
   - "src/components/OfficePage*"
-  - "frontend/src/components/OfficePage*"
   - "src/components/tasks.css"
-  - "frontend/src/components/tasks.css"
   - "src/hooks/useTask*"
-  - "frontend/src/hooks/useTask*"
   - "src/hooks/useOutsourceWorkers*"
-  - "frontend/src/hooks/useOutsourceWorkers*"
   - "src/hooks/useWorkerCodenames*"
-  - "frontend/src/hooks/useWorkerCodenames*"
   - "src/lib/stepBadge.ts"
-  - "frontend/src/lib/stepBadge.ts"
   - "src/lib/taskNo.ts"
-  - "frontend/src/lib/taskNo.ts"
   - "src/lib/duration.ts"
-  - "frontend/src/lib/duration.ts"
 ---
 
 # 任務頁 + 任務卡、外包面板 + 外包聊天、設定 › 任務手冊
 
-> 本檔由 `frontend/CLAUDE.md` 拆出(T-9b5d)。`paths:` 的 glob **相對 `frontend/`**(rules 檔所在目錄),另外並列一組 `frontend/` 開頭的同義 glob 當保險。
+> 本檔由 `frontend/CLAUDE.md` 拆出(T-9b5d)。`paths:` 的 glob **相對 `frontend/`**(rules 檔所在目錄),所以一律寫成 `src/…`;**不要寫 `frontend/…`**——那種寫法在這個位置永遠不命中(實測 89 條對 565 個真檔零命中,已整批刪除)。
 > 標 📎 的段落表示「當時的量測證據已搬回該票」,本檔只留規則。
 
 ## 任務頁 + 任務卡(M3 Phase 3)
