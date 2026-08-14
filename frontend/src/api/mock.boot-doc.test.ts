@@ -20,6 +20,7 @@ import {
   SEED_BOOT_SEQUENCE_MD,
   SEED_BOOT_SEQUENCE_CODEX_MD,
 } from "./seeds";
+import { documentRevisions } from "../test/documentHistory";
 
 beforeEach(() => {
   __resetMock();
@@ -70,10 +71,10 @@ describe("mockApi · boot-context blocks", () => {
     // …and their histories do not bleed either.
     await mockApi.saveBootDoc("boot_sequence", "claude", "claude 第二版");
     expect(
-      await mockApi.listDocumentHistory("boot_sequence", "codex")
+      await documentRevisions(mockApi, "boot_sequence", "codex")
     ).toEqual([]);
     expect(
-      (await mockApi.listDocumentHistory("boot_sequence", "claude")).length
+      (await documentRevisions(mockApi, "boot_sequence", "claude")).length
     ).toBe(1);
   });
 
@@ -83,7 +84,7 @@ describe("mockApi · boot-context blocks", () => {
     for (let i = 0; i < BOOT_DOC_HISTORY_KEPT + 5; i++) {
       await mockApi.saveBootDoc("boot_sequence", "claude", `版本 ${i}\n`);
     }
-    const kept = await mockApi.listDocumentHistory("boot_sequence", "claude");
+    const kept = await documentRevisions(mockApi, "boot_sequence", "claude");
     expect(kept.length).toBe(BOOT_DOC_HISTORY_KEPT);
     // Newest first, and the oldest ones really were pushed out — which is the
     // half of the ruling the cockpit has to warn about.
@@ -100,7 +101,7 @@ describe("mockApi · boot-context blocks", () => {
       await mockApi.saveGlobalContext(`版本 ${i}`);
     }
     expect(
-      (await mockApi.listDocumentHistory("global_context", "global")).length
+      (await documentRevisions(mockApi, "global_context", "global")).length
     ).toBe(3);
   });
 
@@ -117,7 +118,7 @@ describe("mockApi · boot-context blocks", () => {
     });
     // The discarded content survives as a revision — a destructive write with
     // no way back would be the one write the history does not cover.
-    const kept = await mockApi.listDocumentHistory("boot_sequence", "claude");
+    const kept = await documentRevisions(mockApi, "boot_sequence", "claude");
     expect(kept[0].content.text).toBe("壞掉的內容");
   });
 
@@ -149,9 +150,9 @@ describe("mockApi · boot-context blocks", () => {
     // pastes again.
     await mockApi.saveBootDoc("boot_sequence", "claude", "第一版");
     await mockApi.saveBootDoc("boot_sequence", "claude", "第二版");
-    const before = await mockApi.listDocumentHistory("boot_sequence", "claude");
+    const before = await documentRevisions(mockApi, "boot_sequence", "claude");
     await mockApi.saveBootDoc("boot_sequence", "claude", "第二版");
-    expect(await mockApi.listDocumentHistory("boot_sequence", "claude")).toEqual(
+    expect(await documentRevisions(mockApi, "boot_sequence", "claude")).toEqual(
       before
     );
 
@@ -185,7 +186,7 @@ describe("mockApi · boot-context blocks", () => {
   it("restoring a retained revision puts the block back, tombstone included", async () => {
     await mockApi.saveBootDoc("boot_sequence", "claude", "第一版");
     await mockApi.saveBootDoc("boot_sequence", "claude", "第二版");
-    const [older] = await mockApi.listDocumentHistory("boot_sequence", "claude");
+    const [older] = await documentRevisions(mockApi, "boot_sequence", "claude");
     await mockApi.restoreDocumentHistory("boot_sequence", "claude", older.id);
     expect(await mockApi.getBootDoc("boot_sequence", "claude")).toMatchObject({
       text: "第一版",
@@ -195,11 +196,11 @@ describe("mockApi · boot-context blocks", () => {
     // And restoring the tombstoned 初始版本 row puts it back ON the seed rather
     // than writing the seed text in as an edit.
     const seedRow = (
-      await mockApi.listDocumentHistory("boot_sequence", "claude")
+      await documentRevisions(mockApi, "boot_sequence", "claude")
     ).find((v) => v.content.tombstoned === "true");
     expect(seedRow).toBeUndefined();
     await mockApi.resetBootDoc("boot_sequence", "claude");
-    const afterReset = await mockApi.listDocumentHistory(
+    const afterReset = await documentRevisions(mockApi, 
       "boot_sequence",
       "claude"
     );

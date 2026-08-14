@@ -1051,7 +1051,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleListRolesApiRolesGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "List role definitions (seed defaults + owner edits).",
+			Summary:  "List role definitions (seed defaults + owner edits) WITHOUT the persona bodies: each row is the role identity plus its definition size and cap, never definition_md itself. Read the one role you want with get_role.",
 			MCPTool:  "list_roles",
 		},
 		{
@@ -1064,7 +1064,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			// are all machine). It cannot leak more than those already do — it
 			// carries strictly less than any of them.
 			Requires: principalMachine,
-			Summary:  "Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on list_task_manuals ?view=list, and a role definition's size and cap are already on every list_roles row.",
+			Summary:  "Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.",
 			MCPTool:  "peek_doc_sizes",
 		},
 		{
@@ -1583,7 +1583,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleListTaskManualsApiTaskManualsGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "List task types (match by display_name/purpose; address by type_key). WITHOUT view=list this returns the FULL manual of every type — every SOP and every learnings blob in one answer, six figures of characters on a real roster. Pass view=list unless you actually need the text.",
+			Summary:  "List task types WITHOUT their long documents: each row is the type identity (type_key / display_name / purpose), its input fields and its assignee setting, plus the SIZES of sop_md and learnings and the cap each is judged against. The SOP and the learnings text are not on this answer at all — read the one type you picked with get_task_manual.",
 			MCPTool:  "list_task_manuals",
 		},
 		{
@@ -1652,7 +1652,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleListDocumentHistoryApiDocumentHistoryKindKeyGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "READ the retained versions of one editable document: what each version held, when it was replaced and by whom. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.\n\nWHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.\n\nADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.\n\nCOVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.",
+			Summary:  "READ the CATALOGUE of retained versions of one editable document: which versions exist, when each was replaced and by whom, whether each was a tombstone, and HOW LONG each of its fields was. It does NOT carry the versions themselves — a version list is how you CHOOSE one, and choosing does not need the prose; fetch the one you picked with get_document_version. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.\n\nWHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.\n\nADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.\n\nCOVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.",
 			MCPTool:  "list_document_history",
 		},
 		{
@@ -1675,6 +1675,28 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			// list_document_history's level (machine), and this row has no
 			// write verb to open — restore and reset keep their own gates.
 			MCPTool: "get_document_seed",
+		},
+		{
+			Method:  "GET",
+			Path:    "/api/document-history/{kind}/{key}/{id}",
+			Handler: w.HandleGetDocumentVersionApiDocumentHistoryKindKeyIdGet,
+			Auth:    authGated,
+			// Same floor as the two reads above, and for the same reason: this
+			// is the BODY of a version the sibling listing already names. The
+			// listing stopped carrying the prose (a single answer had a
+			// structural ceiling in the hundreds of thousands of characters),
+			// so this row is what makes the retained text reachable at all —
+			// one named revision at a time. Raising the floor here would put
+			// the text behind a gate the catalogue that advertises it is not
+			// behind, which is the shape that makes a listing useless.
+			Requires: principalMachine,
+			Summary:  "READ the BODY of one named retained version of an editable document — the ``content`` map that version was stored with, exactly as it was stored. Read-only: this fetches text, it never puts it back; restoring stays out of the agent tool surface, as it does for list_document_history.\n\nTHIS IS THE SECOND HALF OF A PAIR. list_document_history answers WHICH versions exist and how big each field of each one is, and carries no prose at all; this answers WHAT ONE OF THEM SAID. Name the ``id`` you read off that list. Asking for every version's text is the cost that pairing exists to remove, so fetch the one you actually mean to read.\n\nADDRESSING: ``kind`` and ``key`` name a document exactly as they do for list_document_history — the same server-side gate answers all three routes, so whatever that tool can address, this one can too, and they can never silently disagree. A ``kind`` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it; a ``key`` that fails its kind's required shape is refused with 400 naming the problem. An ``id`` that is not a retained version of THAT document is a 404 — including an id that belongs to some other document, which is why the address is the whole triple and not the id alone.",
+			// A TOOL, on the same owner ruling the seed row cites
+			// (rc-b7d29de0eb9c, and the 2026-07-30 policy rc-b5fd1135e2dd
+			// behind it): READING a document's history is an agent tool,
+			// writing one back is not. The split is the VERB. Restore below
+			// keeps its MCPExclude.
+			MCPTool: "get_document_version",
 		},
 		{
 			Method:   "POST",

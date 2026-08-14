@@ -655,6 +655,42 @@ type roleDefDTO struct {
 	IsSeed        bool   `json:"is_seed"`
 }
 
+// roleDefListItemDTO is one row of GET /api/roles: everything roleDefDTO
+// carries EXCEPT the persona body. The listing is where a caller CHOOSES a
+// role; reading one is get_role.
+//
+// definition_md is ABSENT from the wire rather than served as "" — an empty
+// string in the field that normally holds the persona reads as "this role has
+// no definition", which is a different claim and a false one. SizeChars is
+// still measured on the STORED document (see newRoleDefListItemDTO), so the
+// row keeps answering "which definition is nearly full" without the text.
+type roleDefListItemDTO struct {
+	SizeChars     int    `json:"size_chars"`
+	CapChars      int    `json:"cap_chars"`
+	Key           string `json:"key"`
+	Name          string `json:"name"`
+	OwnerID       string `json:"owner_id"`
+	SchemaVersion int    `json:"schema_version"`
+	IsDefault     bool   `json:"is_default"`
+	IsSeed        bool   `json:"is_seed"`
+}
+
+// newRoleDefListItemDTO projects a folded role onto the listing row. It takes
+// the already-folded roleDefDTO precisely so the two faces cannot disagree
+// about is_default / is_seed / the size — the same fold answers get_role.
+func newRoleDefListItemDTO(d roleDefDTO) roleDefListItemDTO {
+	return roleDefListItemDTO{
+		SizeChars:     d.SizeChars,
+		CapChars:      d.CapChars,
+		Key:           d.Key,
+		Name:          d.Name,
+		OwnerID:       d.OwnerID,
+		SchemaVersion: d.SchemaVersion,
+		IsDefault:     d.IsDefault,
+		IsSeed:        d.IsSeed,
+	}
+}
+
 type roleCreateResultDTO struct {
 	Role   roleDefDTO `json:"role"`
 	Member memberDTO  `json:"member"`
@@ -1361,6 +1397,29 @@ type taskManualDTO struct {
 	UpdatedTS         float64        `json:"updated_ts"`
 }
 
+// taskManualListItemDTO is one row of GET /api/task-manuals: the type's
+// identity, its input fields and its assignee setting — plus the SIZES of the
+// two long documents and the cap each is judged against.
+//
+// sop_md and learnings are ABSENT from the wire, not served as "". They are the
+// bulk that made this listing unreadable, and an empty string in the field that
+// normally holds the SOP reads as "this type has no SOP". The sizes are still
+// measured on the STORED row (see newTaskManualListItemDTO), because a zero that
+// looks like a measurement is worse than the omission it describes.
+type taskManualListItemDTO struct {
+	LearningsChars    int            `json:"learnings_chars"`
+	SopMDChars        int            `json:"sop_md_chars"`
+	LearningsCapChars int            `json:"learnings_cap_chars"`
+	SopMDCapChars     int            `json:"sop_md_cap_chars"`
+	CapChars          int            `json:"cap_chars"`
+	TypeKey           string         `json:"type_key"`
+	DisplayName       string         `json:"display_name"`
+	Purpose           string         `json:"purpose"`
+	Fields            []ManualField  `json:"fields"`
+	Assignee          map[string]any `json:"assignee"`
+	UpdatedTS         float64        `json:"updated_ts"`
+}
+
 type taskManualDeleteResultDTO struct {
 	TypeKey string `json:"type_key"`
 	Deleted bool   `json:"deleted"`
@@ -1742,20 +1801,36 @@ func newTaskManualDTO(m TaskManual, sopCapChars, learningsCapChars int) (taskMan
 	}, nil
 }
 
-// newTaskManualListItemDTO is the ?view=list light projection (T-ec2c): the
-// SAME taskManualDTO wire shape carrying only the type identity the 類型 filter
-// reads (type_key / display_name / purpose + updated_ts), with the heavy
-// authored blobs HONEST-EMPTY — sop_md / learnings "" (the markdown bulk),
-// fields an empty list, assignee an empty object. It never parses the stored
-// fields/assignee JSON, so unlike newTaskManualDTO it cannot fail on a corrupt
-// blob (the light path deliberately does not touch those columns).
-func newTaskManualListItemDTO(m TaskManual, sopCapChars, learningsCapChars int) taskManualDTO {
-	// The sizes are measured on the STORED row, not on the blanked-out wire
-	// fields: this projection omits the bulky text but must not therefore
-	// report it as 0 chars — a zero that looks like a measurement is worse
-	// than the omission it describes. Sizes without the bulk is exactly what
-	// a list view wants.
-	return taskManualDTO{
+// newTaskManualListItemDTO is the ONLY projection GET /api/task-manuals serves:
+// the type identity the 類型 filter reads (type_key / display_name / purpose +
+// updated_ts), the input fields, the assignee setting, and the SIZES + caps of
+// the two long documents it omits.
+//
+// fields and assignee are the REAL parsed values, not the honest-empty
+// placeholders the old ?view=list row carried: they are small, bounded, and
+// they are what a caller choosing or dispatching a type actually needs, so
+// blanking them only forced a second round trip per row. That is why this
+// parses the stored JSON blobs and, like newTaskManualDTO, fails loudly on a
+// corrupt one rather than answering with a silent empty.
+//
+// The sizes are measured on the STORED row, not on the omitted wire fields: a
+// zero that looks like a measurement is worse than the omission it describes.
+func newTaskManualListItemDTO(m TaskManual, sopCapChars, learningsCapChars int) (taskManualListItemDTO, error) {
+	fields, err := ParseManualFields(m.Fields)
+	if err != nil {
+		return taskManualListItemDTO{}, err
+	}
+	if fields == nil {
+		fields = []ManualField{}
+	}
+	assignee := map[string]any{}
+	if m.Assignee != "" {
+		if err := json.Unmarshal([]byte(m.Assignee), &assignee); err != nil {
+			return taskManualListItemDTO{}, fmt.Errorf(
+				"task_manual %s: bad assignee JSON: %w", m.TypeKey, err)
+		}
+	}
+	return taskManualListItemDTO{
 		LearningsChars:    utf8.RuneCountInString(m.Learnings),
 		SopMDChars:        utf8.RuneCountInString(m.SopMD),
 		LearningsCapChars: learningsCapChars,
@@ -1764,10 +1839,10 @@ func newTaskManualListItemDTO(m TaskManual, sopCapChars, learningsCapChars int) 
 		TypeKey:           m.TypeKey,
 		DisplayName:       m.DisplayName,
 		Purpose:           m.Purpose,
-		Fields:            []ManualField{},
-		Assignee:          map[string]any{},
+		Fields:            fields,
+		Assignee:          assignee,
 		UpdatedTS:         m.UpdatedTS,
-	}
+	}, nil
 }
 
 // actorRuntimeFold carries the per-actor telemetry/gauge runtime facts BOTH

@@ -1622,7 +1622,7 @@
       "name": "reset_global_context"
     },
     {
-      "description": "List role definitions (seed defaults + owner edits).",
+      "description": "List role definitions (seed defaults + owner edits) WITHOUT the persona bodies: each row is the role identity plus its definition size and cap, never definition_md itself. Read the one role you want with get_role.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -1630,7 +1630,7 @@
       "name": "list_roles"
     },
     {
-      "description": "Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on list_task_manuals ?view=list, and a role definition's size and cap are already on every list_roles row.",
+      "description": "Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -3054,14 +3054,9 @@
       "name": "set_outsource_worker_model"
     },
     {
-      "description": "List task types (match by display_name/purpose; address by type_key). WITHOUT view=list this returns the FULL manual of every type — every SOP and every learnings blob in one answer, six figures of characters on a real roster. Pass view=list unless you actually need the text.",
+      "description": "List task types WITHOUT their long documents: each row is the type identity (type_key / display_name / purpose), its input fields and its assignee setting, plus the SIZES of sop_md and learnings and the cap each is judged against. The SOP and the learnings text are not on this answer at all — read the one type you picked with get_task_manual.",
       "inputSchema": {
-        "properties": {
-          "view": {
-            "description": "\"list\" = the LIGHT row: type_key / display_name / purpose / updated_ts plus the SIZES of the omitted text (sop_md_chars, learnings_chars) and the caps each is judged against (sop_md_cap_chars, learnings_cap_chars \u2014 the older cap_chars is DEPRECATED: it carries the LEARNINGS cap only and says nothing about sop_md), with sop_md and learnings served empty. Omitted (the default) = the FULL manual of every type, SOP and learnings included. Use \"list\" whenever you are matching or choosing a type rather than executing one: the two answers differ by orders of magnitude, and the light row still tells you how big each manual is, so you can pull the one you picked with get_task_manual.",
-            "type": "string"
-          }
-        },
+        "properties": {},
         "type": "object"
       },
       "name": "list_task_manuals"
@@ -3335,7 +3330,7 @@
       "name": "patch_task_learnings"
     },
     {
-      "description": "READ the retained versions of one editable document: what each version held, when it was replaced and by whom. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.\n\nWHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.\n\nADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.\n\nCOVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.",
+      "description": "READ the CATALOGUE of retained versions of one editable document: which versions exist, when each was replaced and by whom, whether each was a tombstone, and HOW LONG each of its fields was. It does NOT carry the versions themselves — a version list is how you CHOOSE one, and choosing does not need the prose; fetch the one you picked with get_document_version. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.\n\nWHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.\n\nADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.\n\nCOVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.",
       "inputSchema": {
         "properties": {
           "key": {"description": "Which document of that kind to list revisions for. How strictly it is checked depends entirely on kind, so an empty list means different things in different places. For system_interaction and boot_sequence, a key this server does not serve is 400 and the message names the legal key(s). For lessons the key is 'role_key::task_type' and anything without both halves is 400 - but that is the ONLY check it gets: past the split nothing looks the bucket up (the one remaining gate there is a WRITE authorisation, which a list never reaches), so a well-formed name for a bucket nobody has ever written, 'r-nobody::typo', is 200 with an EMPTY list. The retired kind task_manual is 400 whatever the key, naming task_manual_sop and task_manual_learnings instead. For every REMAINING kind - global_context, role_definition, insight, the two task_manual series, task_description, task_title - the value is used as a plain equality condition and nothing checks that it names anything, so a key that names no document answers 200 with an EMPTY list too. That is the same answer a real document with no retained revisions gives, so on lessons and on all of those an empty list cannot tell you 'this document has never been edited' apart from 'you named it wrong'; only system_interaction, boot_sequence and the retired task_manual are loud about a WELL-FORMED name that points at nothing. A MALFORMED lessons key - one missing its '::' - is 400 and never reaches the empty list at all.", "type": "string"},
@@ -3357,6 +3352,19 @@
         "type": "object"
       },
       "name": "get_document_seed"
+    },
+    {
+      "description": "READ the BODY of one named retained version of an editable document — the ``content`` map that version was stored with, exactly as it was stored. Read-only: this fetches text, it never puts it back; restoring stays out of the agent tool surface, as it does for list_document_history.\n\nTHIS IS THE SECOND HALF OF A PAIR. list_document_history answers WHICH versions exist and how big each field of each one is, and carries no prose at all; this answers WHAT ONE OF THEM SAID. Name the ``id`` you read off that list. Asking for every version's text is the cost that pairing exists to remove, so fetch the one you actually mean to read.\n\nADDRESSING: ``kind`` and ``key`` name a document exactly as they do for list_document_history — the same server-side gate answers all three routes, so whatever that tool can address, this one can too, and they can never silently disagree. A ``kind`` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it; a ``key`` that fails its kind's required shape is refused with 400 naming the problem. An ``id`` that is not a retained version of THAT document is a 404 — including an id that belongs to some other document, which is why the address is the whole triple and not the id alone.",
+      "inputSchema": {
+        "properties": {
+          "id": {"description": "WHICH retained version to read, as the id list_document_history reported for it. It is scoped to the kind/key pair you also send: an id that names a version of a DIFFERENT document is a 404, not that other document's text.", "type": "integer"},
+          "key": {"description": "Which document of that kind the version belongs to - addressed exactly as list_document_history addresses it, by the same server-side gate.", "type": "string"},
+          "kind": {"type": "string"}
+        },
+        "required": ["kind", "key", "id"],
+        "type": "object"
+      },
+      "name": "get_document_version"
     },
     {
       "description": "List the product-guide docs (slug + title).",

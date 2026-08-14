@@ -34,8 +34,11 @@ import type {
   BootDocKind,
   BootDocView,
   DocumentKind,
+  DocumentHistoryEntryView,
   DocumentHistoryView,
+  DocumentRevisionView,
   DocumentSeedView,
+  RoleSummaryView,
   RoleDefView,
   BootstrapView,
   LessonsView,
@@ -77,6 +80,7 @@ import type {
   OutsourceWorkerView,
   TaskTypeView,
   TaskCountView,
+  TaskManualSummaryView,
   TaskManualView,
   TaskManualPatch,
   DocSummaryView,
@@ -103,8 +107,11 @@ import {
   toGlobalContext,
   toBootDoc,
   toDocumentHistory,
+  toDocumentHistoryEntry,
+  toDocumentRevision,
   toDocumentSeed,
   toRoleDef,
+  toRoleSummary,
   toBootstrap,
   toLessons,
   toInsight,
@@ -120,6 +127,7 @@ import {
   toOutsourceWorker,
   toTaskType,
   toTaskManual,
+  toTaskManualSummary,
   toWebhookEndpoint,
   toWebhookRequestLog,
   toScheduledMessage,
@@ -1364,24 +1372,26 @@ export const httpApi: Api = {
   },
 
   async listTaskTypes(): Promise<TaskTypeView[]> {
-    // GET /api/task-manuals?view=list -> TaskManualDTO[] (T-ec2c light
-    // projection: type_key / display_name / purpose meaningful, the heavy
-    // sop_md/learnings/fields/assignee honest-empty), narrowed to the
-    // {typeKey, displayName, purpose} the type filter reads. The full-body
-    // read stays the per-type getTaskManual on the settings detail page.
-    const wire = unwrap(
-      await client.GET("/api/task-manuals", {
-        params: { query: { view: "list" } },
-      }),
-    );
+    // GET /api/task-manuals -> TaskManualListItemDTO[], narrowed to the
+    // {typeKey, displayName, purpose} the type filter reads.
+    //
+    // T-1170: the `?view=list` escape hatch is GONE, because the light shape is
+    // now what the route answers by default — an opt-in flag left the expensive
+    // shape pointed at every naive caller, which is the whole reason the
+    // default changed. The full-body read stays the per-type getTaskManual on
+    // the settings detail page.
+    const wire = unwrap(await client.GET("/api/task-manuals"));
     return wire.map(toTaskType);
   },
 
-  async listTaskManuals(): Promise<TaskManualView[]> {
+  async listTaskManuals(): Promise<TaskManualSummaryView[]> {
     // GET /api/task-manuals -> TaskManualDTO[] — the SAME wire read as
-    // listTaskTypes, mapped FULL for the 設定 › 任務手冊 list page.
+    // listTaskTypes. T-1170: this answer is the DIRECTORY (sop_md / learnings
+    // absent, their char counts and caps present), so it is mapped to the
+    // summary; the 任務定義 / 學習經驗 sub-pages read their document through
+    // getTaskManual.
     const wire = unwrap(await client.GET("/api/task-manuals"));
-    return wire.map(toTaskManual);
+    return wire.map(toTaskManualSummary);
   },
 
   async getTaskManual(typeKey: string): Promise<TaskManualView> {
@@ -1884,16 +1894,39 @@ export const httpApi: Api = {
   async listDocumentHistory(
     kind: DocumentKind,
     key: string,
-  ): Promise<DocumentHistoryView[]> {
+  ): Promise<DocumentHistoryEntryView[]> {
     // GET /api/document-history/{kind}/{key} -> DocumentHistoryDTO[], newest
     // first, at most 3 (the server prunes). `key` carries the "::" composite
     // for lessons verbatim — openapi-fetch encodes it as one path segment.
+    //
+    // T-1170: the answer IS the directory — `field_chars` + `tombstoned`, no
+    // text at all. A caller that wants a revision's prose names it through
+    // `getDocumentRevision`.
     const wire = unwrap(
       await client.GET("/api/document-history/{kind}/{key}", {
         params: { path: { kind, key } },
       }),
     );
-    return wire.map(toDocumentHistory);
+    return wire.map(toDocumentHistoryEntry);
+  },
+
+  async getDocumentRevision(
+    kind: DocumentKind,
+    key: string,
+    id: number,
+  ): Promise<DocumentRevisionView> {
+    // GET /api/document-history/{kind}/{key}/{id} -> DocumentHistoryVersionDTO.
+    // The ONE document-history read that carries text (T-1170): the list is a
+    // picker, and this is the revision the reader picked. A pruned or unknown
+    // id 404s exactly where the restore of that id would, so the reader can say
+    // "this version could not be read" instead of drawing an empty document
+    // next to a destructive button.
+    const wire = unwrap(
+      await client.GET("/api/document-history/{kind}/{key}/{id}", {
+        params: { path: { kind, key, id } },
+      }),
+    );
+    return toDocumentRevision(wire);
   },
 
   async getDocumentSeed(
@@ -1930,10 +1963,12 @@ export const httpApi: Api = {
     return toDocumentHistory(wire);
   },
 
-  async listRoles(): Promise<RoleDefView[]> {
-    // GET /api/roles -> RoleDefDTO[]
+  async listRoles(): Promise<RoleSummaryView[]> {
+    // GET /api/roles -> RoleDefListItemDTO[]. T-1170: the roster answer is the
+    // DIRECTORY (no definition_md, only size_chars + cap_chars), so it maps to
+    // the summary; the role page reads its document through getRole.
     const wire = unwrap(await client.GET("/api/roles"));
-    return wire.map(toRoleDef);
+    return wire.map(toRoleSummary);
   },
 
   async getRole(key: string): Promise<RoleDefView> {
