@@ -549,7 +549,46 @@ a.task-card__chip--link {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
-  z-index: 40;
+  /* 🔴 NO z-index HERE, AND THAT IS THE WHOLE POINT (T-76cd). A positioned box
+   * with a non-auto z-index establishes a STACKING CONTEXT, and the
+   * MarkdownPreviewOverlay renders INSIDE this popover (deliberately — it must
+   * stay within `anchorRef` so a click on its backdrop does not dismiss the
+   * popover; see TaskArtifactsPopover.tsx and owner's 2026-07-20 ruling). With
+   * `z-index: 40` here, the overlay's own `z-index: 1100` was scoped to THIS
+   * box: the whole overlay subtree competed with the rest of the page as 40,
+   * and 1100 never entered the comparison. Any app chrome outranking 40 then
+   * painted over the panel while the backdrop painted under the chrome —
+   * header and tabs bright and untouched, the panel's top hidden behind the tab
+   * bar, the close button unreachable. MEASURED with `.topbar,.nav-tabs
+   * {position:relative;z-index:50}`: `elementFromPoint` over the tab bar
+   * returned `nav.nav-tabs` and the close button reported BLOCKED by it.
+   *
+   * `auto` keeps this a positioned element — it still paints above the in-flow
+   * task cards below it, which is all the 40 was ever needed for — while
+   * letting the fixed overlay inside it participate in the ROOT stacking
+   * context, where its 1100 means what it says.
+   *
+   * ⚠️ COST, MEASURED AND ACCEPTED. This popover no longer outranks the other
+   * z-indexed cockpit layers. Paint order at an overlapping point, before → after
+   * (each competitor forced to its real declared z-index, because two of the
+   * four stylesheets are not in that guard's component tree and would otherwise
+   * have measured as `auto` — a cell that looks like a result and is not):
+   *   .tasks__ms-pop        (z:20)  popover on top → COMPETITOR on top  CHANGED
+   *   .task-card__menu-pop  (z:20)  popover on top → COMPETITOR on top  CHANGED
+   *   .confirm-modal        (z:40)  competitor on top → competitor on top
+   *   .machine-picker       (z:40)  competitor on top → competitor on top
+   * The two z:40 modals already won on DOM order, so they do not move. The two
+   * that DO change are unreachable in the app: all three layers dismiss on
+   * `mousedown` outside their own anchor, so opening either menu closes this
+   * popover first. MEASURED — clicking the priority chip with the popover open
+   * leaves `.task-artifacts` count 0 and `.task-card__menu-pop` count 1. They
+   * are never on screen together, so the changed cells have no user-visible
+   * form. ⚠️ That is an argument about TODAY's dismissal behaviour: give this
+   * popover sticky/pinned behaviour and the cost becomes real.
+   *
+   * If you put a z-index back here, put it back knowing it re-confines the
+   * overlay — raising it (1200, 9999) does NOT fix that, it only moves the
+   * whack-a-mole, and the second test in that guard is what says so. */
   width: min(340px, 78vw);
   display: flex;
   flex-direction: column;

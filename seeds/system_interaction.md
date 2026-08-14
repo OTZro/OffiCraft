@@ -542,6 +542,8 @@ owner 的座艙有一頁「任務」。**任務 = 一件帶完成準則（DoD）
 - **MCP 工具以 `tools/list` 為準。** 做事／治理（送訊 `post_chat`、查 roster、學習筆記…）都走 MCP。
 - **⚠️ `tools/list` 是「這個系統有哪些工具」，不是「你有權呼叫哪些」。** 目錄對所有人一樣；權限由 server 在呼叫時判。owner 2026-07-26 把 19 個營運工具（`get_settings`／`update_settings`／`check_release`／`upgrade_station`／`list_webhook_requests`／`answer_reply_card`／`reanswer_reply_card`／`expire_reply_card`／`install_warden_on_server_host`／`uninstall_warden_on_server_host`／`upgrade_warden`／`terminate_task`／`post_task_message`／`get_outsource_worker_boot_context`／`refocus_outsource_worker`／`stop_outsource_worker`／`restart_outsource_worker`／`set_outsource_worker_model`／`delete_task_manual`）開放到 **admin 助理**這一級，所以它們現在會出現在你的目錄裡——**但你如果不是 admin 助理，呼叫一律 403**。⚠️ **這 19 個裡的 `expire_reply_card` 已經不在「非 admin 一律 403」的射程內**（owner 2026-08-07 修訂那條裁定，卡 `rc-3ff94b116970`）：**你自己開的、還沒被回答的卡，你可以自己呼叫它收回**（別人的卡 403、已被回答的卡 409）；其餘 18 個照舊。看到 403 不是 bug、不要重試、也不要想辦法繞過去：那是治理邊界，該做的是在 chat 裡請 owner 或助理處理。
 
+- **⚠️ 列表類工具回的是「目錄」，不是內文。** `list_roles`／`list_task_manuals`／`list_document_history` 回的是**身分＋字數＋上限**，**長文一律不夾帶**：角色定義走 `get_role`、任務手冊的 SOP 與學習經驗走 `get_task_manual`、某一版歷史的內文走 `get_document_version`（帶 `kind`／`key`，加上你從 `list_document_history` 那一列讀到的 `id`）。用法固定是**先列表挑一筆、再指名取回那一筆**；列表上的字數欄（`size_chars`／`sop_md_chars`／`learnings_chars`／歷史列的 `field_chars`）就是「這一筆值不值得取回」的判準，別為了看內文把整份清單拉回來。
+
 看到一個想跑的指令／工具，卻不確定它存不存在，就去查上面兩個權威來源，別憑記憶把名字寫死。
 
 ---

@@ -1491,6 +1491,12 @@ export const en: Dict = {
     docCapManualLearnings: "Task manual learnings size cap",
     docCapManualLearningsSub:
       "Limit on a task manual's learnings doc, independent of the SOP cap above. The floor is the shipped default and the ceiling is 100000, so this can only be raised.",
+    // T-c9b4: the wake snapshot's chat budget. Deliberately not folded into the
+    // doc-cap wording above — those floors are their own shipped defaults and
+    // can only be raised; this one moves in both directions.
+    chatBudget: "Wake chat budget",
+    chatBudgetSub:
+      "How many characters the chat block of a wake snapshot (resume_summary) may spend — the messages, their folded cards, the snapshot header and the cut hint; the peek sizes itself against the same number. The range is 1000 to 13000 and it can be lowered as well as raised: the chat block is repacked on every read, so a smaller budget simply carries fewer messages, and whatever was left out is still reported as omitted.",
     docUsage: "Used",
     chars: "characters",
     // ── Verified-save read-back (T-1c2e; lives in the software-update view

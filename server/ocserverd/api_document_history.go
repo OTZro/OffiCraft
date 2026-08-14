@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 var errDocumentHistoryCap = errors.New("restoring this version would violate the existing document size limit")
@@ -28,12 +29,58 @@ func historyKeyParts(kind, key string) (string, string, bool) {
 	}(), len(parts) == 2 && parts[0] != "" && parts[1] != ""
 }
 
-func documentHistoryDTO(h DocumentHistory) (DocumentHistoryDTO, error) {
+func documentHistoryContent(h DocumentHistory) (map[string]string, error) {
 	content := map[string]string{}
 	if err := json.Unmarshal([]byte(h.ContentJSON), &content); err != nil {
+		return nil, err
+	}
+	return content, nil
+}
+
+// documentHistoryDTO is the CATALOGUE row: identity, provenance, the tombstone
+// flag, and the SIZE of every field the revision holds — never the text. The
+// listing is where a reader picks a revision, and picking does not need the
+// prose: one answer had a structural ceiling in the hundreds of thousands of
+// characters with no narrowing of any kind. The chosen revision's body comes
+// from HandleGetDocumentVersion… below.
+//
+// `tombstoned` is lifted OUT of the field map and served as its own boolean:
+// it is the only entry of `content` that is a flag rather than a document, so
+// leaving it in field_chars would report "4" for it — a character count of the
+// string "true", which measures nothing anybody asked about.
+func documentHistoryDTO(h DocumentHistory) (DocumentHistoryDTO, error) {
+	content, err := documentHistoryContent(h)
+	if err != nil {
 		return DocumentHistoryDTO{}, err
 	}
-	return DocumentHistoryDTO{Id: h.ID, Content: content, CreatedTs: h.CreatedTS, ActorId: h.ActorID}, nil
+	fieldChars := map[string]int{}
+	for name, text := range content {
+		if name == "tombstoned" {
+			continue
+		}
+		fieldChars[name] = utf8.RuneCountInString(text)
+	}
+	return DocumentHistoryDTO{
+		Id:         h.ID,
+		CreatedTs:  h.CreatedTS,
+		ActorId:    h.ActorID,
+		Tombstoned: historyTombstoned(content),
+		FieldChars: fieldChars,
+	}, nil
+}
+
+// documentHistoryRestoreDTO is the RESTORE receipt, and it deliberately still
+// carries `content` — the shape that route has always answered with. A restore
+// names exactly one revision and its whole point is that this text is now what
+// the live document holds; handing back sizes there would answer a question
+// nobody asked. Splitting the two shapes is what lets the listing get light
+// without changing the write face's wire at all.
+func documentHistoryRestoreDTO(h DocumentHistory) (DocumentHistoryRestoreDTO, error) {
+	content, err := documentHistoryContent(h)
+	if err != nil {
+		return DocumentHistoryRestoreDTO{}, err
+	}
+	return DocumentHistoryRestoreDTO{Id: h.ID, Content: content, CreatedTs: h.CreatedTS, ActorId: h.ActorID}, nil
 }
 
 // Overlay documents must retain their persisted tombstone state, not only the
@@ -258,6 +305,41 @@ func (s *apiServer) HandleListDocumentHistoryApiDocumentHistoryKindKeyGet(w http
 	writeJSON(w, http.StatusOK, result)
 }
 
+// GET /api/document-history/{kind}/{key}/{id} — the BODY of one named revision.
+//
+// The other half of the pair the listing became: list_document_history says
+// which revisions exist and how big each of their fields is, this says what one
+// of them held. Same floor and the same addressing gate as the listing and the
+// seed route (`documentHistoryAllowed(..., write=false)`) — reading one
+// revision is not a bigger permission than reading the catalogue that names it.
+//
+// The id is scoped to the kind/key pair, because GetDocumentHistory looks up
+// all three: an id belonging to some OTHER document 404s here rather than
+// handing back that other document's text. That is why the address is the whole
+// triple and never the id alone.
+func (s *apiServer) HandleGetDocumentVersionApiDocumentHistoryKindKeyIdGet(w http.ResponseWriter, r *http.Request, kind string, key string, id int64) {
+	if !s.documentHistoryAllowed(w, r, kind, key, false) {
+		return
+	}
+	history, err := s.dal.GetDocumentHistory(kind, key, id)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if history == nil {
+		writeError(w, http.StatusNotFound, "document history version not found")
+		return
+	}
+	content, err := documentHistoryContent(*history)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, DocumentHistoryVersionDTO{
+		Kind: kind, Key: key, Id: history.ID, Content: content,
+	})
+}
+
 // documentSeedContent answers "what would a reset of this document write back",
 // in the SAME field names a retained revision carries — which is what lets the
 // cockpit hand it to the very same reader/diff the retained versions use.
@@ -387,7 +469,7 @@ func (s *apiServer) HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdResto
 		return
 	}
 	s.publishDocumentHistoryRestore(r, kind, key)
-	dto, err := documentHistoryDTO(*history)
+	dto, err := documentHistoryRestoreDTO(*history)
 	if err != nil {
 		internalError(w, err)
 		return

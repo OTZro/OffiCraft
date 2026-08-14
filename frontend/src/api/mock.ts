@@ -16,8 +16,11 @@ import type {
   BootDocView,
   DocumentKind,
   InsightView,
+  DocumentHistoryEntryView,
   DocumentHistoryView,
+  DocumentRevisionView,
   DocumentSeedView,
+  RoleSummaryView,
   RoleDefView,
   BootstrapView,
   LessonsView,
@@ -64,6 +67,7 @@ import type {
   OutsourceWorkerView,
   TaskTypeView,
   TaskCountView,
+  TaskManualSummaryView,
   TaskManualView,
   TaskManualPatch,
   DocSummaryView,
@@ -101,8 +105,10 @@ import {
   toGlobalContext,
   toBootDoc,
   toDocumentHistory,
+  toDocumentHistoryEntry,
   toDocumentSeed,
   toRoleDef,
+  toRoleSummary,
   toBootstrap,
   toLessons,
   toInsight,
@@ -116,8 +122,14 @@ import {
   DOC_CAP_CHARS_DEFAULTS,
   BOOT_DOC_CAP_CHARS_DEFAULTS,
   BOOT_DOC_HISTORY_KEPT,
+  contentSizes,
   docCapBlocked,
 } from "./docCap";
+import {
+  CHAT_BUDGET_CHARS_DEFAULT,
+  CHAT_BUDGET_CHARS_MAX,
+  CHAT_BUDGET_CHARS_MIN,
+} from "./chatBudget";
 import {
   MOCK_OWNER_ID,
   SEED_SYSTEM_INTERACTION_MD,
@@ -984,7 +996,35 @@ function historyCapFor(kind: DocumentKind): number {
     ? BOOT_DOC_HISTORY_CAP
     : DOCUMENT_HISTORY_CAP;
 }
-const documentHistories = new Map<string, WireDocumentHistory[]>();
+/** ONE retained revision as the mock STORES it — the whole snapshot, because a
+ * restore has to be able to write the text back. The three reads project it:
+ * the list through `directoryRow` (no text), the named read and the restore
+ * receipt through their own mappers. Deliberately NOT `WireDocumentHistory`:
+ * since T-1170 that DTO is the catalogue row and carries no `content`, so
+ * typing the store as it would make the store unable to hold what it is for. */
+interface StoredRevision {
+  id: number;
+  content: Record<string, string>;
+  created_ts: number;
+  actor_id: string;
+}
+
+/** The stored revision as the CATALOGUE ROW the server serves — `field_chars`
+ * measured off the snapshot in code points, `tombstoned` lifted out as its own
+ * boolean. Going through the wire shape (rather than building the view row
+ * directly) is what keeps the mock honest: it exercises the same mapper the
+ * http adapter does, so a rename on either side of that seam breaks both. */
+function directoryRow(h: StoredRevision): WireDocumentHistory {
+  return {
+    id: h.id,
+    created_ts: h.created_ts,
+    actor_id: h.actor_id,
+    tombstoned: h.content["tombstoned"] === "true",
+    field_chars: contentSizes(h.content),
+  };
+}
+
+const documentHistories = new Map<string, StoredRevision[]>();
 let nextDocumentHistoryId = 1;
 
 const historySlot = (kind: DocumentKind, key: string) => `${kind}/${key}`;
@@ -1481,6 +1521,10 @@ const DEFAULT_MOCK_SETTINGS = {
   doc_cap_chars_system_interaction:
     BOOT_DOC_CAP_CHARS_DEFAULTS.system_interaction,
   doc_cap_chars_boot_sequence: BOOT_DOC_CAP_CHARS_DEFAULTS.boot_sequence,
+  // T-c9b4 wake-snapshot chat budget. Served here for the same reason as the
+  // caps above — a settings DTO missing a field the server always sends is a
+  // mock the page can go green against while the real one breaks.
+  chat_budget_chars: CHAT_BUDGET_CHARS_DEFAULT,
   // The two software-update toggles — both OFF out of the box, mirroring the
   // server (updates come from GitHub Releases; there is no updater server to
   // configure any more).
@@ -3719,8 +3763,13 @@ export const mockApi: Api = {
     }));
   },
 
-  async listTaskManuals(): Promise<TaskManualView[]> {
-    return structuredClone(taskManuals);
+  async listTaskManuals(): Promise<TaskManualSummaryView[]> {
+    // T-1170: the DIRECTORY. The two long documents are DROPPED here, the way
+    // the server drops them — a mock that kept serving them would let the
+    // manual sub-pages keep reading a list row and stay green.
+    return taskManuals.map(({ sopMd: _sop, learnings: _learn, ...row }) =>
+      structuredClone(row)
+    );
   },
 
   async getTaskManual(typeKey: string): Promise<TaskManualView> {
@@ -4255,6 +4304,21 @@ export const mockApi: Api = {
         );
       }
     }
+    // T-c9b4: checked on its own, NOT as a row above — it has its own ceiling,
+    // and the message above ("the floor is the shipped default … can only be
+    // raised") would be a lie about a knob that may be turned down.
+    if (
+      patch.chatBudgetChars !== undefined &&
+      (patch.chatBudgetChars < CHAT_BUDGET_CHARS_MIN ||
+        patch.chatBudgetChars > CHAT_BUDGET_CHARS_MAX)
+    ) {
+      throw new ApiError(
+        "http 422 for PATCH /api/settings",
+        422,
+        "validation_error",
+        `chat_budget_chars must be between ${CHAT_BUDGET_CHARS_MIN} and ${CHAT_BUDGET_CHARS_MAX} characters`
+      );
+    }
     if (
       patch.orgName !== undefined &&
       [...patch.orgName.trim()].length > 80
@@ -4362,6 +4426,9 @@ export const mockApi: Api = {
     if (patch.docCapCharsBootSequence !== undefined) {
       mockServerSettings.doc_cap_chars_boot_sequence =
         patch.docCapCharsBootSequence;
+    }
+    if (patch.chatBudgetChars !== undefined) {
+      mockServerSettings.chat_budget_chars = patch.chatBudgetChars;
     }
     if (patch.updaterReceiveBeta !== undefined) {
       mockServerSettings.updater_receive_beta = patch.updaterReceiveBeta;
@@ -4523,12 +4590,14 @@ export const mockApi: Api = {
     return toBootDoc(foldBootDoc(kind, key));
   },
 
-  async listRoles(): Promise<RoleDefView[]> {
+  async listRoles(): Promise<RoleSummaryView[]> {
     // Seeds first (stable), then the owner-created custom roles — mirrors
-    // handle_list_roles.
+    // handle_list_roles. T-1170: the DIRECTORY — `toRoleSummary` is what makes
+    // the mock stop handing out `definition_md` on this route, which is the
+    // half that keeps the tests honest about the new server.
     return [
-      ...MOCK_WIRE_ROLES_SEED.map((seed) => toRoleDef(foldRole(seed.key))),
-      ...[...customRoles.keys()].map((key) => toRoleDef(foldRole(key))),
+      ...MOCK_WIRE_ROLES_SEED.map((seed) => toRoleSummary(foldRole(seed.key))),
+      ...[...customRoles.keys()].map((key) => toRoleSummary(foldRole(key))),
     ];
   },
 
@@ -4882,12 +4951,43 @@ export const mockApi: Api = {
   async listDocumentHistory(
     kind: DocumentKind,
     key: string
-  ): Promise<DocumentHistoryView[]> {
+  ): Promise<DocumentHistoryEntryView[]> {
     refuseRetiredDocumentKind(kind, `GET /api/document-history/${kind}/${key}`);
     // Newest first, at most DOCUMENT_HISTORY_CAP — the retention the server
     // applies, so an offline cockpit sees the same bounded list.
+    //
+    // 🔴 T-1170: the DIRECTORY, and the mock serves it as the new server does
+    // — `sizes` + `tombstoned`, and the text NOT on the answer. That is the
+    // point of changing the mock at all: a mock that kept handing the text back
+    // would let every test in this repo pass against a fake server the real one
+    // no longer resembles, and the surfaces that read a revision off the list
+    // would stay green while being broken.
     const kept = documentHistories.get(historySlot(kind, key)) ?? [];
-    return kept.map((h) => toDocumentHistory(structuredClone(h)));
+    return kept.map((h) => toDocumentHistoryEntry(directoryRow(h)));
+  },
+
+  async getDocumentRevision(
+    kind: DocumentKind,
+    key: string,
+    id: number
+  ): Promise<DocumentRevisionView> {
+    const route = `GET /api/document-history/${kind}/${key}/${id}`;
+    refuseRetiredDocumentKind(kind, route);
+    // Named revision → its content, the only read that carries text (T-1170).
+    // A pruned or unknown id 404s exactly where the restore of that id would:
+    // the reader must be able to say "this version could not be read" instead
+    // of drawing an empty document next to a destructive button.
+    const kept = documentHistories.get(historySlot(kind, key)) ?? [];
+    const found = kept.find((h) => h.id === id);
+    if (!found) {
+      throw new ApiError(
+        `http 404 for ${route}`,
+        404,
+        "not_found",
+        `document revision ${id} is no longer retained`
+      );
+    }
+    return { id: found.id, content: structuredClone(found.content) };
   },
 
   async getDocumentSeed(

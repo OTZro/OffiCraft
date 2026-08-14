@@ -815,6 +815,20 @@ MATRIX: dict[str, Route] = {
         requires="machine",
         path=lambda ctx, i: "/api/document-history/global_context/global/seed",
     ),
+    # The BODY of one named revision (T-1170) — the same read floor as the
+    # listing that names it. It aims at a version id that does not exist, so
+    # every at-or-above-floor identity lands on the same semantic 404 and the
+    # row measures the FLOOR rather than one document's contents; that the
+    # gate and its 400 refusals are the LISTING's is pinned in the Go tests
+    # (TestGetDocumentVersionSharesTheListingsGateAndRefusals).
+    "GET /api/document-history/{kind}/{key}/{id}": Route(
+        requires="machine",
+        path=lambda ctx, i: "/api/document-history/global_context/global/999999",
+        overrides={
+            "warden": 404, "agent_self": 404, "agent_other": 404,
+            "admin_agent": 404, "owner": 404,
+        },
+    ),
     # RESTORING is a write. The route floor is the agent floor, but each KIND
     # then keeps its own document's write floor in the handler — this row aims
     # at a task manual (no extra floor) with a revision id that does not exist,

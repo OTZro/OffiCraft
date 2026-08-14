@@ -321,6 +321,23 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 			return
 		}
 	}
+	// chat_budget_chars (T-c9b4) is checked on its own and NOT as a row in the
+	// table above: it has its own ceiling, and the message above ("the floor is
+	// the shipped default … can only be raised") would be a lie about it. The
+	// chat block is repacked from scratch on every read, so lowering the budget
+	// costs nothing that the doc caps' floor rule exists to protect — the owner
+	// asked for a knob he can turn DOWN.
+	//
+	// 🔴 maxChatBudgetChars is pinned to resumeChatFetch (see domain.go). Raising
+	// it here without raising that constant first breaks the packer's guarantee
+	// that it never runs out of candidates before it runs out of budget.
+	if body.ChatBudgetChars != nil &&
+		(*body.ChatBudgetChars < minChatBudgetChars || *body.ChatBudgetChars > maxChatBudgetChars) {
+		writeError(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf("chat_budget_chars must be between %d and %d characters",
+				minChatBudgetChars, maxChatBudgetChars))
+		return
+	}
 	var orgName string
 	if body.OrgName != nil {
 		orgName = strings.TrimSpace(*body.OrgName)
@@ -447,6 +464,7 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		{body.DocCapCharsManualLearnings, settingDocCapCharsManualLearnings, &s.docCapCharsManualLearnings},
 		{body.DocCapCharsSystemInteraction, settingDocCapCharsSystemInteraction, &s.docCapCharsSystemInteraction},
 		{body.DocCapCharsBootSequence, settingDocCapCharsBootSequence, &s.docCapCharsBootSequence},
+		{body.ChatBudgetChars, settingChatBudgetChars, &s.chatBudgetChars},
 	}
 	for _, c := range capWrite {
 		if c.field == nil {
@@ -594,6 +612,7 @@ func (s *apiServer) settingsView() settingsDTO {
 		DocCapCharsManualLearnings:   s.docCapCharsManualLearnings,
 		DocCapCharsSystemInteraction: s.docCapCharsSystemInteraction,
 		DocCapCharsBootSequence:      s.docCapCharsBootSequence,
+		ChatBudgetChars:              s.chatBudgetChars,
 		UpdaterReceiveBeta:           s.updaterReceiveBeta,
 		UpdaterAutoUpdate:            s.updaterAutoUpdate,
 		OrgName:                      s.orgName,

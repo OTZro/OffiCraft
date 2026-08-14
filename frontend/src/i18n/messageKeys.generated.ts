@@ -667,6 +667,8 @@ export const MESSAGE_KEYS: readonly string[] = [
   "settings.cancel",
   "settings.catalogHash",
   "settings.chars",
+  "settings.chatBudget",
+  "settings.chatBudgetSub",
   "settings.checkFailed",
   "settings.checkUnknown",
   "settings.checkUpdate",

@@ -130,9 +130,22 @@ export function docCapBlocked(
   before: string,
   after: string
 ): boolean {
-  const n = runeLength(after);
-  if (n <= cap) return false;
-  return n >= runeLength(before);
+  return docCapBlockedBySize(cap, runeLength(before), runeLength(after));
+}
+
+/** The same predicate over SIZES rather than texts — the shape the version
+ * list has since T-1170 (the directory carries each field's char count, never
+ * its text). `docCapBlocked` is the text-taking face and is what the shared
+ * fixture (bin/tests/fixtures/doc-cap-cases.tsv) drives, so the rule stays
+ * measured against the server's twin in exactly one place; this is the same
+ * three branches with the measuring already done. */
+export function docCapBlockedBySize(
+  cap: number,
+  beforeChars: number,
+  afterChars: number
+): boolean {
+  if (afterChars <= cap) return false;
+  return afterChars >= beforeChars;
 }
 
 /** The wire field names each kind's restore runs the cap over. Empty = this
@@ -178,6 +191,11 @@ export const CAPPED_FIELDS: Record<DocumentKind, readonly string[]> = {
 /**
  * Which of a revision's fields would make the server refuse this restore.
  *
+ * `sizes` is the revision's per-field CHARACTER COUNT — since T-1170 that is
+ * what the version list holds (the text is one read deeper), and it is all this
+ * verdict ever needed: the rule compares lengths. A field the revision does not
+ * carry is absent, and weighs nothing.
+ *
  * `current` holds the LIVE document's values under the SAME wire field names.
  * Pass `undefined` (or omit a field) while the live doc has not loaded: the
  * verdict then abstains rather than judging the revision against an empty
@@ -194,7 +212,7 @@ export const CAPPED_FIELDS: Record<DocumentKind, readonly string[]> = {
  */
 export function docCapBlockedFields(
   kind: DocumentKind,
-  content: Record<string, string>,
+  sizes: Record<string, number>,
   current: Record<string, string> | undefined,
   caps: DocCaps | undefined
 ): string[] {
@@ -203,8 +221,27 @@ export function docCapBlockedFields(
   return CAPPED_FIELDS[kind].filter(
     (field) =>
       current[field] !== undefined &&
-      docCapBlocked(cap, current[field], content[field] ?? "")
+      docCapBlockedBySize(
+        cap,
+        runeLength(current[field]),
+        // A field the revision does not carry weighs nothing — the same
+        // reading `content[field] ?? ""` had.
+        sizes[field] ?? 0
+      )
   );
+}
+
+/** A document's own field sizes, for a caller holding the TEXT rather than a
+ * directory row (the reader, once it has fetched the revision it is showing).
+ * One measuring rule for both faces of `docCapBlockedFields`. */
+export function contentSizes(
+  content: Record<string, string>
+): Record<string, number> {
+  const sizes: Record<string, number> = {};
+  for (const [field, value] of Object.entries(content)) {
+    if (field !== "tombstoned") sizes[field] = runeLength(value);
+  }
+  return sizes;
 }
 
 /** WHICH cap judges this kind — transcribed from the same switch
