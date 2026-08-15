@@ -325,6 +325,62 @@ func TestCodexListenerActionsWakesTheSessionOnceWhenSSEComesUp(t *testing.T) {
 	}
 }
 
+// The BEHAVIOUR, not the decision table. Independent review (T-99a6) deleted
+// the wake call from the listener loop, and then the once-only flag write, and
+// the whole ocwarden suite stayed green both times: the truth table above says
+// what should happen and nothing said it happened. This drives the real branch
+// and records the turns that were actually opened.
+func TestListenerLoopOpensTheWakeTurnExactlyOnce(t *testing.T) {
+	const connected = "[ocagent] listen: connected — streaming http://127.0.0.1"
+	const event = "[ocagent] chat from owner (#c-1, 1s ago): hi"
+
+	var turns []string
+	connects := 0
+	st := &codexListenerState{}
+	feed := func(line string) {
+		st.handleListenerLine(line, func() { connects++ }, func(text string) {
+			turns = append(turns, text)
+		})
+	}
+
+	feed(connected)
+	if len(turns) != 1 || turns[0] != codexPostBootWake {
+		t.Fatalf("SSE came up and the session was not woken; turns=%q", turns)
+	}
+
+	feed(connected) // a reconnect
+	if len(turns) != 1 {
+		t.Errorf("a reconnect opened another wake turn; turns=%q — the boot it "+
+			"exists to finish is long over by then", turns)
+	}
+	if connects != 2 {
+		t.Errorf("telemetry must still fire on every connect, got %d", connects)
+	}
+
+	feed(event)
+	if len(turns) != 2 || turns[1] != event {
+		t.Errorf("an ordinary event must still be forwarded as its own turn; turns=%q", turns)
+	}
+}
+
+// The other order: an event that arrives BEFORE the stream is announced must not
+// consume the one wake. Without this, "exactly once" could be satisfied by a
+// flag that any line sets.
+func TestListenerLoopStillWakesAfterAnEarlierEvent(t *testing.T) {
+	var turns []string
+	st := &codexListenerState{}
+	feed := func(line string) {
+		st.handleListenerLine(line, func() {}, func(text string) { turns = append(turns, text) })
+	}
+
+	feed("[ocagent] task T-1 updated · by owner")
+	feed("[ocagent] listen: connected — streaming http://127.0.0.1")
+
+	if len(turns) != 2 || turns[1] != codexPostBootWake {
+		t.Fatalf("the wake was lost to an earlier event; turns=%q", turns)
+	}
+}
+
 type runtimeProbeRunner struct{}
 
 func (runtimeProbeRunner) Run(name string, args ...string) (string, error) {

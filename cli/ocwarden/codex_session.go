@@ -642,6 +642,39 @@ func (s *codexSession) handleServerRequest(msg appServerMessage) {
 // whether it wakes a session whose boot is still unfinished, and whether it is
 // forwarded to the model as a turn. It is a pure function so the decision can be
 // tested without an App Server — the loop below owns only the side effects.
+// codexListenerState carries the once-only wake flag across listener lines.
+type codexListenerState struct{ wakeSent bool }
+
+// handleListenerLine runs the side effects ONE listener line is owed, with the
+// effects injected so the branching can be driven without an App Server.
+//
+// 🔴 THE DECISION TABLE IS NOT THE BEHAVIOUR. An earlier version of this
+// package pinned only codexListenerActions, and independent review deleted both
+// the wake call and the flag write from the loop with the whole ocwarden suite
+// still green — the ticket's entire reason for existing could be removed and
+// nothing turned red. A pure function says what SHOULD happen; this seam is
+// what lets a test see that it DID.
+func (st *codexListenerState) handleListenerLine(
+	line string, onConnect func(), openTurn func(string),
+) {
+	wake, forward := codexListenerActions(line, st.wakeSent)
+	if strings.HasPrefix(strings.TrimSpace(line), "[ocagent] listen: connected") {
+		onConnect()
+	}
+	// ONCE per session, and deliberately not on reconnects: this wake exists to
+	// continue a boot that has not finished, and by the second connect that boot
+	// is long over. A reconnect is a network blip — every one of them opening a
+	// fresh "go do your inventory" turn would spend tokens re-doing work and
+	// would interrupt whatever the agent is actually in the middle of.
+	if wake {
+		st.wakeSent = true
+		openTurn(codexPostBootWake)
+	}
+	if forward {
+		openTurn(line)
+	}
+}
+
 func codexListenerActions(line string, wakeAlreadySent bool) (wake, forward bool) {
 	connected := strings.HasPrefix(strings.TrimSpace(line), "[ocagent] listen: connected")
 	return connected && !wakeAlreadySent, actionableCodexListenerLine(line)
@@ -768,7 +801,7 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 
 	listenerLines := make(chan string, 32)
 	listenerStarted := false
-	postBootWakeSent := false
+	listenerState := &codexListenerState{}
 	// Telemetry is intentionally in-memory on the server.  A quiet App Server
 	// thread must therefore re-announce its lightweight identity after a server
 	// restart; use the same 30-second cadence as token telemetry, not a noisy
@@ -793,27 +826,20 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 			// ocagent emits this exact lifecycle line each time its SSE stream
 			// opens. A server restart therefore restores account telemetry
 			// immediately, then restarts the normal 30-second cadence.
-			wake, forward := codexListenerActions(line, postBootWakeSent)
-			if strings.HasPrefix(strings.TrimSpace(line), "[ocagent] listen: connected") {
-				s.reportIdentity()
-				s.requestRateLimits()
-				identityHeartbeat.Reset(codexTelemetryThrottle)
-			}
-			// ONCE per session, and deliberately not on reconnects: this wake
-			// exists to continue a boot that has not finished, and by the second
-			// connect that boot is long over. A reconnect is a network blip —
-			// every one of them opening a fresh "go do your inventory" turn would
-			// spend tokens re-doing work and would interrupt whatever the agent is
-			// actually in the middle of.
-			if wake {
-				postBootWakeSent = true
-				s.activity("waking the session now that SSE is up")
-				s.steerOrStart(codexPostBootWake)
-			}
-			if forward {
-				s.activity("OffiCraft event: %s", line)
-				s.steerOrStart(line)
-			}
+			listenerState.handleListenerLine(line,
+				func() {
+					s.reportIdentity()
+					s.requestRateLimits()
+					identityHeartbeat.Reset(codexTelemetryThrottle)
+				},
+				func(text string) {
+					if text == codexPostBootWake {
+						s.activity("waking the session now that SSE is up")
+					} else {
+						s.activity("OffiCraft event: %s", text)
+					}
+					s.steerOrStart(text)
+				})
 		case msg, ok := <-s.messages:
 			if !ok {
 				s.messages = nil
