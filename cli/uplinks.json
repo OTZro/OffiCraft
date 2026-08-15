@@ -551,7 +551,7 @@
     {
       "id": "codex-hop-4",
       "source": "cli/ocwarden/codex_session.go",
-      "callsite": "s.reportIdentity()\n\t\t\t\ts.requestRateLimits()",
+      "callsite": "s.reportIdentity()\n\t\t\t\t\ts.requestRateLimits()",
       "kind": "seam",
       "seam_reason": "hop to the codex identity POST declared by codex-identity"
     },
