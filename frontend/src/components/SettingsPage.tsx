@@ -88,6 +88,7 @@ import {
   UserIcon,
   PencilIcon,
   BoltIcon,
+  MonitorIcon,
   GearIcon,
   TrashIcon,
   RefreshIcon,
@@ -113,10 +114,12 @@ type View =
   | { kind: "theme" }
   | { kind: "system" }
   | { kind: "custom" }
-  // T-791e: 啟動程序 is TWO documents, so it is two views keyed on the runtime.
-  // There is deliberately no keyless `{kind:"boot"}` any more — it would be a
-  // page for "the boot sequence", and there is no such document.
-  | { kind: "boot"; runtime: "claude" | "codex" }
+  // 啟動程序 is TWO documents. `boot` is the INDEX — two nav rows, one per
+  // runtime — and `bootDoc` is one runtime's own page (T-bac4, owner:「可以改成
+  // 像任務手冊那樣嗎」). The index carries no document of its own, which is why
+  // it may be keyless; every document still has its own page.
+  | { kind: "boot" }
+  | { kind: "bootDoc"; runtime: "claude" | "codex" }
   | { kind: "role"; key: string }
   | { kind: "manuals" }
   // 任務手冊詳情 = hub (摘要卡 + 任務規劃入口卡): the two 任務規劃 cards
@@ -245,7 +248,7 @@ export function SettingsPage({
         crumbs={[crumbRoot, { label: t.settings.roles }]}
         onOpenSystem={() => setView({ kind: "system" })}
         onOpenCustom={() => setView({ kind: "custom" })}
-        onOpenBoot={(runtime) => setView({ kind: "boot", runtime })}
+        onOpenBoot={() => setView({ kind: "boot" })}
         onOpenRole={(key) => setView({ kind: "role", key })}
         onCreate={rolesH.create}
         onDelete={rolesH.remove}
@@ -449,57 +452,110 @@ export function SettingsPage({
   }
 
   if (view.kind === "boot") {
-    // 🔴 ONE RUNTIME PER PAGE. This used to concatenate both seeds into a single
-    // read-only preview ("## Claude Code" … "---" … "## Codex CLI"). That was
-    // acceptable while nothing could be written; it is not now.
+    // 🔴 AN INDEX OF TWO, NOT TWO DOCUMENTS STACKED (T-bac4, owner 2026-08-15
+    // on rc-08e1e073c293:「我覺得呈現方式不好，可以改成像任務手冊那樣嗎」, with
+    // the 任務手冊 hub as the reference picture). Same `.set-entry` rows the
+    // 任務規劃 cards use — icon, title, one-line sub, right chevron — and each
+    // one PUSHES its runtime's own page.
     //
-    // ONE page, BOTH documents, each with its own editor (owner 2026-08-14:
-    // 「啟動程序進去以後可以看到兩份可以分開編輯的」). `view.runtime` is no
-    // longer read — the row that used to carry it now opens this page.
+    // WHAT THIS REPLACED, AND WHY THE HISTORY MATTERS. The page used to render
+    // BOTH documents stacked, then both stacked-and-collapsed (T-6278). Both
+    // shapes were answers to the same complaint: he met this page on a phone,
+    // scrolled the first document to its end, and read that as the end of the
+    // PAGE — 啟動程序 (Codex CLI) sat below the fold and might as well not have
+    // existed. Collapsing put both headings on one screen; an index does it
+    // without an expand/collapse mechanism at all, so the identity of each
+    // document is carried by a permanent row rather than by a heading whose
+    // position moves when its neighbour opens.
     //
-    // ⚠️ The earlier design deliberately kept these on separate pages, on the
-    // argument that stacking them invites copying one runtime's text over the
-    // other — and their third step means OPPOSITE things (claude attaches
-    // `ocagent listen` itself; codex must not, the sidecar does), so such a
-    // copy stops one runtime's agents ever coming online, silently. The owner
-    // asked for them together anyway and that is his call; what protects the
-    // invariant now is that they remain two SEPARATE documents with separate
-    // editors, save buttons and version histories. Nothing here writes both.
+    // ⚠️ THE INVARIANT THAT SURVIVES EVERY SHAPE: the two remain two SEPARATE
+    // documents with separate editors, save buttons and version histories, and
+    // nothing writes both. Their third step means OPPOSITE things (claude
+    // attaches `ocagent listen` itself; codex must NOT — the sidecar does), so
+    // copying one runtime's text over the other stops that runtime's agents
+    // ever coming online, silently. Separate PAGES make that copy harder than
+    // the stacked shape did, not easier.
     //
-    // BOTH START CLOSED (T-6278, owner 2026-08-15:「你可以改成兩個都先收疊，我
-    // 點選時才展開嗎？」). He met this page on a phone, scrolled through the
-    // first document to its end, and read the end of that card as the end of
-    // the PAGE — the second document sat far below the fold, so 啟動程序
-    // (Codex CLI) might as well not have existed. Two closed headings put both
-    // documents on one screen, which is the whole fix; a louder separator was
-    // rejected because there already is one and it is just as far down.
-    //
-    // 🔴 AND THEY SHARE ONE SCROLL REGION. Each card wraps itself in
-    // `.settings`, which is a full-height scroller; two of them stacked put the
-    // second document one whole screen below the first (MEASURED: the codex
-    // heading at y=860 on an 844-tall phone, even with both collapsed), and
-    // scrolling the first only reaches the first's own bottom — which is
-    // precisely what the owner hit. See `.settings-stack` in settings.css.
+    // 🔴 EACH ROW NAMES ITS OWN DOCUMENT. T-6278's review sent that build back
+    // precisely here: its collapse toggles carried an aria-label that covered
+    // both documents' identity, so the very defect being fixed was reproduced
+    // in the accessibility tree. The rows below take their accessible name from
+    // their own visible title (bootClaudeName / bootCodexName), which is the
+    // runtime — do not replace that with a shared label.
     return (
-      <div className="settings-stack">
-        <BootDocPage
-          kind="boot_sequence"
-          docKey="claude"
-          title={t.settings.bootClaudeName}
-          historyTitle={t.settings.historyBootClaudeTitle}
-          crumbs={[crumbRoot, crumbRoles, { label: t.settings.bootName }]}
-          collapsible
+      <div className="settings">
+        <Breadcrumbs
+          items={[crumbRoot, crumbRoles, { label: t.settings.bootName }]}
         />
-        <BootDocPage
-          kind="boot_sequence"
-          docKey="codex"
-          title={t.settings.bootCodexName}
-          historyTitle={t.settings.historyBootCodexTitle}
-          // No crumbs on the second: one page, one breadcrumb trail.
-          crumbs={[]}
-          collapsible
-        />
+        <h1 className="settings__title">{t.settings.bootName}</h1>
+        <div className="set-entries">
+          <button
+            type="button"
+            className="set-entry"
+            data-testid="boot-entry-claude"
+            onClick={() => setView({ kind: "bootDoc", runtime: "claude" })}
+          >
+            <span className="set-entry__icon set-entry__icon--violet">
+              <BoltIcon size={18} />
+            </span>
+            <span className="set-entry__body">
+              <span className="set-entry__name">{t.settings.bootClaudeName}</span>
+              <span className="set-entry__sub">{t.settings.bootClaudeSub}</span>
+            </span>
+            <ChevronRightIcon size={18} className="set-entry__chev" />
+          </button>
+          <button
+            type="button"
+            className="set-entry"
+            data-testid="boot-entry-codex"
+            onClick={() => setView({ kind: "bootDoc", runtime: "codex" })}
+          >
+            <span className="set-entry__icon set-entry__icon--blue">
+              <MonitorIcon size={18} />
+            </span>
+            <span className="set-entry__body">
+              <span className="set-entry__name">{t.settings.bootCodexName}</span>
+              <span className="set-entry__sub">{t.settings.bootCodexSub}</span>
+            </span>
+            <ChevronRightIcon size={18} className="set-entry__chev" />
+          </button>
+        </div>
       </div>
+    );
+  }
+
+  if (view.kind === "bootDoc") {
+    // One runtime, one page, its own editor / save / version history / restore
+    // — all of it BootDocPage's, untouched by T-bac4. `collapsible` is
+    // deliberately NOT passed: a page that holds one document has nothing to
+    // collapse, and the fold it existed to solve is gone with the stack.
+    const claude = view.runtime === "claude";
+    return (
+      <BootDocPage
+        kind="boot_sequence"
+        docKey={view.runtime}
+        title={claude ? t.settings.bootClaudeName : t.settings.bootCodexName}
+        historyTitle={
+          claude
+            ? t.settings.historyBootClaudeTitle
+            : t.settings.historyBootCodexTitle
+        }
+        // The runtime's own name is the TERMINAL crumb, so 啟動程序 sits one
+        // step up and stays clickable — Breadcrumbs renders the last segment as
+        // plain text on purpose, so a trail ending at 啟動程序 would leave the
+        // reader unable to reach the other runtime without going out to 角色誌
+        // and back in.
+        crumbs={[
+          crumbRoot,
+          crumbRoles,
+          { label: t.settings.bootName, onClick: () => setView({ kind: "boot" }) },
+          {
+            label: claude
+              ? t.settings.bootClaudeName
+              : t.settings.bootCodexName,
+          },
+        ]}
+      />
     );
   }
 

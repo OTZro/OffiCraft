@@ -42,32 +42,19 @@
   font-size: 24px;
 }
 
-/* ONE SCROLL REGION FOR A PAGE THAT STACKS TWO DOCUMENTS (T-6278).
+/* NO STACKED-DOCUMENT PAGE EXISTS ANY MORE (T-bac4 retired `.settings-stack`).
  *
- * 🔴 Collapsing the two cards was NOT enough on its own, and the reason is
- * here: every DocCard wraps itself in `.settings`, which is height:100% +
- * overflow-y:auto — a full-height scroll container. Stacked, that gives the
- * page TWO of them, so the second document begins one whole screen below the
- * first no matter how short the first one is, and scrolling inside the first
- * only ever reaches the FIRST's own bottom. MEASURED on the untouched tree with
- * both cards already collapsed: the 啟動程序（Codex CLI）heading sat at y=860 on
- * an 844-tall phone — off screen at every width, 1040 included.
+ * It was T-6278's other half: every DocCard wraps itself in `.settings`, which
+ * is height:100% + overflow-y:auto, so a page holding TWO of them had two
+ * full-height scrollers and the second document began a screen below the first
+ * however short the first was — measured then at y=860 on an 844-tall phone.
+ * The wrapper made the PAGE the single scroller instead.
  *
- * That is the owner's report exactly: he scrolled the first document to its
- * end, the scrolling stopped, and he read that as the end of the page.
- *
- * So the stack owns the scrolling and the cards inside it grow to their
- * content. A page carrying ONE document is untouched — `.settings` is still its
- * own scroller there. */
-.settings-stack {
-  height: 100%;
-  min-height: 0;
-  overflow-y: auto;
-}
-.settings-stack > .settings {
-  height: auto;
-  overflow: visible;
-}
+ * 啟動程序 is now an index of two nav rows, each runtime on its own page, so
+ * nothing in this repo stacks two DocCards: the rule was removed rather than
+ * left as dead CSS that reads like a live constraint. Re-stacking two DocCards
+ * without restoring something like it puts the second one off screen again —
+ * that is the fact worth keeping, not the rule. */
 
 /* A heading that opens its own document (T-6278). The whole heading is the hit
  * target, and it keeps the heading's type — a collapsed document must still

@@ -122,20 +122,45 @@ export interface DocCardProps {
   /** Replace the body. Default: one textarea over the whole document while
    * editing, rendered markdown otherwise. */
   renderBody?: (props: DocCardBodyProps) => ReactNode;
-  /** Put the whole card behind its own heading, CLOSED on mount (T-6278). Off
-   * by default — a page carrying ONE document has nothing to gain from it.
+  /** Put the whole card behind its own heading, CLOSED on mount (T-6278).
    *
-   * It exists for the page that stacks TWO full documents (啟動程序: Claude
-   * then Codex). The owner met that page on a phone, scrolled to the bottom of
-   * the first document, and read the end of the card as the end of the PAGE —
-   * the second document was below the fold and might as well not have existed.
-   * His instruction:「你可以改成兩個都先收疊，我點選時才展開嗎？」
+   * 🔴 NO CALLER PASSES THIS TODAY (T-bac4). It was built for the page that
+   * stacked TWO full documents — 啟動程序, Claude then Codex — and that page is
+   * gone: 啟動程序 is now an index of two rows, one document per page, so
+   * nothing has two cards to fold. This docstring used to describe that stacked
+   * page in the present tense, which the independent review caught: a reader
+   * would have believed the page still exists.
    *
-   * ⚠️ Adding a separator was considered and REJECTED by the same observation:
-   * there already IS one (card edge, background, then the second heading), and
-   * it sits so far down that nobody scrolling the first document reaches it.
-   * Collapsed headings fix it because both fit on one screen; a louder divider
-   * in the same place would not. */
+   * WHY IT WAS KEPT rather than deleted with the page. The same round DID
+   * delete `.settings-stack`, which also lost its only consumer, so the
+   * asymmetry needs a reason and it is not "one felt bigger": `.settings-stack`
+   * was internal CSS with no external surface, while this branch's labels
+   * (`docExpand` / `docCollapse`) are THEME WORDING CODES. A theme pack the
+   * owner has already customised may carry values for them, and removing the
+   * codes makes those values silently vanish on import (unknown codes are
+   * dropped). That is an external effect outside T-bac4's scope, so the call
+   * belongs to whoever owns the wording surface.
+   *
+   * ⚠️ THEREFORE IT IS TESTED, not left as unexercised dead code: the collapse
+   * behaviour and its 🔴 accessibility rule below are pinned in
+   * DocCard.collapsible.test.tsx. If you retire the prop, retire that file and
+   * the two wording codes together — and if you bring it back into a page,
+   * re-read T-fc57 first (see the note above the collapsed branch).
+   *
+   * …AND THAT "together" IS A POLICY, NOT A MECHANISM. The review checked:
+   * there is no unused-key lint in this repo, so you CAN delete this branch and
+   * leave `docExpand` / `docCollapse` in the locales, and the theme whitelist
+   * would not move. They are bundled here because a wording code with no render
+   * site anywhere is its own kind of falsehood — a theme author would be
+   * editing a string that can never appear. Retire them as a pair by choice; do
+   * not read this as "deleting the branch forces a whitelist change", which
+   * would make the branch look harder to remove than it is.
+   *
+   * The shape it took, recorded because the reasoning is not re-derivable: the
+   * owner met the stacked page on a phone, scrolled to the bottom of the first
+   * document, and read the end of the card as the end of the PAGE. Adding a
+   * separator was considered and REJECTED by the same observation — there
+   * already IS one, and it sits so far down that nobody reaches it. */
   collapsible?: boolean;
 }
 

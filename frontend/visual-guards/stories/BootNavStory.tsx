@@ -1,18 +1,19 @@
-// CT story for 設定 › 角色誌 › 啟動程序 — the page that stacks TWO whole
-// documents (T-6278).
+// CT story for 設定 › 角色誌 › 啟動程序 — the INDEX of two documents (T-bac4;
+// it was the page that stacked both of them until the owner replaced that
+// shape).
 //
-// It renders the REAL page, not a hand-built pair of cards: the claim under
+// It renders the REAL page, not a hand-built pair of rows: the claim under
 // measurement is "both documents are reachable on one phone screen", and a
-// story that assembled its own two cards would answer for itself rather than
-// for what SettingsPage renders. The route is walked the way a person walks it
-// (角色誌 → 啟動程序) so the ancestor chain, the breadcrumbs and the second
-// card's deliberate absence of them are all the app's own.
+// story that assembled its own rows would answer for itself rather than for
+// what SettingsPage renders. The route is walked the way a person walks it
+// (角色誌 → 啟動程序) so the ancestor chain and the breadcrumbs are the app's own.
 //
-// The documents are seeded THROUGH THE REAL ADAPTER before the page is opened,
-// at a length that reproduces the defect: the owner met it because the first
-// document is thousands of pixels tall. A short fixture would let a broken page
-// pass — both headings would share a screen simply because there was nothing
-// between them.
+// The documents are seeded THROUGH THE REAL ADAPTER at the length that used to
+// reproduce the defect (the first document is thousands of pixels tall).
+// ⚠️ That length is NOT load-bearing any more, and the guard's header says so
+// with the measurement: on an index that renders no document, cutting the
+// fixture to one section leaves every test green. It is kept because it keeps
+// the fixture resembling the real page, not because anything depends on it.
 import { useEffect, useState } from "react";
 import { I18nProvider } from "../../src/i18n";
 import { SettingsPage } from "../../src/components/SettingsPage";
@@ -33,7 +34,7 @@ const doc = (runtime: string) =>
     ]).flat(),
   ].join("\n");
 
-export function BootCollapseStory() {
+export function BootNavStory() {
   const [ready, setReady] = useState(false);
   useEffect(() => {
     let alive = true;
