@@ -90,6 +90,23 @@ else
   bad "bin/tests/port-default.sh is missing"
 fi
 
+# ── SSE station-sha header: one contract spelled in two modules (T-5b83) ─────
+# server/ocserverd and cli/ocagent cannot import each other, so the header name
+# exists twice. A mismatch is SILENT — Header.Get returns "" and the connection
+# line just omits the sha, which is byte-identical to the honest "this station
+# sent none". Nothing else in the tree can tell those two apart.
+STATIONSHA="$HERE/station-sha-header-guard.sh"
+echo
+if [[ -f "$STATIONSHA" ]]; then
+  if run_guard "$STATIONSHA"; then
+    ok "station-sha header contract suite passed"
+  else
+    bad "station-sha header contract suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/station-sha-header-guard.sh is missing"
+fi
+
 # ── serve-plist runtime stamps: claude + codex, both installers (T-ba62/T-ff48) ─
 # Own file, own tempdir, same PATH-shim discipline. The stamp is what carries
 # PATH/OC_CLAUDE_BIN/OC_CODEX_BIN from the operator's interactive shell into the
