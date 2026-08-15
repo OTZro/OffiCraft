@@ -163,10 +163,20 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 	_, _ = w.Write([]byte(": connected\n\n"))
 	flusher.Flush()
 
-	// Per-connection context-high band state (spec §6): the remind-bucket
-	// marker (T-7826 dedup). In-memory, reset on reconnect, never persisted;
-	// bucketReset (below WARN / boot) so the first climb into the band emits.
-	chLastBucket := bucketReset
+	// This connection's runtime, resolved ONCE (the notice rule differs per
+	// runtime — see decideHandoverNotice). Members and outsource workers live in
+	// different tables and both connect here, so both are tried; "" falls
+	// through to the claude rule, which is the fail-safe direction (a percentage
+	// notice on an unknown runtime is a wasted line, a missing one is a lost
+	// close-out).
+	connRuntime := ""
+	if memberID != "" {
+		if m, err := s.dal.GetMember(memberID); err == nil && m != nil {
+			connRuntime = m.Runtime
+		} else if w, err := s.dal.GetOutsourceWorker(memberID); err == nil && w != nil {
+			connRuntime = w.Runtime
+		}
+	}
 	// Per-connection token-expiry band state (spec §6.1): the last time the
 	// still-unacknowledged warning was sent. A restart replaces this connection
 	// and its JWT, which naturally clears the reminder state.
@@ -204,14 +214,25 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 			}
 			continue
 		}
-		// Quiet tick: the context-high band (any agent connection — the agent
-		// cannot read its own context %, so the server pushes the reminder).
+		// Quiet tick: the ONE advance handover notice (any agent connection — the
+		// agent cannot read its own context %, so the server pushes it).
 		if memberID != "" {
-			signal, newBucket := decideContextHighSignal(
-				memberID, s.gauge.Get(memberID), chLastBucket, s.ctxHighConfig())
-			chLastBucket = newBucket
+			record := s.gauge.Get(memberID)
+			signal := decideHandoverNotice(
+				memberID, connRuntime, record,
+				s.ctxHighConfig(), s.codexCompactionThreshold)
+			// ONCE PER SESSION, not once per connection (T-c382). The dedup key is
+			// the gauge's boot_ts — the SESSION anchor, restored from the durable
+			// member row on reconnect — so an SSE flap mid-session cannot re-fire
+			// the notice. Per-connection state (what this used to hold) would:
+			// every reconnect would nudge again, which is the bombardment the
+			// owner asked to be rid of, wearing a different hat.
 			if signal != nil {
-				if frame, err := directedFrameText(contextHighTopic, signal); err == nil {
+				// Build the frame BEFORE claiming: claiming first would burn the
+				// one-and-only notice on a marshal failure and go silent forever,
+				// and "sent it" vs "silently dropped it" would look identical.
+				if frame, err := directedFrameText(contextHighTopic, signal); err == nil &&
+					s.claimHandoverNotice(memberID, record) {
 					if !write(frame) {
 						return
 					}

@@ -976,6 +976,45 @@ func TestStampContextHighRecycle(t *testing.T) {
 	}
 	now := 10000.0
 
+	// 🔴 POSITIVE CONTROL, and it has to come first (T-c382). Every other
+	// subtest here asserts that something must NOT recycle, which means a
+	// mutant that disables auto-refocus outright — shouldAutoRefocus returning
+	// a flat false — left this whole test GREEN. "The handover works" and "the
+	// handover is dead" were indistinguishable, and nothing would have said so.
+	// Measured, not assumed: that mutant was planted and this file passed.
+	t.Run("an online member over the handover line IS recycled", func(t *testing.T) {
+		s, members := newHot(t)
+		connectOnline(t, s, "m-hot")
+		s.gauge.Set("m-hot", freshGauge(now, float64(s.ctxhigh.HandoverPct)))
+		s.stampContextHighRecycle(members, now)
+		if members[0].RefocusSince != now {
+			t.Fatalf("crossing the handover line must stamp refocus_since, got %v",
+				members[0].RefocusSince)
+		}
+	})
+
+	t.Run("codex is recycled on compaction count, not percent", func(t *testing.T) {
+		// The other half of the positive control: codex has its own axis, and a
+		// change that quietly folded it onto the percentage rule would still
+		// look green against the claude case above.
+		s := newReconcileTestServer(t)
+		m := testAgent("m-codex")
+		m.Runtime = RuntimeCodex
+		putTestMember(t, s, m)
+		fresh, _ := s.dal.GetMember("m-codex")
+		members := []Member{*fresh}
+		connectOnline(t, s, "m-codex")
+		s.gauge.Set("m-codex", map[string]any{
+			"context_pct": 1.0, "context_pct_ts": now - 10, "boot_ts": now - 500,
+			"compaction_count": defaultCodexCompactionThreshold,
+		})
+		s.stampContextHighRecycle(members, now)
+		if members[0].RefocusSince != now {
+			t.Fatalf("a codex member at its compaction threshold must recycle even "+
+				"at 1%% context, got %v", members[0].RefocusSince)
+		}
+	})
+
 	t.Run("skips a stale pct", func(t *testing.T) {
 		s, members := newHot(t)
 		connectOnline(t, s, "m-hot")
@@ -1002,13 +1041,16 @@ func TestStampContextHighRecycle(t *testing.T) {
 		}
 	})
 
-	t.Run("skips the WARN band and an offline member", func(t *testing.T) {
+	t.Run("skips a below-handover gauge and an offline member", func(t *testing.T) {
 		s, members := newHot(t)
 		connectOnline(t, s, "m-hot")
-		s.gauge.Set("m-hot", freshGauge(now, float64(s.ctxhigh.WarnPct)))
+		// One point below the handover line — including the region where the
+		// advance notice fires (T-c382). Being NOTIFIED must never recycle; only
+		// crossing the handover threshold does.
+		s.gauge.Set("m-hot", freshGauge(now, float64(s.ctxhigh.HandoverPct-1)))
 		s.stampContextHighRecycle(members, now)
 		if members[0].RefocusSince != 0 {
-			t.Fatal("WARN alone must not recycle")
+			t.Fatal("below the handover line must not recycle")
 		}
 
 		s2, members2 := newHot(t) // no SSE connection → offline

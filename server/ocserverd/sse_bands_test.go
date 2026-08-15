@@ -10,138 +10,91 @@ func fptr(v float64) *float64 { return &v }
 
 func TestBandFor(t *testing.T) {
 	cases := []struct {
-		name           string
-		pct            *float64
-		warn, handover int
-		want           string
+		name     string
+		pct      *float64
+		handover int
+		want     string
 	}{
-		{"nil pct fails safe to none", nil, 40, 50, levelNone},
-		{"below warn", fptr(39), 40, 50, levelNone},
-		{"warn band", fptr(45), 40, 50, levelWarn},
-		{"handover wins over warn", fptr(50), 40, 50, levelHandover},
-		{"warn threshold <= 0 disables the band", fptr(45), 0, 50, levelNone},
-		{"handover threshold <= 0 disables the band", fptr(99), 40, 0, levelWarn},
+		{"nil pct fails safe to none", nil, 50, levelNone},
+		{"below handover", fptr(49), 50, levelNone},
+		{"at handover", fptr(50), 50, levelHandover},
+		{"above handover", fptr(99), 50, levelHandover},
+		{"threshold <= 0 disables the band", fptr(99), 0, levelNone},
 	}
 	for _, c := range cases {
-		if got := bandFor(c.pct, c.warn, c.handover); got != c.want {
+		if got := bandFor(c.pct, c.handover); got != c.want {
 			t.Errorf("%s: got %q want %q", c.name, got, c.want)
 		}
 	}
 }
 
-func TestAdvanceContext(t *testing.T) {
-	// step 5: bucket = floor(pct/5). warn 40 → bucket 8; 45 → 9; handover 50 → 10.
-	t.Run("first entry into the band emits and marks the bucket", func(t *testing.T) {
-		emit, level, bucket := advanceContext(fptr(42), bucketReset, 40, 50, 5)
-		if !emit || level != levelWarn || bucket != 8 {
-			t.Fatalf("got %v %q %d", emit, level, bucket)
-		}
-	})
-	t.Run("same bucket stays quiet no matter how many ticks", func(t *testing.T) {
-		// 40→41→42→44 all live in bucket 8 — the drift that used to bombard.
-		for _, pct := range []float64{40, 41, 42, 44} {
-			emit, _, bucket := advanceContext(fptr(pct), 8, 40, 50, 5)
-			if emit || bucket != 8 {
-				t.Fatalf("pct %v: got emit=%v bucket=%d", pct, emit, bucket)
-			}
-		}
-	})
-	t.Run("climbing into a higher bucket re-reminds", func(t *testing.T) {
-		emit, level, bucket := advanceContext(fptr(45), 8, 40, 50, 5)
-		if !emit || level != levelWarn || bucket != 9 {
-			t.Fatalf("got %v %q %d", emit, level, bucket)
-		}
-	})
-	t.Run("dropping to a lower bucket re-arms without emitting", func(t *testing.T) {
-		// 降檔 from bucket 9 back to 8: no emit, marker lowered so a re-climb fires.
-		emit, _, bucket := advanceContext(fptr(42), 9, 40, 50, 5)
-		if emit || bucket != 8 {
-			t.Fatalf("re-arm: got emit=%v bucket=%d", emit, bucket)
-		}
-		emit, _, bucket = advanceContext(fptr(46), 8, 40, 50, 5)
-		if !emit || bucket != 9 {
-			t.Fatalf("re-climb after 降檔 must emit: got emit=%v bucket=%d", emit, bucket)
-		}
-	})
-	t.Run("dropping below warn resets to the sentinel", func(t *testing.T) {
-		emit, level, bucket := advanceContext(fptr(10), 9, 40, 50, 5)
-		if emit || level != levelNone || bucket != bucketReset {
-			t.Fatalf("got %v %q %d", emit, level, bucket)
-		}
-	})
-	t.Run("handover advances the marker but never emits on the wire", func(t *testing.T) {
-		emit, level, bucket := advanceContext(fptr(52), 8, 40, 50, 5)
-		if emit || level != levelHandover || bucket != 10 {
-			t.Fatalf("got %v %q %d", emit, level, bucket)
-		}
-	})
-}
-
-// TestContextHighDedupePerBucket is the T-7826 regression: a gauge parked in one
-// 5% bucket across many quiet ticks reminds exactly ONCE (the reported symptom
-// was 30+ reminders as the gauge drifted 40→41→42 over a few minutes). Climbing
-// into the next bucket reminds again; recovery below warn then re-climb reminds.
-func TestContextHighDedupePerBucket(t *testing.T) {
-	cfg := defaultSseContextHigh()
-	drive := func(pct float64) (emits, last int) {
-		last = bucketReset
-		rec := map[string]any{"context_pct": pct, "context_pct_ts": 20.0, "boot_ts": 10.0}
-		for i := 0; i < 60; i++ {
-			var sig *contextHighSignal
-			sig, last = decideContextHighSignal("m-1", rec, last, cfg)
-			if sig != nil {
-				emits++
-			}
-		}
-		return emits, last
+// TestClaudeNoticePct_TracksTheOwnersThreshold is the CORE regression of T-c382.
+// The advance notice used to sit on its own hard-wired 40 with no UI, so an
+// owner moving the handover threshold moved the handover and nothing else. Every
+// assertion here is an ABSOLUTE number on purpose: an assertion written against
+// the constant would stay green through exactly the drift being guarded.
+func TestClaudeNoticePct_TracksTheOwnersThreshold(t *testing.T) {
+	// The owner's own worked example, verbatim: 「例如 65% 的話會從 55% 開始通知」.
+	if got, ok := claudeNoticePct(65); !ok || got != 55 {
+		t.Fatalf("handover 65 must notify at 55, got %d (ok=%v)", got, ok)
 	}
-	emits, last := drive(42)
-	if emits != 1 {
-		t.Fatalf("a gauge parked in one bucket must remind once, got %d", emits)
+	// Move the threshold: the notice MUST move with it. This is the pair that
+	// dies if anyone re-hardwires the notice point.
+	if got, ok := claudeNoticePct(90); !ok || got != 80 {
+		t.Fatalf("handover 90 must notify at 80, got %d (ok=%v)", got, ok)
 	}
-	// Now climb into the next bucket (45–49) from that carried marker: one more.
-	rec := map[string]any{"context_pct": 46.0, "context_pct_ts": 20.0, "boot_ts": 10.0}
-	sig, last := decideContextHighSignal("m-1", rec, last, cfg)
-	if sig == nil || last != 9 {
-		t.Fatalf("climbing into a new bucket must remind: sig=%v bucket=%d", sig, last)
+	if got, ok := claudeNoticePct(40); !ok || got != 30 {
+		t.Fatalf("handover 40 (the UI minimum) must notify at 30, got %d (ok=%v)", got, ok)
 	}
-	// Recover below warn (reset), then re-enter: reminds again.
-	recLow := map[string]any{"context_pct": 12.0, "context_pct_ts": 20.0, "boot_ts": 10.0}
-	_, last = decideContextHighSignal("m-1", recLow, last, cfg)
-	if last != bucketReset {
-		t.Fatalf("recovery below warn must reset the marker, got %d", last)
+	// Kill-switch and degenerate leads produce NO notice rather than one that
+	// fires on a barely-used gauge.
+	if _, ok := claudeNoticePct(0); ok {
+		t.Fatal("a disabled handover band must produce no advance notice")
 	}
-	sig, _ = decideContextHighSignal("m-1", rec, last, cfg)
-	if sig == nil {
-		t.Fatal("re-entering the band after recovery must remind again")
+	if _, ok := claudeNoticePct(handoverNoticeLeadPct); ok {
+		t.Fatal("a lead that lands the notice at 0% must produce no notice")
 	}
 }
 
-// TestContextHighPerConnectionIsolation: two members' gauges drive independent
-// markers — one member sitting quiet never suppresses another's first reminder.
-func TestContextHighPerConnectionIsolation(t *testing.T) {
-	cfg := defaultSseContextHigh()
-	recA := map[string]any{"context_pct": 42.0, "context_pct_ts": 20.0, "boot_ts": 10.0}
-	recB := map[string]any{"context_pct": 47.0, "context_pct_ts": 20.0, "boot_ts": 10.0}
-	// Member A settles into bucket 8 (one reminder, then quiet).
-	sigA, lastA := decideContextHighSignal("m-a", recA, bucketReset, cfg)
-	if sigA == nil {
-		t.Fatal("A first entry must remind")
+// TestCodexNoticeDue pins the OTHER runtime's axis. A codex session hands over
+// on compaction count, so a percentage threshold means nothing to it — that was
+// the second half of the bug (a codex worker was being warned at 40% of a gauge
+// that does not decide anything for it).
+func TestCodexNoticeDue(t *testing.T) {
+	rec := func(count int) map[string]any { return map[string]any{"compaction_count": count} }
+	// Owner's worked example, verbatim: 「例如我設定是 5 那就是在第四輪的 60% 提醒
+	// 一次」 — threshold 5 ⇒ round 4 (count == 4) at >= 60%.
+	if !codexNoticeDue(rec(4), fptr(60), 5) {
+		t.Fatal("threshold 5: round 4 at 60% must be due")
 	}
-	sigA, lastA = decideContextHighSignal("m-a", recA, lastA, cfg)
-	if sigA != nil {
-		t.Fatal("A same bucket must stay quiet")
+	if codexNoticeDue(rec(4), fptr(59), 5) {
+		t.Fatal("threshold 5: round 4 below 60% is not due yet")
 	}
-	// Member B, with its OWN marker, still gets its first reminder.
-	sigB, _ := decideContextHighSignal("m-b", recB, bucketReset, cfg)
-	if sigB == nil || sigB.To != "m-b" {
-		t.Fatalf("B must remind on its own connection: %+v", sigB)
+	// NOT the round before, and not the handover round itself: one notice, on
+	// one round. Firing on the final round would arrive after the decision.
+	if codexNoticeDue(rec(3), fptr(99), 5) {
+		t.Fatal("two rounds out must stay quiet")
 	}
-	// A's marker is untouched by B's tick.
-	if lastA != 8 {
-		t.Fatalf("A marker leaked: %d", lastA)
+	if codexNoticeDue(rec(5), fptr(99), 5) {
+		t.Fatal("the handover round itself must not carry the ADVANCE notice")
+	}
+	// It really is the owner's threshold, not a constant: change it and the
+	// notice round changes with it.
+	if !codexNoticeDue(rec(1), fptr(80), 2) {
+		t.Fatal("threshold 2 must notify on round 1")
+	}
+	if codexNoticeDue(rec(4), fptr(80), 2) {
+		t.Fatal("threshold 2 must not notify on round 4")
+	}
+	// Fail-safe inputs.
+	if codexNoticeDue(map[string]any{}, fptr(99), 5) {
+		t.Fatal("a gauge with no compaction_count must fail safe to quiet")
+	}
+	if codexNoticeDue(rec(4), nil, 5) {
+		t.Fatal("no actionable pct must fail safe to quiet")
 	}
 }
+
 
 func TestActionableContextPct(t *testing.T) {
 	fresh := map[string]any{"context_pct": 45.0, "context_pct_ts": 20.0, "boot_ts": 10.0}
@@ -164,32 +117,87 @@ func TestActionableContextPct(t *testing.T) {
 	}
 }
 
-func TestDecideContextHighSignal(t *testing.T) {
+func TestDecideHandoverNotice(t *testing.T) {
 	cfg := defaultSseContextHigh()
-	record := map[string]any{"context_pct": 45.0, "context_pct_ts": 20.0, "boot_ts": 10.0}
-
-	signal, bucket := decideContextHighSignal("m-1", record, bucketReset, cfg)
-	if signal == nil {
-		t.Fatal("warn band must emit")
-	}
-	if signal.Topic != "context-high" || signal.To != "m-1" || signal.Level != "warn" ||
-		float64(signal.Pct) != 45.0 || signal.Reason == "" {
-		t.Fatalf("signal: %+v", signal)
-	}
-	if bucket != 9 { // floor(45/5)
-		t.Fatalf("carry-forward bucket: %d", bucket)
+	cfg.HandoverPct = 65 // the owner's own setting, and his worked example
+	rec := func(pct float64, extra map[string]any) map[string]any {
+		r := map[string]any{"context_pct": pct, "context_pct_ts": 20.0, "boot_ts": 10.0}
+		for k, v := range extra {
+			r[k] = v
+		}
+		return r
 	}
 
-	// HANDOVER is decided but NEVER emitted on the wire (producer auto-recycle
-	// owns it) — the bucket bookkeeping still advances.
-	record["context_pct"] = 60.0
-	signal, bucket = decideContextHighSignal("m-1", record, 9, cfg)
-	if signal != nil {
-		t.Fatalf("handover must not emit over SSE: %+v", signal)
-	}
-	if bucket != 12 { // floor(60/5) — marker advances even while quiet on the wire
-		t.Fatalf("handover bookkeeping must advance: %d", bucket)
-	}
+	t.Run("claude fires at the derived point, not before", func(t *testing.T) {
+		if sig := decideHandoverNotice("m-1", RuntimeClaude, rec(54, nil), cfg, 5); sig != nil {
+			t.Fatalf("54%% is below the 55%% notice point: %+v", sig)
+		}
+		sig := decideHandoverNotice("m-1", RuntimeClaude, rec(55, nil), cfg, 5)
+		if sig == nil {
+			t.Fatal("55%% with handover 65%% must notify")
+		}
+		if sig.Topic != "context-high" || sig.To != "m-1" || sig.Level != "warn" ||
+			float64(sig.Pct) != 55.0 {
+			t.Fatalf("signal envelope: %+v", sig)
+		}
+	})
+
+	t.Run("the notice says what the ceiling is and what to do", func(t *testing.T) {
+		sig := decideHandoverNotice("m-1", RuntimeClaude, rec(55, nil), cfg, 5)
+		if sig == nil {
+			t.Fatal("expected a notice")
+		}
+		// The ceiling, in the message. An agent cannot read its own context %,
+		// so a notice that omits the number leaves it unable to pace itself.
+		if !strings.Contains(sig.Reason, "65%") {
+			t.Fatalf("the notice must name the ceiling: %q", sig.Reason)
+		}
+		// Owner 2026-08-16, the three things he requires done before a handover.
+		// Asserted individually so dropping ONE is red — a single "is it
+		// non-empty" check would pass a message that lost two of them.
+		for _, want := range []string{"chat", "task", "learning"} {
+			if !strings.Contains(strings.ToLower(sig.Reason), want) {
+				t.Fatalf("the notice must tell the agent to handle %q: %q", want, sig.Reason)
+			}
+		}
+		// And it must NOT read as "you are being stopped now" — the whole point
+		// of an advance notice is that there is still room to work.
+		if !strings.Contains(sig.Reason, "not being stopped yet") {
+			t.Fatalf("the notice must say the agent is not being stopped yet: %q", sig.Reason)
+		}
+	})
+
+	t.Run("codex is judged on rounds, never on the claude percentage", func(t *testing.T) {
+		// 55% would fire for claude. For codex on round 2 of 5 it must not:
+		// its lifecycle has nothing to do with that number.
+		quiet := rec(55, map[string]any{"compaction_count": 2})
+		if sig := decideHandoverNotice("w-1", RuntimeCodex, quiet, cfg, 5); sig != nil {
+			t.Fatalf("codex must not inherit the claude percentage rule: %+v", sig)
+		}
+		due := rec(60, map[string]any{"compaction_count": 4})
+		sig := decideHandoverNotice("w-1", RuntimeCodex, due, cfg, 5)
+		if sig == nil {
+			t.Fatal("codex round 4 of 5 at 60%% must notify")
+		}
+		if !strings.Contains(sig.Reason, "compaction round 5") {
+			t.Fatalf("a codex notice must name ITS ceiling (rounds), not a pct: %q", sig.Reason)
+		}
+	})
+
+	t.Run("fails safe when the gauge cannot be trusted", func(t *testing.T) {
+		stale := map[string]any{"context_pct": 99.0, "context_pct_ts": 5.0, "boot_ts": 10.0}
+		if sig := decideHandoverNotice("m-1", RuntimeClaude, stale, cfg, 5); sig != nil {
+			t.Fatalf("a predecessor session's pct must not notify: %+v", sig)
+		}
+		if sig := decideHandoverNotice("m-1", RuntimeClaude, nil, cfg, 5); sig != nil {
+			t.Fatalf("no gauge must not notify: %+v", sig)
+		}
+		off := cfg
+		off.HandoverPct = 0
+		if sig := decideHandoverNotice("m-1", RuntimeClaude, rec(99, nil), off, 5); sig != nil {
+			t.Fatalf("the kill-switch must silence the notice too: %+v", sig)
+		}
+	})
 }
 
 func TestDecideTokenExpirySignalRepeatsUntilRestart(t *testing.T) {

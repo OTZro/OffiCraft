@@ -136,6 +136,11 @@ type apiServer struct {
 	// evaluates each quiet tick (DB ctx.* settings; defaults when unset).
 	ctxhigh                  SseContextHighConfig
 	codexCompactionThreshold int
+	// handoverNoticed records, per agent id, the SESSION anchor (the gauge's
+	// boot_ts) whose one-and-only advance handover notice has already gone out.
+	// Guarded by settingsMu. See claimHandoverNotice for why the key is the
+	// session anchor and not the connection.
+	handoverNoticed map[string]float64
 	monitoringRefreshSeconds int
 	// root anchors the repo-file assets (seeds / prebuilt binaries / frozen
 	// MCP catalog) — see assets.go.
@@ -498,4 +503,38 @@ func (s *apiServer) ctxHighConfig() SseContextHighConfig {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
 	return s.ctxhigh
+}
+
+// claimHandoverNotice is the once-per-SESSION gate on the advance handover
+// notice (T-c382, owner: 「只通知一次」). It returns true exactly once per agent
+// session and false every tick after; the caller sends only on true.
+//
+// 🔴 The key is the gauge's boot_ts, i.e. the SESSION anchor — NOT the
+// connection. The distinction is the whole requirement: boot_ts is stamped once
+// per session and RESTORED from the durable member row when an SSE stream
+// flaps, so a reconnect finds the notice already claimed and stays quiet, while
+// a genuinely new session brings a new anchor and is entitled to its own
+// notice. Per-connection state would re-nudge on every network blip, which is
+// the bombardment this ticket exists to remove — just wearing a different hat,
+// and invisible in any test that only ever opens one connection.
+//
+// Fail-safe: no usable boot_ts (missing gauge, or amnesia after a server
+// restart) → refuse to claim, so no notice fires off an anchor we cannot
+// recognise again. That errs toward SILENCE, which is the cheap direction here:
+// the agent still gets the handover SOP at the handover itself.
+func (s *apiServer) claimHandoverNotice(agentID string, record map[string]any) bool {
+	bootTS, ok := gaugeBootTS(record)
+	if !ok || bootTS <= 0 {
+		return false
+	}
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	if s.handoverNoticed == nil {
+		s.handoverNoticed = map[string]float64{}
+	}
+	if sent, seen := s.handoverNoticed[agentID]; seen && sent == bootTS {
+		return false
+	}
+	s.handoverNoticed[agentID] = bootTS
+	return true
 }

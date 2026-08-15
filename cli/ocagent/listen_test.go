@@ -225,10 +225,10 @@ func TestHandleDirectedBandPrintsTheServerMessage(t *testing.T) {
 		"data": map[string]any{
 			"topic": "context-high", "to": "m-1", "level": "warn",
 			"pct":    float64(45),
-			"reason": "context 45% — start converging; flush in-flight state",
+			"reason": "context 55% — 65% is the handover ceiling; close out now",
 		},
 	}, &out)
-	if got := out.String(); got != "[ocagent] signal context-high: context 45% — start converging; flush in-flight state\n" {
+	if got := out.String(); got != "[ocagent] signal context-high: context 55% — 65% is the handover ceiling; close out now\n" {
 		t.Fatalf("context-high out = %q", got)
 	}
 
@@ -292,11 +292,11 @@ func TestDispatchRoutesDirectedBandsAndIgnoresUnknownTopics(t *testing.T) {
 		return raw
 	}
 	// All directed band topics print their message through dispatch().
-	l.dispatch(frame("context-high", map[string]any{"reason": "context 45% — start converging"}))
+	l.dispatch(frame("context-high", map[string]any{"reason": "context 55% — 65% is the handover ceiling; close out now"}))
 	l.dispatch(frame("token-expiry", map[string]any{"reason": "agent token expires soon; call restart_self"}))
 	l.dispatch(frame("task-close", map[string]any{"reason": "任務 T-7d40 已結束（done）"}))
 	got := out.String()
-	if !strings.Contains(got, "[ocagent] signal context-high: context 45% — start converging") ||
+	if !strings.Contains(got, "[ocagent] signal context-high: context 55% — 65% is the handover ceiling; close out now") ||
 		!strings.Contains(got, "[ocagent] signal token-expiry: agent token expires soon; call restart_self") ||
 		!strings.Contains(got, "[ocagent] signal task-close: 任務 T-7d40 已結束（done）") {
 		t.Fatalf("dispatch must surface all directed bands, got %q", got)
