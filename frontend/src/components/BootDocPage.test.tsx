@@ -121,10 +121,10 @@ describe("BootDocPage", () => {
     const utils = renderClaude();
 
     const before = await api.getBootDoc("boot_sequence", "claude");
-    await typeWholeDoc(
-      utils,
-      `# 全新的啟動程序標題\n\n${before.text.split("\n").slice(1).join("\n")}`
-    );
+    // Everything except the document's first line — the part a whole-document
+    // save has to carry along with the new heading.
+    const rest = before.text.split("\n").slice(1).join("\n");
+    await typeWholeDoc(utils, `# 全新的啟動程序標題\n\n${rest}`);
     fireEvent.click(utils.getByTestId("doc-card-save"));
     fireEvent.click(await utils.findByTestId("doc-card-save-confirm-btn"));
 
@@ -135,7 +135,16 @@ describe("BootDocPage", () => {
     expect(text.startsWith("# 全新的啟動程序標題")).toBe(true);
     // The write is a WHOLE-DOCUMENT replace and always was — what the editor
     // holds is what lands, so the rest of the document has to be in it.
-    expect(text).toContain("Claude Code 執行環境");
+    //
+    // Assert the WHOLE remainder rather than one hand-picked heading from it.
+    // The old probe named 「Claude Code 執行環境」, which happened to sit in the
+    // middle of the document when it was written; the owner later rewrote the
+    // seed so that heading became LINE ONE — the one line this fixture replaces
+    // — and the assertion started failing on a document that was carried
+    // perfectly. A probe that names a line by its content is a probe that goes
+    // false when the document is re-ordered, and it goes false LOUDLY, on a
+    // package that changed no frontend code at all.
+    expect(text).toContain(rest);
 
     // And the page now RENDERS the saved document: the heading came back from
     // the adapter's response, not from local state that was never confirmed.
