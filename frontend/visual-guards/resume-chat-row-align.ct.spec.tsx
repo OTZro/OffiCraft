@@ -57,6 +57,12 @@ import { ResumeChatRowStory } from "./stories/ResumeChatRowStory";
 // not what any of these three complaints is about — a broken layout moves these
 // distances by tens of pixels, not by one.
 const SLACK = 1.5;
+/** The card's own left padding + border (member-detail.css .mp-resume__chatrow):
+ *  the body sits this far inside its card, by design since T-5ae3. */
+const FRAME_INSET = 11;
+/** How far the card stack may sit from the section title. The frame's inset is
+ *  intended; the original defect indented the body by ~325px at 1280. */
+const MAX_FRAME_INDENT = 20;
 
 for (const width of [390, 1280]) {
   test(`${width}px: chat rows are left-aligned, the fold mark hugs its message, and the timestamp does not move`, async ({
@@ -90,18 +96,50 @@ for (const width of [390, 1280]) {
 
     const titleBox = await box(title);
 
-    // ── ① the body starts on the section title's left edge ──────────────────
+    // ── ① every part of a message shares ONE left edge, and every row agrees
+    //      with every other row ─────────────────────────────────────────────
     // Every row, not just the first: the old layout's indent depended on how
     // wide that row's own meta column happened to be, so the rows disagreed
     // with each other as well as with the title.
+    //
+    // ⚠️ THIS USED TO MEASURE AGAINST THE SECTION TITLE, and it no longer can:
+    // T-5ae3 gave each message a VISIBLE FRAME (owner 2026-08-15, screenshot of
+    // two messages running into each other), and a framed card cannot both show
+    // a boundary and bleed to the section's edge — it is inset by its own
+    // padding + border, measured 11px. What the guard was actually written to
+    // catch is the OLD row-flex bug, where the body started tens of pixels in
+    // from its own row and each row disagreed with the next. That is still
+    // caught, and more precisely: the body must sit on ITS OWN ROW's content
+    // edge, and every row must land on the same x.
+    //
+    // The section title is still read — as the OUTER bound. The inset is a
+    // small deliberate one, not the ~325px runaway the original defect had, so
+    // it is asserted as a bounded range rather than dropped.
+    const rowXs: number[] = [];
     for (let i = 0; i < 3; i++) {
       const bodyBox = await box(bodies.nth(i));
+      const rowBox = await box(rows.nth(i));
       expect(
-        Math.abs(bodyBox.x - titleBox.x),
-        `[${width}px] row ${i}: body must start on the section title's left ` +
-          `edge (title.x=${titleBox.x}, body.x=${bodyBox.x})`,
+        Math.abs(bodyBox.x - rowBox.x - FRAME_INSET),
+        `[${width}px] row ${i}: body must sit on its own card's content edge ` +
+          `(row.x=${rowBox.x}, body.x=${bodyBox.x}, expected inset ${FRAME_INSET})`,
+      ).toBeLessThanOrEqual(SLACK);
+      rowXs.push(bodyBox.x);
+    }
+    for (let i = 1; i < rowXs.length; i++) {
+      expect(
+        Math.abs(rowXs[i] - rowXs[0]),
+        `[${width}px] row ${i} starts at x=${rowXs[i]} but row 0 at ${rowXs[0]} — ` +
+          `rows must agree with each other`,
       ).toBeLessThanOrEqual(SLACK);
     }
+    // …and the whole stack stays close to the section title: a small frame
+    // inset is intended, a runaway indent is the defect this file exists for.
+    expect(
+      rowXs[0] - titleBox.x,
+      `[${width}px] the card stack is indented ${rowXs[0] - titleBox.x}px from ` +
+        `the section title — the frame's inset should be small and deliberate`,
+    ).toBeLessThanOrEqual(MAX_FRAME_INDENT);
 
     // ── ② the fold mark hugs the message it is talking about ────────────────
     // Measured as a HORIZONTAL distance from its own row's left edge. The old
@@ -110,9 +148,9 @@ for (const width of [390, 1280]) {
     const markBox = await box(mark);
     const markRowBox = await box(rows.nth(2));
     expect(
-      markBox.x - markRowBox.x,
-      `[${width}px] the fold mark must sit against its own message's left ` +
-        `edge (row.x=${markRowBox.x}, mark.x=${markBox.x})`,
+      Math.abs(markBox.x - markRowBox.x - FRAME_INSET),
+      `[${width}px] the fold mark must sit on its own card's content edge ` +
+        `(row.x=${markRowBox.x}, mark.x=${markBox.x}, expected inset ${FRAME_INSET})`,
     ).toBeLessThanOrEqual(SLACK);
     // …and it belongs to THAT row, vertically: below its body, above the next
     // row. Without this, a mark that had escaped its row entirely (absolutely

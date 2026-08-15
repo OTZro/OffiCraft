@@ -327,8 +327,27 @@ func TestResumeChat_BudgetIsACeilingAndTheBoundaryIsTight(t *testing.T) {
 	// Uniform, modest messages from several peers so the stream is long enough
 	// to overrun the budget many times over. Uniform size is what makes "one
 	// more message" a well-defined quantity below.
+	//
+	// 🔴 UNIFORM IS A PRECONDITION OF HALF 2, NOT A CONVENIENCE, and the peer
+	// list is chosen to make it TRUE rather than merely claimed. Half 2 reads
+	// the cost of the OLDEST CARRIED message and calls it the cost of the next
+	// one back; that substitution is only sound when every message in the
+	// corpus bills the same. Two things used to break it silently:
+	//   - the OWNER's line is exempt from collapsing (resumeChatCarriesFullBody),
+	//     so an owner message bills its whole 200-rune body while a third
+	//     party's bills the 120-rune preview — a ~1.5x difference;
+	//   - a peer id with no roster row resolves to an EMPTY from_name, so it
+	//     bills 2 runes less than a named one.
+	// A mixed corpus makes half 2 depend on WHICH class of message the pack
+	// happened to stop after: with 165 runes of slack left, a 153-rune reading
+	// off a collapsed message declares the block "not at the ceiling" while the
+	// message actually rejected cost 234 and the packer was in fact full. That
+	// is a false alarm about the packer, and it moves whenever anything outside
+	// the array changes size (the cut hint, say). So: only ROSTERED, NON-OWNER
+	// peers with equal-length names, every body the same length, and the
+	// uniformity is asserted below instead of assumed.
 	chunk := strings.Repeat("字", 200)
-	peers := []string{"m-quiet", "m-peer", "m-third", wireOwnerID}
+	peers := []string{"m-quiet", "m-peer", "m-loud"}
 	ts := 1.0
 	for i := 0; i < 120; i++ {
 		for _, peer := range peers {
@@ -371,11 +390,25 @@ func TestResumeChat_BudgetIsACeilingAndTheBoundaryIsTight(t *testing.T) {
 	// so the next one back costs the same). Deliberately not asking the
 	// production accountant: an assertion written against resumeChatMessageChars
 	// is true by construction and survives every mutant of it.
+	wireCost := func(m chatMessageDTO) int {
+		return len([]rune(m.Body)) +
+			len([]rune(m.FromName)) + len([]rune(m.ToName)) +
+			len([]rune(m.TSDisplay)) +
+			len(strconv.Itoa(m.BodyOmittedChars))
+	}
 	oldest := snap.Chat[0]
-	oneMore := len([]rune(oldest.Body)) +
-		len([]rune(oldest.FromName)) + len([]rune(oldest.ToName)) +
-		len([]rune(oldest.TSDisplay)) +
-		len(strconv.Itoa(oldest.BodyOmittedChars))
+	oneMore := wireCost(oldest)
+	// The substitution above is only legal on a uniform corpus, so CHECK it on
+	// the wire instead of trusting the fixture. A future edit to the peer list
+	// or the body that reintroduces a mixed corpus fails HERE, naming the
+	// reason — rather than surfacing as an unexplained "not at the ceiling".
+	for _, m := range snap.Chat {
+		if got := wireCost(m); got != oneMore {
+			t.Fatalf("fixture bug: the corpus is not uniform, so \"one more message\" "+
+				"is not a well-defined size: %s costs %d, %s costs %d",
+				oldest.ID, oneMore, m.ID, got)
+		}
+	}
 	if oneMore <= 0 {
 		t.Fatalf("fixture bug: a message that costs nothing cannot pin a boundary")
 	}

@@ -1729,8 +1729,32 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  padding: 6px 0;
   font-size: 12.5px;
+  /* 🔴 A VISIBLE BOUNDARY PER MESSAGE (owner 2026-08-15, with a screenshot of
+     two messages running into each other). Before this the row was
+     `padding: 6px 0` with nothing else: no frame, no rule, no fill — so the
+     LAST LINE of one message's body and the FIRST LINE of the next message's
+     sender sat 12px apart with no signal of which message either belonged to.
+     He circled one message to show what he could not tell apart.
+     The frame is the cheapest thing that answers it: fill + hairline + radius,
+     and the gap between cards comes from the list's own `gap` below.
+     ⚠️ THE SIDE PADDING IS A KNOWN TRADE-OFF, not an oversight: it insets the
+     whole card ~10px from the section's left edge, which is the one thing
+     resume-chat-row-align.ct.spec.tsx was written to forbid. What that guard
+     actually protects — every PART of a message sharing ONE left edge — still
+     holds, and is what it asserts now; a card cannot have a visible boundary
+     and simultaneously bleed to the section edge. */
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-overlay) 7%, transparent);
+  background: color-mix(in srgb, var(--color-overlay) 3%, transparent);
+}
+.mp-resume__chatrow + .mp-resume__chatrow {
+  /* The gap BETWEEN cards. Sibling-selector rather than a flex `gap` on a new
+     wrapper: the section's children are the folded-note legend, the truncation
+     marker and the messages, and only message-to-message needs this spacing —
+     the two notes already carry their own. */
+  margin-top: 6px;
 }
 .mp-resume__chatfrom {
   flex: none;

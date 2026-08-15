@@ -306,6 +306,32 @@ describe("ResumeSummaryCard renders the SAME snapshot the agent receives", () =>
     expect(cut).toContain(R.chatCutLabel);
   });
 
+  // 🔴 THE ABSENT MARKER SITS ABOVE THE MESSAGES, AND THE POSITION IS THE
+  // CLAIM (owner 2026-08-15: 「chat 是由舊到新 所以更舊以前的資訊要他撈取這個字
+  // 應該是在訊息一開始不是結尾」). The list runs OLD → NEW, so the edge this
+  // marker describes — "there may be more, further back" — is the TOP one. It
+  // rendered below the last message until now, which was right only while the
+  // list ran new → old; the order changed and the marker was not moved, so it
+  // pointed at the wrong end and a reader scrolling up to the start had no way
+  // to know the line was cut there.
+  //
+  // Asserting DOM ORDER, not mere presence: a presence check stays green with
+  // the marker back at the bottom, which is exactly the state being fixed.
+  it("puts the absent marker BEFORE the messages, because the list runs old → new", async () => {
+    const u = await open();
+    const cut = u.getByTestId("mp-resume-chat-earlier-omitted");
+    const rows = u.getAllByTestId("mp-resume-chat-row");
+    expect(rows.length).toBeGreaterThan(0);
+    // MUTANT CHECK: move the marker back below the list and this goes red on
+    // every row — verified by moving the JSX block, not assumed.
+    for (const [i, row] of rows.entries()) {
+      expect(
+        cut.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING,
+        `chat row ${i} must come AFTER the absent marker`,
+      ).toBeTruthy();
+    }
+  });
+
   // 🔴 A FOLDED message and an ABSENT one must not be described with shared
   // vocabulary. They are different failures. One says "this is here, shortened,
   // the rest is on the server"; the other says "these may not be here at all,

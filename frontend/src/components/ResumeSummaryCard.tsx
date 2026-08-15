@@ -552,28 +552,42 @@ export function ResumeSummaryCard({ agentId }: { agentId: string }) {
                         {t.mp.resumeSummary.bodyOmittedNote}
                       </div>
                     )}
+                    {/* TRUNCATION, not collapse: whole messages that are NOT
+                      * in this payload.
+                      *
+                      * 🔴 IT SITS AT THE TOP, AND THE POSITION IS THE POINT
+                      * (owner 2026-08-15). The list runs OLD → NEW, so the
+                      * boundary this marker describes — "there may be more,
+                      * further back" — is the TOP edge. It used to render
+                      * below the last message, which was correct only while
+                      * the list ran new → old; the order was changed and the
+                      * marker was not moved, leaving it pointing at the wrong
+                      * end. A reader scrolling up to the start hit the oldest
+                      * message and had no way to know the line was cut there.
+                      * Pinned by DOM ORDER in the payload-parity suite — a
+                      * presence check stays green with it back at the bottom.
+                      *
+                      * The hint is the SERVER's own recovery instruction and
+                      * is printed verbatim — re-writing it here would be the
+                      * cockpit inventing a procedure it cannot keep in step
+                      * with the endpoint. */}
+                    {state.data.chatEarlierOmitted.omitted && (
+                      <div
+                        className="mp-resume__chatcut"
+                        data-testid="mp-resume-chat-earlier-omitted"
+                      >
+                        <span className="mp-resume__chatcutlabel">
+                          {t.mp.resumeSummary.chatCutLabel}
+                        </span>{" "}
+                        <span data-testid="mp-resume-chat-earlier-omitted-hint">
+                          {state.data.chatEarlierOmitted.hint}
+                        </span>
+                      </div>
+                    )}
                     {state.data.chat.map((m) => (
                       <ChatRow key={m.id} m={m} t={t} msg={msg} />
                     ))}
                   </>
-                )}
-                {/* TRUNCATION, not collapse: whole messages that are NOT in
-                  * this payload. The hint is the SERVER's own recovery
-                  * instruction and is printed verbatim — re-writing it here
-                  * would be the cockpit inventing a procedure it cannot keep
-                  * in step with the endpoint. */}
-                {state.data.chatEarlierOmitted.omitted && (
-                  <div
-                    className="mp-resume__chatcut"
-                    data-testid="mp-resume-chat-earlier-omitted"
-                  >
-                    <span className="mp-resume__chatcutlabel">
-                      {t.mp.resumeSummary.chatCutLabel}
-                    </span>{" "}
-                    <span data-testid="mp-resume-chat-earlier-omitted-hint">
-                      {state.data.chatEarlierOmitted.hint}
-                    </span>
-                  </div>
                 )}
               </Section>
 
