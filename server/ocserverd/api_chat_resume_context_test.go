@@ -772,26 +772,35 @@ func TestResumeProse_CarriesNoAccidentalMarkdown(t *testing.T) {
 			// when re-wrapping a sentence.
 			lines := strings.Split(tc.text, "\n")
 			for i, line := range lines {
-				trimmed := strings.TrimLeft(line, " \t")
+				leftTrimmed := strings.TrimLeft(line, " \t")
+				bothTrimmed := strings.TrimSpace(line)
 				for _, bad := range blockOpeners {
-					if bad.re.MatchString(trimmed) {
+					probe := leftTrimmed
+					if bad.trimBoth {
+						probe = bothTrimmed
+					}
+					if bad.re.MatchString(probe) {
 						t.Errorf("line %d opens a block that renders as %s "+
 							"for the human while the agent reads it as prose: %q",
 							i+1, bad.becomes, line)
 					}
 				}
 				// A GFM table needs TWO lines: a row carrying a pipe, and a
-				// delimiter row directly under it. Checked as a pair rather than
-				// as "this line has a pipe", because the leading pipe is
-				// OPTIONAL — `^\|` misses `姓名 | 年齡`, which the renderer does
-				// turn into a table — while flagging every stray pipe in prose
-				// would be a false red on text that renders as nothing of the
-				// sort. This mirrors isTableStart() in Markdown.tsx.
-				if strings.Contains(line, "|") && i+1 < len(lines) &&
-					isDelimiterRow(lines[i+1]) {
-					t.Errorf("lines %d–%d form a table header + delimiter pair, "+
-						"which renders as a table for the human while the agent "+
-						"reads it as prose: %q / %q", i+1, i+2, line, lines[i+1])
+				// delimiter row directly under it WITH THE SAME COLUMN COUNT.
+				// Checked as a pair rather than as "this line has a pipe",
+				// because the leading pipe is OPTIONAL — `^\|` misses
+				// `姓名 | 年齡`, which the renderer does turn into a table —
+				// while flagging every stray pipe in prose would be a false red
+				// on text that renders as nothing of the sort. Mirrors
+				// isTableStart() in Markdown.tsx, including its column-count
+				// gate: without that gate `x | y | z` over `--- | ---` reds
+				// here while the renderer leaves it as a paragraph.
+				if strings.Contains(line, "|") && bothTrimmed != "" && i+1 < len(lines) {
+					if n := delimiterColumns(lines[i+1]); n >= 0 && len(splitRow(line)) == n {
+						t.Errorf("lines %d–%d form a table header + delimiter pair, "+
+							"which renders as a table for the human while the agent "+
+							"reads it as prose: %q / %q", i+1, i+2, line, lines[i+1])
+					}
 				}
 			}
 			// The bullet these notes actually use is U+00B7, which markdown does
@@ -823,34 +832,67 @@ func TestResumeProse_CarriesNoAccidentalMarkdown(t *testing.T) {
 // Deliberately a little WIDER than the renderer in places (")" as an ordered
 // marker, tabs as separators): erring wide costs a false red that a human
 // reads and fixes, erring narrow costs a silent miss.
+//
+// `trimBoth` is NOT that trade-off — it is an alignment fix. The renderer tests
+// its HR against `line.trim()`, both ends, so a trailing space or tab hides a
+// real `<hr>` from a guard that only trims the left (review found this one:
+// `"---   "` renders as a rule and stayed green). The other openers are tested
+// left-trimmed on purpose, which is the wider direction: the renderer does not
+// trim them at all.
 var blockOpeners = []struct {
-	re      *regexp.Regexp
-	becomes string
+	re       *regexp.Regexp
+	becomes  string
+	trimBoth bool
 }{
-	{regexp.MustCompile(`^#{1,3}\s`), "a heading"},
-	{regexp.MustCompile(`^[-*+]\s`), "a list item"},
+	{re: regexp.MustCompile(`^#{1,3}\s`), becomes: "a heading"},
+	{re: regexp.MustCompile(`^[-*+]\s`), becomes: "a list item"},
 	// `\d+`, not `\d{1,9}`: the renderer's OLIST_RE has no digit ceiling, and a
 	// guard that stops counting where the renderer does not is a hole with a
 	// number on it (review found this one at ten digits).
-	{regexp.MustCompile(`^\d+[.)]\s`), "an ordered list item"},
-	{regexp.MustCompile(`^>`), "a block quote"},
-	{regexp.MustCompile("^```"), "a code fence"},
-	{regexp.MustCompile(`^(?:-{3,}|\*{3,}|_{3,})$`), "a horizontal rule"},
+	{re: regexp.MustCompile(`^\d+[.)]\s`), becomes: "an ordered list item"},
+	{re: regexp.MustCompile(`^>`), becomes: "a block quote"},
+	{re: regexp.MustCompile("^```"), becomes: "a code fence"},
+	{re: regexp.MustCompile(`^(?:-{3,}|\*{3,}|_{3,})$`), becomes: "a horizontal rule", trimBoth: true},
 }
 
-// isDelimiterRow mirrors parseDelimiterRow() in Markdown.tsx: every cell must be
-// `:?-+:?`, and the row must carry at least one dash (so `|  |` is not one).
-func isDelimiterRow(line string) bool {
-	t := strings.TrimSpace(line)
-	if !strings.Contains(t, "-") || !strings.Contains(t, "|") {
-		return false
+// splitRow mirrors splitRow() in Markdown.tsx: ONE optional leading and ONE
+// optional trailing pipe is decoration, inner pipes separate cells. Stripping
+// EVERY outer pipe instead (strings.Trim) is not the same function — it makes
+// `||---||` look like a delimiter row, which the renderer does not.
+func splitRow(line string) []string {
+	s := strings.TrimSpace(line)
+	s = strings.TrimPrefix(s, "|")
+	s = strings.TrimSuffix(s, "|")
+	cells := strings.Split(s, "|")
+	for i := range cells {
+		cells[i] = strings.TrimSpace(cells[i])
 	}
-	for _, cell := range strings.Split(strings.Trim(t, "|"), "|") {
-		if !delimiterCell.MatchString(strings.TrimSpace(cell)) {
-			return false
+	return cells
+}
+
+// delimiterColumns mirrors parseDelimiterRow() in Markdown.tsx: at least one
+// dash, nothing outside `|`, whitespace, `:` and `-`, and every cell `:?-+:?`.
+// Returns the column count, or -1 when the line is not a delimiter row.
+//
+// 🔴 A pipe is NOT required here, and requiring one is the bug review caught:
+// the renderer accepts a bare `:---:` as a one-column delimiter row, so
+// `a|` over `:---:` renders as a table — and neither the pipe-requiring version
+// of this function nor the HR opener (which needs 3+ dashes) said a word.
+func delimiterColumns(line string) int {
+	t := strings.TrimSpace(line)
+	if !strings.Contains(t, "-") || !delimiterShape.MatchString(t) {
+		return -1
+	}
+	cells := splitRow(t)
+	for _, cell := range cells {
+		if !delimiterCell.MatchString(cell) {
+			return -1
 		}
 	}
-	return true
+	return len(cells)
 }
 
-var delimiterCell = regexp.MustCompile(`^:?-+:?$`)
+var (
+	delimiterShape = regexp.MustCompile(`^[|\s:-]+$`)
+	delimiterCell  = regexp.MustCompile(`^:?-+:?$`)
+)
