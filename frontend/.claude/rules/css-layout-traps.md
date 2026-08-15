@@ -92,6 +92,26 @@ min-content 是整個單字,所以**同一段 CSS 對 en 幾乎沒有作用**(�
   這樣一路綠著,卻沒攔到 owner 手機上的 bug。見
   `stories/TaskArtifactsOverflowStory.tsx`。
 
+## column flex 的 `align-items: flex-start` 會讓子元素被自己最寬的內容綁架(T-4aa0)
+
+`flex-direction: column` 下,`align-items` 決定的是子元素的**寬度**。設成 `flex-start`
+就是叫每個子元素用 **fit-content** ——而 fit-content 的下限是 **min-content**。
+於是只要子孫裡有一個不肯縮的東西(`<pre>` 的 `white-space: pre`、寬表格),整個子元素
+就被撐到那個寬度、突破父容器,**而父容器的寬度限制對它無效**。
+
+- 實例:任務卡內文被撐到 479px,遠寬於卡片給得起的寬度,`.tasks` 因此橫滑
+  (重現真實祖先鏈後 mutant 量到 +148 @390)。拿掉那個 `align-items` 就好了,
+  `<pre>` 也回到自己內部捲動。
+  ⚠️ 數字要註明**是在哪一條祖先鏈上量的**:同一個 bug 裸掛只有 +104,補上
+  `.app__main` 的 22px padding 才是 +148。**裸掛量到的數字比真畫面鬆。**
+- 🔴 **`min-width: 0` 在這裡沒有用**(子元素、任一祖先、整條鏈都試過,實測無變化)——
+  那條規則治的是 flex item 的**自動最小尺寸**,而這裡壞的是 **cross size**。兩者不同。
+- 🔴 **不要從「哪一段看起來爆出去」推兇手**:視覺上最明顯的那段(有底色、有左線的
+  引用區塊)溢出是 0,它只是填滿了被別人撐開的容器。**逐一隱藏子元素、看誰不見了
+  溢出就消失**,那是因果判定;看外觀是猜。
+- 這類容器若曾經放過「不該被拉寬」的按鈕,`flex-start` 可能是那時留下的。按鈕移除後
+  沒人回來收,它就變成一顆等著被踩的地雷。
+
 ## 用了哪份 CSS 的 class,就要自己 import 那份 CSS(T-7526)
 `machine-picker.css` 全 repo 只有 `MachinePicker.tsx` 一個 importer,而它只透過
 `WorkerDetailPanel → useRelocateMachine → MachinePicker` 進入 module graph。**兩個詳情面板
