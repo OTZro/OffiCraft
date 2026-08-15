@@ -987,7 +987,6 @@ func (s *apiServer) HandleSetTaskPriorityApiTasksTaskIdPriorityPost(w http.Respo
 	// clear it on the way out, so frozen_by is never a stale name on a running
 	// task. A frozen→frozen re-write re-stamps the current actor (the last
 	// person to assert the freeze is the one answering for it).
-	wasFrozen := t.Priority == TaskPriorityFrozen
 	if priority == TaskPriorityFrozen {
 		t.FrozenBy = requestTrigger(r)
 	} else {
@@ -999,13 +998,12 @@ func (s *apiServer) HandleSetTaskPriorityApiTasksTaskIdPriorityPost(w http.Respo
 		internalError(w, err)
 		return
 	}
-	// T-e77f: an unfreeze is the transition an outsource executor is most likely
-	// to be sitting out — it correctly refused to advance a frozen task and has
-	// nothing that would tell it the freeze is gone. Freezing runs through the
-	// same call to CLEAR the ledger, so the NEXT unfreeze notifies again.
-	if wasFrozen || priority == TaskPriorityFrozen {
-		s.refreshTaskKickoff(t, kickoffChangeUnfrozen, requestTrigger(r))
-	}
+	// T-51b0: an unfreeze used to post a kickoff notice to the outsource
+	// executor here (and a freeze cleared that notice's ledger). The whole
+	// kickoff seam was withdrawn — owner 2026-08-15, card rc-a4f6a7f8cd71 —
+	// so nothing is posted on this transition any more. What starts a codex
+	// worker now is its own sidecar, which opens a turn the moment that
+	// worker's event stream is up (cli/ocwarden: codexPostBootWake).
 	s.publishTask(*t, requestTrigger(r))
 	writeJSON(w, http.StatusOK, taskPriorityReceiptDTO{
 		TaskID: t.ID, Priority: t.Priority, FrozenBy: t.FrozenBy,
@@ -2539,11 +2537,6 @@ func (s *apiServer) HandleSetTaskDepsApiTasksTaskIdDepsPost(w http.ResponseWrite
 		internalError(w, err)
 		return
 	}
-	// T-e77f: a wholesale deps replacement is the OTHER way a blocker goes away —
-	// the blocker did not close, someone decided it no longer blocks. Both
-	// directions ride the same call: a write that ADDS a live blocker clears the
-	// ledger, so the eventual release notifies.
-	s.refreshTaskKickoff(t, kickoffChangeDepsEdited, requestTrigger(r))
 	s.publishTask(*t, requestTrigger(r))
 	s.writeTask(w, *t)
 }
