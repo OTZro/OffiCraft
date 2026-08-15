@@ -1662,10 +1662,20 @@
 }
 
 /* ---- resume summary card (RESUME SUMMARY, T-8b0d) ---- */
+/* The snapshot's own reading contract, drawn for the human with the SAME text
+ * the agent receives. It goes through `Markdown`, so this block styles a
+ * document, not a text node: the outer margins are collapsed away so the note
+ * still reads as one quiet paragraph block under the timestamp. */
 .mp-resume__note {
   margin-bottom: 12px;
   font-size: 12.5px;
   color: var(--color-text-muted);
+}
+.mp-resume__note > :first-child {
+  margin-top: 0;
+}
+.mp-resume__note > :last-child {
+  margin-bottom: 0;
 }
 .mp-resume__statsgrid {
   display: grid;
@@ -1888,17 +1898,36 @@
 }
 /* TRUNCATION marker — messages are ABSENT and must be fetched. Set apart from
  * the list with a rule and its own block, because it is a statement about the
- * payload rather than about any one message in it. */
+ * payload rather than about any one message in it.
+ *
+ * 🔴 THE RULE IS ON THE BOTTOM EDGE BECAUSE THE MARKER SITS ABOVE THE LIST.
+ * It carried `border-top` from the era when it rendered under the last message
+ * and had to be fenced off from what came before it. The marker moved to the
+ * top; a top rule now fences it off from the section heading (which it has no
+ * quarrel with) and leaves it touching the first message card — separating it
+ * from the wrong neighbour. What it must be set apart from is the list BELOW
+ * it, so the rule and the gap both live on that edge. */
 .mp-resume__chatcut {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed color-mix(in srgb, var(--color-overlay) 14%, transparent);
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed
+    color-mix(in srgb, var(--color-overlay) 14%, transparent);
   font-size: 11.5px;
   overflow-wrap: anywhere;
 }
 .mp-resume__chatcutlabel {
+  display: block;
   font-weight: 600;
   color: var(--color-text-strong);
+}
+/* The hint's own block. `Markdown` wraps its output in paragraphs, which carry
+ * the document margins from `.doc-md`; inside an 11.5px marker those read as a
+ * gap between the label and the sentence it introduces. */
+.mp-resume__chatcuthint > :first-child {
+  margin-top: 0;
+}
+.mp-resume__chatcuthint > :last-child {
+  margin-bottom: 0;
 }
 .mp-resume__foldednote {
   /* The collapse LEGEND, drawn once above the message list. Quieter than a
