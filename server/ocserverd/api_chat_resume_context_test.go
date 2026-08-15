@@ -772,27 +772,12 @@ func TestResumeProse_CarriesNoAccidentalMarkdown(t *testing.T) {
 			// when re-wrapping a sentence.
 			for i, line := range strings.Split(tc.text, "\n") {
 				trimmed := strings.TrimLeft(line, " \t")
-				for _, bad := range []struct {
-					prefix, becomes string
-				}{
-					{"- ", "a list item"},
-					{"* ", "a list item"},
-					{"+ ", "a list item"},
-					{"> ", "a block quote"},
-					{"# ", "a heading"},
-					{"|", "a table row"},
-				} {
-					if strings.HasPrefix(trimmed, bad.prefix) {
-						t.Errorf("line %d opens with %q, which renders as %s "+
+				for _, bad := range blockOpeners {
+					if bad.re.MatchString(trimmed) {
+						t.Errorf("line %d opens a block that renders as %s "+
 							"for the human while the agent reads it as prose: %q",
-							i+1, bad.prefix, bad.becomes, line)
+							i+1, bad.becomes, line)
 					}
-				}
-				// "1. " / "12) " — an ordered list. Checked separately because
-				// the marker is a number, not a fixed prefix.
-				if m := orderedListOpener.FindString(trimmed); m != "" {
-					t.Errorf("line %d opens with %q, which renders as an "+
-						"ordered list item: %q", i+1, m, line)
 				}
 			}
 			// The bullet these notes actually use is U+00B7, which markdown does
@@ -807,5 +792,32 @@ func TestResumeProse_CarriesNoAccidentalMarkdown(t *testing.T) {
 	}
 }
 
-// "1. ", "2) ", "12. " at the head of a line.
-var orderedListOpener = regexp.MustCompile(`^[0-9]{1,9}[.)] `)
+// 🔴 THESE MIRROR THE RENDERER'S OWN GRAMMAR — frontend/src/components/
+// Markdown.tsx, the HEADING_RE / ULIST_RE / OLIST_RE / QUOTE_RE / FENCE_RE /
+// HR_RE block. Keep them in step: if that block gains an opener, this list
+// needs it too, and there is a pointer there saying so.
+//
+// The first version of this guard was a hand-written list of literal prefixes
+// ("# ", "- ", "> "), and review proved it green on three inputs the renderer
+// turns into markup: "## " (two hashes, no match for "# "), a bare "---"
+// (no trailing space, no match for "- "), and ">no space". A guard that is
+// silent on the very shapes it exists to catch is worse than none — it reads
+// as coverage. Copying the GRAMMAR rather than the prefixes is what closes
+// that gap, and it is safe to copy: seven regexes that almost never change,
+// as opposed to copying the STRINGS, which would be a second thing to drift.
+//
+// Deliberately a little WIDER than the renderer in places (")" as an ordered
+// marker, tabs as separators): erring wide costs a false red that a human
+// reads and fixes, erring narrow costs a silent miss.
+var blockOpeners = []struct {
+	re      *regexp.Regexp
+	becomes string
+}{
+	{regexp.MustCompile(`^#{1,3}\s`), "a heading"},
+	{regexp.MustCompile(`^[-*+]\s`), "a list item"},
+	{regexp.MustCompile(`^\d{1,9}[.)]\s`), "an ordered list item"},
+	{regexp.MustCompile(`^>`), "a block quote"},
+	{regexp.MustCompile("^```"), "a code fence"},
+	{regexp.MustCompile(`^(?:-{3,}|\*{3,}|_{3,})$`), "a horizontal rule"},
+	{regexp.MustCompile(`^\|`), "a table row"},
+}
