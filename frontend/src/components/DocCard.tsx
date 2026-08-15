@@ -147,6 +147,15 @@ export interface DocCardProps {
    * the two wording codes together — and if you bring it back into a page,
    * re-read T-fc57 first (see the note above the collapsed branch).
    *
+   * …AND THAT "together" IS A POLICY, NOT A MECHANISM. The review checked:
+   * there is no unused-key lint in this repo, so you CAN delete this branch and
+   * leave `docExpand` / `docCollapse` in the locales, and the theme whitelist
+   * would not move. They are bundled here because a wording code with no render
+   * site anywhere is its own kind of falsehood — a theme author would be
+   * editing a string that can never appear. Retire them as a pair by choice; do
+   * not read this as "deleting the branch forces a whitelist change", which
+   * would make the branch look harder to remove than it is.
+   *
    * The shape it took, recorded because the reasoning is not re-derivable: the
    * owner met the stacked page on a phone, scrolled to the bottom of the first
    * document, and read the end of the card as the end of the PAGE. Adding a
