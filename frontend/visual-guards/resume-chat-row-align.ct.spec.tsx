@@ -135,11 +135,25 @@ for (const width of [390, 1280]) {
     }
     // …and the whole stack stays close to the section title: a small frame
     // inset is intended, a runaway indent is the defect this file exists for.
+    //
+    // 🔴 BOUNDED ON BOTH SIDES. The assertion this replaced compared the body
+    // to the title with a two-way |…| ≤ 1.5px, and rewriting it as a one-way
+    // ceiling silently dropped the other half: independent review put
+    // `margin-left: -60px` on the row and the whole stack walked LEFT out of
+    // the section with this file still green. A frame inset is a small POSITIVE
+    // number by construction, so the floor is 0 — the cards may not start left
+    // of the heading they belong to.
+    const indent = rowXs[0] - titleBox.x;
     expect(
-      rowXs[0] - titleBox.x,
-      `[${width}px] the card stack is indented ${rowXs[0] - titleBox.x}px from ` +
+      indent,
+      `[${width}px] the card stack is indented ${indent}px from ` +
         `the section title — the frame's inset should be small and deliberate`,
     ).toBeLessThanOrEqual(MAX_FRAME_INDENT);
+    expect(
+      indent,
+      `[${width}px] the card stack starts ${-indent}px LEFT of the section ` +
+        `title — cards must not escape the section they sit in`,
+    ).toBeGreaterThanOrEqual(-SLACK);
 
     // ── ② the fold mark hugs the message it is talking about ────────────────
     // Measured as a HORIZONTAL distance from its own row's left edge. The old
