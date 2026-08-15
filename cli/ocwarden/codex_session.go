@@ -654,6 +654,15 @@ type codexListenerState struct{ wakeSent bool }
 // still green — the ticket's entire reason for existing could be removed and
 // nothing turned red. A pure function says what SHOULD happen; this seam is
 // what lets a test see that it DID.
+//
+// ⚠️ ONE RESIDUE, AND WHAT HOLDS IT IS AN ACCIDENT. Deleting the CALL to this
+// method from the listener loop still leaves the whole ocwarden suite green;
+// what reddens is `uplink-guard`, because uplinks.json's codex-hop-4 anchors on
+// the reportIdentity/requestRateLimits pair that happens to live in the closure
+// passed here. That is INCIDENTAL COVERAGE, not design — move those two calls
+// out of the closure and the residue reopens with nothing to announce it.
+// Recorded rather than closed: closing it properly needs a test that drives the
+// real loop, and the review (T-99a6) judged the residue non-blocking.
 func (st *codexListenerState) handleListenerLine(
 	line string, onConnect func(), openTurn func(string),
 ) {
