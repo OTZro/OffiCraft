@@ -306,6 +306,97 @@ describe("ResumeSummaryCard renders the SAME snapshot the agent receives", () =>
     expect(cut).toContain(R.chatCutLabel);
   });
 
+  // 🔴 THE ABSENT MARKER SITS ABOVE THE MESSAGES, AND THE POSITION IS THE
+  // CLAIM (owner 2026-08-15: 「chat 是由舊到新 所以更舊以前的資訊要他撈取這個字
+  // 應該是在訊息一開始不是結尾」). The list runs OLD → NEW, so the edge this
+  // marker describes — "there may be more, further back" — is the TOP one. It
+  // rendered below the last message until now, which was right only while the
+  // list ran new → old; the order changed and the marker was not moved, so it
+  // pointed at the wrong end and a reader scrolling up to the start had no way
+  // to know the line was cut there.
+  //
+  // Asserting DOM ORDER, not mere presence: a presence check stays green with
+  // the marker back at the bottom, which is exactly the state being fixed.
+  it("puts the absent marker BEFORE the messages, because the list runs old → new", async () => {
+    const u = await open();
+    const cut = u.getByTestId("mp-resume-chat-earlier-omitted");
+    const rows = u.getAllByTestId("mp-resume-chat-row");
+    expect(rows.length).toBeGreaterThan(0);
+    // MUTANT CHECK: move the marker back below the list and this goes red on
+    // every row — verified by moving the JSX block, not assumed.
+    for (const [i, row] of rows.entries()) {
+      expect(
+        cut.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING,
+        `chat row ${i} must come AFTER the absent marker`,
+      ).toBeTruthy();
+    }
+  });
+
+  // 🔴 AND IT SURVIVES AN EMPTY CHAT — the payload that needs it most.
+  //
+  // Moving the marker to the top the first time put it INSIDE the "there are
+  // messages" branch, which deleted it from the one snapshot whose reader is
+  // most likely to be misled: budget pressure can evict EVERY message, and the
+  // screen then said 「沒有訊息」 and nothing else. "This line is empty" and
+  // "this line was cut before anything fit" are different facts, and the wire
+  // distinguishes them — chat: [] with the cut flag RAISED is the second one.
+  //
+  // The regression shipped past a full green suite because every fixture in
+  // this file has messages in it. Independent review found it; no test could.
+  it("still draws the absent marker when the chat came back EMPTY", async () => {
+    OVERRIDE.value = { ...MAPPED(), chat: [] };
+    const u = await open();
+    // The empty state is present — this is the payload we mean.
+    expect(u.queryByTestId("mp-resume-chat-row")).toBeNull();
+    // ...and the reader is still told the line was cut, with the recovery
+    // instruction intact. MUTANT CHECK: nest this marker back inside the
+    // non-empty branch and both of these go red.
+    expect(txt(u.getByTestId("mp-resume-chat-earlier-omitted"))).toContain(
+      R.chatCutLabel,
+    );
+    expect(txt(u.getByTestId("mp-resume-chat-earlier-omitted-hint"))).toContain(
+      "get_chat",
+    );
+  });
+
+  // 🔴 THE SERVER'S PROSE IS RENDERED, NOT DUMPED. `note` and the cut `hint`
+  // are ONE text written for both readers (owner: 「應該好好寫 讓兩邊看得懂」),
+  // and the only formatting plain text has is line breaks, `**` and backticks.
+  // Printed as bare text nodes they collapsed into a single run-on paragraph
+  // with the markup showing — byte-verbatim and unreadable, which is the exact
+  // failure this ticket was opened for.
+  //
+  // Asserting the RENDERED SHAPE (<strong>, <br>, <code>), not the characters:
+  // a text assertion stays green on the wall of prose, because the bytes never
+  // changed. That is what made this invisible to every existing test.
+  it("renders the note and the hint as MARKUP, not as a wall of text", async () => {
+    OVERRIDE.value = {
+      ...MAPPED(),
+      note: "第一行\n第二行有**重點**與 `get_task`",
+      chatEarlierOmitted: {
+        omitted: true,
+        hint: "去抓：呼叫 `get_chat`，**成對**送 `before_ts` 與 `before_id`",
+      },
+    };
+    const u = await open();
+    const note = u.getByTestId("mp-resume-note");
+    const hint = u.getByTestId("mp-resume-chat-earlier-omitted-hint");
+
+    // Emphasis and code are elements, not literal ** and backticks on screen.
+    expect(note.querySelector("strong")).not.toBeNull();
+    expect(note.querySelector("code")).not.toBeNull();
+    expect(hint.querySelector("strong")).not.toBeNull();
+    expect(hint.querySelector("code")).not.toBeNull();
+    expect(txt(note)).not.toContain("**");
+    expect(txt(hint)).not.toContain("**");
+
+    // `breaks` is the half a plain <Markdown> would silently drop: the source
+    // separates its lines with SINGLE newlines, which standard markdown joins
+    // into one paragraph. MUTANT CHECK: remove the `breaks` prop and this line
+    // goes red while every assertion above stays green.
+    expect(note.querySelector("br")).not.toBeNull();
+  });
+
   // 🔴 A FOLDED message and an ABSENT one must not be described with shared
   // vocabulary. They are different failures. One says "this is here, shortened,
   // the rest is on the server"; the other says "these may not be here at all,

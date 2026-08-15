@@ -73,6 +73,21 @@ import "./member-detail.css";
 //   3. EVERY SECTION SHOWS. Long ones may be collapsed, but which sections
 //      EXIST is always visible — a section that renders nothing at all is
 //      indistinguishable from a section the payload never carried.
+//      ⚠️ This binds MARKERS too, not just sections: the truncation notice is
+//      a sibling of the chat empty state, because the payload where every
+//      message was evicted is exactly the payload whose reader most needs to be
+//      told the line was cut.
+//   4. THE SERVER'S PROSE IS PRINTED, AND PRINTED AS WRITTEN. `note` and the
+//      cut `hint` are one text serving both readers (owner 2026-08-15: 「應該
+//      好好寫 讓兩邊看得懂」), so the cockpit never substitutes a human-only
+//      rewrite — but it must also not DESTROY the formatting that text carries.
+//      Both go through `Markdown` with `breaks`, the same path a message body
+//      takes: line breaks stay breaks, `**` reads as emphasis, and the field
+//      and tool names the reader has to type stay in backticks. Rendered as
+//      bare text nodes they collapsed into a wall of prose with the markup
+//      showing — verbatim in bytes, unreadable on screen, which is the failure
+//      this ticket was opened for. VERBATIM IS ABOUT THE WORDS, NOT THE
+//      TYPOGRAPHY.
 //
 // Content here is agent- and outsider-authored, so bodies go through
 // `Markdown`, which builds React elements only and never touches
@@ -505,7 +520,23 @@ export function ResumeSummaryCard({ agentId }: { agentId: string }) {
                   </span>
                 </div>
               )}
-              <div className="mp-resume__note">{state.data.note}</div>
+              {/* 🔴 DRAWN THROUGH `Markdown`, AND THAT IS THE POINT (rule 4 in
+                * the file header). The server writes this note for BOTH
+                * readers, so it carries the only formatting plain text has:
+                * line breaks, `**` for emphasis, backticks around the field
+                * and tool names the reader must type. As a bare text node with
+                * no `white-space` rule, every one of those collapsed — seven
+                * lines ran together into one paragraph and the `**` printed
+                * literally, which is the unreadable wall this ticket exists to
+                * remove. `breaks` is required: the source separates its lines
+                * with single \n, and without it they would be re-joined. */}
+              <div data-testid="mp-resume-note">
+                <Markdown
+                  source={state.data.note}
+                  breaks
+                  className="mp-resume__note doc-md"
+                />
+              </div>
               <div
                 className="mp-resume__statsgrid"
                 data-testid="mp-resume-overview"
@@ -529,6 +560,54 @@ export function ResumeSummaryCard({ agentId }: { agentId: string }) {
                 collapseLabel={t.mp.resumeSummary.collapse}
                 expandLabel={t.mp.resumeSummary.expand}
               >
+                {/* TRUNCATION, not collapse: whole messages that are NOT in
+                  * this payload.
+                  *
+                  * 🔴 IT SITS AT THE TOP, AND THE POSITION IS THE POINT
+                  * (owner 2026-08-15). The list runs OLD → NEW, so the
+                  * boundary this marker describes — "there may be more,
+                  * further back" — is the TOP edge. It used to render below
+                  * the last message, which was correct only while the list ran
+                  * new → old; the order was changed and the marker was not
+                  * moved, leaving it pointing at the wrong end. A reader
+                  * scrolling up to the start hit the oldest message and had no
+                  * way to know the line was cut there. Pinned by DOM ORDER in
+                  * the payload-parity suite — a presence check stays green
+                  * with it back at the bottom.
+                  *
+                  * 🔴 IT IS ALSO A SIBLING OF THE EMPTY STATE, NOT A CHILD OF
+                  * THE MESSAGE LIST. Moving it to the top the first time put it
+                  * INSIDE the non-empty branch, and that silently deleted it
+                  * from the one payload that needs it most: budget pressure can
+                  * evict EVERY message, and the reader was then shown a bare
+                  * 「沒有訊息」 with nothing saying the line had been cut — the
+                  * exact false reading rule 3 of the header forbids. Independent
+                  * review caught it; the parity fixture is never empty, so no
+                  * test did.
+                  *
+                  * The hint is the SERVER's own recovery instruction and is
+                  * printed VERBATIM — re-writing it here would be the cockpit
+                  * inventing a procedure it cannot keep in step with the
+                  * endpoint. Verbatim is about the WORDS, not the typography:
+                  * it goes through `Markdown` for the same reason the note
+                  * does (rule 4). */}
+                {state.data.chatEarlierOmitted.omitted && (
+                  <div
+                    className="mp-resume__chatcut"
+                    data-testid="mp-resume-chat-earlier-omitted"
+                  >
+                    <span className="mp-resume__chatcutlabel">
+                      {t.mp.resumeSummary.chatCutLabel}
+                    </span>
+                    <div data-testid="mp-resume-chat-earlier-omitted-hint">
+                      <Markdown
+                        source={state.data.chatEarlierOmitted.hint}
+                        breaks
+                        className="mp-resume__chatcuthint doc-md"
+                      />
+                    </div>
+                  </div>
+                )}
                 {state.data.chat.length === 0 ? (
                   <div className="mp-resume__empty">
                     {t.mp.resumeSummary.chatEmpty}
@@ -556,24 +635,6 @@ export function ResumeSummaryCard({ agentId }: { agentId: string }) {
                       <ChatRow key={m.id} m={m} t={t} msg={msg} />
                     ))}
                   </>
-                )}
-                {/* TRUNCATION, not collapse: whole messages that are NOT in
-                  * this payload. The hint is the SERVER's own recovery
-                  * instruction and is printed verbatim — re-writing it here
-                  * would be the cockpit inventing a procedure it cannot keep
-                  * in step with the endpoint. */}
-                {state.data.chatEarlierOmitted.omitted && (
-                  <div
-                    className="mp-resume__chatcut"
-                    data-testid="mp-resume-chat-earlier-omitted"
-                  >
-                    <span className="mp-resume__chatcutlabel">
-                      {t.mp.resumeSummary.chatCutLabel}
-                    </span>{" "}
-                    <span data-testid="mp-resume-chat-earlier-omitted-hint">
-                      {state.data.chatEarlierOmitted.hint}
-                    </span>
-                  </div>
                 )}
               </Section>
 

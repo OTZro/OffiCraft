@@ -181,6 +181,13 @@ function renderInline(text: string, opts?: InlineOpts): ReactNode[] {
     });
 }
 
+// 🔴 KEEP IN STEP WITH `blockOpeners` in server/ocserverd/
+// api_chat_resume_context_test.go. Two of the strings this renderer draws are
+// SERVER constants written for both a human and an agent (resumeNote,
+// resumeChatCutHint), and that guard asserts neither of them opens a block by
+// accident — a line that starts "1. " or "## " renders as markup for the human
+// while the agent reads it as prose. It works by mirroring the openers below,
+// so an opener added here without one added there is a hole nothing reports.
 const HEADING_RE = /^(#{1,3})\s+(.*)$/;
 const ULIST_RE = /^[-*]\s+(.*)$/;
 const OLIST_RE = /^(\d+)\.\s+(.*)$/;

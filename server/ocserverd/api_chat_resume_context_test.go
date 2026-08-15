@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // resumeCtxServer seeds a roster with real NAMES — the fixture used by every
@@ -327,8 +328,27 @@ func TestResumeChat_BudgetIsACeilingAndTheBoundaryIsTight(t *testing.T) {
 	// Uniform, modest messages from several peers so the stream is long enough
 	// to overrun the budget many times over. Uniform size is what makes "one
 	// more message" a well-defined quantity below.
+	//
+	// 🔴 UNIFORM IS A PRECONDITION OF HALF 2, NOT A CONVENIENCE, and the peer
+	// list is chosen to make it TRUE rather than merely claimed. Half 2 reads
+	// the cost of the OLDEST CARRIED message and calls it the cost of the next
+	// one back; that substitution is only sound when every message in the
+	// corpus bills the same. Two things used to break it silently:
+	//   - the OWNER's line is exempt from collapsing (resumeChatCarriesFullBody),
+	//     so an owner message bills its whole 200-rune body while a third
+	//     party's bills the 120-rune preview — a ~1.5x difference;
+	//   - a peer id with no roster row resolves to an EMPTY from_name, so it
+	//     bills 2 runes less than a named one.
+	// A mixed corpus makes half 2 depend on WHICH class of message the pack
+	// happened to stop after: with 165 runes of slack left, a 153-rune reading
+	// off a collapsed message declares the block "not at the ceiling" while the
+	// message actually rejected cost 234 and the packer was in fact full. That
+	// is a false alarm about the packer, and it moves whenever anything outside
+	// the array changes size (the cut hint, say). So: only ROSTERED, NON-OWNER
+	// peers with equal-length names, every body the same length, and the
+	// uniformity is asserted below instead of assumed.
 	chunk := strings.Repeat("字", 200)
-	peers := []string{"m-quiet", "m-peer", "m-third", wireOwnerID}
+	peers := []string{"m-quiet", "m-peer", "m-loud"}
 	ts := 1.0
 	for i := 0; i < 120; i++ {
 		for _, peer := range peers {
@@ -371,11 +391,25 @@ func TestResumeChat_BudgetIsACeilingAndTheBoundaryIsTight(t *testing.T) {
 	// so the next one back costs the same). Deliberately not asking the
 	// production accountant: an assertion written against resumeChatMessageChars
 	// is true by construction and survives every mutant of it.
+	wireCost := func(m chatMessageDTO) int {
+		return len([]rune(m.Body)) +
+			len([]rune(m.FromName)) + len([]rune(m.ToName)) +
+			len([]rune(m.TSDisplay)) +
+			len(strconv.Itoa(m.BodyOmittedChars))
+	}
 	oldest := snap.Chat[0]
-	oneMore := len([]rune(oldest.Body)) +
-		len([]rune(oldest.FromName)) + len([]rune(oldest.ToName)) +
-		len([]rune(oldest.TSDisplay)) +
-		len(strconv.Itoa(oldest.BodyOmittedChars))
+	oneMore := wireCost(oldest)
+	// The substitution above is only legal on a uniform corpus, so CHECK it on
+	// the wire instead of trusting the fixture. A future edit to the peer list
+	// or the body that reintroduces a mixed corpus fails HERE, naming the
+	// reason — rather than surfacing as an unexplained "not at the ceiling".
+	for _, m := range snap.Chat {
+		if got := wireCost(m); got != oneMore {
+			t.Fatalf("fixture bug: the corpus is not uniform, so \"one more message\" "+
+				"is not a well-defined size: %s costs %d, %s costs %d",
+				oldest.ID, oneMore, m.ID, got)
+		}
+	}
 	if oneMore <= 0 {
 		t.Fatalf("fixture bug: a message that costs nothing cannot pin a boundary")
 	}
@@ -697,3 +731,226 @@ func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T)
 		t.Fatalf("estimated_total_chars: want %d, got %d", wantEstimate, peek.EstimatedTotalChars)
 	}
 }
+
+// 🔴 THESE TWO STRINGS ARE RENDERED AS MARKDOWN, SO THEIR SYNTAX IS PART OF
+// THEIR CONTRACT.
+//
+// The cockpit draws `note` and the cut `hint` through the same Markdown
+// renderer a chat body goes through (ResumeSummaryCard rule 4), because the
+// only formatting plain text has — line breaks, `**`, backticks — was being
+// collapsed into a wall of prose when they were printed as bare text nodes.
+// That fix has a cost this test exists to hold: a line that ACCIDENTALLY looks
+// like markup now renders as markup. Open a line with "1. " or "- " and the
+// human sees a list item the agent does not; leave a backtick unpaired and the
+// rest of the paragraph turns into code on screen while the agent reads it as
+// prose. Both are silent — the bytes are still verbatim, and the parity suite
+// on the other side uses a synthetic fixture, so nothing goes red.
+//
+// The guard lives HERE, at the source, rather than as a golden copy of these
+// strings in a front-end test: a copy is one more thing to drift, and the
+// property being asserted is a property of the TEXT, not of the renderer.
+func TestResumeProse_CarriesNoAccidentalMarkdown(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{"resumeNote", resumeNote},
+		{"resumeChatCutHint", resumeChatCutHint},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Paired inline markers. An odd count means one of them opens a run
+			// that never closes, and everything after it changes appearance.
+			if n := strings.Count(tc.text, "`"); n%2 != 0 {
+				t.Errorf("unpaired backtick (%d of them): a code run is left "+
+					"open and the rest of the text renders as code", n)
+			}
+			if n := strings.Count(tc.text, "**"); n%2 != 0 {
+				t.Errorf("unpaired ** (%d of them): the emphasis run never "+
+					"closes", n)
+			}
+			// Block-level openers. Markdown reads these at the START of a line
+			// only, which is exactly why they are easy to introduce by accident
+			// when re-wrapping a sentence.
+			lines := strings.Split(tc.text, "\n")
+			for i, line := range lines {
+				bothTrimmed := strings.TrimSpace(line)
+				for _, bad := range blockOpeners {
+					if bad.re.MatchString(bad.trim(line)) {
+						t.Errorf("line %d opens a block that renders as %s "+
+							"for the human while the agent reads it as prose: %q",
+							i+1, bad.becomes, line)
+					}
+				}
+				// A GFM table needs TWO lines: a row carrying a pipe, and a
+				// delimiter row directly under it WITH THE SAME COLUMN COUNT.
+				// Checked as a pair rather than as "this line has a pipe",
+				// because the leading pipe is OPTIONAL — `^\|` misses
+				// `姓名 | 年齡`, which the renderer does turn into a table —
+				// while flagging every stray pipe in prose would be a false red
+				// on text that renders as nothing of the sort. Mirrors
+				// isTableStart() in Markdown.tsx, including its column-count
+				// gate: without that gate `x | y | z` over `--- | ---` reds
+				// here while the renderer leaves it as a paragraph.
+				if strings.Contains(line, "|") && bothTrimmed != "" && i+1 < len(lines) {
+					if n := delimiterColumns(lines[i+1]); n >= 0 && len(splitRow(line)) == n {
+						t.Errorf("lines %d–%d form a table header + delimiter pair, "+
+							"which renders as a table for the human while the agent "+
+							"reads it as prose: %q / %q", i+1, i+2, line, lines[i+1])
+					}
+				}
+			}
+			// The bullet these notes actually use is U+00B7, which markdown does
+			// not know — that is why it was chosen. If this ever fails, the text
+			// switched to a real list marker and the check above is the one that
+			// will have caught it.
+			if strings.Contains(tc.text, "·") && !strings.Contains(tc.text, "\n· ") {
+				t.Errorf("the middle dot is used but never at the start of a " +
+					"line — check the bullet convention is still intact")
+			}
+		})
+	}
+}
+
+// 🔴 THESE MIRROR THE RENDERER'S OWN GRAMMAR — frontend/src/components/
+// Markdown.tsx, the HEADING_RE / ULIST_RE / OLIST_RE / QUOTE_RE / FENCE_RE /
+// HR_RE block. Keep them in step: if that block gains an opener, this list
+// needs it too, and there is a pointer there saying so.
+//
+// The first version of this guard was a hand-written list of literal prefixes
+// ("# ", "- ", "> "), and review proved it green on three inputs the renderer
+// turns into markup: "## " (two hashes, no match for "# "), a bare "---"
+// (no trailing space, no match for "- "), and ">no space". A guard that is
+// silent on the very shapes it exists to catch is worse than none — it reads
+// as coverage. Copying the GRAMMAR rather than the prefixes is what closes
+// that gap, and it is safe to copy: seven regexes that almost never change,
+// as opposed to copying the STRINGS, which would be a second thing to drift.
+//
+// Deliberately a little WIDER than the renderer in places — `)` as an ordered
+// marker and `+` as a bullet, neither of which the renderer accepts: erring
+// wide costs a false red that a human reads and fixes, erring narrow costs a
+// silent miss. ("tabs as separators" used to be listed here too and was never
+// an example of anything: a tab is in JavaScript's `\s` and in jsSpace, so
+// there the two are equal, not wider.)
+//
+// 🔴 `\s` IS NOT `\s`. The renderer's regexes are JavaScript, where `\s` is
+// Unicode; Go's is [\t\n\f\r ] and nothing else. That five-character ceiling
+// is the single defect review has now found THREE times in this file, each
+// time in a different opener, and the shape is always the same: a full-width
+// IDEOGRAPHIC SPACE (U+3000) — one keystroke away in the Chinese input these
+// two constants are written in — sits where the guard expects an ASCII space,
+// the renderer opens a list/heading/table, and the guard says nothing. So the
+// space class is spelled out ONCE, here, and every opener uses it. Do not
+// write a bare `\s` in this table.
+const jsSpace = `[\t\n\v\f\r\x{0085}\p{Zs}\x{2028}\x{2029}\x{feff}]`
+
+// Each opener carries the trim its renderer counterpart actually applies,
+// because getting that wrong is a hole in whichever direction it is wrong:
+//
+//   - HR: the renderer tests `line.trim()`, BOTH ends — review found `"---   "`
+//     rendering as a rule while a left-only guard stayed green.
+//   - fence: the renderer tests `line.trimStart()`, which is Unicode — review
+//     found a U+3000-indented fence rendering as <pre> while an ASCII
+//     TrimLeft guard stayed green. An earlier comment here claimed the guard
+//     "merely matches" the renderer for this opener; it did not, it was
+//     strictly NARROWER, which is the one direction this file must never be.
+//   - heading / list / quote: the renderer does NOT trim these at all, so
+//     trimming here is the deliberately-wider direction, costing a false red
+//     on indented prose that a human reads and fixes.
+//
+// Unicode trimming is not byte-identical across the two languages either:
+// Go's unicode.IsSpace has U+0085 that JS's trim lacks, and JS has U+FEFF that
+// Go's lacks. Both asymmetries are known and accepted, and the second is a real
+// hole rather than a theoretical one, so read what it does and does not cover:
+//
+//   - U+0085 costs a false red, on a character nobody can type. Fine.
+//   - U+FEFF is a genuine gap in the trimming direction — a delimiter row or a
+//     fence padded with one renders while this guard stays silent. It cannot
+//     arrive by MISTYPING, which is the failure mode this file exists to catch:
+//     a raw BOM in the middle of a source file is rejected by the compiler
+//     outright (verified — the mutant does not build). It CAN arrive by writing
+//     the `\ufeff` escape, which compiles fine and which review verified goes
+//     undetected. Nobody types that escape by accident, so it is left open
+//     rather than papered over; closing it means a trim of our own
+//     (`unicode.IsSpace(r) || r == '\ufeff'`) in all three places.
+//
+// An earlier version of this comment called that second one "unreachable". It
+// is not, and the difference matters: unreachable would mean nothing to do,
+// where the truth is a known gap with a named shape and a known fix.
+var blockOpeners = []struct {
+	re      *regexp.Regexp
+	becomes string
+	trim    func(string) string
+}{
+	{re: regexp.MustCompile(`^#{1,3}` + jsSpace), becomes: "a heading", trim: trimASCIIStart},
+	{re: regexp.MustCompile(`^[-*+]` + jsSpace), becomes: "a list item", trim: trimASCIIStart},
+	// `\d+`, not `\d{1,9}`: the renderer's OLIST_RE has no digit ceiling, and a
+	// guard that stops counting where the renderer does not is a hole with a
+	// number on it (review found this one at ten digits).
+	{re: regexp.MustCompile(`^\d+[.)]` + jsSpace), becomes: "an ordered list item", trim: trimASCIIStart},
+	{re: regexp.MustCompile(`^>`), becomes: "a block quote", trim: trimASCIIStart},
+	{re: regexp.MustCompile("^```"), becomes: "a code fence", trim: trimUnicodeStart},
+	{re: regexp.MustCompile(`^(?:-{3,}|\*{3,}|_{3,})$`), becomes: "a horizontal rule", trim: strings.TrimSpace},
+}
+
+// trimASCIIStart is the deliberately-wider probe: the renderer does not trim
+// these openers at all, so anything we strip here can only produce a false red.
+func trimASCIIStart(line string) string { return strings.TrimLeft(line, " \t") }
+
+// trimUnicodeStart mirrors String.prototype.trimStart(), which the renderer
+// applies to the code fence.
+func trimUnicodeStart(line string) string {
+	return strings.TrimLeftFunc(line, unicode.IsSpace)
+}
+
+// splitRow mirrors splitRow() in Markdown.tsx: ONE optional leading and ONE
+// optional trailing pipe is decoration, inner pipes separate cells. Stripping
+// EVERY outer pipe instead (strings.Trim) is not the same function — it makes
+// `||---||` look like a delimiter row, which the renderer does not.
+func splitRow(line string) []string {
+	s := strings.TrimSpace(line)
+	s = strings.TrimPrefix(s, "|")
+	s = strings.TrimSuffix(s, "|")
+	cells := strings.Split(s, "|")
+	for i := range cells {
+		cells[i] = strings.TrimSpace(cells[i])
+	}
+	return cells
+}
+
+// delimiterColumns mirrors parseDelimiterRow() in Markdown.tsx: at least one
+// dash and every cell `:?-+:?`. Returns the column count, or -1 when the line
+// is not a delimiter row.
+//
+// 🔴 A pipe is NOT required here, and requiring one is the bug review caught:
+// the renderer accepts a bare `:---:` as a one-column delimiter row, so
+// `a|` over `:---:` renders as a table — and neither the pipe-requiring version
+// of this function nor the HR opener (which needs 3+ dashes) said a word.
+//
+// 🔴 The renderer's cheap-reject (`/^[|\s:-]+$/`) is deliberately NOT copied.
+// Transliterated it gives Go's ASCII-only `\s` — see the jsSpace note below —
+// and a delimiter row holding U+3000 then renders as a table while the guard
+// stays green. Dropping it rather than widening it is safe in the direction
+// that matters: against the RENDERER's cheap-reject it is exactly equivalent,
+// because JS's `\s` set and JS's `trim()` set are the same 25 characters, so
+// the per-cell `:?-+:?` test below already rejects everything the shape test
+// would have. It is NOT equivalent to the Go transliteration that was here:
+// that one also rejected the ~20 non-ASCII spaces Go's `\s` omits, which is
+// the bug, plus U+0085, which Go's TrimSpace strips and JS's trim does not —
+// so a delimiter row padded with U+0085 is now a false red. That is the wide
+// direction, on a character no one can type; the alternative was staying blind
+// to U+3000, which anyone writing Chinese can type by accident.
+func delimiterColumns(line string) int {
+	t := strings.TrimSpace(line)
+	if !strings.Contains(t, "-") {
+		return -1
+	}
+	cells := splitRow(t)
+	for _, cell := range cells {
+		if !delimiterCell.MatchString(cell) {
+			return -1
+		}
+	}
+	return len(cells)
+}
+
+var delimiterCell = regexp.MustCompile(`^:?-+:?$`)
