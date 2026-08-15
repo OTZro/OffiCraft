@@ -1426,6 +1426,10 @@ export const zh = {
     bootDocSaveConfirmSystem:
       "要儲存這份系統互動說明嗎？之後開機的每一個 agent 都會讀到這份內容。",
     bootDocSaveConfirmAction: "確認儲存",
+    // 堆疊呈現的文件，點標題才展開（T-6278）。兩份啟動程序都預設收疊，讓一個
+    // 畫面看得到兩份；標籤寫的是「按下去會怎樣」，不是目前狀態。
+    docExpand: "展開這份文件",
+    docCollapse: "收合這份文件",
     historyBootSystemTitle: "系統互動的版本紀錄",
     historyBootClaudeTitle: "啟動程序（Claude Code）的版本紀錄",
     historyBootCodexTitle: "啟動程序（Codex CLI）的版本紀錄",

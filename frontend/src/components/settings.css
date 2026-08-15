@@ -42,6 +42,62 @@
   font-size: 24px;
 }
 
+/* ONE SCROLL REGION FOR A PAGE THAT STACKS TWO DOCUMENTS (T-6278).
+ *
+ * 🔴 Collapsing the two cards was NOT enough on its own, and the reason is
+ * here: every DocCard wraps itself in `.settings`, which is height:100% +
+ * overflow-y:auto — a full-height scroll container. Stacked, that gives the
+ * page TWO of them, so the second document begins one whole screen below the
+ * first no matter how short the first one is, and scrolling inside the first
+ * only ever reaches the FIRST's own bottom. MEASURED on the untouched tree with
+ * both cards already collapsed: the 啟動程序（Codex CLI）heading sat at y=860 on
+ * an 844-tall phone — off screen at every width, 1040 included.
+ *
+ * That is the owner's report exactly: he scrolled the first document to its
+ * end, the scrolling stopped, and he read that as the end of the page.
+ *
+ * So the stack owns the scrolling and the cards inside it grow to their
+ * content. A page carrying ONE document is untouched — `.settings` is still its
+ * own scroller there. */
+.settings-stack {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+}
+.settings-stack > .settings {
+  height: auto;
+  overflow: visible;
+}
+
+/* A heading that opens its own document (T-6278). The whole heading is the hit
+ * target, and it keeps the heading's type — a collapsed document must still
+ * READ as the document's name, since when both are closed the two names are
+ * the only thing telling them apart. */
+.settings__title--toggle {
+  margin-bottom: 10px;
+}
+.doc-collapse {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 2px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  /* The names are long ("啟動程序（Claude Code）") and the phone is narrow —
+   * this is the surface a phone met the bug on, so it wraps rather than
+   * pushing the page sideways. */
+  overflow-wrap: anywhere;
+}
+.doc-collapse > svg {
+  flex: none;
+  color: var(--color-text-muted);
+}
+
 /* ── breadcrumbs (T-8f6e unified settings navigation) — generalized from the
  * 任務手冊 detail page's crumbs: 「設定 › 子頁 › …」 heads EVERY settings page
  * (each segment clickable back up the tree; the trailing segment is the
