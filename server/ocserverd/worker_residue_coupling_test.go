@@ -57,8 +57,13 @@ func TestWorkerLaunchGuidanceIsTheSharedOneNotAReplacement(t *testing.T) {
 		t.Error("worker boot context falsely claims shared boot steps were removed")
 	}
 	for _, want := range []string{
-		bootSequenceH1,     // the shared 啟動程序 block itself
-		"外包 worker 只綁一張任務", // …and the shared text covers the one-task case
+		bootSequenceH1, // the shared 啟動程序 block itself
+		// …and the shared text still covers the ONE-BOUND-TASK case. The owner
+		// rewrote step 4 so it names no member kind at all (a worker reading
+		// "你是外包" text in a shared document is the drift this ticket removed);
+		// what it says instead is that a reader holding a single task just
+		// continues it. That sentence is the one-task coverage now.
+		"手上只有一張時",
 	} {
 		if !strings.Contains(ctx, want) {
 			t.Errorf("worker boot context is missing launch guidance %q", want)

@@ -94,12 +94,17 @@ type Task struct {
 	// the executor may all freeze, it has to be RECORDED or the owner cannot
 	// tell their own 喊停 from an agent's.
 	FrozenBy string
-	// KickoffNotifiedTo is the de-duplication ledger of the outsource kickoff
-	// notice (T-e77f, migrations/00056): '' = no notice outstanding, else the
-	// executor id the kickoff was last posted to. refreshTaskKickoff stamps it on
-	// send and CLEARS it whenever the task is observed non-advanceable, so a
-	// freeze→unfreeze→freeze→unfreeze cycle notifies once per unfreeze while a
-	// repeated write of the same advanceable state notifies once in total.
+	// KickoffNotifiedTo is VESTIGIAL (T-51b0). It was the de-duplication ledger
+	// of the outsource kickoff notice (T-e77f, migrations/00056); the notice was
+	// withdrawn wholesale (owner 2026-08-15, card rc-a4f6a7f8cd71) and NOTHING
+	// writes this any more — it round-trips as whatever the row already held.
+	//
+	// The field and its column stay on purpose. Dropping a column needs a
+	// migration whose only benefit is tidiness, while the owner's word for the
+	// withdrawal was 「先砍掉」— provisional — and a column that is still there
+	// is the difference between restoring the seam and re-deriving it. Do not
+	// read a non-empty value as "a notice is outstanding"; it is a fossil of one
+	// that was sent before this change.
 	KickoffNotifiedTo string
 }
 
@@ -432,16 +437,8 @@ func (d *DAL) ListTasksBlockedBy(blockerID string) ([]Task, error) {
 // (set_task_deps' whole-list write would clobber deps the successor already
 // carries). Idempotent — INSERT OR IGNORE on the composite key.
 //
-// ⚠️ T-e77f: this writes the edge STRAIGHT to task_dep, bypassing the kickoff
-// seam — refreshTaskKickoff never runs, so kickoff_notified_to is not cleared
-// even though the task just became un-advanceable. Today's only callers are
-// applyHandoffPlan's HandoffFollowUp arms, where the blocker closes inside the
-// same request and releases the edge immediately, so the stale stamp never
-// outlives the call. Any FUTURE caller that leaves a blocker STANDING will
-// leave the task carrying a stamp it no longer earned, and when that blocker
-// eventually closes the seam will see stamp == executor and silently swallow
-// the kickoff. Such a caller must call refreshTaskKickoff (or clear the stamp)
-// after adding the edge.
+// (T-e77f's warning about this bypassing the kickoff seam retired with the seam
+// itself in T-51b0 — nothing reads kickoff_notified_to any more.)
 func (d *DAL) AddTaskDep(taskID, blockedBy string) error {
 	_, err := d.wdb.Exec(
 		`INSERT OR IGNORE INTO task_dep (task_id, blocked_by) VALUES (?, ?)`,

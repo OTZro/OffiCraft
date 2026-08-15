@@ -644,6 +644,26 @@ func actionableCodexListenerLine(line string) bool {
 	return !strings.HasPrefix(strings.TrimSpace(line), "[ocagent] listen:")
 }
 
+// codexPostBootWake is the turn this sidecar opens ONCE, the first time the
+// listener's stream is up (T-51b0).
+//
+// 🔴 WITHOUT IT, THE BOOT SEQUENCE ENDS IN A DEAD STOP. The order the owner
+// asked for is wake → resume → SSE → continue work, and only a sidecar can
+// deliver the third arrow: this runtime's agent must NOT mount its own
+// listener, so it ends its boot turn and hands control back here. But a codex
+// agent only ever runs when a listener line is turned into a turn, and the
+// connected line above is deliberately filtered out — so the agent that just
+// handed control back would sit there until some unrelated event happened to
+// arrive. Its boot document's post-SSE steps (the task inventory) would never
+// run, and nothing anywhere would report it: an agent that never starts looks
+// exactly like an agent with nothing to do.
+//
+// The text names the STEP rather than restating it. The boot document is the
+// owner's and it moves; a copy of its wording here would be a second source of
+// truth that goes stale silently — the failure this whole ticket is made of.
+const codexPostBootWake = "[OffiCraft sidecar] 你的事件流（SSE）已經接上了。" +
+	"請接著做開機說明裡「接上 SSE 之後」的那些步驟（盤點你手上還沒結束的任務並開始推進）。"
+
 func runCodexSession(argv []string, env func(string) string, out io.Writer) int {
 	fs := flag.NewFlagSet("ocwarden codex-session", flag.ContinueOnError)
 	fs.SetOutput(out)
@@ -739,6 +759,7 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 
 	listenerLines := make(chan string, 32)
 	listenerStarted := false
+	postBootWakeSent := false
 	// Telemetry is intentionally in-memory on the server.  A quiet App Server
 	// thread must therefore re-announce its lightweight identity after a server
 	// restart; use the same 30-second cadence as token telemetry, not a noisy
@@ -767,6 +788,17 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 				s.reportIdentity()
 				s.requestRateLimits()
 				identityHeartbeat.Reset(codexTelemetryThrottle)
+				// ONCE per session, and deliberately not on reconnects: this
+				// wake exists to continue a boot that has not finished, and by
+				// the second connect that boot is long over. A reconnect is a
+				// network blip — every one of them opening a fresh "go do your
+				// inventory" turn would spend tokens re-doing work and would
+				// interrupt whatever the agent is actually in the middle of.
+				if !postBootWakeSent {
+					postBootWakeSent = true
+					s.activity("waking the session now that SSE is up")
+					s.steerOrStart(codexPostBootWake)
+				}
 			}
 			if actionableCodexListenerLine(line) {
 				s.activity("OffiCraft event: %s", line)

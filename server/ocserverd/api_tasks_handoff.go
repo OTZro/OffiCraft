@@ -379,22 +379,23 @@ func (s *apiServer) releaseDependentsOnClose(t Task, now float64, trigger string
 			outsourceLog("deps-release %s: touch of %s failed: %v", t.ID, d.ID, err)
 			continue
 		}
-		// T-e77f: an OUTSOURCE dependent goes through the kickoff seam instead of
-		// this notice. The seam refuses the cases this line never checked — a
-		// still-FROZEN dependent must not be told to start (the release only
-		// removed one of its two reasons to wait), and a departed worker must not
-		// be addressed — and it de-duplicates, which this line could not.
-		// A MEMBER dependent keeps the original notice unchanged: a member is a
-		// live session that was never asleep, and the kickoff is the outsource
-		// wake problem.
-		switch {
-		case d.ExecutorKind == TaskExecutorOutsource:
-			s.refreshTaskKickoff(&d, kickoffChangeUnblocked, trigger)
-		case d.ExecutorID != "":
+		// T-51b0: BOTH executor kinds take this one notice again. T-e77f had
+		// routed an outsource dependent through a separate kickoff seam; that
+		// seam was withdrawn wholesale (owner 2026-08-15, card
+		// rc-a4f6a7f8cd71), so this is the pre-T-e77f behaviour restored, not a
+		// new decision — the alternative, telling a member and saying nothing to
+		// a contractor, would silently make the release invisible to exactly the
+		// executor least able to notice it on its own.
+		//
+		// ⚠️ What the withdrawn seam DID check and this line does not: a
+		// dependent that is still FROZEN is told it can start (the release
+		// removed only one of its two reasons to wait), and a worker that has
+		// already left is still addressed. Both were true before T-e77f too.
+		if d.ExecutorID != "" {
 			s.postTaskChat(d, wireSystemSender, d.ExecutorID,
 				"["+TaskNo(d.ID)+"] 擋住這張任務的前置任務 "+TaskNo(t.ID)+
-					"「"+t.Title+"」已經"+t.Status+"了,它不再擋著你。"+
-					"這張任務現在可以開始:請 get_task 讀內容、submit_plan 規劃步驟後開始執行。",
+					"「"+t.Title+"」已經"+t.Status+"了，它不再擋著你。"+
+					"這張任務現在可以開始：請 get_task 讀內容、submit_plan 規劃步驟後開始執行。",
 				trigger)
 		}
 		s.publishTask(d, trigger)
