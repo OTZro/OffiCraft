@@ -133,11 +133,11 @@ func TestNeitherBootSeedCarriesTheOtherRuntimesListenerInstruction(t *testing.T)
 
 func TestMissingInstructionsNamesOnlyTheMissingProbe(t *testing.T) {
 	missing := missingInstructions(
-		"把控制權交回 sidecar\n不要自己啟動 `ocagent listen`\nsidecar 持有你的生命週期",
+		strings.Join(codexOnlyInstructions[:len(codexOnlyInstructions)-1], "\n"),
 		"codexOnlyInstructions",
 		codexOnlyInstructions,
 	)
-	want := []string{"codexOnlyInstructions/它掛好之後會再叫你一次"}
+	want := []string{"codexOnlyInstructions/" + codexOnlyInstructions[len(codexOnlyInstructions)-1]}
 	if strings.Join(missing, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("missing instructions = %v, want %v", missing, want)
 	}
