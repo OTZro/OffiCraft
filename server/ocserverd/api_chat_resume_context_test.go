@@ -770,7 +770,8 @@ func TestResumeProse_CarriesNoAccidentalMarkdown(t *testing.T) {
 			// Block-level openers. Markdown reads these at the START of a line
 			// only, which is exactly why they are easy to introduce by accident
 			// when re-wrapping a sentence.
-			for i, line := range strings.Split(tc.text, "\n") {
+			lines := strings.Split(tc.text, "\n")
+			for i, line := range lines {
 				trimmed := strings.TrimLeft(line, " \t")
 				for _, bad := range blockOpeners {
 					if bad.re.MatchString(trimmed) {
@@ -778,6 +779,19 @@ func TestResumeProse_CarriesNoAccidentalMarkdown(t *testing.T) {
 							"for the human while the agent reads it as prose: %q",
 							i+1, bad.becomes, line)
 					}
+				}
+				// A GFM table needs TWO lines: a row carrying a pipe, and a
+				// delimiter row directly under it. Checked as a pair rather than
+				// as "this line has a pipe", because the leading pipe is
+				// OPTIONAL — `^\|` misses `姓名 | 年齡`, which the renderer does
+				// turn into a table — while flagging every stray pipe in prose
+				// would be a false red on text that renders as nothing of the
+				// sort. This mirrors isTableStart() in Markdown.tsx.
+				if strings.Contains(line, "|") && i+1 < len(lines) &&
+					isDelimiterRow(lines[i+1]) {
+					t.Errorf("lines %d–%d form a table header + delimiter pair, "+
+						"which renders as a table for the human while the agent "+
+						"reads it as prose: %q / %q", i+1, i+2, line, lines[i+1])
 				}
 			}
 			// The bullet these notes actually use is U+00B7, which markdown does
@@ -815,9 +829,28 @@ var blockOpeners = []struct {
 }{
 	{regexp.MustCompile(`^#{1,3}\s`), "a heading"},
 	{regexp.MustCompile(`^[-*+]\s`), "a list item"},
-	{regexp.MustCompile(`^\d{1,9}[.)]\s`), "an ordered list item"},
+	// `\d+`, not `\d{1,9}`: the renderer's OLIST_RE has no digit ceiling, and a
+	// guard that stops counting where the renderer does not is a hole with a
+	// number on it (review found this one at ten digits).
+	{regexp.MustCompile(`^\d+[.)]\s`), "an ordered list item"},
 	{regexp.MustCompile(`^>`), "a block quote"},
 	{regexp.MustCompile("^```"), "a code fence"},
 	{regexp.MustCompile(`^(?:-{3,}|\*{3,}|_{3,})$`), "a horizontal rule"},
-	{regexp.MustCompile(`^\|`), "a table row"},
 }
+
+// isDelimiterRow mirrors parseDelimiterRow() in Markdown.tsx: every cell must be
+// `:?-+:?`, and the row must carry at least one dash (so `|  |` is not one).
+func isDelimiterRow(line string) bool {
+	t := strings.TrimSpace(line)
+	if !strings.Contains(t, "-") || !strings.Contains(t, "|") {
+		return false
+	}
+	for _, cell := range strings.Split(strings.Trim(t, "|"), "|") {
+		if !delimiterCell.MatchString(strings.TrimSpace(cell)) {
+			return false
+		}
+	}
+	return true
+}
+
+var delimiterCell = regexp.MustCompile(`^:?-+:?$`)
