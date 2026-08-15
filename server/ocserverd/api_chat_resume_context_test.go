@@ -730,3 +730,82 @@ func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T)
 		t.Fatalf("estimated_total_chars: want %d, got %d", wantEstimate, peek.EstimatedTotalChars)
 	}
 }
+
+// 🔴 THESE TWO STRINGS ARE RENDERED AS MARKDOWN, SO THEIR SYNTAX IS PART OF
+// THEIR CONTRACT.
+//
+// The cockpit draws `note` and the cut `hint` through the same Markdown
+// renderer a chat body goes through (ResumeSummaryCard rule 4), because the
+// only formatting plain text has — line breaks, `**`, backticks — was being
+// collapsed into a wall of prose when they were printed as bare text nodes.
+// That fix has a cost this test exists to hold: a line that ACCIDENTALLY looks
+// like markup now renders as markup. Open a line with "1. " or "- " and the
+// human sees a list item the agent does not; leave a backtick unpaired and the
+// rest of the paragraph turns into code on screen while the agent reads it as
+// prose. Both are silent — the bytes are still verbatim, and the parity suite
+// on the other side uses a synthetic fixture, so nothing goes red.
+//
+// The guard lives HERE, at the source, rather than as a golden copy of these
+// strings in a front-end test: a copy is one more thing to drift, and the
+// property being asserted is a property of the TEXT, not of the renderer.
+func TestResumeProse_CarriesNoAccidentalMarkdown(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{"resumeNote", resumeNote},
+		{"resumeChatCutHint", resumeChatCutHint},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Paired inline markers. An odd count means one of them opens a run
+			// that never closes, and everything after it changes appearance.
+			if n := strings.Count(tc.text, "`"); n%2 != 0 {
+				t.Errorf("unpaired backtick (%d of them): a code run is left "+
+					"open and the rest of the text renders as code", n)
+			}
+			if n := strings.Count(tc.text, "**"); n%2 != 0 {
+				t.Errorf("unpaired ** (%d of them): the emphasis run never "+
+					"closes", n)
+			}
+			// Block-level openers. Markdown reads these at the START of a line
+			// only, which is exactly why they are easy to introduce by accident
+			// when re-wrapping a sentence.
+			for i, line := range strings.Split(tc.text, "\n") {
+				trimmed := strings.TrimLeft(line, " \t")
+				for _, bad := range []struct {
+					prefix, becomes string
+				}{
+					{"- ", "a list item"},
+					{"* ", "a list item"},
+					{"+ ", "a list item"},
+					{"> ", "a block quote"},
+					{"# ", "a heading"},
+					{"|", "a table row"},
+				} {
+					if strings.HasPrefix(trimmed, bad.prefix) {
+						t.Errorf("line %d opens with %q, which renders as %s "+
+							"for the human while the agent reads it as prose: %q",
+							i+1, bad.prefix, bad.becomes, line)
+					}
+				}
+				// "1. " / "12) " — an ordered list. Checked separately because
+				// the marker is a number, not a fixed prefix.
+				if m := orderedListOpener.FindString(trimmed); m != "" {
+					t.Errorf("line %d opens with %q, which renders as an "+
+						"ordered list item: %q", i+1, m, line)
+				}
+			}
+			// The bullet these notes actually use is U+00B7, which markdown does
+			// not know — that is why it was chosen. If this ever fails, the text
+			// switched to a real list marker and the check above is the one that
+			// will have caught it.
+			if strings.Contains(tc.text, "·") && !strings.Contains(tc.text, "\n· ") {
+				t.Errorf("the middle dot is used but never at the start of a " +
+					"line — check the bullet convention is still intact")
+			}
+		})
+	}
+}
+
+// "1. ", "2) ", "12. " at the head of a line.
+var orderedListOpener = regexp.MustCompile(`^[0-9]{1,9}[.)] `)

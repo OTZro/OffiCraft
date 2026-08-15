@@ -964,7 +964,12 @@ export const en: Dict = {
       // 🔴 "may", not "were": the server raises this marker as soon as a line
       // was cut at its read window, and it never looks past the cut — so it is
       // raised even when nothing older exists (see resumeChatCutHint).
-      chatCutLabel: "Earlier exchanges may be absent — fetch to confirm:",
+      // 🔴 This NAMES the block; the hint below it states the case. It used to
+      // restate the hint's own first sentence, so the reader was told the same
+      // thing twice, back to back. The hint is the half that cannot change: an
+      // agent receives that string alone and never sees this label, so the hint
+      // must stand on its own — this label is cockpit-only wording.
+      chatCutLabel: "This line was cut:",
       cardOptionsLabel: "Options offered",
       cardAiPickTag: "AI pick",
       cardPickedTag: "Picked",

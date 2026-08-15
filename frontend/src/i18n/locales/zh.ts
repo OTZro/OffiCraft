@@ -1032,7 +1032,11 @@ export const zh = {
       // 🔴 措辭是「可能」而不是「一定」:server 端只要那條線被截在切點上就
       // 亮這個標記,而它不會再往切點外看一眼,所以就算其實沒有更舊的往來,
       // 標記一樣會亮(見 api_chat.go 的 resumeChatCutHint)。
-      chatCutLabel: "可能還有更早的往來沒被帶進來:",
+      // 🔴 這是區塊的「名字」,不是它的內容。原本這裡複述了 hint 的第一句,
+      // 兩句上下相連、意思一樣,讀者被同一件事講兩遍。不能改的是 hint 那一句:
+      // agent 拿到的只有那串文字、讀不到這個 label,所以 hint 必須自足;
+      // 而這個 label 是純畫面的用詞,改它不影響 agent 那一側。
+      chatCutLabel: "這條線往前被切斷了:",
       // 就地顯示的回覆卡:owner 選了哪個、打了什麼、什麼時候回的。
       cardOptionsLabel: "提供的選項",
       cardAiPickTag: "AI 建議",
