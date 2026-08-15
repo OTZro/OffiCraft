@@ -1960,9 +1960,9 @@ func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProje
 	// intent ("" from a pre-column/never-set row reads as online client-side).
 	dto.RefocusSince = w.RefocusSince
 	dto.RefocusOp = w.RefocusOp
-	// StoppingTimeoutSecs is the worker collect ceiling openWorkerHandoverGrace
+	// RefocusGraceSecs is the worker collect ceiling openWorkerHandoverGrace
 	// announces — quoted here so the client need not know it.
-	dto.RefocusDeadline = refocusDeadline(w.RefocusSince, StoppingTimeoutSecs)
+	dto.RefocusDeadline = refocusDeadline(w.RefocusSince, RefocusGraceSecs)
 	dto.DesiredState = w.DesiredState
 	return dto
 }

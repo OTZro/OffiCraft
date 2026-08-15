@@ -181,7 +181,7 @@ func TestOwnerOp_RelocateWindsDownInsteadOfKilling(t *testing.T) {
 
 // TestOwnerOp_WindDownEndsOnTheDeadlineToo: the wind-down must not be able to
 // hang forever on a worker that never answers. The grace deadline
-// (StoppingTimeoutSecs) is the ceiling, driven by the tick's in-flight arm.
+// (RefocusGraceSecs) is the ceiling, driven by the tick's in-flight arm.
 func TestOwnerOp_WindDownEndsOnTheDeadlineToo(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
@@ -198,14 +198,14 @@ func TestOwnerOp_WindDownEndsOnTheDeadlineToo(t *testing.T) {
 
 	// Just short of the deadline: still waiting, nothing dispatched.
 	api.outsourceMu.Lock()
-	api.autoHandoverWorker(*w, w.RefocusSince+StoppingTimeoutSecs-1)
+	api.autoHandoverWorker(*w, w.RefocusSince+RefocusGraceSecs-1)
 	api.outsourceMu.Unlock()
 	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
 		t.Fatalf("inside the grace window nothing may be dispatched, got %d frames", got)
 	}
 	// Past it: collected regardless.
 	api.outsourceMu.Lock()
-	api.autoHandoverWorker(*w, w.RefocusSince+StoppingTimeoutSecs+1)
+	api.autoHandoverWorker(*w, w.RefocusSince+RefocusGraceSecs+1)
 	api.outsourceMu.Unlock()
 	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 2 {
 		t.Fatalf("the deadline must collect (stop+start), got %d frames", got)

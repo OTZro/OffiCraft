@@ -354,7 +354,7 @@ ONE-SHOT, never a standing order):
 | `start_timeout` | 90 s | START unconfirmed → failed spawn |
 | `stop_grace` | 120 s | self-stop window before the robust stop |
 | `stop_retry` | 90 s | STOP/UNINSTALL re-dispatch window (lost-frame recovery) |
-| `recycle_grace` | 120 s | dump-stuck fallback from `refocus_since` |
+| `recycle_grace` | 300 s | dump-stuck fallback from `refocus_since` — deliberately LONGER than `stop_grace` (T-c382): a stop abandons the work, a handover has to hand it over (baton, learnings merge, in-flight state onto the tickets), and 120 s was measured too short for that |
 | `backoff_base` / `backoff_cap` | 5 s / 300 s | exponential start backoff |
 | `circuit_threshold` / `circuit_cooldown` | 5 / 120 s | sticky breaker (verified hard failures only) |
 

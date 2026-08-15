@@ -1129,10 +1129,10 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // down, i.e. toward the grace — the safe direction, and the wait is a CEILING not
 // a duration". Both halves of that argument carry over verbatim: the 收口 fires the
 // instant the worker answers report_stopped, so a session with nothing to save
-// still ends in seconds; StoppingTimeoutSecs (120s) is only the ceiling.
+// still ends in seconds; RefocusGraceSecs (300s) is only the ceiling.
 //
 // Everything else (online) opens the window — and the WAIT IS NOT THE
-// DEADLINE. StoppingTimeoutSecs is a ceiling, not a duration: the 收口 fires the
+// DEADLINE. RefocusGraceSecs is a ceiling, not a duration: the 收口 fires the
 // instant the worker answers report_stopped, so a session with nothing to save
 // ends in seconds. That is deliberately where the judgement is made, because the
 // only party that can see the agent's unsaved state is the agent. The server has
@@ -1191,7 +1191,7 @@ func (s *apiServer) openOwnerOpHandover(w OutsourceWorker, op string) {
 	s.publishOutsourceWorker(w, triggerServer)
 	s.openWorkerHandoverGrace(w, triggerServer)
 	outsourceLog("%s %s (%s): wind-down opened — collect on stopped-report or +%.0fs",
-		op, w.ID, w.Codename, StoppingTimeoutSecs)
+		op, w.ID, w.Codename, RefocusGraceSecs)
 }
 
 // respawnWorkerForOwnerOpNow is the IMMEDIATE arm (nothing to wind down): the
@@ -1375,7 +1375,7 @@ func (s *apiServer) autoHandoverWorker(w OutsourceWorker, now float64) {
 		if w.StoppedSince <= 0.0 {
 			if !s.hub.IsOnline(w.ID) {
 				s.collectWorkerHandover(w, "grace-offline", triggerServer)
-			} else if now >= w.RefocusSince+StoppingTimeoutSecs {
+			} else if now >= w.RefocusSince+RefocusGraceSecs {
 				s.collectWorkerHandover(w, "grace-timeout", triggerServer)
 			}
 			return
@@ -1453,7 +1453,7 @@ func (s *apiServer) clearWorkerRefocus(id, reason string) {
 // (its ocagent recycleHook refetches GET /api/members/<self> and prints the
 // five-step handover SOP — the member machinery verbatim, zero client change)
 // and RETURN — the kill is owned by the 收口 drivers (the worker's own
-// report_stopped, or the StoppingTimeoutSecs grace deadline in
+// report_stopped, or the RefocusGraceSecs grace deadline in
 // autoHandoverWorker's in-flight arm). An OFFLINE worker skips the window
 // entirely and takes the legacy immediate kill+respawn: no session can hear the
 // 預告, so a grace would only waste the full deadline (D6). Callers hold
@@ -1466,7 +1466,7 @@ func (s *apiServer) openWorkerHandoverGrace(w OutsourceWorker, trigger string) {
 	s.hub.Publish("member", "patch", "member", wireOwnerID+"::"+w.ID,
 		memberDeltaPayload(memberFromWorker(w)), audienceMembers(w.ID), trigger)
 	outsourceLog("handover %s (%s): grace opened — SOP nudge fanned, collect on "+
-		"stopped-report or +%.0fs", w.ID, w.Codename, StoppingTimeoutSecs)
+		"stopped-report or +%.0fs", w.ID, w.Codename, RefocusGraceSecs)
 }
 
 // collectWorkerHandover is the ONE 收口 funnel of the graceful worker handover:

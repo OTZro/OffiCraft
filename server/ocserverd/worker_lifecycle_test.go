@@ -856,7 +856,7 @@ func TestMidGraceRestartAmnesia_Converges(t *testing.T) {
 
 	dispatched := false
 	for i := 0; i < 20 && !dispatched; i++ {
-		api.runOutsourceTick(now + StoppingTimeoutSecs + float64(i))
+		api.runOutsourceTick(now + RefocusGraceSecs + float64(i))
 		for _, frame := range api.hub.DrainWardenCommands(ServerSelfHost) {
 			if rpc, _ := decodeWardenFrame(t, frame.Frame); rpc == reconcileCmdStart {
 				dispatched = true
@@ -929,7 +929,7 @@ func stampWorkerRefocus(t *testing.T, api *apiServer, workerID string, since flo
 }
 
 // TestAutoHandoverWorker_GraceTimeout_ForceCollects (T-ea82 form ②): a worker
-// that never reports stopped is force-collected once StoppingTimeoutSecs pass
+// that never reports stopped is force-collected once RefocusGraceSecs pass
 // — and NOT one tick earlier. Mutant: dropping the deadline compare in the
 // in-flight arm → the at-deadline case dispatches nothing (red).
 func TestAutoHandoverWorker_GraceTimeout_ForceCollects(t *testing.T) {
@@ -942,7 +942,7 @@ func TestAutoHandoverWorker_GraceTimeout_ForceCollects(t *testing.T) {
 
 	// Inside the window: wait, dispatch nothing, latch nothing.
 	w, _ := api.dal.GetOutsourceWorker(workerID)
-	api.autoHandoverWorker(*w, now+StoppingTimeoutSecs-1)
+	api.autoHandoverWorker(*w, now+RefocusGraceSecs-1)
 	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
 		t.Fatalf("inside the grace window the tick must wait, got %d frames", got)
 	}
@@ -952,7 +952,7 @@ func TestAutoHandoverWorker_GraceTimeout_ForceCollects(t *testing.T) {
 
 	// At the deadline: force-collect (stop+start) + latch.
 	w, _ = api.dal.GetOutsourceWorker(workerID)
-	api.autoHandoverWorker(*w, now+StoppingTimeoutSecs)
+	api.autoHandoverWorker(*w, now+RefocusGraceSecs)
 	frames := api.hub.DrainWardenCommands(ServerSelfHost)
 	if len(frames) != 2 {
 		t.Fatalf("the grace deadline must force-collect (stop+start), got %d frames", len(frames))
@@ -1044,7 +1044,7 @@ func TestWorkerHandoverCollect_OnceOnly(t *testing.T) {
 		// down: no second KILL may fan (a paced re-dispatch heal of the START is
 		// legitimate phase-B behavior, a stop is the double-collect signature).
 		w, _ := api.dal.GetOutsourceWorker(workerID)
-		api.autoHandoverWorker(*w, since+StoppingTimeoutSecs+1)
+		api.autoHandoverWorker(*w, since+RefocusGraceSecs+1)
 		for _, frame := range api.hub.DrainWardenCommands(ServerSelfHost) {
 			if rpc, _ := decodeWardenFrame(t, frame.Frame); rpc == reconcileCmdStop {
 				t.Fatalf("a collected handover must not re-collect on timeout (second stop): %s", frame)
@@ -1056,7 +1056,7 @@ func TestWorkerHandoverCollect_OnceOnly(t *testing.T) {
 		api := newTasksTestServer(t)
 		api.noOutsource = true
 		workerID := newActiveOnlineWorker(t, api)
-		since := nowSecs() - StoppingTimeoutSecs - 1
+		since := nowSecs() - RefocusGraceSecs - 1
 		stampWorkerRefocus(t, api, workerID, since)
 		api.hub.DrainWardenCommands(ServerSelfHost)
 

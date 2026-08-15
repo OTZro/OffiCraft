@@ -7,7 +7,10 @@ package main
 //   * reconcileDecide — the PURE per-member state machine (machine.py decide):
 //     desired_state × observed-online → the ONE command to dispatch (or none),
 //     with the frozen timers (§4.4): start_timeout 90s, stop_grace 120s,
-//     stop_retry 90s, recycle_grace 120s, backoff 5/300s, circuit 5/120s.
+//     stop_retry 90s, recycle_grace 300s, backoff 5/300s, circuit 5/120s.
+//     stop_grace and recycle_grace were ONE constant until T-c382 split them:
+//     a STOP abandons the work, a HANDOVER has to hand it over (see
+//     RefocusGraceSecs in domain.go for the measurement that forced the split).
 //   * the in-memory reconcile store (lifecycle.md §3 inventory #7): per-member
 //     bookkeeping keyed by member id; restart amnesia IS the contract — a lost
 //     store just resets the dedupe/grace windows and the next tick re-decides
@@ -72,7 +75,7 @@ func defaultReconcileConfig() reconcileConfig {
 		StartTimeout:     WakingTTLSecs,
 		StopGrace:        StoppingTimeoutSecs,
 		StopRetry:        90.0,
-		RecycleGrace:     StoppingTimeoutSecs,
+		RecycleGrace:     RefocusGraceSecs,
 		BackoffBase:      5.0,
 		BackoffCap:       300.0,
 		CircuitThreshold: 5,

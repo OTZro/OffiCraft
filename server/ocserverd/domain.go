@@ -111,6 +111,31 @@ const WakingTTLSecs = 90.0
 // this long to wind down before a stuck collect is force-killed.
 const StoppingTimeoutSecs = 120.0
 
+// RefocusGraceSecs: once refocus_since is stamped (a HANDOVER — auto context
+// recycle, 改機器, model/effort change), the still-online agent has this long
+// to finish its own close-out before the dump-stuck fallback force-stops it.
+//
+// SPLIT FROM StoppingTimeoutSecs (T-c382). The two windows LOOK alike and used
+// to share the constant, but they buy different things and only one of them is
+// sized by how long an agent's close-out takes:
+//
+//   - stopping_since is an owner-ordered STOP. The work is already being
+//     abandoned; the window only covers flushing what is in hand.
+//   - refocus_since is a HANDOVER. The agent must write a baton, fold its
+//     task learnings back (which means READING the old ones and merging), pin
+//     in-flight state onto several tickets' step notes, and pin artifacts —
+//     the successor sees NOTHING that did not get written. Measured on this
+//     server 2026-08-16: refocus_since 1786814067 → refocus_deadline
+//     1786814187, exactly 120s, and the baton alone consumed ~70s of it; the
+//     learnings merge did not fit at all and had to be left to the next
+//     session. A half-written close-out is indistinguishable from one that was
+//     never started, and nothing raises an alarm about the difference.
+//
+// This is a CEILING, not a duration: every 收口 driver fires the instant the
+// agent answers report_stopped, so a session with nothing to save still ends
+// in seconds. Raising it costs latency ONLY on a genuinely stuck dump.
+const RefocusGraceSecs = 300.0
+
 // livenessInput is the normalized input to the shared liveness kernel
 // (deriveLiveness): the two actor kinds (member / outsource worker) map their
 // own durable anchors onto these three facts and read back the SAME unified
