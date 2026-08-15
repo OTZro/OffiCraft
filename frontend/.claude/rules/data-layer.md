@@ -19,7 +19,7 @@ paths:
 
 ## SSE 與 refetch
 
-api/http.ts 的 toSseDelta 只投影事件身分欄：id、from、to、reader、peer。事件不可帶 payload 合併進本地 DTO；姓名任一缺少就完整 refetch，不可當成「無變更」。
+api/http.ts 的 toSseDelta 只投影事件身分欄：id、from、to、reader、peer；其他 status／priority 等欄位在 seam 就丟掉，讓下游型別上不可能偷偷 merge payload。姓名任一缺少就完整 refetch，不可當成「無變更」：串流沒有 replay，空名字代表不知道漏了什麼。
 
 deltaSink 每個 burst 只做一次同步決策；coalesce 留在決策層，不要跨 tick debounce。narrowToHeld 的語意固定為：null = 全量、非空 = 指定項目、空集合 = 只指向其他項目。task topic 仍需全量，因為清單可能新增列；chat、chat_read、roster 在沒有持有項目時可跳過。
 
@@ -32,7 +32,9 @@ deltaSink 每個 burst 只做一次同步決策；coalesce 留在決策層，不
 
 GET /api/chat?with= 會前進 watermark 並回 chat_read echo；chat 用 from/to 判斷 peer，chat_read 用 reader 判斷 peer。沒有 peer 名稱時走全量路徑。
 
-owner unread 只由共享的 lib/ownerUnread.ts 判定：chat.to 或 chat_read.reader 指向 owner 才能改 owner badge；owner 不算 roster member。每個 burst 有兩個以上候選時一律全量，單筆也不能只看事件數猜測。
+owner unread 只由共享的 lib/ownerUnread.ts 判定：chat.to 或 chat_read.reader 指向 owner 才能改 owner badge；owner 不算 roster member。每個 burst 有兩個以上候選時一律全量，單筆也不能只看事件數猜測；一則 agent↔agent 加一則給 owner 的事件會在同一 microtask 形成混合 burst，若逐則跳過會吃掉真正需要更新的那一半。
+
+任何 per-item 路徑都先查 `api/dtoParity.ts` 與實際 Go handler，確認單筆 response 是清單列的真正 superset；測試 mock 不得比凍結 wire 慷慨，否則 jsdom 會用 server 不可能回的欄位把壞路徑驗綠。`TaskDTO` 沒有 `dep_tasks` 時，不能把 `narrowToHeld` 順手接回 task；依賴 chip 必須繼續讀有該欄位的清單列。
 
 ## 共享設定快照
 

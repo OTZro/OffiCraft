@@ -16,13 +16,13 @@ paths:
 
 重驗 mutant 時，整頁 overflow 那條若先炸，測試會中止，底下的 per-surface 斷言根本沒執行；要證明後者，先暫時放寬整頁斷言再跑 mutant，不能把「整體失敗」誤讀成「後面的斷言也驗過」。
 
-固定高度、可收縮 flex item、CJK 標籤同時出現時，用 white-space: nowrap 保住單行；不要用 flex:none 代替，也不要只看 computed property。≤359px 的既有 header wrap 是洩壓閥，別擴大斷點到會讓較寬手機多一行的範圍。中文與英文的幾何不可互推。
+固定高度、可收縮 flex item、CJK 標籤同時出現時，用 `white-space: nowrap` 保住單行；中文的 min-content 可能只有一個字，固定高就會被折行溢出，而同一段 CSS 對拉丁字的幾何不等價。不要用 `flex:none` 代替，也不要只看 computed property：要用真瀏覽器量 line box 與實際 overflow。≤359px 的既有 header wrap 是 nowrap 之後的洩壓閥，別擴大斷點到會讓較寬手機多一行的範圍。
 
 ## 浮層與 CSS ownership
 
-絕對定位浮層不可用以視窗左緣為座標的 vw 夾寬度。讓父容器提供 left:0、right:0、width:auto，再以 max-width 收上限；量浮層自己與中間 scroll container，不要只量被壓回視窗寬的 flex parent。
+絕對定位浮層不可用以視窗左緣為座標的 vw 夾寬度。讓父容器提供 `left:0; right:0; width:auto`，再以 max-width 收上限；量浮層自己與中間 scroll container，不要只量被壓回視窗寬的 flex parent。`documentElement` 沒橫溢出不代表沒 bug，祖先的 `overflow-y:auto` 可能把溢出吸進自己的 scroll container；CT 也要重現真實祖先鏈，裸掛會多出餘裕而假綠。
 
-使用某個 block class 的元件要自己 import 該 block 的 stylesheet；不可依賴 transitive import。styleOwnership test 是防止最後一個間接 importer 消失後整個 dialog 變原生樣式的守衛。
+使用某個 block class 的元件要自己 import 該 block 的 stylesheet；不可依賴 transitive import。最後一個間接 importer 消失時，仍使用同一 class 的另一個 dialog 會一起變成原生樣式；styleOwnership test 是必要護欄，因為 jsdom 與 tsc 都看不出 class 字串和 stylesheet 的關係。
 
 ## lazy fetch
 
@@ -47,7 +47,7 @@ fit-content,下限是 min-content。子孫只要有不肯縮的 `<pre>` 或寬�
 styleOwnership test 防止最後一個間接 importer 消失後 dialog 變成原生樣式；jsdom 與 tsc
 都看不出 class 字串和 stylesheet 的關係。
 
-正職與外包詳情面板共用 .mp-identity__actions 的 column 外殼與 row buttons；更改在前、停止在後，沒在跑時只顯示喚醒。手機 media query 要按 row 形狀重新驗跨距與均分，不能只驗「元素仍存在」。
+正職與外包詳情面板共用 `.mp-identity__actions` 的 column 外殼與 row buttons；更改在前、停止在後，沒在跑時只顯示喚醒。改 row/column 時手機 media query 要按新形狀重新驗跨距與均分，不能只驗「元素仍存在」；REST 仍是 `/restart`，退場的是 UI 用語，不是凍結 wire。
 
 喚醒先開與更改相同的設定 dialog，預設保留原執行環境、模型、投入度與已釘機器；落地順序是 model、必要時 relocate、restart。restart 不吃 machine_id。睡著的已釘機器不能 fallback 到第一台線上機器。
 
