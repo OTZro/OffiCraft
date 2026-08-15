@@ -825,9 +825,12 @@ func TestResumeProse_CarriesNoAccidentalMarkdown(t *testing.T) {
 // that gap, and it is safe to copy: seven regexes that almost never change,
 // as opposed to copying the STRINGS, which would be a second thing to drift.
 //
-// Deliberately a little WIDER than the renderer in places (")" as an ordered
-// marker, tabs as separators): erring wide costs a false red that a human
-// reads and fixes, erring narrow costs a silent miss.
+// Deliberately a little WIDER than the renderer in places — `)` as an ordered
+// marker and `+` as a bullet, neither of which the renderer accepts: erring
+// wide costs a false red that a human reads and fixes, erring narrow costs a
+// silent miss. ("tabs as separators" used to be listed here too and was never
+// an example of anything: a tab is in JavaScript's `\s` and in jsSpace, so
+// there the two are equal, not wider.)
 //
 // 🔴 `\s` IS NOT `\s`. The renderer's regexes are JavaScript, where `\s` is
 // Unicode; Go's is [\t\n\f\r ] and nothing else. That five-character ceiling
@@ -856,10 +859,23 @@ const jsSpace = `[\t\n\v\f\r\x{0085}\p{Zs}\x{2028}\x{2029}\x{feff}]`
 //
 // Unicode trimming is not byte-identical across the two languages either:
 // Go's unicode.IsSpace has U+0085 that JS's trim lacks, and JS has U+FEFF that
-// Go's lacks. Both asymmetries are known and accepted here — the first costs a
-// false red on a character no one can type, and the second is unreachable in
-// these two constants because the Go compiler rejects a BOM inside a string
-// literal (verified: the mutant does not build).
+// Go's lacks. Both asymmetries are known and accepted, and the second is a real
+// hole rather than a theoretical one, so read what it does and does not cover:
+//
+//   - U+0085 costs a false red, on a character nobody can type. Fine.
+//   - U+FEFF is a genuine gap in the trimming direction — a delimiter row or a
+//     fence padded with one renders while this guard stays silent. It cannot
+//     arrive by MISTYPING, which is the failure mode this file exists to catch:
+//     a raw BOM in the middle of a source file is rejected by the compiler
+//     outright (verified — the mutant does not build). It CAN arrive by writing
+//     the `\ufeff` escape, which compiles fine and which review verified goes
+//     undetected. Nobody types that escape by accident, so it is left open
+//     rather than papered over; closing it means a trim of our own
+//     (`unicode.IsSpace(r) || r == '\ufeff'`) in all three places.
+//
+// An earlier version of this comment called that second one "unreachable". It
+// is not, and the difference matters: unreachable would mean nothing to do,
+// where the truth is a known gap with a named shape and a known fix.
 var blockOpeners = []struct {
 	re      *regexp.Regexp
 	becomes string
