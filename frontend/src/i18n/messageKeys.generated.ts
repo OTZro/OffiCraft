@@ -708,6 +708,8 @@ export const MESSAGE_KEYS: readonly string[] = [
   "settings.docCapManualLearningsSub",
   "settings.docCapManualSop",
   "settings.docCapManualSopSub",
+  "settings.docCollapse",
+  "settings.docExpand",
   "settings.docOverCapLead",
   "settings.docOverCapMid",
   "settings.docOverCapTail",

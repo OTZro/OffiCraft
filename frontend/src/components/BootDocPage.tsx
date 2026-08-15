@@ -67,6 +67,7 @@ export function BootDocPage({
   title,
   historyTitle,
   crumbs,
+  collapsible,
 }: {
   kind: BootDocKind;
   /** "global" for system_interaction; the RUNTIME ("claude" / "codex") for
@@ -78,6 +79,9 @@ export function BootDocPage({
    * document shares, and 「版本紀錄」 alone cannot say which runtime it holds. */
   historyTitle: string;
   crumbs: Crumb[];
+  /** Start closed behind the heading — passed by the page that stacks TWO of
+   * these (啟動程序), not by 系統互動, which is alone on its page. See DocCard. */
+  collapsible?: boolean;
 }) {
   const { t, msg } = useI18n();
   const { doc, error, refetch, save, reset } = useBootDoc(kind, docKey);
@@ -86,6 +90,7 @@ export function BootDocPage({
     <DocCard
       title={title}
       crumbs={crumbs}
+      collapsible={collapsible}
       doc={doc}
       onSave={save}
       onReset={reset}

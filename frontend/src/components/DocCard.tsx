@@ -38,7 +38,7 @@ import { useI18n } from "../i18n";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 import { InlineEdit } from "./InlineEdit";
 import { Markdown } from "./Markdown";
-import { PencilIcon } from "./icons";
+import { ChevronDownIcon, ChevronRightIcon, PencilIcon } from "./icons";
 import { ConfirmModal } from "./ConfirmModal";
 import {
   DocumentHistoryEntry,
@@ -122,6 +122,21 @@ export interface DocCardProps {
   /** Replace the body. Default: one textarea over the whole document while
    * editing, rendered markdown otherwise. */
   renderBody?: (props: DocCardBodyProps) => ReactNode;
+  /** Put the whole card behind its own heading, CLOSED on mount (T-6278). Off
+   * by default — a page carrying ONE document has nothing to gain from it.
+   *
+   * It exists for the page that stacks TWO full documents (啟動程序: Claude
+   * then Codex). The owner met that page on a phone, scrolled to the bottom of
+   * the first document, and read the end of the card as the end of the PAGE —
+   * the second document was below the fold and might as well not have existed.
+   * His instruction:「你可以改成兩個都先收疊，我點選時才展開嗎？」
+   *
+   * ⚠️ Adding a separator was considered and REJECTED by the same observation:
+   * there already IS one (card edge, background, then the second heading), and
+   * it sits so far down that nobody scrolling the first document reaches it.
+   * Collapsed headings fix it because both fit on one screen; a louder divider
+   * in the same place would not. */
+  collapsible?: boolean;
 }
 
 /** Which confirmation is open. Saving is the only one this card raises: the
@@ -147,8 +162,10 @@ export function DocCard({
   confirmSave,
   requireDirty = false,
   renderBody,
+  collapsible = false,
 }: DocCardProps) {
   const { t, msg } = useI18n();
+  const [collapsed, setCollapsed] = useState(collapsible);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -180,6 +197,21 @@ export function DocCard({
   const overCap =
     usage !== undefined && editing && docCapBlocked(usage.cap, text, draft);
   const unchanged = requireDirty && draft === text;
+
+  // ⚠️ NO SCROLL CORRECTION HERE, AND THAT IS A MEASURED DECISION, NOT AN
+  // OVERSIGHT. The owner's rule for this family of controls (2026-08-15,
+  // T-6630) is that the screen must not move — content grows downward from the
+  // heading and collapses back up into it. This toggle gets that for free:
+  // everything a collapse removes sits BELOW the heading, and the heading is
+  // the only handle the card has, so it is on screen whenever the toggle is
+  // pressed.
+  //
+  // A keepAnchored() correction (the one the task steps use, T-4e39) WAS
+  // written here and then removed: with it mutated out, the guard measuring the
+  // heading's viewport y across a collapse stayed green at 390×844, including
+  // from a scrolled-to-bottom start — scrollTop 0 → 0, y 159.5 → 159.5. It
+  // bought nothing, and dead correction code reads like a hazard someone
+  // handled.
 
   function startEdit() {
     setDraft(text);
@@ -242,7 +274,36 @@ export function DocCard({
   return (
     <div className="settings">
       <Breadcrumbs items={crumbs} />
-      <h1 className="settings__title settings__title--doc">
+      <h1
+        className={
+          "settings__title settings__title--doc" +
+          (collapsible ? " settings__title--toggle" : "")
+        }
+      >
+        {/* The toggle takes the TITLE TEXT with it, so the whole heading is the
+          * click target — the owner asked to expand by pressing the document,
+          * not by hunting a chevron. A renameable title cannot go inside a
+          * button (its InlineEdit owns the click), so those pages get the
+          * chevron alone and keep the InlineEdit beside it. No caller combines
+          * the two today; the branch is here so that one does not silently
+          * lose its rename. */}
+        {collapsible && (
+          <button
+            type="button"
+            className="doc-collapse"
+            data-testid="doc-card-collapse"
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? t.settings.docExpand : t.settings.docCollapse}
+            onClick={() => setCollapsed((c) => !c)}
+          >
+            {collapsed ? (
+              <ChevronRightIcon size={18} />
+            ) : (
+              <ChevronDownIcon size={18} />
+            )}
+            {onRenameTitle ? null : <span>{title}</span>}
+          </button>
+        )}
         {onRenameTitle ? (
           <InlineEdit
             value={title}
@@ -251,7 +312,7 @@ export function DocCard({
             placeholder={t.settings.addRoleName}
           />
         ) : (
-          title
+          !collapsible && title
         )}
       </h1>
 
@@ -265,6 +326,12 @@ export function DocCard({
         * DocumentHistoryEntry, in edit mode. Do not restore this button as a
         * bug fix; T-791e's ticket carries the superseded red line and says so. */}
 
+      {/* Collapsed hides THIS document — its load error included, since the
+        * line is about the body that is no longer on screen. `extra` stays: it
+        * carries OTHER documents (the persona page's insight / lessons cards),
+        * and folding a role definition must not take them with it. */}
+      {collapsed ? null : (
+        <>
       {errorNote}
 
       <div className="doc-card">
@@ -384,6 +451,8 @@ export function DocCard({
 
         <div className="doc-card__body">{body}</div>
       </div>
+        </>
+      )}
       {extra}
 
       {pending && (

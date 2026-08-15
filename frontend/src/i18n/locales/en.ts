@@ -1356,6 +1356,11 @@ export const en: Dict = {
     bootDocSaveConfirmSystem:
       "Save this system-interaction document? Every agent that boots after the save reads this content.",
     bootDocSaveConfirmAction: "Save",
+    // The click-to-open heading of a stacked document (T-6278). Both boot
+    // sequences start closed so the page shows both at once; the label is on
+    // the ACTION, so it says what pressing does, not what the state is.
+    docExpand: "Expand this document",
+    docCollapse: "Collapse this document",
     historyBootSystemTitle: "System interaction · version history",
     historyBootClaudeTitle: "Boot sequence (Claude Code) · version history",
     historyBootCodexTitle: "Boot sequence (Codex CLI) · version history",

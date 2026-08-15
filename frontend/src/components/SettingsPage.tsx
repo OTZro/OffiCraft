@@ -465,14 +465,30 @@ export function SettingsPage({
     // asked for them together anyway and that is his call; what protects the
     // invariant now is that they remain two SEPARATE documents with separate
     // editors, save buttons and version histories. Nothing here writes both.
+    //
+    // BOTH START CLOSED (T-6278, owner 2026-08-15:「你可以改成兩個都先收疊，我
+    // 點選時才展開嗎？」). He met this page on a phone, scrolled through the
+    // first document to its end, and read the end of that card as the end of
+    // the PAGE — the second document sat far below the fold, so 啟動程序
+    // (Codex CLI) might as well not have existed. Two closed headings put both
+    // documents on one screen, which is the whole fix; a louder separator was
+    // rejected because there already is one and it is just as far down.
+    //
+    // 🔴 AND THEY SHARE ONE SCROLL REGION. Each card wraps itself in
+    // `.settings`, which is a full-height scroller; two of them stacked put the
+    // second document one whole screen below the first (MEASURED: the codex
+    // heading at y=860 on an 844-tall phone, even with both collapsed), and
+    // scrolling the first only reaches the first's own bottom — which is
+    // precisely what the owner hit. See `.settings-stack` in settings.css.
     return (
-      <>
+      <div className="settings-stack">
         <BootDocPage
           kind="boot_sequence"
           docKey="claude"
           title={t.settings.bootClaudeName}
           historyTitle={t.settings.historyBootClaudeTitle}
           crumbs={[crumbRoot, crumbRoles, { label: t.settings.bootName }]}
+          collapsible
         />
         <BootDocPage
           kind="boot_sequence"
@@ -481,8 +497,9 @@ export function SettingsPage({
           historyTitle={t.settings.historyBootCodexTitle}
           // No crumbs on the second: one page, one breadcrumb trail.
           crumbs={[]}
+          collapsible
         />
-      </>
+      </div>
     );
   }
 

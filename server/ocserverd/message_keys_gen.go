@@ -709,6 +709,8 @@ var messageKeys = map[string]bool{
 	"settings.docCapManualLearningsSub":        true,
 	"settings.docCapManualSop":                 true,
 	"settings.docCapManualSopSub":              true,
+	"settings.docCollapse":                     true,
+	"settings.docExpand":                       true,
 	"settings.docOverCapLead":                  true,
 	"settings.docOverCapMid":                   true,
 	"settings.docOverCapTail":                  true,
