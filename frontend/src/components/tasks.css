@@ -995,11 +995,23 @@ button.task-card__status-chip:hover {
    atom family — hint / input / actions / save / cancel / editbtn — were
    removed with the affordances that used them. What is left is the read
    surface. Colours come only from theme tokens, per the tokens gate. */
+/* T-4aa0 — no `align-items: flex-start` here. In a COLUMN flex container that
+   makes each item take fit-content as its width, and fit-content floors at
+   min-content: one `<pre>` whose command line cannot break set the description's
+   min-content to 479px inside a 360px card, so the card — and the whole page —
+   scrolled sideways on a phone. The quote block the owner photographed was the
+   visible symptom, not the cause; it merely filled the widened container
+   (measured: hiding the <pre> takes the overflow to 0, hiding the quote changes
+   nothing).
+   Stretching instead binds the description to the card, and `.doc-md pre` /
+   `.doc-md table` then scroll INSIDE themselves, which is the posture
+   settings.css already documents. The flex-start was left over from when this
+   block also held the in-place editor's buttons, which must not stretch; T-e5b1
+   removed them and the only child now is the description itself. */
 .task-card__desc-block {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  align-items: flex-start;
 }
 .task-card__desc-empty {
   color: var(--color-text-muted);
