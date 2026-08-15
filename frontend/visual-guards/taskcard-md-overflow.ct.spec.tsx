@@ -6,9 +6,16 @@
 // 🔴 THE CIRCLED BLOCK WAS NOT THE CAUSE. Measured at 390px, the quote's own
 // min-content is 67px and it overflows by 0; what is 479px wide inside a 360px
 // card is `.task-card__desc` itself. Hiding the children one at a time settles
-// it causally: hide the `<pre>` and the card/page overflow goes 105→0, hide the
-// quote (or the table, or the paragraph) and nothing moves. The quote was the
-// visible tenant of a container something else had widened.
+// it causally: hide the `<pre>` and the card overflow goes 105→0, hide the
+// quote (or the paragraph) and nothing moves. The quote was the visible tenant
+// of a container something else had widened.
+//
+// NOR IS THE `<pre>` THE WHOLE STORY — the first version of this comment said
+// it was, and independent review (T-9b37) measured that too narrow: a WIDE
+// TABLE overflows on its own with no code fence in the document at all, and by
+// more (+675 at 390px). Any child whose min-content exceeds the card does it.
+// The fix is at the container, so one change binds them all; both fixtures are
+// asserted below so a future fix aimed at `pre` alone cannot pass.
 //
 // Mechanism: `.task-card__desc-block` is a COLUMN flex container. It carried
 // `align-items: flex-start`, which sizes each item to fit-content — and
@@ -28,13 +35,19 @@
 // narrowest phone we support) are both asserted — width is an INPUT dimension.
 //
 // MUTANT (verified red→green): put `align-items: flex-start` back on
-// `.task-card__desc-block` → assertion (1) reports +105px at 390 and +175 at 320.
+// `.task-card__desc-block` → all four cases go red, and assertion (1) reports
+// the LIST scrolling by +104px at 390 and +174 at 320. (The +105/+175 pair is
+// the CARD's own overflow, assertion (2) — an earlier header quoted those two
+// numbers against assertion (1), which review caught.)
 import { test, expect } from "@playwright/experimental-ct-react";
-import { TaskCardQuoteOverflowStory } from "./stories/TaskCardQuoteOverflowStory";
+import {
+  TaskCardQuoteOverflowStory,
+  TaskCardWideTableOverflowStory,
+} from "./stories/TaskCardQuoteOverflowStory";
 
-async function mountExpanded(mount: any, page: any, width: number) {
+async function mountExpanded(mount: any, page: any, width: number, story: any) {
   await page.setViewportSize({ width, height: 900 });
-  const cmp = await mount(<TaskCardQuoteOverflowStory />);
+  const cmp = await mount(story);
   await cmp.locator(".task-card__head").first().click();
   await expect(cmp.locator(".task-card__desc")).toBeVisible();
   return cmp;
@@ -45,6 +58,7 @@ async function assertFits(page: any, width: number) {
     const q = (s: string) => document.querySelector(s) as HTMLElement | null;
     const doc = document.scrollingElement!;
     const card = q(".task-card");
+    const list = q(".tasks");
     const desc = q(".task-card__desc");
     const pre = q(".task-card__desc pre");
     const quote = q(".task-card__desc blockquote");
@@ -55,6 +69,7 @@ async function assertFits(page: any, width: number) {
         : null;
     return {
       page: doc.scrollWidth - doc.clientWidth,
+      listOver: list ? list.scrollWidth - list.clientWidth : -2,
       cardOver: card ? card.scrollWidth - card.clientWidth : -2,
       cardInner: card ? card.clientWidth : -2,
       desc: box(desc),
@@ -64,8 +79,16 @@ async function assertFits(page: any, width: number) {
     };
   });
 
-  // (1) CORE red→green — the owner's exact symptom: the page must not drag
-  // sideways.
+  // (1) CORE red→green — the surface the user actually drags. In production the
+  // DOCUMENT never scrolls sideways (measured by the T-9b37 review, before AND
+  // after the fix): `.tasks` is the scroller, so this is where the owner's
+  // symptom lives. The page check below is kept as a second, weaker net.
+  expect(m.listOver, `[${width}px] .tasks never rendered`).not.toBe(-2);
+  expect(
+    m.listOver,
+    `[${width}px] the task list scrolls sideways by +${m.listOver}px — this is the ` +
+      `surface the phone actually drags`
+  ).toBeLessThanOrEqual(1);
   expect(m.page, `[${width}px] page scrolls sideways by +${m.page}px`).toBeLessThanOrEqual(1);
 
   // (2) …and the card itself must not be overflowed from inside, so a container
@@ -103,15 +126,40 @@ async function assertFits(page: any, width: number) {
   ).toBeLessThanOrEqual(1);
 }
 
-test("390px: a description with a code block never widens the card/page", async ({
-  mount,
-  page,
-}) => {
-  await mountExpanded(mount, page, 390);
-  await assertFits(page, 390);
-});
+for (const width of [390, 320]) {
+  test(`${width}px: a description with a code block never widens the card/list`, async ({
+    mount,
+    page,
+  }) => {
+    await mountExpanded(mount, page, width, <TaskCardQuoteOverflowStory />);
+    await assertFits(page, width);
+  });
 
-test("320px: the same holds at the narrowest phone", async ({ mount, page }) => {
-  await mountExpanded(mount, page, 320);
-  await assertFits(page, 320);
-});
+  // The second, INDEPENDENT cause. A wide table overflows with no code fence in
+  // the document at all, and by more than the fence did. Both die on the same
+  // container fix, so this is not a second bug — it is the case that keeps a
+  // future `pre`-shaped fix from passing while the real one is still broken.
+  test(`${width}px: a wide table with no code block is bound too`, async ({
+    mount,
+    page,
+  }) => {
+    await mountExpanded(mount, page, width, <TaskCardWideTableOverflowStory />);
+    const m = await page.evaluate(() => {
+      const q = (s: string) => document.querySelector(s) as HTMLElement | null;
+      const list = q(".tasks");
+      const pre = q(".task-card__desc pre");
+      return {
+        listOver: list ? list.scrollWidth - list.clientWidth : -2,
+        hasPre: !!pre,
+      };
+    });
+    // Non-vacuity: the fixture must really carry no code fence, or this case
+    // silently becomes a duplicate of the one above.
+    expect(m.hasPre, `[${width}px] fixture grew a <pre>; this case no longer isolates the table`).toBe(false);
+    expect(m.listOver, `[${width}px] .tasks never rendered`).not.toBe(-2);
+    expect(
+      m.listOver,
+      `[${width}px] a table-only description still scrolls the list by +${m.listOver}px`
+    ).toBeLessThanOrEqual(1);
+  });
+}

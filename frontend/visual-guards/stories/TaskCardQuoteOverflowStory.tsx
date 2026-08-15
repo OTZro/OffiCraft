@@ -47,10 +47,17 @@ const QUOTE_TASK = mkTask({
   ],
 });
 
+// The card is wrapped in `.tasks` — the class TasksPage puts around the list.
+// Independent review (T-9b37) measured that in production the DOCUMENT never
+// scrolls sideways: `.tasks` is the element that does, so a guard that only
+// watches the page is watching a surface the user's symptom does not live on.
+// It went red for this bug only because a bare mount makes the page the
+// scroller. Mounting inside `.tasks` puts the real surface under the probe.
 export function TaskCardQuoteOverflowStory() {
   return (
     <I18nProvider>
-      <TaskCard
+      <div className="tasks">
+        <TaskCard
         task={QUOTE_TASK}
         allTasks={[QUOTE_TASK]}
         members={[MIRA]}
@@ -61,8 +68,59 @@ export function TaskCardQuoteOverflowStory() {
         onSetPriority={NOOP as never}
         onSendMessage={NOOP as never}
         onReassign={NOOP as never}
-        onHydrate={(async () => QUOTE_TASK) as never}
-      />
+          onHydrate={(async () => QUOTE_TASK) as never}
+        />
+      </div>
+    </I18nProvider>
+  );
+}
+
+// The SAME card with the code fence removed, so only the wide table is left.
+// T-9b37 measured that a wide table overflows on its own — worse than the fence
+// (+675 vs +258 at 390px before the fix) — so "the <pre> is the culprit" was too
+// narrow a sentence. The fix is at the container, which is why one change kills
+// both; this story is what keeps that true, since a future fix aimed only at
+// `pre` would leave this one overflowing and nothing else would notice.
+const TABLE_ONLY = [
+  "## 只有表格，沒有程式碼區塊",
+  "",
+  "> 引用區塊也在，證明它不是元凶。",
+  "",
+  "| 檔案 | 行數 | 位元組 | 何時載入 | 誰維護 |",
+  "| --- | --- | --- | --- | --- |",
+  "| `server/ocserverd/CLAUDE.md` | 559 | 233,639 | 碰 server 時 | 後端 |",
+  "| `e2e_test/seven_gate/CLAUDE.md` | 865 | 75,332 | 碰該目錄時 | 驗證 |",
+].join("\n");
+
+const TABLE_TASK = mkTask({
+  id: "t-4aa0t",
+  taskNo: "T-4aa1",
+  title: "只有寬表格、沒有程式碼區塊",
+  status: "in_progress",
+  description: TABLE_ONLY,
+  progressDone: 1,
+  progressTotal: 2,
+  steps: [mkStep({ status: "pending" })],
+});
+
+export function TaskCardWideTableOverflowStory() {
+  return (
+    <I18nProvider>
+      <div className="tasks">
+        <TaskCard
+          task={TABLE_TASK}
+          allTasks={[TABLE_TASK]}
+          members={[MIRA]}
+          workers={WORKERS}
+          nowTs={3000}
+          onTerminate={NOOP as never}
+          onMarkDuplicate={NOOP as never}
+          onSetPriority={NOOP as never}
+          onSendMessage={NOOP as never}
+          onReassign={NOOP as never}
+          onHydrate={(async () => TABLE_TASK) as never}
+        />
+      </div>
     </I18nProvider>
   );
 }
