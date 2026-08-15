@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // resumeCtxServer seeds a roster with real NAMES — the fixture used by every
@@ -772,14 +773,9 @@ func TestResumeProse_CarriesNoAccidentalMarkdown(t *testing.T) {
 			// when re-wrapping a sentence.
 			lines := strings.Split(tc.text, "\n")
 			for i, line := range lines {
-				leftTrimmed := strings.TrimLeft(line, " \t")
 				bothTrimmed := strings.TrimSpace(line)
 				for _, bad := range blockOpeners {
-					probe := leftTrimmed
-					if bad.trimBoth {
-						probe = bothTrimmed
-					}
-					if bad.re.MatchString(probe) {
+					if bad.re.MatchString(bad.trim(line)) {
 						t.Errorf("line %d opens a block that renders as %s "+
 							"for the human while the agent reads it as prose: %q",
 							i+1, bad.becomes, line)
@@ -833,32 +829,61 @@ func TestResumeProse_CarriesNoAccidentalMarkdown(t *testing.T) {
 // marker, tabs as separators): erring wide costs a false red that a human
 // reads and fixes, erring narrow costs a silent miss.
 //
-// `trimBoth` is NOT that trade-off — it is an alignment fix. The renderer tests
-// its HR against `line.trim()`, both ends, so a trailing space or tab hides a
-// real `<hr>` from a guard that only trims the left (review found this one:
-// `"---   "` renders as a rule and stayed green).
+// 🔴 `\s` IS NOT `\s`. The renderer's regexes are JavaScript, where `\s` is
+// Unicode; Go's is [\t\n\f\r ] and nothing else. That five-character ceiling
+// is the single defect review has now found THREE times in this file, each
+// time in a different opener, and the shape is always the same: a full-width
+// IDEOGRAPHIC SPACE (U+3000) — one keystroke away in the Chinese input these
+// two constants are written in — sits where the guard expects an ASCII space,
+// the renderer opens a list/heading/table, and the guard says nothing. So the
+// space class is spelled out ONCE, here, and every opener uses it. Do not
+// write a bare `\s` in this table.
+const jsSpace = `[\t\n\v\f\r\x{0085}\p{Zs}\x{2028}\x{2029}\x{feff}]`
+
+// Each opener carries the trim its renderer counterpart actually applies,
+// because getting that wrong is a hole in whichever direction it is wrong:
 //
-// The remaining openers are tested left-trimmed, which for the heading, list
-// and quote openers is the wider direction — the renderer does not trim those
-// at all. The code fence is the exception and the wideness claim does NOT
-// cover it: the renderer tests it against `line.trimStart()`, so there the
-// guard merely MATCHES rather than exceeding it. Left as is because matching
-// is not a hole; the sentence is qualified so the next reader does not carry
-// "all of them are wider" into a change that needs it to be true.
+//   - HR: the renderer tests `line.trim()`, BOTH ends — review found `"---   "`
+//     rendering as a rule while a left-only guard stayed green.
+//   - fence: the renderer tests `line.trimStart()`, which is Unicode — review
+//     found a U+3000-indented fence rendering as <pre> while an ASCII
+//     TrimLeft guard stayed green. An earlier comment here claimed the guard
+//     "merely matches" the renderer for this opener; it did not, it was
+//     strictly NARROWER, which is the one direction this file must never be.
+//   - heading / list / quote: the renderer does NOT trim these at all, so
+//     trimming here is the deliberately-wider direction, costing a false red
+//     on indented prose that a human reads and fixes.
+//
+// Unicode trimming is not byte-identical across the two languages either:
+// Go's unicode.IsSpace has U+0085 that JS's trim lacks, and JS has U+FEFF that
+// Go's lacks. Both asymmetries are known and accepted here — the first costs a
+// false red on a character no one can type, and the second is unreachable in
+// these two constants because the Go compiler rejects a BOM inside a string
+// literal (verified: the mutant does not build).
 var blockOpeners = []struct {
-	re       *regexp.Regexp
-	becomes  string
-	trimBoth bool
+	re      *regexp.Regexp
+	becomes string
+	trim    func(string) string
 }{
-	{re: regexp.MustCompile(`^#{1,3}\s`), becomes: "a heading"},
-	{re: regexp.MustCompile(`^[-*+]\s`), becomes: "a list item"},
+	{re: regexp.MustCompile(`^#{1,3}` + jsSpace), becomes: "a heading", trim: trimASCIIStart},
+	{re: regexp.MustCompile(`^[-*+]` + jsSpace), becomes: "a list item", trim: trimASCIIStart},
 	// `\d+`, not `\d{1,9}`: the renderer's OLIST_RE has no digit ceiling, and a
 	// guard that stops counting where the renderer does not is a hole with a
 	// number on it (review found this one at ten digits).
-	{re: regexp.MustCompile(`^\d+[.)]\s`), becomes: "an ordered list item"},
-	{re: regexp.MustCompile(`^>`), becomes: "a block quote"},
-	{re: regexp.MustCompile("^```"), becomes: "a code fence"},
-	{re: regexp.MustCompile(`^(?:-{3,}|\*{3,}|_{3,})$`), becomes: "a horizontal rule", trimBoth: true},
+	{re: regexp.MustCompile(`^\d+[.)]` + jsSpace), becomes: "an ordered list item", trim: trimASCIIStart},
+	{re: regexp.MustCompile(`^>`), becomes: "a block quote", trim: trimASCIIStart},
+	{re: regexp.MustCompile("^```"), becomes: "a code fence", trim: trimUnicodeStart},
+	{re: regexp.MustCompile(`^(?:-{3,}|\*{3,}|_{3,})$`), becomes: "a horizontal rule", trim: strings.TrimSpace},
+}
+
+// trimASCIIStart is the deliberately-wider probe: the renderer does not trim
+// these openers at all, so anything we strip here can only produce a false red.
+func trimASCIIStart(line string) string { return strings.TrimLeft(line, " \t") }
+
+// trimUnicodeStart mirrors String.prototype.trimStart(), which the renderer
+// applies to the code fence.
+func trimUnicodeStart(line string) string {
+	return strings.TrimLeftFunc(line, unicode.IsSpace)
 }
 
 // splitRow mirrors splitRow() in Markdown.tsx: ONE optional leading and ONE
@@ -885,16 +910,19 @@ func splitRow(line string) []string {
 // `a|` over `:---:` renders as a table — and neither the pipe-requiring version
 // of this function nor the HR opener (which needs 3+ dashes) said a word.
 //
-// 🔴 The renderer's cheap-reject (`/^[|\s:-]+$/`) is deliberately NOT copied,
-// and this is the second bug review caught here: transliterating it gives Go's
-// `\s`, which is ASCII-only, where JavaScript's is Unicode. A delimiter row
-// holding an IDEOGRAPHIC SPACE — U+3000, one keystroke away in the Chinese
-// input these two constants are written in — then renders as a table while the
-// guard stays green. The cheap-reject earns nothing anyway: the per-cell
-// `:?-+:?` below is a strictly tighter bound (it admits no character the shape
-// test would have rejected), so dropping it is exact, not lenient. Cell
-// trimming is Unicode-aware on both sides (strings.TrimSpace / String.trim),
-// so U+3000 around a cell is handled identically to a plain space.
+// 🔴 The renderer's cheap-reject (`/^[|\s:-]+$/`) is deliberately NOT copied.
+// Transliterated it gives Go's ASCII-only `\s` — see the jsSpace note below —
+// and a delimiter row holding U+3000 then renders as a table while the guard
+// stays green. Dropping it rather than widening it is safe in the direction
+// that matters: against the RENDERER's cheap-reject it is exactly equivalent,
+// because JS's `\s` set and JS's `trim()` set are the same 25 characters, so
+// the per-cell `:?-+:?` test below already rejects everything the shape test
+// would have. It is NOT equivalent to the Go transliteration that was here:
+// that one also rejected the ~20 non-ASCII spaces Go's `\s` omits, which is
+// the bug, plus U+0085, which Go's TrimSpace strips and JS's trim does not —
+// so a delimiter row padded with U+0085 is now a false red. That is the wide
+// direction, on a character no one can type; the alternative was staying blind
+// to U+3000, which anyone writing Chinese can type by accident.
 func delimiterColumns(line string) int {
 	t := strings.TrimSpace(line)
 	if !strings.Contains(t, "-") {
