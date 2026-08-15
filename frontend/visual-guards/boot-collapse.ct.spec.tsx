@@ -18,14 +18,22 @@
 //       844-tall screen. 🔴 This is the half that collapsing does NOT buy —
 //       each card is its own full-height scroller, so the second document
 //       starts a screen below the first however short the first one is.
-// ⚠️ THE LAST TEST HAS NO MUTANT, and that is reported rather than hidden. The
-// correction it would have caught (keepAnchored, as the task steps use) was
-// written, measured as a no-op — scrollTop 0 → 0, heading y 159.5 → 159.5 with
-// it removed — and deleted. What a collapse removes sits BELOW the heading, and
-// the heading must be on screen to be pressed, so nothing moves with no code at
-// all. The test stays as a regression guard on the owner's rule (T-6630:
-// 「畫面也應該停在原處，直接向上收合」) for the day someone adds an animation, a
-// sticky heading, or a focus scroll here.
+// ⚠️ THE COLLAPSE TESTS HAVE NO MUTANT, and what they pin is NOT what an
+// earlier version of this header claimed. It said a collapse never moves the
+// pressed heading; the independent review measured otherwise and it is now
+// pinned here in BOTH directions:
+//   * collapsing the FIRST card really does not move its heading (its own
+//     heading is at the top of everything the collapse removes);
+//   * collapsing the LAST card from a scrolled-to-the-bottom page moves it
+//     389.9 → 753.9 (364px, same at 390 and 1040) — the page becomes shorter
+//     than the scroll position and the browser clamps scrollTop. No scroll
+//     correction can undo that (it would need scrollTop 7330 against a new
+//     maximum of 6966), which is why DocCard carries none. The test asserts the
+//     heading stays ON SCREEN, which is the part that is actually defensible.
+// So the owner's rule for this family (T-6630:「畫面也應該停在原處，直接向上收
+// 合」) holds for the first card and is BOUNDED for the last one. Fixing that
+// properly is a layout change (reserved height / sticky heading) and belongs to
+// the owner, not to a patch here.
 // CONTROL: 1040 (the desktop content column) is expected green throughout and
 // is NOT counted as coverage — it says the fix did not push the breakage onto
 // desktop.
@@ -63,6 +71,17 @@ for (const width of [320, 390, 1040]) {
       codexBox.y + codexBox.height,
       "codex heading bottom vs viewport"
     ).toBeLessThanOrEqual(844);
+
+    // (1b) …and the names reach a screen reader, not just the eye. An
+    // aria-label on the toggle used to override both, so BOTH buttons reported
+    // 展開這份文件 and this lookup matched nothing — this ticket's own defect
+    // (two documents you cannot tell apart) rebuilt in the accessibility tree.
+    for (const name of [s.bootClaudeName, s.bootCodexName]) {
+      await expect(
+        page.getByRole("button", { name, exact: true }),
+        `accessible name: ${name}`
+      ).toHaveCount(1);
+    }
 
     // (2) Closed, and closed means nothing of either document is on screen —
     // otherwise "both fit" would only be true of this fixture's length.
@@ -120,9 +139,45 @@ test("collapsing a document leaves its heading where it was pressed", async ({
   await expect(page.locator(".doc-md")).toHaveCount(0);
   const after = (await claude.boundingBox())!.y;
 
-  // Owner's rule for this family of controls (2026-08-15, T-6630):「收合時…
-  // 畫面也應該停在原處，直接向上收合」. The heading is the thing pressed, so it
-  // is the thing that must not move. Today no code buys this — see the header
-  // for why, and do not read a green here as a correction working.
+  // The FIRST card's heading sits above everything its own collapse removes, so
+  // it holds still with no code at all — see the header, and do not read this
+  // green as a scroll correction working.
   expect(Math.abs(after - before), "heading moved on collapse").toBeLessThanOrEqual(2);
+});
+
+test("collapsing the LAST document pushes its heading down but never off screen", async ({
+  mount,
+  page,
+}) => {
+  // The other half of the collapse story, and the one that is NOT free: with
+  // both documents open and the page scrolled to its end, collapsing the last
+  // one shortens the page under the reader. The browser clamps scrollTop and
+  // the heading slides down — MEASURED 389.9 → 753.9 at both widths.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mount(<BootCollapseStory />);
+  await openBootPage(page);
+
+  const codex = page.getByText(s.bootCodexName);
+  await page.getByText(s.bootClaudeName).click();
+  await codex.click();
+  await expect(page.locator(".doc-md")).toHaveCount(2);
+
+  await page.locator(".settings-stack").evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  await codex.scrollIntoViewIfNeeded();
+  const before = (await codex.boundingBox())!.y;
+
+  await codex.click();
+  await expect(page.locator(".doc-md")).toHaveCount(1);
+  const after = (await codex.boundingBox())!.y;
+
+  // What is actually defensible: the control the reader just pressed is still
+  // on screen, so the page they are left looking at is the one they asked for.
+  // The movement itself is recorded rather than asserted away — a future layout
+  // fix should make this shrink, and this test should be updated when it does.
+  expect(after, "heading still on screen after collapse").toBeLessThan(844);
+  expect(after, "heading not scrolled above the viewport").toBeGreaterThanOrEqual(0);
+  expect(after - before, "heading movement (known, unfixable by scrolling)")
+    .toBeGreaterThan(0);
 });

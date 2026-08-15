@@ -198,20 +198,30 @@ export function DocCard({
     usage !== undefined && editing && docCapBlocked(usage.cap, text, draft);
   const unchanged = requireDirty && draft === text;
 
-  // ⚠️ NO SCROLL CORRECTION HERE, AND THAT IS A MEASURED DECISION, NOT AN
-  // OVERSIGHT. The owner's rule for this family of controls (2026-08-15,
-  // T-6630) is that the screen must not move — content grows downward from the
-  // heading and collapses back up into it. This toggle gets that for free:
-  // everything a collapse removes sits BELOW the heading, and the heading is
-  // the only handle the card has, so it is on screen whenever the toggle is
-  // pressed.
+  // ⚠️ NO SCROLL CORRECTION HERE, AND THE REASON IS THAT NONE IS POSSIBLE —
+  // NOT, as this comment claimed until the independent review measured it, that
+  // nothing moves.
   //
-  // A keepAnchored() correction (the one the task steps use, T-4e39) WAS
-  // written here and then removed: with it mutated out, the guard measuring the
-  // heading's viewport y across a collapse stayed green at 390×844, including
-  // from a scrolled-to-bottom start — scrollTop 0 → 0, y 159.5 → 159.5. It
-  // bought nothing, and dead correction code reads like a hazard someone
-  // handled.
+  // The owner's rule for this family of controls (2026-08-15, T-6630) is that
+  // the screen must not move: content grows downward from the heading and
+  // collapses back up into it. The FIRST card gets that for free — everything a
+  // collapse removes sits below its heading, and a heading that is scrolled to
+  // is at the top of what is above it.
+  //
+  // 🔴 THE LAST CARD DOES NOT. Measured at 390×844 AND 1040×844: open both
+  // documents, scroll to the very bottom, collapse the LAST one by its own
+  // heading → the heading moves 389.9 → 753.9, 364px. The page has genuinely
+  // become shorter than the current scroll position, so the browser clamps
+  // scrollTop and the content slides down under a viewport that cannot follow
+  // it. Restoring the heading would need scrollTop 7330 against a new maximum
+  // of 6966: THE CORRECTION IS ARITHMETICALLY UNAVAILABLE, which is why a
+  // keepAnchored() call (the one the task steps use, T-4e39) was written here
+  // and then removed rather than kept as a no-op. What survives is that the
+  // heading stays ON SCREEN (753.9 < 844) — it is pushed, never lost.
+  //
+  // Do not "fix" this with a scroll correction. The only real fixes change the
+  // layout — e.g. reserving the collapsed height, or a sticky heading — and
+  // that is a decision for the owner, not a patch.
 
   function startEdit() {
     setDraft(text);
@@ -293,7 +303,27 @@ export function DocCard({
             className="doc-collapse"
             data-testid="doc-card-collapse"
             aria-expanded={!collapsed}
-            aria-label={collapsed ? t.settings.docExpand : t.settings.docCollapse}
+            /* 🔴 NO aria-label HERE. One stood here saying 展開這份文件 /
+             * 收合這份文件, and the independent review measured what it cost:
+             * BOTH buttons — and, through them, both <h1>s — reported the same
+             * accessible name, so a screen reader could not tell 啟動程序
+             * (Claude Code) from (Codex CLI), and getByRole('button', {name:
+             * '啟動程序（Claude Code）'}) matched nothing. That is this
+             * ticket's own defect (two documents you cannot tell apart) rebuilt
+             * in the accessibility tree, plus WCAG 2.5.3 Label in Name.
+             * The visible title IS the name; aria-expanded carries the state,
+             * which is what a screen reader announces as expanded/collapsed. */
+            /* …EXCEPT when the title is renameable and therefore lives OUTSIDE
+             * this button: then there is no visible text inside it to be the
+             * name, and a nameless button is worse than a generic one. No
+             * caller combines the two today. */
+            aria-label={
+              onRenameTitle
+                ? collapsed
+                  ? t.settings.docExpand
+                  : t.settings.docCollapse
+                : undefined
+            }
             onClick={() => setCollapsed((c) => !c)}
           >
             {collapsed ? (
