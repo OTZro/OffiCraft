@@ -7,9 +7,52 @@
 // circled is T-9b5d's 由來 block, whose lines are 「…」-wrapped sentences mixing
 // CJK with latin words and `code` spans. Real TaskCard + real tasks.css, so the
 // guard measures production layout (jsdom applies no layout at all).
+//
+// 🔴 THE ANCESTOR CHAIN IS PART OF THE FIXTURE. Both stories mount inside
+// `.app > .app__main > .tasks > .tasks__section > .tasks__list`, the chain
+// TasksPage really builds, because two levels of it change what is being
+// measured (T-9b37 review):
+//   · `.tasks` is the element that scrolls sideways in production — the
+//     document never does, so a guard watching only the page watches a surface
+//     the owner's symptom does not live on.
+//   · `.app__main` contributes 22px of side padding. Without it the card is
+//     388px wide at a 390px viewport where production gives it 344 — a guard
+//     44px LOOSER than the real screen, which is how a regression slips past a
+//     green run. `css-layout-traps.md`已經寫著這一條; this story broke it twice
+//     before the review made it stick.
 import { I18nProvider } from "../../src/i18n";
 import { TaskCard } from "../../src/components/TaskCard";
 import { mkTask, mkStep, MIRA, NOOP, WORKERS } from "./taskFixtures";
+
+function TasksShell({ task }: { task: ReturnType<typeof mkTask> }) {
+  return (
+    <I18nProvider>
+      <div className="app">
+        <main className="app__main">
+          <div className="tasks">
+            <section className="tasks__section">
+              <div className="tasks__list">
+                <TaskCard
+                  task={task}
+                  allTasks={[task]}
+                  members={[MIRA]}
+                  workers={WORKERS}
+                  nowTs={3000}
+                  onTerminate={NOOP as never}
+                  onMarkDuplicate={NOOP as never}
+                  onSetPriority={NOOP as never}
+                  onSendMessage={NOOP as never}
+                  onReassign={NOOP as never}
+                  onHydrate={(async () => task) as never}
+                />
+              </div>
+            </section>
+          </div>
+        </main>
+      </div>
+    </I18nProvider>
+  );
+}
 
 const DESC = [
   "## 由來（owner 2026-08-14 聊天，原話逐字）",
@@ -47,40 +90,16 @@ const QUOTE_TASK = mkTask({
   ],
 });
 
-// The card is wrapped in `.tasks` — the class TasksPage puts around the list.
-// Independent review (T-9b37) measured that in production the DOCUMENT never
-// scrolls sideways: `.tasks` is the element that does, so a guard that only
-// watches the page is watching a surface the user's symptom does not live on.
-// It went red for this bug only because a bare mount makes the page the
-// scroller. Mounting inside `.tasks` puts the real surface under the probe.
 export function TaskCardQuoteOverflowStory() {
-  return (
-    <I18nProvider>
-      <div className="tasks">
-        <TaskCard
-        task={QUOTE_TASK}
-        allTasks={[QUOTE_TASK]}
-        members={[MIRA]}
-        workers={WORKERS}
-        nowTs={3000}
-        onTerminate={NOOP as never}
-        onMarkDuplicate={NOOP as never}
-        onSetPriority={NOOP as never}
-        onSendMessage={NOOP as never}
-        onReassign={NOOP as never}
-          onHydrate={(async () => QUOTE_TASK) as never}
-        />
-      </div>
-    </I18nProvider>
-  );
+  return <TasksShell task={QUOTE_TASK} />;
 }
 
-// The SAME card with the code fence removed, so only the wide table is left.
+// The same card with NO code fence at all, so only the wide table is left.
 // T-9b37 measured that a wide table overflows on its own — worse than the fence
-// (+675 vs +258 at 390px before the fix) — so "the <pre> is the culprit" was too
-// narrow a sentence. The fix is at the container, which is why one change kills
-// both; this story is what keeps that true, since a future fix aimed only at
-// `pre` would leave this one overflowing and nothing else would notice.
+// — so "the <pre> is the culprit" was too narrow a sentence. The fix is at the
+// container, which is why one change kills both; this story is what keeps that
+// true, since a future fix aimed only at `pre` would leave this one overflowing
+// and nothing else would notice.
 const TABLE_ONLY = [
   "## 只有表格，沒有程式碼區塊",
   "",
@@ -104,23 +123,5 @@ const TABLE_TASK = mkTask({
 });
 
 export function TaskCardWideTableOverflowStory() {
-  return (
-    <I18nProvider>
-      <div className="tasks">
-        <TaskCard
-          task={TABLE_TASK}
-          allTasks={[TABLE_TASK]}
-          members={[MIRA]}
-          workers={WORKERS}
-          nowTs={3000}
-          onTerminate={NOOP as never}
-          onMarkDuplicate={NOOP as never}
-          onSetPriority={NOOP as never}
-          onSendMessage={NOOP as never}
-          onReassign={NOOP as never}
-          onHydrate={(async () => TABLE_TASK) as never}
-        />
-      </div>
-    </I18nProvider>
-  );
+  return <TasksShell task={TABLE_TASK} />;
 }

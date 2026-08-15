@@ -4,9 +4,9 @@
 // past the card's right edge and the whole page could be dragged sideways.
 //
 // 🔴 THE CIRCLED BLOCK WAS NOT THE CAUSE. Measured at 390px, the quote's own
-// min-content is 67px and it overflows by 0; what is 479px wide inside a 360px
-// card is `.task-card__desc` itself. Hiding the children one at a time settles
-// it causally: hide the `<pre>` and the card overflow goes 105→0, hide the
+// min-content is 67px and it overflows by 0; what is far wider than the card
+// can give it is `.task-card__desc` itself. Hiding the children one at a time
+// settles it causally: hide the `<pre>` and the overflow goes to 0, hide the
 // quote (or the paragraph) and nothing moves. The quote was the visible tenant
 // of a container something else had widened.
 //
@@ -35,10 +35,12 @@
 // narrowest phone we support) are both asserted — width is an INPUT dimension.
 //
 // MUTANT (verified red→green): put `align-items: flex-start` back on
-// `.task-card__desc-block` → all four cases go red, and assertion (1) reports
-// the LIST scrolling by +104px at 390 and +174 at 320. (The +105/+175 pair is
-// the CARD's own overflow, assertion (2) — an earlier header quoted those two
-// numbers against assertion (1), which review caught.)
+// `.task-card__desc-block` → all four cases go red, assertion (1) naming the
+// LIST (+148px at 390 with the full ancestor chain; it was +104 when the story
+// mounted bare, which is the 44px of `.app__main` padding this fixture used to
+// be missing). Numbers here are what the mutant printed — an earlier header
+// quoted the CARD's overflow against the LIST assertion, which review caught,
+// so quote a number only with the assertion it came from.
 import { test, expect } from "@playwright/experimental-ct-react";
 import {
   TaskCardQuoteOverflowStory,
@@ -89,6 +91,10 @@ async function assertFits(page: any, width: number) {
     `[${width}px] the task list scrolls sideways by +${m.listOver}px — this is the ` +
       `surface the phone actually drags`
   ).toBeLessThanOrEqual(1);
+  // Kept as a second net, and worth being honest about: on THIS fixture it is
+  // 0 before and after the fix, because `.tasks` absorbs the overflow into its
+  // own scrollbar. It is not coverage — it is the case where some future change
+  // removes that absorption and the whole page starts dragging again.
   expect(m.page, `[${width}px] page scrolls sideways by +${m.page}px`).toBeLessThanOrEqual(1);
 
   // (2) …and the card itself must not be overflowed from inside, so a container
