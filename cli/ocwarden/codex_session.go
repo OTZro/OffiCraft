@@ -638,6 +638,15 @@ func (s *codexSession) handleServerRequest(msg appServerMessage) {
 	}
 }
 
+// codexListenerActions decides what ONE listener line does to the session:
+// whether it wakes a session whose boot is still unfinished, and whether it is
+// forwarded to the model as a turn. It is a pure function so the decision can be
+// tested without an App Server — the loop below owns only the side effects.
+func codexListenerActions(line string, wakeAlreadySent bool) (wake, forward bool) {
+	connected := strings.HasPrefix(strings.TrimSpace(line), "[ocagent] listen: connected")
+	return connected && !wakeAlreadySent, actionableCodexListenerLine(line)
+}
+
 func actionableCodexListenerLine(line string) bool {
 	// Transport diagnostics belong in the pane, not in the model transcript.
 	// Sending the connected/reconnect chatter creates empty, token-heavy turns.
@@ -784,23 +793,24 @@ func runCodexSession(argv []string, env func(string) string, out io.Writer) int 
 			// ocagent emits this exact lifecycle line each time its SSE stream
 			// opens. A server restart therefore restores account telemetry
 			// immediately, then restarts the normal 30-second cadence.
+			wake, forward := codexListenerActions(line, postBootWakeSent)
 			if strings.HasPrefix(strings.TrimSpace(line), "[ocagent] listen: connected") {
 				s.reportIdentity()
 				s.requestRateLimits()
 				identityHeartbeat.Reset(codexTelemetryThrottle)
-				// ONCE per session, and deliberately not on reconnects: this
-				// wake exists to continue a boot that has not finished, and by
-				// the second connect that boot is long over. A reconnect is a
-				// network blip — every one of them opening a fresh "go do your
-				// inventory" turn would spend tokens re-doing work and would
-				// interrupt whatever the agent is actually in the middle of.
-				if !postBootWakeSent {
-					postBootWakeSent = true
-					s.activity("waking the session now that SSE is up")
-					s.steerOrStart(codexPostBootWake)
-				}
 			}
-			if actionableCodexListenerLine(line) {
+			// ONCE per session, and deliberately not on reconnects: this wake
+			// exists to continue a boot that has not finished, and by the second
+			// connect that boot is long over. A reconnect is a network blip —
+			// every one of them opening a fresh "go do your inventory" turn would
+			// spend tokens re-doing work and would interrupt whatever the agent is
+			// actually in the middle of.
+			if wake {
+				postBootWakeSent = true
+				s.activity("waking the session now that SSE is up")
+				s.steerOrStart(codexPostBootWake)
+			}
+			if forward {
 				s.activity("OffiCraft event: %s", line)
 				s.steerOrStart(line)
 			}

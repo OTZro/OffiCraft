@@ -293,6 +293,38 @@ func TestActionableCodexListenerLineFiltersTransportDiagnostics(t *testing.T) {
 	}
 }
 
+// A codex agent only ever runs when a listener line becomes a turn, and the
+// "connected" line is deliberately filtered out of that path. So the moment SSE
+// comes up — the moment its boot document says to carry on with the task
+// inventory — nothing calls it, and a session that never continues looks exactly
+// like a session with nothing to do. This pins the wake that closes that gap,
+// and pins that it happens once: a reconnect is a network blip, and re-sending
+// "go do your inventory" would interrupt whatever the agent is doing by then.
+func TestCodexListenerActionsWakesTheSessionOnceWhenSSEComesUp(t *testing.T) {
+	const connected = "[ocagent] listen: connected — streaming http://127.0.0.1"
+
+	wake, forward := codexListenerActions(connected, false)
+	if !wake {
+		t.Error("SSE came up and nothing woke the session; its boot stops at the " +
+			"step before the task inventory and nothing reports it")
+	}
+	if forward {
+		t.Error("the transport diagnostic itself was forwarded as a turn")
+	}
+
+	if wake, _ := codexListenerActions(connected, true); wake {
+		t.Error("a reconnect woke the session again; the boot it exists to finish " +
+			"is long over by then and the extra turn interrupts real work")
+	}
+
+	// Negative control: an ordinary event is forwarded and wakes nothing, so the
+	// assertions above are about the connect line rather than about any line.
+	wake, forward = codexListenerActions("[ocagent] chat from owner (#c-1, 1s ago): hi", false)
+	if wake || !forward {
+		t.Errorf("ordinary event: wake=%v forward=%v, want false/true", wake, forward)
+	}
+}
+
 type runtimeProbeRunner struct{}
 
 func (runtimeProbeRunner) Run(name string, args ...string) (string, error) {
