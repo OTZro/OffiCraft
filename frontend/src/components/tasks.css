@@ -997,10 +997,11 @@ button.task-card__status-chip:hover {
    surface. Colours come only from theme tokens, per the tokens gate. */
 /* T-4aa0 — no `align-items: flex-start` here. In a COLUMN flex container that
    makes each item take fit-content as its width, and fit-content floors at
-   min-content: one `<pre>` whose command line cannot break set the description's
-   min-content to 479px inside a 360px card, so the card — and the whole page —
-   scrolled sideways on a phone. The quote block the owner photographed was the
-   visible symptom, not the cause; it merely filled the widened container
+   min-content: an unbreakable `<pre>` line — or a wide table, which does it on
+   its own and by more — set the description's min-content to 479px, far past
+   what the card can give it, so the LIST (`.tasks`, the real scroller) dragged
+   sideways on a phone. The quote block the owner photographed was the visible
+   symptom, not the cause; it merely filled the widened container
    (measured: hiding the <pre> takes the overflow to 0, hiding the quote changes
    nothing).
    Stretching instead binds the description to the card, and `.doc-md pre` /
