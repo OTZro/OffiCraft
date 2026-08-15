@@ -74,6 +74,16 @@ func crossRuntimeSeedViolations(claude, codex string) []string {
 	return out
 }
 
+func missingInstructions(document, variableName string, instructions []string) []string {
+	var out []string
+	for _, instruction := range instructions {
+		if !strings.Contains(document, instruction) {
+			out = append(out, variableName+"/"+instruction)
+		}
+	}
+	return out
+}
+
 func TestNeitherBootSeedCarriesTheOtherRuntimesListenerInstruction(t *testing.T) {
 	claude, err := assetRoot("").readSeedFile("boot_sequence.md")
 	if err != nil {
@@ -100,10 +110,14 @@ func TestNeitherBootSeedCarriesTheOtherRuntimesListenerInstruction(t *testing.T)
 	// owner rewrite that rephrases every sentence leaves a guard that forbids
 	// text nobody writes any more: permanently green, permanently useless, and
 	// indistinguishable from a guard that is working.
-	if len(crossRuntimeSeedViolations(codex, claude)) != len(codexOnlyInstructions)+len(claudeOnlyInstructions) {
+	missing := append(
+		missingInstructions(codex, "codexOnlyInstructions", codexOnlyInstructions),
+		missingInstructions(claude, "claudeOnlyInstructions", claudeOnlyInstructions)...,
+	)
+	if len(missing) > 0 {
 		t.Fatalf("swapping the two documents did NOT flag every probe: the "+
 			"probes have drifted away from what the seeds actually say. "+
-			"got %v", crossRuntimeSeedViolations(codex, claude))
+			"missing %v", missing)
 	}
 
 	if got := crossRuntimeSeedViolations(claude, codex); len(got) > 0 {
@@ -114,6 +128,18 @@ func TestNeitherBootSeedCarriesTheOtherRuntimesListenerInstruction(t *testing.T)
 			"listeners on one identity is what the server refuses with 409, so "+
 			"the second one never connects. Either way the agent never comes "+
 			"online and reports nothing.", got)
+	}
+}
+
+func TestMissingInstructionsNamesOnlyTheMissingProbe(t *testing.T) {
+	missing := missingInstructions(
+		strings.Join(codexOnlyInstructions[:len(codexOnlyInstructions)-1], "\n"),
+		"codexOnlyInstructions",
+		codexOnlyInstructions,
+	)
+	want := []string{"codexOnlyInstructions/" + codexOnlyInstructions[len(codexOnlyInstructions)-1]}
+	if strings.Join(missing, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("missing instructions = %v, want %v", missing, want)
 	}
 }
 
