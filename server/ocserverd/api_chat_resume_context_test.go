@@ -836,9 +836,15 @@ func TestResumeProse_CarriesNoAccidentalMarkdown(t *testing.T) {
 // `trimBoth` is NOT that trade-off — it is an alignment fix. The renderer tests
 // its HR against `line.trim()`, both ends, so a trailing space or tab hides a
 // real `<hr>` from a guard that only trims the left (review found this one:
-// `"---   "` renders as a rule and stayed green). The other openers are tested
-// left-trimmed on purpose, which is the wider direction: the renderer does not
-// trim them at all.
+// `"---   "` renders as a rule and stayed green).
+//
+// The remaining openers are tested left-trimmed, which for the heading, list
+// and quote openers is the wider direction — the renderer does not trim those
+// at all. The code fence is the exception and the wideness claim does NOT
+// cover it: the renderer tests it against `line.trimStart()`, so there the
+// guard merely MATCHES rather than exceeding it. Left as is because matching
+// is not a hole; the sentence is qualified so the next reader does not carry
+// "all of them are wider" into a change that needs it to be true.
 var blockOpeners = []struct {
 	re       *regexp.Regexp
 	becomes  string
@@ -871,16 +877,27 @@ func splitRow(line string) []string {
 }
 
 // delimiterColumns mirrors parseDelimiterRow() in Markdown.tsx: at least one
-// dash, nothing outside `|`, whitespace, `:` and `-`, and every cell `:?-+:?`.
-// Returns the column count, or -1 when the line is not a delimiter row.
+// dash and every cell `:?-+:?`. Returns the column count, or -1 when the line
+// is not a delimiter row.
 //
 // 🔴 A pipe is NOT required here, and requiring one is the bug review caught:
 // the renderer accepts a bare `:---:` as a one-column delimiter row, so
 // `a|` over `:---:` renders as a table — and neither the pipe-requiring version
 // of this function nor the HR opener (which needs 3+ dashes) said a word.
+//
+// 🔴 The renderer's cheap-reject (`/^[|\s:-]+$/`) is deliberately NOT copied,
+// and this is the second bug review caught here: transliterating it gives Go's
+// `\s`, which is ASCII-only, where JavaScript's is Unicode. A delimiter row
+// holding an IDEOGRAPHIC SPACE — U+3000, one keystroke away in the Chinese
+// input these two constants are written in — then renders as a table while the
+// guard stays green. The cheap-reject earns nothing anyway: the per-cell
+// `:?-+:?` below is a strictly tighter bound (it admits no character the shape
+// test would have rejected), so dropping it is exact, not lenient. Cell
+// trimming is Unicode-aware on both sides (strings.TrimSpace / String.trim),
+// so U+3000 around a cell is handled identically to a plain space.
 func delimiterColumns(line string) int {
 	t := strings.TrimSpace(line)
-	if !strings.Contains(t, "-") || !delimiterShape.MatchString(t) {
+	if !strings.Contains(t, "-") {
 		return -1
 	}
 	cells := splitRow(t)
@@ -892,7 +909,4 @@ func delimiterColumns(line string) int {
 	return len(cells)
 }
 
-var (
-	delimiterShape = regexp.MustCompile(`^[|\s:-]+$`)
-	delimiterCell  = regexp.MustCompile(`^:?-+:?$`)
-)
+var delimiterCell = regexp.MustCompile(`^:?-+:?$`)
