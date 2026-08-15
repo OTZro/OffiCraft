@@ -30,9 +30,13 @@
 //     notices the shape being reverted; it does NOT exercise (1). Do not quote
 //     it as evidence that the fold check works.
 //   * GEOMETRY (the one that does exercise (1)): a 900px spacer between the two
-//     rows, ids intact → RED on (1) at 320/390/1040 with the codex row bottom
-//     at 1208.5 / 1176.5 / 1176.5 against the 844 fold. This is the assertion's
-//     real discriminating power, measured.
+//     rows, ids intact → RED on (1) at 320/390/402/1040 with the codex row
+//     bottom at 1208.5 / 1176.5 / 1176.5 / 1176.5 against the 844 fold. This is
+//     the assertion's real discriminating power, measured.
+// WIDTHS: 402 is the owner's own phone; 390 and 320 bracket it (320 is the
+// narrowest supported). Width is an INPUT dimension here — the row title is the
+// longest string on the page, so the narrow end is where it would wrap or
+// overflow first.
 //   * ACCESSIBILITY: give both rows one shared aria-label (T-6278's actual
 //     defect — its collapse toggles announced the same name, rebuilding "two
 //     documents you cannot tell apart" in the accessibility tree) → RED on (2)
@@ -55,7 +59,7 @@ async function openBootIndex(page: import("@playwright/test").Page) {
   await expect(page.getByTestId("boot-entry-claude")).toBeVisible();
 }
 
-for (const width of [320, 390, 1040]) {
+for (const width of [320, 390, 402, 1040]) {
   test(`width ${width}: both boot documents are rows on one screen`, async ({
     mount,
     page,
