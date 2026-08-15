@@ -394,8 +394,8 @@ func (s *apiServer) releaseDependentsOnClose(t Task, now float64, trigger string
 		if d.ExecutorID != "" {
 			s.postTaskChat(d, wireSystemSender, d.ExecutorID,
 				"["+TaskNo(d.ID)+"] 擋住這張任務的前置任務 "+TaskNo(t.ID)+
-					"「"+t.Title+"」已經"+t.Status+"了，它不再擋著你。"+
-					"這張任務現在可以開始：請 get_task 讀內容、submit_plan 規劃步驟後開始執行。",
+					"「"+t.Title+"」已經"+t.Status+"了,它不再擋著你。"+
+					"這張任務現在可以開始:請 get_task 讀內容、submit_plan 規劃步驟後開始執行。",
 				trigger)
 		}
 		s.publishTask(d, trigger)

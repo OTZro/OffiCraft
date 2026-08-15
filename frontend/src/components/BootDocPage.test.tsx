@@ -144,6 +144,9 @@ describe("BootDocPage", () => {
     // perfectly. A probe that names a line by its content is a probe that goes
     // false when the document is re-ordered, and it goes false LOUDLY, on a
     // package that changed no frontend code at all.
+    // toContain("") is vacuously true, so pin that the remainder is non-empty —
+    // otherwise a fixture that shrank to a single line would pass this silently.
+    expect(rest.length).toBeGreaterThan(0);
     expect(text).toContain(rest);
 
     // And the page now RENDERS the saved document: the heading came back from

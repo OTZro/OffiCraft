@@ -105,6 +105,11 @@ type Task struct {
 	// is the difference between restoring the seam and re-deriving it. Do not
 	// read a non-empty value as "a notice is outstanding"; it is a fossil of one
 	// that was sent before this change.
+	//
+	// ⚠️ RESTORING the seam means CLEARING this column first. The fossils sit at
+	// stamp == executor, so a restored de-duplication check would swallow the
+	// first kickoff of exactly the tasks that were notified before — the subset
+	// nobody would think to look at.
 	KickoffNotifiedTo string
 }
 
