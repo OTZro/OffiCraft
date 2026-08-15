@@ -38,9 +38,12 @@
 // `.task-card__desc-block` → all four cases go red, assertion (1) naming the
 // LIST (+148px at 390 with the full ancestor chain; it was +104 when the story
 // mounted bare, which is the 44px of `.app__main` padding this fixture used to
-// be missing). Numbers here are what the mutant printed — an earlier header
-// quoted the CARD's overflow against the LIST assertion, which review caught,
-// so quote a number only with the assertion it came from.
+// be missing). +218 at 320. The WIDE TABLE cases print their own pair — +173 at
+// 390 and +243 at 320 — so all four do NOT report one number; a reader who
+// takes +148 as "the" mutant figure is reading the `<pre>` pair only.
+// Numbers here are what the mutant printed — an earlier header quoted the
+// CARD's overflow against the LIST assertion, which review caught, so quote a
+// number only with the assertion it came from.
 import { test, expect } from "@playwright/experimental-ct-react";
 import {
   TaskCardQuoteOverflowStory,
