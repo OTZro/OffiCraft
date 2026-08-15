@@ -14,12 +14,14 @@
 // outright («我覺得呈現方式不好,可以改成像任務手冊那樣嗎») with the 任務手冊 hub's
 // nav rows, which is what this now measures.
 //
-// 🔴 THE FIXTURE'S LENGTH IS LOAD-BEARING AND MUST STAY. Both documents are
-// seeded through the real adapter at several thousand pixels of CJK prose. On
-// an index that renders no document the length changes nothing — which is the
-// POINT: revert SettingsPage's boot view to stacking the two BootDocPages and
-// this fixture's length is what pushes the second heading off screen and turns
-// these tests red. A short fixture would let the stacked shape pass.
+// ⚠️ THE FIXTURE'S LENGTH IS NOT LOAD-BEARING — this header claimed it was, and
+// the independent review DISPROVED it by measurement: cut the seeded documents
+// from 40 sections to 1 and all five tests stay GREEN. Nothing asserted here
+// depends on the documents' height, because the index renders no document at
+// all. The length is kept only so the fixture still resembles the real page.
+// Do not re-promote it to a guarantee: if you want the stacked shape to fail on
+// GEOMETRY rather than on a missing testid, that assertion does not exist yet
+// and would have to be written.
 //
 // MUTANTS — planted and run on THIS browser for this file, and reported as the
 // run printed them, including the part that is weaker than it looks:
@@ -33,14 +35,20 @@
 //     rows, ids intact → RED on (1) at 320/390/402/1040 with the codex row
 //     bottom at 1208.5 / 1176.5 / 1176.5 / 1176.5 against the 844 fold. This is
 //     the assertion's real discriminating power, measured.
-// WIDTHS: 402 is the owner's own phone; 390 and 320 bracket it (320 is the
-// narrowest supported). Width is an INPUT dimension here — the row title is the
-// longest string on the page, so the narrow end is where it would wrap or
-// overflow first.
 //   * ACCESSIBILITY: give both rows one shared aria-label (T-6278's actual
 //     defect — its collapse toggles announced the same name, rebuilding "two
 //     documents you cannot tell apart" in the accessibility tree) → RED on (2)
 //     at every width, count 0 instead of 1.
+//   * CROSSWIRE (added by the independent review, and it earns its place): hard
+//     -code `docKey="claude"` in the bootDoc view → RED, but ONLY on the jsdom
+//     wiring test, not here. That one test is the sole defence against a save
+//     landing on the wrong runtime; do not delete it as redundant.
+// Both figures above were re-measured by the reviewer on a clean clone and came
+// back identical.
+// WIDTHS: 402 is the owner's own phone; 390 and 320 bracket it (320 is the
+// narrowest supported). Width is an INPUT dimension here — the row title is the
+// longest string on the page, so the narrow end is where it would wrap or
+// overflow first.
 // CONTROL, and it is a WEAK one here: 1040 (the desktop content column) is
 // green in the clean tree, but BOTH mutants above take it red too — the index
 // shape has no width-dependent behaviour to separate phone from desktop. It is

@@ -112,6 +112,14 @@ describe("SettingsPage · unified breadcrumb header (T-8f6e)", () => {
     expect(await utils.findByTestId("boot-entry-claude")).toBeTruthy();
     expect(utils.getByTestId("boot-entry-codex")).toBeTruthy();
     expect(utils.container.querySelectorAll("nav.crumbs").length).toBe(1);
+
+    // …and one level deeper. The runtime's own name is the TERMINAL segment on
+    // purpose: Breadcrumbs renders the last one as plain text, so a trail
+    // ending at 啟動程序 would leave a reader who opened one runtime unable to
+    // reach the other without going out to 角色誌 and back in.
+    fireEvent.click(utils.getByTestId("boot-entry-claude"));
+    await utils.findByTestId("doc-card-edit");
+    expectHeader(utils, [s.title, s.roles, s.bootName, s.bootClaudeName]);
   });
 
   it("任務手冊列表: 設定 › 任務手冊 + title; hub: 設定 › 任務手冊 › <type>", async () => {

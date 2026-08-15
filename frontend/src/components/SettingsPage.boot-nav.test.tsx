@@ -84,14 +84,18 @@ describe("SettingsPage · 啟動程序 index", () => {
     // other — which would silently stop that runtime's agents coming online.
     expect(queryByText(s.bootCodexName)).toBeNull();
 
-    // NO COLLAPSE CONTROL ANYWHERE IN THIS FAMILY ANY MORE. This is what
-    // retires T-fc57: that ticket recorded a 364px heading jump when the LAST
-    // stacked card was collapsed from a scrolled-to-the-bottom page (the page
-    // gets shorter than the scroll position and the browser clamps scrollTop —
-    // no scroll correction can undo it). With one document per page there is
-    // nothing to collapse, so the jump is not merely unfixed, it is
-    // unreachable. If a collapse control ever comes back here, T-fc57 comes
-    // back with it.
+    // NO COLLAPSE CONTROL ON THIS PAGE. T-fc57 recorded a 364px heading jump
+    // when the LAST stacked card was collapsed from a scrolled-to-the-bottom
+    // page (the page gets shorter than the scroll position, the browser clamps
+    // scrollTop, and no scroll correction can undo it — which is why DocCard
+    // carries none). One document per page means nothing here can collapse.
+    //
+    // ⚠️ SAY IT NO STRONGER THAN THIS. An earlier version of this comment said
+    // the jump was "unreachable"; the independent review measured that the
+    // MECHANISM is still in DocCard, just unused — so what is true is "no page
+    // passes `collapsible`, and these three assertions are what keep it that
+    // way". Put a collapse control back into a page and T-fc57 comes back with
+    // it, unfixed.
     expect(
       container.querySelectorAll('[data-testid="doc-card-collapse"]').length
     ).toBe(0);

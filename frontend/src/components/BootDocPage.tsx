@@ -79,8 +79,11 @@ export function BootDocPage({
    * document shares, and 「版本紀錄」 alone cannot say which runtime it holds. */
   historyTitle: string;
   crumbs: Crumb[];
-  /** Start closed behind the heading — passed by the page that stacks TWO of
-   * these (啟動程序), not by 系統互動, which is alone on its page. See DocCard. */
+  /** Start closed behind the heading. 🔴 NO CALLER PASSES THIS (T-bac4): the
+   * page that stacked two of these is gone — 啟動程序 is an index of two rows
+   * now, one document per page. This line used to say it WAS passed by that
+   * page, in the present tense. See DocCard's `collapsible` for why the prop
+   * outlived its only caller and what has to happen together if it is retired. */
   collapsible?: boolean;
 }) {
   const { t, msg } = useI18n();
