@@ -33,7 +33,7 @@ const doc = (runtime: string) =>
     ]).flat(),
   ].join("\n");
 
-export function BootCollapseStory() {
+export function BootNavStory() {
   const [ready, setReady] = useState(false);
   useEffect(() => {
     let alive = true;

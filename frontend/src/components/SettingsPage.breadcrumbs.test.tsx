@@ -98,15 +98,20 @@ describe("SettingsPage · unified breadcrumb header (T-8f6e)", () => {
       await utils.findByText(s.systemName);
     }
 
-    // 啟動程序 is ONE entry holding TWO documents (owner 2026-08-14,
-    // rc-e1abbc506b70 option 1 + 「進去以後可以看到兩份可以分開編輯的」), so it
-    // gets ONE trail — and the second card must not add a second one. Without
-    // this half the loop above is satisfied by a page that dropped the codex
-    // document altogether.
+    // 啟動程序 is ONE entry listing TWO documents (T-bac4: an index of two nav
+    // rows, replacing the stacked pair). It gets ONE trail — the second row
+    // must not add a second one. Without this half the loop above is satisfied
+    // by a page that dropped the codex document altogether.
+    //
+    // ⚠️ This used to count the STRING 啟動程序 and require exactly one. That
+    // stopped being the right probe when the index grew its own <h1> (every
+    // other settings page has one), which makes the string appear twice on a
+    // perfectly correct page. Counting the TRAIL is what the assertion always
+    // meant.
     fireEvent.click(utils.getByText(s.bootName));
-    expect(await utils.findByText(s.bootClaudeName)).toBeTruthy();
-    expect(utils.getByText(s.bootCodexName)).toBeTruthy();
-    expect(utils.getAllByText(s.bootName).length).toBe(1);
+    expect(await utils.findByTestId("boot-entry-claude")).toBeTruthy();
+    expect(utils.getByTestId("boot-entry-codex")).toBeTruthy();
+    expect(utils.container.querySelectorAll("nav.crumbs").length).toBe(1);
   });
 
   it("任務手冊列表: 設定 › 任務手冊 + title; hub: 設定 › 任務手冊 › <type>", async () => {
