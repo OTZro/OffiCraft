@@ -81,22 +81,78 @@ func memberDeltaPayload(m Member) map[string]any {
 // sent me a notice and it said nothing".
 func (s *apiServer) offboardDeltaPayload(m Member) map[string]any {
 	payload := memberDeltaPayload(m)
-	if m.RefocusSince <= 0 {
+	kind, carries := offboardKindOf(m, nowSecs())
+	if !carries {
 		return payload
 	}
-	if notice := s.finalOffboardNotice(m); notice != "" {
+	if notice := s.offboardNoticeFor(m, kind); notice != "" {
 		payload["offboard_notice"] = notice
 	}
 	return payload
 }
 
-// finalOffboardNotice composes the FINAL-call sentence for a member that is
-// being collected: the same one sentence as the soft notice, plus the clause
-// that says how long is left. It reads the session's own gauge so the agent is
-// told where it actually is, not just that it is over the line — the owner's
-// requirement that the notice carry 「他現在 context / round 狀況，以及我們兩個
-// 系統數字是多少」.
-func (s *apiServer) finalOffboardNotice(m Member) string {
+// offboardKindOf answers the two questions every offboard delta turns on: does
+// this member carry a notice at all, and is it the SOFT one or the FINAL call.
+//
+// The owner's ruling (2026-08-16) is that his own two buttons and the agent's
+// own context pressure walk the SAME sequence, and that what tells the
+// situations apart is whether there is still room:
+//
+//   - SOFT — 下線 (desired offline + a stopping anchor, the graceful arm) and
+//     重新聚焦. It says work the sequence, then call restart_self yourself; no
+//     countdown clause, because at this point there is not one.
+//   - FINAL — every other refocus cause (context_high, 改機器, model/runtime,
+//     restart_self): the collection is already under way and the 120s recycle
+//     clock is running, so the sentence has to say so.
+//
+// 🔴 The soft arm is the ONLY reason 下線 reaches the agent at all. Before this,
+// a deactivate stamped stopping_since and nothing else, so the notice condition
+// (refocus_since > 0) was false and the agent was collected having never been
+// shown the sequence — while the client-side wind-down declared "durable state
+// already server-side — nothing extra to flush" on its behalf, which was not
+// true of any session holding an unwritten hand-off.
+// The soft→final promotion is DERIVED FROM TIME, not written down: the same
+// anchor and the same soft window that decide when the collection is forced
+// decide which sentence the agent is being sent. A stored flag would be a
+// second copy of that judgement, free to disagree with the clock actually
+// collecting the session — and the disagreement would read as a notice
+// promising 120 seconds while several minutes remained, or the reverse.
+func offboardKindOf(m Member, now float64) (kind string, carries bool) {
+	softExpired := func(anchor float64) string {
+		if now >= anchor+SoftOffboardGraceSecs {
+			return offboardKindFinal
+		}
+		return offboardKindSoft
+	}
+	if m.DesiredState == DesiredStateOffline {
+		// Only the graceful arm: a member with no stopping anchor is not being
+		// wound down (and a cancelled wake is force-stopped outright, which is
+		// deliberately silent — see HandleForceStopMember).
+		if m.StoppingSince > 0 {
+			return softExpired(m.StoppingSince), true
+		}
+		return "", false
+	}
+	if m.RefocusSince <= 0 {
+		return "", false
+	}
+	if m.RefocusOp == refocusOpRefocus {
+		return softExpired(m.RefocusSince), true
+	}
+	return offboardKindFinal, true
+}
+
+const (
+	offboardKindSoft  = "soft"
+	offboardKindFinal = "final"
+)
+
+// offboardNoticeFor composes the sentence for a member that is being wound
+// down: the ONE approved sentence, plus the 120-second clause when this is the
+// final call. It reads the session's own gauge so the agent is told where it
+// actually is, not just that it is over the line — the owner's requirement that
+// the notice carry 「他現在 context / round 狀況，以及我們兩個系統數字是多少」.
+func (s *apiServer) offboardNoticeFor(m Member, kind string) string {
 	cfg := s.ctxHighConfig()
 	// The gauge is absent on a server assembled without one (and a session that
 	// never reported has no entry either). Degrade to "?" for the position
@@ -113,8 +169,17 @@ func (s *apiServer) finalOffboardNotice(m Member) string {
 		if notice < 1 {
 			notice = final - 1
 		}
-		where = fmt.Sprintf("compaction round %d reached (your limits: round %d / round %d)",
-			final, notice, final)
+		round := "?"
+		if record != nil {
+			if v, ok := asNumber(record["compaction_count"]); ok {
+				round = fmt.Sprintf("%d", int(v))
+			}
+		}
+		if kind == offboardKindFinal {
+			round = fmt.Sprintf("%d", final)
+		}
+		where = fmt.Sprintf("compaction round %s (your limits: round %d / round %d)",
+			round, notice, final)
 	} else {
 		pct := "?"
 		if record != nil {
@@ -125,7 +190,7 @@ func (s *apiServer) finalOffboardNotice(m Member) string {
 		where = fmt.Sprintf("context %s%% (your limits: %d%% / %d%%)",
 			pct, cfg.NoticePct, cfg.HandoverPct)
 	}
-	return offboardNotice(where, true, s.offboardText())
+	return offboardNotice(where, kind == offboardKindFinal, s.offboardText())
 }
 
 // resolveAvatarMember admits active staff and outsource rows but rejects
@@ -888,6 +953,16 @@ func (s *apiServer) HandleReportStoppedApiSelfStoppedPost(w http.ResponseWriter,
 	if m.StoppedSince <= 0.0 {
 		m.StoppedSince = nowSecs()
 		if m.DesiredState == DesiredStateOnline && m.RefocusSince > 0.0 {
+			recycleKill = true
+		}
+		// …and the same immediacy for the 下線 arm. The agent no longer kills
+		// its own session there (it used to declare the two phases and suicide
+		// on the client's behalf, having flushed nothing): it works the sequence
+		// and reports stopped when it is genuinely done, and THAT report is what
+		// collects it. Without this the session would sit idle until the wind-
+		// down grace lapsed — the dead time the owner named as the reason the
+		// agent should stop itself rather than wait to be cut off.
+		if m.DesiredState == DesiredStateOffline {
 			recycleKill = true
 		}
 	}

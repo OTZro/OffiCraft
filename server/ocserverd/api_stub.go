@@ -143,7 +143,14 @@ type apiServer struct {
 	// boot_ts) whose one-and-only advance handover notice has already gone out.
 	// Guarded by settingsMu. See claimHandoverNotice for why the key is the
 	// session anchor and not the connection.
-	handoverNoticed          map[string]float64
+	handoverNoticed map[string]float64
+	// softEscalated records, per member id, the soft-offboard epoch whose
+	// promotion to the final call has already been announced — the frame that
+	// tells the agent its 120 seconds have started. Keyed by the epoch so a
+	// re-armed wind-down announces again; guarded by its own mutex because it is
+	// touched from the reconcile tick, not the settings path.
+	softEscalated            map[string]float64
+	softEscalatedMu          sync.Mutex
 	monitoringRefreshSeconds int
 	// root anchors the repo-file assets (seeds / prebuilt binaries / frozen
 	// MCP catalog) — see assets.go.

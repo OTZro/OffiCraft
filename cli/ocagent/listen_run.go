@@ -418,7 +418,7 @@ func cmdListen(cfg Config, env func(string) string, once bool, out io.Writer) in
 		refusalGraceSpan: sseRefusalGrace,
 		selfTerminate:    func() { cmdSuicide(cfg, env, out) },
 		cursorPath:       cursorPath(cfg),
-		winddown:         newWindDownHook(api, cfg, env, out),
+		winddown:         newWindDownHook(api, cfg, out),
 		recycle:          newRecycleHook(api, cfg, out),
 		seen:             map[string]bool{},
 		replySeen:        loadReplyCardSeen(replyCardSeenPath(cfg)),

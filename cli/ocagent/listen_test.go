@@ -1036,45 +1036,76 @@ func TestFetchChat_NonListOrErrorYieldsNil(t *testing.T) {
 // WindDownHook — desired_state=offline graceful self-stop (intent-only, seams injected).
 // ---------------------------------------------------------------------------
 
-func TestWindDown_OfflineReportsStoppingThenStopped_OneShot(t *testing.T) {
-	var phases []string
-	terminated := 0
+// 下線 wakes the session with the server's notice and leaves the closing-out to
+// it. What this pins is the REPLACED behaviour as much as the new one: the hook
+// used to declare stopping → stopped and suicide on the session's behalf, with
+// 「durable state already server-side — nothing extra to flush」 — false of any
+// session still holding a hand-off, and it took the session down before it
+// could write one.
+func TestWindDown_OfflineWakesTheSessionAndDoesNotStopIt(t *testing.T) {
+	var out bytes.Buffer
 	h := &windDownHook{
-		cfg:           Config{ID: "kyle"},
-		out:           &bytes.Buffer{},
-		fetchDesired:  func() (string, bool) { return "offline", true },
-		reportPhase:   func(p string) int { phases = append(phases, p); return 200 },
-		selfTerminate: func() { phases = append(phases, "suicide"); terminated++ },
+		cfg:          Config{ID: "kyle"},
+		out:          &out,
+		fetchDesired: func() (string, bool) { return "offline", true },
+	}
+	frame := func(notice string) map[string]any {
+		return map[string]any{"topic": "member", "data": map[string]any{
+			"key":     "owner::kyle",
+			"payload": map[string]any{"offboard_notice": notice},
+		}}
+	}
+	soft := "context 31% (your limits: 60% / 75%) — offboard now: work the " +
+		"sequence below, then call restart_self yourself."
+	if !h.maybeWindDown(frame(soft)) {
+		t.Fatal("a confirmed offline must wake the session")
+	}
+	if !strings.Contains(out.String(), soft) {
+		t.Fatalf("the server's notice must reach the transcript:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "nothing extra to flush") {
+		t.Fatalf("the hook must not claim the session has nothing to flush:\n%s", out.String())
+	}
+	// The SAME sentence again is silence — but the FINAL call is a different
+	// sentence and has to get through, because it is the one that says the
+	// countdown has started.
+	if h.maybeWindDown(frame(soft)) {
+		t.Fatal("a repeat of the same notice must be a no-op")
+	}
+	final := soft + " You have 120 seconds left."
+	if !h.maybeWindDown(frame(final)) {
+		t.Fatal("the final call must reach a session already woken by the soft notice")
+	}
+	if !strings.Contains(out.String(), "You have 120 seconds left.") {
+		t.Fatalf("the final call must reach the transcript:\n%s", out.String())
+	}
+}
+
+// A frame that carries no notice must still leave the agent knowing it is being
+// collected — the fallback names the tool that fetches the sequence.
+func TestWindDown_NoticeMissingFallsBackToTheFetchInstruction(t *testing.T) {
+	var out bytes.Buffer
+	h := &windDownHook{
+		cfg:          Config{ID: "kyle"},
+		out:          &out,
+		fetchDesired: func() (string, bool) { return "offline", true },
 	}
 	frame := map[string]any{"topic": "member", "data": map[string]any{"key": "owner::kyle"}}
 	if !h.maybeWindDown(frame) {
-		t.Fatal("a confirmed offline must declare the stop intent")
+		t.Fatal("a confirmed offline must wake the session even with no notice")
 	}
-	// Self-terminate fires AFTER stopped is reported (the SSE-drop lever, not before).
-	if !reflect.DeepEqual(phases, []string{"stopping", "stopped", "suicide"}) {
-		t.Fatalf("phases = %v want [stopping stopped suicide]", phases)
-	}
-	if terminated != 1 {
-		t.Fatalf("self-terminate must fire exactly once, got %d", terminated)
-	}
-	// One-shot: a repeated delta does NOT re-report NOR re-terminate.
-	if h.maybeWindDown(frame) {
-		t.Fatal("second delta must be a no-op (one-shot)")
-	}
-	if terminated != 1 {
-		t.Fatalf("one-shot violated: self-terminate fired %d times", terminated)
+	if !strings.Contains(out.String(), "get_offboard") {
+		t.Fatalf("the fallback must name the tool that gets the sequence:\n%s", out.String())
 	}
 }
 
 func TestWindDown_SkipsWhenNotOfflineOrNotMine(t *testing.T) {
-	var reported, terminated int
+	var out bytes.Buffer
 	newH := func(desired_state string) *windDownHook {
 		return &windDownHook{
-			cfg:           Config{ID: "kyle"},
-			out:           &bytes.Buffer{},
-			fetchDesired:  func() (string, bool) { return desired_state, true },
-			reportPhase:   func(string) int { reported++; return 200 },
-			selfTerminate: func() { terminated++ },
+			cfg:          Config{ID: "kyle"},
+			out:          &out,
+			fetchDesired: func() (string, bool) { return desired_state, true },
 		}
 	}
 	mine := map[string]any{"topic": "member", "data": map[string]any{"key": "owner::kyle"}}
@@ -1085,26 +1116,8 @@ func TestWindDown_SkipsWhenNotOfflineOrNotMine(t *testing.T) {
 	if newH("offline").maybeWindDown(notmine) {
 		t.Fatal("a delta naming someone else must NOT wind down")
 	}
-	if reported != 0 {
-		t.Fatalf("no phase report expected, got %d", reported)
-	}
-	if terminated != 0 {
-		t.Fatalf("no self-terminate expected when it does not wind down, got %d", terminated)
-	}
-}
-
-func TestWindDown_ReportFailedNotMasked(t *testing.T) {
-	var out bytes.Buffer
-	h := &windDownHook{
-		cfg:          Config{ID: "kyle"},
-		out:          &out,
-		fetchDesired: func() (string, bool) { return "offline", true },
-		reportPhase:  func(string) int { return 0 }, // transport fault ⇒ falsy status
-	}
-	frame := map[string]any{"topic": "member", "data": map[string]any{"key": "owner::kyle"}}
-	h.maybeWindDown(frame)
-	if !strings.Contains(out.String(), "FAILED (HTTP 0)") {
-		t.Fatalf("a failed report must be logged FAILED, not masked:\n%s", out.String())
+	if out.Len() != 0 {
+		t.Fatalf("nothing may be said when it does not wind down:\n%s", out.String())
 	}
 }
 
@@ -1395,7 +1408,7 @@ func TestListener_EndToEnd_DispatchAndCursor(t *testing.T) {
 	l := newTestListener(srv, cfg, out)
 	// seed a cursor so the Last-Event-ID replay header is asserted.
 	writeCursor(l.cursorPath, "5")
-	l.winddown = newWindDownHook(srv.Client(), cfg, noEnv, out)
+	l.winddown = newWindDownHook(srv.Client(), cfg, out)
 	l.recycle = newRecycleHook(srv.Client(), cfg, out)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1441,7 +1454,7 @@ func TestListener_ReconnectsAfterDrop(t *testing.T) {
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	l := newTestListener(srv, cfg, &out)
-	l.winddown = newWindDownHook(srv.Client(), cfg, noEnv, &out)
+	l.winddown = newWindDownHook(srv.Client(), cfg, &out)
 	l.recycle = newRecycleHook(srv.Client(), cfg, &out)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1482,7 +1495,7 @@ func TestListener_WatchdogReconnectsSilentStream(t *testing.T) {
 	var out bytes.Buffer
 	l := newTestListener(srv, cfg, &out)
 	l.idleReadTimeout = 40 * time.Millisecond
-	l.winddown = newWindDownHook(srv.Client(), cfg, noEnv, &out)
+	l.winddown = newWindDownHook(srv.Client(), cfg, &out)
 	l.recycle = newRecycleHook(srv.Client(), cfg, &out)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1542,7 +1555,7 @@ func TestListener_ReconnectDrainPrintsOfflineAnswerOnce(t *testing.T) {
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	out := &syncBuf{}
 	l := newTestListener(srv, cfg, out)
-	l.winddown = newWindDownHook(srv.Client(), cfg, noEnv, out)
+	l.winddown = newWindDownHook(srv.Client(), cfg, out)
 	l.recycle = newRecycleHook(srv.Client(), cfg, out)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1708,7 +1721,7 @@ func TestListener_SelfExitsOnHeartbeatWhenSessionGone(t *testing.T) {
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	l := newTestListener(srv, cfg, &out)
-	l.winddown = newWindDownHook(srv.Client(), cfg, noEnv, &out)
+	l.winddown = newWindDownHook(srv.Client(), cfg, &out)
 	l.recycle = newRecycleHook(srv.Client(), cfg, &out)
 	l.probe = func() probeVerdict { return probeGone } // session always gone
 
@@ -1750,7 +1763,7 @@ func TestListener_SelfExitAtReconnectTop(t *testing.T) {
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	l := newTestListener(srv, cfg, &out)
-	l.winddown = newWindDownHook(srv.Client(), cfg, noEnv, &out)
+	l.winddown = newWindDownHook(srv.Client(), cfg, &out)
 	l.recycle = newRecycleHook(srv.Client(), cfg, &out)
 	l.probe = func() probeVerdict { return probeGone }
 	l.miss = sessionMissLimit - 1 // one more miss trips at probe #1
@@ -1791,7 +1804,7 @@ func TestListener_SelfTerminatesAfterPersistentSSERefusal(t *testing.T) {
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	out := &syncBuf{}
 	l := newTestListener(srv, cfg, out)
-	l.winddown = newWindDownHook(srv.Client(), cfg, noEnv, out)
+	l.winddown = newWindDownHook(srv.Client(), cfg, out)
 	l.recycle = newRecycleHook(srv.Client(), cfg, out)
 	l.refusalGraceSpan = 0 // count bound only — no wall-clock wait in tests
 	var terminated int32
@@ -1849,7 +1862,7 @@ func TestListener_NonRefusalOutcomesNeverTripFailClosed(t *testing.T) {
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	out := &syncBuf{}
 	l := newTestListener(srv, cfg, out)
-	l.winddown = newWindDownHook(srv.Client(), cfg, noEnv, out)
+	l.winddown = newWindDownHook(srv.Client(), cfg, out)
 	l.recycle = newRecycleHook(srv.Client(), cfg, out)
 	l.refusalGraceSpan = 0 // even with NO grace, the broken run must never trip
 	var terminated int32
@@ -2021,7 +2034,6 @@ func TestDispatch_MemberTopicExemptFromEchoSuppression(t *testing.T) {
 	l := &listener{cfg: Config{ID: "kyle"}, out: &out}
 	l.winddown = &windDownHook{cfg: l.cfg, out: &out,
 		fetchDesired: func() (string, bool) { fetches++; return "online", true },
-		reportPhase:  func(string) int { return 200 },
 	}
 	l.recycle = &recycleHook{cfg: l.cfg, out: &out,
 		fetchMember: func() (map[string]any, bool) {

@@ -223,13 +223,18 @@ func TestReconcileDecide(t *testing.T) {
 	})
 
 	t.Run("desired offline and online arms the grace clock without a command", func(t *testing.T) {
+		// The armed deadline is the SOFT window plus the final 120s: 下線 shows
+		// the agent the sequence and asks it to work it, so the server must not
+		// be counting down 120 seconds behind a notice that says it is not.
+		wantDeadline := 1000 + cfg.SoftOffboardGrace + cfg.StopGrace
 		d := reconcileDecide(obsOf("m", DesiredStateOffline, true), newReconcileState(), cfg, 1000)
 		if d.Command != reconcileCmdNone || d.State.Phase != reconcilePhaseStopping ||
-			d.State.StopDeadline != 1000+cfg.StopGrace {
+			d.State.StopDeadline != wantDeadline {
 			t.Fatalf("decision: %+v", d)
 		}
-		// Within the grace window: keep waiting, still no command.
-		d2 := reconcileDecide(obsOf("m", DesiredStateOffline, true), d.State, cfg, 1000+cfg.StopGrace-1)
+		// Still inside the soft window — where the OLD 120s clock would already
+		// have fired — and still no command.
+		d2 := reconcileDecide(obsOf("m", DesiredStateOffline, true), d.State, cfg, wantDeadline-1)
 		if d2.Command != reconcileCmdNone {
 			t.Fatalf("within grace: %+v", d2)
 		}
@@ -728,12 +733,13 @@ func TestRunReconcileTick(t *testing.T) {
 		connectOnline(t, s, ServerSelfHost)
 		connectOnline(t, s, "m-stop") // still online while desired offline
 
-		s.runReconcileTick(1000) // arms the grace clock
-		s.runReconcileTick(1030) // within grace
+		deadline := 1000 + s.reconcileCfg.SoftOffboardGrace + s.reconcileCfg.StopGrace
+		s.runReconcileTick(1000)         // arms the grace clock
+		s.runReconcileTick(deadline - 1) // the whole soft window + all but a second of the final call
 		if frames := drainFrames(t, s, ServerSelfHost); len(frames) != 0 {
 			t.Fatalf("grace window must dispatch nothing: %+v", frames)
 		}
-		s.runReconcileTick(1000 + s.reconcileCfg.StopGrace)
+		s.runReconcileTick(deadline)
 		frames := drainFrames(t, s, ServerSelfHost)
 		if len(frames) != 1 || frames[0].RPC != "stop" || frames[0].Args["member_id"] != "m-stop" {
 			t.Fatalf("grace elapsed must dispatch the robust stop: %+v", frames)

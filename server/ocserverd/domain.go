@@ -109,6 +109,19 @@ const WakingTTLSecs = 90.0
 // this long to wind down before a stuck collect is force-killed.
 const StoppingTimeoutSecs = 120.0
 
+// SoftOffboardGraceSecs: the room the owner's two GRACEFUL buttons (下線 and
+// 重新聚焦) buy the agent BEFORE StoppingTimeoutSecs starts counting. The soft
+// notice says "work the sequence, then call restart_self yourself" and carries
+// no countdown, so there must not be one running behind it; the final call —
+// and with it the 120s — begins only when this window lapses.
+//
+// A session that is actually closing out leaves in a minute or two, so this is
+// a backstop for one that crashed or ignored the notice, not a schedule. It is
+// deliberately ONE value: the owner's answer on card rc-6d32b19f6a2a moves it
+// (0 restores today's straight-to-120s behaviour) without touching the arms
+// that read it.
+const SoftOffboardGraceSecs = 600.0
+
 // livenessInput is the normalized input to the shared liveness kernel
 // (deriveLiveness): the two actor kinds (member / outsource worker) map their
 // own durable anchors onto these three facts and read back the SAME unified
