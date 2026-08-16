@@ -2537,6 +2537,12 @@ type TaskDescriptionDTO struct {
 	Description *string `json:"description,omitempty"`
 }
 
+// TaskFieldsDTO Partial update of one task's own text (MCP “update_task“, T-646a). Both fields are nullable-with-no-default rather than defaulted, and that shape is the whole point: it keeps ABSENT and PRESENT-BUT-EMPTY distinguishable, so a body that never mentions the description cannot silently erase it. Unknown keys are refused (“additionalProperties: false“), so a caller reaching for “name“, “summary“, “text“ or “desc“ is told rather than ignored. The two fields part company on an explicit blank — “title“ refuses it with 400, “description“ accepts it and clears — and that asymmetry is an owner ruling (card rc-796541192519, option ①), not a leftover from the two DTOs this replaces. The body is validated as a WHOLE before anything is written: a blank title next to a valid description writes neither.
+type TaskFieldsDTO struct {
+	Description *string `json:"description,omitempty"`
+	Title       *string `json:"title,omitempty"`
+}
+
 // TaskLearningsPatchDTO Anchor-addressed PATCH of a type's learnings (MCP “patch_task_learnings“ — the learnings twin of “patch_lessons“): “{edits: [{old, new}], allow_shrink?}“. The write cost scales with the CHANGE, not the doc — a whole-doc “write_task_learnings“ stops fitting in one model output as the learnings grow (30k chars observed), so this is the primary write seam and whole-doc replace stays the last resort. ATOMIC — edits apply sequentially to an in-memory copy and any failing anchor (absent or ambiguous “old“) rejects the ENTIRE batch with a flat 400 and ZERO writes. “allow_shrink“ (default false) must be set explicitly for a patch that empties the doc or shrinks it to under a tenth of its size — the r-76 wipe-guard posture.
 type TaskLearningsPatchDTO struct {
 	AllowShrink *bool            `json:"allow_shrink,omitempty"`
@@ -3247,6 +3253,9 @@ type HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchPostJSONRequestB
 // HandleCreateTaskApiTasksPostJSONRequestBody defines body for HandleCreateTaskApiTasksPost for application/json ContentType.
 type HandleCreateTaskApiTasksPostJSONRequestBody = TaskCreateDTO
 
+// HandleUpdateTaskApiTasksTaskIdPostJSONRequestBody defines body for HandleUpdateTaskApiTasksTaskIdPost for application/json ContentType.
+type HandleUpdateTaskApiTasksTaskIdPostJSONRequestBody = TaskFieldsDTO
+
 // HandleAddTaskArtifactApiTasksTaskIdArtifactPostJSONRequestBody defines body for HandleAddTaskArtifactApiTasksTaskIdArtifactPost for application/json ContentType.
 type HandleAddTaskArtifactApiTasksTaskIdArtifactPostJSONRequestBody = TaskArtifactInputDTO
 
@@ -3747,6 +3756,9 @@ type ServerInterface interface {
 	// Read one task (steps, deps, progress, gate cards).
 	// (GET /api/tasks/{task_id})
 	HandleGetTaskApiTasksTaskIdGet(w http.ResponseWriter, r *http.Request, taskId string)
+	// Correct THIS task's own TEXT — its title, its description, or both in one write (T-646a). Replaces `update_task_title` and `update_task_description`, which documented the same rules twice and could not be applied together: changing both meant two calls, two transactions and two SSE deltas, with room for someone else's write to land in between. WHO: the task's own executor, or an admin/owner; anyone else is a flat 403. Creating a task grants NO standing to keep rewriting it — if you handed the task over, it is the new executor's text now. PARTIAL: only the fields you NAME are touched, so omitting a field is a legal no-op for it that versions nothing and fans nothing. ⚠️ THE TWO FIELDS TREAT AN EXPLICIT BLANK DIFFERENTLY, and that is an owner ruling rather than an inconsistency (card rc-796541192519, 2026-08-11, option ①): a blank `title` ("" or whitespace-only) is REFUSED with 400 and does NOT clear the field, because create_task refuses a blank title too and an edit door looser than the create door would let a caller reach a task-list row with nothing in it; a blank `description` IS accepted and DOES clear the text, because plenty of cards legitimately have no prose. VALIDATION IS WHOLE-BODY AND HAPPENS FIRST: a request carrying a blank title alongside a perfectly good description writes NEITHER — a 400 leaves the task exactly as it was, never half-applied. Both values are trimmed of surrounding whitespace before they are stored AND before they are compared with what is there, so re-sending the same text with a stray trailing space is correctly seen as no change rather than spending one of the retained revisions saying nothing moved. The write is wholesale within each field: send the full corrected text, not a fragment. ⚠️ Division of labour with update_step_note: the DESCRIPTION says what this task IS (stable); the step NOTE says where a step is RIGHT NOW (volatile, handover-facing) — do not put progress here. A CLOSED task (completed / terminated / duplicated) is STILL editable, on the same terms — unlike its artifact set, which freezes at close: artifacts record what the task PRODUCED and must stop moving, while a ticket worded wrongly is usually found to be wrong after it closed, and freezing the text would preserve a known falsehood in the permanent record. Every change that actually alters a field retains the previous value as a document version — kind `task_title` / `task_description`, key = the task id — so a correction is recoverable through list_document_history and the older wording is never simply gone.
+	// (POST /api/tasks/{task_id})
+	HandleUpdateTaskApiTasksTaskIdPost(w http.ResponseWriter, r *http.Request, taskId string)
 	// Register a deliverable (file, image, or link) onto the task's artifact set — the pinned deliverables shown on the task card. Append-only and repeatable: call it again to pin more. For a file or image, first upload the bytes via the chat-attachments upload to get an attachment id, then call this with kind=file|image and that attachment_id. For a link (e.g. a PR url) call it with kind=link and url — no upload needed. label is an optional display name (a link title such as "PR #123"). Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.
 	// (POST /api/tasks/{task_id}/artifact)
 	HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.ResponseWriter, r *http.Request, taskId string)
@@ -6869,6 +6881,32 @@ func (siw *ServerInterfaceWrapper) HandleGetTaskApiTasksTaskIdGet(w http.Respons
 	handler.ServeHTTP(w, r)
 }
 
+// HandleUpdateTaskApiTasksTaskIdPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleUpdateTaskApiTasksTaskIdPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "task_id" -------------
+	var taskId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "task_id", r.PathValue("task_id"), &taskId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "task_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleUpdateTaskApiTasksTaskIdPost(w, r, taskId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleAddTaskArtifactApiTasksTaskIdArtifactPost operation middleware
 func (siw *ServerInterfaceWrapper) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.ResponseWriter, r *http.Request) {
 
@@ -7731,6 +7769,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks", wrapper.HandleCreateTaskApiTasksPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/tasks/count", wrapper.HandleTaskCountApiTasksCountGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/tasks/{task_id}", wrapper.HandleGetTaskApiTasksTaskIdGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}", wrapper.HandleUpdateTaskApiTasksTaskIdPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/artifact", wrapper.HandleAddTaskArtifactApiTasksTaskIdArtifactPost)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/tasks/{task_id}/artifact/{artifact_id}", wrapper.HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDelete)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/claim", wrapper.HandleClaimTaskApiTasksTaskIdClaimPost)

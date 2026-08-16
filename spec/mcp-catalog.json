@@ -2437,63 +2437,47 @@
       "name": "submit_plan"
     },
     {
-      "description": "Correct THIS task's description — the ticket's own text (what the task IS: scope, origin, acceptance). T-e271: until this tool existed there was NO way to change a description after creation — create_task takes one only at birth, submit_plan writes steps, update_task_manual writes the TYPE's manual — so a decision to reword a card had nowhere to land. WHO: the task's own executor, or an admin/owner; anyone else is a flat 403. Creating a task grants NO standing to keep rewriting it — if you handed the task over, it is the new executor's text now. PARTIAL like update_task_manual: omitting `description` changes nothing (a safe no-op), while an explicit \"\" CLEARS it — absent and empty are different on purpose; unknown keys are refused rather than dropped. The write is wholesale within that field: the value replaces whatever was there, so send the full corrected text, not a fragment. ⚠️ Division of labour with update_step_note: the DESCRIPTION says what this task IS (stable); the step NOTE says where a step is RIGHT NOW (volatile, handover-facing) — do not put progress here. A CLOSED task (completed / terminated / duplicated) is STILL editable, on the same terms — unlike its artifact set, which freezes at close. The reason they differ: artifacts are the record of what the task PRODUCED and must stop moving, while a ticket worded wrongly is usually found to be wrong after it closed, and freezing the text would preserve a known falsehood in the permanent record. Every change that actually alters the text retains the previous one as a document version (kind `task_description`, key = the task id) — list it with list_document_history, so a correction is recoverable and the older wording is never simply gone.",
-      "inputSchema": {
-        "properties": {
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Description",
-            "description": "The new description, replacing the whole text. Its empty-value semantics are the OPPOSITE of the sibling update_task_title, and neither call reports the difference: omitting the field is a silent no-op (200 with the task unchanged, nothing written, nothing versioned), while an EMPTY STRING is not refused - it is a genuine write that CLEARS the description. update_task_title refuses a blank with 400; this one accepts it and wipes the text. A description identical to the current one also short-circuits to the unchanged 200. So 'I sent an empty value' means 'nothing happened' on one of these two and 'the text is gone' on the other."
+        "description": "Correct THIS task's own TEXT — its title, its description, or both in one write (T-646a). Replaces `update_task_title` and `update_task_description`, which documented the same rules twice and could not be applied together: changing both meant two calls, two transactions and two SSE deltas, with room for someone else's write to land in between. WHO: the task's own executor, or an admin/owner; anyone else is a flat 403. Creating a task grants NO standing to keep rewriting it — if you handed the task over, it is the new executor's text now. PARTIAL: only the fields you NAME are touched, so omitting a field is a legal no-op for it that versions nothing and fans nothing. ⚠️ THE TWO FIELDS TREAT AN EXPLICIT BLANK DIFFERENTLY, and that is an owner ruling rather than an inconsistency (card rc-796541192519, 2026-08-11, option ①): a blank `title` (\"\" or whitespace-only) is REFUSED with 400 and does NOT clear the field, because create_task refuses a blank title too and an edit door looser than the create door would let a caller reach a task-list row with nothing in it; a blank `description` IS accepted and DOES clear the text, because plenty of cards legitimately have no prose. VALIDATION IS WHOLE-BODY AND HAPPENS FIRST: a request carrying a blank title alongside a perfectly good description writes NEITHER — a 400 leaves the task exactly as it was, never half-applied. Both values are trimmed of surrounding whitespace before they are stored AND before they are compared with what is there, so re-sending the same text with a stray trailing space is correctly seen as no change rather than spending one of the retained revisions saying nothing moved. The write is wholesale within each field: send the full corrected text, not a fragment. ⚠️ Division of labour with update_step_note: the DESCRIPTION says what this task IS (stable); the step NOTE says where a step is RIGHT NOW (volatile, handover-facing) — do not put progress here. A CLOSED task (completed / terminated / duplicated) is STILL editable, on the same terms — unlike its artifact set, which freezes at close: artifacts record what the task PRODUCED and must stop moving, while a ticket worded wrongly is usually found to be wrong after it closed, and freezing the text would preserve a known falsehood in the permanent record. Every change that actually alters a field retains the previous value as a document version — kind `task_title` / `task_description`, key = the task id — so a correction is recoverable through list_document_history and the older wording is never simply gone.",
+        "inputSchema": {
+          "properties": {
+            "task_id": {
+              "type": "string"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Title",
+              "description": "The new title, replacing the whole of it. OMITTING the field is a no-op for the title: nothing is written, nothing is versioned, nothing fans, and the call still answers 200 with the task — so the status code alone never tells you whether a rename happened; read the title back if you need to know. A blank or whitespace-only title is REFUSED (400, 'title must not be blank') and takes the WHOLE request down with it, `description` included. ⚠️ Reaching that guard requires the blank to actually arrive: at least one MCP client serializes an empty string as an ABSENT field, which lands in the no-op branch instead (observed four times over, 2026-08-11) — so a caller trying to clear a title may get silence rather than the 400. Surrounding whitespace is trimmed before the value is stored and before it is compared with the current title. Contrast `description` on this same tool, where a blank is a real write that clears the text."
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Description",
+              "description": "The new description, replacing the whole of it. OMITTING the field is a no-op for the description: nothing is written, nothing is versioned, nothing fans. An EMPTY STRING is NOT refused — it is a genuine write that CLEARS the description, which is the opposite of what `title` does with the same input and is deliberate (a card with no prose is a true state; a card with no title is a blank row on the list). Surrounding whitespace is trimmed before the value is stored and before it is compared with the current description, so re-sending the same text with a stray trailing newline is correctly seen as no change. A description that is ONLY whitespace therefore trims to \"\" and CLEARS."
+            }
           },
-          "task_id": {
-            "type": "string"
-          }
+          "required": [
+            "task_id"
+          ],
+          "additionalProperties": false,
+          "type": "object"
         },
-        "required": [
-          "task_id"
-        ],
-        "additionalProperties": false,
-        "type": "object"
+        "name": "update_task"
       },
-      "name": "update_task_description"
-    },
-    {
-      "description": "Correct THIS task's title — the one line the task list shows. T-2ebe: until this tool existed a title could never be changed after creation, so a card whose scope was later overturned kept advertising its first wording forever — the description could correct itself, the title could not, and whoever scanned the list saw only the stale half. If you have just corrected a description because the scope moved, ask whether the title still says the same thing. WHO: the task's own executor, or an admin/owner; anyone else is a flat 403. Creating a task grants NO standing to keep rewriting it — if you handed the task over, it is the new executor's title now. PARTIAL like update_task_description: omitting `title` changes nothing (a safe no-op); unknown keys are refused rather than dropped. ⚠️ ONE DIFFERENCE FROM ITS DESCRIPTION TWIN: a blank title (\"\" or only whitespace) is REFUSED with 400, it does NOT clear the field — create_task refuses a blank title too, and a task with no title is a blank row on the list. Surrounding whitespace is trimmed. The write is wholesale within that field: send the full corrected title, not a fragment. A CLOSED task (completed / terminated / duplicated) is STILL editable, on the same terms — a ticket is usually found to be worded wrongly after it closed, and freezing the text would preserve a known falsehood; its artifact set is the opposite and freezes at close. Every change that actually alters the text retains the previous one as a document version (kind `task_title`, key = the task id) — list it with list_document_history, so a correction is recoverable.",
-      "inputSchema": {
-        "properties": {
-          "task_id": {
-            "type": "string"
-          },
-          "title": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Title",
-            "description": "The new title. OMITTING the field is a SILENT NO-OP, not an error: the call answers 200 carrying the task unchanged, writes nothing, versions nothing and fans no delta - the same 200-with-a-task you get on success, so the response does not tell you whether anything moved. A blank or whitespace-only title IS refused (400, 'title must not be blank'), but that guard is reachable only if the blank actually arrives: at least one MCP client serializes an empty string as an ABSENT field, which routes into the silent no-op branch instead (observed four times over, 2026-08-11). A title identical to the current one also short-circuits to the same unchanged 200. If you need to know a rename happened, read the title back - do not infer it from the status code. Contrast update_task_description, where a blank is NOT refused but is a real write that clears the text."
-          }
-        },
-        "required": [
-          "task_id"
-        ],
-        "additionalProperties": false,
-        "type": "object"
-      },
-      "name": "update_task_title"
-    },
     {
       "description": "Mark a not-yet-terminal task duplicated, pointing at an existing final original (executor/owner). A blank original, an original that cannot be found, a self-reference, a chained duplicate and a target that is already pointed at are all refused. Closing across executors creates a handoff_follow_up, and no dependency is added.",
       "inputSchema": {
