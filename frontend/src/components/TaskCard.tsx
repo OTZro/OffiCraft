@@ -1919,6 +1919,7 @@ export function TaskCard({
             <Markdown
               source={view.description}
               className="task-card__desc doc-md"
+              tableSizing="content-aware"
             />
           ) : (
             <div className="task-card__desc-empty">{t.tasks.descEmpty}</div>
