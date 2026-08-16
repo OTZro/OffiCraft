@@ -30,7 +30,6 @@ export interface Member {
   /** Personal image URL bound to this stable member id. Empty/absent keeps the
    * role-theme avatar and built-in glyph fallback chain. */
   avatarUrl?: string;
-  memberId: string;
   name: string;
   role: RoleKey;
   /** The role's display TITLE resolved server-side (wire `role_name`): the seed

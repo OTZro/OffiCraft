@@ -42,7 +42,6 @@ vi.mock("../hooks/useChat", () => ({
 
 const member: Member = {
   id: "m1",
-  memberId: "m1",
   name: "Mira",
   role: "assistant",
   status: "online",
