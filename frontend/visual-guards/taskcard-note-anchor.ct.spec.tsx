@@ -390,13 +390,14 @@ test("[390×844 phone · dark] three notes opened in turn never move the scrollp
     ).toBeCloseTo(0, 0);
   }
   // Which of the three actually opens past the fold is a fact about the
-  // fixture, pinned rather than assumed: s-2 sits so near the top of the column
-  // that parking it against the bottom edge would need a NEGATIVE scrollTop, so
-  // it is the trivially-safe member of the sequence and carries no proof — it
-  // is here to describe the sequence the owner asked about. If a fixture edit
-  // ever changes which ones reproduce, this line reddens instead of the guard
-  // going quietly weak.
-  expect(overflowed).toEqual(["s-5", "s-9"]);
+  // fixture, pinned rather than assumed, so that a fixture or layout edit
+  // reddens this line instead of the guard going quietly weak. It has already
+  // earned its keep once: T-6630 ② gave the disclosure a 44px touch row, the
+  // column grew, and s-2 crossed over from "cannot reproduce" to "does". s-2
+  // still cannot be PARKED against the fold (it sits so near the top that the
+  // parking would need a negative scrollTop, so it stays clamped at 0) — it now
+  // overflows on its own height, by 35px as measured.
+  expect(overflowed).toEqual(["s-2", "s-5", "s-9"]);
   await expect(cmp.locator("[data-testid='step-note']")).toHaveCount(3);
 });
 

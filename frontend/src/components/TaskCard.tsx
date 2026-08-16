@@ -895,16 +895,24 @@ export function TaskCard({
                 here, exactly as before.
                 State is per-card and in-memory on purpose (owner scope): no
                 cross-page memory of which notes were open.
-                Shape copied from the existing chevron disclosure in
-                AgentDetailPanel (mp-lastop__toggle) rather than inventing a
-                second collapse vocabulary. A <button> is already exempt from
-                the card-toggle closest() filter, so opening a note cannot
-                collapse the card. */}
+                🔴 T-6630 ②: the control is a FULL-WIDTH ROW, not the 66×16px
+                inline button it started as. Owner 2026-08-16:「按鈕太小,應該
+                要是整列,而不是一個小按鈕,會讓人誤以為是收合備注,實際收合了整
+                個任務」— and the misfire is structural, not clumsiness: the
+                whole <article> carries role=button, so every pixel AROUND this
+                control collapses the entire card. A wider control is therefore
+                also a smaller mistake zone. Shape follows the row that already
+                exists one level down (.task-reply-card__collapsed-row).
+                🔴 It must stay a <button> (or at least [role=button]): that is
+                the ONLY reason onCardToggleClick's closest() filter lets the
+                click through. Demote it to a <div> and clicking the note row
+                collapses the whole card — the exact bug, made worse. */}
             <button
               type="button"
               className="task-step__note-toggle"
               data-testid="step-note-toggle"
               aria-expanded={noteOpen(step.id)}
+              aria-controls={`step-note-${step.id}`}
               onClick={() => toggleNote(step.id)}
             >
               {noteOpen(step.id) ? (
@@ -919,7 +927,11 @@ export function TaskCard({
               </span>
             </button>
             {noteOpen(step.id) && (
-              <div className="task-step__note" data-testid="step-note">
+              <div
+                className="task-step__note"
+                data-testid="step-note"
+                id={`step-note-${step.id}`}
+              >
                 <span className="task-step__note-label">
                   {t.tasks.stepNoteLabel}
                 </span>
