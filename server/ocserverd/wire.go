@@ -159,31 +159,35 @@ type tokenDTO struct {
 }
 
 type memberDTO struct {
-	ID                string  `json:"id"`
-	AvatarURL         string  `json:"avatar_url"`
-	Name              string  `json:"name"`
-	Kind              string  `json:"kind"`
-	RoleKey           string  `json:"role_key"`
-	RoleName          string  `json:"role_name"`
-	Runtime           string  `json:"runtime"`
-	Model             string  `json:"model"`
-	ActualModel       string  `json:"actual_model"`
-	ActualRuntime     string  `json:"actual_runtime"`
-	ActualEffort      string  `json:"actual_effort"`
-	ActualMachine     string  `json:"actual_machine"`
-	Effort            string  `json:"effort"`
-	DesiredState      string  `json:"desired_state"`
-	DesiredMachineID  string  `json:"desired_machine_id"`
-	Machine           string  `json:"machine"`
-	Presence          string  `json:"presence"`
-	RefocusSince      float64 `json:"refocus_since"`
-	RefocusOp         string  `json:"refocus_op"`
-	RefocusDeadline   float64 `json:"refocus_deadline"`
-	LastOp            string  `json:"last_op"`
-	LastOpOK          *bool   `json:"last_op_ok"`
-	LastOpLog         string  `json:"last_op_log"`
-	LastOpReason      string  `json:"last_op_reason"`
-	LastOpAt          float64 `json:"last_op_at"`
+	ID               string  `json:"id"`
+	AvatarURL        string  `json:"avatar_url"`
+	Name             string  `json:"name"`
+	Kind             string  `json:"kind"`
+	RoleKey          string  `json:"role_key"`
+	RoleName         string  `json:"role_name"`
+	Runtime          string  `json:"runtime"`
+	Model            string  `json:"model"`
+	ActualModel      string  `json:"actual_model"`
+	ActualRuntime    string  `json:"actual_runtime"`
+	ActualEffort     string  `json:"actual_effort"`
+	ActualMachine    string  `json:"actual_machine"`
+	Effort           string  `json:"effort"`
+	DesiredState     string  `json:"desired_state"`
+	DesiredMachineID string  `json:"desired_machine_id"`
+	Machine          string  `json:"machine"`
+	Presence         string  `json:"presence"`
+	RefocusSince     float64 `json:"refocus_since"`
+	RefocusOp        string  `json:"refocus_op"`
+	RefocusDeadline  float64 `json:"refocus_deadline"`
+	LastOp           string  `json:"last_op"`
+	LastOpOK         *bool   `json:"last_op_ok"`
+	LastOpLog        string  `json:"last_op_log"`
+	LastOpReason     string  `json:"last_op_reason"`
+	LastOpAt         float64 `json:"last_op_at"`
+	// ForcedStopAt: unix seconds of the last force-stop, 0 when there has never
+	// been one. Deliberately NOT cleared by the next boot — it is the record
+	// that the PREVIOUS session was cut off mid-work (T-a9d6).
+	ForcedStopAt      float64 `json:"forced_stop_at"`
 	UnreadCount       int     `json:"unread_count"`
 	RosterStatus      string  `json:"roster_status"`
 	OwnerID           string  `json:"owner_id"`

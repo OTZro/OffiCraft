@@ -1196,16 +1196,19 @@ type MemberDTO struct {
 	ActualRuntime *string `json:"actual_runtime,omitempty"`
 
 	// AvatarUrl Authenticated URL of this stable member id's personal raster avatar. Empty means no personal image; clients fall back to the active theme's role avatar, then the built-in glyph. Additive-optional for older clients.
-	AvatarUrl        *string  `json:"avatar_url,omitempty"`
-	DesiredMachineId *string  `json:"desired_machine_id,omitempty"`
-	DesiredState     *string  `json:"desired_state,omitempty"`
-	Effort           *string  `json:"effort,omitempty"`
-	Id               string   `json:"id"`
-	Kind             *string  `json:"kind,omitempty"`
-	LastOp           *string  `json:"last_op,omitempty"`
-	LastOpAt         *float64 `json:"last_op_at,omitempty"`
-	LastOpLog        *string  `json:"last_op_log,omitempty"`
-	LastOpOk         *bool    `json:"last_op_ok,omitempty"`
+	AvatarUrl        *string `json:"avatar_url,omitempty"`
+	DesiredMachineId *string `json:"desired_machine_id,omitempty"`
+	DesiredState     *string `json:"desired_state,omitempty"`
+	Effort           *string `json:"effort,omitempty"`
+
+	// ForcedStopAt Unix seconds of the last time this member was FORCE-stopped (the owner's 強制下線, or POST /members/{id}/force-stop), 0 when it never was. Unlike every other lifecycle anchor it is deliberately NOT cleared by the next boot: it records that the PREVIOUS session was cut off mid-work instead of being allowed to work the offboard sequence, and the reader who needs that most is the session that comes after. Without it, a hand-off that was never written and a hand-off that was never needed look identical on the roster (T-a9d6). Additive-optional.
+	ForcedStopAt *float64 `json:"forced_stop_at,omitempty"`
+	Id           string   `json:"id"`
+	Kind         *string  `json:"kind,omitempty"`
+	LastOp       *string  `json:"last_op,omitempty"`
+	LastOpAt     *float64 `json:"last_op_at,omitempty"`
+	LastOpLog    *string  `json:"last_op_log,omitempty"`
+	LastOpOk     *bool    `json:"last_op_ok,omitempty"`
 
 	// LastOpReason Structured one-line cause of the most recent warden op (the warden's ``<code>: <detail>`` refusal/failure summary, e.g. ``session_already_exists: ...``) — distinct from the free-form ``last_op_log`` dump. Empty when the receipt carried no reason (older warden, or a successful op); consumers then fall back to status-only display.
 	LastOpReason *string `json:"last_op_reason,omitempty"`

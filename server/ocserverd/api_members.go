@@ -771,9 +771,24 @@ func (s *apiServer) HandleForceStopMemberApiMembersMemberIdForceStopPost(w http.
 	if m.StoppingSince <= 0.0 {
 		m.StoppingSince = nowSecs()
 	}
+	// The record that this session was cut off (T-a9d6). Force-stop sends no
+	// notice — the recipient is about to stop existing, so a sentence meant to
+	// change its behaviour has no one to change — and that silence is exactly
+	// why the fact has to be written down: everything a killed session leaves
+	// behind is indistinguishable from what a session with nothing to say
+	// leaves behind. Stamped on the member itself so the NEXT generation and the
+	// cockpit can both see it; its own column, so no later snapshot erases it.
+	m.ForcedStopAt = nowSecs()
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
+	}
+	if err := s.dal.SetMemberForcedStopAt(m.ID, m.ForcedStopAt); err != nil {
+		// Best-effort, and deliberately not fatal: the kill below is the point
+		// of the call and the member IS being force-stopped. Reporting a
+		// failure here would say "force-stop failed" about a member that is
+		// about to be killed anyway — the same shape as the dismiss sweep.
+		taskLog("force-stop %s: forced_stop_at not recorded: %v", m.ID, err)
 	}
 	s.dispatchRobustStopNow(m.ID)
 	s.writeMemberDTO(w, *m)
@@ -949,22 +964,26 @@ func (s *apiServer) HandleReportStoppedApiSelfStoppedPost(w http.ResponseWriter,
 		s.writeMemberDTO(w, *fresh)
 		return
 	}
-	recycleKill := false
+	// 🔴 A stopped-report is now ALWAYS collected (owner 2026-08-16, card
+	// rc-b08d49dc3b03 option ①: 「收掉並重生」).
+	//
+	// It used to be collected only when something was already collecting it —
+	// a refocus epoch was in flight. That was sound while the offboard sequence
+	// was shown ONLY to a session being collected: the last step always had a
+	// receiver. Then the notice began telling agents to close out on their own
+	// (T-c382) and the sequence became a document any session could work
+	// (T-c9c0), which opened a path nobody was waiting at the end of: an agent
+	// finished its close-out, reported stopped, and NOTHING happened. It stayed
+	// alive holding a session it had already declared finished — and the sweep
+	// that clears stale stopping anchors erased the evidence, painting it green
+	// again (the owner's T-2123 report, and the previous generation of THIS
+	// member lived it).
+	//
+	// desired_state decides what follows, and neither arm needs a special case
+	// here: online respawns on the next tick's plain START, offline stays down.
+	recycleKill := m.StoppedSince <= 0.0
 	if m.StoppedSince <= 0.0 {
 		m.StoppedSince = nowSecs()
-		if m.DesiredState == DesiredStateOnline && m.RefocusSince > 0.0 {
-			recycleKill = true
-		}
-		// …and the same immediacy for the 下線 arm. The agent no longer kills
-		// its own session there (it used to declare the two phases and suicide
-		// on the client's behalf, having flushed nothing): it works the sequence
-		// and reports stopped when it is genuinely done, and THAT report is what
-		// collects it. Without this the session would sit idle until the wind-
-		// down grace lapsed — the dead time the owner named as the reason the
-		// agent should stop itself rather than wait to be cut off.
-		if m.DesiredState == DesiredStateOffline {
-			recycleKill = true
-		}
 	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)

@@ -484,17 +484,36 @@ func decideDown(
 		st.StopDeadline = 0.0
 		return decisionNone(obs, st, "offline: converged")
 	}
-	if st.StopDeadline == 0.0 {
-		// First observation of desired_state=offline → arm the grace clock. The
-		// clock arms from OBSERVING the intent, never from a dispatched command.
-		//
-		// The soft window is part of this deadline because 下線 now REACHES the
-		// agent: it is shown the sequence and asked to work it and stop itself.
-		// Arming only the 120s would have the server cutting off a session it
-		// just told to close out properly — the failure the owner named when he
-		// ruled the two buttons walk the same path as context pressure.
+	// 🔴 下線 does not run a clock at all any more (owner 2026-08-16, card
+	// rc-27d1710174dd option ①: 「不要兜底：只有你按強制下線才收它」).
+	//
+	// The button now REACHES the agent — it is shown the offboard sequence and
+	// asked to work it and stop itself — and the owner's ruling is that the
+	// escalation is HIS, not a timer's: 「萬一我發現他不理我，我就按下強制下線」.
+	// A clock here would cut off a session that was told there is no countdown,
+	// which is the shape this whole ticket exists to remove.
+	//
+	// What makes that safe to choose is that force-stop is genuinely reachable:
+	// the cockpit offers it exactly in the `stopping` state this button puts the
+	// member into, and the sweep that used to erase that state mid-close-out is
+	// fixed in this same change (T-2123) — without that fix the escalation path
+	// would disappear from under him.
+	//
+	// The collection still happens the instant the agent says it is done: its
+	// stopped report dispatches the robust STOP (HandleReportStopped). What is
+	// gone is the server deciding that time is up.
+	if cfg.SoftOffboardGrace > 0 {
 		st.Phase = reconcilePhaseStopping
-		st.StopDeadline = now + cfg.SoftOffboardGrace + cfg.StopGrace
+		return decisionNone(obs, st,
+			"stopping: agent is working its offboard sequence — collection is the "+
+				"agent's stopped report, or the owner's force-stop")
+	}
+	if st.StopDeadline == 0.0 {
+		// Legacy timed wind-down, kept reachable by SoftOffboardGrace = 0 (the
+		// "restore today's behaviour" setting): arm the grace clock from
+		// OBSERVING the intent, never from a dispatched command.
+		st.Phase = reconcilePhaseStopping
+		st.StopDeadline = now + cfg.StopGrace
 		return decisionNone(obs, st,
 			"stopping: grace window opened — awaiting agent selfstop")
 	}
@@ -1234,7 +1253,7 @@ func (s *apiServer) consumeUninstallOnDisconnect(memberID string) {
 // desired-online member OBSERVED online while still carrying a stopping_since
 // anchor is provably past that stop — clear the anchor so it can never derive
 // a phantom *stopping* forever.
-func (s *apiServer) clearStaleStoppingOnOnline(members []Member) {
+func (s *apiServer) clearStaleStoppingOnOnline(members []Member, now float64) {
 	for i := range members {
 		m := &members[i]
 		if m.DesiredState != DesiredStateOnline {
@@ -1245,6 +1264,19 @@ func (s *apiServer) clearStaleStoppingOnOnline(members []Member) {
 		}
 		if !s.hub.IsOnline(m.ID) {
 			continue // may be a genuine stopped terminal — leave it
+		}
+		// 🔴 …and not while a close-out could still be in progress (T-2123).
+		// This sweep exists for an anchor left by a stop the member SURVIVED,
+		// but "survived a stop" and "is working its offboard sequence right
+		// now" look identical from here: both are online, both are wanted
+		// online, both carry the anchor. Clearing the fresh one erased the
+		// owner's only signal that the session had begun closing out — the
+		// cockpit went back to green while the agent was writing its hand-off,
+		// which is exactly what he reported seeing. An anchor older than the
+		// whole soft window cannot be a live close-out any more, and that is
+		// the only kind this sweep ever meant.
+		if now-m.StoppingSince < SoftOffboardGraceSecs {
+			continue
 		}
 		m.StoppingSince = 0.0
 		if err := s.putMember(*m, triggerServer); err != nil {
@@ -1289,7 +1321,7 @@ func (s *apiServer) runReconcileTick(now float64) {
 	s.stampContextHighRecycle(members, now)
 	s.announceSoftOffboardEscalation(members, now)
 	s.clearRecycleMarkersOnRespawn(members)
-	s.clearStaleStoppingOnOnline(members)
+	s.clearStaleStoppingOnOnline(members, now)
 	s.consumeUninstallIntentOnOffline(members)
 	// The receipt deadline (receipt_watch.go) — swept BEFORE the decide pass so
 	// a start/stop armed by THIS tick always gets a full window, never a same-

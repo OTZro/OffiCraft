@@ -375,6 +375,7 @@ func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unr
 		LastOpLog:        m.LastOpLog,
 		LastOpReason:     m.LastOpReason,
 		LastOpAt:         m.LastOpAt,
+		ForcedStopAt:     m.ForcedStopAt,
 		UnreadCount:      unreadCount,
 		RosterStatus:     m.RosterStatus,
 		OwnerID:          wireOwnerID,
