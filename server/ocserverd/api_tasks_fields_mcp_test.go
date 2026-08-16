@@ -364,6 +364,45 @@ func TestToolsCallUpdateTaskTrimsBothFields(t *testing.T) {
 	}
 }
 
+// TestToolsCallUpdateTaskVersionsOnlyTheFieldThatChanged pins the one claim in
+// this route that nothing else can see: a history stream is enrolled ONLY for a
+// field that is actually changing.
+//
+// Enrolling both unconditionally reads back identically on the task and passes
+// every other test in this file, while quietly retaining a revision for the
+// untouched field — and the retained set is only three deep, so a run of
+// title-only corrections would push the description's oldest recoverable wording
+// off the end. The damage is invisible until someone needs the wording back.
+func TestToolsCallUpdateTaskVersionsOnlyTheFieldThatChanged(t *testing.T) {
+	srv, secret, _ := newWiredTestServer(t)
+	now := time.Now().Unix()
+	ownerTok, _ := mintJWT("owner", "owner", 300, secret, now, "")
+	miraTok, _ := mintJWT("mira", "agent", 300, secret, now, "")
+	taskID := mcpTaskFixture(t, srv.URL, ownerTok)
+
+	// Give the description a value so it HAS something a stray revision could
+	// retain — on an empty description the snapshot is "{}" and nothing is kept,
+	// which would make this test pass for the wrong reason.
+	if _, isError, text := toolResult(t, callUpdateTask(t, srv.URL, miraTok, taskID,
+		nil, strptr("原本的敘述"))); isError {
+		t.Fatalf("seed write must be accepted: %s", text)
+	}
+	beforeTitleRevs := countDocumentRevisions(t, srv.URL, ownerTok, "task_title", taskID)
+	beforeDescRevs := countDocumentRevisions(t, srv.URL, ownerTok, "task_description", taskID)
+
+	if _, isError, text := toolResult(t, callUpdateTask(t, srv.URL, miraTok, taskID,
+		strptr("只改標題"), nil)); isError {
+		t.Fatalf("title-only call must be accepted: %s", text)
+	}
+
+	if got := countDocumentRevisions(t, srv.URL, ownerTok, "task_title", taskID); got != beforeTitleRevs+1 {
+		t.Fatalf("the CHANGED field must retain exactly one revision: %d → %d", beforeTitleRevs, got)
+	}
+	if got := countDocumentRevisions(t, srv.URL, ownerTok, "task_description", taskID); got != beforeDescRevs {
+		t.Fatalf("an untouched description was versioned anyway: %d → %d", beforeDescRevs, got)
+	}
+}
+
 // TestToolsCallUpdateTaskClearsADescriptionOfOnlyWhitespace pins the consequence
 // of trimming the description that a reader would otherwise have to derive:
 // whitespace trims to "", and "" on this field is a real write that CLEARS. It
