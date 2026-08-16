@@ -1848,6 +1848,19 @@ button.task-card__waiting--dep:focus-visible {
   .task-card__title {
     word-break: break-word;
   }
+  /* T-e4ae: the owner chose content-aware table sizing. Markdown measures each
+     column's intrinsic width and stores the chosen C1 floor on every cell;
+     activate that variable only on the phone layout so desktop tables keep
+     their existing auto sizing. Short columns stay short, while long columns
+     become the table's own horizontal scroller instead of making the task list
+     wider. */
+  .task-card__desc.doc-md table[data-md-table-sizing="content-aware"] th,
+  .task-card__desc.doc-md table[data-md-table-sizing="content-aware"] td {
+    min-width: var(--md-table-column-min-width, auto);
+  }
+  .task-card__desc.doc-md table[data-md-table-sizing="content-aware"] th {
+    white-space: nowrap;
+  }
   .task-step__name {
     overflow-wrap: anywhere;
   }
