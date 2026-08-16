@@ -305,8 +305,20 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 	// cockpit that disagrees with when his agents actually get notified. Same
 	// rule on both axes; codex measures in rounds because that is what its
 	// handover reads.
+	//
+	// Both sides read the EFFECTIVE current value, not the raw stored one: a
+	// server whose pair has never been written holds zeroes, and comparing
+	// those would refuse an unrelated patch (org_name, a doc cap) with a
+	// complaint about numbers the caller never sent.
 	ctxNow := s.ctxHighConfig()
+	shipped := defaultSseContextHigh()
 	noticePct, handoverPct := ctxNow.NoticePct, ctxNow.HandoverPct
+	if handoverPct <= 0 {
+		handoverPct = shipped.HandoverPct
+	}
+	if noticePct <= 0 {
+		noticePct = shipped.NoticePct
+	}
 	if body.NoticePct != nil {
 		noticePct = *body.NoticePct
 	}
@@ -319,6 +331,12 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		return
 	}
 	noticeRound, finalRound := s.codexNoticeRoundSetting(), s.codexCompactionThresholdSetting()
+	if finalRound < 1 {
+		finalRound = defaultCodexCompactionThreshold
+	}
+	if noticeRound < 1 {
+		noticeRound = finalRound - 1
+	}
 	if body.CodexNoticeRound != nil {
 		noticeRound = *body.CodexNoticeRound
 	}

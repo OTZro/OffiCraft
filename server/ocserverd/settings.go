@@ -752,18 +752,28 @@ func applyCtxOverrides(d *DAL, c *SseContextHighConfig) error {
 	if err := getInt(settingCtxHandoverPct, &c.HandoverPct); err != nil {
 		return err
 	}
-	// ctx.notice_pct is the FIRST (soft) notice — T-a9d6. An install that
-	// predates the pair has no row here, and the zero value would silently
-	// disable the soft notice, so the MIGRATION below (not this loader) is what
-	// fills it: absent → HandoverPct - handoverNoticeLeadPct, which is exactly
-	// where T-c382 derived it, so an upgrade changes no behaviour at all.
-	if err := getInt(settingCtxNoticePct, &c.NoticePct); err != nil {
+	// ctx.notice_pct is the FIRST (soft) notice — T-a9d6. ABSENCE is what
+	// matters here, not the zero value: an install that predates the pair has
+	// no row, and its notice must land where T-c382 derived it (handover minus
+	// the lead) rather than at the shipped default, which would silently move
+	// the notice of every deployment whose handover the owner had tuned.
+	// Reading the row itself rather than checking c.NoticePct is the point —
+	// the config default is already non-zero, so the value alone cannot tell
+	// "never set" from "set to that number".
+	stored, err := d.GetSetting(settingCtxNoticePct)
+	if err != nil {
 		return err
 	}
-	if c.NoticePct <= 0 && c.HandoverPct > 0 {
+	if stored == nil {
 		if at, ok := claudeNoticePct(c.HandoverPct); ok {
 			c.NoticePct = at
 		}
+	} else {
+		n, err := strconv.Atoi(*stored)
+		if err != nil || n < 0 {
+			return fmt.Errorf("settings %s: not a non-negative integer: %q", settingCtxNoticePct, *stored)
+		}
+		c.NoticePct = n
 	}
 	if v, err := d.GetSetting(settingCtxMinBootSecs); err != nil {
 		return err

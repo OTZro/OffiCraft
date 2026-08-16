@@ -98,7 +98,14 @@ func (s *apiServer) offboardDeltaPayload(m Member) map[string]any {
 // 系統數字是多少」.
 func (s *apiServer) finalOffboardNotice(m Member) string {
 	cfg := s.ctxHighConfig()
-	record := s.gauge.Get(m.ID)
+	// The gauge is absent on a server assembled without one (and a session that
+	// never reported has no entry either). Degrade to "?" for the position
+	// rather than dropping the notice: WHERE the session is is useful, being
+	// told it is being collected is essential.
+	var record map[string]any
+	if s.gauge != nil {
+		record = s.gauge.Get(m.ID)
+	}
 	var where string
 	if NormalizeRuntime(m.Runtime) == RuntimeCodex {
 		final := s.codexCompactionThresholdSetting()

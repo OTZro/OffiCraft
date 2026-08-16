@@ -283,10 +283,31 @@ func TestLoadAuthSettingsCtxOverrides(t *testing.T) {
 		}
 	}
 	got, _ := loadForTest(t, d, defaultConfig())
-	want := SseContextHighConfig{HandoverPct: 70, MinBootSecs: 60.5, StaleGuard: false}
+	// NoticePct 60 is the UPGRADE fallback, not a default: no ctx.notice_pct row
+	// was written, so the pair is completed from the stored handover (70 - the
+	// T-c382 lead). An install whose owner had tuned the handover therefore
+	// keeps notifying exactly where it did before the pair existed.
+	want := SseContextHighConfig{NoticePct: 60, HandoverPct: 70, MinBootSecs: 60.5, StaleGuard: false}
 	if got.ctxhigh != want {
-		t.Fatalf("DB ctx overrides must apply, and the retired keys must reach "+
-			"nothing: %+v", got.ctxhigh)
+		t.Fatalf("DB ctx overrides must apply, the retired keys must reach "+
+			"nothing, and the missing notice point must come from the stored "+
+			"handover: %+v", got.ctxhigh)
+	}
+
+	// An explicitly stored notice point WINS over that fallback — otherwise the
+	// owner's first number would be unsettable and the derivation permanent.
+	dPair := newTestDAL(t)
+	for key, value := range map[string]string{
+		settingCtxHandoverPct: "70",
+		settingCtxNoticePct:   "45",
+	} {
+		if err := dPair.PutSetting(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gotPair, _ := loadForTest(t, dPair, defaultConfig())
+	if gotPair.ctxhigh.NoticePct != 45 || gotPair.ctxhigh.HandoverPct != 70 {
+		t.Fatalf("a stored notice point must win over the upgrade fallback: %+v", gotPair.ctxhigh)
 	}
 
 	// Absent keys keep the oc.toml/default value.
