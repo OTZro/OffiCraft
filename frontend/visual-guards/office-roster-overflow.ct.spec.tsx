@@ -31,8 +31,19 @@
 // 接待）」 — past the ~16-CJK-character threshold at 390px, i.e. the owner walks
 // this path daily. Short invented labels go green while the page is broken.
 //
-// MUTANT (verify before trusting this file): put `grid-template-columns: 1fr`
-// back on `.office` inside the 720px media query.
+// MUTANTS (measured, not assumed):
+//   · `grid-template-columns: 1fr` back on `.office` → 390/320 外包 red on
+//     assertion (1): the page drags +31 / +101px.
+//   · `overflow-wrap: anywhere` off `.member-card__name` → 390/320 正職 red on
+//     assertion (5): the name paints to 377px over a pill at 322 / 252px, while
+//     every page- and `.office`-level number stays 0 (the list is a scroll
+//     container and absorbs it).
+//   · ⚠️ The third change in this package — `.outsource-row__type` from
+//     inline-flex to block, so `text-overflow: ellipsis` actually applies —
+//     has NO measuring guard: reverting it leaves all five cases GREEN. Its
+//     effect (text ending in 「…」 instead of being cut mid-character) is not a
+//     geometry, and the only evidence for it is the before/after screenshots
+//     pinned on the task. Do not read this file as covering it.
 //
 // jsdom has no layout engine, so this is a CT guard in real Chromium. 390 (the
 // owner's phone) and 320 (the narrowest we support) are both asserted — width
