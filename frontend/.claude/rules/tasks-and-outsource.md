@@ -25,7 +25,7 @@ useTasks 把 statusFilter 轉成重複的 ?statuses=；執行者與類型篩選�
 
 卡片預設收合；標題與 description 是唯讀 UI，owner 沒有要求編輯入口。進度與 gate 狀態直接使用 server 值；stepBadge 由 lib/stepBadge.ts 統一，superseded 不計入 progress。gate 預告、內嵌 TaskReplyCard、等待外部 banner 與任務訊息框都要維持原 wire 語意。
 
-依賴 chip 讀 task.depTasks，必須區分已解析、查無此任務與 undefined 未提供。步驟備註預設收起，只有有備註的步驟才顯示 toggle；展開時以 scrollAnchor 對被點的列保住上緣，不得用 scrollIntoView 讓祖先捲動。收合上方其他列造成讀取目標移位是已知未處理範圍，不要把窄護欄寫成已修好。
+依賴 chip 讀 task.depTasks，必須區分已解析、查無此任務與 undefined 未提供。步驟備註預設收起，只有有備註的步驟才顯示 toggle；展開與收合都不得改變捲動位置（owner T-6630：往下展開、向上收合，畫面不動），所以備註 toggle 不做任何 scroll 校正——不寫 `.tasks` 的 scrollTop，也絕不用 `scrollIntoView`（它會重新對整條祖先鏈的每個 scrollport 下手，等於把整個畫面搬走；備註 toggle 一律禁用，等我回覆／等待外部那兩個「跳轉」入口才是它的合法用途）。唯一做不到「完全不動」的是收合比目前捲動量還高的備註：捲動範圍縮短、scrollTop 被夾在 0，殘餘位移等於 `備註高度 − 收合前 scrollTop`，護欄用這個算式做嚴格斷言，不放寬。
 
 外包 chip 在任務卡描述 launch intent；監控頁的自報 runtime/model/effort 是另一條規則，不可混用。worker 已 release 時不捏造代號；未指派與零節點狀態要分別顯示等待指派與規劃中。
 

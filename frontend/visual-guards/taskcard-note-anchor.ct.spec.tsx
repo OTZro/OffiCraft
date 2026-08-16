@@ -1,91 +1,83 @@
-// HOTSPOT — T-4e39: 點開哪一則步驟備註,畫面就停在那一則.
+// HOTSPOT — T-6630: 展開與收合都不改變捲動位置.
 //
-// Owner (2026-08-15, via T-e5b1's screenshot gate, on a real server at a real
-// window height): opening a note left the row he had just opened off screen —
-// 「像在一疊紙中間插進去十張」. MEASURED then: at 390×844 one open note already
-// ended at y 853 against a 844-tall window, and at 1280×800 the third one left
-// the viewport entirely.
+// Owner (2026-08-15, superseding T-4e39): 「我要整個畫面不移動,只是單純往下展開,
+// 而收合時,就是向上收合,整個畫面不能移動」. T-4e39 had shipped the opposite
+// bargain — a keepAnchored() correction that re-scrolled `.tasks` on OPEN so the
+// clicked row kept its viewport y. Re-scrolling IS the screen moving, so this
+// ticket deleted the correction (and src/lib/scrollAnchor.ts with it).
 //
-// WHAT THIS FILE ASSERTS, and what it deliberately does not:
-//   * the invariant is GEOMETRY THE OWNER CAN SEE — where the clicked note's
-//     box lands inside the scrollport after the reflow. It is NOT "a class was
-//     added", and it is NOT "scrollIntoView was called": that API's block /
-//     nearest handling differs between engines and it re-targets every
-//     scrollport on the ancestor chain, so calling it proves nothing about
-//     where anything ended up.
-//   * the scrollport is the INNER container (`.tasks`), which is why the story
-//     reproduces the real ancestor chain. Each test proves that premise before
-//     it measures anything — a document-level scroll would mean the guard is
-//     measuring some other layout than the one that ships.
-//   * only the note that was JUST CLICKED is claimed. Notes opened by earlier
-//     clicks are allowed to drift: one click can only anchor one row, so this
-//     is the unavoidable price of anchoring at all, not something the ticket
-//     scoped out.
-//   * 🔴 COLLAPSE IS UNTOUCHED, AND THAT IS A KNOWN HOLE, NOT A PROOF.
-//     The test at the bottom shows the row YOU CLICKED does not move when it
-//     collapses — but that row is precisely the only one that cannot move.
-//     Collapsing a note ABOVE the one you are reading drags the one you are
-//     reading upward: MEASURED at 390×844 in a real Chromium, open step 1, open
-//     step 5, read step 5, then collapse step 1 ⇒ step 5 goes from top 375 to
-//     top 907, i.e. 532px and completely off screen. ⚠️ The DISTANCE is not a
-//     constant — it moves with the scroll position and the note's length; this
-//     story's own fixture gives 506px at noteRepeat=1 and 903px at noteRepeat=8.
-//     What is stable is that it leaves the window. That is the same defect as
-//     this ticket's, on the other half. Leaving it is this ticket's scope
-//     ruling, and the follow-up is T-6630 — which is NOT automatically a "yes":
-//     it has to be judged on how often the situation really arises, and closing
-//     it with a written reason is a legitimate outcome. Do not read the collapse
-//     test below as saying collapse is fine.
-// MUTANTS MEASURED (this file is their home; each was planted IN PLACE — on the
-// declaration named, not appended at the end of the file, which would be a
-// different program):
-// ⚠️ THESE COUNTS ARE BOUND TO THE CASE LIST BELOW. Add or remove a sample and
-// they expire — re-plant and re-measure rather than editing the prose. (They
-// already went stale once here: M1/M3 were recorded at 6 cases and left
-// unchanged when the `tall` samples took the list to 10.)
-//   M1 · TaskCard.tsx, inside the openNotes useLayoutEffect, the statement
-//        `if (wrap) keepAnchored(wrap, anchor.top);` → `if (wrap) void wrap;`
-//        (i.e. the pre-T-4e39 tree). ⇒ 9 failed / 1 passed. Reported e.g.
-//        "390×844 phone · dark: only 183px of a 243px row is on screen, and
-//        243px would fit"; desktop 93 of 153.
-//   M2 · scrollAnchor.ts, the `delta +=` line inside `anchorDelta`:
-//        `Math.min(bottom - view.bottom, top - view.top)` → `bottom -
-//        view.bottom` (reveal the bottom at any cost). ⇒ 4 failed / 6 passed —
-//        every `tall: true` case, reporting "clicked row's top edge above the
-//        scrollport": afterTop -833 at 390 wide, -157 at 1280 (expected >= 3).
-//        Also killed by src/lib/scrollAnchor.test.ts ("keeps the row's top edge
-//        on screen…", expected 200 to be 100), 1 failed / 6 passed.
-//        ⚠️ It was NOT killed here until the tall sample existed: with only the
-//        `tall: false` cases this file was 6/6 GREEN on M2, because no row was
-//        ever taller than the scrollport. The first version of this header
-//        wrote that off as a property of the two widths — it is a property of
-//        the FIXTURE, and real notes break it daily (515-char median on this
-//        site, 1790 in t-fc23, ~3.5k in T-e5b1's own step 4). Under M2 a reader
-//        would watch the button and the note's first lines slide up to 577px
-//        off the top of the screen.
-//   M3 · scrollAnchor.ts, the initialiser inside `scrollParent`:
-//        `let node = el.parentElement` → `let node = null`, so the correction is
-//        applied to the DOCUMENT scrollport instead of `.tasks` — the exact
-//        wrong-scrollport mistake the ticket warns about. ⇒ 9 failed / 1 passed,
-//        same messages as M1: writing scrollTop on a box that does not scroll
-//        moves nothing.
-//   Under M1 and M3 the four `tall: false` cases stay red alongside the new
-//   ones — the added samples widened the net without diluting it. The 1 that
-//   stays green is the collapse test, correctly: it asserts a property that
-//   holds with no correction code at all.
+// WHAT THIS FILE ASSERTS:
+//   * `.tasks`' scrollTop is IDENTICAL across an open and across a close. Not
+//     "close to" — exactly equal, everywhere the browser is not forced (see the
+//     clamp test at the bottom). That is the whole feature.
+//   * geometry, not a call log: nothing here checks that scrollIntoView was or
+//     was not called. That API re-targets every scrollport on the ancestor
+//     chain, so its absence is what the numbers below prove, not the reverse.
+//   * the scrollport is the INNER container (`.tasks`) — measured on the live
+//     site, `document.scrollHeight` equals the window height at every width, so
+//     asserting on `document.scrollingElement` would be measuring a box that
+//     never scrolls and would stay green against ANY implementation. Every test
+//     proves that premise before it measures anything.
+//   * a click is only a click if the button is already on screen. Playwright's
+//     `.click()` SCROLLS AN OFF-SCREEN TARGET INTO VIEW FIRST, which moves the
+//     scrollport by hundreds of px and has nothing to do with the component —
+//     T-4e39's header reported "collapsing step 1 moves step 5 from 375 to 907,
+//     532px off screen" and that number is exactly that harness scroll
+//     (measured here: 713→11 scrollTop, minus the 132px the note gave back,
+//     = the 570 the row appeared to fall). So every toggle this file clicks is
+//     asserted to be inside the scrollport first, and off-screen toggles are
+//     driven through `element.click()`, which does not scroll.
+//
+// WHAT "不移動" DOES AND DOES NOT MEAN, stated because it is the one thing a
+// reader can get wrong here: the SCROLLPORT does not move. The rows below the
+// toggle do — that is the note opening and closing. Collapsing a note lifts
+// everything under it by exactly the height that went away; there is no
+// alternative unless the fold leaves a hole. Each test below pins that lift to
+// the EXACT height, so a change that lifts by more or less (or pushes down)
+// reddens.
+//
+// THE ONE PLACE THE SCROLLPORT REALLY DOES MOVE, and it is not a bug we can
+// code away: closing a note shortens the scrollable range, and if the reader is
+// near the end of that range the offset they are at stops existing — the
+// browser clamps scrollTop to the new maximum and the content slides DOWN under
+// a viewport that cannot follow it. MEASURED here (close 節點 9's note with its
+// toggle at the top of the scrollport), 收合後那一列被往下推的量:
+//   1280×800 短備註  scrollTop 815 → 683   forced −132   row 586.4 → 718.4
+//   390×844  短備註  scrollTop 902 → 680   forced −222   row 541.6 → 763.6
+//   1280×800 長備註  scrollTop 1359 → 683  forced −676   row  42.4 → 718.4
+//   390×844  長備註  scrollTop 1399 → 680  forced −719   row  44.6 → 763.6
+// In the 長備註 rows the note that went away (916 / 1636 px) is TALLER than the
+// scroll offset the reader had, so the clamp stops at 0-headroom rather than at
+// the full height: the forced move is `min(scrollTop, removed)` and the rest of
+// the height simply has nowhere to come from. "完全不動" is therefore false in
+// this corner, and the last test asserts the corner EXACTLY — `min(before,
+// newMax)`, not a widened tolerance — so a real regression cannot hide in it.
+//
+// MUTANTS MEASURED (each planted IN PLACE, on the declaration named):
+//   M1 · TaskCard.tsx `toggleNote` — put T-4e39's correction back, inline:
+//        record the wrap's top before the state change and, in a
+//        useLayoutEffect on `openNotes`, write
+//        `container.scrollTop += wrap.getBoundingClientRect().top - prevTop`.
+//        ⇒ 8 failed / 9 passed. Reported e.g. "1280×800 desktop · dark:
+//        opening the note scrolled `.tasks` (815 → 947)" — expected 947 to be
+//        815 — and the phone's tall case 2316 → 3952.
+//   M2 · TaskCard.tsx `toggleNote` — collapse pushes the rows below away
+//        instead of leaving the scrollport alone: on a close, walk up to
+//        `.tasks` and do `container.scrollTop -= 120`.
+//        ⇒ 12 failed / 5 passed. Reported e.g. "1280×800 desktop · dark:
+//        collapsing moved `.tasks` (815 → 695)", and on the clamp test
+//        "the browser's clamp is the only movement allowed" 695 vs 815.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { TaskCardNoteAnchorStory } from "./stories/TaskCardNoteAnchorStory";
 
 // The two widths the ticket measured, plus the two shipped themes. 390×844 is
-// the owner's phone (the width where the defect showed up on the SECOND note);
-// 1280×800 is the desktop window (where it took three).
+// the owner's phone, 1280×800 the desktop window.
 //
-// `tall: true` is the SECOND sample, and it is not a synthetic worst case: real
-// step notes on this site have a 515-character median, t-fc23's longest is 1790
-// and T-e5b1's own step 4 runs to ~3.5k — every one of those makes a row taller
-// than the window at 390 wide. In that branch the whole row cannot be shown, so
-// the top edge has to win over revealing the bottom, and that is a DIFFERENT
-// line of code (see M2 above).
+// `tall: true` is not a synthetic worst case: real step notes on this site have
+// a 515-character median, t-fc23's longest is 1790 and T-e5b1's own step 4 runs
+// to ~3.5k, so a row taller than the whole scrollport is the ordinary case, not
+// the corner. It is also where a correction would have the most room to move
+// the screen, and where the clamp above bites hardest (−1636 on the phone).
 const CASES = [
   { name: "390×844 phone · dark", w: 390, h: 844, theme: "dark" as const, tall: false },
   { name: "390×844 phone · light", w: 390, h: 844, theme: "light" as const, tall: false },
@@ -107,31 +99,43 @@ async function mountExpanded(mount: any, page: any, c: (typeof CASES)[number]) {
   return cmp;
 }
 
-/** The clicked row's box and its scrollport's, in viewport coordinates. */
-async function measure(page: any, stepId: string) {
-  return page.evaluate((id: string) => {
-    const step = document.querySelector(`[data-step-id='${id}']`);
-    const wrap = step?.querySelector(".task-step__notewrap") as HTMLElement;
-    const note = step?.querySelector(
-      "[data-testid='step-note']"
-    ) as HTMLElement | null;
+/** The scrollport's state plus the viewport box of every step row asked for. */
+async function measure(page: any, ids: string[]) {
+  return page.evaluate((ids: string[]) => {
     const sc = document.querySelector(".tasks") as HTMLElement;
-    if (!wrap || !sc) return null;
-    const r = wrap.getBoundingClientRect();
-    const sr = sc.getBoundingClientRect();
+    if (!sc) return null;
     const doc = document.scrollingElement!;
+    const rows: Record<string, { top: number; height: number }> = {};
+    for (const id of ids) {
+      const wrap = document.querySelector(
+        `[data-step-id='${id}'] .task-step__notewrap`
+      ) as HTMLElement | null;
+      if (!wrap) return null;
+      const r = wrap.getBoundingClientRect();
+      rows[id] = { top: r.top, height: r.height };
+    }
+    const sr = sc.getBoundingClientRect();
     return {
-      top: r.top,
-      bottom: r.bottom,
-      height: r.height,
-      noteHeight: note ? note.getBoundingClientRect().height : 0,
+      scrollTop: sc.scrollTop,
+      maxScroll: sc.scrollHeight - sc.clientHeight,
       viewTop: sr.top,
       viewBottom: sr.top + sc.clientHeight,
       viewHeight: sc.clientHeight,
-      scrollable: sc.scrollHeight - sc.clientHeight,
       docScroll: doc.scrollHeight - doc.clientHeight,
+      rows,
     };
-  }, stepId);
+  }, ids);
+}
+
+/** `.tasks` is the box that scrolls and the document is not — the shape the
+ * live site has. Without it every assertion below would be vacuous. */
+function assertScrollportPremise(m: any, label: string) {
+  expect(m, `${label}: the fixture must render the note rows`).not.toBeNull();
+  expect(m.maxScroll, `${label}: \`.tasks\` must be the scrollport`).toBeGreaterThan(50);
+  expect(
+    m.docScroll,
+    `${label}: the document must not be scrolling`
+  ).toBeLessThanOrEqual(1);
 }
 
 /** Put a step's disclosure row at `frac` of the way down the scrollport — the
@@ -150,26 +154,61 @@ async function park(page: any, stepId: string, frac: number) {
   );
 }
 
+/** A toggle a user could not see is a toggle a user could not press — and
+ * Playwright would scroll it into view, which is a scrollport move this file
+ * would then blame on the component. Every real click is gated on this. */
+async function assertToggleOnScreen(page: any, stepId: string, label: string) {
+  const box = await page.evaluate((id: string) => {
+    const sc = document.querySelector(".tasks") as HTMLElement;
+    const btn = document.querySelector(
+      `[data-step-id='${id}'] [data-testid='step-note-toggle']`
+    ) as HTMLElement;
+    const r = btn.getBoundingClientRect();
+    const sr = sc.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom, viewTop: sr.top, viewBottom: sr.top + sc.clientHeight };
+  }, stepId);
+  expect(
+    box.top,
+    `${label}: the ${stepId} toggle is above the scrollport — Playwright would scroll it into view and this test would measure the harness`
+  ).toBeGreaterThanOrEqual(box.viewTop);
+  expect(
+    box.bottom,
+    `${label}: the ${stepId} toggle is below the fold — same problem`
+  ).toBeLessThanOrEqual(box.viewBottom);
+}
+
 function clickToggle(cmp: any, stepId: string) {
   return cmp
     .locator(`[data-step-id='${stepId}'] [data-testid='step-note-toggle']`)
     .click();
 }
 
-/** How tall the row becomes once its note is open. Opened and closed again, so
- * the caller can park the row at a position that GUARANTEES the overflow the
- * ticket reported instead of guessing a fraction — a guess that is right at one
- * width is wrong at the other, because the same note wraps to fewer lines on a
- * 1280 card (measured: 243px at 390, ~half that at 1280). */
-async function openedHeight(cmp: any, page: any, stepId: string) {
-  await clickToggle(cmp, stepId);
-  const m = await measure(page, stepId);
-  await clickToggle(cmp, stepId);
-  return m!.height;
+/** Toggle without any scrolling by the harness — for rows deliberately left
+ * off screen, where a real click is impossible anyway. */
+async function jsToggle(page: any, stepId: string) {
+  await page.evaluate((id: string) => {
+    (
+      document.querySelector(
+        `[data-step-id='${id}'] [data-testid='step-note-toggle']`
+      ) as HTMLElement
+    ).click();
+  }, stepId);
 }
 
-/** Park the row so that opening it would push its bottom `overflowBy` px past
- * the fold — the defect, reproduced deliberately at every width. */
+/** How tall the row becomes once its note is open. Opened and closed again, so
+ * the caller can park it at a position that GUARANTEES the overflow the ticket
+ * reported instead of guessing a fraction — a guess that is right at one width
+ * is wrong at the other (measured: 243px tall at 390, 153px at 1280). */
+async function openedHeight(page: any, stepId: string) {
+  await jsToggle(page, stepId);
+  const m = await measure(page, [stepId]);
+  await jsToggle(page, stepId);
+  return m!.rows[stepId].height;
+}
+
+/** Park the row so that opening it pushes its bottom `overflowBy` px past the
+ * fold — the reported defect, reproduced deliberately at every width, while
+ * leaving the toggle itself comfortably on screen. */
 async function parkForOverflow(
   page: any,
   stepId: string,
@@ -190,160 +229,220 @@ async function parkForOverflow(
   );
 }
 
-/**
- * The invariant, in one place so every case states it identically:
- *   ① the note really opened (otherwise everything below is vacuous);
- *   ② the clicked row's TOP edge is inside the scrollport — the control the
- *      reader pressed and the note's first line are where they can see them;
- *   ③ the reflow never pushed the clicked row DOWN;
- *   ④ as much of the row as the scrollport can hold IS on screen. This is the
- *      one the defect broke: the note opened below the fold and nothing moved.
- */
-function assertLandedInView(
-  before: any,
-  after: any,
-  label: string
-) {
-  expect(after.noteHeight, `${label}: the note must actually be open`).toBeGreaterThan(10);
-  expect(
-    after.top,
-    `${label}: clicked row's top edge above the scrollport`
-  ).toBeGreaterThanOrEqual(after.viewTop - 1);
-  expect(
-    after.top,
-    `${label}: clicked row's top edge below the fold`
-  ).toBeLessThanOrEqual(after.viewBottom - 20);
-  expect(
-    after.top,
-    `${label}: the reflow pushed the clicked row further down`
-  ).toBeLessThanOrEqual(before.top + 1);
-
-  const visible =
-    Math.min(after.bottom, after.viewBottom) - Math.max(after.top, after.viewTop);
-  const couldFit = Math.min(after.height, after.viewHeight);
-  expect(
-    visible,
-    `${label}: only ${Math.round(visible)}px of a ${Math.round(
-      after.height
-    )}px row is on screen, and ${Math.round(couldFit)}px would fit`
-  ).toBeGreaterThanOrEqual(couldFit - 1);
+/** Put the clicked row where opening it CANNOT fit below it. A row taller than
+ * the whole scrollport has no such position — parking it near the top is
+ * already the overflow case — so the two branches are genuinely different
+ * setups, not a tuning knob. */
+async function parkForTest(page: any, c: (typeof CASES)[number], stepId: string) {
+  if (c.tall) {
+    await park(page, stepId, 0.15);
+  } else {
+    const h = await openedHeight(page, stepId);
+    await parkForOverflow(page, stepId, h, 60);
+  }
 }
 
 for (const c of CASES) {
-  test(`[${c.name}] opening a note leaves that note where it can be read`, async ({
+  test(`[${c.name}] opening a note does not move the scrollport`, async ({
     mount,
     page,
   }) => {
     const cmp = await mountExpanded(mount, page, c);
+    // Open the notes below so the column has scroll headroom past 節點 5 — a
+    // row parked against the very end of the range would make "scrollTop did
+    // not change" true for the wrong reason.
+    for (const id of ["s-8", "s-9"]) await jsToggle(page, id);
+    await parkForTest(page, c, "s-5");
 
-    // PREMISE. `.tasks` is the box that scrolls and the document is not — the
-    // same shape measured on the live site. Without this the corrections below
-    // would have nowhere to happen and the test would pass on any code.
-    await park(page, "s-5", 0.5);
-    const probe = await measure(page, "s-5");
-    expect(probe, "fixture step s-5 must render a note row").not.toBeNull();
-    expect(probe!.scrollable, "`.tasks` must be the scrollport").toBeGreaterThan(50);
-    expect(probe!.docScroll, "the document must not be scrolling").toBeLessThanOrEqual(1);
+    const before = await measure(page, ["s-5", "s-6"]);
+    assertScrollportPremise(before, c.name);
+    await assertToggleOnScreen(page, "s-5", c.name);
 
-    if (c.tall) {
-      // A row that is TALLER than the scrollport cannot be parked against the
-      // bottom edge — there is no position where its bottom fits. It is parked
-      // a little way down instead, and what the correction has to do is bring
-      // its TOP to the top of the scrollport and stop there.
-      await park(page, "s-5", 0.25);
-    } else {
-      const h = await openedHeight(cmp, page, "s-5");
-      await parkForOverflow(page, "s-5", h, 60);
-    }
-    const before = await measure(page, "s-5");
-
-    // The row is parked so that the note it opens cannot fit below it — the
-    // exact situation the owner hit.
     await clickToggle(cmp, "s-5");
-    const after = await measure(page, "s-5");
-    expect(
-      after!.height,
-      "opening must add real height to the row"
-    ).toBeGreaterThan(before!.height + 20);
-    // The tall case must really be tall, or it is just another copy of the
-    // short one and M2 has nowhere to show up.
-    if (c.tall) {
-      expect(
-        after!.height,
-        `${c.name}: the row must exceed the scrollport for this case to mean anything`
-      ).toBeGreaterThan(after!.viewHeight + 50);
-    } else {
-      expect(
-        after!.height,
-        `${c.name}: this case is supposed to FIT the scrollport`
-      ).toBeLessThan(after!.viewHeight);
-    }
-    // NON-VACUITY for the whole case: had nothing moved, the opened row would
-    // have run past the fold — this IS the reported situation, not a viewport
-    // that happened to have room. A fixture or a font change that quietly makes
-    // the note fit turns the assertions below into a tautology, so it fails
+    const after = await measure(page, ["s-5", "s-6"]);
+
+    const grew = after!.rows["s-5"].height - before!.rows["s-5"].height;
+    expect(grew, `${c.name}: opening must add real height to the row`).toBeGreaterThan(20);
+    // NON-VACUITY: the note must not fit in what was left below the toggle —
+    // this IS the situation the owner reported. A fixture or font change that
+    // quietly makes it fit turns everything below into a tautology, so it fails
     // here instead, loudly.
     expect(
-      before!.top + after!.height,
+      before!.rows["s-5"].top + after!.rows["s-5"].height,
       `${c.name}: the fixture no longer overflows the fold — nothing is being tested`
     ).toBeGreaterThan(after!.viewBottom + 5);
-    assertLandedInView(before, after, c.name);
+    if (c.tall) {
+      expect(
+        after!.rows["s-5"].height,
+        `${c.name}: the row must exceed the scrollport for this case to mean anything`
+      ).toBeGreaterThan(after!.viewHeight + 50);
+    }
+
+    // ① THE FEATURE: the scrollport did not move. Exactly, not approximately.
+    expect(
+      after!.scrollTop,
+      `${c.name}: opening the note scrolled \`.tasks\` (${before!.scrollTop} → ${after!.scrollTop})`
+    ).toBe(before!.scrollTop);
+    // ② 「單純往下展開」: the row grows downward out of its own toggle, so the
+    //    toggle the user pressed is still under their finger.
+    expect(
+      after!.rows["s-5"].top - before!.rows["s-5"].top,
+      `${c.name}: the clicked row's top edge moved`
+    ).toBeLessThanOrEqual(0.5);
+    expect(
+      after!.rows["s-5"].top - before!.rows["s-5"].top,
+      `${c.name}: the clicked row's top edge moved`
+    ).toBeGreaterThanOrEqual(-0.5);
+    // ③ …and the row below moved down by EXACTLY the height that appeared —
+    //    nothing more (a scroll correction) and nothing less.
+    expect(
+      after!.rows["s-6"].top - before!.rows["s-6"].top,
+      `${c.name}: the row below did not follow the growth exactly`
+    ).toBeCloseTo(grew, 0);
+  });
+
+  test(`[${c.name}] collapsing a note does not move the scrollport, and lifts the rows below by exactly what went away`, async ({
+    mount,
+    page,
+  }) => {
+    // 🔴 THIS REPLACES T-4e39's collapse test, which measured the row that was
+    // CLICKED. That row is the only one a collapse cannot move (everything a
+    // collapse removes sits below its own toggle), so the old test read like
+    // "collapse is already safe" while having no power at all: it stayed green
+    // with the correction, without it, and under every mutant. What is measured
+    // here instead is 節點 6 — the row BELOW the one being closed.
+    const cmp = await mountExpanded(mount, page, c);
+    // 同時開多則: 節點 4/5 above, 8/9 below for scroll headroom.
+    for (const id of ["s-4", "s-5", "s-8", "s-9"]) await jsToggle(page, id);
+    await park(page, "s-5", 0.15);
+
+    const before = await measure(page, ["s-5", "s-6"]);
+    assertScrollportPremise(before, c.name);
+    await assertToggleOnScreen(page, "s-5", c.name);
+
+    await clickToggle(cmp, "s-5");
+    const after = await measure(page, ["s-5", "s-6"]);
+
+    const removed = before!.rows["s-5"].height - after!.rows["s-5"].height;
+    expect(removed, `${c.name}: the note must actually have closed`).toBeGreaterThan(20);
+    // This case is deliberately NOT the clamped one — the range still reaches
+    // past the current offset after the collapse, so the browser has no excuse
+    // to move anything and the equality below is strict. (The clamped case is
+    // the last test in this file, and it is asserted just as exactly.)
+    expect(
+      before!.scrollTop,
+      `${c.name}: this case must have scroll headroom left after the collapse, or it is the clamp test in disguise`
+    ).toBeLessThanOrEqual(after!.maxScroll);
+
+    // ① THE FEATURE.
+    expect(
+      after!.scrollTop,
+      `${c.name}: collapsing moved \`.tasks\` (${before!.scrollTop} → ${after!.scrollTop})`
+    ).toBe(before!.scrollTop);
+    // ② 「向上收合」: the row below rises by exactly the height that went away.
+    //    More than that would be a scroll correction dragging it; less (or a
+    //    push downward) would be the screen being scrolled the other way.
+    expect(
+      after!.rows["s-6"].top - before!.rows["s-6"].top,
+      `${c.name}: the row below the collapse did not rise by exactly the note's height (${removed}px)`
+    ).toBeCloseTo(-removed, 0);
   });
 }
 
-test("[390×844 phone · dark] each of three notes opened in turn lands where it can be read", async ({
+test("[390×844 phone · dark] three notes opened in turn never move the scrollport", async ({
   mount,
   page,
 }) => {
-  // The owner's follow-up question: 第 2、第 5、第 9 則 opened one after another.
-  // Every click re-anchors on the row that click was on; the earlier ones are
-  // free to move, which is the documented behaviour choice, not an oversight.
+  // The owner's follow-up shape: 第 2、第 5、第 9 則 opened one after another.
+  // Under T-4e39 every one of these clicks re-scrolled the container; the point
+  // of the sequence is that now none of them does.
   const cmp = await mountExpanded(mount, page, CASES[0]);
-  const reproduced: string[] = [];
+  const overflowed: string[] = [];
   for (const id of ["s-2", "s-5", "s-9"]) {
-    await park(page, id, 0.5);
-    const h = await openedHeight(cmp, page, id);
-    await parkForOverflow(page, id, h, 60);
-    const before = await measure(page, id);
+    await parkForTest(page, CASES[0], id);
+    const before = await measure(page, [id]);
+    assertScrollportPremise(before, `${CASES[0].name} · ${id}`);
+    await assertToggleOnScreen(page, id, `${CASES[0].name} · ${id}`);
     await clickToggle(cmp, id);
-    const after = await measure(page, id);
-    if (before!.top + after!.height > after!.viewBottom + 5) reproduced.push(id);
-    assertLandedInView(before, after, `${CASES[0].name} · ${id}`);
+    const after = await measure(page, [id]);
+    if (before!.rows[id].top + after!.rows[id].height > after!.viewBottom + 5) {
+      overflowed.push(id);
+    }
+    expect(
+      after!.scrollTop,
+      `${CASES[0].name} · ${id}: opening scrolled \`.tasks\` (${before!.scrollTop} → ${after!.scrollTop})`
+    ).toBe(before!.scrollTop);
+    expect(
+      after!.rows[id].top - before!.rows[id].top,
+      `${CASES[0].name} · ${id}: the clicked row's top edge moved`
+    ).toBeCloseTo(0, 0);
   }
-  // Which of the three could be pushed to the fold at all is a fact about the
-  // fixture, and it is pinned rather than assumed: s-2 sits so near the top of
-  // the column that parking it against the bottom edge would need a NEGATIVE
-  // scrollTop, so it is the trivially-safe member of the sequence and carries
-  // no proof — it is here to describe the sequence the owner asked about. The
-  // other two do reproduce the defect, and if a fixture edit ever changes that,
-  // this line reddens instead of the guard going quietly vacuous.
-  expect(reproduced).toEqual(["s-5", "s-9"]);
-
-  // …and the earlier ones are still OPEN — the correction moves the scrollport,
-  // it does not close anything.
+  // Which of the three actually opens past the fold is a fact about the
+  // fixture, pinned rather than assumed: s-2 sits so near the top of the column
+  // that parking it against the bottom edge would need a NEGATIVE scrollTop, so
+  // it is the trivially-safe member of the sequence and carries no proof — it
+  // is here to describe the sequence the owner asked about. If a fixture edit
+  // ever changes which ones reproduce, this line reddens instead of the guard
+  // going quietly weak.
+  expect(overflowed).toEqual(["s-5", "s-9"]);
   await expect(cmp.locator("[data-testid='step-note']")).toHaveCount(3);
 });
 
-test("[1280×800 desktop · dark] collapsing keeps the row that was clicked exactly where it was", async ({
-  mount,
-  page,
-}) => {
-  // 🔴 READ THE SCOPE NOTE IN THE HEADER BEFORE QUOTING THIS TEST.
-  // It pins ONE narrow thing: the row you clicked keeps its y when it
-  // collapses, because the content that goes away is below its toggle. That is
-  // the ONLY row a collapse cannot move, so this test says nothing about
-  // collapse being safe — collapsing a note above the one you are reading moves
-  // that one 532px and off screen (measured; follow-up T-6630). This exists so
-  // that if a later change breaks even this narrow property, it reddens.
-  const cmp = await mountExpanded(mount, page, CASES[2]);
-  await park(page, "s-5", 0.4);
-  await clickToggle(cmp, "s-5");
-  const open = await measure(page, "s-5");
-  await clickToggle(cmp, "s-5");
-  const closed = await measure(page, "s-5");
-  expect(closed!.noteHeight, "the note must be closed again").toBe(0);
-  expect(
-    Math.abs(closed!.top - open!.top),
-    "collapsing moved the row the reader clicked"
-  ).toBeLessThanOrEqual(1);
-});
+for (const c of [CASES[0], CASES[2], CASES[4], CASES[6]]) {
+  test(`[${c.name}] collapsing at the end of the scroll range — the browser's clamp is the only movement allowed`, async ({
+    mount,
+    page,
+  }) => {
+    // 🔴 THE PHYSICAL LIMIT, MEASURED, NOT WAVED AWAY. Closing a note shortens
+    // the scrollable range. Parked at the end of that range, the offset the
+    // reader is at no longer exists, and the browser clamps scrollTop to the
+    // new maximum — the scrollport moves, and no code in the component did it.
+    // "Do not move" is therefore not literally achievable here, and rather than
+    // widen the tolerance until a real defect fits through, this pins the
+    // clamped value EXACTLY: min(before, newMax). A component that scrolls by
+    // even one px more or less than the clamp fails.
+    //
+    // The forced movement MEASURED on this fixture — see the header table for
+    // all four rows; the short cases give −132 / −222 and the tall ones −676 /
+    // −719 (there the note is taller than the offset, so the clamp runs out of
+    // headroom before it has undone the whole height). The failure messages
+    // print the live numbers, so a fixture change updates the evidence rather
+    // than rotting it.
+    //
+    // 節點 9 is the LAST step on purpose: closing the last note is the only way
+    // to shorten the range under the offset while the toggle you press is still
+    // on screen. Its own row is what gets measured, because there is no row
+    // below it — and its own row is the honest victim here: the reader pressed
+    // 收合 and the text slid DOWN the screen anyway.
+    const cmp = await mountExpanded(mount, page, c);
+    await jsToggle(page, "s-9");
+    await park(page, "s-9", 0.05);
+
+    const before = await measure(page, ["s-9"]);
+    assertScrollportPremise(before, c.name);
+    await assertToggleOnScreen(page, "s-9", c.name);
+
+    await clickToggle(cmp, "s-9");
+    const after = await measure(page, ["s-9"]);
+
+    const removed = before!.rows["s-9"].height - after!.rows["s-9"].height;
+    expect(removed, `${c.name}: the note must actually have closed`).toBeGreaterThan(20);
+    const forced = before!.scrollTop - after!.scrollTop;
+    // NON-VACUITY: this test only means something while the clamp really bites.
+    expect(
+      forced,
+      `${c.name}: nothing was clamped — this case has stopped exercising the limit it exists for`
+    ).toBeGreaterThan(20);
+    expect(
+      after!.scrollTop,
+      `${c.name}: the browser's clamp is the only movement allowed (forced ${forced}px; expected min(${before!.scrollTop}, ${after!.maxScroll}))`
+    ).toBe(Math.min(before!.scrollTop, after!.maxScroll));
+    // Nothing ABOVE the collapsed row changed, so the row moves down by exactly
+    // the clamp and by nothing else. A component that added its own scroll on
+    // top of the clamp fails here.
+    expect(
+      after!.rows["s-9"].top - before!.rows["s-9"].top,
+      `${c.name}: the collapsed row moved by more than the clamp accounts for`
+    ).toBeCloseTo(forced, 0);
+  });
+}

@@ -240,9 +240,10 @@ export function DocCard({
   // scrollTop and the content slides down under a viewport that cannot follow
   // it. Restoring the heading would need scrollTop 7330 against a new maximum
   // of 6966: THE CORRECTION IS ARITHMETICALLY UNAVAILABLE, which is why a
-  // keepAnchored() call (the one the task steps use, T-4e39) was written here
-  // and then removed rather than kept as a no-op. What survives is that the
-  // heading stays ON SCREEN (753.9 < 844) — it is pushed, never lost.
+  // scroll correction was written here and then removed rather than kept as a
+  // no-op. What survives is that the heading stays ON SCREEN (753.9 < 844) — it
+  // is pushed, never lost. (The task-step notes have no correction either any
+  // more: T-6630 removed T-4e39's, on the same owner rule as this comment's.)
   //
   // Do not "fix" this with a scroll correction. The only real fixes change the
   // layout — e.g. reserving the collapsed height, or a sticky heading — and
