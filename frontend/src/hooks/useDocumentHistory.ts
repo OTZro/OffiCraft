@@ -63,6 +63,7 @@ const TOPIC_OF: Record<DocumentKind, string> = {
   // not a wrong screen.
   system_interaction: "global_context",
   boot_sequence: "global_context",
+  offboard: "global_context",
 };
 
 interface UseDocumentHistory {

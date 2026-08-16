@@ -635,14 +635,15 @@ type DocumentHistory struct {
 // when nothing says otherwise.
 const documentHistoryKeepDefault = 3
 
-// documentHistoryKeepByKind raises the retained-version depth for the boot
-// context's two editable document kinds (T-791e): system_interaction, which has
-// the single key `global`, and boot_sequence, which has one key per runtime
-// (`claude`, `codex`) — three documents across the two kinds, which is why this
-// table has two entries while the sentence below counts three.
+// documentHistoryKeepByKind raises the retained-version depth for the owner's
+// editable boot-context/global documents: system_interaction, which has the
+// single key `global`; boot_sequence, which has one key per runtime (`claude`,
+// `codex`); and offboard (T-c9c0), a singleton keyed `global`. Four documents
+// across the three kinds, which is why this table has three entries while the
+// sentence below counts documents.
 //
-// WRITTEN DOWN BECAUSE IT IS A DECISION, NOT AN OVERSIGHT: those three
-// documents are the ones an owner can now retype at will from the cockpit,
+// WRITTEN DOWN BECAUSE IT IS A DECISION, NOT AN OVERSIGHT: those documents are
+// the ones an owner can now retype at will from the cockpit,
 // and the sequence that matters — "put back the version from
 // before I broke it" — is exactly the one a handful of idle saves would push off
 // the end of a three-deep list. Ten is the owner's number; every other kind
@@ -655,6 +656,7 @@ const documentHistoryKeepDefault = 3
 var documentHistoryKeepByKind = map[string]int{
 	docKindSystemInteraction: 10,
 	docKindBootSequence:      10,
+	docKindOffboard:          10,
 }
 
 // documentHistoryKeepFor answers the depth for one kind: the table above, else

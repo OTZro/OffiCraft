@@ -115,7 +115,9 @@ export function BootDocPage({
         body:
           kind === "boot_sequence"
             ? t.settings.bootDocSaveConfirmBoot
-            : t.settings.bootDocSaveConfirmSystem,
+            : kind === "offboard"
+              ? t.settings.bootDocSaveConfirmOffboard
+              : t.settings.bootDocSaveConfirmSystem,
         confirmLabel: t.settings.bootDocSaveConfirmAction,
       }}
       // No explanatory notes block above the card. There used to be three

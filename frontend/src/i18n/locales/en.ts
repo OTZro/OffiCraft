@@ -1353,6 +1353,9 @@ export const en: Dict = {
     bootClaudeSub: "Boot SOP for the Claude Code runtime · editable",
     bootCodexName: "Boot sequence (Codex CLI)",
     bootCodexSub: "Boot SOP for the Codex App Server runtime · editable",
+    offboardName: "Offboard Sequence",
+    offboardSub:
+      "Wrap-up instructions handed to an agent when the server is about to collect its session · editable",
     bootDocNoteHistoryLead: "Version history keeps the last ",
     bootDocNoteHistoryTail:
       " versions, counted in SAVES rather than in time — a run of small saves pushes the older ones out. Restoring the factory version is never affected and is always available.",
@@ -1360,6 +1363,8 @@ export const en: Dict = {
       "Save this boot sequence? A broken boot sequence stops agents booting after it from attaching to SSE, so they never come online — silently, with no error anywhere, and with nobody online to fix it. Check the preview first; if it does go wrong, press Restore factory version.",
     bootDocSaveConfirmSystem:
       "Save this system-interaction document? Every agent that boots after the save reads this content.",
+    bootDocSaveConfirmOffboard:
+      "Save this offboard sequence? Every session collected after the save reads this content — with about 120 seconds left and nobody online to ask.",
     bootDocSaveConfirmAction: "Save",
     // The click-to-open heading of a stacked document (T-6278). Both boot
     // sequences start closed so the page shows both at once; the label is on
@@ -1369,6 +1374,7 @@ export const en: Dict = {
     historyBootSystemTitle: "System interaction · version history",
     historyBootClaudeTitle: "Boot sequence (Claude Code) · version history",
     historyBootCodexTitle: "Boot sequence (Codex CLI) · version history",
+    historyBootOffboardTitle: "Offboard sequence · version history",
     defaultBadge: "Default",
     edit: "Edit",
     doneEdit: "Done",

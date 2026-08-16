@@ -1034,5 +1034,26 @@
     "method": "POST",
     "path": "/api/boot-sequence/{runtime_key}/reset",
     "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "get_offboard",
+    "method": "GET",
+    "path": "/api/offboard",
+    "requires": "machine"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "replace_offboard",
+    "method": "POST",
+    "path": "/api/offboard",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "reset_offboard",
+    "method": "POST",
+    "path": "/api/offboard/reset",
+    "requires": "admin_agent"
   }
 ]

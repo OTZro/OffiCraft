@@ -59,6 +59,19 @@ func (s *apiServer) systemInteractionSpec() bootDocSpec {
 	}
 }
 
+// offboardSpec resolves the 下線程序 document (T-c9c0). Singleton shape, key
+// `global`, exactly like systemInteractionSpec: there is no runtime axis here on
+// purpose — being collected is the same procedure for every agent.
+func (s *apiServer) offboardSpec() bootDocSpec {
+	return bootDocSpec{
+		Kind:     docKindOffboard,
+		Key:      offboardDocKey,
+		SeedFile: offboardSeedMD,
+		Cap:      s.offboardCap(),
+		DocName:  "offboard sequence",
+	}
+}
+
 // bootSequenceSpecFor resolves the boot-sequence document for a runtime key as
 // it arrives on the URL. ok=false means the key names no document this server
 // serves — the caller answers 404 rather than quietly falling back to claude,
@@ -90,6 +103,11 @@ func (s *apiServer) bootDocSpecFor(kind, key string) (bootDocSpec, bool) {
 		return s.systemInteractionSpec(), true
 	case docKindBootSequence:
 		return s.bootSequenceSpecFor(key)
+	case docKindOffboard:
+		if key != offboardDocKey {
+			return bootDocSpec{}, false
+		}
+		return s.offboardSpec(), true
 	}
 	return bootDocSpec{}, false
 }
@@ -107,6 +125,8 @@ func bootDocHistoryKeyKnown(kind, key string) bool {
 	case docKindBootSequence:
 		_, ok := bootSequenceSeedForKey(key)
 		return ok
+	case docKindOffboard:
+		return key == offboardDocKey
 	}
 	return false
 }
@@ -114,10 +134,22 @@ func bootDocHistoryKeyKnown(kind, key string) bool {
 // unknownBootDocKeyMsg names the keys that DO exist for this kind, for the same
 // reason writeUnknownBootSequence does: a caller holding a typo needs to be able
 // to tell it from a document that is simply empty.
+//
+// 🔴 SWITCH, NOT AN IF/ELSE: it used to answer the system-interaction key for
+// every kind that was not boot_sequence, so a fourth kind would silently have
+// been described by the wrong key. A kind nobody taught it now says so instead
+// of naming a key that does not belong to it.
 func unknownBootDocKeyMsg(kind, key string) string {
-	want := "'" + systemInteractionDocKey + "'"
-	if kind == docKindBootSequence {
+	var want string
+	switch kind {
+	case docKindSystemInteraction:
+		want = "'" + systemInteractionDocKey + "'"
+	case docKindBootSequence:
 		want = "'" + bootSequenceKeyClaude + "' or '" + bootSequenceKeyCodex + "'"
+	case docKindOffboard:
+		want = "'" + offboardDocKey + "'"
+	default:
+		return "document history kind '" + kind + "' names no editable document on this server"
 	}
 	return "document history key '" + key + "' does not name a " + kind + " document — the key is " + want
 }
@@ -351,6 +383,31 @@ func (s *apiServer) HandleReplaceSystemInteractionApiSystemInteractionPost(w htt
 // POST /api/system-interaction/reset — back to the shipped seed.
 func (s *apiServer) HandleResetSystemInteractionApiSystemInteractionResetPost(w http.ResponseWriter, r *http.Request) {
 	s.resetBootDoc(w, r, s.systemInteractionSpec())
+}
+
+// GET /api/offboard — the folded 下線程序 block.
+func (s *apiServer) HandleGetOffboardApiOffboardGet(w http.ResponseWriter, r *http.Request) {
+	dto, err := s.foldBootDocDTO(s.offboardSpec())
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dto)
+}
+
+// POST /api/offboard — whole-document replace ({text}).
+func (s *apiServer) HandleReplaceOffboardApiOffboardPost(w http.ResponseWriter, r *http.Request) {
+	var body BootDocumentReplaceDTO
+	if !decodeJSONBodyStrict(w, r, &body, "text") {
+		return
+	}
+	s.replaceBootDoc(w, r, s.offboardSpec(), body.Text,
+		body.AllowShrink != nil && *body.AllowShrink)
+}
+
+// POST /api/offboard/reset — back to the shipped seed.
+func (s *apiServer) HandleResetOffboardApiOffboardResetPost(w http.ResponseWriter, r *http.Request) {
+	s.resetBootDoc(w, r, s.offboardSpec())
 }
 
 // GET /api/boot-sequence/{runtime_key} — the folded 啟動程序 block for ONE runtime.

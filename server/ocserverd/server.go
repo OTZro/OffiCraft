@@ -365,6 +365,7 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 		docCapCharsManualLearnings:   contextDocMaxCharsDefault,
 		docCapCharsSystemInteraction: systemInteractionCapCharsDefault,
 		docCapCharsBootSequence:      bootSequenceCapCharsDefault,
+		docCapCharsOffboard:          offboardCapCharsDefault,
 		chatBudgetChars:              chatBudgetCharsDefault,
 		ctxhigh:                      defaultSseContextHigh(),
 		root:                         root,
@@ -530,6 +531,7 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 	api.docCapCharsManualLearnings = auth.docCapCharsManualLearnings
 	api.docCapCharsSystemInteraction = auth.docCapCharsSystemInteraction
 	api.docCapCharsBootSequence = auth.docCapCharsBootSequence
+	api.docCapCharsOffboard = auth.docCapCharsOffboard
 	api.chatBudgetChars = auth.chatBudgetChars
 	api.updaterReceiveBeta = auth.updaterReceiveBeta
 	api.updaterAutoUpdate = auth.updaterAutoUpdate

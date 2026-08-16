@@ -138,6 +138,7 @@ import {
   SEED_INSIGHT_ASSISTANT_MD,
   SEED_BOOT_SEQUENCE_MD,
   SEED_BOOT_SEQUENCE_CODEX_MD,
+  SEED_OFFBOARD_MD,
 } from "./seeds";
 import { ApiError } from "./errors";
 import { validateThemeBundles, isValidDisplayTheme } from "../lib/themeBundle";
@@ -490,6 +491,8 @@ const BOOT_DOC_SEEDS: Record<string, string> = {
   "system_interaction/global": SEED_SYSTEM_INTERACTION_MD.trim(),
   "boot_sequence/claude": SEED_BOOT_SEQUENCE_MD.trim(),
   "boot_sequence/codex": SEED_BOOT_SEQUENCE_CODEX_MD.trim(),
+  // T-c9c0 — a singleton keyed "global", like system_interaction.
+  "offboard/global": SEED_OFFBOARD_MD.trim(),
 };
 const bootDocOverlays = new Map<string, string>();
 
@@ -534,6 +537,7 @@ function foldBootDoc(kind: BootDocKind, key: string): WireBootDoc {
     cap_chars: {
       system_interaction: mockServerSettings.doc_cap_chars_system_interaction,
       boot_sequence: mockServerSettings.doc_cap_chars_boot_sequence,
+      offboard: mockServerSettings.doc_cap_chars_offboard,
     }[kind],
     is_default: overlay === undefined,
     // Every one of the three ships a seed, so the 還原出廠版 path is always
@@ -992,7 +996,9 @@ const BOOT_DOC_HISTORY_CAP = BOOT_DOC_HISTORY_KEPT;
 /** How many revisions this kind retains. One place, so the two numbers cannot
  * end up meaning different things at the write door and the read door. */
 function historyCapFor(kind: DocumentKind): number {
-  return kind === "system_interaction" || kind === "boot_sequence"
+  return kind === "system_interaction" ||
+    kind === "boot_sequence" ||
+    kind === "offboard"
     ? BOOT_DOC_HISTORY_CAP
     : DOCUMENT_HISTORY_CAP;
 }
@@ -1242,7 +1248,8 @@ function snapshotDocument(
     // edit (they read identically today and diverge the moment the seed file
     // changes under a restore).
     case "system_interaction":
-    case "boot_sequence": {
+    case "boot_sequence":
+    case "offboard": {
       if (bootDocSeed(kind, key) === null) return null;
       const overlay = bootDocOverlays.get(`${kind}/${key}`);
       return {
@@ -1409,7 +1416,8 @@ function applyDocumentHistory(
     // would leave `is_default` false and the 預設 badge off for a document that
     // IS the default.
     case "system_interaction":
-    case "boot_sequence": {
+    case "boot_sequence":
+    case "offboard": {
       if (bootDocSeed(kind, key) === null) return;
       if (tombstoned) bootDocOverlays.delete(`${kind}/${key}`);
       else bootDocOverlays.set(`${kind}/${key}`, content.text ?? "");
@@ -1521,6 +1529,7 @@ const DEFAULT_MOCK_SETTINGS = {
   doc_cap_chars_system_interaction:
     BOOT_DOC_CAP_CHARS_DEFAULTS.system_interaction,
   doc_cap_chars_boot_sequence: BOOT_DOC_CAP_CHARS_DEFAULTS.boot_sequence,
+  doc_cap_chars_offboard: BOOT_DOC_CAP_CHARS_DEFAULTS.offboard,
   // T-c9b4 wake-snapshot chat budget. Served here for the same reason as the
   // caps above — a settings DTO missing a field the server always sends is a
   // mock the page can go green against while the real one breaks.
@@ -4294,6 +4303,11 @@ export const mockApi: Api = {
         "doc_cap_chars_boot_sequence",
         DOC_CAP_CHARS_DEFAULTS.bootSequence,
       ],
+      [
+        patch.docCapCharsOffboard,
+        "doc_cap_chars_offboard",
+        DOC_CAP_CHARS_DEFAULTS.offboard,
+      ],
     ] as const) {
       if (field !== undefined && (field < min || field > 100000)) {
         throw new ApiError(
@@ -4426,6 +4440,9 @@ export const mockApi: Api = {
     if (patch.docCapCharsBootSequence !== undefined) {
       mockServerSettings.doc_cap_chars_boot_sequence =
         patch.docCapCharsBootSequence;
+    }
+    if (patch.docCapCharsOffboard !== undefined) {
+      mockServerSettings.doc_cap_chars_offboard = patch.docCapCharsOffboard;
     }
     if (patch.chatBudgetChars !== undefined) {
       mockServerSettings.chat_budget_chars = patch.chatBudgetChars;

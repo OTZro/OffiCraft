@@ -1291,6 +1291,14 @@ HAPPY: dict[str, Happy] = {
         path="/api/boot-sequence/codex/reset",
         check=_boot_doc_reset("/api/boot-sequence/codex"),
     ),
+    # ── 下線程序, the fourth owner-editable global document (T-c9c0) ──────────
+    # A singleton keyed `global`, so it takes the system-interaction shape
+    # rather than the boot-sequence one: no runtime on the path.
+    "GET /api/offboard": Happy(
+        check=lambda _c, r: _boot_doc_read("offboard", "global")(_c, r)
+    ),
+    "POST /api/offboard": Happy(body={"text": _BOOT_DOC_EDIT}, check=_boot_doc_written),
+    "POST /api/offboard/reset": Happy(check=_boot_doc_reset("/api/offboard")),
     "GET /api/roles": Happy(check=_nonempty_list),
     "GET /api/doc-sizes": Happy(
         # Size-only overview: every capped document reports its own size and

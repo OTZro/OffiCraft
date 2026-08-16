@@ -1676,6 +1676,7 @@ export const httpApi: Api = {
       doc_cap_chars_manual_learnings?: number;
       doc_cap_chars_system_interaction?: number;
       doc_cap_chars_boot_sequence?: number;
+      doc_cap_chars_offboard?: number;
       chat_budget_chars?: number;
       updater_receive_beta?: boolean;
       updater_auto_update?: boolean;
@@ -1718,6 +1719,9 @@ export const httpApi: Api = {
     }
     if (patch.docCapCharsBootSequence !== undefined) {
       body.doc_cap_chars_boot_sequence = patch.docCapCharsBootSequence;
+    }
+    if (patch.docCapCharsOffboard !== undefined) {
+      body.doc_cap_chars_offboard = patch.docCapCharsOffboard;
     }
     if (patch.chatBudgetChars !== undefined) {
       body.chat_budget_chars = patch.chatBudgetChars;
@@ -1834,6 +1838,9 @@ export const httpApi: Api = {
     if (kind === "system_interaction") {
       return toBootDoc(unwrap(await client.GET("/api/system-interaction")));
     }
+    if (kind === "offboard") {
+      return toBootDoc(unwrap(await client.GET("/api/offboard")));
+    }
     return toBootDoc(
       unwrap(
         await client.GET("/api/boot-sequence/{runtime_key}", {
@@ -1866,6 +1873,15 @@ export const httpApi: Api = {
         ),
       );
     }
+    if (kind === "offboard") {
+      return toBootDoc(
+        unwrap(
+          await client.POST("/api/offboard", {
+            body: { text, allow_shrink: false },
+          }),
+        ),
+      );
+    }
     return toBootDoc(
       unwrap(
         await client.POST("/api/boot-sequence/{runtime_key}", {
@@ -1881,6 +1897,9 @@ export const httpApi: Api = {
       return toBootDoc(
         unwrap(await client.POST("/api/system-interaction/reset")),
       );
+    }
+    if (kind === "offboard") {
+      return toBootDoc(unwrap(await client.POST("/api/offboard/reset")));
     }
     return toBootDoc(
       unwrap(

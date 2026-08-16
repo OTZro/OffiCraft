@@ -1421,6 +1421,10 @@ export const zh = {
     bootClaudeSub: "Claude Code 執行環境的開機 SOP · 可編輯",
     bootCodexName: "啟動程序（Codex CLI）",
     bootCodexSub: "Codex App Server 執行環境的開機 SOP · 可編輯",
+    // 下線程序（T-c9c0）——不進開機情境，是 server 要收掉這個 session 時
+    // 夾帶給 agent 的收尾指示，所以在清單上自成一列，排在啟動程序之後。
+    offboardName: "下線程序",
+    offboardSub: "server 要收掉這個 session 時夾帶給 agent 的收尾指示 · 可編輯",
     // ── 開機情境區塊：可編輯面（T-791e）──
     bootDocNoteHistoryLead: "版本紀錄只保留最近 ",
     bootDocNoteHistoryTail:
@@ -1429,6 +1433,8 @@ export const zh = {
       "要儲存這份啟動程序嗎？啟動程序改壞會讓之後開機的 agent 掛不上 SSE、因此永遠不會上線，而且不會有任何錯誤訊息——到時候也沒有人在線上可以救。存檔前請確認你看過預覽；真的出事就按「還原出廠版」。",
     bootDocSaveConfirmSystem:
       "要儲存這份系統互動說明嗎？之後開機的每一個 agent 都會讀到這份內容。",
+    bootDocSaveConfirmOffboard:
+      "要儲存這份下線程序嗎？之後每一個被收掉的 session 都會讀到這份內容，而且讀到的時候只剩約 120 秒、沒有人在線上可以問。",
     bootDocSaveConfirmAction: "確認儲存",
     // 堆疊呈現的文件，點標題才展開（T-6278）。兩份啟動程序都預設收疊，讓一個
     // 畫面看得到兩份；標籤寫的是「按下去會怎樣」，不是目前狀態。
@@ -1437,6 +1443,7 @@ export const zh = {
     historyBootSystemTitle: "系統互動的版本紀錄",
     historyBootClaudeTitle: "啟動程序（Claude Code）的版本紀錄",
     historyBootCodexTitle: "啟動程序（Codex CLI）的版本紀錄",
+    historyBootOffboardTitle: "下線程序的版本紀錄",
     // seed vs owner-edited
     defaultBadge: "預設",
     // ── detail: view / edit ──

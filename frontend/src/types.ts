@@ -678,12 +678,16 @@ export type DocumentKind =
   // and the two keys are DIFFERENT DOCUMENTS, not two views of one — their
   // third step means opposite things, so nothing may copy one over the other.
   | "system_interaction"
-  | "boot_sequence";
+  | "boot_sequence"
+  // T-c9c0: the 下線程序 document. A SINGLETON keyed "global" like
+  // system_interaction — being collected is the same procedure whatever
+  // runtime an agent runs, so there is deliberately no runtime axis here.
+  | "offboard";
 
 /** The DocumentKinds that carry a seeded, owner-editable boot-context block
  * (T-791e). Narrower than DocumentKind on purpose: the adapter's three boot-doc
  * methods take THIS, so no caller can address `lessons` through them. */
-export type BootDocKind = "system_interaction" | "boot_sequence";
+export type BootDocKind = "system_interaction" | "boot_sequence" | "offboard";
 
 /**
  * One seeded boot-context block as the cockpit reads it (T-791e) — the folded

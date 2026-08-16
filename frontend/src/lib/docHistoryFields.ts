@@ -37,6 +37,8 @@ export const DOC_FIELD_ORDER: Record<DocumentKind, readonly string[]> = {
   // fall back to) and is a flag, not content, so it is not listed.
   system_interaction: ["text"],
   boot_sequence: ["text"],
+  // T-c9c0. Same overlay shape, same single field.
+  offboard: ["text"],
 };
 
 /** Keys a revision may CARRY but that are not content of the document.

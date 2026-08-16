@@ -268,6 +268,7 @@ describe("T-ae38 — capForKind routes each document kind to its own cap", () =>
       manualLearnings: 5,
       systemInteraction: 6,
       bootSequence: 7,
+      offboard: 8,
     };
     expect(capForKind("role_definition", caps)).toBe(1);
     expect(capForKind("insight", caps)).toBe(2);
@@ -280,6 +281,8 @@ describe("T-ae38 — capForKind routes each document kind to its own cap", () =>
     // the system block's default is four times the boot sequence's.
     expect(capForKind("system_interaction", caps)).toBe(6);
     expect(capForKind("boot_sequence", caps)).toBe(7);
+    // T-c9c0: the 下線程序 document has its own knob too.
+    expect(capForKind("offboard", caps)).toBe(8);
     // The retired bundle kind covers both documents and has no restore path
     // left; it takes the learnings cap, as the deprecated wire field does.
     expect(capForKind("task_manual", caps)).toBe(5);
