@@ -12,8 +12,10 @@
 // 望預設不顯示,多一個展開備注的選項決定要不要開該 step 的備注,不然太長了」.
 //
 // 🔴 What is DELIBERATELY NOT claimed: nothing here says anything about the
-// SERVER. `update_task_title` / `update_task_description` still exist and still
-// work; this file only measures that the cockpit no longer offers a way in.
+// SERVER. Correcting a task's title or description still exists and still works
+// — through `update_task` since T-646a, and through the two original routes,
+// which stay on the HTTP surface for this client. This file only measures that
+// the cockpit no longer offers a way in.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { TaskCardNoteDisclosureStory } from "./stories/TaskCardNoteDisclosureStory";
 

@@ -1382,8 +1382,11 @@ export function TaskCard({
             still the card's heading in the a11y tree.
             T-e5b1 (owner 2026-08-15「UI 不需要提供編輯標題或敘述的功能」): the
             in-place title editor and its 編輯標題 affordance are GONE from the
-            cockpit. The MCP tool `update_task_title` and its route are
-            untouched — this removes the screen's entry, not the capability. */}
+            cockpit. The capability is untouched — this removes the screen's
+            entry, not the ability to correct a title. T-646a moved WHERE that
+            capability lives: the MCP tool is now `update_task` (one tool, both
+            fields), while POST /api/tasks/{id}/title stays on the HTTP surface
+            for this client. */}
         <div className="task-card__title-line">
           <h3 className="task-card__title">{task.title}</h3>
         </div>
@@ -1906,7 +1909,9 @@ export function TaskCard({
         <div className="task-card__desc-block">
           {/* T-e5b1 (owner 2026-08-15): READ-ONLY. The in-place description
               editor and its 編輯敘述 affordance were removed with the title's;
-              `update_task_description` (MCP + route) is untouched. */}
+              the capability is untouched. T-646a: the MCP tool is now
+              `update_task`, and POST /api/tasks/{id}/description stays on the
+              HTTP surface for this client. */}
           {view.description ? (
             <Markdown
               source={view.description}

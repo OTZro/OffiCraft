@@ -101,8 +101,12 @@ func (s *apiServer) writeTaskDescription(t *Task, actor, description string) (bo
 	return true, nil
 }
 
-// POST /api/tasks/{task_id}/description — correct one task's description (MCP
-// update_task_description).
+// POST /api/tasks/{task_id}/description — correct one task's description.
+//
+// 🔴 T-646a: this is no longer an MCP tool. The agent-facing tool is
+// update_task, which writes this same field through the same code
+// (updateTaskText). The route stays on the HTTP surface for the cockpit and any
+// existing client.
 //
 // PARTIAL update, shaped after update_task_manual: the body's only field is
 // description, omitting it is a legal no-op, and an unknown key is refused by

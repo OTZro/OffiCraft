@@ -109,8 +109,12 @@ func (s *apiServer) writeTaskTitle(t *Task, actor, title string) (bool, error) {
 	return true, nil
 }
 
-// POST /api/tasks/{task_id}/title — correct one task's title (MCP
-// update_task_title).
+// POST /api/tasks/{task_id}/title — correct one task's title.
+//
+// 🔴 T-646a: this is no longer an MCP tool. The agent-facing tool is
+// update_task, which writes this same field through the same code
+// (updateTaskText). The route stays on the HTTP surface for the cockpit and any
+// existing client.
 //
 // Guard order: 404 unknown task → 403 not the executor → 400 blank → write.
 // The blank check sits AFTER the permission gate on purpose: a caller who may
