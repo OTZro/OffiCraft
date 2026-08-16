@@ -12,11 +12,9 @@
 //     come from the disclosure control, not from the names;
 //   * the note itself is long enough that opening it is unmistakable in
 //     geometry (it is what the owner called 太長了).
-import { useLayoutEffect } from "react";
 import { I18nProvider } from "../../src/i18n";
 import { TaskCard } from "../../src/components/TaskCard";
 import { mkTask, mkStep, MIRA, NOOP, WORKERS } from "./taskFixtures";
-import { LIGHT_PACK } from "./ThemeContrastStory";
 
 const LONG_NOTE = [
   "第 4 步做到哪:handler 已完成,conformance 三份重生一致。",
@@ -46,26 +44,7 @@ const TASK = mkTask({
   ],
 });
 
-export function TaskCardNoteDisclosureStory({
-  theme = "dark",
-}: {
-  theme?: "dark" | "light";
-} = {}) {
-  // T-6630 ②: the disclosure row now paints a surface of its own, and that
-  // surface is mixed from `--color-overlay`, which a THEME PACK can re-value.
-  // So "can you see this row" is a per-theme question and the story has to be
-  // able to ask it. Applied the way the product applies a pack (--color-*
-  // custom properties on documentElement), reusing a real shipped palette
-  // rather than inventing one.
-  useLayoutEffect(() => {
-    const root = document.documentElement;
-    if (theme === "light") {
-      for (const [k, v] of Object.entries(LIGHT_PACK))
-        root.style.setProperty(k, v);
-    } else {
-      for (const k of Object.keys(LIGHT_PACK)) root.style.removeProperty(k);
-    }
-  }, [theme]);
+export function TaskCardNoteDisclosureStory() {
   return (
     <I18nProvider>
       <TaskCard

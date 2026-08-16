@@ -1637,13 +1637,13 @@ button.task-card__waiting--dep:focus-visible {
      of. The 備註 word in the label is kept for the same reason.
    min-height is a TOUCH target, not decoration: 44px is the interaction size
    this repo already uses for a thumb (tasks.css itself and office.css).
-   🔴 THE TWO MIX PERCENTAGES ARE LOAD-BEARING, not taste. An independent review
-   planted 8%/5% → 0.2%/0.2% — geometry, DOM and a11y untouched, the row simply
-   faded to nothing — and the guard of the day stayed 10/10 GREEN, because it
-   only asked whether a background was DECLARED. The owner's complaint is about
-   whether the row can be SEEN, so taskcard-note-toggle-hitarea now pins a
-   contrast floor in BOTH themes and these values were raised until they clear
-   it with margin (the shipped-before 5%/8% did not, in light). */
+   🔴 THE TINT AND THE BORDER ARE NOT TESTED, AND THAT IS A RULING, NOT A GAP.
+   Owner 2026-08-16:「不需要驗證什麼顏色好不好,這種都是負責人一開始確認沒問題
+   就好,我們不會去改這種東西」. A contrast guard across both themes was written
+   (an independent review had shown the row could be faded to 0.2% with every
+   test still green) and then removed on that ruling. So these two percentages
+   rest on his sign-off alone: changing them changes something nobody will
+   catch, and it is his call to make, not a tidy-up. */
 .task-step__note-toggle {
   display: flex;
   align-items: center;

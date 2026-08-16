@@ -19,10 +19,15 @@
 // colour. jsdom has no layout engine, so a jsdom version passes on a 0×0
 // control painted in nothing.
 //
-// WHY BOTH THEMES: the row's surface is mixed from `--color-overlay`, and a
-// theme pack re-values that. "Can you see this row" is therefore a per-theme
-// question — light is the WEAKER of the two here, measured, so testing dark
-// alone would guard the easy case.
+// 🔴 WHAT THIS FILE DELIBERATELY DOES NOT MEASURE: how the row LOOKS. There is
+// no contrast assertion and no per-theme run, by owner ruling (2026-08-16):
+// 「不需要驗證什麼顏色好不好,這種都是負責人一開始確認沒問題就好,我們不會去改
+// 這種東西」. An earlier revision of this file did pin a composited contrast
+// floor across both themes; it was removed on that ruling, not because it did
+// not work. Appearance is signed off once, by eye, by him — so if the row's
+// tint is ever changed, that is a change to take back to him, and no test here
+// will notice it. Everything below is about SIZE, REACH and SEMANTICS, which
+// are not matters of taste.
 //
 // WHY THE STORY IS MOUNTED BARE (no `.app__main` / `.tasks` ancestor chain,
 // unlike the two anchor stories): nothing here is a scroll or an available-width
@@ -43,18 +48,11 @@
 //        first version probed the control's OWN box and stayed GREEN under N1
 //        (measured), because every point inside a 66×16 button is still that
 //        button. A hit test is only a hit test relative to the area you claim.
-//   N2 · drop the row's own background + border (`border:none; background:none`)
-//        ⇒ 2 failed / 8 passed — "the row is visibly the note's own band" at
-//        both widths. Geometry survives, correctly: N2 is a claim about looking
-//        different, not about being big.
-//   N4 · tasks.css: fade the row's two mixes to nothing (20%/12% → 0.2%/0.2%),
-//        leaving geometry, DOM and a11y untouched
-//        ⇒ "the row is visibly the note's own band" FAILS in BOTH themes. This
-//        mutant is why that test measures a COMPOSITED CONTRAST RATIO and not
-//        the presence of a declaration: the first version of it asked only
-//        "is a background declared, and is it not the step's own value", and an
-//        independent review planted N4 against it for 10 passed / 0 failed. A
-//        row nobody can see is exactly the state the owner reported.
+//   (An N2 that dropped the row's background and border used to live here and
+//    is gone with the contrast test it reddened — see the ruling above. Nothing
+//    in this repo now watches how the row is painted; that is deliberate, not an
+//    oversight, and it is written down so the next reader does not "restore
+//    coverage" the owner declined.)
 //   N3 · TaskCard.tsx: render the control as a <div> instead of a <button>
 //        ⇒ 4 failed / 6 passed — "clicking the far edge opens the note and
 //        leaves the card open" and "did not cost the keyboard or a screen
@@ -65,29 +63,10 @@ import { test, expect } from "@playwright/experimental-ct-react";
 import { TaskCardNoteDisclosureStory } from "./stories/TaskCardNoteDisclosureStory";
 
 const WIDTHS = [1280, 390];
-const THEMES = ["dark", "light"] as const;
 const MIN_TOUCH = 44;
-// Regression floors, not a conformance claim. They sit just under what the
-// shipped values measure in the WEAKER theme (light: 1.24 background, 1.44
-// border; dark: 1.46 / 1.85), so the N4 "faded to nothing" mutant (≈1.00) dies
-// while ordinary palette work does not trip on noise.
-// 🔴 They are NOT WCAG 1.4.11 (which asks 3:1 of a control's visual boundary):
-// reaching that here would need an outline several times heavier than anything
-// else in this cockpit, and that is a look the owner has not been asked about.
-// Raising these is a design decision, not a test edit.
-const MIN_BG_CONTRAST = 1.18;
-const MIN_BORDER_CONTRAST = 1.35;
-
-const CASES = WIDTHS.flatMap((width) => THEMES.map((theme) => ({ width, theme })));
-
-async function mountExpanded(
-  mount: any,
-  page: any,
-  width: number,
-  theme: (typeof THEMES)[number] = "dark"
-) {
+async function mountExpanded(mount: any, page: any, width: number) {
   await page.setViewportSize({ width, height: 1000 });
-  const cmp = await mount(<TaskCardNoteDisclosureStory theme={theme} />);
+  const cmp = await mount(<TaskCardNoteDisclosureStory />);
   await cmp.locator(".task-card__head").first().click();
   await expect(cmp.locator(".task-card__workflow")).toBeVisible();
   return cmp;
@@ -274,100 +253,5 @@ for (const width of WIDTHS) {
       cmp.locator(".task-card__workflow"),
       "Space on the note row must not collapse the card either"
     ).toBeVisible();
-  });
-}
-
-// The colour half runs over widths × THEMES; the geometry, hit-test and
-// keyboard halves above run per width only, because none of them can change
-// with a palette — stating that rather than paying twice for the same answer.
-for (const c of CASES) {
-  test(`[${c.width} · ${c.theme}] the row is visibly the note's own band, not bare card surface`, async ({
-    mount,
-    page,
-  }) => {
-    // 「一眼看得出來」, made measurable. The earlier version of this test asked
-    // whether a background was DECLARED, and an independent review killed it
-    // with a row faded to 0.2% — declared, invisible, 10/10 green. So the
-    // question asked here is the one the owner actually asked: how far does
-    // this row stand out from the surface behind it.
-    await mountExpanded(mount, page, c.width, c.theme);
-    const paint = await page.evaluate(() => {
-      // Composite each element's background down its ancestor chain until an
-      // opaque one is reached — a `color-mix(… / 5%)` reports its own alpha,
-      // and comparing two translucent declarations tells you nothing about
-      // what the eye receives.
-      const parse = (v: string): [number, number, number, number] | null => {
-        let m = v.match(/^rgba?\(([^)]+)\)/);
-        if (m) {
-          const p = m[1].split(",").map((n) => parseFloat(n));
-          return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
-        }
-        // color(srgb r g b / a) — what color-mix() computes to
-        m = v.match(/^color\(srgb ([^)]+)\)/);
-        if (m) {
-          const [rgb, a] = m[1].split("/");
-          const p = rgb.trim().split(/\s+/).map((n) => parseFloat(n));
-          return [p[0] * 255, p[1] * 255, p[2] * 255, a === undefined ? 1 : parseFloat(a)];
-        }
-        return null;
-      };
-      const overlay = (
-        fg: [number, number, number, number],
-        bg: [number, number, number]
-      ): [number, number, number] => [
-        fg[0] * fg[3] + bg[0] * (1 - fg[3]),
-        fg[1] * fg[3] + bg[1] * (1 - fg[3]),
-        fg[2] * fg[3] + bg[2] * (1 - fg[3]),
-      ];
-      /** The colour actually painted where `el` sits, own background included. */
-      const composited = (el: HTMLElement, includeSelf: boolean): [number, number, number] => {
-        const stack: [number, number, number, number][] = [];
-        let n: HTMLElement | null = includeSelf ? el : el.parentElement;
-        while (n) {
-          const c = parse(getComputedStyle(n).backgroundColor);
-          if (c && c[3] > 0) {
-            stack.push(c);
-            if (c[3] === 1) break;
-          }
-          n = n.parentElement;
-        }
-        let out: [number, number, number] = [255, 255, 255];
-        for (let i = stack.length - 1; i >= 0; i--) out = overlay(stack[i], out);
-        return out;
-      };
-      const lum = (rgb: [number, number, number]) => {
-        const f = (v: number) => {
-          const c = v / 255;
-          return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-        };
-        return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]);
-      };
-      const contrast = (a: [number, number, number], b: [number, number, number]) => {
-        const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
-        return (hi + 0.05) / (lo + 0.05);
-      };
-      const step = document.querySelector("[data-step-id='s-note']") as HTMLElement;
-      const btn = step.querySelector("[data-testid='step-note-toggle']") as HTMLElement;
-      const behind = composited(btn, false);
-      const row = composited(btn, true);
-      const bc = parse(getComputedStyle(btn).borderTopColor);
-      const border = bc ? overlay(bc, row) : row;
-      return {
-        bgContrast: contrast(row, behind),
-        borderContrast: contrast(border, row),
-        borderWidth: parseFloat(getComputedStyle(btn).borderTopWidth),
-        row,
-        behind,
-      };
-    });
-    expect(
-      paint.bgContrast,
-      `the row's surface must stand out from what is behind it (row ${paint.row} vs ${paint.behind})`
-    ).toBeGreaterThanOrEqual(MIN_BG_CONTRAST);
-    expect(paint.borderWidth, "the row must have a boundary").toBeGreaterThan(0);
-    expect(
-      paint.borderContrast,
-      "…and that boundary must be visible against the row it encloses"
-    ).toBeGreaterThanOrEqual(MIN_BORDER_CONTRAST);
   });
 }
