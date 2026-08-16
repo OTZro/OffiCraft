@@ -1628,22 +1628,31 @@ button.task-card__waiting--dep:focus-visible {
   justify-content: flex-end;
   margin-top: 4px;
 }
+/* 🔴 NO FILL AND NO BORDER — owner-picked appearance (2026-08-17), chosen from
+   photographs of six real variants. The predecessor was a bordered, filled pill
+   and he called it 好醜: on a LIGHT theme its fill reads as a black block, which
+   is what he actually reported. Icon-only was rejected in the same message
+   (「只有圖真的有點怪」), so the word stays and the icon only flags it.
+   The 44px touch target now lives as PADDING around a 15px glyph and a 12px
+   word — big enough to press, not big enough to look like a panel. Do not put
+   a background back on the resting state; hover is the only painted state. */
 .task-step__note-open {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   min-height: 44px;
-  padding: 6px 12px;
-  border: 1px solid var(--color-border);
+  padding: 0 8px;
+  border: 0;
   border-radius: 8px;
-  background: var(--color-bg);
+  background: none;
   cursor: pointer;
   font-size: 12px;
   color: var(--color-text-muted);
 }
 .task-step__note-open:hover {
   color: var(--color-text);
-  background: var(--color-card);
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
 }
 
 /* ── step-level 等待外部 reason row (T-9ca5) ── shares the waiting purple

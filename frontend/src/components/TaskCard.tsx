@@ -945,7 +945,14 @@ export function TaskCard({
                 A <div> here would make "open the note" collapse the task.
                 🔴 And it keeps a 44px touch target even though it is small on
                 screen — a corner control sits in the middle of the card's own
-                hit area, which is the geometry that produced this ticket. */}
+                hit area, which is the geometry that produced this ticket.
+                🔴 APPEARANCE is owner-picked, not derived (2026-08-17, from
+                photographs of six real variants): icon + the upright word, NO
+                fill and NO border. The filled pill it replaces was the thing he
+                called 好醜 —— on his LIGHT theme that fill read as a black
+                block. Position stays bottom-right (「右下角好像比較好」), and
+                icon-only was rejected in the same breath (「只有圖真的有點怪」),
+                so the word carries the meaning and the icon only flags it. */}
             <button
               type="button"
               className="task-step__note-open"
@@ -956,7 +963,7 @@ export function TaskCard({
                 setNoteModal({ name: step.name, note: step.note ?? "" })
               }
             >
-              <FileTextIcon size={13} />
+              <FileTextIcon size={15} />
               <span>{t.tasks.stepNoteLabel}</span>
             </button>
           </div>
