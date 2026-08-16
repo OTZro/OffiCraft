@@ -757,14 +757,21 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": "update_task_description",
+    "mcp_tool": "update_task",
+    "method": "POST",
+    "path": "/api/tasks/{task_id}",
+    "requires": "agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
     "method": "POST",
     "path": "/api/tasks/{task_id}/description",
     "requires": "agent"
   },
   {
     "auth": "gated",
-    "mcp_tool": "update_task_title",
+    "mcp_tool": null,
     "method": "POST",
     "path": "/api/tasks/{task_id}/title",
     "requires": "agent"

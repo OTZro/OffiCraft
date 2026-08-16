@@ -175,8 +175,8 @@ export const en: Dict = {
     priorityLabel: "Priority",
     // T-e5b1 (owner 2026-08-15): the in-place title / description editors were
     // removed from the task UI, and their whole label family went with them.
-    // `update_task_title` / `update_task_description` are untouched — this is
-    // the screen's vocabulary, not the capability's.
+    // The capability is untouched — this is the screen's vocabulary, not the
+    // capability's. (T-646a folded both tools into `update_task`.)
     descEmpty: "No description yet",
     // Click-to-copy task-no chip (owner 2026-07-19).
     copyTaskNoLabel: "Copy task number",

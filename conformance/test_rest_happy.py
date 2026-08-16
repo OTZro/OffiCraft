@@ -1569,6 +1569,30 @@ HAPPY: dict[str, Happy] = {
         path=lambda ctx: f"/api/tasks/{_happy_reassigning_task(ctx)}/claim",
         check=lambda _c, r: _expect(r, lambda d: d["lock"] == ""),
     ),
+    "POST /api/tasks/{task_id}": Happy(
+        # T-646a: the executor corrects its own task's title AND description in
+        # ONE call — the case its two predecessors could not express, and the
+        # reason this route exists. Aimed at the same CLOSED task as the two
+        # rows below and for the same reason: a terminal task stays correctable,
+        # and a 200 echoing both new values on a card whose artifact set is
+        # frozen is the wire statement of that.
+        #
+        # The check reads BOTH fields back rather than only asserting 200 — a
+        # route that accepted the body and wrote nothing, or wrote one field and
+        # dropped the other, would pass a status check. It also re-asserts the
+        # task is still done and still closed, so a text write that quietly
+        # disturbed the terminal state could not pass either.
+        identity="agent",
+        path=lambda ctx: f"/api/tasks/{_happy_closed_task(ctx)}",
+        body={"title": "one call", "description": "both fields"},
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["title"] == "one call"
+            and d["description"] == "both fields"
+            and d["status"] == "done"
+            and d["closed_ts"] is not None,
+        ),
+    ),
     "POST /api/tasks/{task_id}/description": Happy(
         # T-e271: the executor corrects its own task's wording. Aimed at a
         # CLOSED (done) task deliberately — owner ruling 2 says a terminal task

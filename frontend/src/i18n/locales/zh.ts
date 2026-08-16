@@ -203,8 +203,8 @@ export const zh = {
     statusMenuLabel: "狀態操作",
     priorityLabel: "優先權",
     // T-e5b1(owner 2026-08-15):任務 UI 的標題／敘述就地編輯面已移除,整族
-    // 文案跟著走。`update_task_title` / `update_task_description` 未動 ——
-    // 移掉的是畫面的詞彙,不是能力。
+    // 文案跟著走。能力未動 —— 移掉的是畫面的詞彙,不是能力。
+    // (T-646a 已把兩支工具合併成 `update_task`。)
     descEmpty: "尚未填寫敘述",
     // 任務編號 chip 點擊複製(owner 2026-07-19 圈截圖):點 chip 把顯示的任務
     // 編號寫進剪貼簿,給一個短暫「已複製」回饋。copyTaskNo 是 chip 的 aria-label

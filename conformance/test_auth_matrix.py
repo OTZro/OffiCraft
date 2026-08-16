@@ -1110,6 +1110,25 @@ MATRIX: dict[str, Route] = {
         path=lambda ctx, _i: f"/api/tasks/{_matrix_task(ctx)}/plan",
         body={"steps": [{"name": "conf", "dod": "asserted"}]},
     ),
+    "POST /api/tasks/{task_id}": Route(
+        # T-646a, the one door onto a task's own text. Same executor-or-admin
+        # gate as every other task-driving write (agent B on agent A's task →
+        # 403), so the authz face is the status route's. Pointed at a CLOSED
+        # task on purpose, exactly as its two predecessors below: a terminal
+        # task's text stays editable (T-e271 ruling 2), and a 200 here is the
+        # only place the matrix can say so on the wire — aimed at an open task
+        # the row would pass whether or not the terminal gate existed.
+        #
+        # The body names BOTH fields, which is the case neither predecessor row
+        # could express and the reason this route exists.
+        requires="agent",
+        overrides={"agent_other": 403},
+        path=lambda ctx, _i: f"/api/tasks/{_matrix_closed_task(ctx)}",
+        body={
+            "title": "conf matrix corrected title",
+            "description": "conf matrix corrected description",
+        },
+    ),
     "POST /api/tasks/{task_id}/description": Route(
         # T-e271. Same executor-or-admin gate as every other task-driving write
         # (agent B on agent A's task → 403), so the authz face is the status

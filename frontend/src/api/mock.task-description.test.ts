@@ -163,6 +163,43 @@ describe("mockApi · updateTaskDescription", () => {
     expect(after[0].content.description).toBe("改壞的說法");
   });
 
+  // 🔴 T-646a (owner card rc-0fb94a25a8a8, option ①). Before that ticket this
+  // seam stored the description raw while its title twin trimmed — the drift the
+  // ticket removed. These three sit here, on the seam that changed, for the
+  // reason the ticket's own review made concrete on the Go side: with every trim
+  // assertion living somewhere else, the behaviour was silently revertible and
+  // an entire green suite said nothing about it.
+  it("stores the TRIMMED value, matching its title twin", async () => {
+    const id = await anyTaskId();
+    const after = await mockApi.updateTaskDescription(id, "  兩邊都有空白  ");
+    expect(after.description).toBe("兩邊都有空白");
+  });
+
+  it("an unchanged description is a no-op that versions nothing, trimming included", async () => {
+    // The server compares AFTER trimming, so re-sending a description with a
+    // stray trailing space is correctly seen as no change — without that, a
+    // no-op would spend one of the three retained slots saying nothing happened.
+    // This is the claim a read-back cannot see: both implementations leave the
+    // same text on the task, and only the revision list tells them apart.
+    const id = await anyTaskId();
+    await mockApi.updateTaskDescription(id, "原本的敘述");
+    const before = await documentRevisions(mockApi, "task_description", id);
+    await mockApi.updateTaskDescription(id, "  原本的敘述\n");
+    expect(await documentRevisions(mockApi, "task_description", id)).toEqual(before);
+  });
+
+  it("a description of only whitespace trims to \"\" and therefore CLEARS", async () => {
+    // Not a separate rule — the consequence of trimming a field whose empty
+    // value is a real write. Named so it is a decision on the record rather
+    // than something found in production. Its title twin REFUSES a
+    // whitespace-only value instead; that asymmetry is owner card
+    // rc-796541192519 ① and must not be "tidied up" on either seam.
+    const id = await anyTaskId();
+    await mockApi.updateTaskDescription(id, "先有內容");
+    const after = await mockApi.updateTaskDescription(id, "   \t ");
+    expect(after.description).toBe("");
+  });
+
   it("restoring a description touches nothing else on the task", async () => {
     // Server twin: the restore branch calls writeTaskDescription, a
     // single-column write. A whole-row put would drag back the status and

@@ -1667,10 +1667,23 @@ export interface Api {
    * server accepts them and the cockpit would be lying about what it can do.
    *
    * The write is wholesale within that one field: `description` replaces
-   * whatever was there and `""` clears it. Every change that actually alters
-   * the text retains the previous one as a `task_description` revision keyed on
-   * the task id, readable through listDocumentHistory. Returns the task after
-   * the change; the SSE `task` delta also fans.
+   * whatever was there and `""` clears it. The stored value is TRIMMED of
+   * surrounding whitespace, and the server compares AFTER trimming, so
+   * re-sending a description with a stray trailing space is correctly seen as
+   * no change. 🔴 That trim arrived in T-646a (owner card rc-0fb94a25a8a8,
+   * option ①) — before it this field was stored raw while its title twin
+   * trimmed, and closing that gap is what the ticket was for. Its CONSEQUENCE:
+   * a description of only whitespace trims to `""` and therefore CLEARS.
+   *
+   * 🔴 The agent-facing MCP tool for this is no longer `update_task_description`
+   * — since T-646a it is `update_task`, which writes title and description
+   * together through one seam. This ROUTE is unchanged and stays here for the
+   * cockpit; only the tool surface moved.
+   *
+   * Every change that actually alters the text retains the previous one as a
+   * `task_description` revision keyed on the task id, readable through
+   * listDocumentHistory. Returns the task after the change; the SSE `task`
+   * delta also fans.
    */
   updateTaskDescription(id: string, description: string): Promise<TaskView>;
   /**
@@ -1689,9 +1702,13 @@ export interface Api {
    * an explicit BLANK title (empty or whitespace-only) is a 400 `title must not
    * be blank`, NOT a clear. `create_task` refuses a blank title on the same
    * terms, and an edit door looser than the create door would let a caller
-   * reach a task-list row with nothing in it. The stored value is TRIMMED,
-   * matching create — and the server compares after trimming, so re-sending a
-   * title with a stray trailing space is correctly seen as no change.
+   * reach a task-list row with nothing in it. (Trimming used to be a second
+   * difference; since T-646a both fields are trimmed, so the blank rule is the
+   * only one left.)
+   *
+   * 🔴 The agent-facing MCP tool for this is no longer `update_task_title` —
+   * since T-646a it is `update_task`. This ROUTE is unchanged and stays here for
+   * the cockpit; only the tool surface moved.
    *
    * There is NO length cap, on this door or on create. Every change that
    * actually alters the text retains the previous one as a `task_title`

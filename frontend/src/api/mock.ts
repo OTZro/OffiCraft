@@ -3186,13 +3186,23 @@ export const mockApi: Api = {
     //   * an unchanged text is a no-op: nothing versioned, no `task` delta.
     //     The server compares before writing for the same reason.
     //
+    //   * the value is TRIMMED before it is stored, and the unchanged
+    //     comparison runs AFTER the trim — so re-sending a description with a
+    //     stray trailing space is no change: nothing versioned, no `task`
+    //     delta. 🔴 T-646a (owner card rc-0fb94a25a8a8, option ①) added this;
+    //     before it, this field was stored raw and the title's twin trimmed,
+    //     which is the drift that ticket existed to remove. A CONSEQUENCE worth
+    //     knowing before you "simplify" it: a description of only whitespace
+    //     trims to "" and therefore CLEARS.
+    //
     // The absent-vs-empty distinction lives one layer up (the wire's optional
     // `description`); this seam's argument is always a concrete string, so ""
     // means clear, exactly as the http twin sends it.
     const t = findTask(id);
-    if (t.description === description) return t;
+    const trimmed = description.trim();
+    if (t.description === trimmed) return t;
     recordDocumentHistory("task_description", id);
-    t.description = description;
+    t.description = trimmed;
     t.updatedTs = Date.now() / 1000;
     emitTopic("task");
     return t;
