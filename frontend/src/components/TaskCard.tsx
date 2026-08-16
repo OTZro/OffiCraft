@@ -83,6 +83,7 @@ import {
 import { ComposerAttachmentPreview } from "./ComposerAttachmentPreview";
 import { ConfirmModal } from "./ConfirmModal";
 import { Markdown } from "./Markdown";
+import { MarkdownPreviewOverlay } from "./MarkdownPreviewOverlay";
 import { TaskArtifactsBadge } from "./TaskArtifactsPopover";
 import { TaskReassignDialog } from "./TaskReassignDialog";
 import { TaskReplyCard } from "./TaskReplyCard";
@@ -93,6 +94,7 @@ import {
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  FileTextIcon,
   ClockIcon,
   ExternalLinkIcon,
   GearIcon,
@@ -622,40 +624,31 @@ export function TaskCard({
   // priority chip on the badge row drops a select-style menu right under it —
   // saved on pick, no card expand. Closed on pick / outside click.
   const [prioOpen, setPrioOpen] = useState(false);
-  // 步驟備註 disclosure (T-e5b1): which steps have their note OPEN. Default
-  // closed for every step; the map is per-card and dies with the card — the
-  // owner asked for the simplest thing, not a remembered preference.
-  const [openNotes, setOpenNotes] = useState<Record<string, boolean>>({});
-  const noteOpen = (stepId: string) => openNotes[stepId] === true;
-  // 🔴 NO SCROLL CORRECTION HERE, BY OWNER RULING (2026-08-15, T-6630):
-  // 「我要整個畫面不移動,只是單純往下展開,而收合時,就是向上收合,整個畫面不能
-  // 移動」. T-4e39 shipped a keepAnchored() correction on OPEN that re-scrolled
-  // `.tasks` so the clicked row kept its y; that is exactly the screen movement
-  // the owner does not want, so it was removed rather than extended to collapse.
-  // A note now grows downward out of its toggle and collapses back up into it,
-  // and the scrollport is left alone in both directions.
+  // 步驟備註 (T-e5b1 → T-6630 ④): the note is no longer disclosed INSIDE the
+  // step. One step's note at a time is opened in the full-view overlay, so the
+  // state is the note being read, not a per-step open/closed map.
+  const [noteModal, setNoteModal] = useState<{
+    name: string;
+    note: string;
+  } | null>(null);
+  // 🔴 NO SCROLL CORRECTION FOR THE NOTE, BY OWNER RULING (2026-08-15, T-6630
+  // ①):「我要整個畫面不移動,只是單純往下展開,而收合時,就是向上收合,整個畫面
+  // 不能移動」. T-4e39 had shipped a keepAnchored() correction that re-scrolled
+  // `.tasks` when a note opened; re-scrolling IS the screen moving, so it was
+  // deleted rather than extended.
   //
-  // WHAT THAT COSTS, in plain words, because the owner accepted it and the next
-  // reader will otherwise file it as a bug: T-4e39's correction also REVEALED as
-  // much of a newly-opened note as would fit. Without it, opening a long note
-  // leaves its body running off the bottom of the screen and you scroll down
-  // yourself. That is the trade the owner chose when he asked for a screen that
-  // does not move. If he reports "I open a note and cannot see it", that is this
-  // trade talking — take it back to him, do not quietly re-add the correction.
+  // Since ④ the note opens in an OVERLAY, so nothing in the column reflows at
+  // all and the rule is satisfied structurally rather than by restraint. That
+  // is not licence to re-add anything: opening or closing the note reader must
+  // still leave `.tasks` exactly where it was, and
+  // visual-guards/taskcard-note-anchor.ct.spec.tsx measures precisely that.
   //
-  // Do not re-add one. The guard that would redden is
-  // visual-guards/taskcard-note-anchor.ct.spec.tsx, which measures `.tasks`'
-  // scrollTop across an open and the viewport y of a row BELOW a collapse.
-  //
-  // ⚠️ "NOT HERE" IS THE WHOLE STATEMENT — this card DOES carry a scroll
-  // correction, on the WHOLE-CARD collapse (③, above), which the owner asked
-  // for in the same ticket. The two are not a contradiction and neither is a
-  // precedent for the other: a note opens inside a card you are already looking
-  // at, while collapsing the card takes away the thing you were looking at.
-  // Copying either rule onto the other control reddens that control's guard.
-  const toggleNote = (stepId: string) => {
-    setOpenNotes((m) => ({ ...m, [stepId]: !m[stepId] }));
-  };
+  // ⚠️ "NOT FOR THE NOTE" IS THE WHOLE STATEMENT — this card DOES carry a
+  // scroll correction, on the WHOLE-CARD collapse (③, above), which the owner
+  // asked for in the same ticket. The two are not a contradiction and neither is
+  // a precedent for the other: reading a note takes nothing away, while
+  // collapsing the card removes the thing you were looking at. Copying either
+  // rule onto the other control reddens that control's guard.
   const prioRef = useRef<HTMLDivElement>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -935,76 +928,37 @@ export function TaskCard({
             free text → <Markdown>, same treatment as the DoD and the waiting
             reason. */}
         {step.note && (
-          <div
-            className={`task-step__notewrap${
-              noteOpen(step.id) ? " task-step__notewrap--open" : ""
-            }`}
-          >
-            {/* T-e5b1 (owner 2026-08-15「任務備注我希望預設不顯示，多一個展開備
-                注的選項決定要不要開該step的備注，不然太長了」): the note text is
-                COLLAPSED by default and this button opens it, per step.
-                🔴 The button renders ONLY on a step that HAS a note, and it
-                carries the 備註 word — so a collapsed step still tells the
-                owner whether anyone wrote anything, which is the whole reason
-                he reads this timeline. A step without a note renders nothing
-                here, exactly as before.
-                State is per-card and in-memory on purpose (owner scope): no
-                cross-page memory of which notes were open.
-                🔴 T-6630 ②: the control is a FULL-WIDTH ROW, not the 66×16px
-                inline button it started as. Owner 2026-08-16:「按鈕太小,應該
-                要是整列,而不是一個小按鈕,會讓人誤以為是收合備注,實際收合了整
-                個任務」— and the misfire is structural, not clumsiness: the
-                whole <article> carries role=button, so every pixel AROUND this
-                control collapses the entire card. A wider control is therefore
-                also a smaller mistake zone. Shape follows the row that already
-                exists one level down (.task-reply-card__collapsed-row).
-                The panel around it is the NOTEWRAP, not this row — owner, first
-                acceptance round:「展開備注的時候,備註不是應該要在匡裡面嗎?」.
-                So this is the panel's header and the note is its body, which is
-                why the wrap carries the `--open` modifier below.
-                🔴 It must stay a <button> (or at least [role=button]): that is
-                the ONLY reason onCardToggleClick's closest() filter lets the
-                click through. Demote it to a <div> and clicking the note row
-                collapses the whole card — the exact bug, made worse. */}
+          <div className="task-step__note-actions">
+            {/* 🔴 T-6630 ④ (owner 2026-08-16, second acceptance round):「我覺得
+                備註不是很常按,可以放在 step 的右下角,點開再跳出另一個 Modal 打
+                開嗎?像是我們開 .md 檔那種方式,只是沒有下載或分享連結的功能」—
+                he circled the step's bottom-right corner in a screenshot.
+                The reader is a NOTE, not a disclosure any more: the entry is a
+                small corner control and the text opens in the same full-view
+                overlay the cockpit already uses for .md attachments. Feeding it
+                `source` (rather than a url) is exactly what drops the download
+                and share affordances — that is the overlay's own contract for
+                text a caller already holds, not something stripped here.
+                🔴 It is a real <button> for the same reason its predecessor
+                was: the whole card is role=button, and only interactive
+                elements are let through onCardToggleClick's closest() filter.
+                A <div> here would make "open the note" collapse the task.
+                🔴 And it keeps a 44px touch target even though it is small on
+                screen — a corner control sits in the middle of the card's own
+                hit area, which is the geometry that produced this ticket. */}
             <button
               type="button"
-              className="task-step__note-toggle"
-              data-testid="step-note-toggle"
-              aria-expanded={noteOpen(step.id)}
-              /* Only while the note is really in the DOM: a collapsed note
-                 renders nothing, and an aria-controls pointing at an id that
-                 does not exist announces a relationship that is not there. */
-              aria-controls={
-                noteOpen(step.id) ? `step-note-${step.id}` : undefined
+              className="task-step__note-open"
+              data-testid="step-note-open"
+              aria-label={t.tasks.stepNoteExpand}
+              title={t.tasks.stepNoteExpand}
+              onClick={() =>
+                setNoteModal({ name: step.name, note: step.note ?? "" })
               }
-              onClick={() => toggleNote(step.id)}
             >
-              {noteOpen(step.id) ? (
-                <ChevronDownIcon size={14} />
-              ) : (
-                <ChevronRightIcon size={14} />
-              )}
-              <span>
-                {noteOpen(step.id)
-                  ? t.tasks.stepNoteCollapse
-                  : t.tasks.stepNoteExpand}
-              </span>
+              <FileTextIcon size={13} />
+              <span>{t.tasks.stepNoteLabel}</span>
             </button>
-            {noteOpen(step.id) && (
-              <div
-                className="task-step__note"
-                data-testid="step-note"
-                id={`step-note-${step.id}`}
-              >
-                <span className="task-step__note-label">
-                  {t.tasks.stepNoteLabel}
-                </span>
-                <Markdown
-                  source={step.note}
-                  className="task-step__note-md doc-md"
-                />
-              </div>
-            )}
           </div>
         )}
         {/* 等待外部 reason (T-9ca5): the step's own one-line reason. Since
@@ -2039,6 +1993,20 @@ export function TaskCard({
           danger
           onCancel={() => setConfirmOpen(false)}
           onConfirm={() => void doTerminate()}
+        />
+      )}
+
+      {/* 步驟備註的閱讀面 (T-6630 ④). The overlay portals to document.body, so
+          its clicks never reach onCardToggleClick and reading a note cannot
+          collapse the card. `source` (not `url`) is what makes it a reader with
+          no download and no share link — the owner asked for「沒有下載或分享連
+          結的功能」and that is this overlay's existing contract for text the
+          caller already holds. */}
+      {noteModal && (
+        <MarkdownPreviewOverlay
+          title={`${t.tasks.stepNoteLabel} · ${noteModal.name}`}
+          source={noteModal.note}
+          onClose={() => setNoteModal(null)}
         />
       )}
 

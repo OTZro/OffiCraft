@@ -1611,109 +1611,39 @@ button.task-card__waiting--dep:focus-visible {
    alarm. Always-stack like the waiting row — the label takes line 1, the
    markdown note line 2 — because a handover note is routinely several lines
    and wrapping it around a leading label reads badly. */
-/* ── the note's disclosure button (T-e5b1) ── the note is COLLAPSED by
-   default (owner: 「不然太長了」), so this row is what a reader sees on a step
-   that HAS one. It is deliberately a visible, labelled control rather than a
-   bare chevron: while every note is closed, the presence of this button is the
-   ONLY thing separating a step someone wrote a note on from one nobody did.
-   Same atoms as .mp-lastop__toggle (member-detail.css) so the cockpit keeps
-   one disclosure vocabulary. */
-/* 🔴 T-6630 (owner 2026-08-16, 驗收第一輪):「展開備注的時候,備註不是應該要在
-   匡裡面嗎?」— and he is right. The box was drawn around the disclosure ROW
-   only, so an opened note fell OUTSIDE it and the two read as unrelated things.
-   The panel is therefore the WRAP: the row is its header, the note its body,
-   one rule between them. The row keeps every property ② bought (full width,
-   44px, a real <button>) — only the border moved outward.
-   `align-items: stretch` (not flex-start) so the row spans the panel; a column
-   flex with flex-start sizes children to their own content, which is also the
-   trap css-layout-traps.md warns about. */
-.task-step__notewrap {
+/* ── the note's entry point (T-e5b1 → T-6630 ④) ── the note is READ IN AN
+   OVERLAY now (owner 2026-08-16:「備註不是很常按,可以放在 step 的右下角,點開
+   再跳出另一個 Modal」), so what lives in the step is a small corner control,
+   not a panel. It still renders ONLY on a step that HAS a note and still
+   carries the 備註 word: while every note is closed, the presence of this
+   control is the ONLY thing separating a step someone wrote a note on from one
+   nobody did — the reason the owner reads this timeline at all.
+   🔴 min-height is a 44px TOUCH TARGET even though the control reads small.
+   A corner control sits surrounded by the card's own hit area (the whole
+   .task-card is role=button), and that geometry is what produced this ticket:
+   miss it and you collapse the entire task. Small on screen, not small to the
+   thumb. */
+.task-step__note-actions {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  min-width: 0;
-  margin-top: 6px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.task-step__note-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 6px 12px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-bg);
-  overflow: hidden;
-}
-/* 🔴 T-6630 ②: this is a full-width ROW with a surface of its own, not a bare
-   66×16px inline button. Two things force that shape and both are about the
-   card AROUND it, not about this control's own looks:
-   · the whole .task-card is role=button, so every pixel this row does NOT
-     cover is a pixel that collapses the ENTIRE task. Widening the hit area
-     literally shrinks the mistake zone (owner 2026-08-16:「會讓人誤以為是收
-     合備注,實際收合了整個任務」);
-   · the two controls share one chevron vocabulary, so the note's control needs
-     a boundary a reader can see — the tinted, bordered band says "this strip
-     is the note's", which the card's own top-right chevron has no equivalent
-     of. The 備註 word in the label is kept for the same reason.
-   min-height is a TOUCH target, not decoration: 44px is the interaction size
-   this repo already uses for a thumb (tasks.css itself and office.css).
-   🔴 THE PANEL'S COLOURS ARE THE THEME'S, AND THEY ARE NOT TESTED.
-   Owner 2026-08-16:「不需要驗證什麼顏色好不好,這種都是負責人一開始確認沒問題
-   就好」— a contrast guard existed and was removed on that ruling. And when he
-   saw the first version he asked why the colours were MIXED rather than named:
-   「我覺得我現在淺色卻還是灰色很奇怪」. He was right — a `color-mix()` of the
-   overlay token reads grey on a light palette, because a light pack's overlay
-   is dark. The panel now takes `--color-bg` and `--color-border` straight, so a
-   theme pack that defines those two gets a panel in its own colours with no
-   work. Nothing tests this: changing it is his call, not a tidy-up. */
-.task-step__note-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  min-height: 44px;
-  padding: 8px 10px;
-  border: none;
-  background: none;
   cursor: pointer;
   font-size: 12px;
-  text-align: left;
   color: var(--color-text-muted);
 }
-.task-step__note-toggle:hover {
+.task-step__note-open:hover {
   color: var(--color-text);
   background: var(--color-card);
-}
-/* Open: the header is separated from the body it opened. The modifier is set in
-   TSX rather than using `:has()` — the state is already known where the note is
-   rendered, and a class keeps the selector readable in every engine. */
-.task-step__notewrap--open .task-step__note-toggle {
-  border-bottom: 1px solid var(--color-border);
-}
-.task-step__notewrap .task-step__note {
-  width: 100%;
-}
-.task-step__note {
-  display: flex;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 10px;
-  color: var(--color-text-muted);
-  font-size: 12px;
-}
-.task-step__note-label {
-  flex: none;
-  font-weight: 700;
-  color: color-mix(in srgb, var(--color-text-muted) 80%, transparent);
-}
-.task-step__note-md.doc-md {
-  flex-basis: 100%;
-  min-width: 0;
-  padding: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  /* T-d451: long-token break inherited from the `.doc-md` base (settings.css). */
-}
-.task-step__note-md.doc-md > :first-child {
-  margin-top: 0;
-}
-.task-step__note-md.doc-md > :last-child {
-  margin-bottom: 0;
 }
 
 /* ── step-level 等待外部 reason row (T-9ca5) ── shares the waiting purple
