@@ -451,9 +451,23 @@
       "seam_reason": "hop to the presence POST declared by ocagent-presence"
     },
     {
+      "id": "ocagent-hook-8",
+      "source": "cli/ocagent/listen_hooks.go",
+      "callsite": "fetchOffboard: func() (string, bool) { return fetchOffboardText(client, cfg) },",
+      "kind": "seam",
+      "seam_reason": "builds the offboard-document reader; the read it closes over is ocagent-hook-9"
+    },
+    {
+      "id": "ocagent-hook-9",
+      "source": "cli/ocagent/listen_hooks.go",
+      "callsite": "status, body := getJSON(client, cfg, offboardPath, true)",
+      "kind": "skip",
+      "skip_reason": "GET through the shared ocagent getter (ocagent-getjson-seam): reads the 下線程序 document at the recycle edge — no request body"
+    },
+    {
       "id": "ocagent-hook-7",
       "source": "cli/ocagent/listen_hooks.go",
-      "callsite": "fetchMember: func() (map[string]any, bool) { return fetchMemberRow(client, cfg) },",
+      "callsite": "fetchMember:   func() (map[string]any, bool) { return fetchMemberRow(client, cfg) },",
       "kind": "skip",
       "skip_reason": "GET: reads this member's row back through getJSON — no request body"
     },
