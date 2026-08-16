@@ -14,6 +14,10 @@
 // The 1440px card-to-timestamp gap assertion must turn red; restoring the fix
 // turns it green. The container overflow assertion measures `.chat__messages`
 // itself, not the document surface hidden by its `overflow-x` clamp.
+// Observed runs: normal targeted CT was 3/3 green; the desktop mutant made the
+// wide assertion red (gap 304.0625) while phone stayed green. A separate mutant
+// removing both <=720px `width: 100%` overrides left both timestamp tests green;
+// `max-width: 100%` clamps `max-content` back into the phone container.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { ChatCardTimestampStory } from "./stories/ChatCardTimestampStory";
 
