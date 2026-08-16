@@ -276,18 +276,20 @@ func decideHandoverNotice(
 		text = offboard()
 	}
 	return &contextHighSignal{
-		Topic:  contextHighTopic,
-		To:     agentID,
-		Level:  levelWarn,
-		Pct:    jsonFloat(*pct),
-		Reason: offboardNotice(where, false, text),
+		Topic: contextHighTopic,
+		To:    agentID,
+		Level: levelWarn,
+		Pct:   jsonFloat(*pct),
+		// A context-pressure notice always goes to a member that is still wanted
+		// online, so its sequence ends in a re-start.
+		Reason: offboardNotice(where, offboardCloserRestartSelf, false, text),
 	}
 }
 
 // offboardNotice composes EVERY offboard notice this server sends, in the one
 // sentence the owner approved (2026-08-16, card rc-ec5859a4c384):
 //
-//	<where> — offboard now: work the sequence below, then call restart_self yourself.[ You have 120 seconds left.]
+//	<where> — offboard now: work the sequence below, then call <closer> yourself.[ You have 120 seconds left.]
 //	<the 下線程序 document, verbatim>
 //
 // Three things about it are deliberate and must survive edits:
@@ -296,19 +298,36 @@ func decideHandoverNotice(
 //     notices down to this: 「不需要太多不同描述吧, 就請他按照步驟做好下線, 頂多
 //     告訴他剩下 120 秒」. What tells the situations apart is the FIELDS — the
 //     numbers in `where`, and whether the 120-second clause is there — not tone.
-//   - "work the sequence below, THEN call restart_self yourself" blocks both
+//   - "work the sequence below, THEN call <closer> yourself" blocks both
 //     failure directions at once. Without the second half an agent idles until
 //     the server cuts it off (dead time the owner explicitly does not want);
 //     without the first, it stops mid-work — a predecessor read the old wording
 //     as "you are done" and announced its own end of life at 40%.
+//   - 🔴 <closer> is the tool that ACTUALLY works for this member, and the two
+//     arms differ. A handover (desired online) ends in restart_self. A 下線
+//     does NOT: restart_self refuses a member that is no longer wanted online,
+//     by design — it is a RE-start. Naming it there told the agent to do
+//     something that could only answer 409, and on that arm nothing collects it
+//     on a clock, so it would sit refused until the owner pressed force-stop.
+//     Its sequence ends at report_stopped, which is also step 6 of the document
+//     it is being shown.
 //   - The steps are the DOCUMENT's, carried verbatim, never a summary written
 //     here. A summary in code is a second source of truth that the owner cannot
 //     edit and nothing keeps in step (T-c382 shipped exactly that mistake).
 //
 // An empty document degrades to the sentence alone: losing the checklist is
 // survivable, losing the notice is not.
-func offboardNotice(where string, finalCall bool, offboardText string) string {
-	reason := where + " — offboard now: work the sequence below, then call restart_self yourself."
+// The two tools a session can end its own sequence with. Which one is TRUE for
+// a given member is decided by offboardCloserFor — naming the wrong one asks it
+// to make a call that can only be refused.
+const (
+	offboardCloserRestartSelf   = "restart_self"
+	offboardCloserReportStopped = "report_stopped"
+)
+
+func offboardNotice(where, closer string, finalCall bool, offboardText string) string {
+	reason := where + " — offboard now: work the sequence below, then call " +
+		closer + " yourself."
 	if finalCall {
 		reason += " You have 120 seconds left."
 	}

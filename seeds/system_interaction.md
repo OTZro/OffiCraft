@@ -317,7 +317,7 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
    - **正職成員**（有角色）→ 你角色的**學習筆記**：MCP `get_lessons` → `replace_lessons`。
    - **外包工作者**（沒有角色）→ 你那張任務所屬類型的**任務手冊學習經驗**：MCP `get_task_manual` → `write_task_learnings`。🔴 **不要照正職那句去打 lessons**：外包的名冊列 `role_key` 是空的，而 lessons 的寫入判定是「只能寫自己角色的」，所以那一呼**必定 403**——你會把 120 秒寬限花在一個註定失敗的呼叫上，而那一輪的學習經驗就這樣消失；`get_lessons` 又是不設限的讀，你還會先讀到一份**不屬於你**的長期記憶當基底。
 4. **post chat 給「自己」一則交接 baton**：用 MCP `post_chat` 送到**你自己的 member id**，講清現況／進行中的事／blocker——這是給下一個你的第一手交接。
-5. **MCP `report_stopped()`** — 報完就停手。之後 runtime 自動收攤、server 原地重生一個新的你。
+5. **MCP `report_stopped()`** — 報完就停手，之後 runtime 自動收攤。**會不會重生看「還要不要你在線上」**：換手會原地重生一個新的你；**owner 按了下線就不會**。
 
 **接班起手式**（你剛醒來，很可能就是上一個你換手後的新你）：先讀自己 chat 裡最新的交接 baton（查與**自己 id** 的對話）＋ lessons ＋ 你手上的 tasks，接上了再動工。**接手一張已經規劃過的任務時，動手前，確認你讀過它那本手冊的學習經驗（`get_task_manual`）。**waking 與 model 上報的精確規則以文末該 runtime 的 Boot Sequence 為準；**不要猜 model id**。`report_waking` 的 `model` 欄位是**你實際在跑的模型**：server 會把它存成一個獨立欄位、在成員詳情面板顯示（沒有人回報過就顯示空白），但它**不會**改寫 owner 設定的模型——設定值仍是啟動時採用的那一個，兩者分開存。
 

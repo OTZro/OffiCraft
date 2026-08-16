@@ -155,6 +155,19 @@ const (
 	offboardKindFinal = "final"
 )
 
+// offboardCloserFor names the tool that ACTUALLY ends this member's sequence.
+// A member still wanted online is being handed over and re-starts itself; one
+// the owner has taken down is not coming back, and restart_self refuses it by
+// design (it is a RE-start). Telling it otherwise would be an instruction that
+// can only answer 409 — on an arm where nothing collects it on a clock, so it
+// would sit there refused until someone pressed force-stop.
+func offboardCloserFor(m Member) string {
+	if m.DesiredState == DesiredStateOffline {
+		return offboardCloserReportStopped
+	}
+	return offboardCloserRestartSelf
+}
+
 // offboardNoticeFor composes the sentence for a member that is being wound
 // down: the ONE approved sentence, plus the 120-second clause when this is the
 // final call. It reads the session's own gauge so the agent is told where it
@@ -198,7 +211,8 @@ func (s *apiServer) offboardNoticeFor(m Member, kind string) string {
 		where = fmt.Sprintf("context %s%% (your limits: %d%% / %d%%)",
 			pct, cfg.NoticePct, cfg.HandoverPct)
 	}
-	return offboardNotice(where, kind == offboardKindFinal, s.offboardText())
+	return offboardNotice(where, offboardCloserFor(m), kind == offboardKindFinal,
+		s.offboardText())
 }
 
 // resolveAvatarMember admits active staff and outsource rows but rejects

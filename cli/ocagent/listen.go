@@ -96,8 +96,16 @@ const (
 	// its own tmux session). Any other outcome — a successful stream, a network
 	// fault, a 5xx, a brief server outage — RESETS the run, so a flapping or
 	// briefly-down server can never mass-kill healthy agents; only a standing
-	// refusal (zombie, stale dual-SSE twin) crosses both bounds. The grace
-	// mirrors the server's 120 s stop_grace.
+	// refusal (zombie, stale dual-SSE twin) crosses both bounds.
+	//
+	// The grace was sized to mirror the server's 120 s stop_grace. 🔴 That is no
+	// longer what it mirrors: 下線 runs no clock at all since T-a9d6, and the
+	// server's stop gate now lets a session that is still WORKING its offboard
+	// sequence reconnect (api_infra.go) — precisely so this ladder cannot take
+	// down an agent mid-hand-off, which is what it would otherwise do on a
+	// station upgrade or a network blip. The number stays as a bound on how long
+	// a genuine standing refusal is tolerated; it is no longer derived from
+	// anything.
 	sseRefusalMin   = 4
 	sseRefusalGrace = 120 * time.Second
 

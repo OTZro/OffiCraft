@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,7 +30,7 @@ func TestOffboardNotice_TheApprovedSentence(t *testing.T) {
 	const where = "context 62% (your limits: 60% / 75%)"
 	doc := "1. 報開始收尾\n2. 給自己留交接"
 
-	soft := offboardNotice(where, false, doc)
+	soft := offboardNotice(where, offboardCloserRestartSelf, false, doc)
 	if !strings.Contains(soft, where+" — offboard now: work the sequence below, "+
 		"then call restart_self yourself.") {
 		t.Fatalf("the soft notice must carry the approved sentence verbatim:\n%s", soft)
@@ -42,7 +43,7 @@ func TestOffboardNotice_TheApprovedSentence(t *testing.T) {
 		t.Fatalf("the steps must be the DOCUMENT's, carried verbatim:\n%s", soft)
 	}
 
-	final := offboardNotice(where, true, doc)
+	final := offboardNotice(where, offboardCloserRestartSelf, true, doc)
 	if !strings.Contains(final, "then call restart_self yourself. You have 120 seconds left.") {
 		t.Fatalf("the final call must say how long is left, right after the same "+
 			"sentence:\n%s", final)
@@ -50,7 +51,7 @@ func TestOffboardNotice_TheApprovedSentence(t *testing.T) {
 
 	// An empty document degrades to the sentence alone: losing the checklist is
 	// survivable, losing the notice is not.
-	bare := offboardNotice(where, false, "")
+	bare := offboardNotice(where, offboardCloserRestartSelf, false, "")
 	if !strings.Contains(bare, "offboard now") || strings.Contains(bare, "\n") {
 		t.Fatalf("an empty document must leave the sentence intact and alone:\n%q", bare)
 	}
@@ -119,8 +120,21 @@ func TestOffboardDeltaPayload_下線NeverCarriesACountdown(t *testing.T) {
 	if strings.Contains(notice, "120 seconds") {
 		t.Fatalf("nothing collects 下線 on a clock, so nothing may claim one:\n%s", notice)
 	}
-	if !strings.Contains(notice, "then call restart_self yourself") {
-		t.Fatalf("the approved sentence must survive:\n%s", notice)
+	// 🔴 …and it must name the tool that actually WORKS here. restart_self
+	// refuses a member the owner has taken down (it is a RE-start), so naming it
+	// on this arm would be an instruction that can only answer 409 — and with no
+	// clock collecting 下線, the session would sit refused until someone pressed
+	// force-stop. Its sequence ends at report_stopped, which is also step 6 of
+	// the document it is being shown.
+	if !strings.Contains(notice, "then call report_stopped yourself") {
+		t.Fatalf("the approved sentence must survive, naming the tool that works "+
+			"on this arm:\n%s", notice)
+	}
+	// …in the SENTENCE. The document carried below it is the owner's and
+	// mentions restart_self in its own right (it covers every offboard path),
+	// so the assertion is on the first line only.
+	if sentence, _, _ := strings.Cut(notice, "\n"); strings.Contains(sentence, "restart_self") {
+		t.Fatalf("下線 must not be told to re-start itself:\n%s", sentence)
 	}
 }
 
@@ -168,6 +182,87 @@ func TestRestartSelf_WorksWhileTheAgentIsClosingOut(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("重新聚焦 must still reach an agent that is mid-hand-off: %d %s",
 			rec.Code, rec.Body.String())
+	}
+}
+
+// codex is judged in ROUNDS, and the notice has to say WHERE IT IS, not just
+// where the limits are. The final call substitutes the threshold round because
+// that is where the session has arrived; the soft notice must report the round
+// the gauge actually shows.
+//
+// 🔴 Measured: deleting that substitution left the whole ocserverd suite green
+// (259s) — the codex arm of the composer had no test at all.
+func TestOffboardNoticeFor_CodexReportsWhereItActuallyIs(t *testing.T) {
+	s := newReconcileTestServer(t)
+	m := testAgent("m-codex")
+	m.Runtime = RuntimeCodex
+	m.RefocusSince = nowSecs()
+	m.RefocusOp = refocusOpRefocus
+	putTestMember(t, s, m)
+	s.gauge.Set("m-codex", map[string]any{"compaction_count": 3.0})
+
+	final := s.codexCompactionThresholdSetting()
+	soft := s.offboardNoticeFor(m, offboardKindSoft)
+	if !strings.Contains(soft, "compaction round 3 ") {
+		t.Fatalf("the soft notice must report the round the session is ON:\n%s", soft)
+	}
+	hard := s.offboardNoticeFor(m, offboardKindFinal)
+	if !strings.Contains(hard, fmt.Sprintf("compaction round %d ", final)) {
+		t.Fatalf("the final call must report the round it has ARRIVED at (%d):\n%s",
+			final, hard)
+	}
+	// Both must still carry the limits, which is how the agent tells the two apart.
+	for _, n := range []string{soft, hard} {
+		if !strings.Contains(n, fmt.Sprintf("round %d)", final)) {
+			t.Fatalf("every codex notice must carry its limits:\n%s", n)
+		}
+	}
+}
+
+// The deadline the cockpit renders, and the clock that actually collects the
+// session, must be the SAME number. They were not: refocus_deadline was computed
+// from RecycleGrace while an owner-pressed 重新聚焦 is collected at the soft
+// window PLUS that — the owner watched a time pass with nothing happening. The
+// fix was one call; nothing asserted it, so this pins every arm.
+//
+// 🔴 Measured before writing this: collapsing recycleGraceFor to
+// `return cfg.RecycleGrace` — i.e. reintroducing the exact bug — left the whole
+// ocserverd suite green (339s).
+func TestRecycleGraceFor_MatchesTheClockThatActuallyCollects(t *testing.T) {
+	cfg := defaultReconcileConfig()
+	soft := cfg.SoftOffboardGrace + cfg.RecycleGrace
+
+	cases := map[string]float64{
+		// The owner's button opens SOFT — it says there is no countdown — so the
+		// countdown may not start until that window is gone.
+		refocusOpRefocus: soft,
+		// Everything else arrives already saying 120 seconds.
+		refocusOpContextHigh: cfg.RecycleGrace,
+		refocusOpRestartSelf: cfg.RecycleGrace,
+		memberOpRelocate:     cfg.RecycleGrace,
+		memberOpModel:        cfg.RecycleGrace,
+		"":                   cfg.RecycleGrace,
+	}
+	for op, want := range cases {
+		if got := recycleGraceFor(op, cfg); got != want {
+			t.Errorf("recycleGraceFor(%q) = %v, want %v", op, got, want)
+		}
+	}
+	if soft == cfg.RecycleGrace {
+		t.Fatal("this test cannot tell the two apart if the windows are equal")
+	}
+
+	// …and the wire field the cockpit reads must agree with it, or the owner is
+	// shown a ceiling the server does not intend to honour.
+	s := newReconcileTestServer(t)
+	m := testAgent("m-deadline")
+	m.RefocusSince = 1000
+	m.RefocusOp = refocusOpRefocus
+	putTestMember(t, s, m)
+	dto := s.newMemberDTO(m, "", "", 0)
+	if dto.RefocusDeadline != 1000+soft {
+		t.Fatalf("refocus_deadline = %v, want %v (the grace this epoch is really "+
+			"collected on)", dto.RefocusDeadline, 1000+soft)
 	}
 }
 

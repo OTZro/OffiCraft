@@ -149,17 +149,27 @@ func (s *apiServer) memberHasStateToFlush(m Member) bool {
 // outlives the stop and the next wake can be robust-stopped on an epoch that
 // expired while nobody was listening.
 //
-// Every site that stamps a member's refocus epoch must satisfy this. Two of
-// the four do so through a CORRELATION rather than by name: POST
-// /members/{id}/refocus and POST /self/refocus refuse 409 earlier because
-// PresenceState stops projecting online once StoppingSince > 0, and every path
-// that sets desired offline sets that anchor in the same write. PresenceState
-// itself never reads DesiredState on its online arm — so the thing protecting
-// those two handlers is an agreement between two other files, and adding the
-// check to them was measured to be dead code (T-ccc7). The predicate is named
-// and shared so the invariant has one place to point at when that agreement
-// breaks. The third site, the context-high auto-stamp in reconcile.go, had no
-// proxy at all and stamped members on their way offline until T-ccc7.
+// Every site that stamps a member's refocus epoch must satisfy this, and all of
+// them now say so BY NAME.
+//
+// 🔴 Two of them used not to. POST /members/{id}/refocus and POST /self/refocus
+// were protected by a CORRELATION: they gated on PresenceState, which stops
+// projecting online once StoppingSince > 0, and every path that sets desired
+// offline sets that anchor in the same write. Adding the explicit check was
+// measured to be dead code at the time (T-ccc7), and that measurement was
+// true — of that code.
+//
+// It stopped being true the moment those gates had to change: an agent working
+// its offboard sequence reports stopping FIRST (step 1), which made
+// PresenceState project `stopping` and had both endpoints refusing the very
+// caller the notice tells them to be (T-a9d6). Moving them onto the live-session
+// fact removed the correlation, and with it — silently — the invariant that had
+// been riding on it. The existing T-ccc7 tests caught that within one run, which
+// is the whole reason this predicate is named rather than implied: a protection
+// that holds by coincidence disappears the instant somebody replaces the
+// coincidence, and nothing about the edit looks like it touched the invariant.
+// The third site, the context-high auto-stamp in reconcile.go, had no proxy at
+// all and stamped members on their way offline until T-ccc7.
 func aRefocusStampWouldReachTheAgent(m Member) bool {
 	return m.DesiredState == DesiredStateOnline
 }

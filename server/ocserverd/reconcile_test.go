@@ -240,8 +240,9 @@ func TestReconcileDecide(t *testing.T) {
 		}
 	})
 
-	// …and the timed wind-down is still REACHABLE, as the one setting that
-	// restores the old behaviour wholesale.
+	// …and the timed wind-down is still REACHABLE, as the one value that
+	// restores the old behaviour wholesale (a compile-time constant today, not
+	// something the owner can set).
 	t.Run("soft window of zero restores the timed wind-down", func(t *testing.T) {
 		timed := cfg
 		timed.SoftOffboardGrace = 0
@@ -757,7 +758,7 @@ func TestRunReconcileTick(t *testing.T) {
 		if frames := drainFrames(t, s, ServerSelfHost); len(frames) != 0 {
 			t.Fatalf("下線 must dispatch nothing on a timer: %+v", frames)
 		}
-		// With the soft window off — the setting that restores the timed
+		// With the soft window off — the value that restores the timed
 		// wind-down — the same tick collects it.
 		s.reconcileCfg.SoftOffboardGrace = 0
 		s.runReconcileTick(2000)
