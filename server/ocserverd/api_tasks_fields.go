@@ -105,10 +105,20 @@ import (
 // It is NOT fixed here, and the reason is the reason stated for the length cap
 // below: trimming at create is a behaviour change on a shipped wire, so it
 // belongs on BOTH doors at once or on neither, and choosing is a ruling this
-// ticket was not given. Nothing is lost meanwhile — the state self-heals on the
-// first edit, the cost is one wasted retained slot and a spurious delta, and it
-// needs a caller who padded the description at create. Found by the independent
-// review of T-646a and raised to the owner rather than quietly repaired.
+// ticket was not given. Nothing is lost meanwhile — the cost is one wasted
+// retained slot and a spurious delta, and the edit that pays it also normalises
+// the value.
+//
+// Do NOT write that up as "it settles after one edit". It does not: the RESTORE
+// arm above writes a description back VERBATIM, so restoring a revision that
+// holds untrimmed text puts the column straight back into that state, any number
+// of times. Create and restore are two entrances to one condition — the stored
+// text carrying whitespace this door will normalise — and an earlier draft of
+// the wire text said create was the only one and that it bit once. That was
+// FALSE, was measured false by independent review, and is recorded here rather
+// than quietly swapped, because this file already documented the restore
+// entrance twenty lines up: the package was contradicting itself, which is worse
+// than either half being wrong alone.
 //
 // ⚠️ Read "both fields are trimmed" in this file and in the update_task tool
 // description as a statement about THIS TOOL, which is what it is. It is not a
