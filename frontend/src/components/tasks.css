@@ -1624,20 +1624,45 @@ button.task-card__waiting--dep:focus-visible {
   align-items: flex-start;
   min-width: 0;
 }
+/* 🔴 T-6630 ②: this is a full-width ROW with a surface of its own, not a bare
+   66×16px inline button. Two things force that shape and both are about the
+   card AROUND it, not about this control's own looks:
+   · the whole .task-card is role=button, so every pixel this row does NOT
+     cover is a pixel that collapses the ENTIRE task. Widening the hit area
+     literally shrinks the mistake zone (owner 2026-08-16:「會讓人誤以為是收
+     合備注,實際收合了整個任務」);
+   · the two controls share one chevron vocabulary, so the note's control needs
+     a boundary a reader can see — the tinted, bordered band says "this strip
+     is the note's", which the card's own top-right chevron has no equivalent
+     of. The 備註 word in the label is kept for the same reason.
+   min-height is a TOUCH target, not decoration: 44px is the interaction size
+   this repo already uses for a thumb (tasks.css itself and office.css).
+   🔴 THE TINT AND THE BORDER ARE NOT TESTED, AND THAT IS A RULING, NOT A GAP.
+   Owner 2026-08-16:「不需要驗證什麼顏色好不好,這種都是負責人一開始確認沒問題
+   就好,我們不會去改這種東西」. A contrast guard across both themes was written
+   (an independent review had shown the row could be faded to 0.2% with every
+   test still green) and then removed on that ruling. So these two percentages
+   rest on his sign-off alone: changing them changes something nobody will
+   catch, and it is his call to make, not a tidy-up. */
 .task-step__note-toggle {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  width: 100%;
+  min-height: 44px;
   margin-top: 6px;
-  padding: 0;
-  border: none;
-  background: none;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--color-overlay) 20%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-overlay) 12%, transparent);
   cursor: pointer;
   font-size: 12px;
+  text-align: left;
   color: var(--color-text-muted);
 }
 .task-step__note-toggle:hover {
   color: var(--color-text);
+  background: color-mix(in srgb, var(--color-overlay) 18%, transparent);
 }
 .task-step__notewrap .task-step__note {
   width: 100%;

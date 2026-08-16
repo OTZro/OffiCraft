@@ -72,8 +72,8 @@ import { copyText } from "../lib/clipboard";
 import { resolveStepBadge } from "../lib/stepBadge";
 import { autosizeTextarea } from "../lib/autosize";
 import { navigateHash } from "../lib/hashRoute";
-import { keepAnchored } from "../lib/scrollAnchor";
 import { deriveTaskNo } from "../lib/taskNo";
+import { scrollParent, viewportSpanOf } from "../lib/scrollPort";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { enterShouldSend } from "../lib/composerKeys";
 import {
@@ -409,6 +409,41 @@ export function TaskCard({
     setExpanded((v) => !v);
   }
 
+  // 🔴 T-6630 ③ — collapsing the WHOLE task must leave you looking at that task.
+  // Owner 2026-08-16:「收和整個任務時,最後應該要定位到那則任務,現在好像會跑掉」.
+  // MEASURED baseline (12-card column, `.tasks` scrollport): read your way down
+  // inside a long expanded card until its top edge sits 296px above the fold,
+  // then collapse it — `scrollTop` does not change, the card's top stays at
+  // -296, and since the collapsed card is only ~250px tall it ends up ENTIRELY
+  // above the viewport. You are left staring at the tasks BELOW it. Nothing was
+  // correcting for this: the card just shrank under a fixed scroll offset.
+  // (A short list hides it — the browser clamps `scrollTop` to the shrunken
+  // range and that accidentally brings the card back. Depending on that is
+  // depending on how many tasks happen to be below yours.)
+  //
+  // The correction is deliberately ONE-SIDED: it only fires when the card's top
+  // has gone above the fold, and it puts that top edge back AT the fold. Collapse
+  // with the head already on screen therefore moves nothing at all (measured:
+  // top 104 → 104), which is the case that was never broken.
+  //
+  // This is NOT in conflict with ① (a step NOTE opening or closing must never
+  // move the scrollport). Different control, different owner ruling: a note grows
+  // inside a card you are already looking at, while collapsing the card removes
+  // the thing you were looking at. See lib/scrollPort.ts.
+  const wasExpanded = useRef(expanded);
+  useLayoutEffect(() => {
+    const was = wasExpanded.current;
+    wasExpanded.current = expanded;
+    if (!was || expanded) return;
+    const card = rootRef.current;
+    if (!card) return;
+    const port = scrollParent(card);
+    const view = viewportSpanOf(port);
+    const top = card.getBoundingClientRect().top;
+    if (top >= view.top) return;
+    port.scrollTop += top - view.top;
+  }, [expanded]);
+
   // Keyboard operability (repo convention for clickable surfaces — see the
   // chat header / MemberCard row: role="button" + tabIndex + Enter/Space).
   // Only keys on the card ITSELF toggle — an Enter bubbling out of the
@@ -592,47 +627,35 @@ export function TaskCard({
   // owner asked for the simplest thing, not a remembered preference.
   const [openNotes, setOpenNotes] = useState<Record<string, boolean>>({});
   const noteOpen = (stepId: string) => openNotes[stepId] === true;
-  // 展開後畫面停在你點開的那一則 (T-4e39, owner 2026-08-15「像在一疊紙中間插進去
-  // 十張」). Opening a note inserts a block of text into a column that is
-  // already taller than the window, and the reflow can carry the row that was
-  // just clicked off screen — measured on a 390×844 phone, the note's own
-  // bottom already sat at 853 with ONE note open, and opening a note above it
-  // moved it from top 521 to top 877. So the click records where the row was,
-  // and a layout effect puts it back before the browser paints.
+  // 🔴 NO SCROLL CORRECTION HERE, BY OWNER RULING (2026-08-15, T-6630):
+  // 「我要整個畫面不移動,只是單純往下展開,而收合時,就是向上收合,整個畫面不能
+  // 移動」. T-4e39 shipped a keepAnchored() correction on OPEN that re-scrolled
+  // `.tasks` so the clicked row kept its y; that is exactly the screen movement
+  // the owner does not want, so it was removed rather than extended to collapse.
+  // A note now grows downward out of its toggle and collapses back up into it,
+  // and the scrollport is left alone in both directions.
   //
-  // Only OPENING is corrected, and 🔴 that leaves a KNOWN HOLE rather than a
-  // solved case: collapsing a note ABOVE the one you are reading drags the one
-  // you are reading upward — MEASURED at 390×844, collapsing step 1 moved step
-  // 5 from top 375 to top 907, 532px and off screen, which is this ticket's
-  // defect on the other half. (The distance tracks the scroll position and the
-  // note's length — the CT story's own fixture gives 506px and 903px at its two
-  // lengths — so treat "it leaves the window", not 532, as the finding.)
-  // What is true with no code is only that the row
-  // you CLICKED keeps its y (what a collapse removes sits below its toggle),
-  // and that row is the one a collapse cannot move anyway. Leaving the rest is
-  // this ticket's scope ruling; the follow-up is T-6630, which is not
-  // automatically a yes — it has to be judged on how often this really happens,
-  // and closing it with a written reason is a legitimate outcome.
-  const noteAnchorRef = useRef<{ stepId: string; top: number } | null>(null);
-  const toggleNote = (stepId: string, from: HTMLElement | null) => {
-    const opening = openNotes[stepId] !== true;
-    const wrap = from?.closest(".task-step__notewrap") ?? null;
-    noteAnchorRef.current =
-      opening && wrap
-        ? { stepId, top: wrap.getBoundingClientRect().top }
-        : null;
+  // WHAT THAT COSTS, in plain words, because the owner accepted it and the next
+  // reader will otherwise file it as a bug: T-4e39's correction also REVEALED as
+  // much of a newly-opened note as would fit. Without it, opening a long note
+  // leaves its body running off the bottom of the screen and you scroll down
+  // yourself. That is the trade the owner chose when he asked for a screen that
+  // does not move. If he reports "I open a note and cannot see it", that is this
+  // trade talking — take it back to him, do not quietly re-add the correction.
+  //
+  // Do not re-add one. The guard that would redden is
+  // visual-guards/taskcard-note-anchor.ct.spec.tsx, which measures `.tasks`'
+  // scrollTop across an open and the viewport y of a row BELOW a collapse.
+  //
+  // ⚠️ "NOT HERE" IS THE WHOLE STATEMENT — this card DOES carry a scroll
+  // correction, on the WHOLE-CARD collapse (③, above), which the owner asked
+  // for in the same ticket. The two are not a contradiction and neither is a
+  // precedent for the other: a note opens inside a card you are already looking
+  // at, while collapsing the card takes away the thing you were looking at.
+  // Copying either rule onto the other control reddens that control's guard.
+  const toggleNote = (stepId: string) => {
     setOpenNotes((m) => ({ ...m, [stepId]: !m[stepId] }));
   };
-  useLayoutEffect(() => {
-    const anchor = noteAnchorRef.current;
-    noteAnchorRef.current = null;
-    if (!anchor) return;
-    const step = Array.from(
-      rootRef.current?.querySelectorAll('[data-testid="task-step"]') ?? []
-    ).find((n) => n.getAttribute("data-step-id") === anchor.stepId);
-    const wrap = step?.querySelector(".task-step__notewrap");
-    if (wrap) keepAnchored(wrap, anchor.top);
-  }, [openNotes]);
   const prioRef = useRef<HTMLDivElement>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -923,17 +946,30 @@ export function TaskCard({
                 here, exactly as before.
                 State is per-card and in-memory on purpose (owner scope): no
                 cross-page memory of which notes were open.
-                Shape copied from the existing chevron disclosure in
-                AgentDetailPanel (mp-lastop__toggle) rather than inventing a
-                second collapse vocabulary. A <button> is already exempt from
-                the card-toggle closest() filter, so opening a note cannot
-                collapse the card. */}
+                🔴 T-6630 ②: the control is a FULL-WIDTH ROW, not the 66×16px
+                inline button it started as. Owner 2026-08-16:「按鈕太小,應該
+                要是整列,而不是一個小按鈕,會讓人誤以為是收合備注,實際收合了整
+                個任務」— and the misfire is structural, not clumsiness: the
+                whole <article> carries role=button, so every pixel AROUND this
+                control collapses the entire card. A wider control is therefore
+                also a smaller mistake zone. Shape follows the row that already
+                exists one level down (.task-reply-card__collapsed-row).
+                🔴 It must stay a <button> (or at least [role=button]): that is
+                the ONLY reason onCardToggleClick's closest() filter lets the
+                click through. Demote it to a <div> and clicking the note row
+                collapses the whole card — the exact bug, made worse. */}
             <button
               type="button"
               className="task-step__note-toggle"
               data-testid="step-note-toggle"
               aria-expanded={noteOpen(step.id)}
-              onClick={(e) => toggleNote(step.id, e.currentTarget)}
+              /* Only while the note is really in the DOM: a collapsed note
+                 renders nothing, and an aria-controls pointing at an id that
+                 does not exist announces a relationship that is not there. */
+              aria-controls={
+                noteOpen(step.id) ? `step-note-${step.id}` : undefined
+              }
+              onClick={() => toggleNote(step.id)}
             >
               {noteOpen(step.id) ? (
                 <ChevronDownIcon size={14} />
@@ -947,7 +983,11 @@ export function TaskCard({
               </span>
             </button>
             {noteOpen(step.id) && (
-              <div className="task-step__note" data-testid="step-note">
+              <div
+                className="task-step__note"
+                data-testid="step-note"
+                id={`step-note-${step.id}`}
+              >
                 <span className="task-step__note-label">
                   {t.tasks.stepNoteLabel}
                 </span>

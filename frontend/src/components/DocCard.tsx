@@ -227,11 +227,24 @@ export function DocCard({
   // NOT, as this comment claimed until the independent review measured it, that
   // nothing moves.
   //
-  // The owner's rule for this family of controls (2026-08-15, T-6630) is that
-  // the screen must not move: content grows downward from the heading and
-  // collapses back up into it. The FIRST card gets that for free — everything a
-  // collapse removes sits below its heading, and a heading that is scrolled to
-  // is at the top of what is above it.
+  // The owner's rule for a DISCLOSURE — a body that opens and closes under its
+  // own heading (2026-08-15, T-6630 ①) — is that the screen must not move:
+  // content grows downward from the heading and collapses back up into it. The
+  // FIRST card gets that for free — everything a collapse removes sits below its
+  // heading, and a heading that is scrolled to is at the top of what is above it.
+  //
+  // ⚠️ NOT EVERY COLLAPSE IN THE COCKPIT IS UNDER THAT RULE. Collapsing a whole
+  // TASK CARD was ruled the other way in the same ticket (③, 2026-08-16:「收和整
+  // 個任務時,最後應該要定位到那則任務」) and does carry a correction — see
+  // TaskCard.tsx and lib/scrollPort.ts. Whether this card should follow the task
+  // card is an OPEN QUESTION for the owner — he is the only one who can rule on
+  // it — deliberately not answered here: it was outside T-6630's scope, which
+  // was the task page.
+  // ⚠️ A ruling of "yes, follow it" would still NOT fix the case measured just
+  // below: the task-card correction brings a card back to the fold, and in the
+  // last-card situation here the arithmetic to do that does not exist. It would
+  // buy the OTHER cases. Do not read the open question as "this measured limit
+  // is merely unfinished work".
   //
   // 🔴 THE LAST CARD DOES NOT. Measured at 390×844 AND 1040×844: open both
   // documents, scroll to the very bottom, collapse the LAST one by its own
@@ -240,9 +253,10 @@ export function DocCard({
   // scrollTop and the content slides down under a viewport that cannot follow
   // it. Restoring the heading would need scrollTop 7330 against a new maximum
   // of 6966: THE CORRECTION IS ARITHMETICALLY UNAVAILABLE, which is why a
-  // keepAnchored() call (the one the task steps use, T-4e39) was written here
-  // and then removed rather than kept as a no-op. What survives is that the
-  // heading stays ON SCREEN (753.9 < 844) — it is pushed, never lost.
+  // scroll correction was written here and then removed rather than kept as a
+  // no-op. What survives is that the heading stays ON SCREEN (753.9 < 844) — it
+  // is pushed, never lost. (The task-step notes have no correction either any
+  // more: T-6630 removed T-4e39's, on the same owner rule as this comment's.)
   //
   // Do not "fix" this with a scroll correction. The only real fixes change the
   // layout — e.g. reserving the collapsed height, or a sticky heading — and
