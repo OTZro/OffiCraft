@@ -1,4 +1,4 @@
-// CT story (T-4e39): the note disclosure inside the REAL scrolling chain.
+// CT story (T-4e39): the step note's entry inside the REAL scrolling chain.
 //
 // The bug this exists to make measurable is a scroll-position bug, so the story
 // has to reproduce the box that actually scrolls. In production that is `.tasks`
@@ -12,9 +12,11 @@
 // `.app` carries an explicit 100vh here because `height: 100%` needs a parent
 // with a definite height, which the app shell supplies in production.
 //
-// Nine steps, every one of them carrying a note long enough that opening it
-// cannot fit in what is left of a 390×844 phone — that is the owner's 「像在一疊
-// 紙中間插進去十張」. Steps 2, 5 and 9 are the ones the guard clicks in order.
+// Nine steps, every one of them carrying a note, so the column is long enough
+// to scroll and every step offers the corner entry. Steps 2, 5 and 8 are the
+// ones the guard presses in order (9's entry is the last thing in the column
+// and can only be fully on screen at the very end of the range — see the
+// guard's own note).
 import { useLayoutEffect } from "react";
 import { I18nProvider } from "../../src/i18n";
 import { TaskCard } from "../../src/components/TaskCard";
@@ -33,13 +35,11 @@ const LONG_NOTE = (n: number) =>
     "備援:如果 conformance 再紅,先回到上一顆 commit 再逐檔比對生成物。",
   ].join("\n");
 
-// `noteRepeat` is the one-line knob that makes a note TALLER THAN THE
-// SCROLLPORT. That case is not hypothetical: on this very site the step notes
-// run to a 515-character median, t-fc23's longest is 1790, and T-e5b1's own
-// step 4 is about 3.5k. At `noteRepeat: 8` the row measures ~1.6k px on a
-// 390-wide card and ~1.0k px on a 1280-wide one, against scrollports of 820 and
-// 776 — so it exercises the branch where the whole row CANNOT be revealed and
-// the top edge has to win.
+// `noteRepeat` used to be the knob that made a note TALLER THAN THE SCROLLPORT,
+// for the branch where an anchoring correction could not reveal the whole row.
+// Since T-6630 ④ the note opens in an overlay and never enters the column, so
+// note length no longer reaches the layout and the knob is kept only as a way
+// to feed the reader a long body. Nothing in the guard varies it any more.
 const makeTask = (noteRepeat: number) =>
   mkTask({
     id: "t-4e39",
