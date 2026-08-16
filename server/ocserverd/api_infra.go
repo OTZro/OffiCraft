@@ -570,6 +570,13 @@ func (s *apiServer) clearSessionBootTS(id string) {
 		delete(entry, "compaction_count")
 		s.gauge.Set(id, entry)
 	}
+	// The advance-notice claim (T-c382) is keyed on the anchor being dropped
+	// here, so it is session-scoped state too — drop it on the same boundary
+	// rather than leaving one record per agent id alive for the process's
+	// lifetime.
+	s.settingsMu.Lock()
+	delete(s.handoverNoticed, id)
+	s.settingsMu.Unlock()
 	// Write-on-change: the clear runs on every session boundary, and an
 	// unconditional UPDATE would cost a row write per boundary for nothing.
 	m, err := s.dal.GetMember(id)
