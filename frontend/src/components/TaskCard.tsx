@@ -638,6 +638,13 @@ export function TaskCard({
   // Do not re-add one. The guard that would redden is
   // visual-guards/taskcard-note-anchor.ct.spec.tsx, which measures `.tasks`'
   // scrollTop across an open and the viewport y of a row BELOW a collapse.
+  //
+  // ⚠️ "NOT HERE" IS THE WHOLE STATEMENT — this card DOES carry a scroll
+  // correction, on the WHOLE-CARD collapse (③, above), which the owner asked
+  // for in the same ticket. The two are not a contradiction and neither is a
+  // precedent for the other: a note opens inside a card you are already looking
+  // at, while collapsing the card takes away the thing you were looking at.
+  // Copying either rule onto the other control reddens that control's guard.
   const toggleNote = (stepId: string) => {
     setOpenNotes((m) => ({ ...m, [stepId]: !m[stepId] }));
   };

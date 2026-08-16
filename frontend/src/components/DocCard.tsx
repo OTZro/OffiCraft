@@ -227,11 +227,18 @@ export function DocCard({
   // NOT, as this comment claimed until the independent review measured it, that
   // nothing moves.
   //
-  // The owner's rule for this family of controls (2026-08-15, T-6630) is that
-  // the screen must not move: content grows downward from the heading and
-  // collapses back up into it. The FIRST card gets that for free — everything a
-  // collapse removes sits below its heading, and a heading that is scrolled to
-  // is at the top of what is above it.
+  // The owner's rule for a DISCLOSURE — a body that opens and closes under its
+  // own heading (2026-08-15, T-6630 ①) — is that the screen must not move:
+  // content grows downward from the heading and collapses back up into it. The
+  // FIRST card gets that for free — everything a collapse removes sits below its
+  // heading, and a heading that is scrolled to is at the top of what is above it.
+  //
+  // ⚠️ NOT EVERY COLLAPSE IN THE COCKPIT IS UNDER THAT RULE. Collapsing a whole
+  // TASK CARD was ruled the other way in the same ticket (③, 2026-08-16:「收和整
+  // 個任務時,最後應該要定位到那則任務」) and does carry a correction — see
+  // TaskCard.tsx and lib/scrollPort.ts. Whether this card should follow the task
+  // card is an OPEN QUESTION for the owner, deliberately not answered here: it
+  // was outside T-6630's scope, which was the task page.
   //
   // 🔴 THE LAST CARD DOES NOT. Measured at 390×844 AND 1040×844: open both
   // documents, scroll to the very bottom, collapse the LAST one by its own
