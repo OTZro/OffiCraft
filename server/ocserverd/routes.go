@@ -1325,25 +1325,6 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Read one task (steps, deps, progress, gate cards).",
 			MCPTool:  "get_task",
 		},
-		// T-646a: the one door onto a task's own TEXT. Supersedes the
-		// update_task_description / update_task_title rows below, which stay
-		// REGISTERED for the frontend and any existing HTTP client but are off
-		// the MCP catalogue (x-mcp include:false), so an agent sees one tool
-		// rather than three. All three share updateTaskText, so a rule corrected
-		// once is corrected everywhere — the drift between two hand-kept copies
-		// of the same rules is what this ticket was about. Same executor gate,
-		// same closed-task editability, same document-history series as the two
-		// routes it folds in. POST sits on the GET row's path deliberately: this
-		// is a partial update of the task resource, not a fourth sub-path.
-		{
-			Method:   "POST",
-			Path:     "/api/tasks/{task_id}",
-			Handler:  w.HandleUpdateTaskApiTasksTaskIdPost,
-			Auth:     authGated,
-			Requires: principalAgent,
-			Summary:  "Correct THIS task's own TEXT — its title, its description, or both in one write (T-646a). Replaces `update_task_title` and `update_task_description`, which documented the same rules twice and could not be applied together: changing both meant two calls, two transactions and two SSE deltas, with room for someone else's write to land in between. WHO: the task's own executor, or an admin/owner; anyone else is a flat 403. Creating a task grants NO standing to keep rewriting it — if you handed the task over, it is the new executor's text now. PARTIAL: only the fields you NAME are touched, so omitting a field is a legal no-op for it that versions nothing and fans nothing. ⚠️ THE TWO FIELDS TREAT AN EXPLICIT BLANK DIFFERENTLY, and that is an owner ruling rather than an inconsistency (card rc-796541192519, 2026-08-11, option ①): a blank `title` (\"\" or whitespace-only) is REFUSED with 400 and does NOT clear the field, because create_task refuses a blank title too and an edit door looser than the create door would let a caller reach a task-list row with nothing in it; a blank `description` IS accepted and DOES clear the text, because plenty of cards legitimately have no prose. VALIDATION IS WHOLE-BODY AND HAPPENS FIRST: a request carrying a blank title alongside a perfectly good description writes NEITHER — a 400 leaves the task exactly as it was, never half-applied. Both values are trimmed of surrounding whitespace before they are stored AND before they are compared with what is there, so re-sending the same text with a stray trailing space is correctly seen as no change rather than spending one of the retained revisions saying nothing moved. The write is wholesale within each field: send the full corrected text, not a fragment. ⚠️ Division of labour with update_step_note: the DESCRIPTION says what this task IS (stable); the step NOTE says where a step is RIGHT NOW (volatile, handover-facing) — do not put progress here. A CLOSED task (completed / terminated / duplicated) is STILL editable, on the same terms — unlike its artifact set, which freezes at close: artifacts record what the task PRODUCED and must stop moving, while a ticket worded wrongly is usually found to be wrong after it closed, and freezing the text would preserve a known falsehood in the permanent record. Every change that actually alters a field retains the previous value as a document version — kind `task_title` / `task_description`, key = the task id — so a correction is recoverable through list_document_history and the older wording is never simply gone.",
-			MCPTool:  "update_task",
-		},
 		{
 			// T-6020: opened to admin_agent (owner 2026-07-26). Still the only
 			// non-executor status change, and still closed to plain agents —
@@ -1384,6 +1365,31 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Requires: principalAgent,
 			Summary:  "Submit/replace the workflow plan (done and answered-card steps are kept). T-74f8 交棒閘 (second door): a plan is a step-set write and the task status is DERIVED from the step set, so a plan that leaves EVERY step done CLOSES the task — the same irreversible close the final step report performs. If that task's creator is not its executor and no handover is declared or already real, the replan is refused with 422 BEFORE anything is written (the plan stays fully editable). A plan carries no handoff field, so the way out is to hand over first: create the successor task and point its ``blocked_by`` at this task (the gate then stands aside by itself), or keep one unfinished step and declare the handover on the ``update_step_status`` report that closes it. A replan that still leaves work in the plan is never gated. Answers with a bounded receipt (task_id, steps_total, progress_done, progress_total), not the plan you just sent — use get_task to read the stored step rows back.",
 			MCPTool:  "submit_plan",
+		},
+		// T-646a: the one door onto a task's own TEXT. Supersedes the
+		// update_task_description / update_task_title rows below, which stay
+		// REGISTERED for the frontend and any existing HTTP client but are off
+		// the MCP catalogue (x-mcp include:false), so an agent sees one tool
+		// rather than three. All three share updateTaskText, so a rule corrected
+		// once is corrected everywhere — the drift between two hand-kept copies
+		// of the same rules is what this ticket was about. Same executor gate,
+		// same closed-task editability, same document-history series as the two
+		// routes it folds in. POST sits on the GET row's PATH deliberately: this
+		// is a partial update of the task resource, not a fourth sub-path.
+		//
+		// 🔴 Its POSITION IN THIS TABLE is a wire fact, not cosmetics. The MCP
+		// catalogue's element-wise order mirrors this table, and conformance
+		// asserts the two agree, so this row sits where the two it folds in sit
+		// — not next to the GET row it shares a path with. Moving it moves the
+		// tool in tools/list.
+		{
+			Method:   "POST",
+			Path:     "/api/tasks/{task_id}",
+			Handler:  w.HandleUpdateTaskApiTasksTaskIdPost,
+			Auth:     authGated,
+			Requires: principalAgent,
+			Summary:  "Correct THIS task's own TEXT — its title, its description, or both in one write (T-646a). Replaces `update_task_title` and `update_task_description`, which documented the same rules twice and could not be applied together: changing both meant two calls, two transactions and two SSE deltas, with room for someone else's write to land in between. WHO: the task's own executor, or an admin/owner; anyone else is a flat 403. Creating a task grants NO standing to keep rewriting it — if you handed the task over, it is the new executor's text now. PARTIAL: only the fields you NAME are touched, so omitting a field is a legal no-op for it that versions nothing and fans nothing. ⚠️ THE TWO FIELDS TREAT AN EXPLICIT BLANK DIFFERENTLY, and that is an owner ruling rather than an inconsistency (card rc-796541192519, 2026-08-11, option ①): a blank `title` (\"\" or whitespace-only) is REFUSED with 400 and does NOT clear the field, because create_task refuses a blank title too and an edit door looser than the create door would let a caller reach a task-list row with nothing in it; a blank `description` IS accepted and DOES clear the text, because plenty of cards legitimately have no prose. VALIDATION IS WHOLE-BODY AND HAPPENS FIRST: a request carrying a blank title alongside a perfectly good description writes NEITHER — a 400 leaves the task exactly as it was, never half-applied. Both values are trimmed of surrounding whitespace before they are stored AND before they are compared with what is there, so re-sending the same text with a stray trailing space is correctly seen as no change rather than spending one of the retained revisions saying nothing moved. The write is wholesale within each field: send the full corrected text, not a fragment. ⚠️ Division of labour with update_step_note: the DESCRIPTION says what this task IS (stable); the step NOTE says where a step is RIGHT NOW (volatile, handover-facing) — do not put progress here. A CLOSED task (completed / terminated / duplicated) is STILL editable, on the same terms — unlike its artifact set, which freezes at close: artifacts record what the task PRODUCED and must stop moving, while a ticket worded wrongly is usually found to be wrong after it closed, and freezing the text would preserve a known falsehood in the permanent record. Every change that actually alters a field retains the previous value as a document version — kind `task_title` / `task_description`, key = the task id — so a correction is recoverable through list_document_history and the older wording is never simply gone.",
+			MCPTool:  "update_task",
 		},
 		// T-e271: the ticket's own TEXT is correctable after the fact. Until
 		// this row existed the tool catalogue had NO way to edit an existing

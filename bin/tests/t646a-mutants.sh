@@ -20,6 +20,14 @@
 #
 # Reverting uses a copy this script made itself, never `git checkout --`, which
 # would take somebody else's uncommitted edits with it.
+#
+# 🔴 Both go test calls carry -count=1, and on THIS script that is load-bearing
+# rather than hygiene. A cached "ok <pkg> (cached)" would certify a run that
+# never executed — so a mutant could be reported ALIVE because the cached green
+# from before it was applied came back, and the revert re-run could go green
+# without testing anything. The repo guard that caught this (bin/tests/
+# go-test-cache-defeat) is right to treat a bare `go test` as a lie waiting to
+# happen.
 
 set -uo pipefail
 
@@ -48,7 +56,7 @@ mutate() {
   fi
 
   local out
-  out="$(cd "$PKG" && go test -run "$test_re" ./... 2>&1)"
+  out="$(cd "$PKG" && go test -count=1 -run "$test_re" ./... 2>&1)"
   local rc=$?
 
   if [[ $rc -eq 0 ]]; then
@@ -80,7 +88,7 @@ mutate() {
 
   # ③ revert and re-run: the red must go away, or the tree was already dirty.
   cp "$BACKUP" "$SRC"
-  if ! (cd "$PKG" && go test -run "$test_re" ./... >/dev/null 2>&1); then
+  if ! (cd "$PKG" && go test -count=1 -run "$test_re" ./... >/dev/null 2>&1); then
     echo "FAIL [$label] — still red AFTER revert; the red was not the mutant's" >&2
     FAIL=$((FAIL + 1))
     REPORT+=("$label|RED-WITHOUT-MUTANT|-")
