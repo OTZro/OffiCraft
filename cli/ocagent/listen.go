@@ -64,11 +64,6 @@ const (
 	eventsPath = "/api/events"
 	// chatPath / membersPath are the R7 refetch authorities.
 	membersPath = "/api/members/"
-	// offboardPath is the 下線程序 document (owner overlay ⊕ shipped seed) the
-	// recycle wake reads on the SAME edge it refetches the member row. Gated at
-	// the machine floor, so this agent's own Bearer token reads it.
-	offboardPath = "/api/offboard"
-
 	// Backoff mirrors agent/oc_agent.py _BACKOFF_START / _BACKOFF_CAP (1s / 15s) — the
 	// self-heal cadence. Python jitters each delay by a factor in [0.5, 1.0] to de-sync
 	// a fleet reconnecting in lockstep after a server restart (thundering-herd).

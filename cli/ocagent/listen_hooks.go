@@ -177,35 +177,15 @@ type recycleHook struct {
 	// one-shot (the owner refocused again after a respawn).
 	handledRefocus float64
 
-	fetchMember   func() (map[string]any, bool)
-	fetchOffboard func() (string, bool)
+	fetchMember func() (map[string]any, bool)
 }
 
 func newRecycleHook(client httpClient, cfg Config, out io.Writer) *recycleHook {
 	return &recycleHook{
-		cfg:           cfg,
-		out:           out,
-		fetchMember:   func() (map[string]any, bool) { return fetchMemberRow(client, cfg) },
-		fetchOffboard: func() (string, bool) { return fetchOffboardText(client, cfg) },
+		cfg:         cfg,
+		out:         out,
+		fetchMember: func() (map[string]any, bool) { return fetchMemberRow(client, cfg) },
 	}
-}
-
-// fetchOffboardText reads the 下線程序 document over the SAME authed seam (and the
-// SAME bounded-timeout client) as the member refetch → (text, ok). ok=false on any
-// fault or an empty document, which is what arms the fallback line below. The
-// bounded client timeout is what keeps this off the SSE read path: the stream rides
-// its own client, and a wedged document read can only delay THIS frame's dispatch.
-func fetchOffboardText(client httpClient, cfg Config) (string, bool) {
-	status, body := getJSON(client, cfg, offboardPath, true)
-	if status != 200 {
-		return "", false
-	}
-	m, ok := body.(map[string]any)
-	if !ok {
-		return "", false
-	}
-	text, _ := m["text"].(string)
-	return text, strings.TrimSpace(text) != ""
 }
 
 func (h *recycleHook) say(msg string) { fmt.Fprintf(h.out, "[ocagent] %s\n", msg) }
@@ -215,20 +195,43 @@ func (h *recycleHook) say(msg string) { fmt.Fprintf(h.out, "[ocagent] %s\n", msg
 // it is fetched on the same edge that refetches the member row, so a fetch that
 // faults or answers an EMPTY document must still leave the agent knowing it is
 // being collected. Losing the checklist is survivable; losing the notice is not.
-const offboardFallback = "recycle: server 要收你了，但取不到下線程序（讀取失敗或內容是空的）—— " +
+const offboardFallback = "recycle: server 要收你了，但這則通知沒有帶到下線程序 —— " +
 	"請立刻用 MCP get_offboard 拿完整收尾清單並照做，別空手停下。"
 
 // wakeForRecycle prints the wake message into the session's Monitor transcript:
-// the server's 下線程序 text line by line, or the fallback notice above when the
-// document could not be read. Blank lines are dropped — the transcript is a line
-// wire, not a rendered document.
-func (h *recycleHook) wakeForRecycle() {
-	text, ok := h.fetchOffboard()
+// the notice the SERVER composed and pushed in this frame, line by line, or the
+// fallback above when the frame carried none. Blank lines are dropped — the
+// transcript is a line wire, not a rendered document.
+//
+// The text is no longer fetched back over HTTP (owner 2026-08-16: 「改回真的
+// 推播」). What that costs is the one thing worth writing down: a frame that
+// arrives without the notice cannot be repaired from this side, so the fallback
+// has to name the tool that gets it — losing the checklist is survivable, being
+// collected without knowing it is not.
+// offboardNoticeIn digs the server-composed notice out of a member delta:
+// frame → data → payload → offboard_notice. Every miss answers "", which is
+// what arms the fallback — a frame from a server too old to push the notice
+// looks exactly like a frame whose payload lost it, and both must still leave
+// the agent knowing it is being collected.
+func offboardNoticeIn(frame map[string]any) string {
+	data, ok := frame["data"].(map[string]any)
 	if !ok {
+		return ""
+	}
+	payload, ok := data["payload"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	notice, _ := payload["offboard_notice"].(string)
+	return notice
+}
+
+func (h *recycleHook) wakeForRecycle(notice string) {
+	if strings.TrimSpace(notice) == "" {
 		h.say(offboardFallback)
 		return
 	}
-	for _, line := range strings.Split(text, "\n") {
+	for _, line := range strings.Split(notice, "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
@@ -265,6 +268,6 @@ func (h *recycleHook) maybeRecycle(frame map[string]any) bool {
 		return false // already woke THIS epoch — a NEW, larger epoch re-arms below
 	}
 	h.handledRefocus = refocus
-	h.wakeForRecycle()
+	h.wakeForRecycle(offboardNoticeIn(frame))
 	return true
 }

@@ -47,7 +47,7 @@ func (s *apiServer) putMember(m Member, trigger string) error {
 	// A member delta reaches ITS OWN connection (the wind-down / recycle hooks
 	// key on a member delta naming self — cli/ocagent shouldWindDown) plus the
 	// owner cockpit; other agents ignore it (spec/sse.md §4).
-	s.hub.Publish("member", op, "member", wireOwnerID+"::"+m.ID, memberDeltaPayload(m),
+	s.hub.Publish("member", op, "member", wireOwnerID+"::"+m.ID, s.offboardDeltaPayload(m),
 		audienceMembers(m.ID), trigger)
 	return nil
 }
@@ -62,6 +62,63 @@ func memberDeltaPayload(m Member) map[string]any {
 		"desired_state": m.DesiredState,
 		"owner_id":      wireOwnerID,
 	}
+}
+
+// offboardDeltaPayload is memberDeltaPayload plus the offboard notice, and it is
+// the whole of "改回真的推播" (owner 2026-08-16, card rc-66b82a584c4d): the
+// SERVER composes the sentence and carries the 下線程序 steps in the frame it
+// pushes, instead of the agent fetching them back over HTTP once it notices it
+// is being collected.
+//
+// The notice rides ONLY a member whose refocus marker is set. Attaching it to
+// every member delta would put a document fold and a couple of kilobytes on
+// every roster change — the frames that carry it are the handful this session
+// gets while it is actually being collected, and the client prints one per
+// refocus epoch.
+//
+// An empty notice omits the key rather than sending "": the client's fallback
+// arms on the key being absent, and an empty string would read as "the server
+// sent me a notice and it said nothing".
+func (s *apiServer) offboardDeltaPayload(m Member) map[string]any {
+	payload := memberDeltaPayload(m)
+	if m.RefocusSince <= 0 {
+		return payload
+	}
+	if notice := s.finalOffboardNotice(m); notice != "" {
+		payload["offboard_notice"] = notice
+	}
+	return payload
+}
+
+// finalOffboardNotice composes the FINAL-call sentence for a member that is
+// being collected: the same one sentence as the soft notice, plus the clause
+// that says how long is left. It reads the session's own gauge so the agent is
+// told where it actually is, not just that it is over the line — the owner's
+// requirement that the notice carry 「他現在 context / round 狀況，以及我們兩個
+// 系統數字是多少」.
+func (s *apiServer) finalOffboardNotice(m Member) string {
+	cfg := s.ctxHighConfig()
+	record := s.gauge.Get(m.ID)
+	var where string
+	if NormalizeRuntime(m.Runtime) == RuntimeCodex {
+		final := s.codexCompactionThresholdSetting()
+		notice := s.codexNoticeRoundSetting()
+		if notice < 1 {
+			notice = final - 1
+		}
+		where = fmt.Sprintf("compaction round %d reached (your limits: round %d / round %d)",
+			final, notice, final)
+	} else {
+		pct := "?"
+		if record != nil {
+			if v, ok := asNumber(record["context_pct"]); ok {
+				pct = fmt.Sprintf("%v", formatPct(v))
+			}
+		}
+		where = fmt.Sprintf("context %s%% (your limits: %d%% / %d%%)",
+			pct, cfg.NoticePct, cfg.HandoverPct)
+	}
+	return offboardNotice(where, true, s.offboardText())
 }
 
 // resolveAvatarMember admits active staff and outsource rows but rejects
@@ -83,7 +140,7 @@ func (s *apiServer) publishMemberAvatarChanged(m Member, trigger string) {
 		return
 	}
 	s.hub.Publish("member", "patch", "member", wireOwnerID+"::"+m.ID,
-		memberDeltaPayload(m), audienceMembers(m.ID), trigger)
+		s.offboardDeltaPayload(m), audienceMembers(m.ID), trigger)
 }
 
 func memberAvatarResult(m Member, mime string, filename *string) MemberAvatarDTO {
