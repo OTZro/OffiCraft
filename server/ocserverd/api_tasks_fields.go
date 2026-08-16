@@ -75,8 +75,11 @@ import (
 //
 // The visible consequence, named so it is a decision rather than a surprise: a
 // task_description revision retained BEFORE this ticket can hold untrimmed text,
-// so restoring it yields a stored value this seam can no longer produce. It
-// self-heals on the next edit (which trims), and nothing is lost. Left as-is on
+// so restoring it yields a stored value this seam can no longer produce. The
+// next edit here normalises it, at a cost of one wasted retained slot and a
+// spurious delta — the same accounting the create paragraph below gives, worded
+// the same way on purpose: this is the entrance that RECURS, so it is the last
+// place to be loose about what it costs. Left as-is on
 // purpose: restore returning something other than the revision the owner picked
 // off the list is its own hazard, and choosing between the two arms is a ruling
 // this ticket was not given.
@@ -113,11 +116,12 @@ import (
 // arm above writes a description back VERBATIM, so restoring a revision that
 // holds untrimmed text puts the column straight back into that state, any number
 // of times. Create and restore are two entrances to one condition — the stored
-// text carrying whitespace this door will normalise — and an earlier draft of
-// the wire text said create was the only one and that it bit once. That was
+// text carrying whitespace this door will normalise — and an earlier draft said
+// create was the only one (that half was in the seeds) and that it bit once
+// (that half was in the wire text): two drafts, one error. That was
 // FALSE, was measured false by independent review, and is recorded here rather
 // than quietly swapped, because this file already documented the restore
-// entrance twenty lines up: the package was contradicting itself, which is worse
+// entrance above: the package was contradicting itself, which is worse
 // than either half being wrong alone.
 //
 // ⚠️ Read "both fields are trimmed" in this file and in the update_task tool

@@ -309,6 +309,18 @@ func (s *apiServer) mintCreatorFollowUpTask(
 	if note != "" {
 		desc += "\n\n執行者的交棒說明:" + note
 	}
+	// 🔴 THIS DESCRIPTION MUST STAY TRIMMED, and today it is only by luck of the
+	// caller: the literal above has no surrounding whitespace, so the value is
+	// clean only because handoffPlan.Note was TrimSpace'd where the plan was
+	// built. Nothing here enforces it and no test pins it.
+	//
+	// Why that matters beyond tidiness: create_task does NOT trim a description,
+	// so an INSERT that carried whitespace would be a THIRD way for untrimmed text
+	// to reach that column — and update_task's tool description, the seeds boot
+	// doc and api_tasks_fields.go all state that there are exactly TWO
+	// (create_task and a verbatim restore). Dropping one of those TrimSpace calls
+	// would make all three false at once, and nothing would turn red. Found by the
+	// independent review of T-646a as a near miss, not a live defect.
 	fu := Task{
 		ID:           "t-" + newHexID(12),
 		Title:        "接手 " + no + " 的後續:" + t.Title,
