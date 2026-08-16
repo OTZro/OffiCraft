@@ -24,11 +24,14 @@
 //         geometric trace at all, so no box measurement can see it.
 //   M1b drop `overflow: hidden` alone          → GREEN
 //   M1c drop `min-width: 0` alone              → GREEN
-//   M1d drop all three together
+//   M1e drop `white-space: nowrap` from `.mp-identity__name` alone → GREEN
+//       (structurally unmeasurable on these fixtures: the CJK name already has
+//       break opportunities and the latin one has none either way.)
+//   M1d drop all four together
 //       → RED at 375 and 320 on "name right edge (unbreakable name)".
-//     So M1b and M1c are each individually UNGUARDED here — they are redundant
-//     with one another for the geometry, and only their joint absence is caught.
-//     Do not read this file as covering either one alone.
+//     So M1b, M1c and M1e are each individually UNGUARDED here — they are
+//     redundant with one another for the geometry, and only their joint absence
+//     is caught. Do not read this file as covering any one of them alone.
 //   M2  drop `white-space: nowrap` from `.mp-identity__id`
 //       → GREEN. `flex: none` plus the wrapping row already give the badge a
 //         full line at every width measured here, so nothing on this card can
