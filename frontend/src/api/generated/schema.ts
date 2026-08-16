@@ -3028,7 +3028,11 @@ export interface paths {
          */
         get: operations["handle_get_task_api_tasks__task_id__get"];
         put?: never;
-        post?: never;
+        /**
+         * Correct THIS task's own TEXT — its title, its description, or both in one write (T-646a). Replaces `update_task_title` and `update_task_description`, which documented the same rules twice and could not be applied together: changing both meant two calls, two transactions and two SSE deltas, with room for someone else's write to land in between. WHO: the task's own executor, or an admin/owner; anyone else is a flat 403. Creating a task grants NO standing to keep rewriting it — if you handed the task over, it is the new executor's text now. PARTIAL: only the fields you NAME are touched, so omitting a field is a legal no-op for it that versions nothing and fans nothing. ⚠️ THE TWO FIELDS TREAT AN EXPLICIT BLANK DIFFERENTLY, and that is an owner ruling rather than an inconsistency (card rc-796541192519, 2026-08-11, option ①): a blank `title` ("" or whitespace-only) is REFUSED with 400 and does NOT clear the field, because create_task refuses a blank title too and an edit door looser than the create door would let a caller reach a task-list row with nothing in it; a blank `description` IS accepted and DOES clear the text, because plenty of cards legitimately have no prose. VALIDATION IS WHOLE-BODY AND HAPPENS FIRST: a request carrying a blank title alongside a perfectly good description writes NEITHER — a 400 leaves the task exactly as it was, never half-applied. Both values are trimmed of surrounding whitespace before they are stored AND before they are compared with what is there, so re-sending the same text with a stray trailing space is correctly seen as no change rather than spending one of the retained revisions saying nothing moved. The write is wholesale within each field: send the full corrected text, not a fragment. ⚠️ Division of labour with update_step_note: the DESCRIPTION says what this task IS (stable); the step NOTE says where a step is RIGHT NOW (volatile, handover-facing) — do not put progress here. A CLOSED task (completed / terminated / duplicated) is STILL editable, on the same terms — unlike its artifact set, which freezes at close: artifacts record what the task PRODUCED and must stop moving, while a ticket worded wrongly is usually found to be wrong after it closed, and freezing the text would preserve a known falsehood in the permanent record. Every change that actually alters a field retains the previous value as a document version — kind `task_title` / `task_description`, key = the task id — so a correction is recoverable through list_document_history and the older wording is never simply gone.
+         * @description Correct THIS task's own TEXT — its title, its description, or both in one write (T-646a). Replaces `update_task_title` and `update_task_description`, which documented the same rules twice and could not be applied together: changing both meant two calls, two transactions and two SSE deltas, with room for someone else's write to land in between. WHO: the task's own executor, or an admin/owner; anyone else is a flat 403. Creating a task grants NO standing to keep rewriting it — if you handed the task over, it is the new executor's text now. PARTIAL: only the fields you NAME are touched, so omitting a field is a legal no-op for it that versions nothing and fans nothing. ⚠️ THE TWO FIELDS TREAT AN EXPLICIT BLANK DIFFERENTLY, and that is an owner ruling rather than an inconsistency (card rc-796541192519, 2026-08-11, option ①): a blank `title` ("" or whitespace-only) is REFUSED with 400 and does NOT clear the field, because create_task refuses a blank title too and an edit door looser than the create door would let a caller reach a task-list row with nothing in it; a blank `description` IS accepted and DOES clear the text, because plenty of cards legitimately have no prose. VALIDATION IS WHOLE-BODY AND HAPPENS FIRST: a request carrying a blank title alongside a perfectly good description writes NEITHER — a 400 leaves the task exactly as it was, never half-applied. Both values are trimmed of surrounding whitespace before they are stored AND before they are compared with what is there, so re-sending the same text with a stray trailing space is correctly seen as no change rather than spending one of the retained revisions saying nothing moved. The write is wholesale within each field: send the full corrected text, not a fragment. ⚠️ Division of labour with update_step_note: the DESCRIPTION says what this task IS (stable); the step NOTE says where a step is RIGHT NOW (volatile, handover-facing) — do not put progress here. A CLOSED task (completed / terminated / duplicated) is STILL editable, on the same terms — unlike its artifact set, which freezes at close: artifacts record what the task PRODUCED and must stop moving, while a ticket worded wrongly is usually found to be wrong after it closed, and freezing the text would preserve a known falsehood in the permanent record. Every change that actually alters a field retains the previous value as a document version — kind `task_title` / `task_description`, key = the task id — so a correction is recoverable through list_document_history and the older wording is never simply gone.
+         */
+        post: operations["handle_update_task_api_tasks__task_id__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7748,6 +7752,16 @@ export interface components {
          * @description Correct one task's title in place (MCP ``update_task_title``, T-2ebe). PARTIAL update in ``TaskDescriptionDTO``'s shape: the ONLY field is ``title``, omitting it is a legal no-op that versions nothing, and unknown keys are refused (``additionalProperties: false``) so a caller who reaches for ``name`` or ``summary`` is told rather than ignored. ONE DELIBERATE DIFFERENCE FROM THE DESCRIPTION TWIN, and it is a difference in kind rather than an oversight: an explicit blank (``""`` or whitespace-only) is REFUSED with 400 instead of clearing the field. ``create_task`` has always refused a blank title on the same terms, and an edit door looser than the create door would let a caller reach a state the create door forbids — a task whose only cell on the task list is empty, which is precisely the surface this capability exists to keep true. The value is trimmed of surrounding whitespace before it is stored, again matching create. The write is wholesale within that one field; there is no append form.
          */
         TaskTitleDTO: {
+            /** Title */
+            title?: string | null;
+        };
+        /**
+         * TaskFieldsDTO
+         * @description Partial update of one task's own text (MCP ``update_task``, T-646a). Both fields are nullable-with-no-default rather than defaulted, and that shape is the whole point: it keeps ABSENT and PRESENT-BUT-EMPTY distinguishable, so a body that never mentions the description cannot silently erase it. Unknown keys are refused (``additionalProperties: false``), so a caller reaching for ``name``, ``summary``, ``text`` or ``desc`` is told rather than ignored. The two fields part company on an explicit blank — ``title`` refuses it with 400, ``description`` accepts it and clears — and that asymmetry is an owner ruling (card rc-796541192519, option ①), not a leftover from the two DTOs this replaces. The body is validated as a WHOLE before anything is written: a blank title next to a valid description writes neither.
+         */
+        TaskFieldsDTO: {
+            /** Description */
+            description?: string | null;
             /** Title */
             title?: string | null;
         };
@@ -14887,6 +14901,59 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_update_task_api_tasks__task_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskFieldsDTO"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
