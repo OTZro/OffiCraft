@@ -60,7 +60,14 @@ declare -a REPORT=()
 
 # mutate <label> <test-regex> <expected-substring-in-failure> <python-edit> [target-file]
 mutate() {
-  local label="$1" test_re="$2" want="$3" edit="$4" target="${5:-$SRC}"
+  # 🔴 The regex is ANCHORED here, not at the call sites. Go's -run is an
+  # UNANCHORED regex, so the day somebody adds a test whose name merely CONTAINS
+  # one of ours, that mutant starts running two tests — and the exactly-one-red
+  # rule below would then report a legitimately killed mutant as AMBIGUOUS-RED.
+  # Anchoring costs two characters and removes the whole class. (Raised by the
+  # independent review of T-646a as a prospective, not current, trigger: checked
+  # at the time, no name here is a prefix of another.)
+  local label="$1" test_re="^($2)$" want="$3" edit="$4" target="${5:-$SRC}"
 
   restore_all
   if ! python3 - "$target" <<<"$edit"; then

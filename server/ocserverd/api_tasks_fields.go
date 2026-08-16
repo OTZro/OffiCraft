@@ -66,6 +66,13 @@ import (
 // this is worth saying plainly, the same per-field divergence this ticket exists
 // to remove, still standing one door over.
 //
+// Do not read those two arms as equally live, either. EVERY writer of a title
+// trims — create_task, and both edit doors here — so no task_title revision can
+// hold untrimmed text and the title arm's trimString is provably inert over
+// the values that can reach it, the same "expected to be unreachable" status the
+// blank guard beside it already declares about itself. The description arm's
+// verbatim pass is the one that can actually bite.
+//
 // The visible consequence, named so it is a decision rather than a surprise: a
 // task_description revision retained BEFORE this ticket can hold untrimmed text,
 // so restoring it yields a stored value this seam can no longer produce. It
@@ -84,6 +91,28 @@ import (
 // reachable through any door this ticket added, and fixing it is a behaviour
 // change on the restore path — so it belongs to whoever owns that decision, not
 // to this ticket.
+//
+// 🔴 THE CREATE DOOR DOES NOT TRIM THE DESCRIPTION, AND THIS TICKET IS WHY THAT
+// NOW MATTERS. create_task trims the title (api_tasks.go) and stores the
+// description raw. BEFORE this ticket the two doors AGREED — neither trimmed the
+// description — so the divergence is one this change introduced in effect, not
+// one it inherited. Measured, not reasoned: create with "  hello  ", read it
+// back, re-send that stored text VERBATIM through update_task, and the edit door
+// trims it to "hello", calls that a change, spends one of the three retained
+// revisions and fans a delta. That is word for word the defect the top of this
+// file says the ticket exists to remove, one door over.
+//
+// It is NOT fixed here, and the reason is the reason stated for the length cap
+// below: trimming at create is a behaviour change on a shipped wire, so it
+// belongs on BOTH doors at once or on neither, and choosing is a ruling this
+// ticket was not given. Nothing is lost meanwhile — the state self-heals on the
+// first edit, the cost is one wasted retained slot and a spurious delta, and it
+// needs a caller who padded the description at create. Found by the independent
+// review of T-646a and raised to the owner rather than quietly repaired.
+//
+// ⚠️ Read "both fields are trimmed" in this file and in the update_task tool
+// description as a statement about THIS TOOL, which is what it is. It is not a
+// statement about the system.
 //
 // 🔴 ONE CONSEQUENCE OF TRIMMING THAT THE RULING DID NOT NAME. trimString is
 // strings.TrimSpace, so it removes leading newlines and indentation too. A
