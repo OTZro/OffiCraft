@@ -53,20 +53,32 @@
 // this corner, and the last test asserts the corner EXACTLY — `min(before,
 // newMax)`, not a widened tolerance — so a real regression cannot hide in it.
 //
-// MUTANTS MEASURED (each planted IN PLACE, on the declaration named):
-//   M1 · TaskCard.tsx `toggleNote` — put T-4e39's correction back, inline:
-//        record the wrap's top before the state change and, in a
-//        useLayoutEffect on `openNotes`, write
-//        `container.scrollTop += wrap.getBoundingClientRect().top - prevTop`.
-//        ⇒ 8 failed / 9 passed. Reported e.g. "1280×800 desktop · dark:
-//        opening the note scrolled `.tasks` (815 → 947)" — expected 947 to be
-//        815 — and the phone's tall case 2316 → 3952.
-//   M2 · TaskCard.tsx `toggleNote` — collapse pushes the rows below away
-//        instead of leaving the scrollport alone: on a close, walk up to
-//        `.tasks` and do `container.scrollTop -= 120`.
-//        ⇒ 12 failed / 5 passed. Reported e.g. "1280×800 desktop · dark:
-//        collapsing moved `.tasks` (815 → 695)", and on the clamp test
-//        "the browser's clamp is the only movement allowed" 695 vs 815.
+// MUTANTS MEASURED against 21 tests (each planted IN PLACE, on the declaration
+// named — not appended at the end of the file, which would be a different
+// program). ⚠️ These counts are bound to the case list below; add or remove a
+// sample and they expire — re-plant and re-measure rather than editing the
+// prose.
+//   M1 · TaskCard.tsx `toggleNote` + a `useLayoutEffect` on `openNotes` — put
+//        T-4e39 back whole: record the wrap's top on open, then re-scroll
+//        `.tasks` by `anchorDelta` (put the row back at prevTop, then reveal as
+//        much of its bottom as fits without lifting its top above the view).
+//        ⇒ 9 failed / 12 passed. "390×844 phone · dark: opening the note
+//        scrolled `.tasks` (297 → 357)", expected 297 received 357; the phone's
+//        tall case 811 → 934, the desktop's 775 → 891.
+//        ⚠️ THE ANCHOR HALF ALONE IS NOT A MUTANT: with no correction the
+//        clicked row's top does not move in the first place, so
+//        `scrollTop += top - prevTop` computes 0 and this file is 21/21 GREEN
+//        on it. Measured. It is the REVEAL clause that does the scrolling, and
+//        a mutant that leaves it out proves nothing.
+//   M2 · TaskCard.tsx `toggleNote` — a collapse shoves the scrollport instead
+//        of leaving it alone: `if (openNotes[stepId]) container.scrollTop -= 120`.
+//        ⇒ 8 failed / 13 passed. "390×844 phone · dark: collapsing moved
+//        `.tasks` (1033 → 913)", expected 1033 received 913; desktop 907 → 787,
+//        the tall cases 2447 → 2327 and 1691 → 1571.
+//        The four clamp tests stay green under M2, correctly: at the end of the
+//        range a 120px shove lands inside the clamp the browser applies anyway,
+//        so `min(before, newMax)` is still the answer. They are not the tests
+//        that own this property — the eight collapse tests are.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { TaskCardNoteAnchorStory } from "./stories/TaskCardNoteAnchorStory";
 
