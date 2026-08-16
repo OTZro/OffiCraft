@@ -79,6 +79,16 @@
 //        range a 120px shove lands inside the clamp the browser applies anyway,
 //        so `min(before, newMax)` is still the answer. They are not the tests
 //        that own this property — the eight collapse tests are.
+//
+// RE-PLANTED AND RE-OBSERVED by a different actor (T-6630 ②③ round): M1 ⇒ 9
+// failed / 12 passed, M2 ⇒ 8 failed / 13 passed — the counts above are not
+// taken on the previous author's word.
+//
+// 🔴 THIS FILE ALSO GUARDS THE OTHER DIRECTION. The same ticket's ③ ADDS a
+// scroll correction — collapsing a whole task card brings that card back to the
+// fold (taskcard-collapse-anchor.ct.spec.tsx). The two rulings are opposite on
+// purpose and live in the same component, so if that correction ever leaks onto
+// the note toggle, the scrollTop assertions here are what reddens.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { TaskCardNoteAnchorStory } from "./stories/TaskCardNoteAnchorStory";
 
