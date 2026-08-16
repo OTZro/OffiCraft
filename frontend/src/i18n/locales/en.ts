@@ -1353,7 +1353,7 @@ export const en: Dict = {
     bootClaudeSub: "Boot SOP for the Claude Code runtime · editable",
     bootCodexName: "Boot sequence (Codex CLI)",
     bootCodexSub: "Boot SOP for the Codex App Server runtime · editable",
-    offboardName: "Offboard Sequence",
+    offboardName: "Offboard sequence",
     offboardSub:
       "Wrap-up instructions handed to an agent when the server is about to collect its session · editable",
     bootDocNoteHistoryLead: "Version history keeps the last ",

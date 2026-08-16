@@ -39,7 +39,7 @@ beforeEach(() => {
   __resetMock();
 });
 
-describe("SettingsPage · global-context 3 blocks", () => {
+describe("SettingsPage · global-context 4 blocks", () => {
   it("lists the blocks in boot-assembly order, without .md filenames", async () => {
     // 啟動程序 is ONE row, not one per runtime (owner 2026-08-14, card
     // rc-e1abbc506b70 option 1: "我沒有想到被切割成這麼多份"). The runtime is
