@@ -140,7 +140,7 @@ type apiServer struct {
 	// boot_ts) whose one-and-only advance handover notice has already gone out.
 	// Guarded by settingsMu. See claimHandoverNotice for why the key is the
 	// session anchor and not the connection.
-	handoverNoticed map[string]float64
+	handoverNoticed          map[string]float64
 	monitoringRefreshSeconds int
 	// root anchors the repo-file assets (seeds / prebuilt binaries / frozen
 	// MCP catalog) — see assets.go.

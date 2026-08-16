@@ -95,7 +95,6 @@ func TestCodexNoticeDue(t *testing.T) {
 	}
 }
 
-
 func TestActionableContextPct(t *testing.T) {
 	fresh := map[string]any{"context_pct": 45.0, "context_pct_ts": 20.0, "boot_ts": 10.0}
 	if got := actionableContextPct(fresh, true); got == nil || *got != 45.0 {
