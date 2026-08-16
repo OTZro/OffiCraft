@@ -185,7 +185,6 @@ export const zh = {
     // 收起時的字面留著「備註」兩字是刻意的 —— 有備註的步驟與沒備註的步驟,
     // 在收起狀態下就靠這顆按鈕在不在分辨。
     stepNoteExpand: "展開備註",
-    stepNoteCollapse: "收合備註",
     // deps:「等 T-xxxx」chip 可多筆(mockup 樣式,owner 2026-07-13)
     blockedByLabel: "等",
     // T-1d82:dep 指向的任務查不到(已刪 / 壞 id)。保留原始 id(那是僅剩的線索),

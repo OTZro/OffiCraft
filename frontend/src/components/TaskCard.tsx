@@ -2002,12 +2002,21 @@ export function TaskCard({
         />
       )}
 
-      {/* 步驟備註的閱讀面 (T-6630 ④). The overlay portals to document.body, so
-          its clicks never reach onCardToggleClick and reading a note cannot
-          collapse the card. `source` (not `url`) is what makes it a reader with
-          no download and no share link — the owner asked for「沒有下載或分享連
-          結的功能」and that is this overlay's existing contract for text the
-          caller already holds. */}
+      {/* 步驟備註的閱讀面 (T-6630 ④).
+          🔴 WHAT KEEPS A CLICK IN HERE FROM COLLAPSING THE CARD IS NOT THE
+          PORTAL. An earlier version of this comment said the overlay portals to
+          document.body so its clicks never reach onCardToggleClick; an
+          independent review showed that is false reasoning — a React portal
+          bubbles along the REACT tree, and this element is rendered inside the
+          <article> that carries onClick. What actually stops it is the filter's
+          `[role='dialog']` entry (the overlay's root carries that role) plus the
+          panel's own stopPropagation. MEASURED: deleting just that one token
+          from the filter leaves every note test green while a click on the
+          reader's backdrop closes it AND collapses the card underneath — so
+          taskcard-note-entry now clicks the backdrop on purpose.
+          `source` (not `url`) is what makes it a reader with no download and no
+          share link — the owner asked for「沒有下載或分享連結的功能」and that is
+          this overlay's existing contract for text the caller already holds. */}
       {noteModal && (
         <MarkdownPreviewOverlay
           title={`${t.tasks.stepNoteLabel} · ${noteModal.name}`}

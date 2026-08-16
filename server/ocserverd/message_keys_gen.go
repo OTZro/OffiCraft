@@ -989,7 +989,6 @@ var messageKeys = map[string]bool{
 	"tasks.statusMenuLabel":                    true,
 	"tasks.stepCardAnswered":                   true,
 	"tasks.stepCardExpired":                    true,
-	"tasks.stepNoteCollapse":                   true,
 	"tasks.stepNoteExpand":                     true,
 	"tasks.stepNoteLabel":                      true,
 	"tasks.stepStatus.done":                    true,

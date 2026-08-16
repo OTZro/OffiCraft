@@ -315,13 +315,51 @@ for (const width of WIDTHS) {
     await expect(page.locator(".md-preview__download")).toHaveCount(0);
     await expect(page.locator(".md-preview__share")).toHaveCount(0);
     // …and no download-shaped affordance under any other name.
+    // 🔴 `a[download]`, NOT every `a[href]`: a note is agent-authored markdown
+    // and routinely contains links (PRs, tickets). An independent review put a
+    // link in the fixture's note and the `a[href]` form of this reddened on
+    // LEGITIMATE CONTENT — a guard that fails on the data it is meant to carry
+    // teaches the next reader to weaken it. What must not exist here is a way to
+    // pull the bytes down or to mint a share link, and that is what is asserted.
     expect(
       await page.evaluate(
-        () =>
-          document.querySelectorAll(".md-preview a[download], .md-preview a[href]")
-            .length
+        () => ({
+          download: document.querySelectorAll(".md-preview a[download]").length,
+          shareish: document.querySelectorAll(
+            ".md-preview [class*='share'], .md-preview [class*='download']"
+          ).length,
+        })
       ),
-      "the reader must expose no download or link-out affordance"
-    ).toBe(0);
+      "the reader must expose no download or share affordance"
+    ).toEqual({ download: 0, shareish: 0 });
+  });
+
+  test(`[${width}] clicking the reader's backdrop closes it and leaves the card open`, async ({
+    mount,
+    page,
+  }) => {
+    // 🔴 THE COVERAGE HOLE AN INDEPENDENT REVIEW FOUND, now closed. The card
+    // comment used to claim the portal was what protected it; a portal bubbles
+    // along the REACT tree, and the overlay is rendered inside the <article>
+    // that carries onCardToggleClick. What actually protects it is the filter's
+    // `[role='dialog']` entry plus the panel's stopPropagation — and every test
+    // here used to close the reader with `.md-preview__close`, a <button>, which
+    // the filter exempts for a different reason. So deleting `[role='dialog']`
+    // was a silent change: 23/23 green while a backdrop click closed the reader
+    // AND collapsed the task under it. This test clicks the BACKDROP.
+    await mountExpanded(mount, page, width);
+    await page.locator("[data-testid='step-note-open']").first().click();
+    await expect(page.locator(".md-preview")).toBeVisible();
+
+    const box = (await page.locator(".md-preview").boundingBox())!;
+    // 6px inside the overlay's own top-left corner: the backdrop, never the
+    // panel (which is centred), and never any control.
+    await page.mouse.click(box.x + 6, box.y + 6);
+
+    await expect(page.locator(".md-preview")).toHaveCount(0);
+    await expect(
+      page.locator(".task-card__workflow"),
+      "closing the reader by its backdrop must not collapse the task under it"
+    ).toBeVisible();
   });
 }
