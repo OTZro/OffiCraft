@@ -2277,6 +2277,9 @@ type SettingsDTO struct {
 	// DocCapCharsManualSop The size cap on a TASK MANUAL's SOP doc (sop_md), in CHARACTERS (Unicode code points). The floor of the adjustable range is this segment's shipped default (the `default` field above), the ceiling is 100000. Independent of doc_cap_chars_manual_learnings: the SOP is a written-once-then-refined blueprint while learnings accumulate, so the two documents are sized against separate budgets since T-30f1.
 	DocCapCharsManualSop *int `json:"doc_cap_chars_manual_sop,omitempty"`
 
+	// DocCapCharsOffboard The size cap on the 下線程序 block, in CHARACTERS (Unicode code points). The floor of the adjustable range is this document's shipped default (the `default` field above), the ceiling is 100000. It is sized like the 啟動程序 blocks rather than the 系統互動 handbook: both are short ordered checklists an agent has to be able to finish under a deadline.
+	DocCapCharsOffboard *int `json:"doc_cap_chars_offboard,omitempty"`
+
 	// DocCapCharsSystemInteraction The size cap on the 系統互動 block of the boot context, in CHARACTERS (Unicode code points). The floor of the adjustable range is this document's shipped default (the `default` field above), the ceiling is 100000. It is far larger than the role-journal caps because the block it governs is the studio handbook every agent reads at boot, and it is sized against the seed that ships with it.
 	DocCapCharsSystemInteraction *int `json:"doc_cap_chars_system_interaction,omitempty"`
 	HandoverPct                  int  `json:"handover_pct"`
@@ -2358,6 +2361,9 @@ type SettingsUpdateDTO struct {
 
 	// DocCapCharsManualSop The size cap on a TASK MANUAL's sop_md doc, in CHARACTERS (Unicode code points). Must be at least this segment's shipped default (see `SettingsDTO.doc_cap_chars_manual_sop`, whose `default` is that floor) and at most 100000.
 	DocCapCharsManualSop *int `json:"doc_cap_chars_manual_sop,omitempty"`
+
+	// DocCapCharsOffboard The size cap on the 下線程序 block, in CHARACTERS (Unicode code points). Must be at least this document's shipped default (see `SettingsDTO.doc_cap_chars_offboard`, whose `default` is that floor) and at most 100000.
+	DocCapCharsOffboard *int `json:"doc_cap_chars_offboard,omitempty"`
 
 	// DocCapCharsSystemInteraction The size cap on the 系統互動 block of the boot context, in CHARACTERS (Unicode code points). Must be at least this document's shipped default (see `SettingsDTO.doc_cap_chars_system_interaction`, whose `default` is that floor) and at most 100000.
 	DocCapCharsSystemInteraction *int `json:"doc_cap_chars_system_interaction,omitempty"`
@@ -3184,6 +3190,9 @@ type HandleMintApiMintPostJSONRequestBody = MintRequestDTO
 // HandleIngestTelemetryApiMonitoringTelemetryPostJSONRequestBody defines body for HandleIngestTelemetryApiMonitoringTelemetryPost for application/json ContentType.
 type HandleIngestTelemetryApiMonitoringTelemetryPostJSONRequestBody = AgentTelemetryIngestDTO
 
+// HandleReplaceOffboardApiOffboardPostJSONRequestBody defines body for HandleReplaceOffboardApiOffboardPost for application/json ContentType.
+type HandleReplaceOffboardApiOffboardPostJSONRequestBody = BootDocumentReplaceDTO
+
 // HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPostJSONRequestBody defines body for HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost for application/json ContentType.
 type HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPostJSONRequestBody = OutsourceWorkerModelDTO
 
@@ -3588,6 +3597,15 @@ type ServerInterface interface {
 	// Ingest warden telemetry (hardware/limits/tokens/cost/self_update).
 	// (POST /api/monitoring/telemetry)
 	HandleIngestTelemetryApiMonitoringTelemetryPost(w http.ResponseWriter, r *http.Request)
+	// Read the 下線程序 block — the wrap-up checklist the server hands an agent at the moment it is about to collect that session. It is a SINGLETON: one document for every agent and every runtime, keyed `global` like the 系統互動 block. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.
+	// (GET /api/offboard)
+	HandleGetOffboardApiOffboardGet(w http.ResponseWriter, r *http.Request)
+	// Replace the WHOLE 下線程序 block ({text}) — the wrap-up checklist an agent is handed when its session is being collected. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. The write is judged against the doc.cap_chars.offboard cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_offboard always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.
+	// (POST /api/offboard)
+	HandleReplaceOffboardApiOffboardPost(w http.ResponseWriter, r *http.Request)
+	// Restore the 下線程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.
+	// (POST /api/offboard/reset)
+	HandleResetOffboardApiOffboardResetPost(w http.ResponseWriter, r *http.Request)
 	// List live outsource workers (codename, model, effort, task).
 	// (GET /api/outsource-workers)
 	HandleListOutsourceWorkersApiOutsourceWorkersGet(w http.ResponseWriter, r *http.Request)
@@ -5783,6 +5801,48 @@ func (siw *ServerInterfaceWrapper) HandleIngestTelemetryApiMonitoringTelemetryPo
 	handler.ServeHTTP(w, r)
 }
 
+// HandleGetOffboardApiOffboardGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleGetOffboardApiOffboardGet(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleGetOffboardApiOffboardGet(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleReplaceOffboardApiOffboardPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleReplaceOffboardApiOffboardPost(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleReplaceOffboardApiOffboardPost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleResetOffboardApiOffboardResetPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleResetOffboardApiOffboardResetPost(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleResetOffboardApiOffboardResetPost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleListOutsourceWorkersApiOutsourceWorkersGet operation middleware
 func (siw *ServerInterfaceWrapper) HandleListOutsourceWorkersApiOutsourceWorkersGet(w http.ResponseWriter, r *http.Request) {
 
@@ -7621,6 +7681,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/mint", wrapper.HandleMintApiMintPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/monitoring", wrapper.HandleGetMonitoringApiMonitoringGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/monitoring/telemetry", wrapper.HandleIngestTelemetryApiMonitoringTelemetryPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/offboard", wrapper.HandleGetOffboardApiOffboardGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/offboard", wrapper.HandleReplaceOffboardApiOffboardPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/offboard/reset", wrapper.HandleResetOffboardApiOffboardResetPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/outsource-workers", wrapper.HandleListOutsourceWorkersApiOutsourceWorkersGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/outsource-workers/{id}", wrapper.HandleGetOutsourceWorkerApiOutsourceWorkersIdGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/outsource-workers/{id}/boot-context", wrapper.HandleGetWorkerBootContextApiOutsourceWorkersIdBootContextGet)

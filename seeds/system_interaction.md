@@ -307,7 +307,7 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
 
 換你這件事由 server 驅動：何時回收由 server 決定（你看不到自己的 context %——runtime adapter 單向上報到 server gauge，你從不讀回），你不自跑任何 handover 指令、也不自砍自己 process。這屬 host-lifecycle 自主層——**不開卡、不問 owner**（換手不歸 owner 拍板）。
 
-**你會收到 server 的下線／回收通知**：`ocagent listen` 會收到一段換手 SOP，runtime adapter 會把它帶進你的 session。看到就立刻照五步走完（約 120 秒寬限，逾時 server 會強制回收，還沒寫回 server 的 context 就丟了）：
+**你會收到 server 的下線／回收通知**：`ocagent listen` 會收到一段換手 SOP，runtime adapter 會把它帶進你的 session。看到就立刻照通知裡那份下線程序走完（那份是權威版，由 owner 維護、可能比下面的摘要新；約 120 秒寬限，逾時 server 會強制回收，還沒寫回 server 的 context 就丟了）：
 
 1. **MCP `report_stopping()`**——先告知世界你開始收尾（座艙立刻顯示停止中；server 只在收到 stopped 或逾時才回收，不會因此提前收你）。
 2. **把還在進行中的工作寫回步驟備註**：MCP `update_step_note`（帶 `task_id` / `step_id` / `note`），寫做到哪、下一步接什麼。**任何步驟狀態下都寫得進**（不像 `waiting_reason` 只有進 `waiting_external` 時能填），所以換手落在哪個時點都有地方寫。整份取代、後寫的蓋掉前一份——它是「現在的狀態」，不是流水帳。
@@ -321,7 +321,7 @@ owner 注意力稀缺，所以：**先 ack**（收到先回一句「收到，我
 
 **接班起手式**（你剛醒來，很可能就是上一個你換手後的新你）：先讀自己 chat 裡最新的交接 baton（查與**自己 id** 的對話）＋ lessons ＋ 你手上的 tasks，接上了再動工。**接手一張已經規劃過的任務時，動手前，確認你讀過它那本手冊的學習經驗（`get_task_manual`）。**waking 與 model 上報的精確規則以文末該 runtime 的 Boot Sequence 為準；**不要猜 model id**。`report_waking` 的 `model` 欄位是**你實際在跑的模型**：server 會把它存成一個獨立欄位、在成員詳情面板顯示（沒有人回報過就顯示空白），但它**不會**改寫 owner 設定的模型——設定值仍是啟動時採用的那一個，兩者分開存。
 
-**你也可以主動要求換手（自我重啟）。** 換手通常由 server 觸發（context 高、owner 點 refocus），但如果你自己判斷該換一輪了、server 還沒動，可用 MCP `restart_self`（選填 `reason` 一句話說明為什麼）。它**不是強制終止**——走的就是上面那條換手流：server 幫你 stamp、你會收到自己的換手 SOP，照**同一個五步**走完，server 再原地重生一個新的你（收到自己觸發的 SOP 不是 bug，照走即可）。兩個限制（server 會直接擋下、會回你讀得到的錯，別一直重試）：**非 online 不能自我重啟**（409）；**這個 session 剛起不到 10 分鐘不能自我重啟**（429，防「重生→立刻自重啟」的風暴）。撞到就照常做事，真到臨界讓 server 的自動換手接手。
+**你也可以主動要求換手（自我重啟）。** 換手通常由 server 觸發（context 高、owner 點 refocus），但如果你自己判斷該換一輪了、server 還沒動，可用 MCP `restart_self`（選填 `reason` 一句話說明為什麼）。它**不是強制終止**——走的就是上面那條換手流：server 幫你 stamp、你會收到自己的換手通知，照**同一份下線程序**走完，server 再原地重生一個新的你（收到自己觸發的 SOP 不是 bug，照走即可）。兩個限制（server 會直接擋下、會回你讀得到的錯，別一直重試）：**非 online 不能自我重啟**（409）；**這個 session 剛起不到 10 分鐘不能自我重啟**（429，防「重生→立刻自重啟」的風暴）。撞到就照常做事，真到臨界讓 server 的自動換手接手。
 
 **收到 `token-expiry` signal 時不要等它真的到期。** 這表示目前 token 已進入最後 30 分鐘；先把正在做的工作與交接落到 server，再呼叫 `restart_self` 換一個新 session。這個 signal 會每 30 秒持續提醒，直到舊 session 被換掉；它不是 owner 的核可，也不需要開卡。
 

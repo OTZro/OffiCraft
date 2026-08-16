@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 )
 
 // ---------------------------------------------------------------------------
@@ -27,11 +28,11 @@ import (
 //
 // RECYCLE (desired_state=online ∧ refocus_since>0 — handover: a NEW me respawns):
 // ocagent does NOT report phases and does NOT self-kill. It WAKES the interactive
-// Claude session by printing an explicit handover SOP on stdout (the session's
+// Claude session by printing the server's 下線程序 document on stdout (the session's
 // Monitor tool holds this listener, so the wake lands in its transcript) and the
-// SESSION walks the SOP itself over MCP: report_stopping first (honest "winding
-// down" signal) → persist in-flight work → consolidate lessons → post a baton
-// chat to its own id → report_stopped.
+// SESSION walks that checklist itself over MCP. The text is NOT this binary's: it
+// is fetched from GET /api/offboard on the same edge that refetches the member row,
+// so an owner can change what a collected session is told without a release.
 // The kill is then SERVER-orchestrated end to end: the stopped report of a
 // refocus-marked, still-desired-online member fires an immediate event-driven
 // robust STOP (server api_members.go HandleReportStopped… → dispatchRobustStopNow
@@ -166,7 +167,7 @@ func (h *windDownHook) maybeWindDown(frame map[string]any) bool {
 
 // ---------------------------------------------------------------------------
 // RecycleHook — desired_state=online ∧ refocus_since>0: wake the session with the
-// handover SOP (wake-only; the kill is server-orchestrated — see the file header).
+// server's 下線程序 text (wake-only; the kill is server-orchestrated — see the header).
 // ---------------------------------------------------------------------------
 
 type recycleHook struct {
@@ -176,35 +177,62 @@ type recycleHook struct {
 	// one-shot (the owner refocused again after a respawn).
 	handledRefocus float64
 
-	fetchMember func() (map[string]any, bool)
+	fetchMember   func() (map[string]any, bool)
+	fetchOffboard func() (string, bool)
 }
 
 func newRecycleHook(client httpClient, cfg Config, out io.Writer) *recycleHook {
 	return &recycleHook{
-		cfg:         cfg,
-		out:         out,
-		fetchMember: func() (map[string]any, bool) { return fetchMemberRow(client, cfg) },
+		cfg:           cfg,
+		out:           out,
+		fetchMember:   func() (map[string]any, bool) { return fetchMemberRow(client, cfg) },
+		fetchOffboard: func() (string, bool) { return fetchOffboardText(client, cfg) },
 	}
+}
+
+// fetchOffboardText reads the 下線程序 document over the SAME authed seam (and the
+// SAME bounded-timeout client) as the member refetch → (text, ok). ok=false on any
+// fault or an empty document, which is what arms the fallback line below. The
+// bounded client timeout is what keeps this off the SSE read path: the stream rides
+// its own client, and a wedged document read can only delay THIS frame's dispatch.
+func fetchOffboardText(client httpClient, cfg Config) (string, bool) {
+	status, body := getJSON(client, cfg, offboardPath, true)
+	if status != 200 {
+		return "", false
+	}
+	m, ok := body.(map[string]any)
+	if !ok {
+		return "", false
+	}
+	text, _ := m["text"].(string)
+	return text, strings.TrimSpace(text) != ""
 }
 
 func (h *recycleHook) say(msg string) { fmt.Fprintf(h.out, "[ocagent] %s\n", msg) }
 
-// handoverSOP is the wake message printed into the session's Monitor transcript when
-// the server marks THIS agent for recycle. The five steps mirror the boot-context
-// handover contract (seeds/system_interaction.md §8b): stopping is reported FIRST
-// (the cockpit flips to "stopping" the moment wind-down begins — an honest
-// transition, and harmless: the server only kills on the stopped report or the
-// grace timeout), durable writes follow (2–4), and the stopped report comes LAST —
-// it is what lets the server kill/respawn immediately instead of waiting out the
-// 120 s grace.
-func handoverSOP(selfID string) []string {
-	return []string{
-		"recycle: server 已標記回收（refocus）— 請立刻照換手 SOP 收尾（約 120 秒寬限，逾時 server 會強制回收，未落盤的 context 就沒了）：",
-		"recycle:   1) MCP report_stopping() — 先告知世界你開始收尾（座艙即顯停止中；server 不會因此提前收你）",
-		"recycle:   2) 用 MCP update_step_note 把還在進行中的工作寫回步驟備註（做到哪、下一步接什麼；任何步驟狀態下都寫得進）",
-		"recycle:   3) 用 MCP get_lessons / replace_lessons 整併這輪的長期教訓（合併、更新、刪過時，不是往後貼）",
-		"recycle:   4) 用 MCP post_chat 給自己（to=" + selfID + "）發一則交接 baton：現況 / 在途 / blocker",
-		"recycle:   5) MCP report_stopped() — 報完就停手；runtime 會自動收攤，server 原地重生新的你",
+// offboardFallback is the ONLY hard-coded wake text left in this binary. The wake
+// message itself is the server's 下線程序 document (owner-editable, seed-backed) —
+// it is fetched on the same edge that refetches the member row, so a fetch that
+// faults or answers an EMPTY document must still leave the agent knowing it is
+// being collected. Losing the checklist is survivable; losing the notice is not.
+const offboardFallback = "recycle: server 要收你了，但取不到下線程序（讀取失敗或內容是空的）—— " +
+	"請立刻用 MCP get_offboard 拿完整收尾清單並照做，別空手停下。"
+
+// wakeForRecycle prints the wake message into the session's Monitor transcript:
+// the server's 下線程序 text line by line, or the fallback notice above when the
+// document could not be read. Blank lines are dropped — the transcript is a line
+// wire, not a rendered document.
+func (h *recycleHook) wakeForRecycle() {
+	text, ok := h.fetchOffboard()
+	if !ok {
+		h.say(offboardFallback)
+		return
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		h.say("recycle: " + line)
 	}
 }
 
@@ -214,7 +242,9 @@ func handoverSOP(selfID string) []string {
 // Gated (in order) by the NUDGE match, then a POSITIVE authoritative refetch of
 // desired_state=online ∧ refocus_since>0 ∧ a NEW refocus epoch (one wake per epoch —
 // the follow-up member deltas fanned by the session's own stopping/stopped reports
-// re-enter here and must NOT re-print the SOP). Mutually exclusive with wind-down
+// re-enter here and must NOT re-print the wake). The epoch is claimed BEFORE the
+// document is fetched, so a failed fetch spends the epoch on the fallback notice
+// rather than re-waking on every later delta. Mutually exclusive with wind-down
 // (offline vs online intent), so both are safe to call on every member delta.
 func (h *recycleHook) maybeRecycle(frame map[string]any) bool {
 	if !shouldWindDown(frame, h.cfg.ID) { // identical NUDGE gate
@@ -235,8 +265,6 @@ func (h *recycleHook) maybeRecycle(frame map[string]any) bool {
 		return false // already woke THIS epoch — a NEW, larger epoch re-arms below
 	}
 	h.handledRefocus = refocus
-	for _, line := range handoverSOP(h.cfg.ID) {
-		h.say(line)
-	}
+	h.wakeForRecycle()
 	return true
 }

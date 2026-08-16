@@ -72,9 +72,11 @@ type apiServer struct {
 	docCapCharsManualLearnings int
 	// The two boot-context document kinds, editable since T-791e (DB
 	// doc.cap_chars.{system_interaction,boot_sequence}). bootSequence is ONE cap
-	// serving both runtimes.
+	// serving both runtimes. The 下線程序 document (T-c9c0) joins them with its
+	// own knob, doc.cap_chars.offboard.
 	docCapCharsSystemInteraction int
 	docCapCharsBootSequence      int
+	docCapCharsOffboard          int
 	// chatBudgetChars is the live budget of the wake snapshot's chat block (DB
 	// chat.budget_chars; T-c9b4). Read through chatBudget() by
 	// resumeSnapshotParts — the ONE place the number enters the packer, which is
@@ -427,6 +429,12 @@ func (s *apiServer) bootSequenceCap() int {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
 	return s.docCapCharsBootSequence
+}
+
+func (s *apiServer) offboardCap() int {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.docCapCharsOffboard
 }
 
 // chatBudget is the live wake-snapshot chat budget (chat.budget_chars;

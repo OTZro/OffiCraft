@@ -316,6 +316,7 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		{body.DocCapCharsManualLearnings, "doc_cap_chars_manual_learnings", minDocCapChars},
 		{body.DocCapCharsSystemInteraction, "doc_cap_chars_system_interaction", minSystemInteractionCapChars},
 		{body.DocCapCharsBootSequence, "doc_cap_chars_boot_sequence", minBootSequenceCapChars},
+		{body.DocCapCharsOffboard, "doc_cap_chars_offboard", minOffboardCapChars},
 	}
 	for _, c := range capRange {
 		if c.field != nil && (*c.field < c.min || *c.field > maxDocCapChars) {
@@ -468,6 +469,7 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		{body.DocCapCharsManualLearnings, settingDocCapCharsManualLearnings, &s.docCapCharsManualLearnings},
 		{body.DocCapCharsSystemInteraction, settingDocCapCharsSystemInteraction, &s.docCapCharsSystemInteraction},
 		{body.DocCapCharsBootSequence, settingDocCapCharsBootSequence, &s.docCapCharsBootSequence},
+		{body.DocCapCharsOffboard, settingDocCapCharsOffboard, &s.docCapCharsOffboard},
 		{body.ChatBudgetChars, settingChatBudgetChars, &s.chatBudgetChars},
 	}
 	for _, c := range capWrite {
@@ -616,6 +618,7 @@ func (s *apiServer) settingsView() settingsDTO {
 		DocCapCharsManualLearnings:   s.docCapCharsManualLearnings,
 		DocCapCharsSystemInteraction: s.docCapCharsSystemInteraction,
 		DocCapCharsBootSequence:      s.docCapCharsBootSequence,
+		DocCapCharsOffboard:          s.docCapCharsOffboard,
 		ChatBudgetChars:              s.chatBudgetChars,
 		UpdaterReceiveBeta:           s.updaterReceiveBeta,
 		UpdaterAutoUpdate:            s.updaterAutoUpdate,

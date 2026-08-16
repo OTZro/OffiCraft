@@ -142,6 +142,7 @@ export function DocumentHistoryEntry({
     manualLearnings: settings.docCapCharsManualLearnings,
     systemInteraction: settings.docCapCharsSystemInteraction,
     bootSequence: settings.docCapCharsBootSequence,
+    offboard: settings.docCapCharsOffboard,
   } : undefined;
   // The shipped default, so the 初始版本 row can be READ and COMPARED like every
   // other row (T-40f0). Fetched only where that row exists (`onReset`) and only

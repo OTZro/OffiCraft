@@ -390,6 +390,17 @@ const (
 	docKindBootSequence      = "boot_sequence"
 )
 
+// The 下線程序 document (T-c9c0). A SINGLETON like the system-interaction block —
+// one document keyed "global" for every agent and every runtime — because unlike
+// the boot sequence, being collected is the same procedure whatever runtime you
+// are: report, write the in-flight work back, hand yourself over, stop. There is
+// deliberately no runtime axis to get wrong here.
+const (
+	offboardSeedMD  = "offboard.md"
+	offboardDocKey  = "global"
+	docKindOffboard = "offboard"
+)
+
 // bootSequenceDocKey names the EDITABLE DOCUMENT that carries a runtime's boot
 // sequence (T-791e).
 //

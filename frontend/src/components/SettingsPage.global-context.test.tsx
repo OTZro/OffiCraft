@@ -39,8 +39,8 @@ beforeEach(() => {
   __resetMock();
 });
 
-describe("SettingsPage · global-context 3 blocks", () => {
-  it("lists the blocks in boot-assembly order as THREE rows, without .md filenames", async () => {
+describe("SettingsPage · global-context 4 blocks", () => {
+  it("lists the blocks in boot-assembly order, without .md filenames", async () => {
     // 啟動程序 is ONE row, not one per runtime (owner 2026-08-14, card
     // rc-e1abbc506b70 option 1: "我沒有想到被切割成這麼多份"). The runtime is
     // chosen inside the page. The two DOCUMENTS stay separate — that is
@@ -50,9 +50,13 @@ describe("SettingsPage · global-context 3 blocks", () => {
     const iSystem = text.indexOf(s.systemName);
     const iCustom = text.indexOf(s.customName);
     const iBoot = text.indexOf(s.bootName);
+    // 下線程序 is FOURTH (T-c9c0): the list runs an agent's life end to end,
+    // 開機 → 下線, so it follows 啟動程序 rather than leading it.
+    const iOffboard = text.indexOf(s.offboardName);
     expect(iSystem).toBeGreaterThanOrEqual(0);
     expect(iCustom).toBeGreaterThan(iSystem);
     expect(iBoot).toBeGreaterThan(iCustom);
+    expect(iOffboard).toBeGreaterThan(iBoot);
     // The per-runtime names belong to the PAGE's two cards, never to this list.
     expect(text).not.toContain(s.bootClaudeName);
     expect(text).not.toContain(s.bootCodexName);
@@ -61,6 +65,7 @@ describe("SettingsPage · global-context 3 blocks", () => {
     expect(text).not.toContain("global-context.md");
     expect(text).not.toContain("boot_sequence.md");
     expect(text).not.toContain("system_interaction.md");
+    expect(text).not.toContain("offboard.md");
   });
 
   it("系統互動 opens its own editable page instead of a read-only seed card", async () => {

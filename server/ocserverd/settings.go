@@ -102,6 +102,7 @@ const (
 	// names only — never a description.
 	settingDocCapCharsSystemInteraction = "doc.cap_chars.system_interaction"
 	settingDocCapCharsBootSequence      = "doc.cap_chars.boot_sequence"
+	settingDocCapCharsOffboard          = "doc.cap_chars.offboard"
 	// settingChatBudgetChars (T-c9b4) is the wake snapshot's chat block budget —
 	// what resumeChatPackBudget spends (api_chat.go). It is deliberately NOT a
 	// `doc.cap_chars.*` key: those cap a STORED document and their floors equal
@@ -208,6 +209,7 @@ type authSettings struct {
 	docCapCharsManualLearnings   int              // doc.cap_chars.manual_learnings (default contextDocMaxCharsDefault)
 	docCapCharsSystemInteraction int              // doc.cap_chars.system_interaction (default systemInteractionCapCharsDefault)
 	docCapCharsBootSequence      int              // doc.cap_chars.boot_sequence (default bootSequenceCapCharsDefault; ONE cap, both runtimes)
+	docCapCharsOffboard          int              // doc.cap_chars.offboard (default offboardCapCharsDefault)
 	chatBudgetChars              int              // chat.budget_chars (default chatBudgetCharsDefault)
 	updaterReceiveBeta           bool             // updater.receive_beta (default false = official releases only)
 	updaterAutoUpdate            bool             // updater.auto_update (default false = manual upgrades only)
@@ -442,6 +444,10 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 	}
 	if err := loadCap(settingDocCapCharsBootSequence, minBootSequenceCapChars, maxDocCapChars,
 		&out.docCapCharsBootSequence, bootSequenceCapCharsDefault); err != nil {
+		return out, err
+	}
+	if err := loadCap(settingDocCapCharsOffboard, minOffboardCapChars, maxDocCapChars,
+		&out.docCapCharsOffboard, offboardCapCharsDefault); err != nil {
 		return out, err
 	}
 

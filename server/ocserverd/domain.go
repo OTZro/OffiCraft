@@ -1049,9 +1049,14 @@ const dutyCapCharsDefault = 1000
 // The boot-sequence cap is ONE knob for BOTH runtimes (claude and codex), each
 // measured on its own text. They are two renderings of the same short document;
 // a studio that needs more room for one needs it for the other.
+//
+// The 下線程序 cap (T-c9c0) is sized with the boot sequences rather than the
+// handbook, and for the same reason: it is a short ordered checklist an agent
+// has to be able to finish inside a ~120s grace window, not a reference text.
 const (
 	systemInteractionCapCharsDefault = 60000
 	bootSequenceCapCharsDefault      = 15000
+	offboardCapCharsDefault          = 15000
 )
 
 // min*CapChars / maxDocCapChars bound the adjustable caps. Each floor is THAT
@@ -1065,6 +1070,7 @@ const (
 	minDutyCapChars              = dutyCapCharsDefault
 	minSystemInteractionCapChars = systemInteractionCapCharsDefault
 	minBootSequenceCapChars      = bootSequenceCapCharsDefault
+	minOffboardCapChars          = offboardCapCharsDefault
 	maxDocCapChars               = 100000
 )
 

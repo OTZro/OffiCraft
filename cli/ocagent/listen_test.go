@@ -1112,27 +1112,64 @@ func TestWindDown_ReportFailedNotMasked(t *testing.T) {
 // RecycleHook — desired_state=online ∧ refocus_since>0 (wake-only, epoch one-shot).
 // ---------------------------------------------------------------------------
 
-func TestRecycle_WakesSessionWithHandoverSOP_EpochOneShot(t *testing.T) {
+// offboardServer answers the two authoritative reads the recycle wake makes — the
+// member row and the 下線程序 document — off pointers the test mutates between
+// deltas, so a wake is driven by what the SERVER holds at that moment. Bearer +
+// status are asserted here so the delivery path (auth, route, JSON shape), not a
+// stubbed seam, is what the wake rides.
+func offboardServer(t *testing.T, member map[string]any, docText *string, docStatus *int) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer tok" {
+			t.Errorf("%s must ride the agent's own Bearer token, got %q",
+				r.URL.Path, r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/api/members/kyle":
+			w.WriteHeader(200)
+			_ = json.NewEncoder(w).Encode(member)
+		case "/api/offboard":
+			w.WriteHeader(*docStatus)
+			if *docStatus == 200 {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"kind": "offboard", "key": "global", "text": *docText})
+			}
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestRecycle_WakesSessionWithTheServersOffboardText_EpochOneShot(t *testing.T) {
 	var out bytes.Buffer
 	member := map[string]any{"desired_state": "online", "refocus_since": float64(100)}
-	h := &recycleHook{
-		cfg:         Config{ID: "kyle"},
-		out:         &out,
-		fetchMember: func() (map[string]any, bool) { return member, true },
-	}
+	// Deliberately NOT the shipped seed: only the owner's stored text can produce
+	// these lines, so seeing them proves the DOCUMENT reached the session — a wake
+	// printing anything the binary knows by itself would fail here.
+	docText := "收尾第一步：把在途的 X 寫回步驟備註\n\n收尾第二步：報 stopped"
+	docStatus := 200
+	srv := offboardServer(t, member, &docText, &docStatus)
+	cfg := Config{ID: "kyle", Token: "tok", Base: srv.URL}
+	h := newRecycleHook(defaultHTTPClient(), cfg, &out)
+
 	frame := map[string]any{"topic": "member", "data": map[string]any{"key": "owner::kyle"}}
 	if !h.maybeRecycle(frame) {
-		t.Fatal("online + refocus must wake the session with the handover SOP")
+		t.Fatal("online + refocus must wake the session")
 	}
-	// The full SOP prints, one prefixed line each, baton addressed to MY OWN id.
-	for _, line := range handoverSOP("kyle") {
-		if !strings.Contains(out.String(), "[ocagent] "+line+"\n") {
-			t.Fatalf("wake output missing SOP line %q:\n%s", line, out.String())
+	for _, line := range []string{
+		"收尾第一步：把在途的 X 寫回步驟備註",
+		"收尾第二步：報 stopped",
+	} {
+		if !strings.Contains(out.String(), "[ocagent] recycle: "+line+"\n") {
+			t.Fatalf("the wake must print the server's offboard line %q:\n%s", line, out.String())
 		}
 	}
-	if !strings.Contains(out.String(), "to=kyle") {
-		t.Fatalf("baton step must address the agent's OWN id:\n%s", out.String())
+	if strings.Contains(out.String(), "get_offboard") {
+		t.Fatalf("a document that WAS delivered must not print the fallback:\n%s", out.String())
 	}
+
 	// SAME epoch again (e.g. the member deltas fanned by the session's own
 	// stopping/stopped reports) ⇒ no re-print.
 	out.Reset()
@@ -1145,13 +1182,73 @@ func TestRecycle_WakesSessionWithHandoverSOP_EpochOneShot(t *testing.T) {
 	if h.maybeRecycle(frame) || out.Len() != 0 {
 		t.Fatalf("a stopped report must not re-trigger anything client-side; out=%q", out.String())
 	}
-	// NEW, larger epoch ⇒ re-arms the wake.
+
+	// A NEW epoch re-arms the wake AND re-reads the document: an owner who edits
+	// 下線程序 changes what the next collected session is told, with no release.
 	member["refocus_since"] = float64(200)
+	docText = "新版下線程序：先把 baton 發給自己"
 	if !h.maybeRecycle(frame) {
 		t.Fatal("a new refocus epoch must re-wake")
 	}
-	if !strings.Contains(out.String(), "換手 SOP") {
-		t.Fatalf("re-armed wake must print the SOP again:\n%s", out.String())
+	if !strings.Contains(out.String(), "[ocagent] recycle: 新版下線程序：先把 baton 發給自己\n") {
+		t.Fatalf("the re-armed wake must carry the EDITED document:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "收尾第一步") {
+		t.Fatalf("the re-armed wake must not replay the superseded text:\n%s", out.String())
+	}
+}
+
+// The delivery path the agent actually runs is a member frame arriving on the SSE
+// downlink — not a direct hook call. This drives dispatch end to end (frame →
+// member refetch → document read → transcript) so the wiring, not just the hook,
+// is what carries the owner's text into the session.
+func TestDispatch_MemberDeltaCarriesTheOffboardDocumentIntoTheTranscript(t *testing.T) {
+	var out bytes.Buffer
+	member := map[string]any{"desired_state": "online", "refocus_since": float64(7)}
+	docText := "只有 owner 存進去的字才會長這樣"
+	docStatus := 200
+	srv := offboardServer(t, member, &docText, &docStatus)
+	cfg := Config{ID: "kyle", Token: "tok", Base: srv.URL}
+	l := &listener{cfg: cfg, out: &out, recycle: newRecycleHook(defaultHTTPClient(), cfg, &out)}
+	l.winddown = &windDownHook{cfg: cfg, out: &out,
+		fetchDesired: func() (string, bool) { return "online", true },
+	}
+	raw, _ := json.Marshal(map[string]any{"topic": "member",
+		"data": map[string]any{"key": "owner::kyle"}})
+	l.dispatch(raw)
+	if !strings.Contains(out.String(), "[ocagent] recycle: "+docText+"\n") {
+		t.Fatalf("a member delta must land the SERVER's offboard text in the transcript:\n%s", out.String())
+	}
+}
+
+func TestRecycle_UnreadableOffboardStillTellsTheSessionItIsBeingCollected(t *testing.T) {
+	frame := map[string]any{"topic": "member", "data": map[string]any{"key": "owner::kyle"}}
+	for name, tc := range map[string]struct {
+		status int
+		text   string
+	}{
+		"fetch faults":   {status: 500},
+		"document empty": {status: 200, text: ""},
+		"document blank": {status: 200, text: "\n  \n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out bytes.Buffer
+			member := map[string]any{"desired_state": "online", "refocus_since": float64(100)}
+			text, status := tc.text, tc.status
+			srv := offboardServer(t, member, &text, &status)
+			h := newRecycleHook(defaultHTTPClient(), Config{ID: "kyle", Token: "tok", Base: srv.URL}, &out)
+			if !h.maybeRecycle(frame) {
+				t.Fatal("an unreadable document must NOT swallow the recycle — the agent still has to know")
+			}
+			if !strings.Contains(out.String(), "[ocagent] "+offboardFallback+"\n") {
+				t.Fatalf("the fallback notice must be printed, not silence:\n%q", out.String())
+			}
+			// Still one wake per epoch — the failed read spent this epoch.
+			out.Reset()
+			if h.maybeRecycle(frame) || out.Len() != 0 {
+				t.Fatalf("a fallback wake must not re-print on the same epoch; out=%q", out.String())
+			}
+		})
 	}
 }
 
@@ -1164,6 +1261,10 @@ func TestRecycle_SkipsOfflineOrNoRefocus(t *testing.T) {
 			cfg:         Config{ID: "kyle"},
 			out:         outs[name],
 			fetchMember: func() (map[string]any, bool) { return m, true },
+			fetchOffboard: func() (string, bool) {
+				t.Errorf("%s: a delta that is not a recycle must not read the offboard document", name)
+				return "", false
+			},
 		}
 	}
 	if mk("off", map[string]any{"desired_state": "offline", "refocus_since": float64(100)}).maybeRecycle(frame) {
@@ -1914,8 +2015,8 @@ func TestDispatch_SelfTriggeredEchoSuppressed(t *testing.T) {
 func TestDispatch_MemberTopicExemptFromEchoSuppression(t *testing.T) {
 	// spec §2.3 exemption: a SELF-triggered member delta must STILL nudge the
 	// hooks — restart_self (T-4c71) stamps refocus_since via the agent's OWN
-	// request, and the handover-SOP wake rides exactly that self-triggered
-	// member delta. Suppressing it would break graceful self-recycle.
+	// request, and the recycle wake rides exactly that self-triggered member
+	// delta. Suppressing it would break graceful self-recycle.
 	var out bytes.Buffer
 	fetches := 0
 	l := &listener{cfg: Config{ID: "kyle"}, out: &out}
@@ -1928,15 +2029,16 @@ func TestDispatch_MemberTopicExemptFromEchoSuppression(t *testing.T) {
 			fetches++
 			return map[string]any{"desired_state": "online", "refocus_since": 42.0}, true
 		},
+		fetchOffboard: func() (string, bool) { return "照下線程序收尾", true },
 	}
 	raw, _ := json.Marshal(map[string]any{"topic": "member", "trigger": "kyle",
 		"data": map[string]any{"key": "owner::kyle"}})
 	l.dispatch(raw)
 	if fetches == 0 {
-		t.Fatal("a self-triggered member delta must still nudge the hooks (restart_self SOP)")
+		t.Fatal("a self-triggered member delta must still nudge the hooks (restart_self)")
 	}
 	if !strings.Contains(out.String(), "recycle:") {
-		t.Fatalf("the self-requested recycle SOP wake must land, got %q", out.String())
+		t.Fatalf("the self-requested recycle wake must land, got %q", out.String())
 	}
 }
 

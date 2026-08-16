@@ -52,6 +52,7 @@ export interface DocCaps {
   manualLearnings: number;
   systemInteraction: number;
   bootSequence: number;
+  offboard: number;
 }
 
 /**
@@ -73,6 +74,10 @@ export interface DocCaps {
 export const BOOT_DOC_CAP_CHARS_DEFAULTS: Record<BootDocKind, number> = {
   system_interaction: 60000,
   boot_sequence: 15000,
+  // T-c9c0. Sized with the boot sequences rather than the handbook: the
+  // 下線程序 seed is a short ordered checklist an agent has to finish inside a
+  // ~120s grace window, not a reference text.
+  offboard: 15000,
 };
 
 export const DOC_CAP_CHARS_DEFAULTS: DocCaps = {
@@ -84,6 +89,7 @@ export const DOC_CAP_CHARS_DEFAULTS: DocCaps = {
   // Not restated: the boot blocks' numbers are stated once, above.
   systemInteraction: BOOT_DOC_CAP_CHARS_DEFAULTS.system_interaction,
   bootSequence: BOOT_DOC_CAP_CHARS_DEFAULTS.boot_sequence,
+  offboard: BOOT_DOC_CAP_CHARS_DEFAULTS.offboard,
 };
 
 /**
@@ -186,6 +192,9 @@ export const CAPPED_FIELDS: Record<DocumentKind, readonly string[]> = {
   // them and this pair marks for real.
   system_interaction: ["text"],
   boot_sequence: ["text"],
+  // T-c9c0, same rule: capped on restore, on `text`, against
+  // `doc.cap_chars.offboard`.
+  offboard: ["text"],
 };
 
 /**
@@ -291,5 +300,7 @@ export function capForKind(
     // codex are two documents of the same block, each measured on its own text.
     case "boot_sequence":
       return caps.bootSequence;
+    case "offboard":
+      return caps.offboard;
   }
 }

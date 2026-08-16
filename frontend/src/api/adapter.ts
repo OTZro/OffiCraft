@@ -768,6 +768,8 @@ export interface ServerSettingsView {
    * (docCap.ts); same floor-is-the-default, ceiling-100000 rule as above. */
   docCapCharsSystemInteraction: number;
   docCapCharsBootSequence: number;
+  /** T-c9c0: the 下線程序 document's cap, same surface and same rule. */
+  docCapCharsOffboard: number;
   /** T-c9b4: the wake snapshot's chat block budget, in the same rune unit.
    * NOT a document cap — it bounds a block the server repacks on every read, so
    * it may be lowered as well as raised, and it has its own ceiling. Default and
@@ -854,6 +856,7 @@ export interface ServerSettingsPatch {
    * from the only surface that edits settings. */
   docCapCharsSystemInteraction?: number;
   docCapCharsBootSequence?: number;
+  docCapCharsOffboard?: number;
   /** T-c9b4 wake-snapshot chat budget; range 1000..13000 (chatBudget.ts). The
    * floor is NOT the shipped default — this one may be turned down. */
   chatBudgetChars?: number;

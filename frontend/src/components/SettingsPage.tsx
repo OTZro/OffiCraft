@@ -88,6 +88,7 @@ import {
   UserIcon,
   PencilIcon,
   BoltIcon,
+  LogOutIcon,
   MonitorIcon,
   GearIcon,
   TrashIcon,
@@ -120,6 +121,9 @@ type View =
   // it may be keyless; every document still has its own page.
   | { kind: "boot" }
   | { kind: "bootDoc"; runtime: "claude" | "codex" }
+  // 下線程序 (T-c9c0) — ONE document, so no index/detail split: the nav row
+  // opens the page directly, the shape 系統互動 already has.
+  | { kind: "offboard" }
   | { kind: "role"; key: string }
   | { kind: "manuals" }
   // 任務手冊詳情 = hub (摘要卡 + 任務規劃入口卡): the two 任務規劃 cards
@@ -249,6 +253,7 @@ export function SettingsPage({
         onOpenSystem={() => setView({ kind: "system" })}
         onOpenCustom={() => setView({ kind: "custom" })}
         onOpenBoot={() => setView({ kind: "boot" })}
+        onOpenOffboard={() => setView({ kind: "offboard" })}
         onOpenRole={(key) => setView({ kind: "role", key })}
         onCreate={rolesH.create}
         onDelete={rolesH.remove}
@@ -418,6 +423,22 @@ export function SettingsPage({
         title={t.settings.systemName}
         historyTitle={t.settings.historyBootSystemTitle}
         crumbs={[crumbRoot, crumbRoles, { label: t.settings.systemName }]}
+      />
+    );
+  }
+
+  if (view.kind === "offboard") {
+    // 下線程序 — what an agent is handed at the moment the server collects its
+    // session (T-c9c0). Same editable-document shape as 系統互動, and a
+    // SINGLETON for the same reason: being collected is one procedure whatever
+    // runtime an agent runs, so there is no runtime to choose here.
+    return (
+      <BootDocPage
+        kind="offboard"
+        docKey="global"
+        title={t.settings.offboardName}
+        historyTitle={t.settings.historyBootOffboardTitle}
+        crumbs={[crumbRoot, crumbRoles, { label: t.settings.offboardName }]}
       />
     );
   }
@@ -1637,6 +1658,7 @@ function RolesLog({
   onOpenSystem,
   onOpenCustom,
   onOpenBoot,
+  onOpenOffboard,
   onOpenRole,
   onCreate,
   onDelete,
@@ -1651,6 +1673,8 @@ function RolesLog({
    * whichever it picked would be the wrong document half the time — with no
    * way for the reader to tell, because the two pages look identical. */
   onOpenBoot: (runtime: "claude" | "codex") => void;
+  /** 下線程序 (T-c9c0) — one document, so no runtime to pass. */
+  onOpenOffboard: () => void;
   onOpenRole: (key: string) => void;
   onCreate: (input: { name: string }) => Promise<unknown>;
   onDelete: (key: string) => Promise<void>;
@@ -1796,6 +1820,21 @@ function RolesLog({
           <span className="set-entry__body">
             <span className="set-entry__name">{t.settings.bootName}</span>
             <span className="set-entry__sub">{t.settings.bootSub}</span>
+          </span>
+          <ChevronRightIcon size={18} className="set-entry__chev" />
+        </button>
+        {/* 下線程序 sits FOURTH, right after 啟動程序: the two are the same
+          * agent's life read end to end, so the list runs 開機 → 下線. This
+          * document is NOT part of the boot fold — the server hands it over at
+          * the moment it collects a session — which is exactly why it needs a
+          * row of its own here rather than a paragraph inside another block. */}
+        <button type="button" className="set-entry" onClick={onOpenOffboard}>
+          <span className="set-entry__icon set-entry__icon--violet">
+            <LogOutIcon size={18} />
+          </span>
+          <span className="set-entry__body">
+            <span className="set-entry__name">{t.settings.offboardName}</span>
+            <span className="set-entry__sub">{t.settings.offboardSub}</span>
           </span>
           <ChevronRightIcon size={18} className="set-entry__chev" />
         </button>

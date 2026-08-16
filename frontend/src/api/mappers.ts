@@ -968,6 +968,8 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
       DOC_CAP_CHARS_DEFAULTS.systemInteraction,
     docCapCharsBootSequence:
       w.doc_cap_chars_boot_sequence ?? DOC_CAP_CHARS_DEFAULTS.bootSequence,
+    docCapCharsOffboard:
+      w.doc_cap_chars_offboard ?? DOC_CAP_CHARS_DEFAULTS.offboard,
     // T-c9b4 chat budget. Same "?? the shipped default, never 0" reasoning as
     // the caps above: against a server too old to send the field, 0 would read
     // as "no chat at all", which is the one answer that is never right.
@@ -1137,7 +1139,11 @@ export function toGlobalContext(w: WireGlobalContext): GlobalContextView {
  * "narrow at the mapper, never downstream" rule toPresence follows.
  */
 export function toBootDoc(w: WireBootDoc): BootDocView {
-  if (w.kind !== "system_interaction" && w.kind !== "boot_sequence") {
+  if (
+    w.kind !== "system_interaction" &&
+    w.kind !== "boot_sequence" &&
+    w.kind !== "offboard"
+  ) {
     throw new Error(`toBootDoc: unknown boot document kind ${JSON.stringify(w.kind)}`);
   }
   const kind: BootDocKind = w.kind;

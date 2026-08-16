@@ -123,7 +123,7 @@ func (f bootDocFixture) seed(t *testing.T, filename string) string {
 	return text
 }
 
-// the three documents, addressed the way a client addresses them.
+// the owner-editable documents, addressed the way a client addresses them.
 type bootDocCase struct {
 	name string
 	path string // the read/replace path; reset is this + "/reset"
@@ -137,6 +137,9 @@ func bootDocCases() []bootDocCase {
 		{"system_interaction", "/api/system-interaction", systemInteractionSeedMD, docKindSystemInteraction, systemInteractionDocKey},
 		{"boot_sequence_claude", "/api/boot-sequence/claude", bootSequenceSeedClaude, docKindBootSequence, bootSequenceKeyClaude},
 		{"boot_sequence_codex", "/api/boot-sequence/codex", bootSequenceSeedCodex, docKindBootSequence, bootSequenceKeyCodex},
+		// 下線程序 (T-c9c0) joined the family later; it is listed LAST so the
+		// index-addressed cases above keep pointing at the documents they name.
+		{"offboard", "/api/offboard", offboardSeedMD, docKindOffboard, offboardDocKey},
 	}
 }
 

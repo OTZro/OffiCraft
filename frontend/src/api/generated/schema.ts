@@ -2006,6 +2006,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/offboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the 下線程序 block — the wrap-up checklist the server hands an agent at the moment it is about to collect that session. It is a SINGLETON: one document for every agent and every runtime, keyed `global` like the 系統互動 block. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.
+         * @description Read the 下線程序 block — the wrap-up checklist the server hands an agent at the moment it is about to collect that session (T-c9c0).
+         *
+         *     It is a SINGLETON, keyed `global` exactly like the 系統互動 block: one document for every agent and every runtime, because being collected works the same way whoever you are.
+         *
+         *     It is an OVERLAY over the shipped seed (`seeds/offboard.md`): ``is_default=true`` means nobody has edited it and you are reading the factory text, ``false`` means you are reading an edit. ``has_seed`` reports that a factory version exists to reset back to.
+         */
+        get: operations["handle_get_offboard_api_offboard_get"];
+        put?: never;
+        /**
+         * Replace the WHOLE 下線程序 block ({text}) — the wrap-up checklist an agent is handed when its session is being collected. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. The write is judged against the doc.cap_chars.offboard cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_offboard always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.
+         * @description Whole-document replace of the 下線程序 block: ``{text}`` (T-c9c0).
+         *
+         *     Writes an OVERLAY — the shipped seed is never modified, so ``/api/offboard/reset`` can always reach the factory text. ``text`` is REQUIRED (a whole-document replace must never infer "empty" from a missing key); ``allow_shrink`` (default false) must be set explicitly to replace existing content with an empty document. The ``doc.cap_chars.offboard`` cap is checked UNCONDITIONALLY — ``allow_shrink`` governs the opposite direction and is not a bypass.
+         *
+         *     A save whose folded result is IDENTICAL to what is stored writes nothing and retains NO version.
+         *
+         *     Governance write (owner or the admin 助理): this text is the last thing an agent is told before it stops, and there is nobody online to correct it afterwards.
+         */
+        post: operations["handle_replace_offboard_api_offboard_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/offboard/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore the 下線程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.
+         * @description Reset the 下線程序 block to the SHIPPED seed (T-c9c0): an idempotent tombstone of the overlay, so the folded read falls back to `seeds/offboard.md` (``is_default`` → true).
+         *
+         *     NO length cap is checked on this path, matching ``reset_system_interaction``/``reset_boot_sequence``: the factory text is part of the product, so a cap the owner raised or set afterwards must never be able to block the way back to it.
+         *
+         *     The discarded overlay is retained as a document-history revision, so the reset is itself recoverable. Resetting an already-default block writes nothing and retains nothing.
+         */
+        post: operations["handle_reset_offboard_api_offboard_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/outsource-workers": {
         parameters: {
             query?: never;
@@ -2606,7 +2664,7 @@ export interface paths {
          *     EFFECT: stamps the CALLER's ``refocus_since`` and fans a ``member`` delta, exactly
          *     like the owner's refocus. Nothing else is dispatched here — the STANDARD recycle
          *     orchestration (§4.5) then carries the handover: the delta reaches the agent's OWN
-         *     listen connection → the RecycleHook prints the five-step handover SOP → the agent
+         *     listen connection → the RecycleHook prints the server's 下線程序 document (GET /api/offboard) → the agent
          *     runs it (report_stopping → baton → lessons → report_stopped) → the server kills →
          *     respawns IN PLACE. Same already-tested machinery as an owner refocus, just
          *     self-triggered; the agent never mints a token or kills its own process.
@@ -7129,6 +7187,12 @@ export interface components {
              */
             doc_cap_chars_manual_sop: number;
             /**
+             * Doc Cap Chars Offboard
+             * @description The size cap on the 下線程序 block, in CHARACTERS (Unicode code points). The floor of the adjustable range is this document's shipped default (the `default` field above), the ceiling is 100000. It is sized like the 啟動程序 blocks rather than the 系統互動 handbook: both are short ordered checklists an agent has to be able to finish under a deadline.
+             * @default 15000
+             */
+            doc_cap_chars_offboard: number;
+            /**
              * Doc Cap Chars System Interaction
              * @description The size cap on the 系統互動 block of the boot context, in CHARACTERS (Unicode code points). The floor of the adjustable range is this document's shipped default (the `default` field above), the ceiling is 100000. It is far larger than the role-journal caps because the block it governs is the studio handbook every agent reads at boot, and it is sized against the seed that ships with it.
              * @default 60000
@@ -7251,6 +7315,11 @@ export interface components {
              * @description The size cap on a 啟動程序 block of the boot context, in CHARACTERS (Unicode code points). One knob for both runtimes, each measured on its own text. Must be at least this document's shipped default (see `SettingsDTO.doc_cap_chars_boot_sequence`, whose `default` is that floor) and at most 100000.
              */
             doc_cap_chars_boot_sequence?: number | null;
+            /**
+             * Doc Cap Chars Offboard
+             * @description The size cap on the 下線程序 block, in CHARACTERS (Unicode code points). Must be at least this document's shipped default (see `SettingsDTO.doc_cap_chars_offboard`, whose `default` is that floor) and at most 100000.
+             */
+            doc_cap_chars_offboard?: number | null;
             /**
              * Doc Cap Chars System Interaction
              * @description The size cap on the 系統互動 block of the boot context, in CHARACTERS (Unicode code points). Must be at least this document's shipped default (see `SettingsDTO.doc_cap_chars_system_interaction`, whose `default` is that floor) and at most 100000.
@@ -12378,6 +12447,151 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentTelemetryDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_get_offboard_api_offboard_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootDocumentDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_replace_offboard_api_offboard_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BootDocumentReplaceDTO"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootDocumentDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_reset_offboard_api_offboard_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootDocumentDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

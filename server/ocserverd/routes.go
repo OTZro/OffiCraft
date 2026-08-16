@@ -1045,6 +1045,38 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Restore ONE runtime's 啟動程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). runtime_key is 'claude' or 'codex'; anything else is a 404. No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it, which is what makes this the recovery route when a bad edit has stopped agents from booting. The overlay being discarded is retained in the document history. Owner or admin assistant only.",
 			MCPTool:  "reset_boot_sequence",
 		},
+		// 下線程序 (T-c9c0) — the fourth owner-editable global document, and the
+		// same three-row shape as the 系統互動 block above, floors included: read
+		// at the machine floor (every agent is handed this text when its session
+		// is collected), write at admin_agent (it is the last instruction an
+		// agent gets, with nobody online afterwards to correct it).
+		{
+			Method:   "GET",
+			Path:     "/api/offboard",
+			Handler:  w.HandleGetOffboardApiOffboardGet,
+			Auth:     authGated,
+			Requires: principalMachine,
+			Summary:  "Read the 下線程序 block — the wrap-up checklist the server hands an agent at the moment it is about to collect that session. It is a SINGLETON: one document for every agent and every runtime, keyed `global` like the 系統互動 block. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
+			MCPTool:  "get_offboard",
+		},
+		{
+			Method:   "POST",
+			Path:     "/api/offboard",
+			Handler:  w.HandleReplaceOffboardApiOffboardPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Replace the WHOLE 下線程序 block ({text}) — the wrap-up checklist an agent is handed when its session is being collected. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. The write is judged against the doc.cap_chars.offboard cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_offboard always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.",
+			MCPTool:  "replace_offboard",
+		},
+		{
+			Method:   "POST",
+			Path:     "/api/offboard/reset",
+			Handler:  w.HandleResetOffboardApiOffboardResetPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Restore the 下線程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.",
+			MCPTool:  "reset_offboard",
+		},
 		{
 			Method:   "GET",
 			Path:     "/api/roles",

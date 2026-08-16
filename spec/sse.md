@@ -107,8 +107,8 @@ data: {"seq":42,"topic":"member","op":"patch","data":{"entity":"member","key":"o
   trigger MUST be processed (fail-open — old producer, unknown actor). **Exemption: the
   `member` topic is NOT suppressed** — a member delta naming self is a lifecycle NUDGE
   (wind-down / recycle hooks), not printed content, and the self-requested recycle
-  (`restart_self`, T-4c71) deliberately rides a SELF-triggered member delta whose SOP
-  wake must still land; suppressing it would break graceful handover for zero token gain.
+  (`restart_self`, T-4c71) deliberately rides a SELF-triggered member delta whose
+  handover wake must still land; suppressing it would break graceful handover for zero token gain.
 
 ## 3. Topic and op vocabulary
 
