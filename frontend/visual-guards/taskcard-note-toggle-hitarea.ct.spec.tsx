@@ -15,12 +15,20 @@
 // hard: how much of the row answers to the control, and whether the row still
 // goes through the note's handler rather than the card's.
 //
+// SHAPE (owner 2026-08-16, first acceptance round:「展開備注的時候,備註不是應該
+// 要在匡裡面嗎?」): the panel is the WRAP — this row is its header, the note is
+// its body. So the row is measured against the wrap's INNER width; the border
+// belongs to the panel, not to the row.
+//
 // WHY CT AND NOT JSDOM: every claim is a box, a hit test, or a composited
 // colour. jsdom has no layout engine, so a jsdom version passes on a 0×0
 // control painted in nothing.
 //
 // 🔴 WHAT THIS FILE DELIBERATELY DOES NOT MEASURE: how the row LOOKS. There is
 // no contrast assertion and no per-theme run, by owner ruling (2026-08-16):
+// (and since that ruling the panel stopped being a hand-mixed tint anyway — it
+// takes the theme's own `--color-bg` / `--color-border`, so "what colour is it"
+// is a question for the theme pack, not for this file):
 // 「不需要驗證什麼顏色好不好,這種都是負責人一開始確認沒問題就好,我們不會去改
 // 這種東西」. An earlier revision of this file did pin a composited contrast
 // floor across both themes; it was removed on that ruling, not because it did
@@ -40,14 +48,17 @@
 // MUTANT REGISTER (each planted IN PLACE on the declaration named, run, and
 // observed — counts are against the 10 tests below and expire if the case list
 // changes):
-//   N1 · tasks.css `.task-step__note-toggle` back to the shipped-before shape
-//        (`display:inline-flex; width:auto; min-height:0; padding:0`)
-//        ⇒ 4 failed / 6 passed — "the whole row, and a 44px touch target" AND
-//        "every edge of the row answers to the note's control" at both widths.
-//        ⚠️ The edge test only kills this because it probes the ROW's box. The
-//        first version probed the control's OWN box and stayed GREEN under N1
-//        (measured), because every point inside a 66×16 button is still that
-//        button. A hit test is only a hit test relative to the area you claim.
+//   N1 · tasks.css: the row back to the shipped-before inline shape
+//        (`display:inline-flex; width:auto; min-height:0; padding:0`) AND the
+//        wrap back to `align-items: flex-start`
+//        ⇒ 4 failed / 4 passed — "the whole row, and a 44px touch target" AND
+//        "every edge of the row answers to the note's control", both widths.
+//        🔴 BOTH HALVES ARE REQUIRED TO PLANT IT. The row spanning its panel is
+//        now over-determined: `width:100%` on the row and `align-items:stretch`
+//        on the wrap each achieve it alone. Reverting only one leaves the row
+//        full width and the file 8/8 GREEN — measured, twice — which reads
+//        exactly like "the guard has no teeth". A mutant that does not change
+//        the thing you are measuring proves nothing about the guard.
 //   (An N2 that dropped the row's background and border used to live here and
 //    is gone with the contrast test it reddened — see the ruling above. Nothing
 //    in this repo now watches how the row is painted; that is deliberate, not an
@@ -92,6 +103,11 @@ for (const width of WIDTHS) {
       const s = step.getBoundingClientRect();
       return {
         btn: { w: b.width, h: b.height },
+        // The row is compared against the wrap's INNER width: since the panel's
+        // border moved out to the wrap (owner's 「備註要在框裡面」), the row is
+        // its content, and a border-box comparison would be off by the border
+        // and read as "the row no longer spans its container".
+        wrapInnerW: wrap.clientWidth,
         wrapW: w.width,
         stepW: s.width,
       };
@@ -102,7 +118,7 @@ for (const width of WIDTHS) {
     expect(
       m.btn.w,
       "the control must span its whole row"
-    ).toBeCloseTo(m.wrapW, 0);
+    ).toBeCloseTo(m.wrapInnerW, 0);
     // …and that row is really the step's width, not a shrunken column (a wrap
     // that collapsed to fit-content would make the line above trivially true).
     expect(

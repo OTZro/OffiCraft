@@ -1618,11 +1618,25 @@ button.task-card__waiting--dep:focus-visible {
    ONLY thing separating a step someone wrote a note on from one nobody did.
    Same atoms as .mp-lastop__toggle (member-detail.css) so the cockpit keeps
    one disclosure vocabulary. */
+/* 🔴 T-6630 (owner 2026-08-16, 驗收第一輪):「展開備注的時候,備註不是應該要在
+   匡裡面嗎?」— and he is right. The box was drawn around the disclosure ROW
+   only, so an opened note fell OUTSIDE it and the two read as unrelated things.
+   The panel is therefore the WRAP: the row is its header, the note its body,
+   one rule between them. The row keeps every property ② bought (full width,
+   44px, a real <button>) — only the border moved outward.
+   `align-items: stretch` (not flex-start) so the row spans the panel; a column
+   flex with flex-start sizes children to their own content, which is also the
+   trap css-layout-traps.md warns about. */
 .task-step__notewrap {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   min-width: 0;
+  margin-top: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  overflow: hidden;
 }
 /* 🔴 T-6630 ②: this is a full-width ROW with a surface of its own, not a bare
    66×16px inline button. Two things force that shape and both are about the
@@ -1637,24 +1651,24 @@ button.task-card__waiting--dep:focus-visible {
      of. The 備註 word in the label is kept for the same reason.
    min-height is a TOUCH target, not decoration: 44px is the interaction size
    this repo already uses for a thumb (tasks.css itself and office.css).
-   🔴 THE TINT AND THE BORDER ARE NOT TESTED, AND THAT IS A RULING, NOT A GAP.
+   🔴 THE PANEL'S COLOURS ARE THE THEME'S, AND THEY ARE NOT TESTED.
    Owner 2026-08-16:「不需要驗證什麼顏色好不好,這種都是負責人一開始確認沒問題
-   就好,我們不會去改這種東西」. A contrast guard across both themes was written
-   (an independent review had shown the row could be faded to 0.2% with every
-   test still green) and then removed on that ruling. So these two percentages
-   rest on his sign-off alone: changing them changes something nobody will
-   catch, and it is his call to make, not a tidy-up. */
+   就好」— a contrast guard existed and was removed on that ruling. And when he
+   saw the first version he asked why the colours were MIXED rather than named:
+   「我覺得我現在淺色卻還是灰色很奇怪」. He was right — a `color-mix()` of the
+   overlay token reads grey on a light palette, because a light pack's overlay
+   is dark. The panel now takes `--color-bg` and `--color-border` straight, so a
+   theme pack that defines those two gets a panel in its own colours with no
+   work. Nothing tests this: changing it is his call, not a tidy-up. */
 .task-step__note-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
   min-height: 44px;
-  margin-top: 6px;
   padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--color-overlay) 20%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--color-overlay) 12%, transparent);
+  border: none;
+  background: none;
   cursor: pointer;
   font-size: 12px;
   text-align: left;
@@ -1662,7 +1676,13 @@ button.task-card__waiting--dep:focus-visible {
 }
 .task-step__note-toggle:hover {
   color: var(--color-text);
-  background: color-mix(in srgb, var(--color-overlay) 18%, transparent);
+  background: var(--color-card);
+}
+/* Open: the header is separated from the body it opened. The modifier is set in
+   TSX rather than using `:has()` — the state is already known where the note is
+   rendered, and a class keeps the selector readable in every engine. */
+.task-step__notewrap--open .task-step__note-toggle {
+  border-bottom: 1px solid var(--color-border);
 }
 .task-step__notewrap .task-step__note {
   width: 100%;
@@ -1672,7 +1692,7 @@ button.task-card__waiting--dep:focus-visible {
   align-items: flex-start;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 6px;
+  padding: 10px;
   color: var(--color-text-muted);
   font-size: 12px;
 }
