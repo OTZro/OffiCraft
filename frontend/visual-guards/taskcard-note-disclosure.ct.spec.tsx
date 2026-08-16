@@ -16,6 +16,44 @@
 // — through `update_task` since T-646a, and through the two original routes,
 // which stay on the HTTP surface for this client. This file only measures that
 // the cockpit no longer offers a way in.
+//
+// T-6630 ④ (owner 2026-08-16, second acceptance round):「備註不是很常按,可以放在
+// step 的右下角,點開再跳出另一個 Modal 打開嗎?像是我們開 .md 檔那種方式」. The
+// note is no longer disclosed INSIDE the step, so the three note-facing tests
+// below were re-pointed at the corner entry (`[data-testid='step-note-open']`)
+// and at the portalled reader (`.md-preview`). The 標題／敘述 test is untouched
+// — it never had anything to do with the note — and is re-run here as green.
+// The 「預設不顯示」 half of the owner's older ruling survives the redesign
+// unchanged: a note is still not on screen until someone asks for it. What
+// changed is only WHERE it appears when they do.
+//
+// MUTANT REGISTER — five mutants, planted IN PLACE, run against all three note
+// guards, observed. Counts below are this file's own (4 tests) and expire if the
+// case list changes.
+//   M1 · TaskCard.tsx — render the entry as a <div> instead of a <button>
+//        ⇒ HERE 1 failed / 3 passed: "the note entry and its reader fit a 390px
+//        phone with no page hscroll", with `.task-step__note-open missing (never
+//        rendered)` — pressing a <div> collapses the whole card, so the entry it
+//        then looks for is gone. Owned by taskcard-note-entry.ct.spec.tsx
+//        (6 red), which names the property instead of tripping over it.
+//   M2 · tasks.css `.task-step__note-open` — delete `min-height: 44px`
+//        ⇒ HERE 4 passed / 0 failed. The 44px touch floor belongs to the entry
+//        guard (2 red, measured 29px). Registered so nobody reads this file's
+//        green as touch-target coverage.
+//   M3 · TaskCard.tsx, the entry's onClick — also `.tasks` `scrollTop += 120`
+//   M4 · TaskCard.tsx, the overlay's onClose — also `.tasks` `scrollTop -= 120`
+//        ⇒ both 4 passed / 0 failed HERE: this story mounts bare, with no
+//        `.tasks`. They are the anchor guard's mutants (5 red each).
+//   M5 · TaskCard.tsx — render the entry on every step, not only on one that has
+//        a note (`{step.note && (` → `{true && (`)
+//        ⇒ HERE 3 failed / 1 passed, and this file OWNS the property: red are
+//        "collapsed, a step WITH a note is visibly taller than one without"
+//        (the two rows become the same height), "a step note is not on screen
+//        until the corner entry is pressed" and "the note entry and its reader
+//        fit a 390px phone" (the strict locator resolves to two entries). This
+//        is the owner's reason for reading the timeline at all: while every note
+//        is closed, the entry is the ONLY thing separating a step someone wrote
+//        a note on from one nobody did.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { TaskCardNoteDisclosureStory } from "./stories/TaskCardNoteDisclosureStory";
 
@@ -154,32 +192,36 @@ test("no edit affordance for the title or the description occupies any pixels", 
   await expect(cmp.locator(".task-card__desc")).toBeVisible();
 });
 
-test("a step note is collapsed until its own control is clicked, and collapses again", async ({
+test("a step note is not on screen until the corner entry is pressed, and goes away again", async ({
   mount,
   page,
 }) => {
   const cmp = await mountExpanded(mount, page);
 
-  // default: nothing of the note is on screen.
-  expect(await boxOf(page, "[data-testid='step-note']")).toBeNull();
+  // default: neither the note text nor the reader is anywhere on the page.
+  expect(await boxOf(page, ".md-preview")).toBeNull();
+  expect(
+    await page.evaluate(
+      () => !!document.body.textContent?.includes("handler 已完成")
+    ),
+    "the note text must not be on screen while nobody has asked for it"
+  ).toBe(false);
 
-  const toggle = cmp.locator("[data-testid='step-note-toggle']");
-  await expect(toggle).toHaveCount(1);
-  await expect(toggle).toBeVisible();
+  const entry = cmp.locator("[data-testid='step-note-open']");
+  await expect(entry).toHaveCount(1);
+  await expect(entry).toBeVisible();
 
-  await toggle.click();
-  const open = await boxOf(page, "[data-testid='step-note']");
-  expect(open, "the note must render after 展開備註").not.toBeNull();
+  await entry.click();
+  const open = await boxOf(page, ".md-preview__panel");
+  expect(open, "the reader must render after pressing 備註").not.toBeNull();
   expect(
     open!.h,
-    "the opened note must occupy real height, not a 0px shell"
+    "the reader must occupy real height, not a 0px shell"
   ).toBeGreaterThan(10);
-  await expect(cmp.locator("[data-testid='step-note']")).toContainText(
-    "handler 已完成"
-  );
+  await expect(page.locator(".md-preview")).toContainText("handler 已完成");
 
-  await toggle.click();
-  expect(await boxOf(page, "[data-testid='step-note']")).toBeNull();
+  await page.locator(".md-preview__close").click();
+  expect(await boxOf(page, ".md-preview")).toBeNull();
 });
 
 test("collapsed, a step WITH a note is visibly taller than one without", async ({
@@ -190,7 +232,8 @@ test("collapsed, a step WITH a note is visibly taller than one without", async (
   // With notes collapsed, "nobody wrote anything" and "someone wrote something
   // you cannot see" must not look identical. The story's two step names are
   // the same character length, so a height difference can only come from the
-  // disclosure row.
+  // corner entry. Moving the note into an overlay makes this the ONLY on-card
+  // trace a note leaves, which is why it survives the redesign.
   const cmp = await mountExpanded(mount, page);
 
   const sizes = await page.evaluate(() => {
@@ -212,14 +255,14 @@ test("collapsed, a step WITH a note is visibly taller than one without", async (
   ).toBeGreaterThan(8);
 
   // …and the difference is the CONTROL, not some incidental padding: the
-  // toggle exists on exactly the step that has a note, with a real box.
+  // entry exists on exactly the step that has a note, with a real box.
   const which = await page.evaluate(() => {
     const has = (id: string) =>
       !!document
         .querySelector(`[data-step-id='${id}']`)!
-        .querySelector("[data-testid='step-note-toggle']");
+        .querySelector("[data-testid='step-note-open']");
     const t = document.querySelector(
-      "[data-testid='step-note-toggle']"
+      "[data-testid='step-note-open']"
     ) as HTMLElement;
     const r = t.getBoundingClientRect();
     return { onNote: has("s-note"), onNoNote: has("s-nonote"), w: r.width, h: r.height };
@@ -230,14 +273,15 @@ test("collapsed, a step WITH a note is visibly taller than one without", async (
   expect(which.h).toBeGreaterThan(8);
 });
 
-test("the note disclosure fits a 390px phone with no page hscroll, open or closed", async ({
+test("the note entry and its reader fit a 390px phone with no page hscroll", async ({
   mount,
   page,
 }) => {
   // Inherited from the guard this file replaces (taskcard-desc-editor-wrap):
   // the surface that was added to the card must not burst a phone viewport.
-  // Both states are measured — a rule that holds only while collapsed is not
-  // the rule anyone needs.
+  // Both states are measured — a rule that holds only while the reader is shut
+  // is not the rule anyone needs, and the reader is a full-viewport overlay,
+  // which is exactly the shape that bursts a narrow page when it is wrong.
   const cmp = await mountExpanded(mount, page, 390);
   const hscroll = () =>
     page.evaluate(
@@ -245,12 +289,15 @@ test("the note disclosure fits a 390px phone with no page hscroll, open or close
         document.scrollingElement!.scrollWidth -
         document.scrollingElement!.clientWidth
     );
-  expect(await hscroll(), "collapsed").toBeLessThanOrEqual(1);
-  await cmp.locator("[data-testid='step-note-toggle']").click();
-  await expect(cmp.locator("[data-testid='step-note']")).toBeVisible();
-  expect(await hscroll(), "note open").toBeLessThanOrEqual(1);
+  expect(await hscroll(), "reader closed").toBeLessThanOrEqual(1);
+  await cmp.locator("[data-testid='step-note-open']").click();
+  await expect(page.locator(".md-preview")).toBeVisible();
+  expect(await hscroll(), "reader open").toBeLessThanOrEqual(1);
 
-  for (const sel of [".task-step__note-toggle", ".task-step__note-md"]) {
+  // …and neither the entry nor the reader's own body scrolls sideways inside
+  // itself. `-2` scores a MISSING element as a failure, so a renamed surface
+  // cannot retire the assertion quietly.
+  for (const sel of [".task-step__note-open", ".md-preview__md"]) {
     const over = await page.evaluate((s: string) => {
       const el = document.querySelector(s) as HTMLElement | null;
       return el ? el.scrollWidth - el.clientWidth : -2;

@@ -160,7 +160,6 @@ export const en: Dict = {
     // the collapsed label on purpose — it is the only thing that tells a step
     // WITH a note apart from one without while both are closed.
     stepNoteExpand: "Show note",
-    stepNoteCollapse: "Hide note",
     blockedByLabel: "Waiting on",
     // T-1d82: a dep row whose task cannot be resolved (deleted / bad id). Keeps
     // the raw id — it is the only handle left — but says plainly that there is
