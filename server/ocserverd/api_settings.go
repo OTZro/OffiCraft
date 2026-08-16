@@ -40,7 +40,12 @@ var tokenTTLWhitelist = map[int]bool{
 // below it the lead would put the notice on a barely-used gauge, and at
 // handoverNoticeLeadPct or less there would be no notice at all.
 const (
-	minHandoverPct              = 40
+	minHandoverPct = 40
+	// minNoticePct is deliberately 1, not 40: the SOFT notice is an invitation
+	// to start closing out, and an owner who wants it early should get it early.
+	// What actually protects the pair is the ordering check (notice strictly
+	// below final), not a floor.
+	minNoticePct                = 1
 	maxHandoverPct              = 90
 	minCodexCompactionThreshold = 1
 	maxCodexCompactionThreshold = 10
@@ -279,8 +284,68 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		writeError(w, http.StatusUnprocessableEntity, "handover_pct must be between 40 and 90")
 		return
 	}
+	if body.NoticePct != nil &&
+		(*body.NoticePct < minNoticePct || *body.NoticePct > maxHandoverPct-1) {
+		writeError(w, http.StatusUnprocessableEntity, "notice_pct must be between 1 and 89")
+		return
+	}
 	if body.CodexCompactionThreshold != nil && (*body.CodexCompactionThreshold < minCodexCompactionThreshold || *body.CodexCompactionThreshold > maxCodexCompactionThreshold) {
 		writeError(w, http.StatusUnprocessableEntity, "codex_compaction_threshold must be between 1 and 10")
+		return
+	}
+	if body.CodexNoticeRound != nil && (*body.CodexNoticeRound < minCodexCompactionThreshold || *body.CodexNoticeRound > maxCodexCompactionThreshold) {
+		writeError(w, http.StatusUnprocessableEntity, "codex_notice_round must be between 1 and 10")
+		return
+	}
+	// The two offboard points are a PAIR and are checked against the POST-PATCH
+	// values, not against whatever arrived in this body: either one may be sent
+	// alone, and what must hold is that the SOFT notice still lands strictly
+	// before the FINAL one. A pair that crosses is REFUSED rather than quietly
+	// reordered — silently swapping them would leave the owner looking at a
+	// cockpit that disagrees with when his agents actually get notified. Same
+	// rule on both axes; codex measures in rounds because that is what its
+	// handover reads.
+	//
+	// Both sides read the EFFECTIVE current value, not the raw stored one: a
+	// server whose pair has never been written holds zeroes, and comparing
+	// those would refuse an unrelated patch (org_name, a doc cap) with a
+	// complaint about numbers the caller never sent.
+	ctxNow := s.ctxHighConfig()
+	shipped := defaultSseContextHigh()
+	noticePct, handoverPct := ctxNow.NoticePct, ctxNow.HandoverPct
+	if handoverPct <= 0 {
+		handoverPct = shipped.HandoverPct
+	}
+	if noticePct <= 0 {
+		noticePct = shipped.NoticePct
+	}
+	if body.NoticePct != nil {
+		noticePct = *body.NoticePct
+	}
+	if body.HandoverPct != nil {
+		handoverPct = *body.HandoverPct
+	}
+	if noticePct >= handoverPct {
+		writeError(w, http.StatusUnprocessableEntity,
+			"notice_pct must be strictly below handover_pct")
+		return
+	}
+	noticeRound, finalRound := s.codexNoticeRoundSetting(), s.codexCompactionThresholdSetting()
+	if finalRound < 1 {
+		finalRound = defaultCodexCompactionThreshold
+	}
+	if noticeRound < 1 {
+		noticeRound = finalRound - 1
+	}
+	if body.CodexNoticeRound != nil {
+		noticeRound = *body.CodexNoticeRound
+	}
+	if body.CodexCompactionThreshold != nil {
+		finalRound = *body.CodexCompactionThreshold
+	}
+	if noticeRound >= finalRound {
+		writeError(w, http.StatusUnprocessableEntity,
+			"codex_notice_round must be strictly below codex_compaction_threshold")
 		return
 	}
 	if body.MonitoringRefreshSeconds != nil && (*body.MonitoringRefreshSeconds < minMonitoringRefreshSeconds || *body.MonitoringRefreshSeconds > maxMonitoringRefreshSeconds) {
@@ -432,6 +497,14 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		}
 		s.ctxhigh.HandoverPct = *body.HandoverPct
 	}
+	if body.NoticePct != nil {
+		if err := s.dal.PutSetting(settingCtxNoticePct, strconv.Itoa(*body.NoticePct)); err != nil {
+			s.settingsMu.Unlock()
+			internalError(w, err)
+			return
+		}
+		s.ctxhigh.NoticePct = *body.NoticePct
+	}
 	if body.CodexCompactionThreshold != nil {
 		if err := s.dal.PutSetting(settingCodexCompactionThreshold, strconv.Itoa(*body.CodexCompactionThreshold)); err != nil {
 			s.settingsMu.Unlock()
@@ -439,6 +512,14 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 			return
 		}
 		s.codexCompactionThreshold = *body.CodexCompactionThreshold
+	}
+	if body.CodexNoticeRound != nil {
+		if err := s.dal.PutSetting(settingCodexNoticeRound, strconv.Itoa(*body.CodexNoticeRound)); err != nil {
+			s.settingsMu.Unlock()
+			internalError(w, err)
+			return
+		}
+		s.codexNoticeRound = *body.CodexNoticeRound
 	}
 	if body.MonitoringRefreshSeconds != nil {
 		if err := s.dal.PutSetting(settingMonitoringRefreshSeconds, strconv.Itoa(*body.MonitoringRefreshSeconds)); err != nil {
@@ -608,7 +689,9 @@ func (s *apiServer) settingsView() settingsDTO {
 		OwnerTokenTTL:                s.ownerTokenTTL,
 		AgentTokenTTL:                s.agentTokenTTL,
 		HandoverPct:                  s.ctxhigh.HandoverPct,
+		NoticePct:                    s.ctxhigh.NoticePct,
 		CodexCompactionThreshold:     s.codexCompactionThreshold,
+		CodexNoticeRound:             s.codexNoticeRound,
 		MonitoringRefreshSeconds:     s.monitoringRefreshSeconds,
 		OutsourceMaxParallel:         s.outsourceMaxParallel,
 		DocCapCharsDuty:              s.docCapCharsDuty,

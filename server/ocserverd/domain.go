@@ -109,6 +109,25 @@ const WakingTTLSecs = 90.0
 // this long to wind down before a stuck collect is force-killed.
 const StoppingTimeoutSecs = 120.0
 
+// SoftOffboardGraceSecs: how long a soft offboard runs before anything else
+// happens. The soft notice says "work the sequence, then call restart_self
+// yourself" and carries no countdown, so there must not be one running behind
+// it.
+//
+// What happens AFTER the window differs by path, and the difference is the
+// owner's ruling, not an oversight:
+//
+//   - 重新聚焦 escalates: the final call goes out and StoppingTimeoutSecs
+//     starts, because that handover has to complete for his change to land.
+//   - 下線 never escalates. He chose to be the only escalation there
+//     (rc-27d1710174dd 「不要兜底：只有你按強制下線才收它」), so the window is
+//     only the period during which a close-out is treated as in-flight — see
+//     clearStaleStoppingOnOnline, which is what keeps the force-stop button
+//     on screen for him to press.
+//
+// Setting it to 0 restores the pre-T-a9d6 timed wind-down wholesale.
+const SoftOffboardGraceSecs = 600.0
+
 // livenessInput is the normalized input to the shared liveness kernel
 // (deriveLiveness): the two actor kinds (member / outsource worker) map their
 // own durable anchors onto these three facts and read back the SAME unified

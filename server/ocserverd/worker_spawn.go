@@ -1464,7 +1464,7 @@ func (s *apiServer) openWorkerHandoverGrace(w OutsourceWorker, trigger string) {
 		return
 	}
 	s.hub.Publish("member", "patch", "member", wireOwnerID+"::"+w.ID,
-		memberDeltaPayload(memberFromWorker(w)), audienceMembers(w.ID), trigger)
+		s.offboardDeltaPayload(memberFromWorker(w)), audienceMembers(w.ID), trigger)
 	outsourceLog("handover %s (%s): grace opened — SOP nudge fanned, collect on "+
 		"stopped-report or +%.0fs", w.ID, w.Codename, StoppingTimeoutSecs)
 }

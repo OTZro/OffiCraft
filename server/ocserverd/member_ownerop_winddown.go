@@ -12,7 +12,8 @@ package main
 // ticket the staff verbs split three ways:
 //
 //	重啟   (refocus_member / restart_self) — stamps, dispatches NOTHING, and the
-//	       reconcile recycle arm waits for report_stopped or RecycleGrace.
+//	       reconcile recycle arm waits for report_stopped or the epoch's grace
+//	       (recycleGraceFor: 120s, or the soft window plus 120s for 重新聚焦).
 //	       FULL wind-down. UNCHANGED by this ticket (the sentinel).
 //	改機器 (relocate)                       — stamped nothing; reconcileMemberNow
 //	       took decideUp's relocate arm and dispatched a robust STOP ON THE
@@ -29,7 +30,7 @@ package main
 // land in the same write, and the single member delta the agent wakes on
 // already carries the new values. The 收口 is the pre-existing §4.5 machinery:
 // the agent's own report_stopped (→ dispatchRobustStopNow) or decideUp's
-// recycle arm at RecycleGrace. Either way the next tick's plain START re-mints
+// recycle arm at recycleGraceFor(refocus_op). Either way the next tick's plain START re-mints
 // the boot frame off the row, which is where the new machine / model now live.
 //
 // ── memberHasStateToFlush vs workerHasStateToFlush, cell by cell ─────────────
@@ -88,7 +89,7 @@ package main
 // server has zero visibility into an agent's transcript, so any finer test
 // (context pct, uptime, message counts) would be a guess dressed as a
 // criterion, and guessing wrong silently discards a round of learnings.
-// RecycleGrace is a CEILING — the 收口 fires the instant the agent answers
+// The grace is a CEILING — the 收口 fires the instant the agent answers
 // report_stopped, so a session with nothing to save ends in seconds.
 //
 // Cost, recorded honestly: after 改機器 / 換模型 the member lives at most one
@@ -148,17 +149,27 @@ func (s *apiServer) memberHasStateToFlush(m Member) bool {
 // outlives the stop and the next wake can be robust-stopped on an epoch that
 // expired while nobody was listening.
 //
-// Every site that stamps a member's refocus epoch must satisfy this. Two of
-// the four do so through a CORRELATION rather than by name: POST
-// /members/{id}/refocus and POST /self/refocus refuse 409 earlier because
-// PresenceState stops projecting online once StoppingSince > 0, and every path
-// that sets desired offline sets that anchor in the same write. PresenceState
-// itself never reads DesiredState on its online arm — so the thing protecting
-// those two handlers is an agreement between two other files, and adding the
-// check to them was measured to be dead code (T-ccc7). The predicate is named
-// and shared so the invariant has one place to point at when that agreement
-// breaks. The third site, the context-high auto-stamp in reconcile.go, had no
-// proxy at all and stamped members on their way offline until T-ccc7.
+// Every site that stamps a member's refocus epoch must satisfy this, and all of
+// them now say so BY NAME.
+//
+// 🔴 Two of them used not to. POST /members/{id}/refocus and POST /self/refocus
+// were protected by a CORRELATION: they gated on PresenceState, which stops
+// projecting online once StoppingSince > 0, and every path that sets desired
+// offline sets that anchor in the same write. Adding the explicit check was
+// measured to be dead code at the time (T-ccc7), and that measurement was
+// true — of that code.
+//
+// It stopped being true the moment those gates had to change: an agent working
+// its offboard sequence reports stopping FIRST (step 1), which made
+// PresenceState project `stopping` and had both endpoints refusing the very
+// caller the notice tells them to be (T-a9d6). Moving them onto the live-session
+// fact removed the correlation, and with it — silently — the invariant that had
+// been riding on it. The existing T-ccc7 tests caught that within one run, which
+// is the whole reason this predicate is named rather than implied: a protection
+// that holds by coincidence disappears the instant somebody replaces the
+// coincidence, and nothing about the edit looks like it touched the invariant.
+// The third site, the context-high auto-stamp in reconcile.go, had no proxy at
+// all and stamped members on their way offline until T-ccc7.
 func aRefocusStampWouldReachTheAgent(m Member) bool {
 	return m.DesiredState == DesiredStateOnline
 }
@@ -184,6 +195,6 @@ func (s *apiServer) armMemberOwnerOpHandover(m *Member, op string) bool {
 	m.StoppingSince = 0.0
 	m.StoppedSince = 0.0
 	reconcileLog("recycle: %s %s — wind-down opened (collect on stopped-report or +%.0fs)",
-		op, m.ID, s.reconcileCfg.RecycleGrace)
+		op, m.ID, recycleGraceFor(op, s.reconcileCfg))
 	return true
 }

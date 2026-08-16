@@ -947,6 +947,8 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
     ownerTokenTtl: w.owner_token_ttl,
     agentTokenTtl: w.agent_token_ttl,
     handoverPct: w.handover_pct,
+    noticePct: w.notice_pct,
+    codexNoticeRound: w.codex_notice_round,
     codexCompactionThreshold: w.codex_compaction_threshold ?? 3,
     monitoringRefreshSeconds: w.monitoring_refresh_seconds ?? 5,
     outsourceMaxParallel: w.outsource_max_parallel ?? 0,

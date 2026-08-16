@@ -143,7 +143,19 @@ type Member struct {
 	// ("relocate" | "runtime/model" | "context_high" | "refocus" |
 	// "restart_self"), "" when none is in flight. Stamped and cleared in lockstep
 	// with RefocusSince — see refocusOp* in member_ownerop_winddown.go.
-	RefocusOp    string
+	RefocusOp string
+	// ForcedStopAt is the durable record that a session was CUT OFF rather than
+	// collected (migrations/00057): unix seconds of the last force-stop, 0 when
+	// there has never been one. Force-stop is the one offboard path that sends
+	// no notice, so the session it kills leaves exactly what a session with
+	// nothing to write leaves — no hand-off, no fresh step note, no folded
+	// lesson. This column is what tells those two apart.
+	//
+	// 🔴 NOT cleared on the next boot, unlike every other lifecycle anchor: it
+	// describes the session BEFORE this one, and that is precisely who needs to
+	// read it. Written through SetMemberForcedStopAt only; PutMember's upsert
+	// deliberately does not carry it.
+	ForcedStopAt float64
 	BankedCost   float64
 	LastOp       string
 	LastOpOK     *bool // nil = no op reported yet (three-valued)
@@ -182,7 +194,7 @@ const memberColumns = `id, name, kind, role_key, runtime, model, actual_model, e
 	waking_since, stopping_since, stopped_since, refocus_since, refocus_op, banked_cost,
 	last_op, last_op_ok, last_op_log, last_op_reason, last_op_at, roster_status,
 	linked_task_id, codename, created_ts, released_ts, activated_ts,
-	avatar_attachment_id`
+	avatar_attachment_id, forced_stop_at`
 
 func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 	var m Member
@@ -196,7 +208,7 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 		&m.BankedCost,
 		&m.LastOp, &lastOpOK, &m.LastOpLog, &m.LastOpReason, &m.LastOpAt, &m.RosterStatus,
 		&linkedTaskID, &codename, &m.CreatedTS, &m.ReleasedTS, &m.ActivatedTS,
-		&m.AvatarAttachmentID,
+		&m.AvatarAttachmentID, &m.ForcedStopAt,
 	)
 	if err != nil {
 		return Member{}, err
@@ -299,7 +311,7 @@ func (d *DAL) PutMember(m Member) error {
 	}
 	_, err := d.wdb.Exec(`
 		INSERT INTO member (`+memberColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			name = excluded.name, kind = excluded.kind,
 			role_key = excluded.role_key, runtime = excluded.runtime,
@@ -325,7 +337,14 @@ func (d *DAL) PutMember(m Member) error {
 			codename = excluded.codename,
 			created_ts = excluded.created_ts,
 			released_ts = excluded.released_ts,
-			activated_ts = excluded.activated_ts`,
+			activated_ts = excluded.activated_ts,
+			-- forced_stop_at only ever moves FORWARD. A caller holding the
+			-- current row carries the stamp it just set and it lands here; a
+			-- STALE snapshot carries an older value (or 0) and max() keeps
+			-- what is already stored, so the record that a session was cut off
+			-- survives every other writer — the property the avatar pointer
+			-- and the session anchor each needed their own seam for.
+			forced_stop_at = max(forced_stop_at, excluded.forced_stop_at)`,
 		m.ID, m.Name, m.Kind, m.RoleKey, NormalizeRuntime(m.Runtime), m.Model, m.ActualModel, m.Effort,
 		m.ActualRuntime, m.ActualEffort,
 		m.DesiredState, m.DesiredMachineID, m.LastMachineID, m.SessionBootTS,
@@ -333,8 +352,25 @@ func (d *DAL) PutMember(m Member) error {
 		m.BankedCost,
 		m.LastOp, lastOpOK, m.LastOpLog, m.LastOpReason, m.LastOpAt, m.RosterStatus,
 		linkedTaskID, codename, m.CreatedTS, m.ReleasedTS, m.ActivatedTS,
-		m.AvatarAttachmentID,
+		m.AvatarAttachmentID, m.ForcedStopAt,
 	)
+	return err
+}
+
+// SetMemberForcedStopAt stamps the force-stop record on ONE column. It is the
+// BACKSTOP now, not the only writer: PutMember's upsert carries the column
+// under max(), so the value lands in the same write that publishes the member
+// — and a stale lifecycle snapshot still cannot erase it, because max() keeps
+// whatever is already stored.
+//
+// 🔴 Why the upsert had to carry it (independent review): the SSE stop gate now
+// READS this column to tell "cut off deliberately" from "working its close-out".
+// While this seam was the only writer, and its failure is deliberately
+// non-fatal, a failed UPDATE left the column at 0 — and a force-stopped member
+// then reconnected as if it were closing out, on an arm that runs no clock to
+// collect it. A safety verdict must not hang on a best-effort write.
+func (d *DAL) SetMemberForcedStopAt(id string, ts float64) error {
+	_, err := d.wdb.Exec(`UPDATE member SET forced_stop_at = ? WHERE id = ?`, ts, id)
 	return err
 }
 

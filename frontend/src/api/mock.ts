@@ -179,6 +179,7 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
     last_op_log: "",
     last_op_reason: "",
     last_op_at: 0,
+    forced_stop_at: 0,
     roster_status: "active",
     owner_id: "",
     unread_count: 0,
@@ -213,6 +214,7 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
     last_op_log: "",
     last_op_reason: "",
     last_op_at: 0,
+    forced_stop_at: 0,
     roster_status: "active",
     owner_id: "",
     unread_count: 0,
@@ -249,6 +251,7 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
     last_op_log: "",
     last_op_reason: "",
     last_op_at: 0,
+    forced_stop_at: 0,
     roster_status: "active",
     owner_id: "",
     unread_count: 0,
@@ -1487,7 +1490,9 @@ const DEFAULT_MOCK_SETTINGS = {
   owner_token_ttl: 86400,
   agent_token_ttl: 604800,
   handover_pct: 50,
+  notice_pct: 40,
   codex_compaction_threshold: 3,
+  codex_notice_round: 2,
   monitoring_refresh_seconds: 5,
   // M3 global outsource cap — mirrors the server's code-side default (3).
   outsource_max_parallel: 3,
@@ -3979,6 +3984,7 @@ export const mockApi: Api = {
       last_op_log: "",
       last_op_reason: "",
       last_op_at: 0,
+      forced_stop_at: 0,
       roster_status: "active",
       owner_id: MOCK_OWNER_ID,
       unread_count: 0,
@@ -4229,6 +4235,27 @@ export const mockApi: Api = {
     if (patch.codexCompactionThreshold !== undefined && (patch.codexCompactionThreshold < 1 || patch.codexCompactionThreshold > 10)) {
       throw new ApiError("http 422 for PATCH /api/settings", 422, "validation_error", "codex_compaction_threshold must be between 1 and 10");
     }
+    if (patch.noticePct !== undefined && (patch.noticePct < 1 || patch.noticePct > 89)) {
+      throw new ApiError("http 422 for PATCH /api/settings", 422, "validation_error", "notice_pct must be between 1 and 89");
+    }
+    if (patch.codexNoticeRound !== undefined && (patch.codexNoticeRound < 1 || patch.codexNoticeRound > 10)) {
+      throw new ApiError("http 422 for PATCH /api/settings", 422, "validation_error", "codex_notice_round must be between 1 and 10");
+    }
+    // The pair is checked against the POST-PATCH values, exactly like the
+    // server: either number may be sent on its own, and what must hold is that
+    // the soft notice still lands strictly before the final one.
+    {
+      const notice = patch.noticePct ?? mockServerSettings.notice_pct;
+      const final = patch.handoverPct ?? mockServerSettings.handover_pct;
+      if (notice >= final) {
+        throw new ApiError("http 422 for PATCH /api/settings", 422, "validation_error", "notice_pct must be strictly below handover_pct");
+      }
+      const noticeRound = patch.codexNoticeRound ?? mockServerSettings.codex_notice_round;
+      const finalRound = patch.codexCompactionThreshold ?? mockServerSettings.codex_compaction_threshold;
+      if (noticeRound >= finalRound) {
+        throw new ApiError("http 422 for PATCH /api/settings", 422, "validation_error", "codex_notice_round must be strictly below codex_compaction_threshold");
+      }
+    }
     if (patch.monitoringRefreshSeconds !== undefined && (patch.monitoringRefreshSeconds < 1 || patch.monitoringRefreshSeconds > 60)) {
       throw new ApiError("http 422 for PATCH /api/settings", 422, "validation_error", "monitoring_refresh_seconds must be between 1 and 60");
     }
@@ -4388,6 +4415,12 @@ export const mockApi: Api = {
     }
     if (patch.codexCompactionThreshold !== undefined) {
       mockServerSettings.codex_compaction_threshold = patch.codexCompactionThreshold;
+    }
+    if (patch.noticePct !== undefined) {
+      mockServerSettings.notice_pct = patch.noticePct;
+    }
+    if (patch.codexNoticeRound !== undefined) {
+      mockServerSettings.codex_notice_round = patch.codexNoticeRound;
     }
     if (patch.monitoringRefreshSeconds !== undefined) {
       mockServerSettings.monitoring_refresh_seconds = patch.monitoringRefreshSeconds;
@@ -4721,6 +4754,7 @@ export const mockApi: Api = {
       last_op_log: "",
       last_op_reason: "",
       last_op_at: 0,
+      forced_stop_at: 0,
       roster_status: "active",
       owner_id: MOCK_OWNER_ID,
       unread_count: 0,

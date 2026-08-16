@@ -740,6 +740,10 @@ export interface ServerSettingsView {
   agentTokenTtl: number;
   /** Context auto-handover threshold in percent (40..90). */
   handoverPct: number;
+  /** The FIRST (soft) offboard point — T-a9d6. `handoverPct` is the second. */
+  noticePct: number;
+  /** The codex twin of `noticePct`: the SOFT-notice compaction round. */
+  codexNoticeRound: number;
   /** Codex context compactions before automatic refocus (1..10). */
   codexCompactionThreshold: number;
   /** Minimum seconds between telemetry-triggered monitoring refreshes (1..60). */
@@ -840,6 +844,8 @@ export interface ServerSettingsPatch {
   ownerTokenTtl?: number;
   agentTokenTtl?: number;
   handoverPct?: number;
+  noticePct?: number;
+  codexNoticeRound?: number;
   codexCompactionThreshold?: number;
   monitoringRefreshSeconds?: number;
   outsourceMaxParallel?: number;

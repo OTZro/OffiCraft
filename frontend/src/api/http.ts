@@ -1666,6 +1666,8 @@ export const httpApi: Api = {
       owner_token_ttl?: number;
       agent_token_ttl?: number;
       handover_pct?: number;
+      notice_pct?: number;
+      codex_notice_round?: number;
       codex_compaction_threshold?: number;
       monitoring_refresh_seconds?: number;
       outsource_max_parallel?: number;
@@ -1694,6 +1696,8 @@ export const httpApi: Api = {
     if (patch.ownerTokenTtl !== undefined) body.owner_token_ttl = patch.ownerTokenTtl;
     if (patch.agentTokenTtl !== undefined) body.agent_token_ttl = patch.agentTokenTtl;
     if (patch.handoverPct !== undefined) body.handover_pct = patch.handoverPct;
+    if (patch.noticePct !== undefined) body.notice_pct = patch.noticePct;
+    if (patch.codexNoticeRound !== undefined) body.codex_notice_round = patch.codexNoticeRound;
     if (patch.codexCompactionThreshold !== undefined) body.codex_compaction_threshold = patch.codexCompactionThreshold;
     if (patch.monitoringRefreshSeconds !== undefined) body.monitoring_refresh_seconds = patch.monitoringRefreshSeconds;
     if (patch.outsourceMaxParallel !== undefined) {

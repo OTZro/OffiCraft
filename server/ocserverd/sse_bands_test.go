@@ -28,12 +28,13 @@ func TestBandFor(t *testing.T) {
 	}
 }
 
-// TestClaudeNoticePct_TracksTheOwnersThreshold is the CORE regression of T-c382.
-// The advance notice used to sit on its own hard-wired 40 with no UI, so an
-// owner moving the handover threshold moved the handover and nothing else. Every
-// assertion here is an ABSOLUTE number on purpose: an assertion written against
-// the constant would stay green through exactly the drift being guarded.
-func TestClaudeNoticePct_TracksTheOwnersThreshold(t *testing.T) {
+// TestClaudeNoticePct_IsTheUpgradeFallback pins what this derivation is FOR
+// since T-a9d6: the notice point is now the owner's own setting, and this
+// function survives only to fill it in for an install that predates the pair.
+// Getting it wrong would silently move every upgraded deployment's notice.
+// Every assertion is an ABSOLUTE number on purpose: one written against the
+// constant would stay green through exactly the drift being guarded.
+func TestClaudeNoticePct_IsTheUpgradeFallback(t *testing.T) {
 	// The owner's own worked example, verbatim: 「例如 65% 的話會從 55% 開始通知」.
 	if got, ok := claudeNoticePct(65); !ok || got != 55 {
 		t.Fatalf("handover 65 must notify at 55, got %d (ok=%v)", got, ok)
@@ -64,33 +65,40 @@ func TestCodexNoticeDue(t *testing.T) {
 	rec := func(count int) map[string]any { return map[string]any{"compaction_count": count} }
 	// Owner's worked example, verbatim: 「例如我設定是 5 那就是在第四輪的 60% 提醒
 	// 一次」 — threshold 5 ⇒ round 4 (count == 4) at >= 60%.
-	if !codexNoticeDue(rec(4), fptr(60), 5) {
-		t.Fatal("threshold 5: round 4 at 60% must be due")
+	// The owner's pair, verbatim: 「codex 則是 5 / 6 表示第五輪開始通知，第六輪
+	// 120 秒」 — notice on round 5, final on round 6.
+	if !codexNoticeDue(rec(5), fptr(60), 5, 6) {
+		t.Fatal("pair 5/6: round 5 at 60% must be due")
 	}
-	if codexNoticeDue(rec(4), fptr(59), 5) {
-		t.Fatal("threshold 5: round 4 below 60% is not due yet")
+	if codexNoticeDue(rec(5), fptr(59), 5, 6) {
+		t.Fatal("pair 5/6: round 5 below 60% is not due yet")
 	}
-	// NOT the round before, and not the handover round itself: one notice, on
-	// one round. Firing on the final round would arrive after the decision.
-	if codexNoticeDue(rec(3), fptr(99), 5) {
-		t.Fatal("two rounds out must stay quiet")
+	// One notice, on ONE round: neither earlier nor on the final round itself,
+	// which would arrive after the decision it was warning about.
+	if codexNoticeDue(rec(4), fptr(99), 5, 6) {
+		t.Fatal("a round before the notice round must stay quiet")
 	}
-	if codexNoticeDue(rec(5), fptr(99), 5) {
-		t.Fatal("the handover round itself must not carry the ADVANCE notice")
+	if codexNoticeDue(rec(6), fptr(99), 5, 6) {
+		t.Fatal("the final round itself must not carry the ADVANCE notice")
 	}
-	// It really is the owner's threshold, not a constant: change it and the
-	// notice round changes with it.
-	if !codexNoticeDue(rec(1), fptr(80), 2) {
-		t.Fatal("threshold 2 must notify on round 1")
+	// The notice round is the OWNER'S first number, independent of the final
+	// one: move only it and the notice moves, and only it.
+	if !codexNoticeDue(rec(2), fptr(80), 2, 6) {
+		t.Fatal("pair 2/6 must notify on round 2")
 	}
-	if codexNoticeDue(rec(4), fptr(80), 2) {
-		t.Fatal("threshold 2 must not notify on round 4")
+	if codexNoticeDue(rec(5), fptr(80), 2, 6) {
+		t.Fatal("pair 2/6 must not notify on round 5")
+	}
+	// A config that predates the pair (no notice round) falls back to the old
+	// derivation, so an upgrade notifies exactly where it used to.
+	if !codexNoticeDue(rec(4), fptr(60), 0, 5) {
+		t.Fatal("no notice round: must fall back to threshold-1")
 	}
 	// Fail-safe inputs.
-	if codexNoticeDue(map[string]any{}, fptr(99), 5) {
+	if codexNoticeDue(map[string]any{}, fptr(99), 5, 6) {
 		t.Fatal("a gauge with no compaction_count must fail safe to quiet")
 	}
-	if codexNoticeDue(rec(4), nil, 5) {
+	if codexNoticeDue(rec(5), nil, 5, 6) {
 		t.Fatal("no actionable pct must fail safe to quiet")
 	}
 }
@@ -118,7 +126,11 @@ func TestActionableContextPct(t *testing.T) {
 
 func TestDecideHandoverNotice(t *testing.T) {
 	cfg := defaultSseContextHigh()
-	cfg.HandoverPct = 65 // the owner's own setting, and his worked example
+	// The owner's pair, verbatim: 「65% / 75% 表示第一次通知會是 65% 第二次通知
+	// 會是 75%」.
+	cfg.NoticePct, cfg.HandoverPct = 65, 75
+	const steps = "# 下線程序\n1. report_stopping()\n2. post_chat 交接"
+	doc := func() string { return steps }
 	rec := func(pct float64, extra map[string]any) map[string]any {
 		r := map[string]any{"context_pct": pct, "context_pct_ts": 20.0, "boot_ts": 10.0}
 		for k, v := range extra {
@@ -126,75 +138,118 @@ func TestDecideHandoverNotice(t *testing.T) {
 		}
 		return r
 	}
+	notice := func(runtime string, record map[string]any, c SseContextHighConfig) *contextHighSignal {
+		return decideHandoverNotice("m-1", runtime, record, c, 5, 6, doc)
+	}
 
-	t.Run("claude fires at the derived point, not before", func(t *testing.T) {
-		if sig := decideHandoverNotice("m-1", RuntimeClaude, rec(54, nil), cfg, 5); sig != nil {
-			t.Fatalf("54%% is below the 55%% notice point: %+v", sig)
+	t.Run("claude fires at the owner's first number, not before", func(t *testing.T) {
+		if sig := notice(RuntimeClaude, rec(64, nil), cfg); sig != nil {
+			t.Fatalf("64%% is below the 65%% notice point: %+v", sig)
 		}
-		sig := decideHandoverNotice("m-1", RuntimeClaude, rec(55, nil), cfg, 5)
+		sig := notice(RuntimeClaude, rec(65, nil), cfg)
 		if sig == nil {
-			t.Fatal("55%% with handover 65%% must notify")
+			t.Fatal("65% with the notice point at 65% must notify")
 		}
 		if sig.Topic != "context-high" || sig.To != "m-1" || sig.Level != "warn" ||
-			float64(sig.Pct) != 55.0 {
+			float64(sig.Pct) != 65.0 {
 			t.Fatalf("signal envelope: %+v", sig)
 		}
 	})
 
-	t.Run("the notice says what the ceiling is and what to do", func(t *testing.T) {
-		sig := decideHandoverNotice("m-1", RuntimeClaude, rec(55, nil), cfg, 5)
+	// The two numbers must move INDEPENDENTLY. A single derived point would pass
+	// the test above and fail this one, which is the whole shape of the change.
+	t.Run("the two numbers are independent", func(t *testing.T) {
+		earlier := cfg
+		earlier.NoticePct = 50
+		if sig := notice(RuntimeClaude, rec(50, nil), earlier); sig == nil {
+			t.Fatal("moving only the notice point must move where the notice fires")
+		}
+		if sig := notice(RuntimeClaude, rec(50, nil), cfg); sig != nil {
+			t.Fatalf("the unmoved pair must still be quiet at 50%%: %+v", sig)
+		}
+		laterFinal := cfg
+		laterFinal.HandoverPct = 90
+		if sig := notice(RuntimeClaude, rec(64, nil), laterFinal); sig != nil {
+			t.Fatalf("moving only the FINAL number must not move the notice: %+v", sig)
+		}
+	})
+
+	t.Run("the notice is the one approved sentence, carrying the document", func(t *testing.T) {
+		sig := notice(RuntimeClaude, rec(65, nil), cfg)
 		if sig == nil {
 			t.Fatal("expected a notice")
 		}
-		// The ceiling, in the message. An agent cannot read its own context %,
-		// so a notice that omits the number leaves it unable to pace itself.
-		if !strings.Contains(sig.Reason, "65%") {
-			t.Fatalf("the notice must name the ceiling: %q", sig.Reason)
+		// Both of the owner's numbers, and where this session is right now: an
+		// agent cannot read its own context %, so a notice without them leaves
+		// it unable to pace itself.
+		if !strings.Contains(sig.Reason, "context 65% (your limits: 65% / 75%)") {
+			t.Fatalf("the notice must carry the pct and both limits: %q", sig.Reason)
 		}
-		// Owner 2026-08-16, the three things he requires done before a handover.
-		// Asserted individually so dropping ONE is red — a single "is it
-		// non-empty" check would pass a message that lost two of them.
-		for _, want := range []string{"chat", "task", "learning"} {
-			if !strings.Contains(strings.ToLower(sig.Reason), want) {
-				t.Fatalf("the notice must tell the agent to handle %q: %q", want, sig.Reason)
-			}
+		// The instruction, asserted on BOTH halves: dropping either one is a
+		// different bug (idle until cut off / stop mid-work) and both are red.
+		if !strings.Contains(sig.Reason, "work the sequence below") {
+			t.Fatalf("the notice must point at the steps: %q", sig.Reason)
 		}
-		// And it must NOT read as "you are being stopped now" — the whole point
-		// of an advance notice is that there is still room to work.
-		if !strings.Contains(sig.Reason, "not being stopped yet") {
-			t.Fatalf("the notice must say the agent is not being stopped yet: %q", sig.Reason)
+		if !strings.Contains(sig.Reason, "then call restart_self yourself") {
+			t.Fatalf("the notice must tell the agent to leave under its own power: %q", sig.Reason)
+		}
+		// The steps are the DOCUMENT's, verbatim — not a summary written in Go.
+		if !strings.Contains(sig.Reason, steps) {
+			t.Fatalf("the notice must carry the offboard document: %q", sig.Reason)
+		}
+		// A SOFT notice has no countdown. The 120-second clause belongs to the
+		// final call alone; carrying it here would read as "you are out of time"
+		// a full band early.
+		if strings.Contains(sig.Reason, "120 seconds") {
+			t.Fatalf("the soft notice must not claim a countdown: %q", sig.Reason)
+		}
+	})
+
+	t.Run("the notice survives a document that cannot be read", func(t *testing.T) {
+		sig := decideHandoverNotice("m-1", RuntimeClaude, rec(65, nil), cfg, 5, 6,
+			func() string { return "" })
+		if sig == nil {
+			t.Fatal("losing the checklist must not lose the notice")
+		}
+		if !strings.Contains(sig.Reason, "offboard now") {
+			t.Fatalf("the sentence must still be there: %q", sig.Reason)
 		}
 	})
 
 	t.Run("codex is judged on rounds, never on the claude percentage", func(t *testing.T) {
-		// 55% would fire for claude. For codex on round 2 of 5 it must not:
-		// its lifecycle has nothing to do with that number.
-		quiet := rec(55, map[string]any{"compaction_count": 2})
-		if sig := decideHandoverNotice("w-1", RuntimeCodex, quiet, cfg, 5); sig != nil {
+		// 65% would fire for claude. For codex on round 2 it must not: its
+		// lifecycle has nothing to do with that number.
+		quiet := rec(65, map[string]any{"compaction_count": 2})
+		if sig := notice(RuntimeCodex, quiet, cfg); sig != nil {
 			t.Fatalf("codex must not inherit the claude percentage rule: %+v", sig)
 		}
-		due := rec(60, map[string]any{"compaction_count": 4})
-		sig := decideHandoverNotice("w-1", RuntimeCodex, due, cfg, 5)
+		due := rec(60, map[string]any{"compaction_count": 5})
+		sig := notice(RuntimeCodex, due, cfg)
 		if sig == nil {
-			t.Fatal("codex round 4 of 5 at 60%% must notify")
+			t.Fatal("codex round 5 of the 5/6 pair at 60% must notify")
 		}
-		if !strings.Contains(sig.Reason, "compaction round 5") {
-			t.Fatalf("a codex notice must name ITS ceiling (rounds), not a pct: %q", sig.Reason)
+		if !strings.Contains(sig.Reason, "compaction round 5 (your limits: round 5 / round 6)") {
+			t.Fatalf("a codex notice must name ITS axis (rounds), not a pct: %q", sig.Reason)
 		}
 	})
 
 	t.Run("fails safe when the gauge cannot be trusted", func(t *testing.T) {
 		stale := map[string]any{"context_pct": 99.0, "context_pct_ts": 5.0, "boot_ts": 10.0}
-		if sig := decideHandoverNotice("m-1", RuntimeClaude, stale, cfg, 5); sig != nil {
+		if sig := notice(RuntimeClaude, stale, cfg); sig != nil {
 			t.Fatalf("a predecessor session's pct must not notify: %+v", sig)
 		}
-		if sig := decideHandoverNotice("m-1", RuntimeClaude, nil, cfg, 5); sig != nil {
+		if sig := notice(RuntimeClaude, nil, cfg); sig != nil {
 			t.Fatalf("no gauge must not notify: %+v", sig)
 		}
 		off := cfg
 		off.HandoverPct = 0
-		if sig := decideHandoverNotice("m-1", RuntimeClaude, rec(99, nil), off, 5); sig != nil {
+		if sig := notice(RuntimeClaude, rec(99, nil), off); sig != nil {
 			t.Fatalf("the kill-switch must silence the notice too: %+v", sig)
+		}
+		noNotice := cfg
+		noNotice.NoticePct = 0
+		if sig := notice(RuntimeClaude, rec(99, nil), noNotice); sig != nil {
+			t.Fatalf("an unset notice point must stay quiet, not fire at once: %+v", sig)
 		}
 	})
 }

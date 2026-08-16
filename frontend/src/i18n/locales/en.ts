@@ -1479,12 +1479,18 @@ export const en: Dict = {
     ttl24h: "24 hours",
     ttl7d: "7 days",
     ttl30d: "30 days",
-    handover: "Claude auto-handover threshold",
+    notice: "Claude first notice",
+    noticeSub:
+      "At this level the offboard sequence is sent, and the agent is asked to close out and hand over under its own power (must be below the final call)",
+    handover: "Claude final call",
     handoverSub:
-      "When Claude Code's memory fills to this level, it hands over to a fresh one (40–90%)",
-    codexHandover: "Codex auto-handover rounds",
+      "At this level the final notice goes out and the handover fires; 120 seconds later the session is collected (40–90%)",
+    codexNotice: "Codex first notice",
+    codexNoticeSub:
+      "The compaction round at which the offboard sequence is sent (must be below the final round)",
+    codexHandover: "Codex final round",
     codexHandoverSub:
-      "Automatically refocus after 3 completed context compactions; context percentage is not used.",
+      "Automatically refocus after this many completed context compactions; context percentage is not used.",
     monitoringRefresh: "Monitoring refresh interval",
     monitoringRefreshSub: "Minimum seconds between monitoring refreshes (1–60)",
     seconds: "seconds",

@@ -48,12 +48,19 @@ type authStatusDTO struct {
 // settingsDTO is the owner-adjustable settings surface (GET/PATCH
 // /api/settings).
 type settingsDTO struct {
-	OwnerTokenTTL            int64 `json:"owner_token_ttl"`
-	AgentTokenTTL            int64 `json:"agent_token_ttl"`
-	HandoverPct              int   `json:"handover_pct"`
-	CodexCompactionThreshold int   `json:"codex_compaction_threshold"`
-	MonitoringRefreshSeconds int   `json:"monitoring_refresh_seconds"`
-	OutsourceMaxParallel     int   `json:"outsource_max_parallel"`
+	OwnerTokenTTL int64 `json:"owner_token_ttl"`
+	AgentTokenTTL int64 `json:"agent_token_ttl"`
+	// The offboard points are a PAIR on each runtime's own axis (T-a9d6):
+	// NoticePct / CodexNoticeRound is the SOFT notice, HandoverPct /
+	// CodexCompactionThreshold the FINAL one — and the final one is also where
+	// the handover itself fires, so there is no third number that could
+	// disagree with it about when a session ends.
+	HandoverPct              int `json:"handover_pct"`
+	NoticePct                int `json:"notice_pct"`
+	CodexCompactionThreshold int `json:"codex_compaction_threshold"`
+	CodexNoticeRound         int `json:"codex_notice_round"`
+	MonitoringRefreshSeconds int `json:"monitoring_refresh_seconds"`
+	OutsourceMaxParallel     int `json:"outsource_max_parallel"`
 	// DocCapChars* are the live size caps on the accumulating context
 	// documents, in CHARACTERS (runes) — the same unit the patch receipts and
 	// the refusal message speak (T-3aeb). FIVE independent knobs: a role's
@@ -152,31 +159,35 @@ type tokenDTO struct {
 }
 
 type memberDTO struct {
-	ID                string  `json:"id"`
-	AvatarURL         string  `json:"avatar_url"`
-	Name              string  `json:"name"`
-	Kind              string  `json:"kind"`
-	RoleKey           string  `json:"role_key"`
-	RoleName          string  `json:"role_name"`
-	Runtime           string  `json:"runtime"`
-	Model             string  `json:"model"`
-	ActualModel       string  `json:"actual_model"`
-	ActualRuntime     string  `json:"actual_runtime"`
-	ActualEffort      string  `json:"actual_effort"`
-	ActualMachine     string  `json:"actual_machine"`
-	Effort            string  `json:"effort"`
-	DesiredState      string  `json:"desired_state"`
-	DesiredMachineID  string  `json:"desired_machine_id"`
-	Machine           string  `json:"machine"`
-	Presence          string  `json:"presence"`
-	RefocusSince      float64 `json:"refocus_since"`
-	RefocusOp         string  `json:"refocus_op"`
-	RefocusDeadline   float64 `json:"refocus_deadline"`
-	LastOp            string  `json:"last_op"`
-	LastOpOK          *bool   `json:"last_op_ok"`
-	LastOpLog         string  `json:"last_op_log"`
-	LastOpReason      string  `json:"last_op_reason"`
-	LastOpAt          float64 `json:"last_op_at"`
+	ID               string  `json:"id"`
+	AvatarURL        string  `json:"avatar_url"`
+	Name             string  `json:"name"`
+	Kind             string  `json:"kind"`
+	RoleKey          string  `json:"role_key"`
+	RoleName         string  `json:"role_name"`
+	Runtime          string  `json:"runtime"`
+	Model            string  `json:"model"`
+	ActualModel      string  `json:"actual_model"`
+	ActualRuntime    string  `json:"actual_runtime"`
+	ActualEffort     string  `json:"actual_effort"`
+	ActualMachine    string  `json:"actual_machine"`
+	Effort           string  `json:"effort"`
+	DesiredState     string  `json:"desired_state"`
+	DesiredMachineID string  `json:"desired_machine_id"`
+	Machine          string  `json:"machine"`
+	Presence         string  `json:"presence"`
+	RefocusSince     float64 `json:"refocus_since"`
+	RefocusOp        string  `json:"refocus_op"`
+	RefocusDeadline  float64 `json:"refocus_deadline"`
+	LastOp           string  `json:"last_op"`
+	LastOpOK         *bool   `json:"last_op_ok"`
+	LastOpLog        string  `json:"last_op_log"`
+	LastOpReason     string  `json:"last_op_reason"`
+	LastOpAt         float64 `json:"last_op_at"`
+	// ForcedStopAt: unix seconds of the last force-stop, 0 when there has never
+	// been one. Deliberately NOT cleared by the next boot — it is the record
+	// that the PREVIOUS session was cut off mid-work (T-a9d6).
+	ForcedStopAt      float64 `json:"forced_stop_at"`
 	UnreadCount       int     `json:"unread_count"`
 	RosterStatus      string  `json:"roster_status"`
 	OwnerID           string  `json:"owner_id"`

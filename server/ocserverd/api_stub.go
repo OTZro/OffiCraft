@@ -137,12 +137,20 @@ type apiServer struct {
 	// ctxhigh is the context-high band config the /api/events stream loop
 	// evaluates each quiet tick (DB ctx.* settings; defaults when unset).
 	ctxhigh                  SseContextHighConfig
-	codexCompactionThreshold int
+	codexCompactionThreshold int // the FINAL round (handover)
+	codexNoticeRound         int // the FIRST, soft notice round (T-a9d6)
 	// handoverNoticed records, per agent id, the SESSION anchor (the gauge's
 	// boot_ts) whose one-and-only advance handover notice has already gone out.
 	// Guarded by settingsMu. See claimHandoverNotice for why the key is the
 	// session anchor and not the connection.
-	handoverNoticed          map[string]float64
+	handoverNoticed map[string]float64
+	// softEscalated records, per member id, the soft-offboard epoch whose
+	// promotion to the final call has already been announced — the frame that
+	// tells the agent its 120 seconds have started. Keyed by the epoch so a
+	// re-armed wind-down announces again; guarded by its own mutex because it is
+	// touched from the reconcile tick, not the settings path.
+	softEscalated            map[string]float64
+	softEscalatedMu          sync.Mutex
 	monitoringRefreshSeconds int
 	// root anchors the repo-file assets (seeds / prebuilt binaries / frozen
 	// MCP catalog) — see assets.go.
@@ -511,6 +519,23 @@ func (s *apiServer) ctxHighConfig() SseContextHighConfig {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
 	return s.ctxhigh
+}
+
+// codexNoticeRoundSetting returns the codex FIRST-notice round under the same
+// lock as ctxHighConfig — the two are read together on every quiet tick and a
+// torn pair would notify against one setting and hand over against the other.
+func (s *apiServer) codexNoticeRoundSetting() int {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.codexNoticeRound
+}
+
+// codexCompactionThresholdSetting is its FINAL-round twin, read under the same
+// lock for the same reason.
+func (s *apiServer) codexCompactionThresholdSetting() int {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.codexCompactionThreshold
 }
 
 // claimHandoverNotice is the once-per-SESSION gate on the advance handover

@@ -271,7 +271,32 @@
                 "type": "null"
               }
             ],
+            "description": "The SECOND offboard point: the FINAL notice, and where the automatic handover fires. 40..90, and strictly greater than notice_pct (the pair is validated together against the POST-patch values, so either one may be sent alone).",
             "title": "Handover Pct"
+          },
+          "notice_pct": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The FIRST offboard point (T-a9d6): the SOFT notice, where the agent is asked to work the offboard sequence and then call restart_self itself. 1..89, and strictly below handover_pct.",
+            "title": "Notice Pct"
+          },
+          "codex_notice_round": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The codex SOFT-notice compaction round (T-a9d6). 1..10, and strictly below codex_compaction_threshold.",
+            "title": "Codex Notice Round"
           },
           "monitoring_refresh_seconds": {
             "anyOf": [
@@ -1340,7 +1365,7 @@
           },
           "context_pct": {
             "default": null,
-            "description": "How full this session's context window is, on a 0-100 PERCENT scale. The only check is that it is a JSON number - anything else is a flat 400 - with no range check at all, and the value is stored and echoed back exactly as sent. The scale is the whole point: this is the number the server's context-high band compares against handover_pct, a whole percent (50 by default, owner-settable within 40-90), and against the advance notice derived from it (handover_pct - 10). Reporting 0.85 for 'eighty-five percent' therefore sits below both and neither the notice nor the handover ever fires, while reporting 500 is above both and they fire at once. Both answer 200 and are indistinguishable in the response.",
+            "description": "How full this session's context window is, on a 0-100 PERCENT scale. The only check is that it is a JSON number - anything else is a flat 400 - with no range check at all, and the value is stored and echoed back exactly as sent. The scale is the whole point: this is the number the server's context-high band compares against the owner's PAIR of offboard points — notice_pct (the soft notice) and handover_pct (the final one, and where the handover fires), both whole percents. Reporting 0.85 for 'eighty-five percent' therefore sits below both and neither the notice nor the handover ever fires, while reporting 500 is above both and they fire at once. Both answer 200 and are indistinguishable in the response.",
             "title": "Context Pct"
           },
           "rate_limits": {

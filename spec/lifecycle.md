@@ -362,8 +362,8 @@ ONE-SHOT, never a standing order):
 
 - A recycle never flips `desired_state` — it stays `online` throughout; the flow is:
   `refocus_since` stamped → member delta fans → the agent-side listener REFETCHES the
-  member row and, on a confirmed NEW refocus epoch, ALSO reads the 下線程序 document
-  (`GET /api/offboard`, machine floor) and surfaces its text as the handover wake to
+  member row and, on a confirmed NEW refocus epoch, surfaces the 下線程序 text the
+  SERVER PUSHED in that delta (`offboard_notice`) as the handover wake to
   its interactive session, which persists its state and self-reports over MCP
   (`report_stopping` → `report_stopped`; the runtime never auto-reports on the
   session's behalf) → robust STOP once the agent reports stopped
@@ -372,13 +372,17 @@ ONE-SHOT, never a standing order):
   dead-session fallback — an unresponsive session that never reports is force-stopped
   by the server; the agent side needs no timeout of its own) → the SSE drop makes
   ¬online → the next tick's plain START respawns.
-- **The wake text is the document, not client copy**: the listener prints what
-  `GET /api/offboard` returns, so an owner editing 下線程序 changes what the next
-  collected session is told with no client release. The read is pull on the edge that
-  already pulls (a pushed payload would fail silently on a flaky link and be
-  indistinguishable from an empty document). An unreadable or EMPTY document must not
-  swallow the wake: the agent still prints a one-line notice that it is being collected
-  and must fetch the checklist itself via `get_offboard`. One wake per refocus epoch,
+- **The wake text is the document, not client copy**: the SERVER composes the
+  sentence, folds the 下線程序 document into it and PUSHES both in the member delta
+  (`offboard_notice`), so an owner editing 下線程序 changes what the next collected
+  session is told with no client release.
+  🔴 This REPLACES the pull model this section used to specify, and with it the
+  argument for pull ("a pushed payload would fail silently on a flaky link and be
+  indistinguishable from an empty document") — the owner ruled 「改回真的推播」
+  (T-a9d6). What that argument was pointing at survives as the client's fallback:
+  a frame that arrives WITHOUT the notice cannot be repaired from the client side,
+  so the agent still prints a one-line notice that it is being collected and names
+  `get_offboard` as the way to fetch the checklist itself. One wake per refocus epoch,
   failed read included.
 - **Auto-stamp**: before deciding, the tick MUST stamp `refocus_since` on any candidate
   whose actionable context pct (same stale/boot-storm guards as the SSE band —

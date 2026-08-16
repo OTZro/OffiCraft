@@ -369,16 +369,22 @@ func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unr
 		Presence:         PresenceState(m, nowSecs(), s.hub.IsOnline(m.ID)),
 		RefocusSince:     m.RefocusSince,
 		RefocusOp:        m.RefocusOp,
-		RefocusDeadline:  refocusDeadline(m.RefocusSince, s.reconcileCfg.RecycleGrace),
-		LastOp:           m.LastOp,
-		LastOpOK:         m.LastOpOK,
-		LastOpLog:        m.LastOpLog,
-		LastOpReason:     m.LastOpReason,
-		LastOpAt:         m.LastOpAt,
-		UnreadCount:      unreadCount,
-		RosterStatus:     m.RosterStatus,
-		OwnerID:          wireOwnerID,
-		SchemaVersion:    wireSchemaVersion,
+		// The grace this member's epoch is ACTUALLY collected on — an
+		// owner-pressed 重新聚焦 opens soft and gets the soft window on top of
+		// the final 120s, so reading RecycleGrace here reported a ceiling the
+		// server had no intention of honouring, and the cockpit rendered a
+		// time the owner then watched pass with nothing happening.
+		RefocusDeadline: refocusDeadline(m.RefocusSince, recycleGraceFor(m.RefocusOp, s.reconcileCfg)),
+		LastOp:          m.LastOp,
+		LastOpOK:        m.LastOpOK,
+		LastOpLog:       m.LastOpLog,
+		LastOpReason:    m.LastOpReason,
+		LastOpAt:        m.LastOpAt,
+		ForcedStopAt:    m.ForcedStopAt,
+		UnreadCount:     unreadCount,
+		RosterStatus:    m.RosterStatus,
+		OwnerID:         wireOwnerID,
+		SchemaVersion:   wireSchemaVersion,
 	}
 }
 

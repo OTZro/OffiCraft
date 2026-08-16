@@ -222,20 +222,43 @@ func TestReconcileDecide(t *testing.T) {
 		}
 	})
 
-	t.Run("desired offline and online arms the grace clock without a command", func(t *testing.T) {
+	// 下線 runs NO clock (owner 2026-08-16, card rc-27d1710174dd 「不要兜底：只有
+	// 你按強制下線才收它」). The button shows the agent the offboard sequence and
+	// asks it to stop itself; the escalation is the owner's force-stop, not a
+	// timer's. Collection still happens the instant the agent reports stopped.
+	t.Run("desired offline and online waits indefinitely, arming no clock", func(t *testing.T) {
 		d := reconcileDecide(obsOf("m", DesiredStateOffline, true), newReconcileState(), cfg, 1000)
 		if d.Command != reconcileCmdNone || d.State.Phase != reconcilePhaseStopping ||
-			d.State.StopDeadline != 1000+cfg.StopGrace {
+			d.State.StopDeadline != 0 {
 			t.Fatalf("decision: %+v", d)
 		}
-		// Within the grace window: keep waiting, still no command.
-		d2 := reconcileDecide(obsOf("m", DesiredStateOffline, true), d.State, cfg, 1000+cfg.StopGrace-1)
+		// A day later — far past every window this server has ever had — still
+		// nothing. The owner is the one who decides time is up.
+		d2 := reconcileDecide(obsOf("m", DesiredStateOffline, true), d.State, cfg, 1000+86400)
 		if d2.Command != reconcileCmdNone {
-			t.Fatalf("within grace: %+v", d2)
+			t.Fatalf("a day of silence must still dispatch nothing: %+v", d2)
+		}
+	})
+
+	// …and the timed wind-down is still REACHABLE, as the one value that
+	// restores the old behaviour wholesale (a compile-time constant today, not
+	// something the owner can set).
+	t.Run("soft window of zero restores the timed wind-down", func(t *testing.T) {
+		timed := cfg
+		timed.SoftOffboardGrace = 0
+		d := reconcileDecide(obsOf("m", DesiredStateOffline, true), newReconcileState(), timed, 1000)
+		if d.Command != reconcileCmdNone || d.State.StopDeadline != 1000+timed.StopGrace {
+			t.Fatalf("decision: %+v", d)
+		}
+		d2 := reconcileDecide(obsOf("m", DesiredStateOffline, true), d.State, timed, 1000+timed.StopGrace)
+		if d2.Command != reconcileCmdStop {
+			t.Fatalf("grace elapsed must dispatch the robust stop: %+v", d2)
 		}
 	})
 
 	t.Run("grace elapsed dispatches the single robust STOP with stop_retry dedupe", func(t *testing.T) {
+		cfg := cfg
+		cfg.SoftOffboardGrace = 0 // the timed wind-down — see the sub-test above
 		st := newReconcileState()
 		st.StopDeadline = 1000
 		d := reconcileDecide(obsOf("m", DesiredStateOffline, true), st, cfg, 1000)
@@ -728,12 +751,18 @@ func TestRunReconcileTick(t *testing.T) {
 		connectOnline(t, s, ServerSelfHost)
 		connectOnline(t, s, "m-stop") // still online while desired offline
 
-		s.runReconcileTick(1000) // arms the grace clock
-		s.runReconcileTick(1030) // within grace
+		// The default (owner's ruling) runs no clock at all: a day of ticks
+		// dispatches nothing, because the escalation is his force-stop.
+		s.runReconcileTick(1000)
+		s.runReconcileTick(1000 + 86400)
 		if frames := drainFrames(t, s, ServerSelfHost); len(frames) != 0 {
-			t.Fatalf("grace window must dispatch nothing: %+v", frames)
+			t.Fatalf("下線 must dispatch nothing on a timer: %+v", frames)
 		}
-		s.runReconcileTick(1000 + s.reconcileCfg.StopGrace)
+		// With the soft window off — the value that restores the timed
+		// wind-down — the same tick collects it.
+		s.reconcileCfg.SoftOffboardGrace = 0
+		s.runReconcileTick(2000)
+		s.runReconcileTick(2000 + s.reconcileCfg.StopGrace)
 		frames := drainFrames(t, s, ServerSelfHost)
 		if len(frames) != 1 || frames[0].RPC != "stop" || frames[0].Args["member_id"] != "m-stop" {
 			t.Fatalf("grace elapsed must dispatch the robust stop: %+v", frames)
@@ -1121,7 +1150,9 @@ func TestClearStaleStoppingOnOnline(t *testing.T) {
 		putTestMember(t, s, m)
 		connectOnline(t, s, "m-s")
 		members := []Member{m}
-		s.clearStaleStoppingOnOnline(members)
+		// An anchor older than the whole soft window cannot be a live
+		// close-out; a fresh one can, and the sub-test below pins that.
+		s.clearStaleStoppingOnOnline(members, 900+SoftOffboardGraceSecs)
 		if members[0].StoppingSince != 0 {
 			t.Fatal("a survived-stop anchor must clear")
 		}
@@ -1141,9 +1172,29 @@ func TestClearStaleStoppingOnOnline(t *testing.T) {
 		putTestMember(t, s, down)
 		connectOnline(t, s, "m-s3")
 		members := []Member{offline, down}
-		s.clearStaleStoppingOnOnline(members)
+		s.clearStaleStoppingOnOnline(members, 900+SoftOffboardGraceSecs)
 		if members[0].StoppingSince != 900 || members[1].StoppingSince != 900 {
 			t.Fatalf("no false clears: %+v", members)
+		}
+	})
+
+	// T-2123: the owner watched a member report 「開始收尾」 and go straight back
+	// to green. This sweep was the eraser — a session WORKING its offboard
+	// sequence is online, wanted online, and carries the anchor, which is the
+	// same shape as a session that survived a stop. The fresh anchor stays.
+	t.Run("leaves a close-out that has only just started alone", func(t *testing.T) {
+		m := testAgent("m-s4")
+		m.StoppingSince = 900
+		putTestMember(t, s, m)
+		connectOnline(t, s, "m-s4")
+		members := []Member{m}
+		s.clearStaleStoppingOnOnline(members, 900+SoftOffboardGraceSecs-1)
+		if members[0].StoppingSince != 900 {
+			t.Fatalf("an in-flight close-out must keep its anchor: %+v", members[0])
+		}
+		persisted, _ := s.dal.GetMember("m-s4")
+		if persisted.StoppingSince != 900 {
+			t.Fatalf("nothing may be persisted either: %+v", persisted)
 		}
 	})
 }

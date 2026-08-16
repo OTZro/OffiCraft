@@ -121,11 +121,12 @@ func bandFor(pct *float64, handoverPct int) string {
 	return levelNone
 }
 
-// claudeNoticePct is the gauge pct at which a claude session's ONE advance
-// notice fires: the owner's handover threshold minus the lead. ok=false when
-// the handover band is disabled (threshold <= 0 — the kill-switch) or when the
-// lead would put the notice at or below zero, which would make it fire on a
-// gauge that has barely started.
+// claudeNoticePct DERIVES the old single-threshold notice point (handover minus
+// the lead). Since T-a9d6 the notice point is a SETTING, not a derivation — the
+// owner sets the pair — so this is no longer part of the live decision. Its one
+// remaining caller is the UPGRADE PATH (settings.go): an install that predates
+// the pair has no stored notice_pct, and filling it from here is what makes the
+// upgrade change no behaviour at all. Do not wire it back into the band.
 func claudeNoticePct(handoverPct int) (int, bool) {
 	if handoverPct <= 0 {
 		return 0, false
@@ -147,15 +148,22 @@ func claudeNoticePct(handoverPct int) (int, bool) {
 // compaction count — was being warned on a percentage with no relation to its
 // own lifecycle (坐實: worker ow-638847c9d5f6 carrying context_pct 45.6 and
 // compaction_count 3 while the band's threshold was 40).
-func codexNoticeDue(record map[string]any, pct *float64, codexThreshold int) bool {
+// Since T-a9d6 the notice ROUND is the owner's own setting (the first of his
+// pair, e.g. 「codex 則是 5 / 6 表示第五輪開始通知，第六輪 120 秒」) rather than
+// threshold-1; noticeRound <= 0 falls back to that old derivation so a config
+// that predates the pair behaves exactly as it did.
+func codexNoticeDue(record map[string]any, pct *float64, noticeRound, codexThreshold int) bool {
 	if codexThreshold < 1 {
 		codexThreshold = defaultCodexCompactionThreshold
+	}
+	if noticeRound < 1 {
+		noticeRound = codexThreshold - 1
 	}
 	count, ok := record["compaction_count"].(int)
 	if !ok {
 		return false
 	}
-	return count == codexThreshold-1 && pct != nil && *pct >= codexNoticeRoundPct
+	return count == noticeRound && pct != nil && *pct >= codexNoticeRoundPct
 }
 
 // gaugeBootTS narrows a gauge record's boot_ts to a float64 (false when absent /
@@ -234,39 +242,99 @@ type contextHighSignal struct {
 // tells the agent nothing it can act on.
 func decideHandoverNotice(
 	agentID, runtime string, record map[string]any,
-	cfg SseContextHighConfig, codexThreshold int,
+	cfg SseContextHighConfig, codexNoticeRound, codexThreshold int,
+	offboard func() string,
 ) *contextHighSignal {
 	pct := actionableContextPct(record, cfg.StaleGuard)
-	var ceiling string
+	var where string
 	switch {
 	case NormalizeRuntime(runtime) == RuntimeCodex:
-		if !codexNoticeDue(record, pct, codexThreshold) {
+		if !codexNoticeDue(record, pct, codexNoticeRound, codexThreshold) {
 			return nil
 		}
 		if codexThreshold < 1 {
 			codexThreshold = defaultCodexCompactionThreshold
 		}
-		ceiling = fmt.Sprintf("compaction round %d is your last", codexThreshold)
+		if codexNoticeRound < 1 {
+			codexNoticeRound = codexThreshold - 1
+		}
+		where = fmt.Sprintf("compaction round %d (your limits: round %d / round %d)",
+			codexNoticeRound, codexNoticeRound, codexThreshold)
 	default:
-		at, ok := claudeNoticePct(cfg.HandoverPct)
-		if !ok || pct == nil || *pct < float64(at) {
+		if cfg.HandoverPct <= 0 || cfg.NoticePct <= 0 ||
+			pct == nil || *pct < float64(cfg.NoticePct) {
 			return nil
 		}
-		ceiling = fmt.Sprintf("%d%% is the handover ceiling", cfg.HandoverPct)
+		where = fmt.Sprintf("context %v%% (your limits: %d%% / %d%%)",
+			formatPct(*pct), cfg.NoticePct, cfg.HandoverPct)
+	}
+	// The document is read ONLY once the notice is going out. Reading it on
+	// every quiet tick would put a DB fold on the idle path of every connection
+	// to serve a frame that fires once per session.
+	var text string
+	if offboard != nil {
+		text = offboard()
 	}
 	return &contextHighSignal{
 		Topic: contextHighTopic,
 		To:    agentID,
 		Level: levelWarn,
 		Pct:   jsonFloat(*pct),
-		Reason: fmt.Sprintf(
-			"context %v%% — %s, and this is the ONLY notice you get before it. "+
-				"Close out now, while you still have room: (1) post your hand-off "+
-				"notes to yourself in chat, (2) write the current state and step "+
-				"notes back onto your tasks, (3) fold your learnings/lessons back. "+
-				"Then carry on — you are not being stopped yet.",
-			formatPct(*pct), ceiling),
+		// A context-pressure notice always goes to a member that is still wanted
+		// online, so its sequence ends in a re-start.
+		Reason: offboardNotice(where, offboardCloserRestartSelf, false, text),
 	}
+}
+
+// offboardNotice composes EVERY offboard notice this server sends, in the one
+// sentence the owner approved (2026-08-16, card rc-ec5859a4c384):
+//
+//	<where> — offboard now: work the sequence below, then call <closer> yourself.[ You have 120 seconds left.]
+//	<the 下線程序 document, verbatim>
+//
+// Three things about it are deliberate and must survive edits:
+//
+//   - ONE sentence for every situation. The owner cut four differently-worded
+//     notices down to this: 「不需要太多不同描述吧, 就請他按照步驟做好下線, 頂多
+//     告訴他剩下 120 秒」. What tells the situations apart is the FIELDS — the
+//     numbers in `where`, and whether the 120-second clause is there — not tone.
+//   - "work the sequence below, THEN call <closer> yourself" blocks both
+//     failure directions at once. Without the second half an agent idles until
+//     the server cuts it off (dead time the owner explicitly does not want);
+//     without the first, it stops mid-work — a predecessor read the old wording
+//     as "you are done" and announced its own end of life at 40%.
+//   - 🔴 <closer> is the tool that ACTUALLY works for this member, and the two
+//     arms differ. A handover (desired online) ends in restart_self. A 下線
+//     does NOT: restart_self refuses a member that is no longer wanted online,
+//     by design — it is a RE-start. Naming it there told the agent to do
+//     something that could only answer 409, and on that arm nothing collects it
+//     on a clock, so it would sit refused until the owner pressed force-stop.
+//     Its sequence ends at report_stopped, which is also step 6 of the document
+//     it is being shown.
+//   - The steps are the DOCUMENT's, carried verbatim, never a summary written
+//     here. A summary in code is a second source of truth that the owner cannot
+//     edit and nothing keeps in step (T-c382 shipped exactly that mistake).
+//
+// An empty document degrades to the sentence alone: losing the checklist is
+// survivable, losing the notice is not.
+// The two tools a session can end its own sequence with. Which one is TRUE for
+// a given member is decided by offboardCloserFor — naming the wrong one asks it
+// to make a call that can only be refused.
+const (
+	offboardCloserRestartSelf   = "restart_self"
+	offboardCloserReportStopped = "report_stopped"
+)
+
+func offboardNotice(where, closer string, finalCall bool, offboardText string) string {
+	reason := where + " — offboard now: work the sequence below, then call " +
+		closer + " yourself."
+	if finalCall {
+		reason += " You have 120 seconds left."
+	}
+	if offboardText != "" {
+		reason += "\n" + offboardText
+	}
+	return reason
 }
 
 // formatPct renders the pct for the human reason line (45 not 45.0 for whole

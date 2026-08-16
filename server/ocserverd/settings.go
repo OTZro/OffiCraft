@@ -58,10 +58,12 @@ const (
 	// threshold beside handover_pct, and the advance notice is now derived from
 	// handover_pct instead. Old rows stay in the table, unread. Do not re-add
 	// them; two thresholds for one decision is the bug this ticket fixed.
+	settingCtxNoticePct             = "ctx.notice_pct"
 	settingCtxHandoverPct           = "ctx.handover_pct"
 	settingCtxMinBootSecs           = "ctx.min_boot_secs"
 	settingCtxStaleGuard            = "ctx.stale_guard"
 	settingCodexCompactionThreshold = "codex.compaction_threshold"
+	settingCodexNoticeRound         = "codex.notice_round"
 	settingMonitoringRefreshSeconds = "monitoring.refresh_seconds"
 	// settingOutsourceMaxParallel (M3, owner ruling ③) is the GLOBAL cap on
 	// concurrently live (assigned + active) outsource workers — the Phase 2
@@ -199,7 +201,8 @@ type authSettings struct {
 	ownerTokenTTL                int64
 	agentTokenTTL                int64
 	ctxhigh                      SseContextHighConfig
-	codexCompactionThreshold     int
+	codexCompactionThreshold     int // codex.compaction_threshold — the FINAL round (handover)
+	codexNoticeRound             int // codex.notice_round — the FIRST, soft notice round (T-a9d6)
 	monitoringRefreshSeconds     int
 	outsourceMaxParallel         int              // task.outsource_max_parallel (default 3)
 	docCapCharsDuty              int              // doc.cap_chars.duty (default dutyCapCharsDefault)
@@ -362,6 +365,19 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 			return out, fmt.Errorf("settings %s: must be 1..10: %q", settingCodexCompactionThreshold, *v)
 		}
 		out.codexCompactionThreshold = n
+	}
+	// codex.notice_round is the FIRST, soft notice round (T-a9d6). Absent (every
+	// install that predates the pair) → threshold - 1, which is exactly where
+	// T-c382 derived it, so an upgrade changes no behaviour.
+	out.codexNoticeRound = out.codexCompactionThreshold - 1
+	if v, err := d.GetSetting(settingCodexNoticeRound); err != nil {
+		return out, err
+	} else if v != nil {
+		n, err := strconv.Atoi(*v)
+		if err != nil || n < 1 || n > 10 {
+			return out, fmt.Errorf("settings %s: must be 1..10: %q", settingCodexNoticeRound, *v)
+		}
+		out.codexNoticeRound = n
 	}
 	if v, err := d.GetSetting(settingMonitoringRefreshSeconds); err != nil {
 		return out, err
@@ -553,6 +569,9 @@ func migrateCtxOverrides(d *DAL, cfg Config, logf func(string)) error {
 	if err := put(s.HandoverPct, settingCtxHandoverPct, strconv.Itoa(c.HandoverPct)); err != nil {
 		return err
 	}
+	if err := put(s.NoticePct, settingCtxNoticePct, strconv.Itoa(c.NoticePct)); err != nil {
+		return err
+	}
 	if err := put(s.MinBootSecs, settingCtxMinBootSecs, strconv.FormatFloat(c.MinBootSecs, 'f', -1, 64)); err != nil {
 		return err
 	}
@@ -732,6 +751,29 @@ func applyCtxOverrides(d *DAL, c *SseContextHighConfig) error {
 	// tuned to) and are simply never read.
 	if err := getInt(settingCtxHandoverPct, &c.HandoverPct); err != nil {
 		return err
+	}
+	// ctx.notice_pct is the FIRST (soft) notice — T-a9d6. ABSENCE is what
+	// matters here, not the zero value: an install that predates the pair has
+	// no row, and its notice must land where T-c382 derived it (handover minus
+	// the lead) rather than at the shipped default, which would silently move
+	// the notice of every deployment whose handover the owner had tuned.
+	// Reading the row itself rather than checking c.NoticePct is the point —
+	// the config default is already non-zero, so the value alone cannot tell
+	// "never set" from "set to that number".
+	stored, err := d.GetSetting(settingCtxNoticePct)
+	if err != nil {
+		return err
+	}
+	if stored == nil {
+		if at, ok := claudeNoticePct(c.HandoverPct); ok {
+			c.NoticePct = at
+		}
+	} else {
+		n, err := strconv.Atoi(*stored)
+		if err != nil || n < 0 {
+			return fmt.Errorf("settings %s: not a non-negative integer: %q", settingCtxNoticePct, *stored)
+		}
+		c.NoticePct = n
 	}
 	if v, err := d.GetSetting(settingCtxMinBootSecs); err != nil {
 		return err

@@ -33,7 +33,7 @@ import (
 // downlink delta becomes a wake: a `chat` delta drives an R7 refetch of the
 // authoritative /api/chat (the delta payload is NEVER trusted); a WORK delta
 // (action/task) logs a liveness wake; a `member` delta naming me nudges the graceful
-// self-stop hook (reports the presence PHASE then `suicide`s) and the recycle hook
+// self-stop hook (wakes the session with the offboard notice) and the recycle hook
 // (WAKE-ONLY: prints the server's 下線程序 document for the session — see listen_hooks.go).
 //
 // SELF-EXIT (the lifecycle tie — the agent's OWN death signal): the listener IS the
@@ -64,11 +64,6 @@ const (
 	eventsPath = "/api/events"
 	// chatPath / membersPath are the R7 refetch authorities.
 	membersPath = "/api/members/"
-	// offboardPath is the 下線程序 document (owner overlay ⊕ shipped seed) the
-	// recycle wake reads on the SAME edge it refetches the member row. Gated at
-	// the machine floor, so this agent's own Bearer token reads it.
-	offboardPath = "/api/offboard"
-
 	// Backoff mirrors agent/oc_agent.py _BACKOFF_START / _BACKOFF_CAP (1s / 15s) — the
 	// self-heal cadence. Python jitters each delay by a factor in [0.5, 1.0] to de-sync
 	// a fleet reconnecting in lockstep after a server restart (thundering-herd).
@@ -101,8 +96,16 @@ const (
 	// its own tmux session). Any other outcome — a successful stream, a network
 	// fault, a 5xx, a brief server outage — RESETS the run, so a flapping or
 	// briefly-down server can never mass-kill healthy agents; only a standing
-	// refusal (zombie, stale dual-SSE twin) crosses both bounds. The grace
-	// mirrors the server's 120 s stop_grace.
+	// refusal (zombie, stale dual-SSE twin) crosses both bounds.
+	//
+	// The grace was sized to mirror the server's 120 s stop_grace. 🔴 That is no
+	// longer what it mirrors: 下線 runs no clock at all since T-a9d6, and the
+	// server's stop gate now lets a session that is still WORKING its offboard
+	// sequence reconnect (api_infra.go) — precisely so this ladder cannot take
+	// down an agent mid-hand-off, which is what it would otherwise do on a
+	// station upgrade or a network blip. The number stays as a bound on how long
+	// a genuine standing refusal is tolerated; it is no longer derived from
+	// anything.
 	sseRefusalMin   = 4
 	sseRefusalGrace = 120 * time.Second
 

@@ -195,6 +195,19 @@ func (s *apiServer) systemInteractionText() (string, error) {
 	return dto.Text, nil
 }
 
+// offboardText is what the SERVER carries into the offboard notice itself
+// (T-a9d6): the owner ruled that the steps must ride the notice the server
+// pushes, not be fetched back by the agent — 「改回真的推播」. It answers "" on
+// any fault, and every caller degrades to the sentence alone rather than going
+// silent: losing the checklist is survivable, losing the notice is not.
+func (s *apiServer) offboardText() string {
+	dto, err := s.foldBootDocDTO(s.offboardSpec())
+	if err != nil || dto == nil {
+		return ""
+	}
+	return dto.Text
+}
+
 func (s *apiServer) bootSequenceText(runtime string) (string, error) {
 	spec, ok := s.bootSequenceSpecFor(bootSequenceDocKey(runtime))
 	if !ok {

@@ -296,10 +296,18 @@ data: {"topic":"context-high","data":{"topic":"context-high","to":"m-1a2b3c","le
   dedup key MUST be the session anchor (`boot_ts`), which is restored across an
   SSE reconnect, so a mid-session flap MUST NOT re-notify. A genuinely new
   session (new `boot_ts`) is entitled to its own single notice.
-- **The notice point is DERIVED from the handover threshold, never configured
-  beside it.** There MUST NOT be a second, independently-set warn threshold: it
-  drifts from the one the owner can see, which is exactly what T-c382 fixed
-  (`ctx.warn_pct` and `ctx.remind_step_pct` are retired and unread).
+- **The notice point is a SETTING the owner sets, as one half of a PAIR**
+  (`ctx.notice_pct` / `ctx.handover_pct`; codex: `codex.notice_round` /
+  `codex.compaction_threshold`). The first is where the soft notice fires, the
+  second is both the final call and the handover itself, and the pair is refused
+  unless the first is strictly below the second (T-a9d6).
+  🔴 This SUPERSEDES the rule that stood here before — "the notice point is
+  DERIVED from the handover threshold; there MUST NOT be a second,
+  independently-set warn threshold". That rule was written against
+  `ctx.warn_pct`, a threshold with no UI that drifted from the only number the
+  owner could see (T-c382). What replaced it is not that: both numbers are set
+  by the owner, in the same place, and neither can silently drift from the
+  other. `ctx.warn_pct` and `ctx.remind_step_pct` stay retired and unread.
 - Decision inputs and guards (all MUST hold for an emit):
   - the gauge pct is **actionable**: `context_pct_ts` present and strictly >
     the connection's `boot_ts` (stale-pct guard) — a predecessor
