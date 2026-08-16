@@ -237,8 +237,14 @@ export function DocCard({
   // TASK CARD was ruled the other way in the same ticket (③, 2026-08-16:「收和整
   // 個任務時,最後應該要定位到那則任務」) and does carry a correction — see
   // TaskCard.tsx and lib/scrollPort.ts. Whether this card should follow the task
-  // card is an OPEN QUESTION for the owner, deliberately not answered here: it
-  // was outside T-6630's scope, which was the task page.
+  // card is an OPEN QUESTION for the owner — he is the only one who can rule on
+  // it — deliberately not answered here: it was outside T-6630's scope, which
+  // was the task page.
+  // ⚠️ A ruling of "yes, follow it" would still NOT fix the case measured just
+  // below: the task-card correction brings a card back to the fold, and in the
+  // last-card situation here the arithmetic to do that does not exist. It would
+  // buy the OTHER cases. Do not read the open question as "this measured limit
+  // is merely unfinished work".
   //
   // 🔴 THE LAST CARD DOES NOT. Measured at 390×844 AND 1040×844: open both
   // documents, scroll to the very bottom, collapse the LAST one by its own

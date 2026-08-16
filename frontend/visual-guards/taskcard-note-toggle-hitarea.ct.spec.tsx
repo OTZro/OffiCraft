@@ -15,8 +15,22 @@
 // hard: how much of the row answers to the control, and whether the row still
 // goes through the note's handler rather than the card's.
 //
-// WHY CT AND NOT JSDOM: every claim is a box, a hit test, or a computed colour.
-// jsdom has no layout engine, so a jsdom version passes on a 0×0 control.
+// WHY CT AND NOT JSDOM: every claim is a box, a hit test, or a composited
+// colour. jsdom has no layout engine, so a jsdom version passes on a 0×0
+// control painted in nothing.
+//
+// WHY BOTH THEMES: the row's surface is mixed from `--color-overlay`, and a
+// theme pack re-values that. "Can you see this row" is therefore a per-theme
+// question — light is the WEAKER of the two here, measured, so testing dark
+// alone would guard the easy case.
+//
+// WHY THE STORY IS MOUNTED BARE (no `.app__main` / `.tasks` ancestor chain,
+// unlike the two anchor stories): nothing here is a scroll or an available-width
+// measurement. Every assertion is either relative (the control against the row
+// it sits in) or local (its own colours, its own semantics), and those do not
+// change when the card gets a scrollport. The repo's warning about bare mounts
+// under-reporting real layout applies to the overflow/scroll family of guards —
+// which is why the ③ story does reproduce the chain.
 //
 // MUTANT REGISTER (each planted IN PLACE on the declaration named, run, and
 // observed — counts are against the 10 tests below and expire if the case list
@@ -33,6 +47,14 @@
 //        ⇒ 2 failed / 8 passed — "the row is visibly the note's own band" at
 //        both widths. Geometry survives, correctly: N2 is a claim about looking
 //        different, not about being big.
+//   N4 · tasks.css: fade the row's two mixes to nothing (20%/12% → 0.2%/0.2%),
+//        leaving geometry, DOM and a11y untouched
+//        ⇒ "the row is visibly the note's own band" FAILS in BOTH themes. This
+//        mutant is why that test measures a COMPOSITED CONTRAST RATIO and not
+//        the presence of a declaration: the first version of it asked only
+//        "is a background declared, and is it not the step's own value", and an
+//        independent review planted N4 against it for 10 passed / 0 failed. A
+//        row nobody can see is exactly the state the owner reported.
 //   N3 · TaskCard.tsx: render the control as a <div> instead of a <button>
 //        ⇒ 4 failed / 6 passed — "clicking the far edge opens the note and
 //        leaves the card open" and "did not cost the keyboard or a screen
@@ -43,11 +65,29 @@ import { test, expect } from "@playwright/experimental-ct-react";
 import { TaskCardNoteDisclosureStory } from "./stories/TaskCardNoteDisclosureStory";
 
 const WIDTHS = [1280, 390];
+const THEMES = ["dark", "light"] as const;
 const MIN_TOUCH = 44;
+// Regression floors, not a conformance claim. They sit just under what the
+// shipped values measure in the WEAKER theme (light: 1.24 background, 1.44
+// border; dark: 1.46 / 1.85), so the N4 "faded to nothing" mutant (≈1.00) dies
+// while ordinary palette work does not trip on noise.
+// 🔴 They are NOT WCAG 1.4.11 (which asks 3:1 of a control's visual boundary):
+// reaching that here would need an outline several times heavier than anything
+// else in this cockpit, and that is a look the owner has not been asked about.
+// Raising these is a design decision, not a test edit.
+const MIN_BG_CONTRAST = 1.18;
+const MIN_BORDER_CONTRAST = 1.35;
 
-async function mountExpanded(mount: any, page: any, width: number) {
+const CASES = WIDTHS.flatMap((width) => THEMES.map((theme) => ({ width, theme })));
+
+async function mountExpanded(
+  mount: any,
+  page: any,
+  width: number,
+  theme: (typeof THEMES)[number] = "dark"
+) {
   await page.setViewportSize({ width, height: 1000 });
-  const cmp = await mount(<TaskCardNoteDisclosureStory />);
+  const cmp = await mount(<TaskCardNoteDisclosureStory theme={theme} />);
   await cmp.locator(".task-card__head").first().click();
   await expect(cmp.locator(".task-card__workflow")).toBeVisible();
   return cmp;
@@ -164,47 +204,6 @@ for (const width of WIDTHS) {
     ).toBeVisible();
   });
 
-  test(`[${width}] the row is visibly the note's own band, not bare card surface`, async ({
-    mount,
-    page,
-  }) => {
-    // 「一眼看得出來」, made measurable: the control paints a surface of its own.
-    // Sharing the step's background is exactly the state the owner reported —
-    // a control that looks like the card body, where clicking does the other,
-    // bigger thing.
-    await mountExpanded(mount, page, width);
-    const paint = await page.evaluate(() => {
-      const step = document.querySelector(
-        "[data-step-id='s-note']"
-      ) as HTMLElement;
-      const btn = step.querySelector(
-        "[data-testid='step-note-toggle']"
-      ) as HTMLElement;
-      const cs = getComputedStyle(btn);
-      const parent = getComputedStyle(step);
-      return {
-        bg: cs.backgroundColor,
-        stepBg: parent.backgroundColor,
-        borderW: parseFloat(cs.borderTopWidth),
-        borderColor: cs.borderTopColor,
-      };
-    });
-    // Transparent is spelled two ways depending on how the value was authored
-    // (a keyword vs a colour with a zero alpha channel), and `color-mix()`
-    // resolves to a `color(srgb …)` string rather than `rgba(…)` — so the test
-    // asks the question by NAME rather than by parsing a channel out of it.
-    const TRANSPARENT = ["transparent", "rgba(0, 0, 0, 0)"];
-    expect(
-      TRANSPARENT,
-      "the row must paint a background of its own"
-    ).not.toContain(paint.bg);
-    expect(paint.bg, "…and one the step's surface does not already have").not.toBe(
-      paint.stepBg
-    );
-    expect(paint.borderW, "the row must have a visible boundary").toBeGreaterThan(0);
-    expect(TRANSPARENT).not.toContain(paint.borderColor);
-  });
-
   test(`[${width}] widening it did not cost the keyboard or a screen reader`, async ({
     mount,
     page,
@@ -212,26 +211,26 @@ for (const width of WIDTHS) {
     const cmp = await mountExpanded(mount, page, width);
     const toggle = cmp.locator("[data-testid='step-note-toggle']");
 
-    const semantics = await page.evaluate(() => {
+    const closed = await page.evaluate(() => {
       const btn = document.querySelector(
         "[data-testid='step-note-toggle']"
       ) as HTMLElement;
-      const controls = btn.getAttribute("aria-controls");
       return {
         tag: btn.tagName,
-        role: btn.getAttribute("role"),
         expanded: btn.getAttribute("aria-expanded"),
-        controls,
-        // no nested interactive element inside the row (a button in a button is
-        // both invalid and unreachable for a screen reader)
+        // Collapsed, the note is not in the DOM at all — so the attribute must
+        // NOT be there either. An aria-controls naming an id that does not
+        // exist announces a relationship the page does not have.
+        controls: btn.getAttribute("aria-controls"),
         nestedInteractive: btn.querySelectorAll(
           "button, a, input, select, textarea, [role='button']"
         ).length,
       };
     });
-    expect(semantics.tag).toBe("BUTTON");
-    expect(semantics.expanded).toBe("false");
-    expect(semantics.nestedInteractive).toBe(0);
+    expect(closed.tag).toBe("BUTTON");
+    expect(closed.expanded).toBe("false");
+    expect(closed.controls, "no dangling aria-controls while collapsed").toBeNull();
+    expect(closed.nestedInteractive).toBe(0);
 
     await toggle.focus();
     expect(
@@ -241,6 +240,11 @@ for (const width of WIDTHS) {
       "the row must be reachable by keyboard"
     ).toBe("step-note-toggle");
 
+    // BOTH activation keys, not just Enter. A <button> answers to Space as
+    // well, and Space is also the key that scrolls a page — if the card's own
+    // keydown handler ever stops checking that the event started on the card
+    // itself, Space is the route that collapses the whole task while Enter
+    // still looks fine.
     await page.keyboard.press("Enter");
     await expect(cmp.locator("[data-testid='step-note']")).toBeVisible();
     await expect(
@@ -248,13 +252,122 @@ for (const width of WIDTHS) {
       "Enter on the note row must not collapse the card"
     ).toBeVisible();
 
-    // aria-controls has to POINT AT the note it opened — an attribute that
-    // names nothing announces a relationship that does not exist.
-    const resolves = await page.evaluate((id: string) => {
-      const el = document.getElementById(id);
-      return !!el && el.getAttribute("data-testid") === "step-note";
-    }, semantics.controls!);
-    expect(resolves, "aria-controls must resolve to the note").toBe(true);
+    // aria-controls appears with the note and POINTS AT it.
+    const open = await page.evaluate(() => {
+      const btn = document.querySelector(
+        "[data-testid='step-note-toggle']"
+      ) as HTMLElement;
+      const id = btn.getAttribute("aria-controls");
+      const el = id ? document.getElementById(id) : null;
+      return {
+        id,
+        resolves: !!el && el.getAttribute("data-testid") === "step-note",
+      };
+    });
+    expect(open.id, "aria-controls must be present once the note is open").not.toBeNull();
+    expect(open.resolves, "aria-controls must resolve to the note").toBe(true);
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    await page.keyboard.press(" ");
+    await expect(cmp.locator("[data-testid='step-note']")).toHaveCount(0);
+    await expect(
+      cmp.locator(".task-card__workflow"),
+      "Space on the note row must not collapse the card either"
+    ).toBeVisible();
+  });
+}
+
+// The colour half runs over widths × THEMES; the geometry, hit-test and
+// keyboard halves above run per width only, because none of them can change
+// with a palette — stating that rather than paying twice for the same answer.
+for (const c of CASES) {
+  test(`[${c.width} · ${c.theme}] the row is visibly the note's own band, not bare card surface`, async ({
+    mount,
+    page,
+  }) => {
+    // 「一眼看得出來」, made measurable. The earlier version of this test asked
+    // whether a background was DECLARED, and an independent review killed it
+    // with a row faded to 0.2% — declared, invisible, 10/10 green. So the
+    // question asked here is the one the owner actually asked: how far does
+    // this row stand out from the surface behind it.
+    await mountExpanded(mount, page, c.width, c.theme);
+    const paint = await page.evaluate(() => {
+      // Composite each element's background down its ancestor chain until an
+      // opaque one is reached — a `color-mix(… / 5%)` reports its own alpha,
+      // and comparing two translucent declarations tells you nothing about
+      // what the eye receives.
+      const parse = (v: string): [number, number, number, number] | null => {
+        let m = v.match(/^rgba?\(([^)]+)\)/);
+        if (m) {
+          const p = m[1].split(",").map((n) => parseFloat(n));
+          return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
+        }
+        // color(srgb r g b / a) — what color-mix() computes to
+        m = v.match(/^color\(srgb ([^)]+)\)/);
+        if (m) {
+          const [rgb, a] = m[1].split("/");
+          const p = rgb.trim().split(/\s+/).map((n) => parseFloat(n));
+          return [p[0] * 255, p[1] * 255, p[2] * 255, a === undefined ? 1 : parseFloat(a)];
+        }
+        return null;
+      };
+      const overlay = (
+        fg: [number, number, number, number],
+        bg: [number, number, number]
+      ): [number, number, number] => [
+        fg[0] * fg[3] + bg[0] * (1 - fg[3]),
+        fg[1] * fg[3] + bg[1] * (1 - fg[3]),
+        fg[2] * fg[3] + bg[2] * (1 - fg[3]),
+      ];
+      /** The colour actually painted where `el` sits, own background included. */
+      const composited = (el: HTMLElement, includeSelf: boolean): [number, number, number] => {
+        const stack: [number, number, number, number][] = [];
+        let n: HTMLElement | null = includeSelf ? el : el.parentElement;
+        while (n) {
+          const c = parse(getComputedStyle(n).backgroundColor);
+          if (c && c[3] > 0) {
+            stack.push(c);
+            if (c[3] === 1) break;
+          }
+          n = n.parentElement;
+        }
+        let out: [number, number, number] = [255, 255, 255];
+        for (let i = stack.length - 1; i >= 0; i--) out = overlay(stack[i], out);
+        return out;
+      };
+      const lum = (rgb: [number, number, number]) => {
+        const f = (v: number) => {
+          const c = v / 255;
+          return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]);
+      };
+      const contrast = (a: [number, number, number], b: [number, number, number]) => {
+        const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+        return (hi + 0.05) / (lo + 0.05);
+      };
+      const step = document.querySelector("[data-step-id='s-note']") as HTMLElement;
+      const btn = step.querySelector("[data-testid='step-note-toggle']") as HTMLElement;
+      const behind = composited(btn, false);
+      const row = composited(btn, true);
+      const bc = parse(getComputedStyle(btn).borderTopColor);
+      const border = bc ? overlay(bc, row) : row;
+      return {
+        bgContrast: contrast(row, behind),
+        borderContrast: contrast(border, row),
+        borderWidth: parseFloat(getComputedStyle(btn).borderTopWidth),
+        row,
+        behind,
+      };
+    });
+    expect(
+      paint.bgContrast,
+      `the row's surface must stand out from what is behind it (row ${paint.row} vs ${paint.behind})`
+    ).toBeGreaterThanOrEqual(MIN_BG_CONTRAST);
+    expect(paint.borderWidth, "the row must have a boundary").toBeGreaterThan(0);
+    expect(
+      paint.borderContrast,
+      "…and that boundary must be visible against the row it encloses"
+    ).toBeGreaterThanOrEqual(MIN_BORDER_CONTRAST);
   });
 }

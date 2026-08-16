@@ -236,6 +236,71 @@ for (const c of CASES) {
     ).toBeCloseTo(0, 0);
   });
 
+  test(`[${c.name}] expanding a card whose top is above the fold moves nothing`, async ({
+    mount,
+    page,
+  }) => {
+    // The direction the correction must NOT have. ③ answers "where do I end up
+    // when the task goes away"; nothing goes away when a card OPENS, so ①'s
+    // rule still owns that direction:「只是單純往下展開,整個畫面不能移動」.
+    // A collapsed card is only ~250px tall, so reading down a list routinely
+    // leaves one with its top just above the fold — clicking its lower half is
+    // the ordinary way to open it, and the screen must stay put.
+    await mountList(mount, page, c, 12);
+
+    // Park the (collapsed) target with its top above the fold.
+    await page.evaluate((tid: string) => {
+      const sc = document.querySelector(".tasks") as HTMLElement;
+      const card = document.querySelector(
+        `[data-task-id='${tid}']`
+      ) as HTMLElement;
+      sc.scrollTop +=
+        card.getBoundingClientRect().top - sc.getBoundingClientRect().top + 40;
+    }, TARGET);
+
+    const before = await measure(page, TARGET);
+    expect(
+      before.cardTop,
+      "premise: the card's top must be above the fold"
+    ).toBeLessThan(before.viewTop);
+    expect(
+      before.visible,
+      "premise: part of the card must still be on screen to click"
+    ).toBe(true);
+
+    // Click the card's own body, on screen — `element.click()` does not scroll.
+    const hit = await page.evaluate((tid: string) => {
+      const sc = document.querySelector(".tasks") as HTMLElement;
+      const card = document.querySelector(
+        `[data-task-id='${tid}']`
+      ) as HTMLElement;
+      const sr = sc.getBoundingClientRect();
+      const target = (
+        Array.from(card.querySelectorAll(".task-card__title")) as HTMLElement[]
+      ).find((t) => {
+        const r = t.getBoundingClientRect();
+        return r.top > sr.top && r.bottom < sr.top + sc.clientHeight;
+      });
+      if (!target) return false;
+      target.click();
+      return true;
+    }, TARGET);
+    expect(hit, "no on-screen part of the collapsed card to click").toBe(true);
+    await expect(
+      page.locator(`[data-task-id='${TARGET}'] .task-card__workflow`)
+    ).toBeVisible();
+
+    const after = await measure(page, TARGET);
+    expect(
+      after.scrollTop,
+      `expanding scrolled \`.tasks\` (${before.scrollTop} → ${after.scrollTop})`
+    ).toBe(before.scrollTop);
+    expect(
+      after.cardTop - before.cardTop,
+      "the card's top edge moved on expand"
+    ).toBeCloseTo(0, 0);
+  });
+
   test(`[${c.name}] the LAST card in a short list stays fully readable even though the clamp stops it short`, async ({
     mount,
     page,

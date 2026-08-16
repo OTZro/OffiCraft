@@ -1636,7 +1636,14 @@ button.task-card__waiting--dep:focus-visible {
      is the note's", which the card's own top-right chevron has no equivalent
      of. The 備註 word in the label is kept for the same reason.
    min-height is a TOUCH target, not decoration: 44px is the interaction size
-   this repo already uses for a thumb (office.css). */
+   this repo already uses for a thumb (tasks.css itself and office.css).
+   🔴 THE TWO MIX PERCENTAGES ARE LOAD-BEARING, not taste. An independent review
+   planted 8%/5% → 0.2%/0.2% — geometry, DOM and a11y untouched, the row simply
+   faded to nothing — and the guard of the day stayed 10/10 GREEN, because it
+   only asked whether a background was DECLARED. The owner's complaint is about
+   whether the row can be SEEN, so taskcard-note-toggle-hitarea now pins a
+   contrast floor in BOTH themes and these values were raised until they clear
+   it with margin (the shipped-before 5%/8% did not, in light). */
 .task-step__note-toggle {
   display: flex;
   align-items: center;
@@ -1645,9 +1652,9 @@ button.task-card__waiting--dep:focus-visible {
   min-height: 44px;
   margin-top: 6px;
   padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--color-overlay) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-overlay) 20%, transparent);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--color-overlay) 5%, transparent);
+  background: color-mix(in srgb, var(--color-overlay) 12%, transparent);
   cursor: pointer;
   font-size: 12px;
   text-align: left;
@@ -1655,7 +1662,7 @@ button.task-card__waiting--dep:focus-visible {
 }
 .task-step__note-toggle:hover {
   color: var(--color-text);
-  background: color-mix(in srgb, var(--color-overlay) 10%, transparent);
+  background: color-mix(in srgb, var(--color-overlay) 18%, transparent);
 }
 .task-step__notewrap .task-step__note {
   width: 100%;

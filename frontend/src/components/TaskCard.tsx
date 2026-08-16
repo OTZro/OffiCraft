@@ -635,6 +635,14 @@ export function TaskCard({
   // A note now grows downward out of its toggle and collapses back up into it,
   // and the scrollport is left alone in both directions.
   //
+  // WHAT THAT COSTS, in plain words, because the owner accepted it and the next
+  // reader will otherwise file it as a bug: T-4e39's correction also REVEALED as
+  // much of a newly-opened note as would fit. Without it, opening a long note
+  // leaves its body running off the bottom of the screen and you scroll down
+  // yourself. That is the trade the owner chose when he asked for a screen that
+  // does not move. If he reports "I open a note and cannot see it", that is this
+  // trade talking — take it back to him, do not quietly re-add the correction.
+  //
   // Do not re-add one. The guard that would redden is
   // visual-guards/taskcard-note-anchor.ct.spec.tsx, which measures `.tasks`'
   // scrollTop across an open and the viewport y of a row BELOW a collapse.
@@ -955,7 +963,12 @@ export function TaskCard({
               className="task-step__note-toggle"
               data-testid="step-note-toggle"
               aria-expanded={noteOpen(step.id)}
-              aria-controls={`step-note-${step.id}`}
+              /* Only while the note is really in the DOM: a collapsed note
+                 renders nothing, and an aria-controls pointing at an id that
+                 does not exist announces a relationship that is not there. */
+              aria-controls={
+                noteOpen(step.id) ? `step-note-${step.id}` : undefined
+              }
               onClick={() => toggleNote(step.id)}
             >
               {noteOpen(step.id) ? (
