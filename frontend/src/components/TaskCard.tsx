@@ -935,7 +935,11 @@ export function TaskCard({
             free text → <Markdown>, same treatment as the DoD and the waiting
             reason. */}
         {step.note && (
-          <div className="task-step__notewrap">
+          <div
+            className={`task-step__notewrap${
+              noteOpen(step.id) ? " task-step__notewrap--open" : ""
+            }`}
+          >
             {/* T-e5b1 (owner 2026-08-15「任務備注我希望預設不顯示，多一個展開備
                 注的選項決定要不要開該step的備注，不然太長了」): the note text is
                 COLLAPSED by default and this button opens it, per step.
@@ -954,6 +958,10 @@ export function TaskCard({
                 control collapses the entire card. A wider control is therefore
                 also a smaller mistake zone. Shape follows the row that already
                 exists one level down (.task-reply-card__collapsed-row).
+                The panel around it is the NOTEWRAP, not this row — owner, first
+                acceptance round:「展開備注的時候,備註不是應該要在匡裡面嗎?」.
+                So this is the panel's header and the note is its body, which is
+                why the wrap carries the `--open` modifier below.
                 🔴 It must stay a <button> (or at least [role=button]): that is
                 the ONLY reason onCardToggleClick's closest() filter lets the
                 click through. Demote it to a <div> and clicking the note row
