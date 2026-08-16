@@ -154,7 +154,6 @@ type tokenDTO struct {
 type memberDTO struct {
 	ID                string  `json:"id"`
 	AvatarURL         string  `json:"avatar_url"`
-	MemberNo          string  `json:"member_no"`
 	Name              string  `json:"name"`
 	Kind              string  `json:"kind"`
 	RoleKey           string  `json:"role_key"`

@@ -27,7 +27,6 @@ vi.mock("../hooks/useChat", () => ({
 function mkMember(lifecycle: Member["lifecycle"]): Member {
   return {
     id: "m1",
-    memberId: "m1",
     name: "Mira",
     role: "assistant",
     status: lifecycle === "online" ? "online" : "offline",

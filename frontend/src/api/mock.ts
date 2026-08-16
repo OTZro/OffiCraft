@@ -156,7 +156,6 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
   // (is_self=true via listMachines), and is NOT deletable. Offline until it reports.
   {
     id: MOCK_SERVER_SELF_ID,
-    member_no: "MB-WDN000",
     name: "伺服器這一台",
     kind: "warden",
     role_key: "",
@@ -187,7 +186,6 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
   },
   {
     id: "mira",
-    member_no: "MB-AST001",
     name: "Mira",
     kind: "assistant", // mirror the real seed (dal/seed.py: Mira kind="assistant")
     role_key: "assistant",
@@ -228,7 +226,6 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
   // its id. Offline / never-online — no fabricated telemetry.
   {
     id: "warden-mbp5",
-    member_no: "MB-WDN001",
     name: "Warden · mbp5",
     kind: "warden",
     role_key: "assistant",
@@ -580,24 +577,6 @@ function pickMockMemberName(): string {
     const candidate = `${base}-${2 + Math.floor(Math.random() * 998)}`;
     if (!taken.has(candidate.toLowerCase())) return candidate;
   }
-}
-// Derives the display Member-ID ("MB-XXX###") from a roster id — byte-for-byte
-// the server's domain.MemberNo (server/ocserverd/domain.go:160-168): SHA-256 the
-// id, take the first 8 bytes big-endian as a uint64, peel three uppercase letters
-// (n%26, n/=26) then three digits (n%1000). Stateless display projection, never a
-// lookup key. BigInt keeps the uint64 arithmetic exact (the value overflows Number).
-export async function deriveMemberNo(memberID: string): Promise<string> {
-  const digest = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(memberID))
-  );
-  let n = 0n;
-  for (let i = 0; i < 8; i++) n = (n << 8n) | BigInt(digest[i]);
-  let letters = "";
-  for (let i = 0; i < 3; i++) {
-    letters += String.fromCharCode(65 + Number(n % 26n));
-    n /= 26n;
-  }
-  return `MB-${letters}${String(Number(n % 1000n)).padStart(3, "0")}`;
 }
 // Mirrors the server custom-role template (server/ocserverd/domain.go; the 兩 section
 // 待填說明 scaffold a fresh custom role starts from).
@@ -3977,7 +3956,6 @@ export const mockApi: Api = {
 
     wireMembers.push({
       id: machineId,
-      member_no: `MB-WDN${String(wireMembers.length).padStart(3, "0")}`,
       name: name || machineId,
       kind: "warden",
       role_key: "assistant",
@@ -4720,11 +4698,6 @@ export const mockApi: Api = {
     const memberId = `m-${hex()}`;
     const wireMember: WireMember = {
       id: memberId,
-      // Server derives member_no from the member id (ocserverd/api_helpers.go:198
-      // → domain.go MemberNo): a SHA-256 of the id projected to MB-XXX###. NOT a
-      // constant — deriving here keeps mock parity so two createRole calls mint
-      // distinct member_no values, exactly as the server does.
-      member_no: await deriveMemberNo(memberId),
       name: memberName,
       kind: "",
       role_key: roleKey,
@@ -5183,7 +5156,6 @@ export function __injectMockMember(
 ): void {
   wireMembers.push({
     ...structuredClone(MOCK_WIRE_MEMBERS[1]),
-    member_no: `MB-TEST-${wireMembers.length}`,
     name: over.id,
     ...over,
   });

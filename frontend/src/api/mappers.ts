@@ -175,7 +175,6 @@ export function toMember(w: WireMember): Member {
   return {
     id: w.id, // wire id (attribution key)
     avatarUrl: w.avatar_url ?? "",
-    memberId: w.member_no, // display badge "MB-XXX###"
     name: w.name, // direct
     // role_key is the wire role; view model narrows to the RoleKey union. Fall
     // back to "assistant" (the only M1 role) when the wire leaves it blank.

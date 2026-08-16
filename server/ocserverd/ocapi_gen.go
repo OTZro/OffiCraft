@@ -1165,9 +1165,8 @@ type MemberAvatarDTO struct {
 
 // MemberDTO API representation of one “domain.Member“ (a roster member; §3.4 #8/#10).
 //
-// Carries the durable roster fields PLUS two projections the domain computes at
-// read time: “member_no“ (the “MB-XXX###“ display badge derived from “id“,
-// §3.10) and “presence“ (the DERIVED five-state
+// Carries the durable roster fields PLUS one projection the domain computes at
+// read time: “presence“ (the DERIVED five-state
 // offline/waking/online/stopping/stopped, §3.6 — never stored; the SINGLE
 // presence word on this wire). The raw “online“ / “waking_since“ /
 // “stopping_timed_out“ projections were removed from the wire (2026-07-11
@@ -1211,7 +1210,6 @@ type MemberDTO struct {
 	// LastOpReason Structured one-line cause of the most recent warden op (the warden's ``<code>: <detail>`` refusal/failure summary, e.g. ``session_already_exists: ...``) — distinct from the free-form ``last_op_log`` dump. Empty when the receipt carried no reason (older warden, or a successful op); consumers then fall back to status-only display.
 	LastOpReason *string `json:"last_op_reason,omitempty"`
 	Machine      *string `json:"machine,omitempty"`
-	MemberNo     *string `json:"member_no,omitempty"`
 	Model        *string `json:"model,omitempty"`
 	Name         string  `json:"name"`
 	OwnerId      *string `json:"owner_id,omitempty"`
@@ -1900,9 +1898,8 @@ type RoleCreateDTO struct {
 type RoleCreateResultDTO struct {
 	// Member API representation of one ``domain.Member`` (a roster member; §3.4 #8/#10).
 	//
-	// Carries the durable roster fields PLUS two projections the domain computes at
-	// read time: ``member_no`` (the ``MB-XXX###`` display badge derived from ``id``,
-	// §3.10) and ``presence`` (the DERIVED five-state
+	// Carries the durable roster fields PLUS one projection the domain computes at
+	// read time: ``presence`` (the DERIVED five-state
 	// offline/waking/online/stopping/stopped, §3.6 — never stored; the SINGLE
 	// presence word on this wire). The raw ``online`` / ``waking_since`` /
 	// ``stopping_timed_out`` projections were removed from the wire (2026-07-11

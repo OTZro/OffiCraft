@@ -5319,9 +5319,8 @@ export interface components {
          * MemberDTO
          * @description API representation of one ``domain.Member`` (a roster member; §3.4 #8/#10).
          *
-         *     Carries the durable roster fields PLUS two projections the domain computes at
-         *     read time: ``member_no`` (the ``MB-XXX###`` display badge derived from ``id``,
-         *     §3.10) and ``presence`` (the DERIVED five-state
+         *     Carries the durable roster fields PLUS one projection the domain computes at
+         *     read time: ``presence`` (the DERIVED five-state
          *     offline/waking/online/stopping/stopped, §3.6 — never stored; the SINGLE
          *     presence word on this wire). The raw ``online`` / ``waking_since`` /
          *     ``stopping_timed_out`` projections were removed from the wire (2026-07-11
@@ -5420,11 +5419,6 @@ export interface components {
              * @default
              */
             machine: string;
-            /**
-             * Member No
-             * @default
-             */
-            member_no: string;
             /**
              * Model
              * @default

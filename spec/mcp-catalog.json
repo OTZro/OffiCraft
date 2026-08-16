@@ -403,7 +403,7 @@
       "inputSchema": {
         "properties": {
           "fields": {
-            "description": "The literal STRING \"light\" (not a boolean, and no other value does anything) asks for the identity-only projection of every row: id, member_no, name, kind, role_key/role_name, runtime, roster_status, avatar. It DROPS the per-member unread chat count and the observed live-host state, which is the expensive half of this endpoint. Pass it whenever you are looking someone up or resolving a name to an id; omit it only when you actually need unread counts or where a member is running.",
+            "description": "The literal STRING \"light\" (not a boolean, and no other value does anything) asks for the identity-only projection of every row: id, name, kind, role_key/role_name, runtime, roster_status, avatar. It DROPS the per-member unread chat count and the observed live-host state, which is the expensive half of this endpoint. Pass it whenever you are looking someone up or resolving a name to an id; omit it only when you actually need unread counts or where a member is running.",
             "type": "string"
           }
         },

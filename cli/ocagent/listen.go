@@ -722,7 +722,7 @@ func fmtAgo(secs float64) string {
 // drainChat refetches chat and prints the unread-for-me — ONE LINE per message so the
 // spawned session's Monitor reads exactly '誰、多久前、說了什麼':
 //
-//	[ocagent] chat from MB-ABC123 (#CM-9F2A11, 2m ago): ...
+//	[ocagent] chat from m-3417933c8632 (#c-ceb835093301, 2m ago): ...
 //
 // `from` is the STABLE member id (server-stamped, never a display name) — reply
 // straight to it with post_chat. The `#…` tag is the MESSAGE id: the handle to

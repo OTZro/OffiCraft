@@ -16,8 +16,6 @@ package main
 //     "assistant" at the ingest seam (CanonicalKind).
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -198,23 +196,6 @@ func StoppingTimedOut(m Member, now float64, online bool) bool {
 	return online &&
 		m.StoppingSince > 0.0 &&
 		now-m.StoppingSince > StoppingTimeoutSecs
-}
-
-// ── member: display Member-ID projection ─────────────────────────────────────
-
-// MemberNo derives the display Member-ID ("MB-XXX###") for a roster id: a
-// stable SHA-256 of the id mapped to three uppercase letters and three
-// digits. Deterministic and stateless — a display label only, never a lookup
-// key. Byte-for-byte the Python domain.member.member_no derivation.
-func MemberNo(memberID string) string {
-	sum := sha256.Sum256([]byte(memberID))
-	n := binary.BigEndian.Uint64(sum[:8])
-	letters := make([]byte, 3)
-	for i := range letters {
-		letters[i] = byte('A' + n%26)
-		n /= 26
-	}
-	return fmt.Sprintf("MB-%s%03d", letters, n%1000)
 }
 
 // ── member: random founding-member name pool ─────────────────────────────────
