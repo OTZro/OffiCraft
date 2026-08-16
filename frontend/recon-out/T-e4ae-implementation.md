@@ -31,8 +31,13 @@
 
 - `npm test`：249 test files、2175 tests 全部通過。
 - `npx playwright test -c playwright-ct.config.ts visual-guards/te4ae-mobile-table.ct.spec.tsx visual-guards/taskcard-md-overflow.ct.spec.tsx visual-guards/taskcard-longtoken-wrap.ct.spec.tsx`：9/9 通過。
+- `npm run test:ct`：完整 CT 342 passed、4 skipped；其中 paint guard 11/11 passed。
 - `npm run typecheck`（由 `npm run build` 執行）：通過；Vite production build 通過。
 - `npm run lint:tokens`、`npm run lint:token-roles`、`git diff --check`：通過。
+
+## 獨立審查
+
+delegated reviewer `01a00b32-e075-7510-9e07-1717b9ec38d5`（Euler）讀取實作基準 SHA `6725526441b1251d74c5ace18149ad64e89da71b`，`git merge-base --is-ancestor` 回傳 0；其 review 檔為 `frontend/recon-out/T-e4ae-independent-review.md`，四項 DoD 結論為 PASS。該 reviewer 沒有重跑 npm／Playwright，測試證據以上一節的主執行者紀錄為準。
 
 ## 文件對質
 
