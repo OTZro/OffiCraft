@@ -1000,7 +1000,7 @@
  * must not collapse). The card's own width cap lives in replies.css. */
 .chat__msg--card .chat__msg-line,
 .chat__msg--card .chat__msg-content {
-  width: 100%;
+  width: max-content;
   min-width: 0;
 }
 /* B3 跳到原訊息: the located message flashes an accent ring, then settles
@@ -1678,7 +1678,11 @@ button.chat__msg-file {
     max-width: 100%;
   }
   .chat__msg--card .chat__msg-line {
+    width: 100%;
     flex-wrap: wrap;
+  }
+  .chat__msg--card .chat__msg-content {
+    width: 100%;
   }
 }
 
