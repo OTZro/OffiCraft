@@ -145,9 +145,12 @@
   white-space: nowrap;
 }
 .mp-identity__id {
-  /* `flex: none` is what actually keeps the id whole; `nowrap` is defence for an
-     id longer than anything the roster mints today, and no guard covers it
-     (identity-real-id.ct.spec.tsx M2 stays green without it). */
+  /* Both are load-bearing, and `nowrap` is the one that states the intent (a
+     fixed-height chip must never take a second line — see
+     .claude/rules/css-layout-traps.md; `flex: none` is not a substitute for it).
+     Honest limit: on THIS card no measured width can force a break today, so
+     identity-real-id.ct.spec.tsx stays green without the nowrap (its M2). It is
+     unguarded, not unnecessary. */
   white-space: nowrap;
   flex: none;
 }

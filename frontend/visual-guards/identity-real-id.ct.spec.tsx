@@ -15,19 +15,27 @@
 // `@media`, so the vitest half (MemberDetailPanel.identity-id.test.tsx) can only
 // pin WHAT the badge renders, never whether it fits.
 //
-// Mutants — what was actually run, not what sounded likely:
-//   M1 drop the ellipsis trio from `.mp-identity__name`
-//      → RED at 375 and 320 on "name right edge (unbreakable name)" (the name
-//        ran 463px wide inside a 299px card). This is the mutant that keeps the
-//        latin-name case honest.
-//   M2 drop `white-space: nowrap` from `.mp-identity__id`
-//      → STILL GREEN. `flex: none` plus the wrapping row already give the badge
-//        a full line to itself at every width measured here, so nothing on this
-//        card can force it to break today. The declaration is kept as defence
-//        for a longer id shape than the roster mints now, and this file does NOT
-//        cover it — do not count it as guarded.
-//   M3 drop `flex-wrap: wrap` from `.mp-identity__line`
-//      → RED at 320 on "name still visible" (the name is squeezed to nothing).
+// Mutants — every line below was RUN at this granularity, not reasoned about
+// (an independent review caught an earlier version of this block claiming a red
+// that only happened when three declarations were removed together):
+//   M1a drop `text-overflow: ellipsis` alone
+//       → RED at 375 and 320 on "truncation shows an ellipsis". Note that
+//         assertion is declaration-level ON PURPOSE: a rendered "…" has no
+//         geometric trace at all, so no box measurement can see it.
+//   M1b drop `overflow: hidden` alone          → GREEN
+//   M1c drop `min-width: 0` alone              → GREEN
+//   M1d drop all three together
+//       → RED at 375 and 320 on "name right edge (unbreakable name)".
+//     So M1b and M1c are each individually UNGUARDED here — they are redundant
+//     with one another for the geometry, and only their joint absence is caught.
+//     Do not read this file as covering either one alone.
+//   M2  drop `white-space: nowrap` from `.mp-identity__id`
+//       → GREEN. `flex: none` plus the wrapping row already give the badge a
+//         full line at every width measured here, so nothing on this card can
+//         force it to break today. The declaration is kept as defence for a
+//         longer id shape than the roster mints now, and is NOT guarded.
+//   M3  drop `flex-wrap: wrap` from `.mp-identity__line`
+//       → RED at 320 on "name still visible" (the name is squeezed to nothing).
 //
 import { test, expect } from "@playwright/experimental-ct-react";
 import { IdentityRealIdStory } from "./stories/IdentityRealIdStory";
@@ -133,6 +141,31 @@ for (const vp of VIEWPORTS) {
       nameBox.x + nameBox.width,
       `${vp.name}: name right edge (unbreakable name)`
     ).toBeLessThanOrEqual(card.x + card.width + 1);
+
+    if (vp.width < 720) {
+      // …and yielding means TRUNCATED, not merely boxed. The box geometry above
+      // is satisfied by `min-width: 0` alone, which lets the box shrink while
+      // the text runs on underneath — so the box test cannot tell "clipped" from
+      // "spilling out of a small box". This pair can.
+      const name = cmp.locator(".mp-identity__name");
+      const clip = await name.evaluate((el) => ({
+        overflowing: el.scrollWidth - el.clientWidth,
+        textOverflow: getComputedStyle(el).textOverflow,
+      }));
+      expect(
+        clip.overflowing,
+        `${vp.name}: name is actually clipped, not just boxed`
+      ).toBeGreaterThan(0);
+      // The ellipsis itself leaves NO geometric trace (same box, same scroll
+      // width) — a rendered "…" can only be told apart from a hard cut by
+      // reading the declaration, so this one assertion is deliberately
+      // declaration-level. It is here because a hard cut mid-glyph reads as a
+      // rendering bug to the owner, not as "there is more name".
+      expect(
+        clip.textOverflow,
+        `${vp.name}: truncation shows an ellipsis`
+      ).toBe("ellipsis");
+    }
   });
 
   test(`${vp.name}: the long-id fixture really is the crowded one`, async ({
