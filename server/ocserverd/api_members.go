@@ -482,7 +482,7 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 // owner-pinned desired_machine_id, then run the SAME event-driven reconcile the
 // activate click uses (reconcileMemberNow). A LIVE member is auto-migrated onto
 // the chosen machine, but SINCE T-b6d9 GRACEFULLY: the pin is written together
-// with a refocus epoch, the agent gets the ordinary five-step wind-down SOP, and
+// with a refocus epoch, the agent gets the ordinary 下線程序 wake, and
 // the kill+re-spawn happens at the 收口 (its own report_stopped, or the recycle
 // arm's RecycleGrace ceiling). It used to be an immediate robust STOP with no
 // warning at all (fbc5280). An offline member just re-pins so the next wake
@@ -707,7 +707,7 @@ func (s *apiServer) HandleDismissMemberApiMembersMemberIdDelete(w http.ResponseW
 // — e.g. the owner's sub has none: self-report is agent-only by construction).
 // Unlike resolveMember it does NOT fold kind='outsource' onto errNotFound:
 // since the graceful worker handover (T-ea82) an outsource worker walks the
-// SAME five-step SOP as a member and reports its own presence through these
+// SAME 下線程序 wake as a member and reports its own presence through these
 // self endpoints — only the member_id-target admin surface keeps the pre-fold
 // ow- 404.
 func (s *apiServer) resolveSelf(r *http.Request) (*Member, error) {
@@ -844,7 +844,7 @@ func (s *apiServer) HandleReportStoppedApiSelfStoppedPost(w http.ResponseWriter,
 // the CALLER, so it is strictly weaker than the admin-gated refocus_member —
 // zero privilege-escalation surface. The EFFECT is identical to refocus_member:
 // stamp the caller's refocus_since and fan the member delta; the standard §4.5
-// recycle orchestration (the agent's own RecycleHook → five-step SOP →
+// recycle orchestration (the agent's own RecycleHook → 下線程序 wake →
 // report_stopped → server kill/respawn) carries the rest. Nothing is dispatched
 // here (same as refocus_member — no reconcileMemberNow).
 //

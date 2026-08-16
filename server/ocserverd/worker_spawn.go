@@ -1451,7 +1451,7 @@ func (s *apiServer) clearWorkerRefocus(id, reason string) {
 // openWorkerHandoverGrace turns a freshly-stamped refocus into the member-shaped
 // graceful window: fan the member-topic 預告 delta at the worker's OWN session
 // (its ocagent recycleHook refetches GET /api/members/<self> and prints the
-// five-step handover SOP — the member machinery verbatim, zero client change)
+// 下線程序 handover wake — the member machinery verbatim, zero client change)
 // and RETURN — the kill is owned by the 收口 drivers (the worker's own
 // report_stopped, or the StoppingTimeoutSecs grace deadline in
 // autoHandoverWorker's in-flight arm). An OFFLINE worker skips the window
