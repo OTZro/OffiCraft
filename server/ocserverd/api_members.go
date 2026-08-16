@@ -136,7 +136,15 @@ func offboardKindOf(m Member, now float64) (kind string, carries bool) {
 		// an agent would cut its hand-off short to beat a deadline that does
 		// not exist. Escalation on this arm is the owner pressing force-stop,
 		// and that path deliberately says nothing.
-		if m.StoppingSince > 0 {
+		//
+		// 🔴 …and "deliberately says nothing" has to be enforced HERE, not just
+		// asserted in prose. force-stop sets desired_state=offline AND stamps
+		// stopping_since before it publishes, so on the sentence above alone the
+		// member it just killed receives a full SOFT notice on its own stream —
+		// telling a session that is about to be cut off to work the sequence and
+		// call restart_self. Independent e2e verification observed exactly that
+		// frame; the owner's ruling is that force-stop sends no message at all.
+		if m.StoppingSince > 0 && !forcedEpochLive(m) {
 			return offboardKindSoft, true
 		}
 		return "", false
@@ -154,6 +162,23 @@ const (
 	offboardKindSoft  = "soft"
 	offboardKindFinal = "final"
 )
+
+// forcedEpochLive: the stop this member is currently under was opened by a
+// FORCE-stop, not by 下線. It is the one judgement that separates "cut off
+// deliberately" from "working its close-out", and three places need it — the
+// notice (a forced path says nothing), the SSE stop gate (a forced member's
+// reconnect is refused) and deactivate (a forced epoch must not be re-stamped
+// into a softer one). One definition, because two copies of this could disagree
+// about the same member.
+//
+// stopping_since > 0 is what scopes it to a LIVE epoch: activate clears the stop
+// anchors but deliberately KEEPS forced_stop_at as the durable record that a
+// past session was cut off, so reading that column alone would treat every
+// member ever force-stopped as permanently forced.
+func forcedEpochLive(m Member) bool {
+	return m.ForcedStopAt > 0.0 && m.StoppingSince > 0.0 &&
+		m.ForcedStopAt >= m.StoppingSince
+}
 
 // offboardCloserFor names the tool that ACTUALLY ends this member's sequence.
 // A member still wanted online is being handed over and re-starts itself; one
@@ -781,9 +806,7 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 	// — the 下線 arm returns decisionNone while the soft grace is on, and
 	// offboardKindOf answers soft for desired-offline without consulting the
 	// anchor's age.
-	forcedEpochLive := m.ForcedStopAt > 0.0 && m.StoppingSince > 0.0 &&
-		m.ForcedStopAt >= m.StoppingSince
-	if !forcedEpochLive {
+	if !forcedEpochLive(*m) {
 		m.StoppingSince = nowSecs()
 	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {

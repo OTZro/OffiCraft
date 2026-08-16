@@ -397,7 +397,7 @@ func (s *apiServer) sseStopGateRefusal(memberID string) string {
 		// that has reported stopped is finished; a member the owner FORCE-
 		// stopped was cut off deliberately and must not come back on its own.
 		// Anything else with a stop anchor is a close-out in flight.
-		if m.StoppedSince <= 0.0 && m.ForcedStopAt < m.StoppingSince {
+		if m.StoppedSince <= 0.0 && !forcedEpochLive(*m) {
 			return ""
 		}
 		return "member '" + m.ID + "' has a stop in effect (desired_state=offline) — " +

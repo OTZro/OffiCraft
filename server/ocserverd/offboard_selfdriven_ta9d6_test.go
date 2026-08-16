@@ -559,3 +559,50 @@ func TestDeactivate_DoesNotDowngradeAForcedStop(t *testing.T) {
 		t.Fatalf("a fresh close-out must still be admitted: %s", msg)
 	}
 }
+
+// 強制下線 sends NO message — the owner ruled it outright ("強制還需要發訊息嗎"
+// → no), and both this file's sibling comment and HandleForceStopMember's own
+// godoc say so in prose.
+//
+// 🔴 Prose was all that said it. force-stop sets desired_state=offline and
+// stamps stopping_since BEFORE it publishes, and the offboard payload attaches
+// a notice to exactly that state — so the member being killed received a full
+// SOFT notice on its own stream, telling it to work the sequence and call
+// restart_self. Independent e2e verification caught the frame on the wire; the
+// server suite was green throughout, because nothing asserted the promise.
+func TestForceStop_SendsNoNotice(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-a")
+
+	// Positive control FIRST: the same payload builder on the graceful arm must
+	// carry a notice, otherwise an assertion of "no notice" below proves only
+	// that the notice machinery is off entirely.
+	soft := testAgent("m-soft")
+	soft.DesiredState = DesiredStateOffline
+	soft.StoppingSince = nowSecs()
+	if _, ok := s.offboardDeltaPayload(soft)["offboard_notice"]; !ok {
+		t.Fatalf("a graceful 下線 must still carry the sequence: %+v", soft)
+	}
+
+	m := testAgent("m-killed")
+	m.DesiredMachineID = "mach-a"
+	putTestMember(t, s, m)
+	connectOnline(t, s, "mach-a")
+	connectOnlineMachine(t, s, "m-killed", "mach-a")
+
+	rec := httptest.NewRecorder()
+	s.HandleForceStopMemberApiMembersMemberIdForceStopPost(rec,
+		taskReq(t, "POST", "/api/members/m-killed/force-stop", map[string]any{},
+			wireOwnerID, "owner"), "m-killed")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("force-stop: %d %s", rec.Code, rec.Body.String())
+	}
+
+	killed, _ := s.dal.GetMember("m-killed")
+	if _, carries := offboardKindOf(*killed, nowSecs()); carries {
+		t.Fatalf("force-stop must send nothing: %+v", killed)
+	}
+	if got, ok := s.offboardDeltaPayload(*killed)["offboard_notice"]; ok {
+		t.Fatalf("force-stop must send nothing, got %q", got)
+	}
+}
