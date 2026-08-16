@@ -352,7 +352,6 @@ func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unr
 	return memberDTO{
 		ID:               m.ID,
 		AvatarURL:        memberAvatarURL(m.AvatarAttachmentID),
-		MemberNo:         MemberNo(m.ID),
 		Name:             m.Name,
 		Kind:             m.Kind,
 		RoleKey:          m.RoleKey,
@@ -385,7 +384,7 @@ func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unr
 
 // newMemberLightDTO is the ?fields=light identity-only projection (T-cf91):
 // the SAME memberDTO wire shape, carrying only the fields a name+role surface
-// reads (id / member_no / name / kind / role_key / role_name + the structural
+// reads (id / name / kind / role_key / role_name + the structural
 // owner_id / schema_version / roster_status). Everything the full path DERIVES
 // — presence (hub), machine (observed host), unread_count (chat watermark) —
 // is left HONEST-EMPTY: not computed here, so a light consumer must not read
@@ -396,7 +395,6 @@ func (s *apiServer) newMemberLightDTO(m Member, roleName string) memberDTO {
 	return memberDTO{
 		ID:            m.ID,
 		AvatarURL:     memberAvatarURL(m.AvatarAttachmentID),
-		MemberNo:      MemberNo(m.ID),
 		Name:          m.Name,
 		Kind:          m.Kind,
 		RoleKey:       m.RoleKey,

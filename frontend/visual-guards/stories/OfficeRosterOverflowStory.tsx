@@ -25,7 +25,6 @@ export const REAL_LATIN_TYPE = "Long-term Context · Lessons Refine";
 function mkMember(over: Partial<Member> = {}): Member {
   return {
     id: "mira",
-    memberId: "MB-AST001",
     name: "銀月",
     role: "assistant",
     roleName: "助理",
