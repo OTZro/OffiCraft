@@ -337,7 +337,14 @@ func (d *DAL) PutMember(m Member) error {
 			codename = excluded.codename,
 			created_ts = excluded.created_ts,
 			released_ts = excluded.released_ts,
-			activated_ts = excluded.activated_ts`,
+			activated_ts = excluded.activated_ts,
+			-- forced_stop_at only ever moves FORWARD. A caller holding the
+			-- current row carries the stamp it just set and it lands here; a
+			-- STALE snapshot carries an older value (or 0) and max() keeps
+			-- what is already stored, so the record that a session was cut off
+			-- survives every other writer — the property the avatar pointer
+			-- and the session anchor each needed their own seam for.
+			forced_stop_at = max(forced_stop_at, excluded.forced_stop_at)`,
 		m.ID, m.Name, m.Kind, m.RoleKey, NormalizeRuntime(m.Runtime), m.Model, m.ActualModel, m.Effort,
 		m.ActualRuntime, m.ActualEffort,
 		m.DesiredState, m.DesiredMachineID, m.LastMachineID, m.SessionBootTS,
@@ -350,11 +357,18 @@ func (d *DAL) PutMember(m Member) error {
 	return err
 }
 
-// SetMemberForcedStopAt stamps the force-stop record on ONE column, for the
-// same reason the avatar pointer and the session anchor have their own seams:
-// PutMember's upsert deliberately does not carry it, so a stale lifecycle
-// snapshot written by any other path can never erase the one record that the
-// previous session was cut off mid-work.
+// SetMemberForcedStopAt stamps the force-stop record on ONE column. It is the
+// BACKSTOP now, not the only writer: PutMember's upsert carries the column
+// under max(), so the value lands in the same write that publishes the member
+// — and a stale lifecycle snapshot still cannot erase it, because max() keeps
+// whatever is already stored.
+//
+// 🔴 Why the upsert had to carry it (independent review): the SSE stop gate now
+// READS this column to tell "cut off deliberately" from "working its close-out".
+// While this seam was the only writer, and its failure is deliberately
+// non-fatal, a failed UPDATE left the column at 0 — and a force-stopped member
+// then reconnected as if it were closing out, on an arm that runs no clock to
+// collect it. A safety verdict must not hang on a best-effort write.
 func (d *DAL) SetMemberForcedStopAt(id string, ts float64) error {
 	_, err := d.wdb.Exec(`UPDATE member SET forced_stop_at = ? WHERE id = ?`, ts, id)
 	return err

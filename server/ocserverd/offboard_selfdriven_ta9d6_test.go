@@ -606,3 +606,58 @@ func TestForceStop_SendsNoNotice(t *testing.T) {
 		t.Fatalf("force-stop must send nothing, got %q", got)
 	}
 }
+
+// The force-stop record must land in the SAME write that publishes the member,
+// not only through its own targeted seam. Independent review found the coupling:
+// the SSE stop gate now READS forced_stop_at to tell "cut off deliberately" from
+// "working its close-out", while the only writer was SetMemberForcedStopAt,
+// whose failure is deliberately non-fatal — so a failed UPDATE left the column
+// at 0 and a force-stopped member reconnected as if it were closing out, on an
+// arm that runs no clock to collect it. A safety verdict must not hang on a
+// best-effort write.
+//
+// The upsert carries it under max(), which is what keeps BOTH properties: a
+// fresh writer's stamp lands, and a stale snapshot (older value, or 0) cannot
+// erase one that is already stored.
+func TestPutMemberCarriesForcedStopAtForwardOnly(t *testing.T) {
+	s := newReconcileTestServer(t)
+	m := testAgent("m-upsert")
+	putTestMember(t, s, m)
+
+	stamped := m
+	stamped.ForcedStopAt = 5000.0
+	if err := s.dal.PutMember(stamped); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	got, _ := s.dal.GetMember("m-upsert")
+	if got.ForcedStopAt != 5000.0 {
+		t.Fatalf("the publishing write must carry the record: %v", got.ForcedStopAt)
+	}
+
+	// A stale snapshot — the shape that cost the avatar pointer and the session
+	// anchor their data — must not roll it back.
+	stale := m
+	stale.ForcedStopAt = 0
+	stale.Name = "written by a holder of an older row"
+	if err := s.dal.PutMember(stale); err != nil {
+		t.Fatalf("stale put: %v", err)
+	}
+	got, _ = s.dal.GetMember("m-upsert")
+	if got.ForcedStopAt != 5000.0 {
+		t.Fatalf("a stale snapshot must not erase the record: %v", got.ForcedStopAt)
+	}
+	if got.Name != stale.Name {
+		t.Fatalf("…while the rest of that write must land normally: %+v", got)
+	}
+
+	// …and an EARLIER force-stop cannot overwrite a later one either.
+	older := m
+	older.ForcedStopAt = 4000.0
+	if err := s.dal.PutMember(older); err != nil {
+		t.Fatalf("older put: %v", err)
+	}
+	got, _ = s.dal.GetMember("m-upsert")
+	if got.ForcedStopAt != 5000.0 {
+		t.Fatalf("forced_stop_at must only move forward: %v", got.ForcedStopAt)
+	}
+}
