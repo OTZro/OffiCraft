@@ -840,6 +840,8 @@ function ServerParams({
   // keystroke would PATCH the server mid-typing ("5" on the way to "50").
   const [handoverDraft, setHandoverDraft] = useState<string | null>(null);
   const [codexHandoverDraft, setCodexHandoverDraft] = useState<string | null>(null);
+  const [noticeDraft, setNoticeDraft] = useState<string | null>(null);
+  const [codexNoticeDraft, setCodexNoticeDraft] = useState<string | null>(null);
   const [monitoringRefreshDraft, setMonitoringRefreshDraft] = useState<string | null>(null);
   // T-ae38, widened by T-30f1: five independent caps, so five independent
   // drafts. A shared draft would make typing in one field snap the others back.
@@ -860,8 +862,9 @@ function ServerParams({
     if (!settings) return;
     if (handoverDraft === null) return;
     const n = Number(handoverDraft);
-    if (!Number.isInteger(n) || n < 40 || n > 90) {
-      // Local guard mirrors the server's 422 range — snap back, mark it.
+    if (!Number.isInteger(n) || n < 40 || n > 90 || n <= settings.noticePct) {
+      // Local guard mirrors the server's 422 range AND the pair order — snap
+      // back, mark it.
       setRangeError(true);
       setHandoverDraft(null);
       return;
@@ -871,10 +874,39 @@ function ServerParams({
     void onSave({ handoverPct: n });
   }
 
+  // The two offboard points are a PAIR, so each local guard checks the ORDER as
+  // well as the range — the server refuses a crossing pair with a 422, and
+  // letting the input accept it here would show a saved value the server never
+  // took. Checked against the OTHER field's live value, so either box can be
+  // edited on its own.
+  function commitNotice() {
+    if (!settings || noticeDraft === null) return;
+    const n = Number(noticeDraft);
+    if (!Number.isInteger(n) || n < 1 || n > 89 || n >= settings.handoverPct) {
+      setRangeError(true);
+      setNoticeDraft(null);
+      return;
+    }
+    setNoticeDraft(null);
+    if (n !== settings.noticePct) void onSave({ noticePct: n });
+  }
+
+  function commitCodexNotice() {
+    if (!settings || codexNoticeDraft === null) return;
+    const n = Number(codexNoticeDraft);
+    if (!Number.isInteger(n) || n < 1 || n > 10 || n >= settings.codexCompactionThreshold) {
+      setRangeError(true);
+      setCodexNoticeDraft(null);
+      return;
+    }
+    setCodexNoticeDraft(null);
+    if (n !== settings.codexNoticeRound) void onSave({ codexNoticeRound: n });
+  }
+
   function commitCodexHandover() {
     if (!settings || codexHandoverDraft === null) return;
     const n = Number(codexHandoverDraft);
-    if (!Number.isInteger(n) || n < 1 || n > 10) {
+    if (!Number.isInteger(n) || n < 1 || n > 10 || n <= settings.codexNoticeRound) {
       setRangeError(true); setCodexHandoverDraft(null); return;
     }
     setCodexHandoverDraft(null);
@@ -985,6 +1017,36 @@ function ServerParams({
 
           <div className="param-row">
             <div className="param-row__body">
+              <label className="param-row__name" htmlFor="param-notice">
+                {t.settings.notice}
+              </label>
+              <div className="param-row__sub">{t.settings.noticeSub}</div>
+            </div>
+            <div className="param-pct">
+              <input
+                id="param-notice"
+                className="param-input"
+                type="number"
+                min={1}
+                max={89}
+                aria-label={t.settings.notice}
+                value={noticeDraft ?? String(settings.noticePct)}
+                onChange={(e) => {
+                  setRangeError(false);
+                  onClearSaveError();
+                  setNoticeDraft(e.target.value);
+                }}
+                onBlur={commitNotice}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitNotice();
+                }}
+              />
+              <span className="param-pct__sign">%</span>
+            </div>
+          </div>
+
+          <div className="param-row">
+            <div className="param-row__body">
               <label className="param-row__name" htmlFor="param-handover">
                 {t.settings.handover}
               </label>
@@ -1010,6 +1072,29 @@ function ServerParams({
                 }}
               />
               <span className="param-pct__sign">%</span>
+            </div>
+          </div>
+
+          <div className="param-row">
+            <div className="param-row__body">
+              <label className="param-row__name" htmlFor="param-codex-notice">
+                {t.settings.codexNotice}
+              </label>
+              <div className="param-row__sub">{t.settings.codexNoticeSub}</div>
+            </div>
+            <div className="param-pct">
+              <input
+                id="param-codex-notice"
+                className="param-input"
+                type="number"
+                min={1}
+                max={10}
+                aria-label={t.settings.codexNotice}
+                value={codexNoticeDraft ?? String(settings.codexNoticeRound)}
+                onChange={(e) => { setRangeError(false); onClearSaveError(); setCodexNoticeDraft(e.target.value); }}
+                onBlur={commitCodexNotice}
+                onKeyDown={(e) => { if (e.key === "Enter") commitCodexNotice(); }}
+              />
             </div>
           </div>
 

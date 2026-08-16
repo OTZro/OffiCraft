@@ -2810,8 +2810,10 @@ export interface paths {
          * @description Partially update the org-adjustable settings (owner or admin agent — T-6020). Only supplied
          *     fields change; a change is durable (DB) AND live immediately — `owner_token_ttl`
          *     applies from the next login, `agent_token_ttl` from the next bootstrap, reconcile,
-         *     or outsource spawn, and `handover_pct` from the next context report. Either TTL
-         *     outside the 12h/24h/7d/30d whitelist or `handover_pct` outside 40..90 is a 422
+         *     or outsource spawn, and the offboard points from the next context report. Either
+         *     TTL outside the 12h/24h/7d/30d whitelist, `handover_pct` outside 40..90, or a
+         *     notice point that does not sit strictly below its final one (`notice_pct` vs
+         *     `handover_pct`, `codex_notice_round` vs `codex_compaction_threshold`) is a 422
          *     (nothing is written).
          */
         patch: operations["handle_update_settings_api_settings_patch"];
@@ -7192,8 +7194,21 @@ export interface components {
              * @default 60000
              */
             doc_cap_chars_system_interaction: number;
-            /** Handover Pct */
+            /**
+             * Handover Pct
+             * @description The SECOND of the two offboard points: the FINAL notice, and the point the automatic handover itself fires. Must be 40..90 and strictly greater than notice_pct.
+             */
             handover_pct: number;
+            /**
+             * Notice Pct
+             * @description The FIRST of the two offboard points (T-a9d6): the SOFT notice, where the agent is asked to work the offboard sequence and then call restart_self itself rather than idle until it is cut off. Must be 1..89 and strictly below handover_pct. An install upgraded from the single-threshold era reports handover_pct - 10 here, which is where the notice used to be derived.
+             */
+            notice_pct: number;
+            /**
+             * Codex Notice Round
+             * @description The codex twin of notice_pct (T-a9d6): the compaction round at which the SOFT notice fires. A codex session hands over on compaction count, not on a percentage, so its pair is a pair of ROUNDS. Must be 1..10 and strictly below codex_compaction_threshold.
+             */
+            codex_notice_round: number;
             /**
              * Monitoring Refresh Seconds
              * @description Minimum interval between monitoring and machine refreshes, in seconds (1 through 60).
@@ -7255,9 +7270,15 @@ export interface components {
          *     independent and each MUST be one of 43200 / 86400 / 604800 / 2592000 seconds
          *     (12h / 24h / 7d / 30d — a whitelist, so a stray 0 can never lock future logins
          *     or agent mints out); owner changes apply from the next login and agent changes
-         *     from the next bootstrap, reconcile, or outsource spawn. `handover_pct` MUST be
-         *     40..90 (the warn band sits at 40 — a handover threshold below it would fire
-         *     before the warning). Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).
+         *     from the next bootstrap, reconcile, or outsource spawn. The offboard points are a
+         *     PAIR (T-a9d6): `notice_pct` is the SOFT notice and `handover_pct` is the FINAL one
+         *     (and the point the handover itself fires). `handover_pct` MUST be 40..90,
+         *     `notice_pct` MUST be 1..89, and `notice_pct` MUST be strictly below
+         *     `handover_pct` — the pair is checked against the POST-patch values, so either may
+         *     be sent on its own, and a pair that would cross is a 422 rather than being
+         *     quietly reordered. `codex_notice_round` / `codex_compaction_threshold` are the
+         *     same pair on the codex axis (rounds, 1..10, notice strictly below threshold).
+         *     Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).
          *     `updater_receive_beta` toggles whether the GitHub-release update check also
          *     admits prereleases; `updater_auto_update` toggles unattended background
          *     self-upgrade to the newest admissible release (both booleans, default false;
@@ -7339,8 +7360,21 @@ export interface components {
              * @description Replace the owner's custom theme bundles (T-16a1 P2) with this array (each `{id,name,colors}`). Omit to leave them unchanged; `[]` clears them. Every bundle is validated against the shape, the theme.css token whitelist, and the concrete-colour grammar — any violation is a 422 and nothing is written. The ONE exception is an unrecognised `wording` code, which is dropped from the bundle instead of failing it (see ThemeBundleDTO.wording): that request is a 200 whose echo carries the pruned overlay. When this and display_theme are patched together, display_theme is validated against the POST-patch set; and deleting the active custom theme resets display_theme to "".
              */
             custom_themes?: components["schemas"]["ThemeBundleDTO"][] | null;
-            /** Handover Pct */
+            /**
+             * Handover Pct
+             * @description The SECOND offboard point: the FINAL notice, and where the automatic handover fires. 40..90, and strictly greater than notice_pct (the pair is validated together against the POST-patch values, so either one may be sent alone).
+             */
             handover_pct?: number | null;
+            /**
+             * Notice Pct
+             * @description The FIRST offboard point (T-a9d6): the SOFT notice. 1..89, and strictly below handover_pct.
+             */
+            notice_pct?: number | null;
+            /**
+             * Codex Notice Round
+             * @description The codex SOFT-notice compaction round (T-a9d6). 1..10, and strictly below codex_compaction_threshold.
+             */
+            codex_notice_round?: number | null;
             /**
              * Monitoring Refresh Seconds
              * @description Minimum interval between monitoring and machine refreshes, in seconds. Must be 1 through 60.
