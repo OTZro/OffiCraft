@@ -5386,6 +5386,12 @@ export interface components {
              * @default medium
              */
             effort: string;
+            /**
+             * Forced Stop At
+             * @description Unix seconds of the last time this member was FORCE-stopped (the owner's 強制下線, or POST /members/{id}/force-stop), 0 when it never was. Unlike every other lifecycle anchor it is deliberately NOT cleared by the next boot: it records that the PREVIOUS session was cut off mid-work instead of being allowed to work the offboard sequence, and the reader who needs that most is the session that comes after. Without it, a hand-off that was never written and a hand-off that was never needed look identical on the roster (T-a9d6). Additive-optional.
+             * @default 0
+             */
+            forced_stop_at: number;
             /** Id */
             id: string;
             /**

@@ -12,7 +12,8 @@ package main
 // ticket the staff verbs split three ways:
 //
 //	重啟   (refocus_member / restart_self) — stamps, dispatches NOTHING, and the
-//	       reconcile recycle arm waits for report_stopped or RecycleGrace.
+//	       reconcile recycle arm waits for report_stopped or the epoch's grace
+//	       (recycleGraceFor: 120s, or the soft window plus 120s for 重新聚焦).
 //	       FULL wind-down. UNCHANGED by this ticket (the sentinel).
 //	改機器 (relocate)                       — stamped nothing; reconcileMemberNow
 //	       took decideUp's relocate arm and dispatched a robust STOP ON THE
@@ -29,7 +30,7 @@ package main
 // land in the same write, and the single member delta the agent wakes on
 // already carries the new values. The 收口 is the pre-existing §4.5 machinery:
 // the agent's own report_stopped (→ dispatchRobustStopNow) or decideUp's
-// recycle arm at RecycleGrace. Either way the next tick's plain START re-mints
+// recycle arm at recycleGraceFor(refocus_op). Either way the next tick's plain START re-mints
 // the boot frame off the row, which is where the new machine / model now live.
 //
 // ── memberHasStateToFlush vs workerHasStateToFlush, cell by cell ─────────────
@@ -88,7 +89,7 @@ package main
 // server has zero visibility into an agent's transcript, so any finer test
 // (context pct, uptime, message counts) would be a guess dressed as a
 // criterion, and guessing wrong silently discards a round of learnings.
-// RecycleGrace is a CEILING — the 收口 fires the instant the agent answers
+// The grace is a CEILING — the 收口 fires the instant the agent answers
 // report_stopped, so a session with nothing to save ends in seconds.
 //
 // Cost, recorded honestly: after 改機器 / 換模型 the member lives at most one
@@ -184,6 +185,6 @@ func (s *apiServer) armMemberOwnerOpHandover(m *Member, op string) bool {
 	m.StoppingSince = 0.0
 	m.StoppedSince = 0.0
 	reconcileLog("recycle: %s %s — wind-down opened (collect on stopped-report or +%.0fs)",
-		op, m.ID, s.reconcileCfg.RecycleGrace)
+		op, m.ID, recycleGraceFor(op, s.reconcileCfg))
 	return true
 }

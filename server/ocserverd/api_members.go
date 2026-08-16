@@ -70,11 +70,12 @@ func memberDeltaPayload(m Member) map[string]any {
 // pushes, instead of the agent fetching them back over HTTP once it notices it
 // is being collected.
 //
-// The notice rides ONLY a member whose refocus marker is set. Attaching it to
-// every member delta would put a document fold and a couple of kilobytes on
-// every roster change — the frames that carry it are the handful this session
-// gets while it is actually being collected, and the client prints one per
-// refocus epoch.
+// The notice rides ONLY a member that is actually being wound down — a refocus
+// epoch, or a graceful 下線 (offboardKindOf decides). Attaching it to every
+// member delta would put a document fold and a couple of kilobytes on every
+// roster change. ⚠️ Within those states it rides EVERY write to that row, not
+// just the first: the client is what de-duplicates, by keying on the sentence
+// it last printed.
 //
 // An empty notice omits the key rather than sending "": the client's fallback
 // arms on the key being absent, and an empty string would read as "the server
@@ -128,8 +129,15 @@ func offboardKindOf(m Member, now float64) (kind string, carries bool) {
 		// Only the graceful arm: a member with no stopping anchor is not being
 		// wound down (and a cancelled wake is force-stopped outright, which is
 		// deliberately silent — see HandleForceStopMember).
+		//
+		// 🔴 And it stays SOFT forever, because nothing collects it on a clock:
+		// the owner ruled 下線 runs no countdown at all (rc-27d1710174dd), so a
+		// notice claiming 120 seconds here would be a promise nobody keeps —
+		// an agent would cut its hand-off short to beat a deadline that does
+		// not exist. Escalation on this arm is the owner pressing force-stop,
+		// and that path deliberately says nothing.
 		if m.StoppingSince > 0 {
-			return softExpired(m.StoppingSince), true
+			return offboardKindSoft, true
 		}
 		return "", false
 	}
@@ -794,17 +802,23 @@ func (s *apiServer) HandleForceStopMemberApiMembersMemberIdForceStopPost(w http.
 	s.writeMemberDTO(w, *m)
 }
 
-// POST /api/members/{member_id}/refocus — online-only (409 otherwise); stamps
-// refocus_since.
+// POST /api/members/{member_id}/refocus — needs a live session (409 otherwise);
+// stamps refocus_since.
+//
+// The gate is the SSE connection rather than the presence projection, for the
+// same reason restart_self's is: a member that has begun closing out projects
+// `stopping`, and refusing the owner there would mean 重新聚焦 stops working on
+// an agent that is mid-hand-off — the moment he is most likely to press it.
 func (s *apiServer) HandleRefocusMemberApiMembersMemberIdRefocusPost(w http.ResponseWriter, r *http.Request, memberId string) {
 	m, err := s.resolveMember(memberId)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
 	}
-	if PresenceState(*m, nowSecs(), s.hub.IsOnline(m.ID)) != MemberPresenceOnline {
+	if !s.hub.IsOnline(m.ID) || !aRefocusStampWouldReachTheAgent(*m) {
 		writeError(w, http.StatusConflict,
-			"refocus requires the member to be online (§3.4 #14)")
+			"refocus requires the member to have a live session and to be wanted "+
+				"online (§3.4 #14)")
 		return
 	}
 	m.RefocusSince = nowSecs()
@@ -941,10 +955,11 @@ func (s *apiServer) HandleReportStoppingApiSelfStoppingPost(w http.ResponseWrite
 }
 
 // POST /api/self/stopped — anchors stopped_since ONCE (never re-stamped).
-// The FIRST stopped-report of a refocus-marked, still-desired-online agent
-// (graceful dump complete) fires the event-driven recycle kill so
-// kill→respawn happens immediately, not on the next ~30s tick
-// (handlers._dispatch_recycle_kill).
+// That FIRST report fires the event-driven collect, so kill→respawn happens
+// immediately rather than on the next ~30s tick. It no longer matters what
+// opened the offboard: an agent that says it is done is collected either way
+// (owner rc-b08d49dc3b03), and desired_state alone decides whether a new
+// generation follows.
 func (s *apiServer) HandleReportStoppedApiSelfStoppedPost(w http.ResponseWriter, r *http.Request) {
 	m, err := s.resolveSelf(r)
 	if err != nil {
@@ -1007,8 +1022,17 @@ func (s *apiServer) HandleReportStoppedApiSelfStoppedPost(w http.ResponseWriter,
 // here (same as refocus_member — no reconcileMemberNow).
 //
 // Two abuse guards refuse LOUDLY (readable by the agent):
-//   - ONLINE-ONLY (409): a self-restart is meaningless with no live session
-//     (mirrors refocus_member's gate).
+//   - LIVE-SESSION-ONLY (409): a self-restart is meaningless with no live
+//     session to recycle. 🔴 The test is the SSE connection, not the presence
+//     projection. Those differ for exactly the caller this endpoint exists for:
+//     the offboard notice says 「work the sequence below, then call
+//     restart_self yourself」, step 1 of that sequence is report_stopping, and
+//     that stamps the anchor which makes PresenceState project `stopping`. So
+//     an agent doing precisely what it was told was refused — and once a
+//     close-out's anchor stopped being swept away every tick (T-2123) the
+//     refusal lasted the whole soft window instead of clearing on the next
+//     tick. A session holding an open stream has something to recycle; that is
+//     the whole question here.
 //   - MINIMUM-LIVENESS (429): a call within minSelfRestartSecs of this session
 //     connecting is refused — the server-authoritative boot_ts (stamped on the
 //     SSE first-connect edge, onFirstConnect) is the anchor; reusing the
@@ -1025,9 +1049,10 @@ func (s *apiServer) HandleRestartSelfApiSelfRefocusPost(w http.ResponseWriter, r
 		return
 	}
 	now := nowSecs()
-	if PresenceState(*m, now, s.hub.IsOnline(m.ID)) != MemberPresenceOnline {
+	if !s.hub.IsOnline(m.ID) || !aRefocusStampWouldReachTheAgent(*m) {
 		writeError(w, http.StatusConflict,
-			"restart_self requires you to be online (no live session to recycle)")
+			"restart_self requires a live session to recycle, on a member that is "+
+				"still wanted online")
 		return
 	}
 	secsSinceBoot := gaugeSecsSinceBoot(s.gauge.Get(m.ID), now)

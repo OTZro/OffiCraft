@@ -27,24 +27,29 @@ import (
 // or an unfolded lesson, and the sequence took the session down before it could
 // write them; 下線 was the ONE offboard path that never showed the agent the
 // checklist. The collection is now the server's, on the session's own
-// report_stopped (immediate) or the wind-down grace (the crashed-agent backstop),
-// with the warden killpg ladder unchanged underneath both.
+// report_stopped, which collects it immediately. There is no timer behind that:
+// the owner ruled the only other way out is his force-stop button, so a session
+// that never reports simply stays up, visible to him as 停止中, until he presses
+// it (the warden killpg ladder is unchanged underneath).
 //
 // RECYCLE (desired_state=online ∧ refocus_since>0 — handover: a NEW me respawns):
 // ocagent does NOT report phases and does NOT self-kill. It WAKES the interactive
 // Claude session by printing the server's 下線程序 document on stdout (the session's
 // Monitor tool holds this listener, so the wake lands in its transcript) and the
-// SESSION walks that checklist itself over MCP. The text is NOT this binary's: it
-// is fetched from GET /api/offboard on the same edge that refetches the member row,
-// so an owner can change what a collected session is told without a release.
+// SESSION walks that checklist itself over MCP. The text is NOT this binary's:
+// the SERVER composes it and pushes it IN the member delta (owner 2026-08-16:
+// 「改回真的推播」), so an owner can change what a collected session is told
+// without a release, and this binary has no fetch of its own to get wrong.
 // The kill is then SERVER-orchestrated end to end: the stopped report of a
 // refocus-marked, still-desired-online member fires an immediate event-driven
 // robust STOP (server api_members.go HandleReportStopped… → dispatchRobustStopNow
 // → warden killpg kills the tmux session, taking this listener with it) → the SSE
 // drop makes ¬online → the next tick's plain START respawns. A dead/unresponsive
-// session that never reports is covered by the server's recycle_grace (120 s)
-// fallback: the reconcile tick dispatches the same robust STOP once the grace
-// elapses (spec/lifecycle.md §4.5) — so ocagent needs NO local timeout and NO
+// session that never reports is covered by the server's recycle grace (120 s for
+// every cause except an owner-pressed 重新聚焦, which opens SOFT and gets the
+// soft window first — recycleGraceFor): the reconcile tick dispatches the same
+// robust STOP once the grace elapses (spec/lifecycle.md §4.5) — so ocagent needs
+// NO local timeout and NO
 // self-kill; a client-side kill on a frozen-wire observable is impossible anyway
 // (the member DTO exposes no stopped_since, and `presence` still projects
 // "stopping" while this SSE is held).
@@ -199,16 +204,6 @@ func (h *recycleHook) say(msg string) { fmt.Fprintf(h.out, "[ocagent] %s\n", msg
 const offboardFallback = "recycle: server 要收你了，但這則通知沒有帶到下線程序 —— " +
 	"請立刻用 MCP get_offboard 拿完整收尾清單並照做，別空手停下。"
 
-// wakeForRecycle prints the wake message into the session's Monitor transcript:
-// the notice the SERVER composed and pushed in this frame, line by line, or the
-// fallback above when the frame carried none. Blank lines are dropped — the
-// transcript is a line wire, not a rendered document.
-//
-// The text is no longer fetched back over HTTP (owner 2026-08-16: 「改回真的
-// 推播」). What that costs is the one thing worth writing down: a frame that
-// arrives without the notice cannot be repaired from this side, so the fallback
-// has to name the tool that gets it — losing the checklist is survivable, being
-// collected without knowing it is not.
 // offboardNoticeIn digs the server-composed notice out of a member delta:
 // frame → data → payload → offboard_notice. Every miss answers "", which is
 // what arms the fallback — a frame from a server too old to push the notice
@@ -227,6 +222,16 @@ func offboardNoticeIn(frame map[string]any) string {
 	return notice
 }
 
+// wakeForRecycle prints the wake message into the session's Monitor transcript:
+// the notice the SERVER composed and pushed in this frame, line by line, or the
+// fallback above when the frame carried none. Blank lines are dropped — the
+// transcript is a line wire, not a rendered document.
+//
+// The text is no longer fetched back over HTTP (owner 2026-08-16: 「改回真的
+// 推播」). What that costs is the one thing worth writing down: a frame that
+// arrives without the notice cannot be repaired from this side, so the fallback
+// has to name the tool that gets it — losing the checklist is survivable, being
+// collected without knowing it is not.
 func (h *recycleHook) wakeForRecycle(notice string) {
 	if strings.TrimSpace(notice) == "" {
 		h.say(offboardFallback)

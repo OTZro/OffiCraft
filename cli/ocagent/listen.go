@@ -33,7 +33,7 @@ import (
 // downlink delta becomes a wake: a `chat` delta drives an R7 refetch of the
 // authoritative /api/chat (the delta payload is NEVER trusted); a WORK delta
 // (action/task) logs a liveness wake; a `member` delta naming me nudges the graceful
-// self-stop hook (reports the presence PHASE then `suicide`s) and the recycle hook
+// self-stop hook (wakes the session with the offboard notice) and the recycle hook
 // (WAKE-ONLY: prints the server's 下線程序 document for the session — see listen_hooks.go).
 //
 // SELF-EXIT (the lifecycle tie — the agent's OWN death signal): the listener IS the

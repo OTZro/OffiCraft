@@ -46,18 +46,21 @@ type reconcileConfig struct {
 	StopGrace    float64 // self-stop window before the robust stop
 	StopRetry    float64 // STOP/UNINSTALL re-dispatch window (lost frame)
 	RecycleGrace float64 // dump-stuck fallback from refocus_since
-	// SoftOffboardGrace is the room the owner's two GRACEFUL buttons buy the
-	// agent before the final call starts: 下線 and 重新聚焦 open with the soft
-	// notice ("work the sequence, then call restart_self yourself") and no
-	// countdown, and only when this window lapses does the 120s clock start —
-	// so a session that is genuinely closing out is never cut off mid-hand-off,
-	// and one that has died is still collected.
+	// SoftOffboardGrace is the room 重新聚焦 buys the agent before its final
+	// call starts: it opens with the soft notice ("work the sequence, then call
+	// restart_self yourself") and no countdown, and only when this window lapses
+	// does the 120s recycle clock start — so a session genuinely closing out is
+	// never cut off mid-hand-off, and one that has died is still collected.
 	//
-	// 🔴 The session normally leaves long before this fires: it is a backstop for
-	// an agent that crashed, wedged, or ignored the notice, NOT a schedule.
-	// Whether it exists at all is the owner's call (card rc-6d32b19f6a2a) — an
-	// answer of "don't collect automatically" makes this window infinite and an
-	// answer of "keep today's behaviour" makes it zero. Both are this one value.
+	// 🔴 It does NOT apply to 下線, which is collected on NO clock at all: the
+	// owner ruled the escalation there is his force-stop, not a timer
+	// (rc-27d1710174dd). The value is shared because the two windows mean the
+	// same thing to the agent — how long it has before anyone acts — but only
+	// one of them ends in a collection.
+	//
+	// Setting it to 0 restores the pre-T-a9d6 timed wind-down wholesale, which
+	// is what the tests covering the robust-stop ladder drive. It is a compile-
+	// time constant today (domain.go), not an owner-facing setting.
 	SoftOffboardGrace float64
 	BackoffBase       float64
 	BackoffCap        float64
@@ -509,9 +512,10 @@ func decideDown(
 				"agent's stopped report, or the owner's force-stop")
 	}
 	if st.StopDeadline == 0.0 {
-		// Legacy timed wind-down, kept reachable by SoftOffboardGrace = 0 (the
-		// "restore today's behaviour" setting): arm the grace clock from
-		// OBSERVING the intent, never from a dispatched command.
+		// The pre-T-a9d6 timed wind-down, reached by SoftOffboardGrace = 0 (a
+		// compile-time constant today, not an owner-facing setting): arm the
+		// grace clock from OBSERVING the intent, never from a dispatched
+		// command.
 		st.Phase = reconcilePhaseStopping
 		st.StopDeadline = now + cfg.StopGrace
 		return decisionNone(obs, st,
@@ -1072,10 +1076,12 @@ func (s *apiServer) announceSoftOffboardEscalation(members []Member, now float64
 		if !carries || kind != offboardKindFinal {
 			continue
 		}
-		// Only the two arms that OPENED soft have anything to escalate; a cause
-		// that was final from the start already said its 120 seconds.
-		soft := m.DesiredState == DesiredStateOffline || m.RefocusOp == refocusOpRefocus
-		if !soft {
+		// 重新聚焦 is the ONLY arm that opens soft and later escalates: it is
+		// collected by the recycle clock once its window lapses, so the notice
+		// that says so is true. 下線 never escalates (nothing collects it on a
+		// clock — the owner's ruling), and a cause that was final from the
+		// start already said its 120 seconds.
+		if m.RefocusOp != refocusOpRefocus {
 			continue
 		}
 		if !s.claimSoftOffboardEscalation(m.ID, softOffboardEpoch(m)) {
@@ -1087,15 +1093,9 @@ func (s *apiServer) announceSoftOffboardEscalation(members []Member, now float64
 	}
 }
 
-// softOffboardEpoch is the anchor the soft window was measured from — the same
-// one offboardKindOf reads, so a re-armed wind-down (a second 下線 press, a
-// fresh 重新聚焦) is a NEW epoch and gets its own announcement.
-func softOffboardEpoch(m Member) float64 {
-	if m.DesiredState == DesiredStateOffline {
-		return m.StoppingSince
-	}
-	return m.RefocusSince
-}
+// softOffboardEpoch is the anchor the soft window was measured from, so a
+// fresh 重新聚焦 is a NEW epoch and gets its own announcement.
+func softOffboardEpoch(m Member) float64 { return m.RefocusSince }
 
 func (s *apiServer) claimSoftOffboardEscalation(memberID string, epoch float64) bool {
 	s.softEscalatedMu.Lock()
