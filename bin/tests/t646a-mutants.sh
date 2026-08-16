@@ -99,8 +99,25 @@ mutate() {
     return
   fi
 
+  # ② (second half) EXACTLY ONE test may go red. Check ② above only asks that
+  # the wanted phrase appears SOMEWHERE in the output, and every mutant here is
+  # aimed at one named test — so a mutant that also broke something incidental
+  # (M7 rewrites a handler whose error strings eight other tests pin) could be
+  # reported KILLED on the strength of a failure that has nothing to do with the
+  # claim. Widening a mutant's -run later is exactly when that would start
+  # happening, silently. If a future mutant legitimately fails more than one
+  # test, say so explicitly here rather than relaxing this back to "any count".
   local which
   which="$(grep -c -- "--- FAIL" <<<"$out")"
+  if [[ "$which" -ne 1 ]]; then
+    echo "FAIL [$label] — $which tests went red, expected exactly 1; the KILLED verdict" >&2
+    echo "       cannot be attributed to the mutated claim when others broke too" >&2
+    grep -- "--- FAIL" <<<"$out" | head -10 >&2
+    FAIL=$((FAIL + 1))
+    REPORT+=("$label|AMBIGUOUS-RED|$which failing tests")
+    restore_all
+    return
+  fi
 
   # ③ revert and re-run: the red must go away, or the tree was already dirty.
   restore_all

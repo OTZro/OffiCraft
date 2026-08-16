@@ -52,15 +52,27 @@ import (
 // 🔴 EDIT doors — the count is three, and saying "three doors" unqualified would
 // be false. There is a FOURTH writer of this text: the RESTORE path
 // (api_document_history.go) puts a retained revision back by calling
-// writeTaskTitle / writeTaskDescription directly, and it deliberately does NOT
-// come through here. Restore's job is to put back EXACTLY what was retained; a
-// restored value that had been normalised on the way out would not be the
-// revision the owner picked off the list. The visible consequence, named so it
-// is a decision rather than a surprise: a task_description revision retained
-// BEFORE this ticket can hold untrimmed text, so restoring it yields a stored
-// value this seam can no longer produce. It self-heals on the next edit (which
-// trims), and nothing is lost. Found by the independent review of T-646a; left
-// as-is on purpose.
+// writeTaskTitle / writeTaskDescription directly, and it does NOT come through
+// here.
+//
+// Do not read that as "restore puts back exactly what was retained". An earlier
+// draft of this paragraph said so and it was FALSE — corrected by independent
+// review rather than left to read as a mechanism. The fourth door is SPLIT, one
+// arm each way: the description arm passes content["description"] verbatim,
+// while the title arm TRIMS it before writing. Neither arm is wrong on its own
+// terms (a blank title is a state the system does not admit, so normalising
+// there cannot lose anything a reader wanted; a description's whitespace is the
+// author's), but the asymmetry is undecided rather than ruled on — which is, and
+// this is worth saying plainly, the same per-field divergence this ticket exists
+// to remove, still standing one door over.
+//
+// The visible consequence, named so it is a decision rather than a surprise: a
+// task_description revision retained BEFORE this ticket can hold untrimmed text,
+// so restoring it yields a stored value this seam can no longer produce. It
+// self-heals on the next edit (which trims), and nothing is lost. Left as-is on
+// purpose: restore returning something other than the revision the owner picked
+// off the list is its own hazard, and choosing between the two arms is a ruling
+// this ticket was not given.
 //
 // 🔴 ALSO NOT FIXED HERE, and reported rather than silently repaired:
 // writeTaskTitle / writeTaskDescription record the row-vanished case in a flag
