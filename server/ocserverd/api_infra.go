@@ -71,8 +71,15 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 	// member the server has an ACTIVE stop record for must never RE-project
 	// online by reconnecting — see sseStopGateRefusal for the exact predicate
 	// and why each legitimate flow stays admitted. Deliberately checked BEFORE
-	// hub.Connect: a stop-in-effect member always gets the 409 and can never
-	// take the slot over from anyone (zombie-stop semantics outrank takeover).
+	// hub.Connect, so a member the gate REFUSES can never take the slot over
+	// from anyone (zombie-stop semantics outrank takeover).
+	//
+	// ⚠️ Read "refuses", not "has a stop anchor": since T-a9d6 a close-out in
+	// flight is admitted on purpose and therefore DOES reach hub.Connect with
+	// ordinary takeover semantics. The sentence that used to sit here said a
+	// stop-in-effect member "always" gets the 409, which this ticket's own
+	// change made false — the exact species of stale self-description it exists
+	// to remove (independent review caught it here).
 	if memberID != "" {
 		if msg := s.sseStopGateRefusal(memberID); msg != "" {
 			fmt.Fprintf(os.Stderr, "[sse] refused reconnect for %q: %s\n", memberID, msg)

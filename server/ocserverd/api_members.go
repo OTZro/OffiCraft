@@ -175,6 +175,13 @@ const (
 // anchors but deliberately KEEPS forced_stop_at as the durable record that a
 // past session was cut off, so reading that column alone would treat every
 // member ever force-stopped as permanently forced.
+//
+// 🔴 The >= is LOAD-BEARING, not defensive. force-stop stamps stopping_since
+// and forced_stop_at from two nowSecs() calls with no I/O between them, and at
+// 1.78e9 a float64 tick is ~238ns — so the two anchors landing on the SAME
+// value is the NORMAL path, not a coincidence. Independent review measured it:
+// every failure dump from the mutants that exercise the real handler shows the
+// two columns identical. Tidying this into > breaks force-stop outright.
 func forcedEpochLive(m Member) bool {
 	return m.ForcedStopAt > 0.0 && m.StoppingSince > 0.0 &&
 		m.ForcedStopAt >= m.StoppingSince
