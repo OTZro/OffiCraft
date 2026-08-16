@@ -326,6 +326,70 @@ func TestTaskDescriptionAbsentFieldIsANoOpButEmptyStringClears(t *testing.T) {
 	}
 }
 
+// TestTaskDescriptionIsTrimmedOnThisDoorToo pins the one behaviour T-646a
+// CHANGED on an already-shipped route: the description is trimmed, before it is
+// stored AND before the unchanged-value comparison (owner card
+// rc-0fb94a25a8a8, 2026-08-16, option ①). Until T-646a this route stored what
+// it was given.
+//
+// 🔴 It lives HERE, on the route's own file, and that placement is the whole
+// point of the test. The independent review of T-646a demonstrated the hole by
+// measurement: with every trim assertion living on the new update_task door,
+// this handler could be reverted to its pre-T-646a inline body — untrimmed
+// store, untrimmed compare — and the ENTIRE Go suite stayed green while the
+// mutant harness still reported 6/6. The owner's ruling was silently revertible
+// on the door the cockpit actually calls. This test is what turns red.
+//
+// Three claims, and the third is the one no read-back can see:
+//
+//	① the STORED value is trimmed;
+//	② a whitespace-only description therefore trims to "" and CLEARS, which is
+//	   the same answer an explicit "" gets;
+//	③ the unchanged-value COMPARISON is made on the trimmed value, so a resend
+//	   differing only by surrounding whitespace spends none of the three
+//	   retained revisions. A handler that trimmed on the way in but compared the
+//	   RAW value would store identical text and pass ① and ② unnoticed.
+func TestTaskDescriptionIsTrimmedOnThisDoorToo(t *testing.T) {
+	api := newTasksTestServer(t)
+	task := createAdHocTask(t, api, "m-exec")
+
+	if got := writeTaskDescription(t, api, task.ID, "m-exec", "agent",
+		map[string]any{"description": "  有前後空白的敘述\t\n"}).Code; got != http.StatusOK {
+		t.Fatalf("seed write status = %d", got)
+	}
+	if got := readTaskDescription(t, api, task.ID); got != "有前後空白的敘述" {
+		t.Fatalf("① stored description was not trimmed: %q", got)
+	}
+
+	before := len(historyRowsFrom(t, api, docKindTaskDescription, task.ID, "m-exec", "agent",
+		listTaskDescriptionHistory(t, api, task.ID, "m-exec", "agent")))
+
+	// ③ same text, different surrounding whitespace ⇒ no change, no revision.
+	if got := writeTaskDescription(t, api, task.ID, "m-exec", "agent",
+		map[string]any{"description": "\n  有前後空白的敘述  "}).Code; got != http.StatusOK {
+		t.Fatalf("whitespace-only resend status = %d, want 200", got)
+	}
+	if got := readTaskDescription(t, api, task.ID); got != "有前後空白的敘述" {
+		t.Fatalf("whitespace-only resend changed the text: %q", got)
+	}
+	after := len(historyRowsFrom(t, api, docKindTaskDescription, task.ID, "m-exec", "agent",
+		listTaskDescriptionHistory(t, api, task.ID, "m-exec", "agent")))
+	if after != before {
+		t.Fatalf("③ a whitespace-only resend burned a revision: %d → %d", before, after)
+	}
+
+	// ② whitespace-only trims to "" and therefore CLEARS — named here so the
+	// consequence is a decision on the record, not a surprise found in
+	// production.
+	if got := writeTaskDescription(t, api, task.ID, "m-exec", "agent",
+		map[string]any{"description": "   \t "}).Code; got != http.StatusOK {
+		t.Fatalf("whitespace-only clear status = %d, want 200", got)
+	}
+	if got := readTaskDescription(t, api, task.ID); got != "" {
+		t.Fatalf("② a whitespace-only description must CLEAR, got %q", got)
+	}
+}
+
 // An unknown key is refused rather than dropped — the update_task_manual
 // posture, and the reason the whole strict-decoder guard exists: a caller who
 // reaches for `text` must be told, not silently ignored while believing the

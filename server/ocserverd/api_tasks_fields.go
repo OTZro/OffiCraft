@@ -40,13 +40,46 @@ import (
 // field — would leave the card half-updated behind a 400, which is the one
 // outcome a caller cannot reason about from the status code.
 //
-// ONE SEAM, THREE DOORS. The two original routes now resolve their body through
-// the same taskTextEdit and write through the same transaction as update_task.
-// That is the point of the ticket rather than a tidy-up: while each door kept
-// its own copy of the rules, a rule could be corrected on one and left standing
-// on the other, and the drift this file exists to remove is exactly what that
-// produced. The two remain on the HTTP surface for the frontend and any existing
-// client; they are off the MCP catalogue, so an agent sees one tool.
+// ONE SEAM, THREE EDIT DOORS. The two original routes now resolve their body
+// through the same taskTextEdit and write through the same transaction as
+// update_task. That is the point of the ticket rather than a tidy-up: while each
+// door kept its own copy of the rules, a rule could be corrected on one and left
+// standing on the other, and the drift this file exists to remove is exactly
+// what that produced. The two remain on the HTTP surface for the frontend and
+// any existing client; they are off the MCP catalogue, so an agent sees one
+// tool.
+//
+// 🔴 EDIT doors — the count is three, and saying "three doors" unqualified would
+// be false. There is a FOURTH writer of this text: the RESTORE path
+// (api_document_history.go) puts a retained revision back by calling
+// writeTaskTitle / writeTaskDescription directly, and it deliberately does NOT
+// come through here. Restore's job is to put back EXACTLY what was retained; a
+// restored value that had been normalised on the way out would not be the
+// revision the owner picked off the list. The visible consequence, named so it
+// is a decision rather than a surprise: a task_description revision retained
+// BEFORE this ticket can hold untrimmed text, so restoring it yields a stored
+// value this seam can no longer produce. It self-heals on the next edit (which
+// trims), and nothing is lost. Found by the independent review of T-646a; left
+// as-is on purpose.
+//
+// 🔴 ALSO NOT FIXED HERE, and reported rather than silently repaired:
+// writeTaskTitle / writeTaskDescription record the row-vanished case in a flag
+// and return outside the transaction, so that transaction COMMITS — retaining a
+// document_history revision for a task that no longer exists. writeTaskText
+// below does not have that bug (it returns errTaskRowVanished from INSIDE the
+// write function, which rolls back). The two siblings therefore violate the
+// discipline this file argues for at length. It is pre-existing, it is not
+// reachable through any door this ticket added, and fixing it is a behaviour
+// change on the restore path — so it belongs to whoever owns that decision, not
+// to this ticket.
+//
+// 🔴 ONE CONSEQUENCE OF TRIMMING THAT THE RULING DID NOT NAME. trimString is
+// strings.TrimSpace, so it removes leading newlines and indentation too. A
+// description whose FIRST line is an indented (four-space or tab) markdown code
+// block loses that indent and stops rendering as code. Fenced blocks (```) —
+// overwhelmingly the common form, and what agents write — are unaffected, as is
+// anything after the first line. Named here because an absent hazard and an
+// unnoticed one look identical to whoever reads this next.
 
 // errTaskRowVanished reports a task row hard-deleted by someone else BETWEEN the
 // handler's read and this transaction's write. It is returned from inside the

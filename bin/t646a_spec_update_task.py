@@ -18,6 +18,18 @@ The four changes:
 
 Refuses to run twice. Verifies its own result by re-parsing and re-checking the
 order sequence, so a silently corrupted spec cannot pass as success.
+
+Kept in the tree so the diff it produced is reproducible and reviewable, not as a
+build step. Precedent: bin/t6cce_add_param_desc.py is the same shape from an
+earlier ticket.
+
+🔴 THE DESCRIPTION TEXT BELOW IS A HISTORICAL RECORD, NOT A SOURCE OF TRUTH.
+spec/openapi.json is authoritative; this file holds a third verbatim copy of the
+wording as applied on 2026-08-16, and NO drift guard compares the two — so the
+moment anyone edits that description in the spec, this copy is stale and nothing
+says so. Acceptable for a script that has already run and refuses to run again,
+but do not reach for these strings when you want the current wording, and do not
+"sync" them: read the spec. Flagged by the independent review of T-646a.
 """
 
 import json

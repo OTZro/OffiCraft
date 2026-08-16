@@ -33,25 +33,41 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PKG="$HERE/server/ocserverd"
+# 🔴 TWO files, not one. The independent review found the hole: with only
+# api_tasks_fields.go in scope, NO mutant could speak about whether the two
+# surviving routes still delegate to the shared seam — and it demonstrated that
+# gap by reverting the description handler to its pre-T-646a inline body, at
+# which point the whole Go suite stayed green AND this harness still printed
+# 6/6. A harness whose blind spot is exactly the thing the ticket changed is
+# worse than no harness, because it is quoted as coverage.
 SRC="$PKG/api_tasks_fields.go"
+SRC2="$PKG/api_tasks_description.go"
 BACKUP="$(mktemp -t t646a-fields.XXXXXX.go)"
-trap 'cp "$BACKUP" "$SRC"; rm -f "$BACKUP"' EXIT
+BACKUP2="$(mktemp -t t646a-desc.XXXXXX.go)"
+trap 'cp "$BACKUP" "$SRC"; cp "$BACKUP2" "$SRC2"; rm -f "$BACKUP" "$BACKUP2"' EXIT
 
 cp "$SRC" "$BACKUP"
+cp "$SRC2" "$BACKUP2"
+
+restore_all() {
+  cp "$BACKUP" "$SRC"
+  cp "$BACKUP2" "$SRC2"
+}
 
 PASS=0
 FAIL=0
 declare -a REPORT=()
 
-# mutate <label> <test-regex> <expected-substring-in-failure> <python-edit>
+# mutate <label> <test-regex> <expected-substring-in-failure> <python-edit> [target-file]
 mutate() {
-  local label="$1" test_re="$2" want="$3" edit="$4"
+  local label="$1" test_re="$2" want="$3" edit="$4" target="${5:-$SRC}"
 
-  cp "$BACKUP" "$SRC"
-  if ! python3 - "$SRC" <<<"$edit"; then
+  restore_all
+  if ! python3 - "$target" <<<"$edit"; then
     echo "FAIL [$label] — the mutant did not apply; it proves nothing about the guard" >&2
     FAIL=$((FAIL + 1))
     REPORT+=("$label|MUTANT-NOT-APPLIED|-")
+    restore_all
     return
   fi
 
@@ -63,7 +79,7 @@ mutate() {
     echo "FAIL [$label] — the mutant is ALIVE: $test_re still passes with the guard broken" >&2
     FAIL=$((FAIL + 1))
     REPORT+=("$label|ALIVE|-")
-    cp "$BACKUP" "$SRC"
+    restore_all
     return
   fi
   if grep -q "build failed\|cannot use\|undefined:" <<<"$out"; then
@@ -71,7 +87,7 @@ mutate() {
     echo "$out" | head -20 >&2
     FAIL=$((FAIL + 1))
     REPORT+=("$label|COMPILE-ERROR|-")
-    cp "$BACKUP" "$SRC"
+    restore_all
     return
   fi
   if ! grep -qF "$want" <<<"$out"; then
@@ -79,7 +95,7 @@ mutate() {
     echo "$out" | grep -- "--- FAIL" | head -10 >&2
     FAIL=$((FAIL + 1))
     REPORT+=("$label|WRONG-ASSERTION|-")
-    cp "$BACKUP" "$SRC"
+    restore_all
     return
   fi
 
@@ -87,7 +103,7 @@ mutate() {
   which="$(grep -c -- "--- FAIL" <<<"$out")"
 
   # ③ revert and re-run: the red must go away, or the tree was already dirty.
-  cp "$BACKUP" "$SRC"
+  restore_all
   if ! (cd "$PKG" && go test -count=1 -run "$test_re" ./... >/dev/null 2>&1); then
     echo "FAIL [$label] — still red AFTER revert; the red was not the mutant's" >&2
     FAIL=$((FAIL + 1))
@@ -219,6 +235,53 @@ new="""	if description != nil {
 	}"""
 assert t.count(old)==1, "M6 anchor"
 open(p,"w",encoding="utf-8").write(t.replace(old,new))'
+
+# ── M7 the description door still DELEGATES ─────────────────────────────────
+# Un-delegate it: put back an inline body that stores and compares the RAW
+# value, the way this handler worked before T-646a. This is the mutant the
+# independent review had to construct by hand because nothing here could — and
+# with it the ENTIRE Go suite stayed green and this harness still printed 6/6.
+# The claim being guarded is not "the new tool trims"; it is "the owner ruling
+# HOLDS ON THE DOOR THE COCKPIT CALLS", and those are different claims.
+#
+# The replacement body is deliberately not a byte copy of the pre-T-646a
+# handler: its error strings are simplified so the whole edit can live in a
+# single-quoted shell argument like every other mutant here. Nothing in the
+# guarded test reads those strings — it reads the stored value and the revision
+# count — so the simplification does not weaken what M7 proves.
+mutate "M7 description door delegates" \
+  "TestTaskDescriptionIsTrimmedOnThisDoorToo" \
+  "was not trimmed" \
+  'import sys
+p=sys.argv[1]; t=open(p,encoding="utf-8").read()
+old="""	s.updateTaskText(w, r, taskId, nil, body.Description)"""
+new="""	tk, err := s.resolveTask(taskId)
+	if err != nil {
+		writeResolveError(w, err, "task", taskId)
+		return
+	}
+	if !s.callerMayDriveTask(r, *tk) {
+		writeError(w, http.StatusForbidden, "caller is not the task executor")
+		return
+	}
+	if body.Description == nil || *body.Description == tk.Description {
+		s.writeTask(w, *tk)
+		return
+	}
+	ok, err := s.writeTaskDescription(tk, currentActor(r), *body.Description)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	s.publishTask(*tk, requestTrigger(r))
+	s.writeTask(w, *tk)"""
+assert t.count(old)==1, "M7 anchor"
+open(p,"w",encoding="utf-8").write(t.replace(old,new))' \
+  "$SRC2"
 
 echo
 if [[ $FAIL -ne 0 ]]; then
