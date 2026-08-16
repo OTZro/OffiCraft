@@ -51,9 +51,14 @@ const (
 	settingClaimToken = "auth.claim_token"
 	// ctx.* mirror the SseContextHighConfig knobs (defaults in
 	// defaultSseContextHigh; only handover_pct gets UI in B3).
-	settingCtxWarnPct               = "ctx.warn_pct"
+	//
+	// `ctx.warn_pct` and `ctx.remind_step_pct` are RETIRED (T-c382) and
+	// deliberately not listed: the key set is closed, so an unlisted key is
+	// never read — which is exactly the intent. They used to hold a SECOND
+	// threshold beside handover_pct, and the advance notice is now derived from
+	// handover_pct instead. Old rows stay in the table, unread. Do not re-add
+	// them; two thresholds for one decision is the bug this ticket fixed.
 	settingCtxHandoverPct           = "ctx.handover_pct"
-	settingCtxRemindStepPct         = "ctx.remind_step_pct"
 	settingCtxMinBootSecs           = "ctx.min_boot_secs"
 	settingCtxStaleGuard            = "ctx.stale_guard"
 	settingCodexCompactionThreshold = "codex.compaction_threshold"
@@ -539,13 +544,7 @@ func migrateCtxOverrides(d *DAL, cfg Config, logf func(string)) error {
 		return nil
 	}
 	c, s := cfg.SseContextHigh, cfg.SseContextHighSet
-	if err := put(s.WarnPct, settingCtxWarnPct, strconv.Itoa(c.WarnPct)); err != nil {
-		return err
-	}
 	if err := put(s.HandoverPct, settingCtxHandoverPct, strconv.Itoa(c.HandoverPct)); err != nil {
-		return err
-	}
-	if err := put(s.RemindStepPct, settingCtxRemindStepPct, strconv.Itoa(c.RemindStepPct)); err != nil {
 		return err
 	}
 	if err := put(s.MinBootSecs, settingCtxMinBootSecs, strconv.FormatFloat(c.MinBootSecs, 'f', -1, 64)); err != nil {
@@ -720,13 +719,12 @@ func applyCtxOverrides(d *DAL, c *SseContextHighConfig) error {
 		*dst = n
 		return nil
 	}
-	if err := getInt(settingCtxWarnPct, &c.WarnPct); err != nil {
-		return err
-	}
+	// ctx.warn_pct / ctx.remind_step_pct have NO reader since T-c382 — the
+	// advance notice is derived from handover_pct, so a second stored threshold
+	// could only ever disagree with the one the owner sets. Rows an old install
+	// migrated are left in the table (they are the record of what it used to be
+	// tuned to) and are simply never read.
 	if err := getInt(settingCtxHandoverPct, &c.HandoverPct); err != nil {
-		return err
-	}
-	if err := getInt(settingCtxRemindStepPct, &c.RemindStepPct); err != nil {
 		return err
 	}
 	if v, err := d.GetSetting(settingCtxMinBootSecs); err != nil {

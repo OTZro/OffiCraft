@@ -33,8 +33,12 @@ var tokenTTLWhitelist = map[int]bool{
 	2592000: true,
 }
 
-// handover_pct bounds: the warn band sits at 40 (ctx.warn_pct default) — a
-// handover threshold below it would fire before the warning.
+// handover_pct bounds. The floor is no longer about out-ordering a separate
+// warn threshold (that knob is gone — T-c382): the advance notice is now
+// DERIVED as handover_pct - handoverNoticeLeadPct, so the two can never invert.
+// 40 remains the floor because the notice must still land somewhere useful —
+// below it the lead would put the notice on a barely-used gauge, and at
+// handoverNoticeLeadPct or less there would be no notice at all.
 const (
 	minHandoverPct              = 40
 	maxHandoverPct              = 90

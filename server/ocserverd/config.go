@@ -82,42 +82,42 @@ type AuthConfig struct {
 	TokenTTLSet bool
 }
 
-// SseContextHighConfig mirrors service.config.SseContextHighConfig — the
-// [sse_context_high] knobs for the server-side context band push. A threshold
-// <= 0 disables that band entirely (reversible kill-switch).
+// SseContextHighConfig is the server-side context band config. HandoverPct <= 0
+// disables the band entirely (reversible kill-switch).
+//
+// warn_pct and remind_step_pct USED to live here and are gone (T-c382). They
+// were a SECOND threshold beside HandoverPct, hard-wired at 40 and 5 with no UI
+// on either, so an owner who moved the handover threshold to 65% did not move
+// the reminder — it kept firing from 40%, every 5%, five times before the event
+// it was warning about. The advance notice is now DERIVED from HandoverPct (see
+// handoverNoticeLeadPct in sse_bands.go), which is the only threshold the owner
+// can actually see and set. Do not reintroduce a standalone one: two thresholds
+// for one decision is how this drifted in the first place.
 type SseContextHighConfig struct {
-	WarnPct     int
 	HandoverPct int
-	// RemindStepPct is the width (in gauge %) of one remind bucket: a same-band
-	// WARN re-reminds only when the gauge climbs a full step into a new higher
-	// bucket (T-7826 dedup, replacing the old per-tick cooldown that bombarded
-	// the agent). <= 0 falls back to 1% buckets.
-	RemindStepPct int
-	MinBootSecs   float64
-	StaleGuard    bool
+	MinBootSecs float64
+	StaleGuard  bool
 }
 
-// defaultSseContextHigh mirrors the Python dataclass defaults (WARN=40,
-// HANDOVER=50, 5% remind buckets, 120s boot-storm guard, stale guard on).
+// defaultSseContextHigh: HANDOVER=50, 120s boot-storm guard, stale guard on.
 func defaultSseContextHigh() SseContextHighConfig {
 	return SseContextHighConfig{
-		WarnPct:       40,
-		HandoverPct:   50,
-		RemindStepPct: 5,
-		MinBootSecs:   120.0,
-		StaleGuard:    true,
+		HandoverPct: 50,
+		MinBootSecs: 120.0,
+		StaleGuard:  true,
 	}
 }
 
 // SseContextHighSet records which RETIRED [sse_context_high] knobs the file
 // wrote explicitly — the one-shot ctx.* DB migration (settings.go) imports
 // exactly those, so an old file's tuned knobs survive the key retirement.
+// warn_pct / remind_step_pct dropped out with the knobs themselves (T-c382):
+// an old file may still carry them and is still parsed without error, but there
+// is no longer anything for the migration to import them INTO.
 type SseContextHighSet struct {
-	WarnPct       bool
-	HandoverPct   bool
-	RemindStepPct bool
-	MinBootSecs   bool
-	StaleGuard    bool
+	HandoverPct bool
+	MinBootSecs bool
+	StaleGuard  bool
 }
 
 // Config is the fully resolved oc.toml. The EFFECTIVE schema is Server
@@ -253,17 +253,12 @@ func loadConfig(path string) (Config, []string, error) {
 	} else {
 		cfg.StorageDSN = f.Storage.DatabaseURL
 	}
-	if f.SseContextHigh.WarnPct != nil {
-		cfg.SseContextHigh.WarnPct = *f.SseContextHigh.WarnPct
-		cfg.SseContextHighSet.WarnPct = true
-	}
+	// warn_pct / remind_step_pct are still PARSED (an old file must not become
+	// fatal) but no longer land anywhere: the knobs they fed were removed in
+	// T-c382 and the advance notice is derived from handover_pct.
 	if f.SseContextHigh.HandoverPct != nil {
 		cfg.SseContextHigh.HandoverPct = *f.SseContextHigh.HandoverPct
 		cfg.SseContextHighSet.HandoverPct = true
-	}
-	if f.SseContextHigh.RemindStepPct != nil {
-		cfg.SseContextHigh.RemindStepPct = *f.SseContextHigh.RemindStepPct
-		cfg.SseContextHighSet.RemindStepPct = true
 	}
 	if f.SseContextHigh.MinBootSecs != nil {
 		cfg.SseContextHigh.MinBootSecs = *f.SseContextHigh.MinBootSecs

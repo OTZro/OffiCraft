@@ -985,7 +985,7 @@ func shouldAutoRefocus(runtime string, record map[string]any, cfg SseContextHigh
 		return ok && count >= codexThreshold
 	}
 	pct := actionableContextPct(record, cfg.StaleGuard)
-	return bandFor(pct, cfg.WarnPct, cfg.HandoverPct) == levelHandover
+	return bandFor(pct, cfg.HandoverPct) == levelHandover
 }
 
 // stampContextHighRecycle auto-stamps refocus_since on any candidate whose

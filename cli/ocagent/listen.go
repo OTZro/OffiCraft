@@ -569,8 +569,13 @@ func handleDirectedBand(frame map[string]any, out io.Writer) {
 	if line == "" {
 		switch topic {
 		case contextHighTopic:
-			line = fmt.Sprintf("context usage high (level=%s pct=%s) — start converging",
-				get("level"), get("pct"))
+			// Fallback only — the server always composes a reason, and that reason
+			// is the real message (it names the ceiling and the close-out steps,
+			// which this side cannot know). Kept deliberately vaguer than the
+			// server's: inventing a threshold here would be a second source of
+			// truth, which is the exact bug T-c382 removed.
+			line = fmt.Sprintf("context usage high (level=%s pct=%s) — close out your "+
+				"in-flight state before the handover", get("level"), get("pct"))
 		case tokenExpiryTopic:
 			line = fmt.Sprintf("agent token expires in %ss — checkpoint this turn, then call restart_self",
 				get("expires_in"))
