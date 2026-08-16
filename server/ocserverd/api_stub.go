@@ -523,6 +523,14 @@ func (s *apiServer) codexNoticeRoundSetting() int {
 	return s.codexNoticeRound
 }
 
+// codexCompactionThresholdSetting is its FINAL-round twin, read under the same
+// lock for the same reason.
+func (s *apiServer) codexCompactionThresholdSetting() int {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.codexCompactionThreshold
+}
+
 // claimHandoverNotice is the once-per-SESSION gate on the advance handover
 // notice (T-c382, owner: 「只通知一次」). It returns true exactly once per agent
 // session and false every tick after; the caller sends only on true.

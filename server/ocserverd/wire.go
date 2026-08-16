@@ -48,12 +48,19 @@ type authStatusDTO struct {
 // settingsDTO is the owner-adjustable settings surface (GET/PATCH
 // /api/settings).
 type settingsDTO struct {
-	OwnerTokenTTL            int64 `json:"owner_token_ttl"`
-	AgentTokenTTL            int64 `json:"agent_token_ttl"`
-	HandoverPct              int   `json:"handover_pct"`
-	CodexCompactionThreshold int   `json:"codex_compaction_threshold"`
-	MonitoringRefreshSeconds int   `json:"monitoring_refresh_seconds"`
-	OutsourceMaxParallel     int   `json:"outsource_max_parallel"`
+	OwnerTokenTTL int64 `json:"owner_token_ttl"`
+	AgentTokenTTL int64 `json:"agent_token_ttl"`
+	// The offboard points are a PAIR on each runtime's own axis (T-a9d6):
+	// NoticePct / CodexNoticeRound is the SOFT notice, HandoverPct /
+	// CodexCompactionThreshold the FINAL one — and the final one is also where
+	// the handover itself fires, so there is no third number that could
+	// disagree with it about when a session ends.
+	HandoverPct              int `json:"handover_pct"`
+	NoticePct                int `json:"notice_pct"`
+	CodexCompactionThreshold int `json:"codex_compaction_threshold"`
+	CodexNoticeRound         int `json:"codex_notice_round"`
+	MonitoringRefreshSeconds int `json:"monitoring_refresh_seconds"`
+	OutsourceMaxParallel     int `json:"outsource_max_parallel"`
 	// DocCapChars* are the live size caps on the accumulating context
 	// documents, in CHARACTERS (runes) — the same unit the patch receipts and
 	// the refusal message speak (T-3aeb). FIVE independent knobs: a role's

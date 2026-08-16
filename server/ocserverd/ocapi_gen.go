@@ -2244,6 +2244,9 @@ type SettingsDTO struct {
 	// CodexCompactionThreshold Codex context-compaction threshold, 1 through 10.
 	CodexCompactionThreshold *int `json:"codex_compaction_threshold,omitempty"`
 
+	// CodexNoticeRound The codex twin of notice_pct (T-a9d6): the compaction round at which the SOFT notice fires. A codex session hands over on compaction count, not on a percentage, so its pair is a pair of ROUNDS. Must be 1..10 and strictly below codex_compaction_threshold.
+	CodexNoticeRound int `json:"codex_notice_round"`
+
 	// CustomThemes The owner's saved custom theme bundles (T-16a1 P2), each a `{id,name,colors}` colour bundle. `[]` = none saved. display_theme may point at any id in this set (or a built-in). Governance-gated (owner/admin agent): rides GET /api/settings only.
 	CustomThemes *[]ThemeBundleDTO `json:"custom_themes,omitempty"`
 
@@ -2279,10 +2282,15 @@ type SettingsDTO struct {
 
 	// DocCapCharsSystemInteraction The size cap on the 系統互動 block of the boot context, in CHARACTERS (Unicode code points). The floor of the adjustable range is this document's shipped default (the `default` field above), the ceiling is 100000. It is far larger than the role-journal caps because the block it governs is the studio handbook every agent reads at boot, and it is sized against the seed that ships with it.
 	DocCapCharsSystemInteraction *int `json:"doc_cap_chars_system_interaction,omitempty"`
-	HandoverPct                  int  `json:"handover_pct"`
+
+	// HandoverPct The SECOND of the two offboard points: the FINAL notice, and the point the automatic handover itself fires. Must be 40..90 and strictly greater than notice_pct.
+	HandoverPct int `json:"handover_pct"`
 
 	// MonitoringRefreshSeconds Minimum interval between monitoring and machine refreshes, in seconds (1 through 60).
 	MonitoringRefreshSeconds *int `json:"monitoring_refresh_seconds,omitempty"`
+
+	// NoticePct The FIRST of the two offboard points (T-a9d6): the SOFT notice, where the agent is asked to work the offboard sequence and then call restart_self itself rather than idle until it is cut off. Must be 1..89 and strictly below handover_pct. An install upgraded from the single-threshold era reports handover_pct - 10 here, which is where the notice used to be derived.
+	NoticePct int `json:"notice_pct"`
 
 	// Onboarding The first-run onboarding report (T-ba62), or null when onboarding never ran on this database. Governance-gated (owner/admin agent) by virtue of living on GET /api/settings — a failed step's detail can carry local paths, so it must never reach the PUBLIC /api/auth/status probe.
 	Onboarding *OnboardingReportDTO `json:"onboarding,omitempty"`
@@ -2308,9 +2316,15 @@ type SettingsDTO struct {
 // independent and each MUST be one of 43200 / 86400 / 604800 / 2592000 seconds
 // (12h / 24h / 7d / 30d — a whitelist, so a stray 0 can never lock future logins
 // or agent mints out); owner changes apply from the next login and agent changes
-// from the next bootstrap, reconcile, or outsource spawn. `handover_pct` MUST be
-// 40..90 (the warn band sits at 40 — a handover threshold below it would fire
-// before the warning). Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).
+// from the next bootstrap, reconcile, or outsource spawn. The offboard points are a
+// PAIR (T-a9d6): `notice_pct` is the SOFT notice and `handover_pct` is the FINAL one
+// (and the point the handover itself fires). `handover_pct` MUST be 40..90,
+// `notice_pct` MUST be 1..89, and `notice_pct` MUST be strictly below
+// `handover_pct` — the pair is checked against the POST-patch values, so either may
+// be sent on its own, and a pair that would cross is a 422 rather than being
+// quietly reordered. `codex_notice_round` / `codex_compaction_threshold` are the
+// same pair on the codex axis (rounds, 1..10, notice strictly below threshold).
+// Anything else is a 422. `outsource_max_parallel` MUST be -1..20 (-1 = 無限/unlimited — no global cap; 0 pauses outsource assignment).
 // `updater_receive_beta` toggles whether the GitHub-release update check also
 // admits prereleases; `updater_auto_update` toggles unattended background
 // self-upgrade to the newest admissible release (both booleans, default false;
@@ -2328,6 +2342,9 @@ type SettingsUpdateDTO struct {
 
 	// CodexCompactionThreshold Codex context-compaction threshold, 1 through 10.
 	CodexCompactionThreshold *int `json:"codex_compaction_threshold,omitempty"`
+
+	// CodexNoticeRound The codex SOFT-notice compaction round (T-a9d6). 1..10, and strictly below codex_compaction_threshold.
+	CodexNoticeRound *int `json:"codex_notice_round,omitempty"`
 
 	// CustomThemes Replace the owner's custom theme bundles (T-16a1 P2) with this array (each `{id,name,colors}`). Omit to leave them unchanged; `[]` clears them. Every bundle is validated against the shape, the theme.css token whitelist, and the concrete-colour grammar — any violation is a 422 and nothing is written. The ONE exception is an unrecognised `wording` code, which is dropped from the bundle instead of failing it (see ThemeBundleDTO.wording): that request is a 200 whose echo carries the pruned overlay. When this and display_theme are patched together, display_theme is validated against the POST-patch set; and deleting the active custom theme resets display_theme to "".
 	CustomThemes *[]ThemeBundleDTO `json:"custom_themes,omitempty"`
@@ -2364,10 +2381,15 @@ type SettingsUpdateDTO struct {
 
 	// DocCapCharsSystemInteraction The size cap on the 系統互動 block of the boot context, in CHARACTERS (Unicode code points). Must be at least this document's shipped default (see `SettingsDTO.doc_cap_chars_system_interaction`, whose `default` is that floor) and at most 100000.
 	DocCapCharsSystemInteraction *int `json:"doc_cap_chars_system_interaction,omitempty"`
-	HandoverPct                  *int `json:"handover_pct,omitempty"`
+
+	// HandoverPct The SECOND offboard point: the FINAL notice, and where the automatic handover fires. 40..90, and strictly greater than notice_pct (the pair is validated together against the POST-patch values, so either one may be sent alone).
+	HandoverPct *int `json:"handover_pct,omitempty"`
 
 	// MonitoringRefreshSeconds Minimum interval between monitoring and machine refreshes, in seconds. Must be 1 through 60.
 	MonitoringRefreshSeconds *int `json:"monitoring_refresh_seconds,omitempty"`
+
+	// NoticePct The FIRST offboard point (T-a9d6): the SOFT notice. 1..89, and strictly below handover_pct.
+	NoticePct *int `json:"notice_pct,omitempty"`
 
 	// OrgName The studio display name (T-d693) — trimmed, max 80 runes; "" clears it back to the localized default. A value longer than 80 runes is a 422.
 	OrgName              *string `json:"org_name,omitempty"`
