@@ -73,6 +73,7 @@ import { resolveStepBadge } from "../lib/stepBadge";
 import { autosizeTextarea } from "../lib/autosize";
 import { navigateHash } from "../lib/hashRoute";
 import { deriveTaskNo } from "../lib/taskNo";
+import { scrollParent, viewportSpanOf } from "../lib/scrollPort";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { enterShouldSend } from "../lib/composerKeys";
 import {
@@ -407,6 +408,41 @@ export function TaskCard({
     if (sel && sel.rangeCount > 0 && !sel.isCollapsed) return;
     setExpanded((v) => !v);
   }
+
+  // 🔴 T-6630 ③ — collapsing the WHOLE task must leave you looking at that task.
+  // Owner 2026-08-16:「收和整個任務時,最後應該要定位到那則任務,現在好像會跑掉」.
+  // MEASURED baseline (12-card column, `.tasks` scrollport): read your way down
+  // inside a long expanded card until its top edge sits 296px above the fold,
+  // then collapse it — `scrollTop` does not change, the card's top stays at
+  // -296, and since the collapsed card is only ~250px tall it ends up ENTIRELY
+  // above the viewport. You are left staring at the tasks BELOW it. Nothing was
+  // correcting for this: the card just shrank under a fixed scroll offset.
+  // (A short list hides it — the browser clamps `scrollTop` to the shrunken
+  // range and that accidentally brings the card back. Depending on that is
+  // depending on how many tasks happen to be below yours.)
+  //
+  // The correction is deliberately ONE-SIDED: it only fires when the card's top
+  // has gone above the fold, and it puts that top edge back AT the fold. Collapse
+  // with the head already on screen therefore moves nothing at all (measured:
+  // top 104 → 104), which is the case that was never broken.
+  //
+  // This is NOT in conflict with ① (a step NOTE opening or closing must never
+  // move the scrollport). Different control, different owner ruling: a note grows
+  // inside a card you are already looking at, while collapsing the card removes
+  // the thing you were looking at. See lib/scrollPort.ts.
+  const wasExpanded = useRef(expanded);
+  useLayoutEffect(() => {
+    const was = wasExpanded.current;
+    wasExpanded.current = expanded;
+    if (!was || expanded) return;
+    const card = rootRef.current;
+    if (!card) return;
+    const port = scrollParent(card);
+    const view = viewportSpanOf(port);
+    const top = card.getBoundingClientRect().top;
+    if (top >= view.top) return;
+    port.scrollTop += top - view.top;
+  }, [expanded]);
 
   // Keyboard operability (repo convention for clickable surfaces — see the
   // chat header / MemberCard row: role="button" + tabIndex + Enter/Space).
