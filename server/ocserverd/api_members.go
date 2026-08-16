@@ -760,7 +760,32 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 	cancellingWake := PresenceState(*m, nowSecs(), s.hub.IsOnline(m.ID)) ==
 		MemberPresenceWaking
 	m.DesiredState = DesiredStateOffline
-	m.StoppingSince = nowSecs()
+	// …UNCONDITIONAL with ONE exception: a stop epoch that a FORCE-stop opened
+	// must not be re-stamped into a softer one. The SSE stop gate separates
+	// "close-out in flight" (admit the reconnect) from "cut off deliberately"
+	// (refuse it) by comparing the two anchors — forced_stop_at >= this epoch's
+	// stopping_since means forced — so re-stamping stopping_since to now would
+	// move a force-stopped member to the ADMIT side, and the 下線 arm runs no
+	// clock, so nothing would collect it afterwards. Found by independent
+	// review; reachable through the API/MCP surface (the cockpit offers no 下線
+	// button in stopping/stopped, but that is a UI fact, not a gate).
+	//
+	// The three conditions are each load-bearing. `stopping_since > 0` is what
+	// keeps this narrow to a LIVE forced epoch: activate clears the stop anchors
+	// but deliberately KEEPS forced_stop_at (it is the durable record that a
+	// past session was cut off), so testing forced_stop_at alone would strip the
+	// soft-offboard admission from every member that was ever force-stopped.
+	//
+	// Consequence, deliberate: a forced epoch's anchor stops moving, so this
+	// call no longer restarts the grace clock for it. Nothing reads it that way
+	// — the 下線 arm returns decisionNone while the soft grace is on, and
+	// offboardKindOf answers soft for desired-offline without consulting the
+	// anchor's age.
+	forcedEpochLive := m.ForcedStopAt > 0.0 && m.StoppingSince > 0.0 &&
+		m.ForcedStopAt >= m.StoppingSince
+	if !forcedEpochLive {
+		m.StoppingSince = nowSecs()
+	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return

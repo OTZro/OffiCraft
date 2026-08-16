@@ -951,6 +951,23 @@ def test_force_stopped_member_reconnect_refused(
     assert "stop in effect" in body["error"]["message"], body
     zombie.close()
 
+    # …and a LATER deactivate must not downgrade that verdict. The two arms are
+    # told apart by comparing the anchors, so a deactivate that re-stamped
+    # stopping_since to now would move a force-stopped member onto the admitted
+    # side — and the 下線 arm runs no clock, so nothing would collect it after.
+    # The cockpit offers no 下線 button in this state, but the API does.
+    r = client.post(
+        f"/api/members/{agent.member_id}/deactivate", headers=_auth(owner_token)
+    )
+    assert r.status_code == 200, r.text
+    still = SSEConnection(base_url, agent.token)
+    assert still.status_code == 409, (
+        "a deactivate after a force-stop must not re-open the gate, got "
+        f"{still.status_code}"
+    )
+    assert "stop in effect" in json.loads(still.error_body)["error"]["message"]
+    still.close()
+
 
 def test_fresh_hire_desired_offline_still_connects(
     base_url, client, owner_token

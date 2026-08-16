@@ -483,3 +483,79 @@ func TestForceStop_RecordsThatTheSessionWasCutOff(t *testing.T) {
 		t.Fatalf("…while the rest of that write must land normally: %+v", survived)
 	}
 }
+
+// 下線 must not downgrade a 強制下線. The stop gate tells "close-out in flight"
+// (admit the reconnect, because 下線 runs no clock and a refused reconnect
+// self-terminates the session mid-hand-off) from "cut off deliberately"
+// (refuse it) by comparing the two anchors. deactivate re-stamps
+// stopping_since UNCONDITIONALLY — so without the exception this test pins, a
+// deactivate arriving after a force-stop moves a cut-off member onto the
+// admitted side, and nothing collects it afterwards.
+//
+// Found by independent review, not by me: I compared the anchors without
+// asking who else writes them.
+func TestDeactivate_DoesNotDowngradeAForcedStop(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-a")
+
+	m := testAgent("m-forced")
+	m.DesiredMachineID = "mach-a"
+	putTestMember(t, s, m)
+	connectOnline(t, s, "mach-a")
+	connectOnlineMachine(t, s, "m-forced", "mach-a")
+
+	rec := httptest.NewRecorder()
+	s.HandleForceStopMemberApiMembersMemberIdForceStopPost(rec,
+		taskReq(t, "POST", "/api/members/m-forced/force-stop", map[string]any{},
+			wireOwnerID, "owner"), "m-forced")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("force-stop: %d %s", rec.Code, rec.Body.String())
+	}
+	forced, _ := s.dal.GetMember("m-forced")
+	if s.sseStopGateRefusal("m-forced") == "" {
+		t.Fatalf("a force-stopped member must be refused to begin with: %+v", forced)
+	}
+
+	rec = httptest.NewRecorder()
+	s.HandleDeactivateMemberApiMembersMemberIdDeactivatePost(rec,
+		taskReq(t, "POST", "/api/members/m-forced/deactivate", map[string]any{},
+			wireOwnerID, "owner"), "m-forced")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("deactivate: %d %s", rec.Code, rec.Body.String())
+	}
+	after, _ := s.dal.GetMember("m-forced")
+	if after.StoppingSince != forced.StoppingSince {
+		t.Fatalf("a forced epoch's anchor must not move: %v → %v",
+			forced.StoppingSince, after.StoppingSince)
+	}
+	if s.sseStopGateRefusal("m-forced") == "" {
+		t.Fatalf("a deactivate after a force-stop must not re-open the gate: %+v", after)
+	}
+
+	// …and the exception stays narrow: activate clears the stop anchors (it
+	// keeps forced_stop_at, which is the durable record), so the NEXT 下線 is a
+	// fresh soft epoch and its reconnect must be admitted again. Testing
+	// forced_stop_at alone instead of the live epoch would fail right here — it
+	// would strip the soft-offboard admission from every member ever forced.
+	rec = httptest.NewRecorder()
+	s.HandleActivateMemberApiMembersMemberIdActivatePost(rec,
+		taskReq(t, "POST", "/api/members/m-forced/activate", map[string]any{},
+			wireOwnerID, "owner"), "m-forced")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("activate: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	s.HandleDeactivateMemberApiMembersMemberIdDeactivatePost(rec,
+		taskReq(t, "POST", "/api/members/m-forced/deactivate", map[string]any{},
+			wireOwnerID, "owner"), "m-forced")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("deactivate after activate: %d %s", rec.Code, rec.Body.String())
+	}
+	fresh, _ := s.dal.GetMember("m-forced")
+	if fresh.StoppingSince <= forced.StoppingSince {
+		t.Fatalf("a fresh soft epoch must stamp a NEW anchor: %+v", fresh)
+	}
+	if msg := s.sseStopGateRefusal("m-forced"); msg != "" {
+		t.Fatalf("a fresh close-out must still be admitted: %s", msg)
+	}
+}
