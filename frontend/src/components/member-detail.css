@@ -122,12 +122,34 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+/* The name yields, the id does not (T-5dab). The badge carries the member's
+   REAL id now — a longer string than the retired MB-XXX### label, and the one
+   thing on this row you cannot truncate without making it useless. So the name
+   half is the shrinkable one: it ellipses, and the id keeps its full width on
+   one line at every width. Without this the badge pushed out of the card at
+   ≤375px (the old label only did so at ≤320px). */
+.mp-identity__line .inline-edit {
+  min-width: 0;
 }
 .mp-identity__name {
   font-size: 20px;
   font-weight: 700;
   color: var(--color-text-strong);
   font-family: var(--font-title);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp-identity__id {
+  /* `flex: none` is what actually keeps the id whole; `nowrap` is defence for an
+     id longer than anything the roster mints today, and no guard covers it
+     (identity-real-id.ct.spec.tsx M2 stays green without it). */
+  white-space: nowrap;
+  flex: none;
 }
 /* The InlineEdit input inherits font via `font: inherit`; give the name row a
    larger, bold baseline so the edit field matches the display name's weight. */
@@ -672,12 +694,6 @@
   }
   .mp-identity__buttons .member-actions .btn {
     flex: 1 1 auto;
-  }
-  /* The id badge must never wrap its member id onto two lines or get clipped by
-   * the shrinking name field. */
-  .mp-identity__id {
-    white-space: nowrap;
-    flex: none;
   }
   .mp-info2,
   .mp-runtime__cells {
