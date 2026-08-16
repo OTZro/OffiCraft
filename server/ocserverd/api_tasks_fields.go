@@ -117,11 +117,11 @@ import (
 // holds untrimmed text puts the column straight back into that state, any number
 // of times. Create and restore are two entrances to one condition — the stored
 // text carrying whitespace this door will normalise — and an earlier draft said
-// create was the only one (that half was in the seeds) and that it bit once
-// (that half was in the wire text): two drafts, one error. That was
-// FALSE, was measured false by independent review, and is recorded here rather
-// than quietly swapped, because this file already documented the restore
-// entrance above: the package was contradicting itself, which is worse
+// create was the only one and that it bit once. BOTH halves were in the seeds;
+// the wire text carried the "bit once" half as well and never claimed "only".
+// That was FALSE, was measured false by independent review, and is recorded
+// here rather than quietly swapped, because this file already documented the
+// RESTORE entrance above: the package was contradicting itself, which is worse
 // than either half being wrong alone.
 //
 // ⚠️ Read "both fields are trimmed" in this file and in the update_task tool
