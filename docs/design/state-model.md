@@ -56,9 +56,20 @@
   - **owner / dashboard 連線豁免**:它不投影成任何 member 的 online,可以並存多條。
   - ⚠️ **這一條在 2026-07-12 定案時是「第二條連線 409 拒絕、舊的續存」**,後來改成 takeover(spec/sse.md §5.1 已同步,並有專門的單元測試與 conformance 斷言)。原始裁定的**目的**沒有被推翻——目的一直是「同時只有一個 live 實例」;變的是達成手段:409 拒新會讓一個半死的舊連線永遠佔著槽位,新的那個永遠上不來。**這是手段換掉,不是原則被否決。**(T-e04f 對帳時發現本文落後,owner 2026-08-17 於 rc-cfbc6624378f 裁定由 Kyle 更新。)
 - **殭屍 stop gate**(765deb9,`sseStopGateRefusal`):roster 非 active、或 desired_state=offline 且有 stop 錨 → 409 拒連。停用/回收中的 member 連不回來。
+  - ⚠️ 現況已有**三個豁免**,原本「有 stop 錨 → 409」這句已經過強:①`kind=outsource` 一律放行(在 roster 檢查之前,released worker 的 session 要活到結案);②warden 不受 desired-offline 那一臂管;③**收尾進行中放行**(T-a9d6)——只打了「開始收尾」而還沒報「收完了」、且不是被強制切斷的,允許重連,否則一次網路抖動就會把做到一半的交接弄死。真正決定拒不拒的是「收完了」的錨與強制切斷的判定。
 
-**連線的 machine claim 不參與 handshake 判斷**(只用來標出 online 的位置與下架擋門)。推論:**member 換機器(desired_machine_id A→B)沒有自動路徑**——A 上舊實例不會自己退,而 **server 不對已 online 的 member 發 START**,所以 B 上根本不會冒出第二個實例;換機是**手動三步:先 desired_state=offline(舊實例退)→ 改 desired_machine_id → 再 online(B 上拉起)**。
-> ⚠️ 這段推論在 takeover 之前的寫法是「舊實例還**佔著**唯一 SSE 槽」。takeover 之後那個理由已經不成立(真有第二個實例連上來,它會把舊的踢掉,而不是被拒),但**結論不變**——擋住自動換機的是「server 不對已 online 的 member 發 START」這一條,不是槽位被佔。理由換了,結論還站得住。
+**連線的 machine claim 不參與 handshake 判斷**。它用來標出 online 的位置、下架擋門,以及(後來新增的)**解析 kill 要送到哪一台 warden**、與 relocation backstop 臂的機器分歧判斷。
+
+🔴 **換機器現在有自動路徑了(T-b6d9),本段原本的「手動三步」推論已被推翻。**
+現況:owner 按一次「改機器」就是**一個動詞的自動換機**——handler 寫下新的 `desired_machine_id` 並開一個 refocus epoch,等 agent 收尾或寬限到期後把**舊機器上的** session robust STOP 掉;`desired_state` 全程維持 online,所以下一輪就在**新機器**上 START。`decideUp` 裡那條 relocation 臂已降級為 backstop,只處理「沒有人蓋 epoch 的 pin 分歧」。
+
+⇒ 原文那三句話今天都不成立:①「沒有自動路徑」— 有,而且是 owner 面向的正式動作;②「A 上舊實例不會自己退」— 會,它會被收掉;③「手動三步」— 不是現行流程。
+
+> ⚠️ **這段的修訂史值得留著,因為它示範了一個很難自覺的漏接。**
+> takeover 之前,這裡的理由是「舊實例還**佔著**唯一 SSE 槽」。改成 takeover 後那個理由失效,於是有人(我)把理由換成「server 不對已 online 的 member 發 START」並寫下「**結論不變**」——**而結論其實早就被 T-b6d9 推翻了**,只是沒有人回頭查它。那個新理由本身為真,但它擋不住自動換機,因為自動換機是**先 STOP、讓它不再 online,再 START**。
+>
+> **換掉一段話的理由,不等於驗證了它的結論——反而會讓結論看起來更可信**(文件上多了一行「查證過」的痕跡,下一個讀者更不會去質疑它)。⇒ **改理由時要把結論一起打回未驗證狀態**,重新問一次「這句話今天還成立嗎」。
+> (owner 2026-08-17 於 `rc-b5da935fda77` 裁定由 Kyle 更新;抓到它的是 T-baf7 的獨立審查,不是作者自己。)
 
 **未實作的 by-construction 設計(backlog 選項,之後真需要自動換機再照此補)**:SSE handshake 當場比對機器,不另開偵測迴圈:
 
