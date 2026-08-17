@@ -28,6 +28,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pressly/goose/v3"
@@ -142,6 +143,25 @@ func t83efReadRows(t *testing.T, db *sql.DB) (ids []string, bundles []string, id
 		t.Fatalf("rows: %v", err)
 	}
 	return ids, bundles, idxs
+}
+
+// t83efSkipRecord reads the receipt Up leaves when it could not move something.
+// No row means no skips, which is what a healthy install looks like.
+func t83efSkipRecord(t *testing.T, db *sql.DB) []customThemeSkip {
+	t.Helper()
+	var raw string
+	err := db.QueryRow(`SELECT value FROM setting WHERE key = ?`, customThemeSkipRecordKey).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("read skip record: %v", err)
+	}
+	var out []customThemeSkip
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatalf("skip record is not readable JSON (%q): %v", raw, err)
+	}
+	return out
 }
 
 func t83efLegacyValue(t *testing.T, db *sql.DB) (string, bool) {
@@ -392,6 +412,98 @@ func TestMigration00059SkipsUnkeyableElementsInsteadOfBrickingTheUpgrade(t *test
 		t.Fatalf("what was skipped must still be in the legacy row (present=%v, unchanged=%v)",
 			present, got == original)
 	}
+
+	// 🔴 AND THE RECEIPT. Printing a skip has no consumer a test can be — empty
+	// the print function's body and everything still passes — so the promise
+	// that a skip is never silent rests on this row, which is also what the
+	// retirement precondition reads.
+	skips := t83efSkipRecord(t, db)
+	if len(skips) != 4 {
+		t.Fatalf("recorded %d skips, want 4: %+v", len(skips), skips)
+	}
+	wantIdx := []int{1, 2, 3, 4}
+	for i, s := range skips {
+		if s.Index != wantIdx[i] {
+			t.Fatalf("skip %d records index %d, want %d — the index is what locates the element in the legacy row",
+				i, s.Index, wantIdx[i])
+		}
+		if s.Reason == "" {
+			t.Fatalf("skip at index %d has no reason; whoever retires the legacy row needs to know what to do about it", s.Index)
+		}
+	}
+}
+
+// TestMigration00059WritesNoSkipRecordWhenNothingWasSkipped is the other half of
+// the receipt, and it is not symmetry for its own sake: ABSENCE of the key is
+// what the retirement precondition reads as "nothing was lost". A migration that
+// wrote an empty record on every healthy install would make every install look
+// like it needed investigating, and the gate would be ignored within a week.
+func TestMigration00059WritesNoSkipRecordWhenNothingWasSkipped(t *testing.T) {
+	db, err := openSQLite(filepath.Join(t.TempDir(), "t83ef-norec.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	t83efUpTo58(t, db)
+	t83efSeedLegacyThemes(t, db, t83efFixture())
+	t83efUpTo59(t, db)
+
+	var n int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM setting WHERE key = ?`, customThemeSkipRecordKey).Scan(&n); err != nil {
+		t.Fatalf("count record: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("a clean migration left a skip record behind (%d rows); absence is the \"nothing was lost\" answer", n)
+	}
+}
+
+// TestMigration00059SkipsElementsGoAndSQLiteReadDifferently is the one the CHECK
+// constraint made necessary, and it is not a theoretical case.
+//
+// The key is derived by Go; the custom_theme_id_matches_bundle constraint
+// re-derives it with SQLite's json_extract. The two readers disagree on inputs
+// that BOTH accept, so an element like these would have failed the constraint,
+// failed the migration, and bricked the upgrade — the exact class the skip
+// posture exists to prevent, walking back in through the guard added to enforce
+// it. Both shapes parse in Go, so an install holding one starts today.
+func TestMigration00059SkipsElementsGoAndSQLiteReadDifferently(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		element string
+	}{
+		{"duplicate id key (Go takes the last, SQLite the first)", `{"id":"a","id":"b"}`},
+		{"lone surrogate (Go substitutes U+FFFD, SQLite keeps the bytes)", `{"id":"a\ud800b"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := openSQLite(filepath.Join(t.TempDir(), "t83ef-decoder.db"))
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer db.Close()
+			t83efUpTo58(t, db)
+			original := `[` + tc.element + `,{"id":"fine","name":"F"}]`
+			if _, err := db.Exec(
+				`INSERT INTO setting (key, value, updated_at) VALUES ('display.custom_themes', ?, 1)`,
+				original); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+
+			// The whole point: the upgrade SUCCEEDS.
+			t83efUpTo59(t, db)
+
+			ids, _, _ := t83efReadRows(t, db)
+			if len(ids) != 1 || ids[0] != "fine" {
+				t.Fatalf("migrated %v, want just [fine] — the odd element is skipped, its neighbour is not", ids)
+			}
+			if skips := t83efSkipRecord(t, db); len(skips) != 1 || skips[0].Index != 0 {
+				t.Fatalf("the skip was not recorded: %+v", skips)
+			}
+			if got, present := t83efLegacyValue(t, db); !present || got != original {
+				t.Fatal("the skipped element must still be in the legacy row")
+			}
+		})
+	}
 }
 
 // TestMigration00059TableRefusesAnIdThatDisagreesWithItsBundle pins the CHECK
@@ -414,12 +526,18 @@ func TestMigration00059TableRefusesAnIdThatDisagreesWithItsBundle(t *testing.T) 
 	// reports PASS while proving nothing. Measured — the mutant that drops the
 	// constraint reddened two of these three, and the third stayed green for
 	// exactly that reason.
+	// 🔴 AND EACH CASE ASSERTS WHICH CONSTRAINT FIRED, not merely that something
+	// did. With one anonymous CHECK covering all three facts, SQLite reported the
+	// same first line for every violation — a bundle that was not JSON at all
+	// answered `CHECK constraint failed: theme_id <> ''`, sending whoever reads
+	// that log at the wrong field. Asserting only `err != nil` cannot tell a
+	// constraint that names the right fact from one that names the wrong one.
 	for _, tc := range []struct {
-		name, id, bundle string
+		name, id, bundle, wantConstraint string
 	}{
-		{"key disagrees with the bundle's own id", "blue", `{"id":"red"}`},
-		{"bundle is not JSON", "green", `not json at all`},
-		{"empty key", "", `{"id":""}`},
+		{"key disagrees with the bundle's own id", "blue", `{"id":"red"}`, "custom_theme_id_matches_bundle"},
+		{"bundle is not JSON", "green", `not json at all`, "custom_theme_bundle_is_json"},
+		{"empty key", "", `{"id":""}`, "custom_theme_id_not_blank"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := db.Exec(
@@ -428,6 +546,10 @@ func TestMigration00059TableRefusesAnIdThatDisagreesWithItsBundle(t *testing.T) 
 			if err == nil {
 				t.Fatalf("accepted %s — the id would then disagree with the id it is filed under, which is how \"delete theme X\" deletes something else",
 					tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantConstraint) {
+				t.Fatalf("refused %s, but the message names the wrong fact.\n want it to name: %s\n           got: %v",
+					tc.name, tc.wantConstraint, err)
 			}
 		})
 	}

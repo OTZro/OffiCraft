@@ -24,7 +24,11 @@ package main
 // ticket's hard requirement is that the moved data reads back BYTE-FOR-BYTE
 // identical before anything old is removed. Copying each array element's own
 // bytes verbatim makes that a mechanical fact: re-joining the rows in order
-// reproduces the original array string exactly, and a diff proves it. Unpacking
+// reproduces the original array string exactly — WHEN NOTHING WAS SKIPPED, which
+// is every healthy install and is the state the skip record below reports. On an
+// install that DID leave something behind the rejoin is necessarily shorter than
+// the legacy value, and comparing them proves nothing; the skip record, not the
+// diff, is what speaks for those. A diff proves it in the first case. Unpacking
 // into columns would round-trip through unmarshal/marshal, where key order,
 // whitespace and Unicode escaping are all free to change — the reassembled
 // bytes could differ while nothing is actually wrong, and then the one check
@@ -55,11 +59,30 @@ package main
 // same package (so there is only one truth), or its write path maintains BOTH
 // until it does. The same file carries the retirement precondition below.
 //
-// 🔴 RETIREMENT PRECONDITION, because Up is deliberately lossy-tolerant (see the
-// failure posture): before any later change deletes `display.custom_themes`, it
-// MUST verify that `custom_theme` holds as many rows as the legacy array holds
-// elements. Up SKIPS elements it cannot key (below) rather than failing, which
-// is safe only for as long as the legacy row is still there to hold them.
+// 🔴 RETIREMENT PRECONDITION — AND IT IS A QUERY, NOT A THING TO REMEMBER.
+//
+// Up is deliberately lossy-tolerant: it SKIPS elements it cannot key (see the
+// failure posture) rather than failing, which is safe only for as long as the
+// legacy row is still there to hold them. So the change that eventually deletes
+// `display.custom_themes` must refuse while anything was left behind.
+//
+// A sentence in this header cannot enforce that. Whoever retires the legacy row
+// months from now has no reason to open this file, and if they do not, the
+// skipped themes vanish at that moment with nothing raising a word. So every
+// skip is RECORDED IN THE DATABASE under customThemeSkipRecordKey, and the rule
+// for that later change is:
+//
+//	if the key exists → REFUSE, print what is in it, and print the way out.
+//	if it is absent   → nothing was left behind; retiring is safe.
+//
+// ⚠️ THE RULE IS "KEY EXISTS", NOT "ROW COUNT EQUALS ARRAY LENGTH". An earlier
+// draft said the latter and it was unsatisfiable by construction: on an install
+// that skipped something, the counts can NEVER match, so that phrasing would
+// have locked those installs out of retirement forever with no way forward. A
+// gate with no exit gets bypassed by hand, which is worse than no gate — it also
+// looks like someone is guarding. Hence the exit is part of the rule: resolve
+// the listed elements (re-add them under usable ids, or decide they are not
+// wanted), DELETE the record key, then retire.
 //
 // ORDER IS RECORDED, NOT DERIVED. `order_idx` carries each element's position in
 // the legacy array, and the reassembly sorts by it.
@@ -85,8 +108,7 @@ package main
 //     `FATAL: load settings` and rc 1. It is dead either way, and failing loudly
 //     during migrate is the better of two deaths.
 //
-//   - AN ELEMENT CANNOT BE KEYED (no id, blank id, not an object, or an id
-//     another element already used) → that element is SKIPPED and the migration
+//   - AN ELEMENT CANNOT BE KEYED → that element is SKIPPED and the migration
 //     succeeds. 🔴 This is the case the first draft got wrong, and the review
 //     that caught it was right about why: those rows PARSE, so such an install
 //     BOOTS FINE TODAY. Failing the migration would turn "your themes are a bit
@@ -94,9 +116,24 @@ package main
 //     far worse outcome than the one being prevented — and it would be caused by
 //     data the product refuses to WRITE but has never refused to HOLD.
 //
+//     "Cannot be keyed" covers five shapes: not an object, no id, blank id, an
+//     id an earlier element already used, and — the one that is not obvious —
+//     AN ELEMENT WHOSE id GO AND SQLITE READ DIFFERENTLY.
+//
+//     🔴 THAT LAST ONE IS NOT THEORETICAL, AND IT IS THE TRAP THE CHECK
+//     CONSTRAINT SET. The key is derived by Go's decoder while the constraint
+//     re-derives it with SQLite's `json_extract`, and the two do not agree on
+//     every input. Measured on this tree (2026-08-17): `{"id":"a","id":"b"}`
+//     (duplicate JSON key) gives Go "b" and SQLite "a"; `{"id":"a\ud800b"}` (a
+//     lone surrogate) gives Go a U+FFFD replacement and SQLite the original
+//     bytes. Both PARSE, so both boot today — and both would have failed the
+//     CHECK, failed the migration, and bricked the upgrade. Exactly the class
+//     this posture exists to prevent, re-entering through the guard added to
+//     enforce it. So the id is re-derived with SQLITE's OWN reader before the
+//     insert, and a disagreement is a skip like any other.
+//
 //     Skipping loses nothing WHILE THE LEGACY ROW IS STILL THERE, which is
-//     exactly why the retirement precondition above is not optional. Every skip
-//     is printed during migrate so an upgrade that dropped something says so.
+//     exactly why the retirement precondition above is not optional.
 
 import (
 	"context"
@@ -104,6 +141,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/pressly/goose/v3"
 )
@@ -133,15 +171,23 @@ func init() {
 // add only while the table is empty. Losing it means the cockpit can be served a
 // theme whose id disagrees with the id it is filed under, which is precisely the
 // shape that makes "delete theme X" delete something else.
+//
+// ⚠️ THE THREE CONDITIONS ARE THREE NAMED CONSTRAINTS, NOT ONE. SQLite names the
+// constraint it reports, and with a single anonymous CHECK it prints the WHOLE
+// expression's first line for every violation — so a bundle that was not JSON at
+// all reported `CHECK constraint failed: theme_id <> ''`, pointing whoever is
+// reading the log at the wrong field. Named, each violation says which fact was
+// broken.
 const customThemeTableDDL = `
 CREATE TABLE custom_theme (
   theme_id   TEXT PRIMARY KEY,
   bundle     TEXT NOT NULL,
   order_idx  INTEGER NOT NULL,
   updated_at REAL NOT NULL DEFAULT 0,
-  CHECK (theme_id <> ''
-         AND json_valid(bundle)
-         AND json_extract(bundle, '$.id') = theme_id)
+  CONSTRAINT custom_theme_id_not_blank CHECK (theme_id <> ''),
+  CONSTRAINT custom_theme_bundle_is_json CHECK (json_valid(bundle)),
+  CONSTRAINT custom_theme_id_matches_bundle
+    CHECK (json_extract(bundle, '$.id') = theme_id)
 )`
 
 // legacyCustomThemesKey is the settings key the array has lived under. It is
@@ -150,6 +196,31 @@ CREATE TABLE custom_theme (
 // constant is renamed or retired later, this migration must still run the same
 // way on an install upgrading from before it existed.
 const legacyCustomThemesKey = "display.custom_themes"
+
+// customThemeSkipRecordKey is where Up records what it could not move. It is the
+// mechanical half of the retirement precondition at the top of this file — the
+// half a comment cannot be.
+//
+// A settings key rather than a table because this is a one-shot RECEIPT, not
+// state anything reads at runtime. Settings are looked up one key at a time
+// (dal.go GetSetting / DeleteSetting are both `WHERE key = ?`) and nothing in the
+// tree enumerates the key space or scans it by prefix — verified independently
+// on origin/main — so an extra row is inert to settings load, to
+// `GET /api/settings` and to the cockpit. It cannot surface anywhere by accident.
+//
+// 🔴 THE ROW EXISTS ONLY WHEN SOMETHING WAS LEFT BEHIND. Its ABSENCE is the
+// "nothing was lost" answer, which is the state every healthy install is in and
+// therefore the one that must cost nothing to be in.
+//
+// Value: a JSON array of {"index", "reason"}. The index locates the element in
+// the legacy row, which still holds it.
+const customThemeSkipRecordKey = "display.custom_themes.skipped_by_00059"
+
+// customThemeSkip is one element Up could not move.
+type customThemeSkip struct {
+	Index  int    `json:"index"`
+	Reason string `json:"reason"`
+}
 
 func upCustomThemeTable(ctx context.Context, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, customThemeTableDDL); err != nil {
@@ -178,21 +249,26 @@ func upCustomThemeTable(ctx context.Context, tx *sql.Tx) error {
 	}
 	rows := make([]row, 0, len(elements))
 	seen := make(map[string]bool, len(elements))
+	var skipped []customThemeSkip
+	skip := func(i int, why string) {
+		skipped = append(skipped, customThemeSkip{Index: i, Reason: why})
+		announceCustomThemeSkip(i, why)
+	}
 	for i, el := range elements {
 		// Only the id is decoded. Everything else stays as the bytes that were
 		// stored — see the byte-for-byte note at the top of this file.
 		var head struct {
 			ID string `json:"id"`
 		}
-		// Every `continue` below is a SKIP, not a failure, and the reason is the
-		// same in all three: an element shaped like this parses, so the install
+		// Every `skip` below is a SKIP, not a failure, and the reason is the same
+		// in all of them: an element shaped like this parses, so the install
 		// carrying it starts today. See the failure posture at the top.
 		if err := json.Unmarshal(el, &head); err != nil {
-			skipCustomThemeElement(i, "not a JSON object")
+			skip(i, "not a JSON object")
 			continue
 		}
 		if head.ID == "" {
-			skipCustomThemeElement(i, "no usable id")
+			skip(i, "no usable id")
 			continue
 		}
 		if seen[head.ID] {
@@ -201,7 +277,26 @@ func upCustomThemeTable(ctx context.Context, tx *sql.Tx) error {
 			// supported state — but the primary key would turn it into a failed
 			// migration, and a station that will not start is a worse answer than
 			// a theme left behind in the legacy row.
-			skipCustomThemeElement(i, "id "+head.ID+" already used by an earlier element")
+			skip(i, "id "+head.ID+" already used by an earlier element")
+			continue
+		}
+		// 🔴 ASK THE DATABASE WHAT IT THINKS THE id IS, BEFORE TRUSTING GO'S
+		// ANSWER. The custom_theme_id_matches_bundle constraint re-derives the id
+		// with SQLite's own JSON reader, and the two readers do not agree on
+		// every input that both accept — a duplicate `id` key (Go takes the last,
+		// SQLite the first) and a lone surrogate escape (Go substitutes U+FFFD,
+		// SQLite keeps the bytes) are both measured examples. Letting the INSERT
+		// discover that would fail the migration, which is the exact brick this
+		// posture exists to avoid. So the disagreement is detected here and
+		// treated as what it is: an element that cannot be keyed.
+		var dbID sql.NullString
+		if err := tx.QueryRowContext(ctx,
+			`SELECT json_extract(?, '$.id')`, string(el)).Scan(&dbID); err != nil {
+			skip(i, "the database's JSON reader cannot read this element")
+			continue
+		}
+		if !dbID.Valid || dbID.String != head.ID {
+			skip(i, "the database's JSON reader and Go disagree about this element's id")
 			continue
 		}
 		seen[head.ID] = true
@@ -214,16 +309,46 @@ func upCustomThemeTable(ctx context.Context, tx *sql.Tx) error {
 			return fmt.Errorf("migration 00059: insert theme %q: %w", r.id, err)
 		}
 	}
+	return recordCustomThemeSkips(ctx, tx, skipped)
+}
+
+// recordCustomThemeSkips writes the receipt the retirement precondition reads.
+// No skips ⇒ NO ROW, because absence is the "nothing was lost" answer and the
+// healthy case must not pay for the unhealthy one.
+func recordCustomThemeSkips(ctx context.Context, tx *sql.Tx, skipped []customThemeSkip) error {
+	if len(skipped) == 0 {
+		return nil
+	}
+	blob, err := json.Marshal(skipped)
+	if err != nil {
+		return fmt.Errorf("migration 00059: record skips: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO setting (key, value, updated_at) VALUES (?, ?, 0)
+		 ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+		customThemeSkipRecordKey, string(blob)); err != nil {
+		return fmt.Errorf("migration 00059: record skips: %w", err)
+	}
 	return nil
 }
 
-// skipCustomThemeElement prints what was left behind. It is not decoration: a
-// skip is only safe because the legacy row still holds the element, and an
-// upgrade that quietly dropped something the owner can see in the cockpit would
-// be indistinguishable from one that moved everything. goose's own output goes
-// to stdout, so this lands in the same place as the `OK 00059_...` line.
-func skipCustomThemeElement(i int, why string) {
-	fmt.Printf("[migration 00059] SKIPPED %s[%d]: %s — it stays in the legacy row\n",
+// announceCustomThemeSkip prints what was left behind, and it is the CONVENIENCE
+// half of the pair — recordCustomThemeSkips is the half anything can rely on.
+//
+// ⚠️ NOTHING GUARDS THIS FUNCTION, and pretending otherwise would be the same
+// mistake as the order_idx justification above: emptying its body leaves every
+// test green, because a line of log output has no consumer a test can be. It is
+// here so a person watching an upgrade sees it; the migration's promise that a
+// skip is never silent rests on the database row, not on this.
+//
+// It writes to STDERR, which is where goose's own migration lines go — goose v3
+// logs through the standard library's `log` package and nothing in this tree
+// calls goose.SetLogger, so `OK 00059_...` is on stderr too. An earlier version
+// of this comment said stdout; that was wrong, and the operational conclusion
+// (an operator sees both) survived only because the two streams land in the same
+// file either way.
+func announceCustomThemeSkip(i int, why string) {
+	fmt.Fprintf(os.Stderr, "[migration 00059] SKIPPED %s[%d]: %s — it stays in the legacy row\n",
 		legacyCustomThemesKey, i, why)
 }
 
