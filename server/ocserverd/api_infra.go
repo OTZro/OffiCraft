@@ -605,9 +605,9 @@ func (s *apiServer) clearSessionBootTS(id string) {
 	// here, so it is session-scoped state too — drop it on the same boundary
 	// rather than leaving one record per agent id alive for the process's
 	// lifetime.
-	s.settingsMu.Lock()
+	s.handoverNoticedMu.Lock()
 	delete(s.handoverNoticed, id)
-	s.settingsMu.Unlock()
+	s.handoverNoticedMu.Unlock()
 	// Write-on-change: the clear runs on every session boundary, and an
 	// unconditional UPDATE would cost a row write per boundary for nothing.
 	m, err := s.dal.GetMember(id)

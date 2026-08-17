@@ -28,6 +28,7 @@
 - owner 對外包的 relocate、restart、model/runtime/effort 變更走同一個 owner-op handover funnel：先保留 session 狀態，再以 refocus epoch、announce/grace 與 `report_stopped`／timeout 收尾；沒有 live session 或已收尾的 epoch 不應重複收尾。正職與外包刻意不對稱：共用純 reconcile 決策，但 worker 仍有 task、codename、release 與 close-out 專屬生命週期。
 - deactivate 打到 waking member 時，handler 必須在覆寫 `stopping_since` 前立即 dispatch robust stop；已 online 的 member 保留 120 秒 graceful window，已 offline 的 member 不派 stop。dead worker 的 restart 依 `hub.IsOnline` 判 liveness，不能只看 `desired_state`。
 - session boot anchor `member.session_boot_ts` 是 durable、不上 wire。reconnect 從持久值恢復 gauge；每一條成功 enqueue 的新 session start 與 stop boundary 都要清 anchor，使用 `SetMemberSessionBootTS` 單欄更新，不用整列 `PutMember` 代替。已知邊界：舊 snapshot 的整列 upsert 仍可能復活舊 anchor；若要改變該資料競態，另行取得 owner 裁定。
+- `member.handover_noticed_ts`（換手提醒的 once-per-session 認領，同樣 durable、同樣不上 wire）刻意採**相反**策略：它**不在 `PutMember` 的 `DO UPDATE SET` 裡**，只有 `SetMemberHandoverNoticedTS` 能移動它。理由是 `memberFromWorker` 從零重建 Member、不帶這個欄位，所以每次 `PutOutsourceWorker` 都會送 0 進來——把它加進 SET 會讓外包 worker 的認領在每次狀態寫入時被歸零，等於讓「一個 session 只提醒一次」從另一扇門失效。這個約束由 `TestHandoverNotice_ClaimSurvivesAWholeRowUpsert` 守住，不是靠註解。
 
 ## 4. attachment、文件與 context
 

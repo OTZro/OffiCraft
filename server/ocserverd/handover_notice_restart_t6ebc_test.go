@@ -114,6 +114,111 @@ func TestHandoverNotice_ClaimIsReleasedAtTheSessionBoundary(t *testing.T) {
 	}
 }
 
+// TestHandoverNotice_ClaimSurvivesAWholeRowUpsert is the guard the design
+// decision needed and did not have (found by independent review, T-ffdf).
+//
+// The claim column is deliberately absent from PutMember's DO UPDATE SET, and
+// until this test existed the ONLY thing enforcing that was a comment. Adding
+// `handover_noticed_ts = excluded.handover_noticed_ts` to that SET list left
+// the whole suite green — a change that reads like tidying up an oversight,
+// and no test would have argued.
+//
+// 🔴 It is not theoretical. memberFromWorker rebuilds a Member from scratch and
+// does NOT carry this column (OutsourceWorker has no such field), so every
+// PutOutsourceWorker sends a zero for it. With the column in the SET list, each
+// worker status write would silently release that worker's claim — and the bug
+// this ticket exists to fix walks back in through a different door, for exactly
+// the population that churns member rows the most.
+func TestHandoverNotice_ClaimSurvivesAWholeRowUpsert(t *testing.T) {
+	api, _ := restartableNoticeServers(t, "m-1")
+	const anchor = 4242.0
+
+	if err := api.dal.SetMemberHandoverNoticedTS("m-1", anchor); err != nil {
+		t.Fatalf("stamp claim: %v", err)
+	}
+
+	// A whole-row writer holding a snapshot that predates the claim — which is
+	// every writer, since nothing but the single-column setter ever sets it.
+	m, err := api.dal.GetMember("m-1")
+	if err != nil || m == nil {
+		t.Fatalf("read member: %v", err)
+	}
+	stale := *m
+	stale.HandoverNoticedTS = 0
+	stale.Name = "renamed by an unrelated write"
+	if err := api.dal.PutMember(stale); err != nil {
+		t.Fatalf("whole-row upsert: %v", err)
+	}
+
+	after, err := api.dal.GetMember("m-1")
+	if err != nil || after == nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if after.HandoverNoticedTS != anchor {
+		t.Fatalf("a whole-row upsert must NOT move the notice claim: %v → %v. "+
+			"The column must stay out of PutMember's DO UPDATE SET; only "+
+			"SetMemberHandoverNoticedTS may move it",
+			anchor, after.HandoverNoticedTS)
+	}
+	// Positive control: the same write DID land its other change, so the
+	// assertion above is not passing because nothing was written at all.
+	if after.Name != "renamed by an unrelated write" {
+		t.Fatalf("the upsert itself must have landed; got name %q", after.Name)
+	}
+}
+
+// TestHandoverNotice_ADatabaseFailureFallsTowardSending pins the DIRECTION the
+// gate errs in when it cannot read the durable claim (independent review, T-ffdf:
+// flipping this to silence left the suite green).
+//
+// The two failure modes are not symmetric and that asymmetry is the whole
+// decision: a duplicate notice costs one repeated sentence and someone will say
+// so, while a swallowed notice means an agent never learns it is near the
+// handover ceiling — and NOTHING reports a message that was never sent. So a
+// database hiccup must not be able to mute the one notice a session gets.
+//
+// 🔴 If this test is ever in the way, the change it is blocking is a RULING
+// about which error is cheaper, not a refactor. Get the ruling first.
+func TestHandoverNotice_ADatabaseFailureFallsTowardSending(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "handover-notice-dbfail.db")
+	open := func() (*apiServer, func() error) {
+		db, err := openSQLite(dsn)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		if err := runMigrations(db); err != nil {
+			t.Fatalf("goose up: %v", err)
+		}
+		return newAPIServer(NewDAL(db), NewHub(), []byte("notice-dbfail-secret"), 3600,
+			assetRoot(t.TempDir())), db.Close
+	}
+
+	before, closeBefore := open()
+	if err := before.dal.PutMember(Member{
+		ID: "m-1", Name: "dbfail-probe", Kind: KindAssistant,
+		DesiredState: DesiredStateOnline, RosterStatus: RosterStatusActive,
+	}); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+	if !before.claimHandoverNotice("m-1", noticeGauge(1000)) {
+		t.Fatal("first claim of the session")
+	}
+	if err := closeBefore(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// A new process (empty cache) whose database is unreachable. The claim IS
+	// on disk — this session was already told — but the gate cannot see it.
+	after, closeAfter := open()
+	if err := closeAfter(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if !after.claimHandoverNotice("m-1", noticeGauge(1000)) {
+		t.Fatal("a database read failure must fall toward SENDING: a repeated " +
+			"sentence gets reported, a silently swallowed notice never does")
+	}
+}
+
 // TestHandoverNotice_WithoutAMemberRowIsCacheOnly pins the KNOWN LIMIT rather
 // than leaving it to be discovered as a surprise: the durable claim lives on
 // the member row, so an id with no row (every T-c382 unit fixture, and nothing

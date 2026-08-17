@@ -367,7 +367,9 @@ func (d *DAL) PutMember(m Member) error {
 			-- here would let one of those revive a claim that was just cleared
 			-- — silencing a genuinely new session's one notice. The INSERT
 			-- carries it so a brand-new row starts at its zero value;
-			-- SetMemberHandoverNoticedTS is the only writer that moves it.`,
+			-- SetMemberHandoverNoticedTS is the only writer that moves it.
+			-- Guarded by TestHandoverNotice_ClaimSurvivesAWholeRowUpsert:
+			-- adding this column to the SET list turns that test red.`,
 		m.ID, m.Name, m.Kind, m.RoleKey, NormalizeRuntime(m.Runtime), m.Model, m.ActualModel, m.Effort,
 		m.ActualRuntime, m.ActualEffort,
 		m.DesiredState, m.DesiredMachineID, m.LastMachineID, m.SessionBootTS,
