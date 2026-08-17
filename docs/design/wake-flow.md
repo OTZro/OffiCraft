@@ -35,6 +35,7 @@ sequenceDiagram
     participant rec as server（reconcile 迴圈）
     participant w as warden（目標機器上）
     participant agent as agent（新 session）
+    participant w2 as warden（其他機器上）
 
     owner->>srv: 按上線（或換手把舊的收掉之後，由 rec 自己續上）
     Note over srv: 只寫意圖：想要它在線上、要它在哪一台
@@ -44,21 +45,22 @@ sequenceDiagram
     Note over rec: 決定當下才 mint 那張 token，<br/>並把「去哪一台」燒進去
 
     rec->>w: 推 START（走 warden 自己那條下行通道）
-    Note over rec: 派得出去才記錄；派不出去就當沒發生
+    Note over rec: 派得出去才推進狀態；<br/>派不出去就當沒發生過
+    rec->>rec: 蓋上喚醒錨（唯有真的被收下才蓋）
 
-    w->>w: 落檔、建工作目錄、把 runtime 拉起來
-    alt warden 收不下（例如位子已被佔著）
+    alt warden 收下了
+        w->>w: 落檔、建工作目錄、把 runtime 拉起來
+        w->>agent: 起 session，戳它開始
+        agent->>agent: 讀自己的身分與開機程序，照著走
+        agent->>srv: 報「我醒了」（這還不算上線）
+        agent->>srv: 掛上長連線
+        Note over srv: 連線這件事本身才是「上線」的權威
+        srv->>agent: 收下連線，清掉喚醒錨
+        srv->>w2: 這個身分不該在你那裡（正身那台被排除在外）
+    else warden 收不下（例如位子已被佔著）
         w-->>srv: 拒絕，並說明理由
-        Note over srv: 這個回音是「有殭屍佔位」的訊號，<br/>但不當場殺
+        Note over srv: 這個回音是「有殭屍佔位」的訊號。<br/>server 記下來，但不當場殺
     end
-
-    w->>agent: 起 session，戳它開始
-    agent->>agent: 讀自己的身分與開機程序，照著走
-    agent->>srv: 報「我醒了」
-    agent->>srv: 掛上長連線
-    Note over srv: 連線這件事本身才是「上線」的權威
-    srv->>agent: 收下連線，清掉喚醒錨
-    srv->>w: 對其他機器廣播：這個身分不該在你那裡
 ```
 
 ⚠️ **圖上刻意沒有的東西**：所有時間、兩種 runtime 的差異、退避與重試、以及每個失敗分支的細節。**它們不是被省略，是被放到文字裡**——因為它們正是會變的那一層。
