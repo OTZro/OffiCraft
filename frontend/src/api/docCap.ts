@@ -75,8 +75,9 @@ export const BOOT_DOC_CAP_CHARS_DEFAULTS: Record<BootDocKind, number> = {
   system_interaction: 60000,
   boot_sequence: 15000,
   // T-c9c0. Sized with the boot sequences rather than the handbook: the
-  // 下線程序 seed is a short ordered checklist an agent has to finish inside a
-  // ~120s grace window, not a reference text.
+  // 下線程序 seed is a short ordered checklist an agent works under time
+  // pressure (a recycle gives it a bounded window; an offboard gives it none
+  // but the owner is waiting), not a reference text.
   offboard: 15000,
 };
 

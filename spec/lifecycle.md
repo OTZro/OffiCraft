@@ -382,7 +382,8 @@ ONE-SHOT, never a standing order):
 | `start_timeout` | 90 s | START unconfirmed → failed spawn |
 | `stop_grace` | 120 s | self-stop window before the robust stop — **unreachable today**: the arm that consumes it is guarded by `SoftOffboardGrace == 0` (see §4.3) |
 | `stop_retry` | 90 s | STOP/UNINSTALL re-dispatch window (lost-frame recovery) |
-| `recycle_grace` | 120 s | dump-stuck fallback from `refocus_since` |
+| `recycle_grace` | 120 s | dump-stuck fallback from `refocus_since` — but the wait is **`recycleGraceFor(refocus_op)`, not this value flat**: an owner-pressed 重新聚焦 (`refocus_op = refocus`) waits `soft_offboard_grace + recycle_grace` = **720 s**, because its notice carries no countdown; `context_high` and `restart_self` already say 120 s and get exactly that |
+| `soft_offboard_grace` | 600 s | the no-countdown window a SOFT notice opens. Load-bearing in two different ways: on the 下線 arm it is what makes `decideDown` run **no clock at all** (§4.3) and it never escalates; on the 重新聚焦 arm it is the first half of the 720 s above, and that one **does** escalate. Compile-time constant (`SoftOffboardGraceSecs`), deliberately not owner-settable |
 | `backoff_base` / `backoff_cap` | 5 s / 300 s | exponential start backoff |
 | `circuit_threshold` / `circuit_cooldown` | 5 / 120 s | sticky breaker (verified hard failures only) |
 
@@ -396,9 +397,11 @@ ONE-SHOT, never a standing order):
   (`report_stopping` → `report_stopped`; the runtime never auto-reports on the
   session's behalf) → robust STOP once the agent reports stopped
   (the first stopped report of a refocus-marked, still-desired-online member fires
-  the kill event-driven, not on the next tick) OR `recycle_grace` elapses (the
-  dead-session fallback — an unresponsive session that never reports is force-stopped
-  by the server; the agent side needs no timeout of its own) → the SSE drop makes
+  the kill event-driven, not on the next tick) OR `recycleGraceFor(refocus_op)` elapses
+  (the dead-session fallback — an unresponsive session that never reports is force-stopped
+  by the server; the agent side needs no timeout of its own. **The wait is not one number**:
+  120 s for `context_high` / `restart_self`, 720 s for an owner-pressed `refocus` — see the
+  `recycle_grace` row in §4.4) → the SSE drop makes
   ¬online → the next tick's plain START respawns.
 - **The wake text is the document, not client copy**: the SERVER composes the
   sentence, folds the 下線程序 document into it and PUSHES both in the member delta

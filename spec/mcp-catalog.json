@@ -669,7 +669,7 @@
       "name": "deactivate_member"
     },
     {
-      "description": "Force-stop: robust STOP now, bypassing the graceful-stop grace.",
+      "description": "Force-stop: robust STOP now. On the offboard arm this is the ONLY thing that ever collects the member -- nothing times out.",
       "inputSchema": {
         "properties": {
           "member_id": {

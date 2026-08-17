@@ -768,7 +768,12 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 }
 
 // POST /api/members/{member_id}/deactivate — desired_state=offline + an
-// UNCONDITIONAL stopping_since re-stamp (each call restarts the grace clock).
+// UNCONDITIONAL stopping_since re-stamp (one exception, below).
+//
+// The re-stamp does NOT restart a countdown: since rc-27d1710174dd the 下線 arm
+// runs no clock at all. What the anchor dates is the close-out epoch — which
+// reconnect the SSE stop gate admits, and how long clearStaleStoppingOnOnline
+// treats the close-out as in flight.
 func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w http.ResponseWriter, r *http.Request, memberId string) {
 	m, err := s.resolveMember(memberId)
 	if err != nil {
@@ -784,8 +789,9 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 	// only when !Online). So for the whole waking window the cadence dispatched
 	// NOTHING: the process the earlier START already put on the machine booted
 	// anyway, connected, went green, and only then — as a now-online member with
-	// desired_state=offline — did decideDown arm its 120s grace. The owner's
-	// 取消 read as "the button did nothing", which is exactly what it did.
+	// desired_state=offline — did decideDown even look at it (at the time that
+	// armed a 120s grace; today that arm runs no clock at all). Either way the
+	// owner's 取消 read as "the button did nothing", which is exactly what it did.
 	//
 	// There is also nothing to wind down: a member that has not connected has
 	// taken no work, so the grace window it cannot enter would buy nothing.
@@ -822,14 +828,16 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 	}
 	if cancellingWake {
 		// The same immediate robust STOP force-stop uses. NOT widened to the
-		// online case: a live member's stop keeps its graceful grace.
+		// online case: a live member gets the no-countdown soft window instead,
+		// and it is collected only by its own report_stopped or the owner's
+		// force-stop — never from here.
 		s.dispatchRobustStopNow(m.ID)
 	}
-	// Event-driven reconcile: arm the 120s grace clock immediately (a graceful
-	// stop dispatches NOTHING inside the grace; the eventual robust stop stays
-	// the cadence's job). Still armed after a cancel — the raw dispatch above
-	// does not touch the reconcile store, and the cadence STOP arm is its
-	// idempotent backstop.
+	// Event-driven reconcile: move the member into `stopping` immediately rather
+	// than on the next tick. It arms NO clock — decideDown's online arm returns
+	// decisionNone for the whole soft window, so nothing here will ever collect
+	// the member; that is the owner's ruling, not a gap. Still run after a cancel
+	// — the raw dispatch above does not touch the reconcile store.
 	s.reconcileMemberNow(m.ID)
 	s.writeMemberDTO(w, *m)
 }

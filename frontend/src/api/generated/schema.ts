@@ -1685,24 +1685,33 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Force-stop: robust STOP now, bypassing the graceful-stop grace.
-         * @description Force-stop a member: IMMEDIATELY kill the live session, bypassing BOTH the
-         *     120s graceful-stop grace clock AND the ~30s reconcile cadence.
+         * Force-stop: robust STOP now. On the offboard arm this is the ONLY thing that ever collects the member -- nothing times out.
+         * @description Force-stop a member: IMMEDIATELY kill the live session.
          *
-         *     This is the escalation the cockpit surfaces once a member is already *stopping*
-         *     (inside its graceful-stop grace): instead of waiting for the agent to self-stop
-         *     (up to 120s) or for the reconcile tick to eventually dispatch the robust stop,
-         *     the owner force-kills now. The handler writes the STOP intent
-         *     (``desired_state=offline``
+         *     🔴 This is NOT a shortcut past a countdown — there is no countdown to shortcut.
+         *     On the 下線 arm (``desired_state=offline`` on a still-online member) the reconcile
+         *     machine runs NO clock at all: ``decideDown`` returns decisionNone for as long as
+         *     the member stays online, so a member whose agent never reports stopped is NEVER
+         *     collected by the server. Owner ruling rc-27d1710174dd
+         *     (「不要兜底：只有你按強制下線才收它」) — the escalation is deliberately his, not
+         *     a timer's, because the notice the agent was shown promises no deadline.
+         *
+         *     So there are exactly two things that end a soft offboard: the agent's own
+         *     ``report_stopped`` (that call dispatches the robust STOP itself), or THIS endpoint.
+         *     If neither happens the member stays in *stopping* indefinitely, which is the state
+         *     the cockpit surfaces this button in.
+         *
+         *     ``stop_deadline`` / ``stop_grace`` still exist in the reconcile store and config,
+         *     but the arm that consumes them is guarded by ``SoftOffboardGrace == 0`` and
+         *     ``SoftOffboardGraceSecs`` is a compile-time 600 s — unreachable in production,
+         *     injectable in tests. Do not implement against them.
+         *
+         *     The handler writes the STOP intent (``desired_state=offline``
          *     + stamps ``stopping_since`` if unset, so presence reads coherently) and then
          *     dispatches the SINGLE robust STOP straight to the member's warden via
          *     :func:`_dispatch_robust_stop_now` — the warden's ``stop()`` → ``escalateKill``
          *     ladder performs the SIGKILL (tmux kill-session → force killpg the process group).
-         *
-         *     The grace clock lives in the reconcile machine's desired_state=offline arm (it waits
-         *     ``stop_grace`` before emitting the robust stop); dispatching the stop directly
-         *     here skips that wait entirely. The reconcile tick remains the idempotent backstop
-         *     — a robust stop against an already-dead session is a no-op.
+         *     It also bypasses the ~30s reconcile cadence, which is the only wait it does skip.
          *
          *     RBAC (control-others): route-table ``requires="admin_agent"`` — only an
          *     owner-scoped token OR an admin-role (assistant) member may force-stop a
