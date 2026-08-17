@@ -47,8 +47,8 @@ sequenceDiagram
 
     alt agent 自己收完
         agent->>srv: 「我收完了」——這才是扳機
-    else agent 不再回話
-        owner->>srv: 強制下線（同一道命令，只是不等）
+    else agent 不再回話——沒有計時器會替你收
+        owner->>srv: owner 自己按強制下線（同一道命令，只是不等）
     end
 
     Note over srv: 先寫 durable 狀態、先廣播 delta，然後才推殺
