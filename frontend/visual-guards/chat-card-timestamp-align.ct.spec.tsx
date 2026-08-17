@@ -18,11 +18,11 @@
 // M2 changes the card row/content widths from `100%` to `max-content`; the gap
 // stays green at `6px`, while the new guard turns red (`418.96875px` received,
 // `772.0625px` required). Thus the new guard's unique coverage is M2, not M1.
-// The ≤720px width overrides are redundant with the base `width: 100%`; the
-// measured #219 removal mutant left both phone assertions green. Keep the
-// phone `flex-wrap: wrap` behavior. The container overflow assertion measures
-// `.chat__messages` itself, not the document surface hidden by its
-// `overflow-x` clamp.
+// The ≤720px width overrides duplicate the base `width: 100%`, so removing
+// them is a no-op on this base; the wide and phone CT cases both pass (2
+// passed). Keep the phone `flex-wrap: wrap` behavior. The container overflow
+// assertion measures `.chat__messages` itself, not the document surface hidden
+// by its `overflow-x` clamp.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { ChatCardTimestampStory } from "./stories/ChatCardTimestampStory";
 
