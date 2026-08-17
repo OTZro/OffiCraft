@@ -199,23 +199,38 @@ func TestCustomThemeListOrderComesFromOrderIdxNotRowid(t *testing.T) {
 // skip, so it needs this answer.
 func TestCustomThemeWriteRefusesAMismatchedPairBeforeTheTableDoes(t *testing.T) {
 	d := newTestDAL(t)
+	// 🔴 EACH CASE NAMES THE ERROR IT EXPECTS, not merely "some named error".
+	// Answering a blank id with the MISMATCH error sends the caller to look at
+	// the wrong field — the same defect the table had while its three facts
+	// shared one anonymous CHECK, one layer up. An earlier version of this test
+	// asserted only ErrCustomThemeIDMismatch and froze that defect in place.
 	for _, tc := range []struct {
 		name, id, bundle string
+		want             error
 	}{
-		{"bundle's id is a different theme", "blue", `{"id":"red"}`},
-		{"bundle is not JSON", "blue", `not json at all`},
-		{"bundle has no id", "blue", `{"name":"nameless"}`},
-		{"empty key", "", `{"id":""}`},
-		{"duplicate id key — Go reads b, SQLite reads a", "b", `{"id":"a","id":"b"}`},
-		{"lone surrogate — Go substitutes U+FFFD, SQLite keeps the bytes", "a�b", `{"id":"a\ud800b"}`},
+		{"bundle's id is a different theme", "blue", `{"id":"red"}`, ErrCustomThemeIDMismatch},
+		{"bundle is not JSON", "blue", `not json at all`, ErrCustomThemeBundleNotJSON},
+		{"bundle has no id", "blue", `{"name":"nameless"}`, ErrCustomThemeIDMismatch},
+		{"empty key", "", `{"id":""}`, ErrCustomThemeIDBlank},
+		{"duplicate id key — Go reads b, SQLite reads a", "b", `{"id":"a","id":"b"}`, ErrCustomThemeIDMismatch},
+		{"lone surrogate — Go substitutes U+FFFD, SQLite keeps the bytes", "a�b", `{"id":"a\ud800b"}`, ErrCustomThemeIDMismatch},
+		// The numeric shapes below are the ones that USED TO PASS this check and
+		// then be refused by the table — a 500 where a 400 belongs. They are not
+		// reachable through the wire (the DTO's id is a string), which is why
+		// they were invisible; they are here because the check's own description
+		// claims it answers what the constraint would answer, and until the
+		// comparison moved into SQLite that claim was false for exactly these.
+		{"id is a float that Go and SQLite render differently", "1", `{"id":1.0}`, ErrCustomThemeIDMismatch},
+		{"id is an exponent", "1e+100", `{"id":1e100}`, ErrCustomThemeIDMismatch},
+		{"id is negative zero", "-0", `{"id":-0.0}`, ErrCustomThemeIDMismatch},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := d.PutCustomTheme(tc.id, tc.bundle)
 			if err == nil {
 				t.Fatal("accepted a pair whose key and bundle id disagree")
 			}
-			if !errors.Is(err, ErrCustomThemeIDMismatch) {
-				t.Fatalf("refused, but not with the named error a handler can turn into a 400 — it will have to guess.\n got: %v", err)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("refused, but with the wrong named error — the handler will point the caller at the wrong field.\n want: %v\n  got: %v", tc.want, err)
 			}
 			// And nothing was written: a refusal that half-lands is worse than
 			// one that does not refuse at all.
@@ -228,6 +243,25 @@ func TestCustomThemeWriteRefusesAMismatchedPairBeforeTheTableDoes(t *testing.T) 
 	// case above.
 	if err := d.PutCustomTheme("green", `{"id":"green","name":"G"}`); err != nil {
 		t.Fatalf("a legitimate pair was refused: %v", err)
+	}
+
+	// 🔴 THE PARITY DIRECTION THE CASES ABOVE CANNOT TEST. Every case above
+	// asserts a REFUSAL, and a check that is too STRICT refuses too — so they
+	// cannot tell "agrees with the table" from "stricter than the table", and
+	// being stricter is its own failure: a write the database would have taken,
+	// turned away by the layer in front of it.
+	//
+	// This pair is the separator, measured rather than assumed: the table
+	// ACCEPTS it, because a TEXT column's affinity converts the extracted
+	// integer 42 to "42" before comparing. Without the CAST that reproduces that
+	// conversion, the pre-check compares INTEGER 42 against TEXT "42", calls it
+	// a mismatch, and refuses a row the table was happy to store. (Removing the
+	// CAST reddens nothing among the refusal cases — verified.)
+	if err := d.PutCustomTheme("42", `{"id":42}`); err != nil {
+		t.Fatalf("the pre-check is STRICTER than the constraint it stands in front of: the table accepts this pair, the check refused it (%v)", err)
+	}
+	if got, err := d.GetCustomTheme("42"); err != nil || got == nil {
+		t.Fatalf("the write reported success but stored nothing (err=%v)", err)
 	}
 }
 

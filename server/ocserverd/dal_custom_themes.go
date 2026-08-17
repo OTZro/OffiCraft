@@ -145,11 +145,23 @@ func (d *DAL) PutCustomTheme(id, bundle string) error {
 	return err
 }
 
-// ErrCustomThemeIDMismatch is what a caller gets when the key it asked to file a
-// bundle under is not the id inside that bundle. It is a NAMED error because the
-// handler above this layer has to turn it into a 400 that says what is wrong —
-// `errors.Is` against this, never a string match on a database message.
-var ErrCustomThemeIDMismatch = errors.New("custom theme: the bundle's own id does not match the id it is being filed under")
+// The three refusals this layer can produce, mirroring the table's three named
+// constraints one for one. They are NAMED errors because the handler above has
+// to turn each into a 400 that says what is wrong — `errors.Is` against these,
+// never a string match on a database message, whose wording nobody has promised
+// to keep stable.
+//
+// ⚠️ THREE, NOT ONE, FOR THE SAME REASON THE TABLE HAS THREE NAMED CONSTRAINTS
+// RATHER THAN ONE ANONYMOUS CHECK: a caller told "the id does not match" when
+// the real problem is a blank id, or a bundle that is not JSON at all, goes and
+// looks at the wrong field. An earlier version of this file answered all three
+// with the mismatch error and its test froze that in place — the same defect the
+// table had, one layer up.
+var (
+	ErrCustomThemeIDBlank       = errors.New("custom theme: the id is blank")
+	ErrCustomThemeBundleNotJSON = errors.New("custom theme: the bundle is not valid JSON")
+	ErrCustomThemeIDMismatch    = errors.New("custom theme: the bundle's own id does not match the id it is being filed under")
+)
 
 // checkCustomThemeIDMatchesBundle asks THE DATABASE what the bundle's id is, and
 // refuses the write when that disagrees with the key.
@@ -172,25 +184,52 @@ var ErrCustomThemeIDMismatch = errors.New("custom theme: the bundle's own id doe
 // will reject. Migration 00059 hit exactly this and skips such elements; the
 // endpoints cannot skip, so they need an answer, and this is it.
 //
-// It asks SQLite rather than re-deriving in Go on purpose: the question is not
-// "what does this bundle say" but "will the constraint agree", and only the same
-// reader the constraint uses can answer that.
+// 🔴 THE COMPARISON HAPPENS IN SQLITE TOO, NOT ONLY THE EXTRACTION, and that
+// distinction is the whole point rather than a detail. An earlier version pulled
+// the extracted id into Go and compared strings there — which reads like "asking
+// SQLite" but is not: the VALUE came from SQLite and the JUDGEMENT stayed in Go,
+// so the two could still disagree. Measured, five inputs passed that check and
+// were then refused by the constraint — exactly the 500 this function exists to
+// prevent, e.g. `{"id":1.0}` (Go renders the extracted number "1", SQLite's
+// affinity conversion renders it "1.0"), `{"id":1e100}`, `{"id":-0.0}`,
+// `{"id":3.0e2}`. The CAST to TEXT reproduces the affinity conversion the column
+// applies, and with it all eight probed inputs agree with what the table
+// actually accepts.
+//
+// (None of those shapes is reachable through the wire today — ThemeBundleDTO.Id
+// is a string, so a numeric id fails DTO decoding first. This is about the
+// function being true to its own description, and about the next caller, who
+// may not come through that DTO.)
 func (d *DAL) checkCustomThemeIDMatchesBundle(id, bundle string) error {
 	if id == "" {
-		return fmt.Errorf("%w: the id is empty", ErrCustomThemeIDMismatch)
+		return ErrCustomThemeIDBlank
 	}
-	var dbID sql.NullString
-	if err := d.rdb.QueryRow(`SELECT json_extract(?, '$.id')`, bundle).Scan(&dbID); err != nil {
-		// json_extract refuses malformed JSON outright, so this branch is also
-		// the "bundle is not JSON" answer — same 400, and naming it here beats a
-		// constraint violation surfacing from the driver.
-		return fmt.Errorf("%w: the bundle is not readable JSON", ErrCustomThemeIDMismatch)
+	// json_valid FIRST, and separately: json_extract raises a hard error on
+	// malformed JSON, so folding the two together would leave "the bundle is not
+	// JSON" (a 400) indistinguishable from "the read pool is gone" (not a 400).
+	var valid bool
+	if err := d.rdb.QueryRow(`SELECT json_valid(?)`, bundle).Scan(&valid); err != nil {
+		return fmt.Errorf("custom theme: checking the bundle: %w", err)
 	}
-	if !dbID.Valid {
+	if !valid {
+		return ErrCustomThemeBundleNotJSON
+	}
+	var matches, missing bool
+	var extracted sql.NullString
+	if err := d.rdb.QueryRow(
+		`SELECT CAST(json_extract(?, '$.id') AS TEXT) IS ?,
+		        json_extract(?, '$.id') IS NULL,
+		        json_extract(?, '$.id')`,
+		bundle, id, bundle, bundle).Scan(&matches, &missing, &extracted); err != nil {
+		return fmt.Errorf("custom theme: checking the bundle id: %w", err)
+	}
+	if missing {
 		return fmt.Errorf("%w: the bundle carries no id", ErrCustomThemeIDMismatch)
 	}
-	if dbID.String != id {
-		return fmt.Errorf("%w: bundle says %q, filed under %q", ErrCustomThemeIDMismatch, dbID.String, id)
+	if !matches {
+		// `extracted` is used ONLY to say what was found. The judgement above is
+		// SQLite's; this is the sentence a human reads.
+		return fmt.Errorf("%w: bundle says %q, filed under %q", ErrCustomThemeIDMismatch, extracted.String, id)
 	}
 	return nil
 }
