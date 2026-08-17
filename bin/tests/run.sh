@@ -338,27 +338,19 @@ else
 fi
 
 
-# ── single-source rule defer markers (T-c19c) ───────────────────────────────
-# The "兩份權威打架" rule (stop and open a reply card when two authorities
-# contradict each other) has ONE body, in seeds/system_interaction.md §4.1, and
-# three sites that defer to it (CLAUDE.md §8, §9(d), docs/guide/best-practices.md).
-# Before T-c19c CLAUDE.md carried its own full copy of the instruction — two
-# copies of the same rule, free to drift apart until every reader obeyed whichever
-# one they opened. Each deferring site now pins the seed block's content hash, so
-# editing the rule turns all of them red at once, and CLAUDE.md /
-# docs/guide/best-practices.md are each required BY PATH to carry a current
-# marker — a count alone was paddable (three markers in a junk file passed) and
-# its minimum was a knob (MIN_DEFER_SITES=0 asserted the empty set). A green here
-# does NOT prove there is no unregistered fourth copy, and a red does NOT prove
-# the rule's meaning changed — see the guard's header for the honest boundary
-# before treating it as either.
+# ── single-source rule review digest (T-c19c) ────────────────────────────────
+# The "兩份權威打架" rule has one operational paragraph in
+# seeds/system_interaction.md §2.2. The guard records its last-reviewed digest
+# outside agent-facing documents; changing that paragraph turns CI red and
+# forces a human to re-read the owner-facing restatement before updating the
+# digest. It is a re-read reminder, not a semantic-fidelity proof.
 RULEDEFER="$HERE/rule-defer-guard.sh"
 echo
 if [[ -f "$RULEDEFER" ]]; then
   if run_guard "$RULEDEFER"; then
-    ok "single-source rule defer-marker suite passed"
+    ok "single-source rule review-digest suite passed"
   else
-    bad "single-source rule defer-marker suite FAILED (see output above)"
+    bad "single-source rule review-digest suite FAILED (see output above)"
   fi
 else
   bad "bin/tests/rule-defer-guard.sh is missing"
