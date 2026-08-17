@@ -332,7 +332,6 @@ func (s *apiServer) notifyCreatorOnHandback(t Task, trigger string) {
 	s.postTaskChat(t, wireSystemSender, t.CreatorID, body, trigger)
 }
 
-
 // ── half B: dependency becomes a real handover ───────────────────────────────
 
 // releaseDependentsOnClose runs at the tail of closeTask. Until T-74f8 a dep
