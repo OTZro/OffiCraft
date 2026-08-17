@@ -107,10 +107,20 @@ func t83efFixture() []ThemeBundleDTO {
 // for EVERY row left every assertion in this file green. SQLite answers
 // `ORDER BY order_idx` on an all-equal column in rowid order, which is insertion
 // order, which is the very order the migration inserted them in. So the column
-// can be complete garbage and the list still comes back correct — until someone
-// deletes and re-inserts a theme through the new write path, at which point the
-// owner's list silently reshuffles. Only asserting the VALUES separates "the
-// order was carried" from "the order happened to fall out".
+// can be complete garbage and the list still comes back correct. Only asserting
+// the VALUES separates "the position was recorded" from "the position happened
+// to fall out of the insert order".
+//
+// ⚠️ AND DO NOT DRESS THAT UP AS A USER-VISIBLE BUG, because the obvious story
+// is false. An earlier version of this comment said the owner's list would
+// silently reshuffle once a theme was deleted and re-added; an independent
+// review disproved it and the measurement was repeated here (2026-08-17):
+// order_idx and rowid move together under every write path that exists today
+// (append, delete-then-re-add of a middle row, of the highest row, edit through
+// the upsert's conflict path, and after VACUUM), so the two orderings cannot
+// currently diverge at all. What this assertion protects is the MIGRATION's own
+// contract — the array position is a fact this code knows and must write down —
+// not a bug anyone can reproduce in the product today.
 func t83efReadRows(t *testing.T, db *sql.DB) (ids []string, bundles []string, idxs []int) {
 	t.Helper()
 	rows, err := db.Query(`SELECT theme_id, bundle, order_idx FROM custom_theme ORDER BY order_idx`)
@@ -321,6 +331,168 @@ func TestMigration00059CopiesBytesRatherThanRoundTrippingThroughTheDTO(t *testin
 	if string(reassembled) != original {
 		t.Fatalf("an unknown field did not survive the move — the migration is decoding instead of copying.\n stored: %s\n rejoined: %s",
 			original, reassembled)
+	}
+}
+
+// TestMigration00059SkipsUnkeyableElementsInsteadOfBrickingTheUpgrade pins the
+// distinction the first draft of this migration got wrong.
+//
+// An element with no id, a blank id, a duplicate id, or one that is not an
+// object at all PARSES — `loadAuthSettings` unmarshals the row into
+// []ThemeBundleDTO and is perfectly happy with every one of them. So an install
+// carrying such an element STARTS TODAY. Failing the migration on it would mean
+// the station does not come up after an upgrade, caused by data the product
+// refuses to write but has never refused to hold. The element is skipped and
+// stays in the legacy row, which is still there.
+//
+// 🔴 THIS IS ALSO WHY THE RETIREMENT PRECONDITION EXISTS. A skip is only safe
+// while the legacy row holds what was skipped, so this test asserts BOTH halves:
+// the good themes moved, AND the legacy row is untouched.
+func TestMigration00059SkipsUnkeyableElementsInsteadOfBrickingTheUpgrade(t *testing.T) {
+	db, err := openSQLite(filepath.Join(t.TempDir(), "t83ef-skip.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	t83efUpTo58(t, db)
+
+	// good, no id, blank id, duplicate of the first, not an object, good.
+	const original = `[{"id":"good-one","name":"A"},` +
+		`{"name":"no id at all"},` +
+		`{"id":"","name":"blank id"},` +
+		`{"id":"good-one","name":"duplicate"},` +
+		`12345,` +
+		`{"id":"good-two","name":"B"}]`
+	if _, err := db.Exec(
+		`INSERT INTO setting (key, value, updated_at) VALUES ('display.custom_themes', ?, 1)`,
+		original); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// The whole point: this SUCCEEDS.
+	t83efUpTo59(t, db)
+
+	ids, _, idxs := t83efReadRows(t, db)
+	want := []string{"good-one", "good-two"}
+	if len(ids) != len(want) {
+		t.Fatalf("migrated %v, want %v", ids, want)
+	}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Fatalf("position %d is %q, want %q", i, ids[i], want[i])
+		}
+	}
+	// The positions are the ORIGINAL array indexes, not 0 and 1: a skip must not
+	// renumber what survived, or the surviving themes quietly change places.
+	if idxs[0] != 0 || idxs[1] != 5 {
+		t.Fatalf("order_idx after skips is %v, want [0 5] — the original array positions", idxs)
+	}
+	got, present := t83efLegacyValue(t, db)
+	if !present || got != original {
+		t.Fatalf("what was skipped must still be in the legacy row (present=%v, unchanged=%v)",
+			present, got == original)
+	}
+}
+
+// TestMigration00059TableRefusesAnIdThatDisagreesWithItsBundle pins the CHECK
+// constraint, which is the only thing making the id ONE fact rather than two.
+// The migration itself cannot violate it (it derives the key from the bundle),
+// so this drives the constraint directly — the way every write after this
+// migration will meet it.
+func TestMigration00059TableRefusesAnIdThatDisagreesWithItsBundle(t *testing.T) {
+	db, err := openSQLite(filepath.Join(t.TempDir(), "t83ef-check.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	t83efUpTo58(t, db)
+	t83efUpTo59(t, db)
+
+	// 🔴 EACH CASE USES ITS OWN theme_id, and that is not tidiness. With a shared
+	// id they share a primary key: remove the CHECK and the first case's row
+	// lands, after which the second case is refused for being a DUPLICATE and
+	// reports PASS while proving nothing. Measured — the mutant that drops the
+	// constraint reddened two of these three, and the third stayed green for
+	// exactly that reason.
+	for _, tc := range []struct {
+		name, id, bundle string
+	}{
+		{"key disagrees with the bundle's own id", "blue", `{"id":"red"}`},
+		{"bundle is not JSON", "green", `not json at all`},
+		{"empty key", "", `{"id":""}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := db.Exec(
+				`INSERT INTO custom_theme (theme_id, bundle, order_idx) VALUES (?, ?, 0)`,
+				tc.id, tc.bundle)
+			if err == nil {
+				t.Fatalf("accepted %s — the id would then disagree with the id it is filed under, which is how \"delete theme X\" deletes something else",
+					tc.name)
+			}
+		})
+	}
+	// The control: a well-formed pair still goes in. Without this, a CHECK that
+	// refused everything would pass the three cases above.
+	if _, err := db.Exec(
+		`INSERT INTO custom_theme (theme_id, bundle, order_idx) VALUES ('blue', '{"id":"blue"}', 0)`); err != nil {
+		t.Fatalf("the constraint refuses a legitimate row: %v", err)
+	}
+}
+
+// TestMigration00059ByteForByteWindowClosesOnTheFirstWriteThroughTheDAL puts a
+// mechanical carrier under a TIME CONSTRAINT that was, until this test, only
+// prose in two file headers.
+//
+// The byte-for-byte guarantee is about what the MIGRATION wrote. It says nothing
+// about the table five minutes later, because the first per-theme write replaces
+// that theme's bytes with whatever the caller marshalled — correctly, and by
+// design. The consequence is operational and easy to get wrong: the comparison
+// that authorises retiring `display.custom_themes` has to be run BEFORE the
+// endpoints start writing. Afterwards it will differ, and differing will mean
+// nothing.
+//
+// So this test asserts both halves in order: identical immediately after the
+// migration, and NOT identical after one ordinary write.
+func TestMigration00059ByteForByteWindowClosesOnTheFirstWriteThroughTheDAL(t *testing.T) {
+	db, err := openSQLite(filepath.Join(t.TempDir(), "t83ef-window.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	t83efUpTo58(t, db)
+	original := t83efSeedLegacyThemes(t, db, t83efFixture())
+	t83efUpTo59(t, db)
+
+	d := NewDAL(db)
+	rejoin := func() string {
+		list, err := d.ListCustomThemes()
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		raws := make([]json.RawMessage, len(list))
+		for i, ct := range list {
+			raws[i] = json.RawMessage(ct.Bundle)
+		}
+		b, err := json.Marshal(raws)
+		if err != nil {
+			t.Fatalf("reassemble: %v", err)
+		}
+		return string(b)
+	}
+
+	// Half one: what the DAL reads is what the migration wrote — the two layers
+	// agree, so the comparison can be run through either.
+	if got := rejoin(); got != original {
+		t.Fatalf("straight after the migration the DAL does not read back the stored bytes.\n stored: %s\n    got: %s",
+			original, got)
+	}
+
+	// Half two: one ordinary write and the window is shut.
+	if err := d.PutCustomTheme("paper", `{"id":"paper","name":"edited"}`); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if got := rejoin(); got == original {
+		t.Fatal("the reassembly still equals the legacy row after a theme was rewritten — then this comparison cannot tell 'nothing was lost in the move' from 'nothing has happened since', and using it to authorise retiring the legacy row would be unsound")
 	}
 }
 

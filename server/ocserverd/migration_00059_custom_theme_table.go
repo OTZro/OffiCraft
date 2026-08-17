@@ -45,19 +45,58 @@ package main
 // Retiring `display.custom_themes` is a SEPARATE decision on a later change,
 // once the new path has actually carried the owner's data.
 //
-// ORDER IS DATA. The cockpit's theme list is the array's order and there is no
-// reordering UI (ThemeSettings.tsx says so), so the index is not cosmetic: lose
-// it and the owner's list silently reshuffles on upgrade. `order_idx` carries
-// the element's position; it is what the reassembly sorts by.
+// 🔴 WHILE BOTH EXIST, THE LEGACY ROW IS THE TRUTH — and whoever writes the
+// per-theme endpoints has to know that before writing them. This migration is a
+// one-way copy: nothing keeps the two representations in step afterwards. So a
+// write that lands ONLY in `custom_theme` makes `GET /api/settings` and the new
+// table disagree, silently, with the settings face still serving the pre-upgrade
+// answer. Two ways out, and the choice belongs to the change that adds the
+// endpoints, not to this one: either that change retires the legacy row in the
+// same package (so there is only one truth), or its write path maintains BOTH
+// until it does. The same file carries the retirement precondition below.
 //
-// FAILURE POSTURE. A `display.custom_themes` value that is absent or empty
-// migrates zero rows and is not an error — that is what an install with no
-// saved themes looks like. A value that is present but is NOT a JSON array
-// FAILS the migration rather than being skipped, and that is deliberate: the
-// same bytes already hard-fail settings load at boot (loadSettings returns
-// "not a valid theme-bundle array"), so such an install cannot serve either
-// way. Skipping would turn "this install is broken" into "this install
-// upgraded fine and lost its themes", which is strictly worse and invisible.
+// 🔴 RETIREMENT PRECONDITION, because Up is deliberately lossy-tolerant (see the
+// failure posture): before any later change deletes `display.custom_themes`, it
+// MUST verify that `custom_theme` holds as many rows as the legacy array holds
+// elements. Up SKIPS elements it cannot key (below) rather than failing, which
+// is safe only for as long as the legacy row is still there to hold them.
+//
+// ORDER IS RECORDED, NOT DERIVED. `order_idx` carries each element's position in
+// the legacy array, and the reassembly sorts by it.
+//
+// ⚠️ BE ACCURATE ABOUT WHAT THAT BUYS TODAY, because the obvious justification is
+// false and was measured false: with the current write path, `ORDER BY order_idx`
+// and `ORDER BY rowid` CANNOT diverge. Both a new row's order_idx (MAX+1) and its
+// rowid (max+1) move the same way, so delete-then-re-add, editing through the
+// upsert's conflict path, and VACUUM all leave the two orderings identical
+// (measured on this tree, 2026-08-17, all four cases). The column is kept because
+// the list order is a FACT THIS MIGRATION KNOWS and rowid order is an accident
+// that currently happens to agree — and because inserting at a position, or an
+// import that reorders, needs a column that means position. Do NOT write that
+// dropping it would reshuffle the owner's list; today it would not.
+//
+// FAILURE POSTURE — and it distinguishes two cases that a first draft of this
+// migration wrongly treated alike:
+//
+//   - THE VALUE IS NOT A JSON ARRAY → the migration FAILS. This adds no new
+//     blast radius: such an install ALREADY cannot start. loadAuthSettings
+//     unmarshals this row into []ThemeBundleDTO and returns
+//     "not a valid theme-bundle array", and server.go answers that with
+//     `FATAL: load settings` and rc 1. It is dead either way, and failing loudly
+//     during migrate is the better of two deaths.
+//
+//   - AN ELEMENT CANNOT BE KEYED (no id, blank id, not an object, or an id
+//     another element already used) → that element is SKIPPED and the migration
+//     succeeds. 🔴 This is the case the first draft got wrong, and the review
+//     that caught it was right about why: those rows PARSE, so such an install
+//     BOOTS FINE TODAY. Failing the migration would turn "your themes are a bit
+//     odd" into "your station does not come up after the upgrade", which is a
+//     far worse outcome than the one being prevented — and it would be caused by
+//     data the product refuses to WRITE but has never refused to HOLD.
+//
+//     Skipping loses nothing WHILE THE LEGACY ROW IS STILL THERE, which is
+//     exactly why the retirement precondition above is not optional. Every skip
+//     is printed during migrate so an upgrade that dropped something says so.
 
 import (
 	"context"
@@ -82,12 +121,27 @@ func init() {
 // that. `updated_at` is 0 for migrated rows on purpose: nothing knows when the
 // owner last edited a theme that lived inside a shared settings value, and
 // stamping migrate time would invent a fact that reads like an edit.
+//
+// 🔴 THE CHECK IS THE ONLY THING THAT MAKES `theme_id` AND `bundle` ONE FACT
+// RATHER THAN TWO. The id is stored twice by construction — once as the key,
+// once inside the JSON — and nothing about the Go types stops a caller writing
+// `PutCustomTheme("blue", {"id":"red"})`. Measured before this constraint
+// existed: that write was accepted, so was a bundle that was not JSON at all,
+// and so was an empty theme_id. The rows this migration creates always satisfy
+// it (the key is DERIVED from the bundle's own id), so the constraint costs
+// nothing here; it exists for every write that comes after, and it is free to
+// add only while the table is empty. Losing it means the cockpit can be served a
+// theme whose id disagrees with the id it is filed under, which is precisely the
+// shape that makes "delete theme X" delete something else.
 const customThemeTableDDL = `
 CREATE TABLE custom_theme (
   theme_id   TEXT PRIMARY KEY,
   bundle     TEXT NOT NULL,
   order_idx  INTEGER NOT NULL,
-  updated_at REAL NOT NULL DEFAULT 0
+  updated_at REAL NOT NULL DEFAULT 0,
+  CHECK (theme_id <> ''
+         AND json_valid(bundle)
+         AND json_extract(bundle, '$.id') = theme_id)
 )`
 
 // legacyCustomThemesKey is the settings key the array has lived under. It is
@@ -123,27 +177,37 @@ func upCustomThemeTable(ctx context.Context, tx *sql.Tx) error {
 		idx    int
 	}
 	rows := make([]row, 0, len(elements))
+	seen := make(map[string]bool, len(elements))
 	for i, el := range elements {
 		// Only the id is decoded. Everything else stays as the bytes that were
 		// stored — see the byte-for-byte note at the top of this file.
 		var head struct {
 			ID string `json:"id"`
 		}
+		// Every `continue` below is a SKIP, not a failure, and the reason is the
+		// same in all three: an element shaped like this parses, so the install
+		// carrying it starts today. See the failure posture at the top.
 		if err := json.Unmarshal(el, &head); err != nil {
-			return fmt.Errorf("migration 00059: %s[%d] is not a JSON object: %w",
-				legacyCustomThemesKey, i, err)
+			skipCustomThemeElement(i, "not a JSON object")
+			continue
 		}
 		if head.ID == "" {
-			return fmt.Errorf("migration 00059: %s[%d] has no id",
-				legacyCustomThemesKey, i)
+			skipCustomThemeElement(i, "no usable id")
+			continue
 		}
+		if seen[head.ID] {
+			// The write path has always refused duplicates
+			// (validateThemeBundles), so this is corruption rather than a
+			// supported state — but the primary key would turn it into a failed
+			// migration, and a station that will not start is a worse answer than
+			// a theme left behind in the legacy row.
+			skipCustomThemeElement(i, "id "+head.ID+" already used by an earlier element")
+			continue
+		}
+		seen[head.ID] = true
 		rows = append(rows, row{id: head.ID, bundle: el, idx: i})
 	}
 	for _, r := range rows {
-		// A duplicate id violates the primary key and fails the migration. The
-		// write path has always refused duplicates (validateThemeBundles), so a
-		// row carrying two of the same id is corruption, not a supported state,
-		// and quietly collapsing them would lose one of the owner's themes.
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO custom_theme (theme_id, bundle, order_idx, updated_at) VALUES (?, ?, ?, 0)`,
 			r.id, string(r.bundle), r.idx); err != nil {
@@ -151,6 +215,16 @@ func upCustomThemeTable(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+// skipCustomThemeElement prints what was left behind. It is not decoration: a
+// skip is only safe because the legacy row still holds the element, and an
+// upgrade that quietly dropped something the owner can see in the cockpit would
+// be indistinguishable from one that moved everything. goose's own output goes
+// to stdout, so this lands in the same place as the `OK 00059_...` line.
+func skipCustomThemeElement(i int, why string) {
+	fmt.Printf("[migration 00059] SKIPPED %s[%d]: %s — it stays in the legacy row\n",
+		legacyCustomThemesKey, i, why)
 }
 
 // downCustomThemeTable drops the table, and that loses nothing the binary below

@@ -16,6 +16,22 @@ package main
 // given and never decodes it. Decoding belongs to the API layer, where the DTO
 // is the wire contract; doing it here would put a lossy round-trip underneath
 // the one guarantee the ticket rests on.
+//
+// 🔴 READ THIS BEFORE WRITING THE ENDPOINTS: WHILE `display.custom_themes` STILL
+// EXISTS, IT IS THE TRUTH AND THIS TABLE IS A COPY. Migration 00059 copies once
+// and nothing keeps the two in step afterwards, so a write that lands only here
+// makes `GET /api/settings` and this table disagree — silently, with the
+// settings face still serving the pre-upgrade answer. The change that adds the
+// per-theme endpoints has to pick one: retire the legacy row in that same
+// package, or write BOTH until it does. It cannot ignore the question, and the
+// migration's header carries the precondition for retiring (row count must match
+// the legacy array's length, because Up skips elements it cannot key).
+//
+// ⚠️ THE BYTE-FOR-BYTE GUARANTEE HAS A TIME WINDOW, and it closes here. It holds
+// for what the migration wrote; the first write through this layer replaces that
+// theme's bytes with whatever the caller marshalled. That is correct and
+// intended — but it means the comparison that authorises retiring the legacy row
+// has to be run BEFORE the endpoints start writing, not after.
 
 import (
 	"database/sql"
@@ -37,12 +53,24 @@ type CustomTheme struct {
 
 // ListCustomThemes returns every saved theme in the owner's list order.
 //
-// ⚠️ ORDER COMES FROM order_idx AND MUST KEEP DOING SO. There is no reordering
-// UI, so the list order IS the data, and it is tempting to believe insertion
-// order is enough — it is not, and that is measured rather than assumed: with
-// every order_idx equal, SQLite answers this query in rowid order, which looks
-// correct until a theme is deleted and re-added, at which point the owner's list
-// silently reshuffles. The migration test pins the stored values for that reason.
+// ⚠️ ORDER COMES FROM order_idx, AND THE HONEST STATE OF THAT IS: it is a
+// DELIBERATE CHOICE, not a bug fix. Measured on this tree (2026-08-17), the
+// column cannot currently disagree with rowid order at all — a new row takes
+// MAX(order_idx)+1 while SQLite gives it max(rowid)+1, so append,
+// delete-then-re-add (middle row and highest row alike), editing through the
+// upsert's conflict path, and VACUUM all leave `ORDER BY order_idx` and
+// `ORDER BY rowid` identical. An earlier version of this comment claimed a
+// delete-and-re-add would silently reshuffle the owner's list; an independent
+// review disproved it, and the claim is gone rather than softened.
+//
+// The column stays because the list order is a fact the MIGRATION knows and
+// writes down, while rowid order is an accident that currently agrees with it —
+// and because inserting at a position, or an import that reorders, needs a
+// column that means position. TestCustomThemeListOrderComesFromOrderIdxNotRowid
+// is what stops this query drifting to `ORDER BY rowid`: it seeds rows whose
+// stored positions deliberately contradict their insertion order, which is the
+// one state the product cannot reach on its own and the only one that tells the
+// two orderings apart.
 func (d *DAL) ListCustomThemes() ([]CustomTheme, error) {
 	rows, err := d.rdb.Query(
 		`SELECT theme_id, bundle, order_idx, updated_at FROM custom_theme ORDER BY order_idx`)

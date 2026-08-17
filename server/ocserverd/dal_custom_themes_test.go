@@ -136,6 +136,49 @@ func TestCustomThemeDeleteRemovesOneAndReportsWhetherItExisted(t *testing.T) {
 	}
 }
 
+// TestCustomThemeListOrderComesFromOrderIdxNotRowid is the ONLY thing standing
+// between `ORDER BY order_idx` and someone simplifying it to `ORDER BY rowid`.
+//
+// 🔴 IT HAS TO CHEAT TO SAY ANYTHING, and that is the finding, not a weakness of
+// the test. Through the product's own write path the two orderings cannot
+// disagree — order_idx is MAX+1 and rowid is max+1, so they move together
+// through every sequence of appends, deletes, re-adds and edits (measured; an
+// independent review demonstrated the equivalence, and swapping this query to
+// `ORDER BY rowid` left every other test in this file green). The only state
+// that separates them is one the product cannot reach on its own, so the rows
+// are seeded DIRECTLY with positions that contradict their insertion order.
+//
+// That is exactly the situation the column exists for: a future insert-at-
+// position or a reordering import produces this state legitimately, and the day
+// it does, this query has to already be reading the column rather than the
+// accident that agreed with it.
+func TestCustomThemeListOrderComesFromOrderIdxNotRowid(t *testing.T) {
+	d := newTestDAL(t)
+	// Inserted last-to-first by position: rowid order is the REVERSE of the
+	// order these rows claim to be in.
+	for _, seed := range []struct {
+		id  string
+		idx int
+	}{{"third", 2}, {"second", 1}, {"first", 0}} {
+		if _, err := d.wdb.Exec(
+			`INSERT INTO custom_theme (theme_id, bundle, order_idx, updated_at) VALUES (?, ?, ?, 0)`,
+			seed.id, `{"id":"`+seed.id+`"}`, seed.idx); err != nil {
+			t.Fatalf("seed %s: %v", seed.id, err)
+		}
+	}
+	got := t83efList(t, d)
+	want := []string{"first", "second", "third"}
+	if len(got) != len(want) {
+		t.Fatalf("list holds %d themes, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].ID != want[i] {
+			t.Fatalf("position %d is %q, want %q — the list is being read in insertion order, not stored order",
+				i, got[i].ID, want[i])
+		}
+	}
+}
+
 func TestCustomThemeGetAndCountOnAnEmptyTable(t *testing.T) {
 	d := newTestDAL(t)
 	got, err := d.GetCustomTheme("nobody")
