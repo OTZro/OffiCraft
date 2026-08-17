@@ -36,10 +36,17 @@ import (
 // the status plus the decoded JSON body.
 func patchStepNote(t *testing.T, api *apiServer, taskID, stepID, caller string, body any) (int, map[string]any) {
 	t.Helper()
+	return patchStepNoteAs(t, api, taskID, stepID, caller, "agent", body)
+}
+
+// patchStepNoteAs is patchStepNote with the caller's SCOPE spelled out, for the
+// admin-capability path (the executor half of the gate needs no scope).
+func patchStepNoteAs(t *testing.T, api *apiServer, taskID, stepID, sub, scope string, body any) (int, map[string]any) {
+	t.Helper()
 	rec := httptest.NewRecorder()
 	api.HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPost(rec,
 		taskReq(t, "POST", "/api/tasks/"+taskID+"/steps/"+stepID+"/note/patch",
-			body, caller, "agent"),
+			body, sub, scope),
 		taskID, stepID)
 	var data map[string]any
 	if rec.Body.Len() > 0 {
@@ -370,9 +377,16 @@ func TestUpdateStepNoteStillReplacesWholesale(t *testing.T) {
 // JSON body.
 func patchSop(t *testing.T, api *apiServer, typeKey string, body any) (int, map[string]any) {
 	t.Helper()
+	return patchSopAs(t, api, typeKey, "m-exec", "agent", body)
+}
+
+// patchSopAs is patchSop with the caller spelled out, for the callers ABOVE the
+// route's agent floor.
+func patchSopAs(t *testing.T, api *apiServer, typeKey, sub, scope string, body any) (int, map[string]any) {
+	t.Helper()
 	rec := httptest.NewRecorder()
 	api.HandlePatchTaskSopApiTaskManualsTypeKeySopPatchPost(rec, taskReq(t, "POST",
-		"/api/task-manuals/"+typeKey+"/sop/patch", body, "m-exec", "agent"), typeKey)
+		"/api/task-manuals/"+typeKey+"/sop/patch", body, sub, scope), typeKey)
 	var data map[string]any
 	if rec.Body.Len() > 0 {
 		_ = json.Unmarshal(rec.Body.Bytes(), &data)
@@ -723,6 +737,38 @@ func TestPatchTaskSopRetainsAVersion(t *testing.T) {
 	hydrated := hydrateHistory(t, api, "task_manual_sop", key, "m-exec", "agent", rows)
 	if got := hydrated[0].Content["sop_md"]; got != seeded {
 		t.Fatalf("the retained version must be the PRE-patch sop verbatim, got %q", got)
+	}
+}
+
+// TestPatchTaskSopAcceptsCallersAboveTheAgentFloor: manual CONTENT is
+// agent-editable, so the route's floor is principalAgent and the handler adds no
+// caller gate of its own. Nothing pinned that: an admin-capable caller had no
+// coverage on this face at all, and an executor-style check quietly copied in
+// from the step-note twin would refuse every owner and admin edit without any
+// test noticing. Asserted on both faces onto sop_md, so they cannot diverge.
+func TestPatchTaskSopAcceptsCallersAboveTheAgentFloor(t *testing.T) {
+	api := newTasksTestServer(t)
+	key := seedManualWithSop(t, api, "## 步驟\n1. 收單\n2. 出貨\n")
+
+	status, data := patchSopAs(t, api, key, wireOwnerID, "owner", map[string]any{
+		"edits": []any{edit("2. 出貨", "2. 出貨（owner 改的）")},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("owner patch: %d %v, want 200", status, data)
+	}
+	if got := storedSop(t, api, key); got != "## 步驟\n1. 收單\n2. 出貨（owner 改的）\n" {
+		t.Fatalf("sop after owner patch = %q, want the splice to have landed", got)
+	}
+
+	rec := httptest.NewRecorder()
+	api.HandleUpdateTaskManualApiTaskManualsTypeKeyPost(rec, taskReq(t, "POST",
+		"/api/task-manuals/"+key, map[string]any{"sop_md": "## 整份換掉\n"},
+		wireOwnerID, "owner"), key)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("owner wholesale write: %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	if got := storedSop(t, api, key); got != "## 整份換掉\n" {
+		t.Fatalf("sop after owner wholesale write = %q", got)
 	}
 }
 

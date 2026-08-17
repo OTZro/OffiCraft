@@ -635,11 +635,25 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 // stale copy is typically the LONGER of the two (it was written by a session
 // that had the whole SOP in context and re-typed all of it) — so the write does
 // not even look like a deletion. The result is a silent loss with zero signal.
-// The unique anchor is an optimistic lock against exactly that: a concurrent
-// write that moved or duplicated the anchor turns this batch into a visible
-// 400. Making the write cost scale with the CHANGE is the secondary benefit.
-// (It still does not solve concurrent edits to DIFFERENT anchors — that needs a
-// version/etag lock, tracked separately.)
+// The anchor closes that shape by construction rather than by locking: the
+// caller sends only {old, new} and never a base copy, so "overwrite the whole
+// doc from a base I read earlier" is not expressible on this wire at all, and
+// the splice is matched against sop_md as it stands when this request reads it.
+// A concurrent write that moved or duplicated the anchor turns this batch into
+// a visible 400. Making the write cost scale with the CHANGE is the secondary
+// benefit.
+//
+// WHAT IS STILL OPEN is NOT concurrent edits to DIFFERENT anchors — those are
+// the case this face handles best, each spliced onto whatever the doc says at
+// its own read, both surviving. It is the read-then-write gap INSIDE one
+// request: the read above goes to the read pool, the write below to the write
+// pool, with no transaction spanning the two, no version compare, and an UPDATE
+// that carries no old value. Two patch requests interleaving in the server
+// (A reads → B reads → A writes → B writes) still lose A's edit silently. That
+// window is milliseconds — orders of magnitude narrower than the session-length
+// window this face was built for — but it exists; closing it needs the read and
+// the write under one transaction, or a version/etag compare at the write
+// boundary. Tracked separately.
 //
 // Semantics: edits apply IN ORDER; a non-empty old must match exactly once
 // (0/>1 → flat 400 naming the failing edit index and get_task_manual as the
