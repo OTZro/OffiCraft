@@ -544,6 +544,17 @@ func TestMigration00059TableRefusesAnIdThatDisagreesWithItsBundle(t *testing.T) 
 		name, id, bundle, wantConstraint string
 	}{
 		{"key disagrees with the bundle's own id", "blue", `{"id":"red"}`, "custom_theme_id_matches_bundle"},
+		// ⚠️ THE ONE CASE THAT CANNOT BE ISOLATED, said out loud rather than
+		// dressed up. Every other row here breaks exactly one constraint, which
+		// is what makes "the message names the right fact" a claim about
+		// SEMANTICS. This row cannot: a bundle that is not JSON necessarily
+		// breaks custom_theme_bundle_is_json AND custom_theme_id_matches_bundle,
+		// because the second one has to call json_extract to have an opinion at
+		// all. So what this row pins is SQLite's REPORTING ORDER for this input —
+		// which is real behaviour worth pinning (an operator reading the log
+		// should be told the more fundamental fact first), but it is narrower
+		// than the rows around it. Do not read it as proof that only one
+		// constraint was violated.
 		{"bundle is not JSON", "green", `not json at all`, "custom_theme_bundle_is_json"},
 		{"empty key", "", `{"id":""}`, "custom_theme_id_not_blank"},
 		{"bundle has no id at all", "blue", `{"name":"not blue at all"}`, "custom_theme_id_matches_bundle"},
