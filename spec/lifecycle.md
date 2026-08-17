@@ -324,22 +324,35 @@ decides that time is up.
 - online → the member is `stopping` and the producer dispatches **NOTHING**, indefinitely.
   The agent has been handed the offboard sequence and is working it; a clock here would
   cut off a session that was told there is no countdown.
-- Collection has exactly **two** sources, neither of them a timer:
+- Collection **on this online arm** has two sources, neither of them a timer:
   1. **the agent's own `report_stopped`** — that call itself dispatches the SINGLE robust
      **STOP**, event-driven, not on the next tick; and
   2. **the owner pressing 強制下線** — the SAME command, it only skips the waiting.
+  (A member still `waking` is a different case and is NOT covered by this arm: deactivating
+  a wake that has been dispatched but never connected force-stops it outright — nobody is
+  inside being told anything. See §4.2 and `docs/design/offboard-flow.md` §三.)
 - There is no separate force-kill RPC either way: the warden self-escalates the kill.
-- De-dupe on that robust STOP: MUST NOT re-issue while `last_command==STOP` within
+- 🔴 **Neither of those two paths re-dispatches.** Both go through the one-shot
+  `dispatchRobustStopNow`, which enqueues once and does NOT write `last_command` /
+  `last_command_at` — so the producer's de-dupe/re-dispatch discipline below never engages
+  for them. **If that STOP frame is lost, nothing on the server re-sends it; the remaining
+  escalation is the owner's hand.**
+- De-dupe and re-dispatch (MUST NOT re-issue while `last_command==STOP` within
   `stop_retry`; once `stop_retry` elapses and the member is STILL online, MUST re-dispatch
-  (at-least-once over the at-most-once band; re-firing is an idempotent no-op warden-side).
+  — at-least-once over the at-most-once band, re-firing being an idempotent warden-side
+  no-op) belong to the **producer-dispatched** STOP, i.e. the timed arm below. **Under
+  today's production constants that arm is not reached**, so this rule currently governs
+  nothing on the offline path; it still governs `desired_state=uninstall` (§4.3) and stays
+  contract for the timed arm.
 
-🔴 **`stop_deadline` / `stop_grace` still exist — they are UNREACHABLE, not deleted.**
-The timed wind-down they drive is still written in `decideDown`, behind a
-`SoftOffboardGrace == 0` guard, and `SoftOffboardGraceSecs` is a compile-time constant
-greater than zero (deliberately not an owner-facing setting). So the fields are still in
-the reconcile state and still in the timers table below; today nothing reaches them.
-Anyone grepping for those names will find live code — read this as "the clock is off",
-not as "the clock was removed".
+🔴 **`stop_deadline` / `stop_grace` still exist — under the production config they are
+UNREACHABLE, not deleted.** The timed wind-down they drive is still written in
+`decideDown`; it is entered **only when `SoftOffboardGrace == 0`**, and
+`SoftOffboardGraceSecs` is a compile-time constant of 600 s (deliberately not an
+owner-facing setting), so production never takes that branch. Tests DO reach it by
+injecting zero — the timers below are "all injectable", and there are sub-tests on both
+arms — so a grep will find live code and live tests. Read this as **"the clock is off in
+production"**, not as "the clock was removed", and not as "that constant is zero".
 
 **desired_state=uninstall** (warden members only; owner-revised 2026-07-11 — the intent is
 ONE-SHOT, never a standing order):
