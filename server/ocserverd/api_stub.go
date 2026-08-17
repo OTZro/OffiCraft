@@ -555,6 +555,21 @@ func (s *apiServer) codexCompactionThresholdSetting() int {
 // restart) → refuse to claim, so no notice fires off an anchor we cannot
 // recognise again. That errs toward SILENCE, which is the cheap direction here:
 // the agent still gets the handover SOP at the handover itself.
+//
+// 🔴 T-6ebc — THE MAP IS A CACHE, THE COLUMN IS THE AUTHORITY. A process-local
+// map cannot answer "has this session been told?" across a station re-exec: the
+// map empties and the AGENTS DO NOT — they reconnect, restore the same anchor,
+// and were told the same "this is the ONLY notice you get" a second time, which
+// is the sentence this gate exists to keep true. So a map MISS is not an
+// answer; it falls through to member.handover_noticed_ts and only a miss THERE
+// grants the claim. The map's whole job is to keep the steady state off the
+// database: once an agent is in the high band, this runs on every quiet tick
+// and every one of those calls after the first is a refusal.
+//
+// Both stores are written together and cleared together (clearSessionBootTS),
+// so the only drift a bug could produce is a map that has forgotten a claim the
+// column still holds — and that direction is caught by the read below rather
+// than turning into a second notice.
 func (s *apiServer) claimHandoverNotice(agentID string, record map[string]any) bool {
 	bootTS, ok := gaugeBootTS(record)
 	if !ok || bootTS <= 0 {
@@ -567,6 +582,24 @@ func (s *apiServer) claimHandoverNotice(agentID string, record map[string]any) b
 	}
 	if sent, seen := s.handoverNoticed[agentID]; seen && sent == bootTS {
 		return false
+	}
+	// Map miss. Ask the durable half before granting anything.
+	if m, err := s.dal.GetMember(agentID); err == nil && m != nil {
+		if m.HandoverNoticedTS == bootTS {
+			// Already sent for THIS anchor, by a previous process. Warm the
+			// cache so the remaining ticks of this high band cost nothing.
+			s.handoverNoticed[agentID] = bootTS
+			return false
+		}
+	}
+	// A failed read falls through to granting the claim. That is the deliberate
+	// direction: the alternative is an agent that silently never gets its one
+	// notice because the database hiccuped once, and the notice is what makes it
+	// hand over cleanly. A duplicate notice costs a repeated sentence.
+	if err := s.dal.SetMemberHandoverNoticedTS(agentID, bootTS); err != nil {
+		// Non-fatal, but say so: the claim is now cache-only, so the next
+		// station re-exec will re-notify this session.
+		taskLog("handover notice %s: claim not persisted: %v", agentID, err)
 	}
 	s.handoverNoticed[agentID] = bootTS
 	return true

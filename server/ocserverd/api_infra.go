@@ -611,11 +611,25 @@ func (s *apiServer) clearSessionBootTS(id string) {
 	// Write-on-change: the clear runs on every session boundary, and an
 	// unconditional UPDATE would cost a row write per boundary for nothing.
 	m, err := s.dal.GetMember(id)
-	if err != nil || m == nil || m.SessionBootTS == 0 {
-		return // no durable anchor to drop — a clean no-op, and zero row writes
+	if err != nil || m == nil {
+		return
 	}
-	if err := s.dal.SetMemberSessionBootTS(id, 0); err != nil {
-		fmt.Fprintf(os.Stderr, "[sse] session-boot anchor clear failed for %q: %v\n", id, err)
+	if m.SessionBootTS != 0 {
+		if err := s.dal.SetMemberSessionBootTS(id, 0); err != nil {
+			fmt.Fprintf(os.Stderr, "[sse] session-boot anchor clear failed for %q: %v\n", id, err)
+		}
+	}
+	// 🔴 The durable half of the notice claim (T-6ebc) is tested SEPARATELY, not
+	// under the anchor's condition. The two columns describe the same session but
+	// they are not written in one transaction, so a boundary that finds the
+	// anchor already at 0 can still find a claim standing — and returning early
+	// on the anchor alone would leave it there for the NEXT session to inherit,
+	// which silences the one notice that session is entitled to. Silence is the
+	// failure mode no one reports.
+	if m.HandoverNoticedTS != 0 {
+		if err := s.dal.SetMemberHandoverNoticedTS(id, 0); err != nil {
+			fmt.Fprintf(os.Stderr, "[sse] handover-notice claim clear failed for %q: %v\n", id, err)
+		}
 	}
 }
 
