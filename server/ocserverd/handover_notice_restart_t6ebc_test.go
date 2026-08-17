@@ -167,6 +167,35 @@ func TestHandoverNotice_ClaimSurvivesAWholeRowUpsert(t *testing.T) {
 	}
 }
 
+// TestHandoverNotice_TwoRacingClaimsOnlyOneSends guards the double-check that
+// moving the database read OUT of the lock made necessary (independent review,
+// T-ffdf I2: removing it left the suite green).
+//
+// Two ticks can now miss the cache together, both read the database, both find
+// no claim, and both arrive believing they may send. Only one may. The check
+// that decides this lives inside the lock and is the whole reason
+// rememberHandoverClaim returns a bool instead of nothing — a signature that
+// looks like an over-engineered setter until you delete the branch and watch
+// nothing complain.
+//
+// No goroutines needed: the interleaving that matters is just "two callers
+// reach the claim step with the same anchor", which is two ordinary calls.
+func TestHandoverNotice_TwoRacingClaimsOnlyOneSends(t *testing.T) {
+	api, _ := restartableNoticeServers(t, "m-1")
+
+	if !api.rememberHandoverClaim("m-1", 1000) {
+		t.Fatal("the first caller to reach the claim step must win it")
+	}
+	if api.rememberHandoverClaim("m-1", 1000) {
+		t.Fatal("the second caller racing on the SAME anchor must lose — both " +
+			"sending is the duplicate notice this ticket exists to remove")
+	}
+	// A different anchor is a different session and is entitled to its own.
+	if !api.rememberHandoverClaim("m-1", 2000) {
+		t.Fatal("a new session's anchor must still be claimable")
+	}
+}
+
 // TestHandoverNotice_ADatabaseFailureFallsTowardSending pins the DIRECTION the
 // gate errs in when it cannot read the durable claim (independent review, T-ffdf:
 // flipping this to silence left the suite green).

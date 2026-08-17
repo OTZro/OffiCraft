@@ -141,8 +141,8 @@ type apiServer struct {
 	codexNoticeRound         int // the FIRST, soft notice round (T-a9d6)
 	// handoverNoticed records, per agent id, the SESSION anchor (the gauge's
 	// boot_ts) whose one-and-only advance handover notice has already gone out.
-	// Guarded by settingsMu. See claimHandoverNotice for why the key is the
-	// session anchor and not the connection.
+	// Guarded by handoverNoticedMu below. See claimHandoverNotice for why the
+	// key is the session anchor and not the connection.
 	handoverNoticed map[string]float64
 	// handoverNoticedMu guards the map above. It is its OWN mutex, following the
 	// softEscalated precedent below, and the reason is load-bearing: the claim
@@ -637,6 +637,9 @@ func (s *apiServer) rememberHandoverClaim(agentID string, bootTS float64) bool {
 	if s.handoverNoticed == nil {
 		s.handoverNoticed = map[string]float64{}
 	}
+	// Deleting this branch makes every racing caller a winner — guarded by
+	// TestHandoverNotice_TwoRacingClaimsOnlyOneSends, which is why this
+	// function returns a bool rather than nothing.
 	if s.handoverNoticed[agentID] == bootTS {
 		return false
 	}
