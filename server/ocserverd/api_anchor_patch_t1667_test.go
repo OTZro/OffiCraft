@@ -702,6 +702,10 @@ func TestPatchTaskSopRetainsAVersion(t *testing.T) {
 		t.Fatalf("patch must land, got %d: %v", status, data)
 	}
 
+	// T-1170 split the history surface: the LISTING carries metadata only, and
+	// the body is fetched per version. So asserting on the listing's text would
+	// now pass for the wrong reason on an empty document and fail for the right
+	// one here — read the version back and compare the CONTENT.
 	rec := httptest.NewRecorder()
 	api.HandleListDocumentHistoryApiDocumentHistoryKindKeyGet(rec, taskReq(t, "GET",
 		"/api/document-history/task_manual_sop/"+key, nil, "m-exec", "agent"),
@@ -709,8 +713,16 @@ func TestPatchTaskSopRetainsAVersion(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list history: %d %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "1. 收單") {
-		t.Fatalf("the pre-patch sop must be retained as a version, got %s", rec.Body.String())
+	var rows []DocumentHistoryDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode history listing: %v (%s)", err, rec.Body.String())
+	}
+	if len(rows) != 1 {
+		t.Fatalf("the pre-patch sop must be retained as exactly one version, got %+v", rows)
+	}
+	hydrated := hydrateHistory(t, api, "task_manual_sop", key, "m-exec", "agent", rows)
+	if got := hydrated[0].Content["sop_md"]; got != seeded {
+		t.Fatalf("the retained version must be the PRE-patch sop verbatim, got %q", got)
 	}
 }
 
