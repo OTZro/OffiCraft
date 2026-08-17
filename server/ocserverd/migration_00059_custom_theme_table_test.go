@@ -99,26 +99,39 @@ func t83efFixture() []ThemeBundleDTO {
 	}
 }
 
-// t83efReadRows returns the migrated bundles ordered by order_idx.
-func t83efReadRows(t *testing.T, db *sql.DB) (ids []string, bundles []string) {
+// t83efReadRows returns the migrated bundles ordered by order_idx, together with
+// the order_idx values themselves.
+//
+// 🔴 THE INDEXES ARE RETURNED BECAUSE READING BACK IN THE RIGHT ORDER PROVES
+// NOTHING ON ITS OWN — measured, not reasoned: a mutant writing order_idx = 0
+// for EVERY row left every assertion in this file green. SQLite answers
+// `ORDER BY order_idx` on an all-equal column in rowid order, which is insertion
+// order, which is the very order the migration inserted them in. So the column
+// can be complete garbage and the list still comes back correct — until someone
+// deletes and re-inserts a theme through the new write path, at which point the
+// owner's list silently reshuffles. Only asserting the VALUES separates "the
+// order was carried" from "the order happened to fall out".
+func t83efReadRows(t *testing.T, db *sql.DB) (ids []string, bundles []string, idxs []int) {
 	t.Helper()
-	rows, err := db.Query(`SELECT theme_id, bundle FROM custom_theme ORDER BY order_idx`)
+	rows, err := db.Query(`SELECT theme_id, bundle, order_idx FROM custom_theme ORDER BY order_idx`)
 	if err != nil {
 		t.Fatalf("select custom_theme: %v", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var id, bundle string
-		if err := rows.Scan(&id, &bundle); err != nil {
+		var idx int
+		if err := rows.Scan(&id, &bundle, &idx); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
 		ids = append(ids, id)
 		bundles = append(bundles, bundle)
+		idxs = append(idxs, idx)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows: %v", err)
 	}
-	return ids, bundles
+	return ids, bundles, idxs
 }
 
 func t83efLegacyValue(t *testing.T, db *sql.DB) (string, bool) {
@@ -144,13 +157,18 @@ func TestMigration00059ReassemblesTheLegacyArrayByteForByte(t *testing.T) {
 	original := t83efSeedLegacyThemes(t, db, t83efFixture())
 	t83efUpTo59(t, db)
 
-	ids, bundles := t83efReadRows(t, db)
+	ids, bundles, idxs := t83efReadRows(t, db)
 	if want := []string{"midnight", "paper", "zebra"}; len(ids) != len(want) {
 		t.Fatalf("migrated %d themes, want %d (%v)", len(ids), len(want), ids)
 	} else {
 		for i := range want {
 			if ids[i] != want[i] {
-				t.Fatalf("order_idx %d is %q, want %q — the cockpit list IS this order", i, ids[i], want[i])
+				t.Fatalf("position %d is %q, want %q — the cockpit list IS this order", i, ids[i], want[i])
+			}
+			// The VALUE, not just the resulting sequence — see t83efReadRows.
+			if idxs[i] != i {
+				t.Fatalf("theme %q carries order_idx %d, want %d: the array position was not recorded, so the list order is currently an accident of insertion order",
+					ids[i], idxs[i], i)
 			}
 		}
 	}
@@ -291,7 +309,7 @@ func TestMigration00059CopiesBytesRatherThanRoundTrippingThroughTheDTO(t *testin
 	}
 	t83efUpTo59(t, db)
 
-	_, bundles := t83efReadRows(t, db)
+	_, bundles, _ := t83efReadRows(t, db)
 	if len(bundles) != 1 {
 		t.Fatalf("migrated %d rows, want 1", len(bundles))
 	}
