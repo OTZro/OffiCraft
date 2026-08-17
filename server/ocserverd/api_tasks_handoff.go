@@ -146,9 +146,8 @@ func handoffGateReason(t Task, door string) string {
 		": this report would CLOSE it, and a closed task can never be replanned " +
 		"(submit_plan turns into a permanent 409). Say where the ball goes, in " +
 		"THIS same update_step_status call, with one of: " +
-		"handoff='" + HandoffReturnToCreator + "' (the server tells the creator " +
-		"in a DURABLE chat message — it opens no task, so nothing lands on " +
-		"anybody's list needing an admin to close it); handoff='" +
+		"handoff='" + HandoffReturnToCreator + "' (recorded on this task and " +
+		"nothing else — no task is opened and nobody is notified); handoff='" +
 		HandoffFollowUp + "' + " +
 		"handoff_task_id='<the successor task you already created>' (the server " +
 		"attaches this task to it as a dependency, and closing this one releases " +
@@ -237,11 +236,11 @@ func (s *apiServer) handoffGateVerdict(
 		if err != nil {
 			return nil, http.StatusInternalServerError, err.Error()
 		}
-		// Fail-closed and HONEST: we cannot hand the ball to somebody who is not
-		// on the roster any more (a dismissed member, a released ow-worker, the
-		// pre-column blank) — post_chat rejects those recipients, so the notice
-		// would simply not arrive. Say so and name the other two doors rather
-		// than pretending the ball landed.
+		// Fail-closed and HONEST: "handed back to X" is a false statement when X
+		// is not on the roster any more (a dismissed member, a released
+		// ow-worker, the pre-column blank). Nothing is dispatched either way now,
+		// so this guard is about the RECORD being true, not about delivery. Say
+		// so and name the other two doors rather than pretending the ball landed.
 		if m == nil || m.RosterStatus != RosterStatusActive {
 			return nil, http.StatusUnprocessableEntity,
 				"cannot hand back to creator '" + t.CreatorID +
@@ -275,61 +274,13 @@ func (s *apiServer) applyHandoffPlan(t *Task, plan *handoffPlan) error {
 		}
 		t.HandoffTaskID = plan.TaskID
 	case HandoffReturnToCreator:
-		// Nothing to build. The notice to the creator fires from the TAIL of
-		// closeTask (notifyCreatorOnHandback), reading the declaration this
-		// call is about to stamp — so the sentence can honestly say the task
-		// is closed, and a close that fails never leaves an announcement
-		// behind claiming it succeeded.
+		// Nothing happens beyond stamping the declaration below — no task is
+		// created and nobody is told. See the note on the constant in
+		// domain.go for why the notice was withdrawn (owner 2026-08-17).
 	}
 	t.Handoff = plan.Kind
 	t.HandoffNote = plan.Note
 	return nil
-}
-
-// notifyCreatorOnHandback is what `return_to_creator` does now that it no
-// longer opens a task.
-//
-// WHY IT USED TO OPEN ONE: telling the creator over SSE drops — a delta is a
-// line that scrolls away, and since T-0eb5 the creator is not even in the task
-// audience (publishTask fans to the executor only). A TASK was the durable
-// carrier that put the ball on their side.
-//
-// WHY IT NO LONGER DOES (owner 2026-08-17, card rc-dc3305f590a7, verbatim
-// 「轉派都不需要另外開票」): the minted task's own first line told the creator to
-// terminate it if nothing followed — and terminate_task requires admin_agent,
-// so an ordinary member was instructed to do something it gets a 403 for. The
-// carrier was also heavier than the message: a row on the open list, in the
-// resume snapshot and on the cockpit, that only leaves by being worked or
-// terminated.
-//
-// WHAT CARRIES IT INSTEAD: a durable chat row — the same persistent half
-// releaseDependentsOnClose uses. It lands in the creator's mailbox, counts as
-// unread, and survives a reconnect; it does NOT need anybody's permission to
-// clear. The purpose (the creator learns the ball is back) is kept; the
-// mechanism (a ticket only an admin could close) is not.
-//
-// Runs at the TAIL of closeTask, so the sentence can say the task is closed
-// and a failed close never leaves an announcement claiming otherwise.
-// Best-effort: a notify failure must never fail the close it follows.
-func (s *apiServer) notifyCreatorOnHandback(t Task, trigger string) {
-	if t.Handoff != HandoffReturnToCreator {
-		return
-	}
-	// The gate already refused an off-roster creator and a self-created task
-	// never reaches the gate at all; these are belt-and-braces so a future
-	// caller cannot address a blank or talk to the executor about itself.
-	if t.CreatorID == "" || t.CreatorID == t.ExecutorID {
-		return
-	}
-	no := TaskNo(t.ID)
-	body := "[" + no + "] 任務「" + t.Title + "」已由 " + t.ExecutorID +
-		" 完成並關閉,球交回給你(這張任務的建立者)。" +
-		"有後續工作請開一張新任務;沒有後續就不必做任何事。" +
-		"注意:" + no + " 已經是終態,它的 plan 永久凍結。"
-	if t.HandoffNote != "" {
-		body += "執行者的交棒說明:" + t.HandoffNote
-	}
-	s.postTaskChat(t, wireSystemSender, t.CreatorID, body, trigger)
 }
 
 // ── half B: dependency becomes a real handover ───────────────────────────────
