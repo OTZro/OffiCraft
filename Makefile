@@ -106,7 +106,8 @@ REGEN_PAIR_GATE = $(P) \
   lint-go-naming lint-go-fmt lint-go-vet lint-uplink-contract lint-effort-vocab \
   lint-conformance-blackbox lint-ts lint-css-tokens lint-css-token-roles \
   build-embed-assets build-go build-frontend-deps \
-  test-e2e-isolation-guard test-bin-guards test-go test-frontend-unit \
+  test-e2e-isolation-guard test-bin-guards test-go test-system-interaction-examples \
+  test-frontend-unit \
   test-frontend-ct test-conformance \
   scan-tracked-paths scan-secrets scan-tcc-anchor \
   drift-ocapi drift-schema-ts drift-theme-tokens drift-message-keys drift-fonts \
@@ -425,6 +426,13 @@ test-go: build-embed-assets
 	  echo "[test-go] go test -count=1 $$dir"; \
 	  (cd "$$dir" && "$$GO" test -count=1 ./...); \
 	done; \
+	$(DONE)
+
+test-system-interaction-examples:
+	@$(P) \
+	GO="$$(oc_go)"; \
+	echo "[test-system-interaction-examples] system_interaction.md MCP/CLI examples"; \
+	OC_GO="$$GO" bash bin/tests/system-interaction-examples.sh; \
 	$(DONE)
 
 # vitest runs in jsdom, which applies no layout engine — see test-frontend-ct for
