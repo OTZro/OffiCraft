@@ -84,6 +84,15 @@ package main
 // the listed elements (re-add them under usable ids, or decide they are not
 // wanted), DELETE the record key, then retire.
 //
+// ⚠️ HOW MUCH OF THAT EXIT EXISTS TODAY, stated plainly so nobody plans against
+// a capability that is not here: deleting the key is straightforward (the
+// retiring migration does it itself). "Re-add them under usable ids" has NO
+// executable path at the time of writing — there is no per-theme write endpoint
+// yet, and `PATCH /api/settings` writes the legacy row, not this table. Whoever
+// retires the legacy row either arrives after those endpoints exist, or does the
+// re-adding in their own migration. This is a limitation of the exit, not a
+// reason to skip it.
+//
 // ORDER IS RECORDED, NOT DERIVED. `order_idx` carries each element's position in
 // the legacy array, and the reassembly sorts by it.
 //
@@ -172,22 +181,35 @@ func init() {
 // theme whose id disagrees with the id it is filed under, which is precisely the
 // shape that makes "delete theme X" delete something else.
 //
-// ⚠️ THE THREE CONDITIONS ARE THREE NAMED CONSTRAINTS, NOT ONE. SQLite names the
-// constraint it reports, and with a single anonymous CHECK it prints the WHOLE
-// expression's first line for every violation — so a bundle that was not JSON at
-// all reported `CHECK constraint failed: theme_id <> ''`, pointing whoever is
-// reading the log at the wrong field. Named, each violation says which fact was
-// broken.
+// ⚠️ THE THREE CONDITIONS ARE THREE NAMED CONSTRAINTS, NOT ONE. SQLite reports
+// the constraint it names, and a single anonymous CHECK covering all three
+// printed the same text — the first condition's — for every violation, so a
+// bundle that was not JSON at all was reported as a blank-id problem, pointing
+// whoever reads that log at the wrong field. Named, each violation says which
+// fact was broken.
+//
+// 🔴 THE ID COMPARISON USES `IS`, NOT `=`, AND THAT IS THE WHOLE CONSTRAINT.
+// SQLite fails a CHECK only when it evaluates to FALSE; NULL is not FALSE, so it
+// PASSES. `json_extract` answers NULL for a bundle with no `$.id` at all — which
+// is every bundle whose id key is missing, misspelled, or capitalised
+// differently, plus every bundle that is a number, a string, an array or JSON
+// null. With `=`, all of those were ACCEPTED (measured: six such rows went in
+// clean), and the comment below promising this constraint makes the id "one fact
+// rather than two" was false for exactly the inputs most likely to occur.
+// `IS` is SQLite's NULL-safe equality: NULL IS 'blue' is FALSE, so the row is
+// refused. `theme_id` also has to be NOT NULL explicitly — a TEXT PRIMARY KEY in
+// SQLite does NOT imply it, a legacy quirk, and a NULL key would otherwise slip
+// past both this constraint and the primary key.
 const customThemeTableDDL = `
 CREATE TABLE custom_theme (
-  theme_id   TEXT PRIMARY KEY,
+  theme_id   TEXT NOT NULL PRIMARY KEY,
   bundle     TEXT NOT NULL,
   order_idx  INTEGER NOT NULL,
   updated_at REAL NOT NULL DEFAULT 0,
   CONSTRAINT custom_theme_id_not_blank CHECK (theme_id <> ''),
   CONSTRAINT custom_theme_bundle_is_json CHECK (json_valid(bundle)),
   CONSTRAINT custom_theme_id_matches_bundle
-    CHECK (json_extract(bundle, '$.id') = theme_id)
+    CHECK (json_extract(bundle, '$.id') IS theme_id)
 )`
 
 // legacyCustomThemesKey is the settings key the array has lived under. It is
@@ -315,9 +337,24 @@ func upCustomThemeTable(ctx context.Context, tx *sql.Tx) error {
 // recordCustomThemeSkips writes the receipt the retirement precondition reads.
 // No skips ⇒ NO ROW, because absence is the "nothing was lost" answer and the
 // healthy case must not pay for the unhealthy one.
+//
+// 🔴 "NO ROW" MEANS IT DELETES, NOT MERELY THAT IT DOES NOT WRITE. An earlier
+// version simply returned early when there was nothing to record, which made the
+// receipt a claim about the FIRST time this migration ever ran rather than about
+// the state it just produced. The failing sequence is short and reachable: Up on
+// a database with a bad element leaves a receipt; Down drops the table; the
+// legacy value is repaired; Up runs again and moves everything cleanly — and the
+// stale receipt is still sitting there saying something was left behind. Under
+// the "key exists ⇒ refuse" rule that install is now blocked from retiring the
+// legacy row FOREVER, for a reason that is not true.
+//
+// That is the same failure the rule itself was rewritten to remove (a gate with
+// no exit), re-entering through a different door, so the receipt is written the
+// way every other idempotent projection is: it REPLACES what the last run said.
 func recordCustomThemeSkips(ctx context.Context, tx *sql.Tx, skipped []customThemeSkip) error {
 	if len(skipped) == 0 {
-		return nil
+		_, err := tx.ExecContext(ctx, `DELETE FROM setting WHERE key = ?`, customThemeSkipRecordKey)
+		return err
 	}
 	blob, err := json.Marshal(skipped)
 	if err != nil {
@@ -362,7 +399,14 @@ func announceCustomThemeSkip(i int, why string) {
 // That is the accepted cost of a one-way copy, and it is why retiring the
 // legacy row is a separate, later decision rather than part of this change:
 // while both exist, a downgrade costs at most the edits made since the upgrade.
+// It also removes the skip receipt, and that is not tidying. The receipt
+// describes the contents of a table that is about to stop existing; leaving it
+// behind would let a later Up — possibly on repaired data, with nothing skipped
+// at all — start life already carrying a claim that something was lost.
 func downCustomThemeTable(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, `DROP TABLE custom_theme`)
+	if _, err := tx.ExecContext(ctx, `DROP TABLE custom_theme`); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM setting WHERE key = ?`, customThemeSkipRecordKey)
 	return err
 }

@@ -532,12 +532,26 @@ func TestMigration00059TableRefusesAnIdThatDisagreesWithItsBundle(t *testing.T) 
 	// answered `CHECK constraint failed: theme_id <> ''`, sending whoever reads
 	// that log at the wrong field. Asserting only `err != nil` cannot tell a
 	// constraint that names the right fact from one that names the wrong one.
+	// 🔴 THE `$.id`-IS-ABSENT ROWS ARE THE ONES THAT USED TO GET IN. SQLite fails
+	// a CHECK only on FALSE, and NULL is not FALSE — so while the comparison was
+	// `=`, every bundle without an `$.id` (missing key, differently capitalised
+	// key, or a bundle that is not an object at all) compared NULL against the
+	// key, evaluated to NULL, and was ACCEPTED. Six such rows went in clean while
+	// the constraint's own comment claimed it made the id one fact rather than
+	// two. `IS` is what closes that, and these cases are what would notice if
+	// anyone changed it back.
 	for _, tc := range []struct {
 		name, id, bundle, wantConstraint string
 	}{
 		{"key disagrees with the bundle's own id", "blue", `{"id":"red"}`, "custom_theme_id_matches_bundle"},
 		{"bundle is not JSON", "green", `not json at all`, "custom_theme_bundle_is_json"},
 		{"empty key", "", `{"id":""}`, "custom_theme_id_not_blank"},
+		{"bundle has no id at all", "blue", `{"name":"not blue at all"}`, "custom_theme_id_matches_bundle"},
+		{"bundle is an array", "red", `[1,2]`, "custom_theme_id_matches_bundle"},
+		{"bundle is a number", "green", `42`, "custom_theme_id_matches_bundle"},
+		{"bundle is a bare JSON string", "pink", `"just a string"`, "custom_theme_id_matches_bundle"},
+		{"bundle is JSON null", "grey", `null`, "custom_theme_id_matches_bundle"},
+		{"id key differs only in case", "cyan", `{"Id":"CYAN"}`, "custom_theme_id_matches_bundle"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := db.Exec(
@@ -553,11 +567,106 @@ func TestMigration00059TableRefusesAnIdThatDisagreesWithItsBundle(t *testing.T) 
 			}
 		})
 	}
+	// A NULL key is its own case, and THE BUNDLE HERE IS CHOSEN SO THAT ONLY THE
+	// NOT NULL DECLARATION CAN REFUSE IT. `TEXT PRIMARY KEY` in SQLite does not
+	// imply NOT NULL, and with a bundle carrying no `$.id` the other three
+	// constraints all pass: json_extract answers NULL, `NULL IS NULL` is true, and
+	// `NULL <> ''` is NULL rather than false. A bundle WITH an id would have been
+	// refused by the id comparison instead — the assertion would still be green
+	// while the declaration it claims to test did nothing (measured: dropping
+	// NOT NULL reddened nothing until this case was written this way).
+	if _, err := db.Exec(
+		`INSERT INTO custom_theme (theme_id, bundle, order_idx) VALUES (NULL, '{"name":"no id here"}', 0)`); err == nil {
+		t.Fatal("accepted a NULL theme_id — SQLite's TEXT PRIMARY KEY does not imply NOT NULL on its own")
+	}
+
 	// The control: a well-formed pair still goes in. Without this, a CHECK that
-	// refused everything would pass the three cases above.
+	// refused everything would pass every case above.
 	if _, err := db.Exec(
 		`INSERT INTO custom_theme (theme_id, bundle, order_idx) VALUES ('blue', '{"id":"blue"}', 0)`); err != nil {
 		t.Fatalf("the constraint refuses a legitimate row: %v", err)
+	}
+}
+
+// TestMigration00059ReplacesTheSkipRecordRatherThanLeavingAStaleOne closes a way
+// the receipt could LIE, which matters more than whether it can be written at
+// all: the retirement rule is "key exists ⇒ refuse", so a receipt that outlives
+// what it describes blocks an install forever for a reason that is not true.
+//
+// The sequence is short and reachable: migrate a database whose legacy value has
+// a bad element (receipt written) → Down → repair the legacy value → Up again,
+// this time with nothing to skip. The second Up produced no receipt, but it also
+// removed nothing, so the first run's receipt was still there describing a state
+// that no longer existed.
+func TestMigration00059ReplacesTheSkipRecordRatherThanLeavingAStaleOne(t *testing.T) {
+	db, err := openSQLite(filepath.Join(t.TempDir(), "t83ef-stale.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	t83efUpTo58(t, db)
+	if _, err := db.Exec(
+		`INSERT INTO setting (key, value, updated_at) VALUES ('display.custom_themes', ?, 1)`,
+		`[{"name":"no id"},{"id":"good"}]`); err != nil {
+		t.Fatalf("seed bad: %v", err)
+	}
+	t83efUpTo59(t, db)
+	if len(t83efSkipRecord(t, db)) != 1 {
+		t.Fatal("the bad element was not recorded on the first run")
+	}
+
+	if err := goose.DownTo(db, "migrations", 58); err != nil {
+		t.Fatalf("goose down: %v", err)
+	}
+	// Down describes a table that no longer exists, so its receipt must go too.
+	if got := t83efSkipRecord(t, db); len(got) != 0 {
+		t.Fatalf("Down left a receipt behind for a table it dropped: %+v", got)
+	}
+
+	// Repair, then migrate again with nothing to skip.
+	if _, err := db.Exec(
+		`UPDATE setting SET value = ? WHERE key = 'display.custom_themes'`,
+		`[{"id":"fixed"},{"id":"good"}]`); err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	t83efUpTo59(t, db)
+
+	if got := t83efSkipRecord(t, db); len(got) != 0 {
+		t.Fatalf("a clean run left the previous run's receipt in place: %+v — that install is now blocked from retiring the legacy row forever, for a reason that is not true", got)
+	}
+	if ids, _, _ := t83efReadRows(t, db); len(ids) != 2 {
+		t.Fatalf("after the repair both themes should have moved, got %v", ids)
+	}
+}
+
+// TestMigration00059ClearsAReceiptItDidNotWrite guards the OTHER half of the
+// replace, and it exists because the obvious test does not reach it.
+//
+// 🔴 MEASURED: with the Down above already clearing the receipt, reverting Up's
+// clean-run branch to a plain early-return reddened NOTHING — the sequence
+// Up→Down→Up never lets Up meet a receipt, because Down removed it first. Two
+// guards, one of them decorative, and the decorative one looks exactly like the
+// load-bearing one. So this seeds the receipt directly: a row present for any
+// reason at all (an aborted run, a hand-edit, a future path nobody has written
+// yet) must not survive a migration that skipped nothing.
+func TestMigration00059ClearsAReceiptItDidNotWrite(t *testing.T) {
+	db, err := openSQLite(filepath.Join(t.TempDir(), "t83ef-orphan.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	t83efUpTo58(t, db)
+	t83efSeedLegacyThemes(t, db, t83efFixture())
+	if _, err := db.Exec(
+		`INSERT INTO setting (key, value, updated_at) VALUES (?, ?, 1)`,
+		customThemeSkipRecordKey, `[{"index":7,"reason":"from somewhere else"}]`); err != nil {
+		t.Fatalf("seed orphan receipt: %v", err)
+	}
+
+	t83efUpTo59(t, db)
+
+	if got := t83efSkipRecord(t, db); len(got) != 0 {
+		t.Fatalf("a migration that skipped nothing left a receipt saying otherwise: %+v", got)
 	}
 }
 
