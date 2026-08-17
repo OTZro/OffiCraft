@@ -287,9 +287,10 @@ func (d *DAL) CountTasksDuplicatingOriginal(originalID string) (int, error) {
 // The fix is an OWNERSHIP BOUNDARY rather than a lock or a retry: each column is
 // written ONLY by its own single-field setter (SetTaskDescriptionOn /
 // SetTaskTitleOn, each of which versions its column in the same transaction) and
-// by the INSERT half of this very statement, which is how create_task and the
-// handoff follow-up set them — both mint a fresh id, so neither ever reaches the
-// conflict clause. Single-writer columns cannot be clobbered by a stale
+// by the INSERT half of this very statement, which is how create_task sets them
+// — it mints a fresh id, so it never reaches the conflict clause. (Until T-f265
+// the handoff follow-up was a second such INSERT; it no longer exists, which
+// removes a writer rather than adding one.) Single-writer columns cannot be clobbered by a stale
 // whole-row copy, because no stale whole-row copy of them exists. Guarded by
 // TestTaskDescriptionRaceGuardHasTeeth and TestTaskTitleRaceGuardHasTeeth.
 //
@@ -302,7 +303,8 @@ func (d *DAL) CountTasksDuplicatingOriginal(originalID string) (int, error) {
 // happened to read a moment earlier and silently destroys a correction the title
 // endpoint has already answered 200 to. Verified at the time of the change that
 // no production path mutates Title on an EXISTING row (the only writers are the
-// create INSERT, the handoff follow-up's INSERT, and the new setter), so
+// create INSERT and the new setter; the handoff follow-up's INSERT was a third
+// until T-f265 removed it), so
 // dropping it from the conflict clause changes nothing for any existing caller —
 // it only removes the clobber.
 //
