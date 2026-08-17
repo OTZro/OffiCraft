@@ -1678,11 +1678,7 @@ button.chat__msg-file {
     max-width: 100%;
   }
   .chat__msg--card .chat__msg-line {
-    width: 100%;
     flex-wrap: wrap;
-  }
-  .chat__msg--card .chat__msg-content {
-    width: 100%;
   }
 }
 

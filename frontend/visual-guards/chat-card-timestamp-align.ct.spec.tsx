@@ -11,14 +11,18 @@
 // chain, including `.app__main` padding, because jsdom cannot resolve the flex
 // layout or viewport geometry.
 //
-// MUTANT (§5): two desktop mutants are independently meaningful here. Changing
-// `.reply-card--chat { width: 100% }` back to `min(480px, 100%)` leaves the
-// message row wide but the card narrow; the wide card-width assertion must turn
-// red. Changing the card row/content widths from `100%` to `max-content` makes
-// the row shrink to the card; that assertion must also turn red, even though
-// the timestamp gap alone can look green. The container overflow assertion
-// measures `.chat__messages` itself, not the document surface hidden by its
-// `overflow-x` clamp. Phone keeps the card full-width and wraps the timestamp.
+// MUTANT (§5): two desktop mutants cover different guards, and the distinction
+// is measured rather than inferred. M1 changes `.reply-card--chat { width: 100% }`
+// back to `min(480px, 100%)`; the existing gap assertion turns red at
+// `304.0625px`, so Playwright stops before evaluating the new card-width guard.
+// M2 changes the card row/content widths from `100%` to `max-content`; the gap
+// stays green at `6px`, while the new guard turns red (`418.96875px` received,
+// `772.0625px` required). Thus the new guard's unique coverage is M2, not M1.
+// The ≤720px width overrides are redundant with the base `width: 100%`; the
+// measured #219 removal mutant left both phone assertions green. Keep the
+// phone `flex-wrap: wrap` behavior. The container overflow assertion measures
+// `.chat__messages` itself, not the document surface hidden by its
+// `overflow-x` clamp.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { ChatCardTimestampStory } from "./stories/ChatCardTimestampStory";
 
