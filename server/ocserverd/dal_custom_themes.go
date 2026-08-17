@@ -24,8 +24,12 @@ package main
 // settings face still serving the pre-upgrade answer. The change that adds the
 // per-theme endpoints has to pick one: retire the legacy row in that same
 // package, or write BOTH until it does. It cannot ignore the question, and the
-// migration's header carries the precondition for retiring (row count must match
-// the legacy array's length, because Up skips elements it cannot key).
+// migration's header carries the precondition for retiring: refuse while the
+// settings key customThemeSkipRecordKey exists, because Up skips elements it
+// cannot key and that key is the receipt saying something was left behind. (An
+// earlier draft of this sentence said "row count must match the legacy array's
+// length" — that test can never pass on an install that skipped something, which
+// would have locked those installs out of retirement with no way forward.)
 //
 // ⚠️ THE BYTE-FOR-BYTE GUARANTEE HAS A TIME WINDOW, and it closes here. It holds
 // for what the migration wrote; the first write through this layer replaces that
@@ -36,6 +40,7 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 )
 
 // CustomTheme is one saved theme as it is stored: identity, the bundle's JSON
@@ -123,7 +128,14 @@ func (d *DAL) GetCustomTheme(id string) (*CustomTheme, error) {
 //
 // COALESCE covers the empty table: MAX over no rows is NULL, and NULL would fail
 // the NOT NULL column rather than mean "first".
+//
+// 🔴 IT REFUSES A MISMATCHED PAIR ITSELF RATHER THAN LETTING THE TABLE DO IT, and
+// that is not belt-and-braces — it is the difference between a 400 and a 500. See
+// checkCustomThemeIDMatchesBundle.
 func (d *DAL) PutCustomTheme(id, bundle string) error {
+	if err := d.checkCustomThemeIDMatchesBundle(id, bundle); err != nil {
+		return err
+	}
 	_, err := d.wdb.Exec(`
 		INSERT INTO custom_theme (theme_id, bundle, order_idx, updated_at)
 		VALUES (?, ?, COALESCE((SELECT MAX(order_idx) + 1 FROM custom_theme), 0), ?)
@@ -131,6 +143,56 @@ func (d *DAL) PutCustomTheme(id, bundle string) error {
 			bundle = excluded.bundle, updated_at = excluded.updated_at`,
 		id, bundle, nowSecs())
 	return err
+}
+
+// ErrCustomThemeIDMismatch is what a caller gets when the key it asked to file a
+// bundle under is not the id inside that bundle. It is a NAMED error because the
+// handler above this layer has to turn it into a 400 that says what is wrong —
+// `errors.Is` against this, never a string match on a database message.
+var ErrCustomThemeIDMismatch = errors.New("custom theme: the bundle's own id does not match the id it is being filed under")
+
+// checkCustomThemeIDMatchesBundle asks THE DATABASE what the bundle's id is, and
+// refuses the write when that disagrees with the key.
+//
+// 🔴 WHY THIS EXISTS EVEN THOUGH THE TABLE ALREADY HAS A CHECK FOR IT. The
+// constraint is a table-level guard: it fires at INSERT time, from inside the
+// driver, as a failed write. Every write path that reaches this layer for the
+// rest of the product's life passes under it — including the per-theme endpoints
+// this ticket is being split to make possible. Without this function, the first
+// bundle whose id Go and SQLite read differently produces a failed statement at
+// runtime, which is a 500 and a log line, when what the caller deserves is a 400
+// naming the field.
+//
+// 🔴 AND THE DISAGREEMENT IS REAL, MEASURED, NOT DEFENSIVE PROGRAMMING. Go's
+// decoder and SQLite's json_extract do not agree on every input both accept:
+// `{"id":"a","id":"b"}` (duplicate key) reads as "b" in Go and "a" in SQLite;
+// `{"id":"a\ud800b"}` (lone surrogate) reads as a U+FFFD substitution in Go and
+// as the original bytes in SQLite. A handler that derives the key from the
+// decoded DTO — the obvious way to write it — hands this layer a pair the table
+// will reject. Migration 00059 hit exactly this and skips such elements; the
+// endpoints cannot skip, so they need an answer, and this is it.
+//
+// It asks SQLite rather than re-deriving in Go on purpose: the question is not
+// "what does this bundle say" but "will the constraint agree", and only the same
+// reader the constraint uses can answer that.
+func (d *DAL) checkCustomThemeIDMatchesBundle(id, bundle string) error {
+	if id == "" {
+		return fmt.Errorf("%w: the id is empty", ErrCustomThemeIDMismatch)
+	}
+	var dbID sql.NullString
+	if err := d.rdb.QueryRow(`SELECT json_extract(?, '$.id')`, bundle).Scan(&dbID); err != nil {
+		// json_extract refuses malformed JSON outright, so this branch is also
+		// the "bundle is not JSON" answer — same 400, and naming it here beats a
+		// constraint violation surfacing from the driver.
+		return fmt.Errorf("%w: the bundle is not readable JSON", ErrCustomThemeIDMismatch)
+	}
+	if !dbID.Valid {
+		return fmt.Errorf("%w: the bundle carries no id", ErrCustomThemeIDMismatch)
+	}
+	if dbID.String != id {
+		return fmt.Errorf("%w: bundle says %q, filed under %q", ErrCustomThemeIDMismatch, dbID.String, id)
+	}
+	return nil
 }
 
 // DeleteCustomTheme removes one theme and reports whether a row was actually

@@ -9,6 +9,7 @@ package main
 // delete that renumbers everyone.
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -176,6 +177,57 @@ func TestCustomThemeListOrderComesFromOrderIdxNotRowid(t *testing.T) {
 			t.Fatalf("position %d is %q, want %q — the list is being read in insertion order, not stored order",
 				i, got[i].ID, want[i])
 		}
+	}
+}
+
+// TestCustomThemeWriteRefusesAMismatchedPairBeforeTheTableDoes is about WHICH
+// LAYER says no, not about whether anything does.
+//
+// The table's custom_theme_id_matches_bundle constraint would catch every case
+// below — as a failed statement, surfacing from the driver, which a handler can
+// only turn into a 500 and a log line. The caller deserves a 400 naming the
+// field, and only a check ABOVE the write can produce one. So each case asserts
+// the named error, not merely that the write failed: `errors.Is` is the
+// difference between "the handler can answer" and "the handler can string-match
+// a database message and hope".
+//
+// 🔴 THE DUPLICATE-KEY AND LONE-SURROGATE CASES ARE THE REASON THIS IS NOT
+// PARANOIA. A handler deriving the key from its decoded DTO — the obvious way to
+// write one — produces exactly those pairs from input that Go accepted happily,
+// because Go's decoder and SQLite's json_extract disagree about them. Migration
+// 00059 meets the same disagreement and skips those elements; an endpoint cannot
+// skip, so it needs this answer.
+func TestCustomThemeWriteRefusesAMismatchedPairBeforeTheTableDoes(t *testing.T) {
+	d := newTestDAL(t)
+	for _, tc := range []struct {
+		name, id, bundle string
+	}{
+		{"bundle's id is a different theme", "blue", `{"id":"red"}`},
+		{"bundle is not JSON", "blue", `not json at all`},
+		{"bundle has no id", "blue", `{"name":"nameless"}`},
+		{"empty key", "", `{"id":""}`},
+		{"duplicate id key — Go reads b, SQLite reads a", "b", `{"id":"a","id":"b"}`},
+		{"lone surrogate — Go substitutes U+FFFD, SQLite keeps the bytes", "a�b", `{"id":"a\ud800b"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := d.PutCustomTheme(tc.id, tc.bundle)
+			if err == nil {
+				t.Fatal("accepted a pair whose key and bundle id disagree")
+			}
+			if !errors.Is(err, ErrCustomThemeIDMismatch) {
+				t.Fatalf("refused, but not with the named error a handler can turn into a 400 — it will have to guess.\n got: %v", err)
+			}
+			// And nothing was written: a refusal that half-lands is worse than
+			// one that does not refuse at all.
+			if got, gerr := d.GetCustomTheme(tc.id); gerr != nil || got != nil {
+				t.Fatalf("the refused write left a row behind (err=%v, row=%v)", gerr, got != nil)
+			}
+		})
+	}
+	// The control. Without it, a check that refused EVERYTHING would pass every
+	// case above.
+	if err := d.PutCustomTheme("green", `{"id":"green","name":"G"}`); err != nil {
+		t.Fatalf("a legitimate pair was refused: %v", err)
 	}
 }
 
