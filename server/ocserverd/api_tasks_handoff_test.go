@@ -155,13 +155,17 @@ func TestHandoffGateRefusesTheClosingReportAndLeavesTheTaskAnswerable(t *testing
 	}
 }
 
-// T-f265: return_to_creator used to MINT a task on the creator. It no longer
-// does — owner 2026-08-17 (rc-dc3305f590a7) 「轉派都不需要另外開票」, because that
-// task's own first line told an ordinary member to terminate it and
-// terminate_task requires admin_agent. The ball is handed back with the durable
-// chat row instead. This test is the OLD one turned around: same close, and it
-// now pins that NOTHING is created while the creator is still told.
-func TestHandoffReturnToCreatorTellsTheCreatorWithoutOpeningATask(t *testing.T) {
+// T-f265, narrowed TWICE by the owner on the same day:
+//   - it used to MINT a task on the creator (rc-dc3305f590a7 「轉派都不需要另外開
+//     票」) — that task's own first line told an ordinary member to terminate it,
+//     and terminate_task requires admin_agent;
+//   - the durable chat notice that replaced it was withdrawn as well
+//     (rc-e04adbc42574, option ①): once work is handed over it belongs to
+//     whoever holds it, and the system should not report back.
+//
+// So the declaration is now RECORDED and nothing else happens. This test is the
+// old one turned around twice: same close, and it pins BOTH silences.
+func TestHandoffReturnToCreatorRecordsTheHandoffAndDoesNothingElse(t *testing.T) {
 	api := newTasksTestServer(t)
 	seedActiveMember(t, api, "m-creator")
 	seedHandoffTask(t, api, "t-aaaa00000002", "m-creator", "m-exec", "design")
@@ -200,10 +204,32 @@ func TestHandoffReturnToCreatorTellsTheCreatorWithoutOpeningATask(t *testing.T) 
 		t.Fatalf("creator's open list must stay empty: %v %+v", err, open)
 	}
 
-	// …and the creator is still TOLD, durably: the chat row is the carrier now,
-	// and it carries the executor's handover note.
-	assertHandoverChat(t, api, "m-creator", TaskNo(closed.ID))
-	assertHandoverChat(t, api, "m-creator", "後續實作要不要做由你決定")
+	// …and NOBODY was told either. Asserted on the creator's whole mailbox
+	// rather than on one phrase: a notice that changed its wording would still
+	// be a notice, and this pins the absence, not the text.
+	assertNoChatTo(t, api, "m-creator")
+
+	// The declaration itself IS still recorded — that is the whole of what
+	// return_to_creator does now, and without this the test would also pass if
+	// the gate had silently stopped storing it.
+	if closed.HandoffNote != "後續實作要不要做由你決定" {
+		t.Fatalf("the handover note must still be recorded on the task: %+v", closed)
+	}
+}
+
+// assertNoChatTo is the negative twin of assertHandoverChat. It exists because
+// "no message arrived" and "the message changed" must not look the same.
+func assertNoChatTo(t *testing.T, api *apiServer, recipient string) {
+	t.Helper()
+	msgs, err := api.dal.ListChatInvolving(recipient, 50)
+	if err != nil {
+		t.Fatalf("list chat: %v", err)
+	}
+	for _, m := range msgs {
+		if m.Recipient == recipient {
+			t.Fatalf("nothing may be sent to %s, got %q", recipient, m.Body)
+		}
+	}
 }
 
 func TestHandoffFollowUpAttachesTheDepToTheSuccessor(t *testing.T) {
@@ -744,10 +770,11 @@ func TestOutsourceWorkerIsGatedButCanAlwaysHandBackToItsDispatcher(t *testing.T)
 	if closed.Status != TaskStatusDone || closed.Handoff != HandoffReturnToCreator {
 		t.Fatalf("ticket must close with the declaration recorded: %+v", closed)
 	}
-	// T-f265: the ball is a DURABLE CHAT ROW on the dispatcher, not a task. The
-	// durability is the load-bearing half (an SSE frame alone is what failed in
-	// T-8a1e); opening a task to carry it is what the owner withdrew.
-	assertHandoverChat(t, api, "m-front", TaskNo(closed.ID))
+	// T-f265: handing back neither opens a task on the dispatcher nor tells
+	// them. What the worker gets out of it is the CLOSE — the escape hatch this
+	// test exists to protect is that the 發包 lane never deadlocks, and that is
+	// still true with both side effects gone.
+	assertNoChatTo(t, api, "m-front")
 	open, err := api.dal.ListOpenTasksByExecutor("m-front", 50)
 	if err != nil {
 		t.Fatalf("list dispatcher's open tasks: %v", err)

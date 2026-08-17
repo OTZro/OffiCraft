@@ -525,11 +525,6 @@ func (s *apiServer) closeTask(t *Task, status string, now float64, trigger strin
 	// an immediate scheduler tick, which is what makes "設計完成 → 自動轉開發"
 	// actually happen. Best-effort; never fails the close.
 	s.releaseDependentsOnClose(*t, now, trigger)
-	// T-f265: a `return_to_creator` handover used to MINT a task on the creator.
-	// It no longer does (owner 2026-08-17: 「轉派都不需要另外開票」) — the ball is
-	// handed back with a durable chat row instead. Same persistent carrier as the
-	// release notice above; best-effort, never fails the close.
-	s.notifyCreatorOnHandback(*t, trigger)
 	// Task-close nudge band (spec/sse.md §8): remind the executor down its own
 	// SSE connection to fold this run's learnings back into the type's manual.
 	// Typed tasks only (ad-hoc has no manual); done AND terminated both nudge.
