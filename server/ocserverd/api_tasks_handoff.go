@@ -146,9 +146,10 @@ func handoffGateReason(t Task, door string) string {
 		": this report would CLOSE it, and a closed task can never be replanned " +
 		"(submit_plan turns into a permanent 409). Say where the ball goes, in " +
 		"THIS same update_step_status call, with one of: " +
-		"handoff='" + HandoffReturnToCreator + "' (the server opens a durable " +
-		"follow-up task on the creator so the work is on somebody's list, not in " +
-		"a notification); handoff='" + HandoffFollowUp + "' + " +
+		"handoff='" + HandoffReturnToCreator + "' (the server tells the creator " +
+		"in a DURABLE chat message — it opens no task, so nothing lands on " +
+		"anybody's list needing an admin to close it); handoff='" +
+		HandoffFollowUp + "' + " +
 		"handoff_task_id='<the successor task you already created>' (the server " +
 		"attaches this task to it as a dependency, and closing this one releases " +
 		"it); handoff='" + HandoffNone + "' + handoff_note='<why nothing " +
@@ -236,10 +237,11 @@ func (s *apiServer) handoffGateVerdict(
 		if err != nil {
 			return nil, http.StatusInternalServerError, err.Error()
 		}
-		// Fail-closed and HONEST: we cannot put a durable task on somebody who
-		// is not on the roster any more (a dismissed member, a released ow-
-		// worker, the pre-column blank). Say so and name the other two doors
-		// rather than pretending the ball landed.
+		// Fail-closed and HONEST: we cannot hand the ball to somebody who is not
+		// on the roster any more (a dismissed member, a released ow-worker, the
+		// pre-column blank) — post_chat rejects those recipients, so the notice
+		// would simply not arrive. Say so and name the other two doors rather
+		// than pretending the ball landed.
 		if m == nil || m.RosterStatus != RosterStatusActive {
 			return nil, http.StatusUnprocessableEntity,
 				"cannot hand back to creator '" + t.CreatorID +
@@ -257,9 +259,11 @@ func (s *apiServer) handoffGateVerdict(
 // onto t (the caller persists t — closeTask's PutTask carries it). It runs
 // AFTER the step write and BEFORE the derivation/close, so the successor task
 // and its dep edge already exist when releaseDependentsOnClose walks them.
-func (s *apiServer) applyHandoffPlan(
-	t *Task, plan *handoffPlan, now float64, trigger string,
-) error {
+//
+// Since T-f265 only follow_up has a side effect here (the dep edge); the
+// return_to_creator notice moved to the tail of closeTask, which is why this
+// no longer needs a clock or a trigger.
+func (s *apiServer) applyHandoffPlan(t *Task, plan *handoffPlan) error {
 	if plan == nil {
 		return nil
 	}
@@ -271,78 +275,61 @@ func (s *apiServer) applyHandoffPlan(
 		}
 		t.HandoffTaskID = plan.TaskID
 	case HandoffReturnToCreator:
-		followUp, err := s.mintCreatorFollowUpTask(*t, plan.Note, now, trigger)
-		if err != nil {
-			return err
-		}
-		t.HandoffTaskID = followUp.ID
+		// Nothing to build. The notice to the creator fires from the TAIL of
+		// closeTask (notifyCreatorOnHandback), reading the declaration this
+		// call is about to stamp — so the sentence can honestly say the task
+		// is closed, and a close that fails never leaves an announcement
+		// behind claiming it succeeded.
 	}
 	t.Handoff = plan.Kind
 	t.HandoffNote = plan.Note
 	return nil
 }
 
-// mintCreatorFollowUpTask is option ① made durable. The complaint the ticket
-// starts from is that telling the creator over SSE still drops: a delta is a
-// line that scrolls away, and nothing in the system afterwards says "there is
-// a ball on your side". (Since T-0eb5 the creator is not even in the task
-// audience any more — publishTask fans to the executor only — so the durable
-// carrier below is the ONLY thing that puts the ball on their side.) The
-// durable equivalent that already exists is a TASK — it sits on the creator's
-// open list, it is counted in the resume snapshot (resumeTasksFor), it shows on
-// the cockpit, and it only leaves by being worked or terminated. So that is
-// what we mint: an ad-hoc task on the creator, blocked by the task that just
-// finished (so half B fans the release the moment we close).
+// notifyCreatorOnHandback is what `return_to_creator` does now that it no
+// longer opens a task.
 //
-// It is deliberately step-LESS (status derives to not_started): the follow-up's
-// first job is to decide what the follow-up work IS, which is the creator's
-// call, not ours to plan for them.
-func (s *apiServer) mintCreatorFollowUpTask(
-	t Task, note string, now float64, trigger string,
-) (Task, error) {
+// WHY IT USED TO OPEN ONE: telling the creator over SSE drops — a delta is a
+// line that scrolls away, and since T-0eb5 the creator is not even in the task
+// audience (publishTask fans to the executor only). A TASK was the durable
+// carrier that put the ball on their side.
+//
+// WHY IT NO LONGER DOES (owner 2026-08-17, card rc-dc3305f590a7, verbatim
+// 「轉派都不需要另外開票」): the minted task's own first line told the creator to
+// terminate it if nothing followed — and terminate_task requires admin_agent,
+// so an ordinary member was instructed to do something it gets a 403 for. The
+// carrier was also heavier than the message: a row on the open list, in the
+// resume snapshot and on the cockpit, that only leaves by being worked or
+// terminated.
+//
+// WHAT CARRIES IT INSTEAD: a durable chat row — the same persistent half
+// releaseDependentsOnClose uses. It lands in the creator's mailbox, counts as
+// unread, and survives a reconnect; it does NOT need anybody's permission to
+// clear. The purpose (the creator learns the ball is back) is kept; the
+// mechanism (a ticket only an admin could close) is not.
+//
+// Runs at the TAIL of closeTask, so the sentence can say the task is closed
+// and a failed close never leaves an announcement claiming otherwise.
+// Best-effort: a notify failure must never fail the close it follows.
+func (s *apiServer) notifyCreatorOnHandback(t Task, trigger string) {
+	if t.Handoff != HandoffReturnToCreator {
+		return
+	}
+	// The gate already refused an off-roster creator and a self-created task
+	// never reaches the gate at all; these are belt-and-braces so a future
+	// caller cannot address a blank or talk to the executor about itself.
+	if t.CreatorID == "" || t.CreatorID == t.ExecutorID {
+		return
+	}
 	no := TaskNo(t.ID)
-	desc := "任務 " + no + "「" + t.Title + "」已由 " + t.ExecutorID +
-		" 完成並關閉,球交回給你(這張任務的建立者)。\n\n" +
-		"請決定後續:有後續工作就在這張任務上規劃步驟並執行(或轉派出去);" +
-		"確認沒有後續就直接終止這張任務。\n\n" +
-		"注意:" + no + " 已經是終態,它的 plan 永久凍結,後續工作只能開在這裡。"
-	if note != "" {
-		desc += "\n\n執行者的交棒說明:" + note
+	body := "[" + no + "] 任務「" + t.Title + "」已由 " + t.ExecutorID +
+		" 完成並關閉,球交回給你(這張任務的建立者)。" +
+		"有後續工作請開一張新任務;沒有後續就不必做任何事。" +
+		"注意:" + no + " 已經是終態,它的 plan 永久凍結。"
+	if t.HandoffNote != "" {
+		body += "執行者的交棒說明:" + t.HandoffNote
 	}
-	// 🔴 THIS DESCRIPTION MUST STAY TRIMMED, and today it is only by luck of the
-	// caller: the literal above has no surrounding whitespace, so the value is
-	// clean only because handoffPlan.Note was TrimSpace'd where the plan was
-	// built. Nothing here enforces it and no test pins it.
-	//
-	// Why that matters beyond tidiness: create_task does NOT trim a description,
-	// so an INSERT that carried whitespace would be a THIRD way for untrimmed text
-	// to reach that column — and update_task's tool description, the seeds boot
-	// doc and api_tasks_fields.go all state that there are exactly TWO
-	// (create_task and a verbatim restore). Dropping one of those TrimSpace calls
-	// would make all three false at once, and nothing would turn red. Found by the
-	// independent review of T-646a as a near miss, not a live defect.
-	fu := Task{
-		ID:           "t-" + newHexID(12),
-		Title:        "接手 " + no + " 的後續:" + t.Title,
-		Description:  desc,
-		Status:       TaskStatusNotStarted,
-		Priority:     TaskPriorityMid,
-		ExecutorKind: TaskExecutorMember,
-		ExecutorID:   t.CreatorID,
-		// The finished task's executor is the one handing over, so it is the
-		// creator of the follow-up — the ball's provenance stays readable.
-		CreatorID: t.ExecutorID,
-		CreatedTS: now,
-		UpdatedTS: now,
-	}
-	if err := s.dal.PutTask(fu); err != nil {
-		return Task{}, err
-	}
-	if err := s.dal.AddTaskDep(fu.ID, t.ID); err != nil {
-		return Task{}, err
-	}
-	s.publishTask(fu, trigger)
-	return fu, nil
+	s.postTaskChat(t, wireSystemSender, t.CreatorID, body, trigger)
 }
 
 // ── half B: dependency becomes a real handover ───────────────────────────────

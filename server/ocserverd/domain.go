@@ -1213,9 +1213,11 @@ func ValidTaskLock(l string) bool {
 // step lands done the task derives to done, closed_ts stamps, and submit_plan
 // is a permanent 409 — there is no "after" in which to arrange a handover.
 //
-//   - HandoffReturnToCreator — hand it back: the server mints a DURABLE
-//     follow-up task on the creator (an open task row on their list, not an
-//     SSE line that washes away) carrying a dep on this one;
+//   - HandoffReturnToCreator — hand it back: the server tells the creator in a
+//     DURABLE chat message (a mailbox row that survives a reconnect, not an SSE
+//     line that washes away). It used to MINT a task on them instead; that was
+//     withdrawn in T-f265 because the minted task's own first line told an
+//     ordinary member to terminate it, and terminate_task is admin-only;
 //   - HandoffFollowUp        — a successor task already exists; the server
 //     attaches this task to it as a dep, so half B (closeTask →
 //     releaseDependentsOnClose) wakes/schedules it the moment we close;
