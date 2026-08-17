@@ -1302,8 +1302,10 @@ export const httpApi: Api = {
     // online-only 409). Graceful (T-ea82): stamps the handover + nudges the worker
     // to flush, then the server kills+re-spawns a fresh worker on the same task;
     // the outsource_worker SSE delta also fans so the list refetches. The flush
-    // window is recycleGraceFor(refocus_op) — an owner-pressed refocus (this one)
-    // gets soft_offboard_grace + recycle_grace, not recycle_grace alone.
+    // window is a flat StoppingTimeoutSecs (~120s) ceiling — workers do NOT go
+    // through recycleGraceFor, so unlike a member's owner-pressed refocus there
+    // is no soft window in front of it. It is a ceiling, not a duration: the
+    // collect fires on the worker's stopped report if that comes first.
     const wire = unwrap(
       await client.POST("/api/outsource-workers/{id}/refocus", {
         params: { path: { id } },

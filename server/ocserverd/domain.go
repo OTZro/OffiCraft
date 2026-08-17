@@ -1052,7 +1052,8 @@ const dutyCapCharsDefault = 1000
 //
 // The 下線程序 cap (T-c9c0) is sized with the boot sequences rather than the
 // handbook, and for the same reason: it is a short ordered checklist an agent
-// has to be able to finish inside a ~120s grace window, not a reference text.
+// has to work under time pressure (a recycle bounds it; an offboard does not,
+// but the owner is waiting), not a reference text.
 const (
 	systemInteractionCapCharsDefault = 60000
 	bootSequenceCapCharsDefault      = 15000

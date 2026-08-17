@@ -844,8 +844,13 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 
 // POST /api/members/{member_id}/force-stop — STOP intent now (stamps
 // stopping_since only if unset) + the immediate robust-STOP dispatch straight
-// to the member's warden, bypassing BOTH the 120s grace clock AND the ~30s
-// cadence (handlers.handle_force_stop_member).
+// to the member's warden, bypassing the ~30s cadence
+// (handlers.handle_force_stop_member).
+//
+// There is no grace clock here to bypass: the 下線 arm runs none, so apart from
+// the agent's own report_stopped this endpoint is the ONLY thing that ever
+// collects the member (owner ruling rc-27d1710174dd). See the endpoint's
+// description in spec/openapi.json, which says the same at length.
 func (s *apiServer) HandleForceStopMemberApiMembersMemberIdForceStopPost(w http.ResponseWriter, r *http.Request, memberId string) {
 	m, err := s.resolveMember(memberId)
 	if err != nil {
