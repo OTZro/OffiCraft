@@ -316,15 +316,30 @@ runtime capability report.
 
 **desired_state=offline** — the one-command model:
 
+**This arm runs NO CLOCK.** Owner ruling 2026-08-16 (card `rc-27d1710174dd`, option ①):
+「不要兜底：只有你按強制下線才收它」. The server does not arm a deadline here and never
+decides that time is up.
+
 - ¬online → converged; reset bookkeeping.
-- online, no grace armed → arm `stop_deadline = now + stop_grace` and dispatch NOTHING
-  (the agent gets the grace window to self-stop).
-- online, within grace → wait.
-- online, grace elapsed → dispatch the SINGLE robust **STOP** (the warden self-escalates the
-  kill; there is no separate force-kill RPC). De-dupe: MUST NOT re-issue while
-  `last_command==STOP` within `stop_retry`; once `stop_retry` elapses and the member is
-  STILL online, MUST re-dispatch (at-least-once over the at-most-once band; re-firing is an
-  idempotent no-op warden-side).
+- online → the member is `stopping` and the producer dispatches **NOTHING**, indefinitely.
+  The agent has been handed the offboard sequence and is working it; a clock here would
+  cut off a session that was told there is no countdown.
+- Collection has exactly **two** sources, neither of them a timer:
+  1. **the agent's own `report_stopped`** — that call itself dispatches the SINGLE robust
+     **STOP**, event-driven, not on the next tick; and
+  2. **the owner pressing 強制下線** — the SAME command, it only skips the waiting.
+- There is no separate force-kill RPC either way: the warden self-escalates the kill.
+- De-dupe on that robust STOP: MUST NOT re-issue while `last_command==STOP` within
+  `stop_retry`; once `stop_retry` elapses and the member is STILL online, MUST re-dispatch
+  (at-least-once over the at-most-once band; re-firing is an idempotent no-op warden-side).
+
+🔴 **`stop_deadline` / `stop_grace` still exist — they are UNREACHABLE, not deleted.**
+The timed wind-down they drive is still written in `decideDown`, behind a
+`SoftOffboardGrace == 0` guard, and `SoftOffboardGraceSecs` is a compile-time constant
+greater than zero (deliberately not an owner-facing setting). So the fields are still in
+the reconcile state and still in the timers table below; today nothing reaches them.
+Anyone grepping for those names will find live code — read this as "the clock is off",
+not as "the clock was removed".
 
 **desired_state=uninstall** (warden members only; owner-revised 2026-07-11 — the intent is
 ONE-SHOT, never a standing order):
@@ -352,7 +367,7 @@ ONE-SHOT, never a standing order):
 |---|---|---|
 | cadence | 30 s | tick period |
 | `start_timeout` | 90 s | START unconfirmed → failed spawn |
-| `stop_grace` | 120 s | self-stop window before the robust stop |
+| `stop_grace` | 120 s | self-stop window before the robust stop — **unreachable today**: the arm that consumes it is guarded by `SoftOffboardGrace == 0` (see §4.3) |
 | `stop_retry` | 90 s | STOP/UNINSTALL re-dispatch window (lost-frame recovery) |
 | `recycle_grace` | 120 s | dump-stuck fallback from `refocus_since` |
 | `backoff_base` / `backoff_cap` | 5 s / 300 s | exponential start backoff |
