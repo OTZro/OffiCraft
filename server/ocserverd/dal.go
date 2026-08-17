@@ -172,13 +172,13 @@ type Member struct {
 	// claim that a session boundary just cleared. Not on the wire.
 	HandoverNoticedTS float64
 	BankedCost        float64
-	LastOp       string
-	LastOpOK     *bool // nil = no op reported yet (three-valued)
-	LastOpLog    string
-	LastOpReason string // structured "<code>: <detail>" cause; "" = none reported
-	LastOpAt     float64
-	RosterStatus string  // "active" | "removed" (dismiss is a SOFT delete)
-	LinkedTaskID *string // task binding (migrations/00024); nil = unbound. Outsource members carry their bound task id here.
+	LastOp            string
+	LastOpOK          *bool // nil = no op reported yet (three-valued)
+	LastOpLog         string
+	LastOpReason      string // structured "<code>: <detail>" cause; "" = none reported
+	LastOpAt          float64
+	RosterStatus      string  // "active" | "removed" (dismiss is a SOFT delete)
+	LinkedTaskID      *string // task binding (migrations/00024); nil = unbound. Outsource members carry their bound task id here.
 	// ── A案 P7d (migrations/00025 — the outsource_worker fold) ────────────────
 	// Codename is the outsource display codename (O-7 / S-12 / H-3), globally
 	// unique and never reused (partial UNIQUE index); "" (stored NULL) on every
