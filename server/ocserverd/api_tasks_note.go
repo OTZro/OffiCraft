@@ -78,21 +78,23 @@ func (s *apiServer) HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost(w 
 // note as it stands when this request reads it. A concurrent write that moved or
 // duplicated the anchor turns this batch into a visible 400 instead.
 //
-// WHAT IS STILL OPEN is NOT concurrent edits to DIFFERENT anchors — those are
-// the case this face handles best, each spliced onto whatever the note says at
-// its own read, both surviving. It is the read-then-write gap INSIDE one
-// request: resolveStepForNoteWrite reads the step from the read pool and
+// WHAT IS STILL OPEN. Concurrent edits to DIFFERENT anchors survive TOGETHER
+// once the two requests serialise — each is spliced onto whatever the note says
+// at its own read. What remains is the read-then-write gap INSIDE one request,
+// which is milliseconds wide rather than handover-long, but is not zero: an
+// interleaving there still eats one side's edit silently.
+// Concretely: resolveStepForNoteWrite reads the step from the read pool and
 // storeStepNote writes it through the write pool, with no transaction spanning
 // the two, no version compare, and an UPDATE that carries no old value. Two
 // patch requests interleaving in the server (A reads → B reads → A writes →
 // B writes) still lose A's edit silently. SetTaskStepNote being a SINGLE-column
 // UPDATE is not a defence here — that is what stops the whole-row step writers
 // from replaying a note they read earlier (T-e271, api_tasks_note_race_test.go)
-// — because both patches compute their new text from the same base. That window
-// is milliseconds, orders of magnitude narrower than the handover-length window
-// this face was built for — but it exists; closing it needs the read and the
-// write under one transaction, or a version/etag compare at the write boundary.
-// Tracked separately, and identical on the patch_task_sop twin.
+// — because both patches compute their new text from the same base. Closing it
+// needs the read and the write under one transaction, or a version/etag compare
+// at the write boundary. Tracked separately. The patch_task_sop twin carries
+// the same gap AND a wider one — its write is a whole-row upsert, so read that
+// face's own caveat rather than assuming the two are equivalent.
 //
 // Guards are the wholesale write's, called through the SAME two helpers rather
 // than restated — two faces onto one field must not be able to disagree about

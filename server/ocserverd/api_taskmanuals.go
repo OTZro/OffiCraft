@@ -356,12 +356,15 @@ func (s *apiServer) HandleUpdateTaskManualApiTaskManualsTypeKeyPost(w http.Respo
 			return
 		}
 	}
-	// T-3351 hard cap. This handler is the ONLY write face for sop_md, and a
-	// SECOND write face for learnings (spelled `learnings` here, `text` in
-	// write_task_learnings) — capping only the learnings-specific seams would
-	// have left both an uncapped door onto the same document and sop_md with no
-	// gate at all. Validated BEFORE any field is applied, so a refusal leaves
-	// the whole partial update unwritten (the handler's existing posture).
+	// T-3351 hard cap. This handler is ONE OF TWO write faces for sop_md (the
+	// other is patch_task_sop, T-1667, which judges the SAME cap on the RESULT
+	// of its patch), and a SECOND write face for learnings (spelled `learnings`
+	// here, `text` in write_task_learnings) — capping only the
+	// learnings-specific seams would have left both an uncapped door onto the
+	// same document and sop_md with no gate at all; every sop_md door has to
+	// carry the cap or the cap is a suggestion. Validated BEFORE any field is
+	// applied, so a refusal leaves the whole partial update unwritten (the
+	// handler's existing posture).
 	// Each field is judged against ITS OWN cap, read once (T-30f1). Until then
 	// both were judged against one read of one shared cap, and the reason given
 	// was that two reads could straddle a concurrent PATCH and judge one doc by
@@ -643,17 +646,40 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 // a visible 400. Making the write cost scale with the CHANGE is the secondary
 // benefit.
 //
-// WHAT IS STILL OPEN is NOT concurrent edits to DIFFERENT anchors — those are
-// the case this face handles best, each spliced onto whatever the doc says at
-// its own read, both surviving. It is the read-then-write gap INSIDE one
-// request: the read above goes to the read pool, the write below to the write
-// pool, with no transaction spanning the two, no version compare, and an UPDATE
-// that carries no old value. Two patch requests interleaving in the server
-// (A reads → B reads → A writes → B writes) still lose A's edit silently. That
-// window is milliseconds — orders of magnitude narrower than the session-length
-// window this face was built for — but it exists; closing it needs the read and
-// the write under one transaction, or a version/etag compare at the write
-// boundary. Tracked separately.
+// WHAT IS STILL OPEN. Concurrent edits to DIFFERENT anchors survive TOGETHER
+// once the two requests serialise — each is spliced onto whatever the doc says
+// at its own read. What remains is the read-then-write gap INSIDE one request,
+// which is milliseconds wide rather than session-long, but is not zero: an
+// interleaving there still eats one side's edit silently.
+// Concretely: the read above goes to the read pool, the write below to the
+// write pool, with no transaction spanning the two and no version compare. Two
+// patch requests interleaving in the server (A reads → B reads → A writes →
+// B writes) lose A's edit. Closing it needs the read and the write under one
+// transaction, or a version/etag compare at the write boundary. Tracked
+// separately.
+//
+// 🔴 AND THAT WINDOW IS WIDER HERE THAN ON THE patch_step_note TWIN, which is
+// why this caveat is not a copy of that one. putTaskManualOn is a WHOLE-ROW
+// upsert: it writes back purpose, fields, display_name, assignee and learnings
+// from the copy resolveTaskManual read at the top of this request, not just
+// sop_md. So an interleaving in the same window also REVERTS a concurrent write
+// to any of those other fields — a patch_task_learnings landing between this
+// face's read and its write is silently undone, and the caller of that write
+// already got its 200. The step-note twin does not have this: SetTaskStepNote
+// is a SINGLE-column UPDATE, so its window can only cost the note itself.
+// The narrow fix is to make this face write sop_md alone; that is out of
+// T-1667's scope and is recorded here rather than done.
+//
+// Same shape, same cause: a manual DELETED concurrently between the read and
+// the write is RESURRECTED by the upsert's INSERT arm and this face answers
+// 200. That is pre-existing behaviour of update_task_manual (identical write
+// seam), but this ticket opens a SECOND door onto it. Also not fixed here.
+//
+// Wording note: the two faces T-1667 added (this one and patch_step_note) are
+// the only ones rewritten to the description above. patch_task_learnings above,
+// and patch_lessons / patch_insight, still describe the anchor as an "optimistic
+// lock" in their comments and on the wire. Realigning those three is a
+// follow-up; do not read this comment as a claim that all five now agree.
 //
 // Semantics: edits apply IN ORDER; a non-empty old must match exactly once
 // (0/>1 → flat 400 naming the failing edit index and get_task_manual as the
