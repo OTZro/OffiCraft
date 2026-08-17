@@ -316,15 +316,43 @@ runtime capability report.
 
 **desired_state=offline** — the one-command model:
 
+**This arm runs NO CLOCK.** Owner ruling 2026-08-16 (card `rc-27d1710174dd`, option ①):
+「不要兜底：只有你按強制下線才收它」. The server does not arm a deadline here and never
+decides that time is up.
+
 - ¬online → converged; reset bookkeeping.
-- online, no grace armed → arm `stop_deadline = now + stop_grace` and dispatch NOTHING
-  (the agent gets the grace window to self-stop).
-- online, within grace → wait.
-- online, grace elapsed → dispatch the SINGLE robust **STOP** (the warden self-escalates the
-  kill; there is no separate force-kill RPC). De-dupe: MUST NOT re-issue while
-  `last_command==STOP` within `stop_retry`; once `stop_retry` elapses and the member is
-  STILL online, MUST re-dispatch (at-least-once over the at-most-once band; re-firing is an
-  idempotent no-op warden-side).
+- online → the member is `stopping` and the producer dispatches **NOTHING**, indefinitely.
+  The agent has been handed the offboard sequence and is working it; a clock here would
+  cut off a session that was told there is no countdown.
+- Collection **on this online arm** has two sources, neither of them a timer:
+  1. **the agent's own `report_stopped`** — that call itself dispatches the SINGLE robust
+     **STOP**, event-driven, not on the next tick; and
+  2. **the owner pressing 強制下線** — the SAME command, it only skips the waiting.
+  (A member still `waking` is a different case and is NOT covered by this arm: deactivating
+  a wake that has been dispatched but never connected force-stops it outright — nobody is
+  inside being told anything. See §4.2 and `docs/design/offboard-flow.md` §三.)
+- There is no separate force-kill RPC either way: the warden self-escalates the kill.
+- 🔴 **Neither of those two paths re-dispatches.** Both go through the one-shot
+  `dispatchRobustStopNow`, which enqueues once and does NOT write `last_command` /
+  `last_command_at` — so the producer's de-dupe/re-dispatch discipline below never engages
+  for them. **If that STOP frame is lost, nothing on the server re-sends it; the remaining
+  escalation is the owner's hand.**
+- De-dupe and re-dispatch (MUST NOT re-issue while `last_command==STOP` within
+  `stop_retry`; once `stop_retry` elapses and the member is STILL online, MUST re-dispatch
+  — at-least-once over the at-most-once band, re-firing being an idempotent warden-side
+  no-op) belong to the **producer-dispatched** STOP, i.e. the timed arm below. **Under
+  today's production constants that arm is not reached**, so this rule currently governs
+  nothing on the offline path; it still governs `desired_state=uninstall` (§4.3) and stays
+  contract for the timed arm.
+
+🔴 **`stop_deadline` / `stop_grace` still exist — under the production config they are
+UNREACHABLE, not deleted.** The timed wind-down they drive is still written in
+`decideDown`; it is entered **only when `SoftOffboardGrace == 0`**, and
+`SoftOffboardGraceSecs` is a compile-time constant of 600 s (deliberately not an
+owner-facing setting), so production never takes that branch. Tests DO reach it by
+injecting zero — the timers below are "all injectable", and there are sub-tests on both
+arms — so a grep will find live code and live tests. Read this as **"the clock is off in
+production"**, not as "the clock was removed", and not as "that constant is zero".
 
 **desired_state=uninstall** (warden members only; owner-revised 2026-07-11 — the intent is
 ONE-SHOT, never a standing order):
@@ -352,9 +380,10 @@ ONE-SHOT, never a standing order):
 |---|---|---|
 | cadence | 30 s | tick period |
 | `start_timeout` | 90 s | START unconfirmed → failed spawn |
-| `stop_grace` | 120 s | self-stop window before the robust stop |
+| `stop_grace` | 120 s | self-stop window before the robust stop — **unreachable today**: the arm that consumes it is guarded by `SoftOffboardGrace == 0` (see §4.3) |
 | `stop_retry` | 90 s | STOP/UNINSTALL re-dispatch window (lost-frame recovery) |
-| `recycle_grace` | 120 s | dump-stuck fallback from `refocus_since` |
+| `recycle_grace` | 120 s | dump-stuck fallback from `refocus_since` — but the wait is **`recycleGraceFor(refocus_op)`, not this value flat**: an owner-pressed 重新聚焦 (`refocus_op = refocus`) waits `soft_offboard_grace + recycle_grace` = **720 s**, because its notice carries no countdown; `context_high` and `restart_self` already say 120 s and get exactly that |
+| `soft_offboard_grace` | 600 s | the no-countdown window a SOFT notice opens. Load-bearing in two different ways: on the 下線 arm it is what makes `decideDown` run **no clock at all** (§4.3) and it never escalates; on the 重新聚焦 arm it is the first half of the 720 s above, and that one **does** escalate. Compile-time constant (`SoftOffboardGraceSecs`), deliberately not owner-settable |
 | `backoff_base` / `backoff_cap` | 5 s / 300 s | exponential start backoff |
 | `circuit_threshold` / `circuit_cooldown` | 5 / 120 s | sticky breaker (verified hard failures only) |
 
@@ -368,9 +397,11 @@ ONE-SHOT, never a standing order):
   (`report_stopping` → `report_stopped`; the runtime never auto-reports on the
   session's behalf) → robust STOP once the agent reports stopped
   (the first stopped report of a refocus-marked, still-desired-online member fires
-  the kill event-driven, not on the next tick) OR `recycle_grace` elapses (the
-  dead-session fallback — an unresponsive session that never reports is force-stopped
-  by the server; the agent side needs no timeout of its own) → the SSE drop makes
+  the kill event-driven, not on the next tick) OR `recycleGraceFor(refocus_op)` elapses
+  (the dead-session fallback — an unresponsive session that never reports is force-stopped
+  by the server; the agent side needs no timeout of its own. **The wait is not one number**:
+  120 s for `context_high` / `restart_self`, 720 s for an owner-pressed `refocus` — see the
+  `recycle_grace` row in §4.4) → the SSE drop makes
   ¬online → the next tick's plain START respawns.
 - **The wake text is the document, not client copy**: the SERVER composes the
   sentence, folds the 下線程序 document into it and PUSHES both in the member delta

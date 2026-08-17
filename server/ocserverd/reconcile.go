@@ -1381,11 +1381,17 @@ func (s *apiServer) reconcileMemberNow(memberID string) reconcileDecision {
 }
 
 // dispatchRobustStopNow dispatches ONE robust STOP to the member's warden
-// RIGHT NOW — bypassing BOTH the cadence tick AND the machine's grace clock
+// RIGHT NOW — bypassing the cadence tick
 // (handlers._dispatch_robust_stop_now: the force-stop endpoint + the
 // event-driven recycle kill). Raw dispatch: it does not touch the reconcile
-// store — the cadence STOP arm is the idempotent backstop. Best-effort +
-// fire-and-forget; gated OFF wholesale by --no-reconcile.
+// store. Best-effort + fire-and-forget; gated OFF wholesale by --no-reconcile.
+//
+// What it skips differs by caller, and only one of them has a clock to skip:
+//   - recycle kill: skips the remaining recycleGraceFor window, and the cadence
+//     STOP arm is still the idempotent backstop if this frame is lost.
+//   - force-stop / offboard: there is NO clock here and NO backstop — decideDown
+//     returns decisionNone for the whole soft window, so a lost frame leaves the
+//     member online until the owner presses the button again.
 func (s *apiServer) dispatchRobustStopNow(memberID string) {
 	if s.noReconcile {
 		return

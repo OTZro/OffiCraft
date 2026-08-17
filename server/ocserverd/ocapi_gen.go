@@ -3580,7 +3580,7 @@ type ServerInterface interface {
 	// Deactivate: desired_state=offline + stamp stopping_since (retains row).
 	// (POST /api/members/{member_id}/deactivate)
 	HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w http.ResponseWriter, r *http.Request, memberId string)
-	// Force-stop: robust STOP now, bypassing the graceful-stop grace.
+	// Force-stop: robust STOP now. On the offboard arm this is the ONLY thing that ever collects the member -- nothing times out.
 	// (POST /api/members/{member_id}/force-stop)
 	HandleForceStopMemberApiMembersMemberIdForceStopPost(w http.ResponseWriter, r *http.Request, memberId string)
 	// Refocus a member's context (online-only, else 409).

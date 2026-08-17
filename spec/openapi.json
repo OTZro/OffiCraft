@@ -11832,7 +11832,7 @@
     },
     "/api/members/{member_id}/force-stop": {
       "post": {
-        "description": "Force-stop a member: IMMEDIATELY kill the live session, bypassing BOTH the\n120s graceful-stop grace clock AND the ~30s reconcile cadence.\n\nThis is the escalation the cockpit surfaces once a member is already *stopping*\n(inside its graceful-stop grace): instead of waiting for the agent to self-stop\n(up to 120s) or for the reconcile tick to eventually dispatch the robust stop,\nthe owner force-kills now. The handler writes the STOP intent\n(``desired_state=offline``\n+ stamps ``stopping_since`` if unset, so presence reads coherently) and then\ndispatches the SINGLE robust STOP straight to the member's warden via\n:func:`_dispatch_robust_stop_now` — the warden's ``stop()`` → ``escalateKill``\nladder performs the SIGKILL (tmux kill-session → force killpg the process group).\n\nThe grace clock lives in the reconcile machine's desired_state=offline arm (it waits\n``stop_grace`` before emitting the robust stop); dispatching the stop directly\nhere skips that wait entirely. The reconcile tick remains the idempotent backstop\n— a robust stop against an already-dead session is a no-op.\n\nRBAC (control-others): route-table ``requires=\"admin_agent\"`` — only an\nowner-scoped token OR an admin-role (assistant) member may force-stop a\nmember; an ordinary agent → 403. A ``member`` delta\nfans out on the intent write.",
+        "description": "Force-stop a member: IMMEDIATELY kill the live session.\n\n🔴 This is NOT a shortcut past a countdown — there is no countdown to shortcut.\nOn the 下線 arm (``desired_state=offline`` on a still-online member) the reconcile\nmachine runs NO clock at all: ``decideDown`` returns decisionNone for as long as\nthe member stays online, so a member whose agent never reports stopped is NEVER\ncollected by the server. Owner ruling rc-27d1710174dd\n(「不要兜底：只有你按強制下線才收它」) — the escalation is deliberately his, not\na timer's, because the notice the agent was shown promises no deadline.\n\nSo there are exactly two things that end a soft offboard: the agent's own\n``report_stopped`` (that call dispatches the robust STOP itself), or THIS endpoint.\nIf neither happens the member stays in *stopping* indefinitely, which is the state\nthe cockpit surfaces this button in.\n\n``stop_deadline`` / ``stop_grace`` still exist in the reconcile store and config,\nbut the arm that consumes them is guarded by ``SoftOffboardGrace == 0`` and\n``SoftOffboardGraceSecs`` is a compile-time 600 s — unreachable in production,\ninjectable in tests. Do not implement against them.\n\nThe handler writes the STOP intent (``desired_state=offline``\n+ stamps ``stopping_since`` if unset, so presence reads coherently) and then\ndispatches the SINGLE robust STOP straight to the member's warden via\n:func:`_dispatch_robust_stop_now` — the warden's ``stop()`` → ``escalateKill``\nladder performs the SIGKILL (tmux kill-session → force killpg the process group).\nIt also bypasses the ~30s reconcile cadence, which is the only wait it does skip.\n\nRBAC (control-others): route-table ``requires=\"admin_agent\"`` — only an\nowner-scoped token OR an admin-role (assistant) member may force-stop a\nmember; an ordinary agent → 403. A ``member`` delta\nfans out on the intent write.",
         "operationId": "handle_force_stop_member_api_members__member_id__force_stop_post",
         "parameters": [
           {
@@ -11887,14 +11887,14 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Force-stop: robust STOP now, bypassing the graceful-stop grace.",
+        "summary": "Force-stop: robust STOP now. On the offboard arm this is the ONLY thing that ever collects the member -- nothing times out.",
         "x-mcp": {
           "include": true,
           "order": 12,
           "name": "force_stop_member",
-          "description": "Force-stop: robust STOP now, bypassing the graceful-stop grace.",
+          "description": "Force-stop: robust STOP now. On the offboard arm this is the ONLY thing that ever collects the member -- nothing times out.",
           "legacy": {
-            "descriptor": "{\n      \"description\": \"Force-stop: robust STOP now, bypassing the graceful-stop grace.\",\n      \"inputSchema\": {\n        \"properties\": {\n          \"member_id\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"member_id\"\n        ],\n        \"additionalProperties\": false,\n        \"type\": \"object\"\n      },\n      \"name\": \"force_stop_member\"\n    }"
+            "descriptor": "{\n      \"description\": \"Force-stop: robust STOP now. On the offboard arm this is the ONLY thing that ever collects the member -- nothing times out.\",\n      \"inputSchema\": {\n        \"properties\": {\n          \"member_id\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"member_id\"\n        ],\n        \"additionalProperties\": false,\n        \"type\": \"object\"\n      },\n      \"name\": \"force_stop_member\"\n    }"
           }
         }
       }

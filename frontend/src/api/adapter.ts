@@ -1389,8 +1389,9 @@ export interface Api {
   deactivateMember(id: string): Promise<void>;
   /**
    * Force-stop (immediate kill): POST /api/members/{id}/force-stop → the server
-   * dispatches the robust STOP straight to the warden NOW, bypassing the 120s
-   * graceful-stop grace (the warden SIGKILLs the session). Backs the cockpit's
+   * dispatches the robust STOP straight to the warden NOW (the warden SIGKILLs the
+   * session). Not a shortcut past a countdown — the offboard arm runs none, so
+   * apart from the agent's own report_stopped this is the only collection. Backs the cockpit's
    * "Force stop" escalation, surfaced once a member is already *stopping*. Does
    * NOT flip online — the caller refetches; presence surfaces stopped.
    */

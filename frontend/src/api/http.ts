@@ -544,8 +544,10 @@ export const httpApi: Api = {
   async forceStopMember(id: string): Promise<void> {
     // POST /api/members/{id}/force-stop -> MemberDTO. Escalates a *stopping* member
     // to an IMMEDIATE kill: the server dispatches the robust STOP straight to the
-    // warden, bypassing the 120s graceful-stop grace (the warden SIGKILLs). Takes
-    // no body. Caller refetches; presence surfaces stopped.
+    // warden (the warden SIGKILLs). It is NOT a shortcut past a countdown — the
+    // offboard arm runs no clock, so apart from the agent's own report_stopped this
+    // is the only thing that ever collects it. Takes no body. Caller refetches;
+    // presence surfaces stopped.
     await client.POST("/api/members/{member_id}/force-stop", {
       params: { path: { member_id: id } },
     });
@@ -1298,8 +1300,12 @@ export const httpApi: Api = {
   async refocusWorker(id: string): Promise<OutsourceWorkerView> {
     // POST /api/outsource-workers/{id}/refocus -> OutsourceWorkerDTO (owner/admin-agent,
     // online-only 409). Graceful (T-ea82): stamps the handover + nudges the worker
-    // to flush (~120s grace), then the server kills+re-spawns a fresh worker on the
-    // same task; the outsource_worker SSE delta also fans so the list refetches.
+    // to flush, then the server kills+re-spawns a fresh worker on the same task;
+    // the outsource_worker SSE delta also fans so the list refetches. The flush
+    // window is a flat StoppingTimeoutSecs (~120s) ceiling — workers do NOT go
+    // through recycleGraceFor, so unlike a member's owner-pressed refocus there
+    // is no soft window in front of it. It is a ceiling, not a duration: the
+    // collect fires on the worker's stopped report if that comes first.
     const wire = unwrap(
       await client.POST("/api/outsource-workers/{id}/refocus", {
         params: { path: { id } },
