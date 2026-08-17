@@ -27,6 +27,43 @@
 
 ---
 
+## 全景：一次下線的訊息往來
+
+先看形狀，再讀細節。**這張圖只畫最不會變的那一層**——有哪些角色、訊息往哪個方向走、哪一步才是扳機。**秒數、條件、例外一律不在圖上**，它們在後面的章節，圖與文字刻意不重疊：多一份講同一件事的拷貝，下次只會有一邊被改，而沒有任何東西會叫。
+
+```mermaid
+sequenceDiagram
+    actor owner
+    participant srv as server（HTTP 面）
+    participant rec as server（reconcile 迴圈）
+    participant agent as agent
+    participant w as warden（該 session 實際所在的機器）
+
+    owner->>srv: 按下線（改 desired_state）
+    srv-->>agent: 廣播 delta，夾帶收尾清單並指名收口工具
+    Note over agent: agent 自己收尾。<br/>它沒有決定自己何時死的權力
+
+    agent->>srv: 「我開始收尾了」——不是扳機，沒有殺的動作
+
+    alt agent 自己收完
+        agent->>srv: 「我收完了」——這才是扳機
+    else agent 不再回話
+        owner->>srv: 強制下線（同一道命令，只是不等）
+    end
+
+    Note over srv: 先寫 durable 狀態、先廣播 delta，然後才推殺
+    srv->>w: 推停止命令（SSE 推播，不是 warden 來拉）
+    w->>w: 自我升級的殺階梯（升級發生在 warden 自己身上）
+    w->>srv: command_result 回執
+
+    Note over rec,w: 回執是觀測，不是投遞保證。<br/>死亡的權威判定是那條 SSE 掉了
+    rec->>w: 還活著就再送一次（命令重複執行無害）
+```
+
+**圖上刻意看不到的三件事**，因為它們不是時序：哪一步不可逆（第六節）、出錯時往哪一邊倒（第八節）、三條下線路徑彼此差在哪（第三節）。畫進去只會讓圖變成一份會漂的第二敘述。
+
+---
+
 ## 一、有哪些塊，各自負責什麼
 
 四個參與者，職責邊界是這條流程最重要的一件事：
