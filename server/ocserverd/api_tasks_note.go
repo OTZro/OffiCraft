@@ -51,7 +51,7 @@ func (s *apiServer) HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost(w 
 	if !ok {
 		return
 	}
-	if !s.storeStepNote(w, r, t, step, note) {
+	if !s.storeStepNote(w, r, t, step, note, true) {
 		return
 	}
 	writeJSON(w, http.StatusOK, taskStepNoteReceiptDTO{
@@ -117,26 +117,33 @@ func (s *apiServer) HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPos
 	if !stepNoteWithinLimit(w, next) {
 		return
 	}
-	// 🔴 `next` byte-identical to the stored note → there is nothing to write. The
-	// gate is that text comparison and NOT applied > 0: `applied` counts edits that
-	// moved the INTERMEDIATE result, so a batch whose edits undo one another
+	// 🔴 `next` byte-identical to the stored note → there is nothing to ANNOUNCE.
+	// The gate is that text comparison and NOT applied > 0: `applied` counts edits
+	// that moved the INTERMEDIATE result, so a batch whose edits undo one another
 	// reports applied != 0 over a note that never changed (ApplyDocEdits in
 	// domain.go marks `applied > 0` as the exact reasoning error the earlier patch
 	// faces were built on). A step note keeps no document history, so no retention
-	// is at stake here; what an unconditional write costs is an SSE task delta
-	// announcing a change that never happened — every cockpit card holding this
+	// is at stake here; what an unconditional ANNOUNCEMENT costs is an SSE task
+	// delta about a change that never happened — every cockpit card holding this
 	// task refetches and gets back the text it already had — plus an updated_ts
 	// bump that misdates the task's last real movement.
 	//
+	// The gate holds back the announcement ONLY, never the write: that UPDATE is
+	// also the one place a step deleted by a concurrent submit_plan is noticed
+	// (SetTaskStepNote affects zero rows → 404). Skipping it on a no-op would make
+	// this the single path that answers 200 with a note and a sha256 for a step
+	// that no longer exists — a false statement about current state, in a face
+	// that exists FOR concurrency safety. It stores nothing new (the bytes are
+	// byte-identical), so re-running it costs a WAL frame and buys the one check
+	// worth having; two detection seams, one per path, could disagree.
+	//
 	// Deliberately not carried into the wholesale face: it says "the note is now
-	// this" and owes the same unconditional write as the other wholesale faces
+	// this" and owes the same unconditional delta as the other wholesale faces
 	// (update_task_manual, write_task_learnings). Only a patch face reports a count
 	// of edits, and only a patch face can report a non-zero one over a document
 	// that never moved.
-	if next != step.Note {
-		if !s.storeStepNote(w, r, t, step, next) {
-			return
-		}
+	if !s.storeStepNote(w, r, t, step, next, next != step.Note) {
+		return
 	}
 	sum := sha256.Sum256([]byte(next))
 	writeJSON(w, http.StatusOK, taskStepNotePatchResultDTO{
@@ -207,10 +214,14 @@ func (s *apiServer) resolveStepForNoteWrite(w http.ResponseWriter, r *http.Reque
 	return t, step, true
 }
 
-// storeStepNote persists the note and fans the task delta, shared by both write
-// faces. It mutates step.Note and t.UpdatedTS in place so the caller's receipt
-// echoes what was STORED.
-func (s *apiServer) storeStepNote(w http.ResponseWriter, r *http.Request, t *Task, step *TaskStep, note string) bool {
+// storeStepNote persists the note and, when announce is set, fans the task
+// delta; shared by both write faces. It mutates step.Note and t.UpdatedTS in
+// place so the caller's receipt echoes what was STORED.
+//
+// announce=false is the patch face's no-op batch: the note is written anyway
+// (identical bytes, and the row-count is how a concurrently deleted step is
+// caught) but nothing is told the cockpit about a change that did not happen.
+func (s *apiServer) storeStepNote(w http.ResponseWriter, r *http.Request, t *Task, step *TaskStep, note string, announce bool) bool {
 	ok, err := s.dal.SetTaskStepNote(step.ID, note)
 	if err != nil {
 		internalError(w, err)
@@ -223,6 +234,9 @@ func (s *apiServer) storeStepNote(w http.ResponseWriter, r *http.Request, t *Tas
 		return false
 	}
 	step.Note = note
+	if !announce {
+		return true
+	}
 	// Move updated_ts so the cockpit actually shows this. The SSE task delta
 	// carries only id/status/priority and the list it refreshes carries no
 	// steps, so a card the owner ALREADY has open re-reads its step-bearing
