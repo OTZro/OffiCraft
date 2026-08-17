@@ -690,17 +690,30 @@ func (s *apiServer) HandlePatchTaskSopApiTaskManualsTypeKeySopPatchPost(w http.R
 		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "sop_md doc", m.SopMD, next))
 		return
 	}
-	m.SopMD = next
-	m.UpdatedTS = nowSecs()
-	if err := s.dal.SaveWithDocumentHistories(
-		taskManualHistoryStreams(typeKey, currentActor(r), true, false),
-		func(ex sqlExecer) error {
-			return putTaskManualOn(ex, *m)
-		}); err != nil {
-		internalError(w, err)
-		return
+	// 🔴 `next` byte-identical to the stored sop_md → there is nothing to write
+	// and nothing to retain. The gate is that text comparison and NOT applied > 0:
+	// `applied` counts edits that moved the INTERMEDIATE result, so a batch whose
+	// edits undo one another reports applied != 0 over a document that never
+	// changed. Writing anyway burns one of the THREE document history slots on a
+	// snapshot of text nobody replaced (and bumps updated_ts for a change that did
+	// not happen), silently shortening the owner's undo path. Full reasoning at
+	// ApplyDocEdits (domain.go), which marks `applied > 0` as the exact reasoning
+	// error the earlier faces were built on. SOP and learnings are two independent
+	// version series on one manual (T-1f39), so this face burns the SOP series'
+	// slots specifically. The receipt below stays outside the gate and unchanged.
+	if next != m.SopMD {
+		m.SopMD = next
+		m.UpdatedTS = nowSecs()
+		if err := s.dal.SaveWithDocumentHistories(
+			taskManualHistoryStreams(typeKey, currentActor(r), true, false),
+			func(ex sqlExecer) error {
+				return putTaskManualOn(ex, *m)
+			}); err != nil {
+			internalError(w, err)
+			return
+		}
+		s.publishTaskManual(typeKey, requestTrigger(r))
 	}
-	s.publishTaskManual(typeKey, requestTrigger(r))
 	sum := sha256.Sum256([]byte(next))
 	writeJSON(w, http.StatusOK, taskSopPatchResultDTO{
 		TypeKey:      typeKey,

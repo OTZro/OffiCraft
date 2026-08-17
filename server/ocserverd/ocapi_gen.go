@@ -2828,7 +2828,7 @@ type TaskSopPatchDTO struct {
 	Edits       []LessonsEditDTO `json:"edits"`
 }
 
-// TaskSopPatchResultDTO Receipt of a task-SOP PATCH (MCP “patch_task_sop“). “size_chars“ (CHARACTERS — Unicode code points, the SAME unit as the “doc.cap_chars.manual_sop“ cap the write is judged against) and “sha256“ (hex) are lightweight verification anchors over the RESULTING sop_md text, so the caller can confirm the write landed without re-reading the full doc. “applied_edits“ is the number of edits that ACTUALLY changed the doc (a no-op append/replace does not count), so "0 applied" is expressible and a silent no-op cannot masquerade as success.
+// TaskSopPatchResultDTO Receipt of a task-SOP PATCH (MCP “patch_task_sop“). “size_chars“ (CHARACTERS — Unicode code points, the SAME unit as the “doc.cap_chars.manual_sop“ cap the write is judged against) and “sha256“ (hex) are lightweight verification anchors over the RESULTING sop_md text, so the caller can confirm the write landed without re-reading the full doc. “applied_edits“ counts the edits that changed the text THEY were handed (a no-op append/replace does not count), so "0 applied" is expressible and a silent no-op cannot masquerade as success. It is not a report on whether the document ended up different from where it started: a batch whose edits undo one another (“anchor → middle“ then “middle → anchor“) reports the full count over a sop_md that never moved, and nothing is written in that case. To decide whether the doc actually changed, compare “sha256“ against the value you held before the call.
 type TaskSopPatchResultDTO struct {
 	AppliedEdits *int `json:"applied_edits,omitempty"`
 
@@ -2869,7 +2869,7 @@ type TaskStepNotePatchDTO struct {
 	Edits       []LessonsEditDTO `json:"edits"`
 }
 
-// TaskStepNotePatchResultDTO Receipt of a step-note PATCH (MCP “patch_step_note“). Echoes the note as STORED — the same posture as the wholesale receipt, since the whole point of the field is that a later session reads it back — plus “applied_edits“ (the number of edits that ACTUALLY changed the note, so "0 applied" is expressible and a silent no-op cannot masquerade as success) and “size_chars“/“cap_chars“/“sha256“ verification anchors over the resulting note. “size_chars“ and “cap_chars“ are CHARACTERS (Unicode code points), the unit the note's limit is enforced in.
+// TaskStepNotePatchResultDTO Receipt of a step-note PATCH (MCP “patch_step_note“). Echoes the note as STORED — the same posture as the wholesale receipt, since the whole point of the field is that a later session reads it back — plus “applied_edits“ (the edits that changed the text THEY were handed, so "0 applied" is expressible and a silent no-op cannot masquerade as success — it is not a report on whether the note ended up different from where it started: a batch whose edits undo one another (“anchor → middle“ then “middle → anchor“) reports the full count over a note that never moved, and nothing is written in that case, so compare “sha256“ against the value you held before the call to decide that) and “size_chars“/“cap_chars“/“sha256“ verification anchors over the resulting note. “size_chars“ and “cap_chars“ are CHARACTERS (Unicode code points), the unit the note's limit is enforced in.
 type TaskStepNotePatchResultDTO struct {
 	AppliedEdits *int `json:"applied_edits,omitempty"`
 
