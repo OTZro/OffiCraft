@@ -192,86 +192,114 @@ func validateThemeBundles(bundles []ThemeBundleDTO) error {
 	seen := make(map[string]bool, len(bundles))
 	for i, b := range bundles {
 		where := fmt.Sprintf("custom_themes[%d]", i)
-		if !themeBundleIDRe.MatchString(b.Id) {
-			return fmt.Errorf(
-				"%s: id must match ^[a-z0-9][a-z0-9-]{1,63}$ (got %q)", where, b.Id)
+		if err := validateThemeBundle(b, where, seen); err != nil {
+			return err
 		}
-		if reservedThemeIDs[b.Id] {
-			return fmt.Errorf("%s: id %q is reserved for a built-in theme", where, b.Id)
-		}
+	}
+	return nil
+}
+
+// validateThemeBundle validates ONE bundle — every rule above except the two
+// that are properties of a SET rather than of a bundle: the cap on how many
+// themes may be kept, and cross-bundle id uniqueness.
+//
+// 🔴 IT EXISTS BECAUSE THE PER-THEME ENDPOINTS CANNOT USE THE ARRAY FORM
+// (T-83ef). `PUT /api/themes/{id}` has exactly one bundle in hand and no array
+// to count or scan, while the two set-level rules still have to hold — they
+// just have to be answered against the TABLE (CountCustomThemes, and the row
+// that already carries this id) rather than against a slice. Splitting them out
+// is what lets both callers share ONE copy of the bundle rules instead of the
+// endpoints growing a second, drifting opinion about what a legal theme is.
+//
+// ⚠️ THE CHECK ORDER IS LOAD-BEARING AND IS PRESERVED EXACTLY. `seen` is
+// consulted between the id checks and the name checks, where the array version
+// consulted it — a bundle that is BOTH a duplicate and badly named must still
+// report the duplicate, because that is the message the existing tests and the
+// mirrored client validator pin. Pass a nil `seen` when there is no set to be
+// duplicate WITHIN (the single-theme write, whose uniqueness question is
+// "does this id already have a row", answered by the caller).
+func validateThemeBundle(b ThemeBundleDTO, where string, seen map[string]bool) error {
+	if !themeBundleIDRe.MatchString(b.Id) {
+		return fmt.Errorf(
+			"%s: id must match ^[a-z0-9][a-z0-9-]{1,63}$ (got %q)", where, b.Id)
+	}
+	if reservedThemeIDs[b.Id] {
+		return fmt.Errorf("%s: id %q is reserved for a built-in theme", where, b.Id)
+	}
+	if seen != nil {
 		if seen[b.Id] {
 			return fmt.Errorf("%s: duplicate id %q", where, b.Id)
 		}
 		seen[b.Id] = true
+	}
 
-		name := trimThemeName(b.Name)
-		if n := utf8.RuneCountInString(name); n < 1 || n > maxThemeNameLen {
+	name := trimThemeName(b.Name)
+	if n := utf8.RuneCountInString(name); n < 1 || n > maxThemeNameLen {
+		return fmt.Errorf(
+			"%s: name must be 1..%d characters after trimming", where, maxThemeNameLen)
+	}
+	if hasInvisibleNameRune(b.Name) {
+		return fmt.Errorf(
+			"%s: name must not contain control, formatting, private-use, surrogate or line/paragraph separator characters",
+			where)
+	}
+	if n := len(b.Colors); n < minThemeColors || n > maxThemeColors {
+		return fmt.Errorf(
+			"%s: colors must hold %d..%d entries (got %d)",
+			where, minThemeColors, maxThemeColors, n)
+	}
+	for token, value := range b.Colors {
+		if !themeColorTokens[token] {
 			return fmt.Errorf(
-				"%s: name must be 1..%d characters after trimming", where, maxThemeNameLen)
+				"%s: %q is not a theme colour token (see theme.css)", where, token)
 		}
-		if hasInvisibleNameRune(b.Name) {
+		if !validColorValue(value) {
 			return fmt.Errorf(
-				"%s: name must not contain control, formatting, private-use, surrogate or line/paragraph separator characters",
-				where)
+				"%s: %q has an invalid colour value %q — only concrete "+
+					"hex / rgb() / rgba() / hsl() / hsla() / transparent are accepted",
+				where, token, value)
 		}
-		if n := len(b.Colors); n < minThemeColors || n > maxThemeColors {
-			return fmt.Errorf(
-				"%s: colors must hold %d..%d entries (got %d)",
-				where, minThemeColors, maxThemeColors, n)
-		}
-		for token, value := range b.Colors {
-			if !themeColorTokens[token] {
-				return fmt.Errorf(
-					"%s: %q is not a theme colour token (see theme.css)", where, token)
-			}
-			if !validColorValue(value) {
-				return fmt.Errorf(
-					"%s: %q has an invalid colour value %q — only concrete "+
-						"hex / rgb() / rgba() / hsl() / hsla() / transparent are accepted",
-					where, token, value)
-			}
-		}
-		// wording (T-16a1 P3) is an OPTIONAL per-language text-override overlay —
-		// validated in full when present (language set + message-key whitelist +
-		// plain-text value rules), a no-op when absent.
-		if err := validateWording(b.Wording, where); err != nil {
-			return err
-		}
-		// fonts (T-16a1 P4) is an OPTIONAL --font-* → safe-family overlay —
-		// validated in full when present (font-token whitelist + closed
-		// safe-family stack allowlist), a no-op when absent.
-		if err := validateFonts(b.Fonts, where); err != nil {
-			return err
-		}
-		// avatars (T-16a1 P5) is an OPTIONAL per-member-type embedded-image
-		// overlay — validated in full when present (kind whitelist + data-URI /
-		// raster-mime / size / magic-byte gate), a no-op when absent.
-		if err := validateAvatars(b.Avatars, where); err != nil {
-			return err
-		}
-		// logo (T-ea81) is an OPTIONAL single studio-logo image and navIcons an
-		// OPTIONAL per-tab icon overlay — both reuse the same avatar image gate,
-		// validated in full when present, a no-op when absent.
-		if err := validateLogo(b.Logo, where); err != nil {
-			return err
-		}
-		if err := validateNavIcons(b.NavIcons, where); err != nil {
-			return err
-		}
-		// backgrounds (T-081b) is an OPTIONAL outer-canvas tiled-image overlay —
-		// same avatar image gate again, validated in full when present, a no-op
-		// when absent.
-		if err := validateBackgrounds(b.Backgrounds, where); err != nil {
-			return err
-		}
-		// backgroundModes (T-081b) says HOW each of those images is laid down
-		// (tile / sides). Absent = every zone tiles, i.e. the behaviour that
-		// predates the field, so an older bundle is unaffected.
-		if err := validateBackgroundModes(
-			b.BackgroundModes, b.Backgrounds, where,
-		); err != nil {
-			return err
-		}
+	}
+	// wording (T-16a1 P3) is an OPTIONAL per-language text-override overlay —
+	// validated in full when present (language set + message-key whitelist +
+	// plain-text value rules), a no-op when absent.
+	if err := validateWording(b.Wording, where); err != nil {
+		return err
+	}
+	// fonts (T-16a1 P4) is an OPTIONAL --font-* → safe-family overlay —
+	// validated in full when present (font-token whitelist + closed
+	// safe-family stack allowlist), a no-op when absent.
+	if err := validateFonts(b.Fonts, where); err != nil {
+		return err
+	}
+	// avatars (T-16a1 P5) is an OPTIONAL per-member-type embedded-image
+	// overlay — validated in full when present (kind whitelist + data-URI /
+	// raster-mime / size / magic-byte gate), a no-op when absent.
+	if err := validateAvatars(b.Avatars, where); err != nil {
+		return err
+	}
+	// logo (T-ea81) is an OPTIONAL single studio-logo image and navIcons an
+	// OPTIONAL per-tab icon overlay — both reuse the same avatar image gate,
+	// validated in full when present, a no-op when absent.
+	if err := validateLogo(b.Logo, where); err != nil {
+		return err
+	}
+	if err := validateNavIcons(b.NavIcons, where); err != nil {
+		return err
+	}
+	// backgrounds (T-081b) is an OPTIONAL outer-canvas tiled-image overlay —
+	// same avatar image gate again, validated in full when present, a no-op
+	// when absent.
+	if err := validateBackgrounds(b.Backgrounds, where); err != nil {
+		return err
+	}
+	// backgroundModes (T-081b) says HOW each of those images is laid down
+	// (tile / sides). Absent = every zone tiles, i.e. the behaviour that
+	// predates the field, so an older bundle is unaffected.
+	if err := validateBackgroundModes(
+		b.BackgroundModes, b.Backgrounds, where,
+	); err != nil {
+		return err
 	}
 	return nil
 }

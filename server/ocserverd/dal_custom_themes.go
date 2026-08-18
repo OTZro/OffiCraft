@@ -31,6 +31,17 @@ package main
 // length" — that test can never pass on an install that skipped something, which
 // would have locked those installs out of retirement with no way forward.)
 //
+// 🔴 WHICH IS WHAT T-83ef CHOSE, AND THE CHOICE HAS A NAMED HOLE. It retires the
+// legacy row FROM THE WIRE — settings neither serves nor accepts custom_themes
+// any more, so there is one truth on the wire — while leaving the row itself in
+// the database, unwritten by anything, as the rollback path the ticket requires.
+// The hole: the receipt above is read by whoever DELETES the row, but a skipped
+// theme becomes unreachable at the earlier moment the row stops being SERVED.
+// The precondition therefore does NOT protect those themes through this change;
+// it protects the bytes, later. The migration's header carries the full
+// statement, including the one measured and the one mechanical fact that keep it
+// off the live-hazard list. Read it before you rely on that rule for anything.
+//
 // ⚠️ THE BYTE-FOR-BYTE GUARANTEE HAS A TIME WINDOW, and it closes here. It holds
 // for what the migration wrote; the first write through this layer replaces that
 // theme's bytes with whatever the caller marshalled. That is correct and

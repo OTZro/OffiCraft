@@ -3444,6 +3444,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/themes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the saved custom themes — id and name only, in list order (owner/admin agent).
+         * @description List the saved custom themes — ONE LINE EACH, id and name only (T-83ef).
+         *
+         *     🔴 IT DELIBERATELY DOES NOT RETURN THE BUNDLES. A theme carries its images embedded, so a list of whole bundles is hundreds of kilobytes to megabytes — on the install this ticket moved, four themes come to 1.59 MB, one of them 953 KB by itself. That payload is exactly what made `GET /api/settings` unusable and is the reason this resource exists, so serving it again from a new door would have reproduced the problem rather than fixed it (owner ruling 2026-08-18: the list needs the title and the little the UI shows, nothing more).
+         *
+         *     id and name are what the cockpit's theme list and the profile theme picker actually render. Everything else a caller might want a theme FOR — applying it, editing it, exporting it — is about ONE theme, and that one theme is `GET /api/themes/{theme_id}`.
+         */
+        get: operations["handle_list_themes_api_themes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/themes/{theme_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one saved custom theme (unknown id → 404).
+         * @description Read ONE saved custom theme by id (T-83ef). Unknown id → 404.
+         *
+         *     The per-item read that makes "edit one theme" possible without pulling the whole set: before this split a caller who wanted one bundle had to fetch every bundle, including every embedded image, because they shared one settings value.
+         */
+        get: operations["handle_get_theme_api_themes__theme_id__get"];
+        /**
+         * Create or replace ONE custom theme; the bundle's id must match the path (owner/admin agent).
+         * @description Create or replace ONE saved custom theme (T-83ef). The write this split exists to make expressible: before it, changing a single colour meant re-sending EVERY theme with EVERY embedded image, because all of them lived in one settings value.
+         *
+         *     `theme_id` in the path is the key the bundle is filed under and the bundle's own `id` must equal it — a mismatched pair is a 422 rather than a silently re-keyed theme. The bundle is validated exactly as the old whole-array write validated it (shape, the theme.css token whitelist, the concrete-colour grammar, the image gates); any violation is a 422 and nothing is written. The ONE exception is an unrecognised `wording` code, which is dropped from the bundle instead of failing it (see ThemeBundleDTO.wording).
+         *
+         *     Creating a theme when the saved set is already at its cap is a 422; replacing an existing one is not capped. A replace KEEPS the theme's position in the owner's list — re-colouring a theme does not move it to the bottom. The answer is a small receipt, not the bundle echoed back: echoing it would send the embedded images a second time, which is the payload this ticket exists to remove.
+         */
+        put: operations["handle_put_theme_api_themes__theme_id__put"];
+        post?: never;
+        /**
+         * Delete one custom theme; deleting the active one resets display_theme to "".
+         * @description Delete ONE saved custom theme (T-83ef). Unknown id → 404.
+         *
+         *     Deleting the ACTIVE theme resets `display_theme` back to `""` in the same request — the coupling the whole-array settings write used to perform — and the receipt says whether that happened, so the cockpit does not have to re-read settings to find out its theme changed under it.
+         */
+        delete: operations["handle_delete_theme_api_themes__theme_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/update/upgrade": {
         parameters: {
             query?: never;
@@ -7202,12 +7262,6 @@ export interface components {
              */
             display_wide: boolean;
             /**
-             * Custom Themes
-             * @description The owner's saved custom theme bundles (T-16a1 P2), each a `{id,name,colors}` colour bundle. `[]` = none saved. display_theme may point at any id in this set (or a built-in). Governance-gated (owner/admin agent): rides GET /api/settings only.
-             * @default []
-             */
-            custom_themes: components["schemas"]["ThemeBundleDTO"][];
-            /**
              * Chat Budget Chars
              * @description The wake snapshot's chat block budget, in CHARACTERS (Unicode code points). It bounds EVERYTHING `overview.chat_chars` counts — the messages and their folded cards plus the snapshot header and the cut hint — and it is the same number `peek_resume_summary_size` sizes its `estimated_total_chars` against, because both faces are assembled by one code path. Unlike the `doc_cap_chars_*` knobs this one may be LOWERED as well as raised: the chat block is repacked from scratch on every read, so a smaller budget simply returns fewer messages next time, with `chat_earlier_omitted` reporting the cut. The adjustable range is 1000..13000; the ceiling is tied to how many messages the packer reads before packing, so it is not a number that can be raised on its own.
              * @default 6000
@@ -7422,11 +7476,6 @@ export interface components {
              * @description Turn the WIDE cockpit layout on/off (T-756f) — true lifts the centred ~1040px content column (the side gutters stay), false restores it. A plain boolean with no unset state: omit the field to leave it unchanged.
              */
             display_wide?: boolean | null;
-            /**
-             * Custom Themes
-             * @description Replace the owner's custom theme bundles (T-16a1 P2) with this array (each `{id,name,colors}`). Omit to leave them unchanged; `[]` clears them. Every bundle is validated against the shape, the theme.css token whitelist, and the concrete-colour grammar — any violation is a 422 and nothing is written. The ONE exception is an unrecognised `wording` code, which is dropped from the bundle instead of failing it (see ThemeBundleDTO.wording): that request is a 200 whose echo carries the pruned overlay. When this and display_theme are patched together, display_theme is validated against the POST-patch set; and deleting the active custom theme resets display_theme to "".
-             */
-            custom_themes?: components["schemas"]["ThemeBundleDTO"][] | null;
             /**
              * Handover Pct
              * @description The SECOND offboard point: the FINAL notice, and where the automatic handover fires. 40..90, and strictly greater than notice_pct (the pair is validated together against the POST-patch values, so either one may be sent alone).
@@ -8694,6 +8743,42 @@ export interface components {
         ThemeFetchResultDTO: {
             /** Content */
             content: string;
+        };
+        /**
+         * ThemeListItemDTO
+         * @description One row of GET /api/themes (T-83ef): a saved theme's identity and its display name, and nothing else. It is a LIST ITEM rather than the bundle on purpose — see that endpoint's description for why a list of whole bundles is the payload this resource exists to stop serving. `name` is what the cockpit's theme list and the profile picker render; `id` is what selects it, edits it, or fetches it in full.
+         */
+        ThemeListItemDTO: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
+        /**
+         * ThemeWriteReceiptDTO
+         * @description Receipt for a single-theme write (T-83ef). It is a RECEIPT rather than the stored bundle echoed back on purpose: a bundle carries its images embedded, so echoing it would send hundreds of kilobytes a second time — the payload this split exists to remove. ``created`` distinguishes a theme that did not exist before from one that was replaced; ``order_idx`` is its position in the owner's list, which a replace KEEPS (re-colouring a theme does not move it to the bottom); ``updated_at`` is when this write landed.
+         */
+        ThemeWriteReceiptDTO: {
+            /** Created */
+            created: boolean;
+            /** Id */
+            id: string;
+            /** Order Idx */
+            order_idx: number;
+            /** Updated At */
+            updated_at: number;
+        };
+        /**
+         * ThemeDeleteResultDTO
+         * @description Receipt for deleting one custom theme (T-83ef). ``display_theme_reset`` is the part a caller cannot work out on its own: deleting the ACTIVE theme resets ``display_theme`` back to ``""`` in the same request — the coupling the whole-array settings write used to perform — and this field says whether that happened, so the cockpit does not have to re-read settings to discover its theme changed under it.
+         */
+        ThemeDeleteResultDTO: {
+            /** Deleted */
+            deleted: boolean;
+            /** Display Theme Reset */
+            display_theme_reset: boolean;
+            /** Id */
+            id: string;
         };
         /**
          * TokenDTO
@@ -16141,6 +16226,204 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ThemeFetchResultDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_list_themes_api_themes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeListItemDTO"][];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_get_theme_api_themes__theme_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                theme_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeBundleDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_put_theme_api_themes__theme_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                theme_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThemeBundleDTO"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeWriteReceiptDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_delete_theme_api_themes__theme_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                theme_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeDeleteResultDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

@@ -2250,9 +2250,6 @@ type SettingsDTO struct {
 	// CodexNoticeRound The codex twin of notice_pct (T-a9d6): the compaction round at which the SOFT notice fires. A codex session hands over on compaction count, not on a percentage, so its pair is a pair of ROUNDS. Must be 1..10 and strictly below codex_compaction_threshold.
 	CodexNoticeRound int `json:"codex_notice_round"`
 
-	// CustomThemes The owner's saved custom theme bundles (T-16a1 P2), each a `{id,name,colors}` colour bundle. `[]` = none saved. display_theme may point at any id in this set (or a built-in). Governance-gated (owner/admin agent): rides GET /api/settings only.
-	CustomThemes *[]ThemeBundleDTO `json:"custom_themes,omitempty"`
-
 	// DisplayLanguage The owner's cockpit language (T-0b41-p2). "" = never set — the frontend keeps its localStorage cache / default; reconciled in at login as the cross-device source of truth.
 	DisplayLanguage *string `json:"display_language,omitempty"`
 
@@ -2348,9 +2345,6 @@ type SettingsUpdateDTO struct {
 
 	// CodexNoticeRound The codex SOFT-notice compaction round (T-a9d6). 1..10, and strictly below codex_compaction_threshold.
 	CodexNoticeRound *int `json:"codex_notice_round,omitempty"`
-
-	// CustomThemes Replace the owner's custom theme bundles (T-16a1 P2) with this array (each `{id,name,colors}`). Omit to leave them unchanged; `[]` clears them. Every bundle is validated against the shape, the theme.css token whitelist, and the concrete-colour grammar — any violation is a 422 and nothing is written. The ONE exception is an unrecognised `wording` code, which is dropped from the bundle instead of failing it (see ThemeBundleDTO.wording): that request is a 200 whose echo carries the pruned overlay. When this and display_theme are patched together, display_theme is validated against the POST-patch set; and deleting the active custom theme resets display_theme to "".
-	CustomThemes *[]ThemeBundleDTO `json:"custom_themes,omitempty"`
 
 	// DisplayLanguage The owner's cockpit language (T-0b41-p2) — trimmed; "" clears it back to unset. Must be one of zh, en (or ""); anything else is a 422.
 	DisplayLanguage *string `json:"display_language,omitempty"`
@@ -2954,6 +2948,13 @@ type ThemeBundleDTO struct {
 	Wording *map[string]map[string]string `json:"wording,omitempty"`
 }
 
+// ThemeDeleteResultDTO Receipt for deleting one custom theme (T-83ef). “display_theme_reset“ is the part a caller cannot work out on its own: deleting the ACTIVE theme resets “display_theme“ back to “""“ in the same request — the coupling the whole-array settings write used to perform — and this field says whether that happened, so the cockpit does not have to re-read settings to discover its theme changed under it.
+type ThemeDeleteResultDTO struct {
+	Deleted           bool   `json:"deleted"`
+	DisplayThemeReset bool   `json:"display_theme_reset"`
+	Id                string `json:"id"`
+}
+
 // ThemeFetchDTO One link to pull a theme bundle from (T-29c7). “url“ must be an absolute “http“/“https“ URL — that FORMAT check is the only thing asked of the address. The link's ORIGIN is deliberately unconstrained (owner ruling 2026-08-03: "不要限制 link 是哪邊來的", "不用驗證"): there is no host allowlist, no private-address refusal and no per-hop redirect re-check. What IS checked is the ANSWER — see ThemeFetchResultDTO.
 type ThemeFetchDTO struct {
 	Url string `json:"url"`
@@ -2962,6 +2963,20 @@ type ThemeFetchDTO struct {
 // ThemeFetchResultDTO The fetched theme bundle, handed back as the RAW response text in “content“ (T-29c7). It is verbatim on purpose: the cockpit feeds it into the very same “parseImportedBundle“ that a pasted / file-picked bundle goes through, so a link-imported theme and a hand-pasted one cannot diverge. The server has already proved the body parses as JSON and passes the shared theme-bundle validator, so “content“ is never arbitrary bytes.
 type ThemeFetchResultDTO struct {
 	Content string `json:"content"`
+}
+
+// ThemeListItemDTO One row of GET /api/themes (T-83ef): a saved theme's identity and its display name, and nothing else. It is a LIST ITEM rather than the bundle on purpose — see that endpoint's description for why a list of whole bundles is the payload this resource exists to stop serving. `name` is what the cockpit's theme list and the profile picker render; `id` is what selects it, edits it, or fetches it in full.
+type ThemeListItemDTO struct {
+	Id   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// ThemeWriteReceiptDTO Receipt for a single-theme write (T-83ef). It is a RECEIPT rather than the stored bundle echoed back on purpose: a bundle carries its images embedded, so echoing it would send hundreds of kilobytes a second time — the payload this split exists to remove. “created“ distinguishes a theme that did not exist before from one that was replaced; “order_idx“ is its position in the owner's list, which a replace KEEPS (re-colouring a theme does not move it to the bottom); “updated_at“ is when this write landed.
+type ThemeWriteReceiptDTO struct {
+	Created   bool    `json:"created"`
+	Id        string  `json:"id"`
+	OrderIdx  int     `json:"order_idx"`
+	UpdatedAt float64 `json:"updated_at"`
 }
 
 // TokenDTO Owner-scoped JWT issued by `/api/login` (the one token for REST/MCP/SSE).
@@ -3361,6 +3376,9 @@ type HandleUpdateTaskTitleApiTasksTaskIdTitlePostJSONRequestBody = TaskTitleDTO
 
 // HandleFetchThemeApiThemeFetchPostJSONRequestBody defines body for HandleFetchThemeApiThemeFetchPost for application/json ContentType.
 type HandleFetchThemeApiThemeFetchPostJSONRequestBody = ThemeFetchDTO
+
+// HandlePutThemeApiThemesThemeIdPutJSONRequestBody defines body for HandlePutThemeApiThemesThemeIdPut for application/json ContentType.
+type HandlePutThemeApiThemesThemeIdPutJSONRequestBody = ThemeBundleDTO
 
 // AsHandleListReplyCardsApiReplyCardsGet200JSONResponseBody0 returns the union data inside the HandleListReplyCardsApiReplyCardsGet200JSONResponseBody as a HandleListReplyCardsApiReplyCardsGet200JSONResponseBody0
 func (t HandleListReplyCardsApiReplyCardsGet200JSONResponseBody) AsHandleListReplyCardsApiReplyCardsGet200JSONResponseBody0() (HandleListReplyCardsApiReplyCardsGet200JSONResponseBody0, error) {
@@ -3883,6 +3901,18 @@ type ServerInterface interface {
 	// Fetch a theme bundle from a link (owner/admin agent).
 	// (POST /api/theme/fetch)
 	HandleFetchThemeApiThemeFetchPost(w http.ResponseWriter, r *http.Request)
+	// List the saved custom themes — id and name only, in list order (owner/admin agent).
+	// (GET /api/themes)
+	HandleListThemesApiThemesGet(w http.ResponseWriter, r *http.Request)
+	// Delete one custom theme; deleting the active one resets display_theme to "".
+	// (DELETE /api/themes/{theme_id})
+	HandleDeleteThemeApiThemesThemeIdDelete(w http.ResponseWriter, r *http.Request, themeId string)
+	// Read one saved custom theme (unknown id → 404).
+	// (GET /api/themes/{theme_id})
+	HandleGetThemeApiThemesThemeIdGet(w http.ResponseWriter, r *http.Request, themeId string)
+	// Create or replace ONE custom theme; the bundle's id must match the path (owner/admin agent).
+	// (PUT /api/themes/{theme_id})
+	HandlePutThemeApiThemesThemeIdPut(w http.ResponseWriter, r *http.Request, themeId string)
 	// Trigger a software upgrade to the latest GitHub release.
 	// (POST /api/update/upgrade)
 	HandleUpgradeApiUpdateUpgradePost(w http.ResponseWriter, r *http.Request)
@@ -7507,6 +7537,98 @@ func (siw *ServerInterfaceWrapper) HandleFetchThemeApiThemeFetchPost(w http.Resp
 	handler.ServeHTTP(w, r)
 }
 
+// HandleListThemesApiThemesGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleListThemesApiThemesGet(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleListThemesApiThemesGet(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleDeleteThemeApiThemesThemeIdDelete operation middleware
+func (siw *ServerInterfaceWrapper) HandleDeleteThemeApiThemesThemeIdDelete(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "theme_id" -------------
+	var themeId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "theme_id", r.PathValue("theme_id"), &themeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "theme_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleDeleteThemeApiThemesThemeIdDelete(w, r, themeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleGetThemeApiThemesThemeIdGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleGetThemeApiThemesThemeIdGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "theme_id" -------------
+	var themeId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "theme_id", r.PathValue("theme_id"), &themeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "theme_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleGetThemeApiThemesThemeIdGet(w, r, themeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandlePutThemeApiThemesThemeIdPut operation middleware
+func (siw *ServerInterfaceWrapper) HandlePutThemeApiThemesThemeIdPut(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "theme_id" -------------
+	var themeId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "theme_id", r.PathValue("theme_id"), &themeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "theme_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandlePutThemeApiThemesThemeIdPut(w, r, themeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleUpgradeApiUpdateUpgradePost operation middleware
 func (siw *ServerInterfaceWrapper) HandleUpgradeApiUpdateUpgradePost(w http.ResponseWriter, r *http.Request) {
 
@@ -7923,6 +8045,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/terminate", wrapper.HandleTerminateTaskApiTasksTaskIdTerminatePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/title", wrapper.HandleUpdateTaskTitleApiTasksTaskIdTitlePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/theme/fetch", wrapper.HandleFetchThemeApiThemeFetchPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/themes", wrapper.HandleListThemesApiThemesGet)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/themes/{theme_id}", wrapper.HandleDeleteThemeApiThemesThemeIdDelete)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/themes/{theme_id}", wrapper.HandleGetThemeApiThemesThemeIdGet)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/themes/{theme_id}", wrapper.HandlePutThemeApiThemesThemeIdPut)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/update/upgrade", wrapper.HandleUpgradeApiUpdateUpgradePost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/version", wrapper.HandleVersionApiVersionGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/warden/binary", wrapper.HandleWardenBinaryApiWardenBinaryGet)

@@ -75,6 +75,34 @@ package main
 //	if the key exists → REFUSE, print what is in it, and print the way out.
 //	if it is absent   → nothing was left behind; retiring is safe.
 //
+// 🔴 AND HERE IS WHAT THAT RULE DOES *NOT* COVER, stated plainly because the
+// wording above reads like a complete guard and is not one. The receipt is read
+// by whoever DELETES the legacy row. But a theme stops being reachable the
+// moment the legacy row stops being SERVED — and that is a different, EARLIER
+// event: T-83ef cuts `custom_themes` off the settings wire while deliberately
+// leaving the row in the database as a rollback path. From that release on, a
+// skipped theme is gone from the product, and nothing has read this receipt yet.
+// The guard is anchored to deletion; the user-visible loss happens at the wire
+// cut. Do not read "refuse while the key exists" as protecting the themes — it
+// protects the BYTES, and only at the later event.
+//
+// Two things stop that from being a live hazard today, and they are of different
+// kinds — do not merge them:
+//   - MEASURED, on the install this ticket moved: its four themes all carried
+//     usable ids and the receipt row did not exist. That is one install at one
+//     moment, re-checked against the land candidate (T-83ef step 11); it says
+//     nothing about anyone else's database.
+//   - MECHANICAL, and this one is general: the FIRST version of the validator
+//     (92628c80, the same commit that introduced this settings key) already
+//     required every bundle's id to match `^[a-z0-9][a-z0-9-]{1,63}$`, byte for
+//     byte the rule in force today, and the stored value is always
+//     json.Marshal's output rather than caller-supplied text. So no release of
+//     this product could ever store an element Up would fail to key: a receipt
+//     can only come from a hand-edited or corrupted database.
+//
+// Moving the guard to the earlier event is a real change with a real cost and is
+// NOT done here — it is recorded as follow-up work, not quietly assumed.
+//
 // ⚠️ THE RULE IS "KEY EXISTS", NOT "ROW COUNT EQUALS ARRAY LENGTH". An earlier
 // draft said the latter and it was unsatisfiable by construction: on an install
 // that skipped something, the counts can NEVER match, so that phrasing would

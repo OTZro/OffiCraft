@@ -16,7 +16,6 @@ package main
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strconv"
@@ -204,25 +203,24 @@ type authSettings struct {
 	codexCompactionThreshold     int // codex.compaction_threshold — the FINAL round (handover)
 	codexNoticeRound             int // codex.notice_round — the FIRST, soft notice round (T-a9d6)
 	monitoringRefreshSeconds     int
-	outsourceMaxParallel         int              // task.outsource_max_parallel (default 3)
-	docCapCharsDuty              int              // doc.cap_chars.duty (default dutyCapCharsDefault)
-	docCapCharsInsight           int              // doc.cap_chars.insight (default contextDocMaxCharsDefault)
-	docCapCharsLearning          int              // doc.cap_chars.learning (default contextDocMaxCharsDefault)
-	docCapCharsManualSop         int              // doc.cap_chars.manual_sop (default contextDocMaxCharsDefault)
-	docCapCharsManualLearnings   int              // doc.cap_chars.manual_learnings (default contextDocMaxCharsDefault)
-	docCapCharsSystemInteraction int              // doc.cap_chars.system_interaction (default systemInteractionCapCharsDefault)
-	docCapCharsBootSequence      int              // doc.cap_chars.boot_sequence (default bootSequenceCapCharsDefault; ONE cap, both runtimes)
-	docCapCharsOffboard          int              // doc.cap_chars.offboard (default offboardCapCharsDefault)
-	chatBudgetChars              int              // chat.budget_chars (default chatBudgetCharsDefault)
-	updaterReceiveBeta           bool             // updater.receive_beta (default false = official releases only)
-	updaterAutoUpdate            bool             // updater.auto_update (default false = manual upgrades only)
-	orgName                      string           // org.name ("" = never set → localized default in the topbar)
-	ownerName                    string           // owner.name ("" = never set → localized default in the profile pill)
-	pushContactEmail             string           // push.contact_email ("" = never set → Web Push delivery is refused)
-	displayTheme                 string           // display.theme ("" = never set → frontend cache/default)
-	displayLanguage              string           // display.language ("" = never set → frontend cache/default)
-	displayWide                  bool             // display.wide (default false = the narrow centred column)
-	displayCustomThemes          []ThemeBundleDTO // display.custom_themes (nil = none saved)
+	outsourceMaxParallel         int    // task.outsource_max_parallel (default 3)
+	docCapCharsDuty              int    // doc.cap_chars.duty (default dutyCapCharsDefault)
+	docCapCharsInsight           int    // doc.cap_chars.insight (default contextDocMaxCharsDefault)
+	docCapCharsLearning          int    // doc.cap_chars.learning (default contextDocMaxCharsDefault)
+	docCapCharsManualSop         int    // doc.cap_chars.manual_sop (default contextDocMaxCharsDefault)
+	docCapCharsManualLearnings   int    // doc.cap_chars.manual_learnings (default contextDocMaxCharsDefault)
+	docCapCharsSystemInteraction int    // doc.cap_chars.system_interaction (default systemInteractionCapCharsDefault)
+	docCapCharsBootSequence      int    // doc.cap_chars.boot_sequence (default bootSequenceCapCharsDefault; ONE cap, both runtimes)
+	docCapCharsOffboard          int    // doc.cap_chars.offboard (default offboardCapCharsDefault)
+	chatBudgetChars              int    // chat.budget_chars (default chatBudgetCharsDefault)
+	updaterReceiveBeta           bool   // updater.receive_beta (default false = official releases only)
+	updaterAutoUpdate            bool   // updater.auto_update (default false = manual upgrades only)
+	orgName                      string // org.name ("" = never set → localized default in the topbar)
+	ownerName                    string // owner.name ("" = never set → localized default in the profile pill)
+	pushContactEmail             string // push.contact_email ("" = never set → Web Push delivery is refused)
+	displayTheme                 string // display.theme ("" = never set → frontend cache/default)
+	displayLanguage              string // display.language ("" = never set → frontend cache/default)
+	displayWide                  bool   // display.wide (default false = the narrow centred column)
 }
 
 // loadAuthSettings loads the snapshot from the migrated DB, running the
@@ -521,26 +519,14 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 	} else if v != nil {
 		out.displayLanguage = *v
 	}
-	if v, err := d.GetSetting(settingDisplayCustomThemes); err != nil {
-		return out, err
-	} else if v != nil && *v != "" {
-		if err := json.Unmarshal([]byte(*v), &out.displayCustomThemes); err != nil {
-			return out, fmt.Errorf("settings %s: not a valid theme-bundle array: %v",
-				settingDisplayCustomThemes, err)
-		}
-		// Prune unrecognised wording codes on READ too (T-081b). The write path
-		// prunes, but a row written BEFORE the whitelist shrank still carries the
-		// retired codes, and this load is what GET /api/settings echoes — so
-		// without this the dead codes are served back until the owner happens to
-		// PATCH themes again. Prune only: a stored row is never re-REJECTED here
-		// (a whitelist that shrinks must not brick settings load, and the drop is
-		// exactly the write path's own semantics).
-		for i := range out.displayCustomThemes {
-			if w := out.displayCustomThemes[i].Wording; w != nil {
-				dropUnknownWordingCodes(*w, fmt.Sprintf("stored custom_themes[%d]", i))
-			}
-		}
-	}
+	// display.custom_themes is NOT loaded here any more (T-83ef). The themes moved
+	// to their own table and their own endpoints, so holding a boot-time copy of
+	// them in the settings snapshot would be a second, never-refreshed opinion
+	// about a set that /api/themes writes — while the row this key names is kept
+	// only as a rollback path and has no writer left. The READ-PATH WORDING PRUNE
+	// that used to sit here moved with them, to decodeStoredThemeBundle
+	// (api_themes.go); it had to, or a theme carrying a retired message-key code
+	// would start being served back verbatim, silently.
 	return out, nil
 }
 
