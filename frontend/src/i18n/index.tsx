@@ -332,12 +332,25 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   // Taking the line out leaves all 2204 green, and putting it back leaves all
   // 2204 green — measured, both directions. So nothing here is a measurement;
   // the reasons are structural, and they are the whole case:
-  //   - it is the only writer that can move the ref BACKWARDS, which is the one
-  //     thing that would undo the guard the four awaiting readers depend on;
-  //   - it mutates a ref during render, which StrictMode and concurrent
-  //     rendering may run more than once;
+  //   - NOBODY READS THIS REF DURING RENDER. All eight touch sites sit inside
+  //     useCallback bodies, every one of them after an await. The only thing
+  //     the deleted line offered was synchrony *at render time*, which no
+  //     reader ever needed — so removing it cannot hand anyone a stale value.
+  //     This is the load-bearing reason.
+  //   - it mutates a ref during render, and main.tsx really does wrap the app
+  //     in <StrictMode>, which is entitled to run that body twice.
   //   - two writers that look identical, one load-bearing and one not, is the
   //     exact confusion this file has already been bitten by.
+  //
+  // One claim was WALKED BACK rather than left standing: an earlier draft of
+  // this note led with "a render before the state flush would push the ref
+  // BACKWARDS". That shape is real but its REACHABILITY IS UNPROVEN — cacheTheme
+  // calls setThemeState synchronously before returning, so every later render
+  // carries the update, and this repo has no useTransition / startTransition /
+  // Suspense to defer one. Kept here demoted rather than deleted, because
+  // "sounds right, nobody checked" is precisely what this ticket kept paying
+  // for; a reason that cannot be reached should not be the first one a reader
+  // sees.
   // If a later reader wants it back, the bar is a test that goes red without
   // it — not a green suite, which both versions already have.
   const themeRef = useRef(theme);
