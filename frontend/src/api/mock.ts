@@ -76,6 +76,9 @@ import type {
   ResumeRosterMemberView,
   ResumeMachinesView,
   ResumeTaskView,
+  ThemeListItem,
+  ThemeWriteReceipt,
+  ThemeDeleteResult,
 } from "./adapter";
 import type {
   WireMember,
@@ -141,7 +144,12 @@ import {
   SEED_OFFBOARD_MD,
 } from "./seeds";
 import { ApiError } from "./errors";
-import { validateThemeBundles, isValidDisplayTheme } from "../lib/themeBundle";
+import {
+  validateThemeBundle,
+  isValidDisplayTheme,
+  MAX_CUSTOM_THEMES,
+} from "../lib/themeBundle";
+import type { ThemeBundle } from "../lib/themeBundle";
 
 // The always-present server-self machine id (mirrors the server seed):
 // the warden for the host running the server itself — listed FIRST, is_self, NOT
@@ -1537,17 +1545,25 @@ const DEFAULT_MOCK_SETTINGS = {
   // Layout width (T-756f) — OFF out of the box, mirroring the server (the
   // cockpit ships with the narrow centred column).
   display_wide: false,
-  // Custom theme bundles (T-16a1 P2) — none saved out of the box, mirroring the
-  // server (display.custom_themes absent).
-  custom_themes: [] as {
-    id: string;
-    name: string;
-    colors: Record<string, string>;
-    wording?: Record<string, Record<string, string>>;
-    fonts?: Record<string, string>;
-    avatars?: { member?: string; outsource?: string };
-  }[],
 };
+
+// ── Themes (T-83ef): their OWN store, keyed by id ────────────────────────────
+//
+// A Map, not an array: the endpoints are all per-id, and Map keeps INSERTION
+// order — which is what makes "a replace keeps the theme's position in the
+// list, a create appends" fall out for free instead of being re-implemented
+// (and re-broken) here. `order_idx` on the write receipt is the key's index in
+// that order. Themes no longer ride on settings at all: `custom_themes` is
+// gone from SettingsDTO, so the mock must not keep a second copy of them
+// there either — one store, or the two would disagree.
+const mockThemes = new Map<string, ThemeBundle>();
+
+/** The saved theme ids, for the `display_theme` check ("" | office | a saved
+ * id). Reads the theme STORE, never a settings field — after T-83ef there is
+ * no settings field left to read. */
+function mockThemeIds(): Set<string> {
+  return new Set(mockThemes.keys());
+}
 
 /** Mirror of the server's per-document size/cap reporting (T-3aeb). Runes, not
  * UTF-16 units — same reason docCap.ts spells it [...s].length.
@@ -4212,6 +4228,93 @@ export const mockApi: Api = {
     );
   },
 
+  async listThemes(): Promise<ThemeListItem[]> {
+    // GET /api/themes -> id + name ONLY (T-83ef). The mock answers the same
+    // narrow row the server does: a mock that handed back whole bundles here
+    // would let a component read `colors` off a list row and still pass, then
+    // find it undefined in production.
+    return [...mockThemes.values()].map((t) => ({ id: t.id, name: t.name }));
+  },
+
+  async getTheme(id: string): Promise<ThemeBundle> {
+    const found = mockThemes.get(id);
+    if (!found) {
+      throw new ApiError(
+        `http 404 for GET /api/themes/${id}`,
+        404,
+        "not_found",
+        "theme not found"
+      );
+    }
+    return structuredClone(found);
+  },
+
+  async putTheme(bundle: ThemeBundle): Promise<ThemeWriteReceipt> {
+    // Server parity, in the server's order: the path key is the bundle's own
+    // id here (the adapter takes only the bundle), so the mismatch 422 is
+    // checked against that same identity — it can only fire on a bundle whose
+    // id is missing/not a string, which the validator names anyway.
+    const err = validateThemeBundle(bundle, "theme");
+    if (err) {
+      throw new ApiError(
+        `http 422 for PUT /api/themes/${bundle?.id}`,
+        422,
+        "validation_error",
+        err
+      );
+    }
+    const existing = mockThemes.has(bundle.id);
+    if (!existing && mockThemes.size >= MAX_CUSTOM_THEMES) {
+      // Creating past the cap is a 422; REPLACING is not capped (server parity).
+      //
+      // 🔴 The WORDING is parity too, and it is not the array validator's line.
+      // `custom_themes must hold at most N themes` is what the whole-array
+      // validator says — still reachable through link import, which hands it an
+      // array. The per-theme endpoint counts rows instead and speaks to a person
+      // (api_themes.go), naming no field: the row it would have to name does not
+      // exist on the wire any more. This message is the one the cockpit actually
+      // renders when the cap is hit on a device that did not know it was full
+      // (the local pre-check catches the ordinary case), so a mock that made up
+      // its own phrasing would put words on screen in a test that the owner can
+      // never be shown.
+      throw new ApiError(
+        `http 422 for PUT /api/themes/${bundle.id}`,
+        422,
+        "validation_error",
+        `at most ${MAX_CUSTOM_THEMES} custom themes may be saved — delete one first`
+      );
+    }
+    // Map.set on an EXISTING key keeps its insertion position — which is
+    // exactly the "a replace does not move the theme to the bottom" rule, so
+    // nothing here has to re-implement it.
+    mockThemes.set(bundle.id, structuredClone(bundle));
+    return {
+      id: bundle.id,
+      created: !existing,
+      orderIdx: [...mockThemes.keys()].indexOf(bundle.id),
+      updatedAt: Math.floor(Date.now() / 1000),
+    };
+  },
+
+  async deleteTheme(id: string): Promise<ThemeDeleteResult> {
+    if (!mockThemes.has(id)) {
+      throw new ApiError(
+        `http 404 for DELETE /api/themes/${id}`,
+        404,
+        "not_found",
+        "theme not found"
+      );
+    }
+    mockThemes.delete(id);
+    // The coupling the old whole-array settings write used to perform: the
+    // ACTIVE theme just stopped existing, so display_theme goes back to "" in
+    // this same call and the receipt SAYS so — that flag is the only way the
+    // caller learns its theme changed without re-reading settings.
+    const displayThemeReset = mockServerSettings.display_theme === id;
+    if (displayThemeReset) mockServerSettings.display_theme = "";
+    return { id, deleted: true, displayThemeReset };
+  },
+
   async getServerSettings(): Promise<ServerSettingsView> {
     return toServerSettings(structuredClone(mockServerSettings));
   },
@@ -4372,27 +4475,13 @@ export const mockApi: Api = {
         "owner_name must be at most 80 characters"
       );
     }
-    // custom_themes (T-16a1 P2): validated in full before anything is written —
-    // shape + theme.css token whitelist + concrete-colour grammar (the SAME
-    // themeBundle validator the server mirrors). A bad bundle 422s, nothing set.
-    if (patch.customThemes !== undefined) {
-      const err = validateThemeBundles(patch.customThemes);
-      if (err) {
-        throw new ApiError(
-          "http 422 for PATCH /api/settings",
-          422,
-          "validation_error",
-          err
-        );
-      }
-    }
-    // display_theme is validated against the POST-patch custom set: "" | a
-    // built-in | an existing custom id (server parity).
-    const effectiveThemes = patch.customThemes ?? mockServerSettings.custom_themes;
-    const effectiveThemeIds = new Set(effectiveThemes.map((t) => t.id));
+    // display_theme is validated against the THEME STORE: "" | a built-in | an
+    // id that exists in /api/themes (server parity). T-83ef: settings no
+    // longer carries the bundles, so there is no "post-patch custom set" to
+    // resolve against — the store IS the set.
     if (
       patch.displayTheme !== undefined &&
-      !isValidDisplayTheme(patch.displayTheme.trim(), effectiveThemeIds)
+      !isValidDisplayTheme(patch.displayTheme.trim(), mockThemeIds())
     ) {
       throw new ApiError(
         "http 422 for PATCH /api/settings",
@@ -4487,19 +4576,15 @@ export const mockApi: Api = {
       }
       mockServerSettings.push_contact_email = email;
     }
-    // custom_themes + display_theme are coupled (server parity): write the set,
-    // then resolve the theme against the post-patch set — an explicit theme
-    // wins; otherwise a now-dangling active custom theme is reset to "".
-    if (patch.customThemes !== undefined) {
-      mockServerSettings.custom_themes = structuredClone(patch.customThemes);
-    }
+    // display_theme (T-83ef): an explicit value wins; otherwise a now-dangling
+    // active theme is reset to "". The bundles are NOT written here any more —
+    // deleteTheme owns the "the active theme just vanished" coupling.
     if (patch.displayTheme !== undefined) {
       mockServerSettings.display_theme = patch.displayTheme.trim();
-    } else {
-      const ids = new Set(mockServerSettings.custom_themes.map((t) => t.id));
-      if (!isValidDisplayTheme(mockServerSettings.display_theme, ids)) {
-        mockServerSettings.display_theme = "";
-      }
+    } else if (
+      !isValidDisplayTheme(mockServerSettings.display_theme, mockThemeIds())
+    ) {
+      mockServerSettings.display_theme = "";
     }
     if (patch.displayLanguage !== undefined) {
       mockServerSettings.display_language = patch.displayLanguage.trim();
@@ -5132,6 +5217,10 @@ export function __resetMock(): void {
   mockPasswordSet = true;
   mockPassword = "mock-password";
   mockServerSettings = { ...DEFAULT_MOCK_SETTINGS };
+  // T-83ef: themes are their own store now, so resetting settings no longer
+  // clears them — the reset hook has to name the store explicitly or a theme
+  // saved in one test leaks into the next.
+  mockThemes.clear();
   activationPendingNext = false;
   relocationPendingNext = false;
   relocationDeferredNext = false;
