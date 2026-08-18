@@ -10,6 +10,7 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -204,25 +205,35 @@ func TestCustomThemeWriteRefusesAMismatchedPairBeforeTheTableDoes(t *testing.T) 
 	// the wrong field — the same defect the table had while its three facts
 	// shared one anonymous CHECK, one layer up. An earlier version of this test
 	// asserted only ErrCustomThemeIDMismatch and froze that defect in place.
+	// 🔴 AND NAMING THE SENTINEL IS NOT ENOUGH WHERE TWO CAUSES SHARE ONE.
+	// "no id at all" and "an id that disagrees" both answer
+	// ErrCustomThemeIDMismatch, so `errors.Is` cannot tell them apart and the
+	// branch that produces the more accurate sentence was, by measurement,
+	// removable with every case here still green. What separates them is the
+	// SENTENCE, so wantMsg pins that: without it the no-id case falls through to
+	// the mismatch wording, which reports `bundle says ""` — telling the caller
+	// their id is an empty string when the truth is that the field is absent.
+	// Same class of defect this test's own header warns about, one level deeper.
 	for _, tc := range []struct {
 		name, id, bundle string
 		want             error
+		wantMsg          string
 	}{
-		{"bundle's id is a different theme", "blue", `{"id":"red"}`, ErrCustomThemeIDMismatch},
-		{"bundle is not JSON", "blue", `not json at all`, ErrCustomThemeBundleNotJSON},
-		{"bundle has no id", "blue", `{"name":"nameless"}`, ErrCustomThemeIDMismatch},
-		{"empty key", "", `{"id":""}`, ErrCustomThemeIDBlank},
-		{"duplicate id key — Go reads b, SQLite reads a", "b", `{"id":"a","id":"b"}`, ErrCustomThemeIDMismatch},
-		{"lone surrogate — Go substitutes U+FFFD, SQLite keeps the bytes", "a�b", `{"id":"a\ud800b"}`, ErrCustomThemeIDMismatch},
+		{"bundle's id is a different theme", "blue", `{"id":"red"}`, ErrCustomThemeIDMismatch, `bundle says "red"`},
+		{"bundle is not JSON", "blue", `not json at all`, ErrCustomThemeBundleNotJSON, ""},
+		{"bundle has no id", "blue", `{"name":"nameless"}`, ErrCustomThemeIDMismatch, "the bundle carries no id"},
+		{"empty key", "", `{"id":""}`, ErrCustomThemeIDBlank, ""},
+		{"duplicate id key — Go reads b, SQLite reads a", "b", `{"id":"a","id":"b"}`, ErrCustomThemeIDMismatch, ""},
+		{"lone surrogate — Go substitutes U+FFFD, SQLite keeps the bytes", "a�b", `{"id":"a\ud800b"}`, ErrCustomThemeIDMismatch, ""},
 		// The numeric shapes below are the ones that USED TO PASS this check and
 		// then be refused by the table — a 500 where a 400 belongs. They are not
 		// reachable through the wire (the DTO's id is a string), which is why
 		// they were invisible; they are here because the check's own description
 		// claims it answers what the constraint would answer, and until the
 		// comparison moved into SQLite that claim was false for exactly these.
-		{"id is a float that Go and SQLite render differently", "1", `{"id":1.0}`, ErrCustomThemeIDMismatch},
-		{"id is an exponent", "1e+100", `{"id":1e100}`, ErrCustomThemeIDMismatch},
-		{"id is negative zero", "-0", `{"id":-0.0}`, ErrCustomThemeIDMismatch},
+		{"id is a float that Go and SQLite render differently", "1", `{"id":1.0}`, ErrCustomThemeIDMismatch, ""},
+		{"id is an exponent", "1e+100", `{"id":1e100}`, ErrCustomThemeIDMismatch, ""},
+		{"id is negative zero", "-0", `{"id":-0.0}`, ErrCustomThemeIDMismatch, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := d.PutCustomTheme(tc.id, tc.bundle)
@@ -231,6 +242,11 @@ func TestCustomThemeWriteRefusesAMismatchedPairBeforeTheTableDoes(t *testing.T) 
 			}
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("refused, but with the wrong named error — the handler will point the caller at the wrong field.\n want: %v\n  got: %v", tc.want, err)
+			}
+			// Where two causes share a sentinel, the sentence is the only thing
+			// that tells the caller WHICH field to go and look at.
+			if tc.wantMsg != "" && !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Fatalf("right sentinel, wrong diagnosis — the caller is sent to the wrong field.\n want the sentence to contain: %q\n                          got: %v", tc.wantMsg, err)
 			}
 			// And nothing was written: a refusal that half-lands is worse than
 			// one that does not refuse at all.

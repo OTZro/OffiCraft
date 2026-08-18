@@ -601,4 +601,65 @@ describe("I18nProvider · the switch window", () => {
     expect(localStorage.getItem("oc.themePaint")).toBeNull();
     spy.mockRestore();
   });
+
+  it("adopts a bundle whose write settles BEFORE React re-renders with the new id", async () => {
+    // 🔴 The guards above ask "is this still the active theme?" AFTER an await,
+    // and the ref they ask used to be assigned during RENDER. So a promise that
+    // settles in the same tick as the switch read the PREVIOUS theme and the
+    // code threw away the bundle it had just asked for.
+    //
+    // This exact sequence — select, then save, in one tick — is what
+    // visual-guards/stories/AvatarKindStory.tsx routes around in prose: "the
+    // save's promise settles before React has re-rendered with the new id, the
+    // provider sees a different active theme, and the avatars never arrive."
+    // The diagnosis was right and the hole stayed open; the story split the two
+    // steps across renders to avoid it. This pins the fix so the story's
+    // workaround is a choice rather than a requirement.
+    //
+    // Production's three callers fire from discrete DOM events, where React
+    // flushes synchronously — so the gap was closed by React's SCHEDULING, not
+    // by this file. That is the kind of guarantee that stops holding quietly.
+    await mountCapture(0);
+
+    await act(async () => {
+      ctx.setTheme("aurora");
+      await ctx.saveTheme(AURORA);
+    });
+
+    expect(ctx.theme).toBe("aurora");
+    expect(ctx.activeThemeBundle?.id).toBe("aurora");
+    // …and everything the bundle carries actually arrived.
+    expect(ctx.activeAvatars?.member).toBe(PNG);
+    expect(ctx.t.nav.tasks).toBe("極光榜");
+  });
+
+  it("refuses a stored display_theme that is not in the list, and keeps the local choice", async () => {
+    // 🔴 This is the cockpit half of a race the SERVER cannot close cheaply:
+    // PATCH /api/settings checks "does this theme exist?" outside the lock it
+    // then writes display_theme under, so a DELETE landing in between leaves
+    // settings naming a theme with no row. api_themes.go says in as many words
+    // that the visible outcome is absorbed here — and that claim had no test:
+    // every case fed display_theme "" (never set), so the branch that refuses a
+    // NON-EMPTY unknown id had never once been taken.
+    //
+    // The window did not exist before T-83ef: the vocabulary and the selection
+    // arrived in one request under one lock.
+    await mockApi.putTheme(PLAIN);
+    await mockApi.putTheme(AURORA);
+    await mockApi.patchServerSettings({ displayTheme: "aurora" });
+    localStorage.setItem("oc.theme", "plain");
+    // …and now aurora is gone from the set while settings still names it.
+    const spy = vi
+      .spyOn(api, "listThemes")
+      .mockResolvedValue([{ id: "plain", name: "Plain" }]);
+
+    await mountCapture(1);
+
+    // The dangling server value is NOT adopted — the live local choice stands…
+    expect(ctx.theme).toBe("plain");
+    // …and what is painted is that local choice, not a half-applied aurora.
+    await waitFor(() => expect(ctx.activeThemeBundle?.id).toBe("plain"));
+    expect(ctx.activeAvatars).toBeUndefined();
+    spy.mockRestore();
+  });
 });

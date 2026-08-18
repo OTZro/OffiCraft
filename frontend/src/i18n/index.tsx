@@ -327,6 +327,27 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   const cacheTheme = useCallback((next: string) => {
     setThemeState(next);
+    // 🔴 [T-83ef] The ref moves HERE, with the decision — not later, with the
+    // render. `themeRef.current = theme` at the top of the body only runs when
+    // React re-renders, and four separate places read this ref AFTER an await
+    // (setTheme's fetch, saveTheme's write, removeTheme's delete, reconcile's
+    // fetch). Any promise that settles before that render sees the PREVIOUS
+    // theme and concludes the owner switched away — so the code throws away the
+    // very bundle it just asked for.
+    //
+    // This is not hypothetical and it was already costing someone: the CT story
+    // in visual-guards/stories/AvatarKindStory.tsx routes around it in prose
+    // ("the save's promise settles before React has re-rendered with the new
+    // id … and the avatars never arrive"). The diagnosis there was right; the
+    // hole just never got closed. In production the three user-facing callers
+    // happen to fire from discrete DOM events, where React flushes
+    // synchronously — the gap is closed by React's scheduling, not by anything
+    // this file does, which is the kind of guarantee that quietly stops holding.
+    //
+    // Setting it where the decision is made makes all four readers correct at
+    // once, and keeps ONE answer to "which theme is active right now" instead of
+    // one per call site.
+    themeRef.current = next;
     writeStored(LS_THEME, next);
   }, []);
 
@@ -498,15 +519,9 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         // hold and no picture to cache. Clearing the paint record is the T-1500
         // rule ("never leave a picture the server no longer recognises") and it
         // now has to be spelled out, because there is no set to fail a lookup in.
-        // themeRef is assigned during RENDER, so it still holds the pre-reconcile
-        // value here even though cacheTheme() above has already settled which
-        // theme wins. Point it at that decision now: without this the guard on
-        // the fetch below reads its OWN adoption as "the owner switched away"
-        // and drops the bundle it just asked for — which is how the first cut of
-        // this fix broke repainting after an edit. A later real switch still
-        // moves the ref (setTheme → cacheTheme → render), so the guard keeps
-        // exactly the case it is there for.
-        themeRef.current = active;
+        // No ref fix-up needed here: whichever branch above settled `active`
+        // either called cacheTheme (which moves the ref with the decision) or
+        // kept themeRef.current itself.
         if (active === "office" || !ids.has(active)) {
           setActiveThemeBundle(null);
           writePaint(null);

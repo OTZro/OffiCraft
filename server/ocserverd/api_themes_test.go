@@ -183,10 +183,29 @@ func TestThemePutRefusesAnIllegalBundleAndWritesNothing(t *testing.T) {
 // one, an append-on-replace implementation reorders the list visibly.
 func TestThemeReplaceKeepsItsPlaceInTheList(t *testing.T) {
 	api := newTasksTestServer(t)
-	for _, id := range []string{"aaa", "bbb", "ccc"} {
-		if rec := putTheme(t, api, id, aTestBundle(id, id)); rec.Code != http.StatusOK {
+	// 🔴 The receipt's own order_idx is asserted here, not just the list order
+	// below. wire.go says every field on the receipt is "something the caller
+	// cannot already know" and that OrderIdx is the place a replace KEEPS —
+	// but only `created` had a test. Replacing the whole read-back with zeroes
+	// left every case green, so those two fields could ship as constants and
+	// nothing would say a word. The list order and the receipt are two separate
+	// promises to the caller; a client that trusted the receipt (rather than
+	// re-listing) is exactly who the untested one would have failed.
+	seeded := map[string]float64{}
+	for i, id := range []string{"aaa", "bbb", "ccc"} {
+		rec := putTheme(t, api, id, aTestBundle(id, id))
+		if rec.Code != http.StatusOK {
 			t.Fatalf("seed %s: %d %s", id, rec.Code, rec.Body.String())
 		}
+		r := decodeBody[map[string]any](t, rec)
+		idx, ok := r["order_idx"].(float64)
+		if !ok || int(idx) != i {
+			t.Fatalf("a create must report the place it was appended to: want %d, receipt %v", i, r)
+		}
+		if ts, ok := r["updated_at"].(float64); !ok || ts <= 0 {
+			t.Fatalf("the receipt must carry a real write time (the caller cannot know it): %v", r)
+		}
+		seeded[id] = idx
 	}
 	rec := putTheme(t, api, "bbb", aTestBundle("bbb", "renamed"))
 	if rec.Code != http.StatusOK {
@@ -195,6 +214,9 @@ func TestThemeReplaceKeepsItsPlaceInTheList(t *testing.T) {
 	receipt := decodeBody[map[string]any](t, rec)
 	if receipt["created"] != false {
 		t.Fatalf("replacing an existing theme must report created=false: %v", receipt)
+	}
+	if idx, ok := receipt["order_idx"].(float64); !ok || idx != seeded["bbb"] {
+		t.Fatalf("a replace must keep its place — re-colouring a theme may not move it to the bottom.\n want order_idx %v, receipt %v", seeded["bbb"], receipt)
 	}
 
 	rows := decodeBody[[]map[string]any](t, listThemes(t, api))
