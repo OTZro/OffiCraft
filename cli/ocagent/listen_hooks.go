@@ -197,10 +197,12 @@ func newRecycleHook(client httpClient, cfg Config, out io.Writer) *recycleHook {
 func (h *recycleHook) say(msg string) { fmt.Fprintf(h.out, "[ocagent] %s\n", msg) }
 
 // offboardFallback is the ONLY hard-coded wake text left in this binary. The wake
-// message itself is the server's 下線程序 document (owner-editable, seed-backed) —
-// it is fetched on the same edge that refetches the member row, so a fetch that
-// faults or answers an EMPTY document must still leave the agent knowing it is
-// being collected. Losing the checklist is survivable; losing the notice is not.
+// message itself is the server's 下線程序 document (owner-editable, seed-backed),
+// PUSHED in the same member delta that says the agent is being collected — this
+// binary never fetches it. It is armed on `offboard_notice` being ABSENT OR BLANK:
+// a server too old to push one looks exactly like a notice that said nothing, and
+// neither case is worth telling apart from here — both mean the checklist did not
+// arrive. Losing the checklist is survivable; losing the notice is not.
 const offboardFallback = "recycle: server 要收你了，但這則通知沒有帶到下線程序 —— " +
 	"請立刻用 MCP get_offboard 拿完整收尾清單並照做，別空手停下。"
 
@@ -249,12 +251,16 @@ func (h *recycleHook) wakeForRecycle(notice string) {
 // and never self-kills — the handover is the SESSION's job and the kill is the
 // SERVER's, per the file header). Returns true iff it woke the session this call.
 // Gated (in order) by the NUDGE match, then a POSITIVE authoritative refetch of
-// desired_state=online ∧ refocus_since>0 ∧ a NEW refocus epoch (one wake per epoch —
+// desired_state=online ∧ refocus_since>0 ∧ a NEW refocus epoch (one wake per epoch
+// PER SENTENCE — the soft→final upgrade rides the same epoch with a new sentence —
 // the follow-up member deltas fanned by the session's own stopping/stopped reports
 // re-enter here and must NOT re-print the wake). The epoch is claimed BEFORE the
-// document is fetched, so a failed fetch spends the epoch on the fallback notice
-// rather than re-waking on every later delta. Mutually exclusive with wind-down
-// (offline vs online intent), so both are safe to call on every member delta.
+// wake is printed, so a delta that arrived WITHOUT the pushed document spends the
+// epoch on the fallback notice rather than re-waking on every later delta. BOTH keys
+// must match to stay quiet; the sentence key is the half that lets the soft→final
+// upgrade through (and a real notice that arrives after a fallback), since the notice
+// rides EVERY write to the row. Mutually exclusive with wind-down (offline vs online
+// intent), so both are safe to call on every member delta.
 func (h *recycleHook) maybeRecycle(frame map[string]any) bool {
 	if !shouldWindDown(frame, h.cfg.ID) { // identical NUDGE gate
 		return false

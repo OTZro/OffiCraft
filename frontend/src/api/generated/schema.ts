@@ -2673,7 +2673,7 @@ export interface paths {
          *     EFFECT: stamps the CALLER's ``refocus_since`` and fans a ``member`` delta, exactly
          *     like the owner's refocus. Nothing else is dispatched here — the STANDARD recycle
          *     orchestration (§4.5) then carries the handover: the delta reaches the agent's OWN
-         *     listen connection → the RecycleHook prints the server's 下線程序 document (GET /api/offboard) → the agent
+         *     listen connection → the RecycleHook prints the 下線程序 document the SERVER PUSHED in that same delta (`offboard_notice`) → the agent
          *     runs it (report_stopping → baton → lessons → report_stopped) → the server kills →
          *     respawns IN PLACE. Same already-tested machinery as an owner refocus, just
          *     self-triggered; the agent never mints a token or kills its own process.
