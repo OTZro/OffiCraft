@@ -93,6 +93,9 @@ import type {
   SseDelta,
   SseDeltaNames,
   MemberResumeSummaryView,
+  ThemeListItem,
+  ThemeWriteReceipt,
+  ThemeDeleteResult,
 } from "./adapter";
 import {
   toMember,
@@ -134,6 +137,10 @@ import {
   toMemberResumeSummary,
   fromTaskManualPatch,
   fromTaskReassignInput,
+  toThemeBundle,
+  toThemeListItem,
+  toThemeWriteReceipt,
+  toThemeDeleteResult,
 } from "./mappers";
 // The one wire type this seam names directly: GET /api/reply-cards serves a
 // UNION (light rows | full cards) and `?view=full` is what picks the second
@@ -1694,10 +1701,6 @@ export const httpApi: Api = {
       display_theme?: string;
       display_language?: string;
       display_wide?: boolean;
-      // The wire accepts the full ThemeBundle shape (id/name/colors + optional
-      // wording/fonts/avatars/logo/navIcons); reuse the type so it can't drift
-      // out of sync with the bundle and silently drop new fields again.
-      custom_themes?: ThemeBundle[];
     } = {};
     if (patch.ownerTokenTtl !== undefined) body.owner_token_ttl = patch.ownerTokenTtl;
     if (patch.agentTokenTtl !== undefined) body.agent_token_ttl = patch.agentTokenTtl;
@@ -1752,7 +1755,6 @@ export const httpApi: Api = {
     if (patch.displayWide !== undefined) {
       body.display_wide = patch.displayWide;
     }
-    if (patch.customThemes !== undefined) body.custom_themes = patch.customThemes;
     const wire = unwrap(await client.PATCH("/api/settings", { body }));
     return toServerSettings(wire);
   },
@@ -1769,6 +1771,55 @@ export const httpApi: Api = {
     // (unreachable link) both throw via the client middleware.
     const wire = unwrap(await client.POST("/api/theme/fetch", { body: { url } }));
     return wire.content;
+  },
+
+  async listThemes(): Promise<ThemeListItem[]> {
+    // GET /api/themes -> ThemeListItemDTO[] (T-83ef) — id + name ONLY. The
+    // bundles are deliberately NOT here: a theme embeds its images, so the
+    // whole set is hundreds of KB to MB, and that payload is what this
+    // resource exists to stop serving. One theme in full = getTheme.
+    const wire = unwrap(await client.GET("/api/themes"));
+    return wire.map(toThemeListItem);
+  },
+
+  async getTheme(id: string): Promise<ThemeBundle> {
+    // GET /api/themes/{theme_id} -> ThemeBundleDTO (unknown id → 404, thrown
+    // as ApiError by the client middleware).
+    const wire = unwrap(
+      await client.GET("/api/themes/{theme_id}", {
+        params: { path: { theme_id: id } },
+      }),
+    );
+    return toThemeBundle(wire);
+  },
+
+  async putTheme(bundle: ThemeBundle): Promise<ThemeWriteReceipt> {
+    // PUT /api/themes/{theme_id} {ThemeBundleDTO} -> ThemeWriteReceiptDTO.
+    // The path key IS the bundle's own id, so the server's "they must match"
+    // rule (422 otherwise) cannot be broken from here. The answer is the
+    // receipt, never the bundle echoed back — echoing would resend the
+    // embedded images, the payload this split removes. 422 (validator /
+    // create-past-cap) throws and nothing is written.
+    const wire = unwrap(
+      await client.PUT("/api/themes/{theme_id}", {
+        params: { path: { theme_id: bundle.id } },
+        body: bundle,
+      }),
+    );
+    return toThemeWriteReceipt(wire);
+  },
+
+  async deleteTheme(id: string): Promise<ThemeDeleteResult> {
+    // DELETE /api/themes/{theme_id} -> ThemeDeleteResultDTO (unknown id →
+    // 404, throws). Deleting the ACTIVE theme resets display_theme to "" in
+    // the same request; display_theme_reset reports it, so the caller does not
+    // re-read settings to notice.
+    const wire = unwrap(
+      await client.DELETE("/api/themes/{theme_id}", {
+        params: { path: { theme_id: id } },
+      }),
+    );
+    return toThemeDeleteResult(wire);
   },
 
   async getPushPublicKey(): Promise<string> {

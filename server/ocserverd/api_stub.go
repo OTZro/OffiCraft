@@ -117,11 +117,6 @@ type apiServer struct {
 	// default) = the centred ~1040px content column the cockpit ships with; true
 	// lifts that cap. NOT an agent read path.
 	displayWide bool
-	// displayCustomThemes is the owner's saved custom theme bundles (DB
-	// display.custom_themes; T-16a1 P2). nil = none saved. Owner-writable via
-	// PATCH /api/settings so the set syncs across devices; display.theme may
-	// point at any id in it. NOT an agent read path.
-	displayCustomThemes []ThemeBundleDTO
 	// selfBase is this server's OWN loopback base URL ("http://127.0.0.1:PORT"),
 	// stamped by cmdServe once the bind address is known. It exists for the ONE
 	// in-process caller that needs an OC_BASE with no HTTP request to derive it
@@ -506,17 +501,6 @@ func (s *apiServer) displayWideSnapshot() bool {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
 	return s.displayWide
-}
-
-// displayCustomThemesSnapshot returns a copy of the live custom theme bundles
-// (display.custom_themes; T-16a1 P2). Always non-nil for the wire (an empty
-// array, never null), and a copy so a caller can never mutate the snapshot.
-func (s *apiServer) displayCustomThemesSnapshot() []ThemeBundleDTO {
-	s.settingsMu.RLock()
-	defer s.settingsMu.RUnlock()
-	out := make([]ThemeBundleDTO, len(s.displayCustomThemes))
-	copy(out, s.displayCustomThemes)
-	return out
 }
 
 // ctxHighConfig returns the live context-high band config (by value — one

@@ -114,10 +114,6 @@ type settingsDTO struct {
 	// two prefs above this is a plain bool with no "never set" state — false IS
 	// the shipped narrow look, so an untouched install reads exactly right.
 	DisplayWide bool `json:"display_wide"`
-	// CustomThemes is the owner's saved custom theme bundles (display.custom_themes;
-	// T-16a1 P2) — always an array ([] when none). display_theme may point at any
-	// id in it. Owner-gated (rides GET /api/settings only).
-	CustomThemes []ThemeBundleDTO `json:"custom_themes"`
 	// Onboarding (T-ba62) is the first-run onboarding report, or nil when
 	// onboarding never ran on this database. It rides the OWNER-GATED settings
 	// read on purpose: a failed step's Detail carries the raw `ocwarden install`
@@ -1466,6 +1462,50 @@ type taskManualListItemDTO struct {
 type taskManualDeleteResultDTO struct {
 	TypeKey string `json:"type_key"`
 	Deleted bool   `json:"deleted"`
+}
+
+// themeListItemDTO is one row of GET /api/themes (T-83ef).
+//
+// 🔴 IT IS NOT THE BUNDLE, AND THAT IS THE WHOLE POINT OF THE ENDPOINT. A theme
+// carries its images embedded, so listing whole bundles is the several-hundred-
+// kilobyte answer that made GET /api/settings unusable in the first place —
+// serving it again from a new path would have moved the problem, not fixed it.
+// These two fields are what the cockpit's theme list and the profile picker
+// actually render; applying, editing and exporting are all about ONE theme and
+// go to GET /api/themes/{theme_id}.
+type themeListItemDTO struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// themeWriteReceiptDTO answers PUT /api/themes/{theme_id} (T-83ef).
+//
+// 🔴 IT IS A RECEIPT RATHER THAN THE STORED BUNDLE, AND THAT IS THE POINT. A
+// bundle carries its images embedded — one of the themes this ticket moved is
+// 953 KB on its own — so echoing the write back would send that payload a
+// SECOND time, in the direction the split exists to unburden. Everything here
+// is something the caller cannot already know.
+//
+// Created separates "this id had no row" from "an existing theme was replaced";
+// OrderIdx is the theme's place in the owner's list, which a replace KEEPS, so
+// re-colouring a theme does not move it to the bottom.
+type themeWriteReceiptDTO struct {
+	ID        string  `json:"id"`
+	Created   bool    `json:"created"`
+	OrderIdx  int     `json:"order_idx"`
+	UpdatedAt float64 `json:"updated_at"`
+}
+
+// themeDeleteResultDTO answers DELETE /api/themes/{theme_id} (T-83ef).
+//
+// DisplayThemeReset is the field worth having: deleting the ACTIVE theme resets
+// display.theme back to "" in the same request — the coupling the whole-array
+// settings write used to perform — and saying so here is what stops the cockpit
+// having to re-read settings to discover its theme changed underneath it.
+type themeDeleteResultDTO struct {
+	ID                string `json:"id"`
+	Deleted           bool   `json:"deleted"`
+	DisplayThemeReset bool   `json:"display_theme_reset"`
 }
 
 // docSummaryDTO is one row of GET /api/docs — a product-guide doc's addressable

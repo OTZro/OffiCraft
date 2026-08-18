@@ -237,9 +237,12 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		},
 		{
 			// T-29c7: the cockpit's theme import box takes a LINK. Floor is
-			// admin_agent because that is exactly the floor of the PATCH
-			// /api/settings write that stores the imported theme — a caller who
-			// could fetch but not store would only ever get a dead end.
+			// admin_agent because that is exactly the floor of the write that
+			// stores the imported theme — a caller who could fetch but not store
+			// would only ever get a dead end. (That write was the PATCH
+			// /api/settings custom_themes array until T-83ef; it is PUT
+			// /api/themes/{theme_id} now. Same floor, so the reasoning stands —
+			// but the two must be kept equal deliberately, not by luck.)
 			// MCPExclude: this is the cockpit's paste-a-link seam, not an agent
 			// tool (an agent that HAS a theme bundle already holds the JSON; it
 			// has no reason to ask the server to go read one back).
@@ -1830,6 +1833,76 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Requires:   principalMachine,
 			Summary:    "Serve a product-guide image asset (referenced by a doc's markdown).",
 			MCPExclude: true, // a binary image, not a callable tool
+		},
+		// 🔴 PLACED LAST ON PURPOSE, and not next to /api/theme/fetch where they
+		// read better. The MCP tool surface has ONE order shared by three files:
+		// this table, spec/openapi.json's x-mcp.order, and
+		// conformance/routes_manifest.json — tools/list is served from the frozen
+		// catalog and conformance asserts all three agree element-wise. x-mcp.order
+		// must also be the consecutive range 0..N-1, so inserting a tool in the
+		// middle renumbers every tool after it. Appending costs four numbers;
+		// grouping them by subject would have cost a hundred.
+		// ── Custom themes (T-83ef) — themes used to ride GET/PATCH /api/settings
+		// as one custom_themes array, so "change one theme" meant re-sending every
+		// theme with every embedded image. These four give them their own door and
+		// make the unit of work ONE theme. Floor is admin_agent: the same floor the
+		// settings write they replace carried, so nothing gained or lost authority
+		// in the move.
+		//
+		// 🔴 THEY ARE ON THE MCP SURFACE BY AN OWNER RULING (rc-32ed1bfba080,
+		// 2026-08-18), against the recommendation on that card. The card proposed
+		// MCPExclude for all four — the list read is the several-hundred-kilobyte
+		// payload this ticket exists to take away from agents, and a write with no
+		// read is only a blind overwrite. He chose to keep themes usable by AI
+		// members instead, and that is the decision of record. What was reported to
+		// him alongside it, so it is not rediscovered as a surprise: a bundle
+		// carries its images, so a list of BUNDLES would have been the same order
+		// of magnitude as the `get_settings` payload the tool layer already
+		// refuses today. Splitting themes out of settings fixed SETTINGS; it did
+		// not make themes small.
+		//
+		// 🔴 AND THAT REPORT IS WHY THE LIST BELOW IS `{id, name}` ONLY. He
+		// answered it the same day, in chat: list everything with just the title
+		// and whatever else the UI actually shows. So the metadata-only shape is
+		// not a possible future fix for a payload problem — it is the ruling that
+		// made ruling #1 usable, and the two must be read together. A later reader
+		// who "restores" whole bundles here to make the list richer would be
+		// undoing the half that made agents able to call it at all.
+		{
+			Method:   "GET",
+			Path:     "/api/themes",
+			Handler:  w.HandleListThemesApiThemesGet,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "List the saved custom themes — id and name only, in list order (owner/admin agent).",
+			MCPTool:  "list_themes",
+		},
+		{
+			Method:   "GET",
+			Path:     "/api/themes/{theme_id}",
+			Handler:  w.HandleGetThemeApiThemesThemeIdGet,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Read one saved custom theme (unknown id → 404).",
+			MCPTool:  "get_theme",
+		},
+		{
+			Method:   http.MethodPut,
+			Path:     "/api/themes/{theme_id}",
+			Handler:  w.HandlePutThemeApiThemesThemeIdPut,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Create or replace ONE custom theme; the bundle's id must match the path (owner/admin agent).",
+			MCPTool:  "put_theme",
+		},
+		{
+			Method:   "DELETE",
+			Path:     "/api/themes/{theme_id}",
+			Handler:  w.HandleDeleteThemeApiThemesThemeIdDelete,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  `Delete one custom theme; deleting the active one resets display_theme to "".`,
+			MCPTool:  "delete_theme",
 		},
 	}
 }
