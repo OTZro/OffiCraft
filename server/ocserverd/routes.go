@@ -237,9 +237,12 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		},
 		{
 			// T-29c7: the cockpit's theme import box takes a LINK. Floor is
-			// admin_agent because that is exactly the floor of the PATCH
-			// /api/settings write that stores the imported theme — a caller who
-			// could fetch but not store would only ever get a dead end.
+			// admin_agent because that is exactly the floor of the write that
+			// stores the imported theme — a caller who could fetch but not store
+			// would only ever get a dead end. (That write was the PATCH
+			// /api/settings custom_themes array until T-83ef; it is PUT
+			// /api/themes/{theme_id} now. Same floor, so the reasoning stands —
+			// but the two must be kept equal deliberately, not by luck.)
 			// MCPExclude: this is the cockpit's paste-a-link seam, not an agent
 			// tool (an agent that HAS a theme bundle already holds the JSON; it
 			// has no reason to ask the server to go read one back).
@@ -1853,12 +1856,18 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		// read is only a blind overwrite. He chose to keep themes usable by AI
 		// members instead, and that is the decision of record. What was reported to
 		// him alongside it, so it is not rediscovered as a surprise: a bundle
-		// carries its images, so `list_themes` is the same order of magnitude as
-		// the `get_settings` payload that the tool layer already refuses today.
-		// Splitting themes out of settings fixed SETTINGS; it did not make themes
-		// small. If that read turns out to be unusable in practice, the answer is a
-		// metadata-only list shape — a new interface decision, not a quiet edit
-		// here.
+		// carries its images, so a list of BUNDLES would have been the same order
+		// of magnitude as the `get_settings` payload the tool layer already
+		// refuses today. Splitting themes out of settings fixed SETTINGS; it did
+		// not make themes small.
+		//
+		// 🔴 AND THAT REPORT IS WHY THE LIST BELOW IS `{id, name}` ONLY. He
+		// answered it the same day, in chat: list everything with just the title
+		// and whatever else the UI actually shows. So the metadata-only shape is
+		// not a possible future fix for a payload problem — it is the ruling that
+		// made ruling #1 usable, and the two must be read together. A later reader
+		// who "restores" whole bundles here to make the list richer would be
+		// undoing the half that made agents able to call it at all.
 		{
 			Method:   "GET",
 			Path:     "/api/themes",

@@ -3431,11 +3431,11 @@ export interface paths {
          * Fetch a theme bundle from a link (owner/admin agent).
          * @description Pull a theme bundle from a LINK so the cockpit's import box can take a URL instead of only pasted text / a picked file (T-29c7). It exists because a theme carrying a background image runs to hundreds of thousands of characters while a chat message is hard-capped at 4000 — without this there is no channel at all through which an agent can hand the owner a finished theme.
          *
-         *     The server GETs the url and answers `{content}` — the RAW response text — which the cockpit then feeds through the same parse/validate path a pasted bundle takes. Before answering it proves the body is JSON and passes the shared theme-bundle validator (the same `validateThemeBundles` that guards `PATCH /api/settings`), so a link pointing at something that is not a theme is a 422 naming what is wrong, not a mystery further down the UI.
+         *     The server GETs the url and answers `{content}` — the RAW response text — which the cockpit then feeds through the same parse/validate path a pasted bundle takes. Before answering it proves the body is JSON and passes the shared theme-bundle validator (the same `validateThemeBundles` that guards the theme write itself — `PATCH /api/settings`' custom_themes array until T-83ef, `PUT /api/themes/{theme_id}` since), so a link pointing at something that is not a theme is a 422 naming what is wrong, not a mystery further down the UI.
          *
          *     🔴 The link's ORIGIN is deliberately NOT constrained — no host allowlist, no private/loopback address refusal, no per-hop redirect re-validation. That is an explicit owner ruling (2026-08-03), taken AFTER the timing of the risk was spelled out to him (the fetch happens before any content is seen, so "check the format" cannot cover it). It is recorded here so the next reader knows it is a decision, not an oversight; do not "fix" it without a new ruling.
          *
-         *     What IS bounded, for availability rather than safety, is the CALL: an 8-second timeout and a hard response-size ceiling, so one unresponsive or endless URL cannot pin a request. Transport failure / timeout / non-200 upstream → 502; an oversized, non-JSON or non-theme body → 422. Gated at admin_agent, the same floor as the `PATCH /api/settings` write that stores the imported theme.
+         *     What IS bounded, for availability rather than safety, is the CALL: an 8-second timeout and a hard response-size ceiling, so one unresponsive or endless URL cannot pin a request. Transport failure / timeout / non-200 upstream → 502; an oversized, non-JSON or non-theme body → 422. Gated at admin_agent, the same floor as the write that stores the imported theme (`PUT /api/themes/{theme_id}` since T-83ef; the `PATCH /api/settings` custom_themes array before it). The two floors are kept equal on purpose: a caller that could fetch but not store would only ever reach a dead end.
          */
         post: operations["handle_fetch_theme_api_theme_fetch_post"];
         delete?: never;
@@ -7468,7 +7468,7 @@ export interface components {
             display_language?: string | null;
             /**
              * Display Theme
-             * @description The owner's cockpit visual theme (T-0b41-p2) — trimmed; "" clears it back to unset. Must be one of office, xian (or ""); anything else is a 422.
+             * @description The owner's cockpit visual theme (T-0b41-p2) — trimmed; "" clears it back to unset. Accepted values are "", the built-in `office`, or the id of a theme that ALREADY EXISTS (T-83ef); anything else is a 422 reading `display_theme must be "", office, or an existing custom theme id`. The existence half is why this can no longer create a theme on the way past: themes are their own resource now, so save it with PUT /api/themes/{theme_id} first and select it here second. (This said "one of office, xian" until T-83ef — wrong twice over: `xian` stopped being built in when it became an importable pack, and the custom ids were never listed.)
              */
             display_theme?: string | null;
             /**

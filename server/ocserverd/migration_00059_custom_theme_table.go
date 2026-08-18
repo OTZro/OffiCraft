@@ -3,20 +3,26 @@ package main
 // migration_00059_custom_theme_table.go — T-83ef, the storage half of moving
 // custom themes OUT of the settings row they have lived in since T-16a1 P2.
 //
-// 🔴 WHY THIS EXISTS. Every saved theme, INCLUDING every image the owner picked
-// (avatars, logo, nav icons, canvas backgrounds — all base64 data: URIs), is
-// serialised into ONE settings value under the key `display.custom_themes`, and
-// that value is written by whole-array replace. Two consequences, both measured
-// rather than argued:
+// 🔴 WHY THIS EXISTS — stated as of the world this migration was written
+// AGAINST, which is the world it runs on and the one it removes. Every saved
+// theme, INCLUDING every image the owner picked (avatars, logo, nav icons,
+// canvas backgrounds — all base64 data: URIs), WAS serialised into ONE settings
+// value under the key `display.custom_themes`, written by whole-array replace.
+// Two consequences, both measured rather than argued:
 //
-//   - Editing ONE theme resends ALL of them. There is no partial write path at
+//   - Editing ONE theme resent ALL of them. There was no partial write path at
 //     all (api_settings.go: json.Marshal(newCustomThemes) → PutSetting).
-//   - `GET /api/settings` is 639,270 bytes on the production install and
-//     `custom_themes` alone is 626,721 of it — 98%. That figure is not new here;
-//     it is recorded verbatim in frontend/src/lib/sharedSnapshot.ts, which
-//     exists because five unrelated cockpit consumers were each downloading it.
-//     The same weight is what makes the `get_settings` MCP tool unusable for
-//     agents that only want a boolean out of it.
+//   - That one value dominated the settings payload — measured at 98% of it.
+//     🔴 The exact byte counts are DELIBERATELY not repeated here. The pair that
+//     used to be quoted (639,270 total / 626,721 for the themes) was measured in
+//     2026-07 and was already stale by 2026-08, when the same field measured
+//     1,592,133 bytes — see frontend/src/lib/sharedSnapshot.ts, which now carries
+//     that history with its dates attached. A number copied into a second file
+//     goes stale twice as quietly: the reader cannot tell a figure someone
+//     measured from a figure someone inherited. The RATIO is the load-bearing
+//     part and it is what this paragraph keeps.
+//     The same weight is what made the `get_settings` MCP tool unusable for
+//     agents that only wanted a boolean out of it.
 //
 // One theme per ROW is what makes "write one theme" expressible at all.
 //

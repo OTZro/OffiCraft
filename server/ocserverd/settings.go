@@ -172,10 +172,19 @@ const (
 	// localStorage the pre-auth cache. Stored like the updater toggles —
 	// strconv.FormatBool text, absent row = false. NOT an agent read path.
 	settingDisplayWide = "display.wide"
-	// settingDisplayCustomThemes (T-16a1 P2) is the owner's saved custom theme
-	// bundles — a JSON array of {id,name,colors} colour bundles (theme_bundle.go).
-	// Server-backed so the set syncs across devices; display.theme may point at
-	// any id in it. Absent/"" = none saved. NOT an agent read path.
+	// settingDisplayCustomThemes (T-16a1 P2) NAMED the row that used to hold every
+	// saved theme as one JSON array. T-83ef RETIRED IT FROM THE WIRE: settings
+	// neither serves nor accepts custom_themes any more, the themes live in the
+	// custom_theme table behind /api/themes, and NOTHING WRITES THIS ROW.
+	//
+	// 🔴 THE ROW IS NOT DELETED, AND THE CONSTANT IS NOT DEAD CODE. The row is
+	// deliberately kept as the rollback path the migration was allowed to run
+	// against — an install that goes back to a pre-split binary finds its themes
+	// exactly as it left them, byte for byte. The constant stays because
+	// migration 00059 and its tests still address that row. Do not "tidy up"
+	// either one without reading the retirement precondition in
+	// migration_00059_custom_theme_table.go: deleting the row is a separate,
+	// gated change, not housekeeping.
 	settingDisplayCustomThemes = "display.custom_themes"
 )
 

@@ -1,8 +1,10 @@
 package main
 
 // theme_bundle.go — T-16a1 P2: server-side validation of owner-authored theme
-// colour bundles (display.custom_themes). The security boundary is the colour
-// VALUE, not the token name.
+// colour bundles. (The parenthetical here named `display.custom_themes` until
+// T-83ef moved themes to their own table and endpoints; the validation is the
+// same, only what it is called from changed.) The security boundary is the
+// colour VALUE, not the token name.
 //
 // A bundle is `{ id, name, colors: { "--color-x": "<value>" } }`. It is stored
 // as JSON and, on the client, applied via element.style.setProperty(name,
@@ -34,8 +36,17 @@ const (
 	// maxThemeColors / minThemeColors bound the colours map in one bundle.
 	minThemeColors = 1
 	maxThemeColors = 200
-	// maxCustomThemes bounds how many bundles the owner may keep — the setting
-	// is one JSON row, so an unbounded array is the only way to bloat it.
+	// maxCustomThemes bounds how many themes the owner may keep.
+	//
+	// ⚠️ ITS ORIGINAL REASON IS GONE AND THE CAP IS NOT. It read "the setting is
+	// one JSON row, so an unbounded array is the only way to bloat it" — true
+	// until T-83ef gave themes their own table, where one more theme is one more
+	// row rather than a longer array. The cap stays because the thing it really
+	// bounds is what the OWNER accumulates: a theme carries its images embedded,
+	// so a hundred of them is already a large database and an unbounded number is
+	// an unbounded one. What changed is how it is asked — CountCustomThemes on
+	// creates only, since a replace keeps the count the same and refusing one
+	// would strand an owner at the limit with no way to edit.
 	maxCustomThemes = 100
 	// maxThemeNameLen caps a bundle's display name (runes), matching the
 	// existing 80-rune name convention (org.name / owner.name).
