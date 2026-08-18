@@ -111,6 +111,36 @@ describe("Markdown", () => {
     expect(c.querySelector("h4")?.textContent).toBe("four");
   });
 
+  // These three are what the change actually ALTERED, and the first draft of
+  // this file tested only the places that stayed the same — the control group
+  // was pinned to the untouched side. `###` already behaved this way in all
+  // three positions (a list item's indented continuation is re-rendered, a
+  // blockquote is re-rendered after its "> " is stripped, and a block opener
+  // ends the paragraph above it), so widening the ladder extends that same
+  // existing rule to levels 4-6. It is still an output change, and the manual's
+  // own prose uses "> 🔴 …" quote blocks heavily, so somebody WILL write a
+  // #### inside one.
+  it("treats #### as a heading in the same places ### already was", () => {
+    const quoted = renderMd("> #### in a quote");
+    expect(quoted.querySelector("blockquote h4")?.textContent).toBe("in a quote");
+
+    const nested = renderMd("- item\n    #### in a list item");
+    expect(nested.querySelector("li h4")?.textContent).toBe("in a list item");
+
+    const afterProse = renderMd("hello\n#### right after prose");
+    expect(afterProse.querySelector("p")?.textContent).toBe("hello");
+    expect(afterProse.querySelector("h4")?.textContent).toBe("right after prose");
+  });
+
+  // The regex reads the RAW line, so an indented "####" is not a heading. That
+  // was true before this ticket and is unchanged by it — but nothing asserted
+  // it, and a mutation that trimmed the line first left the whole file green.
+  it("does not treat an indented #### as a heading", () => {
+    const c = renderMd("  #### indented");
+    expect(c.querySelector("h4")).toBeNull();
+    expect(c.textContent).toContain("#### indented");
+  });
+
   // The hashes must still be inert wherever they are not a block opener.
   it("leaves #### alone inside a code fence and mid-paragraph", () => {
     const fenced = renderMd("```\n#### not a heading\n```");
