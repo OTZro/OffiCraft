@@ -9,14 +9,36 @@
 //      JSON on its own and the Go side reddens; edit the Go map on its own and
 //      it reddens too. Nobody can move one side quietly.
 //
-//   2. No source file under src/ writes an error code the server cannot emit.
-//      This is the guard that would have caught the original defect: seven mock
-//      refusals and five hand-built fake responses all said `bad_request`, a
-//      code `errorCodeForStatus` has never produced, so any component test
-//      branching on the CODE agreed with a server that does not exist.
-//      Structurally the mock can no longer write one at all (it imports
-//      `mockApiError`, not `ApiError`) — this catches the hand-built fakes in
-//      test files, which the structure cannot reach.
+//   2. No hand-written source file under frontend/ (src/, visual-guards/,
+//      paint-guards/, scripts/ — .ts/.tsx/.js/.mjs/.cjs, build output and
+//      node_modules excluded) writes an error code the server cannot emit.
+//      Structurally the mock adapter can no longer write one at all (it imports
+//      `mockApiError`, not `ApiError`); this catches the hand-built fakes and
+//      stories, which the structure cannot reach.
+//
+// 🔴 WHAT GUARD 2 DOES *NOT* PROMISE. It is a literal-scanner over three
+// syntactic shapes, not a type system, and the following were measured to stay
+// GREEN while carrying a wrong code:
+//
+//   a. A code that travels through a variable, constant or template literal.
+//      All three scanned positions require a `"..."` literal at the exact spot;
+//      `code: SOME_CONST` and `` `${x}` `` are invisible.
+//   b. A hand-built envelope that orders the keys `message` before `code`, or
+//      that asserts the code through anything other than the two matched
+//      forms (`error: { code: "…" }` / `.code).toBe("…")`) — e.g. `toEqual`,
+//      `toMatchObject`, `toHaveProperty`, a destructured compare.
+//   c. A code that IS in the vocabulary but does not belong to the status it is
+//      paired with. Only the `new ApiError(msg, STATUS, "code", …)` shape
+//      carries a status the scanner can read, so only THAT shape is
+//      status-cross-checked. The envelope shape and the `.toBe` shape are
+//      checked against the vocabulary ONLY — a 404 answered with `conflict`
+//      passes. (The three real envelope call sites put the status in three
+//      different syntactic positions — a positional argument before the body,
+//      a `status:` key, a trailing argument after it — so there is no
+//      extraction rule that would not misjudge one of them.)
+//
+// So: this guard pins the closed vocabulary broadly, and status↔code pairing
+// narrowly. It is a floor, not a proof.
 
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
@@ -25,12 +47,31 @@ import { codeForStatus, ERROR_CODE_VOCABULARY } from "./errorCodes";
 import spec from "../../../spec/error-codes.json";
 
 const SRC = join(__dirname, "..");
+const FRONTEND = join(__dirname, "..", "..");
+
+/** Directories that hold no hand-written source: dependencies and build
+ * output. Scanning them is both slow and meaningless — a minified bundle
+ * re-states every literal src/ already declares. */
+const SKIP_DIRS = new Set([
+  "node_modules",
+  "dist",
+  "dist-ssr",
+  "dist-paint-guard",
+  "test-results",
+  "coverage",
+  ".vite",
+  ".cache",
+  ".git",
+]);
 
 function sources(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) sources(path, out);
-    else if (/\.tsx?$/.test(entry.name)) out.push(path);
+    if (entry.isDirectory()) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+      sources(join(dir, entry.name), out);
+    } else if (/\.(tsx?|mjs|cjs|js)$/.test(entry.name)) {
+      out.push(join(dir, entry.name));
+    }
   }
   return out;
 }
@@ -91,8 +132,14 @@ describe("codeForStatus", () => {
 
 describe("error codes typed in the frontend", () => {
   it("only ever names codes the server can actually emit", () => {
-    const files = sources(SRC);
+    const files = sources(FRONTEND);
     expect(files.length).toBeGreaterThan(50);
+    // The walk must reach the guard trees outside src/ …
+    expect(files.some((f) => f.includes("visual-guards"))).toBe(true);
+    expect(files.some((f) => f.includes("paint-guards"))).toBe(true);
+    expect(files.some((f) => f.endsWith(".mjs"))).toBe(true);
+    // … and must not descend into dependencies or build output.
+    expect(files.filter((f) => [...SKIP_DIRS].some((d) => f.includes(`/${d}/`)))).toEqual([]);
     const offenders: string[] = [];
     let seen = 0;
     for (const file of files) {
