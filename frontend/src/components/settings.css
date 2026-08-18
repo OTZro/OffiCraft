@@ -608,6 +608,32 @@
   font-weight: 700;
   color: var(--color-text-strong);
 }
+/* h4-h6 (T-2bb4). The ladder above has already run out of SIZE by h3 — it sits
+   at the body's own 14px and is told apart by weight and colour — so these three
+   continue on the two axes that are left: one step down in size, then one step
+   down in colour. What they must NOT do is land on h3's exact box: a #### that
+   renders identically to a ### is the silent downgrade this ticket rejected,
+   and it looks like a working heading, which is worse than the literal "####"
+   it replaced. The margins tighten in step so a deep section still reads as
+   belonging to the one above it. */
+.doc-md h4 {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-strong);
+}
+.doc-md h5 {
+  margin: 12px 0 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+.doc-md h6 {
+  margin: 12px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
 .doc-md p {
   margin: 10px 0;
 }
