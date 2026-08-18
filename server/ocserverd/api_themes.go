@@ -160,6 +160,15 @@ func (s *apiServer) HandlePutThemeApiThemesThemeIdPut(w http.ResponseWriter, r *
 				"at most "+strconv.Itoa(maxCustomThemes)+" custom themes may be saved — delete one first")
 			return
 		}
+		// ⚠️ COUNT-THEN-WRITE, not atomic. Two creates racing here can both see
+		// n == cap-1 and both land, leaving cap+1 rows. Known and accepted, not
+		// missed: the cap bounds how much one owner may keep, it is not a
+		// security boundary, and overshooting it by the number of concurrent
+		// writers costs nothing (the next create is refused normally). Closing
+		// it means counting inside the same transaction as the insert, which is
+		// a change to the DAL's write seam and wants its own decision — see the
+		// same note on displayThemeExists below, which is the sharper half of
+		// this pair.
 	}
 
 	raw, err := marshalThemeBundle(body)
@@ -291,6 +300,28 @@ func marshalThemeBundle(b ThemeBundleDTO) (string, error) {
 // different caller a moment ago. Any copy of that id set held anywhere else
 // would be a snapshot with no one keeping it fresh, which is exactly the class
 // of bug this ticket has been paying for.
+//
+// ⚠️ CHECK-THEN-SET, and the window is REAL AND NEW. This answer is true when
+// it is given and the caller then writes display_theme under settingsMu, which
+// this lookup is outside of; a DELETE of that same theme in between leaves
+// display_theme naming a theme with no row. The window did not exist before
+// T-83ef because the vocabulary and the selection arrived in ONE request under
+// one lock — splitting the resources is what opened it.
+//
+// It is left open on purpose, and here is what actually absorbs it: the cockpit
+// treats a display_theme it cannot find in the list as "not selectable" and
+// falls back to the built-in on the next reconcile (i18n/index.tsx), which is
+// the T-1500 rule and is pinned by a guard that survives even when the stale
+// paint record cannot be removed. So the visible outcome is the built-in theme,
+// not a broken screen.
+//
+// What would NOT be absorbed, and is the reason this note exists rather than a
+// silent shrug: any future reader that treats display_theme as a guaranteed
+// foreign key — a join, a NOT NULL reference, a migration that assumes every
+// display_theme has a row. Closing the window means taking settingsMu across
+// the lookup and the write, or a real transaction spanning both resources.
+// That is a locking decision, not an implementation detail, and this ticket's
+// scope was ruled to be the split alone.
 func (s *apiServer) displayThemeExists(theme string) (bool, error) {
 	if theme == "" || displayThemeAllowed[theme] {
 		return true, nil

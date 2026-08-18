@@ -315,19 +315,15 @@ func validateThemeBundle(b ThemeBundleDTO, where string, seen map[string]bool) e
 	return nil
 }
 
-// themeBundleIDSet returns the id set of a bundle array — the vocabulary
-// display.theme may point at (on top of the built-ins).
-func themeBundleIDSet(bundles []ThemeBundleDTO) map[string]bool {
-	ids := make(map[string]bool, len(bundles))
-	for _, b := range bundles {
-		ids[b.Id] = true
-	}
-	return ids
-}
-
-// isValidDisplayTheme reports whether theme is an admissible display.theme
-// value given the effective custom-theme id set: "" (unset) | a built-in |
-// an existing custom id.
-func isValidDisplayTheme(theme string, customIDs map[string]bool) bool {
-	return theme == "" || displayThemeAllowed[theme] || customIDs[theme]
-}
+// [T-83ef] `themeBundleIDSet` and `isValidDisplayTheme` lived here and are gone.
+// They answered "is this a real theme id" by building a set out of the bundle
+// ARRAY that settings used to carry — a question that cannot be asked that way
+// any more, because settings no longer carries the bundles. The replacement is
+// `(*apiServer).displayThemeExists` in api_themes.go, which asks the
+// custom_theme table, and it is pinned by TestDisplayThemeIsValidatedAgainstThe
+// Table using an id that exists ONLY in the table.
+//
+// Worth the note rather than a silent delete: Go does not fail a build over an
+// unused unexported func, so a helper stranded by a refactor sits here looking
+// current. These two survived the whole of this ticket and were found by asking
+// the compiler (delete it and see), not by reading.

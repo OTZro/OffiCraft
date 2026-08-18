@@ -5,12 +5,13 @@
 // data-theme> reconcile wiring; the geometry-free bits a real browser is not
 // needed for (the visual pre-auth guard lives in the Playwright CT suite).
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import { I18nProvider, useI18n } from "./index";
 import { zh } from "./locales/zh";
 import { readDictMessage } from "./wording";
 import { mockApi, __resetMock } from "../api/mock";
+import { api } from "../api";
 import { setToken, TOKEN_KEY } from "../api/auth";
 
 function Probe() {
@@ -492,5 +493,112 @@ describe("I18nProvider custom theme wording overlay", () => {
     await mountCapture(1);
     await activate("sunrise");
     expect(ctx.t.nav.tasks).toBe(zh.nav.tasks);
+  });
+});
+
+// [T-83ef] The window between "the owner picked a theme" and "that theme's
+// bundle arrived". Before the split there was no window — the bundle was found
+// synchronously in the array settings already carried — so nothing had to say
+// what the cockpit shows in between. Now one round trip does, and these pin the
+// answer: NOTHING of the previous theme survives into it.
+describe("I18nProvider · the switch window", () => {
+  const AURORA = {
+    id: "aurora",
+    name: "Aurora",
+    colors: { "--color-accent": "#00ffcc" },
+    avatars: { member: PNG },
+    logo: PNG,
+    navIcons: { office: PNG },
+    wording: { zh: { "nav.tasks": "極光榜" } },
+  };
+  const PLAIN = { id: "plain", name: "Plain", colors: { "--color-accent": "#111111" } };
+
+  beforeEach(() => {
+    __resetMock();
+    localStorage.clear();
+    document.documentElement.removeAttribute("style");
+    delete document.documentElement.dataset.theme;
+    localStorage.setItem(TOKEN_KEY, "live-owner-token");
+  });
+
+  it("shows NO part of the old theme while the next one's bundle is in flight", async () => {
+    // The colour apply always refused a bundle whose id was not the active
+    // theme; wording, avatars, logo and nav icons each read the fetched bundle
+    // directly. So a switch used to render the next theme's (absent) colours
+    // over the PREVIOUS theme's images and words — a blend of two themes that
+    // never existed, on every switch, for as long as the fetch took.
+    await mockApi.putTheme(AURORA);
+    await mockApi.putTheme(PLAIN);
+    await mountCapture(2);
+    await activate("aurora");
+    // Everything the bundle carries is live…
+    expect(ctx.activeAvatars?.member).toBe(PNG);
+    expect(ctx.activeLogo).toBe(PNG);
+    expect(ctx.activeNavIcons?.office).toBe(PNG);
+    expect(ctx.t.nav.tasks).toBe("極光榜");
+
+    // …now switch, and hold the next bundle in flight.
+    let release!: (b: typeof PLAIN) => void;
+    const pending = new Promise<typeof PLAIN>((res) => {
+      release = res;
+    });
+    const spy = vi.spyOn(api, "getTheme").mockReturnValue(pending as never);
+    act(() => {
+      ctx.setTheme("plain");
+    });
+
+    // The active id has already moved…
+    expect(ctx.theme).toBe("plain");
+    // …so NOTHING of aurora may still be on screen. Each of these is a separate
+    // consumer that used to read the raw bundle.
+    expect(ctx.activeAvatars).toBeUndefined();
+    expect(ctx.activeLogo).toBeUndefined();
+    expect(ctx.activeNavIcons).toBeUndefined();
+    expect(ctx.t.nav.tasks).toBe(zh.nav.tasks);
+
+    release(PLAIN);
+    await waitFor(() => expect(ctx.activeThemeBundle?.id).toBe("plain"));
+    spy.mockRestore();
+  });
+
+  it("drops a reconcile bundle the owner has already switched away from, and does not cache its picture", async () => {
+    // reconcile fires on login/reload, so its fetch is in flight exactly when
+    // the owner is free to pick something else. `setTheme` carried this guard;
+    // reconcile did not — and one of two paths having it is not the guard
+    // existing. The cache is the half that outlives the moment: a picture of
+    // the wrong theme is what the NEXT cold load paints before React mounts.
+    await mockApi.putTheme(AURORA);
+    await mockApi.patchServerSettings({ displayTheme: "aurora" });
+
+    let release!: (b: typeof AURORA) => void;
+    const spy = vi.spyOn(api, "getTheme").mockReturnValue(
+      new Promise<typeof AURORA>((res) => {
+        release = res;
+      }) as never
+    );
+    await act(async () => {
+      render(
+        <I18nProvider>
+          <Capture />
+        </I18nProvider>
+      );
+    });
+    await waitFor(() => expect(ctx.theme).toBe("aurora"));
+
+    // The owner leaves for the built-in before aurora's bundle lands.
+    act(() => {
+      ctx.setTheme("office");
+    });
+    expect(ctx.theme).toBe("office");
+
+    release(AURORA);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The late answer is discarded on both faces.
+    expect(ctx.activeThemeBundle).toBeNull();
+    expect(localStorage.getItem("oc.themePaint")).toBeNull();
+    spy.mockRestore();
   });
 });

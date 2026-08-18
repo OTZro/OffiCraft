@@ -172,20 +172,32 @@ const (
 	// localStorage the pre-auth cache. Stored like the updater toggles —
 	// strconv.FormatBool text, absent row = false. NOT an agent read path.
 	settingDisplayWide = "display.wide"
-	// settingDisplayCustomThemes (T-16a1 P2) NAMED the row that used to hold every
-	// saved theme as one JSON array. T-83ef RETIRED IT FROM THE WIRE: settings
-	// neither serves nor accepts custom_themes any more, the themes live in the
-	// custom_theme table behind /api/themes, and NOTHING WRITES THIS ROW.
+	// [T-16a1 P2 / T-83ef] `display.custom_themes` — the row that used to hold
+	// every saved theme as one JSON array — HAS NO CONSTANT HERE ANY MORE, and
+	// that is deliberate rather than an oversight:
 	//
-	// 🔴 THE ROW IS NOT DELETED, AND THE CONSTANT IS NOT DEAD CODE. The row is
-	// deliberately kept as the rollback path the migration was allowed to run
-	// against — an install that goes back to a pre-split binary finds its themes
-	// exactly as it left them, byte for byte. The constant stays because
-	// migration 00059 and its tests still address that row. Do not "tidy up"
-	// either one without reading the retirement precondition in
-	// migration_00059_custom_theme_table.go: deleting the row is a separate,
-	// gated change, not housekeeping.
-	settingDisplayCustomThemes = "display.custom_themes"
+	//   - The WIRE is retired. Settings neither serves nor accepts
+	//     custom_themes; the themes live in the custom_theme table behind
+	//     /api/themes, and nothing in the server writes this row.
+	//   - The ROW is NOT deleted. It is kept as the rollback path the migration
+	//     was allowed to run against — an install that goes back to a pre-split
+	//     binary finds its themes exactly as it left them, byte for byte.
+	//     Deleting it is a separate, gated change; the precondition is at the
+	//     top of migration_00059_custom_theme_table.go.
+	//   - The only code that still names the key is that migration, and it
+	//     spells the string out ITSELF (`legacyCustomThemesKey`) on purpose: a
+	//     migration has to keep describing the schema as it was AT ITS OWN
+	//     VERSION, so it must not follow a constant that later versions are
+	//     free to rename or retire.
+	//
+	// 🔴 This block previously kept a `settingDisplayCustomThemes` constant and
+	// justified it by saying migration 00059 and its tests still addressed the
+	// row. That was FALSE — the migration deliberately does not reference it,
+	// and deleting the constant left `go build ./...` green, which is how it was
+	// caught. It is recorded here because the danger was not the unused constant
+	// but the REASON attached to it: a comment that hands the next reader a
+	// wrong argument for keeping something is worse than no comment, and nothing
+	// mechanical checks a rationale.
 )
 
 // displayThemeAllowed / displayLanguageAllowed are the enum whitelists for the

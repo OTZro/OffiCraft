@@ -198,11 +198,36 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   // user overlay; a custom theme keys its overlay on `language` (zh/en). FALLBACK
   // (owner decision b): codes without an override keep the base dict's text, so
   // the interface's original language is preserved for everything unwrapped.
+  // 🔴 [T-83ef] ONE authority for "the bundle we are allowed to render": the
+  // fetched bundle ONLY while it is the active theme's.
+  //
+  // `theme` moves the instant the owner picks one; `activeThemeBundle` cannot
+  // move until its fetch lands a round trip later. Before the split there was
+  // no gap — the bundle was `customThemes.find(b => b.id === theme)`, resolved
+  // synchronously — so nothing had to say what happens in between. Now
+  // something does, and the answer must be the SAME for every consumer: the
+  // colour apply already refused a mismatched bundle, but wording, avatars,
+  // logo and nav icons each read the raw state, so for one round trip a switch
+  // rendered the NEXT theme's colours over the PREVIOUS theme's images and
+  // words. Not a rare race — every single theme switch, for as long as a
+  // several-hundred-KB bundle takes to arrive.
+  //
+  // Falling back to the built-in for that moment is the same answer the colour
+  // path already gave; a consistent built-in beats a blend of two themes that
+  // never existed.
+  const bundleForTheme = useMemo(
+    () =>
+      activeThemeBundle && activeThemeBundle.id === theme
+        ? activeThemeBundle
+        : null,
+    [activeThemeBundle, theme]
+  );
+
   const t = useMemo(() => {
     const base = DICTS[locale];
-    const overlay = activeThemeBundle?.wording?.[language];
+    const overlay = bundleForTheme?.wording?.[language];
     return applyWording(base, overlay);
-  }, [locale, language, activeThemeBundle]);
+  }, [locale, language, bundleForTheme]);
 
   // The composed parameterised messages ride the SAME memo inputs as `t` — a
   // wording overlay change re-composes them, so no message can serve stale
@@ -215,8 +240,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   // The built-in office theme carries none; a dangling active id resolves to
   // undefined (office glyph fallback — office never degrades).
   const activeAvatars = useMemo(
-    () => activeThemeBundle?.avatars,
-    [activeThemeBundle]
+    () => bundleForTheme?.avatars,
+    [bundleForTheme]
   );
 
   // The active custom theme's studio logo image + per-nav-tab icons (T-ea81).
@@ -224,13 +249,13 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   // icons), so they ride the context rather than the DOM. Absent → the built-in
   // logo mark / built-in nav icons (office never degrades).
   const activeLogo = useMemo(
-    () => activeThemeBundle?.logo,
-    [activeThemeBundle]
+    () => bundleForTheme?.logo,
+    [bundleForTheme]
   );
 
   const activeNavIcons = useMemo(
-    () => activeThemeBundle?.navIcons,
-    [activeThemeBundle]
+    () => bundleForTheme?.navIcons,
+    [bundleForTheme]
   );
 
   // The --color-* inline props applied for the current custom theme, remembered
@@ -254,8 +279,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       return;
     }
     root.dataset.theme = "office";
-    if (activeThemeBundle && activeThemeBundle.id === theme) {
-      appliedTokensRef.current = applyThemeToRoot(root, activeThemeBundle);
+    if (bundleForTheme) {
+      appliedTokensRef.current = applyThemeToRoot(root, bundleForTheme);
       return;
     }
     // [T-1500] the bundle is unresolved AND reconcile has not spoken: keep
@@ -268,7 +293,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         appliedTokensRef.current = applyThemeToRoot(root, cached);
       }
     }
-  }, [theme, activeThemeBundle, themesLoaded]);
+  }, [theme, bundleForTheme, themesLoaded]);
 
   // Apply the layout width (T-756f). Narrow REMOVES the attribute rather than
   // writing data-layout="narrow": the default DOM then looks exactly as it did
@@ -473,6 +498,15 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         // hold and no picture to cache. Clearing the paint record is the T-1500
         // rule ("never leave a picture the server no longer recognises") and it
         // now has to be spelled out, because there is no set to fail a lookup in.
+        // themeRef is assigned during RENDER, so it still holds the pre-reconcile
+        // value here even though cacheTheme() above has already settled which
+        // theme wins. Point it at that decision now: without this the guard on
+        // the fetch below reads its OWN adoption as "the owner switched away"
+        // and drops the bundle it just asked for — which is how the first cut of
+        // this fix broke repainting after an edit. A later real switch still
+        // moves the ref (setTheme → cacheTheme → render), so the guard keeps
+        // exactly the case it is there for.
+        themeRef.current = active;
         if (active === "office" || !ids.has(active)) {
           setActiveThemeBundle(null);
           writePaint(null);
@@ -480,6 +514,18 @@ export function I18nProvider({ children }: { children: ReactNode }) {
           return;
         }
         return api.getTheme(active).then((b) => {
+          // Same guard `setTheme` carries, for the same reason and it was
+          // missing here: reconcile fires on login/reload, so its fetch is in
+          // flight while the owner is free to pick a different theme. Without
+          // this, the slower of the two answers wins — and the damage outlives
+          // the moment, because writePaint would cache a picture of a theme the
+          // owner is not on and the NEXT cold load would paint it before React
+          // mounts. Two paths fetch one bundle; one of them having the guard is
+          // not the same as the guard existing.
+          if (themeRef.current !== active) {
+            setThemesLoaded(true);
+            return;
+          }
           setActiveThemeBundle(b);
           writePaint(b);
           setThemesLoaded(true);
