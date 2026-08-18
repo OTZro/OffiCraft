@@ -194,8 +194,9 @@ type apiServer struct {
 	reconcileStates map[string]reconcileState
 	reconcileCfg    reconcileConfig
 	// noReconcile is the --no-reconcile serve flag: disables the cadence loop
-	// AND every event-driven warden-command dispatch (the shadow-deployment
-	// kill-switch) while the rest of the server runs unchanged.
+	// AND the event-driven warden-command dispatch the producer owns (the
+	// shadow-deployment kill-switch) while the rest of the server runs
+	// unchanged. Not a server-wide gate — see spec/lifecycle.md §4.1.
 	noReconcile bool
 	// identitySweepAt (T-bb29 §3) → member id → last cross-machine identity-sweep
 	// dispatch ts. The connection-edge 正身 sweep fires on every SSE first-connect

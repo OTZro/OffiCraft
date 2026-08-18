@@ -1157,9 +1157,10 @@ func (s *apiServer) HandleUpgradeMachineApiMachinesMemberIdUpgradePost(w http.Re
 		return
 	}
 	dispatched := false
-	// --no-reconcile is the shadow-deploy kill-switch over EVERY warden-command
-	// dispatch (reconcileMemberNow / dispatchRobustStopNow posture) — a shadow
-	// server must never command wardens, including this one-shot kick.
+	// This one-shot kick borrows the reconcile producer's --no-reconcile
+	// posture (reconcileMemberNow / dispatchRobustStopNow): the flag gates THIS
+	// dispatch. It is NOT a server-wide gate over every warden command — what
+	// it does not cover is enumerated in spec/lifecycle.md §4.1.
 	if !s.noReconcile {
 		if frame, ok := buildTargetFrame(reconcileCmdUpdate, m.ID); ok {
 			// enqueueWardenFrame carries the same reachability gate as every
