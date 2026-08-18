@@ -881,7 +881,11 @@ var blockOpeners = []struct {
 	becomes string
 	trim    func(string) string
 }{
-	{re: regexp.MustCompile(`^#{1,3}` + jsSpace), becomes: "a heading", trim: trimASCIIStart},
+	// `{1,6}`, not `{1,3}`: T-2bb4 widened Markdown.tsx's HEADING_RE to all six
+	// levels. A guard that stops one level short of the renderer is a hole with
+	// a number on it — the same shape review already found on the digit ceiling
+	// two entries down.
+	{re: regexp.MustCompile(`^#{1,6}` + jsSpace), becomes: "a heading", trim: trimASCIIStart},
 	{re: regexp.MustCompile(`^[-*+]` + jsSpace), becomes: "a list item", trim: trimASCIIStart},
 	// `\d+`, not `\d{1,9}`: the renderer's OLIST_RE has no digit ceiling, and a
 	// guard that stops counting where the renderer does not is a hole with a
