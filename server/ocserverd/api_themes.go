@@ -301,12 +301,26 @@ func marshalThemeBundle(b ThemeBundleDTO) (string, error) {
 // would be a snapshot with no one keeping it fresh, which is exactly the class
 // of bug this ticket has been paying for.
 //
-// ⚠️ CHECK-THEN-SET, and the window is REAL AND NEW. This answer is true when
-// it is given and the caller then writes display_theme under settingsMu, which
-// this lookup is outside of; a DELETE of that same theme in between leaves
-// display_theme naming a theme with no row. The window did not exist before
-// T-83ef because the vocabulary and the selection arrived in ONE request under
-// one lock — splitting the resources is what opened it.
+// ⚠️ CHECK-THEN-SET. The SHAPE is real and it is new: this answer is true when
+// it is given, the caller then writes display_theme under settingsMu, and this
+// lookup sits outside that lock — so a DELETE of the same theme in between
+// would leave display_theme naming a theme with no row. The shape did not exist
+// before T-83ef, when the vocabulary and the selection arrived in ONE request
+// under one lock.
+//
+// 🔴 REACHABILITY IS UNPROVEN, and that is stated deliberately rather than left
+// to read as a live hazard. A probe ran the two requests concurrently 300 times
+// and produced the dangling state ZERO times; every observed interleaving was
+// "the delete lands first, the patch is then refused 422". One plausible reason
+// is that the write pool is capped at one connection and serialises the
+// dangerous order away — but that is a GUESS, it was not proven, and it must
+// not be quoted as if it were. So: the shape exists, nobody has reached it, and
+// neither "it happens" nor "it cannot" is claimed here.
+//
+// (The sibling count-then-write above IS reachable — the same probe reproduced
+// cap+1 rows. It is tracked separately as T-f49e; this one is not, on the
+// ruling that acting on an unreached race would trade a certain risk for an
+// unknown gain.)
 //
 // It is left open on purpose, and here is what actually absorbs it: the cockpit
 // treats a display_theme it cannot find in the list as "not selectable" and
