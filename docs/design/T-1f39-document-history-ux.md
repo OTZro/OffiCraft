@@ -52,7 +52,7 @@ owner 原話（2026-07-31，逐字）：
 
 | kind | content_json | 由誰寫 |
 | --- | --- | --- |
-| `task_manual_sop` | `{"sop_md": ...}` | `update_task_manual`（僅當 SOP 真的變了） |
+| `task_manual_sop` | `{"sop_md": ...}` | `update_task_manual`、`patch_task_sop`（都只在 SOP 真的變了時留版） |
 | `task_manual_learnings` | `{"learnings": ...}` | `update_task_manual`（僅當學習經驗真的變了）、`write_task_learnings`、`patch_task_learnings` |
 
 - **`purpose`、`fields`（識別鍵）、`display_name`、`assignee` 不再產生任何版本**——改它們不留快照、也不可還原。這是 owner 明示要的，同時也是**能力的刻意移除**（今天還原一版可以把 purpose 一起帶回來，之後不行）。

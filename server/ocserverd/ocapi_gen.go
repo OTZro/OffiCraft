@@ -2822,6 +2822,25 @@ type TaskRefDTO struct {
 	TypeKey *string `json:"type_key,omitempty"`
 }
 
+// TaskSopPatchDTO Anchor-addressed PATCH of a type's SOP (MCP “patch_task_sop“ — the sop_md twin of “patch_task_learnings“): “{edits: [{old, new}], allow_shrink?}“. It exists to stop CONCURRENT OVERWRITE: the only sop_md write face was “update_task_manual.sop_md“, a whole-doc replace, so a caller holding a stale copy silently deletes whatever landed in between — and because the stale copy is usually the LONGER one, the shrink guard never fires and the loss carries no signal at all. An anchor patch cannot express that write: each non-empty “old“ must match the current sop_md EXACTLY ONCE, so a concurrent write that moved or duplicated the anchor turns the batch into a visible refusal. ATOMIC — edits apply sequentially to an in-memory copy and any failing anchor (absent or ambiguous “old“) rejects the ENTIRE batch with a flat 400 and ZERO writes. “allow_shrink“ (default false) must be set explicitly for a patch that empties the doc or shrinks it to under a tenth of its size — the r-76 wipe-guard posture.
+type TaskSopPatchDTO struct {
+	AllowShrink *bool            `json:"allow_shrink,omitempty"`
+	Edits       []LessonsEditDTO `json:"edits"`
+}
+
+// TaskSopPatchResultDTO Receipt of a task-SOP PATCH (MCP “patch_task_sop“). “size_chars“ (CHARACTERS — Unicode code points, the SAME unit as the “doc.cap_chars.manual_sop“ cap the write is judged against) and “sha256“ (hex) are lightweight verification anchors over the RESULTING sop_md text, so the caller can confirm the write landed without re-reading the full doc. “applied_edits“ counts the edits that changed the text THEY were handed (a no-op append/replace does not count), so "0 applied" is expressible and a silent no-op cannot masquerade as success. It is not a report on whether the document ended up different from where it started: a batch whose edits undo one another (“anchor → middle“ then “middle → anchor“) reports the full count over a sop_md that never moved, and nothing is written in that case. To decide whether the doc actually changed, compare “sha256“ against the value you held before the call.
+type TaskSopPatchResultDTO struct {
+	AppliedEdits *int `json:"applied_edits,omitempty"`
+
+	// CapChars The document size cap in force when this write was judged, in CHARACTERS (the doc.cap_chars.manual_sop setting — this face only ever writes sop_md). Returned so a caller can see its remaining budget without a second request — the cap is adjustable and agents cannot read the settings surface.
+	CapChars *int    `json:"cap_chars,omitempty"`
+	Sha256   *string `json:"sha256,omitempty"`
+
+	// SizeChars Size of the RESULTING document in CHARACTERS (Unicode code points) — the same unit as cap_chars.
+	SizeChars *int    `json:"size_chars,omitempty"`
+	TypeKey   *string `json:"type_key,omitempty"`
+}
+
 // TaskStepDTO One workflow node on the task timeline. Every row is one progress leaf (parallel items are separate rows sharing “parallel_group“). A parallel stage is CONSECUTIVE rows sharing a non-empty “parallel_group“ — submit_plan refuses (400) split groups, one-lane groups and gates inside a group, so stored plans always fold cleanly. “status“ is the closed set “pending“ | “in_progress“ | “waiting_owner“ | “done“ | “superseded“. “done“ and “superseded“ are the step's terminal states: “superseded“ (T-1aea) is stamped by submit_plan alone — a replan freezes a step whose latest bound reply card was already answered/expired as kept history (original order, ahead of the fresh plan) unless the fresh plan re-lists the node by name; a superseded row counts toward neither “progress_done“ nor “progress_total“, is never the current node, is not agent-reportable and cannot be re-armed; its “finished_ts“ is the freeze moment. Gate projection: “is_gate“ with an empty “reply_card_id“ is the ANNOUNCED (dashed) gate; a non-empty “reply_card_id“ is a step carrying a live reply card — an ARMED gate, or a plain step a “create_reply_card“ ask auto-bound to. “reply_card_id“ always points at the LATEST bound card and persists after the step finishes (the permanent approval mark).
 type TaskStepDTO struct {
 	Dod        *string  `json:"dod,omitempty"`
@@ -2842,6 +2861,26 @@ type TaskStepDTO struct {
 	Status          string   `json:"status"`
 	TaskId          string   `json:"task_id"`
 	WaitingReason   *string  `json:"waiting_reason,omitempty"`
+}
+
+// TaskStepNotePatchDTO Anchor-addressed PATCH of one step's working note (MCP “patch_step_note“): “{edits: [{old, new}], allow_shrink?}“. It exists to stop CONCURRENT OVERWRITE: “update_step_note“ is a whole-doc replace, so a caller that read the note earlier and writes it back silently deletes whatever a second writer added in between — and because the stale copy is usually the LONGER one, no shrink guard fires and the loss carries no signal at all. An anchor patch cannot express that write: each non-empty “old“ must match the current note EXACTLY ONCE, so a concurrent write that moved or duplicated the anchor turns the batch into a refusal. ATOMIC — edits apply sequentially to an in-memory copy and any failing anchor (absent or ambiguous “old“) rejects the ENTIRE batch with a flat 400 and ZERO writes; an empty “old“ appends “new“. “allow_shrink“ (default false) must be set explicitly for a patch that empties the note or shrinks it to under a tenth of its size — the r-76 wipe-guard posture; use “update_step_note“ for an honest wholesale rewrite.
+type TaskStepNotePatchDTO struct {
+	AllowShrink *bool            `json:"allow_shrink,omitempty"`
+	Edits       []LessonsEditDTO `json:"edits"`
+}
+
+// TaskStepNotePatchResultDTO Receipt of a step-note PATCH (MCP “patch_step_note“). Echoes the note as STORED — the same posture as the wholesale receipt, since the whole point of the field is that a later session reads it back — plus “applied_edits“ (the edits that changed the text THEY were handed, so "0 applied" is expressible and a silent no-op cannot masquerade as success — it is not a report on whether the note ended up different from where it started: a batch whose edits undo one another (“anchor → middle“ then “middle → anchor“) reports the full count over a note that never moved, and in that case the stored note, the task's “updated_ts“ and every open cockpit card are left exactly as they stood, so compare “sha256“ against the value you held before the call to decide that) and “size_chars“/“cap_chars“/“sha256“ verification anchors over the resulting note. “size_chars“ and “cap_chars“ are CHARACTERS (Unicode code points), the unit the note's limit is enforced in.
+type TaskStepNotePatchResultDTO struct {
+	AppliedEdits *int `json:"applied_edits,omitempty"`
+
+	// CapChars The step-note ceiling this write was judged against, in CHARACTERS — the same limit ``update_step_note`` enforces, shared with the task-level handover note. NOT a setting: unlike the ``cap_chars`` on the manual patch receipts (which report the adjustable ``doc.cap_chars.*`` values), this one is a server CONSTANT and no settings key moves it. Same field name, different source — do not read one as evidence about the other.
+	CapChars   *int    `json:"cap_chars,omitempty"`
+	Note       string  `json:"note"`
+	Sha256     *string `json:"sha256,omitempty"`
+	SizeChars  *int    `json:"size_chars,omitempty"`
+	StepId     string  `json:"step_id"`
+	StepStatus string  `json:"step_status"`
+	TaskId     string  `json:"task_id"`
 }
 
 // TaskStepNoteReceiptDTO Bounded receipt returned after writing one step's working note (T-cc3e). Echoes the note as STORED, so the caller can confirm what actually landed without a follow-up GET — the point of the field is that the next session reads it back, so the write must be verifiable at the write. Fetch GET /api/tasks/{task_id} when full task detail is needed.
@@ -3272,6 +3311,9 @@ type HandleWriteTaskLearningsApiTaskManualsTypeKeyLearningsPostJSONRequestBody =
 // HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchPostJSONRequestBody defines body for HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchPost for application/json ContentType.
 type HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchPostJSONRequestBody = TaskLearningsPatchDTO
 
+// HandlePatchTaskSopApiTaskManualsTypeKeySopPatchPostJSONRequestBody defines body for HandlePatchTaskSopApiTaskManualsTypeKeySopPatchPost for application/json ContentType.
+type HandlePatchTaskSopApiTaskManualsTypeKeySopPatchPostJSONRequestBody = TaskSopPatchDTO
+
 // HandleCreateTaskApiTasksPostJSONRequestBody defines body for HandleCreateTaskApiTasksPost for application/json ContentType.
 type HandleCreateTaskApiTasksPostJSONRequestBody = TaskCreateDTO
 
@@ -3307,6 +3349,9 @@ type HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePostJSONRequestBody = ReplyC
 
 // HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePostJSONRequestBody defines body for HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost for application/json ContentType.
 type HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePostJSONRequestBody = TaskStepNoteUpdateDTO
+
+// HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPostJSONRequestBody defines body for HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPost for application/json ContentType.
+type HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPostJSONRequestBody = TaskStepNotePatchDTO
 
 // HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPostJSONRequestBody defines body for HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost for application/json ContentType.
 type HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPostJSONRequestBody = TaskStepStatusUpdateDTO
@@ -3766,6 +3811,9 @@ type ServerInterface interface {
 	// Patch a type's learnings by unique anchors ({edits:[{old,new}]}) — the learnings twin of patch_lessons, so the write cost scales with the CHANGE, not the whole (30k-char) doc, and re-typing the whole doc can no longer silently drop content. Edits apply in order; a non-empty old must match the current learnings EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400, zero writes — the unique anchor also acts as an optimistic lock); an empty old appends. Wiping the doc, or shrinking it below a tenth, needs allow_shrink=true.
 	// (POST /api/task-manuals/{type_key}/learnings/patch)
 	HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchPost(w http.ResponseWriter, r *http.Request, typeKey string)
+	// Patch a type's SOP (sop_md) by unique anchors ({edits:[{old,new}]}) — send only the section that changed, instead of re-typing the whole SOP. USE THIS WHENEVER YOU ARE AMENDING AN SOP THAT ALREADY HAS CONTENT. update_task_manual{sop_md} is a wholesale replace, so if anyone else edited the SOP between your read and your write, your copy is stale and the replace silently deletes their section — and because your stale copy is usually the LONGER one, no guard fires and nothing tells you. A patch cannot do that: a non-empty old must match the current sop_md EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400 that names which edit failed and which tool to re-read with, zero writes), so a concurrent write turns into a refusal you can see. Edits apply in order; an empty old appends. Wiping the doc, or shrinking it below a tenth, needs allow_shrink=true — for an honest rewrite from scratch use update_task_manual. The sop_md cap is judged on the RESULT and allow_shrink is not a bypass. Re-read with get_task_manual after a refusal.
+	// (POST /api/task-manuals/{type_key}/sop/patch)
+	HandlePatchTaskSopApiTaskManualsTypeKeySopPatchPost(w http.ResponseWriter, r *http.Request, typeKey string)
 	// List tasks (?executor=&type=&status=, or statuses=[…] for a SET of states — every filter given is ANDed; LIGHT list items — id/task_no/title/type_key/status/priority/executor/creator_id/progress/timestamps/deps + dep_tasks, WITHOUT steps/description/inputs). Ask for the states you actually want (`statuses: ["not_started", "in_progress"]`) instead of listing everything and filtering yourself — the whole history is a large answer. `statuses` also accepts "reassigning", which matches the handover LOCK rather than the status column. `dep_tasks` already carries each blocker's task_no/title/status, so a blocked task needs no follow-up get_task just to name what it is waiting for. Call get_task for a task's full detail (steps, description, inputs).
 	// (GET /api/tasks)
 	HandleListTasksApiTasksGet(w http.ResponseWriter, r *http.Request, params HandleListTasksApiTasksGetParams)
@@ -3820,6 +3868,9 @@ type ServerInterface interface {
 	// Write this step's working note: where the work stands and what comes next — the field the handover SOP means by 「把還在進行中的工作寫回 task step note」. WHAT TO WRITE — three things, then stop: (1) STATE — one sentence on where this step actually got to; (2) NEXT — one sentence on what whoever takes over does next; (3) EVIDENCE POINTERS — version ids, file and log paths, what you verified YOURSELF versus what you are taking on someone's word, and the limits of what was NOT done. Long narrative does not live here: reasoning and scope belong in the task description, reports and diffs belong on the task as artifacts. The note is the current state — not a report, not an append-only log. Writable in ANY step status (pending, in_progress, waiting_owner, waiting_external, done, superseded), unlike `waiting_reason`, which is locked to waiting_external. Wholesale write: `note` replaces whatever was there and "" clears it, so rewrite it as the work moves rather than appending; over 4,000 characters (counted in runes) is refused. Same executor/admin gate as every other task-driving write (403 otherwise). ⚠️ A task auto-closes when its last step is reported done and a closed task 409s — so write the note BEFORE the report that finishes the last step, not after.
 	// (POST /api/tasks/{task_id}/steps/{step_id}/note)
 	HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost(w http.ResponseWriter, r *http.Request, taskId string, stepId string)
+	// Patch this step's working note by unique anchors ({edits:[{old,new}]}) — send only the part that changed, instead of re-typing the whole note. USE THIS WHENEVER YOU ARE AMENDING A NOTE THAT ALREADY HAS CONTENT. update_step_note is a wholesale replace, so if anyone else wrote to the step between your read and your write, your copy is stale and the replace silently deletes their text — and because your stale copy is usually the LONGER one, no guard fires and nothing tells you. A patch cannot do that: a non-empty old must match the current note EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400 that names which edit failed and which tool to re-read with, zero writes), so a concurrent write turns into a refusal you can see. Edits apply in order; an empty old appends. Wiping the note, or shrinking it below a tenth, needs allow_shrink=true — for an honest rewrite from scratch use update_step_note. Same executor/admin gate, same any-step-status generality, same closed-task 409 as update_step_note. Re-read with get_task after a refusal.
+	// (POST /api/tasks/{task_id}/steps/{step_id}/note/patch)
+	HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPost(w http.ResponseWriter, r *http.Request, taskId string, stepId string)
 	// Report a step status (pending/in_progress/waiting_external/done). Entering waiting_external requires a non-blank waiting_reason (422 otherwise); the task status is derived from its steps. T-74f8 交棒閘: if this report would CLOSE the task (every step done) AND the task's creator is not its executor, the call is REFUSED with 422 unless you say where the ball goes IN THIS SAME CALL — handoff='return_to_creator' (recorded on the task and nothing else — no task is opened and nobody is notified), handoff='follow_up' + handoff_task_id=<a successor task you already created> (the server hangs this task off it as a dependency, and closing this one releases it), or handoff='none' + handoff_note=<why nothing follows>. The gate stands aside by itself when a non-terminal task already depends on this one — you never see it if the handover is already real. It refuses BEFORE writing anything, so a refused report leaves the plan fully editable: create the successor task, then re-send this same report with the declaration. This is your LAST chance — once the task closes it can never be replanned (submit_plan becomes a permanent 409).
 	// (POST /api/tasks/{task_id}/steps/{step_id}/status)
 	HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost(w http.ResponseWriter, r *http.Request, taskId string, stepId string)
@@ -6764,6 +6815,32 @@ func (siw *ServerInterfaceWrapper) HandlePatchTaskLearningsApiTaskManualsTypeKey
 	handler.ServeHTTP(w, r)
 }
 
+// HandlePatchTaskSopApiTaskManualsTypeKeySopPatchPost operation middleware
+func (siw *ServerInterfaceWrapper) HandlePatchTaskSopApiTaskManualsTypeKeySopPatchPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "type_key" -------------
+	var typeKey string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "type_key", r.PathValue("type_key"), &typeKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "type_key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandlePatchTaskSopApiTaskManualsTypeKeySopPatchPost(w, r, typeKey)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleListTasksApiTasksGet operation middleware
 func (siw *ServerInterfaceWrapper) HandleListTasksApiTasksGet(w http.ResponseWriter, r *http.Request) {
 
@@ -7294,6 +7371,41 @@ func (siw *ServerInterfaceWrapper) HandleUpdateTaskStepNoteApiTasksTaskIdStepsSt
 	handler.ServeHTTP(w, r)
 }
 
+// HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPost operation middleware
+func (siw *ServerInterfaceWrapper) HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "task_id" -------------
+	var taskId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "task_id", r.PathValue("task_id"), &taskId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "task_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "step_id" -------------
+	var stepId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "step_id", r.PathValue("step_id"), &stepId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "step_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPost(w, r, taskId, stepId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost operation middleware
 func (siw *ServerInterfaceWrapper) HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost(w http.ResponseWriter, r *http.Request) {
 
@@ -7787,6 +7899,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/task-manuals/{type_key}", wrapper.HandleUpdateTaskManualApiTaskManualsTypeKeyPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/task-manuals/{type_key}/learnings", wrapper.HandleWriteTaskLearningsApiTaskManualsTypeKeyLearningsPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/task-manuals/{type_key}/learnings/patch", wrapper.HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/task-manuals/{type_key}/sop/patch", wrapper.HandlePatchTaskSopApiTaskManualsTypeKeySopPatchPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/tasks", wrapper.HandleListTasksApiTasksGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks", wrapper.HandleCreateTaskApiTasksPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/tasks/count", wrapper.HandleTaskCountApiTasksCountGet)
@@ -7805,6 +7918,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/reassign", wrapper.HandleReassignTaskApiTasksTaskIdReassignPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/steps/{step_id}/gate", wrapper.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/steps/{step_id}/note", wrapper.HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/steps/{step_id}/note/patch", wrapper.HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/steps/{step_id}/status", wrapper.HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/terminate", wrapper.HandleTerminateTaskApiTasksTaskIdTerminatePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/title", wrapper.HandleUpdateTaskTitleApiTasksTaskIdTitlePost)
