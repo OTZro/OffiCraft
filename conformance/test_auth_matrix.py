@@ -456,6 +456,33 @@ MATRIX: dict[str, Route] = {
         requires="admin_agent",
         body={},  # empty patch = validated no-op read (mutating nothing)
     ),
+    # ── custom themes (T-83ef) ───────────────────────────────────────────────
+    # This file answers ONE question — who gets past the gate — so every positive
+    # face here is aimed at a DETERMINISTIC, NON-MUTATING outcome (a 404 for a
+    # theme that does not exist, a 422 for a bundle whose id disagrees with the
+    # path). A non-403 IS the proof the identity passed the floor; what the
+    # endpoints actually DO is pinned by test_rest_happy.py and by the Go tests.
+    # Writing real themes from here would leave rows behind that the list row and
+    # the happy suite would then have to reason about.
+    "GET /api/themes": Route(requires="admin_agent"),
+    "GET /api/themes/{theme_id}": Route(
+        requires="admin_agent",
+        path=lambda ctx, _i: "/api/themes/conf-missing-theme",
+        overrides={"owner": 404, "admin_agent": 404},
+    ),
+    "PUT /api/themes/{theme_id}": Route(
+        requires="admin_agent",
+        path=lambda ctx, _i: "/api/themes/conf-theme-matrix",
+        # id disagrees with the path on purpose: refused for a reason that has
+        # nothing to do with identity, and nothing is stored.
+        body={"id": "conf-theme-other", "name": "conf", "colors": {"--color-bg": "#111"}},
+        overrides={"owner": 422, "admin_agent": 422},
+    ),
+    "DELETE /api/themes/{theme_id}": Route(
+        requires="admin_agent",
+        path=lambda ctx, _i: "/api/themes/conf-missing-theme",
+        overrides={"owner": 404, "admin_agent": 404},
+    ),
     # ── members ──────────────────────────────────────────────────────────────
     "GET /api/members": Route(requires="machine"),
     "POST /api/members": Route(

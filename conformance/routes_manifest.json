@@ -1076,5 +1076,33 @@
     "method": "POST",
     "path": "/api/offboard/reset",
     "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "list_themes",
+    "method": "GET",
+    "path": "/api/themes",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "get_theme",
+    "method": "GET",
+    "path": "/api/themes/{theme_id}",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "put_theme",
+    "method": "PUT",
+    "path": "/api/themes/{theme_id}",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "delete_theme",
+    "method": "DELETE",
+    "path": "/api/themes/{theme_id}",
+    "requires": "admin_agent"
   }
 ]
