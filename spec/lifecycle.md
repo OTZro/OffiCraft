@@ -205,17 +205,21 @@ implementations).
 `POST /api/bootstrap` returns a freshly minted member JWT only when `member_id` was supplied
 (a warden spawn); a UI preview (no `member_id`) MUST get `token: null`.
 
-## 3. In-memory lifecycle stores (restart amnesia is contract)
+## 3. In-memory lifecycle stores (restart amnesia is contract — one named exception)
 
 These stores are **volatile by design** (state-model.md 大原則: observed state never enters
-the DB). A rewrite MUST keep them ephemeral — persisting any of them is a behaviour change:
+the DB). A rewrite MUST keep them ephemeral — persisting any of them is a behaviour change.
+**One narrow, deliberate exception**: the warden-command FIFO mirrors the `update` verb (and
+only that verb) to a durable table, because that one command has no compensating re-decision;
+the row is written on enqueue and forgotten when the frame reaches the socket. Nothing else
+in this section may be persisted, and the mirror stores an ORDER, not observed state:
 
 | store | keyed by | written by | read by | restart semantics |
 |---|---|---|---|---|
 | context gauge (inventory #3) | verified caller `sub` | `POST /api/agent/context` (merge: MUST NOT clobber `boot_ts`; stamps `context_pct`, `rate_limits`, `ts`, `context_pct_ts`); SSE connect stamps `boot_ts` | context-high band, auto-recycle, monitoring fold | empty on restart (honest-empty; reporter refills) |
 | warden telemetry (inventory #5) | verified caller `sub` | `POST /api/monitoring/telemetry` — partial-report MERGE: only supplied fields (`rate_limits`/`tokens`/`hardware`/`cost`/`effort`/`runtime`/`runtimes`/`self_update`/`command_result`, `machine`/`account` tags) overwrite; `runtimes` is a value-free provider readiness map and MUST NOT contain credential material; an all-absent body is 400 | monitoring fold; disconnect-edge bank and runtime-capable placement | empty on restart; a purely-banked account disappears from the monitoring fold until re-reported (honest-empty by design) |
 | reconcile store (inventory #7) | member id | producer tick (per-member reconcile state: `last_command`, `last_command_at`, `stop_deadline`, attempts/backoff/circuit) | producer tick | forgotten on restart → the "awaiting presence"/dedupe windows reset; the next tick re-decides from presence (self-healing) |
-| warden-command FIFO (inventory #6) | warden member id | producer dispatch | SSE warden band | pending frames dropped; re-folded next tick (spec/sse.md §7) |
+| warden-command FIFO (inventory #6) | warden member id | producer dispatch | SSE warden band | pending frames dropped **for every verb except `update`**, and re-folded next tick from observed presence; `update` alone has a durable mirror (`warden_command_queue`) and is restored into the FIFO on restart, because nothing re-derives "the owner asked this machine to upgrade". START is excluded on top of that — its `args` carry a live `member_token` (spec/sse.md §7) |
 
 **Cost is a dual-state field**: `cost` lives live in telemetry (memory) and is folded into
 the durable `member.banked_cost` exactly once per online→offline edge, then popped
@@ -274,9 +278,47 @@ The server owns desired-state reconciliation; the warden is a stateless executor
 
 ### 4.1 Cadence and candidates
 
-- A background tick MUST run every **30 s** and is
-  **always on** — the reconcile producer is mounted unconditionally.
-  There is NO kill-switch flag in the current implementation (see Appendix B #1).
+- A background tick MUST run every **30 s** and is **always on in production** —
+  the reconcile producer is mounted unless the serve flag `--no-reconcile` is
+  passed. That flag is the shadow-deployment kill-switch for THIS producer: it disables it
+  WHOLESALE (the cadence loop AND every event-driven warden-command dispatch it owns), which
+  covers **every command this producer DISPATCHES** at a staff-member or warden row — START,
+  STOP, UNINSTALL, and the machine-upgrade `update` kick (`api_machines.go`). Every
+  member-facing HTTP verb funnels into those seams.
+  🔴 **Two holes, and neither flag closes them.**
+  (a) **Restore is not dispatch.** The durable `update` mirror (§3) is rehydrated into the
+  FIFO at assembly (`BindWardenCommandStore`, wired unconditionally before the flag is even
+  read) and drained onto the first warden that connects, with no flag consulted on either
+  side. So a shadow assembled over a copy of production data — which, on a flagged shadow, is
+  when that table is non-empty at all, since the flag blocks the only path that mints such a
+  row — can still deliver a pending upgrade kick to a real machine. Three things
+  BOUND this without closing it: rows older than the 24 h `wardenCommandTTL` are swept before
+  the restore; the frame is addressed to one warden's own id, so it drains only if that real
+  warden connects to the shadow; and the kick is idempotent at the warden (content-hash swap
+  oracle, spec/sse.md §7).
+  (b) **Outsource workers.** Worker spawn and stop dispatch (`worker_spawn.go`) never consults
+  `--no-reconcile`; the mirror flag `--no-outsource` gates only the assignment PRODUCER
+  (`outsourceTickNow`, plus not mounting that cadence). Everything else that reaches
+  `respawnWorkerForOwnerOp` / `enqueueWorkerStop` consults **neither** flag — the owner verbs
+  (restart, model change, relocate, stop, refocus), a task terminate that dismisses its
+  workers, and the worker's own `report_stopped` — so a shadow server with both flags set
+  still spawns and kills real worker sessions. This list is not exhaustive; the invariant to
+  rely on is the negative one: **the flag gates the reconcile producer and nothing else.**
+  What "the producer" covers is wider than dispatch, including: its dispatch seams; the
+  desired-state control writes that ride the same posture (`consumeUninstallOnDisconnect`
+  enqueues nothing and is still gated); the row stamps the decide pass itself performs
+  (`stampWakeObservability`, `stampMemberPlacementBlocked`); the one HTTP kick that borrows it
+  (`api_machines.go`); and — because the cadence is simply not mounted — every roster pass
+  that cadence runs BEFORE it decides anything (context-high recycle stamping, soft-offboard
+  escalation, recycle-marker and stale-stopping clears, uninstall-intent consumption,
+  lapsed-receipt sweep). All but one of those passes persist real member rows; the
+  soft-offboard escalation writes nothing and only publishes a delta to a live agent. A
+  rewrite that gates only the dispatches leaves every one of them running against real data.
+  A shadow deployment must keep those paths away from real machines by some other means;
+  there is no flag for it today.
+  Each flag is a deployment-mode flag, not a production control — nothing in the frozen wire
+  contract turns them on or off, and no API surface exposes them.
+  (Appendix B #1 records the freeze-time state, when the flag did not yet exist.)
 - An event-driven immediate tick for one member fires on activate/deactivate;
   it MUST share the cadence's reconcile store
   and be serialized with it (one tick mutex) so the two never race — a START recorded by the
@@ -429,7 +471,10 @@ ONE-SHOT, never a standing order):
 
 - Dispatch is **fire-and-forget**: acceptance ≠ outcome; results return asynchronously via
   presence. Correlation is zero-field — no command id exists; the
-  server re-derives everything from observed presence each tick.
+  server re-derives everything from observed presence each tick. **`update` is the one verb
+  this does not cover**: nothing re-derives "the owner asked this machine to upgrade", so it
+  is re-enqueued on a failed write and mirrored durably across a restart (spec/sse.md §7,
+  which is normative for that verb).
 - **Target-reachability gate**: a command MUST NOT be enqueued for a target warden that is
   not online (no live SSE downstream to drain it) — the dispatch fails closed
   (`accepted=false`), state does not advance, and the tick re-decides when the warden
@@ -438,10 +483,34 @@ ONE-SHOT, never a standing order):
   ACTIVE warden on M's `desired_machine_id` (the machine id IS the warden's own member id);
   a warden target addresses itself.
 - Placement MUST filter for an online machine whose latest telemetry reports the selected
-  runtime `installed == true` and `logged_in != false`. An explicit machine that is
-  offline or lacks that readiness falls back to the same runtime-capable automatic
-  placement used by outsource scheduling. If no eligible machine exists, dispatch fails
-  closed and reconcile retries after telemetry or placement changes.
+  runtime `installed == true` and `logged_in != false`. **There is NO automatic placement:**
+  an explicit machine that is offline, inactive, or lacks that readiness makes the dispatch
+  STALL, and no other machine is substituted. A member with no machine selected is likewise
+  not placed anywhere. This follows the owner's 2026-07-25 ruling that removed automatic
+  placement: a pin is an instruction, not a hint, and booting somewhere nobody chose is the
+  mis-placement that ruling removed. Outsource workers add ONE softer tier — the machine the
+  worker's last confirmed session ran on is a preference that may be fallen through — but
+  every tier it falls through to is still an owner-authored source
+  (`resolveStickyWorkerPlacement`).
+- **Owner-visible refusal, and the asymmetry in it**: a WORKER stalls with a stamped reason
+  in all three cases (`resolveWorkerPlacement` → `stampWorkerPlacementBlocked`). A MEMBER
+  stamps its row (`stampMemberPlacementBlocked`) only when no machine is selected or the pin
+  is not an active machine; a pin that is merely OFFLINE, or that lacks the runtime, stalls
+  with a server log line and an unlanded-dispatch flag but writes NO row receipt today. A
+  rewrite MUST NOT read this as "the reason is always on the row". Nor is the no-receipt set
+  closed at those two: an unbuildable START payload (no persona/token) fails closed with a
+  log line only.
+  A placement stall arms no backoff of its own — it keeps the prior reconcile state, and the
+  cadence re-decides every candidate every tick. It is NOT, however, a promise that the next
+  tick after the obstruction clears will dispatch: a member that previously timed out a
+  LANDED start is still subject to the §4.3 backoff / circuit-open gate — and to the
+  zombie-confirm arm (`decideUp`; not specified in §4.3 today): once a landed START has
+  bounced off the warden's clobber guard, the tick dispatches NOTHING while the member has
+  been continuously offline for less than `2 × waking TTL`, and once that window lapses it
+  answers with a STOP — not a START — to reap the squatting session. The window is anchored
+  on continuous-offline time, so a reconnect inside it resets the wait; withholding is the
+  point, because a presence-deaf zombie and a session mid-reconnect are indistinguishable at
+  that instant.
 
 ## 5. Installer / binary surface (one line — OpenAPI covers it)
 
@@ -462,7 +531,7 @@ behaviour beyond the string templating.
 |---|---|---|
 | 3 | context gauge | §3 |
 | 5 | warden telemetry + banked-cost edge | §3 (edge mechanics: spec/sse.md §5.2) |
-| 6 | warden-command FIFO loss/re-send semantics | §4.6 (queue: spec/sse.md §7) |
+| 6 | warden-command FIFO loss/re-send semantics (in-memory except the durable `update` mirror) | §4.6, §3 (queue: spec/sse.md §7) |
 | 7 | reconcile producer bookkeeping | §3, §4 |
 
 ## Appendix B — doc↔code discrepancies found at freeze (code wins; spec follows code)
@@ -476,12 +545,19 @@ behaviour beyond the string templating.
 > was a freeze-time judgement about a shipped wire, not evidence that code is the
 > more trustworthy authority in general.
 
-1. **`--no-reconcile` does not exist.** The migration plan (Phase 4 §2) requires a
-   reconcile kill-switch for shadow deployment; the current implementation is
-   unconditionally always-on. This spec freezes the always-on
-   behaviour; the kill-switch remains a REQUIRED feature of any shadow-mode deployment of a
+1. **`--no-reconcile` did not exist AT FREEZE.** The migration plan (Phase 4 §2) requires a
+   reconcile kill-switch for shadow deployment; the implementation at freeze was
+   unconditionally always-on. This spec froze the always-on
+   behaviour; the kill-switch remained a REQUIRED feature of any shadow-mode deployment of a
    second implementation (a shadow without it would spawn real agents), but it is a
    deployment-mode flag, not part of the frozen production contract.
+   **Since then it has been implemented** — `--no-reconcile` is a serve flag today
+   (`server/ocserverd/main.go` `parseServeFlags`, mounted in `server.go`), and §4.1
+   describes what it gates. Note the shadow-deployment requirement this entry states is
+   NOT met by that one flag alone — see §4.1 for the two holes it leaves open (the restore
+   path, and outsource workers). This entry stays as the
+   record of the freeze-time adjudication — read the first paragraph as history and the
+   **Since then** note as the pointer to where the current behaviour is specified (§4.1).
 2. **state-model.md 原則 3 (handshake machine-claim mismatch → wind-down) is not
    implemented.** state-model.md itself flags this ("code 尚未做到"); no wind-down/suicide
    path exists in the SSE connection handling at freeze. The frozen contract is the code:
