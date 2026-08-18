@@ -130,8 +130,16 @@ func TestThemeListCarriesOnlyIdAndName(t *testing.T) {
 // The bundle is legal in EVERY other respect — real token, legal name, legal
 // slug id — so the only thing that can produce the refusal is the mismatch. And
 // the write must not have happened under EITHER id: "filed under the other one"
-// is the silent outcome this check exists to prevent, so asserting the 422
-// alone would not distinguish it from a refusal that still wrote.
+// is the silent outcome this rule exists to prevent, so asserting the 422 alone
+// would not distinguish it from a refusal that still wrote.
+//
+// ⚠️ WHICH LAYER THIS ACTUALLY PINS, measured rather than assumed. When the
+// handler carried its own body.Id != themeID check as well, this test passed
+// with that check deleted and only went red once the DAL check went too — i.e.
+// it never had the power to tell the two apart, and the handler copy was
+// decorative. The handler copy is gone (see HandlePutThemeApiThemesThemeIdPut);
+// what this test pins is the one check that a mutant can kill:
+// checkCustomThemeIDMatchesBundle.
 func TestThemePutRefusesAnIdThatDisagreesWithThePath(t *testing.T) {
 	api := newTasksTestServer(t)
 	rec := putTheme(t, api, "night-walk", aTestBundle("day-walk", "夜行"))

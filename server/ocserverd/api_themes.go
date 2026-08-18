@@ -101,25 +101,26 @@ func (s *apiServer) HandleGetThemeApiThemesThemeIdGet(w http.ResponseWriter, r *
 // HandlePutThemeApiThemesThemeIdPut answers PUT /api/themes/{theme_id} — create
 // or replace ONE theme. This is the write the whole split exists to express.
 //
-// 🔴 THE PATH ID IS THE KEY AND THE BUNDLE MUST AGREE WITH IT. A mismatched pair
-// is refused (422) rather than silently filed under one of the two, because
-// "silently filed under the other one" is how a caller loses a theme it thought
-// it had written. The DAL refuses the same pair independently — that is not
-// belt-and-braces but a different question answered by a different authority:
-// this check reads the DECODED DTO, the DAL asks SQLITE what the stored bytes
-// say, and the two decoders do not agree on every input both accept (duplicate
-// keys, lone surrogates, numeric ids — see checkCustomThemeIDMatchesBundle).
-// Keeping both is what turns "the table rejected your write" into a 4xx that
-// names the field.
+// 🔴 THE PATH ID IS THE KEY AND THE BUNDLE MUST AGREE WITH IT — AND THAT IS
+// CHECKED IN EXACTLY ONE PLACE, WHICH IS NOT HERE. The refusal comes from
+// PutCustomTheme's checkCustomThemeIDMatchesBundle, which asks SQLITE what the
+// stored bytes say the id is; this handler maps its named error to a 422.
+//
+// An earlier draft of this function ALSO compared body.Id to themeID up front,
+// with a comment explaining that the two checks answer different questions
+// (decoded DTO vs stored bytes) and so both were needed. A mutant disproved it:
+// deleting the check here left every assertion green, and only deleting the DAL
+// check turned the test red. It was decorative, and on this path it could not be
+// anything else — the bytes handed to the DAL are marshalled FROM this DTO, so
+// the id SQLite reads is by construction the id Go decoded. The disagreements
+// that function was written for (duplicate keys, lone surrogates, numeric ids)
+// live on paths where the caller's raw text is stored, not this one.
+//
+// So: one authority, not two opinions. "Silently filed under the other id" — the
+// outcome worth preventing — is prevented by the check that a mutant can kill.
 func (s *apiServer) HandlePutThemeApiThemesThemeIdPut(w http.ResponseWriter, r *http.Request, themeID string) {
 	var body ThemeBundleDTO
 	if !decodeJSONBodyStrict(w, r, &body, "id", "name", "colors") {
-		return
-	}
-	if body.Id != themeID {
-		writeError(w, http.StatusUnprocessableEntity,
-			"the bundle's id "+strconv.Quote(body.Id)+" does not match "+
-				strconv.Quote(themeID)+" in the path — a theme is filed under the id in the path")
 		return
 	}
 	// The wording overlay's unknown-code PRUNE is not done here: it lives inside
