@@ -4576,15 +4576,24 @@ export const mockApi: Api = {
       }
       mockServerSettings.push_contact_email = email;
     }
-    // display_theme (T-83ef): an explicit value wins; otherwise a now-dangling
-    // active theme is reset to "". The bundles are NOT written here any more —
-    // deleteTheme owns the "the active theme just vanished" coupling.
+    // display_theme (T-83ef): an explicit value wins, and an omitted one changes
+    // NOTHING — no sweep of a now-dangling active theme.
+    //
+    // 🔴 THE ABSENCE IS THE PARITY. Both sides used to sweep here, back when
+    // this endpoint also wrote the bundles and could therefore orphan the active
+    // theme itself. It cannot any more: DELETE /api/themes/{id} performs the
+    // reset and reports it in its receipt. api_settings.go says exactly why it
+    // dropped its sweep — "a second opinion about a fact that endpoint already
+    // settled, and the two would drift" — and this mock kept sweeping, so the
+    // two that drifted were the server and this file. That comment predicted its
+    // own situation and nothing noticed.
+    //
+    // What it cost: a settings row naming a theme with no row heals ITSELF here
+    // on the next unrelated PATCH, and never heals in production. A mock that is
+    // kinder than the server lets a test go green on a state the owner would
+    // still be sitting in.
     if (patch.displayTheme !== undefined) {
       mockServerSettings.display_theme = patch.displayTheme.trim();
-    } else if (
-      !isValidDisplayTheme(mockServerSettings.display_theme, mockThemeIds())
-    ) {
-      mockServerSettings.display_theme = "";
     }
     if (patch.displayLanguage !== undefined) {
       mockServerSettings.display_language = patch.displayLanguage.trim();

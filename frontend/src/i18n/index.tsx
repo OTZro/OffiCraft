@@ -315,8 +315,32 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   // [T-1500] M3: the paint write must be driven by the BUNDLE SET, not by
   // the id — editing a theme's colours does not change its id.
+  // 🔴 ONE writer, and it is NOT this line's old job. `cacheTheme` is the only
+  // caller of setThemeState, and it moves this ref with the decision (see
+  // there). The `themeRef.current = theme` that used to sit here was therefore
+  // writing a value the ref already held — except in the one case that matters,
+  // where it wrote the value the ref had just been moved AWAY from: a render
+  // that happens before the state flush would push it BACKWARDS and undo the
+  // fix. It was also a mutation during render, which StrictMode and concurrent
+  // rendering are entitled to run more than once.
+  //
+  // It survived because it looked exactly like the writer that carries the
+  // weight — the same shape this ticket has been paying for all along, this
+  // time introduced BY the fix for it.
+  //
+  // ⚠️ BE HONEST ABOUT THE EVIDENCE: this removal is UNTESTABLE either way.
+  // Taking the line out leaves all 2204 green, and putting it back leaves all
+  // 2204 green — measured, both directions. So nothing here is a measurement;
+  // the reasons are structural, and they are the whole case:
+  //   - it is the only writer that can move the ref BACKWARDS, which is the one
+  //     thing that would undo the guard the four awaiting readers depend on;
+  //   - it mutates a ref during render, which StrictMode and concurrent
+  //     rendering may run more than once;
+  //   - two writers that look identical, one load-bearing and one not, is the
+  //     exact confusion this file has already been bitten by.
+  // If a later reader wants it back, the bar is a test that goes red without
+  // it — not a green suite, which both versions already have.
   const themeRef = useRef(theme);
-  themeRef.current = theme;
 
   // [T-83ef] It takes the BUNDLE, not an id plus a set to search. The set is no
   // longer held in full — and the thing being cached was always the active
