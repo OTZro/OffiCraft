@@ -344,9 +344,9 @@ warden 的拒絕理由**原本被宣告為一個閉集合**，其中「**session
 ### 已知落後、未決、已另案回報的
 
 - 🔴 **未決（碼上自己標著等 owner 裁定）**：**relocate 那條路的預設值會清掉 pin**，與第四節「pin 是 hard 的」直接張力。這不是文件落後，是**行為本身還沒被決定**。
-- `spec/lifecycle.md` 有三處落後於碼（產生器的關閉開關、機器 fallback、命令佇列的重啟語意）。**已回報 owner，等他裁定要不要動凍結契約**，本文不自行抹平。
+- ~~`spec/lifecycle.md` 三處落後於碼（產生器的關閉開關、機器 fallback、命令佇列的重啟語意）~~ **已補**：owner 於 `rc-cfe683349853` 裁定「四處一併補」（T-a91a），三處都已在 spec 上跟上碼。
 - `docs/design/state-model.md` 下游有一節與它自己的 §3 矛盾（換機器是不是手動）。**另開票處理。**
-- `docs/guide/architecture.md` 說「成員一起手會先報一次喚醒中」——現在 **server 才是第一個 writer**（第七節）。
+- ~~`docs/guide/architecture.md` 說「成員一起手會先報一次喚醒中」~~ **已補**：同一次裁定內，手冊兩處都改成「server 派出開機命令當下就記下 waking」（第七節仍是這件事的權威說明）。
 
 ---
 
