@@ -18005,7 +18005,7 @@
         "summary": "List the saved custom themes — id and name only, in list order (owner/admin agent).",
         "x-mcp": {
           "include": true,
-          "order": 108,
+          "order": 110,
           "name": "list_themes",
           "description": "List the saved custom themes — id and name only, in list order (owner/admin agent).",
           "legacy": {
@@ -18074,7 +18074,7 @@
         "summary": "Delete one custom theme; deleting the active one resets display_theme to \"\".",
         "x-mcp": {
           "include": true,
-          "order": 111,
+          "order": 113,
           "name": "delete_theme",
           "description": "Delete one custom theme; deleting the active one resets display_theme to \"\".",
           "legacy": {
@@ -18141,7 +18141,7 @@
         "summary": "Read one saved custom theme (unknown id \u2192 404).",
         "x-mcp": {
           "include": true,
-          "order": 109,
+          "order": 111,
           "name": "get_theme",
           "description": "Read one saved custom theme (unknown id \u2192 404).",
           "legacy": {
@@ -18218,7 +18218,7 @@
         "summary": "Create or replace ONE custom theme; the bundle's id must match the path (owner/admin agent).",
         "x-mcp": {
           "include": true,
-          "order": 110,
+          "order": 112,
           "name": "put_theme",
           "description": "Create or replace ONE custom theme; the bundle's id must match the path (owner/admin agent).",
           "legacy": {
