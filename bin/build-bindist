@@ -67,8 +67,13 @@ mkdir -p "$BINDIST"
 # SHIPPED anchor silently diverges from the committed one (measured: bindist copy
 # 710a2525… → d8fb53dd… under the stamp, while dist/officraft/officraft and
 # binary.sha256 both stay 710a2525…), and the embedded copy is what every install
-# receives. bin/tests/agent-build-sha-guard.sh check 4 is the ONLY thing in the
-# tree that catches it.
+# receives. ⚠️ And the copy that reaches machines is the one staged on to
+# cli/ocwarden/anchordist, which anchor_embed.go go:embeds into ocwarden —
+# server/ocserverd/bindist/officraft is not served to anybody.
+# bin/tests/agent-build-sha-guard.sh is the only thing in the tree that catches
+# any of this: case 4 checks that this line carries no -X, case 9 compares both
+# staged copies against the committed anchor, and case 10 reads the shipped
+# ocwarden to prove the anchor actually got embedded rather than merely staged.
 # ocwarden is not a listener and needs none. -s -w strips symbols and DWARF,
 # neither of which -X uses, so stamping costs no strip.
 #

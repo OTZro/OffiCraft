@@ -113,3 +113,34 @@ func TestPrintVersion_ReportsWhetherThisBuildWasStamped(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildSHAOrUnstamped_NeverGuessesFromVCSMetadata is the case the guard's
+// oracle rests on. build.sha answers ONE question — did bin/build-bindist stamp
+// this binary — and a build with no stamp is unstamped no matter how much VCS
+// metadata Go embedded alongside it.
+//
+// 🔴 Review made this concrete: with buildSHAOrUnstamped falling back to
+// vcs.revision, `ocagent version` reported the correct sha while buildSHA was
+// empty, so the connection line printed no [agent …] segment at all — and the
+// shell guard, which asks version for exactly this value, went green on a fleet
+// that could not name itself. Both defences blind at once, from one plausible
+// two-line "improvement".
+func TestBuildSHAOrUnstamped_NeverGuessesFromVCSMetadata(t *testing.T) {
+	prev := buildSHA
+	buildSHA = ""
+	t.Cleanup(func() { buildSHA = prev })
+
+	withRevision := func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Settings: []debug.BuildSetting{
+			{Key: "vcs.revision", Value: "0123456789abcdef0123456789abcdef01234567"},
+			{Key: "vcs.modified", Value: "false"},
+		}}, true
+	}
+	if got := buildSHAOrUnstamped(withRevision); got != "unstamped (not built by bin/build-bindist)" {
+		t.Errorf("build.sha = %q with an EMPTY stamp and vcs.revision present. It must "+
+			"stay unstamped: the connection line reads the same empty buildSHA and "+
+			"prints nothing, so any other answer here makes `ocagent version` and the "+
+			"line disagree — and the build-sha guard trusts this value to tell it "+
+			"whether bin/build-bindist ran at all", got)
+	}
+}

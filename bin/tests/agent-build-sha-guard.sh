@@ -36,7 +36,7 @@
 # 🔴 EMPTY-EXTRACTION IS THE TRAP. If a pattern stops matching because someone
 # reformatted a line, the extraction is "" — and a naive comparison of "" against
 # "" passes. So each check asserts a NON-EMPTY find before it asserts anything
-# about the value, and case 5 plants a real mutant to prove the checks can still
+# about the value, and case 6 plants a real mutant to prove the checks can still
 # go red.
 set -uo pipefail
 
@@ -46,6 +46,16 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 BUILD_FILE="$ROOT/bin/build-bindist"
 MAIN_FILE="$ROOT/cli/ocagent/main.go"
 LINE_FILE="$ROOT/cli/ocagent/listen_run.go"
+
+# ruby is resolved the same way bin/tests/go-test-timeout-guard.sh and
+# auto-beta-guard.sh do: the hosted macOS runner has system ruby, and case 10 needs
+# a language that can read two binaries and search one for a slice of the other.
+RUBY="$(command -v ruby 2>/dev/null || true)"
+if [[ -z "$RUBY" ]]; then
+  for cand in /usr/bin/ruby /opt/homebrew/bin/ruby /usr/local/bin/ruby; do
+    [[ -x "$cand" ]] && { RUBY="$cand"; break; }
+  done
+fi
 
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   — %s\n' "$1"; }
@@ -175,15 +185,7 @@ else
       bad "the ocagent bin/build-bindist just produced reports build.sha=\"${REPORTED:-<none>}\", not this tree's sha ($HEAD_SHA). Every listener from this build will print no [agent …] segment, or name a different build — and both are byte-indistinguishable from a dev build behaving correctly, which is the failure this whole feature exists to remove. Causes seen: an empty sha lookup (no .git), a second unstamped go build overwriting the first, or a stamp fed from the wrong revision"
     fi
 
-    # ── 8. an empty sha must be FATAL, not a silent unstamped build ─────────
-    if OCAGENT_SHA=" " bash "$ROOT/bin/build-bindist" >/dev/null 2>&1; then
-      bad "bin/build-bindist accepted a BLANK OCAGENT_SHA and built anyway — that is the tarball/git-archive case, and it ships a fleet that cannot say which build it is while every text check here stays green"
-    else
-      ok "a blank OCAGENT_SHA is FATAL — a build that cannot name itself does not ship"
-    fi
-    bash "$ROOT/bin/build-bindist" >/dev/null 2>&1 || true
-
-    # ── 7. the shipped anchor still equals the committed one ────────────────
+    # ── 9. the shipped anchors still equal the committed one ────────────────
     # The consequence case 4 is really about. check-officraft-dist cannot see this
     # (measured rc=0 with the anchor stamped): it compares dist/officraft/officraft
     # against its manifest, and never looks at the copy that actually ships.
@@ -211,6 +213,63 @@ else
           bad "the anchor staged at $staged (${A:0:12}…) is not the committed one (${B:0:12}…). cli/ocwarden/anchordist is go:embedded into ocwarden and is what 'ocwarden install' materialises, so a divergence there means the TCC anchor machines actually run stopped being the one reviewers can reproduce — and check-officraft-dist returns 0 on exactly this, because it only ever compares the committed file to its own manifest"
         fi
       done
+
+      # ── 10. the anchor is INSIDE the ocwarden that ships ──────────────────
+      # 🔴 CASE 9 COMPARES THE EMBED'S INPUT, NOT ITS OUTPUT. It hashes files on
+      # disk; what reaches a machine is the copy go:embed baked into ocwarden, and
+      # the only thing connecting the two is the ORDER of two builds in
+      # bin/build-bindist. Review reordered them — ocwarden built before the anchor
+      # was staged — and measured a shipped ocwarden 1.77MB smaller (exactly the
+      # anchor), embeddedAnchor() returning nil, `ocwarden install` refusing on
+      # every new machine, and this guard printing 11 ok.
+      # ⚠️ IT ALSO HID ITSELF: this script runs build-bindist up to three times, and
+      # a later run staged the anchor the first run had missed. CI runs it once.
+      # go:embed stores bytes verbatim, so the committed anchor's own bytes must be
+      # findable inside the binary. That is the output, not the input.
+      WARDEN_BIN="$ROOT/server/ocserverd/bindist/ocwarden"
+      if [[ -z "$RUBY" ]]; then
+        bad "cannot check whether the shipped ocwarden embeds the anchor: no ruby (the same dependency the ci.yml side already needs)"
+      elif [[ ! -f "$WARDEN_BIN" ]]; then
+        bad "bin/build-bindist produced no ocwarden at $WARDEN_BIN"
+      elif "$RUBY" -e '
+            anchor = File.binread(ARGV[0])
+            warden = File.binread(ARGV[1])
+            # A slice from the middle: headers and padding are shared between two
+            # Mach-O binaries, the middle of one is not.
+            probe = anchor.byteslice(anchor.bytesize / 2, 4096)
+            exit(probe && !probe.empty? && warden.include?(probe) ? 0 : 1)
+          ' "$ANCHOR_COMMITTED" "$WARDEN_BIN"; then
+        ok "the ocwarden that ships CONTAINS the committed anchor's bytes — proven by reading the binary, not by trusting the order the build stages them in"
+      else
+        bad "the ocwarden bin/build-bindist just produced does NOT contain the committed anchor's bytes. cli/ocwarden/anchordist is go:embedded into it and 'ocwarden install' refuses without an anchor, so the cockpit one-liner fails on every new machine — and staging the file next to the build is not the same as the build having read it. Check the ORDER in bin/build-bindist: the anchor must be staged BEFORE ocwarden is compiled"
+      fi
+
+    # ⚠️ THE REMAINING CASES RUN LAST ON PURPOSE. They build twice more — once
+    # refused, once to repair — and a LATER BUILD STAGES WHAT AN EARLIER ONE
+    # MISSED. Cases 9 and 10 must read the FIRST build's output or this script
+    # hides the defect it is looking for: measured, with the anchor staged after
+    # ocwarden was compiled, the repair rebuild below fixed it and case 10 went
+    # green on a shipped binary that had no anchor in it. CI runs build-bindist
+    # once, so the first build is the one that matters.
+    # ── 8. an empty sha must be FATAL, not a silent unstamped build ─────────
+    if OCAGENT_SHA=" " bash "$ROOT/bin/build-bindist" >/dev/null 2>&1; then
+      bad "bin/build-bindist accepted a BLANK OCAGENT_SHA and built anyway — that is the tarball/git-archive case, and it ships a fleet that cannot say which build it is while every text check here stays green"
+    else
+      ok "a blank OCAGENT_SHA is FATAL — a build that cannot name itself does not ship"
+    fi
+    # 🔴 AND IT MUST NOT HAVE DELETED ANYTHING ON ITS WAY OUT. bindist/.gitkeep is
+    # TRACKED, and `rm -rf "$BINDIST"` used to run BEFORE the sha check, so a
+    # refused build left the working tree with a deleted tracked file and only an
+    # error message to explain it. That fix shipped with nothing guarding it:
+    # review reverted it and this suite printed 11 ok, because THIS SCRIPT is both
+    # what triggers the deletion (the failing build above) and what repairs it (the
+    # rebuild below). Asserted here, before the repair, or it cannot be seen.
+    if [[ -n "$(git -C "$ROOT" status --porcelain -- server/ocserverd/bindist/.gitkeep 2>/dev/null)" ]]; then
+      bad "the refused build deleted the TRACKED file server/ocserverd/bindist/.gitkeep. A build that declines to run must not modify the tree on its way out — resolve the sha before anything destructive happens, not after"
+    else
+      ok "a refused build leaves the tree alone — the tracked bindist/.gitkeep survives it"
+    fi
+    bash "$ROOT/bin/build-bindist" >/dev/null 2>&1 || true
     fi
   fi
 fi
