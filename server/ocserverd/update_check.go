@@ -40,6 +40,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 )
@@ -59,6 +60,15 @@ var releaseAPIDefault = releaseAPIDefaultBase
 
 // updateCheckTTL is how long one background check result (success OR failure)
 // is trusted before /api/version kicks a fresh refresh.
+//
+// ⚠️ The TTL is anchored on updateCheckState.checkedAt — the last ATTEMPT —
+// and must NEVER be re-anchored on lastOKAt (the last SUCCESS). The two
+// timestamps answer different questions on purpose: checkedAt exists to
+// rate-limit the network (an unreachable GitHub is retried once per TTL, not
+// hammered), lastOKAt exists to report how fresh the ANSWER is. Anchoring
+// staleness on lastOKAt would make every read while GitHub is down look
+// stale, and the server would pound GitHub for exactly as long as it is
+// broken — the opposite of the graceful degradation this cache is for.
 const updateCheckTTL = 5 * time.Minute
 
 // releaseCheckButtonTTL is the explicit button's much shorter reuse window —
@@ -91,11 +101,20 @@ type githubRelease struct {
 // channel flip reads as an empty (unknown) state until its own fetch lands.
 type updateCheckState struct {
 	includePre bool
-	checkedAt  time.Time // zero = never checked under this channel
-	fetching   bool
-	ok         bool          // a fetch has SUCCEEDED under this channel
-	none       bool          // GitHub reachable, but no matching release published
-	rel        githubRelease // the newest matching release (valid when ok && !none)
+	// checkedAt is the last ATTEMPT (success OR failure) — the TTL anchor
+	// that keeps an unreachable GitHub from being re-polled every request.
+	// Never report it as "when we last knew": a failed attempt stamps it.
+	checkedAt time.Time // zero = never checked under this channel
+	// lastOKAt is the last SUCCESSFUL check — the freshness of the answer
+	// /api/version is serving (update_checked_ok_at). Zero = never succeeded
+	// under this channel; a FAILED attempt must leave it untouched, which is
+	// the whole point of keeping it apart from checkedAt. It is deliberately
+	// NOT the TTL anchor (see updateCheckTTL).
+	lastOKAt time.Time
+	fetching bool
+	ok       bool          // a fetch has SUCCEEDED under this channel
+	none     bool          // GitHub reachable, but no matching release published
+	rel      githubRelease // the newest matching release (valid when ok && !none)
 }
 
 // receiveBetaEnabled reads the live prerelease toggle under the settings lock.
@@ -172,12 +191,40 @@ func (s *apiServer) refreshUpdateCheck(includePre bool) {
 		return
 	}
 	s.updateCheck.fetching = false
+	// The ATTEMPT stamp: written whether or not the fetch worked (TTL anchor).
 	s.updateCheck.checkedAt = time.Now()
-	if err == nil {
-		s.updateCheck.ok = true
-		s.updateCheck.none = none
-		s.updateCheck.rel = rel
+	if err != nil {
+		// Loud, once per TTL at most: before this line a check that could
+		// never reach GitHub was entirely SILENT — /api/version simply kept
+		// answering update_available=false and nothing in the log said why.
+		log.Printf("[update-check] GitHub release check failed (channel include_prerelease=%v): %v",
+			includePre, err)
+		return
 	}
+	// SUCCESS ONLY: the freshness stamp of the answer being served.
+	s.updateCheck.lastOKAt = s.updateCheck.checkedAt
+	s.updateCheck.ok = true
+	s.updateCheck.none = none
+	s.updateCheck.rel = rel
+}
+
+// updateCheckedOKAt reports WHEN the last SUCCESSFUL check landed under the
+// current channel, as a strict RFC3339 stamp — nil when no check has ever
+// succeeded (never checked, or every attempt failed). It is the honest
+// freshness of /api/version's update_available: a false there means something
+// different when this is minutes old than when it is nil or hours old.
+//
+// Read-only: unlike updateStatus it neither kicks a refresh nor resets the
+// cache on a channel flip (the caller does that first), so the stamp it
+// returns always describes the state that produced the answer alongside it.
+func (s *apiServer) updateCheckedOKAt() *string {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+	if s.updateCheck.lastOKAt.IsZero() {
+		return nil
+	}
+	stamp := s.updateCheck.lastOKAt.UTC().Format(time.RFC3339)
+	return &stamp
 }
 
 // fetchLatestOffiCraftRelease asks GitHub for the repo's releases and picks
@@ -313,9 +360,12 @@ func (s *apiServer) syncUpdateCheck() updateCheckState {
 	s.updateCheck.checkedAt = time.Now()
 	if err != nil {
 		// Keep the background cache's last-known state, but answer THIS
-		// click honestly: the fresh look failed.
+		// click honestly: the fresh look failed. checkedAt (the attempt) is
+		// stamped above; lastOKAt is NOT — a failure must never pass itself
+		// off as a successful check.
 		return updateCheckState{includePre: includePre}
 	}
+	s.updateCheck.lastOKAt = s.updateCheck.checkedAt
 	s.updateCheck.ok = true
 	s.updateCheck.none = none
 	s.updateCheck.rel = rel

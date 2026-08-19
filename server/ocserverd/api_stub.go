@@ -326,15 +326,21 @@ func (s *apiServer) HandleVersionApiVersionGet(w http.ResponseWriter, r *http.Re
 	// GitHub Releases probe — honest-static (false, nil) while nothing newer
 	// is known.
 	available, latest := s.updateStatus()
+	// Read the success stamp AFTER updateStatus: that call is what resets the
+	// cache on a channel flip, so reading second keeps the stamp describing
+	// the same state the answer above came from. A failed check never moves
+	// it, so `false` + an old/absent stamp reads as "we do not actually know".
+	checkedOKAt := s.updateCheckedOKAt()
 	writeJSON(w, http.StatusOK, versionDTO{
 		Version: appVersion,
 		GitSHA:  s.processSHA,
 		GitTime: gt,
 		// Derived over the non-mcp_exclude route rows (the normative
 		// handlers.current_catalog_hash algorithm) — the agent-restart signal.
-		CatalogHash:     s.catalogHash,
-		UpdateAvailable: available,
-		LatestVersion:   latest,
+		CatalogHash:       s.catalogHash,
+		UpdateAvailable:   available,
+		LatestVersion:     latest,
+		UpdateCheckedOKAt: checkedOKAt,
 	})
 }
 

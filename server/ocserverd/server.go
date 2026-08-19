@@ -102,6 +102,13 @@ type versionDTO struct {
 	CatalogHash     string  `json:"catalog_hash"`
 	UpdateAvailable bool    `json:"update_available"`
 	LatestVersion   *string `json:"latest_version"` // only meaningful when UpdateAvailable
+	// UpdateCheckedOKAt is when the update check last SUCCEEDED (RFC3339,
+	// UTC) — the freshness of UpdateAvailable, added because `false` alone
+	// cannot distinguish "checked a minute ago, nothing newer" from "the
+	// check has never once succeeded". OMITTED (not null) when no check has
+	// ever succeeded, so a station that has never checked serves the exact
+	// bytes it served before this field existed.
+	UpdateCheckedOKAt *string `json:"update_checked_ok_at,omitempty"`
 }
 
 // probeVersionDTO is the bare `/version` deploy-probe shape (autodeploy reads

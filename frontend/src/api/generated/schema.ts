@@ -3572,12 +3572,16 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status. Settle whether something is deployed by git sha ancestry, never by the version string.
+         * Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status and `update_checked_ok_at`, the time that update check last SUCCEEDED (absent = it never has, so `update_available: false` is not evidence of being up to date). Settle whether something is deployed by git sha ancestry, never by the version string.
          * @description Report version, git sha/time, and the derived MCP catalog hash.
          *
          *     `update_available` / `latest_version` reflect the newest admissible GitHub
          *     Release (cached background check against repo pkyosx/OffiCraft; False/None
          *     when nothing newer is known or GitHub is unreachable).
+         *
+         *     `update_checked_ok_at` says WHEN that check last SUCCEEDED (RFC3339, UTC;
+         *     absent when it never has) — read it before trusting a False, because a
+         *     check that has never once reached GitHub answers False too.
          */
         get: operations["handle_version_api_version_get"];
         put?: never;
@@ -8896,6 +8900,15 @@ export interface components {
          *     self-build's "0.0.0" sorts below any published release and therefore
          *     still prompts. Prereleases are admitted only when the
          *     `updater_receive_beta` setting is on.
+         *
+         *     `update_checked_ok_at` is WHEN that check last SUCCEEDED (RFC3339, UTC).
+         *     It is the freshness of `update_available`, which on its own cannot tell
+         *     "checked a minute ago, nothing newer" apart from "the check has never once
+         *     succeeded" (GitHub unreachable, rate-limited, or never run) — both answer
+         *     False. A FAILED check NEVER moves it; absent/None means no check has ever
+         *     succeeded under the current channel (a channel flip resets it). It is
+         *     deliberately NOT the check cache's TTL anchor — that stays the last
+         *     ATTEMPT, so an unreachable GitHub is retried once per TTL, not hammered.
          */
         VersionDTO: {
             /** Catalog Hash */
@@ -8911,6 +8924,8 @@ export interface components {
              * @default false
              */
             update_available: boolean;
+            /** Update Checked Ok At */
+            update_checked_ok_at?: string | null;
             /** Version */
             version: string;
         };
