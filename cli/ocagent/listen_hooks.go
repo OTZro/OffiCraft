@@ -46,8 +46,9 @@ import (
 // → warden killpg kills the tmux session, taking this listener with it) → the SSE
 // drop makes ¬online → the next tick's plain START respawns. A dead/unresponsive
 // session that never reports is covered by the server's recycle grace (120 s for
-// every cause except an owner-pressed 重新聚焦, which opens SOFT and gets the
-// soft window first — recycleGraceFor): the reconcile tick dispatches the same
+// every cause except an owner-pressed 重新聚焦, which runs NO clock at all and is
+// collected only by the stopped report or the owner's 強制下線 —
+// recycleGraceFor): the reconcile tick dispatches the same
 // robust STOP once the grace elapses (spec/lifecycle.md §4.5) — so ocagent needs
 // NO local timeout and NO
 // self-kill; a client-side kill on a frozen-wire observable is impossible anyway
@@ -177,10 +178,13 @@ type recycleHook struct {
 	// The refocus epoch already woken for (0 = none). A NEW, larger epoch re-arms the
 	// one-shot (the owner refocused again after a respawn).
 	handledRefocus float64
-	// lastNotice is the sentence already shown for that epoch. An owner-pressed
-	// 重新聚焦 opens SOFT and is promoted to the final call on the same epoch,
-	// so the epoch alone would swallow the sentence that says the 120 seconds
-	// have started.
+	// lastNotice is the sentence already shown for that epoch. It exists because
+	// the SERVER decides what to say and may say something NEW on the same
+	// epoch, which the epoch alone would swallow. 重新聚焦 used to be exactly
+	// that case — it opened SOFT and was promoted to the final call — and it no
+	// longer is (owner 2026-08-19, no clock on that arm). Keyed on the sentence
+	// rather than a flag so this client keeps working whatever the server
+	// decides to say next; it is the de-dup contract api_members.go names.
 	lastNotice string
 
 	fetchMember func() (map[string]any, bool)

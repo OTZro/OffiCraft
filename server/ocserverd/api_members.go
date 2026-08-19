@@ -101,7 +101,8 @@ func (s *apiServer) offboardDeltaPayload(m Member) map[string]any {
 //
 //   - SOFT — 下線 (desired offline + a stopping anchor, the graceful arm) and
 //     重新聚焦. It says work the sequence, then call restart_self yourself; no
-//     countdown clause, because at this point there is not one.
+//     countdown clause, because on these two arms there is no clock AT ALL —
+//     not now, and not later.
 //   - FINAL — every other refocus cause (context_high, 改機器, model/runtime,
 //     restart_self): the collection is already under way and the 120s recycle
 //     clock is running, so the sentence has to say so.
@@ -112,19 +113,23 @@ func (s *apiServer) offboardDeltaPayload(m Member) map[string]any {
 // shown the sequence — while the client-side wind-down declared "durable state
 // already server-side — nothing extra to flush" on its behalf, which was not
 // true of any session holding an unwritten hand-off.
-// The soft→final promotion is DERIVED FROM TIME, not written down: the same
-// anchor and the same soft window that decide when the collection is forced
-// decide which sentence the agent is being sent. A stored flag would be a
-// second copy of that judgement, free to disagree with the clock actually
-// collecting the session — and the disagreement would read as a notice
-// promising 120 seconds while several minutes remained, or the reverse.
+// There is NO soft→final promotion any more (owner 2026-08-19, card
+// rc-c540367065ad). 重新聚焦 used to open soft and, ten minutes later, change
+// its mind and say "you have 120 seconds" — a split only an agent that ran past
+// the soft window ever saw. The owner's ruling is that 重新聚焦 is the same
+// shape as 下線: no countdown in the sentence because no clock is running, and
+// the collection is the agent's own stopped report or the owner's force-stop.
+// The pair has to move together — recycleGraceFor is the clock, this is the
+// sentence, and changing one without the other is what makes a silent deadline.
+// ⚠️ `now` is READ BY NOTHING in here any more, and that is the invariant, not
+// an oversight: after T-c996 neither soft arm turns on a clock, so there is no
+// longer any time at which this answer changes. It stays in the signature
+// because the question this function answers is still "what would this member
+// be told AT time T" — and a later arm that does need a clock must be handed
+// one here rather than reaching for a global one, which is how the sentence and
+// the clock came apart in the first place.
 func offboardKindOf(m Member, now float64) (kind string, carries bool) {
-	softExpired := func(anchor float64) string {
-		if now >= anchor+SoftOffboardGraceSecs {
-			return offboardKindFinal
-		}
-		return offboardKindSoft
-	}
+	_ = now
 	if m.DesiredState == DesiredStateOffline {
 		// Only the graceful arm: a member with no stopping anchor is not being
 		// wound down (and a cancelled wake is force-stopped outright, which is
@@ -144,6 +149,21 @@ func offboardKindOf(m Member, now float64) (kind string, carries bool) {
 		// telling a session that is about to be cut off to work the sequence and
 		// call restart_self. Independent e2e verification observed exactly that
 		// frame; the owner's ruling is that force-stop sends no message at all.
+		//
+		// 🔴 RECONFIRMED 2026-08-18, and written down because it was nearly
+		// reversed that day: the owner first said a force-stop should tell the
+		// agent what to do (c-7b2163781ee2), was shown that this would overturn
+		// the named ruling above, and chose silence again (c-5c8bc3d7362d).
+		// Nothing in the code changed, which is exactly why the review is worth
+		// recording — the next person to notice this arm should know it has been
+		// looked at deliberately, not merely never revisited.
+		//
+		// 🔴 And it is enforced for BOTH kinds since T-c996. It used to be
+		// enforced here for staff only: forcedEpochLive reads forced_stop_at,
+		// OutsourceWorker had no such field, so the predicate was false for every
+		// worker and the arm that must stay silent was the one that could still
+		// speak. An outsource 停止 now stamps the same anchors (api_outsource.go)
+		// — it kills on the spot, so it IS this shape, whatever it is named.
 		if m.StoppingSince > 0 && !forcedEpochLive(m) {
 			return offboardKindSoft, true
 		}
@@ -153,7 +173,13 @@ func offboardKindOf(m Member, now float64) (kind string, carries bool) {
 		return "", false
 	}
 	if m.RefocusOp == refocusOpRefocus {
-		return softExpired(m.RefocusSince), true
+		// 🔴 SOFT forever, exactly like 下線 above, and for the same reason:
+		// recycleGraceFor runs NO clock on this arm (owner 2026-08-19, card
+		// rc-c540367065ad: 「連時鐘一起拿掉」). A countdown clause here would be
+		// a promise nobody keeps in the other direction — the sentence would
+		// start a 120s timer in the agent's head while nothing was coming to
+		// collect it. Escalation on this arm is the owner pressing force-stop.
+		return offboardKindSoft, true
 	}
 	return offboardKindFinal, true
 }

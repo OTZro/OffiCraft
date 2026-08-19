@@ -109,21 +109,17 @@ const WakingTTLSecs = 90.0
 // this long to wind down before a stuck collect is force-killed.
 const StoppingTimeoutSecs = 120.0
 
-// SoftOffboardGraceSecs: how long a soft offboard runs before anything else
-// happens. The soft notice says "work the sequence, then call restart_self
-// yourself" and carries no countdown, so there must not be one running behind
-// it.
+// SoftOffboardGraceSecs: how long a close-out is treated as still in flight.
+// The soft notice says "work the sequence, then call restart_self yourself" and
+// carries no countdown, and since 2026-08-19 NEITHER soft arm has one running
+// behind it: 下線 (rc-27d1710174dd 「不要兜底：只有你按強制下線才收它」) and
+// 重新聚焦 (rc-c540367065ad 「連時鐘一起拿掉」) are both collected by the agent's
+// own stopped report or by the owner pressing force-stop, and by nothing else.
 //
-// What happens AFTER the window differs by path, and the difference is the
-// owner's ruling, not an oversight:
-//
-//   - 重新聚焦 escalates: the final call goes out and StoppingTimeoutSecs
-//     starts, because that handover has to complete for his change to land.
-//   - 下線 never escalates. He chose to be the only escalation there
-//     (rc-27d1710174dd 「不要兜底：只有你按強制下線才收它」), so the window is
-//     only the period during which a close-out is treated as in-flight — see
-//     clearStaleStoppingOnOnline, which is what keeps the force-stop button
-//     on screen for him to press.
+// 🔴 So this is NOT a deadline any more, and nothing may re-read it as one.
+// What still uses it is clearStaleStoppingOnOnline — the window during which a
+// stopping member keeps its stopping state, which is what keeps the force-stop
+// button on screen for the owner to press. Escalation is his, not a timer's.
 //
 // Setting it to 0 restores the pre-T-a9d6 timed wind-down wholesale.
 const SoftOffboardGraceSecs = 600.0

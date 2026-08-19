@@ -297,6 +297,18 @@ func refocusDeadline(refocusSince, grace float64) float64 {
 	return refocusSince + grace
 }
 
+// refocusDeadlineOf takes recycleGraceFor's pair straight through: an epoch
+// nobody collects on a clock has NO deadline, and 0 is how the wire says that
+// (the cockpit maps 0 → null → renders nothing). Anything else here would put a
+// countdown on screen that the reconcile tick has no intention of honouring.
+func refocusDeadlineOf(refocusSince float64, cfg reconcileConfig, refocusOp string) float64 {
+	grace, clocked := recycleGraceFor(refocusOp, cfg)
+	if !clocked {
+		return 0.0
+	}
+	return refocusDeadline(refocusSince, grace)
+}
+
 // observedHost resolves a member's OBSERVED machine (handlers.observed_host):
 // SSE machine claim → self-reported telemetry.machine; a warden attributes to
 // its own id. Honest-empty "" when nothing is observed.
@@ -370,12 +382,12 @@ func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unr
 		Presence:         PresenceState(m, nowSecs(), s.hub.IsOnline(m.ID)),
 		RefocusSince:     m.RefocusSince,
 		RefocusOp:        m.RefocusOp,
-		// The grace this member's epoch is ACTUALLY collected on — an
-		// owner-pressed 重新聚焦 opens soft and gets the soft window on top of
-		// the final 120s, so reading RecycleGrace here reported a ceiling the
-		// server had no intention of honouring, and the cockpit rendered a
-		// time the owner then watched pass with nothing happening.
-		RefocusDeadline: refocusDeadline(m.RefocusSince, recycleGraceFor(m.RefocusOp, s.reconcileCfg)),
+		// The grace this member's epoch is ACTUALLY collected on, and 0 when
+		// nothing collects it on time at all — an owner-pressed 重新聚焦 runs no
+		// clock (owner 2026-08-19), so the cockpit must show NO deadline rather
+		// than a time the owner would watch pass with nothing happening. Reading
+		// RecycleGrace straight would report exactly that kind of ceiling.
+		RefocusDeadline: refocusDeadlineOf(m.RefocusSince, s.reconcileCfg, m.RefocusOp),
 		LastOp:          m.LastOp,
 		LastOpOK:        m.LastOpOK,
 		LastOpLog:       m.LastOpLog,
