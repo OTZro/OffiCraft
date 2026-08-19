@@ -1072,11 +1072,16 @@ func TestWindDown_OfflineWakesTheSessionAndDoesNotStopIt(t *testing.T) {
 	if h.maybeWindDown(frame(soft)) {
 		t.Fatal("a repeat of the same notice must be a no-op")
 	}
-	final := soft + " You have 120 seconds left."
+	// The clause the server actually appends (T-d6a7: an absolute deadline, not a
+	// countdown — a countdown would differ on every replay and this de-dupe would
+	// never match again). The client parses none of it; what matters here is only
+	// that a DIFFERENT sentence gets through.
+	const deadlineClause = " Your deadline is 2026-08-19T14:32:07+08:00."
+	final := soft + deadlineClause
 	if !h.maybeWindDown(frame(final)) {
 		t.Fatal("the final call must reach a session already woken by the soft notice")
 	}
-	if !strings.Contains(out.String(), "You have 120 seconds left.") {
+	if !strings.Contains(out.String(), deadlineClause) {
 		t.Fatalf("the final call must reach the transcript:\n%s", out.String())
 	}
 }

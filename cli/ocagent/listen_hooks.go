@@ -131,7 +131,13 @@ func (h *windDownHook) say(msg string) { fmt.Fprintf(h.out, "[ocagent] %s\n", ms
 //
 // Not one-shot but notice-keyed: the soft notice and the final call are two
 // different sentences on the same wind-down, and the second one — the one that
-// says the 120 seconds have started — has to get through.
+// names the deadline — has to get through.
+//
+// 🔴 This de-dupe is why the server quotes an ABSOLUTE deadline and never a
+// countdown (T-d6a7): the comparison is the WHOLE sentence, verbatim, so a
+// remaining-seconds number would differ on every replay of the same epoch, this
+// branch would stop matching, and a session working its close-out would be
+// re-woken and re-fed the document on every write to its row.
 func (h *windDownHook) maybeWindDown(frame map[string]any) bool {
 	if !shouldWindDown(frame, h.cfg.ID) {
 		return false

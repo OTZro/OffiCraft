@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The sentence itself. The owner cut four differently-worded notices down to
@@ -30,7 +31,7 @@ func TestOffboardNotice_TheApprovedSentence(t *testing.T) {
 	const where = "context 62% (your limits: 60% / 75%)"
 	doc := "1. 報開始收尾\n2. 給自己留交接"
 
-	soft := offboardNotice(where, offboardCloserRestartSelf, false, doc)
+	soft := offboardNotice(where, offboardCloserRestartSelf, false, 0, doc)
 	if !strings.Contains(soft, where+" — offboard now: work the sequence below, "+
 		"then call restart_self yourself.") {
 		t.Fatalf("the soft notice must carry the approved sentence verbatim:\n%s", soft)
@@ -43,15 +44,28 @@ func TestOffboardNotice_TheApprovedSentence(t *testing.T) {
 		t.Fatalf("the steps must be the DOCUMENT's, carried verbatim:\n%s", soft)
 	}
 
-	final := offboardNotice(where, offboardCloserRestartSelf, true, doc)
-	if !strings.Contains(final, "then call restart_self yourself. You have 120 seconds left.") {
-		t.Fatalf("the final call must say how long is left, right after the same "+
+	// T-d6a7: the final call now names WHEN the deadline is, not how long is
+	// left. A duration went stale on every replay of the same epoch (and broke
+	// the client's verbatim de-dupe); an absolute instant is constant.
+	const deadline = 1_787_000_000.0
+	final := offboardNotice(where, offboardCloserRestartSelf, true, deadline, doc)
+	wantClause := "then call restart_self yourself. Your deadline is " +
+		time.Unix(int64(deadline), 0).Format(time.RFC3339) + "."
+	if !strings.Contains(final, wantClause) {
+		t.Fatalf("the final call must name the deadline, right after the same "+
 			"sentence:\n%s", final)
+	}
+
+	// A final call with NO clock is a contradiction (offboardKindOf only answers
+	// "final" for a clocked arm), and if it ever happens the sentence says
+	// nothing about time rather than formatting epoch 0 as 1970.
+	if noClock := offboardNotice(where, offboardCloserRestartSelf, true, 0, doc); strings.Contains(noClock, "deadline") {
+		t.Fatalf("a final call with no clock must quote no time at all:\n%s", noClock)
 	}
 
 	// An empty document degrades to the sentence alone: losing the checklist is
 	// survivable, losing the notice is not.
-	bare := offboardNotice(where, offboardCloserRestartSelf, false, "")
+	bare := offboardNotice(where, offboardCloserRestartSelf, false, 0, "")
 	if !strings.Contains(bare, "offboard now") || strings.Contains(bare, "\n") {
 		t.Fatalf("an empty document must leave the sentence intact and alone:\n%q", bare)
 	}

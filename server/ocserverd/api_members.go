@@ -269,7 +269,11 @@ func (s *apiServer) offboardNoticeFor(m Member, kind string) string {
 		where = fmt.Sprintf("context %s%% (your limits: %d%% / %d%%)",
 			pct, cfg.NoticePct, cfg.HandoverPct)
 	}
+	// The deadline quoted in the sentence and the deadline the cockpit shows come
+	// from ONE expression (T-d6a7). offboardKindOf only answers "final" for a
+	// clocked arm, so this is positive exactly when the sentence needs it.
 	return offboardNotice(where, offboardCloserFor(m), kind == offboardKindFinal,
+		refocusDeadlineOf(m.RefocusSince, s.reconcileCfg, m.RefocusOp),
 		s.offboardText())
 }
 
