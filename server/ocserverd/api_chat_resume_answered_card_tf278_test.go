@@ -306,11 +306,24 @@ func TestResumeProseNamesTheAnsweredCardSignal(t *testing.T) {
 //
 // So the reference is neither a hard-coded list nor the other faces: it is
 // PARSED OUT OF THE SERVER, from the expression that computes the field. Each
-// face must state that sum, and EVERY addition chain on a face must state it —
-// not merely its longest one, which is what the decoy exploited. Adding a sixth
-// addend to the server turns all seven faces red the moment it lands, whatever
-// it is called, because the names come from the code rather than from a
-// pattern that guesses at their shape.
+// face must state that sum, and every addition chain THAT NAMES AT LEAST ONE
+// REAL ADDEND must state it — not merely the longest one, which is what the
+// decoy exploited.
+//
+// KNOWN GAPS — measured green, do not read this guard as covering them:
+//
+//   - The NUMERAL is not checked. Every face also says "all five reported in
+//     overview"; editing that word to "four" while leaving the five names in
+//     place is exactly the original lie in a shorter form, and this guard is
+//     blind to it. Nothing else in the package reads that word either.
+//   - A decoy chain naming NO real addend is dropped, not compared. Writing
+//     "…all four reported in overview (chat_count + task_count + roster_count +
+//     machine_count)" beside a correct chain stays green. The filter is what
+//     stops an unrelated `a + b` elsewhere in the prose from being read as a
+//     claim about this total, and it cannot tell that use apart from a decoy.
+//   - Only the faces listed below are read. A NEW face — another spec field,
+//     another constant — is not discovered; it has to be added here by hand,
+//     which is the failure mode that produced this test in the first place.
 func TestEveryFaceOfThePeekSumMatchesWhatTheServerActuallyAdds(t *testing.T) {
 	want := addendsTheServerSums(t)
 	if len(want) < 2 {
@@ -400,11 +413,17 @@ func addendsTheServerSums(t *testing.T) []string {
 	if err != nil {
 		t.Fatalf("read api_chat.go: %v", err)
 	}
-	m := regexp.MustCompile(`EstimatedTotalChars:\s*((?:overview\.\w+\s*\+\s*)*overview\.\w+)`).
+	// The trailing comma is load-bearing: it forces the match to cover the
+	// WHOLE right-hand side. Without it a sum ending in a term this pattern
+	// cannot read — `… + overview.MachinesChars + len(peekNote),` — matched its
+	// overview-only prefix and returned a reference one addend short, so every
+	// face kept claiming the old sum and the guard stayed green. Measured.
+	m := regexp.MustCompile(`EstimatedTotalChars:\s*((?:overview\.\w+\s*\+\s*)*overview\.\w+),`).
 		FindSubmatch(src)
 	if m == nil {
-		t.Fatal("could not find the EstimatedTotalChars assignment in api_chat.go — " +
-			"the field may have been renamed or the sum moved behind a helper; " +
+		t.Fatal("could not find the EstimatedTotalChars assignment in api_chat.go as a " +
+			"plain sum of overview fields — the field may have been renamed, the sum " +
+			"moved behind a helper, or an addend added that is not an overview field; " +
 			"re-anchor this parse rather than replacing it with a hard-coded list, " +
 			"which is what this guard exists to avoid")
 	}
@@ -415,7 +434,11 @@ func addendsTheServerSums(t *testing.T) []string {
 	return out
 }
 
-// snakeCase turns a Go field name into the wire name the prose uses.
+// snakeCase turns a Go field name into the wire name the prose uses. It is a
+// re-derivation, not the json tag: a field named with an acronym (MCPChars ->
+// m_c_p_chars) or carrying a tag that is not its lower-snake name produces a
+// reference the prose can never match, which shows up as a confusing red rather
+// than a silent pass. Read the tag out of wire.go if that day comes.
 func snakeCase(field string) string {
 	var b strings.Builder
 	for i, r := range field {
@@ -444,7 +467,11 @@ func snakeCase(field string) string {
 // seven faces still claiming it, that form of this function stayed green.
 //
 // The "at least one known addend" filter is what keeps an ordinary `a + b` in
-// some unrelated sentence from being read as a claim about this total.
+// some unrelated sentence from being read as a claim about this total. It is
+// also this function's hole: a chain naming none of them is invisible, so a
+// decoy sum written in names the server does not use passes untouched. It is
+// not clear how to close that without also flagging every unrelated sum in the
+// prose, so it is left open and named in the test's KNOWN GAPS instead.
 //
 // Backticks are tolerated because the OpenAPI prose wraps names in them. A lone
 // mention is deliberately NOT a chain: naming an addend in a paragraph is not
