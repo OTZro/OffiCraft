@@ -50,13 +50,17 @@
 #  T6  Sentinel: the real tree passes. A guard that is red on a healthy tree gets
 #      deleted rather than fixed.
 #  T7  GO_TEST_TOTAL_WARN — the Makefile's warning line for the SUM of the
-#      modules' elapsed time — is WIRED (the recipe accumulates and compares) and
-#      leaves room for a dump: WARN + the per-package timeout stays strictly under
-#      the effective ceiling. Both halves were learned the hard way. Comparing
-#      WARN alone accepted 24m under a 25m ceiling, and checking neither meant the
-#      alarm could be deleted from the recipe entirely with the guard still green.
-#      See item 1 below for why the sum of GREEN time, not the sum of timeouts, is
-#      the one that can kill the cell.
+#      modules' elapsed time — leaves room for a dump: WARN + the per-package
+#      timeout stays strictly under the effective ceiling. Comparing WARN alone
+#      accepted 24m under a 25m ceiling.
+#  T7b The alarm FIRES, measured by RUNNING the recipe (`make -n` expanded, with a
+#      stub `go` that sleeps a different amount per module) and watching for the
+#      warning: it must trip on a line under the modules' summed seconds and stay
+#      silent on one above. A pair, because the positive half alone passes on a
+#      recipe that shouts unconditionally. This replaced a text check that greps
+#      the recipe — four separate mutants kept its strings in place while the
+#      alarm was dead. See item 1 below for why the sum of GREEN time, not the sum
+#      of timeouts, is the one that can kill the cell.
 #
 # ── ONE DURATION SEMANTICS ───────────────────────────────────────────────────
 # `<N>m` or `<N>s` with an integer N, and nothing else — deliberately NARROWER
@@ -80,12 +84,9 @@
 #     under its 15m limit and this comparison stays green. That is what
 #     GO_TEST_TOTAL_WARN and T7 exist for. What is still NOT asserted here is that
 #     the warning line is well placed for today's suite — only that the recipe
-#     really accumulates and compares, and that WARN + the per-package timeout
-#     leaves a hung run room to dump. The recipe warns; nothing fails the build on
-#     it. Nor does anything here prove the warning branch FIRES: T7a is a text
-#     check on the recipe, the same class as T1 asking whether the call site
-#     carries -timeout. Reachability was measured by hand instead
-#     (`make test-go GO_TEST_TOTAL_WARN=1s` prints the ten warning lines).
+#     really fires on the summed seconds (T7b runs it), and that WARN + the
+#     per-package timeout leaves a hung run room to dump. The recipe warns;
+#     nothing fails the build on it.
 #  2. THE REST OF THE CELL'S BUDGET. go-checks also runs lint-go-naming,
 #     lint-go-fmt, lint-go-vet, build-go and test-system-interaction-examples.
 #     Their cost is in the Makefile's prose budget, not in any assertion here.
@@ -190,70 +191,6 @@ makefile_go_test_sites() { # FILE [LABEL]
   ' "$file"
 }
 
-# A make VARIABLE is the honest way to write the number once and use it in the
-# recipe twice, so the extractor has to be able to follow one. Resolution is a
-# single non-recursive hop against the same file's assignments — enough for
-# `GO_TEST_TIMEOUT := 15m`, and it reports failure rather than guessing.
-#
-# 🔴 THE LAST ASSIGNMENT WINS, NOT THE FIRST. This used to `print; exit` on the
-# first match, which is the opposite of make: a recipe expands its variables when
-# it RUNS, so a second `GO_TEST_TIMEOUT := 40m` further down the file is the
-# value `go test` actually receives. The first-match read did not merely miss the
-# override — it UNDERSTOOD the file, reported 900s, and declared the contract
-# satisfied using a number the build never uses. A wrong number asserted
-# confidently is worse than no assertion.
-#
-# Flavours are honoured because they change WHICH assignment wins:
-#   `=` `:=` `::=`  replace   — a later one overrides
-#   `?=`            replace only if still unset — a later one does NOT override
-#   `+=`            append    — the result carries a space and therefore fails
-#                               dur_to_seconds loudly, which is the right answer:
-#                               `15m 40m` is not a duration and nothing should
-#                               guess which half was meant.
-# What is still NOT modelled: command-line overrides (`make GO_TEST_TIMEOUT=1h`),
-# `override`, and `export`. Those are the same class of hole as the guard header's
-# item 4 (runtime overrides).
-# ⚠️ AN EARLIER VERSION OF THIS NOTE SAID THE FILE IS READ "as if every assignment
-# line executes unconditionally". That described the wrong mechanism in the wrong
-# direction: the scan skipped every line that was not at column 0, so a
-# space-indented assignment — the usual shape INSIDE an `ifeq` block — was not
-# over-read, it was not read at all, and `  GO_TEST_TIMEOUT := 40m` went green
-# while `make -pn` said 40m. Leading blanks are now honoured and tab-led lines
-# (recipe bodies, which are not assignments) are skipped. Conditionals themselves
-# are still not evaluated: an assignment inside a branch that does not run is
-# counted as if it did.
-resolve_make_value() { # FILE TOKEN -> literal
-  local file="$1" tok="$2" name
-  case "$tok" in
-    '$('*')'|'${'*'}')
-      name="${tok#??}"; name="${name%?}"
-      awk -v N="$name" '
-        # 🔴 LEADING BLANKS COUNT. make accepts a space-indented assignment as an
-        # assignment; only a TAB makes a line a recipe body. Anchoring at column 0
-        # meant `  GO_TEST_TIMEOUT := 40m` — two spaces from the caught mutant —
-        # was invisible: the guard reported 900s and went green while `make -pn`
-        # said 40m.
-        /^\t/ { next }
-        $0 ~ "^[ ]*" N "[[:space:]]*[:?+]?[:]?=" {
-          line = $0
-          sub(/^[ ]+/, "", line)
-          match(line, "^" N "[[:space:]]*[:?+]?[:]?=")
-          op = substr(line, RSTART, RLENGTH)
-          sub("^" N "[[:space:]]*", "", op)
-          sub("=$", "", op)
-          rhs = substr(line, RSTART + RLENGTH)
-          sub(/^[[:space:]]*/, "", rhs)
-          sub(/[[:space:]]+$/, "", rhs)
-          if (op == "?") { if (!set) { val = rhs; set = 1 } }
-          else if (op == "+") { val = (set && val != "") ? val " " rhs : rhs; set = 1 }
-          else { val = rhs; set = 1 }
-        }
-        END { if (set) print val }' "$file"
-      ;;
-    *) printf '%s\n' "$tok" ;;
-  esac
-}
-
 # THE ONE DURATION SEMANTICS (T-cf93 follow-up). Deliberately NARROWER than go:
 # only `<N>m` or `<N>s` with an integer N. That is exactly the form the
 # Makefile's test-go recipe accepts, and the two must not disagree — before this
@@ -322,11 +259,24 @@ make_expanded_recipe() { # FILE TARGET -> the expanded shell, or empty on failur
 # line while running without it would otherwise read as compliant — and the log
 # would be the thing lying. make does not emit comment lines, so those need no
 # exclusion here; the A4 decoy fixture holds all three shapes.
+#
+# 🔴 `&&` SEPARATES COMMANDS TOO, NOT JUST `;`. Splitting on `;` alone left
+# `echo "…" && (cd … "$GO" test -timeout 40m ./...)` as ONE line beginning with
+# echo, so the print-exclusion swallowed the whole thing: the real invocation
+# vanished and the guard reported a clean tree it had never looked at.
+# The split is bash's own `${text//&&/$nl}` rather than a `sed s/&&/\n/g` so that
+# no sed dialect is in the answer at all. `\n` on the replacement side is not in
+# POSIX; whether a given sed emits a newline or a literal `n` is that build's
+# business, and a sed that emitted `n` would fail SILENTLY here — the split just
+# would not happen, which reads as rc=0 on a clean tree, indistinguishable from
+# the false green this line exists to close. Bash's expansion cannot vary.
 go_test_commands() { # EXPANDED -> one command fragment per line
   # Quotes are stripped first: the real call site is `("$GO" test …)`, and a
   # pattern that did not account for the closing quote between $GO and `test`
   # matched nothing and reported NO-CALL-SITE on a healthy tree.
-  printf '%s\n' "$1" | tr ';' '\n' | sed 's/"//g' |
+  local text="$1" nl=$'\n'
+  text="${text//&&/$nl}"
+  printf '%s\n' "$text" | tr ';' '\n' | sed 's/"//g' |
     grep -E '(^|[^[:alnum:]_])(\$\{?GO\}?|go)[[:space:]]+test([[:space:]]|$)' |
     grep -vE '^[[:space:]]*(echo|printf)([[:space:]]|$)'
 }
@@ -535,8 +485,8 @@ verdict() { # MAKEFILE CI_YML -> "OK <go_s> <job_s> <job> <origin>" | "VIOLATION
 # disclaimed — a check that can hand the next person a confident wrong diagnosis
 # is worse than no check, because they will believe it.
 # 🔴 ASK MAKE FOR THIS ONE TOO. The first version of this read the value through
-# resolve_make_value — the text parser THIS FILE declares unfixable a few hundred
-# lines up. Only the -timeout half was moved, so review walked straight back in
+# a text parser over the Makefile's assignment lines, the same shape this file
+# gave up on above. Only the -timeout half was moved, so review walked straight in
 # through the half that was left: a TAB-indented second `GO_TEST_TOTAL_WARN := 24m`
 # after an assignment, and a plain `ifeq (1,0)` dead branch with no tabs at all,
 # both had make using 24m while this reported 300s and declared the relation
@@ -841,9 +791,9 @@ fi
 # out; see the Makefile comment). An alarm set at or above the ceiling is an
 # alarm that first rings after the cell is already dead.
 # ── T7b: RUN THE RECIPE AND WATCH THE ALARM ────────────────────────────────
-# 🔴 THE TEXT CHECK BELOW IS NOT ENOUGH, AND REVIEW PROVED IT FOUR TIMES. Every
-# one of these kept both greppable strings in place and left T7a green while the
-# alarm was dead or measuring the wrong thing:
+# 🔴 A TEXT CHECK IS NOT ENOUGH, AND REVIEW PROVED IT FOUR TIMES. This used to be
+# a grep over the recipe; every one of these kept its strings in place and left it
+# green while the alarm was dead or measuring the wrong thing:
 #   * `total=0` reset inside the loop  ⇒ only the LAST module is ever weighed
 #   * `elapsed=0`                      ⇒ the total is permanently 0
 #   * `if false && [[ … ]]`            ⇒ the branch cannot be taken
