@@ -337,10 +337,24 @@ makefile_timeout_seconds() { # FILE
   [[ -n "$(printf '%s' "$expanded" | tr -d '[:space:]')" ]] || { echo "NO-CALL-SITE"; return; }
   cmds="$(go_test_commands "$expanded")"
   [[ -n "$(printf '%s' "$cmds" | tr -d '[:space:]')" ]] || { echo "NO-CALL-SITE"; return; }
-  # LAST -timeout per command, because that is the one the go flag package keeps:
-  # `go test -timeout 5s -timeout 40m` runs for 40m, measured.
-  vals="$(printf '%s\n' "$cmds" | sed -nE 's/.*[[:space:]]--?timeout[= ]+([^[:space:]]+).*/\1/p' |
-    sed -E 's/^"//; s/"$//' | sort -u)"
+  # 🔴 PER SITE, NOT A UNION. Taking every -timeout in the recipe and sort -u'ing
+  # them makes "a call site that contributes no value" and "no such call site"
+  # indistinguishable: review added a second `go test -tags slow ./...` with NO
+  # -timeout and this reported 900s and called the contract satisfied, while that
+  # second invocation ran under go's 10m default. T1 says call SITE(S), plural.
+  # Each site is asked separately and a site with no -timeout is MISSING, whatever
+  # its neighbours carry.
+  #
+  # Within one site the LAST -timeout wins, because that is the one the go flag
+  # package keeps: `go test -timeout 5s -timeout 40m` runs for 40m.
+  local per_site
+  per_site="$(printf '%s\n' "$cmds" | while IFS= read -r cmd; do
+    [[ -n "$(printf '%s' "$cmd" | tr -d '[:space:]')" ]] || continue
+    v="$(printf '%s\n' "$cmd" | sed -nE 's/.*[[:space:]]--?timeout[= ]+([^[:space:]]+).*/\1/p' | tail -1)"
+    printf '%s\n' "${v:--}"
+  done)"
+  if printf '%s\n' "$per_site" | grep -qx -- '-'; then echo "MISSING"; return; fi
+  vals="$(printf '%s\n' "$per_site" | sed -E 's/^"//; s/"$//' | sort -u)"
   if [[ -z "$(printf '%s' "$vals" | tr -d '[:space:]')" ]]; then echo "MISSING"; return; fi
   if [[ "$(printf '%s\n' "$vals" | grep -c .)" != "1" ]]; then
     echo "MULTIPLE:$(printf '%s\n' "$vals" | tr '\n' ',')"; return
@@ -520,9 +534,25 @@ verdict() { # MAKEFILE CI_YML -> "OK <go_s> <job_s> <job> <origin>" | "VIOLATION
 # had nothing left to add and one thing left to get wrong. Deleted rather than
 # disclaimed — a check that can hand the next person a confident wrong diagnosis
 # is worse than no check, because they will believe it.
+# 🔴 ASK MAKE FOR THIS ONE TOO. The first version of this read the value through
+# resolve_make_value — the text parser THIS FILE declares unfixable a few hundred
+# lines up. Only the -timeout half was moved, so review walked straight back in
+# through the half that was left: a TAB-indented second `GO_TEST_TOTAL_WARN := 24m`
+# after an assignment, and a plain `ifeq (1,0)` dead branch with no tabs at all,
+# both had make using 24m while this reported 300s and declared the relation
+# satisfied. 1440 + 900 = 2340 > 1500 — the only thing T7 exists to prevent,
+# passed green with a confident wrong number.
+#
+# The value comes from the EXPANDED recipe, which is also where the recipe itself
+# gets it: `dur_s "<value>" GO_TEST_TOTAL_WARN`. That closes the other half of the
+# same hole review found on the timeout side — the constant a check compares and
+# the value the recipe uses coming apart. Here they cannot: it is one string.
 makefile_named_duration_seconds() { # FILE NAME -> seconds | UNSET | UNPARSEABLE:<lit>
-  local file="$1" name="$2" lit secs
-  lit="$(resolve_make_value "$file" "\$($name)")"
+  local file="$1" name="$2" expanded lit secs
+  expanded="$(make_expanded_recipe "$file" test-go)" || { echo "UNSET"; return; }
+  lit="$(printf '%s\n' "$expanded" |
+    sed -nE "s/.*dur_s[[:space:]]+\"([^\"]*)\"[[:space:]]+$name([^A-Za-z0-9_]|\$).*/\1/p" |
+    tail -1)"
   [[ -n "$lit" ]] || { echo "UNSET"; return; }
   secs="$(dur_to_seconds "$lit")" || { echo "UNPARSEABLE:$lit"; return; }
   [[ -n "$secs" ]] || { echo "UNPARSEABLE:$lit"; return; }
@@ -830,10 +860,27 @@ fi
 # above fails the POSITIVE case, because each leaves the running total below any
 # threshold the sum should have crossed.
 run_recipe_with_stub_go() { # WARN_VALUE -> the recipe's output
+  # 🔴 THE STUB SLEEPS A DIFFERENT AMOUNT EACH CALL, and that is the whole design.
+  # It used to sleep 1s every time, which made the four modules sum to 4 — the same
+  # number as the module COUNT. Every assertion built on it therefore could not
+  # tell "add each module's seconds" from "add one per module": review changed
+  # `total + elapsed` to `total + 1` and this check still printed FIRES ON THE SUM.
+  # In production that mutant is fatal to the alarm — four 9-minute modules would
+  # total 4, and `4 >= 300` never fires, which is the one situation
+  # GO_TEST_TOTAL_WARN exists for. Sleeping 1,2,3,4 makes the sum 10 against a
+  # count of 4, so a threshold between them separates the two readings.
   local warn="$1" expanded stub
   expanded="$(cd "$ROOT" && make -n test-go GO_TEST_TOTAL_WARN="$warn" 2>/dev/null)" || return 1
   stub="$WORK/stub-go"
-  { echo '#!/usr/bin/env bash'; echo 'sleep 1'; echo 'exit 0'; } > "$stub"
+  rm -f "$WORK/stub-calls"
+  {
+    echo '#!/usr/bin/env bash'
+    echo "n=\$(cat '$WORK/stub-calls' 2>/dev/null || echo 0)"
+    echo "n=\$(( n + 1 ))"
+    echo "printf '%s' \"\$n\" > '$WORK/stub-calls'"
+    echo 'sleep "$n"'
+    echo 'exit 0'
+  } > "$stub"
   chmod +x "$stub"
   # Keep only the test-go recipe itself: `make -n` prints its prerequisite
   # (build-embed-assets) first, and that one really does stage artefacts.
@@ -851,16 +898,18 @@ run_recipe_with_stub_go() { # WARN_VALUE -> the recipe's output
 if ! command -v make >/dev/null 2>&1; then
   bad "green-time alarm — make is unavailable, so the recipe could not be run and nothing below was actually measured"
 else
-  TRIPPED="$(run_recipe_with_stub_go 3s || true)"
+  # 7s sits ABOVE the module count (4) and BELOW the sum of their seconds (10),
+  # so only a recipe that really adds up ELAPSED TIME crosses it.
+  TRIPPED="$(run_recipe_with_stub_go 7s || true)"
   QUIET="$(run_recipe_with_stub_go 30s || true)"
   if ! printf '%s' "$TRIPPED" | grep -q 'all modules finished in'; then
     bad "green-time alarm — the recipe did not run to completion under a stub go, so neither case below measured anything (output: $(printf '%s' "$TRIPPED" | tail -2 | tr '\n' ' '))"
   elif ! printf '%s' "$TRIPPED" | grep -q 'TOTAL'; then
-    bad "green-time alarm — RAN the recipe with the warning line at 3s and four modules taking ~4s, and NO total-time warning was printed. The sum of green module time is what can kill the cell, and nothing is watching it. Causes review has actually produced: the running total reset inside the loop (only the last module weighed), elapsed forced to 0, the branch made unreachable, or the recipe reading a different value than GO_TEST_TOTAL_WARN"
+    bad "green-time alarm — RAN the recipe with the warning line at 7s and four stub modules taking 1+2+3+4=10s, and NO total-time warning was printed. The sum of green module time is what can kill the cell, and nothing is watching it. Causes review has actually produced: the running total reset inside the loop (only the last module weighed), elapsed forced to 0, the branch made unreachable, or the recipe reading a different value than GO_TEST_TOTAL_WARN"
   elif printf '%s' "$QUIET" | grep -q 'TOTAL'; then
     bad "green-time alarm — the warning fired with the line at 30s on a ~4s run, so it is unconditional. An alarm that is always on is one people learn to skip, which is the same as not having it"
   else
-    ok "green-time alarm FIRES ON THE SUM — measured by running the real recipe against a stub go: at a 3s line the four modules (~4s) trip it, at a 30s line they do not. This is behaviour, not a pattern in the file"
+    ok "green-time alarm FIRES ON THE SUM OF SECONDS — measured by running the real recipe against a stub go whose modules take 1,2,3,4s: a 7s line (above the module COUNT of 4, below their 10s sum) trips it, a 30s line does not. Counting modules instead of adding their seconds fails the first half"
   fi
 fi
 
@@ -878,8 +927,16 @@ case "$REAL_WARN" in
         # inside the cell to print the goroutine dump. Comparing WARN alone
         # accepted 24m under a 25m ceiling — 24 + 15 = 39m, an alarm that first
         # rings 14 minutes after diagnosability is gone.
-        if (( REAL_WARN + REAL_GO < CEIL_S )); then
+        # ⚠️ REAL_GO is only a number on a healthy tree; on MISSING / DISABLED:0m /
+        # UNPARSEABLE it is a WORD, and `(( ))` under `set -u` then aborted the whole
+        # script — no summary line, and M1/M2/M3 never ran, which made the careful
+        # "mutants skipped and why" message from an earlier round dead code on
+        # exactly the paths it was written for. The real-tree failure is already
+        # reported above; this arm just declines to add a second, derived one.
+        if [[ "$REAL_GO" =~ ^[0-9]+$ ]] && (( REAL_WARN + REAL_GO < CEIL_S )); then
           ok "green-time alarm — GO_TEST_TOTAL_WARN (${REAL_WARN}s) PLUS the per-package timeout (${REAL_GO}s) is STRICTLY LESS than the effective ceiling (${CEIL_S}s): a run warned about and then hung still has room to print its goroutine dump"
+        elif [[ ! "$REAL_GO" =~ ^[0-9]+$ ]]; then
+          skip "green-time alarm — cannot weigh GO_TEST_TOTAL_WARN (${REAL_WARN}s) against the ceiling because the per-package timeout did not resolve ($REAL_GO), which has already failed above. Restating it here would read like a second, separate defect"
         else
           bad "green-time alarm — GO_TEST_TOTAL_WARN (${REAL_WARN}s) + the per-package timeout (${REAL_GO}s) is not below the effective ceiling (${CEIL_S}s): by the time it rings, a hang can no longer produce a dump before GitHub cancels the cell"
         fi ;;
