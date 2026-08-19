@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"runtime/debug"
 	"strings"
 	"testing"
@@ -69,5 +70,46 @@ func TestSelfHashDeterministic(t *testing.T) {
 	}
 	if len(a) != selfHashPrefixLen {
 		t.Errorf("self-hash prefix len = %d, want %d", len(a), selfHashPrefixLen)
+	}
+}
+
+// TestPrintVersion_ReportsWhetherThisBuildWasStamped covers the build.sha line,
+// which shipped with no test at all: deleting the Fprintf that prints it left the
+// whole package green and the shell guard green.
+//
+// 🔴 IT IS ALSO AN ORACLE, NOT JUST A DISPLAY. bin/tests/agent-build-sha-guard.sh
+// asks a freshly built ocagent for this value and compares it to the tree's sha,
+// precisely because grepping the binary CANNOT do that job — Go auto-embeds
+// vcs.revision (the full sha) when built from a clone, and the short sha is a
+// prefix of it, so a substring search matches an unstamped build too. That guard
+// is only as good as this line, so the two renderings are pinned here.
+//
+// Both go through the same TrimSpace as the connection line: the two must not
+// disagree about what counts as absent, which is a disagreement no reader would
+// find until they were already confused about something else.
+func TestPrintVersion_ReportsWhetherThisBuildWasStamped(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stamp string
+		want  string
+	}{
+		{"stamped", "cafe1234beef", "  build.sha:    cafe1234beef"},
+		{"unstamped", "", "  build.sha:    unstamped (not built by bin/build-bindist)"},
+		{"blank is not a stamp", "  \t ", "  build.sha:    unstamped (not built by bin/build-bindist)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prev := buildSHA
+			buildSHA = tc.stamp
+			t.Cleanup(func() { buildSHA = prev })
+
+			var out bytes.Buffer
+			printVersion(&out, func() (*debug.BuildInfo, bool) { return nil, false },
+				func() (string, error) { return "", errors.New("no exe") },
+				func(string) ([]byte, error) { return nil, errors.New("no read") })
+
+			if !strings.Contains(out.String(), tc.want) {
+				t.Errorf("version output must contain %q; got:\n%s", tc.want, out.String())
+			}
+		})
 	}
 }

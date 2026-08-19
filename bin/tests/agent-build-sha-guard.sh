@@ -101,7 +101,7 @@ else
   bad "cli/ocagent/listen_run.go: the connection line does not read TrimSpace(buildSHA) — either it ignores the stamp, or a whitespace-only one prints as ' [agent \\t]', which reads as an answer"
 fi
 
-# ── 6. POSITIVE CONTROL: the checks above can still go red ─────────────────
+# ── 6. POSITIVE CONTROL (text side): the checks above can still go red ─────────────────
 # Without this, a reformat that broke every pattern would print all green. The
 # mutant is one character on a copy; nothing in the tree is touched.
 MUT="$(mktemp -t oc-agent-sha-guard.XXXXXX)"
@@ -146,7 +146,21 @@ else
   else
     ok "bin/build-bindist runs clean, so the assertions below are about real output"
 
-    # ── 5. the produced ocagent really carries THIS tree's sha ──────────────
+    # ── 7. the produced ocagent really carries THIS tree's sha ──────────────
+    # 🔴 ASK THE BINARY, DO NOT GREP IT. This was `strings … | grep -c "$HEAD_SHA"`
+    # and it was DECORATION in the tree shape CI uses. cli/ocagent is built without
+    # -trimpath/-buildvcs=false, so Go auto-embeds `vcs.revision=<full sha>` — and
+    # the short sha is a PREFIX of it, so in a plain clone the grep matches any
+    # ocagent built from this tree, stamped or not. Review measured a second
+    # unstamped build and a HEAD~5 stamp both passing while the shipped binary
+    # reported `unstamped` and `a0d998a2`.
+    # 🔴 IT LOOKED LOAD-BEARING TO ME BECAUSE I MEASURED IT IN A GIT WORKTREE,
+    # where .git is a file, Go embeds no vcs settings, and the grep really does
+    # return 0. One tree shape, generalised into a claim about all of them — and
+    # the shape I did not test is the one actions/checkout produces.
+    # `ocagent version` prints build.sha from the linked-in variable and nothing
+    # else can supply it, so exact equality against it cannot be satisfied by
+    # metadata that merely happens to contain the same characters.
     AGENT_BIN="$ROOT/server/ocserverd/bindist/ocagent"
     if [[ ! -f "$AGENT_BIN" ]]; then
       bad "bin/build-bindist produced no ocagent at $AGENT_BIN"
@@ -154,13 +168,14 @@ else
     # matches, strings takes SIGPIPE, and the PIPELINE reports 141 — so the
     # success case reads as failure. Measured here: -q said "not found" on a
     # binary where -c said 3.
-    elif [[ "$(strings -a "$AGENT_BIN" 2>/dev/null | grep -c -- "$HEAD_SHA")" -gt 0 ]]; then
-      ok "the ocagent it produced carries THIS tree's sha ($HEAD_SHA) in its bytes — the stamp is not merely written in the script, it survived -s -w and landed"
+    elif REPORTED="$("$AGENT_BIN" version 2>/dev/null | awk '/build\.sha:/{print $2}')" &&
+         [[ "$REPORTED" == "$HEAD_SHA" ]]; then
+      ok "the ocagent it produced REPORTS this tree's sha ($HEAD_SHA) from its own version command — asked, not grepped, so no auto-embedded vcs metadata can satisfy it"
     else
-      bad "the ocagent bin/build-bindist just produced does NOT contain this tree's sha ($HEAD_SHA). Every listener from this build will print no [agent …] segment, or name a different build — and both are byte-indistinguishable from a dev build behaving correctly, which is the failure this whole feature exists to remove. Causes seen: an empty sha lookup (no .git), a second unstamped go build overwriting the first, or a stamp fed from the wrong revision"
+      bad "the ocagent bin/build-bindist just produced reports build.sha=\"${REPORTED:-<none>}\", not this tree's sha ($HEAD_SHA). Every listener from this build will print no [agent …] segment, or name a different build — and both are byte-indistinguishable from a dev build behaving correctly, which is the failure this whole feature exists to remove. Causes seen: an empty sha lookup (no .git), a second unstamped go build overwriting the first, or a stamp fed from the wrong revision"
     fi
 
-    # ── 6. an empty sha must be FATAL, not a silent unstamped build ─────────
+    # ── 8. an empty sha must be FATAL, not a silent unstamped build ─────────
     if OCAGENT_SHA=" " bash "$ROOT/bin/build-bindist" >/dev/null 2>&1; then
       bad "bin/build-bindist accepted a BLANK OCAGENT_SHA and built anyway — that is the tarball/git-archive case, and it ships a fleet that cannot say which build it is while every text check here stays green"
     else
@@ -172,18 +187,30 @@ else
     # The consequence case 4 is really about. check-officraft-dist cannot see this
     # (measured rc=0 with the anchor stamped): it compares dist/officraft/officraft
     # against its manifest, and never looks at the copy that actually ships.
-    ANCHOR_BINDIST="$ROOT/server/ocserverd/bindist/officraft"
+    # 🔴 BOTH STAGED COPIES, and anchordist is the one that reaches machines.
+    # An earlier version compared only bindist/officraft and its message claimed
+    # "every install receives the bindist copy" — wrong: nothing serves that file.
+    # build-bindist copies it on to cli/ocwarden/anchordist, which anchor_embed.go
+    # go:embeds into ocwarden, and `ocwarden install` materialises THAT. Review
+    # rebuilt anchordist separately and got a shipped anchor of aa576b9e… against a
+    # committed 710a2525… with the guard still printing 10 ok.
     ANCHOR_COMMITTED="$ROOT/dist/officraft/officraft"
-    if [[ ! -f "$ANCHOR_BINDIST" || ! -f "$ANCHOR_COMMITTED" ]]; then
-      bad "cannot compare the shipped anchor against the committed one (missing $ANCHOR_BINDIST or $ANCHOR_COMMITTED)"
+    if [[ ! -f "$ANCHOR_COMMITTED" ]]; then
+      bad "cannot compare the shipped anchors: $ANCHOR_COMMITTED is missing"
     else
-      A="$(shasum -a 256 "$ANCHOR_BINDIST" | cut -d' ' -f1)"
       B="$(shasum -a 256 "$ANCHOR_COMMITTED" | cut -d' ' -f1)"
-      if [[ "$A" == "$B" ]]; then
-        ok "the anchor bin/build-bindist ships is byte-identical to the committed dist/officraft/officraft (${A:0:12}…) — it is still reproducible from a clean clone"
-      else
-        bad "the anchor that SHIPS (${A:0:12}…) is not the committed one (${B:0:12}…). Every install receives the bindist copy, so the TCC anchor people run stopped being the one reviewers can reproduce — and check-officraft-dist returns 0 on exactly this, because it only ever compares the committed file to its own manifest"
-      fi
+      for staged in "$ROOT/server/ocserverd/bindist/officraft" "$ROOT/cli/ocwarden/anchordist/officraft"; do
+        if [[ ! -f "$staged" ]]; then
+          bad "cannot compare the shipped anchor against the committed one: $staged is missing"
+          continue
+        fi
+        A="$(shasum -a 256 "$staged" | cut -d' ' -f1)"
+        if [[ "$A" == "$B" ]]; then
+          ok "$(basename "$(dirname "$staged")")/officraft is byte-identical to the committed dist/officraft/officraft (${A:0:12}…)"
+        else
+          bad "the anchor staged at $staged (${A:0:12}…) is not the committed one (${B:0:12}…). cli/ocwarden/anchordist is go:embedded into ocwarden and is what 'ocwarden install' materialises, so a divergence there means the TCC anchor machines actually run stopped being the one reviewers can reproduce — and check-officraft-dist returns 0 on exactly this, because it only ever compares the committed file to its own manifest"
+        fi
+      done
     fi
   fi
 fi

@@ -23,6 +23,24 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# 🔴 RESOLVED BEFORE ANYTHING IS DELETED. The wipe below removes a TRACKED file
+# (server/ocserverd/bindist/.gitkeep), so a sha check placed after it left the
+# working tree with that file deleted and only an error message to explain it.
+# Nothing destructive happens until we know this build can name itself.
+OCAGENT_SHA="${OCAGENT_SHA:-$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)}"
+# Trim before testing: `-z` is false for " ", and a whitespace stamp links in
+# cleanly, produces a binary that passes every text check, and prints no segment
+# at runtime — the unstamped fleet again, wearing a value.
+OCAGENT_SHA="$(printf '%s' "$OCAGENT_SHA" | tr -d '[:space:]')"
+if [[ -z "$OCAGENT_SHA" ]]; then
+  echo "build-bindist: cannot resolve a git sha for the ocagent stamp (is this a" >&2
+  echo "  git checkout? a tarball or 'git archive' tree has no .git). Refusing to" >&2
+  echo "  build an ocagent that cannot say which build it is: an unstamped listener" >&2
+  echo "  is indistinguishable from a dev build, which is the false negative this" >&2
+  echo "  stamp exists to remove. Set OCAGENT_SHA explicitly to build anyway." >&2
+  exit 1
+fi
+
 BINDIST="$ROOT/server/ocserverd/bindist"
 rm -rf "$BINDIST"
 mkdir -p "$BINDIST"
@@ -60,19 +78,6 @@ mkdir -p "$BINDIST"
 # guard printed 6 ok, and the real listener printed no [agent …] segment at all.
 # That is the exact false negative this whole feature exists to kill, reinstated by
 # a fallback nobody would look at. A build that cannot name itself must not ship.
-OCAGENT_SHA="${OCAGENT_SHA:-$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)}"
-# Trim before testing: `-z` is false for " ", and a whitespace stamp links in
-# cleanly, produces a binary that passes every text check, and prints no segment
-# at runtime — the unstamped fleet again, wearing a value.
-OCAGENT_SHA="$(printf '%s' "$OCAGENT_SHA" | tr -d '[:space:]')"
-if [[ -z "$OCAGENT_SHA" ]]; then
-  echo "build-bindist: cannot resolve a git sha for the ocagent stamp (is this a" >&2
-  echo "  git checkout? a tarball or 'git archive' tree has no .git). Refusing to" >&2
-  echo "  build an ocagent that cannot say which build it is: an unstamped listener" >&2
-  echo "  is indistinguishable from a dev build, which is the false negative this" >&2
-  echo "  stamp exists to remove. Set OCAGENT_SHA explicitly to build anyway." >&2
-  exit 1
-fi
 (cd "$ROOT/cli/ocagent" && go build -ldflags="-s -w -X main.buildSHA=$OCAGENT_SHA" -o "$BINDIST/ocagent" ./...)
 # The anchor is built BEFORE ocwarden and staged into cli/ocwarden/anchordist,
 # because ocwarden embeds it: the cockpit's one-liner downloads ocwarden alone,
