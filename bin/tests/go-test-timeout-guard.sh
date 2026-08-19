@@ -50,9 +50,13 @@
 #  T6  Sentinel: the real tree passes. A guard that is red on a healthy tree gets
 #      deleted rather than fixed.
 #  T7  GO_TEST_TOTAL_WARN — the Makefile's warning line for the SUM of the
-#      modules' elapsed time — is also strictly under the effective ceiling. See
-#      item 1 below for why that sum, and not the sum of timeouts, is the one
-#      that can kill the cell.
+#      modules' elapsed time — is WIRED (the recipe accumulates and compares) and
+#      leaves room for a dump: WARN + the per-package timeout stays strictly under
+#      the effective ceiling. Both halves were learned the hard way. Comparing
+#      WARN alone accepted 24m under a 25m ceiling, and checking neither meant the
+#      alarm could be deleted from the recipe entirely with the guard still green.
+#      See item 1 below for why the sum of GREEN time, not the sum of timeouts, is
+#      the one that can kill the cell.
 #
 # ── ONE DURATION SEMANTICS ───────────────────────────────────────────────────
 # `<N>m` or `<N>s` with an integer N, and nothing else — deliberately NARROWER
@@ -74,9 +78,14 @@
 #     all passing, zero timeouts ⇒ 36 minutes ⇒ GitHub cancels go-checks at its
 #     ceiling with no goroutine dump, while every per-module number stays far
 #     under its 15m limit and this comparison stays green. That is what
-#     GO_TEST_TOTAL_WARN and T7 exist for. What is still NOT asserted here is
-#     that the warning line is CORRECTLY PLACED for today's suite — only that it
-#     is below the ceiling. The recipe warns; nothing fails the build on it.
+#     GO_TEST_TOTAL_WARN and T7 exist for. What is still NOT asserted here is that
+#     the warning line is well placed for today's suite — only that the recipe
+#     really accumulates and compares, and that WARN + the per-package timeout
+#     leaves a hung run room to dump. The recipe warns; nothing fails the build on
+#     it. Nor does anything here prove the warning branch FIRES: T7a is a text
+#     check on the recipe, the same class as T1 asking whether the call site
+#     carries -timeout. Reachability was measured by hand instead
+#     (`make test-go GO_TEST_TOTAL_WARN=1s` prints the ten warning lines).
 #  2. THE REST OF THE CELL'S BUDGET. go-checks also runs lint-go-naming,
 #     lint-go-fmt, lint-go-vet, build-go and test-system-interaction-examples.
 #     Their cost is in the Makefile's prose budget, not in any assertion here.
@@ -159,15 +168,21 @@ makefile_go_test_sites() { # FILE [LABEL]
           sub_cmd = a; break
         }
         if (sub_cmd != "test") continue
-        # the -timeout argument, in either spelling go accepts
+        # the -timeout argument, in either spelling go accepts.
+        # 🔴 THE LAST ONE WINS. The go flag package takes the last occurrence, so a
+        # command line carrying `-timeout $(GO_TEST_TIMEOUT) -timeout 40m` runs
+        # under 40m — measured: `go test -timeout 5s -timeout 40m ./...` ran for
+        # 34s instead of failing at 5s. Scanning for the first one reported the
+        # variable and called the contract satisfied on a number go never used,
+        # which is the same defect as reading the first make assignment.
         val = "-"
         for (k = j + 1; k <= m; k++) {
           a = tok[k]; gsub(/["'"'"']/, "", a)
           if (a == "-timeout" || a == "--timeout") {
             if (k + 1 <= m) { val = tok[k+1]; gsub(/["'"'"']/, "", val) }
-            break
+            continue
           }
-          if (a ~ /^--?timeout=/) { sub(/^--?timeout=/, "", a); val = a; break }
+          if (a ~ /^--?timeout=/) { b = a; sub(/^--?timeout=/, "", b); val = b }
         }
         printf "%s\t%d\t%s\t%s\n", LABEL, NR, val, seg
       }
@@ -196,17 +211,32 @@ makefile_go_test_sites() { # FILE [LABEL]
 #                               `15m 40m` is not a duration and nothing should
 #                               guess which half was meant.
 # What is still NOT modelled: command-line overrides (`make GO_TEST_TIMEOUT=1h`),
-# `override`, `export`, environment variables, and conditional (`ifeq`) blocks —
-# the file is read as if every assignment line executes unconditionally. That is
-# the same class of hole as the guard header's item 4 (runtime overrides).
+# `override`, and `export`. Those are the same class of hole as the guard header's
+# item 4 (runtime overrides).
+# ⚠️ AN EARLIER VERSION OF THIS NOTE SAID THE FILE IS READ "as if every assignment
+# line executes unconditionally". That described the wrong mechanism in the wrong
+# direction: the scan skipped every line that was not at column 0, so a
+# space-indented assignment — the usual shape INSIDE an `ifeq` block — was not
+# over-read, it was not read at all, and `  GO_TEST_TIMEOUT := 40m` went green
+# while `make -pn` said 40m. Leading blanks are now honoured and tab-led lines
+# (recipe bodies, which are not assignments) are skipped. Conditionals themselves
+# are still not evaluated: an assignment inside a branch that does not run is
+# counted as if it did.
 resolve_make_value() { # FILE TOKEN -> literal
   local file="$1" tok="$2" name
   case "$tok" in
     '$('*')'|'${'*'}')
       name="${tok#??}"; name="${name%?}"
       awk -v N="$name" '
-        $0 ~ "^" N "[[:space:]]*[:?+]?[:]?=" {
+        # 🔴 LEADING BLANKS COUNT. make accepts a space-indented assignment as an
+        # assignment; only a TAB makes a line a recipe body. Anchoring at column 0
+        # meant `  GO_TEST_TIMEOUT := 40m` — two spaces from the caught mutant —
+        # was invisible: the guard reported 900s and went green while `make -pn`
+        # said 40m.
+        /^\t/ { next }
+        $0 ~ "^[ ]*" N "[[:space:]]*[:?+]?[:]?=" {
           line = $0
+          sub(/^[ ]+/, "", line)
           match(line, "^" N "[[:space:]]*[:?+]?[:]?=")
           op = substr(line, RSTART, RLENGTH)
           sub("^" N "[[:space:]]*", "", op)
@@ -244,8 +274,14 @@ resolve_make_value() { # FILE TOKEN -> literal
 dur_to_seconds() { # DURATION -> seconds on stdout, rc 1 if unparseable
   awk -v D="$1" '
     BEGIN {
-      if (D ~ /^[0-9]+m$/) { sub(/m$/, "", D); printf "%d\n", D * 60; exit 0 }
-      if (D ~ /^[0-9]+s$/) { sub(/s$/, "", D); printf "%d\n", D + 0;  exit 0 }
+      # 🔴 NO LEADING ZEROS. awk reads "08" as 8; bash $(( )) reads it as OCTAL
+      # and dies with `value too great for base` — the very error string this
+      # convergence was written to eliminate, and it comes out of the arithmetic
+      # before the friendly refusal in the recipe can print. `015m` was worse: the
+      # guard said 900s, the recipe computed 780s, and go used 900s. One string,
+      # three consumers, two answers.
+      if (D ~ /^(0|[1-9][0-9]*)m$/) { sub(/m$/, "", D); printf "%d\n", D * 60; exit 0 }
+      if (D ~ /^(0|[1-9][0-9]*)s$/) { sub(/s$/, "", D); printf "%d\n", D + 0;  exit 0 }
       exit 1
     }'
 }
@@ -420,6 +456,35 @@ verdict() { # MAKEFILE CI_YML -> "OK <go_s> <job_s> <job> <origin>" | "VIOLATION
 # ceiling read out of ci.yml, and it has to be strictly under it for the same
 # reason go's per-package timeout does: a warning that only trips after the cell
 # is already dead is not a warning.
+# 🔴 T7a — DOES THE RECIPE ACTUALLY DO IT? The first version of T7 read
+# GO_TEST_TOTAL_WARN out of the Makefile and compared it to the ceiling, and
+# nothing else. It never asked whether anything USES it. Measured: deleting the
+# whole accumulate-and-shout block from the test-go recipe, or just the
+# `total=$(( total + elapsed ))` line, or multiplying the threshold by a thousand,
+# each left the guard at 26 ok / rc=0 — still announcing that the sum of green
+# time "is shouted about", with nothing left to shout. A guard that reads one
+# constant and compares it to another is measuring itself.
+#
+# So this reads the test-go recipe and requires three things of it: the elapsed
+# time of each module is ACCUMULATED, the accumulator is COMPARED against the
+# warn variable, and the comparison is not with a constant standing in for it.
+# ⚠️ This is a TEXT-level check on the recipe, the same class as T1 asking whether
+# the call site carries -timeout. It cannot prove the branch fires; that was
+# measured by hand (`make test-go GO_TEST_TOTAL_WARN=1s` prints the ten warning
+# lines, rc=0) and is not re-measured here, because doing so costs a full 230s
+# test run.
+makefile_total_warn_wiring() { # FILE -> OK | MISSING-ACCUMULATOR | MISSING-COMPARISON
+  local file="$1" recipe
+  recipe="$(awk '
+    /^test-go:/ { inr = 1; next }
+    inr && /^[a-zA-Z0-9_.-]+:/ { inr = 0 }
+    inr { print }
+  ' "$file")"
+  printf '%s\n' "$recipe" | grep -qE 'total=\$\$\(\( *total *\+ *elapsed *\)\)' || { echo "MISSING-ACCUMULATOR"; return; }
+  printf '%s\n' "$recipe" | grep -qE '\$\$total .*-ge .*\$\$warn_s' || { echo "MISSING-COMPARISON"; return; }
+  echo "OK"
+}
+
 makefile_named_duration_seconds() { # FILE NAME -> seconds | UNSET | UNPARSEABLE:<lit>
   local file="$1" name="$2" lit secs
   lit="$(resolve_make_value "$file" "\$($name)")"
@@ -710,6 +775,13 @@ fi
 # timeout sum cannot — `set -e` ends the recipe on the first module that times
 # out; see the Makefile comment). An alarm set at or above the ceiling is an
 # alarm that first rings after the cell is already dead.
+REAL_WIRING="$(makefile_total_warn_wiring "$MAKEFILE")"
+case "$REAL_WIRING" in
+  OK) ok "green-time alarm is WIRED — the test-go recipe accumulates each module's elapsed seconds and compares the running total against GO_TEST_TOTAL_WARN. Without this check the three ways of deleting the alarm (drop the block, drop the accumulation, scale the threshold) were all green" ;;
+  MISSING-ACCUMULATOR) bad "green-time alarm — the test-go recipe never adds each module's elapsed time into a running total, so GO_TEST_TOTAL_WARN cannot fire no matter what it is set to ($REAL_WIRING)" ;;
+  *) bad "green-time alarm — the test-go recipe never compares its running total against GO_TEST_TOTAL_WARN ($REAL_WIRING)" ;;
+esac
+
 REAL_WARN="$(makefile_named_duration_seconds "$MAKEFILE" GO_TEST_TOTAL_WARN)"
 case "$REAL_WARN" in
   ''|*[!0-9]*)
@@ -718,10 +790,16 @@ case "$REAL_WARN" in
     case "$REAL_CI" in
       *$'\t'*$'\t'*)
         CEIL_S=$(( $(printf '%s' "$REAL_CI" | cut -f2) * 60 ))
-        if (( REAL_WARN < CEIL_S )); then
-          ok "green-time alarm — GO_TEST_TOTAL_WARN (${REAL_WARN}s) is STRICTLY LESS than the effective ceiling (${CEIL_S}s), so the sum of PASSING module time is shouted about while the cell is still alive"
+        # 🔴 WARN ALONE IS THE WRONG COMPARISON. The number that has to fit under
+        # the ceiling is the warn line PLUS the per-package timeout: a run that
+        # reaches the warn line and THEN hangs needs its full GO_TEST_TIMEOUT
+        # inside the cell to print the goroutine dump. Comparing WARN alone
+        # accepted 24m under a 25m ceiling — 24 + 15 = 39m, an alarm that first
+        # rings 14 minutes after diagnosability is gone.
+        if (( REAL_WARN + REAL_GO < CEIL_S )); then
+          ok "green-time alarm — GO_TEST_TOTAL_WARN (${REAL_WARN}s) PLUS the per-package timeout (${REAL_GO}s) is STRICTLY LESS than the effective ceiling (${CEIL_S}s): a run warned about and then hung still has room to print its goroutine dump"
         else
-          bad "green-time alarm — GO_TEST_TOTAL_WARN (${REAL_WARN}s) is not below the effective ceiling (${CEIL_S}s): it can only ring after GitHub has already cancelled the cell"
+          bad "green-time alarm — GO_TEST_TOTAL_WARN (${REAL_WARN}s) + the per-package timeout (${REAL_GO}s) is not below the effective ceiling (${CEIL_S}s): by the time it rings, a hang can no longer produce a dump before GitHub cancels the cell"
         fi ;;
       *) skip "green-time alarm — no ceiling to compare GO_TEST_TOTAL_WARN (${REAL_WARN}s) against; the ci.yml side did not parse ($REAL_CI) and has already failed above. Restating it here would read like a second, separate defect." ;;
     esac ;;

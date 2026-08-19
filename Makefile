@@ -472,50 +472,64 @@ test-bin-guards:
 #    That is what GO_TEST_TOTAL_WARN watches: the recipe accumulates each
 #    module's elapsed seconds and shouts when the RUNNING TOTAL crosses it.
 #
-# ── WHY GO_TEST_TOTAL_WARN IS 10m ───────────────────────────────────────────
-# It is 40% of the go-checks job's 25m ceiling in ci.yml, which lands it between
-# the two numbers that matter:
-#   * ABOVE today's reality, so it is not noise. The whole go-checks cell
-#     currently measures 6:44 / 6:57 / 7:37 end to end, and test-go is only part
-#     of that.
-#   * WELL BELOW the line that kills. The rest of the cell (checkout, setup-go,
-#     lint-go-*, build-go, test-system-interaction-examples) costs ≈3–4 min, so
-#     test-go has ≈21 min before the ceiling cuts it. 10m leaves a full doubling
-#     of headroom to notice in and act, which is the whole point of warning while
-#     the cell is still green.
-# Contrast the per-module two-thirds warning below, which is anchored to the
-# per-package limit (600s of 900s): 600s for ONE module is larger than today's
-# ENTIRE cell, so that line sits ABOVE the danger line and cannot realistically
-# fire first. It is kept because it is the right alarm for "one module is about
-# to hit go's own timeout" — but it is not the one guarding the ceiling.
-# bin/tests/go-test-timeout-guard.sh pins GO_TEST_TOTAL_WARN under the job
-# ceiling for the same reason it pins GO_TEST_TIMEOUT: a warning that only trips
-# after the cell is already dead is not a warning.
+# ── WHY GO_TEST_TOTAL_WARN IS 5m (corrected: 10m was above the danger line) ──
+# 🔴 THE DANGER LINE IS NOT THE CEILING. An earlier version of this comment put
+# the warning at 10m, reasoning that test-go "has ≈21 min before the ceiling cuts
+# it". That is the line past which a GREEN run gets cancelled — it is not the line
+# past which a HUNG run stops being diagnosable, and the second one is what this
+# whole file is about. For go to hit its own timeout and print the goroutine dump,
+# the run needs its 15m INSIDE the ceiling:
+#
+#   rest of the cell (≈4m) + green module time + GO_TEST_TIMEOUT (15m) ≤ 25m
+#   ⇒ green module time must stay under ≈6m
+#
+# At 10m the first warning would arrive when 4 + 10 + 15 = 29m > 25m, i.e. after
+# diagnosability was already gone. That is precisely the mistake this file makes
+# below about the per-module two-thirds line — an alarm above the danger line
+# cannot fire first — repeated on the alarm written to fix it.
+#   * 5m is UNDER that ≈6m danger line, and 5 + 15 = 20m leaves the rest of the
+#     cell its ≈3–4 min inside the 25m ceiling.
+#   * It is above today's reality but not by much: the four modules measure 230s
+#     ≈ 3m50s together. ocserverd growing ~30% would trip it. That is deliberate —
+#     the alarm is supposed to arrive while runs are still GREEN — but it is also
+#     why it only warns and never fails a build: an alarm that blocks on a 30%
+#     drift is one somebody turns off on the first day.
+# bin/tests/go-test-timeout-guard.sh pins WARN + GO_TEST_TIMEOUT under the
+# effective ceiling, not WARN alone, for exactly this reason.
+# The per-module two-thirds warning below is anchored to the per-package limit
+# (600s of 900s): 600s for ONE module is larger than today's ENTIRE cell, so that
+# line sits above the danger line and cannot realistically fire first. It is kept
+# because it is the right alarm for "one module is about to hit go's own timeout"
+# — but it is not the one guarding the ceiling, and it is not evidence of
+# anything. GO_TEST_TOTAL_WARN is the one that guards the ceiling.
 #
 # The price of 10m → 15m: a genuinely hung test is found five minutes later.
 # Accepted deliberately, because losing the goroutine dump costs far more.
 #
 # ── ONE DURATION SEMANTICS, SHARED WITH THE GUARD ───────────────────────────
-# Both values are <N>m or <N>s with an INTEGER N, and nothing else — narrower
-# than go on purpose. The recipe does arithmetic on them, and integer minutes or
+# Both values are <N>m or <N>s with an INTEGER N and NO LEADING ZERO, and nothing
+# else — narrower than go on purpose. The leading zero is excluded because this
+# arithmetic reads `08` as octal and dies with `value too great for base` before
+# the refusal below can print, while the guard\'s awk reads it as 8: `015m` had
+# the guard saying 900s, this recipe computing 780s, and go using 900s. The recipe does arithmetic on them, and integer minutes or
 # seconds is what shell arithmetic can carry. go-test-timeout-guard.sh refuses
 # the same set, so its green implies this recipe can actually start; before the
 # two were converged, `1.5m` and `10m30s` were green in the guard and died here
 # with `1.5 * 60 : syntax error` and `10m30: value too great for base` — errors
 # that name nothing anybody can act on. Widening one side means widening both.
 GO_TEST_TIMEOUT := 15m
-GO_TEST_TOTAL_WARN := 10m
+GO_TEST_TOTAL_WARN := 5m
 
 test-go: build-embed-assets
 	@$(P) \
 	GO="$$(oc_go)"; \
 	dur_s() { \
 	  local v="$$1" n="$$2"; \
-	  if [[ "$$v" =~ ^([0-9]+)m$$ ]]; then echo $$(( $${BASH_REMATCH[1]} * 60 )); \
-	  elif [[ "$$v" =~ ^([0-9]+)s$$ ]]; then echo "$${BASH_REMATCH[1]}"; \
+	  if [[ "$$v" =~ ^(0|[1-9][0-9]*)m$$ ]]; then echo $$(( $${BASH_REMATCH[1]} * 60 )); \
+	  elif [[ "$$v" =~ ^(0|[1-9][0-9]*)s$$ ]]; then echo "$${BASH_REMATCH[1]}"; \
 	  else \
 	    echo "FAIL — $$n '$$v' must be <N>m or <N>s with an integer N." >&2; \
-	    echo "       go itself accepts more (1h, 1.5m, 10m30s); this recipe and" >&2; \
+	    echo "       go itself accepts more (1h, 1.5m, 10m30s, 08m); this recipe and" >&2; \
 	    echo "       bin/tests/go-test-timeout-guard.sh deliberately share ONE" >&2; \
 	    echo "       narrower semantics, so that a green guard implies a runnable" >&2; \
 	    echo "       recipe. Widen both or neither." >&2; \
@@ -553,7 +567,9 @@ test-go: build-embed-assets
 	  echo "⚠️  [test-go] GO_TEST_TIMEOUT exists to avoid, arriving by the one route GO_TEST_TIMEOUT"; \
 	  echo "⚠️  [test-go] cannot see, because no single module ever approached its own limit."; \
 	  echo "⚠️  [test-go] Make the suite faster, or split the cell. Raising GO_TEST_TOTAL_WARN only"; \
-	  echo "⚠️  [test-go] moves the alarm; bin/tests/go-test-timeout-guard.sh keeps it under the ceiling."; \
+	  echo "⚠️  [test-go] moves the alarm; bin/tests/go-test-timeout-guard.sh keeps GO_TEST_TOTAL_WARN"; \
+	  echo "⚠️  [test-go] plus GO_TEST_TIMEOUT under the ceiling, so that a hung run still has room to"; \
+	  echo "⚠️  [test-go] print its goroutine dump before GitHub cancels the cell."; \
 	fi; \
 	$(DONE)
 
