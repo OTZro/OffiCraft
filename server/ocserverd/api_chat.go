@@ -223,7 +223,7 @@ const (
 	// of several hundred runes (measured 560 at the time of writing — it is a
 	// constant in this file, so re-measure it there rather than trusting this
 	// number). An itemised list can only go stale against that function; the
-	// four addends are checkable against the code that computes them.
+	// addends are checkable against the code that computes them.
 	//
 	// 🔴 The answered-card sentence used to read "that many of your steps",
 	// which claims a TOTAL. It is not one: the count is taken over the bounded
