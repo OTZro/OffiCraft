@@ -858,7 +858,23 @@ func (s *apiServer) HandleMcpApiMcpPost(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		s.fillLessonsIdentityArgs(r, name, arguments)
-		reqPath, rawQuery, body := splitToolArguments(spec, arguments)
+		reqPath, rawQuery, body, splitErr := splitToolArguments(spec, arguments)
+		if splitErr != nil {
+			// A known tool with a missing path argument is a tool-level input
+			// validation refusal, not a JSON-RPC invalid-params error. Keep it in
+			// the same CallToolResult shape as a REST 422 so callers receive the
+			// missing field name instead of a route reached after path.Clean.
+			status := http.StatusUnprocessableEntity
+			raw, marshalErr := json.Marshal(map[string]map[string]string{
+				"error": {"code": errorCodeForStatus(status), "message": splitErr.Error()},
+			})
+			if marshalErr != nil {
+				rpcError(w, id, rpcInternalError, "tool validation failed: "+marshalErr.Error())
+				return
+			}
+			rpcResult(w, id, callToolResult(status, raw))
+			return
+		}
 		status, raw, err := s.loopbackCall(r, spec.Method, reqPath, rawQuery, body)
 		if err != nil {
 			rpcError(w, id, rpcInternalError, "tool call failed: "+err.Error())

@@ -29,6 +29,14 @@ import (
 
 var pathParamRe = regexp.MustCompile(`\{([^}]+)\}`)
 
+func emptyPathParam(value any) bool {
+	if value == nil {
+		return true
+	}
+	s, isString := value.(string)
+	return isString && strings.TrimSpace(s) == ""
+}
+
 // toolName is the MCP tool name of a route row: the explicit override, else
 // derived from method+path — the frozen tool_name rule verbatim.
 func (s RouteSpec) toolName() string {
@@ -85,12 +93,13 @@ func pyArgString(v any) string {
 }
 
 // splitToolArguments splits the flat `arguments` object per spec/mcp.md §3.1:
-// path keys pop into the path template (a missing key substitutes the empty
-// string — no error at this layer), a GET route's remaining non-null keys
-// become the query string (list values expand doseq-style), any other
+// path keys pop into the path template, a GET route's remaining non-null keys
+// become the query string (list values expand doseq-style), and any other
 // method's remaining keys become the JSON body (an empty object when nothing
-// remains — a body is ALWAYS sent for a write route).
-func splitToolArguments(spec RouteSpec, arguments map[string]any) (reqPath string, rawQuery string, body []byte) {
+// remains — a body is ALWAYS sent for a write route). A missing or empty path
+// parameter is a validation error, rather than an empty segment that could be
+// cleaned into a different route.
+func splitToolArguments(spec RouteSpec, arguments map[string]any) (reqPath string, rawQuery string, body []byte, err error) {
 	remaining := make(map[string]any, len(arguments))
 	for k, v := range arguments {
 		remaining[k] = v
@@ -99,11 +108,12 @@ func splitToolArguments(spec RouteSpec, arguments map[string]any) (reqPath strin
 	reqPath = spec.Path
 	for _, match := range pathParamRe.FindAllStringSubmatch(spec.Path, -1) {
 		name := match[1]
-		sub := ""
-		if value, ok := remaining[name]; ok {
-			sub = pyArgString(value)
-			delete(remaining, name)
+		value, ok := remaining[name]
+		if !ok || emptyPathParam(value) {
+			return "", "", nil, errors.New("field required: " + name)
 		}
+		sub := pyArgString(value)
+		delete(remaining, name)
 		reqPath = strings.ReplaceAll(reqPath, "{"+name+"}", sub)
 	}
 
@@ -121,14 +131,14 @@ func splitToolArguments(spec RouteSpec, arguments map[string]any) (reqPath strin
 			}
 			query.Add(k, pyArgString(v))
 		}
-		return reqPath, query.Encode(), nil
+		return reqPath, query.Encode(), nil, nil
 	}
 
 	raw, err := json.Marshal(remaining)
 	if err != nil {
 		raw = []byte("{}")
 	}
-	return reqPath, "", raw
+	return reqPath, "", raw, nil
 }
 
 // loopbackRecorder captures the sub-response (status + body) of an in-process

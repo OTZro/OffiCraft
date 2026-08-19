@@ -53,8 +53,11 @@ Each tool maps 1:1 to a REST route (§4). The flat `arguments` are split back in
 path / query / body:
 
 1. **Path params**: for each `{param}` in the route's path template, pop that key from
-   `arguments` and substitute `str(value)` into the path. A missing path key substitutes the
-   **empty string** (no error at this layer — the loopback route then 404s/405s naturally).
+   `arguments` and substitute `str(value)` into the path. A missing, `null`, empty, or
+   whitespace-only string path value MUST return a tool result with `isError: true` and the
+   REST-style 422 `validation_error` envelope (`field required: <param>`); it MUST NOT be
+   substituted as an empty segment. Non-empty path values continue to reach the loopback
+   route, which then applies the route's normal validation and guards.
 2. **GET routes**: every remaining non-`None` key becomes a query parameter
    (form-urlencoded, `doseq` list expansion); `None` values (unset optionals) MUST be
    dropped.

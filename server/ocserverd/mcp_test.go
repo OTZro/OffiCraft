@@ -37,12 +37,15 @@ func TestMcpToolIndexMatchesFrozenCatalog(t *testing.T) {
 
 func TestSplitToolArgumentsPathQueryBody(t *testing.T) {
 	getSpec := RouteSpec{Method: "GET", Path: "/api/members/{member_id}"}
-	path, query, body := splitToolArguments(getSpec, map[string]any{
+	path, query, body, err := splitToolArguments(getSpec, map[string]any{
 		"member_id": "m-1",
 		"limit":     json.Number("5"),
 		"with":      "peer",
 		"unset":     nil,
 	})
+	if err != nil {
+		t.Fatalf("complete path args must split: %v", err)
+	}
 	if path != "/api/members/m-1" {
 		t.Fatalf("path param not substituted: %q", path)
 	}
@@ -56,16 +59,22 @@ func TestSplitToolArgumentsPathQueryBody(t *testing.T) {
 		t.Fatalf("nil optionals must be dropped from the query: %q", query)
 	}
 
-	// A missing path key substitutes the EMPTY string (spec §3.1 rule 1).
-	path, _, _ = splitToolArguments(getSpec, map[string]any{})
-	if path != "/api/members/" {
-		t.Fatalf("missing path key must substitute empty string: %q", path)
+	// Missing, nil, and blank path values must be refused before path.Clean can
+	// turn the request into a different route.
+	for _, value := range []any{nil, "", "   "} {
+		_, _, _, err = splitToolArguments(getSpec, map[string]any{"member_id": value})
+		if err == nil || err.Error() != "field required: member_id" {
+			t.Fatalf("missing path value %v must name the field, got %v", value, err)
+		}
 	}
 
 	// A GET list value expands doseq-style: one pair per element.
-	_, query, _ = splitToolArguments(getSpec, map[string]any{
+	_, query, _, err = splitToolArguments(getSpec, map[string]any{
 		"member_id": "m-1", "tag": []any{"a", "b"},
 	})
+	if err != nil {
+		t.Fatalf("complete path args must split: %v", err)
+	}
 	if !strings.Contains(query, "tag=a") || !strings.Contains(query, "tag=b") {
 		t.Fatalf("list query values must expand per element: %q", query)
 	}
@@ -73,9 +82,12 @@ func TestSplitToolArgumentsPathQueryBody(t *testing.T) {
 	// Non-GET: remaining keys are the JSON body; empty remaining → {} (a body
 	// is always sent for a write route).
 	postSpec := RouteSpec{Method: "POST", Path: "/api/members/{member_id}/activate"}
-	path, query, body = splitToolArguments(postSpec, map[string]any{
+	path, query, body, err = splitToolArguments(postSpec, map[string]any{
 		"member_id": "m-1", "name": "n", "count": json.Number("3"),
 	})
+	if err != nil {
+		t.Fatalf("complete path args must split: %v", err)
+	}
 	if path != "/api/members/m-1/activate" || query != "" {
 		t.Fatalf("POST split: path=%q query=%q", path, query)
 	}
@@ -83,7 +95,10 @@ func TestSplitToolArgumentsPathQueryBody(t *testing.T) {
 	if err := json.Unmarshal(body, &parsed); err != nil || parsed["name"] != "n" || parsed["count"] != float64(3) {
 		t.Fatalf("POST body must carry the remaining args as JSON: %s (%v)", body, err)
 	}
-	_, _, body = splitToolArguments(postSpec, map[string]any{"member_id": "m-1"})
+	_, _, body, err = splitToolArguments(postSpec, map[string]any{"member_id": "m-1"})
+	if err != nil {
+		t.Fatalf("complete path args must split: %v", err)
+	}
 	if string(body) != "{}" {
 		t.Fatalf("empty remaining args must send {}: %q", body)
 	}
