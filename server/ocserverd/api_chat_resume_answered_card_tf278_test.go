@@ -285,33 +285,39 @@ func TestResumeProseNamesTheAnsweredCardSignal(t *testing.T) {
 	}
 }
 
-// TestEveryFaceOfThePeekSumAgreesOnTheAddends: the same arithmetic — what
-// estimated_total_chars is made of — is written out in prose on SEVEN
-// hand-written faces, and this sum has now been extended four separate times,
-// each time missing one of them.
+// TestEveryFaceOfThePeekSumMatchesWhatTheServerActuallyAdds: the arithmetic
+// behind estimated_total_chars is written out in prose on seven hand-written
+// faces, and it has now been extended four separate times, each time missing
+// one of them.
 //
-// The faces are not interchangeable: peekNote is what the agent reads in the
-// RESPONSE, x-mcp.description is what it reads in the TOOL LIST, and the two
-// arrive in the same call — a caller told "four" by one and "five" by the other
-// is being lied to by whichever it happens to believe.
+// WHAT THIS COMPARES, and why the obvious two designs both failed here.
 //
-// WHAT THIS COMPARES, and why it is not a keyword search. An earlier form of
-// this guard asked each face whether it CONTAINED the new addend's name. Three
-// ways past that were demonstrated, all of them green: name the addend in a
-// different sentence while the sum itself still says four; write the sum in a
-// wording the marker string did not match; or add a SIXTH addend to one face
-// and no other. So the unit here is the addition CHAIN — the run of
-// `x_chars + y_chars + ...` — extracted by shape rather than by wording, and
-// every face must agree on the SET of addends in it. Nothing is hard-coded:
-// the next addend is protected the day it is written, and prose may be reworded
-// freely as long as the arithmetic still reads as a sum.
+// Asking each face whether it CONTAINS the new addend's name was walked past
+// three ways, all green: name it in a neighbouring sentence while the sum still
+// says four; write the sum in a wording the marker did not match; add a sixth
+// addend to one face only.
 //
-// TestEveryMCPToolDescriptionAgreesWithItsSources confronts three faces
-// (route_summary, openapi_summary, x-mcp.description) and does NOT read the
-// operation description, the DTO schema description, or the legacy descriptor —
-// the three that went stale here.
-func TestEveryFaceOfThePeekSumAgreesOnTheAddends(t *testing.T) {
-	const answeredCardAddend = "steps_on_answered_card_chars"
+// Making the faces agree WITH EACH OTHER was then walked past too: a decoy
+// chain — "…all four reported in overview (the overview reports a + b + c + d +
+// e)" — put the correct arithmetic beside the false claim on every face at
+// once. The faces agreed, the package was green, and the lie "this total is
+// four things" was still what an agent read in the tool list. Two faces
+// agreeing is not evidence either is right.
+//
+// So the reference is neither a hard-coded list nor the other faces: it is
+// PARSED OUT OF THE SERVER, from the expression that computes the field. Each
+// face must state that sum, and EVERY addition chain on a face must state it —
+// not merely its longest one, which is what the decoy exploited. Adding a sixth
+// addend to the server turns all seven faces red the moment it lands, whatever
+// it is called, because the names come from the code rather than from a
+// pattern that guesses at their shape.
+func TestEveryFaceOfThePeekSumMatchesWhatTheServerActuallyAdds(t *testing.T) {
+	want := addendsTheServerSums(t)
+	if len(want) < 2 {
+		t.Fatalf("parsed %v out of the estimated_total_chars expression — a sum of "+
+			"fewer than two addends means the parse broke, and every comparison "+
+			"below would be vacuous", want)
+	}
 
 	rawAPI, err := os.ReadFile("../../spec/openapi.json")
 	if err != nil {
@@ -325,16 +331,23 @@ func TestEveryFaceOfThePeekSumAgreesOnTheAddends(t *testing.T) {
 	if !ok {
 		t.Fatalf("openapi has no GET /api/resume-summary-size — this test has stopped discriminating")
 	}
+	dto, ok := api.Components.Schemas["ResumeSummarySizeDTO"]
+	if !ok {
+		t.Fatalf("openapi has no ResumeSummarySizeDTO schema — this test has stopped discriminating")
+	}
 
 	faces := map[string]string{
 		"peekNote":                  peekNote,
 		"openapi.summary":           op.Summary,
 		"openapi.description":       op.Description,
 		"openapi.x-mcp.description": op.XMCP.Description,
-		// The frozen descriptor is prose the catalog generator copies verbatim;
-		// it reaches an agent exactly like the others and nothing else reads it.
+		// The frozen descriptor is prose an agent reads in the tool list.
+		// bin/gen-mcp-catalog pins it equal to x-mcp.description, so it cannot
+		// drift from that one — but both are hand-written here, and a single
+		// edit that changes the pair together is exactly the edit that has gone
+		// wrong four times.
 		"openapi.x-mcp.legacy.descriptor": op.XMCP.Legacy.Descriptor,
-		"openapi.ResumeSummarySizeDTO":    api.Components.Schemas["ResumeSummarySizeDTO"].Description,
+		"openapi.ResumeSummarySizeDTO":    dto.Description,
 	}
 	for _, spec := range defaultRouteSpecs() {
 		if spec.Path == "/api/resume-summary-size" && strings.EqualFold(spec.Method, "get") {
@@ -344,85 +357,122 @@ func TestEveryFaceOfThePeekSumAgreesOnTheAddends(t *testing.T) {
 	if _, ok := faces["routes.go/Summary"]; !ok {
 		t.Fatalf("GET /api/resume-summary-size is not on the routes table — this test has stopped discriminating")
 	}
-	// spec/mcp-catalog.json is deliberately NOT a face here: it is generated
-	// from x-mcp.description and make drift-mcp-catalog already fails when the
-	// two disagree, so counting it would be counting one source twice.
+	// spec/mcp-catalog.json is deliberately NOT a face: bin/gen-mcp-catalog
+	// refuses to render when it disagrees with x-mcp.description, and
+	// make drift-mcp-catalog refuses a stale file — measured both ways.
 
-	chains := map[string][]string{}
-	for name, text := range faces {
+	for _, name := range sortedFaceNames(faces) {
+		text := faces[name]
 		if text == "" {
-			t.Errorf("%s is empty — a face that carries no prose cannot be confronted, "+
-				"and this guard would pass by having nothing to read", name)
+			t.Errorf("%s carries no prose at all — a face this guard cannot read is a "+
+				"face nothing is checking; if it was renamed, re-anchor the lookup", name)
 			continue
 		}
-		chain := longestAddendChain(text)
-		if len(chain) == 0 {
-			t.Errorf("%s states no addition chain (`a_chars + b_chars + ...`) — either it "+
-				"stopped saying what the total is made of, or it now says so in a shape this "+
-				"guard cannot see; point the guard at whatever replaced it rather than "+
-				"deleting the claim", name)
+		chains := additionChains(text, want)
+		if len(chains) == 0 {
+			t.Errorf("%s states no addition chain over %v — either it stopped saying what "+
+				"the total is made of, or it now says so in a shape this guard cannot "+
+				"see. Point the guard at whatever replaced it rather than deleting the "+
+				"claim.", name, want)
 			continue
 		}
-		chains[name] = chain
-	}
-	if len(chains) < len(faces) {
-		return // the per-face errors above say what is wrong; the comparison would be noise
-	}
-
-	// Every face must agree, and the comparison names the disagreement rather
-	// than asserting against a hard-coded list — a fifth face that is right and
-	// two that are wrong should read as two failures, not one.
-	var reference string
-	for _, name := range sortedKeys(chains) {
-		if reference == "" {
-			reference = name
-			continue
-		}
-		if !sameAddends(chains[reference], chains[name]) {
-			t.Errorf("%s and %s disagree on what estimated_total_chars is made of:\n  %s: %v\n  %s: %v\n"+
-				"one of them is telling a caller the sum has an addend the other does not",
-				reference, name, reference, chains[reference], name, chains[name])
-		}
-	}
-
-	// The agreement above is satisfied by every face being wrong together, which
-	// is exactly the state this ticket found. Pin the addend this ticket added.
-	for _, name := range sortedKeys(chains) {
-		found := false
-		for _, addend := range chains[name] {
-			if addend == answeredCardAddend {
-				found = true
+		for i, got := range chains {
+			if sameAddends(got, want) {
+				continue
 			}
-		}
-		if !found {
-			t.Errorf("%s omits %q from the sum — the server adds it, so this face is short one addend",
-				name, answeredCardAddend)
+			t.Errorf("%s states a sum the server does not compute (chain %d of %d):\n"+
+				"  face:   %v\n  server: %v\n"+
+				"Every chain on a face is checked, not just the longest — a correct sum "+
+				"written BESIDE a false one leaves the false one in front of the reader.",
+				name, i+1, len(chains), got, want)
 		}
 	}
 }
 
-// addendChainRe matches a run of snake_case *_chars identifiers joined by "+",
-// tolerating the backticks the OpenAPI prose wraps them in. It deliberately
-// does NOT match a lone identifier: naming an addend somewhere in a paragraph
-// is not the same as putting it in the sum, and treating the two alike is how
-// the previous form of this guard was walked past.
-var addendChainRe = regexp.MustCompile("`{0,2}([a-z_]+_chars)`{0,2}(?:\\s*\\+\\s*`{0,2}[a-z_]+_chars`{0,2})+")
+// addendsTheServerSums reads the addends out of the expression that actually
+// computes EstimatedTotalChars, so the guard above has a reference that cannot
+// be satisfied by prose agreeing with prose. Parsing the server rather than
+// listing the names here is what makes a SIXTH addend protected on the day it
+// is written, under whatever name it is given.
+func addendsTheServerSums(t *testing.T) []string {
+	t.Helper()
+	src, err := os.ReadFile("api_chat.go")
+	if err != nil {
+		t.Fatalf("read api_chat.go: %v", err)
+	}
+	m := regexp.MustCompile(`EstimatedTotalChars:\s*((?:overview\.\w+\s*\+\s*)*overview\.\w+)`).
+		FindSubmatch(src)
+	if m == nil {
+		t.Fatal("could not find the EstimatedTotalChars assignment in api_chat.go — " +
+			"the field may have been renamed or the sum moved behind a helper; " +
+			"re-anchor this parse rather than replacing it with a hard-coded list, " +
+			"which is what this guard exists to avoid")
+	}
+	var out []string
+	for _, term := range strings.Split(string(m[1]), "+") {
+		out = append(out, snakeCase(strings.TrimPrefix(strings.TrimSpace(term), "overview.")))
+	}
+	return out
+}
 
-// longestAddendChain returns the addends of the longest addition chain in text.
-// Longest rather than first: a face may mention a two-term sum in passing, and
-// the enumeration of the total is the longest one it states.
-func longestAddendChain(text string) []string {
-	var best []string
-	for _, match := range addendChainRe.FindAllString(text, -1) {
-		var addends []string
-		for _, term := range strings.Split(match, "+") {
-			addends = append(addends, strings.Trim(strings.TrimSpace(term), "`"))
+// snakeCase turns a Go field name into the wire name the prose uses.
+func snakeCase(field string) string {
+	var b strings.Builder
+	for i, r := range field {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			b.WriteRune(r + ('a' - 'A'))
+			continue
 		}
-		if len(addends) > len(best) {
-			best = addends
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// additionChains returns EVERY run of `+`-joined wire names in text, keeping
+// the runs that mention at least one addend the server actually adds.
+//
+// The token shape is a plain snake_case identifier rather than the server's own
+// list, and that asymmetry is deliberate. Building the pattern out of the known
+// names looks tighter and is strictly weaker in one direction: when an addend
+// is REMOVED from the server, its name leaves the pattern, a chain still
+// naming it gets cut short at that word, and the truncated remainder matches
+// the shortened sum exactly — so prose left behind by a removal reads as
+// correct. Measured: with the fifth addend deleted from the server and all
+// seven faces still claiming it, that form of this function stayed green.
+//
+// The "at least one known addend" filter is what keeps an ordinary `a + b` in
+// some unrelated sentence from being read as a claim about this total.
+//
+// Backticks are tolerated because the OpenAPI prose wraps names in them. A lone
+// mention is deliberately NOT a chain: naming an addend in a paragraph is not
+// the same as putting it in the sum, and treating the two alike is how an
+// earlier form of this guard was walked past.
+func additionChains(text string, known []string) [][]string {
+	isKnown := map[string]bool{}
+	for _, name := range known {
+		isKnown[name] = true
+	}
+	const name = "`{0,2}([a-z][a-z0-9_]*)`{0,2}"
+	re := regexp.MustCompile(name + `(?:\s*\+\s*` + name + `)+`)
+	var out [][]string
+	for _, match := range re.FindAllString(text, -1) {
+		var chain []string
+		mentionsAnAddend := false
+		for _, term := range strings.Split(match, "+") {
+			word := strings.Trim(strings.TrimSpace(term), "`")
+			chain = append(chain, word)
+			if isKnown[word] {
+				mentionsAnAddend = true
+			}
+		}
+		if mentionsAnAddend {
+			out = append(out, chain)
 		}
 	}
-	return best
+	return out
 }
 
 func sameAddends(a, b []string) bool {
@@ -444,7 +494,7 @@ func sameAddends(a, b []string) bool {
 	return true
 }
 
-func sortedKeys(m map[string][]string) []string {
+func sortedFaceNames(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
