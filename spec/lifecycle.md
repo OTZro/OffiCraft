@@ -309,10 +309,9 @@ The server owns desired-state reconciliation; the warden is a stateless executor
   enqueues nothing and is still gated); the row stamps the decide pass itself performs
   (`stampWakeObservability`, `stampMemberPlacementBlocked`); the one HTTP kick that borrows it
   (`api_machines.go`); and — because the cadence is simply not mounted — every roster pass
-  that cadence runs BEFORE it decides anything (context-high recycle stamping, soft-offboard
-  escalation, recycle-marker and stale-stopping clears, uninstall-intent consumption,
-  lapsed-receipt sweep). All but one of those passes persist real member rows; the
-  soft-offboard escalation writes nothing and only publishes a delta to a live agent. A
+  that cadence runs BEFORE it decides anything (context-high recycle stamping,
+  recycle-marker and stale-stopping clears, uninstall-intent consumption,
+  lapsed-receipt sweep). Each of those passes persists real member rows. A
   rewrite that gates only the dispatches leaves every one of them running against real data.
   A shadow deployment must keep those paths away from real machines by some other means;
   there is no flag for it today.
@@ -424,8 +423,8 @@ ONE-SHOT, never a standing order):
 | `start_timeout` | 90 s | START unconfirmed → failed spawn |
 | `stop_grace` | 120 s | self-stop window before the robust stop — **unreachable today**: the arm that consumes it is guarded by `SoftOffboardGrace == 0` (see §4.3) |
 | `stop_retry` | 90 s | STOP/UNINSTALL re-dispatch window (lost-frame recovery) |
-| `recycle_grace` | 120 s | dump-stuck fallback from `refocus_since` — but the wait is **`recycleGraceFor(refocus_op)`, not this value flat**: an owner-pressed 重新聚焦 (`refocus_op = refocus`) waits `soft_offboard_grace + recycle_grace` = **720 s**, because its notice carries no countdown; `context_high` and `restart_self` already say 120 s and get exactly that |
-| `soft_offboard_grace` | 600 s | the no-countdown window a SOFT notice opens. Load-bearing in two different ways: on the 下線 arm it is what makes `decideDown` run **no clock at all** (§4.3) and it never escalates; on the 重新聚焦 arm it is the first half of the 720 s above, and that one **does** escalate. Compile-time constant (`SoftOffboardGraceSecs`), deliberately not owner-settable |
+| `recycle_grace` | 120 s | dump-stuck fallback from `refocus_since` — but the wait is **`recycleGraceFor(refocus_op)`, which answers *whether there is a clock at all* as well as how long**: an owner-pressed 重新聚焦 (`refocus_op = refocus`) is **not on a clock** (owner 2026-08-19, `rc-c540367065ad`) and is collected only by the agent's own stopped report or by 強制下線; `context_high` and `restart_self` already say 120 s and get exactly that |
+| `soft_offboard_grace` | 600 s | the window during which a close-out is treated as still in flight — **not a deadline**. Neither soft arm escalates any more: 下線 never did (`rc-27d1710174dd`) and 重新聚焦 stopped on 2026-08-19 (`rc-c540367065ad`), so what this value still does is make `decideDown` run **no clock at all** (§4.3) and keep a stopping member in the state where the 強制下線 button is on screen (`clearStaleStoppingOnOnline`). Compile-time constant (`SoftOffboardGraceSecs`), deliberately not owner-settable |
 | `backoff_base` / `backoff_cap` | 5 s / 300 s | exponential start backoff |
 | `circuit_threshold` / `circuit_cooldown` | 5 / 120 s | sticky breaker (verified hard failures only) |
 
@@ -442,8 +441,9 @@ ONE-SHOT, never a standing order):
   the kill event-driven, not on the next tick) OR `recycleGraceFor(refocus_op)` elapses
   (the dead-session fallback — an unresponsive session that never reports is force-stopped
   by the server; the agent side needs no timeout of its own. **The wait is not one number**:
-  120 s for `context_high` / `restart_self`, 720 s for an owner-pressed `refocus` — see the
-  `recycle_grace` row in §4.4) → the SSE drop makes
+  120 s for `context_high` / `restart_self`, and **no fallback at all** for an owner-pressed
+  `refocus`, which waits indefinitely for the stopped report or the owner's 強制下線 — see
+  the `recycle_grace` row in §4.4) → the SSE drop makes
   ¬online → the next tick's plain START respawns.
 - **The wake text is the document, not client copy**: the SERVER composes the
   sentence, folds the 下線程序 document into it and PUSHES both in the member delta

@@ -139,19 +139,12 @@ type apiServer struct {
 	// Guarded by handoverNoticedMu below. See claimHandoverNotice for why the
 	// key is the session anchor and not the connection.
 	handoverNoticed map[string]float64
-	// handoverNoticedMu guards the map above. It is its OWN mutex, following the
-	// softEscalated precedent below, and the reason is load-bearing: the claim
+	// handoverNoticedMu guards the map above. It is its OWN mutex, and the
+	// reason is load-bearing: the claim
 	// gate now reads and writes SQLite on a cache miss, and holding the shared
 	// settings lock across that I/O would stall every unrelated settings reader
 	// on a database round-trip. This lock protects one map and nothing else.
-	handoverNoticedMu sync.Mutex
-	// softEscalated records, per member id, the soft-offboard epoch whose
-	// promotion to the final call has already been announced — the frame that
-	// tells the agent its 120 seconds have started. Keyed by the epoch so a
-	// re-armed wind-down announces again; guarded by its own mutex because it is
-	// touched from the reconcile tick, not the settings path.
-	softEscalated            map[string]float64
-	softEscalatedMu          sync.Mutex
+	handoverNoticedMu        sync.Mutex
 	monitoringRefreshSeconds int
 	// root anchors the repo-file assets (seeds / prebuilt binaries / frozen
 	// MCP catalog) — see assets.go.
