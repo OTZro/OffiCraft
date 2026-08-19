@@ -2272,3 +2272,197 @@ func TestDrainChat_PathologicalBodyTrippedBySafetyValve(t *testing.T) {
 		t.Fatal("rune-boundary cut must not split a multi-byte char")
 	}
 }
+
+// ── T-5b83: the connection line names the build the station handed it ───────
+
+// wireStationSHAHeader is the header name spelled OUT on the wire, on purpose:
+// a fixture built from the stationSHAHeader constant would follow a client-side
+// typo and stay green. bin/tests/station-sha-header-guard.sh pins this against
+// the station's own spelling in the other module.
+const wireStationSHAHeader = "X-Officraft-Station-Sha"
+
+// stationHandler serves the two faces of ONE station: the SSE downlink, which
+// stamps its build sha onto the response headers, and /api/version, which
+// reports the same build as git_sha. sendHeader=false is a station that sent
+// nothing (an old build, or a proxy that stripped it); sendHeader=true with an
+// empty sha is the pathological "sent, but empty" — Header.Get cannot tell the
+// two apart, which is exactly why both are exercised.
+func stationHandler(sha string, sendHeader bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/version") {
+			_, _ = w.Write([]byte(`{"git_sha":"` + sha + `"}`))
+			return
+		}
+		if !strings.HasPrefix(r.URL.Path, eventsPath) {
+			_, _ = w.Write([]byte("[]"))
+			return
+		}
+		if sendHeader {
+			w.Header().Set(wireStationSHAHeader, sha)
+		}
+		w.WriteHeader(http.StatusOK)
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+		_, _ = w.Write([]byte(": connected\n\n"))
+	}
+}
+
+// stationGitSHA asks the station what build it is running, so the expectation
+// is paired against the station's own answer instead of a literal copied into
+// the assertion.
+func stationGitSHA(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	resp, err := srv.Client().Get(srv.URL + "/api/version")
+	if err != nil {
+		t.Fatalf("GET /api/version: %v", err)
+	}
+	defer resp.Body.Close()
+	var v struct {
+		GitSHA string `json:"git_sha"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		t.Fatalf("decode /api/version: %v", err)
+	}
+	return v.GitSHA
+}
+
+// rawStationSHAHeader reports the header EXACTLY as it arrives on the wire —
+// nil when the station sent none, [""] when it sent an empty one. Header.Get
+// collapses both to "", so this is the only way a test can prove the two
+// fixtures below actually differ.
+func rawStationSHAHeader(t *testing.T, srv *httptest.Server) []string {
+	t.Helper()
+	resp, err := srv.Client().Get(srv.URL + eventsPath)
+	if err != nil {
+		t.Fatalf("GET %s: %v", eventsPath, err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.Header[http.CanonicalHeaderKey(wireStationSHAHeader)]
+}
+
+// connectedLine returns the single connection line out of a transcript.
+func connectedLine(t *testing.T, transcript string) string {
+	t.Helper()
+	var found []string
+	for _, line := range strings.Split(transcript, "\n") {
+		if strings.Contains(line, "listen: connected") {
+			found = append(found, line)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("want exactly one connection line, got %d:\n%s", len(found), transcript)
+	}
+	return found[0]
+}
+
+func TestConnectOnce_ConnectionLineNamesTheShaTheStationSelfReports(t *testing.T) {
+	cfgTempDir = t.TempDir()
+	srv := httptest.NewServer(stationHandler("9f3c1ab77e40", true))
+	defer srv.Close()
+
+	reported := stationGitSHA(t, srv)
+	if reported == "" {
+		t.Fatal("fixture broken: the station must self-report a build")
+	}
+
+	out := &syncBuf{}
+	l := newTestListener(srv, Config{Base: srv.URL, Token: "tok", ID: "kyle"}, out)
+	if _, _, _, err := l.connectOnce(context.Background()); err != nil {
+		t.Fatalf("connectOnce: %v", err)
+	}
+
+	line := connectedLine(t, out.String())
+	if want := " [station " + reported + "]"; !strings.HasSuffix(line, want) {
+		t.Fatalf("connection line must END with %q (the station's own git_sha), got:\n%s",
+			want, line)
+	}
+	// 🔴 THE PREFIX MUST NOT MOVE, and this assertion is the only thing that
+	// says so. cli/ocwarden/codex_session.go decides this line is NOT
+	// actionable by matching exactly these bytes at the start; anything that
+	// pushes them rightward — naming the station in front of "listen:", for
+	// instance — turns every reconnect into a codex turn for every agent, and
+	// a station changeover reconnects the whole fleet at once.
+	//
+	// That failure is invisible by construction: nothing errors, nothing
+	// crashes, no test that existed before this one goes red. The only symptom
+	// is a row of agents waking for no reason. Verified on the tree as it
+	// stood: with the sha moved to the front of the line, the entire
+	// pre-existing ocagent suite and the entire ocwarden suite stayed green —
+	// listen_stamp_test.go and codex_session_test.go both assert against
+	// hand-written string constants, never against the line connectOnce
+	// actually prints, so a moved prefix is exactly what they cannot see.
+	if !strings.HasPrefix(strings.TrimSpace(line), "[ocagent] listen: connected") {
+		t.Fatalf("the not-actionable prefix must not move (cli/ocwarden/codex_session.go "+
+			"matches it to keep this line from opening a codex turn); got:\n%s", line)
+	}
+}
+
+func TestConnectOnce_NoStationSHALeavesTheLineUnadornedAndNeverReusesTheLastOne(t *testing.T) {
+	cfgTempDir = t.TempDir()
+	const sha = "9f3c1ab77e40"
+	var mode atomic.Int32 // 0 stamped · 1 header absent · 2 header present but empty
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch mode.Load() {
+		case 0:
+			stationHandler(sha, true)(w, r)
+		case 1:
+			stationHandler("", false)(w, r)
+		default:
+			stationHandler("", true)(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	// The fixtures have to differ ON THE WIRE, or the two cases below are the
+	// same case twice.
+	mode.Store(1)
+	if got := rawStationSHAHeader(t, srv); got != nil {
+		t.Fatalf("fixture broken: this station must send NO %s, wire carried %q",
+			wireStationSHAHeader, got)
+	}
+	mode.Store(2)
+	if got := rawStationSHAHeader(t, srv); len(got) != 1 || got[0] != "" {
+		t.Fatalf("fixture broken: this station must send an EMPTY %s, wire carried %q",
+			wireStationSHAHeader, got)
+	}
+
+	l := newTestListener(srv, Config{Base: srv.URL, Token: "tok", ID: "kyle"}, nil)
+	connect := func() string {
+		out := &syncBuf{}
+		l.out = out
+		if _, _, _, err := l.connectOnce(context.Background()); err != nil {
+			t.Fatalf("connectOnce: %v", err)
+		}
+		return connectedLine(t, out.String())
+	}
+
+	// A stamped connection first, so a later line could reuse it if the code
+	// ever kept the value anywhere but the response it came from.
+	mode.Store(0)
+	stamped := connect()
+	if !strings.HasSuffix(stamped, " [station "+sha+"]") {
+		t.Fatalf("fixture broken: the stamped connection must name the build, got:\n%s", stamped)
+	}
+
+	mode.Store(1)
+	absent := connect()
+	mode.Store(2)
+	empty := connect()
+
+	for name, line := range map[string]string{"absent": absent, "empty": empty} {
+		if strings.Contains(line, "[station") {
+			t.Fatalf("%s header: nothing may be fabricated — the whole segment is "+
+				"dropped, not printed empty; got:\n%s", name, line)
+		}
+		if strings.Contains(line, sha) {
+			t.Fatalf("%s header: the previous connection's sha must not survive into "+
+				"this one; got:\n%s", name, line)
+		}
+	}
+	if absent != empty {
+		t.Fatalf("a station that sent nothing and one that sent an empty sha must "+
+			"produce the same line:\n%s\n%s", absent, empty)
+	}
+}
