@@ -19,6 +19,7 @@ import { MAX_AVATAR_BYTES, MAX_CUSTOM_THEMES } from "../lib/themeBundleCore";
 import { __resetMock } from "../api/mock";
 import { api } from "../api";
 import { ApiError } from "../api/errors";
+import { codeForStatus } from "../api/errorCodes";
 import type { ThemeBundle } from "../lib/themeBundle";
 import { setToken, clearToken } from "../api/auth";
 
@@ -1170,7 +1171,7 @@ describe("ThemeSettings · fetching a bundle to edit or export", () => {
     await utils.findByText("午夜藍");
 
     vi.spyOn(api, "getTheme").mockRejectedValue(
-      new ApiError("http 404", 404, "not_found", "theme not found")
+      new ApiError("http 404", 404, codeForStatus(404), "theme not found")
     );
     await openEditor(utils, "午夜藍");
 
@@ -1347,7 +1348,7 @@ describe("ThemeSettings · a refused write is visible", () => {
     setToken("owner-token");
     const utils = await renderManage();
     vi.spyOn(api, "putTheme").mockRejectedValue(
-      new ApiError("http 422", 422, "validation_error", "伺服器不收")
+      new ApiError("http 422", 422, codeForStatus(422), "伺服器不收")
     );
 
     fireEvent.click(utils.getByText(p.themeAdd));
@@ -1381,7 +1382,7 @@ describe("ThemeSettings · a refused write is visible", () => {
       target: { value: "#ffffff" },
     });
     vi.spyOn(api, "putTheme").mockRejectedValue(
-      new ApiError("http 422", 422, "validation_error", "伺服器不收")
+      new ApiError("http 422", 422, codeForStatus(422), "伺服器不收")
     );
     await clickSave(utils);
 
@@ -1416,7 +1417,7 @@ describe("ThemeSettings · a refused write is visible", () => {
     await utils.findByText("午夜藍");
 
     vi.spyOn(api, "deleteTheme").mockRejectedValue(
-      new ApiError("http 404", 404, "not_found", "theme not found")
+      new ApiError("http 404", 404, codeForStatus(404), "theme not found")
     );
     fireEvent.click(await utils.findByLabelText(`${p.themeDelete} 午夜藍`));
     fireEvent.click(utils.getByTestId("theme-delete-confirm-btn"));
@@ -1451,7 +1452,7 @@ describe("ThemeSettings · a refused write is visible", () => {
 
     const spy = vi
       .spyOn(api, "deleteTheme")
-      .mockRejectedValue(new ApiError("http 500", 500, "internal", "伺服器爆了"));
+      .mockRejectedValue(new ApiError("http 500", 500, codeForStatus(500), "伺服器爆了"));
     fireEvent.click(await utils.findByLabelText(`${p.themeDelete} 午夜藍`));
     fireEvent.click(utils.getByTestId("theme-delete-confirm-btn"));
     await settle();

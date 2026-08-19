@@ -727,7 +727,7 @@ mock 後端，read／edit 兩張），與本檔 §D 同樣的處置：記下來�
 mock 是每一支前端測試唯一跑得到的 adapter，所以「還在對死掉的 kind 定址」的介面在測試裡看起來
 是活的，只有上線才會 400——正是 §E 那支 H2 mutant（錯誤被吞掉）的形狀，只是換到了 mock 這一側。
 `mock.ts` 因此新增 `refuseRetiredDocumentKind()`，在 `listDocumentHistory`／`restoreDocumentHistory`
-的**第一行**擋下 `task_manual`，丟出 `ApiError(400, "bad_request")`，
+的**第一行**擋下 `task_manual`，丟出 `ApiError(400, "validation_error")`，
 `serverMessage` 與 Go 的 `legacyTaskManualKindMsg` **逐字相同**（含指名兩個新 kind）。
 `mock.document-history.test.ts` 補一條測試，兩條路由各驗一次，並**帶陽性對照**——
 同一本手冊上 `task_manual_sop` 照樣回得出那一版，排除「整條路都壞了所以也拒絕」的假綠。
