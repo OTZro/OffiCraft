@@ -39,6 +39,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // ── context-high band (service/sse/context_high.py) ─────────────────────────
@@ -282,7 +283,9 @@ func decideHandoverNotice(
 		Pct:   jsonFloat(*pct),
 		// A context-pressure notice always goes to a member that is still wanted
 		// online, so its sequence ends in a re-start.
-		Reason: offboardNotice(where, offboardCloserRestartSelf, false, text),
+		// A context-pressure notice is never the final call, so it quotes no
+		// deadline (T-d6a7); 0 is passed rather than a value nobody reads.
+		Reason: offboardNotice(where, offboardCloserRestartSelf, false, 0, text),
 	}
 }
 
@@ -325,11 +328,35 @@ const (
 	offboardCloserReportStopped = "report_stopped"
 )
 
-func offboardNotice(where, closer string, finalCall bool, offboardText string) string {
+func offboardNotice(where, closer string, finalCall bool, deadline float64, offboardText string) string {
 	reason := where + " — offboard now: work the sequence below, then call " +
 		closer + " yourself."
-	if finalCall {
-		reason += " You have 120 seconds left."
+	// T-d6a7 — the final call quotes an ABSOLUTE deadline, not a duration.
+	//
+	// It used to say a hardcoded "You have 120 seconds left." while the deadline
+	// runs from the FIRST stamp, and this notice is REPLAYED whenever the row is
+	// rewritten (the context pct is part of `where`, so a pct change re-sends
+	// it). Measured on a live station: two notices 46 s apart, both claiming
+	// 120 s — the second one telling an agent it had 120 s when it had ~74.
+	//
+	// 🔴 The intuitive fix — printing the seconds REMAINING — is the one thing
+	// this must not do. The client de-dupes notices by comparing the whole
+	// sentence verbatim (cli/ocagent listen_hooks), so a countdown makes every
+	// replay a different string, the de-dupe never matches again, and an agent
+	// working its close-out is woken and re-fed the whole document on every
+	// write to its row. An absolute deadline is CONSTANT within the epoch, so
+	// the sentence is stable and the number cannot go stale.
+	//
+	// The value comes from refocusDeadlineOf — the SAME expression that fills
+	// the cockpit's refocus_deadline — so there is no second source of truth to
+	// drift. deadline <= 0 means nothing collects this epoch on a clock, and
+	// then no time is quoted at all: offboardKindOf only returns "final" for a
+	// clocked arm (refocus_since > 0 and refocus_op != refocus), so a final call
+	// with no deadline is a contradiction, and printing epoch 0 formatted as
+	// 1970 would be worse than saying nothing.
+	if finalCall && deadline > 0 {
+		reason += " Your deadline is " +
+			time.Unix(int64(deadline), 0).Format(time.RFC3339) + "."
 	}
 	if offboardText != "" {
 		reason += "\n" + offboardText

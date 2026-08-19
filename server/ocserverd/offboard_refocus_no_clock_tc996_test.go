@@ -116,18 +116,26 @@ func TestRefocusNoticeNeverStartsACountdown_ButAContextLimitStillDoes(t *testing
 
 	// Straddling the old flip point deliberately: before T-c996 the first of
 	// these was silent about time and the rest promised 120 seconds.
+	//
+	// T-d6a7 changed the SHAPE of what a clocked arm says (an absolute deadline
+	// instead of "120 seconds left"), so this checks for TIME OF ANY SHAPE rather
+	// than for that one string — otherwise the next wording change would make
+	// this test pass vacuously.
 	for _, age := range []float64{1, SoftOffboardGraceSecs - 1, SoftOffboardGraceSecs, 10 * SoftOffboardGraceSecs} {
 		notice := noticeAt(t, refocusOpRefocus, age)
-		if strings.Contains(notice, "120 seconds") {
-			t.Fatalf("重新聚焦 at +%.0fs started a countdown nobody is counting:\n%s",
-				age, notice)
+		for _, clause := range []string{"120 seconds", "Your deadline is", "seconds left"} {
+			if strings.Contains(notice, clause) {
+				t.Fatalf("重新聚焦 at +%.0fs put a clock (%q) on an arm nobody is counting:\n%s",
+					age, clause, notice)
+			}
 		}
 	}
 
-	// The positive control: the causes that really are on the 120s clock must
-	// still say so, or an agent under context pressure would take its time and
-	// be cut off.
-	if notice := noticeAt(t, refocusOpContextHigh, 1); !strings.Contains(notice, "120 seconds") {
-		t.Fatalf("a context-limit handover IS on the clock and must say so:\n%s", notice)
+	// The positive control: the causes that really are on the clock must still
+	// say when it runs out, or an agent under context pressure would take its
+	// time and be cut off.
+	if notice := noticeAt(t, refocusOpContextHigh, 1); !strings.Contains(notice, "Your deadline is ") {
+		t.Fatalf("a context-limit handover IS on the clock and must say when it "+
+			"runs out:\n%s", notice)
 	}
 }
