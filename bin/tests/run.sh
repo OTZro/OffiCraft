@@ -311,6 +311,28 @@ else
   bad "bin/tests/go-test-nocache-guard.sh is missing"
 fi
 
+# ── go test timeout ↔ CI job ceiling (T-cf93) ───────────────────────────────
+# Two deadlines can end `make test-go`, and only ONE of them is diagnosable:
+# GitHub hitting the job's `timeout-minutes` kills the cell with no goroutine
+# dump and no name for whatever was still running, while go hitting its own
+# `-timeout` prints `panic: test timed out after 15m0s` and dumps every running
+# goroutine. So go MUST hit its limit first — and that is a relation between a
+# number in the Makefile and a number in .github/workflows/ci.yml, in two files
+# nobody edits together. The guard parses each number out of its OWN file (no
+# expected value is written down inside it) and refuses `go >= job`.
+# Its green does NOT cover the SUM over modules — see the guard's header.
+GOTIMEOUT="$HERE/go-test-timeout-guard.sh"
+echo
+if [[ -f "$GOTIMEOUT" ]]; then
+  if run_guard "$GOTIMEOUT"; then
+    ok "go test timeout ↔ CI job ceiling suite passed"
+  else
+    bad "go test timeout ↔ CI job ceiling suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/go-test-timeout-guard.sh is missing"
+fi
+
 # ── bin/release publish/promote: CI gate + read-back (T-588c, T-b65e) ────────
 # Own file because it needs its own shim set (`gh`, `curl`) and its own fixture
 # git repo, and because what it guards is a different KIND of property: not "does
