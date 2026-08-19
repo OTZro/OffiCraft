@@ -3,9 +3,13 @@
 # single binary.
 #
 # bootstrap-here / the binary download routes / MCP tools/list serve three
-# repo-file assets (bin/ocwarden, bin/ocagent, spec/mcp-catalog.json)
-# EMBED-ONLY (assets.go + api_machines.go — no disk fallback, so a stale copy
-# under the CWD can never shadow the embed the binary was built with). go:embed
+# assets — ocwarden, ocagent and spec/mcp-catalog.json — EMBED-ONLY (assets.go +
+# api_machines.go — no disk fallback, so a stale copy under the CWD can never
+# shadow the embed the binary was built with). ⚠️ Only the catalog is a repo
+# file; the two binaries are BUILT here from cli/ocwarden and cli/ocagent. This
+# said "repo-file assets (bin/ocwarden, bin/ocagent, …)" and there is no
+# bin/ocwarden and no bin/ocagent — never has been in this repo's history. A
+# sentence like that exists so the next person does not have to go look. go:embed
 # cannot reach outside the server module, so this stages them into
 # server/ocserverd/bindist/ (gitignored except .gitkeep) before `go build` —
 # the exact seedsdist pattern (bin/build-seedsdist). WITHOUT this staging the
@@ -68,8 +72,11 @@ mkdir -p "$BINDIST"
 # 710a2525… → d8fb53dd… under the stamp, while dist/officraft/officraft and
 # binary.sha256 both stay 710a2525…), and the embedded copy is what every install
 # receives. ⚠️ And the copy that reaches machines is the one staged on to
-# cli/ocwarden/anchordist, which anchor_embed.go go:embeds into ocwarden —
-# server/ocserverd/bindist/officraft is not served to anybody.
+# cli/ocwarden/anchordist, which anchor_embed.go go:embeds into ocwarden.
+# ⚠️ server/ocserverd/bindist/officraft is not served over HTTP — serveBinary is
+# only ever called for ocwarden and ocagent (api_machines.go) — but it DOES ship:
+# bin/release copies THAT file into the release tarball, where `officraft` is one
+# of the seven members verify_artifacts pins. Divergence there is not cosmetic.
 # bin/tests/agent-build-sha-guard.sh is the only thing in the tree that catches
 # any of this: case 4 checks that this line carries no -X, case 9 compares both
 # staged copies against the committed anchor, and case 10 reads the shipped

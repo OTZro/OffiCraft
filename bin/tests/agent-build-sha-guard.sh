@@ -49,7 +49,7 @@ LINE_FILE="$ROOT/cli/ocagent/listen_run.go"
 
 # ruby is resolved the same way bin/tests/go-test-timeout-guard.sh and
 # auto-beta-guard.sh do: the hosted macOS runner has system ruby, and case 10 needs
-# a language that can read two binaries and search one for a slice of the other.
+# a language that can read two binaries and search one for the whole of the other.
 RUBY="$(command -v ruby 2>/dev/null || true)"
 if [[ -z "$RUBY" ]]; then
   for cand in /usr/bin/ruby /opt/homebrew/bin/ruby /usr/local/bin/ruby; do
@@ -104,11 +104,21 @@ else
   ok "bin/build-bindist: the cli/officraft anchor is NOT stamped — its bytes stay reproducible for bin/check-officraft-dist"
 fi
 
-# ── 5. the connection line reads the variable, and omits the segment when empty
+# ── 5. BREADCRUMB, NOT A DEFENCE — the blank-stamp path is guarded in Go ────
+# ⚠️ READ THIS BEFORE TRUSTING THIS CASE. It is a bare grep for the characters
+# `TrimSpace(buildSHA)`, so it only notices the text disappearing outright.
+# Measured: review kept the `TrimSpace(buildSHA)` call and made the segment print
+# UNCONDITIONALLY — this case stayed green (guard rc=0) and three Go tests went
+# red (rc=1). The blank/missing-stamp behaviour is genuinely covered there, in
+# the one place that can see it, which is why nothing is added here: a second
+# check over the same behaviour would only make this file look like it is doing
+# more than it does. What this line is for is naming the coupling — the segment
+# and the [station …] segment next to it must agree on what counts as missing
+# (they once did not, and the disagreement printed ' [agent \t]').
 if grep -qE 'TrimSpace\(buildSHA\)' "$LINE_FILE"; then
-  ok "cli/ocagent/listen_run.go: the connection line reads buildSHA through TrimSpace, so a blank stamp takes the same not-known path as no stamp"
+  ok "cli/ocagent/listen_run.go: still spells the stamp read as TrimSpace(buildSHA) — a breadcrumb for the coupling with the [station …] segment, NOT a guard (the Go tests own the blank-stamp behaviour; this grep cannot see it)"
 else
-  bad "cli/ocagent/listen_run.go: the connection line does not read TrimSpace(buildSHA) — either it ignores the stamp, or a whitespace-only one prints as ' [agent \\t]', which reads as an answer"
+  bad "cli/ocagent/listen_run.go: the connection line no longer mentions TrimSpace(buildSHA). This case cannot tell you what broke — go read the Go tests for the blank-stamp path — but the two adjacent segments have stopped agreeing on what counts as a missing value, which is how ' [agent \\t]' shipped once already"
 fi
 
 # ── 6. POSITIVE CONTROL (text side): the checks above can still go red ─────────────────
@@ -171,6 +181,14 @@ else
     # `ocagent version` prints build.sha from the linked-in variable and nothing
     # else can supply it, so exact equality against it cannot be satisfied by
     # metadata that merely happens to contain the same characters.
+    # ⚠️ THIS IS THE EMBED'S INPUT — the same gap case 10 closes one level up. The
+    # ocagent a machine runs is the copy `go:embed all:bindist` (assets.go) baked
+    # into ocserverd and serveBinary hands out (api_machines.go); this checks the
+    # file build-bindist just wrote, before anything embeds it. The OUTPUT is
+    # pinned in bin/release's verify_artifacts, which reads the packaged ocagent's
+    # -ldflags with `go version -m` on the artifact about to be published. It lives
+    # there rather than here because a real ocserverd only exists at release time —
+    # not because of cost. See the comment beside it for the full reasoning.
     AGENT_BIN="$ROOT/server/ocserverd/bindist/ocagent"
     if [[ ! -f "$AGENT_BIN" ]]; then
       bad "bin/build-bindist produced no ocagent at $AGENT_BIN"
@@ -226,6 +244,14 @@ else
       # a later run staged the anchor the first run had missed. CI runs it once.
       # go:embed stores bytes verbatim, so the committed anchor's own bytes must be
       # findable inside the binary. That is the output, not the input.
+      # 🔴 AND IT MUST BE THE WHOLE ANCHOR, NOT A SAMPLE OF IT. This read a 4096-byte
+      # slice from the anchor's middle, which is a shape test, not an identity test:
+      # measured, adding -X main.buildSHA to the cli/officraft line changes 100 bytes
+      # out of 1,742,642 and NONE of them are in that window, so the probe returned
+      # true for an anchor that was NOT the committed one. Case 9 catches that
+      # particular mutant by hash, but the cell case 10 claims for itself — the
+      # embed's OUTPUT — was green on a shipped ocwarden carrying the wrong anchor.
+      # Containment of the ENTIRE file is the identity claim, and it costs 0.054s.
       WARDEN_BIN="$ROOT/server/ocserverd/bindist/ocwarden"
       if [[ -z "$RUBY" ]]; then
         bad "cannot check whether the shipped ocwarden embeds the anchor: no ruby (the same dependency the ci.yml side already needs)"
@@ -234,14 +260,11 @@ else
       elif "$RUBY" -e '
             anchor = File.binread(ARGV[0])
             warden = File.binread(ARGV[1])
-            # A slice from the middle: headers and padding are shared between two
-            # Mach-O binaries, the middle of one is not.
-            probe = anchor.byteslice(anchor.bytesize / 2, 4096)
-            exit(probe && !probe.empty? && warden.include?(probe) ? 0 : 1)
+            exit(anchor.bytesize > 0 && warden.include?(anchor) ? 0 : 1)
           ' "$ANCHOR_COMMITTED" "$WARDEN_BIN"; then
-        ok "the ocwarden that ships CONTAINS the committed anchor's bytes — proven by reading the binary, not by trusting the order the build stages them in"
+        ok "the ocwarden that ships contains the committed anchor IN FULL (all $(wc -c < "$ANCHOR_COMMITTED" | tr -d ' ') bytes, found inside the binary) — the embed's output, not the order the build stages its input in"
       else
-        bad "the ocwarden bin/build-bindist just produced does NOT contain the committed anchor's bytes. cli/ocwarden/anchordist is go:embedded into it and 'ocwarden install' refuses without an anchor, so the cockpit one-liner fails on every new machine — and staging the file next to the build is not the same as the build having read it. Check the ORDER in bin/build-bindist: the anchor must be staged BEFORE ocwarden is compiled"
+        bad "the ocwarden bin/build-bindist just produced does NOT contain the committed anchor's bytes in full. cli/ocwarden/anchordist is go:embedded into it and 'ocwarden install' refuses without an anchor, so the cockpit one-liner fails on every new machine — and staging the file next to the build is not the same as the build having read it. Check the ORDER in bin/build-bindist: the anchor must be staged BEFORE ocwarden is compiled"
       fi
 
     # ⚠️ THE REMAINING CASES RUN LAST ON PURPOSE. They build twice more — once

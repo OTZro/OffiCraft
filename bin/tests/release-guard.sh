@@ -378,11 +378,11 @@ build_fixture "$PLAIN" ""
 
 # make_out — assemble a well-formed OUT dir, then let the caller break one thing.
 AOUT="$WORK/out"
-make_out() { # make_out <serverd-binary> [member-to-omit]
+make_out() { # make_out <serverd-binary> [member-to-omit] [ocagent-binary]
   rm -rf "$AOUT" "$WORK/pkg"; mkdir -p "$AOUT" "$WORK/pkg/officraft-$TAG-darwin-arm64"
-  local pkg="$WORK/pkg/officraft-$TAG-darwin-arm64" skip="${2:-}"
+  local pkg="$WORK/pkg/officraft-$TAG-darwin-arm64" skip="${2:-}" agent="${3:-$STAMPED}"
   cp "$1" "$pkg/ocserverd"
-  cp "$STAMPED" "$pkg/ocwarden"; cp "$STAMPED" "$pkg/ocagent"; cp "$STAMPED" "$pkg/officraft"
+  cp "$STAMPED" "$pkg/ocwarden"; cp "$agent" "$pkg/ocagent"; cp "$STAMPED" "$pkg/officraft"
   printf '#!/bin/sh\n' > "$pkg/install.sh"; printf 'MIT\n' > "$pkg/LICENSE"
   printf '# OffiCraft %s\n' "$TAG" > "$pkg/README.md"
   [[ -n "$skip" ]] && rm -f "$pkg/$skip"
@@ -446,6 +446,25 @@ build_fixture "$WORK/wrongsha" "-X main.appVersion=$TAG -X main.buildSHA=beefbee
 make_out "$WORK/wrongsha"
 verify_out
 named_failure "A7 ocserverd is stamped with the WRONG buildSHA" version-stamp "$RC" "$OUT"
+
+# ── the PACKAGED ocagent's own stamp (T-8f7d) ──────────────────────────────
+# Not a duplicate of A5–A7. ocserverd can be asked what it is at any time —
+# /api/version, the running process, the artifact on disk. A listener cannot: it
+# holds the image it started with, and an ocagent with no stamp prints connection
+# lines with no [agent …] segment, which is BYTE-IDENTICAL to a dev build doing
+# exactly the right thing. There is no downstream moment where the difference is
+# visible, so if this is not caught on the artifact it is not caught at all.
+# ⚠️ And the tree is otherwise silent about it: measured, an unstamped ocagent
+# staged into bindist gets embedded into ocserverd verbatim while
+# bin/tests/agent-build-sha-guard.sh still prints 13 ok (it rebuilds the very
+# file the mutant replaced) and check-officraft-dist returns 0.
+make_out "$STAMPED" "" "$PLAIN"
+verify_out
+named_failure "A7b the packaged ocagent carries NO build stamp" agent-stamp "$RC" "$OUT"
+
+make_out "$STAMPED" "" "$WORK/wrongsha"
+verify_out
+named_failure "A7c the packaged ocagent is stamped with the WRONG buildSHA" agent-stamp "$RC" "$OUT"
 
 # A checksums file covering ONE file is how install.sh's sha256 step starts
 # silently verifying nothing.
@@ -522,7 +541,12 @@ mkdir -p "$R/.deploy" "$R/server/ocserverd/bindist"
     -ldflags "-X main.appVersion=${OC_APP_VERSION} -X main.buildSHA=${SHORT}" \
     -o "$R/.deploy/ocserverd" . )
 ( cd "$R/gosrc" && "$GO_BIN" build -o "$R/server/ocserverd/bindist/ocwarden" . )
-cp "$R/server/ocserverd/bindist/ocwarden" "$R/server/ocserverd/bindist/ocagent"
+# ⚠️ ocagent is BUILT, not copied from ocwarden: the real bin/build-bindist
+# stamps it with -X main.buildSHA and verify_artifacts now reads that stamp off
+# the packaged copy (T-8f7d). A fixture that shipped an unstamped ocagent would
+# make every E case here fail for a reason none of them are about.
+( cd "$R/gosrc" && "$GO_BIN" build -ldflags "-X main.buildSHA=${SHORT}" \
+    -o "$R/server/ocserverd/bindist/ocagent" . )
 cp "$R/server/ocserverd/bindist/ocwarden" "$R/server/ocserverd/bindist/officraft"
 SH
 # The fixture CI. publish runs `$STAGE/bin/ci.sh` — a path inside the staging
