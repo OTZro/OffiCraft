@@ -383,16 +383,19 @@ decides that time is up.
   gives an outsource worker the graceful 下線 a staff member gets. Adding one is a change to
   the owner's set of buttons, not a bug fix, so it is out of T-c996's scope and is recorded
   here rather than silently filled in.
-- 🔴 **And a SECOND outsource gap, named here so this section does not read as swept**: an
-  outsource **重新聚焦** is still collected on a 120 s clock. `autoHandoverWorker`
-  (`worker_spawn.go`) times a worker's in-flight handover out at
-  `refocus_since + StoppingTimeoutSecs` and **never reads `refocus_op`**, so the arm that has
-  no clock for staff still has one here — while the notice that worker is sent says nothing
-  about time. That is the exact shape §4.4's `recycle_grace` row calls worse than the split
-  T-c996 removed, sitting on the other kind. It is **pre-existing, not a regression** (a
-  worker's notice was already silent about that clock), it belongs to **T-fe5e**, and closing
-  it needs an owner ruling of its own: a staff member stuck in a handover only occupies a
-  slot, while a worker stuck in one holds its TASK down with it.
+- ✅ **The second outsource gap is closed (T-fe5e, owner 2026-08-19 `rc-5c478001de8a`)**: an
+  outsource **重新聚焦** used to be collected on a flat 120 s clock — `autoHandoverWorker`
+  (`worker_spawn.go`) timed a worker's in-flight handover out at
+  `refocus_since + StoppingTimeoutSecs` and **never read `refocus_op`** — while the notice
+  that worker was sent said nothing about time. Both the in-flight arm and the worker DTO's
+  `refocus_deadline` now go through the SAME `recycleGraceFor` / `refocusDeadlineOf` pair the
+  staff side uses, so 重新聚焦 runs no clock on either kind and every other cause keeps its
+  120 s. The owner ruled the two kinds identical and rejected the asymmetry argument that had
+  been offered for keeping the clock (「如果正職只有一個任務 那跟外包的代價不一樣嗎」): a
+  staff member holding a single task pays exactly what a worker holding one pays.
+  ⚠️ **What that ruling costs, stated rather than buried**: a worker that never answers its
+  stopped report now waits indefinitely, holding its task with it. The exit is the owner's
+  own 停止 button — the same exit the staff side has.
 - 🔴 **Neither of those two paths re-dispatches.** Both go through the one-shot
   `dispatchRobustStopNow`, which enqueues once and does NOT write `last_command` /
   `last_command_at` — so the producer's de-dupe/re-dispatch discipline below never engages

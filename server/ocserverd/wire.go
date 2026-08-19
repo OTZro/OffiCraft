@@ -1645,9 +1645,14 @@ type outsourceWorkerDTO struct {
 // the pre-resolved creator display name. Grouped into one struct so the two
 // callers (list loop + single GET) share the exact same fold.
 type outsourceWorkerProjection struct {
-	unread         int
-	now            float64
-	online         bool
+	unread int
+	now    float64
+	online bool
+	// cfg is the SAME reconcile config the tick collects this worker on, so the
+	// deadline on the wire and the deadline that actually kills come from one
+	// source (T-fe5e). Carried rather than derived: a second copy of the grace
+	// here is exactly how the two drifted apart the first time.
+	cfg            reconcileConfig
 	tele           map[string]any      // telemetry[w.ID]; nil-safe
 	gaugeEntry     map[string]any      // gauge[w.ID]; nil-safe
 	machineDisplay func(string) string // machine id → registry display label
@@ -2043,9 +2048,12 @@ func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProje
 	// intent ("" from a pre-column/never-set row reads as online client-side).
 	dto.RefocusSince = w.RefocusSince
 	dto.RefocusOp = w.RefocusOp
-	// StoppingTimeoutSecs is the worker collect ceiling openWorkerHandoverGrace
-	// announces — quoted here so the client need not know it.
-	dto.RefocusDeadline = refocusDeadline(w.RefocusSince, StoppingTimeoutSecs)
+	// The grace the tick ACTUALLY collects this epoch on, and 0 when nothing
+	// collects it on a clock at all (owner 2026-08-19: 重新聚焦 runs no clock for
+	// outsource workers either — the cockpit maps 0 → null → renders nothing).
+	// Reading StoppingTimeoutSecs straight reported a ceiling for every op,
+	// including the one arm that is not on a clock.
+	dto.RefocusDeadline = refocusDeadlineOf(w.RefocusSince, p.cfg, w.RefocusOp)
 	dto.DesiredState = w.DesiredState
 	return dto
 }

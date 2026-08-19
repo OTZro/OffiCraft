@@ -52,6 +52,7 @@ func (s *apiServer) projectWorker(
 		machineObserved = s.observedWorkerHost(worker.ID, tele[worker.ID])
 	}
 	return newOutsourceWorkerDTO(worker, task, outsourceWorkerProjection{
+		cfg:         s.reconcileCfg,
 		unread:      unread,
 		now:         now,
 		online:      s.hub.IsOnline(worker.ID),
