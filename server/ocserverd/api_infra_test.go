@@ -228,7 +228,7 @@ func TestEventsHandlerStampsTheBuildApiVersionReportsAsGitSHA(t *testing.T) {
 	api, dal := newGateTestAPI(t)
 	putGateMember(t, dal, Member{ID: "sha-1", Kind: KindAssistant,
 		DesiredState: DesiredStateOnline})
-	api.processSHA = "abc1234def56"
+	api.processSHA = "deadbeefdead"
 
 	rec := doEvents(api, "sha-1")
 	if rec.Code != 200 {
