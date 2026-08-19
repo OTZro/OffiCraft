@@ -30,7 +30,10 @@ package main
 //   - put `MCPExclude: true` back on the GET row ⇒ arm (1) goes red on the table
 //     assertion, the tool index and the live loopback.
 //   - change one tool name in routes.go without regenerating the catalog ⇒ the
-//     catalog membership assertion here plus `make drift-mcp-catalog` go red.
+//     catalog membership assertion here goes red. `make drift-mcp-catalog` does
+//     NOT: it regenerates the catalog from spec/openapi.json and never reads
+//     routes.go, so it stays green through this mutant. The Go assertion is the
+//     only thing standing between routes.go and a stale catalog.
 
 import (
 	"encoding/json"
