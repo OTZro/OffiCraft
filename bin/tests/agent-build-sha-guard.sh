@@ -21,12 +21,17 @@
 # distinguish them: the suite stays green with the flag deleted. That is what this
 # guard buys, and it is the whole reason it is a shell script.
 #
-# It also pins the ONE binary that must NOT be stamped. cli/officraft is the one
-# committed prebuilt (dist/officraft/officraft) and its -trimpath -buildvcs=false
-# exist to keep the git revision OUT of the bits, so bin/check-officraft-dist can
-# compare bytes from a clean clone. Measured: stamping all three ⇒
-# check-officraft-dist rc=1 (`stale: cli/officraft source hash`); stamping ocagent
-# alone ⇒ rc=0.
+# It also pins the ONE binary that must NOT be stamped, and this guard is the ONLY
+# thing that does. cli/officraft is the one committed prebuilt
+# (dist/officraft/officraft); its -trimpath -buildvcs=false keep the git revision
+# out of the bits so the committed bytes are reproducible from a clean clone.
+# 🔴 check-officraft-dist DOES NOT CATCH A STAMP — measured, rc=0 with all three
+# stamped. It hashes cli/officraft's SOURCE files and dist/officraft/officraft's
+# bytes; stamping changes no source file and it never looks at the bindist copy.
+# What stamping actually does is split the SHIPPED anchor from the committed one
+# (measured: bindist copy 710a2525… → d8fb53dd… while dist/ and binary.sha256 stay
+# 710a2525…), and the bindist copy is what every install receives. Case 4 below
+# checks the flag; case 7 checks the bytes, which is the consequence.
 #
 # 🔴 EMPTY-EXTRACTION IS THE TRAP. If a pattern stops matching because someone
 # reformatted a line, the extraction is "" — and a naive comparison of "" against
@@ -110,6 +115,76 @@ else
     bad "positive control: a renamed -X target still extracted as main.buildSHA — check 1 cannot go red and is decoration"
   else
     ok "positive control: renaming the -X target one character is detected (extracted '$MUT_TARGET'), so check 1 is load-bearing"
+  fi
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 🔴 BUILD IT AND LOOK AT THE BINARY. Everything above is text matching, and text
+# matching cannot see the three ways this feature dies silently while every
+# pattern above still matches:
+#   * a tree with no .git — the sha lookup came back empty and the build shipped
+#     an unstamped fleet (this is now fatal in build-bindist, and case 6 proves it
+#     stays fatal);
+#   * a SECOND, unstamped `go build` for ocagent appended after the stamped one —
+#     the last write wins on disk, while a first-match text scan never sees it;
+#   * a stamp fed from the wrong revision (HEAD~5, a stale variable) — shape-valid,
+#     confidently naming a build this is not.
+# All three were green against the text checks alone. So the last cases run the
+# real bin/build-bindist and read the bytes it produced.
+# ⚠️ SIDE EFFECT, ON PURPOSE: this rebuilds server/ocserverd/bindist/ (gitignored
+# build output, which build-bindist rewrites from scratch anyway). ~1s. Anything
+# cheaper would be back to grepping the script that is the thing under test.
+echo
+if ! command -v git >/dev/null 2>&1 || ! git -C "$ROOT" rev-parse --short HEAD >/dev/null 2>&1; then
+  bad "cannot resolve HEAD: this guard has to compare the stamp against the tree being built, and without a sha it would silently check nothing"
+else
+  HEAD_SHA="$(git -C "$ROOT" rev-parse --short HEAD)"
+  BUILD_LOG="$(mktemp -t oc-agent-sha-build.XXXXXX)"
+  trap 'rm -f "$MUT" "$BUILD_LOG"' EXIT
+  if ! bash "$ROOT/bin/build-bindist" >"$BUILD_LOG" 2>&1; then
+    bad "bin/build-bindist FAILED, so nothing below could be checked (last lines: $(tail -3 "$BUILD_LOG" | tr '\n' ' '))"
+  else
+    ok "bin/build-bindist runs clean, so the assertions below are about real output"
+
+    # ── 5. the produced ocagent really carries THIS tree's sha ──────────────
+    AGENT_BIN="$ROOT/server/ocserverd/bindist/ocagent"
+    if [[ ! -f "$AGENT_BIN" ]]; then
+      bad "bin/build-bindist produced no ocagent at $AGENT_BIN"
+    # ⚠️ grep -c, NOT grep -q. Under `set -o pipefail`, grep -q exits the moment it
+    # matches, strings takes SIGPIPE, and the PIPELINE reports 141 — so the
+    # success case reads as failure. Measured here: -q said "not found" on a
+    # binary where -c said 3.
+    elif [[ "$(strings -a "$AGENT_BIN" 2>/dev/null | grep -c -- "$HEAD_SHA")" -gt 0 ]]; then
+      ok "the ocagent it produced carries THIS tree's sha ($HEAD_SHA) in its bytes — the stamp is not merely written in the script, it survived -s -w and landed"
+    else
+      bad "the ocagent bin/build-bindist just produced does NOT contain this tree's sha ($HEAD_SHA). Every listener from this build will print no [agent …] segment, or name a different build — and both are byte-indistinguishable from a dev build behaving correctly, which is the failure this whole feature exists to remove. Causes seen: an empty sha lookup (no .git), a second unstamped go build overwriting the first, or a stamp fed from the wrong revision"
+    fi
+
+    # ── 6. an empty sha must be FATAL, not a silent unstamped build ─────────
+    if OCAGENT_SHA=" " bash "$ROOT/bin/build-bindist" >/dev/null 2>&1; then
+      bad "bin/build-bindist accepted a BLANK OCAGENT_SHA and built anyway — that is the tarball/git-archive case, and it ships a fleet that cannot say which build it is while every text check here stays green"
+    else
+      ok "a blank OCAGENT_SHA is FATAL — a build that cannot name itself does not ship"
+    fi
+    bash "$ROOT/bin/build-bindist" >/dev/null 2>&1 || true
+
+    # ── 7. the shipped anchor still equals the committed one ────────────────
+    # The consequence case 4 is really about. check-officraft-dist cannot see this
+    # (measured rc=0 with the anchor stamped): it compares dist/officraft/officraft
+    # against its manifest, and never looks at the copy that actually ships.
+    ANCHOR_BINDIST="$ROOT/server/ocserverd/bindist/officraft"
+    ANCHOR_COMMITTED="$ROOT/dist/officraft/officraft"
+    if [[ ! -f "$ANCHOR_BINDIST" || ! -f "$ANCHOR_COMMITTED" ]]; then
+      bad "cannot compare the shipped anchor against the committed one (missing $ANCHOR_BINDIST or $ANCHOR_COMMITTED)"
+    else
+      A="$(shasum -a 256 "$ANCHOR_BINDIST" | cut -d' ' -f1)"
+      B="$(shasum -a 256 "$ANCHOR_COMMITTED" | cut -d' ' -f1)"
+      if [[ "$A" == "$B" ]]; then
+        ok "the anchor bin/build-bindist ships is byte-identical to the committed dist/officraft/officraft (${A:0:12}…) — it is still reproducible from a clean clone"
+      else
+        bad "the anchor that SHIPS (${A:0:12}…) is not the committed one (${B:0:12}…). Every install receives the bindist copy, so the TCC anchor people run stopped being the one reviewers can reproduce — and check-officraft-dist returns 0 on exactly this, because it only ever compares the committed file to its own manifest"
+      fi
+    fi
   fi
 fi
 

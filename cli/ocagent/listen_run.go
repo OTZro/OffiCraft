@@ -280,9 +280,11 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	//
 	// 🔴 SUFFIXES ONLY, AND THE PREFIX DOES NOT MOVE. The codex sidecar reads this
 	// line through THREE prefix checks (cli/ocwarden/codex_session.go), and pushing
-	// those bytes rightward breaks all three. They are named by function, not by
-	// line number, because the line numbers in an earlier version of this comment
-	// had already drifted:
+	// those bytes rightward breaks all three. They are named by function rather than
+	// by line number so they cannot drift — an earlier version of this note claimed
+	// they ALREADY had, which was wrong: the two it listed were still accurate. What
+	// was actually wrong with it is below, and it is worse than a stale number: one
+	// of the three was missing from the list entirely.
 	//   - actionableCodexListenerLine keeps transport chatter out of the model
 	//     transcript by matching the SHORT prefix "[ocagent] listen:". Miss it and
 	//     every connect and reconnect turns the raw line into a turn — at a
@@ -294,10 +296,11 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	//     on EVERY connect. This one was missing from this list entirely.
 	// All three TrimSpace and then HasPrefix, so they read the head of the line
 	// only: anything appended is safe, anything prepended breaks three things at
-	// once. The long prefix implies the short one, so the one test that pins the
-	// real printed line covers all three — and it is the ONLY test that does. The
-	// four sidecar tests feed hand-written constants and cannot see what this
-	// function actually prints.
+	// once. The long prefix implies the short one, so a test that pins the REAL
+	// printed line covers all three. Two do (the station-sha test and the agent-sha
+	// test); the four sidecar tests do not — they feed hand-written constants and
+	// cannot see what this function actually prints, so they stay green through a
+	// moved prefix.
 	//
 	// ⚠️ "AT THE END" IS NOT WHERE THESE LAND. cmdListen wraps out in a
 	// stampWriter before the first print, which inserts " [ts=<float> local]"

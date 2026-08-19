@@ -28,6 +28,7 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"strings"
 )
 
 // selfHashPrefixLen mirrors ocwarden's selfUpdateHashPrefixLen: the first 12 hex
@@ -79,10 +80,28 @@ func printVersion(
 		}
 	}
 	fmt.Fprintln(out, "ocagent")
+	// build.sha is the link-time stamp bin/build-bindist applies, and it is the
+	// line the connection line quotes. It is here because vcs.revision above goes
+	// "unknown" in exactly the builds this fleet ships — a git WORKTREE (.git is a
+	// file) or a tarball yields no VCS settings, as this file's own header says —
+	// so without it `ocagent version` would know LESS about the running build than
+	// its own log line does, and this is the first place a person looks.
+	fmt.Fprintf(out, "  build.sha:    %s\n", buildSHAOrUnstamped())
 	fmt.Fprintf(out, "  vcs.revision: %s\n", rev)
 	fmt.Fprintf(out, "  vcs.time:     %s\n", when)
 	fmt.Fprintf(out, "  vcs.modified: %s\n", modified)
 	fmt.Fprintf(out, "  self-hash:    %s\n", selfHash(exe, read))
+}
+
+// buildSHAOrUnstamped names the absent case rather than printing an empty field.
+// "unstamped" is a FACT about this binary — it was not built by bin/build-bindist
+// — and it is the same fact the connection line states by omitting its segment.
+// The two must not disagree about what absent means, so both trim first.
+func buildSHAOrUnstamped() string {
+	if sha := strings.TrimSpace(buildSHA); sha != "" {
+		return sha
+	}
+	return "unstamped (not built by bin/build-bindist)"
 }
 
 // cmdVersion is the dispatch entry: wires the real providers and returns exit 0.

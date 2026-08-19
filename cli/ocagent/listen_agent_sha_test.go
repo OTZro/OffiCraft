@@ -109,3 +109,36 @@ func TestConnectOnce_AnUnstampedOcagentSaysNothingAboutItself(t *testing.T) {
 		}
 	}
 }
+
+// TestConnectOnce_EveryReconnectNamesTheAgentAgain closes the hole review found:
+// every assertion above drives connectOnce ONCE, so a segment emitted only on the
+// first connect of a process satisfies all of them. Measured: gating it behind a
+// package-level `var agentSaid bool` left the whole ocagent suite green and the
+// shell guard green, while a real binary against a station that dropped the stream
+// printed the segment on the first line and never again.
+//
+// 🔴 THAT IS THE MOTIVATING SCENARIO, NOT AN EDGE CASE. A station changeover
+// reconnects the whole fleet at once — it is exactly when someone reads these
+// lines to work out which agents are running which build, and exactly when a
+// once-per-process segment has already been spent. The reconnect lines are the
+// ones that matter most, so they are the ones pinned here.
+func TestConnectOnce_EveryReconnectNamesTheAgentAgain(t *testing.T) {
+	cfgTempDir = t.TempDir()
+	srv := httptest.NewServer(stationHandler("9f3c1ab77e40", true))
+	defer srv.Close()
+	withBuildSHA(t, "cafe1234beef")
+
+	for attempt := 1; attempt <= 3; attempt++ {
+		out := &syncBuf{}
+		l := newTestListener(srv, Config{Base: srv.URL, Token: "tok", ID: "kyle"}, out)
+		if _, _, _, err := l.connectOnce(context.Background()); err != nil {
+			t.Fatalf("connectOnce #%d: %v", attempt, err)
+		}
+		line := connectedLine(t, out.String())
+		if !strings.HasSuffix(line, " [agent cafe1234beef]") {
+			t.Fatalf("connect #%d dropped the agent segment — a listener that names "+
+				"itself only once is silent for every reconnect after it, which is "+
+				"precisely a station changeover:\n%s", attempt, line)
+		}
+	}
+}

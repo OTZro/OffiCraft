@@ -37,14 +37,42 @@ mkdir -p "$BINDIST"
 #
 # ⚠️ NOT cli/officraft (below): its -trimpath -buildvcs=false exist precisely to
 # keep the git revision OUT of the bits (dist/officraft/BUILD.md), because that
-# binary is the ONE committed prebuilt and check-officraft-dist compares its
-# bytes. Stamping it would change the anchor's TCC identity every commit and
-# make the committed bytes unreproducible from a clean clone. Measured: stamping
-# all three ⇒ check-officraft-dist rc=1 (`stale: cli/officraft source hash`);
-# stamping ocagent alone ⇒ rc=0, the other two byte-identical to baseline.
+# binary is the ONE committed prebuilt whose bytes are compared.
+#
+# 🔴 AND NOTHING THAT EXISTED BEFORE WOULD HAVE CAUGHT IT. An earlier version of
+# this comment claimed stamping all three makes check-officraft-dist go rc=1 with
+# `stale: cli/officraft source hash`. That is FALSE — I measured it: rc=0, no
+# output. check-officraft-dist hashes cli/officraft's SOURCE files and
+# dist/officraft/officraft's bytes; it never reads this script and never looks at
+# server/ocserverd/bindist/officraft, so stamping — which changes no source file —
+# is invisible to it. What actually happens is worse than the wrong claim: the
+# SHIPPED anchor silently diverges from the committed one (measured: bindist copy
+# 710a2525… → d8fb53dd… under the stamp, while dist/officraft/officraft and
+# binary.sha256 both stay 710a2525…), and the embedded copy is what every install
+# receives. bin/tests/agent-build-sha-guard.sh check 4 is the ONLY thing in the
+# tree that catches it.
 # ocwarden is not a listener and needs none. -s -w strips symbols and DWARF,
 # neither of which -X uses, so stamping costs no strip.
-OCAGENT_SHA="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo '')"
+#
+# 🔴 NO SHA ⇒ DIE, never an empty stamp. `|| echo ''` here was a silent downgrade
+# to a completely unstamped fleet: measured on a tree unpacked with `git archive`
+# (no .git at all — the shape of a source tarball build), the build succeeded, the
+# guard printed 6 ok, and the real listener printed no [agent …] segment at all.
+# That is the exact false negative this whole feature exists to kill, reinstated by
+# a fallback nobody would look at. A build that cannot name itself must not ship.
+OCAGENT_SHA="${OCAGENT_SHA:-$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)}"
+# Trim before testing: `-z` is false for " ", and a whitespace stamp links in
+# cleanly, produces a binary that passes every text check, and prints no segment
+# at runtime — the unstamped fleet again, wearing a value.
+OCAGENT_SHA="$(printf '%s' "$OCAGENT_SHA" | tr -d '[:space:]')"
+if [[ -z "$OCAGENT_SHA" ]]; then
+  echo "build-bindist: cannot resolve a git sha for the ocagent stamp (is this a" >&2
+  echo "  git checkout? a tarball or 'git archive' tree has no .git). Refusing to" >&2
+  echo "  build an ocagent that cannot say which build it is: an unstamped listener" >&2
+  echo "  is indistinguishable from a dev build, which is the false negative this" >&2
+  echo "  stamp exists to remove. Set OCAGENT_SHA explicitly to build anyway." >&2
+  exit 1
+fi
 (cd "$ROOT/cli/ocagent" && go build -ldflags="-s -w -X main.buildSHA=$OCAGENT_SHA" -o "$BINDIST/ocagent" ./...)
 # The anchor is built BEFORE ocwarden and staged into cli/ocwarden/anchordist,
 # because ocwarden embeds it: the cockpit's one-liner downloads ocwarden alone,
