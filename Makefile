@@ -104,6 +104,7 @@ REGEN_PAIR_GATE = $(P) \
 
 .PHONY: \
   lint-go-naming lint-go-fmt lint-go-vet lint-uplink-contract lint-effort-vocab \
+  lint-shadow-claim \
   lint-conformance-blackbox lint-ts lint-css-tokens lint-css-token-roles \
   build-embed-assets build-go build-frontend-deps \
   test-e2e-isolation-guard test-bin-guards test-go test-system-interaction-examples \
@@ -305,6 +306,16 @@ lint-effort-vocab:
 	echo "[lint-effort-vocab] every hand-written copy lists exactly what the server enforces"; \
 	python3 bin/effort-vocab-guard.py; \
 	python3 bin/tests/effort-vocab-guard-selftest.py; \
+	$(DONE)
+
+# Shadow-claim contract gate (T-941e) plus its control, same shape and same
+# reason as the pair above: the promise "--no-reconcile covers every warden
+# command" was false for as long as it was written down, and nothing went red.
+lint-shadow-claim:
+	@$(P) \
+	echo "[lint-shadow-claim] no sentence may promise a coverage the flag does not have"; \
+	python3 bin/shadow-claim-guard.py; \
+	python3 bin/tests/shadow-claim-guard-selftest.py; \
 	$(DONE)
 
 # The conformance suite is the language-agnostic black-box definition of the

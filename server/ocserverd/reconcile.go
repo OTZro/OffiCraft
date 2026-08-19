@@ -26,10 +26,10 @@ package main
 //     so the cadence stays an idempotent backstop).
 //
 // --no-reconcile (serve flag) disables the producer WHOLESALE — the cadence
-// loop AND every event-driven warden-command dispatch — while the rest of the
-// server (intent writes, presence, SSE) runs unchanged. This is the shadow-
-// deployment kill-switch lifecycle.md Appendix B #1 requires: a shadow server
-// must never wake or kill a real agent.
+// loop AND every event-driven warden-command dispatch IT OWNS — while the rest
+// of the server (intent writes, presence, SSE) runs unchanged. This is the
+// shadow-deployment kill-switch lifecycle.md Appendix B #1 requires; the paths
+// it does NOT cover are enumerated in spec/lifecycle.md §4.1.
 
 import (
 	"fmt"
@@ -1227,7 +1227,7 @@ func (s *apiServer) consumeUninstallIntentOnOffline(members []Member) {
 // drops its stream while desired_state=="uninstall", the intent is observed
 // converged and consumed — no 30s cadence window in which a fast re-install
 // could reconnect into the standing kill order. Best-effort; gated OFF by
-// --no-reconcile like every other desired-state control write.
+// --no-reconcile like the producer's other desired-state control writes.
 func (s *apiServer) consumeUninstallOnDisconnect(memberID string) {
 	if s.noReconcile {
 		return
@@ -1432,7 +1432,8 @@ const identitySweepDedupeSecs = 90.0
 // no-ops, spec/sse.md §7) over the existing warden-command band: ZERO warden
 // change, ZERO wire change. Deduped per identitySweepDedupeSecs so a steady-state
 // reconnect flap does not re-spam. Caller MUST hold reconcileMu. Gated OFF
-// wholesale by --no-reconcile (like every other warden-command dispatch).
+// wholesale by --no-reconcile, like the producer's other warden-command
+// dispatches.
 func (s *apiServer) dispatchIdentitySweepNow(memberID, keepWarden string, now float64) {
 	if s.noReconcile || memberID == "" {
 		return

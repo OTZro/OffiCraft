@@ -142,6 +142,7 @@ OC_ROUND=(
   test-system-interaction-examples
   lint-uplink-contract
   lint-effort-vocab
+  lint-shadow-claim
   drift-ocapi
   drift-mcp-catalog
   lint-conformance-blackbox

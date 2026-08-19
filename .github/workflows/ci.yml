@@ -259,7 +259,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
-      - run: bash bin/run-checks.sh lint-uplink-contract lint-effort-vocab
+      - run: bash bin/run-checks.sh lint-uplink-contract lint-effort-vocab lint-shadow-claim
 
   # ---------------------------------------------------------------------------
   # conformance — the black-box import lint (fast, static) and then the full
