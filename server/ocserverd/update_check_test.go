@@ -599,3 +599,64 @@ func TestVersionCheckedOKAtAbsentWhenNeverSucceeded(t *testing.T) {
 		t.Fatalf("no check has ever succeeded — update_checked_ok_at must be absent/null, got %v", got)
 	}
 }
+
+// TestReleaseCheckButtonCheckedOKAtSemantics pins update_checked_ok_at on the
+// OTHER writer: syncUpdateCheck — the cockpit's 檢查更新 button, which is also
+// the path the MCP tool check_release takes. The background refresher's two
+// lastOKAt semantics are pinned above; this one had none, so the button could
+// silently stop stamping a success, or (much worse) stamp a FAILURE as a
+// success — the exact failure mode that makes the field worse than absent,
+// and reachable in practice every time an agent calls check_release while
+// GitHub is unreachable.
+//
+// Both halves rewind the stamp by an hour or more first: RFC3339 resolves to
+// one second, so a same-second restamp would be invisible.
+func TestReleaseCheckButtonCheckedOKAtSemantics(t *testing.T) {
+	api, srv, _, _ := newSettingsTestServer(t, "settings-pass")
+	token := ownerLogin(t, srv.URL, "settings-pass")
+	gh := newFakeGitHub(t, fakeRelease{tag: "v9.9.9"})
+	api.releaseAPIBase = gh.srv.URL
+
+	// ── half 1: a SUCCEEDED button check must ADVANCE the stamp ──
+	stale := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Second)
+	api.updateMu.Lock()
+	api.updateCheck.lastOKAt = stale
+	api.updateMu.Unlock()
+
+	status, data := doJSON(t, "GET", srv.URL+"/api/release/check", token, "")
+	if status != 200 || data["status"] != "update_available" {
+		t.Fatalf("precondition: the button check must have SUCCEEDED: %d %v", status, data)
+	}
+	_, ver := doJSON(t, "GET", srv.URL+"/api/version", "", "")
+	raw, ok := ver["update_checked_ok_at"].(string)
+	if !ok {
+		t.Fatalf("a succeeded button check must stamp update_checked_ok_at: %v", ver)
+	}
+	advanced, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		t.Fatalf("update_checked_ok_at must be RFC3339, got %q: %v", raw, err)
+	}
+	if !advanced.After(stale) {
+		t.Fatalf("a SUCCEEDED button check must advance update_checked_ok_at past %v, got %v",
+			stale.Format(time.RFC3339), raw)
+	}
+
+	// ── half 2: a FAILED button check must LEAVE THE STAMP ALONE ──
+	rewound := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	api.updateMu.Lock()
+	api.updateCheck.lastOKAt = rewound
+	api.updateMu.Unlock()
+	want := rewound.Format(time.RFC3339)
+
+	gh.setStatus(http.StatusInternalServerError)
+	expireUpdateCache(api) // defeat the button's short reuse window
+	status, data = doJSON(t, "GET", srv.URL+"/api/release/check", token, "")
+	if status != 200 || data["status"] != "unknown" {
+		t.Fatalf("precondition: GitHub is down, the button must answer the honest unknown: %d %v", status, data)
+	}
+
+	_, ver = doJSON(t, "GET", srv.URL+"/api/version", "", "")
+	if got := ver["update_checked_ok_at"]; got != want {
+		t.Fatalf("a FAILED button check must not restamp update_checked_ok_at: want %q, got %v", want, got)
+	}
+}
