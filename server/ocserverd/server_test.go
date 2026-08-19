@@ -65,7 +65,10 @@ func TestVersionProbeShapeMatchesPython(t *testing.T) {
 	// Key ORDER is part of the byte-level contract (pydantic field order):
 	// version, git_sha, git_time, catalog_hash, update_available,
 	// latest_version. (release_tag — the retired ocupdaterd r-N serial —
-	// left the shape with the updater teardown, t-dc68.)
+	// left the shape with the updater teardown, t-dc68.) update_checked_ok_at
+	// (T-e87d) is OPTIONAL and trails them: this server has never completed a
+	// successful check, so it is omitted entirely and these bytes are exactly
+	// what they were before that field existed.
 	wantOrder := []string{`"version":`, `"git_sha":`, `"git_time":`, `"catalog_hash":`, `"update_available":`, `"latest_version":`}
 	pos := -1
 	for _, key := range wantOrder {

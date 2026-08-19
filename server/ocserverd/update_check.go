@@ -179,7 +179,9 @@ func (s *apiServer) kickUpdateCheck() {
 // refreshUpdateCheck runs in its own goroutine: one bounded GitHub fetch,
 // then a guarded cache write. Failure is GRACEFUL: the last-known release
 // stands (stale-but-honest beats fabricated-empty) and checkedAt is stamped
-// so unreachable GitHub is not re-polled before the TTL.
+// so unreachable GitHub is not re-polled before the TTL — but it is no longer
+// SILENT (the failure is logged) and it does not move lastOKAt, so nothing
+// downstream can mistake a failed attempt for a fresh successful check.
 func (s *apiServer) refreshUpdateCheck(includePre bool) {
 	rel, none, err := fetchLatestOffiCraftRelease(s.releaseAPIBaseURL(), includePre)
 
