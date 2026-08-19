@@ -23,7 +23,7 @@
 | **ocagent**（成員運行時） | 成員 session 的隨身工具 | 掛著那條到 server 的長連線（`ocagent listen`）收即時通知，也負責上傳／下載附件。**成員持著這條連線＝它還活著。** |
 
 底下每一個「成員」，本體就是一個 **Claude Code 或 Codex session，跑在 tmux 裡**——跑的就是你機器上那個 `claude` 或 `codex`，
-你原本串好的 skill / plugin / MCP 全都在。
+你在它上面串好的設定照舊生效（Claude Code 的 skill / plugin / MCP 全都在）。
 
 > **server 和 warden 只是水電，產品是你僱的那些人。**
 

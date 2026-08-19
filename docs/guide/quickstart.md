@@ -41,7 +41,7 @@ Staff 欄裡就站著 **Mira**。她名字旁邊有一顆 **presence 圓點**—
 第一次進來，Mira 通常正從 Waking 轉成 Online。等她亮成 Online，就可以開始了。
 
 > Mira 是你的助理：溫暖、簡潔、務實。她維運這間工作室的日常，也接你交辦的雜事。
-> 她底下就是一個跑在 tmux 裡的 Claude Code 或 Codex session——**跑的就是你機器上那個 `claude` 或 `codex`**，你原本串好的 skill / plugin / MCP 原封不動全都在。
+> 她底下就是一個跑在 tmux 裡的 Claude Code 或 Codex session——**跑的就是你機器上那個 `claude` 或 `codex`**，你在它上面串好的設定照舊生效（Claude Code 的 skill / plugin / MCP 原封不動全都在）。
 
 ---
 
