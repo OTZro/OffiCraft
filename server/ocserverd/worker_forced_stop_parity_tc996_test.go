@@ -3,7 +3,6 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -138,14 +137,13 @@ func TestWorkerHandoverStillSpeaks_AndCarriesNoCountdown(t *testing.T) {
 		t.Fatalf("a worker being handed over must be shown the sequence: %+v",
 			api.offboardDeltaPayload(m))
 	}
-	if containsCountdown(notice) {
-		t.Fatalf("重新聚焦 runs no clock, so its notice may not start one:\n%s", notice)
-	}
-}
-
-// containsCountdown looks for the clause in BOTH languages the notice is
-// composed in: a sentence that says the number in Chinese starts the same
-// countdown in the agent's head as one that says it in English.
-func containsCountdown(notice string) bool {
-	return strings.Contains(notice, "120 seconds") || strings.Contains(notice, "120 秒")
+	// 🔴 This assertion was toothless until T-d6a7's post-land review. It read
+	// `strings.Contains(notice, "120 seconds") || strings.Contains(notice, "120
+	// 秒")`, and after T-d6a7 no notice this server composes contains either
+	// string — on ANY arm — so the second half of this test passed by
+	// construction, guarding nothing, on the one path an outsource worker's
+	// 重新聚焦 takes. It now rejects a span of time in any wording and either
+	// language, which is a property of the sentence rather than of one wording
+	// of it (offboard_absolute_deadline_td6a7_test.go).
+	assertQuotesNoTime(t, "a worker's 重新聚焦", notice)
 }
