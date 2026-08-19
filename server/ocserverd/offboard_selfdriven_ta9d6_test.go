@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 )
 
 // The sentence itself. The owner cut four differently-worded notices down to
@@ -36,10 +35,10 @@ func TestOffboardNotice_TheApprovedSentence(t *testing.T) {
 		"then call restart_self yourself.") {
 		t.Fatalf("the soft notice must carry the approved sentence verbatim:\n%s", soft)
 	}
-	if strings.Contains(soft, "120 seconds") {
-		t.Fatalf("the soft notice must NOT start a countdown — that is the whole "+
-			"difference between the two:\n%s", soft)
-	}
+	// Time of ANY shape, not the one literal: the difference between the two
+	// notices is that one is on a clock and one is not, and a whitelist of
+	// yesterday's wordings stops guarding that the moment the wording changes.
+	assertQuotesNoTime(t, "the soft notice", soft)
 	if !strings.Contains(soft, doc) {
 		t.Fatalf("the steps must be the DOCUMENT's, carried verbatim:\n%s", soft)
 	}
@@ -47,10 +46,16 @@ func TestOffboardNotice_TheApprovedSentence(t *testing.T) {
 	// T-d6a7: the final call now names WHEN the deadline is, not how long is
 	// left. A duration went stale on every replay of the same epoch (and broke
 	// the client's verbatim de-dupe); an absolute instant is constant.
-	const deadline = 1_787_000_000.0
+	//
+	// ⚠️ The expected instant is a LITERAL, deliberately. It used to be computed
+	// with the same `time.Unix(...).Format(time.RFC3339)` the production code
+	// ran, so it agreed with whatever zone that produced — including the
+	// implicit LOCAL one it actually used. The rendering is UTC and is asserted
+	// as such.
+	const deadline = 1_787_000_000.0 // 2026-08-17T20:53:20Z
 	final := offboardNotice(where, offboardCloserRestartSelf, true, deadline, doc)
-	wantClause := "then call restart_self yourself. Your deadline is " +
-		time.Unix(int64(deadline), 0).Format(time.RFC3339) + "."
+	const wantClause = "then call restart_self yourself. " +
+		"Your deadline is 2026-08-17T20:53:20Z."
 	if !strings.Contains(final, wantClause) {
 		t.Fatalf("the final call must name the deadline, right after the same "+
 			"sentence:\n%s", final)
@@ -136,9 +141,7 @@ func TestOffboardDeltaPayload_下線NeverCarriesACountdown(t *testing.T) {
 	if !ok || notice == "" {
 		t.Fatalf("下線 must carry the offboard notice: %+v", payload)
 	}
-	if strings.Contains(notice, "120 seconds") {
-		t.Fatalf("nothing collects 下線 on a clock, so nothing may claim one:\n%s", notice)
-	}
+	assertQuotesNoTime(t, "下線", notice)
 	// 🔴 …and it must name the tool that actually WORKS here. restart_self
 	// refuses a member the owner has taken down (it is a RE-start), so naming it
 	// on this arm would be an instruction that can only answer 409 — and with no

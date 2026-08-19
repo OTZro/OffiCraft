@@ -292,7 +292,7 @@ func decideHandoverNotice(
 // offboardNotice composes EVERY offboard notice this server sends, in the one
 // sentence the owner approved (2026-08-16, card rc-ec5859a4c384):
 //
-//	<where> — offboard now: work the sequence below, then call <closer> yourself.[ You have 120 seconds left.]
+//	<where> — offboard now: work the sequence below, then call <closer> yourself.[ Your deadline is <RFC3339 UTC>.]
 //	<the 下線程序 document, verbatim>
 //
 // Three things about it are deliberate and must survive edits:
@@ -300,7 +300,13 @@ func decideHandoverNotice(
 //   - ONE sentence for every situation. The owner cut four differently-worded
 //     notices down to this: 「不需要太多不同描述吧, 就請他按照步驟做好下線, 頂多
 //     告訴他剩下 120 秒」. What tells the situations apart is the FIELDS — the
-//     numbers in `where`, and whether the 120-second clause is there — not tone.
+//     numbers in `where`, and whether the deadline clause is there — not tone.
+//     ⚠️ That clause names an INSTANT, never a span. It was "You have 120
+//     seconds left." until T-d6a7; the deadline runs from the first stamp and
+//     this notice is REPLAYED on every write to the row, so a duration told a
+//     later replay it had the full window when most of it was gone — and a
+//     LIVE duration would be worse still, since the client de-dupes on the
+//     whole sentence verbatim.
 //   - "work the sequence below, THEN call <closer> yourself" blocks both
 //     failure directions at once. Without the second half an agent idles until
 //     the server cuts it off (dead time the owner explicitly does not want);
@@ -355,8 +361,13 @@ func offboardNotice(where, closer string, finalCall bool, deadline float64, offb
 	// with no deadline is a contradiction, and printing epoch 0 formatted as
 	// 1970 would be worse than saying nothing.
 	if finalCall && deadline > 0 {
+		// .UTC() is not cosmetic. The reader is an AGENT, which need not be
+		// running on this host, and the whole point of the sentence is that the
+		// same epoch renders to the same characters on every replay — an
+		// implicit local zone makes the literal depend on the server process's
+		// TZ. Every other machine-read RFC3339 in this tree is explicit.
 		reason += " Your deadline is " +
-			time.Unix(int64(deadline), 0).Format(time.RFC3339) + "."
+			time.Unix(int64(deadline), 0).UTC().Format(time.RFC3339) + "."
 	}
 	if offboardText != "" {
 		reason += "\n" + offboardText

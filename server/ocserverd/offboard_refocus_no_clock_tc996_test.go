@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -118,17 +119,15 @@ func TestRefocusNoticeNeverStartsACountdown_ButAContextLimitStillDoes(t *testing
 	// these was silent about time and the rest promised 120 seconds.
 	//
 	// T-d6a7 changed the SHAPE of what a clocked arm says (an absolute deadline
-	// instead of "120 seconds left"), so this checks for TIME OF ANY SHAPE rather
-	// than for that one string — otherwise the next wording change would make
-	// this test pass vacuously.
+	// instead of "120 seconds left"). This asserted a list of literal clauses in
+	// response, which is the same mistake one wording later: an independent
+	// review added "Time remaining: 74s." here and nothing in the tree went red.
+	// assertQuotesNoTime rejects a digit attached to a unit of time (ASCII and
+	// CJK) and a clock-shaped span like 00:01:14, read on the composed sentence
+	// only — offboard_absolute_deadline_td6a7_test.go states the exact edge.
 	for _, age := range []float64{1, SoftOffboardGraceSecs - 1, SoftOffboardGraceSecs, 10 * SoftOffboardGraceSecs} {
 		notice := noticeAt(t, refocusOpRefocus, age)
-		for _, clause := range []string{"120 seconds", "Your deadline is", "seconds left"} {
-			if strings.Contains(notice, clause) {
-				t.Fatalf("重新聚焦 at +%.0fs put a clock (%q) on an arm nobody is counting:\n%s",
-					age, clause, notice)
-			}
-		}
+		assertQuotesNoTime(t, fmt.Sprintf("重新聚焦 at +%.0fs", age), notice)
 	}
 
 	// The positive control: the causes that really are on the clock must still

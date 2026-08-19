@@ -1076,7 +1076,7 @@ func TestWindDown_OfflineWakesTheSessionAndDoesNotStopIt(t *testing.T) {
 	// countdown — a countdown would differ on every replay and this de-dupe would
 	// never match again). The client parses none of it; what matters here is only
 	// that a DIFFERENT sentence gets through.
-	const deadlineClause = " Your deadline is 2026-08-19T14:32:07+08:00."
+	const deadlineClause = " Your deadline is 2026-08-19T06:32:07Z."
 	final := soft + deadlineClause
 	if !h.maybeWindDown(frame(final)) {
 		t.Fatal("the final call must reach a session already woken by the soft notice")
