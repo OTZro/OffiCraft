@@ -1600,6 +1600,16 @@ export function toResumeOverview(w: WireResumeOverview): ResumeOverviewView {
   };
 }
 
+// TODO(T-f278): the cockpit does not carry the answered-card signal. The wire
+// has `answered_card_steps` on this row and `steps_on_answered_card` /
+// `steps_on_answered_card_chars` on the overview above; neither this mapper nor
+// `toResumeOverview` reads them, and `ResumeTaskView` / `ResumeOverviewView` do
+// not declare them. Both wire fields are optional, so TS stays green and the
+// parity roll-call stays green — this is EXACTLY the shape the 🔴 note on
+// `toMemberResumeSummary` below warns about (`roster`/`machines` dropped on the
+// floor with nothing red), reproduced in the same function. The owner's ruling
+// for this ticket was "開機時主動撈" only, so wiring the panel is deliberately
+// NOT done here — it needs its own ask before anyone extends the view model.
 /** Map one wire resume-snapshot LIGHT task row → the view model. */
 export function toResumeTask(w: WireResumeTask): ResumeTaskView {
   return {

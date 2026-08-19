@@ -63,6 +63,48 @@ func TestResumeSnapshotNamesStepsSittingOnAnAnsweredCard(t *testing.T) {
 	})
 	startFirstStep(t, api, workingTask.ID, "m-exec")
 
+	// The two ONE-CONDITION-OFF fixtures. The three above differ from the
+	// answered case in BOTH conjuncts at once, so either one alone would still
+	// reject them and neither conjunct is actually load-bearing. These two flip
+	// exactly one each, and both name a mistake that happens for real:
+	//
+	// expiredTask — the step IS back at in_progress with a card bound, because
+	// expire runs the SAME hold release an answer does; only the card status
+	// tells them apart. Drop the card check and an expired ask reads as an
+	// answer waiting to be picked up.
+	expiredTask := createAdHocTask(t, api, "m-exec")
+	expiredPlan := submitPlan(t, api, expiredTask.ID, "m-exec", []map[string]any{
+		{"name": "問了但過期", "dod": "另想辦法"},
+		{"name": "後面還有", "dod": "做完"},
+	})
+	startFirstStep(t, api, expiredTask.ID, "m-exec")
+	expiredCard := openGateCard(t, api, expiredTask.ID, "m-exec",
+		expiredPlan.Steps[0].ID, "沒人回的問題")
+	if rec := expireCardReq(t, api, expiredCard.ID, "owner", "owner"); rec.Code != http.StatusOK {
+		t.Fatalf("expire: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// pickedUpTask — the card IS answered and the step still carries its id
+	// (nothing ever clears reply_card_id), but the agent has consumed the answer
+	// and moved the step to done. Drop the in_progress check and this pointer
+	// never goes away.
+	pickedUpTask := createAdHocTask(t, api, "m-exec")
+	pickedUpPlan := submitPlan(t, api, pickedUpTask.ID, "m-exec", []map[string]any{
+		{"name": "問了也接手了", "dod": "照答案做完"},
+		{"name": "還沒開始的下一步", "dod": "做完"},
+	})
+	startFirstStep(t, api, pickedUpTask.ID, "m-exec")
+	pickedUpCard := openGateCard(t, api, pickedUpTask.ID, "m-exec",
+		pickedUpPlan.Steps[0].ID, "已經消化掉的問題")
+	if rec := answerCard(t, api, pickedUpCard.ID,
+		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := reportStepStatus(t, api, pickedUpTask.ID, pickedUpPlan.Steps[0].ID,
+		"m-exec", StepStatusDone, ""); rec.Code != http.StatusOK {
+		t.Fatalf("done: %d %s", rec.Code, rec.Body.String())
+	}
+
 	// ANTI-VACUITY: the answered step must really be back at in_progress with an
 	// answered card bound. That indistinguishability IS the bug — if the fixture
 	// stopped reproducing it, every assertion below would be about nothing.
@@ -75,13 +117,32 @@ func TestResumeSnapshotNamesStepsSittingOnAnAnsweredCard(t *testing.T) {
 		t.Fatalf("the bound card must read answered: %+v", answeredView.Steps[0])
 	}
 
+	// ANTI-VACUITY for the two one-off fixtures: each must differ from the
+	// answered case in exactly ONE conjunct, or it stops discriminating.
+	expiredView := getTaskView(t, api, expiredTask.ID)
+	if expiredView.Steps[0].Status != StepStatusInProgress ||
+		expiredView.Steps[0].ReplyCardID != expiredCard.ID ||
+		expiredView.Steps[0].ReplyCardStatus != replyCardStatusExpired {
+		t.Fatalf("the expired fixture must be in_progress on an EXPIRED bound card "+
+			"(only the card status may differ from the answered case): %+v",
+			expiredView.Steps[0])
+	}
+	pickedUpView := getTaskView(t, api, pickedUpTask.ID)
+	if pickedUpView.Steps[0].Status != StepStatusDone ||
+		pickedUpView.Steps[0].ReplyCardID != pickedUpCard.ID ||
+		pickedUpView.Steps[0].ReplyCardStatus != replyCardStatusAnswered {
+		t.Fatalf("the picked-up fixture must be DONE on an answered bound card "+
+			"(only the step status may differ from the answered case): %+v",
+			pickedUpView.Steps[0])
+	}
+
 	snap := resumeSnapshot(t, api, "m-exec")
 	rows := map[string]resumeTaskDTO{}
 	for _, r := range snap.Tasks {
 		rows[r.ID] = r
 	}
-	if len(rows) != 3 {
-		t.Fatalf("expected the three seeded tasks on the snapshot, got %d", len(rows))
+	if len(rows) != 5 {
+		t.Fatalf("expected the five seeded tasks on the snapshot, got %d", len(rows))
 	}
 
 	named := rows[answeredTask.ID].AnsweredCardSteps
@@ -106,6 +167,17 @@ func TestResumeSnapshotNamesStepsSittingOnAnAnsweredCard(t *testing.T) {
 	}
 	if got := rows[workingTask.ID].AnsweredCardSteps; len(got) != 0 {
 		t.Fatalf("a plain in_progress step with no card must not be named: %+v", got)
+	}
+	// An EXPIRED card released the hold the same way an answer does. There is no
+	// answer to pick up — naming it would send the agent to read one that does
+	// not exist.
+	if got := rows[expiredTask.ID].AnsweredCardSteps; len(got) != 0 {
+		t.Fatalf("an in_progress step on an EXPIRED card must not be named: %+v", got)
+	}
+	// The agent already acted on this answer and closed the step. reply_card_id
+	// is never cleared, so only the step status can retire the pointer.
+	if got := rows[pickedUpTask.ID].AnsweredCardSteps; len(got) != 0 {
+		t.Fatalf("a step already moved to done must not be named: %+v", got)
 	}
 
 	if snap.Overview.StepsOnAnsweredCard != 1 {
@@ -172,6 +244,12 @@ func TestResumeSnapshotSaysNothingWhenNoAnswerIsWaiting(t *testing.T) {
 // field nobody reads. The wake snapshot's own note is where an agent learns what
 // its task rows mean, and the peek's note is where it learns what the size
 // number is made of — both must name this signal, or it ships invisible.
+//
+// And neither may call the count a TOTAL. It is taken over the bounded task
+// rows only (resumeTasksN), so an agent holding more tasks than the cap can be
+// stuck on an answered card and still read 0 — a reader who believes "total"
+// draws exactly the wrong conclusion from that 0, which is the failure this
+// whole signal exists to prevent. Both notes must say so out loud.
 func TestResumeProseNamesTheAnsweredCardSignal(t *testing.T) {
 	for _, tc := range []struct {
 		name, text, field string
@@ -184,6 +262,21 @@ func TestResumeProseNamesTheAnsweredCardSignal(t *testing.T) {
 		if !strings.Contains(tc.text, tc.field) {
 			t.Errorf("%s must name %q — an unexplained field is an unread field",
 				tc.name, tc.field)
+		}
+	}
+	if strings.Contains(resumeNote, "`steps_on_answered_card` 是總數") {
+		t.Error("resumeNote must not call the count a total — it counts only the " +
+			"bounded task rows the snapshot carries")
+	}
+	for _, tc := range []struct{ name, text, phrase string }{
+		{"resumeNote", resumeNote, "不是你所有任務的總數"},
+		{"resumeNote/zero", resumeNote, "0 不等於沒有"},
+		{"peekNote", peekNote, "not across all your tasks"},
+		{"peekNote/zero", peekNote, "0 does not prove there is none"},
+	} {
+		if !strings.Contains(tc.text, tc.phrase) {
+			t.Errorf("%s must state the bound (%q): a count read as a total makes a "+
+				"0 mean 'nothing is stuck', which it does not", tc.name, tc.phrase)
 		}
 	}
 }
