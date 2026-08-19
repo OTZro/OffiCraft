@@ -121,7 +121,15 @@ func (s *apiServer) offboardDeltaPayload(m Member) map[string]any {
 // the collection is the agent's own stopped report or the owner's force-stop.
 // The pair has to move together — recycleGraceFor is the clock, this is the
 // sentence, and changing one without the other is what makes a silent deadline.
+// ⚠️ `now` is READ BY NOTHING in here any more, and that is the invariant, not
+// an oversight: after T-c996 neither soft arm turns on a clock, so there is no
+// longer any time at which this answer changes. It stays in the signature
+// because the question this function answers is still "what would this member
+// be told AT time T" — and a later arm that does need a clock must be handed
+// one here rather than reaching for a global one, which is how the sentence and
+// the clock came apart in the first place.
 func offboardKindOf(m Member, now float64) (kind string, carries bool) {
+	_ = now
 	if m.DesiredState == DesiredStateOffline {
 		// Only the graceful arm: a member with no stopping anchor is not being
 		// wound down (and a cancelled wake is force-stopped outright, which is

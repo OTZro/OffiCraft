@@ -383,6 +383,16 @@ decides that time is up.
   gives an outsource worker the graceful 下線 a staff member gets. Adding one is a change to
   the owner's set of buttons, not a bug fix, so it is out of T-c996's scope and is recorded
   here rather than silently filled in.
+- 🔴 **And a SECOND outsource gap, named here so this section does not read as swept**: an
+  outsource **重新聚焦** is still collected on a 120 s clock. `autoHandoverWorker`
+  (`worker_spawn.go`) times a worker's in-flight handover out at
+  `refocus_since + StoppingTimeoutSecs` and **never reads `refocus_op`**, so the arm that has
+  no clock for staff still has one here — while the notice that worker is sent says nothing
+  about time. That is the exact shape §4.4's `recycle_grace` row calls worse than the split
+  T-c996 removed, sitting on the other kind. It is **pre-existing, not a regression** (a
+  worker's notice was already silent about that clock), it belongs to **T-fe5e**, and closing
+  it needs an owner ruling of its own: a staff member stuck in a handover only occupies a
+  slot, while a worker stuck in one holds its TASK down with it.
 - 🔴 **Neither of those two paths re-dispatches.** Both go through the one-shot
   `dispatchRobustStopNow`, which enqueues once and does NOT write `last_command` /
   `last_command_at` — so the producer's de-dupe/re-dispatch discipline below never engages

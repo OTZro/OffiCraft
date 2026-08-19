@@ -5567,7 +5567,7 @@ export interface components {
             presence: string;
             /**
              * Refocus Deadline
-             * @description Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace), 0 when no handover is in flight. Derived at read time, never stored. It exists so a client can say WHEN a pending launch change takes effect at the latest without hard-coding a server constant; the collection fires the instant the agent answers ``report_stopped``, so this is a CEILING, not a prediction (T-7f28). Additive-optional.
+             * @description Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace). ZERO CARRIES TWO MEANINGS, and a client that reads it as one of them will be wrong about the other: no handover is in flight, OR a handover is in flight that NOTHING collects on a clock at all — an owner-pressed ``refocus`` (owner 2026-08-19), whose deadline would otherwise be a time the cockpit renders and then watches pass. ``refocus_op`` is what tells the two apart. Rendering no deadline is correct for both. Derived at read time, never stored. It exists so a client can say WHEN a pending launch change takes effect at the latest without hard-coding a server constant; the collection fires the instant the agent answers ``report_stopped``, so this is a CEILING, not a prediction (T-7f28). Additive-optional.
              * @default 0
              */
             refocus_deadline: number;

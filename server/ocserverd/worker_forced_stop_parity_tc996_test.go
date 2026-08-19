@@ -69,6 +69,44 @@ func TestWorkerStopIsForcedShaped_SoItSaysNothing(t *testing.T) {
 		t.Fatalf("a force-stopped worker must be told NOTHING — the same ruling "+
 			"api_members.go enforces for staff — got:\n%v", notice)
 	}
+	// 🔴 THE OTHER ORDER, and it is the one that guards the second anchor.
+	// forcedEpochLive requires forced_stop_at >= stopping_since, so a 停止 that
+	// stamps only forced_stop_at is defeated by a report_stopping that lands
+	// AFTER it: the later anchor wins the comparison and the worker reads as
+	// "still working its close-out" — the arm that speaks. Measured: with the
+	// stopping_since stamp removed, the sequence below fans the full soft
+	// notice ("work the sequence below, then call report_stopped yourself") at
+	// a worker the owner has already killed, and the case above stays GREEN,
+	// because its ordering stamps stopping_since first and never exercises the
+	// guard at all.
+	t.Run("…and the report_stopping that arrives AFTER the kill cannot re-open its mouth", func(t *testing.T) {
+		late := newActiveOnlineWorker(t, api)
+		postWorker(t, api, late, "stop", nil,
+			api.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
+		rec := httptest.NewRecorder()
+		api.HandleReportStoppingApiSelfStoppingPost(rec,
+			taskReq(t, http.MethodPost, "/api/self/stopping", nil, late, "agent"))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("report_stopping after the stop: %d %s", rec.Code, rec.Body.String())
+		}
+		w, err := api.dal.GetOutsourceWorker(late)
+		if err != nil || w == nil {
+			t.Fatalf("read back the worker: %v", err)
+		}
+		if w.DesiredState != DesiredStateOffline || w.StoppingSince <= 0 {
+			t.Fatalf("fixture: this case needs the notice-bearing state too "+
+				"(desired=%q stopping_since=%v)", w.DesiredState, w.StoppingSince)
+		}
+		lm := memberFromWorker(*w)
+		if !forcedEpochLive(lm) {
+			t.Fatalf("a stop that lands FIRST is still the forced epoch — a later "+
+				"report_stopping must not out-rank it (forced_stop_at=%v stopping_since=%v)",
+				lm.ForcedStopAt, lm.StoppingSince)
+		}
+		if notice, ok := api.offboardDeltaPayload(lm)["offboard_notice"]; ok {
+			t.Fatalf("the worker was already killed — this frame must carry nothing:\n%v", notice)
+		}
+	})
 }
 
 // The negative control, and it is what stops the fix above from becoming
