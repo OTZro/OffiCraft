@@ -41,7 +41,7 @@ server 的標準埠是 **7755**。被別的程式占用時，安裝會**當場�
 
 ### 新請的成員亮不起來（Waking 卡住或一直 Offline）
 
-先確認**那位成員被指派到的機器上**有已登入的 `claude` 與 `tmux`——warden 靠它們把成員 spawn 起來。缺任一個，成員就起不來。
+先確認**那位成員被指派到的機器上**有 `tmux`，以及那位成員的 runtime 所需的 `claude` 或 `codex`（已登入）——warden 靠它們把成員 spawn 起來。缺了，成員就起不來。
 
 **最常見的一個原因：Claude Code 太舊、沒有 Monitor tool。** 成員靠 `claude` 內建的 **Monitor** tool 持住 `ocagent listen` 那條到 server 的 SSE 長連線——**持著連線才算 online**。`claude` 太舊、沒有 Monitor tool（**2.1.98 起才內建**），成員就**掛不住 listen**、於是 Waking 卡住或一直 Offline。看那位成員被指派到的機器上 `claude --version`，太舊就升級：
 
