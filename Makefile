@@ -428,14 +428,69 @@ test-bin-guards:
 # replays a previous PASS whenever the package's inputs hash the same, which
 # certifies a run that DID NOT HAPPEN and structurally hides flakes.
 # bin/tests/go-test-nocache-guard.sh pins this flag.
+#
+# ── THE PER-PACKAGE TIMEOUT, AND WHY IT IS 15m (T-cf93) ─────────────────────
+# `go test` defaults to -timeout 10m per TEST BINARY (i.e. per package). This
+# recipe sets it explicitly, as a chosen number, because the number only means
+# something in relation to a SECOND deadline: the go-checks job in
+# .github/workflows/ci.yml carries `timeout-minutes: 25`, and the two doors
+# fire very differently.
+#
+#   * GitHub hitting the JOB timeout kills the whole job. No goroutine dump, no
+#     name of the test that was still running — just a cancelled cell.
+#   * Go hitting ITS OWN timeout prints `panic: test timed out after 15m0s` and
+#     DUMPS EVERY RUNNING GOROUTINE, naming the test that hung. That dump is the
+#     only artifact in this system that can tell you WHAT was slow.
+#
+# So the ordering is load-bearing: GO MUST HIT ITS LIMIT FIRST. That is exactly
+# the relation bin/tests/go-test-timeout-guard.sh pins — it parses this value out
+# of THIS file and `timeout-minutes` out of the go-checks job in ci.yml, and
+# requires go's limit to be STRICTLY LESS than the job's.
+#
+# The worst-case budget that makes 15m fit under 25m, measured on the tree:
+#   ocserverd runs to the full 15m + the other three modules ≈ 37s + the three
+#   other checks sharing the go-checks cell (lint-go-*, build-go,
+#   test-system-interaction-examples) ≈ 3 min  ⇒ ≈ 19 min < 25.
+#
+# ⚠️ THAT BUDGET ASSUMES AT MOST ONE MODULE EVER RUNS TO THE LIMIT, AND NOTHING
+#    ENFORCES THAT ASSUMPTION. If a second module also grows to 15m the sum
+#    blows past the job ceiling and the cell dies the un-diagnosable way again.
+#    This is a known, UNGUARDED hole — the guard checks one timeout against one
+#    job ceiling, not the sum over modules. Do not read its green as coverage.
+#
+# The price of 10m → 15m: a genuinely hung test is found five minutes later.
+# Accepted deliberately, because losing the goroutine dump costs far more.
+#
+# The recipe times each MODULE (`go test ./...` over all its packages) and warns
+# past two thirds of the limit. Module time ≥ any single package's time, so the
+# comparison is conservative: it warns EARLY, never late.
+GO_TEST_TIMEOUT := 15m
+
 test-go: build-embed-assets
 	@$(P) \
 	GO="$$(oc_go)"; \
+	tl="$(GO_TEST_TIMEOUT)"; \
+	case "$$tl" in \
+	  *m) limit_s=$$(( $${tl%m} * 60 ));; \
+	  *s) limit_s=$${tl%s};; \
+	  *) echo "FAIL — GO_TEST_TIMEOUT '$$tl' must be <N>m or <N>s" >&2; exit 1;; \
+	esac; \
 	for gomod in cli/*/go.mod server/*/go.mod; do \
 	  [[ -f "$$gomod" ]] || continue; \
 	  dir="$$(dirname "$$gomod")"; \
-	  echo "[test-go] go test -count=1 $$dir"; \
-	  (cd "$$dir" && "$$GO" test -count=1 ./...); \
+	  echo "[test-go] go test -count=1 -timeout $(GO_TEST_TIMEOUT) $$dir"; \
+	  started=$$(date +%s); \
+	  (cd "$$dir" && "$$GO" test -count=1 -timeout $(GO_TEST_TIMEOUT) ./...); \
+	  elapsed=$$(( $$(date +%s) - started )); \
+	  echo "[test-go] $$dir finished in $${elapsed}s (per-package limit $${limit_s}s)"; \
+	  if [[ $$(( elapsed * 3 )) -ge $$(( limit_s * 2 )) ]]; then \
+	    echo "⚠️  [test-go] $$dir used $${elapsed}s — OVER TWO THIRDS of the $${limit_s}s per-package limit ($(GO_TEST_TIMEOUT))."; \
+	    echo "⚠️  [test-go] This round is still GREEN. That is the point: the warning is meant to arrive"; \
+	    echo "⚠️  [test-go] while the cell is passing, not on the round it finally dies."; \
+	    echo "⚠️  [test-go] Raising GO_TEST_TIMEOUT is NOT free — read its comment in the Makefile: go's"; \
+	    echo "⚠️  [test-go] limit must stay strictly under the go-checks job's timeout-minutes in ci.yml,"; \
+	    echo "⚠️  [test-go] and that budget assumes AT MOST ONE module ever runs to the limit."; \
+	  fi; \
 	done; \
 	$(DONE)
 
