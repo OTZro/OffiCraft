@@ -35,6 +35,19 @@ import (
 const (
 	sseHeartbeat = 15 * time.Second
 	ssePoll      = 250 * time.Millisecond
+
+	// sseStationSHAHeader carries this station's build sha to the client when
+	// the stream opens (T-5b83), so ocagent's connection line can name the
+	// build it just attached to.
+	//
+	// 🔴 THIS STRING IS HALF OF A CROSS-MODULE CONTRACT and the modules cannot
+	// import each other. The other half is stationSHAHeader in
+	// cli/ocagent/listen.go. A typo does NOT fail loudly — the client's
+	// Header.Get returns "" and its connection line silently omits the sha,
+	// which is byte-identical to the honest "this station sent none". If the
+	// two halves drift apart, nothing turns red on its own — see the task note
+	// for the guard this still owes.
+	sseStationSHAHeader = "X-Officraft-Station-Sha"
 )
 
 // sseWriteTimeout bounds a single SSE write to the client socket (T-7e07,
@@ -165,6 +178,15 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
+	// T-5b83: hand the client the build it is attaching to, so ocagent's
+	// connection line can name it. A version change restarts the station and
+	// therefore drops every stream — the connection line already marks every
+	// changeover, it just never said which commit. Stamping it here rather
+	// than answering a separate probe is deliberate: a changeover reconnects
+	// the whole fleet within seconds, and that is the worst possible moment to
+	// take N extra requests. This is the same value /api/version reports as
+	// git_sha (both read s.processSHA), so the two can be reconciled.
+	w.Header().Set(sseStationSHAHeader, s.processSHA)
 	w.WriteHeader(http.StatusOK)
 	armWriteDeadline()
 	_, _ = w.Write([]byte(": connected\n\n"))
