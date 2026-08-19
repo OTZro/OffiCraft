@@ -862,7 +862,15 @@ func (s *apiServer) HandleBootstrapHereApiMachinesMachineIdBootstrapHerePost(w h
 	if !ok {
 		return
 	}
-	res, err := s.runWardenInstallHere(*machine, binPath, requestBaseURL(r))
+	// T-ce3d: the base comes from the SERVER, not from the caller's Host
+	// header. bootstrap-here installs the warden ON THIS HOST, so the address
+	// it must call home on is one the server already knows — and asking the
+	// request instead made this path structurally impossible over MCP, where
+	// loopbackCall synthesises `Host: "loopback"` and the installer was handed
+	// OC_BASE=http://loopback. The first-run onboarding path (onboarding.go)
+	// has always passed s.selfBase; this makes the cockpit button agree with
+	// it rather than each deriving its own answer.
+	res, err := s.runWardenInstallHere(*machine, binPath, s.selfBase)
 	if err != nil {
 		internalError(w, err)
 		return
