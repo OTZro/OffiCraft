@@ -141,6 +141,21 @@ func offboardKindOf(m Member, now float64) (kind string, carries bool) {
 		// telling a session that is about to be cut off to work the sequence and
 		// call restart_self. Independent e2e verification observed exactly that
 		// frame; the owner's ruling is that force-stop sends no message at all.
+		//
+		// 🔴 RECONFIRMED 2026-08-18, and written down because it was nearly
+		// reversed that day: the owner first said a force-stop should tell the
+		// agent what to do (c-7b2163781ee2), was shown that this would overturn
+		// the named ruling above, and chose silence again (c-5c8bc3d7362d).
+		// Nothing in the code changed, which is exactly why the review is worth
+		// recording — the next person to notice this arm should know it has been
+		// looked at deliberately, not merely never revisited.
+		//
+		// 🔴 And it is enforced for BOTH kinds since T-c996. It used to be
+		// enforced here for staff only: forcedEpochLive reads forced_stop_at,
+		// OutsourceWorker had no such field, so the predicate was false for every
+		// worker and the arm that must stay silent was the one that could still
+		// speak. An outsource 停止 now stamps the same anchors (api_outsource.go)
+		// — it kills on the spot, so it IS this shape, whatever it is named.
 		if m.StoppingSince > 0 && !forcedEpochLive(m) {
 			return offboardKindSoft, true
 		}
