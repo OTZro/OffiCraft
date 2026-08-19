@@ -289,20 +289,70 @@ dur_to_seconds() { # DURATION -> seconds on stdout, rc 1 if unparseable
 # The whole side-A extractor: Makefile in, seconds out (or MISSING / MULTIPLE /
 # UNPARSEABLE:<tok>). One string, so a fixture and the real file go through the
 # exact same code path.
+# ═════════════════════════════════════════════════════════════════════════════
+# 🔴 ASK MAKE, DO NOT PARSE MAKE. Every version of this extractor that read the
+# Makefile as text was defeated by a detail of make's own grammar that the reader
+# did not model, and each fix moved the boundary one character rather than
+# removing it:
+#   * anchored at column 0        ⇒ `␣␣GO_TEST_TIMEOUT := 40m` invisible
+#   * then "only a TAB is a recipe body" ⇒ a TAB-indented assignment AFTER another
+#     assignment is still an assignment, and that was invisible too
+#   * first `-timeout` on the line ⇒ go takes the LAST one
+# The decisive measurement: the SAME mutant text appended at the end of the file
+# resolved to 15m, and inserted after an assignment resolved to 40m. The rule was
+# never about tabs — it is about make's parser state, which nothing short of make
+# knows. So the value now comes from `make -n`, which prints the recipe with every
+# variable ALREADY EXPANDED: that string is what the shell will run, so it is what
+# go will receive, by construction.
+#
+# What this buys beyond correctness: overrides, `override`, `ifeq` branches,
+# `define` blocks, `.RECIPEPREFIX` and included makefiles are all handled by make
+# rather than modelled here. What it does NOT cover is the command line
+# (`make GO_TEST_TIMEOUT=1h`) and the environment, because this invokes make
+# without them — see header item 4.
+make_expanded_recipe() { # FILE TARGET -> the expanded shell, or empty on failure
+  local file="$1" target="$2" dir base
+  dir="$(cd "$(dirname "$file")" 2>/dev/null && pwd)" || return 1
+  base="$(basename "$file")"
+  (cd "$dir" && make -f "$base" -n "$target" 2>/dev/null)
+}
+
+# The go test invocations in that expanded text, EXCLUDING the ones that only
+# PRINT such a string (echo, printf). A recipe that mentions -timeout in a log
+# line while running without it would otherwise read as compliant — and the log
+# would be the thing lying. make does not emit comment lines, so those need no
+# exclusion here; the A4 decoy fixture holds all three shapes.
+go_test_commands() { # EXPANDED -> one command fragment per line
+  # Quotes are stripped first: the real call site is `("$GO" test …)`, and a
+  # pattern that did not account for the closing quote between $GO and `test`
+  # matched nothing and reported NO-CALL-SITE on a healthy tree.
+  printf '%s\n' "$1" | tr ';' '\n' | sed 's/"//g' |
+    grep -E '(^|[^[:alnum:]_])(\$\{?GO\}?|go)[[:space:]]+test([[:space:]]|$)' |
+    grep -vE '^[[:space:]]*(echo|printf)([[:space:]]|$)'
+}
+
 makefile_timeout_seconds() { # FILE
-  local file="$1" sites vals tok lit secs
-  sites="$(makefile_go_test_sites "$file")"
-  [[ -n "$(printf '%s' "$sites" | tr -d '[:space:]')" ]] || { echo "NO-CALL-SITE"; return; }
-  vals="$(printf '%s\n' "$sites" | awk -F'\t' 'NF { print $3 }' | sort -u)"
-  if printf '%s\n' "$vals" | grep -qx -- '-'; then echo "MISSING"; return; fi
+  local file="$1" expanded cmds vals secs
+  expanded="$(make_expanded_recipe "$file" test-go)" || { echo "UNRESOLVED:make-failed"; return; }
+  [[ -n "$(printf '%s' "$expanded" | tr -d '[:space:]')" ]] || { echo "NO-CALL-SITE"; return; }
+  cmds="$(go_test_commands "$expanded")"
+  [[ -n "$(printf '%s' "$cmds" | tr -d '[:space:]')" ]] || { echo "NO-CALL-SITE"; return; }
+  # LAST -timeout per command, because that is the one the go flag package keeps:
+  # `go test -timeout 5s -timeout 40m` runs for 40m, measured.
+  vals="$(printf '%s\n' "$cmds" | sed -nE 's/.*[[:space:]]--?timeout[= ]+([^[:space:]]+).*/\1/p' |
+    sed -E 's/^"//; s/"$//' | sort -u)"
+  if [[ -z "$(printf '%s' "$vals" | tr -d '[:space:]')" ]]; then echo "MISSING"; return; fi
   if [[ "$(printf '%s\n' "$vals" | grep -c .)" != "1" ]]; then
     echo "MULTIPLE:$(printf '%s\n' "$vals" | tr '\n' ',')"; return
   fi
-  tok="$vals"
-  lit="$(resolve_make_value "$file" "$tok")"
-  [[ -n "$lit" ]] || { echo "UNRESOLVED:$tok"; return; }
-  secs="$(dur_to_seconds "$lit")" || { echo "UNPARSEABLE:$lit"; return; }
-  [[ -n "$secs" ]] || { echo "UNPARSEABLE:$lit"; return; }
+  secs="$(dur_to_seconds "$vals")" || { echo "UNPARSEABLE:$vals"; return; }
+  [[ -n "$secs" ]] || { echo "UNPARSEABLE:$vals"; return; }
+  # 🔴 `-timeout 0` DISABLES go's timeout entirely. It parses, it compares as
+  # smaller than every ceiling, and it is precisely the disaster this file exists
+  # to prevent: a hang with no goroutine dump, killed by GitHub with no name for
+  # what was slow. Rejected here rather than left to the comparison, which would
+  # have called it the safest value possible.
+  if [[ "$secs" == "0" ]]; then echo "DISABLED:$vals"; return; fi
   echo "$secs"
 }
 
@@ -456,35 +506,20 @@ verdict() { # MAKEFILE CI_YML -> "OK <go_s> <job_s> <job> <origin>" | "VIOLATION
 # ceiling read out of ci.yml, and it has to be strictly under it for the same
 # reason go's per-package timeout does: a warning that only trips after the cell
 # is already dead is not a warning.
-# 🔴 T7a — DOES THE RECIPE ACTUALLY DO IT? The first version of T7 read
-# GO_TEST_TOTAL_WARN out of the Makefile and compared it to the ceiling, and
-# nothing else. It never asked whether anything USES it. Measured: deleting the
-# whole accumulate-and-shout block from the test-go recipe, or just the
-# `total=$(( total + elapsed ))` line, or multiplying the threshold by a thousand,
-# each left the guard at 26 ok / rc=0 — still announcing that the sum of green
-# time "is shouted about", with nothing left to shout. A guard that reads one
-# constant and compares it to another is measuring itself.
+# 🔴 THERE IS NO TEXT CHECK FOR THE ALARM ANY MORE, ON PURPOSE. There was one:
+# it grepped the recipe for an accumulate line and a compare line. Review defeated
+# it four times while both strings stayed in place (a `total=0` reset inside the
+# loop, `elapsed=0`, `if false && …`, and warn_s fed a literal while the constant
+# stayed put), and then it went the other way and FAILED a recipe that was correct
+# — `total=$$(( $$total + $$elapsed ))`, the same arithmetic with sigils — while
+# printing "the recipe never adds each module's elapsed time", which was simply
+# false about that tree.
 #
-# So this reads the test-go recipe and requires three things of it: the elapsed
-# time of each module is ACCUMULATED, the accumulator is COMPARED against the
-# warn variable, and the comparison is not with a constant standing in for it.
-# ⚠️ This is a TEXT-level check on the recipe, the same class as T1 asking whether
-# the call site carries -timeout. It cannot prove the branch fires; that was
-# measured by hand (`make test-go GO_TEST_TOTAL_WARN=1s` prints the ten warning
-# lines, rc=0) and is not re-measured here, because doing so costs a full 230s
-# test run.
-makefile_total_warn_wiring() { # FILE -> OK | MISSING-ACCUMULATOR | MISSING-COMPARISON
-  local file="$1" recipe
-  recipe="$(awk '
-    /^test-go:/ { inr = 1; next }
-    inr && /^[a-zA-Z0-9_.-]+:/ { inr = 0 }
-    inr { print }
-  ' "$file")"
-  printf '%s\n' "$recipe" | grep -qE 'total=\$\$\(\( *total *\+ *elapsed *\)\)' || { echo "MISSING-ACCUMULATOR"; return; }
-  printf '%s\n' "$recipe" | grep -qE '\$\$total .*-ge .*\$\$warn_s' || { echo "MISSING-COMPARISON"; return; }
-  echo "OK"
-}
-
+# Both directions are the same defect: it measured the spelling and reported a
+# conclusion about the behaviour. T7b runs the recipe instead, so the text check
+# had nothing left to add and one thing left to get wrong. Deleted rather than
+# disclaimed — a check that can hand the next person a confident wrong diagnosis
+# is worse than no check, because they will believe it.
 makefile_named_duration_seconds() { # FILE NAME -> seconds | UNSET | UNPARSEABLE:<lit>
   local file="$1" name="$2" lit secs
   lit="$(resolve_make_value "$file" "\$($name)")"
@@ -503,7 +538,7 @@ makefile_named_duration_seconds() { # FILE NAME -> seconds | UNSET | UNPARSEABLE
 AND='&&'
 
 # --- A1: a literal -timeout is FOUND and converted --------------------------
-printf '%s\n' 'lit:' "	@(cd x $AND go test -count=1 -timeout 7m ./...)" > "$WORK/lit.mk"
+printf '%s\n' 'test-go:' "	@(cd x $AND go test -count=1 -timeout 7m ./...)" > "$WORK/lit.mk"
 GOT="$(makefile_timeout_seconds "$WORK/lit.mk")"
 if [[ "$GOT" == "420" ]]; then
   ok "Makefile side: a literal '-timeout 7m' in a make recipe reads as 420s"
@@ -512,7 +547,7 @@ else
 fi
 
 # --- A2: a make VARIABLE is resolved, not echoed back ------------------------
-printf '%s\n' 'MYTO := 12m' 'var:' "	@(cd x $AND \"\$\$GO\" test -count=1 -timeout \$(MYTO) ./...)" > "$WORK/var.mk"
+printf '%s\n' 'MYTO := 12m' 'test-go:' "	@(cd x $AND \"\$\$GO\" test -count=1 -timeout \$(MYTO) ./...)" > "$WORK/var.mk"
 GOT="$(makefile_timeout_seconds "$WORK/var.mk")"
 if [[ "$GOT" == "720" ]]; then
   ok "Makefile side: '-timeout \$(MYTO)' with 'MYTO := 12m' resolves to 720s"
@@ -524,7 +559,7 @@ fi
 # A recipe expands its variables when it RUNS, so a later `MYTO := 40m` is the
 # value go test receives. Reading the FIRST match is not a near miss — it makes
 # the guard report a number the build never uses and call the contract satisfied.
-printf '%s\n' 'MYTO := 12m' 'MYTO := 40m' 'var:' "	@(cd x $AND go test -timeout \$(MYTO) ./...)" > "$WORK/var-last.mk"
+printf '%s\n' 'MYTO := 12m' 'MYTO := 40m' 'test-go:' "	@(cd x $AND go test -timeout \$(MYTO) ./...)" > "$WORK/var-last.mk"
 GOT="$(makefile_timeout_seconds "$WORK/var-last.mk")"
 if [[ "$GOT" == "2400" ]]; then
   ok "Makefile side: a SECOND 'MYTO := 40m' overrides the first, as make does — 2400s, not 720s"
@@ -533,7 +568,7 @@ else
 fi
 
 # --- A2c: `?=` does NOT override, because make says it does not --------------
-printf '%s\n' 'MYTO := 12m' 'MYTO ?= 40m' 'var:' "	@(cd x $AND go test -timeout \$(MYTO) ./...)" > "$WORK/var-qeq.mk"
+printf '%s\n' 'MYTO := 12m' 'MYTO ?= 40m' 'test-go:' "	@(cd x $AND go test -timeout \$(MYTO) ./...)" > "$WORK/var-qeq.mk"
 GOT="$(makefile_timeout_seconds "$WORK/var-qeq.mk")"
 if [[ "$GOT" == "720" ]]; then
   ok "Makefile side: a later '?=' leaves an already-set variable alone — still 720s"
@@ -542,7 +577,7 @@ else
 fi
 
 # --- A3: the RED direction — a call site with no -timeout is reported --------
-printf '%s\n' 'bare:' "	@(cd x $AND go test -count=1 ./...)" > "$WORK/bare.mk"
+printf '%s\n' 'test-go:' "	@(cd x $AND go test -count=1 ./...)" > "$WORK/bare.mk"
 GOT="$(makefile_timeout_seconds "$WORK/bare.mk")"
 if [[ "$GOT" == "MISSING" ]]; then
   ok "Makefile side: a 'go test' call site with NO -timeout is reported MISSING"
@@ -553,7 +588,7 @@ fi
 # --- A4: decoys — the exact strings a substring grep would swallow -----------
 printf '%s\n' \
   '# a comment about go test -timeout 99m that must not count' \
-  'decoy:' \
+  'test-go:' \
   '	@echo "[test-go] go test -count=1 -timeout 99m $$dir"' \
   '	@printf "%s\n" "go test -timeout 99m"' \
   "	@(cd x $AND go build -o y ./...)" > "$WORK/decoy.mk"
@@ -565,7 +600,7 @@ else
 fi
 
 # --- A5: garbage is refused, not silently zeroed ----------------------------
-printf '%s\n' 'junk:' "	@(cd x $AND go test -timeout soon ./...)" > "$WORK/junk.mk"
+printf '%s\n' 'test-go:' "	@(cd x $AND go test -timeout soon ./...)" > "$WORK/junk.mk"
 GOT="$(makefile_timeout_seconds "$WORK/junk.mk")"
 if [[ "$GOT" == UNPARSEABLE:* ]]; then
   ok "Makefile side: an unparseable duration is refused ($GOT), never read as 0"
@@ -580,7 +615,7 @@ fi
 # green does not imply the recipe can start is worse than no guard, and those
 # errors name nothing. Both sides now accept only <N>m / <N>s.
 for BAD_DUR in 1h 1.5m 10m30s 90ms; do
-  printf '%s\n' 'wide:' "	@(cd x $AND go test -timeout $BAD_DUR ./...)" > "$WORK/wide.mk"
+  printf '%s\n' 'test-go:' "	@(cd x $AND go test -timeout $BAD_DUR ./...)" > "$WORK/wide.mk"
   GOT="$(makefile_timeout_seconds "$WORK/wide.mk")"
   if [[ "$GOT" == "UNPARSEABLE:$BAD_DUR" ]]; then
     ok "Makefile side: '$BAD_DUR' is a legal GO duration but NOT a legal GO_TEST_TIMEOUT — refused ($GOT), same as the recipe refuses it"
@@ -721,8 +756,8 @@ fi
 # --- C: the verdict function itself, both ways, on synthetic pairs ----------
 # Without this the mutants below could all be "caught" by a verdict() that
 # always says VIOLATION, and the sentinel could be met by one that never does.
-printf '%s\n' 'green:' "	@(cd x $AND go test -timeout 1m ./...)" > "$WORK/v-green.mk"
-printf '%s\n' 'red:'   "	@(cd x $AND go test -timeout 30m ./...)" > "$WORK/v-red.mk"
+printf '%s\n' 'test-go:' "	@(cd x $AND go test -timeout 1m ./...)" > "$WORK/v-green.mk"
+printf '%s\n' 'test-go:' "	@(cd x $AND go test -timeout 30m ./...)" > "$WORK/v-red.mk"
 cat >"$WORK/v.yml" <<'YML_EOF'
 name: fixture
 on: [push]
@@ -775,12 +810,59 @@ fi
 # timeout sum cannot — `set -e` ends the recipe on the first module that times
 # out; see the Makefile comment). An alarm set at or above the ceiling is an
 # alarm that first rings after the cell is already dead.
-REAL_WIRING="$(makefile_total_warn_wiring "$MAKEFILE")"
-case "$REAL_WIRING" in
-  OK) ok "green-time alarm is WIRED — the test-go recipe accumulates each module's elapsed seconds and compares the running total against GO_TEST_TOTAL_WARN. Without this check the three ways of deleting the alarm (drop the block, drop the accumulation, scale the threshold) were all green" ;;
-  MISSING-ACCUMULATOR) bad "green-time alarm — the test-go recipe never adds each module's elapsed time into a running total, so GO_TEST_TOTAL_WARN cannot fire no matter what it is set to ($REAL_WIRING)" ;;
-  *) bad "green-time alarm — the test-go recipe never compares its running total against GO_TEST_TOTAL_WARN ($REAL_WIRING)" ;;
-esac
+# ── T7b: RUN THE RECIPE AND WATCH THE ALARM ────────────────────────────────
+# 🔴 THE TEXT CHECK BELOW IS NOT ENOUGH, AND REVIEW PROVED IT FOUR TIMES. Every
+# one of these kept both greppable strings in place and left T7a green while the
+# alarm was dead or measuring the wrong thing:
+#   * `total=0` reset inside the loop  ⇒ only the LAST module is ever weighed
+#   * `elapsed=0`                      ⇒ the total is permanently 0
+#   * `if false && [[ … ]]`            ⇒ the branch cannot be taken
+#   * warn_s fed a literal `60m` while GO_TEST_TOTAL_WARN stays 5m ⇒ the constant
+#     T7 compares against and the value the recipe uses come apart entirely
+# A greppable pattern can always be satisfied without the behaviour. So this runs
+# the recipe — `make -n` prints it fully expanded, and swapping in a stub `go`
+# that sleeps 1s per module makes a complete run cost ~4s instead of 230s.
+#
+# The pair is what makes it load-bearing: with the line at 3s the four stubbed
+# modules (≈4s total) MUST trip it, and with the line at 30s they MUST NOT. The
+# positive case alone would pass on a recipe that shouts unconditionally; the
+# negative alone would pass on one that never shouts. Each of the four mutants
+# above fails the POSITIVE case, because each leaves the running total below any
+# threshold the sum should have crossed.
+run_recipe_with_stub_go() { # WARN_VALUE -> the recipe's output
+  local warn="$1" expanded stub
+  expanded="$(cd "$ROOT" && make -n test-go GO_TEST_TOTAL_WARN="$warn" 2>/dev/null)" || return 1
+  stub="$WORK/stub-go"
+  { echo '#!/usr/bin/env bash'; echo 'sleep 1'; echo 'exit 0'; } > "$stub"
+  chmod +x "$stub"
+  # Keep only the test-go recipe itself: `make -n` prints its prerequisite
+  # (build-embed-assets) first, and that one really does stage artefacts.
+  # LAST recipe only. `make -n` prints the prerequisite (build-embed-assets)
+  # first, and that one really does stage artefacts. Each recipe begins with the
+  # shared `set -euo pipefail` prologue, so keeping only what follows the final
+  # one isolates test-go — including its `GO=` line, which is the whole point of
+  # the extraction and which a naive cut at `dur_s()` leaves behind.
+  printf '%s\n' "$expanded" |
+    awk '/^set -euo pipefail/ { buf = "" } { buf = buf $0 "\n" } END { printf "%s", buf }' |
+    sed "s|GO=\"\$(oc_go)\"|GO=\"$stub\"|" > "$WORK/recipe.sh"
+  bash "$WORK/recipe.sh" 2>&1
+}
+
+if ! command -v make >/dev/null 2>&1; then
+  bad "green-time alarm — make is unavailable, so the recipe could not be run and nothing below was actually measured"
+else
+  TRIPPED="$(run_recipe_with_stub_go 3s || true)"
+  QUIET="$(run_recipe_with_stub_go 30s || true)"
+  if ! printf '%s' "$TRIPPED" | grep -q 'all modules finished in'; then
+    bad "green-time alarm — the recipe did not run to completion under a stub go, so neither case below measured anything (output: $(printf '%s' "$TRIPPED" | tail -2 | tr '\n' ' '))"
+  elif ! printf '%s' "$TRIPPED" | grep -q 'TOTAL'; then
+    bad "green-time alarm — RAN the recipe with the warning line at 3s and four modules taking ~4s, and NO total-time warning was printed. The sum of green module time is what can kill the cell, and nothing is watching it. Causes review has actually produced: the running total reset inside the loop (only the last module weighed), elapsed forced to 0, the branch made unreachable, or the recipe reading a different value than GO_TEST_TOTAL_WARN"
+  elif printf '%s' "$QUIET" | grep -q 'TOTAL'; then
+    bad "green-time alarm — the warning fired with the line at 30s on a ~4s run, so it is unconditional. An alarm that is always on is one people learn to skip, which is the same as not having it"
+  else
+    ok "green-time alarm FIRES ON THE SUM — measured by running the real recipe against a stub go: at a 3s line the four modules (~4s) trip it, at a 30s line they do not. This is behaviour, not a pattern in the file"
+  fi
+fi
 
 REAL_WARN="$(makefile_named_duration_seconds "$MAKEFILE" GO_TEST_TOTAL_WARN)"
 case "$REAL_WARN" in
