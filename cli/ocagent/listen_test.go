@@ -2402,13 +2402,15 @@ func TestConnectOnce_ConnectionLineNamesTheShaTheStationSelfReports(t *testing.T
 func TestConnectOnce_NoStationSHALeavesTheLineUnadornedAndNeverReusesTheLastOne(t *testing.T) {
 	cfgTempDir = t.TempDir()
 	const sha = "9f3c1ab77e40"
-	var mode atomic.Int32 // 0 stamped · 1 header absent · 2 header present but empty
+	var mode atomic.Int32 // 0 stamped · 1 header absent · 2 present but empty · 3 station says "unknown"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch mode.Load() {
 		case 0:
 			stationHandler(sha, true)(w, r)
 		case 1:
 			stationHandler("", false)(w, r)
+		case 3:
+			stationHandler("unknown", true)(w, r)
 		default:
 			stationHandler("", true)(w, r)
 		}
@@ -2464,5 +2466,18 @@ func TestConnectOnce_NoStationSHALeavesTheLineUnadornedAndNeverReusesTheLastOne(
 	if absent != empty {
 		t.Fatalf("a station that sent nothing and one that sent an empty sha must "+
 			"produce the same line:\n%s\n%s", absent, empty)
+	}
+
+	// A station whose build carries no sha reports the literal "unknown"
+	// (server.go gitSHA). That is the station's own answer, not a missing
+	// header, so it is passed through: the client never decides what a sha
+	// means, and "[station unknown]" says truthfully that this station could
+	// not name its build. Folding it into the absent case would hide a
+	// station running an unstamped binary.
+	mode.Store(3)
+	unknown := connect()
+	if !strings.HasSuffix(unknown, " [station unknown]") {
+		t.Fatalf("a station that reports \"unknown\" must be quoted verbatim, not "+
+			"silently dropped; got:\n%s", unknown)
 	}
 }

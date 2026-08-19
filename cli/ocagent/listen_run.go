@@ -279,10 +279,17 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	// that is precisely the station's most fragile moment to be asked N times.
 	//
 	// 🔴 THE SUFFIX GOES AT THE END AND THE PREFIX DOES NOT MOVE. The codex
-	// sidecar decides this line is NOT actionable by matching the prefix
-	// "[ocagent] listen: connected" (cli/ocwarden/codex_session.go); anything
-	// that pushes those bytes rightward makes every reconnect wake every codex
-	// agent — at a changeover, all of them, at once.
+	// sidecar reads this line through TWO prefix checks, and pushing those
+	// bytes rightward breaks BOTH (cli/ocwarden/codex_session.go):
+	//   - actionableCodexListenerLine (:695) keeps transport chatter out of
+	//     the model transcript by matching the SHORT prefix "[ocagent] listen:".
+	//     Miss it and every connect and every reconnect turns the raw line into
+	//     a turn — at a changeover, for the whole fleet at once.
+	//   - codexListenerActions (:687) opens the ONE post-boot wake (T-51b0) on
+	//     the long prefix "[ocagent] listen: connected". Miss it and that wake
+	//     never fires, silently, and nothing reports it.
+	// The long prefix implies the short one, so the test that pins it guards
+	// both paths.
 	//
 	// Absent header ⇒ the line is emitted byte-identical to what it was before
 	// this change. Nothing is fabricated and no earlier value is reused: each
