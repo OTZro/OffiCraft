@@ -108,10 +108,10 @@ Claude's percentage-based handover remains unchanged. Codex App Server keeps a d
 thread and can compact that thread without ending the session, so a transient context
 percentage is not its useful handover signal. The sidecar counts completed
 `contextCompaction` items and includes the current count in context telemetry. Once a live
-session reaches the owner-settable round (`codex_compaction_threshold`, 1-10, with
+session reaches the owner-settable round (`codex_compaction_threshold`, with
 `codex_notice_round` the earlier warning), the existing graceful refocus flow runs; a real
 session boundary clears the count before the replacement thread reports again. Monitoring
-renders the count alone (`compact: N`), with no denominator; Claude remains
+renders the count with no denominator (`context N% (compact: K)`); Claude remains
 percentage-only.
 
 The cockpit's Global Context editor remains a single shared owner-additions block. The
