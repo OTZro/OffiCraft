@@ -452,29 +452,79 @@ test-bin-guards:
 #   other checks sharing the go-checks cell (lint-go-*, build-go,
 #   test-system-interaction-examples) ≈ 3 min  ⇒ ≈ 19 min < 25.
 #
-# ⚠️ THAT BUDGET ASSUMES AT MOST ONE MODULE EVER RUNS TO THE LIMIT, AND NOTHING
-#    ENFORCES THAT ASSUMPTION. If a second module also grows to 15m the sum
-#    blows past the job ceiling and the cell dies the un-diagnosable way again.
-#    This is a known, UNGUARDED hole — the guard checks one timeout against one
-#    job ceiling, not the sum over modules. Do not read its green as coverage.
+# ⚠️ WHICH SUM IS ACTUALLY OPEN, AND WHICH ONE IS NOT (corrected T-cf93)
+#    This comment used to warn that "at most one module may run to the limit,
+#    and nothing enforces that". THAT WARNING POINTED AT A DOOR THAT IS ALREADY
+#    SHUT. `set -e` shuts it: the recipe is one shell command, so the FIRST
+#    module whose `go test` times out kills the recipe on the spot — measured,
+#    with GO_TEST_TIMEOUT=50s: the failing round never even printed its
+#    `finished in Xs` line and the loop never reached the next module. Timeouts
+#    cannot accumulate. There is no worst case in which two modules each burn
+#    the full 15m.
+#
+#    THE SUM THAT IS OPEN IS THE SUM OF *GREEN* TIME. Four modules that each
+#    take 9 minutes and all PASS produce 36 minutes with zero timeouts, and
+#    GitHub kills the go-checks cell at its 25m ceiling — no goroutine dump, and
+#    both the guard and the per-module warning below stay green, because no
+#    single module ever came near its 15m limit. Nothing about a timeout is
+#    involved; the cell simply runs out of wall clock while succeeding.
+#
+#    That is what GO_TEST_TOTAL_WARN watches: the recipe accumulates each
+#    module's elapsed seconds and shouts when the RUNNING TOTAL crosses it.
+#
+# ── WHY GO_TEST_TOTAL_WARN IS 10m ───────────────────────────────────────────
+# It is 40% of the go-checks job's 25m ceiling in ci.yml, which lands it between
+# the two numbers that matter:
+#   * ABOVE today's reality, so it is not noise. The whole go-checks cell
+#     currently measures 6:44 / 6:57 / 7:37 end to end, and test-go is only part
+#     of that.
+#   * WELL BELOW the line that kills. The rest of the cell (checkout, setup-go,
+#     lint-go-*, build-go, test-system-interaction-examples) costs ≈3–4 min, so
+#     test-go has ≈21 min before the ceiling cuts it. 10m leaves a full doubling
+#     of headroom to notice in and act, which is the whole point of warning while
+#     the cell is still green.
+# Contrast the per-module two-thirds warning below, which is anchored to the
+# per-package limit (600s of 900s): 600s for ONE module is larger than today's
+# ENTIRE cell, so that line sits ABOVE the danger line and cannot realistically
+# fire first. It is kept because it is the right alarm for "one module is about
+# to hit go's own timeout" — but it is not the one guarding the ceiling.
+# bin/tests/go-test-timeout-guard.sh pins GO_TEST_TOTAL_WARN under the job
+# ceiling for the same reason it pins GO_TEST_TIMEOUT: a warning that only trips
+# after the cell is already dead is not a warning.
 #
 # The price of 10m → 15m: a genuinely hung test is found five minutes later.
 # Accepted deliberately, because losing the goroutine dump costs far more.
 #
-# The recipe times each MODULE (`go test ./...` over all its packages) and warns
-# past two thirds of the limit. Module time ≥ any single package's time, so the
-# comparison is conservative: it warns EARLY, never late.
+# ── ONE DURATION SEMANTICS, SHARED WITH THE GUARD ───────────────────────────
+# Both values are <N>m or <N>s with an INTEGER N, and nothing else — narrower
+# than go on purpose. The recipe does arithmetic on them, and integer minutes or
+# seconds is what shell arithmetic can carry. go-test-timeout-guard.sh refuses
+# the same set, so its green implies this recipe can actually start; before the
+# two were converged, `1.5m` and `10m30s` were green in the guard and died here
+# with `1.5 * 60 : syntax error` and `10m30: value too great for base` — errors
+# that name nothing anybody can act on. Widening one side means widening both.
 GO_TEST_TIMEOUT := 15m
+GO_TEST_TOTAL_WARN := 10m
 
 test-go: build-embed-assets
 	@$(P) \
 	GO="$$(oc_go)"; \
-	tl="$(GO_TEST_TIMEOUT)"; \
-	case "$$tl" in \
-	  *m) limit_s=$$(( $${tl%m} * 60 ));; \
-	  *s) limit_s=$${tl%s};; \
-	  *) echo "FAIL — GO_TEST_TIMEOUT '$$tl' must be <N>m or <N>s" >&2; exit 1;; \
-	esac; \
+	dur_s() { \
+	  local v="$$1" n="$$2"; \
+	  if [[ "$$v" =~ ^([0-9]+)m$$ ]]; then echo $$(( $${BASH_REMATCH[1]} * 60 )); \
+	  elif [[ "$$v" =~ ^([0-9]+)s$$ ]]; then echo "$${BASH_REMATCH[1]}"; \
+	  else \
+	    echo "FAIL — $$n '$$v' must be <N>m or <N>s with an integer N." >&2; \
+	    echo "       go itself accepts more (1h, 1.5m, 10m30s); this recipe and" >&2; \
+	    echo "       bin/tests/go-test-timeout-guard.sh deliberately share ONE" >&2; \
+	    echo "       narrower semantics, so that a green guard implies a runnable" >&2; \
+	    echo "       recipe. Widen both or neither." >&2; \
+	    return 1; \
+	  fi; \
+	}; \
+	limit_s="$$(dur_s "$(GO_TEST_TIMEOUT)" GO_TEST_TIMEOUT)"; \
+	warn_s="$$(dur_s "$(GO_TEST_TOTAL_WARN)" GO_TEST_TOTAL_WARN)"; \
+	total=0; \
 	for gomod in cli/*/go.mod server/*/go.mod; do \
 	  [[ -f "$$gomod" ]] || continue; \
 	  dir="$$(dirname "$$gomod")"; \
@@ -482,16 +532,29 @@ test-go: build-embed-assets
 	  started=$$(date +%s); \
 	  (cd "$$dir" && "$$GO" test -count=1 -timeout $(GO_TEST_TIMEOUT) ./...); \
 	  elapsed=$$(( $$(date +%s) - started )); \
-	  echo "[test-go] $$dir finished in $${elapsed}s (per-package limit $${limit_s}s)"; \
+	  total=$$(( total + elapsed )); \
+	  echo "[test-go] $$dir finished in $${elapsed}s (per-package limit $${limit_s}s, running total $${total}s)"; \
 	  if [[ $$(( elapsed * 3 )) -ge $$(( limit_s * 2 )) ]]; then \
 	    echo "⚠️  [test-go] $$dir used $${elapsed}s — OVER TWO THIRDS of the $${limit_s}s per-package limit ($(GO_TEST_TIMEOUT))."; \
 	    echo "⚠️  [test-go] This round is still GREEN. That is the point: the warning is meant to arrive"; \
 	    echo "⚠️  [test-go] while the cell is passing, not on the round it finally dies."; \
 	    echo "⚠️  [test-go] Raising GO_TEST_TIMEOUT is NOT free — read its comment in the Makefile: go's"; \
-	    echo "⚠️  [test-go] limit must stay strictly under the go-checks job's timeout-minutes in ci.yml,"; \
-	    echo "⚠️  [test-go] and that budget assumes AT MOST ONE module ever runs to the limit."; \
+	    echo "⚠️  [test-go] limit must stay strictly under the go-checks job's timeout-minutes in ci.yml."; \
 	  fi; \
 	done; \
+	echo "[test-go] all modules finished in $${total}s total (warn at $${warn_s}s = $(GO_TEST_TOTAL_WARN))"; \
+	if [[ $$total -ge $$warn_s ]]; then \
+	  echo "⚠️  [test-go] TOTAL $${total}s across all modules is at or past the $${warn_s}s ($(GO_TEST_TOTAL_WARN)) line."; \
+	  echo "⚠️  [test-go] Every module PASSED and no timeout fired — that is exactly the failure this"; \
+	  echo "⚠️  [test-go] warning exists for. The go-checks job in .github/workflows/ci.yml has a"; \
+	  echo "⚠️  [test-go] timeout-minutes ceiling, and green time counts against it just as timed-out"; \
+	  echo "⚠️  [test-go] time does. When the sum reaches that ceiling GitHub cancels the cell with NO"; \
+	  echo "⚠️  [test-go] goroutine dump and no name for what was slow — the un-diagnosable death that"; \
+	  echo "⚠️  [test-go] GO_TEST_TIMEOUT exists to avoid, arriving by the one route GO_TEST_TIMEOUT"; \
+	  echo "⚠️  [test-go] cannot see, because no single module ever approached its own limit."; \
+	  echo "⚠️  [test-go] Make the suite faster, or split the cell. Raising GO_TEST_TOTAL_WARN only"; \
+	  echo "⚠️  [test-go] moves the alarm; bin/tests/go-test-timeout-guard.sh keeps it under the ceiling."; \
+	fi; \
 	$(DONE)
 
 test-system-interaction-examples:
