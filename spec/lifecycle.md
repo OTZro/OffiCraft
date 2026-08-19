@@ -373,6 +373,16 @@ decides that time is up.
   a wake that has been dispatched but never connected force-stops it outright — nobody is
   inside being told anything. See §4.2 and `docs/design/offboard-flow.md` §三.)
 - There is no separate force-kill RPC either way: the warden self-escalates the kill.
+- 🔴 **An OUTSOURCE worker does not have these two arms — it has only the forced one.**
+  `POST /api/outsource-workers/{id}/stop` is named like the graceful 下線 but behaves like
+  強制下線: it sets `desired_state=offline` and kills the session on the spot, with no
+  grace, no 預告 and no chance to work the sequence. So it stamps what 強制下線 stamps
+  (`forced_stop_at` **and** `stopping_since`, T-c996) and the worker is told **nothing** —
+  the same ruling, now enforced on both sides rather than only on the staff side.
+  ⚠️ **The consequence is a real gap, not a design choice**: there is today no verb that
+  gives an outsource worker the graceful 下線 a staff member gets. Adding one is a change to
+  the owner's set of buttons, not a bug fix, so it is out of T-c996's scope and is recorded
+  here rather than silently filled in.
 - 🔴 **Neither of those two paths re-dispatches.** Both go through the one-shot
   `dispatchRobustStopNow`, which enqueues once and does NOT write `last_command` /
   `last_command_at` — so the producer's de-dupe/re-dispatch discipline below never engages

@@ -995,6 +995,19 @@ type OutsourceWorker struct {
 	// flight) — the worker twin of member.refocus_op. Stamped and cleared in
 	// lockstep with RefocusSince.
 	RefocusOp string
+	// ForcedStopAt mirrors member.forced_stop_at (T-a9d6, migrations/00057) —
+	// the durable record that this session was CUT OFF rather than collected,
+	// and the one field forcedEpochLive reads to decide whether an offboard
+	// delta says anything at all.
+	//
+	// 🔴 It has to be here, not derived, because the projection rebuilds a
+	// Member from scratch: for as long as this field did not exist,
+	// forcedEpochLive was FALSE for every worker that ever ran, and the silence
+	// the owner ruled for a forced stop simply did not apply on this side
+	// (T-c996). Deriving it from desired_state instead would be true only for as
+	// long as 停止 stays the ONLY writer of offline on a worker — a condition
+	// nothing enforces and nothing would report breaking.
+	ForcedStopAt float64
 	// StoppingSince / StoppedSince are the graceful-handover wind-down anchors
 	// (T-ea82), DIRECT mirrors of the member columns (the row has carried them
 	// since the P7d fold): stopping_since marks the SOP started; stopped_since
@@ -1071,6 +1084,7 @@ func workerFromMember(m Member) OutsourceWorker {
 		RefocusOp:          m.RefocusOp,
 		StoppingSince:      m.StoppingSince,
 		StoppedSince:       m.StoppedSince,
+		ForcedStopAt:       m.ForcedStopAt,
 		DesiredState:       m.DesiredState,
 		BankedCost:         m.BankedCost,
 		AvatarAttachmentID: m.AvatarAttachmentID,
@@ -1118,6 +1132,7 @@ func memberFromWorker(w OutsourceWorker) Member {
 		RefocusOp:          w.RefocusOp,
 		StoppingSince:      w.StoppingSince,
 		StoppedSince:       w.StoppedSince,
+		ForcedStopAt:       w.ForcedStopAt,
 		BankedCost:         w.BankedCost,
 		LastOp:             w.LastOp,
 		LastOpOK:           w.LastOpOK,
