@@ -26,7 +26,26 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINDIST="$ROOT/server/ocserverd/bindist"
 rm -rf "$BINDIST"
 mkdir -p "$BINDIST"
-(cd "$ROOT/cli/ocagent" && go build -ldflags="-s -w" -o "$BINDIST/ocagent" ./...)
+# 🔴 ocagent CARRIES ITS BUILD SHA; the other two deliberately do NOT.
+# A listener process holds the image it started with. Measured on this fleet:
+# one listener sat on inode 65557770 while the file on disk turned over four
+# times (65845892 → 66185238 → 66321537) — so a FIXED bug is, for every
+# long-lived agent, unfixed until it restarts, and "ship it and watch the fleet
+# get better" returns a false negative. T-5b83 lost two generations to exactly
+# that, both nearly concluding cloudflared was stripping a header. Without a
+# stamp the only way to know which ocagent a listener runs is lsof from outside.
+#
+# ⚠️ NOT cli/officraft (below): its -trimpath -buildvcs=false exist precisely to
+# keep the git revision OUT of the bits (dist/officraft/BUILD.md), because that
+# binary is the ONE committed prebuilt and check-officraft-dist compares its
+# bytes. Stamping it would change the anchor's TCC identity every commit and
+# make the committed bytes unreproducible from a clean clone. Measured: stamping
+# all three ⇒ check-officraft-dist rc=1 (`stale: cli/officraft source hash`);
+# stamping ocagent alone ⇒ rc=0, the other two byte-identical to baseline.
+# ocwarden is not a listener and needs none. -s -w strips symbols and DWARF,
+# neither of which -X uses, so stamping costs no strip.
+OCAGENT_SHA="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo '')"
+(cd "$ROOT/cli/ocagent" && go build -ldflags="-s -w -X main.buildSHA=$OCAGENT_SHA" -o "$BINDIST/ocagent" ./...)
 # The anchor is built BEFORE ocwarden and staged into cli/ocwarden/anchordist,
 # because ocwarden embeds it: the cockpit's one-liner downloads ocwarden alone,
 # and `ocwarden install` refuses without an anchor. Staging into both places

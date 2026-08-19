@@ -278,18 +278,34 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	// no second request: a changeover reconnects the whole fleet at once, and
 	// that is precisely the station's most fragile moment to be asked N times.
 	//
-	// 🔴 THE SUFFIX GOES AT THE END AND THE PREFIX DOES NOT MOVE. The codex
-	// sidecar reads this line through TWO prefix checks, and pushing those
-	// bytes rightward breaks BOTH (cli/ocwarden/codex_session.go):
-	//   - actionableCodexListenerLine (:695) keeps transport chatter out of
-	//     the model transcript by matching the SHORT prefix "[ocagent] listen:".
-	//     Miss it and every connect and every reconnect turns the raw line into
-	//     a turn — at a changeover, for the whole fleet at once.
-	//   - codexListenerActions (:687) opens the ONE post-boot wake (T-51b0) on
-	//     the long prefix "[ocagent] listen: connected". Miss it and that wake
-	//     never fires, silently, and nothing reports it.
-	// The long prefix implies the short one, so the test that pins it guards
-	// both paths.
+	// 🔴 SUFFIXES ONLY, AND THE PREFIX DOES NOT MOVE. The codex sidecar reads this
+	// line through THREE prefix checks (cli/ocwarden/codex_session.go), and pushing
+	// those bytes rightward breaks all three. They are named by function, not by
+	// line number, because the line numbers in an earlier version of this comment
+	// had already drifted:
+	//   - actionableCodexListenerLine keeps transport chatter out of the model
+	//     transcript by matching the SHORT prefix "[ocagent] listen:". Miss it and
+	//     every connect and reconnect turns the raw line into a turn — at a
+	//     changeover, for the whole fleet at once.
+	//   - codexListenerActions opens the ONE post-boot wake (T-51b0) on the long
+	//     prefix "[ocagent] listen: connected". Miss it and that wake never fires,
+	//     silently, and nothing reports it.
+	//   - handleListenerLine fires onConnect() telemetry on that same long prefix,
+	//     on EVERY connect. This one was missing from this list entirely.
+	// All three TrimSpace and then HasPrefix, so they read the head of the line
+	// only: anything appended is safe, anything prepended breaks three things at
+	// once. The long prefix implies the short one, so the one test that pins the
+	// real printed line covers all three — and it is the ONLY test that does. The
+	// four sidecar tests feed hand-written constants and cannot see what this
+	// function actually prints.
+	//
+	// ⚠️ "AT THE END" IS NOT WHERE THESE LAND. cmdListen wraps out in a
+	// stampWriter before the first print, which inserts " [ts=<float> local]"
+	// ahead of the first newline — so the real transcript line ends with the
+	// timestamp and everything added here sits to its LEFT. Confirmed against a
+	// live listener, not just read: `… (⇒ online while held) [station da11eae8]
+	// [ts=1787148244.692 local]`. Tests that use newTestListener see no stamp
+	// because that helper writes past the wrapper.
 	//
 	// Absent header ⇒ the line is emitted byte-identical to what it was before
 	// this change. Nothing is fabricated and no earlier value is reused: each
@@ -298,7 +314,28 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	if sha := strings.TrimSpace(resp.Header.Get(stationSHAHeader)); sha != "" {
 		station = " [station " + sha + "]"
 	}
-	l.logf("listen: connected — streaming %s%s (⇒ online while held)%s", l.cfg.Base, eventsPath, station)
+	// ── AND WHICH OCAGENT IS SAYING IT ──────────────────────────────────────
+	// The station sha above names the peer; this names the SPEAKER. They are
+	// different clocks: the station changes when it is deployed, this process
+	// changes only when it restarts. Measured on this fleet: a listener held one
+	// inode while the file on disk turned over four times, so its behaviour was
+	// four changeovers old and the connection line said nothing about it.
+	//
+	// Empty ⇒ THE SEGMENT IS NOT PRINTED AT ALL. An unstamped build (any plain
+	// `go build`, every test binary) must produce the line byte-identical to what
+	// it was before this change: no empty brackets, no placeholder, and nothing
+	// carried over from another build — same rule the station segment follows.
+	// TrimSpace, exactly like the station segment above: `-X main.buildSHA=` with
+	// nothing after it, or a build script whose sha lookup produced whitespace,
+	// must take the same not-known path as a stamp that was never applied. A
+	// blank one printed as " [agent \t]" looks like an answer, and the two
+	// segments disagreeing about what counts as absent is the kind of difference
+	// nobody finds until they are reading a transcript for another reason.
+	agent := ""
+	if sha := strings.TrimSpace(buildSHA); sha != "" {
+		agent = " [agent " + sha + "]"
+	}
+	l.logf("listen: connected — streaming %s%s (⇒ online while held)%s%s", l.cfg.Base, eventsPath, station, agent)
 
 	// Boot/reconnect drain: /api/events has no replay, so any reply_card delta
 	// fanned while this listener held no stream is lost — catch up from the
