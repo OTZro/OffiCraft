@@ -1453,11 +1453,11 @@
       "name": "list_machines"
     },
     {
-      "description": "Bootstrap on server: install this machine's warden on the host.",
+      "description": "Bootstrap on server: runs `ocwarden install --force` on the SERVER's own host. machine_id is NOT a target — this verb has no way to reach another machine, and naming one is refused (409); the server-local machine is the only value it accepts, and the install overwrites the existing one, which is how you repair this host's warden. To install a different machine, fetch that machine's own boot command with GET /api/machines/{machine_id}/boot-command and run it on that host.",
       "inputSchema": {
         "properties": {
           "machine_id": {
-            "description": "Which machine's IDENTITY the installed warden runs as. An unknown or retired id is a 404, so the dangerous wrong value is the one that RESOLVES: the install always happens on the server's own host - the child process is addressed by the server's HOME and uid, never by this parameter - while the token it is handed is minted for the machine you named. Naming a valid but wrong machine therefore installs this host's warden under another machine's identity, answers 200 with ok true, and echoes your machine_id back as if it had been honoured. The install runs with --force, so it overwrites an existing one rather than refusing.",
+            "description": "Which machine the caller claims to be talking about — NOT a target selector. The install always happens on the server's own host: the child process is addressed by the server's HOME and uid, never by this parameter. An unknown or retired id is a 404; the server-local machine (its id is 'm-server-self') is the one value that proceeds, and it reinstalls this host's warden with `install --force`, overwriting an existing install rather than refusing. Every OTHER id that resolves is a 409, refused before anything is installed or written, because honouring it would put this host's warden under another machine's identity. There is no flag that widens this verb: to install a different machine, fetch that machine's own one-liner with GET /api/machines/{machine_id}/boot-command and run it on that host.",
             "type": "string"
           }
         },

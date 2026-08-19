@@ -892,7 +892,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleBootstrapHereApiMachinesMachineIdBootstrapHerePost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Bootstrap on server: install this machine's warden on the host.",
+			Summary:  "Bootstrap on server: runs `ocwarden install --force` on the SERVER's own host. machine_id is NOT a target — this verb has no way to reach another machine, and naming one is refused (409); the server-local machine is the only value it accepts, and the install overwrites the existing one, which is how you repair this host's warden. To install a different machine, fetch that machine's own boot command with GET /api/machines/{machine_id}/boot-command and run it on that host.",
 			MCPTool:  "install_warden_on_server_host",
 		},
 		{

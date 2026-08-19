@@ -3598,7 +3598,7 @@ type ServerInterface interface {
 	// Re-fetch a machine's boot command anytime (re-mints its exec-token).
 	// (GET /api/machines/{machine_id}/boot-command)
 	HandleMachineBootCommandApiMachinesMachineIdBootCommandGet(w http.ResponseWriter, r *http.Request, machineId string)
-	// Bootstrap on server: install this machine's warden on the host.
+	// Bootstrap on server: runs `ocwarden install --force` on the SERVER's own host. machine_id is NOT a target — this verb has no way to reach another machine, and naming one is refused (409); the server-local machine is the only value it accepts, and the install overwrites the existing one, which is how you repair this host's warden. To install a different machine, fetch that machine's own boot command with GET /api/machines/{machine_id}/boot-command and run it on that host.
 	// (POST /api/machines/{machine_id}/bootstrap-here)
 	HandleBootstrapHereApiMachinesMachineIdBootstrapHerePost(w http.ResponseWriter, r *http.Request, machineId string)
 	// Teardown on server: runs `ocwarden teardown` on the SERVER's own host. machine_id is NOT a target — this verb has no way to reach another machine, and naming one is refused (409). The server-local machine is refused too (retiring it revokes credentials fleet-wide). To retire another machine use uninstall_machine then delete_machine; to repair the server host's own warden use install_warden_on_server_host, which runs `install --force` over the existing install.
