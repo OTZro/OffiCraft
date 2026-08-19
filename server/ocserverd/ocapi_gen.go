@@ -1700,6 +1700,13 @@ type RestartSelfDTO struct {
 	Reason *string `json:"reason,omitempty"`
 }
 
+// ResumeAnsweredCardStepDTO ONE step of a resume-summary task row that is sitting on a reply card the owner has ALREADY answered while the step itself is still “in_progress“ — the answer landed and nobody has acted on it yet. It carries “step_id“, “step_name“ and “card_id“ and NO card body: read the answer with “get_reply_card“. This is a POINTER, never a verdict — the server puts a held step back to “in_progress“ the moment the card is answered (it releases the wait, it does not do the executor's work), and an owner's answer is as often 不通過／改做 as it is approval, so nothing here means the step is finished.
+type ResumeAnsweredCardStepDTO struct {
+	CardId   string `json:"card_id"`
+	StepId   string `json:"step_id"`
+	StepName string `json:"step_name"`
+}
+
 // ResumeChatCutDTO The CUT POINT of the wake snapshot's chat: whether messages exist that this
 // payload does NOT carry, and how to go and get them.
 //
@@ -1729,17 +1736,19 @@ type ResumeMachinesDTO struct {
 	YouAreOn string             `json:"you_are_on"`
 }
 
-// ResumeOverviewDTO The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). “chat_count“ / “tasks_returned“ count what THIS snapshot carries; “tasks_open_total“ is ALL the caller's open tasks (may exceed the bounded rows — page with “list_tasks“); “tasks_detail_chars“ sums every returned row's “detail_chars“ (the plan text a full “get_task“ pull would load); “cards_waiting“ / “cards_answered_recent“ count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with “list_reply_cards“, cap with its “limit“). “roster_chars“ / “machines_chars“ (T-1b09) size the two studio-floor blocks THIS snapshot carries — reported separately, and deliberately NOT folded into “tasks_detail_chars“: that one counts text the snapshot does NOT carry (the plan text a later “get_task“ would load), so mixing the two kinds of number is what made “estimated_total_chars“ ambiguous in the first place.
+// ResumeOverviewDTO The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). “chat_count“ / “tasks_returned“ count what THIS snapshot carries; “tasks_open_total“ is ALL the caller's open tasks (may exceed the bounded rows — page with “list_tasks“); “tasks_detail_chars“ sums every returned row's “detail_chars“ (the plan text a full “get_task“ pull would load); “cards_waiting“ / “cards_answered_recent“ count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with “list_reply_cards“, cap with its “limit“). “roster_chars“ / “machines_chars“ (T-1b09) size the two studio-floor blocks THIS snapshot carries — reported separately, and deliberately NOT folded into “tasks_detail_chars“: that one counts text the snapshot does NOT carry (the plan text a later “get_task“ would load), so mixing the two kinds of number is what made “estimated_total_chars“ ambiguous in the first place. “steps_on_answered_card“ counts the “answered_card_steps“ rows across the returned tasks — steps sitting on a reply card the owner already answered while the step is still “in_progress“, i.e. an answer nobody has picked up; “steps_on_answered_card_chars“ sizes the text those rows carry and, like “roster_chars“/“machines_chars“, IS folded into “estimated_total_chars“ because the snapshot does carry it.
 type ResumeOverviewDTO struct {
-	CardsAnsweredRecent int  `json:"cards_answered_recent"`
-	CardsWaiting        int  `json:"cards_waiting"`
-	ChatChars           int  `json:"chat_chars"`
-	ChatCount           int  `json:"chat_count"`
-	MachinesChars       *int `json:"machines_chars,omitempty"`
-	RosterChars         *int `json:"roster_chars,omitempty"`
-	TasksDetailChars    int  `json:"tasks_detail_chars"`
-	TasksOpenTotal      int  `json:"tasks_open_total"`
-	TasksReturned       int  `json:"tasks_returned"`
+	CardsAnsweredRecent      int  `json:"cards_answered_recent"`
+	CardsWaiting             int  `json:"cards_waiting"`
+	ChatChars                int  `json:"chat_chars"`
+	ChatCount                int  `json:"chat_count"`
+	MachinesChars            *int `json:"machines_chars,omitempty"`
+	RosterChars              *int `json:"roster_chars,omitempty"`
+	StepsOnAnsweredCard      *int `json:"steps_on_answered_card,omitempty"`
+	StepsOnAnsweredCardChars *int `json:"steps_on_answered_card_chars,omitempty"`
+	TasksDetailChars         int  `json:"tasks_detail_chars"`
+	TasksOpenTotal           int  `json:"tasks_open_total"`
+	TasksReturned            int  `json:"tasks_returned"`
 }
 
 // ResumeRosterMemberDTO One roster entry in the wake snapshot — who else is in the studio and how to reach them (owner ruling rc-4e98c0481852, 2026-08-03, verbatim: "All members and contractors and their online / offline status"). “id“ is what you address a message to — names are editable and roles repeat, so NEVER address by name. “kind“ separates permanent members from disposable contractors (a contractor's id is retired with its one task). “duty“ is the role's own definition text, capped at 1000 characters with “…“ marking a cut (owner 2026-08-03: 「1000字 多的截斷」), applied to the definition MINUS its own leading title line (a role doc opens with its own title, which would otherwise spend the budget restating “role_name“; exactly ONE leading ATX heading line is removed — never an inner heading, never a chosen line, and a title-only doc is returned whole). It is NOT summarized and NOT reduced to a chosen line — a heuristic that picks WHICH line to show would silently change what a role appears responsible for whenever its author reorders their own doc, whereas a flat cap can only cut the tail and says so. The cap happens to be the SAME number the owner set for the cap on a duty document itself (「After separation of insight duty should not exceed 1000」), but the two are INDEPENDENT values: this one is a fixed wire constant, that one is an owner-adjustable setting, and raising the setting does not move this. Whether this cap binds at all depends on how long each role's duty happens to be at the moment — that is runtime state, not part of this frozen contract. Do NOT lower this number: the cost was put to the owner in rc-d88c445397a3 — an independent review argued for 150–200 until the separation lands — and he ruled to keep 1000. How often this cap actually fires is deliberately NOT recorded here: that is a runtime reading of one deployment, it goes stale, and nothing in a frozen wire spec can re-derive or correct it. Such measurements live — each carrying the date it was taken — in the server-side comments, where they can be re-checked and revised. NO insight and NO learning ride here — both are readable by ANY authenticated identity, so their absence is a deliberate owner ruling (2026-08-02 「之後應該給 duty 就好，不要給 insight / learning」) and NOT a gap left by lack of access; do not helpfully fill it in later. “machine“ is the live binding (which machine that member runs on); “presence“ is the online/offline status the ruling asks for. Contractors carry no role, so their “role_name“ and “duty“ are “”“ — instead they carry “current_task“, the TITLE of the one task that contractor is bound to, HARD-TRUNCATED (owner ruling rc-a02d8bc7fe23, 2026-08-03: 正職給職責、外包給任務標題): a contractor id is minted per task, so its task title IS its duty. The truncation is not cosmetic — measured task titles average ~99 chars and reach 147, so five untruncated contractor titles alone outweigh the whole machine block. Members carry “duty“ and leave “current_task“ “”“: duty is stable and answers "is this the right person to ask", whereas a member's task changes daily and would churn every agent's boot for less signal. “task_status“/“waiting_reason“/“progress_done“/“progress_total“ are the bound task's progress for contractors only (owner ruling rc-6935feeb293a 選①, T-925f): status and waiting_reason ride the SAME task row already loaded to build “current_task“, and progress comes from one roster-wide grouped step-count query. Members leave all four at their zero value — the same 正職給職責、外包給任務標題 ruling that keeps “current_task“ bare for members applies here, since progress churns even faster than a task title. A contractor reading “0/0“ is AMBIGUOUS — a bound task with no steps yet, or no bound task at all — and “task_status“ is what tells them apart (non-empty vs “”“).
@@ -1824,7 +1833,7 @@ type ResumeSummaryDTO struct {
 	Machines    *ResumeMachinesDTO `json:"machines,omitempty"`
 	Note        *string            `json:"note,omitempty"`
 
-	// Overview The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). ``chat_count`` / ``tasks_returned`` count what THIS snapshot carries; ``tasks_open_total`` is ALL the caller's open tasks (may exceed the bounded rows — page with ``list_tasks``); ``tasks_detail_chars`` sums every returned row's ``detail_chars`` (the plan text a full ``get_task`` pull would load); ``cards_waiting`` / ``cards_answered_recent`` count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with ``list_reply_cards``, cap with its ``limit``). ``roster_chars`` / ``machines_chars`` (T-1b09) size the two studio-floor blocks THIS snapshot carries — reported separately, and deliberately NOT folded into ``tasks_detail_chars``: that one counts text the snapshot does NOT carry (the plan text a later ``get_task`` would load), so mixing the two kinds of number is what made ``estimated_total_chars`` ambiguous in the first place.
+	// Overview The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). ``chat_count`` / ``tasks_returned`` count what THIS snapshot carries; ``tasks_open_total`` is ALL the caller's open tasks (may exceed the bounded rows — page with ``list_tasks``); ``tasks_detail_chars`` sums every returned row's ``detail_chars`` (the plan text a full ``get_task`` pull would load); ``cards_waiting`` / ``cards_answered_recent`` count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with ``list_reply_cards``, cap with its ``limit``). ``roster_chars`` / ``machines_chars`` (T-1b09) size the two studio-floor blocks THIS snapshot carries — reported separately, and deliberately NOT folded into ``tasks_detail_chars``: that one counts text the snapshot does NOT carry (the plan text a later ``get_task`` would load), so mixing the two kinds of number is what made ``estimated_total_chars`` ambiguous in the first place. ``steps_on_answered_card`` counts the ``answered_card_steps`` rows across the returned tasks — steps sitting on a reply card the owner already answered while the step is still ``in_progress``, i.e. an answer nobody has picked up; ``steps_on_answered_card_chars`` sizes the text those rows carry and, like ``roster_chars``/``machines_chars``, IS folded into ``estimated_total_chars`` because the snapshot does carry it.
 	Overview *ResumeOverviewDTO       `json:"overview,omitempty"`
 	Roster   *[]ResumeRosterMemberDTO `json:"roster,omitempty"`
 	Tasks    *[]ResumeTaskDTO         `json:"tasks,omitempty"`
@@ -1839,10 +1848,12 @@ type ResumeSummaryDTO struct {
 // through the shared server path, so they cannot drift) plus
 // “estimated_total_chars“ — a derived single number the boot threshold gates on:
 // exactly “chat_chars“ + “tasks_detail_chars“ + “roster_chars“ +
-// “machines_chars“, all four reported in “overview“. That is the WHOLE chat
+// “machines_chars“ + “steps_on_answered_card_chars“, all five reported in
+// “overview“. That is the WHOLE chat
 // block as the snapshot renders it (“chat_chars“ is the rendered block's cost,
-// NOT the sum of the message bodies), plus the plan text its task rows omit and
-// the two studio-floor blocks it carries — and
+// NOT the sum of the message bodies), plus the plan text its task rows omit, the
+// two studio-floor blocks it carries and the answered-card pointers on its task
+// rows — and
 // a fixed guidance “note“. It carries NO chat bodies and NO task rows: peeking
 // it costs a few hundred bytes, so a waking agent can size “resume_summary“
 // BEFORE deciding whether to pull it into its own context or hand the pull to a
@@ -1854,25 +1865,26 @@ type ResumeSummarySizeDTO struct {
 	Identity            *string `json:"identity,omitempty"`
 	Note                *string `json:"note,omitempty"`
 
-	// Overview The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). ``chat_count`` / ``tasks_returned`` count what THIS snapshot carries; ``tasks_open_total`` is ALL the caller's open tasks (may exceed the bounded rows — page with ``list_tasks``); ``tasks_detail_chars`` sums every returned row's ``detail_chars`` (the plan text a full ``get_task`` pull would load); ``cards_waiting`` / ``cards_answered_recent`` count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with ``list_reply_cards``, cap with its ``limit``). ``roster_chars`` / ``machines_chars`` (T-1b09) size the two studio-floor blocks THIS snapshot carries — reported separately, and deliberately NOT folded into ``tasks_detail_chars``: that one counts text the snapshot does NOT carry (the plan text a later ``get_task`` would load), so mixing the two kinds of number is what made ``estimated_total_chars`` ambiguous in the first place.
+	// Overview The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). ``chat_count`` / ``tasks_returned`` count what THIS snapshot carries; ``tasks_open_total`` is ALL the caller's open tasks (may exceed the bounded rows — page with ``list_tasks``); ``tasks_detail_chars`` sums every returned row's ``detail_chars`` (the plan text a full ``get_task`` pull would load); ``cards_waiting`` / ``cards_answered_recent`` count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with ``list_reply_cards``, cap with its ``limit``). ``roster_chars`` / ``machines_chars`` (T-1b09) size the two studio-floor blocks THIS snapshot carries — reported separately, and deliberately NOT folded into ``tasks_detail_chars``: that one counts text the snapshot does NOT carry (the plan text a later ``get_task`` would load), so mixing the two kinds of number is what made ``estimated_total_chars`` ambiguous in the first place. ``steps_on_answered_card`` counts the ``answered_card_steps`` rows across the returned tasks — steps sitting on a reply card the owner already answered while the step is still ``in_progress``, i.e. an answer nobody has picked up; ``steps_on_answered_card_chars`` sizes the text those rows carry and, like ``roster_chars``/``machines_chars``, IS folded into ``estimated_total_chars`` because the snapshot does carry it.
 	Overview ResumeOverviewDTO `json:"overview"`
 }
 
-// ResumeTaskDTO One task the resuming caller EXECUTES, in the resume-summary snapshot (SPEC §6.2) — a LIGHT row (owner ruling: 任務不該包含細節; the wake snapshot carries NO steps and NO DoD text). It names the task (“task_no“/“title“/“type_key“), its “status“/“priority“/“waiting_reason“, the current node (“current_step_id“ + “current_step_name“ — the first non-terminal step — “superseded“ replan history is skipped like “done“; both “”“ when the plan is empty or complete), the executed-vs-pending boundary as “progress_done“/“progress_total“, and “updated_ts“. “detail_chars“ is the SIZE (in characters) of the plan text this row omits (every step's name + DoD) — the peek-then-decide signal: check it BEFORE pulling detail, and hand a large “get_task“ pull to a sub-agent instead of loading it into your own context. Non-terminal tasks only; the list is BOUNDED (most recently updated first) — page the rest with “list_tasks“ / “get_task“.
+// ResumeTaskDTO One task the resuming caller EXECUTES, in the resume-summary snapshot (SPEC §6.2) — a LIGHT row (owner ruling: 任務不該包含細節; the wake snapshot carries NO steps and NO DoD text). It names the task (“task_no“/“title“/“type_key“), its “status“/“priority“/“waiting_reason“, the current node (“current_step_id“ + “current_step_name“ — the first non-terminal step — “superseded“ replan history is skipped like “done“; both “”“ when the plan is empty or complete), the executed-vs-pending boundary as “progress_done“/“progress_total“, and “updated_ts“. “detail_chars“ is the SIZE (in characters) of the plan text this row omits (every step's name + DoD) — the peek-then-decide signal: check it BEFORE pulling detail, and hand a large “get_task“ pull to a sub-agent instead of loading it into your own context. “answered_card_steps“ names the steps of THIS task that sit on a reply card the owner has ALREADY ANSWERED while the step is still “in_progress“ — the answer arrived and nobody picked it up; empty on a normal row. It is the one thing on this row a status field cannot tell you, because an answered card releases its step back to “in_progress“, which is the SAME value a step being actively worked carries. Read the card (“get_reply_card“) before deciding — the answer may well be 不通過／改做, and nothing about this signal marks the step done. Non-terminal tasks only; the list is BOUNDED (most recently updated first) — page the rest with “list_tasks“ / “get_task“.
 type ResumeTaskDTO struct {
-	CurrentStepId   *string  `json:"current_step_id,omitempty"`
-	CurrentStepName *string  `json:"current_step_name,omitempty"`
-	DetailChars     int      `json:"detail_chars"`
-	Id              string   `json:"id"`
-	Priority        string   `json:"priority"`
-	ProgressDone    int      `json:"progress_done"`
-	ProgressTotal   int      `json:"progress_total"`
-	Status          string   `json:"status"`
-	TaskNo          string   `json:"task_no"`
-	Title           *string  `json:"title,omitempty"`
-	TypeKey         *string  `json:"type_key,omitempty"`
-	UpdatedTs       *float64 `json:"updated_ts,omitempty"`
-	WaitingReason   *string  `json:"waiting_reason,omitempty"`
+	AnsweredCardSteps *[]ResumeAnsweredCardStepDTO `json:"answered_card_steps,omitempty"`
+	CurrentStepId     *string                      `json:"current_step_id,omitempty"`
+	CurrentStepName   *string                      `json:"current_step_name,omitempty"`
+	DetailChars       int                          `json:"detail_chars"`
+	Id                string                       `json:"id"`
+	Priority          string                       `json:"priority"`
+	ProgressDone      int                          `json:"progress_done"`
+	ProgressTotal     int                          `json:"progress_total"`
+	Status            string                       `json:"status"`
+	TaskNo            string                       `json:"task_no"`
+	Title             *string                      `json:"title,omitempty"`
+	TypeKey           *string                      `json:"type_key,omitempty"`
+	UpdatedTs         *float64                     `json:"updated_ts,omitempty"`
+	WaitingReason     *string                      `json:"waiting_reason,omitempty"`
 }
 
 // RoleCreateDTO Create ONE custom role + its ONE founding member in a single call (M2-2
@@ -3760,7 +3772,7 @@ type ServerInterface interface {
 	// Bounded LIGHT wake snapshot for the caller (identity-locked; recent chat + light open-task rows + size overview — peek sizes first, pull detail via get_task). CHAT is packed newest-first under a CHARACTER BUDGET, not a fixed message count, and stopping at the last message that still fits; each message carries from_name/to_name beside the ids and ts_display (full date + time + zone offset) beside the epoch ts, and folds in its reply card as `card` when it has one — read every ts_display against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked DIFFERENTLY: `body_omitted_chars` > 0 means THAT message is here with that many characters COLLAPSED away (another agent's line — the owner's line and your own hand-off notes to yourself are carried in full), re-read it with get_chat; `chat_earlier_omitted` is the other kind and it is a MAYBE, not a fact: that line was cut at a read or budget limit and nothing looked past the cut, so whole messages may be missing from this payload entirely — it is raised even when there is in fact nothing older. Its hint tells you how to CHECK and fetch them. The two are asymmetric ON PURPOSE: the collapse marker is CERTAIN (that message IS here, shortened, exact count); this one is not, and only the fetch settles it. Also carries the STUDIO FLOOR you wake up onto: roster (every member and contractor, each with online/offline status, the machine it runs on, and its duty capped at 1000 chars with `…` marking a cut, the cap applied after the doc's own leading title line is removed — who to ask for help; no insight/learning by owner ruling. Contractors additionally carry their bound task's status, waiting_reason, and step progress (progress_done/progress_total) — members leave these at their zero value; a contractor's 0/0 is ambiguous (a task with no steps yet, or no task at all) and task_status is what tells them apart, non-empty vs empty) and machines (the machine list plus you_are_on, your server-recorded machine binding — never derive it from a hostname).
 	// (GET /api/resume-summary)
 	HandleResumeSummaryApiResumeSummaryGet(w http.ResponseWriter, r *http.Request)
-	// Size-only PEEK of the wake snapshot (identity-locked; overview counts/sizes + estimated_total_chars, NO chat/task content). estimated_total_chars is exactly chat_chars + tasks_detail_chars + roster_chars + machines_chars, all four reported in overview: the WHOLE chat block as the snapshot renders it (chat_chars is the rendered block's cost, NOT the sum of the message bodies), plus the plan text its task rows omit and the two studio-floor blocks — what pulling the snapshot actually costs. Step one of the two-step boot: call this FIRST to size resume_summary, then either call resume_summary directly (small) or hand the pull to a cheap sub-agent that returns a digest (large).
+	// Size-only PEEK of the wake snapshot (identity-locked; overview counts/sizes + estimated_total_chars, NO chat/task content). estimated_total_chars is exactly chat_chars + tasks_detail_chars + roster_chars + machines_chars + steps_on_answered_card_chars, all five reported in overview: the WHOLE chat block as the snapshot renders it (chat_chars is the rendered block's cost, NOT the sum of the message bodies), plus the plan text its task rows omit, the two studio-floor blocks, and the named steps sitting on an answered card — what pulling the snapshot actually costs. Step one of the two-step boot: call this FIRST to size resume_summary, then either call resume_summary directly (small) or hand the pull to a cheap sub-agent that returns a digest (large).
 	// (GET /api/resume-summary-size)
 	HandlePeekResumeSummarySizeApiResumeSummarySizeGet(w http.ResponseWriter, r *http.Request)
 	// List role definitions (seed defaults + owner edits) WITHOUT the persona bodies: each row is the role identity plus its definition size and cap, never definition_md itself. Read the one role you want with get_role.

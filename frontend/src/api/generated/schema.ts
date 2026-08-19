@@ -2497,7 +2497,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Size-only PEEK of the wake snapshot (identity-locked; overview counts/sizes + estimated_total_chars, NO chat/task content). estimated_total_chars is exactly chat_chars + tasks_detail_chars + roster_chars + machines_chars, all four reported in overview: the WHOLE chat block as the snapshot renders it (chat_chars is the rendered block's cost, NOT the sum of the message bodies), plus the plan text its task rows omit and the two studio-floor blocks — what pulling the snapshot actually costs. Step one of the two-step boot: call this FIRST to size resume_summary, then either call resume_summary directly (small) or hand the pull to a cheap sub-agent that returns a digest (large).
+         * Size-only PEEK of the wake snapshot (identity-locked; overview counts/sizes + estimated_total_chars, NO chat/task content). estimated_total_chars is exactly chat_chars + tasks_detail_chars + roster_chars + machines_chars + steps_on_answered_card_chars, all five reported in overview: the WHOLE chat block as the snapshot renders it (chat_chars is the rendered block's cost, NOT the sum of the message bodies), plus the plan text its task rows omit, the two studio-floor blocks, and the named steps sitting on an answered card — what pulling the snapshot actually costs. Step one of the two-step boot: call this FIRST to size resume_summary, then either call resume_summary directly (small) or hand the pull to a cheap sub-agent that returns a digest (large).
          * @description The size-only PEEK of the wake snapshot (``peek_resume_summary_size`` MCP
          *     tool, zero params; ``GET /api/resume-summary-size``) — step ONE of the two-step
          *     boot.
@@ -2508,11 +2508,12 @@ export interface paths {
          *     resume_summary actually carries) plus ``estimated_total_chars`` — a derived
          *     single number to gate the boot decision on — and a fixed guidance ``note``.
          *     ``estimated_total_chars`` is exactly ``chat_chars`` + ``tasks_detail_chars`` +
-         *     ``roster_chars`` + ``machines_chars``, all four reported in ``overview``: the
+         *     ``roster_chars`` + ``machines_chars`` + ``steps_on_answered_card_chars``, all
+         *     five reported in ``overview``: the
          *     WHOLE chat block as the snapshot renders it (``chat_chars`` is the rendered
          *     block's cost, NOT the sum of the message bodies), plus the plan text its task
-         *     rows omit and the two studio-floor blocks — what pulling the snapshot actually
-         *     costs. It carries
+         *     rows omit, the two studio-floor blocks, and the named steps sitting on an
+         *     answered card — what pulling the snapshot actually costs. It carries
          *     NO chat bodies and NO task rows of any kind: peeking it costs a few hundred
          *     bytes, so a waking agent sizes ``resume_summary`` BEFORE deciding whether to
          *     pull it into its own context or hand the pull to a cheap sub-agent (e.g. haiku)
@@ -6501,6 +6502,27 @@ export interface components {
             reason?: string | null;
         };
         /**
+         * ResumeAnsweredCardStepDTO
+         * @description ONE step of a resume-summary task row that is sitting on a reply card the owner has ALREADY answered while the step itself is still ``in_progress`` — the answer landed and nobody has acted on it yet. It carries ``step_id``, ``step_name`` and ``card_id`` and NO card body: read the answer with ``get_reply_card``. This is a POINTER, never a verdict — the server puts a held step back to ``in_progress`` the moment the card is answered (it releases the wait, it does not do the executor's work), and an owner's answer is as often 不通過／改做 as it is approval, so nothing here means the step is finished.
+         */
+        ResumeAnsweredCardStepDTO: {
+            /**
+             * Card Id
+             * @default
+             */
+            card_id: string;
+            /**
+             * Step Id
+             * @default
+             */
+            step_id: string;
+            /**
+             * Step Name
+             * @default
+             */
+            step_name: string;
+        };
+        /**
          * ResumeChatCutDTO
          * @description The CUT POINT of the wake snapshot's chat: whether messages exist that this
          *     payload does NOT carry, and how to go and get them.
@@ -6549,7 +6571,7 @@ export interface components {
         };
         /**
          * ResumeOverviewDTO
-         * @description The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). ``chat_count`` / ``tasks_returned`` count what THIS snapshot carries; ``tasks_open_total`` is ALL the caller's open tasks (may exceed the bounded rows — page with ``list_tasks``); ``tasks_detail_chars`` sums every returned row's ``detail_chars`` (the plan text a full ``get_task`` pull would load); ``cards_waiting`` / ``cards_answered_recent`` count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with ``list_reply_cards``, cap with its ``limit``). ``roster_chars`` / ``machines_chars`` (T-1b09) size the two studio-floor blocks THIS snapshot carries — reported separately, and deliberately NOT folded into ``tasks_detail_chars``: that one counts text the snapshot does NOT carry (the plan text a later ``get_task`` would load), so mixing the two kinds of number is what made ``estimated_total_chars`` ambiguous in the first place.
+         * @description The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). ``chat_count`` / ``tasks_returned`` count what THIS snapshot carries; ``tasks_open_total`` is ALL the caller's open tasks (may exceed the bounded rows — page with ``list_tasks``); ``tasks_detail_chars`` sums every returned row's ``detail_chars`` (the plan text a full ``get_task`` pull would load); ``cards_waiting`` / ``cards_answered_recent`` count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with ``list_reply_cards``, cap with its ``limit``). ``roster_chars`` / ``machines_chars`` (T-1b09) size the two studio-floor blocks THIS snapshot carries — reported separately, and deliberately NOT folded into ``tasks_detail_chars``: that one counts text the snapshot does NOT carry (the plan text a later ``get_task`` would load), so mixing the two kinds of number is what made ``estimated_total_chars`` ambiguous in the first place. ``steps_on_answered_card`` counts the ``answered_card_steps`` rows across the returned tasks — steps sitting on a reply card the owner already answered while the step is still ``in_progress``, i.e. an answer nobody has picked up; ``steps_on_answered_card_chars`` sizes the text those rows carry and, like ``roster_chars``/``machines_chars``, IS folded into ``estimated_total_chars`` because the snapshot does carry it.
          */
         ResumeOverviewDTO: {
             /** Cards Answered Recent */
@@ -6564,6 +6586,10 @@ export interface components {
             machines_chars?: number;
             /** Roster Chars */
             roster_chars?: number;
+            /** Steps On Answered Card */
+            steps_on_answered_card?: number;
+            /** Steps On Answered Card Chars */
+            steps_on_answered_card_chars?: number;
             /** Tasks Detail Chars */
             tasks_detail_chars: number;
             /** Tasks Open Total */
@@ -6686,10 +6712,12 @@ export interface components {
          *     through the shared server path, so they cannot drift) plus
          *     ``estimated_total_chars`` — a derived single number the boot threshold gates on:
          *     exactly ``chat_chars`` + ``tasks_detail_chars`` + ``roster_chars`` +
-         *     ``machines_chars``, all four reported in ``overview``. That is the WHOLE chat
+         *     ``machines_chars`` + ``steps_on_answered_card_chars``, all five reported in
+         *     ``overview``. That is the WHOLE chat
          *     block as the snapshot renders it (``chat_chars`` is the rendered block's cost,
-         *     NOT the sum of the message bodies), plus the plan text its task rows omit and
-         *     the two studio-floor blocks it carries — and
+         *     NOT the sum of the message bodies), plus the plan text its task rows omit, the
+         *     two studio-floor blocks it carries and the answered-card pointers on its task
+         *     rows — and
          *     a fixed guidance ``note``. It carries NO chat bodies and NO task rows: peeking
          *     it costs a few hundred bytes, so a waking agent can size ``resume_summary``
          *     BEFORE deciding whether to pull it into its own context or hand the pull to a
@@ -6711,9 +6739,11 @@ export interface components {
         };
         /**
          * ResumeTaskDTO
-         * @description One task the resuming caller EXECUTES, in the resume-summary snapshot (SPEC §6.2) — a LIGHT row (owner ruling: 任務不該包含細節; the wake snapshot carries NO steps and NO DoD text). It names the task (``task_no``/``title``/``type_key``), its ``status``/``priority``/``waiting_reason``, the current node (``current_step_id`` + ``current_step_name`` — the first non-terminal step — ``superseded`` replan history is skipped like ``done``; both ``''`` when the plan is empty or complete), the executed-vs-pending boundary as ``progress_done``/``progress_total``, and ``updated_ts``. ``detail_chars`` is the SIZE (in characters) of the plan text this row omits (every step's name + DoD) — the peek-then-decide signal: check it BEFORE pulling detail, and hand a large ``get_task`` pull to a sub-agent instead of loading it into your own context. Non-terminal tasks only; the list is BOUNDED (most recently updated first) — page the rest with ``list_tasks`` / ``get_task``.
+         * @description One task the resuming caller EXECUTES, in the resume-summary snapshot (SPEC §6.2) — a LIGHT row (owner ruling: 任務不該包含細節; the wake snapshot carries NO steps and NO DoD text). It names the task (``task_no``/``title``/``type_key``), its ``status``/``priority``/``waiting_reason``, the current node (``current_step_id`` + ``current_step_name`` — the first non-terminal step — ``superseded`` replan history is skipped like ``done``; both ``''`` when the plan is empty or complete), the executed-vs-pending boundary as ``progress_done``/``progress_total``, and ``updated_ts``. ``detail_chars`` is the SIZE (in characters) of the plan text this row omits (every step's name + DoD) — the peek-then-decide signal: check it BEFORE pulling detail, and hand a large ``get_task`` pull to a sub-agent instead of loading it into your own context. ``answered_card_steps`` names the steps of THIS task that sit on a reply card the owner has ALREADY ANSWERED while the step is still ``in_progress`` — the answer arrived and nobody picked it up; empty on a normal row. It is the one thing on this row a status field cannot tell you, because an answered card releases its step back to ``in_progress``, which is the SAME value a step being actively worked carries. Read the card (``get_reply_card``) before deciding — the answer may well be 不通過／改做, and nothing about this signal marks the step done. Non-terminal tasks only; the list is BOUNDED (most recently updated first) — page the rest with ``list_tasks`` / ``get_task``.
          */
         ResumeTaskDTO: {
+            /** Answered Card Steps */
+            answered_card_steps?: components["schemas"]["ResumeAnsweredCardStepDTO"][];
             /**
              * Current Step Id
              * @default
