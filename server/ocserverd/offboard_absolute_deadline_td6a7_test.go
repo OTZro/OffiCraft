@@ -43,7 +43,11 @@ import (
 //     simplified: "2 hrs", "90 分钟", "限 5 分內", "剩半分鐘";
 //   - a CLOCK-shaped span — "00:01:14", "1:30" — which is the same bug wearing
 //     punctuation instead of a unit, and is what a naive "make it precise" fix
-//     reaches for.
+//     reaches for;
+//   - a Go duration — "1m14s", "1h30m0s" — which the unit pattern above cannot
+//     see (its units end on a word boundary, and here a digit follows the unit)
+//     and which is what time.Until(deadline).Round(time.Second).String() prints,
+//     so it is the likeliest shape a countdown comes back in.
 //
 // ⚠️ It does NOT reject a quantity spelled in words ("you have two minutes
 // left"). That is a deliberate limit, not an oversight: units are a closed list,
@@ -79,6 +83,13 @@ var (
 	timeShapeASCII = regexp.MustCompile(`(?i)\b\d+(\.\d+)?\s*(ms|msec|msecs|millisecond|milliseconds|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\b`)
 	timeShapeCJK   = regexp.MustCompile(`[0-9０-９〇零一二三四五六七八九十兩两半幾几百千]+\s*(秒鐘|秒钟|秒|分鐘|分鍾|分钟|分|鐘|鍾|钟|小時|小时|時|时|刻鐘|刻钟|天)`)
 	timeShapeClock = regexp.MustCompile(`\b\d{1,3}:\d{2}(:\d{2})?\b`)
+	// Go's own time.Duration.String() — "1m14s", "1h30m0s". The ASCII pattern
+	// cannot see these: it ends each unit on a word boundary, and in "1m14s"
+	// the m is followed by a digit. This is the shape a Go author reaches for
+	// first when putting a countdown back (time.Until(dl).Round(time.Second)),
+	// so leaving it out would mean the guard misses the most likely regression
+	// while its own comment claims to catch units.
+	timeShapeGoDuration = regexp.MustCompile(`(?i)\b\d+(\.\d+)?(ns|us|ms|s|m|h)(\d+(\.\d+)?(ns|us|ms|s|m|h))+\b`)
 
 	deadlineWords = regexp.MustCompile(`(?i)deadline|截止|死線|死线`)
 )
@@ -99,7 +110,7 @@ func composedSentence(notice string) string {
 // assertion.
 func quotesTimeOfAnyShape(notice string) (string, bool) {
 	sentence := rfc3339Instant.ReplaceAllString(composedSentence(notice), "<instant>")
-	for _, re := range []*regexp.Regexp{timeShapeASCII, timeShapeCJK, timeShapeClock} {
+	for _, re := range []*regexp.Regexp{timeShapeASCII, timeShapeCJK, timeShapeClock, timeShapeGoDuration} {
 		if m := re.FindString(sentence); m != "" {
 			return m, true
 		}
@@ -311,6 +322,8 @@ func TestTimeShapeGuardReadsRealNoticesCorrectly(t *testing.T) {
 		"剩半分鐘",
 		"還有半小時",
 		"限 5 分內完成",
+		"You have 1m14s left.",
+		"You have 1h30m0s left.",
 	} {
 		planted := offboardNotice("context 50% (your limits: 40% / 50%) "+countdown,
 			offboardCloserReportStopped, true, deadlineEpochSince+deadlineEpochGrace,
