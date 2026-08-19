@@ -176,6 +176,12 @@ type openapiSpec struct {
 		XMCP        struct {
 			Include     bool   `json:"include"`
 			Description string `json:"description"`
+			// Legacy.Descriptor is frozen prose the catalog generator copies
+			// verbatim — it reaches an agent like every other face and, like
+			// the operation description above, nothing confronted it.
+			Legacy struct {
+				Descriptor string `json:"descriptor"`
+			} `json:"legacy"`
 		} `json:"x-mcp"`
 		Parameters []struct {
 			Name string `json:"name"`
@@ -188,7 +194,8 @@ type openapiSpec struct {
 	} `json:"paths"`
 	Components struct {
 		Schemas map[string]struct {
-			Properties map[string]any `json:"properties"`
+			Description string         `json:"description"`
+			Properties  map[string]any `json:"properties"`
 		} `json:"schemas"`
 	} `json:"components"`
 }

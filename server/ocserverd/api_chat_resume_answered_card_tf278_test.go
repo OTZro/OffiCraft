@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -283,34 +285,33 @@ func TestResumeProseNamesTheAnsweredCardSignal(t *testing.T) {
 	}
 }
 
-// TestEveryFaceOfThePeekSumNamesTheAnsweredCardAddend: the same sentence — what
-// estimated_total_chars is made of — is written on FIVE faces, and this signal
-// has now been added to it four separate times, each time missing one.
+// TestEveryFaceOfThePeekSumAgreesOnTheAddends: the same arithmetic — what
+// estimated_total_chars is made of — is written out in prose on SEVEN
+// hand-written faces, and this sum has now been extended four separate times,
+// each time missing one of them.
 //
 // The faces are not interchangeable: peekNote is what the agent reads in the
 // RESPONSE, x-mcp.description is what it reads in the TOOL LIST, and the two
 // arrive in the same call — a caller told "four" by one and "five" by the other
-// is being lied to by whichever it happens to believe. openapi's own summary and
-// description feed schema.ts, and routes.go's Summary is the human SSOT.
+// is being lied to by whichever it happens to believe.
 //
-// TestEveryMCPToolDescriptionAgreesWithItsSources already confronts three of
-// them (route_summary, openapi_summary, x-mcp.description) — but it does NOT
-// read the operation-level description, which is exactly the face that survived
-// the last round. This test is deliberately narrow where that one is broad: it
-// asks only that every face carrying THIS sentence names THIS addend, so it
-// needs no drift baseline and cannot be satisfied by prose that merely looks
-// similar.
-func TestEveryFaceOfThePeekSumNamesTheAnsweredCardAddend(t *testing.T) {
-	const (
-		addend = "steps_on_answered_card_chars"
-		// The sentence that enumerates the sum. Any face making this claim is a
-		// face that can go stale when an addend is added.
-		claim = "estimated_total_chars`` is exactly"
-		// Same sentence with the backticks stripped (peekNote, catalog, routes).
-		claimPlain = "estimated_total_chars is exactly"
-	)
-
-	faces := map[string]string{"peekNote": peekNote}
+// WHAT THIS COMPARES, and why it is not a keyword search. An earlier form of
+// this guard asked each face whether it CONTAINED the new addend's name. Three
+// ways past that were demonstrated, all of them green: name the addend in a
+// different sentence while the sum itself still says four; write the sum in a
+// wording the marker string did not match; or add a SIXTH addend to one face
+// and no other. So the unit here is the addition CHAIN — the run of
+// `x_chars + y_chars + ...` — extracted by shape rather than by wording, and
+// every face must agree on the SET of addends in it. Nothing is hard-coded:
+// the next addend is protected the day it is written, and prose may be reworded
+// freely as long as the arithmetic still reads as a sum.
+//
+// TestEveryMCPToolDescriptionAgreesWithItsSources confronts three faces
+// (route_summary, openapi_summary, x-mcp.description) and does NOT read the
+// operation description, the DTO schema description, or the legacy descriptor —
+// the three that went stale here.
+func TestEveryFaceOfThePeekSumAgreesOnTheAddends(t *testing.T) {
+	const answeredCardAddend = "steps_on_answered_card_chars"
 
 	rawAPI, err := os.ReadFile("../../spec/openapi.json")
 	if err != nil {
@@ -324,35 +325,17 @@ func TestEveryFaceOfThePeekSumNamesTheAnsweredCardAddend(t *testing.T) {
 	if !ok {
 		t.Fatalf("openapi has no GET /api/resume-summary-size — this test has stopped discriminating")
 	}
-	faces["openapi.summary"] = op.Summary
-	faces["openapi.description"] = op.Description
-	faces["openapi.x-mcp.description"] = op.XMCP.Description
 
-	rawCat, err := os.ReadFile("../../spec/mcp-catalog.json")
-	if err != nil {
-		t.Fatalf("read mcp-catalog: %v", err)
+	faces := map[string]string{
+		"peekNote":                  peekNote,
+		"openapi.summary":           op.Summary,
+		"openapi.description":       op.Description,
+		"openapi.x-mcp.description": op.XMCP.Description,
+		// The frozen descriptor is prose the catalog generator copies verbatim;
+		// it reaches an agent exactly like the others and nothing else reads it.
+		"openapi.x-mcp.legacy.descriptor": op.XMCP.Legacy.Descriptor,
+		"openapi.ResumeSummarySizeDTO":    api.Components.Schemas["ResumeSummarySizeDTO"].Description,
 	}
-	var cat struct {
-		Tools []struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
-		} `json:"tools"`
-	}
-	if err := json.Unmarshal(rawCat, &cat); err != nil {
-		t.Fatalf("parse mcp-catalog: %v", err)
-	}
-	catFound := false
-	for _, tool := range cat.Tools {
-		if tool.Name == "peek_resume_summary_size" {
-			faces["mcp-catalog.description"] = tool.Description
-			catFound = true
-			break
-		}
-	}
-	if !catFound {
-		t.Fatalf("peek_resume_summary_size is not in the frozen catalog — this test has stopped discriminating")
-	}
-
 	for _, spec := range defaultRouteSpecs() {
 		if spec.Path == "/api/resume-summary-size" && strings.EqualFold(spec.Method, "get") {
 			faces["routes.go/Summary"] = spec.Summary
@@ -361,22 +344,111 @@ func TestEveryFaceOfThePeekSumNamesTheAnsweredCardAddend(t *testing.T) {
 	if _, ok := faces["routes.go/Summary"]; !ok {
 		t.Fatalf("GET /api/resume-summary-size is not on the routes table — this test has stopped discriminating")
 	}
+	// spec/mcp-catalog.json is deliberately NOT a face here: it is generated
+	// from x-mcp.description and make drift-mcp-catalog already fails when the
+	// two disagree, so counting it would be counting one source twice.
 
-	claiming := 0
+	chains := map[string][]string{}
 	for name, text := range faces {
-		if !strings.Contains(text, claim) && !strings.Contains(text, claimPlain) {
+		if text == "" {
+			t.Errorf("%s is empty — a face that carries no prose cannot be confronted, "+
+				"and this guard would pass by having nothing to read", name)
 			continue
 		}
-		claiming++
-		if !strings.Contains(text, addend) {
-			t.Errorf("%s enumerates what estimated_total_chars is made of but never "+
-				"names %q — that face is telling a caller the sum has one addend "+
-				"fewer than the server actually adds", name, addend)
+		chain := longestAddendChain(text)
+		if len(chain) == 0 {
+			t.Errorf("%s states no addition chain (`a_chars + b_chars + ...`) — either it "+
+				"stopped saying what the total is made of, or it now says so in a shape this "+
+				"guard cannot see; point the guard at whatever replaced it rather than "+
+				"deleting the claim", name)
+			continue
+		}
+		chains[name] = chain
+	}
+	if len(chains) < len(faces) {
+		return // the per-face errors above say what is wrong; the comparison would be noise
+	}
+
+	// Every face must agree, and the comparison names the disagreement rather
+	// than asserting against a hard-coded list — a fifth face that is right and
+	// two that are wrong should read as two failures, not one.
+	var reference string
+	for _, name := range sortedKeys(chains) {
+		if reference == "" {
+			reference = name
+			continue
+		}
+		if !sameAddends(chains[reference], chains[name]) {
+			t.Errorf("%s and %s disagree on what estimated_total_chars is made of:\n  %s: %v\n  %s: %v\n"+
+				"one of them is telling a caller the sum has an addend the other does not",
+				reference, name, reference, chains[reference], name, chains[name])
 		}
 	}
-	if claiming < len(faces) {
-		t.Errorf("only %d of %d faces carry the enumerating sentence — a face that "+
-			"drops the sentence entirely escapes this guard, so the guard must be "+
-			"pointed at whatever replaced it", claiming, len(faces))
+
+	// The agreement above is satisfied by every face being wrong together, which
+	// is exactly the state this ticket found. Pin the addend this ticket added.
+	for _, name := range sortedKeys(chains) {
+		found := false
+		for _, addend := range chains[name] {
+			if addend == answeredCardAddend {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s omits %q from the sum — the server adds it, so this face is short one addend",
+				name, answeredCardAddend)
+		}
 	}
+}
+
+// addendChainRe matches a run of snake_case *_chars identifiers joined by "+",
+// tolerating the backticks the OpenAPI prose wraps them in. It deliberately
+// does NOT match a lone identifier: naming an addend somewhere in a paragraph
+// is not the same as putting it in the sum, and treating the two alike is how
+// the previous form of this guard was walked past.
+var addendChainRe = regexp.MustCompile("`{0,2}([a-z_]+_chars)`{0,2}(?:\\s*\\+\\s*`{0,2}[a-z_]+_chars`{0,2})+")
+
+// longestAddendChain returns the addends of the longest addition chain in text.
+// Longest rather than first: a face may mention a two-term sum in passing, and
+// the enumeration of the total is the longest one it states.
+func longestAddendChain(text string) []string {
+	var best []string
+	for _, match := range addendChainRe.FindAllString(text, -1) {
+		var addends []string
+		for _, term := range strings.Split(match, "+") {
+			addends = append(addends, strings.Trim(strings.TrimSpace(term), "`"))
+		}
+		if len(addends) > len(best) {
+			best = addends
+		}
+	}
+	return best
+}
+
+func sameAddends(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]int{}
+	for _, x := range a {
+		seen[x]++
+	}
+	for _, x := range b {
+		seen[x]--
+	}
+	for _, n := range seen {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func sortedKeys(m map[string][]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
