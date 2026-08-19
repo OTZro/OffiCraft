@@ -199,9 +199,9 @@ func TestDecideHandoverNotice(t *testing.T) {
 		}
 		// A SOFT notice has no countdown, and no deadline either. That clause
 		// belongs to the final call alone; carrying it here would read as "you
-		// are out of time" a full band early. Asserted by SHAPE — a number
-		// attached to a unit of time, in any wording — because a whitelist of
-		// literals stops guarding at the next rewording.
+		// are out of time" a full band early. Asserted by SHAPE — a digit
+		// attached to a unit of time, or a clock-shaped span — because a
+		// whitelist of literals stops guarding at the next rewording.
 		assertQuotesNoTime(t, "a context-pressure notice", sig.Reason)
 	})
 

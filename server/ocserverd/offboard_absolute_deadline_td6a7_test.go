@@ -24,47 +24,94 @@ import (
 // re-fed the whole document on every write to its row. So both halves are
 // pinned: there IS a time, and it does NOT move with the wall clock.
 
-// A countdown has a SHAPE, not a vocabulary.
+// A countdown has a SHAPE, not a vocabulary — and the guard reads the sentence
+// the SERVER composes, nothing else.
 //
 // 🔴 The first version of this guard was a list of literals — "seconds left",
 // "seconds remaining", "you have" — and an independent review walked straight
 // through it: adding "Time remaining: 74s." to the no-clock arm, a value that
 // moves with the wall clock and is exactly the bug, left every test in the tree
 // green. A whitelist of yesterday's wordings only ever catches yesterday's
-// wording. What these arms may not contain is a NUMBER ATTACHED TO A UNIT OF
-// TIME, in any phrasing and in either language.
+// wording.
+//
+// So, stated as narrowly as it is TRUE — a second review walked through the
+// first draft of this paragraph, which claimed "any phrasing, either language".
+// What these arms may not contain is:
+//
+//   - a QUANTITY attached to a unit of time — a digit, a CJK numeral, or the
+//     quantity words 半/幾/几 — with the unit written in ASCII, traditional or
+//     simplified: "2 hrs", "90 分钟", "限 5 分內", "剩半分鐘";
+//   - a CLOCK-shaped span — "00:01:14", "1:30" — which is the same bug wearing
+//     punctuation instead of a unit, and is what a naive "make it precise" fix
+//     reaches for.
+//
+// ⚠️ It does NOT reject a quantity spelled in words ("you have two minutes
+// left"). That is a deliberate limit, not an oversight: units are a closed list,
+// English quantity phrasing is not ("a couple of", "half an", "a few more"), so
+// a partial numeral whitelist would rebuild the
+// same false confidence the literal whitelist had, one layer down. The sentence
+// is composed from one fixed template in offboardNotice, so a spelled-out
+// duration can only get there by someone typing one on purpose.
 //
 // ⚠️ The unit is what the pattern turns on, never the digit, because a real
 // notice is full of legitimate numbers: "context 35% (your limits: 40% / 50%)",
-// "compaction round 5 (your limits: round 5 / round 6)", and the numbered steps
-// of the 下線程序 document carried below the sentence. Both directions are
-// pinned by TestTimeShapeGuardReadsRealNoticesCorrectly below — a guard that
-// fired on a real notice would be worse than no guard, since the fix would be
-// to weaken it.
+// "compaction round 5 (your limits: round 5 / round 6)". The truthful deadline
+// clause is the one exception the pattern has to see past — an RFC3339 instant
+// is literally clock-shaped — so instants are lifted out before the clock
+// pattern reads what is left. An INSTANT is stable within the epoch; a SPAN is
+// not, and that difference is the whole ticket.
+//
+// 🔴 SCOPE — the guard reads only the composed sentence, never the 下線程序
+// document folded in beneath it. A review appended one sentence a human would
+// plausibly write to seeds/offboard.md — 「⚠️ 第 5 步收拾暫存最多花 5 分鐘」 —
+// and five tests went red on a REAL notice. The document is not what T-d6a7
+// fixed, and it says so itself on its third line: 「你現在有多少時間、是誰要你
+// 下線，看包著這份清單的那則通知。」 A guard that fires on owner prose gets
+// repaired by WEAKENING it, which puts back the hole the whole ticket closed —
+// so the fix is to aim it, not to blunt it. Both directions stay pinned by
+// TestTimeShapeGuardReadsRealNoticesCorrectly below.
 var (
-	timeShapeASCII = regexp.MustCompile(`(?i)\b\d+\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hour|hours)\b`)
-	timeShapeCJK   = regexp.MustCompile(`[0-9０-９〇零一二三四五六七八九十兩百千]+\s*(秒|分鐘|分鍾|小時)`)
-	deadlineWords  = regexp.MustCompile(`(?i)deadline|截止|死線`)
+	// The truthful deadline clause: an absolute instant, lifted out before the
+	// clock pattern runs so that "00:02:00" inside 2026-02-01T00:02:00Z is not
+	// read as a span.
+	rfc3339Instant = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})`)
+
+	timeShapeASCII = regexp.MustCompile(`(?i)\b\d+(\.\d+)?\s*(ms|msec|msecs|millisecond|milliseconds|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\b`)
+	timeShapeCJK   = regexp.MustCompile(`[0-9０-９〇零一二三四五六七八九十兩两半幾几百千]+\s*(秒鐘|秒钟|秒|分鐘|分鍾|分钟|分|鐘|鍾|钟|小時|小时|時|时|刻鐘|刻钟|天)`)
+	timeShapeClock = regexp.MustCompile(`\b\d{1,3}:\d{2}(:\d{2})?\b`)
+
+	deadlineWords = regexp.MustCompile(`(?i)deadline|截止|死線|死线`)
 )
 
-// quotesTimeOfAnyShape returns the offending fragment when a notice quotes a
-// SPAN of time. The clocked arms' deadline clause names an INSTANT, not a span,
-// so it does not match here — it has its own literal assertion.
-func quotesTimeOfAnyShape(notice string) (string, bool) {
-	if m := timeShapeASCII.FindString(notice); m != "" {
-		return m, true
+// composedSentence is the half of a notice the SERVER writes. offboardNotice
+// folds the 下線程序 document in after a newline, and everything below that
+// line is the owner's prose, which these guards do not police.
+func composedSentence(notice string) string {
+	if i := strings.Index(notice, "\n"); i >= 0 {
+		return notice[:i]
 	}
-	if m := timeShapeCJK.FindString(notice); m != "" {
-		return m, true
+	return notice
+}
+
+// quotesTimeOfAnyShape returns the offending fragment when the composed
+// sentence quotes a SPAN of time. The clocked arms' deadline clause names an
+// INSTANT, not a span, so it does not match here — it has its own literal
+// assertion.
+func quotesTimeOfAnyShape(notice string) (string, bool) {
+	sentence := rfc3339Instant.ReplaceAllString(composedSentence(notice), "<instant>")
+	for _, re := range []*regexp.Regexp{timeShapeASCII, timeShapeCJK, timeShapeClock} {
+		if m := re.FindString(sentence); m != "" {
+			return m, true
+		}
 	}
 	return "", false
 }
 
-// quotesADeadline returns the offending fragment when a notice names a deadline
-// at all — the other half of "no time word of any kind on the arms nobody is
-// counting".
+// quotesADeadline returns the offending fragment when the composed sentence
+// names a deadline at all — the other half of "no time word of any kind on the
+// arms nobody is counting".
 func quotesADeadline(notice string) (string, bool) {
-	if m := deadlineWords.FindString(notice); m != "" {
+	if m := deadlineWords.FindString(composedSentence(notice)); m != "" {
 		return m, true
 	}
 	return "", false
@@ -227,6 +274,16 @@ func TestTimeShapeGuardReadsRealNoticesCorrectly(t *testing.T) {
 	notices["codex rounds"] = offboardNotice(
 		"compaction round 5 (your limits: round 5 / round 6)",
 		offboardCloserRestartSelf, false, 0, s.offboardText())
+	// 🔴 The owner's prose, and the reason the guard is aimed at the sentence
+	// alone. This is the exact line a review appended to seeds/offboard.md, and
+	// it turned five tests red on a notice the server composed correctly. The
+	// document describes the STEPS; how long anything takes there is a human
+	// telling a human to hurry, not the server quoting a clock. Appended here
+	// rather than left to the staged copy so this stays covered even on a tree
+	// where the embed is empty and offboardText answers "".
+	notices["下線程序 prose under the sentence"] = offboardNotice(
+		"context 50% (your limits: 40% / 50%)", offboardCloserReportStopped, false, 0,
+		s.offboardText()+"\n⚠️ 第 5 步收拾暫存最多花 5 分鐘，別在這裡耗掉交接時間。")
 
 	for name, n := range notices {
 		if frag, yes := quotesTimeOfAnyShape(n); yes {
@@ -235,18 +292,32 @@ func TestTimeShapeGuardReadsRealNoticesCorrectly(t *testing.T) {
 		}
 	}
 
-	// …and it still catches every shape the review walked through the old
-	// literal whitelist with.
+	// …and it still catches every shape a review has walked through this guard
+	// with, planted where a real one would be — INSIDE the composed sentence,
+	// with the real document folded in beneath it, so that neither the narrowed
+	// scope nor the RFC3339 exemption can hide one.
 	for _, countdown := range []string{
 		"Time remaining: 74s.",
 		"You have 120 seconds left.",
 		"about 2 minutes left",
 		"~3 h to go",
+		"You have 2 hrs left.",
+		"Time remaining: 00:01:14.",
+		"1:30 to go",
 		"剩 90 秒。",
 		"還有 2 分鐘",
+		"剩 90 分钟。",
+		"還有 2 小时",
+		"剩半分鐘",
+		"還有半小時",
+		"限 5 分內完成",
 	} {
-		if _, yes := quotesTimeOfAnyShape(notices["下線"] + " " + countdown); !yes {
-			t.Fatalf("the shape guard misses a countdown written as %q", countdown)
+		planted := offboardNotice("context 50% (your limits: 40% / 50%) "+countdown,
+			offboardCloserReportStopped, true, deadlineEpochSince+deadlineEpochGrace,
+			s.offboardText())
+		if _, yes := quotesTimeOfAnyShape(planted); !yes {
+			t.Fatalf("the shape guard misses a countdown written as %q:\n%s",
+				countdown, planted)
 		}
 	}
 }

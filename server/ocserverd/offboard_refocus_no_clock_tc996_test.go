@@ -122,8 +122,9 @@ func TestRefocusNoticeNeverStartsACountdown_ButAContextLimitStillDoes(t *testing
 	// instead of "120 seconds left"). This asserted a list of literal clauses in
 	// response, which is the same mistake one wording later: an independent
 	// review added "Time remaining: 74s." here and nothing in the tree went red.
-	// assertQuotesNoTime rejects a number attached to a unit of time in ANY
-	// phrasing, in both languages (offboard_absolute_deadline_td6a7_test.go).
+	// assertQuotesNoTime rejects a digit attached to a unit of time (ASCII and
+	// CJK) and a clock-shaped span like 00:01:14, read on the composed sentence
+	// only — offboard_absolute_deadline_td6a7_test.go states the exact edge.
 	for _, age := range []float64{1, SoftOffboardGraceSecs - 1, SoftOffboardGraceSecs, 10 * SoftOffboardGraceSecs} {
 		notice := noticeAt(t, refocusOpRefocus, age)
 		assertQuotesNoTime(t, fmt.Sprintf("重新聚焦 at +%.0fs", age), notice)
