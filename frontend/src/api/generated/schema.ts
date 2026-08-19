@@ -1224,7 +1224,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Bootstrap on server: install this machine's warden on the host.
+         * Bootstrap on server: runs `ocwarden install --force` on the SERVER's own host. machine_id is NOT a target — this verb has no way to reach another machine, and naming one is refused (409); the server-local machine is the only value it accepts, and the install overwrites the existing one, which is how you repair this host's warden. To install a different machine, fetch that machine's own boot command with GET /api/machines/{machine_id}/boot-command and run it on that host.
          * @description Bootstrap on server: install a machine's warden ON THE SERVER HOST in one
          *     click (``POST /api/machines/{machine_id}/bootstrap-here``).
          *
