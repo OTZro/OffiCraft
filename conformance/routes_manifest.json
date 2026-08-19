@@ -281,28 +281,28 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "list_scheduled_messages",
     "method": "GET",
     "path": "/api/members/{member_id}/scheduled-messages",
     "requires": "admin_agent"
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "create_scheduled_message",
     "method": "POST",
     "path": "/api/members/{member_id}/scheduled-messages",
     "requires": "admin_agent"
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "update_scheduled_message",
     "method": "PATCH",
     "path": "/api/members/{member_id}/scheduled-messages/{schedule_id}",
     "requires": "admin_agent"
   },
   {
     "auth": "gated",
-    "mcp_tool": null,
+    "mcp_tool": "delete_scheduled_message",
     "method": "DELETE",
     "path": "/api/members/{member_id}/scheduled-messages/{schedule_id}",
     "requires": "admin_agent"

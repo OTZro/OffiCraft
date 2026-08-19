@@ -526,45 +526,63 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		// neighbouring config CRUD means the owner and the admin assistant set
 		// these up, which is what the design asks for.
 		//
-		// MCPExclude on all four, following the webhook precedent exactly:
-		// configuration CRUD belongs in the cockpit, not the tool catalogue —
-		// only the debugging read (list_webhook_requests) ever earned a tool.
-		// This batch adds NO MCP tool, so spec/mcp-catalog.json is untouched.
+		// 🔴 ALL FOUR CARRY AN MCP TOOL (T-63bf). They shipped MCPExclude, on
+		// the webhook precedent, with the reason written out as "configuration
+		// CRUD belongs in the cockpit, not the tool catalogue — only the
+		// debugging read (list_webhook_requests) ever earned a tool". That rule
+		// is REVERSED here, and only here, for a reason that is specific to
+		// this feature rather than a general loosening of it:
+		//
+		//   * owner ruling, 2026-08-19, verbatim: 「助理應該能夠代替我設定這些
+		//     東西 在我的授權下進行」 — the admin assistant is meant to be able
+		//     to set these up on his behalf.
+		//   * and the precedent did not actually transfer. A webhook endpoint is
+		//     a door for something OUTSIDE the office to speak in; a scheduled
+		//     message exists to WAKE AN AI MEMBER. Leaving the only way to set
+		//     one up on a surface no AI can reach is a design deadlock: an alarm
+		//     clock whose whole purpose is to wake the agent, that only a human
+		//     can ever set.
+		//
+		// What did NOT change: Requires stays principalAdminAgent on every row.
+		// Opening the entrance is not widening the gate — an ordinary agent
+		// calling any of these four still gets 403, and that is the correct
+		// answer, not a gap. routes_t63bf_scheduled_message_mcp_test.go pins
+		// both halves (the tools exist AND the floor did not move).
 		{
-			Method:     "GET",
-			Path:       "/api/members/{member_id}/scheduled-messages",
-			Handler:    w.HandleListScheduledMessagesApiMembersMemberIdScheduledMessagesGet,
-			Auth:       authGated,
-			Requires:   principalAdminAgent,
-			Summary:    "List one member's scheduled messages.",
-			MCPExclude: true,
+			Method:   "GET",
+			Path:     "/api/members/{member_id}/scheduled-messages",
+			Handler:  w.HandleListScheduledMessagesApiMembersMemberIdScheduledMessagesGet,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "List one member's scheduled messages — 定期訊息, the wall-clock alarm that wakes that member with a chat message on a repeating cadence. admin_agent floor: the owner, or an admin assistant setting these up on the owner's behalf; an ordinary agent gets 403 even for its own member_id. Rows come oldest→newest and each carries the whole schedule — label, body, cadence, the slot fields `hour`/`minute`/`day_of_week`/`day_of_month`, the four `custom` sets, timezone, and the enabled/disabled toggle — plus the delivery cursor `last_fired_slot`/`last_fired_ts`. Read this before update_scheduled_message: that call is a partial edit against these stored values, and it re-aims the cursor only for a slot field whose value actually CHANGES. 404 if the member is absent or soft-removed.",
+			MCPTool:  "list_scheduled_messages",
 		},
 		{
-			Method:     "POST",
-			Path:       "/api/members/{member_id}/scheduled-messages",
-			Handler:    w.HandleCreateScheduledMessageApiMembersMemberIdScheduledMessagesPost,
-			Auth:       authGated,
-			Requires:   principalAdminAgent,
-			Summary:    "Create a scheduled message on one member.",
-			MCPExclude: true,
+			Method:   "POST",
+			Path:     "/api/members/{member_id}/scheduled-messages",
+			Handler:  w.HandleCreateScheduledMessageApiMembersMemberIdScheduledMessagesPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Create a scheduled message on one member — 定期訊息, the mechanism for waking a member on a repeating wall-clock slot: at each due slot the server delivers `body` verbatim down the ORDINARY chat path, from the synthetic sender `sched:<schedule_id>`. admin_agent floor: the owner, or an admin assistant setting one up on the owner's behalf; an ordinary agent gets 403 even for its own member_id. The recipient follows chat's rule, so an `ow-` outsource worker is a legal target as well as a staff member. `body`, `cadence` and `timezone` are always required; `hour`/`minute` are required by `daily`/`weekly`/`monthly` and ignored by `custom` FOR SCHEDULING — their range is still checked under every cadence, so `hour: 99` is a 422 even for `custom`, which instead requires `custom_days`/`custom_hours`/`custom_minutes` (`custom_months` may be omitted to mean all twelve; an explicit empty set is a 422). Those conditional rules are NOT expressible in this schema — a wrong combination comes back as a 422 rather than folding into a silent midnight. TWO fields are the exception and they fail SILENTLY: `day_of_week` (used by `weekly`) and `day_of_month` (used by `monthly`) are NOT required — omit either one and the create returns 200 having defaulted it to 0 (Sunday) and 1 (the first of the month). 'Every Friday at 09:00' sent without `day_of_week` is a Sunday alarm and nothing reports it, so send the field explicitly whenever the cadence reads it. `timezone` must NAME A PLACE: `Local` and the empty string are refused with 422 even though they resolve, because they hand \"what time is it\" to wherever the server happens to run. Missed slots are never backfilled — only the slot most recently elapsed is ever considered — and the cursor starts at creation time, so a `daily` 09:00 schedule created at 10:00 does not fire today. 404 if the member is absent or soft-removed.",
+			MCPTool:  "create_scheduled_message",
 		},
 		{
-			Method:     "PATCH",
-			Path:       "/api/members/{member_id}/scheduled-messages/{schedule_id}",
-			Handler:    w.HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdPatch,
-			Auth:       authGated,
-			Requires:   principalAdminAgent,
-			Summary:    "Update one scheduled message (including enable/disable).",
-			MCPExclude: true,
+			Method:   "PATCH",
+			Path:     "/api/members/{member_id}/scheduled-messages/{schedule_id}",
+			Handler:  w.HandleUpdateScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdPatch,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Update one scheduled message, including the enabled/disabled toggle (`status`) — 定期訊息, the wall-clock wake-up for one member. admin_agent floor: the owner, or an admin assistant acting on the owner's behalf; an ordinary agent gets 403 even for its own member_id. PATCH semantics: only the fields you send change, and `id`/`member_id` are immutable. The create-side validation applies unchanged — `hour`/`minute` required by `daily`/`weekly`/`monthly` and ignored by `custom` for scheduling though still range-checked under every cadence, the custom sets never empty, `timezone` never `Local` or the empty string — all 422. Editing a timing field to a DIFFERENT value re-aims the delivery cursor to the slot most recently elapsed, so the edit never retroactively fires the slot it crossed; re-sending a value the schedule already holds moves nothing, which is what makes a whole-form save safe. `disabled` suspends firing and is reversible — it is not a lifecycle state; delete_scheduled_message is the permanent removal. 404 if the member or the schedule is absent.",
+			MCPTool:  "update_scheduled_message",
 		},
 		{
-			Method:     "DELETE",
-			Path:       "/api/members/{member_id}/scheduled-messages/{schedule_id}",
-			Handler:    w.HandleDeleteScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdDelete,
-			Auth:       authGated,
-			Requires:   principalAdminAgent,
-			Summary:    "Delete one scheduled message.",
-			MCPExclude: true,
+			Method:   "DELETE",
+			Path:     "/api/members/{member_id}/scheduled-messages/{schedule_id}",
+			Handler:  w.HandleDeleteScheduledMessageApiMembersMemberIdScheduledMessagesScheduleIdDelete,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Delete one scheduled message — 定期訊息, permanent and not undoable. admin_agent floor: the owner, or an admin assistant acting on the owner's behalf; an ordinary agent gets 403 even for its own member_id. When the schedule should merely STOP firing, call update_scheduled_message with `status: disabled` instead — that is the reversible half and this one is not. 404 if the member or the schedule is absent.",
+			MCPTool:  "delete_scheduled_message",
 		},
 		// T-8b0d (owner 2026-08-02): the SAME bounded wake snapshot as
 		// /api/resume-summary, for a TARGET member instead of the caller
