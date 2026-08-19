@@ -179,8 +179,9 @@ type memberObservation struct {
 	RefocusSince float64
 	// RefocusOp is the CAUSE of that epoch (member.refocus_op). decideUp reads
 	// it for one reason only: an owner-pressed 重新聚焦 opens with the SOFT
-	// notice, so its collection clock is the soft window plus the final 120s,
-	// not 120s flat. Every other cause is already a final call when it lands.
+	// notice and is collected on NO clock at all, so this arm must never time
+	// it out. Every other cause is already a final call when it lands and gets
+	// its 120s. See recycleGraceFor.
 	RefocusOp    string
 	AgentStopped bool // stopped_since > 0 (the graceful dump-done fact)
 	// The last warden command_result folded onto this member (api_monitoring.go
