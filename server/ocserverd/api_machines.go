@@ -842,14 +842,54 @@ func (s *apiServer) resolveOcwardenBinaryFrom(embedded fs.FS) (string, error) {
 	return materializeBinary(s.binCacheDir, "ocwarden", data)
 }
 
+// bootstrapHereForeignTargetMsg is the refusal bootstrap-here owes a caller who
+// named a machine other than this server's own. Like teardown-here, this verb
+// carries NO machine selector on the path it actually walks: ocwarden installs
+// under THIS host's HOME / uid / namespace. The {machine_id} only picks whose
+// IDENTITY the local install claims — so naming machine B overwrites this
+// host's warden with B's credentials and B's roster row.
+//
+// Until T-ce3d that was accidentally impossible over MCP: loopbackCall
+// synthesises `Host: "loopback"`, and the base derived from it made the
+// installer's download fail. Taking the base from the server (the fix this
+// ticket ships) removes that accident, so the refusal has to be explicit.
+func bootstrapHereForeignTargetMsg(machineID string) string {
+	return "bootstrap-here only ever installs the warden running on THIS server " +
+		"host — it carries no machine selector, so it cannot reach " + machineID +
+		"; refusing rather than overwriting this host's warden with another " +
+		"machine's identity. To install a different machine, fetch its own " +
+		"one-liner with GET /api/machines/{member_id}/boot-command and run it " +
+		"on that host."
+}
+
+// bootstrapHereRefusal answers "what does bootstrap-here owe a caller who named
+// this machine?" and returns "" when the target may proceed. Shaped after
+// teardownHereRefusal so the two host-mutating verbs cannot drift into
+// disagreeing about who they are allowed to act on.
+func bootstrapHereRefusal(machineID string) string {
+	if machineID == ServerSelfHost {
+		return ""
+	}
+	return bootstrapHereForeignTargetMsg(machineID)
+}
+
 // POST /api/machines/{machine_id}/bootstrap-here — install this machine's
 // warden ON THE SERVER HOST (requires=admin_agent on the route table since
 // T-6020; a plain agent is a flat 403). A non-zero exit
 // is NOT an HTTP error: ok=false with the log surfaced.
+//
+// ⚠️ {machine_id} IS NOT A TARGET SELECTOR, exactly as on teardown-here
+// (T-42a0): naming anything but the server-local machine is a 409.
 func (s *apiServer) HandleBootstrapHereApiMachinesMachineIdBootstrapHerePost(w http.ResponseWriter, r *http.Request, machineId string) {
 	machine, err := s.resolveMachine(machineId)
 	if err != nil {
 		writeResolveError(w, err, "machine", machineId)
+		return
+	}
+	// Before ANY state is touched: a refused target must not even have its
+	// uninstall intent zeroed, or a foreign call still mutates the roster.
+	if refusal := bootstrapHereRefusal(machine.ID); refusal != "" {
+		writeError(w, http.StatusConflict, refusal)
 		return
 	}
 	// An install path: zero any residual uninstall intent BEFORE installing
