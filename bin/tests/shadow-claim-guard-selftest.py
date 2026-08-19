@@ -168,6 +168,20 @@ HOLES: List[Tuple[str, str, str]] = [
 ]
 
 
+# The guard also requires the two TRUE warnings to be present while an ungated
+# dispatch exists (owner ruling, T-941e). Every fixture therefore has to carry
+# them, or each case below would go red for a reason it is not testing. An extra
+# aimed at one of these files APPENDS rather than replaces, so a case planting a
+# revived sentence in api_stub.go still leaves the warning in place and reddens
+# on the sentence alone.
+WARNING_FILES = {
+    "server/ocserverd/api_stub.go":
+        "package ocserverd\n\n// A SHADOW SERVER WITH THIS FLAG SET STILL COMMANDS REAL WARDENS.\n",
+    "docs/design/offboard-flow.md":
+        "🔴 **演練站不是安全的沙盒**：命令會真的送到真的 warden。\n",
+}
+
+
 def stage(tmp: Path, go_src: str, extra: Optional[Tuple[str, str]] = None) -> Path:
     tree = tmp / "tree"
     (tree / "bin" / "tests").mkdir(parents=True)
@@ -177,11 +191,16 @@ def stage(tmp: Path, go_src: str, extra: Optional[Tuple[str, str]] = None) -> Pa
     (tree / "bin" / "shadow-claim-guard.py").write_text(
         GUARD.read_text(encoding="utf-8"), encoding="utf-8")
     (tree / "server" / "ocserverd" / "worker_spawn.go").write_text(go_src, encoding="utf-8")
+    for rel, body in WARNING_FILES.items():
+        (tree / rel).write_text(body, encoding="utf-8")
     if extra:
         rel, body = extra
         path = tree / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body, encoding="utf-8")
+        if rel in WARNING_FILES:
+            path.write_text(body + "\n" + WARNING_FILES[rel], encoding="utf-8")
+        else:
+            path.write_text(body, encoding="utf-8")
     subprocess.run(["git", "init", "-q"], cwd=tree, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tree, check=True)
     return tree
@@ -247,6 +266,22 @@ def main() -> None:
                     f"docstring claims out loud. It just started catching this "
                     f"shape, which is good news: delete this case AND the matching "
                     f"bullet in the docstring, do not weaken the guard.\n{out}")
+
+    # The TRUE warning is protected the same way the false promise is banned:
+    # deleting it is silent, and its absence is the state that let the false one
+    # live unexamined for as long as it did.
+    for rel in WARNING_FILES:
+        with tempfile.TemporaryDirectory() as td:
+            tree = stage(Path(td) / "warn", UNGATED_GO)
+            (tree / rel).write_text("(the warning was removed)\n", encoding="utf-8")
+            code, out = run(tree)
+            if code == 0:
+                failures.append(
+                    f"warning-gone:{rel}: deleting the true warning must go RED while "
+                    "an ungated dispatch still exists — an operator rehearsing on a "
+                    "shadow station has nothing else telling them which buttons are live")
+            elif rel not in out:
+                failures.append(f"warning-gone:{rel}: went red without naming the file:\n{out}")
 
     # GATED: the same universal sentence, in a tree where nothing is ungated.
     with tempfile.TemporaryDirectory() as td:

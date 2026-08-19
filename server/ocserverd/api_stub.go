@@ -197,6 +197,17 @@ type apiServer struct {
 	// AND the event-driven warden-command dispatch the producer owns (the
 	// shadow-deployment kill-switch) while the rest of the server runs
 	// unchanged. Not a server-wide gate — see spec/lifecycle.md §4.1.
+	//
+	// 🔴 SAY THE TRUE THING WHERE THE FALSE ONE STOOD (owner ruling, T-941e
+	// 2026-08-18). A SHADOW SERVER WITH THIS FLAG SET STILL COMMANDS REAL
+	// WARDENS: the owner-triggered outsource-worker verbs (stop, restart, model
+	// change, relocate, refocus), a task terminate that dismisses its workers,
+	// and the worker's own report_stopped all reach enqueueToWarden without
+	// consulting this field. Pressing stop on a shadow cockpit kills a REAL
+	// session. Whoever runs a rehearsal has to know which buttons are live;
+	// nothing in the code stops them, and this comment is the only warning
+	// there is — the four sentences that used to promise otherwise were the
+	// reason nobody looked.
 	noReconcile bool
 	// identitySweepAt (T-bb29 §3) → member id → last cross-machine identity-sweep
 	// dispatch ts. The connection-edge 正身 sweep fires on every SSE first-connect

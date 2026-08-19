@@ -211,9 +211,35 @@ def universal_claims(root: Path) -> List[str]:
     return rows
 
 
+# The owner's second ruling (T-941e, 2026-08-18): once the false promise is
+# gone, SAY THE TRUE THING IN ITS PLACE. That sentence needs the same protection
+# as the ban — deleting it is silent, and its absence is exactly the state that
+# let the false one live unexamined. Same conjunction as everything else here:
+# it is required only while (A) holds, so closing the holes in code retires this
+# obligation automatically instead of freezing it.
+REQUIRED_WARNINGS = (
+    ("server/ocserverd/api_stub.go", "STILL COMMANDS REAL"),
+    ("docs/design/offboard-flow.md", "演練站不是安全的沙盒"),
+)
+
+
+def missing_warnings(root: Path) -> List[str]:
+    rows: List[str] = []
+    for rel, marker in REQUIRED_WARNINGS:
+        try:
+            text = (root / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            rows.append(f"{rel} (unreadable — the warning cannot be there)")
+            continue
+        if marker not in text:
+            rows.append(f"{rel} no longer says {marker!r}")
+    return rows
+
+
 def main() -> None:
     ungated = ungated_dispatches(ROOT)
     claims = universal_claims(ROOT)
+    absent = missing_warnings(ROOT) if ungated else []
     if ungated and claims:
         listing = "\n  ".join(claims)
         sites = "\n  ".join(ungated)
@@ -233,9 +259,25 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+    if absent:
+        rows = "\n  ".join(absent)
+        print(
+            f"FAIL — {len(ungated)} warden-command dispatch site(s) still ignore "
+            "--no-reconcile, so a shadow server still kills real sessions, and the "
+            f"warning that says so is gone:\n  {rows}\n\n"
+            "  The owner ruled (T-941e) that the true sentence takes the place of the\n"
+            "  false one. If you closed the holes in code, this check retires itself —\n"
+            "  the list above is only consulted while an ungated dispatch exists. If you\n"
+            "  moved the warning, move the marker here with it. Do NOT delete the marker\n"
+            "  to make this pass: an operator rehearsing on a shadow station has nothing\n"
+            "  else telling them which buttons are live.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     print(
         f"[shadow-claim-guard] all green ({len(ungated)} ungated warden-command "
-        f"dispatch site(s), {len(claims)} unqualified universal claim(s) — "
+        f"dispatch site(s), {len(claims)} unqualified universal claim(s), "
+        f"{len(REQUIRED_WARNINGS)} required warning(s) present — "
         "the pair is what reddens, so a zero on EITHER side is a pass)"
     )
 
