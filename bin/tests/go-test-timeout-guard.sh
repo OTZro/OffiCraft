@@ -35,9 +35,11 @@
 #      A guard that hard-codes "15" and "25" goes green after someone edits
 #      either file, which is the same as having no guard. See the parser
 #      controls: they are what prove each extractor really reads its file.
-#      Make-variable resolution follows make's own rule that the LAST assignment
-#      wins (and that `?=` does not override), because reading the first one made
-#      this guard report a number the build does not use.
+#      Make-variable resolution is NOT reimplemented here. This guard used to
+#      parse the assignment lines itself and follow make's last-assignment rule
+#      by hand; that parser is gone. The timeout and the warning threshold are
+#      both read out of `make -n` output, i.e. out of the already-expanded
+#      recipe make itself produced. See ASK MAKE, DO NOT PARSE MAKE below.
 #  T4  The extractors are exercised red AND green on synthetic fixtures BEFORE
 #      any claim about the real tree, because "no violation" is also what an
 #      extractor that finds nothing at all reports — the vacuous-empty-set
@@ -96,10 +98,19 @@
 #     covers the Makefile, which is the one place a check's HOW is written), but
 #     its ceiling is not compared to anything.
 #  4. RUNTIME OVERRIDES. `GOFLAGS=-timeout=1h`, a `-timeout` appended by a
-#     wrapper, `make GO_TEST_TIMEOUT=1h`, an `override`/`ifeq` block, or a job
-#     re-declaring its ceiling in a reusable workflow all defeat the intent while
-#     keeping the text. Nothing here looks at the environment, at make's command
-#     line, or at any workflow other than ci.yml.
+#     wrapper, `make GO_TEST_TIMEOUT=1h`, or a job re-declaring its ceiling in a
+#     reusable workflow all defeat the intent while keeping the text. Nothing
+#     here looks at the environment, at make's command line, or at any workflow
+#     other than ci.yml.
+#     NOT in this list, though an earlier version of this comment said so:
+#     `override` and `ifeq` blocks. Those ARE caught, because the value comes
+#     from `make -n` rather than from a parser of our own — make applies them
+#     before we ever see the recipe. Measured, not reasoned: appending
+#     `override GO_TEST_TIMEOUT := 40m` to the Makefile makes `make -pn` report
+#     40m and this guard exit 1 with `VIOLATION go=2400s ceiling=1500s`.
+#     The stale wording cost real work: it sends a reader off to hand-test a
+#     case that is already covered, which is the same waste the deleted T7a
+#     text-check note used to cause.
 #  5. WHETHER 15m IS *ENOUGH*. It asserts a relation between two numbers, not
 #     that either is well chosen. A suite that legitimately needs 40m fails
 #     under this contract and should — but this file cannot tell you that.
