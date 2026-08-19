@@ -40,6 +40,14 @@ import (
 // absent — they are agent-initiated requests that go over MCP (presence via the
 // `set_member_presence` tool), not the CLI. Kept as data so the usage text and the
 // dispatch stay in one place.
+// buildSHA is filled at link time by bin/build-bindist (-X main.buildSHA). It is
+// EMPTY in every other build — `go build ./...` by hand, `go test`, a dev binary
+// — and every reader must treat empty as "this build carries no stamp" rather
+// than substituting anything. Nothing derives it at runtime: a process that
+// looked up the current sha would report the sha of whatever is on disk NOW,
+// which is the opposite of what a long-lived listener needs to say about itself.
+var buildSHA string
+
 var planeASubcommands = []struct{ name, help string }{
 	{"listen", "hold the SSE downlink: chat (refetch) + work wakes"},
 	{"context-report", "statusLine reporter: stdin statusLine JSON → POST /api/agent/context"},

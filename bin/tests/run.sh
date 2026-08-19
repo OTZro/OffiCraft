@@ -107,6 +107,26 @@ else
   bad "bin/tests/station-sha-header-guard.sh is missing"
 fi
 
+# ── the ocagent build stamp: which OCAGENT a listener is running (T-8f7d) ─────
+# A listener holds the image it started with, so a fixed bug is unfixed for its
+# whole life and "watch the fleet get better" returns a false negative — measured:
+# one listener on inode 65557770 while the file turned over four times. The
+# connection line now names its own build from a link-time -X. 🔴 EVERY GO TEST
+# BINARY IS UNSTAMPED BY CONSTRUCTION, so dropping the -X flag leaves the entire
+# Go suite green and every line silently unstamped, which is byte-identical to a
+# dev build behaving correctly. Only a script outside the Go build can see it.
+AGENTSHA="$HERE/agent-build-sha-guard.sh"
+echo
+if [[ -f "$AGENTSHA" ]]; then
+  if run_guard "$AGENTSHA"; then
+    ok "ocagent build-sha stamp contract suite passed"
+  else
+    bad "ocagent build-sha stamp contract suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/agent-build-sha-guard.sh is missing"
+fi
+
 # ── serve-plist runtime stamps: claude + codex, both installers (T-ba62/T-ff48) ─
 # Own file, own tempdir, same PATH-shim discipline. The stamp is what carries
 # PATH/OC_CLAUDE_BIN/OC_CODEX_BIN from the operator's interactive shell into the

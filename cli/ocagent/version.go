@@ -28,6 +28,7 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"strings"
 )
 
 // selfHashPrefixLen mirrors ocwarden's selfUpdateHashPrefixLen: the first 12 hex
@@ -79,10 +80,41 @@ func printVersion(
 		}
 	}
 	fmt.Fprintln(out, "ocagent")
+	// build.sha is the link-time stamp bin/build-bindist applies, and it is the
+	// line the connection line quotes. It is here because vcs.revision above goes
+	// "unknown" in exactly the builds this fleet ships — a git WORKTREE (.git is a
+	// file) or a tarball yields no VCS settings, as this file's own header says —
+	// so without it `ocagent version` would know LESS about the running build than
+	// its own log line does, and this is the first place a person looks.
+	fmt.Fprintf(out, "  build.sha:    %s\n", buildSHAOrUnstamped(buildInfo))
 	fmt.Fprintf(out, "  vcs.revision: %s\n", rev)
 	fmt.Fprintf(out, "  vcs.time:     %s\n", when)
 	fmt.Fprintf(out, "  vcs.modified: %s\n", modified)
 	fmt.Fprintf(out, "  self-hash:    %s\n", selfHash(exe, read))
+}
+
+// buildSHAOrUnstamped names the absent case rather than printing an empty field.
+// "unstamped" is a FACT about this binary — it was not built by bin/build-bindist
+// — and it is the same fact the connection line states by omitting its segment.
+// The two must not disagree about what absent means, so both trim first.
+//
+// 🔴 IT TAKES buildInfo SO THAT A FALLBACK CANNOT HIDE FROM ITS TEST. This line is
+// the oracle bin/tests/agent-build-sha-guard.sh asks — it compares this value to
+// the tree's sha precisely because grepping the binary cannot (Go auto-embeds
+// vcs.revision, and the short sha is a prefix of it). Review measured what that
+// buys if the function reaches for vcs.revision itself when buildSHA is empty:
+// `ocagent version` reports the right sha, the connection line prints no segment
+// at all because buildSHA really is empty, and BOTH new defences go blind at once
+// — guard 11 ok, go test rc=0. The parameter exists so that case is reachable from
+// a test; the answer must stay "unstamped" however much VCS metadata is lying
+// around, because the question is "did bin/build-bindist stamp this", not "can
+// this binary guess which commit it came from".
+func buildSHAOrUnstamped(buildInfo func() (*debug.BuildInfo, bool)) string {
+	if sha := strings.TrimSpace(buildSHA); sha != "" {
+		return sha
+	}
+	_ = buildInfo
+	return "unstamped (not built by bin/build-bindist)"
 }
 
 // cmdVersion is the dispatch entry: wires the real providers and returns exit 0.

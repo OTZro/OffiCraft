@@ -549,8 +549,47 @@ verify_artifacts() {
     || fail_item version-stamp "ocserverd was NOT stamped with appVersion=$TAG (its -ldflags: $ldflags) — /api/version would misreport the release."
   [[ "$ldflags" == *"-X main.buildSHA=$SHORT"* ]] \
     || fail_item version-stamp "ocserverd was NOT stamped with buildSHA=$SHORT (its -ldflags: $ldflags) — the artifact cannot prove which commit it came from."
+
+  # 🔴 AND THE ocagent, WHICH IS THE BINARY THAT CANNOT BE ASKED LATER (T-8f7d).
+  # A listener process holds the image it started with, so an unstamped ocagent
+  # is not a cosmetic gap: every connection line it ever prints omits the
+  # [agent …] segment, and that is BYTE-IDENTICAL to a dev build behaving
+  # correctly. Nothing downstream can tell them apart, which is why it has to be
+  # caught here, on the artifact, before it is published.
+  # ⚠️ THIS IS THE SHIPPED COPY, NOT A REBUILD. It comes out of the tarball, which
+  # was copied from server/ocserverd/bindist/ocagent — the same file `go:embed
+  # all:bindist` baked into ocserverd, so this pins the output of that embed and
+  # not merely the input to it. bin/tests/agent-build-sha-guard.sh case 7 asks a
+  # FRESHLY BUILT ocagent for its version, which proves the build line stamps but
+  # says nothing about what ended up inside the artifact.
+  # ⚠️ NOT ADDED TO THAT GUARD AS WELL, AND THE REASON IS NOT COST. Measured: an
+  # ocserverd builds in 5.5s cold / 0.8s warm, so the guard could afford one. What
+  # it could not do is build the RIGHT one — go:embed needs webdist/, seedsdist/
+  # and docsdist/ staged, and a guard that fakes them (an empty webdist is what it
+  # takes) would be reading an ocserverd nobody ships, then generalising from it.
+  # That is the same move — one tree shape, one artifact, treated as all of them —
+  # that made the earlier checks in that guard decoration. Here the bytes under
+  # inspection ARE the ones being published. Release is the last moment this can
+  # still be wrong, and the first moment a real ocserverd exists.
+  # `go version -m` reads the LINKER FLAGS, not the bytes: `ocagent version` would
+  # need the artifact to be executable on this host, and a grep for the sha would
+  # match the auto-embedded vcs.revision (cli/ocagent has no -buildvcs=false).
+  # ⚠️ $SHORT and the stamp must abbreviate to the SAME LENGTH, and they do only
+  # because $STAGE is `git worktree add`-ed from $SRC and therefore shares its
+  # object database — git picks the abbreviation from the object count, and a
+  # clone of the same commit really does abbreviate differently (measured: 7 vs 8
+  # characters for the same sha). If $STAGE ever becomes a clone, this comparison
+  # starts failing on a correctly stamped binary.
+  local agent_ldflags
+  agent_ldflags="$(go version -m "$vdir/$NAME/ocagent" 2>/dev/null | grep -F -- '-ldflags' || true)"
+  [[ -n "$agent_ldflags" ]] \
+    || fail_item agent-stamp "could not read the packaged ocagent's linker flags (go version -m returned no -ldflags line) — cannot prove the listeners this release installs will be able to name their own build."
+  [[ "$agent_ldflags" == *"-X main.buildSHA=$SHORT"* ]] \
+    || fail_item agent-stamp "the packaged ocagent was NOT stamped with buildSHA=$SHORT (its -ldflags: $agent_ldflags). Every listener installed from this release prints a connection line with no [agent …] segment — indistinguishable from a dev build doing the right thing — so 'ship it and watch the fleet' returns a false negative for the whole life of every long-lived agent."
+
   rm -rf "$vdir"
   say "  ocserverd stamp OK: appVersion=$TAG buildSHA=$SHORT"
+  say "  packaged ocagent stamp OK: buildSHA=$SHORT"
 
   # checksums.txt must actually check out, and must cover exactly the two files
   # the install one-liner verifies. A checksums file that lists one entry — or
