@@ -614,8 +614,8 @@ var sanctionedProcessStarters = map[string]processStarter{
 		why:        "Runs `ocwarden install --force`, i.e. the machine conversion itself: deploys the anchor, rewrites the plist, boots the launchd job out and back in. The single most destructive argv in this package.",
 		mustRefuse: true,
 	},
-	"selfupdate.go:newSelfUpdater": {
-		why:        "Builds the execSelf closure whose syscall.Exec REPLACES THIS PROCESS IMAGE with the swapped ocwarden. Under `go test` that would replace the test binary itself, so the constructor refuses rather than relying on nobody ever invoking the closure.",
+	"selfupdate.go:syscallExecImage": {
+		why:        "THE syscall.Exec that REPLACES THIS PROCESS IMAGE with the swapped ocwarden. Under `go test` that would replace the test binary itself. It used to be an inline closure inside newSelfUpdater, and the constructor refused as a whole; splitting a testable buildSelfUpdater out of that constructor moved the syscall to a site this inventory could not name, and TestMain refused the whole suite until it was named here — which is the check working. The refusal now sits on the syscall itself, which is the site that can actually replace this process image; constructing an updater — or naming this function as a value, which is all newSelfUpdater does — cannot. renewwiring_reached_test.go proves the refusal is still what production hands over, by calling execSelf in a CHILD test binary and reading how it died.",
 		mustRefuse: true,
 	},
 	"install.go:realClaudeProbe": {

@@ -13,9 +13,27 @@
 // kickstart`, so every self-update killed the machine's warden. The fix removes
 // launchd from the loop entirely: after the on-disk swap, syscall.Exec replaces our
 // own process image with the new binary. The PID never dies, so from launchd's view
-// the job never stopped and no relaunch semantics are involved. If the exec itself
-// fails (it only returns on failure) we fall back to the old exit(0) path — no worse
-// than before — with the failure logged.
+// the job never stopped and no relaunch semantics are involved.
+//
+// 🔴 WHAT HAPPENS WHEN THE EXEC ITSELF FAILS DEPENDS ON THE CALLER, AND THE TWO
+// CALLERS ARE NOT SYMMETRIC. This used to read "we fall back to the old exit(0)
+// path — no worse than before", written when the swap path was the only caller.
+// A blanket disclaimer outliving the thing it excused is how a second caller
+// inherits a decision nobody made for it, so it is now stated per caller:
+//
+//   - SELF-UPDATE (execInPlace): the binary on disk has ALREADY been replaced, so
+//     this process is the last one running the old image and carrying on would be
+//     running code that no longer exists on disk. exit(0) is defensible there —
+//     the machine is down until somebody kickstarts it, which is bad, but staying
+//     up on a retired image is not obviously better.
+//   - RENEWAL (execAfterRenewal, renewapply.go): the old credential is still valid
+//     for days, the new one is already atomically on disk, and ANY later restart
+//     picks it up. The exec is only "sooner", never "correct". Exiting there would
+//     trade a fully recoverable state for the one state nothing recovers from —
+//     a dead warden launchd demonstrably does not relaunch — to save one restart's
+//     delay. So that caller does NOT exit: it logs and keeps running.
+//
+// Both log the failure.
 //
 // SWAP ORACLE — WHY CONTENT-HASH, NOT A VERSION STRING (load-bearing):
 // The server's /api/version reports git_sha of the RUNNING server commit, but the
@@ -263,6 +281,47 @@ type updater struct {
 	agentID string
 	now     func() time.Time
 
+	// --- self-renewal of THIS machine's credential (see renewapply.go) ----------
+	// renew asks the server for a fresh credential (nil = renewal not wired, e.g.
+	// every existing self-update test). writeTok puts it on disk atomically; it is
+	// the SAME write `ocwarden install` uses (install.go's tokfileWriter), not a
+	// second implementation. tokfilePath is the file readTokfile will read on the
+	// next boot — resolved through main.go's tokfilePath so the two cannot drift.
+	// token is the credential this process is running on, i.e. the thing whose
+	// expiry is being judged. envToken is OC_TOKEN as read from the RAW
+	// environment, never the tokfile-folded view: a non-empty value means the
+	// token survives the exec and renewing is pointless (renewapply.go says why).
+	renew credentialRenewer
+	// verify presents a CANDIDATE credential to the station before anything on
+	// disk is replaced. nil (tests / unwired) skips the probe.
+	verify      credentialVerifier
+	writeTok    func(path, token string) error
+	tokfilePath string
+	token       string
+	envToken    string
+
+	// renewedAwaitingRestart records that a fresh credential HAS been written to
+	// disk while this process kept running on the old one — i.e. the post-renewal
+	// exec did not take. It is PROCESS-LOCAL on purpose (never a file): it says
+	// something about this process image, not about the machine, and the next
+	// process reads the new credential and starts with it false, which is exactly
+	// right. Without it maybeRenewCredential would judge the OLD token still in
+	// memory, find it still due, and renew again every poll — forever, on every
+	// machine in the fleet at once. See maybeRenewCredential (renewapply.go).
+	renewedAwaitingRestart bool
+	// execPendingAfterRenewal is the SEPARATE question of whether the exec is still
+	// owed. It is not the same bit as the latch above and must not be merged with
+	// it: the "the credential just minted is already due" path deliberately latches
+	// WITHOUT wanting an exec (exec'ing on it is the once-per-poll runaway that
+	// branch exists to prevent), so one flag would either re-open the runaway or
+	// give up on a retry that costs nothing. Set only when a renewal reported that
+	// an exec is warranted; never cleared, because the exec that succeeds does not
+	// return.
+	execPendingAfterRenewal bool
+	// execAttempts counts post-renewal exec attempts, so the retries above narrate
+	// themselves in one line instead of repeating the whole explanation per poll.
+	execAttempts int
+
 	// lastSwap holds the ocwarden self-update event captured during the most recent
 	// swapping cycle, consumed by run() to announce it just before exit.
 	lastSwap *selfUpdateEvent
@@ -286,6 +345,33 @@ func (u *updater) run(ctx context.Context) {
 	for {
 		if !u.waitNext(ctx, wait) {
 			return // ctx cancelled during the wait → clean exit
+		}
+		// CREDENTIAL RENEWAL runs EVERY turn, and deliberately BEFORE checkOnce:
+		// checkOnce opens with the server-sha gate and returns early whenever the
+		// station has not shipped a new commit, so a renewal placed inside it would
+		// only ever be considered on release days — and credentials expire on their
+		// own calendar. The check is local arithmetic on a token already in hand;
+		// only a genuinely due credential sends anything. On success the new
+		// credential is ALREADY on disk, so the exec is the last step, never a step
+		// that could leave the machine without one (renewapply.go).
+		// The exec after a renewal is an OPTIMISATION — it makes a credential that
+		// is already on disk take effect now instead of at the next restart — so it
+		// deliberately does NOT go through execInPlace, whose exec-failed fallback
+		// is exit(0). See the file header and execAfterRenewal (renewapply.go).
+		if u.maybeRenewCredential() {
+			u.execPendingAfterRenewal = true
+		}
+		// AND IT IS RETRIED EVERY TURN. An exec can fail for a reason that passes:
+		// ETXTBSY while the self-update loop is mid-swap of this very binary, a
+		// transient EAGAIN under memory pressure. Retrying is free — a successful
+		// exec never returns, so this call is a no-op on every turn after the one
+		// that works — whereas giving up after one attempt leaves the machine on a
+		// credential it has already replaced until something else restarts it. Not
+		// folded into the branch above: maybeRenewCredential answers false forever
+		// once the credential is on disk (renewedAwaitingRestart), so a retry that
+		// depended on it would never happen.
+		if u.execPendingAfterRenewal {
+			u.execAfterRenewal()
 		}
 		wardenSwapped, err := u.checkOnce()
 		if err != nil {
@@ -312,15 +398,28 @@ func (u *updater) run(ctx context.Context) {
 			// demonstrably does NOT relaunch an exited warden). execSelf returns only on
 			// failure; then, and only then, fall back to the old exit(0) — no worse than
 			// the pre-fix behaviour, and the failure is on record in the log.
-			u.logf("[ocwarden] self-update: ocwarden replaced — exec'ing the new binary in place (same PID)")
-			if u.execSelf != nil {
-				err := u.execSelf()
-				u.logf("[ocwarden] self-update: in-place exec failed (%v) — falling back to exit(0)", err)
-			}
-			u.exit(0)
+			u.execInPlace("self-update: ocwarden replaced")
 			return
 		}
 	}
+}
+
+// execInPlace replaces this process image with the binary at selfPath — same PID,
+// same argv, same env — so whatever changed on disk (a swapped binary, a renewed
+// credential) takes effect without launchd being asked to relaunch anything, which
+// it demonstrably does not do (see the file header). execSelf returns ONLY on
+// failure; then, and only then, fall back to exit(0), which is no worse than the
+// pre-fix behaviour and is on record in the log.
+//
+// EVERY CALLER MUST HAVE ALREADY COMMITTED ITS CHANGE TO DISK. There is no undo
+// past this point: the process that would have retried is gone.
+func (u *updater) execInPlace(reason string) {
+	u.logf("[ocwarden] %s — exec'ing the new binary in place (same PID)", reason)
+	if u.execSelf != nil {
+		err := u.execSelf()
+		u.logf("[ocwarden] in-place exec failed (%v) — falling back to exit(0)", err)
+	}
+	u.exit(0)
 }
 
 // waitNext blocks until the poll interval elapses, a kick arrives, or ctx is
@@ -585,28 +684,101 @@ func selfUpdateAgentPath(executable func() (string, error)) string {
 	return filepath.Join(filepath.Dir(exe), "ocagent")
 }
 
-// newSelfUpdater wires the real self-update engine: it resolves the LIVE binary
-// paths it will replace (ocwarden = our own executable; ocagent = the home sibling
-// via selfUpdateAgentPath — unconditional, unlike the spawn path's resolveOcAgentBin),
-// builds the Bearer-authed GET seam and the real filesystem/exec ops, and returns a
-// ready updater. Mirrors newCommandTransport's construction shape.
-func newSelfUpdater(cfg Config, logf func(string, ...any)) *updater {
-	// The execSelf closure built below calls syscall.Exec, which REPLACES THE
-	// CALLING PROCESS IMAGE. Under `go test` that process is the test binary, so
-	// invoking it would not "start a subprocess" — it would silently become
-	// ocwarden mid-suite, with the harness none the wiser. Nothing calls this
-	// constructor from a test today; this refusal is what keeps that true by
-	// construction rather than by the next author noticing. Production is
-	// unaffected: realMain only reaches here on the real forever-loop path.
-	refuseInTestBinary("newSelfUpdater")
-	selfPath := resolveSelfExe(os.Executable)
-	agentPath := selfUpdateAgentPath(os.Executable)
+// syscallExecImage is the production exec seam: it replaces THIS process image, so
+// it is the one function in this file a test binary must never be able to reach.
+// Kept as a named function rather than a closure so the host-seam inventory can
+// name it, and so buildSelfUpdater carries no syscall of its own.
+func syscallExecImage(path string, argv, envv []string) error {
+	refuseInTestBinary("syscallExecImage")
+	_ = os.Stdout.Sync()
+	_ = os.Stderr.Sync()
+	return syscall.Exec(path, argv, envv)
+}
+
+// rawEnv carries the UNFOLDED environment — the one whoever started this process
+// actually set — and it is a struct for exactly one reason: to make handing over
+// the wrong one a COMPILE ERROR rather than a one-character edit.
+//
+// 🔴 THE TWO VIEWS ARE ONE IDENTIFIER APART AND MEAN OPPOSITE THINGS. realMain
+// holds `env` (raw) and `renv` (env with OC_TOKEN folded in from the tokfile, which
+// loadConfig needs). The renewal path needs the RAW one: envToken has to say
+// whether OC_TOKEN was set by whoever STARTED this warden, because a non-empty one
+// disables the infinite-exec guard. Given the folded view it reports the token
+// FILE's contents as if somebody had exported it — so the guard trips on precisely
+// the machines it protects (every launchd warden, none of which sets OC_TOKEN) and
+// the whole fleet silently stops renewing.
+//
+// Both were plain `func(string) string`, so `newSelfUpdater(cfg, renv, logf)`
+// compiled, ran, and passed the entire suite — review measured it. A named func
+// type would not have helped: an unnamed func value converts to it implicitly.
+// A struct does not. Writing `rawEnv{lookup: renv}` still defeats it, and that is
+// the point: it is a visible decision in a diff instead of a typo, the same
+// standard sanctionedProcessStarters holds process-starting sites to.
+type rawEnv struct{ lookup func(string) string }
+
+// newSelfUpdater is the production entry point: buildSelfUpdater with the two host
+// effects bound to the real ones — os.Executable for "which binary am I", and
+// syscallExecImage for "replace this process image".
+//
+// 🔴 IT NO LONGER OPENS WITH refuseInTestBinary, AND THAT WAS LOAD-BEARING TO
+// REMOVE. The refusal used to sit here as well as on the syscall, dating from when
+// the syscall.Exec closure was built inside this function. Since the closure moved
+// out, this body starts no process: it passes syscallExecImage as a VALUE. The
+// refusal therefore protected nothing except the assertions — it made the one
+// function production actually calls impossible for any test to observe, and review
+// measured three separate edits inside it that switch renewal off fleet-wide, turn
+// confirm-before-write into a rubber stamp, or replace the exec with a no-op, with
+// the package green.
+//
+// The runtime backstop is unchanged and is where the danger is: syscallExecImage
+// itself opens with refuseInTestBinary, so a test binary that ever CALLS the real
+// exec seam dies on the spot instead of becoming ocwarden mid-suite — which is
+// exactly what hostseam_test.go's inventory says about that site. Constructing an
+// updater was already safe (buildSelfUpdater has been called from tests since it
+// was split out); this only stops pretending otherwise about its one-line caller.
+func newSelfUpdater(cfg Config, env rawEnv, logf func(string, ...any)) *updater {
+	return buildSelfUpdater(cfg, env, logf, os.Executable, syscallExecImage)
+}
+
+// buildSelfUpdater is newSelfUpdater with the one host effect injected, and it
+// exists so that what this constructor WIRES can be observed.
+//
+// 🔴 WHY THIS SPLIT, AFTER ARGUING AGAINST IT. The previous round guarded the two
+// renewal lines below with a go/ast check and I wrote that the alternative was
+// "not a better test but no test", because changing production shape to suit an
+// assertion is backwards. Review then walked through the syntax check four times
+// without renaming anything: fold env at the call site
+// (`newRenewalWiring(cfg, tokfileEnv(env, os.ReadFile))`), put the call in a
+// branch production never takes (`if cfg.Token == ""`), or add ONE line after it
+// (`u.verify = nil`). Each ends with a fleet that never renews, or one that writes
+// an unconfirmed credential and execs into it, with the package green. A syntax
+// check reads names; none of those change a name.
+//
+// So the thing to fix was the UNOBSERVABILITY, not the check. And the shape was
+// already here: resolveSelfExe and selfUpdateAgentPath have taken an injected
+// `executable` since before this ticket — newSelfUpdater was the only caller
+// hard-coding os.Executable. refuseInTestBinary stays where the danger is (the
+// execSelf closure replaces the running process image, which under `go test`
+// means becoming ocwarden mid-suite), and everything it was incidentally hiding
+// becomes testable.
+// 🔴 execImage IS INJECTED, and the host-seam guard is why. The first version of
+// this split built the syscall.Exec closure inline here, and TestMain refused to
+// run the suite at all: buildSelfUpdater had become a process-starting site that
+// was not a sanctioned choke point. That refusal is correct — a test binary able
+// to CONSTRUCT the real exec seam can replace its own process image, and
+// "constructing is harmless as long as nobody calls it" is exactly the reasoning
+// that guard exists to reject. So the effect is a parameter, production passes the
+// real one, and the only thing a test can build is an updater whose execSelf goes
+// nowhere.
+func buildSelfUpdater(cfg Config, env rawEnv, logf func(string, ...any), executable func() (string, error), execImage func(string, []string, []string) error) *updater {
+	selfPath := resolveSelfExe(executable)
+	agentPath := selfUpdateAgentPath(executable)
 
 	client := &http.Client{Timeout: selfUpdateHTTPTimeout}
 	// Separate, short-timeout client for the best-effort announce so a slow announce
 	// can never eat into the generous multi-MB download budget on the swap→exit path.
 	reportClient := &http.Client{Timeout: selfUpdateReportBudget}
-	return &updater{
+	u := &updater{
 		get:          httpGetter(client, cfg.Base, cfg.Token),
 		ops:          osUpdaterOps{runner: newCmdRunner(selfUpdateProbeBudget)},
 		selfPath:     selfPath,
@@ -624,15 +796,20 @@ func newSelfUpdater(cfg Config, logf func(string, ...any)) *updater {
 		// tmux-bound already, there is no non-unix build of this module. stdout/
 		// stderr writes are unbuffered fd writes, but Sync best-effort anyway so
 		// nothing the kernel has pending is lost across the image replacement.
-		execSelf: func() error {
-			_ = os.Stdout.Sync()
-			_ = os.Stderr.Sync()
-			return syscall.Exec(selfPath, os.Args, os.Environ())
-		},
-		exit:    os.Exit,
-		logf:    logf,
-		post:    httpPoster(reportClient, cfg.Base, cfg.Token),
-		agentID: cfg.ID,
-		now:     time.Now,
+		execSelf: func() error { return execImage(selfPath, os.Args, os.Environ()) },
+		exit:     os.Exit,
+		logf:     logf,
+		post:     httpPoster(reportClient, cfg.Base, cfg.Token),
+		agentID:  cfg.ID,
+		now:      time.Now,
 	}
+	// Self-renewal, assembled by newRenewalWiring so the values are testable — this
+	// constructor is unreachable from any test (refuseInTestBinary above), so
+	// anything filled in HERE is filled in unobserved. See renewapply.go.
+	//
+	// It builds its own HTTP client rather than being handed one of the two here:
+	// the short announce budget beside the generous download client is one
+	// character away, and nothing could have told the two apart from a test.
+	u.apply(newRenewalWiring(cfg, env.lookup))
+	return u
 }

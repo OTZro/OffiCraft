@@ -96,26 +96,39 @@ const defaultTokfileRel = "/.officraft/warden/exec-warden.tok"
 // substitution strips trailing newlines). A missing/unreadable file yields "" —
 // the binary then fail-safes exactly as an unset OC_TOKEN (run() logs + exits 0).
 func readTokfile(env func(string) string, readFile func(string) ([]byte, error)) string {
-	path := env("OC_WARDEN_TOKFILE")
+	path := tokfilePath(env)
 	if path == "" {
-		home := env("HOME")
-		if home == "" {
-			return ""
-		}
-		// The default follows the OC_NAMESPACE instance root (byte-identical to
-		// $HOME + defaultTokfileRel for the empty namespace); an invalid namespace
-		// fail-safes to "no token" like every other mis-wire.
-		ns, err := namespaceFromEnv(env)
-		if err != nil {
-			return ""
-		}
-		path = tokfileFor(home, ns)
+		return ""
 	}
 	raw, err := readFile(path)
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(raw))
+}
+
+// tokfilePath resolves WHICH file holds the exec-warden token, and is the single
+// owner of that derivation: readTokfile reads it, and the self-renewal loop writes
+// it. Those two must name the same file or a renewal writes a credential nothing
+// will ever read — so they share this function rather than each parsing the env.
+// Empty means the path could not be derived (no HOME, malformed namespace), which
+// every caller reads as "do nothing" rather than as a licence to guess a path.
+func tokfilePath(env func(string) string) string {
+	if path := env("OC_WARDEN_TOKFILE"); path != "" {
+		return path
+	}
+	home := env("HOME")
+	if home == "" {
+		return ""
+	}
+	// The default follows the OC_NAMESPACE instance root (byte-identical to
+	// $HOME + defaultTokfileRel for the empty namespace); an invalid namespace
+	// fail-safes to "no token" like every other mis-wire.
+	ns, err := namespaceFromEnv(env)
+	if err != nil {
+		return ""
+	}
+	return tokfileFor(home, ns)
 }
 
 // tokfileEnv wraps env so an unset OC_TOKEN falls back to the token file
@@ -886,7 +899,35 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 		// same ctx-aware graceful-shutdown contract (registered with wg). A separate
 		// goroutine from the 30s telemetry loop: binary reconcile runs at a much slower
 		// cadence and must not be entangled with the well-tested telemetry cycle.
-		up := newSelfUpdater(cfg, logf)
+		// rawEnv{} names which of the two views this is; renv would not compile here.
+		//
+		// 🔴 NOTHING GUARDS THIS CALL SITE, AND THAT IS A STATEMENT, NOT AN OVERSIGHT.
+		// Delete these three lines, or just the `go up.run(ctx)` below, and the whole
+		// package stays green: self-update and credential renewal stop fleet-wide,
+		// silently, and with credentials carrying a 30-day life the machines start
+		// falling off the roster a month later. The third and cheapest-looking edit
+		// is `rawEnv{lookup: renv}` — one identifier, reads like a typo, compiles
+		// (the struct only stops the bare `renv`, which is deliberate: it makes the
+		// substitution a visible decision instead of an accident) — and it hands the
+		// renewal path the tokfile-folded view, whose envToken reports the token FILE
+		// as if somebody had exported OC_TOKEN, tripping the infinite-exec guard on
+		// every launchd warden and stopping the fleet renewing with one log line per
+		// machine. renewwiring_reached_test.go catches that substitution inside
+		// newSelfUpdater; nothing catches it here. What newSelfUpdater BUILDS is now
+		// asserted by using it (renewwiring_reached_test.go); whether realMain calls
+		// it is not asserted by anything.
+		//
+		// Why there is no check here: the only kind available is a syntax check over
+		// this file, and this repo has now written that check twice and had review
+		// walk through it four times in one round without renaming anything — it
+		// reads identifiers, and every way to disable the feature leaves the
+		// identifiers alone. Adding a fifth version would be pretending. The real
+		// instrument is an integration test that runs realMain against a fake station
+		// and observes a renewal happen, and it does not exist because this block is
+		// gated on `iters == 0` — the forever-loop path, the one no test enters (the
+		// tests that call realMain all pass `run --once`). That test is worth writing;
+		// it is not a comment's worth of work, so it is named here rather than faked.
+		up := newSelfUpdater(cfg, rawEnv{lookup: env}, logf)
 
 		// 方案A (T-c93d): wire the SSE transport's connect hook to the updater's Kick
 		// so every successful (re)connect triggers an immediate self-update check —
