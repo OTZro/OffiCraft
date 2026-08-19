@@ -726,7 +726,8 @@ func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T)
 	}
 	// And the peek's single headline number is still that plus the other blocks.
 	wantEstimate := full.Overview.ChatChars + full.Overview.TasksDetailChars +
-		full.Overview.RosterChars + full.Overview.MachinesChars
+		full.Overview.RosterChars + full.Overview.MachinesChars +
+		full.Overview.StepsOnAnsweredCardChars
 	if peek.EstimatedTotalChars != wantEstimate {
 		t.Fatalf("estimated_total_chars: want %d, got %d", wantEstimate, peek.EstimatedTotalChars)
 	}

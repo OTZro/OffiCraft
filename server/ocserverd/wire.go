@@ -1104,6 +1104,15 @@ type resumeOverviewDTO struct {
 	// fetch" is exactly what makes a single size number un-actionable.
 	RosterChars   int `json:"roster_chars"`
 	MachinesChars int `json:"machines_chars"`
+	// StepsOnAnsweredCard counts the answered_card_steps rows this snapshot
+	// carries (T-f278) — the peek's whole point: an agent that has not pulled
+	// resume_summary yet still learns from the size-only payload that N of its
+	// steps are sitting on an answer nobody has picked up.
+	// StepsOnAnsweredCardChars sizes the text those rows carry, and it is a
+	// FIFTH addend of estimated_total_chars — it counts text the snapshot DOES
+	// carry, like roster_chars, not text it omits like tasks_detail_chars.
+	StepsOnAnsweredCard      int `json:"steps_on_answered_card"`
+	StepsOnAnsweredCardChars int `json:"steps_on_answered_card_chars"`
 }
 
 // resumeSummarySizeDTO is the size-only PEEK of the wake snapshot (T-7974
@@ -1139,6 +1148,25 @@ type resumeTaskDTO struct {
 	ProgressTotal   int     `json:"progress_total"`
 	DetailChars     int     `json:"detail_chars"` // runes of the omitted plan text
 	UpdatedTS       float64 `json:"updated_ts"`
+	// AnsweredCardSteps names the steps of THIS task that sit on a reply card
+	// the owner has ALREADY answered while the step itself is still
+	// in_progress — the answer landed and nobody has acted on it yet (T-f278).
+	//
+	// 🔴 This is a POINTER, not a verdict. releaseCardHold deliberately puts a
+	// held step back to in_progress when the card is answered: the server
+	// releases the wait, it does not do the executor's work, and the answer is
+	// just as often 不通過、改做 as it is approval. So the row says "read this
+	// card, then decide"; nothing here marks the step done.
+	AnsweredCardSteps []resumeAnsweredCardStepDTO `json:"answered_card_steps"`
+}
+
+// resumeAnsweredCardStepDTO is one such step: enough to go read the answer
+// (card_id → get_reply_card) and to know which node of the plan it unblocks,
+// without any card body riding the wake snapshot.
+type resumeAnsweredCardStepDTO struct {
+	StepID   string `json:"step_id"`
+	StepName string `json:"step_name"`
+	CardID   string `json:"card_id"`
 }
 
 // taskStepStatusReceiptDTO is the bounded confirmation returned after an agent
