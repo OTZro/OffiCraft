@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 )
@@ -278,5 +280,103 @@ func TestResumeProseNamesTheAnsweredCardSignal(t *testing.T) {
 			t.Errorf("%s must state the bound (%q): a count read as a total makes a "+
 				"0 mean 'nothing is stuck', which it does not", tc.name, tc.phrase)
 		}
+	}
+}
+
+// TestEveryFaceOfThePeekSumNamesTheAnsweredCardAddend: the same sentence — what
+// estimated_total_chars is made of — is written on FIVE faces, and this signal
+// has now been added to it four separate times, each time missing one.
+//
+// The faces are not interchangeable: peekNote is what the agent reads in the
+// RESPONSE, x-mcp.description is what it reads in the TOOL LIST, and the two
+// arrive in the same call — a caller told "four" by one and "five" by the other
+// is being lied to by whichever it happens to believe. openapi's own summary and
+// description feed schema.ts, and routes.go's Summary is the human SSOT.
+//
+// TestEveryMCPToolDescriptionAgreesWithItsSources already confronts three of
+// them (route_summary, openapi_summary, x-mcp.description) — but it does NOT
+// read the operation-level description, which is exactly the face that survived
+// the last round. This test is deliberately narrow where that one is broad: it
+// asks only that every face carrying THIS sentence names THIS addend, so it
+// needs no drift baseline and cannot be satisfied by prose that merely looks
+// similar.
+func TestEveryFaceOfThePeekSumNamesTheAnsweredCardAddend(t *testing.T) {
+	const (
+		addend = "steps_on_answered_card_chars"
+		// The sentence that enumerates the sum. Any face making this claim is a
+		// face that can go stale when an addend is added.
+		claim = "estimated_total_chars`` is exactly"
+		// Same sentence with the backticks stripped (peekNote, catalog, routes).
+		claimPlain = "estimated_total_chars is exactly"
+	)
+
+	faces := map[string]string{"peekNote": peekNote}
+
+	rawAPI, err := os.ReadFile("../../spec/openapi.json")
+	if err != nil {
+		t.Fatalf("read openapi: %v", err)
+	}
+	var api openapiSpec
+	if err := json.Unmarshal(rawAPI, &api); err != nil {
+		t.Fatalf("parse openapi: %v", err)
+	}
+	op, ok := api.Paths["/api/resume-summary-size"]["get"]
+	if !ok {
+		t.Fatalf("openapi has no GET /api/resume-summary-size — this test has stopped discriminating")
+	}
+	faces["openapi.summary"] = op.Summary
+	faces["openapi.description"] = op.Description
+	faces["openapi.x-mcp.description"] = op.XMCP.Description
+
+	rawCat, err := os.ReadFile("../../spec/mcp-catalog.json")
+	if err != nil {
+		t.Fatalf("read mcp-catalog: %v", err)
+	}
+	var cat struct {
+		Tools []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(rawCat, &cat); err != nil {
+		t.Fatalf("parse mcp-catalog: %v", err)
+	}
+	catFound := false
+	for _, tool := range cat.Tools {
+		if tool.Name == "peek_resume_summary_size" {
+			faces["mcp-catalog.description"] = tool.Description
+			catFound = true
+			break
+		}
+	}
+	if !catFound {
+		t.Fatalf("peek_resume_summary_size is not in the frozen catalog — this test has stopped discriminating")
+	}
+
+	for _, spec := range defaultRouteSpecs() {
+		if spec.Path == "/api/resume-summary-size" && strings.EqualFold(spec.Method, "get") {
+			faces["routes.go/Summary"] = spec.Summary
+		}
+	}
+	if _, ok := faces["routes.go/Summary"]; !ok {
+		t.Fatalf("GET /api/resume-summary-size is not on the routes table — this test has stopped discriminating")
+	}
+
+	claiming := 0
+	for name, text := range faces {
+		if !strings.Contains(text, claim) && !strings.Contains(text, claimPlain) {
+			continue
+		}
+		claiming++
+		if !strings.Contains(text, addend) {
+			t.Errorf("%s enumerates what estimated_total_chars is made of but never "+
+				"names %q — that face is telling a caller the sum has one addend "+
+				"fewer than the server actually adds", name, addend)
+		}
+	}
+	if claiming < len(faces) {
+		t.Errorf("only %d of %d faces carry the enumerating sentence — a face that "+
+			"drops the sentence entirely escapes this guard, so the guard must be "+
+			"pointed at whatever replaced it", claiming, len(faces))
 	}
 }

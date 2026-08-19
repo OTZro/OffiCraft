@@ -169,7 +169,11 @@ var deliberatelyOffMCP = map[string][]string{
 type openapiSpec struct {
 	Paths map[string]map[string]struct {
 		Summary string `json:"summary"`
-		XMCP    struct {
+		// Description is the operation-level prose. Nothing confronted it until
+		// T-f278 round 3 — which is how the same sentence went stale on this one
+		// face while three others were being corrected.
+		Description string `json:"description"`
+		XMCP        struct {
 			Include     bool   `json:"include"`
 			Description string `json:"description"`
 		} `json:"x-mcp"`

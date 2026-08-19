@@ -2508,11 +2508,12 @@ export interface paths {
          *     resume_summary actually carries) plus ``estimated_total_chars`` — a derived
          *     single number to gate the boot decision on — and a fixed guidance ``note``.
          *     ``estimated_total_chars`` is exactly ``chat_chars`` + ``tasks_detail_chars`` +
-         *     ``roster_chars`` + ``machines_chars``, all four reported in ``overview``: the
+         *     ``roster_chars`` + ``machines_chars`` + ``steps_on_answered_card_chars``, all
+         *     five reported in ``overview``: the
          *     WHOLE chat block as the snapshot renders it (``chat_chars`` is the rendered
          *     block's cost, NOT the sum of the message bodies), plus the plan text its task
-         *     rows omit and the two studio-floor blocks — what pulling the snapshot actually
-         *     costs. It carries
+         *     rows omit, the two studio-floor blocks, and the named steps sitting on an
+         *     answered card — what pulling the snapshot actually costs. It carries
          *     NO chat bodies and NO task rows of any kind: peeking it costs a few hundred
          *     bytes, so a waking agent sizes ``resume_summary`` BEFORE deciding whether to
          *     pull it into its own context or hand the pull to a cheap sub-agent (e.g. haiku)
