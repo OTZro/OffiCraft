@@ -10,7 +10,7 @@
 ## 一句話版
 
 > **一切都在你的 Mac 上。** server 是唯一真相來源、只綁 loopback；每台機器上有一個 warden，照 server 的指令
-> 把成員起起來或收掉（要不要起、要不要收由 server 決定）；成員是一個個跑在 tmux 裡的 Claude Code，靠一條長連線跟 server 保持聯繫。你透過控制台網頁指揮全部。
+> 把成員起起來或收掉（要不要起、要不要收由 server 決定）；成員是一個個跑在 tmux 裡的 Claude Code 或 Codex session，靠一條長連線跟 server 保持聯繫。你透過控制台網頁指揮全部。
 
 ---
 
@@ -22,7 +22,7 @@
 | **warden**（看門狗） | 每台機器上的常駐守護程式 | 系統自動化的**執行手**：照 server 下的指令，在自己這台機器上把成員起起來或收掉——**不巡檢成員死活、也不自己決定要起誰或收誰**，那些決策都在 server。自己與隨身工具的更新也由它顧。它**推**成員，不是 AI。 |
 | **ocagent**（成員運行時） | 成員 session 的隨身工具 | 掛著那條到 server 的長連線（`ocagent listen`）收即時通知，也負責上傳／下載附件。**成員持著這條連線＝它還活著。** |
 
-底下每一個「成員」，本體就是一個 **Claude Code session，跑在 tmux 裡**——跑的就是你機器上那個 `claude`，
+底下每一個「成員」，本體就是一個 **Claude Code 或 Codex session，跑在 tmux 裡**——跑的就是你機器上那個 `claude` 或 `codex`，
 你原本串好的 skill / plugin / MCP 全都在。
 
 > **server 和 warden 只是水電，產品是你僱的那些人。**
@@ -97,7 +97,7 @@ warden 重拉）**，還是**warden 沒連上（warden 掛了，跟成員在不�
 上面說「成員可丟棄是好事」，這件事之所以成立，是因為**換手（handoff）是這套系統特別設計過的一個機制**，不是把
 session 殺掉重開那麼粗暴。它值得單獨講清楚。
 
-**為什麼 session 可以丟、記憶卻不能丟。** 一個成員的 Claude Code session 有它的極限：context 會愈填愈滿，滿了就
+**為什麼 session 可以丟、記憶卻不能丟。** 一個成員的 Claude Code 或 Codex session 有它的極限：context 會愈填愈滿，滿了就
 再也塞不下新東西。如果「這個成員是誰、做過什麼、學到什麼」全綁在這個 session 裡，那 session 一滿就等於失憶。
 OffiCraft 的解法是把兩件事拆開：**session 只是這一手的臨時工作記憶，真正要留的東西一律落在 server**——身分、
 角色記憶、學習筆記、任務進度全在 server 上（見上一節）。於是 session 變成純消耗品：丟掉一手、換上一手，
