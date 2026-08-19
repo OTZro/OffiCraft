@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// The server edge of the ONE status → envelope-code table, spec/error-codes.json.
+// The server edge of the ONE status → envelope-code table, docs/design/api-error-envelope.codes.json.
 //
 // 🔴 WHY (T-fd2c): the frontend's mock adapter answered 400 with `bad_request`
 // — a code errorCodeForStatus has never produced (400/422 are
@@ -19,7 +19,7 @@ import (
 // cell-by-cell — fallback buckets included — against the file the frontend
 // derives its codes from and conformance pins its own table against.
 //
-// ⚠️ Go's test cache does NOT track ../../spec/error-codes.json, so editing only
+// ⚠️ Go's test cache does NOT track ../../docs/design/api-error-envelope.codes.json, so editing only
 // the JSON and re-running `go test` locally can hand back a CACHED ok. Same
 // trap and same answer as TestSSETopicsMatchSpec: pass -count=1 when you run
 // this by hand after touching the spec (CI's bin/tests/go-test-nocache-guard.sh
@@ -38,16 +38,16 @@ type errorCodeSpec struct {
 
 func readErrorCodeSpec(t *testing.T) errorCodeSpec {
 	t.Helper()
-	raw, err := os.ReadFile("../../spec/error-codes.json")
+	raw, err := os.ReadFile("../../docs/design/api-error-envelope.codes.json")
 	if err != nil {
-		t.Fatalf("read spec/error-codes.json: %v", err)
+		t.Fatalf("read docs/design/api-error-envelope.codes.json: %v", err)
 	}
 	var spec errorCodeSpec
 	if err := json.Unmarshal(raw, &spec); err != nil {
-		t.Fatalf("parse spec/error-codes.json: %v", err)
+		t.Fatalf("parse docs/design/api-error-envelope.codes.json: %v", err)
 	}
 	if len(spec.ByStatus) == 0 || spec.Fallback5xx == "" || spec.FallbackOther == "" {
-		t.Fatalf("spec/error-codes.json parsed empty (%+v) — the guard would be "+
+		t.Fatalf("docs/design/api-error-envelope.codes.json parsed empty (%+v) — the guard would be "+
 			"vacuous; the file's shape changed", spec)
 	}
 	return spec
@@ -59,10 +59,10 @@ func TestErrorCodeForStatusMatchesSpec(t *testing.T) {
 	for raw, want := range spec.ByStatus {
 		status, err := strconv.Atoi(raw)
 		if err != nil {
-			t.Fatalf("spec/error-codes.json: by_status key %q is not a status", raw)
+			t.Fatalf("docs/design/api-error-envelope.codes.json: by_status key %q is not a status", raw)
 		}
 		if got := errorCodeForStatus(status); got != want {
-			t.Errorf("errorCodeForStatus(%d) = %q, spec/error-codes.json says %q",
+			t.Errorf("errorCodeForStatus(%d) = %q, docs/design/api-error-envelope.codes.json says %q",
 				status, got, want)
 		}
 	}
@@ -79,7 +79,7 @@ func TestErrorCodeForStatusMatchesSpec(t *testing.T) {
 			want = spec.Fallback5xx
 		}
 		if got := errorCodeForStatus(status); got != want {
-			t.Errorf("errorCodeForStatus(%d) = %q, spec/error-codes.json fallback says %q",
+			t.Errorf("errorCodeForStatus(%d) = %q, docs/design/api-error-envelope.codes.json fallback says %q",
 				status, got, want)
 		}
 		fallbacks++
@@ -100,7 +100,7 @@ func TestErrorCodeVocabularyIsClosed(t *testing.T) {
 	}
 	for status := 100; status < 600; status++ {
 		if code := errorCodeForStatus(status); !known[code] {
-			t.Errorf("errorCodeForStatus(%d) = %q, which spec/error-codes.json does not name",
+			t.Errorf("errorCodeForStatus(%d) = %q, which docs/design/api-error-envelope.codes.json does not name",
 				status, code)
 		}
 	}

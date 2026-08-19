@@ -3,6 +3,8 @@
 **Status**: 定案(owner Seth 已裁:換掉原框架隱性 `{"detail": …}`)。
 **實作**:Go server `server/ocserverd/`(`server.go` 統一錯誤寫出 + `api_helpers.go` 422/400 分流)· wire 宣告在凍結 `spec/openapi.json`(每 route `422`/`4XX`/`5XX` → ErrorEnvelope)· FE 消費 `frontend/src/api/errors.ts::ApiError`(由 `client.ts` middleware 與 `http.ts` 手寫路徑丟出) · 黑箱回歸 `conformance/test_error_envelope.py`。(原 Python 實作已退役、其歷史不在本 repo;本文描述的 wire 契約不變。)
 
+**機器可讀的那一份**：`docs/design/api-error-envelope.codes.json`（本檔的同名 JSON 孿生）。狀態碼 → 錯誤碼那張表**只有那一份**，三個消費者各自讀它、都不重新宣告：前端 `api/errorCodes.ts` 的 `codeForStatus`、server 的 `TestErrorCodeForStatusMatchesSpec`、conformance 的 `CODE_BY_STATUS`。⚠️ 它**刻意不放 `spec/`** —— owner 於 `rc-fcbb77b32b64` 裁定：`spec/` 是凍結 wire 契約，往裡面加資產是他的決定，即使 wire 本身沒動。
+
 ## WHY
 
 原實作(FastAPI)的預設錯誤體 `{"detail": …}` 是框架副產品、不是契約,而且**不是單一形狀**:

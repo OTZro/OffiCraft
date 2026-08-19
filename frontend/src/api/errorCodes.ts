@@ -18,7 +18,7 @@
 // server adds tomorrow must not fail to compile in the browser today.
 
 import { ApiError } from "./errors";
-import errorCodeSpec from "../../../spec/error-codes.json";
+import errorCodeSpec from "../../../docs/design/api-error-envelope.codes.json";
 
 const BY_STATUS: Record<string, string> = errorCodeSpec.by_status;
 
@@ -29,7 +29,7 @@ export const ERROR_CODE_VOCABULARY: ReadonlySet<string> = new Set([
   errorCodeSpec.fallback_other,
 ]);
 
-/** The status → envelope code map, read from `spec/error-codes.json` — the same
+/** The status → envelope code map, read from `docs/design/api-error-envelope.codes.json` — the same
  * table `errorCodeForStatus` is pinned against on the Go side and
  * `CODE_BY_STATUS` is pinned against in conformance. Unmapped statuses fall
  * into the same two honest buckets the server uses. */

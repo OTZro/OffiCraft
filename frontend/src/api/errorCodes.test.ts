@@ -1,4 +1,4 @@
-// The frontend edge of the ONE status→code table (spec/error-codes.json).
+// The frontend edge of the ONE status→code table (docs/design/api-error-envelope.codes.json).
 //
 // Two guards, and neither is about a single wrong string:
 //
@@ -44,7 +44,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { codeForStatus, ERROR_CODE_VOCABULARY } from "./errorCodes";
-import spec from "../../../spec/error-codes.json";
+import spec from "../../../docs/design/api-error-envelope.codes.json";
 
 const SRC = join(__dirname, "..");
 const FRONTEND = join(__dirname, "..", "..");
