@@ -17,7 +17,7 @@
 //      roster is the canonical clean root, i.e. an EMPTY hash, not "#office".
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, screen } from "@testing-library/react";
+import { render, fireEvent, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "./i18n";
 import { zh } from "./i18n/locales/zh";
 
@@ -63,6 +63,7 @@ async function clickTab(label: string) {
 describe("辦公室 記住最後的對話", () => {
   beforeEach(() => {
     history.replaceState(null, "", window.location.pathname);
+    localStorage.clear();
   });
 
   it("re-opens the last chat when coming back from another tab", async () => {
@@ -126,6 +127,59 @@ describe("辦公室 記住最後的對話", () => {
     await clickTab(zh.nav.tasks);
     await clickTab(zh.nav.office);
     expect(window.location.hash).toBe(""); // roster = canonical clean root
+  });
+
+  // The conductor tab embeds this console as <iframe src="<bare console URL>">
+  // and UNMOUNTS it on every conductor tab switch, so coming back is a cold page
+  // load with an empty hash — the in-memory ref is already gone. These four pin
+  // the localStorage half that survives it (owner 2026-08-20:「在 Conductor 切換
+  // iframe 的時候能夠記住嗎?」).
+  it("reopens the remembered chat on a cold load of the bare URL", async () => {
+    history.replaceState(
+      null,
+      "",
+      window.location.pathname + "#office/chat/m-1892d870ded7",
+    );
+    const first = renderApp();
+    await screen.findByText(zh.nav.office);
+    first.unmount();
+
+    // A fresh iframe: same origin (localStorage survives), bare URL (no hash).
+    history.replaceState(null, "", window.location.pathname);
+    renderApp();
+    await waitFor(() =>
+      expect(window.location.hash).toBe("#office/chat/m-1892d870ded7"),
+    );
+  });
+
+  it("does NOT hijack an explicit #office on a cold load", async () => {
+    localStorage.setItem("oc_last_office_chat", "m-1892d870ded7");
+    history.replaceState(null, "", window.location.pathname + "#office");
+    renderApp();
+    await screen.findByText(zh.nav.office);
+    expect(window.location.hash).toBe("#office");
+  });
+
+  it("does NOT hijack a deep link into another tab on a cold load", async () => {
+    localStorage.setItem("oc_last_office_chat", "m-1892d870ded7");
+    history.replaceState(null, "", window.location.pathname + "#tasks");
+    renderApp();
+    await screen.findByText(zh.nav.tasks);
+    expect(window.location.hash).toBe("#tasks");
+  });
+
+  it("degrades to the roster when localStorage throws (private mode)", async () => {
+    const getItem = Storage.prototype.getItem;
+    Storage.prototype.getItem = () => {
+      throw new Error("storage blocked");
+    };
+    try {
+      renderApp();
+      await screen.findByText(zh.nav.office);
+      expect(window.location.hash).toBe("");
+    } finally {
+      Storage.prototype.getItem = getItem;
+    }
   });
 
   it("forgets the chat once the owner closes it back to the roster", async () => {
