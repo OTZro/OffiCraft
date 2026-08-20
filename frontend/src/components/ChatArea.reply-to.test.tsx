@@ -21,12 +21,12 @@
 
 import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, waitFor } from "@testing-library/react";
+import { render, fireEvent, waitFor, act } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { ChatArea } from "./ChatArea";
 import type { Member } from "../types";
 import type { ChatMessage } from "../api/adapter";
-import { resetChatDrafts } from "../lib/chatDraftStore";
+import { resetChatDrafts, getChatDraft } from "../lib/chatDraftStore";
 
 let messages: ChatMessage[] = [];
 const send = vi.fn(() => Promise.resolve());
@@ -82,6 +82,7 @@ function mkMsg(over: Partial<ChatMessage> & { id: string }): ChatMessage {
 }
 
 const m1 = mkMember("m1", "Mira");
+const m2 = mkMember("m2", "Kyle");
 
 function renderChat() {
   return render(
@@ -302,6 +303,133 @@ describe("ChatArea 回覆這則", () => {
     await waitFor(() =>
       expect(quote.textContent).toContain("較早的一則訊息"),
     );
+  });
+
+  it("offers NO reply entry on a message the owner is not a party to", () => {
+    // 🔴 THE AC IS 每一則, BUT A REPLY HAS TO BE SENDABLE. This thread also shows
+    // messages the owner is not in: an inter-agent run (Mira→Kyle), and the
+    // server-authored 「系統」 line. A reply addresses {owner, peer} and carries
+    // the quoted id, and the server refuses a target from another conversation —
+    // the owner's own ruling. So an entry on those rows is a button that 400s
+    // every time, and the composer only console.warns on failure: the message
+    // vanishes, the banner stays, nothing explains it. Reviewed and reproduced
+    // before this guard existed.
+    messages = [
+      mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他問我的" }),
+      mkMsg({ id: "c-own", from: "owner", to: "m1", body: "我回的", ts: 2 }),
+      mkMsg({ id: "c-ia", from: "m1", to: "m9", body: "我轉給別人的", ts: 3 }),
+    ];
+    const { container } = renderChat();
+
+    // Positive control: the rows that CAN be replied to still carry one, so a
+    // predicate that simply removed every entry would not pass this.
+    for (const id of ["c-1", "c-own"]) {
+      expect(
+        rowOf(container, id).querySelector(".chat__msg-reply"),
+        `${id} should keep its entry`,
+      ).not.toBeNull();
+    }
+    // The inter-agent run renders collapsed, so open it before looking — a row
+    // that is merely absent would satisfy this assertion without the predicate
+    // doing anything.
+    fireEvent.click(
+      container.querySelector(".chat__inter [aria-expanded]") as HTMLElement,
+    );
+    const ia = rowOf(container, "c-ia");
+    expect(ia, "the inter-agent row is on screen once expanded").not.toBeNull();
+    expect(
+      ia.querySelector(".chat__msg-reply"),
+      "an inter-agent row must not offer a reply that cannot be sent",
+    ).toBeNull();
+    // NOT covered here: a server-authored 「系統」 line (sender "system"). It is
+    // refused by the same rule and the predicate excludes it, but it does not
+    // render as a plain row in this harness, so this guard does not witness it.
+  });
+
+  it("names the owner's own message with the owner's label, never the raw id", () => {
+    // The commonest thing to reply to is your own last line, and nameOf had no
+    // owner branch — this is the first display path that feeds the owner's own
+    // id into it, so it fell through to the raw "owner" and the banner read
+    // 「正在回覆 owner」 next to a topbar that says 「CEO（你）」.
+    messages = [
+      mkMsg({ id: "c-own", from: "owner", to: "m1", body: "我自己說的那句" }),
+    ];
+    const { container } = renderChat();
+
+    fireEvent.click(rowOf(container, "c-own").querySelector(".chat__msg-reply")!);
+    const text = banner(container)!.textContent ?? "";
+    expect(text).not.toContain("owner");
+    expect(text).toContain("CEO");
+  });
+
+  it("opens a collapsed inter-agent block rather than offering a jump that goes nowhere", async () => {
+    // `quoteLocatable` asks the LOADED WINDOW; locateMessage searches the DOM.
+    // They are not the same set: an inter-agent run renders as one collapsed
+    // block, so a quote pointing into it rendered a live button that did
+    // nothing at all — the exact thing the quote line's own comment promises it
+    // will not ship.
+    messages = [
+      mkMsg({ id: "c-ia", from: "m1", to: "m9", body: "被引用的那則", ts: 1 }),
+      mkMsg({
+        id: "c-own",
+        from: "owner",
+        to: "m1",
+        body: "回覆它",
+        ts: 2,
+        replyTo: "c-ia",
+      }),
+    ];
+    const { container } = renderChat();
+
+    // Precondition: the target really is out of the document to begin with.
+    expect(rowOf(container, "c-ia")).toBeNull();
+    const jump = rowOf(container, "c-own").querySelector(
+      "[data-testid='msg-quote-jump']",
+    ) as HTMLButtonElement;
+    expect(jump, "the quote is locatable, so the jump is offered").not.toBeNull();
+
+    fireEvent.click(jump);
+
+    await waitFor(() => expect(rowOf(container, "c-ia")).not.toBeNull());
+    // …and it really was asked to come into view. Expanding without scrolling
+    // would leave the owner looking at the same screen.
+    expect(scrolled).toContain(rowOf(container, "c-ia"));
+  });
+
+  it("does not spill a failed send into whichever room is on screen when it fails", async () => {
+    // The restore runs after an await and this component is REUSED across
+    // peers. Reviewed and reproduced: the previous room's text AND its reply
+    // target were restored into the next room and persisted into that room's
+    // draft. The target half is worse than untidy — it belongs to another
+    // conversation, so the new room's composer then 400s on every send.
+    messages = [mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" })];
+    let reject: (e: Error) => void = () => {};
+    send.mockImplementationOnce(
+      () => new Promise((_, r) => (reject = r)) as Promise<void>,
+    );
+
+    const { container, rerender } = render(
+      <I18nProvider>
+        <ChatArea member={m1} />
+      </I18nProvider>,
+    );
+    fireEvent.click(rowOf(container, "c-1").querySelector(".chat__msg-reply")!);
+    fireEvent.change(input(container), { target: { value: "給 m1 的" } });
+    fireEvent.keyDown(input(container), { key: "Enter" });
+
+    rerender(
+      <I18nProvider>
+        <ChatArea member={m2} />
+      </I18nProvider>,
+    );
+    await act(async () => {
+      reject(new Error("nope"));
+      await Promise.resolve();
+    });
+
+    expect(input(container).value).toBe("");
+    expect(banner(container)).toBeNull();
+    expect(getChatDraft("m2")).toBeUndefined();
   });
 
   it("still settles the quote under <StrictMode> — the dev-only double-invoke", async () => {

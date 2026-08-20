@@ -265,6 +265,12 @@ export function ChatArea({
   // it is not in the passed roster.
   const nameOf = (id: string): string => {
     if (id === member.id) return member.name;
+    // 🔴 THE OWNER HAS A NAME TOO. T-4e95 is the first display path that feeds
+    // the owner's OWN id into nameOf — replying to your own message names the
+    // sender in the composer banner and in the quote row — and without this it
+    // fell through to the raw id and printed 「正在回覆 owner」 at a reader whose
+    // own topbar says 「CEO（你）」.
+    if (id === OWNER_ID) return t.user;
     // Server-authored messages (T-ba04 reassign handover, sender="system") are
     // not a roster member — render the synthetic sender as the localized 「系統」
     // label instead of the raw "system" id.
@@ -344,6 +350,9 @@ export function ChatArea({
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     () => new Set(),
   );
+  // A jump whose target sat inside a COLLAPSED group: the group is expanded and
+  // the scroll runs once the row has painted (see locateMessage).
+  const [pendingLocateId, setPendingLocateId] = useState<string | null>(null);
   // Expanded 判定 is membership-based (T-bf82 收折 × 分頁): a group counts as
   // expanded when ANY of its message ids is in the set — a history prepend can
   // merge a loaded older run into an existing expanded block, CHANGING the
@@ -683,13 +692,44 @@ export function ChatArea({
   // #office/chat/<id>/msg/<msgId> jump already behaves.
   function locateMessage(id: string): boolean {
     const el = messagesRef.current?.querySelector(`[data-msg-id="${id}"]`);
-    if (!el) return false;
+    if (el) {
+      el.scrollIntoView({ block: "center" });
+      // Located mid-thread → not at the bottom; a later arrival must not yank.
+      nearBottomRef.current = false;
+      setHighlightMsgId(id);
+      return true;
+    }
+    // 🔴 IN THE WINDOW BUT NOT IN THE DOM — two different sets, and the quote
+    // line was testing the wrong one. An inter-agent run renders as ONE
+    // collapsed block, so its messages are in `messages` (which is what marks
+    // the quote locatable) and absent from the document (which is what this
+    // function searches). The button was offered and did nothing: the exact
+    // "affordance that scrolls nowhere" the quote line's own comment promises
+    // not to ship. Open the block that holds it and finish on the next paint.
+    // Adding the MESSAGE id is what expands its group, whichever day boundary
+    // the group ended up on (groupExpanded is membership-based).
+    if (messageById.has(id)) {
+      setExpandedGroups((prev) => new Set(prev).add(id));
+      setPendingLocateId(id);
+      return true;
+    }
+    return false;
+  }
+
+  // Second half of the jump above: the row only exists once the expand has
+  // painted, so the scroll cannot happen in the same tick as the click.
+  useEffect(() => {
+    if (!pendingLocateId) return;
+    const el = messagesRef.current?.querySelector(
+      `[data-msg-id="${pendingLocateId}"]`,
+    );
+    const id = pendingLocateId;
+    setPendingLocateId(null);
+    if (!el) return;
     el.scrollIntoView({ block: "center" });
-    // Located mid-thread → not at the bottom; a later arrival must not yank.
     nearBottomRef.current = false;
     setHighlightMsgId(id);
-    return true;
-  }
+  }, [pendingLocateId]);
 
   // B3 跳到原訊息 — declared BEFORE the entry-positioning reactor below so the
   // jump consumes entry positioning first (the divider/bottom scroll must not
@@ -908,6 +948,14 @@ export function ChatArea({
     const draftSnapshot = draft;
     const attachmentsSnapshot = pendingAttachments;
     const replyToSnapshot = replyToId;
+    // 🔴 WHICH ROOM THIS SEND BELONGS TO. The restore below runs after an await,
+    // and the owner can switch peers during it — this component is REUSED across
+    // peers, so the restore landed in whoever was on screen when the failure came
+    // back, and the save effect then persisted it into THAT peer's draft. The
+    // reply target makes it worse than untidy: a target from another room is
+    // refused by the server on every send, so the new room's composer would 400
+    // silently until the owner noticed the banner and cleared it by hand.
+    const sendPeer = member.id;
     // ALL staged attachments ride the SAME message, in staged order.
     const attachments = attachmentsSnapshot.map((a) => ({
       dataB64: a.dataUri,
@@ -929,6 +977,10 @@ export function ChatArea({
       );
     } catch (e) {
       console.warn("ChatArea: send failed, restoring composer", e);
+      // Not this room any more → the content belongs to the room it was typed
+      // in, and that room's draft still holds it. Restoring here would put one
+      // room's words, and one room's reply target, into another.
+      if (peerIdRef.current !== sendPeer) return;
       // Restore the user's unsent content so it isn't silently lost. Only put
       // back what the user hasn't already retyped/restaged — if they started a
       // new draft while the send was in flight, don't clobber it.
@@ -990,6 +1042,20 @@ export function ChatArea({
     // button that scrolls nowhere is worse than a label that never claimed it
     // would. Older-than-the-window renders as a plain span, matching how the
     // #office/chat/<id>/msg/<msgId> jump already lands honestly.
+    // 🔴 THE ENTRY IS OFFERED ONLY WHERE A REPLY CAN ACTUALLY BE SENT. The AC
+    // says 每一則, and every row the owner can reply to has one — but this thread
+    // also renders messages the owner is not a party to: inter-agent runs, and
+    // server-authored 「系統」 lines. A reply carries the quoted id into a message
+    // addressed {owner, peer}, and the server refuses a target from another
+    // conversation — the owner's own ruling, not an accident. So an entry on
+    // those rows is a button that CANNOT work: it 400s every time, and the
+    // composer's only failure handling is a console.warn, so what the owner sees
+    // is the message vanishing with the banner still sitting there. An
+    // affordance that always fails is worse than none — the same argument the
+    // jump control below already makes.
+    const replyable =
+      (m.from === OWNER_ID && m.to === member.id) ||
+      (m.from === member.id && m.to === OWNER_ID);
     const quoted = m.replyTo ? quoteOf(m.replyTo) : undefined;
     const quoteLocatable = m.replyTo ? messageById.has(m.replyTo) : false;
     const quoteWho = quoted ? nameOf(quoted.from) : "";
@@ -1059,7 +1125,7 @@ export function ChatArea({
     // bubble is replaced by <ChatReplyCard>, a full-width surface with its own
     // header controls, and hanging a floating action over it would collide with
     // them. Stated here rather than silently: card rows are the exception.
-    const replyEntry = (
+    const replyEntry = !replyable ? null : (
       <button
         type="button"
         className="chat__msg-reply"
