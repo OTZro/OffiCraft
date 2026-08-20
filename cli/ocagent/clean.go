@@ -2,22 +2,29 @@ package main
 
 // clean — the ONE entry an agent uses to get rid of a file or a folder it made.
 //
-// It exists because the offboard document spells out the PROCEDURE
-// (seeds/offboard.md §5: 「臨時檔案 `mv` 進 `<你的工作目錄>/trash/`（不要自己
-// `rm`）」), and a procedure written in prose is a second source of truth that
-// nothing keeps in step: move the quarantine directory, change who reclaims it,
-// decide something should be kept — and that paragraph becomes a lie with
-// nothing to redden. Owner 2026-08-16: 「收拾程序我在想是不是應該改成 ocagent
-// 的 command... 例如 `ocagent clean <path>` 不要把實作暴露出來」, and
-// 2026-08-20 on the scope: 「可以指定 file / folder, 用來取代 rm -rf」.
+// It exists because the offboard document used to spell out the PROCEDURE
+// (「臨時檔案 `mv` 進 `<你的工作目錄>/trash/`（不要自己 `rm`）」), and a procedure
+// written in prose is a second source of truth that nothing keeps in step: move
+// the quarantine directory, change who reclaims it, decide something should be
+// kept — and that paragraph becomes a lie with nothing to redden. Owner
+// 2026-08-16: 「收拾程序我在想是不是應該改成 ocagent 的 command... 例如
+// `ocagent clean <path>` 不要把實作暴露出來」, and 2026-08-20 on the scope:
+// 「可以指定 file / folder, 用來取代 rm -rf」.
 //
-// ⚠️ THAT SECOND TRUTH IS STILL THERE. This package builds the command; it
-// does NOT yet edit seeds/offboard.md, which still names `trash/` by hand. The
-// edit is deliberately deferred, not forgotten: that document is being replaced
-// wholesale in a separate change, and rewriting §5 here would only be
-// overwritten by it. Until that lands, the prose and this file BOTH decide
-// where quarantine lives, and this file is not yet the single source of truth
-// the paragraph above argues for. Do not read the WHY as delivered.
+// That second truth is now GONE for the quarantine location: seeds/offboard.md
+// §4 names this command and no longer writes a directory out by hand, so this
+// file is the only place that decides where quarantine lives.
+//
+// ⚠️ What the document still describes by hand is the OTHER half — branches,
+// worktrees and processes — and that is deliberate, not a leftover: nothing
+// registers which of those belong to which agent, so a command that moves
+// things cannot be asked to guess (owner 2026-08-20 scope ruling). Do not read
+// this header as "the document no longer describes any procedure".
+//
+// ⚠️ The document also tells the reader what to do when this subcommand is
+// missing (an older ocagent prints usage and exits 2): skip that item, note it
+// in the hand-off, do not stall the close-out. Changing the dispatch so an
+// unknown subcommand fails some other way would make that sentence wrong.
 //
 // 🔴 IT DELETES NOTHING. "Replaces rm -rf" is about the ENTRY, not the effect:
 // the owner's own contract for this command says quarantine/move, never rm. So
@@ -55,10 +62,14 @@ import (
 // follows on the next binary, which is the entire point of turning the
 // procedure into a command.
 //
-// ⚠️ It is not the only place YET. seeds/offboard.md §5 still writes
-// `<你的工作目錄>/trash/` out by hand, so today changing this constant alone
-// makes that line wrong. Retiring it is queued behind the pending rewrite of
-// that document (see the header note).
+// It IS the only place now: seeds/offboard.md §4 names the command instead of a
+// directory, so changing this constant changes where quarantine lives for every
+// agent on the next binary and leaves no prose behind to contradict it.
+//
+// ⚠️ ocwarden is the other half of the contract and it is NOT downstream of this
+// constant — it reclaims by its own literal (cli/ocwarden/trash.go). Moving
+// quarantine here without moving it there strands the files instead of freeing
+// them.
 const quarantineDirName = "trash"
 
 // cleanRoot resolves the ONLY tree this command may touch: this agent's own
