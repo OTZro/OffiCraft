@@ -618,6 +618,15 @@ func TestReleaseCheckButtonCheckedOKAtSemantics(t *testing.T) {
 	api.releaseAPIBase = gh.srv.URL
 
 	// ── half 1: a SUCCEEDED button check must ADVANCE the stamp ──
+	//
+	// `stale` alone is too weak an oracle on its own: "advanced past a floor the
+	// test itself planted two hours ago" is satisfied by any stamp in that
+	// two-hour span, so an implementation that stamps a FIXED older instant
+	// (say now-90m) survives it — and this field's whole claim is FRESHNESS, so
+	// a stamp that is stably wrong-by-90-minutes is a lie of the same family as
+	// half 2's, just in the conservative direction. `floor` closes that: the
+	// stamp must also be no older than this test's own start.
+	floor := time.Now().UTC().Truncate(time.Second)
 	stale := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Second)
 	api.updateMu.Lock()
 	api.updateCheck.lastOKAt = stale
@@ -639,6 +648,11 @@ func TestReleaseCheckButtonCheckedOKAtSemantics(t *testing.T) {
 	if !advanced.After(stale) {
 		t.Fatalf("a SUCCEEDED button check must advance update_checked_ok_at past %v, got %v",
 			stale.Format(time.RFC3339), raw)
+	}
+	if advanced.Before(floor) {
+		t.Fatalf("a SUCCEEDED button check must stamp NOW, not merely something newer "+
+			"than the planted floor: want >= %v, got %v",
+			floor.Format(time.RFC3339), raw)
 	}
 
 	// ── half 2: a FAILED button check must LEAVE THE STAMP ALONE ──
