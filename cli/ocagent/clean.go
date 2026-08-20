@@ -11,20 +11,22 @@ package main
 // `ocagent clean <path>` 不要把實作暴露出來」, and 2026-08-20 on the scope:
 // 「可以指定 file / folder, 用來取代 rm -rf」.
 //
-// That second truth is now GONE for the quarantine location: seeds/offboard.md
-// §4 names this command and no longer writes a directory out by hand, so this
-// file is the only place that decides where quarantine lives.
+// That second truth is now GONE for the quarantine location: every seed that
+// used to name a directory now names this command instead — seeds/offboard.md
+// §4, and seeds/system_interaction.md §3.5 and §3.6 — so this file is the only
+// place that decides where quarantine lives.
 //
-// ⚠️ What the document still describes by hand is the OTHER half — branches,
-// worktrees and processes — and that is deliberate, not a leftover: nothing
-// registers which of those belong to which agent, so a command that moves
-// things cannot be asked to guess (owner 2026-08-20 scope ruling). Do not read
-// this header as "the document no longer describes any procedure".
+// ⚠️ This command's scope is FILES AND FOLDERS ONLY. Branches, worktrees and
+// processes are deliberately not here: nothing registers which of those belong
+// to which agent, so a command that moves things cannot be asked to guess
+// (owner 2026-08-20 scope ruling). Do not grow it into them.
 //
-// ⚠️ The document also tells the reader what to do when this subcommand is
-// missing (an older ocagent prints usage and exits 2): skip that item, note it
-// in the hand-off, do not stall the close-out. Changing the dispatch so an
-// unknown subcommand fails some other way would make that sentence wrong.
+// ⚠️ seeds/system_interaction.md 附錄 A — NOT the offboard document — tells the
+// reader that an ocagent lacking this subcommand answers 「unknown subcommand」,
+// and to skip that item and note it in the hand-off rather than stall. The
+// dispatch in main.go prints usage and exits 2, whose first line carries that
+// exact phrase; changing it so an unknown subcommand fails some OTHER way would
+// make that sentence wrong.
 //
 // 🔴 IT DELETES NOTHING. "Replaces rm -rf" is about the ENTRY, not the effect:
 // the owner's own contract for this command says quarantine/move, never rm. So

@@ -576,8 +576,8 @@ func decideTaskCloseNudge(t Task, manualLabel string) *taskCloseSignal {
 			"若這一趟有值得留下的經驗（踩坑、更好做法），用 write_task_learnings" +
 			"（type_key=`" + t.TypeKey + "`）整併回「" + manualLabel +
 			"」的任務手冊（先 get_task_manual 讀現況、同主題合併後整份寫回）；" +
-			"用 `ocagent clean <path>` 移除這個任務的暫存檔、" +
-			"收掉臨時 branch/worktree 與跑著的臨時程序；" +
+			"用 `ocagent clean <path>` 移除這個任務的暫存檔/資料夾、" +
+			"收掉臨時 branch/worktree 與跑著的臨時程序（只收自己建的）；" +
 			"最後用 report_task_closeout 回報後續已處理完。",
 	}
 }
