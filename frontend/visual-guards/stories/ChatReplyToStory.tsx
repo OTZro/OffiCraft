@@ -73,6 +73,9 @@ export function ChatReplyToStory({
                     >
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="14 4 20 4 20 10" />
+                        <polyline points="10 20 4 20 4 14" />
+                        <line x1="20" y1="4" x2="13" y2="11" />
+                        <line x1="4" y1="20" x2="11" y2="13" />
                       </svg>
                     </button>
                   </div>
@@ -335,6 +338,9 @@ export function ChatReplyToStory({
                     >
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="14 4 20 4 20 10" />
+                        <polyline points="10 20 4 20 4 14" />
+                        <line x1="20" y1="4" x2="13" y2="11" />
+                        <line x1="4" y1="20" x2="11" y2="13" />
                       </svg>
                     </button>
                   </div>

@@ -900,7 +900,9 @@
  * bubbles and never hides a glyph.
  *
  * Coarse pointers have no hover to reveal it with, so there it is always
- * visible at reduced emphasis. */
+ * visible — at FULL strength since T-4e95, not the reduced one this line used to
+ * describe: the ink became a fraction of the bubble's colour, and a reduced
+ * opacity on top of that multiplied down to 2:1. */
 /* The corner ACTION SLOT reserves its width on EVERY bubble (T-4e95). Reserved
  * rather than floating for the reason the original 放大閱讀 comment gives: a
  * bubble shrink-wraps its content, so a floating control lands on the last
@@ -994,8 +996,10 @@
  *
  * It is ALWAYS in the layout (opacity, never display) so revealing it on hover
  * cannot shift the bubble sideways mid-hover. Coarse pointers have no hover to
- * reveal with, so there it sits at reduced emphasis — the same contract
- * .chat__msg-expand already established. */
+ * reveal with, so there it sits at FULL strength — the same contract
+ * .chat__msg-expand keeps. It used to be reduced there, and that was correct
+ * while the ink was opaque; once the ink became a fraction of the bubble's
+ * colour the two fractions multiplied and the control fell under 3:1. */
 .chat__msg-reply {
   display: inline-flex;
   align-items: center;
@@ -1132,11 +1136,28 @@
  *
  * So it shrinks, ten times more eagerly than the name (the name says WHO; this
  * label is boilerplate the arrow already implies) and far less than the excerpt.
- * Only the LABEL truncates — the arrow is `flex: none` below, so what is left
- * always still reads as "go somewhere". */
+ *
+ * 🔴 AND IT STOPS AT THE ARROW — `min-width` is the floor, and it has to be an
+ * explicit one. Two wrong answers came first, each measured:
+ *
+ * ① `min-width: 0`. The button collapsed to ZERO, and the arrow, being
+ *    `flex: none`, kept its 12px and painted straight out of the button box and
+ *    under `.chat__msg-actions`. 1686 of 5616 scanned combinations, and this
+ *    time CHINESE broke too, at every width up to 728px; `elementFromPoint` on
+ *    the arrow returned the reply button. A zero-width box also satisfies any
+ *    assertion of the form "the button does not reach the corner controls",
+ *    which is why the guards below measure the ARROW, not the box.
+ * ② No `min-width` at all. Then the floor is the button's own min-content, and
+ *    `white-space: nowrap` makes that the WHOLE label — 154px in English — so
+ *    the button never shrank by a pixel and the original overlap came straight
+ *    back at 300/320/336.
+ *
+ * So: 14px, which is the arrow (12) plus the gap that precedes it. Tied to
+ * `ChevronRightIcon size={12}` in ChatArea; change one and this stops being the
+ * floor it is named after. */
 .chat__msg-quote__jump {
   flex: 0 10 auto;
-  min-width: 0;
+  min-width: 14px;
   display: inline-flex;
   align-items: center;
   gap: 2px;
