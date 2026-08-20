@@ -9868,7 +9868,7 @@
     },
     "/api/global-context": {
       "get": {
-        "description": "Read the owner's 使用者自訂 (user-custom) additive block (§3.4 #20). Empty\n(never written / reset) → ``text=\"\"``/``is_default=True``. The read-only\nsystem-interaction + boot-sequence seed blocks are NOT served here — they have\nno owner-editable representation at all.",
+        "description": "Read the owner's 使用者自訂 (user-custom) additive block (§3.4 #20). Empty\n(never written / reset) → ``text=\"\"``/``is_default=True``. The\nsystem-interaction + boot-sequence blocks are NOT served here — they are their own\ndocuments with their own endpoints (POST /api/system-interaction, POST\n/api/boot-sequence/{runtime_key}, and their /reset twins). They used to have no\nowner-editable representation at all; since T-791e they do, so \"not served here\"\nno longer means \"not editable\".",
         "operationId": "handle_get_global_context_api_global_context_get",
         "responses": {
           "200": {

@@ -820,9 +820,12 @@ export interface paths {
         /**
          * Read the user-custom additive context block (empty = is_default).
          * @description Read the owner's 使用者自訂 (user-custom) additive block (§3.4 #20). Empty
-         *     (never written / reset) → ``text=""``/``is_default=True``. The read-only
-         *     system-interaction + boot-sequence seed blocks are NOT served here — they have
-         *     no owner-editable representation at all.
+         *     (never written / reset) → ``text=""``/``is_default=True``. The
+         *     system-interaction + boot-sequence blocks are NOT served here — they are their own
+         *     documents with their own endpoints (POST /api/system-interaction, POST
+         *     /api/boot-sequence/{runtime_key}, and their /reset twins). They used to have no
+         *     owner-editable representation at all; since T-791e they do, so "not served here"
+         *     no longer means "not editable".
          */
         get: operations["handle_get_global_context_api_global_context_get"];
         put?: never;

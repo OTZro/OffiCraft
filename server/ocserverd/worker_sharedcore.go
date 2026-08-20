@@ -6,10 +6,13 @@ import "strings"
 //
 // "Global Context" is what the cockpit shows under 全域情境 — THREE blocks:
 //
-//	1. 系統互動   seeds/system_interaction.md   (read-only seed)
+//	1. 系統互動   /api/system-interaction       (owner-editable; folds to the
+//	                                            seed when unedited — T-791e)
 //	2. 使用者自訂 /api/global-context           (owner-editable additive block)
-//	3. 啟動程序   seeds/boot_sequence*.md       (read-only studio SOP,
-//	                                            per-runtime — see below)
+//	3. 啟動程序   /api/boot-sequence/{runtime_key}
+//	                                            (owner-editable studio SOP,
+//	                                            per-runtime; same fold — see
+//	                                            below)
 //
 // Members and workers receive all three, IN THE SAME SLOTS (T-4595): 系統互動
 // first, 使用者自訂 second, 啟動程序 last, with the reader's own persona
