@@ -415,6 +415,19 @@ type chatMessageDTO struct {
 	// answered cards. See ChatMessageDTO in the spec.
 	ReplyCardStatus string              `json:"reply_card_status"`
 	Attachments     []chatAttachmentDTO `json:"attachments"`
+	// ReplyTo is the id of the message this one is REPLYING TO, "" when it
+	// replies to nothing. Stamped once at post time from ChatPostDTO.reply_to
+	// and never rewritten, and always an id in THIS message's own
+	// conversation — the post-time check refuses anything else.
+	//
+	// 🔴 THE ID ALONE, and that is the whole design (T-4e95, owner ruling).
+	// No sender, no display name and no excerpt of the quoted message rides
+	// here. That text already exists under its own id; a copy of it shipped
+	// beside every reply is a second place for the same sentence to live and
+	// therefore a place it can disagree with itself. A reader that wants to
+	// show the quote re-reads the id with get_chat?ids=, which since T-4e95
+	// reaches exactly as far as the ordinary listing does.
+	ReplyTo string `json:"reply_to"`
 }
 
 type chatGalleryEntryDTO struct {
@@ -2241,7 +2254,22 @@ func newChatMessageDTO(m ChatMessage) chatMessageDTO {
 		TS:          m.TS,
 		Meta:        meta,
 		Attachments: attachments,
+		ReplyTo:     replyToFromMeta(meta),
 	}
+}
+
+// replyToFromMeta returns the id of the message this one replies to ("" when
+// it replies to nothing). It reads the same open meta map every other client
+// can write to, so it is a READ of a value only the POST handler is allowed to
+// put there: HandlePostChatApiChatPost deletes any caller-supplied reply_to
+// before validation and writes its own. Without that deletion this getter
+// would happily serve a forged link — the meta map is copied through wholesale.
+func replyToFromMeta(meta map[string]any) string {
+	if meta == nil {
+		return ""
+	}
+	id, _ := meta[chatReplyToMetaKey].(string)
+	return id
 }
 
 // replyCardIDFromMeta returns the reply_card_id a chat message carries in its

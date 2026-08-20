@@ -97,6 +97,7 @@ const WIRE: WireResumeSummary = {
       ts_display: "2026-08-12 22:13:04 +08:00",
       body_omitted_chars: 0,
       reply_card_status: "answered",
+      reply_to: "",
       attachments: [],
       card: {
         options: ["照這個形狀做", "先擋著等下一輪"],
@@ -122,6 +123,7 @@ const WIRE: WireResumeSummary = {
       // the server. Not the same thing as chat_earlier_omitted below.
       body_omitted_chars: 1284,
       reply_card_status: "",
+      reply_to: "",
       attachments: [
         {
           id: "att-9",
@@ -735,6 +737,11 @@ describe("the roll-call: a field the seam gains cannot stay undrawn", () => {
         "id",
         "replyCardId",
         "replyCardStatus",
+        // T-4e95: the quoted message's id. It is an ID AND NOTHING ELSE by
+        // owner ruling, so there is no sibling name/excerpt field to expect
+        // beside it — a future one appearing here is exactly what this
+        // roll-call is for.
+        "replyTo",
         "to",
         "toName",
         "ts",

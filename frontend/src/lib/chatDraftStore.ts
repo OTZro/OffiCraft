@@ -28,6 +28,12 @@ import type { PendingAttachment } from "../hooks/useAttachmentStaging";
 export interface ChatDraft {
   text: string;
   attachments: PendingAttachment[];
+  /** The id of the message this draft is REPLYING TO, when the composer is in
+   * reply mode. Part of the draft because it is part of what the owner has
+   * composed but not yet sent: leaving 跳頁-and-back with the text restored but
+   * the reply target silently dropped would send the message to the wrong
+   * place while looking exactly like a normal restore. */
+  replyTo?: string;
 }
 
 const drafts = new Map<string, ChatDraft>();
@@ -43,7 +49,14 @@ export function getChatDraft(peerId: string): ChatDraft | undefined {
  * path, so a later return finds nothing to restore (and the compose seed is free
  * to inject into the genuinely-empty composer). */
 export function saveChatDraft(peerId: string, draft: ChatDraft): void {
-  if (draft.text.length === 0 && draft.attachments.length === 0) {
+  // "Empty" now includes the reply target: a composer holding ONLY a reply
+  // target (no text, no attachments) is still a composer the owner has put into
+  // a state, and dropping it on 跳頁 would silently cancel the reply.
+  if (
+    draft.text.length === 0 &&
+    draft.attachments.length === 0 &&
+    !draft.replyTo
+  ) {
     drafts.delete(peerId);
     return;
   }

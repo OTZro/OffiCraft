@@ -779,6 +779,16 @@ export const zh = {
     // 對方訊息角落的「放大閱讀」小按鈕：把這則訊息本文丟進同一個
     // 全幅 overlay 讀（長回覆在對話欄裡很難讀）。自己發的訊息沒有。
     expandMessage: "放大閱讀",
+    // T-4e95「回覆這則」：每則訊息角落的回覆入口、輸入框上方的「正在回覆」
+    // 橫幅與它的 x，以及訊息上方那條指回原訊息的引用列。
+    // replyQuoteGone 是誠實的落空：被回覆的那則已經捲出載入範圍，撈也撈不到
+    // ——不假裝還在，也不無限轉圈。
+    replyAction: "回覆這則",
+    replyingTo: (name: string) => `正在回覆 ${name}`,
+    replyCancel: "取消回覆",
+    replyQuoteJump: "跳到原訊息",
+    replyQuoteGone: "較早的一則訊息",
+    replyQuoteAttachment: "（附件）",
   },
   mp: {
     back: "返回",

@@ -101,6 +101,17 @@ export interface ChatMessage {
    * that opened it (wire `card`) — so the decision reads IN the chat stream
    * rather than in a second, separately-joined card list. null ⇒ no card. */
   card?: ChatInlineReplyCardView | null;
+  /** The id of the message this one is REPLYING TO (wire `reply_to`), or null
+   * when it replies to nothing. Always an id in THIS conversation — the server
+   * refuses a reply_to pointing anywhere else at post time.
+   *
+   * 🔴 THE ID ALONE (T-4e95, owner ruling). No name and no excerpt of the
+   * quoted message rides here: that text already exists under its own id, and a
+   * copy beside every reply is a second place for the same sentence to live.
+   * The thread resolves the quote from the messages it already holds, and falls
+   * back to a by-id read (`listChatByIds`) when the quoted message has scrolled
+   * out of the loaded window. */
+  replyTo?: string | null;
 }
 
 /** One reply card folded onto the chat message that opened it (view model of
@@ -1613,6 +1624,17 @@ export interface Api {
    * http adapter fetches the unfiltered stream (`limit=-1`) and applies the
    * same participant filter + recent-window cap client-side. */
   peekChat(withId: string, limit?: number): Promise<ChatMessage[]>;
+  /** Re-read NAMED messages (`GET /api/chat?ids=`): those messages in full,
+   * oldest→newest, with NO read-watermark side effect. Caller-blind — it
+   * reaches exactly as far as the ordinary listing does (T-4e95 aligned the two
+   * doors; before that this one refused a message between two other members
+   * while `listChat` served the same row to the same caller).
+   *
+   * The thread uses it to resolve a `replyTo` whose target has scrolled out of
+   * the loaded window — the alternative was shipping a copy of the quoted text
+   * on every reply, which the owner ruled against. ALL OR NOTHING: one unknown
+   * id rejects the whole call (throws). At most 20 ids per call. */
+  listChatByIds(ids: string[]): Promise<ChatMessage[]>;
   /** The M2 gallery query (`GET /api/chat/attachments?with=<memberId>`): every
    * attachment of the member's conversations, flattened newest→oldest —
    * owner↔member BOTH directions AND the member's inter-agent threads — each
@@ -1635,6 +1657,11 @@ export interface Api {
     to: string;
     body: string;
     attachments?: ChatAttachmentInput[];
+    /** The id of the message this post REPLIES TO, when it is a reply. The
+     * server validates it (must exist, must be in the SAME conversation) and is
+     * the only writer of the stored link — a forged `meta.reply_to` is dropped.
+     * Omitted on an ordinary post. */
+    replyTo?: string;
   }): Promise<ChatMessage>;
   /** Mark a conversation (with `peer`) read up to `lastReadTs` — the caller's own
    * read watermark (reader = the verified JWT sub server-side; anti-spoof). The

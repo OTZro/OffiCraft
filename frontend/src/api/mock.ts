@@ -2775,6 +2775,22 @@ export const mockApi: Api = {
     }));
   },
 
+  async listChatByIds(ids: string[]): Promise<ChatMessage[]> {
+    // Mock twin of GET /api/chat?ids= — the named messages, oldest→newest, with
+    // NO read-watermark side effect. Caller-blind, exactly like the server since
+    // T-4e95. All-or-nothing on an unknown id (server parity: a short array is
+    // indistinguishable from a message that was simply not asked for).
+    if (ids.length === 0) return [];
+    const byId = new Map(chatLog.map((m) => [m.id, m]));
+    const found = ids.map((id) => byId.get(id));
+    const missing = ids.find((id) => !byId.has(id));
+    if (missing) throw new Error(`no message carries id ${missing}`);
+    return (found as ChatMessage[])
+      .slice()
+      .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((m) => ({ ...m, replyCardStatus: mockReplyCardStatusOf(m.replyCardId) }));
+  },
+
   async peekChat(withId: string, limit = 30): Promise<ChatMessage[]> {
     // READ-ONLY twin of listChat: SAME filter/order/window, but NEVER advances
     // the owner's read watermark (mirrors the BE ?peek=true — filter+cap by
@@ -2831,6 +2847,7 @@ export const mockApi: Api = {
     to: string;
     body: string;
     attachments?: ChatAttachmentInput[];
+    replyTo?: string;
   }): Promise<ChatMessage> {
     // Record the owner's message into the in-memory log and echo it back. The
     // sender is MOCK_OWNER_ID ("owner") — matching the real backend, which
@@ -2855,6 +2872,25 @@ export const mockApi: Api = {
         isImage: mime.startsWith("image/"),
       };
     });
+    // The quote link (T-4e95). The mock enforces the SAME two refusals the
+    // server does, because the point of mock mode is that offline preview
+    // behaves like the real thing: the target must EXIST, and it must be in the
+    // SAME conversation as the message being posted. A mock that accepted
+    // anything would let an offline session build a reply the server rejects.
+    if (msg.replyTo) {
+      const quoted = chatLog.find((m) => m.id === msg.replyTo);
+      if (!quoted) {
+        throw new Error(`reply_to names no message (${msg.replyTo})`);
+      }
+      const sameConversation =
+        (quoted.from === MOCK_OWNER_ID && quoted.to === msg.to) ||
+        (quoted.from === msg.to && quoted.to === MOCK_OWNER_ID);
+      if (!sameConversation) {
+        throw new Error(
+          `reply_to (${msg.replyTo}) is a message in another conversation`
+        );
+      }
+    }
     const sent: ChatMessage = {
       id: `mock-${stamp}`,
       from: MOCK_OWNER_ID,
@@ -2866,6 +2902,7 @@ export const mockApi: Api = {
       // owner-posted message never carries one (mirrors the server).
       replyCardId: null,
       replyCardStatus: null,
+      replyTo: msg.replyTo ?? null,
     };
     chatLog.push(sent);
     return sent;
