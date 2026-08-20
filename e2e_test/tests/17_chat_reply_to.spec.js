@@ -39,6 +39,7 @@ const ANSWER = 'answering that one';
 // 「較早的一則訊息」 miss with no jump control at all, and BOTH the quote
 // assertion and the jump would go red for a reason that has nothing to do with
 // 「回覆這則」 being broken. If the page size changes, this number moves with it.
+const FILLER = 24;
 
 test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
   test('reply to a message: the banner names the sender, the send carries the link, the reply shows a quote row, and it jumps back', async ({
