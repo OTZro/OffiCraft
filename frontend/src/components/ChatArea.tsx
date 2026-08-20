@@ -1018,10 +1018,12 @@ export function ChatArea({
          * that cannot give way does not stay politely inside the bubble: it
          * runs past the edge and under the corner buttons, which are absolutely
          * positioned and therefore painted on top of it. Measured against the
-         * running app, per pixel: the English band is 280–367px, and Chinese
-         * overlaps at 280–289 too. (An earlier version of this note said "360,
-         * 375 and 721–728, English only" — those came from a hand-built copy of
-         * the layout and none of the three survived measuring the real one.)
+         * running app: it fails at the narrow end in BOTH languages, and again
+         * just past the two-column breakpoint on an incoming bubble that is
+         * itself a reply — that one reserves 56px of corner where your own
+         * reserves 32. Two earlier versions of this note quoted exact ranges;
+         * both were wrong, because the range moves with the bubble kind, the
+         * language and the display name. The guard holds the numbers.
          * A trimmed label with its arrow still showing beats a control hidden
          * under another control. */}
         {quoteLocatable && (

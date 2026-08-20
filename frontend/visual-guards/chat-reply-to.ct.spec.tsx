@@ -325,12 +325,16 @@ for (const width of [390, 1280]) {
 // takes the reply entry and the x out of reach for anyone not using a mouse.
 // 🔴 THE ENGLISH LABEL IS A DIFFERENT LAYOUT PROBLEM, not the same one in another
 // font. "Go to the original message" is 154px against 「跳到原訊息」's 69px, and
-// the control it lives in used to refuse to shrink — so on the two commonest
-// phone widths, and again just past the two-column breakpoint, it ran out of the
-// bubble and under `.chat__msg-actions`, which is absolutely positioned and
-// paints on top of it. Nothing in the suite could see that: every fixture was
-// Chinese. Reviewed against the real app shell in Chromium, 600 of 5040 scanned
-// combinations overlapped and EVERY ONE of them was English.
+// the control it lives in used to refuse to shrink, so it ran out of the bubble
+// and under `.chat__msg-actions`, which is absolutely positioned and paints on
+// top of it. Nothing in the suite could see that: every fixture was Chinese.
+//
+// Be exact about ONE thing and vague about another. Exact: the English string
+// reaches the failure first, and it is the fixture this loop needs. Vague: WHERE
+// it fails. Three reviews put three different ranges in this file and all three
+// were withdrawn — the band moves with the bubble kind, the display name and the
+// language, and one of the three was measured on a hand-built copy of the layout
+// rather than the layout. Chinese is NOT exempt; it fails at the narrow end too.
 //
 // ⚠️ THESE WIDTHS ARE THE HARNESS'S, AND THEY DO NOT MAP ONTO PRODUCTION. The
 // harness has no app shell — no 1040px cap, no 22px page padding, no 264px
@@ -342,12 +346,13 @@ for (const width of [390, 1280]) {
 //
 // Say what this therefore does NOT cover: production has a discontinuity at the
 // two-column breakpoint (628px of pane at 720, 347px at 721) which no width in
-// this harness reproduces. Measuring the running app showed there is no failure
-// band there to guard — at 721 the bubble shrinks to its own min-content and the
-// width cap never bites — but that is a fact about the app, not something this
-// file can see; a future change to the breakpoint would go unnoticed here.
-// What IS guarded is the mechanism: a control that cannot give way ends up under
-// the corner buttons, at the widths this harness can reproduce it.
+// this harness reproduces — and there IS a failure band on the far side of it,
+// on an incoming bubble that is itself a reply (56px of reserved corner against
+// your own bubble's 32). An earlier version of this note said there was nothing
+// there to guard; that was measured on own-bubbles only and it was wrong.
+// So: this file guards the MECHANISM — a control that cannot give way ends up
+// under the corner buttons — at the widths this harness can reproduce it, and a
+// change to the breakpoint would go unnoticed here.
 for (const width of [300, 320, 336, 360, 390]) {
   test(`width ${width}: the English jump label never reaches the corner controls`, async ({
     mount,
@@ -407,8 +412,10 @@ for (const width of [300, 320, 336, 360, 390]) {
       // This one catches a collapse to zero and nothing finer — with a 14px
       // floor the width is 14 whatever happens, so do not read it as pinning
       // that number. What pins 14 is the next assertion: at a floor of 12 the
-      // arrow starts painting 2px outside its own button and only that one goes
-      // red. (Measured, by setting the floor to 12.)
+      // arrow starts painting 2px outside its own button and that is the FIRST
+      // assertion to go red. (Measured, by setting the floor to 12. "First", not
+      // "only": the loop stops at the first failure, so what comes after it is
+      // untested rather than known-green.)
       expect(
         jump.width,
         `${row}: the jump collapsed past its arrow`,
