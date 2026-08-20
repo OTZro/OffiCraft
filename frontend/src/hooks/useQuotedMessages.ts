@@ -16,6 +16,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { ApiError } from "../api/errors";
 import type { ChatMessage } from "../api/adapter";
 
 /** The server refuses more than 20 ids per by-ids call, so batch to that. */
@@ -39,11 +40,20 @@ export function useQuotedMessages(
   // Ids already asked for (resolved OR missed OR in flight). Kept in a ref so
   // asking does not itself re-run the effect.
   const askedRef = useRef<Set<string>>(new Set());
+  // Ids that have already had their ONE retry after a transient failure. Bounds
+  // the retry below to a single extra attempt per id, so a server that is down
+  // costs one repeat and not a loop.
+  const retriedRef = useRef<Set<string>>(new Set());
+  // Bumped when a transient failure un-asks a batch. It is part of the effect
+  // key ON PURPOSE: un-asking alone changes no state, so without this the very
+  // next render can recompute an IDENTICAL key, React sees unchanged deps, and
+  // the retry we just enabled never fires.
+  const [attempt, setAttempt] = useState(0);
 
   const wanted = ids.filter((id) => !have.has(id) && !askedRef.current.has(id));
   // A stable key so the effect fires on the SET of wanted ids, not on the array
   // identity a render creates fresh every time.
-  const wantedKey = wanted.join(",");
+  const wantedKey = wanted.length === 0 ? "" : `${attempt}|${wanted.join(",")}`;
 
   // Mounted, NOT "these deps are still current". The difference is the whole of
   // T-4e95 review B1: marking ids asked does not re-render, so the very next
@@ -78,17 +88,40 @@ export function useQuotedMessages(
 
   useEffect(() => {
     if (wantedKey === "") return;
-    const batch = wantedKey.split(",").slice(0, BY_IDS_MAX);
+    const batch = wantedKey.split("|")[1].split(",").slice(0, BY_IDS_MAX);
     for (const id of batch) askedRef.current.add(id);
     void (async () => {
       let rows: ChatMessage[] = [];
       try {
         rows = await api.listChatByIds(batch);
-      } catch {
-        // ALL OR NOTHING on the wire: one unknown id refuses the whole call, so
-        // a throw says nothing about the other ids in the batch. Record the
-        // whole batch as missed rather than retrying — a retry loop against a
-        // permanent refusal is worse than an honest "earlier message" label.
+      } catch (e) {
+        // 🔴 A REFUSAL AND A BLIP ARE NOT THE SAME ANSWER, and this used to
+        // treat them as one. `null` in the map is a SETTLED state — "we asked
+        // and it is not there" — and writing it on any throw meant one dropped
+        // connection made every quote in that batch say 「較早的一則訊息」 for
+        // the rest of the session: `askedRef` never forgets, and OfficePage
+        // mounts <ChatArea> without a key, so the hook does not even remount
+        // when the owner changes rooms. Only a full page reload cleared it.
+        // The paragraph that used to be here argued a throw "says nothing
+        // about the other ids" and then recorded a definitive negative for all
+        // of them — it contradicted itself in three lines.
+        //
+        // ALL OR NOTHING is still true, and it is what makes 4xx definitive:
+        // one unknown id refuses the WHOLE call with a 404, and that refusal
+        // will not change on a retry. Anything else — a 5xx, a dropped socket,
+        // an offline laptop — is a blip, and a blip earns exactly ONE more go
+        // (see retriedRef). Not zero, because the label is a lie until then;
+        // not unbounded, because a server that is down would spin.
+        const definitive = e instanceof ApiError && e.status >= 400 && e.status < 500;
+        const fresh = batch.filter((id) => !retriedRef.current.has(id));
+        if (!definitive && fresh.length > 0) {
+          for (const id of fresh) {
+            retriedRef.current.add(id);
+            askedRef.current.delete(id);
+          }
+          if (mountedRef.current) setAttempt((a) => a + 1);
+          return;
+        }
         rows = [];
       }
       if (!mountedRef.current) return;

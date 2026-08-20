@@ -320,6 +320,62 @@ for (const width of [390, 1280]) {
   });
 }
 
+// 🔴 A LONG DISPLAY NAME MUST NOT EAT THE BANNER. The name half was `flex: none`
+// until r15 — the same assumption that failed on the quote row and took three
+// tries to get right there. Display names are free text the owner types, so an
+// unshrinkable name squeezes the excerpt beside it toward zero and is then
+// hard-cut by the parent's `overflow: hidden`, with no ellipsis to admit it.
+// The story's default name is four characters, which is why this needs its own
+// mount: the existing banner test cannot see this failure at all.
+for (const width of [390, 1280]) {
+  test(`width ${width}: a long name gives way before the quoted text does`, async ({
+    mount,
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    const cmp = await mount(
+      <ChatReplyToStory bannerWho="正在回覆 一個非常非常長的顯示名稱這是負責人自己在設定裡打進去的沒有任何上限也沒有人會攔他" />,
+    );
+
+    const banner = cmp.getByTestId("chat-reply-banner");
+    const bannerBox = (await banner.boundingBox())!;
+    // 🔴 THE ASSERTION THAT ACTUALLY SEES IT, and it took two tries to find.
+    // The first version of this test measured bounding boxes and passed under
+    // the very mutant it was written for — `overflow: hidden` on the parent
+    // clips the PAINT, so a name that has run past its container still reports
+    // a box inside it. What does move is the parent's own scrollWidth: an
+    // unshrinkable name makes the text row wider than the space it has.
+    // (Measured here, both ways: fixed → 309/309 and the name truncates at 303
+    // with 510 of content behind the ellipsis; `flex: none` → 516 of content in
+    // a 309 box, hard-cut, no ellipsis.)
+    const overflow = await banner.evaluate((el) => {
+      const t = el.querySelector(".chat__reply-banner__text") as HTMLElement;
+      return { client: t.clientWidth, scroll: t.scrollWidth };
+    });
+    expect(
+      overflow.scroll,
+      "the text row must not be wider than the space it has",
+    ).toBeLessThanOrEqual(overflow.client + 1);
+    // Still one line, still inside the composer.
+    expect(bannerBox.height).toBeLessThan(36);
+    expect(bannerBox.x + bannerBox.width).toBeLessThanOrEqual(width + 1);
+
+    // The name gave way rather than running past its box…
+    const who = banner.locator(".chat__reply-banner__who");
+    const whoBox = (await who.boundingBox())!;
+    expect(whoBox.x + whoBox.width).toBeLessThanOrEqual(
+      bannerBox.x + bannerBox.width + 0.5,
+    );
+
+    // …and the x — the only way back to the ordinary send state — is still a
+    // real, hittable control that nothing is sitting on top of.
+    const x = cmp.getByTestId("reply-banner-x");
+    const xBox = (await x.boundingBox())!;
+    expect(xBox.width).toBeGreaterThanOrEqual(20);
+    expect(whoBox.x + whoBox.width).toBeLessThanOrEqual(xBox.x + 0.5);
+  });
+}
+
 // Native keyboard semantics, one width. jsdom proved the click handler; this
 // proves both controls really are <button> elements — a <div onClick> mutant
 // takes the reply entry and the x out of reach for anyone not using a mouse.

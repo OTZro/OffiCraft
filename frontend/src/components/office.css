@@ -1256,12 +1256,29 @@
   overflow: hidden;
   white-space: nowrap;
 }
+/* 🔴 THE SAME RULE THE QUOTE ROW ALREADY LEARNED, applied here too. This was
+ * `flex: none` on the reasoning that a name is short — the exact assumption
+ * that failed on the row版 and cost three tries there (see
+ * `.chat__msg-quote__who` above). Display names are free text the owner types,
+ * so a long one could not shrink: the excerpt beside it was squeezed toward
+ * zero and the name itself was hard-cut by the parent's `overflow: hidden`,
+ * with no ellipsis to say so.
+ *
+ * The shrink factors are the row's, deliberately — 10000 on the excerpt, 1 on
+ * the name — so the excerpt absorbs essentially all of any deficit and the name
+ * only gives once the excerpt has nothing left. Those numbers were measured on
+ * the running app for the row; reusing them keeps one rule in this file, not
+ * two that drift. */
 .chat__reply-banner__who {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-weight: 600;
   color: var(--color-text);
 }
 .chat__reply-banner__body {
+  flex: 1 10000 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

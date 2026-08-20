@@ -13,8 +13,14 @@
  * end up under the corner buttons) only fails on the long one. A story hard-
  * wired to Chinese measured a control 85px narrower than half the users see. */
 export function ChatReplyToStory({
+  bannerWho = "正在回覆 Mira",
   jumpLabel = "跳到原訊息",
 }: {
+  /** The banner's WHO half. A prop for the same reason `jumpLabel` is one: its
+   * WIDTH is the thing under test, and display names are free text. The default
+   * is four characters — which is exactly why the long-name case needed its own
+   * mount rather than trusting this row. */
+  bannerWho?: string;
   jumpLabel?: string;
 } = {}) {
   // 🔴 A LONG SENDER, not "Mira". What makes a long one real is that display
@@ -409,7 +415,7 @@ export function ChatReplyToStory({
             <polyline points="9 17 4 12 9 7" />
           </svg>
           <span className="chat__reply-banner__text">
-            <span className="chat__reply-banner__who">正在回覆 Mira</span>
+            <span className="chat__reply-banner__who">{bannerWho}</span>
             <span className="chat__reply-banner__body">{longQuote}</span>
           </span>
           <button
