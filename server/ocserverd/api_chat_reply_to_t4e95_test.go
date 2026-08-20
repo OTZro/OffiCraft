@@ -159,6 +159,39 @@ func TestChatReplyTo_ForeignConversationIsRefused(t *testing.T) {
 	}
 }
 
+// ③ (cont.) THE OTHER DIRECTION, and it is the MAIN USE CASE: replying to a
+// message the other party sent YOU. A reply travels the opposite way to the
+// message it quotes, so the same-conversation check has to compare the two
+// {sender, recipient} pairs as SETS, not positionally.
+//
+// This test exists because a review (T-4e95, DoD 7) removed the reverse half of
+// sameChatConversation and the whole Go suite stayed green: every case above
+// quotes a message travelling the SAME way as the reply, so the reverse half
+// was uncovered production code. A guard nothing measures is a guard that
+// disappears the first time someone tidies it.
+func TestChatReplyTo_ReplyingToWhatTheOtherPartySentYou(t *testing.T) {
+	srv, secret, db := newWiredTestServerWithDB(t)
+	tok, _ := mintJWT("mira", "agent", 300, secret, time.Now().Unix(), "")
+
+	// The owner's line to mira — the opposite direction to the reply below.
+	if err := NewDAL(db).PutChat(ChatMessage{
+		ID: "c-fromowner", Sender: "owner", Recipient: "mira",
+		Body: "這個你先做", TS: 1.0,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	status, raw := postedChat(t, srv.URL, tok,
+		`{"to":"owner","body":"好，我接","reply_to":"c-fromowner"}`)
+	if status != 200 {
+		t.Fatalf("replying to what the peer sent you must be accepted, got %d %s",
+			status, raw)
+	}
+	if _, replyTo := chatFields(t, raw); replyTo != "c-fromowner" {
+		t.Fatalf("the link must be stored, got %q", replyTo)
+	}
+}
+
 // ④ THE FORGED LINK. `meta` is copied through wholesale — that is documented
 // behaviour and other keys rely on it — so the ONE key the server owns has to be
 // removed on the way in. Without this, ② and ③ are decoration: a caller that

@@ -952,13 +952,13 @@ export const httpApi: Api = {
         body: {
           to: msg.to,
           body: msg.body,
-          // The quote link, when this send is a reply. Omitted entirely when it
-          // is not, so an ordinary post's wire shape is unchanged. The server
-          // validates it (exists + same conversation) and is the only writer of
-          // the stored link.
-          // "" is the wire's "replies to nothing" — the same shape `body`
-          // uses, and what the generated request type requires. The server
-          // treats an empty value as no link at all.
+          // The quote link. ALWAYS SENT — "" is the wire's "replies to
+          // nothing", the same shape `body` uses, and what the generated
+          // request type requires. (An earlier version of this comment said the
+          // field was omitted on an ordinary post; it never was, and a comment
+          // describing a wire shape the code does not produce is worse than no
+          // comment.) The server validates a non-empty value (exists + same
+          // conversation) and is the only writer of the stored link.
           reply_to: msg.replyTo ?? "",
           ...(attachments.length > 0
             ? {

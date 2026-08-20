@@ -2658,6 +2658,70 @@ def test_upload_then_ref_post_roundtrip(hctx: HCtx) -> None:
     assert again.status_code == 200, again.text
 
 
+def test_chat_reply_to_is_the_servers_link_not_the_callers(hctx: HCtx) -> None:
+    """T-4e95 「回覆這則」 over the real wire.
+
+    The repo charter puts the BEHAVIOURAL close-out of a wire change here, and
+    this field has three claims worth closing out over HTTP rather than only in
+    Go: the link round-trips, a link out of this conversation is refused, and a
+    caller-supplied ``meta.reply_to`` is discarded. The third is the one that
+    needs a real request the most — ``meta`` is copied through wholesale, so the
+    only thing standing between a caller and an unvalidated link is a deletion
+    the handler performs before it validates anything.
+    """
+    quoted = hctx.client.post(
+        "/api/chat",
+        json={"to": hctx.agent.member_id, "body": "reply-to-target"},
+        headers=_auth(hctx.owner_token),
+    )
+    assert quoted.status_code == 200, quoted.text
+    quoted_id = quoted.json()["id"]
+    assert quoted.json()["reply_to"] == "", "a plain post carries no link"
+
+    # The MAIN use case, and the direction a positional (rather than set)
+    # comparison would refuse: answering what the other party sent you.
+    reply = hctx.client.post(
+        "/api/chat",
+        json={"to": "owner", "body": "reply-to-answer", "reply_to": quoted_id},
+        headers=_auth(hctx.agent.token),
+    )
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["reply_to"] == quoted_id
+
+    # Read it back off the wire — the POST response is built from the row the
+    # handler just made, so it would look right even if nothing were stored.
+    served = hctx.client.get(
+        f"/api/chat?ids={reply.json()['id']}", headers=_auth(hctx.agent.token)
+    )
+    assert served.status_code == 200, served.text
+    assert served.json()[0]["reply_to"] == quoted_id
+
+    # An id that names nothing is a 400 on the FIELD, not a 404 on the route.
+    orphan = hctx.client.post(
+        "/api/chat",
+        json={"to": "owner", "body": "orphan", "reply_to": "c-nosuchmessage"},
+        headers=_auth(hctx.agent.token),
+    )
+    assert orphan.status_code == 400, orphan.text
+    assert "c-nosuchmessage" in orphan.text
+
+    # A caller-supplied meta.reply_to is DISCARDED — while the rest of meta,
+    # which really is free-form passthrough, survives.
+    forged = hctx.client.post(
+        "/api/chat",
+        json={
+            "to": "owner",
+            "body": "forged-link",
+            "meta": {"reply_to": quoted_id, "keepme": "yes"},
+        },
+        headers=_auth(hctx.agent.token),
+    )
+    assert forged.status_code == 200, forged.text
+    assert forged.json()["reply_to"] == "", "a meta-supplied link must not stand"
+    assert forged.json()["meta"].get("keepme") == "yes"
+    assert "reply_to" not in forged.json()["meta"]
+
+
 def test_chat_recipient_validation_preserves_offline_mailbox(hctx: HCtx) -> None:
     """A valid member remains a durable mailbox while disconnected, but an
     invented recipient is rejected instead of becoming an orphaned chat row."""

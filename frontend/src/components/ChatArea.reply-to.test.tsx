@@ -257,6 +257,37 @@ describe("ChatArea 回覆這則", () => {
     expect(scrolled).toContain(rowOf(container, "c-1"));
   });
 
+  it("resolves an out-of-window quote even when the composer re-renders mid-flight", async () => {
+    // T-4e95 review B1. The by-id read is fired from an effect keyed on the set
+    // of unresolved ids, and asking marks them in a ref WITHOUT re-rendering. So
+    // the very next render — one keystroke is enough — recomputes that key as
+    // empty, React tears down the previous effect, and a cleanup that cancelled
+    // the in-flight read would drop the answer. The ids are already marked
+    // asked, so nothing would ever ask again: the quote sits at "…" forever.
+    //
+    // The typing below is the WHOLE test. Without it the effect is never torn
+    // down and the bug cannot appear — which is exactly why the existing
+    // out-of-window test passed while this was broken.
+    messages = [
+      mkMsg({
+        id: "c-9",
+        from: "owner",
+        to: "m1",
+        body: "回覆很久以前那則",
+        ts: 9,
+        replyTo: "c-longgone",
+      }),
+    ];
+    const { container } = renderChat();
+    fireEvent.change(input(container), { target: { value: "一" } });
+    fireEvent.change(input(container), { target: { value: "一二" } });
+
+    const quote = rowOf(container, "c-9").querySelector(".chat__msg-quote")!;
+    await waitFor(() =>
+      expect(quote.textContent).toContain("較早的一則訊息"),
+    );
+  });
+
   it("a quote whose target is older than the loaded window says so instead of pretending", async () => {
     messages = [
       mkMsg({

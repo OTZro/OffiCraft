@@ -8,6 +8,7 @@ paths:
   - "src/components/ScheduledMessagesCard*"
   - "src/components/replies.css"
   - "src/hooks/useChat*"
+  - "src/hooks/useQuotedMessages*"
   - "src/hooks/useReplyCard*"
   - "src/hooks/useScheduledMessages.ts"
   - "src/lib/composerKeys.ts"
@@ -43,3 +44,31 @@ ChatReplyCard 的 doReanswer 保留單卡 refetch：終態 delta 可能被刻意
 view=full 只在 HTTP list seam 表示整個 pane 的一次請求，不上提到 adapter，也不向 agent 的 MCP tools/list 宣傳；否則 agent 會拿到一次拉整個 pane 的昂貴把手，抵消輕量摘要契約。light/default 行為不變、未知 view 回 400。等待卡的 expire 規則以 server 為準：owner/admin 或卡片作者可過期自己的 waiting 卡；其他人 403，已回答 409。
 
 hash route #office/chat/<id>/msg/<msgId> 只做一次定位與 highlight；若訊息不在最近窗口就誠實落到底。回覆卡的 red badge 與聊天未讀互不清除；任務關聯卡共用卡身，只顯示任務標題與查看詳情連結。
+
+## 「回覆這則」（T-4e95）
+
+**回覆關係只有 id，沒有任何拷貝。** owner 裁定：被引用那句話已經在它自己的
+message id 底下，複製一份在每則回覆旁邊就是同一句話的第二個住處。要顯示引用
+內容，先從已載入的 `messages` 找，找不到才用 `useQuotedMessages` 走 by-id 讀
+回來 —— 不要為了省一次請求就在 wire 上加摘要欄位。
+
+**引用有三態，不准壓成兩態**：還沒解決（`undefined`）、問過但沒拿到
+（`null`）、拿到（物件）。第二態要顯示「較早的一則訊息」這種誠實落空，第一態
+才是暫時的。把兩者畫成同一個樣子，使用者就分不出「還在找」和「找不到」。
+
+**取消回覆的 x 只清回覆對象。** 不准順手清 `draft`、不准清
+`pendingAttachments`：取消回覆不是取消訊息。這條有測試釘住
+（`ChatArea.reply-to.test.tsx`）。
+
+**送出後一定要清掉回覆對象**，否則它會默默黏在下一則訊息上。
+
+**`useQuotedMessages` 的 effect 不准用 cleanup 取消飛行中的請求。** 「已問過」
+記在 ref 裡而且不觸發 re-render，所以下一次 render（composer 打一個字就夠）會
+把 effect 的 key 算成空、React 跑上一個 effect 的 cleanup —— 取消掉的請求永遠
+不會再發一次，引用就卡在「…」。要防的只有 unmount 後寫 state（T-4e95 review
+B1，已有會紅的測試）。
+
+**每一則訊息都要有回覆入口**，包含你自己發的與只有附件的。氣泡的右上角是共用的
+action slot（回覆＋放大閱讀），寬度依控制項數量預留，不要改成 hover 才進版面 ——
+那會讓滑過去時氣泡橫向跳動。**唯一的例外是請示卡那種訊息**：它沒有氣泡，入口留
+在列上，這是有紀錄的決定，不是漏做。
