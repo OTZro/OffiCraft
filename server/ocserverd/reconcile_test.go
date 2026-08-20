@@ -1247,6 +1247,32 @@ func TestClearStaleStoppingOnOnline(t *testing.T) {
 		}
 	})
 
+	// 🔴 The OTHER half of the max(), and it is the half that fires most often:
+	// the gauge's ts OUTLIVES the session that wrote it. anchorSessionBoot only
+	// refreshes boot_ts and clearSessionBootTS only deletes boot_ts — nothing
+	// ever clears ts — so a member that reports stopping right after a quiet
+	// stretch has an anchor NEWER than its last context report. Taking the
+	// gauge's ts on its own would then sweep a close-out that started seconds
+	// ago, which is worse than the behaviour this ticket exists to fix.
+	t.Run("a fresh anchor wins over a stale gauge report", func(t *testing.T) {
+		m := testAgent("m-s8")
+		now := 10_000.0
+		m.StoppingSince = now // reported stopping just now
+		putTestMember(t, s, m)
+		connectOnline(t, s, "m-s8")
+		// …but its last context report is older than the whole window.
+		s.gauge.Set("m-s8", map[string]any{"ts": now - SoftOffboardGraceSecs*2})
+		members := []Member{m}
+		s.clearStaleStoppingOnOnline(members, now)
+		if members[0].StoppingSince != now {
+			t.Fatalf("a just-reported close-out must not be swept by an old gauge ts: %+v", members[0])
+		}
+		persisted, _ := s.dal.GetMember("m-s8")
+		if persisted.StoppingSince != now {
+			t.Fatalf("nothing may be persisted either: %+v", persisted)
+		}
+	})
+
 	// 🔴 The gauge is in-memory and volatile by contract (hub.go): a station
 	// re-exec blanks it for everyone. A missing record must therefore mean "no
 	// opinion" and fall back to the anchor's age — the pre-T-7723 rule — so the

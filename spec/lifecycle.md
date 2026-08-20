@@ -523,9 +523,18 @@ ONE-SHOT, never a standing order):
   changed the clock). A member with NO gauge record has said nothing the server can
   date — the store is in-memory and a station re-exec blanks it fleet-wide — so that
   case falls back to the anchor's age rather than reading the amnesia as silence.
-  Consequence, deliberate: a member that reports stopping and then resumes ordinary
-  work reads `stopping` for the rest of that session. `report_stopped` and any reboot
-  both clear it.
+  ⚠️ The report is NOT a heartbeat: it is throttled to at most one burst per
+  `soft_offboard_grace`-independent 30 s window, and it is driven by the agent's
+  activity (Claude wires it to the statusLine redraw, codex to turn boundaries).
+  So this discriminator sees a member that is still producing turns and does NOT
+  see one blocked inside a single long call — a close-out that spends the whole
+  window waiting on one sub-agent is still swept. Strict improvement, not a
+  complete fix.
+  Two deliberate consequences, both owner-facing: a member that reports stopping
+  and then resumes ordinary work reads `stopping` for the rest of that session,
+  and while it reads `stopping` the cockpit offers 強制下線 rather than the
+  ordinary graceful 下線. `report_stopped` and any reboot clear the anchor; so
+  does 喚醒, which is the non-destructive way back.
 
 ### 4.6 Dispatch discipline
 

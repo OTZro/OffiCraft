@@ -38,6 +38,12 @@ type ActionKey = "spawn" | "cancel" | "stop" | "force-stop";
  * button is not an impatient shortcut, it is the ONLY escalation there is (owner
  * ruling rc-27d1710174dd). It is an IMMEDIATE kill (robust STOP straight to the
  * warden), not another graceful deactivate — the parent gates it behind a confirm.
+ * 🔴 Since T-7723 that window is no longer bounded by the anchor's age: a member
+ * that is still filing context reports stays `stopping` for as long as its
+ * session lives, so this set — and the absence of an ordinary graceful Stop in
+ * it — is what the owner sees for that whole time, not for ten minutes. The
+ * non-destructive way out is Spawn: activate unconditionally clears the anchor
+ * and the member returns to `online-awake` with its ordinary Stop back.
  * `online-awake` keeps the ordinary graceful
  * Stop (=deactivate); `waking` keeps Cancel (deactivate / cancel-wake) alongside the
  * Spawn rescue. All backed by real endpoints (no dead affordance). */

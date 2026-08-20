@@ -46,12 +46,14 @@ type reconcileConfig struct {
 	StopGrace    float64 // self-stop window before the robust stop
 	StopRetry    float64 // STOP/UNINSTALL re-dispatch window (lost frame)
 	RecycleGrace float64 // dump-stuck fallback from refocus_since
-	// SoftOffboardGrace is how long a close-out is treated as in flight. It is
-	// NOT a deadline: neither soft arm is collected on a clock — 下線 by the
-	// owner's ruling (rc-27d1710174dd) and 重新聚焦 by his 2026-08-19 one
-	// (rc-c540367065ad). Both end at the agent's own stopped report or at his
-	// force-stop, and this window is what keeps that button on screen (see
-	// clearStaleStoppingOnOnline).
+	// SoftOffboardGrace is how long a close-out may say NOTHING before its
+	// anchor is treated as residue (T-7723 — it is silence, not the anchor's
+	// age). It is NOT a deadline: neither soft arm is collected on a clock —
+	// 下線 by the owner's ruling (rc-27d1710174dd) and 重新聚焦 by his 2026-08-19
+	// one (rc-c540367065ad). Both end at the agent's own stopped report or at
+	// his force-stop, and this window is what keeps that button on screen for a
+	// close-out that has gone quiet (see clearStaleStoppingOnOnline); one that
+	// is still reporting keeps it for as long as it takes.
 	//
 	// Setting it to 0 restores the pre-T-a9d6 timed wind-down wholesale, which
 	// is what the tests covering the robust-stop ladder drive. It is a compile-
@@ -1212,11 +1214,24 @@ func (s *apiServer) consumeUninstallOnDisconnect(memberID string) {
 // report ts.
 //
 // The gauge's ts is written by the member's OWN live session (ocagent's
-// context-report, ~30s cadence, keyed on the verified token sub) — and per the
-// recon behind T-7723 it is the ONLY per-member timestamp the server has that
-// originates there. Nothing else moves when a member works: chat, tasks and
-// every other MCP call write no member row at all, and last_op_at belongs to
-// the WARDEN, not to the member.
+// context-report, keyed on the verified token sub), and it is the ONLY
+// per-member timestamp the server has that originates there. Nothing else moves
+// when a member works: chat, tasks and every other MCP call write no member row
+// at all, and last_op_at belongs to the WARDEN, not to the member.
+//
+// 🔴 It is NOT a heartbeat, and nothing may read it as one. The 30s in
+// contextreport.go is a THROTTLE CEILING ("at most one report burst per 30s
+// window"), not a timer: on Claude the reporter is wired as the statusLine
+// command (cli/ocwarden/spawn.go), so it fires when the status line redraws; on
+// codex it rides reportTokenUsage, so it fires at TURN boundaries. Both are
+// driven by the agent's activity, not by a clock.
+//
+// What that costs, precisely: this discriminator sees a member that is still
+// producing turns, and does NOT see one blocked inside a single long call. So a
+// close-out that spends twenty minutes waiting on one sub-agent still gets swept
+// at the old boundary. That case wants a real heartbeat and does not have one;
+// this is a strict improvement over dating the sweep from the anchor, not a
+// complete fix, and it must not be described as one.
 //
 // 🔴 A missing or unusable record means NO OPINION, not "silent" — the gauge is
 // in-memory and volatile by contract (hub.go), so a station re-exec blanks it
