@@ -173,4 +173,21 @@ describe("useChat load routing (active vs background)", () => {
 
     expect(h.postChat).toHaveBeenCalledTimes(1);
   });
+
+  // The OTHER half of the same contract, and the one nothing was standing on:
+  // every restore this feature does rests on "a send that really failed
+  // rejects". A reviewer pulled the POST itself inside the try/catch added
+  // above and all 2248 tests stayed green — a message that never left would
+  // then vanish with no restore, no draft and not even a console.warn. This is
+  // the assertion that makes that a red.
+  it("a send whose POST FAILED still rejects — the caller must be able to tell", async () => {
+    h.listChat.mockResolvedValueOnce([]); // the initial load
+    h.postChat.mockRejectedValueOnce(new Error("server said no"));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(1));
+
+    await expect(result.current.send("沒送出去的話")).rejects.toThrow(
+      "server said no",
+    );
+  });
 });

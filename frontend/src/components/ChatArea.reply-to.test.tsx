@@ -537,6 +537,107 @@ describe("ChatArea 回覆這則", () => {
     });
   });
 
+  it("does not clobber a picture the owner staged in that room while the send was away", async () => {
+    // The case the comment above the fix names in words — "go back to that room,
+    // stage one image and type nothing" — and which nothing was standing on: a
+    // reviewer made the attachments field write the snapshot UNCONDITIONALLY and
+    // all 1310 tests stayed green. The room's own picture would be overwritten,
+    // and since an empty draft is deleted outright there is no way back.
+    messages = [mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" })];
+    let reject: (e: Error) => void = () => {};
+    send.mockImplementationOnce(
+      () => new Promise((_, r) => (reject = r)) as Promise<void>,
+    );
+
+    const { container, rerender } = render(
+      <I18nProvider>
+        <ChatArea member={m1} />
+      </I18nProvider>,
+    );
+    fireEvent.click(rowOf(container, "c-1").querySelector(".chat__msg-reply")!);
+    fireEvent.change(input(container), { target: { value: "給 m1 的" } });
+    fireEvent.keyDown(input(container), { key: "Enter" });
+
+    rerender(
+      <I18nProvider>
+        <ChatArea member={m2} />
+      </I18nProvider>,
+    );
+    // Back in m1 the owner staged a picture and typed nothing.
+    saveChatDraft("m1", {
+      text: "",
+      attachments: [
+        {
+          key: "k-theirs",
+          dataUri: "data:image/png;base64,AAAA",
+          filename: "後來貼的.png",
+          mime: "image/png",
+          size: 4,
+          isImage: true,
+        },
+      ],
+    });
+
+    await act(async () => {
+      reject(new Error("nope"));
+      await Promise.resolve();
+    });
+
+    const kept = getChatDraft("m1");
+    // Theirs survives…
+    expect(kept?.attachments).toHaveLength(1);
+    expect(kept?.attachments[0].filename).toBe("後來貼的.png");
+    // …and the fields the room had nothing in still come back.
+    expect(kept?.text).toBe("給 m1 的");
+    expect(kept?.replyTo).toBe("c-1");
+  });
+
+  it("gives the room back its OWN reply target, not the failed send's", async () => {
+    // Polarity pin for the replyTo field. Inverting it left all 1310 tests
+    // green: every other case has the room holding no target at all, so both
+    // polarities produce the same answer there.
+    messages = [
+      mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" }),
+      mkMsg({ id: "c-2", from: "m1", to: "owner", body: "他說的第二句", ts: 2 }),
+    ];
+    let reject: (e: Error) => void = () => {};
+    send.mockImplementationOnce(
+      () => new Promise((_, r) => (reject = r)) as Promise<void>,
+    );
+
+    const { container, rerender } = render(
+      <I18nProvider>
+        <ChatArea member={m1} />
+      </I18nProvider>,
+    );
+    fireEvent.click(rowOf(container, "c-1").querySelector(".chat__msg-reply")!);
+    fireEvent.change(input(container), { target: { value: "給 m1 的" } });
+    fireEvent.keyDown(input(container), { key: "Enter" });
+
+    rerender(
+      <I18nProvider>
+        <ChatArea member={m2} />
+      </I18nProvider>,
+    );
+    // Back in m1 the owner aimed at a DIFFERENT message and typed something.
+    saveChatDraft("m1", {
+      text: "我後來又打的",
+      attachments: [],
+      replyTo: "c-2",
+    });
+
+    await act(async () => {
+      reject(new Error("nope"));
+      await Promise.resolve();
+    });
+
+    const kept = getChatDraft("m1");
+    expect(kept?.text).toBe("我後來又打的");
+    expect(kept?.replyTo, "the room's own aim, not the failed send's").toBe(
+      "c-2",
+    );
+  });
+
   it("keeps a failed send when the owner has left the conversation entirely", async () => {
     // Same defect, second door: 跳頁 while the send is in flight unmounts the
     // composer, so restoring into component state discards it just as quietly
