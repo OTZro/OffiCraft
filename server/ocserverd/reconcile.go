@@ -1207,6 +1207,31 @@ func (s *apiServer) consumeUninstallOnDisconnect(memberID string) {
 		"(desired_state → offline; record kept)", m.ID)
 }
 
+// quietSince answers "when did this member last say anything of its own?" for
+// the stale-stopping sweep: the later of the close-out anchor and the gauge's
+// report ts.
+//
+// The gauge's ts is written by the member's OWN live session (ocagent's
+// context-report, ~30s cadence, keyed on the verified token sub) — and per the
+// recon behind T-7723 it is the ONLY per-member timestamp the server has that
+// originates there. Nothing else moves when a member works: chat, tasks and
+// every other MCP call write no member row at all, and last_op_at belongs to
+// the WARDEN, not to the member.
+//
+// 🔴 A missing or unusable record means NO OPINION, not "silent" — the gauge is
+// in-memory and volatile by contract (hub.go), so a station re-exec blanks it
+// for the whole fleet at once. Reading that as fleet-wide silence would sweep
+// every close-out in flight; instead the anchor's own age decides, which is
+// exactly the pre-T-7723 rule. The worst this can do is behave like it used to.
+// Same fail-open shape as gaugeSecsSinceBoot's loop guard.
+func quietSince(m Member, gauge map[string]any) float64 {
+	quiet := m.StoppingSince
+	if ts, ok := asNumber(gauge["ts"]); ok && ts > quiet {
+		quiet = ts
+	}
+	return quiet
+}
+
 // clearStaleStoppingOnOnline is the survived-stop auto-clear (§4.5): a
 // desired-online member OBSERVED online while still carrying a stopping_since
 // anchor is provably past that stop — clear the anchor so it can never derive
@@ -1230,10 +1255,29 @@ func (s *apiServer) clearStaleStoppingOnOnline(members []Member, now float64) {
 		// online, both carry the anchor. Clearing the fresh one erased the
 		// owner's only signal that the session had begun closing out — the
 		// cockpit went back to green while the agent was writing its hand-off,
-		// which is exactly what he reported seeing. An anchor older than the
-		// whole soft window cannot be a live close-out any more, and that is
-		// the only kind this sweep ever meant.
-		if now-m.StoppingSince < SoftOffboardGraceSecs {
+		// which is exactly what he reported seeing.
+		//
+		// 🔴 T-7723: the anchor's AGE was the wrong clock. It bought exactly
+		// SoftOffboardGraceSecs of visibility, and the one thing an offboard is
+		// told to do first — collect the sub-agents still running — is the one
+		// thing that routinely takes longer than that. The owner watched a
+		// member report 「開始收尾」 and asked TWICE, 22 minutes later, why it never
+		// had; the anchor had been swept at minute 10 while the member was still
+		// working. So the clock is now QUIET TIME, not anchor age: a member that
+		// is still filing context reports is still saying something, and a
+		// close-out that says nothing for the whole window is the residue this
+		// sweep was written for.
+		//
+		// What it costs, said plainly: a member that reports stopping, abandons
+		// the close-out and goes back to ordinary work now reads *stopping* for
+		// as long as that session lives, where before it flipped green after the
+		// window. That trade is deliberate — the two errors are not equal. The
+		// old one HID a member that really was closing out, and the owner read it
+		// as idle. The new one shows a member that said it was stopping and never
+		// finished, which is literally true, and it has two cheap exits that both
+		// already exist: report_stopped, or any reboot (report_waking clears the
+		// anchor). It cannot outlive the session.
+		if now-quietSince(*m, s.gauge.Get(m.ID)) < SoftOffboardGraceSecs {
 			continue
 		}
 		m.StoppingSince = 0.0

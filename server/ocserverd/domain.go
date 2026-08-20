@@ -117,9 +117,13 @@ const StoppingTimeoutSecs = 120.0
 // own stopped report or by the owner pressing force-stop, and by nothing else.
 //
 // 🔴 So this is NOT a deadline any more, and nothing may re-read it as one.
-// What still uses it is clearStaleStoppingOnOnline — the window during which a
-// stopping member keeps its stopping state, which is what keeps the force-stop
-// button on screen for the owner to press. Escalation is his, not a timer's.
+// What still uses it is clearStaleStoppingOnOnline — but as a SILENCE window,
+// not an age: how long a close-out may say nothing before its anchor is treated
+// as residue (T-7723). A member that is still filing context reports keeps its
+// stopping state however long the close-out takes, which is what keeps the
+// force-stop button on screen for the owner to press. Escalation is his, not a
+// timer's — and it is only useful while the button is still there, which is the
+// whole reason the clock had to stop being the anchor's age.
 //
 // Setting it to 0 restores the pre-T-a9d6 timed wind-down wholesale.
 const SoftOffboardGraceSecs = 600.0

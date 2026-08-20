@@ -802,8 +802,13 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 //
 // The re-stamp does NOT restart a countdown: since rc-27d1710174dd the 下線 arm
 // runs no clock at all. What the anchor dates is the close-out epoch — which
-// reconnect the SSE stop gate admits, and how long clearStaleStoppingOnOnline
-// treats the close-out as in flight.
+// reconnect the SSE stop gate admits (api_infra.go), and, paired with
+// ForcedStopAt, whether forcedEpochLive reads this stop as a deliberate cut-off.
+//
+// ⚠️ NOT clearStaleStoppingOnOnline, whatever an older version of this comment
+// said: that sweep skips every member whose desired_state is offline, and this
+// handler writes offline two statements from here. The sweep only ever sees the
+// self-driven arm (report_stopping, which touches no desired_state at all).
 func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w http.ResponseWriter, r *http.Request, memberId string) {
 	m, err := s.resolveMember(memberId)
 	if err != nil {
