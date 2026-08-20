@@ -45,11 +45,27 @@ export function useQuotedMessages(
   // identity a render creates fresh every time.
   const wantedKey = wanted.join(",");
 
+  // Mounted, NOT "these deps are still current". The difference is the whole of
+  // T-4e95 review B1: marking ids asked does not re-render, so the very next
+  // render (a keystroke in the composer is enough) recomputes `wantedKey` as ""
+  // — the deps changed, React runs the PREVIOUS effect's cleanup, and a cleanup
+  // that cancelled the in-flight read threw the answer away. The ids were
+  // already in `askedRef`, so nothing ever asked again and the quote sat at "…"
+  // forever, which is precisely the "spinner that never resolves" this file's
+  // header promises it does not do. `askedRef` is what prevents duplicate
+  // requests; the only thing left worth guarding is writing state after unmount.
+  const mountedRef = useRef(true);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
+
   useEffect(() => {
     if (wantedKey === "") return;
     const batch = wantedKey.split(",").slice(0, BY_IDS_MAX);
     for (const id of batch) askedRef.current.add(id);
-    let alive = true;
     void (async () => {
       let rows: ChatMessage[] = [];
       try {
@@ -61,7 +77,7 @@ export function useQuotedMessages(
         // permanent refusal is worse than an honest "earlier message" label.
         rows = [];
       }
-      if (!alive) return;
+      if (!mountedRef.current) return;
       const byId = new Map(rows.map((m) => [m.id, m]));
       setFetched((prev) => {
         const next = new Map(prev);
@@ -69,9 +85,6 @@ export function useQuotedMessages(
         return next;
       });
     })();
-    return () => {
-      alive = false;
-    };
   }, [wantedKey]);
 
   return fetched;
