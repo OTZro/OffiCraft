@@ -60,7 +60,7 @@ presence 是 **server 端算出來的**，不是 agent 自報的心跳狀態。�
 > **個人頭像優先序（2026-07-27 owner 裁定）。** owner 可在正職／外包詳情替指定 stable member id 上傳、替換或移除個人圖片；一般成員不可管理。所有主要身分露出一致採「個人圖片 → 角色／主題圖片 → 內建 glyph」，圖片載入失敗也沿同一鏈回退。個人圖片不影響 presence，亦不以可變的 display name 當 key。契約、儲存與 rollback 見 [per-member custom avatar](member-custom-avatar.md)。
 
 ### 全域情境（Global Context）
-**套用到所有成員**的 boot context，拆成三塊（依組裝順序）：**系統互動**（系統運作說明，唯讀 seed）→ **使用者自訂**（owner 可編輯的 additive 追加塊，空時整塊跳過）→ **啟動程序**（工作室固定 SOP，唯讀 seed）。於「設定 › 角色誌」檢視；**在這個畫面上**只有「使用者自訂」可編輯。另外兩塊在這裡唯讀，但**不是後端沒有寫入端點** —— `PUT /api/system-interaction`、`PUT /api/boot-sequence/{runtime_key}` 與各自的 `/reset` 都存在，只是 **owner 或 admin 特助才呼叫得動**，而座艙沒有接這幾條路。⇒ 這道唯讀是 **UI 沒接 ＋ 授權下限**，不是 by construction；要改那兩塊走 MCP（`replace_system_interaction`／`replace_boot_sequence`），出廠 seed 永遠不被覆蓋，`reset_*` 拿得回原文。UI 一律**不顯示 .md 檔名**（三塊是內容、不是檔案）。
+**套用到所有成員**的 boot context，拆成三塊（依組裝順序）：**系統互動**（系統運作說明，唯讀 seed）→ **使用者自訂**（owner 可編輯的 additive 追加塊，空時整塊跳過）→ **啟動程序**（工作室固定 SOP，唯讀 seed）。於「設定 › 角色誌」檢視；**三塊都可編輯**。系統互動與啟動程序曾經是唯讀渲染、後端也真的沒有寫入端點（那正是「by construction」那句話的世界）；**T-791e 起兩者都有**：`POST /api/system-interaction`、`POST /api/boot-sequence/{runtime_key}` 與各自的 `/reset`，**動詞是 POST 不是 PUT**（整個路由表只有一個 PUT，與這裡無關；打 PUT 會拿到 405），授權下限是 owner 或 admin 特助。這兩塊與下線程序由同一個 `BootDocPage` 呈現，共用「編輯／版本歷史／還原出廠版」那一套；出廠 seed 永遠不被覆蓋，`reset_*` 拿得回原文。UI 一律**不顯示 .md 檔名**（三塊是內容、不是檔案）。
 
 ---
 
@@ -142,9 +142,9 @@ presence 是 **server 端算出來的**，不是 agent 自報的心跳狀態。�
 
 **區塊 1 — 全域情境（GLOBAL CONTEXT）：三塊**
 - 角色誌列表依 boot 組裝順序列三列（**不顯示 .md 檔名**）：
-  - **系統互動**（`系統唯讀` 徽章）：點進 → 唯讀詳情頁，只有渲染後的 markdown，**無編輯入口**
+  - **系統互動**：點進 → `BootDocPage`：檢視 markdown；**編輯**、版本歷史、**還原出廠版**（出廠 seed 不被覆蓋，永遠拿得回來）
   - **使用者自訂**：點進 → 詳情頁：檢視 markdown；**編輯** → 編輯模式（**取消編輯／重置／完成編輯**）；**重置**＝清空（回到未撰寫的 `預設` 空塊；boot context 組裝時空塊整塊跳過）
-  - **啟動程序**（`工作室 SOP` 徽章）：點進 → 唯讀詳情頁，**無編輯入口**
+  - **啟動程序**：點進 → 同一個 `BootDocPage`（Claude 與 Codex 各一份，各自可編輯與還原）
 
 **區塊 2 — 角色定義**
 - **列表**：角色卡片，每張顯示 頭像、**角色標題**、描述（目前只有「助理」一張）。點卡片 → 角色詳情。
