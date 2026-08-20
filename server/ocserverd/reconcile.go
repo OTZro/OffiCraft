@@ -1214,24 +1214,32 @@ func (s *apiServer) consumeUninstallOnDisconnect(memberID string) {
 // report ts.
 //
 // The gauge's ts is written by the member's OWN live session (ocagent's
-// context-report, keyed on the verified token sub), and it is the ONLY
-// per-member timestamp the server has that originates there. Nothing else moves
-// when a member works: chat, tasks and every other MCP call write no member row
-// at all, and last_op_at belongs to the WARDEN, not to the member.
+// context-report, keyed on the verified token sub). Nothing on the member ROW
+// moves when a member works: chat, tasks and every other MCP call write no
+// member row at all, and last_op_at belongs to the WARDEN, not to the member.
 //
 // 🔴 It is NOT a heartbeat, and nothing may read it as one. The 30s in
 // contextreport.go is a THROTTLE CEILING ("at most one report burst per 30s
 // window"), not a timer: on Claude the reporter is wired as the statusLine
 // command (cli/ocwarden/spawn.go), so it fires when the status line redraws; on
-// codex it rides reportTokenUsage, so it fires at TURN boundaries. Both are
-// driven by the agent's activity, not by a clock.
+// codex it rides reportTokenUsage, which answers a tokenUsage-updated event.
+// Both are driven by the agent's activity, not by a clock.
 //
-// What that costs, precisely: this discriminator sees a member that is still
-// producing turns, and does NOT see one blocked inside a single long call. So a
-// close-out that spends twenty minutes waiting on one sub-agent still gets swept
-// at the old boundary. That case wants a real heartbeat and does not have one;
-// this is a strict improvement over dating the sweep from the anchor, not a
-// complete fix, and it must not be described as one.
+// What that costs: this discriminator sees a member that is still producing
+// activity, and a member blocked inside one long call produces none — so a
+// close-out that spends the whole window waiting on a single sub-agent is still
+// swept. This is a strict improvement over dating the sweep from the anchor,
+// not a complete fix, and it must not be described as one.
+//
+// ⚠️ And do NOT read the paragraph above as "no clock-driven signal exists".
+// One does, for codex only: codex_session.go runs an identityHeartbeat ticker
+// (30s, in the session's select loop) whose reportIdentity POSTs to
+// /api/monitoring/telemetry under the member's own token, and the server stamps
+// ts there — a DIFFERENT store (s.telemetry, not s.gauge). It keeps ticking
+// through a long tool call, so it could close exactly the gap named above.
+// Reading it here is a behaviour change with its own trade-offs and belongs to
+// the follow-up, not to this sweep; what must not happen is the next reader
+// concluding from these comments that nothing of the sort is available.
 //
 // 🔴 A missing or unusable record means NO OPINION, not "silent" — the gauge is
 // in-memory and volatile by contract (hub.go), so a station re-exec blanks it

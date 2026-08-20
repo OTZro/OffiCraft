@@ -41,9 +41,14 @@ type ActionKey = "spawn" | "cancel" | "stop" | "force-stop";
  * 🔴 Since T-7723 that window is no longer bounded by the anchor's age: a member
  * that is still filing context reports stays `stopping` for as long as its
  * session lives, so this set — and the absence of an ordinary graceful Stop in
- * it — is what the owner sees for that whole time, not for ten minutes. The
- * non-destructive way out is Spawn: activate unconditionally clears the anchor
- * and the member returns to `online-awake` with its ordinary Stop back.
+ * it — is what the owner sees for that whole time, not for ten minutes.
+ * ⚠️ The non-destructive way out is NOT the Spawn button in this set: a
+ * `stopping` member maps to tri-state `status: "online"` (api/mappers.ts), the
+ * detail panel derives `online` from that, and its Spawn opens the settings
+ * dialog whose save both short-circuits on an unchanged form and gates
+ * runActivate behind `!online` — so activate is never sent from here. The entry
+ * that DOES send it is the chat's 就地喚醒 row (ChatArea `onWake` →
+ * `api.activateMember`), which is ungated and clears the anchor server-side.
  * `online-awake` keeps the ordinary graceful
  * Stop (=deactivate); `waking` keeps Cancel (deactivate / cancel-wake) alongside the
  * Spawn rescue. All backed by real endpoints (no dead affordance). */

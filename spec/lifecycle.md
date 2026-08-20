@@ -533,8 +533,10 @@ ONE-SHOT, never a standing order):
   Two deliberate consequences, both owner-facing: a member that reports stopping
   and then resumes ordinary work reads `stopping` for the rest of that session,
   and while it reads `stopping` the cockpit offers 強制下線 rather than the
-  ordinary graceful 下線. `report_stopped` and any reboot clear the anchor; so
-  does 喚醒, which is the non-destructive way back.
+  ordinary graceful 下線. `report_stopped` and any reboot clear the anchor, and
+  so does `activate` — but the non-destructive route to it is the chat's 就地喚醒
+  row, NOT the detail panel's Spawn, which for a `stopping` member opens the
+  settings dialog and never sends activate.
 
 ### 4.6 Dispatch discipline
 
