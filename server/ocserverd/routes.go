@@ -93,7 +93,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleVersionApiVersionGet,
 			Auth:     authPublic,
 			Requires: requiresPublic,
-			Summary:  "Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status. Settle whether something is deployed by git sha ancestry, never by the version string.",
+			Summary:  "Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status and `update_checked_ok_at`, the time that update check last SUCCEEDED (absent = it never has, so `update_available: false` is not evidence of being up to date). Settle whether something is deployed by git sha ancestry, never by the version string.",
 		},
 		{
 			Method:     "GET",

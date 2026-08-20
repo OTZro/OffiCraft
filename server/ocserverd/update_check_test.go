@@ -506,3 +506,171 @@ func TestFetchAllUnorderableFallsBackToFirstRow(t *testing.T) {
 		t.Fatalf("an all-unorderable list must keep the pre-fix first-row answer, got %q", rel.TagName)
 	}
 }
+
+// ── update_checked_ok_at: the freshness of /api/version's update_available ──
+//
+// `update_available: false` has at least four causes (never checked, the check
+// failed, no release matches the channel, genuinely up to date) and the wire
+// could not tell them apart. update_checked_ok_at answers the one question
+// that separates "we looked and there is nothing" from "we do not know": WHEN
+// did a check last SUCCEED. The three tests below pin the three states.
+
+// TestVersionCheckedOKAtStampsSuccessfulCheck — a check that SUCCEEDED puts a
+// parseable stamp on the wire.
+func TestVersionCheckedOKAtStampsSuccessfulCheck(t *testing.T) {
+	api, srv, _, _ := newSettingsTestServer(t, "settings-pass")
+	gh := newFakeGitHub(t, fakeRelease{tag: "v9.9.9"})
+	api.releaseAPIBase = gh.srv.URL
+
+	doJSON(t, "GET", srv.URL+"/api/version", "", "") // kicks the check
+	waitUpdateSettled(t, api)
+	status, data := doJSON(t, "GET", srv.URL+"/api/version", "", "")
+	if status != 200 {
+		t.Fatalf("version face: %d %v", status, data)
+	}
+	raw, ok := data["update_checked_ok_at"].(string)
+	if !ok {
+		t.Fatalf("a succeeded check must stamp update_checked_ok_at: %v", data)
+	}
+	if _, err := time.Parse(time.RFC3339, raw); err != nil {
+		t.Fatalf("update_checked_ok_at must be RFC3339, got %q: %v", raw, err)
+	}
+}
+
+// TestVersionCheckedOKAtSurvivesAFailedCheck is THE assertion of this field: a
+// FAILED check must not pass itself off as a successful one. The stamp is
+// rewound an hour after the real success so "left alone" and "restamped now"
+// cannot collide inside one RFC3339 second; the attempt stamp (checkedAt) is
+// asserted to have MOVED, so the failing check provably ran.
+func TestVersionCheckedOKAtSurvivesAFailedCheck(t *testing.T) {
+	api, srv, _, _ := newSettingsTestServer(t, "settings-pass")
+	gh := newFakeGitHub(t, fakeRelease{tag: "v9.9.9"})
+	api.releaseAPIBase = gh.srv.URL
+
+	doJSON(t, "GET", srv.URL+"/api/version", "", "")
+	waitUpdateSettled(t, api)
+
+	// Rewind the successful stamp so a failure restamping it is visible even
+	// at RFC3339's one-second resolution.
+	rewound := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	api.updateMu.Lock()
+	if api.updateCheck.lastOKAt.IsZero() {
+		api.updateMu.Unlock()
+		t.Fatal("precondition: the successful check left no stamp to defend")
+	}
+	api.updateCheck.lastOKAt = rewound
+	beforeAttempt := api.updateCheck.checkedAt
+	api.updateMu.Unlock()
+	want := rewound.Format(time.RFC3339)
+
+	// GitHub breaks; force one fresh (failing) check.
+	gh.setStatus(http.StatusInternalServerError)
+	api.kickUpdateCheck()
+	waitUpdateSettled(t, api)
+
+	api.updateMu.Lock()
+	afterAttempt := api.updateCheck.checkedAt
+	api.updateMu.Unlock()
+	if !afterAttempt.After(beforeAttempt) {
+		t.Fatalf("precondition: the failing check never ran (checkedAt %v → %v)", beforeAttempt, afterAttempt)
+	}
+
+	_, data := doJSON(t, "GET", srv.URL+"/api/version", "", "")
+	if got := data["update_checked_ok_at"]; got != want {
+		t.Fatalf("a FAILED check must not restamp update_checked_ok_at: want %q, got %v", want, got)
+	}
+}
+
+// TestVersionCheckedOKAtAbsentWhenNeverSucceeded — a station whose every check
+// has failed must NOT look like one that checked and found nothing: no stamp.
+func TestVersionCheckedOKAtAbsentWhenNeverSucceeded(t *testing.T) {
+	api, srv, _, _ := newSettingsTestServer(t, "settings-pass")
+	gh := newFakeGitHub(t, fakeRelease{tag: "v9.9.9"})
+	gh.setStatus(http.StatusInternalServerError)
+	api.releaseAPIBase = gh.srv.URL
+
+	doJSON(t, "GET", srv.URL+"/api/version", "", "")
+	waitUpdateSettled(t, api)
+	status, data := doJSON(t, "GET", srv.URL+"/api/version", "", "")
+	if status != 200 || data["update_available"] != false {
+		t.Fatalf("a never-succeeded check must still answer the honest false: %d %v", status, data)
+	}
+	if got, present := data["update_checked_ok_at"]; present && got != nil {
+		t.Fatalf("no check has ever succeeded — update_checked_ok_at must be absent/null, got %v", got)
+	}
+}
+
+// TestReleaseCheckButtonCheckedOKAtSemantics pins update_checked_ok_at on the
+// OTHER writer: syncUpdateCheck — the cockpit's 檢查更新 button, which is also
+// the path the MCP tool check_release takes. The background refresher's two
+// lastOKAt semantics are pinned above; this one had none, so the button could
+// silently stop stamping a success, or (much worse) stamp a FAILURE as a
+// success — the exact failure mode that makes the field worse than absent,
+// and reachable in practice every time an agent calls check_release while
+// GitHub is unreachable.
+//
+// Both halves rewind the stamp by an hour or more first: RFC3339 resolves to
+// one second, so a same-second restamp would be invisible.
+func TestReleaseCheckButtonCheckedOKAtSemantics(t *testing.T) {
+	api, srv, _, _ := newSettingsTestServer(t, "settings-pass")
+	token := ownerLogin(t, srv.URL, "settings-pass")
+	gh := newFakeGitHub(t, fakeRelease{tag: "v9.9.9"})
+	api.releaseAPIBase = gh.srv.URL
+
+	// ── half 1: a SUCCEEDED button check must ADVANCE the stamp ──
+	//
+	// `stale` alone is too weak an oracle on its own: "advanced past a floor the
+	// test itself planted two hours ago" is satisfied by any stamp in that
+	// two-hour span, so an implementation that stamps a FIXED older instant
+	// (say now-90m) survives it — and this field's whole claim is FRESHNESS, so
+	// a stamp that is stably wrong-by-90-minutes is a lie of the same family as
+	// half 2's, just in the conservative direction. `floor` closes that: the
+	// stamp must also be no older than this test's own start.
+	floor := time.Now().UTC().Truncate(time.Second)
+	stale := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Second)
+	api.updateMu.Lock()
+	api.updateCheck.lastOKAt = stale
+	api.updateMu.Unlock()
+
+	status, data := doJSON(t, "GET", srv.URL+"/api/release/check", token, "")
+	if status != 200 || data["status"] != "update_available" {
+		t.Fatalf("precondition: the button check must have SUCCEEDED: %d %v", status, data)
+	}
+	_, ver := doJSON(t, "GET", srv.URL+"/api/version", "", "")
+	raw, ok := ver["update_checked_ok_at"].(string)
+	if !ok {
+		t.Fatalf("a succeeded button check must stamp update_checked_ok_at: %v", ver)
+	}
+	advanced, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		t.Fatalf("update_checked_ok_at must be RFC3339, got %q: %v", raw, err)
+	}
+	if !advanced.After(stale) {
+		t.Fatalf("a SUCCEEDED button check must advance update_checked_ok_at past %v, got %v",
+			stale.Format(time.RFC3339), raw)
+	}
+	if advanced.Before(floor) {
+		t.Fatalf("a SUCCEEDED button check must stamp NOW, not merely something newer "+
+			"than the planted floor: want >= %v, got %v",
+			floor.Format(time.RFC3339), raw)
+	}
+
+	// ── half 2: a FAILED button check must LEAVE THE STAMP ALONE ──
+	rewound := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	api.updateMu.Lock()
+	api.updateCheck.lastOKAt = rewound
+	api.updateMu.Unlock()
+	want := rewound.Format(time.RFC3339)
+
+	gh.setStatus(http.StatusInternalServerError)
+	expireUpdateCache(api) // defeat the button's short reuse window
+	status, data = doJSON(t, "GET", srv.URL+"/api/release/check", token, "")
+	if status != 200 || data["status"] != "unknown" {
+		t.Fatalf("precondition: GitHub is down, the button must answer the honest unknown: %d %v", status, data)
+	}
+
+	_, ver = doJSON(t, "GET", srv.URL+"/api/version", "", "")
+	if got := ver["update_checked_ok_at"]; got != want {
+		t.Fatalf("a FAILED button check must not restamp update_checked_ok_at: want %q, got %v", want, got)
+	}
+}

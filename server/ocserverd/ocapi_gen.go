@@ -3094,13 +3094,23 @@ type UpgradeResultDTO struct {
 // self-build's "0.0.0" sorts below any published release and therefore
 // still prompts. Prereleases are admitted only when the
 // `updater_receive_beta` setting is on.
+//
+// `update_checked_ok_at` is WHEN that check last SUCCEEDED (RFC3339, UTC).
+// It is the freshness of `update_available`, which on its own cannot tell
+// "checked a minute ago, nothing newer" apart from "the check has never once
+// succeeded" (GitHub unreachable, rate-limited, or never run) — both answer
+// False. A FAILED check NEVER moves it; absent/None means no check has ever
+// succeeded under the current channel (a channel flip resets it). It is
+// deliberately NOT the check cache's TTL anchor — that stays the last
+// ATTEMPT, so an unreachable GitHub is retried once per TTL, not hammered.
 type VersionDTO struct {
-	CatalogHash     string  `json:"catalog_hash"`
-	GitSha          string  `json:"git_sha"`
-	GitTime         *string `json:"git_time,omitempty"`
-	LatestVersion   *string `json:"latest_version,omitempty"`
-	UpdateAvailable *bool   `json:"update_available,omitempty"`
-	Version         string  `json:"version"`
+	CatalogHash       string  `json:"catalog_hash"`
+	GitSha            string  `json:"git_sha"`
+	GitTime           *string `json:"git_time,omitempty"`
+	LatestVersion     *string `json:"latest_version,omitempty"`
+	UpdateAvailable   *bool   `json:"update_available,omitempty"`
+	UpdateCheckedOkAt *string `json:"update_checked_ok_at,omitempty"`
+	Version           string  `json:"version"`
 }
 
 // WebhookCreateDTO Create one webhook endpoint on a member (M4 §1). `endpoint_id` is REQUIRED, immutable after creation, per-member-unique, and restricted to letters/digits/`_`/`-` (422 otherwise; 409 on a duplicate id). `purpose` is optional editable free text. The server mints the opaque `token` and returns it once on the WebhookEndpointDTO.
@@ -3991,7 +4001,7 @@ type ServerInterface interface {
 	// Trigger a software upgrade to the latest GitHub release.
 	// (POST /api/update/upgrade)
 	HandleUpgradeApiUpdateUpgradePost(w http.ResponseWriter, r *http.Request)
-	// Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status. Settle whether something is deployed by git sha ancestry, never by the version string.
+	// Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status and `update_checked_ok_at`, the time that update check last SUCCEEDED (absent = it never has, so `update_available: false` is not evidence of being up to date). Settle whether something is deployed by git sha ancestry, never by the version string.
 	// (GET /api/version)
 	HandleVersionApiVersionGet(w http.ResponseWriter, r *http.Request)
 	// Download the prebuilt ocwarden binary (octet-stream) for a machine.

@@ -7756,7 +7756,7 @@
         "type": "object"
       },
       "VersionDTO": {
-        "description": "Build identity: app version, git sha, and the MCP catalog hash (M1 §3.9).\n\n`version` is the single human-facing version identity: an OFFICIAL package\n(bin/release) is stamped with its GitHub Release tag; a self-build keeps the\nhonest \"0.0.0\" (the UI then falls back to git_sha + git_time as the build\nlabel).\n\n`git_time` is the commit time of the running `git_sha` (strict ISO-8601), or\nNone when unavailable (release tarball / no git).\n\n`update_available` drives the software-update card: the server periodically\nasks GitHub Releases (repo pkyosx/OffiCraft, anonymous) for the newest\npublished release (cached, refreshed in the background — unreachable GitHub\nNEVER slows this probe) and reports honestly: True iff the newest admissible\nrelease tag is STRICTLY NEWER than the running `version` under semver\nordering (`latest_version` then carries the tag); running >= latest reads\nFalse, and a version label that does not parse as semver on either side\nreads False (with a server-side log warning) — never a prompt. A\nself-build's \"0.0.0\" sorts below any published release and therefore\nstill prompts. Prereleases are admitted only when the\n`updater_receive_beta` setting is on.",
+        "description": "Build identity: app version, git sha, and the MCP catalog hash (M1 §3.9).\n\n`version` is the single human-facing version identity: an OFFICIAL package\n(bin/release) is stamped with its GitHub Release tag; a self-build keeps the\nhonest \"0.0.0\" (the UI then falls back to git_sha + git_time as the build\nlabel).\n\n`git_time` is the commit time of the running `git_sha` (strict ISO-8601), or\nNone when unavailable (release tarball / no git).\n\n`update_available` drives the software-update card: the server periodically\nasks GitHub Releases (repo pkyosx/OffiCraft, anonymous) for the newest\npublished release (cached, refreshed in the background — unreachable GitHub\nNEVER slows this probe) and reports honestly: True iff the newest admissible\nrelease tag is STRICTLY NEWER than the running `version` under semver\nordering (`latest_version` then carries the tag); running >= latest reads\nFalse, and a version label that does not parse as semver on either side\nreads False (with a server-side log warning) — never a prompt. A\nself-build's \"0.0.0\" sorts below any published release and therefore\nstill prompts. Prereleases are admitted only when the\n`updater_receive_beta` setting is on.\n\n`update_checked_ok_at` is WHEN that check last SUCCEEDED (RFC3339, UTC).\nIt is the freshness of `update_available`, which on its own cannot tell\n\"checked a minute ago, nothing newer\" apart from \"the check has never once\nsucceeded\" (GitHub unreachable, rate-limited, or never run) — both answer\nFalse. A FAILED check NEVER moves it; absent/None means no check has ever\nsucceeded under the current channel (a channel flip resets it). It is\ndeliberately NOT the check cache's TTL anchor — that stays the last\nATTEMPT, so an unreachable GitHub is retried once per TTL, not hammered.",
         "properties": {
           "catalog_hash": {
             "title": "Catalog Hash",
@@ -7792,6 +7792,17 @@
             "default": false,
             "title": "Update Available",
             "type": "boolean"
+          },
+          "update_checked_ok_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Update Checked Ok At"
           },
           "version": {
             "title": "Version",
@@ -18467,7 +18478,7 @@
     },
     "/api/version": {
       "get": {
-        "description": "Report version, git sha/time, and the derived MCP catalog hash.\n\n`update_available` / `latest_version` reflect the newest admissible GitHub\nRelease (cached background check against repo pkyosx/OffiCraft; False/None\nwhen nothing newer is known or GitHub is unreachable).",
+        "description": "Report version, git sha/time, and the derived MCP catalog hash.\n\n`update_available` / `latest_version` reflect the newest admissible GitHub\nRelease (cached background check against repo pkyosx/OffiCraft; False/None\nwhen nothing newer is known or GitHub is unreachable).\n\n`update_checked_ok_at` says WHEN that check last SUCCEEDED (RFC3339, UTC;\nabsent when it never has) — read it before trusting a False, because a\ncheck that has never once reached GitHub answers False too.",
         "operationId": "handle_version_api_version_get",
         "responses": {
           "200": {
@@ -18511,14 +18522,14 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status. Settle whether something is deployed by git sha ancestry, never by the version string.",
+        "summary": "Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status and `update_checked_ok_at`, the time that update check last SUCCEEDED (absent = it never has, so `update_available: false` is not evidence of being up to date). Settle whether something is deployed by git sha ancestry, never by the version string.",
         "x-mcp": {
           "include": true,
           "order": 0,
           "name": "get_version",
-          "description": "Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status. Settle whether something is deployed by git sha ancestry, never by the version string.",
+          "description": "Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status and `update_checked_ok_at`, the time that update check last SUCCEEDED (absent = it never has, so `update_available: false` is not evidence of being up to date). Settle whether something is deployed by git sha ancestry, never by the version string.",
           "legacy": {
-            "descriptor": "{\n      \"description\": \"Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status. Settle whether something is deployed by git sha ancestry, never by the version string.\",\n      \"inputSchema\": {\n        \"properties\": {},\n        \"type\": \"object\"\n      },\n      \"name\": \"get_version\"\n    }"
+            "descriptor": "{\n      \"description\": \"Read the build identity this station is RUNNING: version, git sha, git time and the MCP catalog hash, plus the cached update status and `update_checked_ok_at`, the time that update check last SUCCEEDED (absent = it never has, so `update_available: false` is not evidence of being up to date). Settle whether something is deployed by git sha ancestry, never by the version string.\",\n      \"inputSchema\": {\n        \"properties\": {},\n        \"type\": \"object\"\n      },\n      \"name\": \"get_version\"\n    }"
           }
         }
       }
