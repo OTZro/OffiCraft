@@ -29,6 +29,10 @@ export function ChatReplyToStory() {
   // and the guard would assert nothing. Measured, not guessed — the first
   // version of that test passed at 390 and failed its own control at 1280.
   const veryLongQuote = longQuote.repeat(4);
+  // What nameOf() renders when the roster cannot resolve the sender: 15
+  // characters. Too short to trip the corner-collision guard (measured: that
+  // one needs 33), and exactly the length a percentage cap silently trimmed.
+  const rawIdSender = "ow-8808ccf51794";
   return (
     <div className="chat">
       <div className="chat__body">
@@ -111,6 +115,19 @@ export function ChatReplyToStory() {
                       data-testid="quote-jump"
                     >
                       跳到原訊息
+                      <svg
+                        className="chat__msg-quote__jump-chevron"
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="m9 18 6-6-6-6" />
+                      </svg>
                     </button>
                   </div>
                   <div className="chat__msg-text doc-md">好，我照這個做</div>
@@ -170,9 +187,96 @@ export function ChatReplyToStory() {
                       data-testid="quote-jump-short"
                     >
                       跳到原訊息
+                      <svg
+                        className="chat__msg-quote__jump-chevron"
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="m9 18 6-6-6-6" />
+                      </svg>
                     </button>
                   </div>
                   <div className="chat__msg-text doc-md">好，我照這個做</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 🔴 THE THIRD DIRECTION, and the one two previous fixes both got
+            * wrong: a MIDDLING name with an excerpt too short to absorb
+            * anything. Nothing here needs to be cut — the row has room to
+            * spare — so any ellipsis on the name is the layout inventing a
+            * shortage. A `max-width: 40%` cap did exactly that: the bubble is
+            * shrink-to-fit and a percentage max-width is ignored while its
+            * intrinsic width is computed, so the bubble was sized to the whole
+            * name and the cap clipped it afterwards, at every width including
+            * 1600px. This name is a raw member id — what nameOf() renders when
+            * the roster cannot resolve the sender. */}
+          <div className="chat__msg chat__msg--me" data-msg-id="c-4" data-testid="row-mine-tight">
+            <div className="chat__msg-line">
+              <div className="chat__msg-sidemeta">
+                <span className="chat__msg-time">10:05</span>
+              </div>
+              <div className="chat__msg-content">
+                <div className="chat__msg-bubble chat__msg-bubble--acts1">
+                  <div className="chat__msg-actions">
+                    <button
+                      type="button"
+                      className="chat__msg-reply"
+                      aria-label="回覆這則"
+                      data-testid="reply-entry-mine-tight"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <polyline points="9 17 4 12 9 7" />
+                        <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="chat__msg-quote" data-testid="quote-row-tight">
+                    <svg
+                      className="chat__msg-quote__icon"
+                      width="11"
+                      height="11"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                    >
+                      <polyline points="9 17 4 12 9 7" />
+                    </svg>
+                    <span className="chat__msg-quote__who" data-testid="quote-who-tight">
+                      {rawIdSender}
+                    </span>
+                    <span className="chat__msg-quote__body" data-testid="quote-body-tight">
+                      好
+                    </span>
+                    <button
+                      type="button"
+                      className="chat__msg-quote__jump"
+                      data-testid="quote-jump-tight"
+                    >
+                      跳到原訊息
+                      <svg
+                        className="chat__msg-quote__jump-chevron"
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="m9 18 6-6-6-6" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="chat__msg-text doc-md">好</div>
                 </div>
               </div>
             </div>

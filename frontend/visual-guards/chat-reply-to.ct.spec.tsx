@@ -120,6 +120,72 @@ for (const width of [390, 1280]) {
     expect((await who.textContent())?.trim()).toBe("Mira");
   });
 
+  test(`width ${width}: a name is never cut while the excerpt still fits`, async ({
+    mount,
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    const cmp = await mount(<ChatReplyToStory />);
+
+    const who = cmp.getByTestId("quote-who-tight");
+    const body = cmp.getByTestId("quote-body-tight");
+
+    // POSITIVE CONTROL, the other way round from the test above: this row has
+    // room to spare, so NOTHING on it should be cut. If the excerpt were being
+    // trimmed the row would be genuinely tight and the name's fate would say
+    // nothing about the rule.
+    const bodyCut = await body.evaluate(
+      (e) => e.scrollWidth > e.clientWidth + 0.5,
+    );
+    expect(bodyCut).toBe(false);
+
+    // 🔴 SO THE NAME MUST BE WHOLE. A `max-width` in PERCENT does not survive
+    // shrink-to-fit: the bubble is sized from intrinsic width, where a
+    // percentage cap is ignored, and the cap then clips the name inside a
+    // bubble that was measured to hold it. The result was a name losing
+    // characters at 1600px next to a one-word excerpt — a shortage the layout
+    // invented. Whatever keeps long names inside the bubble, it must not fire
+    // when the row is not full.
+    const whoCut = await who.evaluate(
+      (e) => e.scrollWidth > e.clientWidth + 0.5,
+    );
+    expect(whoCut).toBe(false);
+    expect((await who.textContent())?.trim()).toBe("ow-8808ccf51794");
+  });
+
+  test(`width ${width}: the corner buttons take their ink from the bubble they sit on`, async ({
+    mount,
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    const cmp = await mount(<ChatReplyToStory />);
+
+    // owner 2026-08-20 (rc-8056a06aa2b8): the entry used to be a chip in
+    // --color-card, which is the same surface as an incoming bubble and a
+    // foreign grey box on your own — that one is painted accent green. He asked
+    // why the two buttons looked like different colours; they were not
+    // different from each other, they were different from what they sat on.
+    const incoming = cmp.getByTestId("reply-entry-incoming");
+    const mine = cmp.getByTestId("reply-entry-mine");
+
+    // 🔴 THE RULE, stated as something that can fail: the same button on two
+    // differently-coloured bubbles must not come out the same colour. A
+    // hardcoded muted ink passes any "is it readable" check and fails this one.
+    const inkIncoming = await incoming.evaluate((e) => getComputedStyle(e).color);
+    const inkMine = await mine.evaluate((e) => getComputedStyle(e).color);
+    expect(inkMine).not.toBe(inkIncoming);
+
+    // And no box of its own: the chip is what made it read as a foreign object.
+    for (const btn of [incoming, mine]) {
+      const box = await btn.evaluate((e) => {
+        const c = getComputedStyle(e);
+        return { bg: c.backgroundColor, bw: c.borderTopWidth };
+      });
+      expect(box.bg).toBe("rgba(0, 0, 0, 0)");
+      expect(box.bw).toBe("0px");
+    }
+  });
+
   test(`width ${width}: the 正在回覆 banner stays one line and its x stays reachable`, async ({
     mount,
     page,
