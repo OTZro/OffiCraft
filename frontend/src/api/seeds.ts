@@ -35,8 +35,10 @@ export const MOCK_OWNER_ID = "owner";
 const foldOwnerId = (raw: string): string =>
   raw.replace(/\{OWNER_ID\}/g, MOCK_OWNER_ID);
 
-/** seeds/system_interaction.md — the read-only 系統互動 block of the boot
- * context, `{OWNER_ID}` substituted to owner. */
+/** seeds/system_interaction.md — the FACTORY text of the 系統互動 block,
+ * `{OWNER_ID}` substituted to owner. It is what the block folds to when the
+ * owner has not edited it (the block itself is owner-editable — T-791e), and
+ * what 還原出廠版 restores. */
 export const SEED_SYSTEM_INTERACTION_MD = foldOwnerId(SEED_SYSTEM_INTERACTION_RAW);
 
 /** seeds/role_def_assistant.md — the REAL Mira persona. */
