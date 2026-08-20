@@ -62,7 +62,11 @@ for (const width of [390, 1280]) {
     const bubble = cmp.getByTestId("row-incoming").locator(".chat__msg-text");
 
     // Hidden by OPACITY, not by display/visibility: it must still occupy space.
+    // Both bubble kinds, because the contrast test downstream measures the ink
+    // on both and describes it as "the colour they are revealed in" — a claim
+    // that needs the resting state pinned on both, not just this one.
     await expect(entry).toHaveCSS("opacity", "0");
+    await expect(cmp.getByTestId("reply-entry-mine")).toHaveCSS("opacity", "0");
     const box = await entry.boundingBox();
     expect(box, "an opacity-hidden control still has a box").not.toBeNull();
     expect(box!.width).toBeGreaterThan(0);
@@ -353,6 +357,11 @@ for (const width of [300, 320, 336, 360, 390]) {
       <ChatReplyToStory jumpLabel="Go to the original message" />,
     );
 
+    // ⚠️ Of these four, only `row-mine` has ever gone red: every CSS mutation
+    // tried against this loop (floor 0, no floor, floor 12, no shrink) reddened
+    // that row alone. The other three are shape coverage — they exercise the
+    // arrangement, they do not currently reproduce the failure. Keep them for
+    // the shapes, but do not read a green from them as evidence.
     for (const row of [
       "row-mine",
       "row-mine-short",
@@ -384,6 +393,11 @@ for (const width of [300, 320, 336, 360, 390]) {
         .locator(".chat__msg-quote__jump-chevron")
         .boundingBox())!;
 
+      // This one catches a collapse to zero and nothing finer — with a 14px
+      // floor the width is 14 whatever happens, so do not read it as pinning
+      // that number. What pins 14 is the next assertion: at a floor of 12 the
+      // arrow starts painting 2px outside its own button and only that one goes
+      // red. (Measured, by setting the floor to 12.)
       expect(
         jump.width,
         `${row}: the jump collapsed past its arrow`,

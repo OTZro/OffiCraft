@@ -985,14 +985,21 @@
 /* ===== T-4e95 「回覆這則」 =====
  *
  * Three surfaces, one visual language: a left-turning arrow plus low-emphasis
- * text, always in --color-text-muted on the surrounding surface, so a thread
- * full of replies stays as quiet as one without them.
+ * text, quiet enough that a thread full of replies reads like one without them.
+ * The quote line and the composer banner take that quiet from
+ * --color-text-muted; the corner entry does NOT, and has not since the owner
+ * asked for it to follow its bubble (rc-8056a06aa2b8) — see the ink rule below.
+ * This paragraph used to claim all three were the same token.
  *
- * ① THE ROW ENTRY. It lives on .chat__msg-line rather than inside the bubble:
- * the bubble corner is already spoken for by 放大閱讀, which exists only on
- * incoming text messages, while the AC is 每一則 — own messages, inline reply
- * cards and attachment-only bubbles included. The row is the one container all
- * of those share.
+ * ① THE CORNER ENTRY. It sits in .chat__msg-actions, inside the bubble, beside
+ * 放大閱讀 — owner 2026-08-20, after seeing it out on .chat__msg-line and saying
+ * it read as belonging to the thread rather than to that message. The corner did
+ * not exist on every bubble at the time (放大閱讀 is only on incoming text), so
+ * the slot was added to the ones that lacked it and its width is now reserved on
+ * EVERY bubble; the AC is 每一則 and it still holds. ONE shape keeps the old row
+ * placement: an inline reply card, which replaces the bubble entirely and has no
+ * corner to sit in. (This paragraph described the pre-owner-feedback layout for
+ * five commits after it stopped being true.)
  *
  * It is ALWAYS in the layout (opacity, never display) so revealing it on hover
  * cannot shift the bubble sideways mid-hover. Coarse pointers have no hover to
@@ -1142,9 +1149,12 @@
  *
  * ① `min-width: 0`. The button collapsed to ZERO, and the arrow, being
  *    `flex: none`, kept its 12px and painted straight out of the button box and
- *    under `.chat__msg-actions`. 1686 of 5616 scanned combinations, and this
- *    time CHINESE broke too, at every width up to 728px; `elementFromPoint` on
- *    the arrow returned the reply button. A zero-width box also satisfies any
+ *    under `.chat__msg-actions`. 1686 of 5616 scanned combinations, and CHINESE
+ *    broke too — a later, denser scan (280–1600px, every pixel) puts the Chinese
+ *    failure at 280–512 in one column and 721–899 in two, with 513–720 clean;
+ *    an earlier note here said "every width up to 728", which was the shape of
+ *    it but not the range. `elementFromPoint` on the arrow returned the reply
+ *    button. A zero-width box also satisfies any
  *    assertion of the form "the button does not reach the corner controls",
  *    which is why the guards below measure the ARROW, not the box.
  * ② No `min-width` at all. Then the floor is the button's own min-content, and
