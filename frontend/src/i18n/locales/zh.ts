@@ -1174,6 +1174,7 @@ export const zh = {
       // ── 三動詞:安裝 / 解除安裝 / 刪除 (install / uninstall / delete) ──
       // 三顆按鈕標籤
       install: "安裝",
+      reinstall: "重新安裝",
       uninstall: "解除安裝",
       deleteMachine: "刪除",
       // 離線機器沒有可解除安裝的 warden(按鈕停用時的提示)

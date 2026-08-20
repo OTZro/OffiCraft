@@ -292,8 +292,9 @@ export function MonitorPage() {
   };
 
   // Install the server-self machine IN PLACE → POST bootstrap-here (owner/admin-agent HOST
-  // action): the server installs the warden on itself. NO dialog — run directly on
-  // click. A failed install is a REAL result (ok=false + log), NOT a thrown error —
+  // action): the server installs the warden on itself. Run directly on click when
+  // the machine is OFFLINE; while it is ONLINE the caller opens a confirm first
+  // (bootstrapConfirmTarget) because that overwrites a live warden. A failed install is a REAL result (ok=false + log), NOT a thrown error —
   // only a transport/gate failure lands in catch.
   //
   // T-ba62: the log is KEPT ON SUCCESS TOO. It used to be discarded on the ok
@@ -672,7 +673,17 @@ export function MonitorPage() {
                         >
                           {m.isSelf && bootstrapBusy
                             ? t.monitor.machine.bootstrapBusy
-                            : t.monitor.machine.install}
+                            : m.online
+                              ? // Online ⇒ this machine HAS a warden talking to the
+                                // station, so this click reinstalls over it. Offline
+                                // is NOT the negation: the server keeps no "was this
+                                // ever installed" field, so an installed-but-powered-off
+                                // machine is indistinguishable from one that never was
+                                // (T-ce3d). Owner ruled 2026-08-20 to use online as the
+                                // proxy anyway — the ACTION is identical either way
+                                // (`install --force`), only the word differs.
+                                t.monitor.machine.reinstall
+                              : t.monitor.machine.install}
                         </button>
                         {/* Mid-uninstall (intent still pending on the warden) the
                          * button wears the SAME in-progress treatment as install:
