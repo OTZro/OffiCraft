@@ -60,7 +60,7 @@ presence 是 **server 端算出來的**，不是 agent 自報的心跳狀態。�
 > **個人頭像優先序（2026-07-27 owner 裁定）。** owner 可在正職／外包詳情替指定 stable member id 上傳、替換或移除個人圖片；一般成員不可管理。所有主要身分露出一致採「個人圖片 → 角色／主題圖片 → 內建 glyph」，圖片載入失敗也沿同一鏈回退。個人圖片不影響 presence，亦不以可變的 display name 當 key。契約、儲存與 rollback 見 [per-member custom avatar](member-custom-avatar.md)。
 
 ### 全域情境（Global Context）
-**套用到所有成員**的 boot context，拆成三塊（依組裝順序）：**系統互動**（系統運作說明，唯讀 seed）→ **使用者自訂**（owner 可編輯的 additive 追加塊，空時整塊跳過）→ **啟動程序**（工作室固定 SOP，唯讀 seed）。於「設定 › 角色誌」檢視；只有「使用者自訂」可編輯（唯讀兩塊 backend 無寫入 endpoint，by construction）。UI 一律**不顯示 .md 檔名**（三塊是內容、不是檔案）。
+**套用到所有成員**的 boot context，拆成三塊（依組裝順序）：**系統互動**（系統運作說明，唯讀 seed）→ **使用者自訂**（owner 可編輯的 additive 追加塊，空時整塊跳過）→ **啟動程序**（工作室固定 SOP，唯讀 seed）。於「設定 › 角色誌」檢視；**在這個畫面上**只有「使用者自訂」可編輯。另外兩塊在這裡唯讀，但**不是後端沒有寫入端點** —— `PUT /api/system-interaction`、`PUT /api/boot-sequence/{runtime_key}` 與各自的 `/reset` 都存在，只是 **owner 或 admin 特助才呼叫得動**，而座艙沒有接這幾條路。⇒ 這道唯讀是 **UI 沒接 ＋ 授權下限**，不是 by construction；要改那兩塊走 MCP（`replace_system_interaction`／`replace_boot_sequence`），出廠 seed 永遠不被覆蓋，`reset_*` 拿得回原文。UI 一律**不顯示 .md 檔名**（三塊是內容、不是檔案）。
 
 ---
 

@@ -215,7 +215,7 @@ server's own deps-fulfill, not by eavesdropping on another member's stream):
 | `task` | the executor ONLY (NOT the creator, NOT dependents); a reassign additionally fans one delta to the OLD executor — the row's executor just changed, so the person unassigned would otherwise be silently dropped from the audience |
 | `outsource_worker` | — (owner cockpit only; an `ow-` id has no roster/presence) |
 | `task_manual` | — (owner cockpit only) |
-| `global_context` / `role_def` / `lessons` | — (owner cockpit only) |
+| `global_context` / `role_def` / `lessons` / `insight` | — (owner cockpit only) |
 | `context` / `monitoring` | — (owner cockpit only; `context` also drives the server-side §6 band) |
 
 A blank id in an audience (an unassigned executor) is dropped — it narrows the
