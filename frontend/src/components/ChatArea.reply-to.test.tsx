@@ -139,6 +139,30 @@ describe("ChatArea 回覆這則", () => {
     }
   });
 
+  it("the entry sits in the bubble's own corner slot, beside 放大閱讀", () => {
+    const { container } = renderChat();
+    // Owner 2026-08-20: out on the row it read as belonging to the thread
+    // rather than to this message. Bubble-shaped messages carry it in the same
+    // corner slot as 放大閱讀 — and the slot is INSIDE the bubble, which is
+    // what makes it look like part of the message.
+    for (const id of ["c-1", "c-2", "c-4"]) {
+      const entry = rowOf(container, id).querySelector(".chat__msg-reply")!;
+      expect(entry.closest(".chat__msg-actions")).toBeTruthy();
+      expect(entry.closest(".chat__msg-bubble")).toBeTruthy();
+    }
+    // An INCOMING text bubble carries BOTH controls, in ONE slot — two corners
+    // would be two places to look.
+    const slot = rowOf(container, "c-1").querySelector(".chat__msg-actions")!;
+    expect(slot.querySelector(".chat__msg-reply")).toBeTruthy();
+    expect(slot.querySelector(".chat__msg-expand")).toBeTruthy();
+
+    // The declared exception: a reply-card row has no bubble to put a corner
+    // on, so its entry stays on the row. Stated as a test so the exception is
+    // a decision on record rather than something that quietly happened.
+    const cardEntry = rowOf(container, "c-3").querySelector(".chat__msg-reply")!;
+    expect(cardEntry.closest(".chat__msg-bubble")).toBeNull();
+  });
+
   it("clicking it names the quoted sender and quotes what they said, above the input", () => {
     const { container } = renderChat();
     expect(banner(container)).toBeNull();
@@ -219,11 +243,14 @@ describe("ChatArea 回覆這則", () => {
     const quote = rowOf(container, "c-5").querySelector(".chat__msg-quote")!;
     expect(quote.textContent).toContain("Mira");
     expect(quote.textContent).toContain("第一個問題");
-    // In the loaded window ⇒ it is a real control, and using it locates the
-    // quoted row (the same highlight the 跳到訊息 route uses).
-    expect(quote.tagName).toBe("BUTTON");
+    // It is part of the MESSAGE, not a strip beside it (owner 2026-08-20).
+    expect(quote.closest(".chat__msg-bubble")).toBeTruthy();
+    // In the loaded window ⇒ the row offers a real jump control, and using it
+    // locates the quoted row (the same highlight the 跳到訊息 route uses).
+    const jump = quote.querySelector("[data-testid='msg-quote-jump']")!;
+    expect(jump).toBeTruthy();
     scrolled = [];
-    fireEvent.click(quote);
+    fireEvent.click(jump);
     expect(rowOf(container, "c-1").className).toContain("chat__msg--located");
     // …and it really asked THAT row to come into view. Without this, a handler
     // that only set the highlight class would pass.
@@ -244,9 +271,9 @@ describe("ChatArea 回覆這則", () => {
     const { container } = renderChat();
 
     const quote = rowOf(container, "c-9").querySelector(".chat__msg-quote")!;
-    // NOT a button: a control that scrolls nowhere is worse than a label that
-    // never claimed it would.
-    expect(quote.tagName).not.toBe("BUTTON");
+    // NO jump control: an affordance that scrolls nowhere is worse than a line
+    // that never offered one.
+    expect(quote.querySelector("[data-testid='msg-quote-jump']")).toBeNull();
     // The label is the SETTLED state, reached only after the by-id read has
     // been tried and missed — "not resolved yet" and "asked and not there" are
     // different states and the row must not show the miss before it is one.
