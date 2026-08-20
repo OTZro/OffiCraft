@@ -2,20 +2,32 @@ package main
 
 // clean — the ONE entry an agent uses to get rid of a file or a folder it made.
 //
-// It exists because the offboard document used to spell out the PROCEDURE
-// ("mv it into <workdir>/trash/, do not rm it yourself"), and a procedure
-// written in prose is a second source of truth that nothing keeps in step: move
-// the quarantine directory, change who reclaims it, decide something should be
-// kept — and that paragraph becomes a lie with nothing to redden. Owner
-// 2026-08-16: 「收拾程序我在想是不是應該改成 ocagent 的 command... 例如
-// `ocagent clean <path>` 不要把實作暴露出來」, and 2026-08-20 on the scope:
-// 「可以指定 file / folder, 用來取代 rm -rf」.
+// It exists because the offboard document spells out the PROCEDURE
+// (seeds/offboard.md §5: 「臨時檔案 `mv` 進 `<你的工作目錄>/trash/`（不要自己
+// `rm`）」), and a procedure written in prose is a second source of truth that
+// nothing keeps in step: move the quarantine directory, change who reclaims it,
+// decide something should be kept — and that paragraph becomes a lie with
+// nothing to redden. Owner 2026-08-16: 「收拾程序我在想是不是應該改成 ocagent
+// 的 command... 例如 `ocagent clean <path>` 不要把實作暴露出來」, and
+// 2026-08-20 on the scope: 「可以指定 file / folder, 用來取代 rm -rf」.
+//
+// ⚠️ THAT SECOND TRUTH IS STILL THERE. This package builds the command; it
+// does NOT yet edit seeds/offboard.md, which still names `trash/` by hand. The
+// edit is deliberately deferred, not forgotten: that document is being replaced
+// wholesale in a separate change, and rewriting §5 here would only be
+// overwritten by it. Until that lands, the prose and this file BOTH decide
+// where quarantine lives, and this file is not yet the single source of truth
+// the paragraph above argues for. Do not read the WHY as delivered.
 //
 // 🔴 IT DELETES NOTHING. "Replaces rm -rf" is about the ENTRY, not the effect:
 // the owner's own contract for this command says quarantine/move, never rm. So
 // the target is RENAMED under <root>/trash/ and stays readable — a wrong path
-// costs a move, not the file. Nothing in here may grow an os.RemoveAll of a
-// caller-named path; the guard test asserts that by name.
+// costs a move, not the file. Nothing in here may grow an os.Remove or
+// os.RemoveAll of a caller-named path — and that is not a promise in prose:
+// TestCleanNeverDeletesAnything (clean_test.go) parses THIS FILE's syntax tree
+// and reddens on either call by name. Said in a file whose entire argument is
+// that prose nobody can falsify becomes a lie, an unenforced sentence here
+// would have been the same mistake one paragraph later.
 //
 // WHAT IT IS NOT
 //
@@ -38,10 +50,15 @@ import (
 	"strings"
 )
 
-// quarantineDirName is the ONE place the quarantine location is decided. The
-// offboard document deliberately no longer names it: whoever moves it moves it
-// here and every agent follows on the next binary, which is the entire point of
-// turning the procedure into a command.
+// quarantineDirName is where this command decides the quarantine location, and
+// the intent is that it becomes the ONLY place — move it here and every agent
+// follows on the next binary, which is the entire point of turning the
+// procedure into a command.
+//
+// ⚠️ It is not the only place YET. seeds/offboard.md §5 still writes
+// `<你的工作目錄>/trash/` out by hand, so today changing this constant alone
+// makes that line wrong. Retiring it is queued behind the pending rewrite of
+// that document (see the header note).
 const quarantineDirName = "trash"
 
 // cleanRoot resolves the ONLY tree this command may touch: this agent's own
@@ -130,7 +147,19 @@ func insideRoot(root, path, arg string) error {
 	// The quarantine directory is not cleanable: moving trash into trash nests
 	// forever, and the whole point of quarantine is that it is the one place
 	// this command does not touch.
-	if strings.Split(rel, string(filepath.Separator))[0] == quarantineDirName {
+	//
+	// 🔴 EqualFold, not ==. This ran as a case-SENSITIVE comparison while the
+	// filesystem underneath it (macOS APFS, the default here) is case-
+	// INSENSITIVE, so `clean <root>/TRASH/tmp/x` named the very directory this
+	// line protects, missed the string compare, and nested the parked file at
+	// trash/TRASH/... — the "nests forever" outcome the sentence above claims
+	// to prevent, reachable by holding shift.
+	//
+	// On a case-sensitive host TRASH/ really is a different directory and this
+	// costs one false refusal there. That is the right side to be wrong on: a
+	// false refusal costs a rename and a retry, a false accept moves evidence
+	// that was already parked.
+	if strings.EqualFold(strings.Split(rel, string(filepath.Separator))[0], quarantineDirName) {
 		return fmt.Errorf("that is already in %s/: %s", quarantineDirName, arg)
 	}
 	return nil
@@ -156,7 +185,13 @@ func insideRoot(root, path, arg string) error {
 // its target is not touched. Three shapes, all defined and all tested:
 //   - points OUT of the tree → REFUSED (canonicalise lands outside)
 //   - points INSIDE the tree → the LINK moves, the pointee stays
-//   - dangling               → the LINK moves (no bytes live behind it)
+//   - dangling               → the LINK moves (no bytes live behind it),
+//     INCLUDING when it dangles at a path outside the tree. That is the fourth
+//     shape and it is deliberately NOT lumped in with "points out": nothing is
+//     out there to reach, canonicalise resolves the deepest existing ancestor
+//     and gets no further, and the only byte that exists is the link itself,
+//     which is in the tree and is what the caller named. Refusing it would
+//     strand exactly the debris this command exists to clear.
 //
 // Rejecting a symlink leaf outright was the other candidate. It is worse: an
 // agent's own leftovers routinely include symlinks (node_modules/.bin, venv,
@@ -217,8 +252,21 @@ func quarantineDest(root, target string) (string, error) {
 	base := filepath.Join(root, quarantineDirName, rel)
 	dest := base
 	for i := 2; ; i++ {
-		if _, err := os.Lstat(dest); os.IsNotExist(err) {
-			break
+		// 🔴 Three outcomes, not two. This used to break only on ENOENT and
+		// treat EVERYTHING else as "that slot is taken, try the next name" —
+		// so a plain FILE sitting where trash/tmp has to be a directory
+		// (ENOTDIR), a symlink loop (ELOOP) or an unreadable parent (EACCES)
+		// span all 1000 candidates and then answered "too many quarantined
+		// copies of <rel>" when there were none. Nothing unsafe happened, but
+		// the one thing this command owes its caller is a true account of
+		// where the file went, and that answer sent a human looking for 1000
+		// copies that do not exist while never naming the file in the way.
+		_, err := os.Lstat(dest)
+		if err != nil {
+			if os.IsNotExist(err) {
+				break // free slot
+			}
+			return "", fmt.Errorf("cannot inspect the %s/ slot %s: %w", quarantineDirName, rel, err)
 		}
 		if i > 1000 {
 			return "", fmt.Errorf("too many quarantined copies of %s", rel)
@@ -248,8 +296,26 @@ func quarantineDest(root, target string) (string, error) {
 	// afterwards is already too late: it would have created a directory on the
 	// far side of the link. canonicalise gives the resolved path without needing
 	// it to exist first, which is exactly the case here.
-	if !isUnder(root, canonicalise(parent)) {
-		return "", fmt.Errorf("the %s/ path leaves my workdir", quarantineDirName)
+	//
+	// 🔴 And the bar is the QUARANTINE, not the workdir. "Under root" was the
+	// weaker claim and it let an escape through that never leaves the tree:
+	// with `<root>/trash/tmp -> <root>/live`, cleaning `<root>/tmp/sub/x.txt`
+	// passed (the destination resolves under root), exited 0, and printed
+	// `<root>/trash/tmp/sub/x.txt` — while the file landed in
+	// `<root>/live/sub/x.txt` and trash/ stayed empty. Reporting success while
+	// naming a path the file is not at is this command's own worst failure
+	// class; staying inside the tree does not soften it, because what the
+	// agent is handed is the location of its parked copy.
+	//
+	// The comparison is against the LITERAL <root>/trash, deliberately not
+	// against its resolution: if trash itself were a symlink, resolving both
+	// sides would re-admit exactly this hole one level up. So a symlinked
+	// quarantine at any level is refused — the same stance ocwarden takes
+	// before purging it (cli/CLAUDE.md §5).
+	quarantine := filepath.Join(root, quarantineDirName)
+	resolvedParent := canonicalise(parent)
+	if resolvedParent != quarantine && !isUnder(quarantine, resolvedParent) {
+		return "", fmt.Errorf("the %s/ path does not stay in %s/", quarantineDirName, quarantineDirName)
 	}
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return "", fmt.Errorf("cannot open quarantine: %w", err)

@@ -13,6 +13,9 @@ package main
 
 import (
 	"bytes"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -433,6 +436,208 @@ func TestCleanRefusesWhenTheQuarantinePathRunsThroughADanglingSymlink(t *testing
 	if _, err := os.Lstat(target); err != nil {
 		t.Fatalf("the target must be untouched: %v", err)
 	}
+	if _, err := os.Lstat(neverCreated); !os.IsNotExist(err) {
+		t.Fatalf("nothing may be created outside the tree; err = %v", err)
+	}
+	if entries, err := os.ReadDir(elsewhere); err != nil || len(entries) != 0 {
+		t.Fatalf("nothing may land outside the tree; entries = %v err = %v", entries, err)
+	}
+}
+
+// ── B-1: the sentence in clean.go's header, made falsifiable ─────────────────
+//
+// clean.go's header says "Nothing in here may grow an os.RemoveAll of a
+// caller-named path". That sentence used to be prose with nothing behind it —
+// the exact failure mode this whole command was written to end (a procedure
+// written in prose is a second source of truth that nothing keeps in step). So
+// it is asserted here, BY NAME, against the file's own syntax tree.
+//
+// The AST is read rather than the text on purpose: the header comment itself
+// contains the string "os.RemoveAll", so a grep would either match its own
+// documentation or need a comment-stripper that is itself untested. go/parser
+// discards comments, so what is left is only what the compiler will run.
+//
+// Scope: os.Remove and os.RemoveAll both DELETE, and this command's whole
+// contract is that a wrong path costs a move and never the file — so both are
+// refused, not just the one the sentence happens to name.
+func TestCleanNeverDeletesAnything(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "clean.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse clean.go: %v", err)
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok || pkg.Name != "os" {
+			return true
+		}
+		if sel.Sel.Name == "Remove" || sel.Sel.Name == "RemoveAll" {
+			t.Errorf("clean.go:%d calls os.%s — this command quarantines, it never deletes; "+
+				"a wrong path must cost a move, not the file",
+				fset.Position(call.Pos()).Line, sel.Sel.Name)
+		}
+		return true
+	})
+}
+
+// ── N-1: the exit guard proved "in the tree", not "in the quarantine" ────────
+//
+// The escape it missed is INSIDE the tree, which is why "under root" waved it
+// through: `<root>/trash/tmp -> <root>/live`. Cleaning `<root>/tmp/sub/x.txt`
+// exited 0 and printed `<root>/trash/tmp/sub/x.txt` while the file actually
+// landed in `<root>/live/sub/x.txt` — `trash/` held nothing.
+//
+// 🔴 Reporting success while naming a path the file is not at is the exact
+// class this command calls its worst failure. The file being "still in the
+// tree" does not soften it: the agent is told where its parked copy is, and it
+// is not there. The destination of a quarantine move has to be inside the
+// QUARANTINE, and "under root" is a strictly weaker claim.
+func TestCleanRefusesWhenTheQuarantinePathLeavesTrashWithoutLeavingTheTree(t *testing.T) {
+	cfg, root := cleanFixture(t)
+	inTreeButNotTrash := filepath.Join(root, "live")
+	if err := os.MkdirAll(inTreeButNotTrash, 0o755); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "trash"), 0o755); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	if err := os.Symlink(inTreeButNotTrash, filepath.Join(root, "trash", "tmp")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	// Two levels under the symlinked name, for the same reason the sibling
+	// test spells out: at one level MkdirAll creates nothing and the fixture
+	// cannot tell a late guard from an early one.
+	target := filepath.Join(root, "tmp", "sub", "x.txt")
+	writeFile(t, target, "mine")
+
+	rc, out := run(cfg, target)
+	if rc == 0 {
+		t.Fatalf("a destination outside trash/ must be refused; out = %q", out)
+	}
+	if got := mustReadFile(t, target); got != "mine" {
+		t.Fatalf("the target must be untouched; got %q", got)
+	}
+	// 🔴 THE assertion: nothing was written into the in-tree-but-not-quarantine
+	// directory the link aimed at.
+	entries, err := os.ReadDir(inTreeButNotTrash)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("nothing may land outside %s/; entries = %v err = %v", quarantineDirName, entries, err)
+	}
+}
+
+// ── N-2: the "trash is not cleanable" guard fell to a single capital letter ──
+//
+// insideRoot compared the first path segment against "trash" as a
+// case-SENSITIVE string, and macOS APFS is case-INSENSITIVE by default — the
+// filesystem this repo is developed on. So `clean <root>/TRASH/tmp/parked.txt`
+// named the very same directory the guard exists to protect, missed the
+// comparison, and re-quarantined an already-quarantined file into
+// `trash/TRASH/...` — "moving trash into trash nests forever", which is the
+// comment's own words for what it was preventing.
+//
+// The assertion is filesystem-independent: on a case-sensitive host `TRASH/`
+// is a different directory and refusing it costs one false refusal (the agent
+// renames it and retries); on a case-insensitive host it is the quarantine
+// itself and allowing it costs a spurious move of parked evidence. A command
+// that moves things takes the refusal.
+func TestCleanRefusesTheQuarantineDirWhateverItsCase(t *testing.T) {
+	cfg, root := cleanFixture(t)
+	parked := filepath.Join(root, "TRASH", "tmp", "parked.txt")
+	writeFile(t, parked, "already quarantined")
+
+	rc, out := run(cfg, parked)
+	if rc == 0 {
+		t.Fatalf("a path through the quarantine dir must be refused whatever its case; out = %q", out)
+	}
+	if !strings.Contains(out, "already in") {
+		t.Fatalf("the refusal must say it is already quarantined; got %q", out)
+	}
+	if got := mustReadFile(t, parked); got != "already quarantined" {
+		t.Fatalf("parked evidence must be untouched; got %q", got)
+	}
+	// Nothing nested a second time.
+	if _, err := os.Lstat(filepath.Join(root, "trash", "TRASH")); !os.IsNotExist(err) {
+		t.Fatalf("quarantine must not nest inside itself; err = %v", err)
+	}
+}
+
+// ── N-3: the collision loop called every error "it already exists" ───────────
+//
+// The loop broke only on ENOENT and treated EVERY other Lstat error as "that
+// slot is taken", so an ENOTDIR (a plain file sitting where `trash/tmp` should
+// be a directory), an ELOOP, or an EACCES span 1000 candidate names and then
+// answered `too many quarantined copies of tmp/x.txt` — when there are none.
+// Nothing unsafe happens, but the message sends a human hunting for 1000
+// copies that do not exist, and the real cause (a file in the way) is never
+// named. A command whose whole job is "tell the agent where its file went" may
+// not answer with a fabricated reason.
+func TestCleanReportsTheRealReasonWhenTheQuarantineSlotCannotBeInspected(t *testing.T) {
+	cfg, root := cleanFixture(t)
+	// A PLAIN FILE where the quarantine subdirectory would have to be.
+	writeFile(t, filepath.Join(root, "trash", "tmp"), "not a directory")
+	target := filepath.Join(root, "tmp", "x.txt")
+	writeFile(t, target, "mine")
+
+	rc, out := run(cfg, target)
+	if rc == 0 {
+		t.Fatalf("must not report success; out = %q", out)
+	}
+	if strings.Contains(out, "too many quarantined copies") {
+		t.Fatalf("must not invent 1000 copies that do not exist; got %q", out)
+	}
+	if got := mustReadFile(t, target); got != "mine" {
+		t.Fatalf("the target must be untouched; got %q", got)
+	}
+}
+
+// ── N-4: the fourth leaf shape, which the contract listed only three of ──────
+//
+// A leaf symlink that is BOTH dangling AND aimed outside the tree
+// (`<root>/dangleout -> <elsewhere>/never.txt`). It sits between two documented
+// rules — "points OUT of the tree → refused" and "dangling → the link moves" —
+// and it takes the second one. That is correct and it is now stated: nothing
+// exists at the far end to reach, so the only byte involved is the link itself,
+// which is in the tree and is precisely what the caller named. Refusing it
+// would strand exactly the debris this command exists to clear (a stale
+// node_modules/.bin entry is this shape).
+//
+// It is asserted here because it was reachable and undocumented, which is the
+// same defect as an undocumented refusal: the next reader cannot tell whether
+// the behaviour was decided or fell out.
+func TestCleanMovesADanglingLinkThatAimsOutsideTheTree(t *testing.T) {
+	cfg, root := cleanFixture(t)
+	elsewhere := t.TempDir()
+	neverCreated := filepath.Join(elsewhere, "never.txt")
+	link := filepath.Join(root, "dangleout")
+	if err := os.Symlink(neverCreated, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	rc, out := run(cfg, link)
+	if rc != 0 {
+		t.Fatalf("a dangling link is cleanable wherever it aims; rc = %d out = %q", rc, out)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("the link the caller named must have moved; err = %v", err)
+	}
+	parked := filepath.Join(root, "trash", "dangleout")
+	fi, err := os.Lstat(parked)
+	if err != nil {
+		t.Fatalf("the link must be parked as %s: %v", parked, err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("what was parked must still be the symlink: mode = %v", fi.Mode())
+	}
+	// 🔴 Nothing was created at the far end — "the link moves" must not have
+	// meant "the pointee was materialised".
 	if _, err := os.Lstat(neverCreated); !os.IsNotExist(err) {
 		t.Fatalf("nothing may be created outside the tree; err = %v", err)
 	}
