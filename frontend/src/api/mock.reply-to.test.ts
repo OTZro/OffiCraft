@@ -13,8 +13,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { mockApi, __resetMock } from "./mock";
 
-const OWNER = "owner";
-
 describe("mock 回覆這則 — server parity", () => {
   beforeEach(() => __resetMock());
 
