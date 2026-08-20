@@ -525,11 +525,16 @@ ONE-SHOT, never a standing order):
   case falls back to the anchor's age rather than reading the amnesia as silence.
   ⚠️ The report is NOT a heartbeat: it is throttled to at most one burst per
   `soft_offboard_grace`-independent 30 s window, and it is driven by the agent's
-  activity (Claude wires it to the statusLine redraw, codex to turn boundaries).
-  So this discriminator sees a member that is still producing turns and does NOT
-  see one blocked inside a single long call — a close-out that spends the whole
-  window waiting on one sub-agent is still swept. Strict improvement, not a
+  activity (Claude wires it to the statusLine redraw, codex to a tokenUsage-updated
+  event). So this discriminator sees a member that is still producing activity and
+  does NOT see one blocked inside a single long call — a close-out that spends the
+  whole window waiting on one sub-agent is still swept. Strict improvement, not a
   complete fix.
+  ⚠️ Do NOT read that as "no clock-driven signal exists". One does, for codex only:
+  the session runs a 30 s identityHeartbeat whose report is stamped into a
+  DIFFERENT store (telemetry, not the gauge) and keeps ticking through a long tool
+  call. Reading it here is a behaviour change with its own trade-offs and is not
+  part of this rule; the point is that the gap above has a known candidate.
   Two deliberate consequences, both owner-facing: a member that reports stopping
   and then resumes ordinary work reads `stopping` for the rest of that session,
   and while it reads `stopping` the cockpit offers 強制下線 rather than the
