@@ -68,6 +68,21 @@ func TestSplitToolArgumentsPathQueryBody(t *testing.T) {
 		}
 	}
 
+	// Slash-containing values and dot segments must not let path.Clean reinterpret
+	// a route. Other scalar and documented path-shaped values remain untouched.
+	for _, value := range []string{".", "..", "../members", "../roles"} {
+		_, _, _, err = splitToolArguments(getSpec, map[string]any{"member_id": value})
+		if err == nil || err.Error() != "invalid path: member_id" {
+			t.Fatalf("unsafe path value %q must be rejected, got %v", value, err)
+		}
+	}
+	for _, value := range []any{"a.b-c_D", "a%20b", "UPPER", " pad ", 0, false, []any{}} {
+		_, _, _, err = splitToolArguments(getSpec, map[string]any{"member_id": value})
+		if err != nil {
+			t.Fatalf("safe path value %v must pass unchanged, got %v", value, err)
+		}
+	}
+
 	// A GET list value expands doseq-style: one pair per element.
 	_, query, _, err = splitToolArguments(getSpec, map[string]any{
 		"member_id": "m-1", "tag": []any{"a", "b"},

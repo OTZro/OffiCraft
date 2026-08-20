@@ -467,19 +467,19 @@ func (s *apiServer) HandleDeleteRoleApiRolesRoleDelete(w http.ResponseWriter, r 
 // get_lessons / replace_lessons / patch_lessons MCP call so an agent's lessons round-trip lands
 // on the SAME per-role doc the boot context injects into its persona (T-d483).
 //
-// The two path params are REQUIRED by the route, so an MCP call that omits either
-// one substitutes the empty string (mcp.go splitToolArguments) → the path degrades
-// to /api/lessons/{role}/ (or //) which no longer matches the wildcard route, and
-// the SPA fallback answers not_found — the reported learning-loop break. We close
-// that here, once, at the tool boundary the agents actually use, mirroring
-// buildBootContext's own key derivation:
+// The two path params are REQUIRED by the route. For the MCP tool face, a blank
+// task_type folds to the general seed bucket, and a blank role_key folds to the
+// caller's own role for an agent. We do that before the shared path validation,
+// mirroring buildBootContext's own key derivation and keeping the learning loop
+// on one concrete route:
 //   - a blank task_type folds to the "general" seed bucket (seedLessonsTaskType);
 //   - a blank role_key folds to the caller's OWN role — the roster's role_key for
 //     the verified sub (resolveBootRoleKey, the same source the write authz reads).
 //
 // A non-agent caller (owner/machine) has no identity role, so a blank role_key is
-// left untouched (that caller must name the role explicitly). The REST wire shape
-// is unchanged — REST callers already pass both segments (conformance happy path).
+// left untouched and the shared path validation reports it as required. The REST
+// wire shape is unchanged — REST callers already pass both segments (conformance
+// happy path).
 func (s *apiServer) fillLessonsIdentityArgs(r *http.Request, name string, arguments map[string]any) {
 	if name != "get_lessons" && name != "replace_lessons" && name != "patch_lessons" {
 		return
@@ -495,15 +495,11 @@ func (s *apiServer) fillLessonsIdentityArgs(r *http.Request, name string, argume
 	}
 }
 
-// blankArg reports whether an MCP argument is effectively unset — absent, null,
-// or the empty string (the shapes splitToolArguments would turn into an empty
-// path segment).
+// blankArg shares emptyPathParam's unset predicate: absent, null, empty, or
+// whitespace-only string. Keeping one predicate prevents identity folding and
+// shared path validation from disagreeing about blank path values.
 func blankArg(v any) bool {
-	if v == nil {
-		return true
-	}
-	str, ok := v.(string)
-	return ok && str == ""
+	return emptyPathParam(v)
 }
 
 // lessonsWriteAuthz enforces the per-role lessons WRITE authz shared by

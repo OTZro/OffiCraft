@@ -319,6 +319,19 @@ def test_call_missing_path_param_returns_precise_validation(
     assert result["structuredContent"] == body
 
 
+@pytest.mark.parametrize("value", [".", "..", "../members", "../roles"])
+def test_call_path_param_rejects_route_reinterpretation(
+    client, owner_token, value
+) -> None:
+    """spec §3.1: a path separator or dot segment cannot reach another route."""
+    result = _call(client, owner_token, "get_task_manual", {"type_key": value})
+    assert result["isError"] is True, result
+    body = json.loads(_text(result))
+    assert body["error"]["code"] == "validation_error", body
+    assert body["error"]["message"] == "invalid path: type_key", body
+    assert result["structuredContent"] == body
+
+
 def test_call_forwards_caller_authorization(
     client, owner_token, agent_a: AgentIdentity
 ) -> None:

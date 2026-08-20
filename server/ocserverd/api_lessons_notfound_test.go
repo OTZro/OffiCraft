@@ -105,6 +105,17 @@ func TestLessonsMCPDefaultsCloseTheLearningLoop(t *testing.T) {
 		t.Fatalf("get_lessons with empty task_type must serve, got code=%q", code)
 	}
 
+	// 3b. Whitespace-only path values use the same blank predicate as the
+	// shared MCP path guard, so identity defaults still apply before dispatch.
+	if isErr, code, _ := lessonsCall(t, srv.URL, ownerTok,
+		`{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"get_lessons","arguments":{"role_key":"assistant","task_type":"   "}}}`); isErr {
+		t.Fatalf("get_lessons with whitespace task_type must serve, got code=%q", code)
+	}
+	if isErr, code, _ := lessonsCall(t, srv.URL, joeyTok,
+		`{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"get_lessons","arguments":{"role_key":"   ","task_type":"general"}}}`); isErr {
+		t.Fatalf("agent get_lessons with whitespace role_key must serve, got code=%q", code)
+	}
+
 	// 4. NO arguments as an AGENT ("無參數,identity 從 token") → role from the
 	//    roster + general → serves the custom role's doc, never not_found.
 	if isErr, code, _ := lessonsCall(t, srv.URL, joeyTok,

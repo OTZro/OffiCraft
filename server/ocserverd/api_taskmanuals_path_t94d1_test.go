@@ -13,15 +13,20 @@ func TestToolsCallMissingTaskManualTypeKeyNamesTheField(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := []struct {
-		name string
-		body string
+		name        string
+		body        string
+		wantMessage string
 	}{
-		{"write_task_learnings", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"write_task_learnings","arguments":{"text":"probe"}}}`},
-		{"patch_task_learnings", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"patch_task_learnings","arguments":{"edits":[]}}}`},
-		{"get_task_manual", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_task_manual","arguments":{}}}`},
-		{"write_task_learnings_empty", `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"write_task_learnings","arguments":{"type_key":"","text":"probe"}}}`},
-		{"patch_task_learnings_empty", `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"patch_task_learnings","arguments":{"type_key":"","edits":[]}}}`},
-		{"get_task_manual_empty", `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_task_manual","arguments":{"type_key":""}}}`},
+		{"write_task_learnings", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"write_task_learnings","arguments":{"text":"probe"}}}`, "field required: type_key"},
+		{"patch_task_learnings", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"patch_task_learnings","arguments":{"edits":[]}}}`, "field required: type_key"},
+		{"get_task_manual", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_task_manual","arguments":{}}}`, "field required: type_key"},
+		{"write_task_learnings_empty", `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"write_task_learnings","arguments":{"type_key":"","text":"probe"}}}`, "field required: type_key"},
+		{"patch_task_learnings_empty", `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"patch_task_learnings","arguments":{"type_key":"","edits":[]}}}`, "field required: type_key"},
+		{"get_task_manual_empty", `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_task_manual","arguments":{"type_key":""}}}`, "field required: type_key"},
+		{"get_task_manual_dot", `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"get_task_manual","arguments":{"type_key":"."}}}`, "invalid path: type_key"},
+		{"get_task_manual_parent", `{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"get_task_manual","arguments":{"type_key":".."}}}`, "invalid path: type_key"},
+		{"get_task_manual_members", `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"get_task_manual","arguments":{"type_key":"../members"}}}`, "invalid path: type_key"},
+		{"get_task_manual_roles", `{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"get_task_manual","arguments":{"type_key":"../roles"}}}`, "invalid path: type_key"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -38,7 +43,7 @@ func TestToolsCallMissingTaskManualTypeKeyNamesTheField(t *testing.T) {
 				t.Fatalf("validation refusal must carry structured content: %v", result)
 			}
 			errObj, ok := structured["error"].(map[string]any)
-			if !ok || errObj["code"] != "validation_error" || errObj["message"] != "field required: type_key" {
+			if !ok || errObj["code"] != "validation_error" || errObj["message"] != tc.wantMessage {
 				t.Fatalf("missing type_key must name the field, got %v", result)
 			}
 			text := result["content"].([]any)[0].(map[string]any)["text"].(string)

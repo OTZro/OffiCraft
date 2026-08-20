@@ -56,10 +56,11 @@ path / query / body:
    `arguments` and substitute `str(value)` into the path. A missing, `null`, empty, or
    whitespace-only string path value MUST return a tool result with `isError: true` and the
    REST-style 422 `validation_error` envelope (`field required: <param>`); it MUST NOT be
-   substituted as an empty segment. Non-empty path values continue to reach the loopback
-   path handling. The loopback still applies its existing `path.Clean` before dispatch,
-   so values containing `/` or `..` may be normalized into another route; this rule
-   only rejects missing, `null`, empty, or whitespace-only values.
+   substituted as an empty segment. Non-empty path values containing `/`, or equal to
+   `.` or `..`, MUST return a tool result with `isError: true` and the REST-style 422
+   `validation_error` envelope (`invalid path: <param>`); they MUST NOT reach loopback
+   dispatch. Other non-empty path values continue to reach the loopback path handling,
+   which still applies its existing `path.Clean` before dispatch.
 2. **GET routes**: every remaining non-`None` key becomes a query parameter
    (form-urlencoded, `doseq` list expansion); `None` values (unset optionals) MUST be
    dropped.

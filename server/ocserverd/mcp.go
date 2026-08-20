@@ -37,6 +37,12 @@ func emptyPathParam(value any) bool {
 	return isString && strings.TrimSpace(s) == ""
 }
 
+// unsafePathParam identifies values that path.Clean could reinterpret as a
+// separator or dot segment instead of leaving them as one route segment.
+func unsafePathParam(value string) bool {
+	return strings.Contains(value, "/") || value == "." || value == ".."
+}
+
 // toolName is the MCP tool name of a route row: the explicit override, else
 // derived from method+path — the frozen tool_name rule verbatim.
 func (s RouteSpec) toolName() string {
@@ -97,8 +103,8 @@ func pyArgString(v any) string {
 // become the query string (list values expand doseq-style), and any other
 // method's remaining keys become the JSON body (an empty object when nothing
 // remains — a body is ALWAYS sent for a write route). A missing or empty path
-// parameter is a validation error, rather than an empty segment that could be
-// cleaned into a different route.
+// parameter, or a value that could be cleaned into a different route, is a
+// validation error before the loopback dispatch.
 func splitToolArguments(spec RouteSpec, arguments map[string]any) (reqPath string, rawQuery string, body []byte, err error) {
 	remaining := make(map[string]any, len(arguments))
 	for k, v := range arguments {
@@ -113,6 +119,9 @@ func splitToolArguments(spec RouteSpec, arguments map[string]any) (reqPath strin
 			return "", "", nil, errors.New("field required: " + name)
 		}
 		sub := pyArgString(value)
+		if unsafePathParam(sub) {
+			return "", "", nil, errors.New("invalid path: " + name)
+		}
 		delete(remaining, name)
 		reqPath = strings.ReplaceAll(reqPath, "{"+name+"}", sub)
 	}
@@ -182,7 +191,8 @@ func (s *apiServer) loopbackCall(r *http.Request, method, reqPath, rawQuery stri
 	}
 	// Pre-clean the path so the mux receives its canonical form instead of
 	// issuing a 301 canonicalisation redirect. Keep this normalization for
-	// non-canonical paths even though splitToolArguments rejects empty path params.
+	// non-canonical paths even though splitToolArguments rejects empty and
+	// route-reinterpreting path params.
 	cleaned := pathpkg.Clean(reqPath)
 	req := (&http.Request{
 		Method:     method,
