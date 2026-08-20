@@ -933,7 +933,15 @@
  * to the inherited value, so this is the green on your messages and the plain
  * text colour on theirs — one rule, no per-bubble override). Hover restores it
  * to full strength and lays down a faint wash of the same colour, so the hover
- * target still reads as a target without reintroducing a permanent box. */
+ * target still reads as a target without reintroducing a permanent box.
+ *
+ * ⚠️ THIS MOVES A THEME DEPENDENCY. The chip's legibility rested on
+ * `--color-text-muted` against `--color-card`; it now rests on each bubble's own
+ * ink against its own ground — on your messages that is the accent against the
+ * accent-tinted bubble, a pair nothing in check-token-roles.mjs pins. An
+ * imported theme pack can drive those two together and fade these buttons out
+ * without any check firing. The CT guard measures the built-in theme only, at
+ * WCAG 3:1, resting, on both bubbles and on a coarse pointer. */
 .chat__msg-expand {
   display: inline-flex;
   align-items: center;
@@ -960,9 +968,16 @@
   color: inherit;
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
+/* 🔴 COARSE POINTERS GET THE FULL RESTING STATE, not a dimmed one. This block
+ * used to say `opacity: 0.55`, calibrated when the ink was opaque. The ink is
+ * now 55% of the bubble's colour, and opacity MULTIPLIES: touch devices were
+ * getting 30% ink, measured at 2.42:1 on an incoming bubble and 2.02:1 on your
+ * own — under the 3:1 floor for a non-text control, and worse than the chip it
+ * replaced. On a touch device there is no hover to reveal these with, so this
+ * IS the state they live in, and it is the only reply entry there is. */
 @media (hover: none) {
   .chat__msg-expand {
-    opacity: 0.55;
+    opacity: 1;
   }
 }
 /* ===== T-4e95 「回覆這則」 =====
@@ -1008,9 +1023,11 @@
   color: inherit;
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
+/* Same correction as .chat__msg-expand above: opacity multiplies the ink's own
+ * alpha, and 0.55 × 55% left the only reply entry a touch user has at 2.02:1. */
 @media (hover: none) {
   .chat__msg-reply {
-    opacity: 0.55;
+    opacity: 1;
   }
 }
 
@@ -1036,11 +1053,12 @@
    * narrow: an earlier comment called them load-bearing, and mutating each in
    * turn (CT `chat-reply-to`, 390 and 1280) changed nothing, all guards green.
    * That measures "not needed at the widths and fixtures we guard", NOT "dead".
-   * Below about 300px the clip is still the last thing that would trim this row
-   * — reviewed there and found cosmetic: `.chat__msg-actions` is absolutely
-   * positioned above, so the quote slides UNDER the corner buttons and they stay
-   * clickable. Against that, clipping here has a standing cost: it cuts the
-   * focus ring off 跳到原訊息, whose right edge is flush with the row's. */
+   * A later review found the row CAN still run past the bubble, but the trigger
+   * is the jump control's width, not this clip: in Chinese nothing overflows down
+   * to 280px, while the English label overflows from 375px. That is fixed where
+   * it is caused — the jump shrinks now (see below) — rather than by clipping
+   * here. Clipping here has a standing cost anyway: it cuts the focus ring off
+   * 跳到原訊息, whose right edge is flush with the row's. */
   margin-bottom: 6px;
   padding-bottom: 5px;
   border-bottom: 1px solid color-mix(in srgb, var(--color-text-muted) 22%, transparent);
@@ -1069,12 +1087,15 @@
  *    scanned combinations cut the name while the excerpt was untouched.
  *
  * What actually expresses the rule is an ASYMMETRIC shrink factor, below: the
- * excerpt shrinks a hundred times more eagerly than the name, so it absorbs
- * essentially all of any deficit and the name only starts to give once the
- * excerpt has nothing left. No cap, no cliff, and nothing is cut while the row
- * still has room. All three directions are pinned by CT, one story row each:
- * long name, short name with a long excerpt, and a middling name with an
- * excerpt too short to absorb anything. */
+ * excerpt shrinks far more eagerly than the name, so it absorbs essentially all
+ * of any deficit and the name only starts to give once the excerpt has nothing
+ * left. No cap, no cliff, and nothing is cut while the row still has room.
+ *
+ * Three story rows carry the three shapes — long name, short name with a long
+ * excerpt, middling name with an excerpt too short to absorb anything — but be
+ * precise about what each PINS: reverting the asymmetry reddens the short-name
+ * row, and the third row reddens only on a percentage cap. Between them they
+ * cover the two ways this has actually broken, not every way it could. */
 .chat__msg-quote__who {
   flex: 0 1 auto;
   min-width: 0;
@@ -1083,19 +1104,39 @@
   white-space: nowrap;
   font-weight: 600;
 }
-/* `flex-shrink: 100` is the asymmetry described above — not a magic number, just
- * one large enough that the name's share of any deficit rounds to nothing while
- * the excerpt has width left to give. `overflow: hidden` is load-bearing twice
- * over: it clips the text AND it is what lets this flex item go below its
- * content width at all. */
+/* 🔴 THE SHRINK FACTORS ARE A PRIORITY ORDER, written as orders of magnitude:
+ * excerpt 10000 → jump label 10 → name 1. Flex shares a deficit in proportion to
+ * `factor × basis`, so each step down is far enough that the ones below it round
+ * away while the one above still has width to give; when an item bottoms out at
+ * zero flex freezes it and the rest share what is left, which is exactly the
+ * hand-off we want. The gaps have to be this wide: at 100 the excerpt still left
+ * the jump 0.3% of a 2300px deficit — 7px, enough to visibly clip the label.
+ * `overflow: hidden` is load-bearing twice over: it clips the text AND it is
+ * what lets this flex item go below its content width at all. */
 .chat__msg-quote__body {
-  flex: 1 100 auto;
+  flex: 1 10000 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 🔴 THE JUMP GIVES WAY BEFORE IT COVERS ANYTHING. It was `flex: 0 0 auto` —
+ * never shrink, because a cut 跳到原訊息 helps nobody. That reasoning was
+ * measured against the Chinese string (69px) and fails on the English one, "Go
+ * to the original message", at 154px: with the excerpt and the name both shrunk
+ * to nothing, a control that still refuses to give runs past the bubble's edge
+ * and under `.chat__msg-actions`, which is absolutely positioned and paints on
+ * top of it. Reviewed in Chromium against the real app shell — 5040 combinations
+ * of width × language × bubble kind × name × excerpt — and it overlaps in 600 of
+ * them, EVERY ONE in English: 360px and 375px (the two commonest phone widths)
+ * and again at 721–728px, just past the two-column breakpoint.
+ *
+ * So it shrinks, ten times more eagerly than the name (the name says WHO; this
+ * label is boilerplate the arrow already implies) and far less than the excerpt.
+ * Only the LABEL truncates — the arrow is `flex: none` below, so what is left
+ * always still reads as "go somewhere". */
 .chat__msg-quote__jump {
-  flex: 0 0 auto;
+  flex: 0 10 auto;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   gap: 2px;
@@ -1106,6 +1147,15 @@
   font-size: 11px;
   color: var(--color-accent);
   white-space: nowrap;
+}
+.chat__msg-quote__jump-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat__msg-quote__jump-chevron {
+  flex: none;
 }
 .chat__msg-quote__jump:hover,
 .chat__msg-quote__jump:focus-visible {

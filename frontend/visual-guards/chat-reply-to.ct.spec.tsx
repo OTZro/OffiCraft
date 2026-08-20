@@ -14,6 +14,39 @@
 import { test, expect } from "@playwright/experimental-ct-react";
 import { ChatReplyToStory } from "./stories/ChatReplyToStory";
 
+/** Parse what getComputedStyle hands back for a colour — `rgb()`, `rgba()` or
+ * the `color(srgb r g b / a)` form a `color-mix()` resolves to — into 0..255
+ * channels plus alpha. Written here rather than pulled in because the ONLY
+ * consumer is the contrast assertion below. */
+function parseColour(v: string): [number, number, number, number] {
+  const n = v.match(/-?[\d.]+(?=[\s,)/])|-?[\d.]+$/g)?.map(Number) ?? [];
+  if (v.startsWith("color(")) {
+    // color(srgb 0.43 0.83 0.69 / 0.55) — channels are 0..1
+    const [r, g, b, a = 1] = n;
+    return [r * 255, g * 255, b * 255, a];
+  }
+  const [r, g, b, a = 1] = n;
+  return [r, g, b, a];
+}
+
+/** WCAG 2.x relative-luminance contrast, after compositing `fg` over `bg`. */
+function contrast(fg: string, bg: string): number {
+  const [fr, fg_, fb, fa] = parseColour(fg);
+  const [br, bg_, bb] = parseColour(bg);
+  const over = [fr * fa + br * (1 - fa), fg_ * fa + bg_ * (1 - fa), fb * fa + bb * (1 - fa)];
+  const lum = (c: number[]) => {
+    const [r, g, b] = c.map((v) => {
+      const x = v / 255;
+      return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const l1 = lum(over);
+  const l2 = lum([br, bg_, bb]);
+  const [hi, lo] = l1 > l2 ? [l1, l2] : [l2, l1];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
 for (const width of [390, 1280]) {
   test(`width ${width}: the reply entry is hover-revealed but never re-flows the row`, async ({
     mount,
@@ -70,15 +103,28 @@ for (const width of [390, 1280]) {
     );
     expect(quoteBox.y).toBeGreaterThanOrEqual(bubbleBox.y - 0.5);
 
-    // The jump control keeps its whole width — a cut 跳到原訊息 helps nobody;
-    // it is the quoted TEXT (and, when it has to, the sender name) that gives
-    // way. The story deliberately uses an UNRESOLVED sender — a raw member id —
-    // because that is the long name this row really meets.
+    // The jump stays inside the bubble. Its LABEL may be trimmed here — this row
+    // carries a deliberately extreme sender name, and something has to give —
+    // but the arrow may not: what survives must still read as "go somewhere".
+    //
+    // This replaces an earlier `jump.width > 40`, which encoded "the jump keeps
+    // its whole width, a cut 跳到原訊息 helps nobody". That rule was measured
+    // against the 69px Chinese string and could not survive the 154px English
+    // one: a control that never gives way does not stay inside the bubble, it
+    // runs under the corner buttons. Trimming the label is the lesser loss, and
+    // the ordinary case is pinned separately below (short name → label intact).
     const jump = (await cmp.getByTestId("quote-jump").boundingBox())!;
     expect(jump.x + jump.width).toBeLessThanOrEqual(
       bubbleBox.x + bubbleBox.width + 0.5,
     );
-    expect(jump.width).toBeGreaterThan(40);
+    const chevron = (await cmp
+      .getByTestId("row-mine")
+      .locator(".chat__msg-quote__jump-chevron")
+      .boundingBox())!;
+    expect(chevron.width).toBeGreaterThanOrEqual(11.5);
+    expect(chevron.x + chevron.width).toBeLessThanOrEqual(
+      jump.x + jump.width + 0.5,
+    );
 
     // 🔴 AND IT MUST NOT REACH THE CORNER CONTROLS. Measured, not inferred: a
     // row whose min-content width exceeded the bubble pushed the jump ON TOP of
@@ -118,6 +164,16 @@ for (const width of [390, 1280]) {
     );
     expect(whoCut).toBe(false);
     expect((await who.textContent())?.trim()).toBe("Mira");
+
+    // …and the jump keeps its whole label in the ordinary case. The label CAN
+    // be trimmed (that is what stops the English string running under the
+    // corner buttons), but only after the excerpt has nothing left to give —
+    // never on a row like this one.
+    const labelCut = await cmp
+      .getByTestId("row-mine-short")
+      .locator(".chat__msg-quote__jump-label")
+      .evaluate((e) => e.scrollWidth > e.clientWidth + 0.5);
+    expect(labelCut).toBe(false);
   });
 
   test(`width ${width}: a name is never cut while the excerpt still fits`, async ({
@@ -184,6 +240,47 @@ for (const width of [390, 1280]) {
       expect(box.bg).toBe("rgba(0, 0, 0, 0)");
       expect(box.bw).toBe("0px");
     }
+
+    // 🔴 AND IT MUST STILL BE VISIBLE. "Follows the bubble" is satisfied just as
+    // well by ink at 5% — the two would still differ from each other, and this
+    // test would still pass, while the control had effectively vanished. So the
+    // rule is stated as contrast: WCAG's 3:1 floor for a non-text control,
+    // measured against the bubble each button actually sits on.
+    for (const [btn, row] of [
+      [incoming, "row-incoming"],
+      [mine, "row-mine"],
+    ] as const) {
+      const { ink, ground } = await btn.evaluate((e) => ({
+        ink: getComputedStyle(e).color,
+        ground: getComputedStyle(e.closest(".chat__msg-bubble")!).backgroundColor,
+      }));
+      expect(contrast(ink, ground), `${row}: resting ink vs its bubble`).toBeGreaterThanOrEqual(3);
+    }
+
+    // Hover: back to the bubble's full-strength colour, plus a wash of the same
+    // colour so the target still reads as a target. owner asked for the box to
+    // go; he did not ask for the hover state to stop existing.
+    await mine.hover();
+    // ⚠️ WAIT OUT THE TRANSITION. These buttons animate `color` and
+    // `background-color` over 0.15s, and a computed value read mid-flight comes
+    // back as an interpolated `oklab(...)` that matches nothing — it reads as
+    // "the rule did not apply" when in fact it had not finished applying.
+    await page.waitForTimeout(400);
+    const hovered = await mine.evaluate((e) => {
+      const c = getComputedStyle(e);
+      return {
+        ink: c.color,
+        wash: c.backgroundColor,
+        bubbleInk: getComputedStyle(e.closest(".chat__msg-bubble")!).color,
+      };
+    });
+    const ink = parseColour(hovered.ink);
+    const bubbleInk = parseColour(hovered.bubbleInk);
+    for (let i = 0; i < 3; i++) {
+      expect(Math.abs(ink[i] - bubbleInk[i])).toBeLessThanOrEqual(1.5);
+    }
+    expect(ink[3]).toBeGreaterThan(0.95);
+    expect(parseColour(hovered.wash)[3]).toBeGreaterThan(0);
   });
 
   test(`width ${width}: the 正在回覆 banner stays one line and its x stays reachable`, async ({
@@ -215,6 +312,63 @@ for (const width of [390, 1280]) {
 // Native keyboard semantics, one width. jsdom proved the click handler; this
 // proves both controls really are <button> elements — a <div onClick> mutant
 // takes the reply entry and the x out of reach for anyone not using a mouse.
+// 🔴 THE ENGLISH LABEL IS A DIFFERENT LAYOUT PROBLEM, not the same one in another
+// font. "Go to the original message" is 154px against 「跳到原訊息」's 69px, and
+// the control it lives in used to refuse to shrink — so on the two commonest
+// phone widths, and again just past the two-column breakpoint, it ran out of the
+// bubble and under `.chat__msg-actions`, which is absolutely positioned and
+// paints on top of it. Nothing in the suite could see that: every fixture was
+// Chinese. Reviewed against the real app shell in Chromium, 600 of 5040 scanned
+// combinations overlapped and EVERY ONE of them was English.
+//
+// ⚠️ These widths are the CT harness's, and the harness has no app shell — no
+// 1040px cap, no 22px page padding, no 264px roster column. It is therefore
+// ROOMIER than production at the same number, which is why the narrow end goes
+// below 390 here: 336 in this harness is about 720 in the real one.
+for (const width of [300, 320, 336, 360, 390]) {
+  test(`width ${width}: the English jump label never reaches the corner controls`, async ({
+    mount,
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    const cmp = await mount(
+      <ChatReplyToStory jumpLabel="Go to the original message" />,
+    );
+
+    for (const row of [
+      "row-mine",
+      "row-mine-short",
+      "row-mine-tight",
+      "row-incoming-quote",
+    ]) {
+      const jump = (await cmp
+        .getByTestId(row)
+        .locator(".chat__msg-quote__jump")
+        .boundingBox())!;
+      const acts = (await cmp
+        .getByTestId(row)
+        .locator(".chat__msg-actions")
+        .boundingBox())!;
+      const bubble = (await cmp
+        .getByTestId(row)
+        .locator(".chat__msg-bubble")
+        .boundingBox())!;
+
+      // Under the buttons is the failure the review measured — and it is a
+      // silent one: the row still LOOKS fine, the control is simply not where
+      // the pointer lands.
+      expect(
+        jump.x + jump.width,
+        `${row}: jump overlaps the corner controls`,
+      ).toBeLessThanOrEqual(acts.x + 0.5);
+      expect(
+        jump.x + jump.width,
+        `${row}: jump escapes the bubble`,
+      ).toBeLessThanOrEqual(bubble.x + bubble.width + 0.5);
+    }
+  });
+}
+
 test("narrow 390: the reply entry and the banner x are focusable native buttons", async ({
   mount,
   page,
@@ -229,3 +383,61 @@ test("narrow 390: the reply entry and the banner x are focusable native buttons"
     await expect(control).toBeFocused();
   }
 });
+
+// A coarse pointer has no hover to reveal these buttons with, so the
+// `@media (hover: none)` branch IS the state they live in — and on a phone that
+// entry is the only way to reply at all. `hasTouch` is what puts the browser in
+// that branch; it is a context option, so this half of the file runs under its
+// own describe.
+test.describe("coarse pointer", () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  for (const width of [390, 1280]) {
+  test(`width ${width}: on a touch device the entry is readable without hover`, async ({
+    mount,
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    const cmp = await mount(<ChatReplyToStory />);
+
+    // Sanity FIRST: if the coarse branch is not actually active, the buttons sit
+    // at the fine-pointer resting opacity of 0 and every contrast below comes
+    // out 1:1 — which would read as "the colour rule is broken" rather than
+    // "this test never entered the branch it is named after".
+    const coarseApplied = await page.evaluate(
+      () => window.matchMedia("(hover: none)").matches,
+    );
+    expect(coarseApplied, "the coarse-pointer branch is not active").toBe(true);
+
+    // 🔴 OPACITY MULTIPLIES THE INK'S OWN ALPHA. That is the whole reason this
+    // test exists: the branch said `opacity: 0.55`, calibrated when the ink was
+    // opaque, and the ink later became 55% of the bubble's colour — 0.55 × 0.55
+    // is 30%, measured at 2.02:1 on your own bubble. Nothing was red; the two
+    // rules are forty lines apart and each is defensible alone.
+    for (const row of ["row-incoming", "row-mine"]) {
+      const { ink, alpha, ground } = await cmp
+        .getByTestId(row)
+        .locator(".chat__msg-reply")
+        .evaluate((e) => {
+          const c = getComputedStyle(e);
+          return {
+            ink: c.color,
+            alpha: Number(c.opacity),
+            ground: getComputedStyle(e.closest(".chat__msg-bubble")!)
+              .backgroundColor,
+          };
+        });
+      const parsed = parseColour(ink);
+      const effective = `color(srgb ${parsed[0] / 255} ${parsed[1] / 255} ${
+        parsed[2] / 255
+      } / ${parsed[3] * alpha})`;
+      expect(
+        contrast(effective, ground),
+        `${row}: coarse-pointer resting ink vs its bubble`,
+      ).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  }
+});
+

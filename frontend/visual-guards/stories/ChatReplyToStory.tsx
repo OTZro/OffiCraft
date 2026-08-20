@@ -7,7 +7,16 @@
 // PRESENTATIONAL (hover reveal, one-line clipping, the quote row staying inside
 // the bubble column), and jsdom can measure none of them. The behavioural half
 // is already pinned in ChatArea.reply-to.test.tsx.
-export function ChatReplyToStory() {
+/** `jumpLabel` exists because the label's WIDTH is the thing under test and it
+ * is not the same in every language: zh is 「跳到原訊息」 at 69px, en is "Go to
+ * the original message" at 154px, and the guard that matters (the jump must not
+ * end up under the corner buttons) only fails on the long one. A story hard-
+ * wired to Chinese measured a control 85px narrower than half the users see. */
+export function ChatReplyToStory({
+  jumpLabel = "跳到原訊息",
+}: {
+  jumpLabel?: string;
+} = {}) {
   // 🔴 A LONG SENDER, not "Mira". What makes a long one real is that display
   // names are OWNER-SET FREE TEXT — there is no cap on what he types. (An
   // earlier version of this comment also claimed nameOf()'s raw-id fallback was
@@ -51,7 +60,7 @@ export function ChatReplyToStory() {
                       aria-label="回覆這則"
                       data-testid="reply-entry-incoming"
                     >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="9 17 4 12 9 7" />
                         <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
                       </svg>
@@ -62,7 +71,7 @@ export function ChatReplyToStory() {
                       aria-label="放大閱讀"
                       data-testid="expand-entry-incoming"
                     >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="14 4 20 4 20 10" />
                       </svg>
                     </button>
@@ -90,7 +99,7 @@ export function ChatReplyToStory() {
                       aria-label="回覆這則"
                       data-testid="reply-entry-mine"
                     >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="9 17 4 12 9 7" />
                         <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
                       </svg>
@@ -104,6 +113,9 @@ export function ChatReplyToStory() {
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
                     >
                       <polyline points="9 17 4 12 9 7" />
                     </svg>
@@ -114,7 +126,7 @@ export function ChatReplyToStory() {
                       className="chat__msg-quote__jump"
                       data-testid="quote-jump"
                     >
-                      跳到原訊息
+                      <span className="chat__msg-quote__jump-label">{jumpLabel}</span>
                       <svg
                         className="chat__msg-quote__jump-chevron"
                         width="12"
@@ -158,7 +170,7 @@ export function ChatReplyToStory() {
                       aria-label="回覆這則"
                       data-testid="reply-entry-mine-short"
                     >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="9 17 4 12 9 7" />
                         <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
                       </svg>
@@ -172,6 +184,9 @@ export function ChatReplyToStory() {
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
                     >
                       <polyline points="9 17 4 12 9 7" />
                     </svg>
@@ -186,7 +201,7 @@ export function ChatReplyToStory() {
                       className="chat__msg-quote__jump"
                       data-testid="quote-jump-short"
                     >
-                      跳到原訊息
+                      <span className="chat__msg-quote__jump-label">{jumpLabel}</span>
                       <svg
                         className="chat__msg-quote__jump-chevron"
                         width="12"
@@ -232,7 +247,7 @@ export function ChatReplyToStory() {
                       aria-label="回覆這則"
                       data-testid="reply-entry-mine-tight"
                     >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="9 17 4 12 9 7" />
                         <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
                       </svg>
@@ -246,6 +261,9 @@ export function ChatReplyToStory() {
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
                     >
                       <polyline points="9 17 4 12 9 7" />
                     </svg>
@@ -260,7 +278,7 @@ export function ChatReplyToStory() {
                       className="chat__msg-quote__jump"
                       data-testid="quote-jump-tight"
                     >
-                      跳到原訊息
+                      <span className="chat__msg-quote__jump-label">{jumpLabel}</span>
                       <svg
                         className="chat__msg-quote__jump-chevron"
                         width="12"
@@ -278,6 +296,94 @@ export function ChatReplyToStory() {
                   </div>
                   <div className="chat__msg-text doc-md">好</div>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 🔴 THE COMMONEST SHAPE OF ALL, and the one this story did not have:
+            * an INCOMING message that is itself a reply — an agent answering
+            * something you said. Every other quote row here sits on one of your
+            * own bubbles, which reserve 32px for a single corner button; an
+            * incoming one with a body reserves 56px for two (`--acts2`, see
+            * ChatArea's `!mine && m.body`). That extra 24px is exactly the
+            * margin a jump control eats when it cannot shrink, so the widest
+            * failure lived in the one arrangement nothing rendered. */}
+          <div className="chat__msg" data-msg-id="c-5" data-testid="row-incoming-quote">
+            <div className="chat__msg-meta">
+              <span className="chat__msg-name">Mira</span>
+            </div>
+            <div className="chat__msg-line">
+              <div className="chat__msg-content">
+                <div className="chat__msg-bubble chat__msg-bubble--expandable chat__msg-bubble--acts2">
+                  <div className="chat__msg-actions">
+                    <button
+                      type="button"
+                      className="chat__msg-reply"
+                      aria-label="回覆這則"
+                      data-testid="reply-entry-incoming-quote"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="9 17 4 12 9 7" />
+                        <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      className="chat__msg-expand"
+                      aria-label="放大閱讀"
+                      data-testid="expand-entry-incoming-quote"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="14 4 20 4 20 10" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="chat__msg-quote" data-testid="quote-row-incoming">
+                    <svg
+                      className="chat__msg-quote__icon"
+                      width="11"
+                      height="11"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <polyline points="9 17 4 12 9 7" />
+                    </svg>
+                    <span className="chat__msg-quote__who" data-testid="quote-who-incoming">
+                      CEO
+                    </span>
+                    <span className="chat__msg-quote__body" data-testid="quote-body-incoming">
+                      好
+                    </span>
+                    <button
+                      type="button"
+                      className="chat__msg-quote__jump"
+                      data-testid="quote-jump-incoming"
+                    >
+                      <span className="chat__msg-quote__jump-label">{jumpLabel}</span>
+                      <svg
+                        className="chat__msg-quote__jump-chevron"
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="m9 18 6-6-6-6" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="chat__msg-text doc-md">好，我照這個做</div>
+                </div>
+              </div>
+              <div className="chat__msg-sidemeta">
+                <span className="chat__msg-time">10:06</span>
               </div>
             </div>
           </div>
@@ -306,7 +412,7 @@ export function ChatReplyToStory() {
             aria-label="取消回覆"
             data-testid="reply-banner-x"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>

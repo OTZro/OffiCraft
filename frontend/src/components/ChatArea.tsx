@@ -1009,8 +1009,18 @@ export function ChatArea({
          * task-derived ask (ReplyCardTaskRef) — owner 2026-08-20. It exists
          * ONLY when the quoted row is really in the loaded window: an
          * affordance that scrolls nowhere is worse than a line that never
-         * offered one. The quoted text beside it truncates; the jump keeps its
-         * intrinsic width, because a cut 跳到原訊息 helps nobody. */}
+         * offered one.
+         *
+         * 🔴 THE LABEL IS ITS OWN ELEMENT so it can be the thing that truncates.
+         * It used to keep its intrinsic width on the reasoning that a cut
+         * 跳到原訊息 helps nobody — true of the Chinese string, which is 69px.
+         * The English one is "Go to the original message", 154px, and a control
+         * that cannot give way does not stay politely inside the bubble: it
+         * runs past the edge and under the corner buttons, which are absolutely
+         * positioned and therefore painted on top of it. Measured in Chromium
+         * with the real app shell: overlapping at 360px, 375px and again at
+         * 721–728px, in English only. A trimmed label with its arrow still
+         * showing beats a control hidden under another control. */}
         {quoteLocatable && (
           <button
             type="button"
@@ -1018,8 +1028,13 @@ export function ChatArea({
             data-testid="msg-quote-jump"
             onClick={() => locateMessage(m.replyTo as string)}
           >
-            {t.chat.replyQuoteJump}
-            <ChevronRightIcon size={12} />
+            <span className="chat__msg-quote__jump-label">
+              {t.chat.replyQuoteJump}
+            </span>
+            <ChevronRightIcon
+              size={12}
+              className="chat__msg-quote__jump-chevron"
+            />
           </button>
         )}
       </div>
