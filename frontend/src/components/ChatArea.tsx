@@ -1017,10 +1017,13 @@ export function ChatArea({
          * The English one is "Go to the original message", 154px, and a control
          * that cannot give way does not stay politely inside the bubble: it
          * runs past the edge and under the corner buttons, which are absolutely
-         * positioned and therefore painted on top of it. Measured in Chromium
-         * with the real app shell: overlapping at 360px, 375px and again at
-         * 721–728px, in English only. A trimmed label with its arrow still
-         * showing beats a control hidden under another control. */}
+         * positioned and therefore painted on top of it. Measured against the
+         * running app, per pixel: the English band is 280–367px, and Chinese
+         * overlaps at 280–289 too. (An earlier version of this note said "360,
+         * 375 and 721–728, English only" — those came from a hand-built copy of
+         * the layout and none of the three survived measuring the real one.)
+         * A trimmed label with its arrow still showing beats a control hidden
+         * under another control. */}
         {quoteLocatable && (
           <button
             type="button"

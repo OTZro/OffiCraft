@@ -896,8 +896,10 @@
  * button float over the text. Floating is what a full-width surface (Slack) can
  * afford; a chat bubble shrink-wraps its content, so on a one-line message the
  * button lands squarely on the last characters — a hovered 「短訊息也有按鈕嗎？」
- * lost its 「？」. Reserved space costs ~19px of right padding on incoming text
- * bubbles and never hides a glyph.
+ * lost its 「？」. Reserved space costs 43px of right padding on an incoming text
+ * bubble (56 reserved − the bubble's own 13) and never hides a glyph. It said
+ * ~19px until T-4e95: that was 32 − 13, the width of ONE control, and the corner
+ * has carried two since the reply entry moved into it.
  *
  * Coarse pointers have no hover to reveal it with, so there it is always
  * visible — at FULL strength since T-4e95, not the reduced one this line used to
@@ -976,7 +978,9 @@
  * getting 30% ink, measured at 2.42:1 on an incoming bubble and 2.02:1 on your
  * own — under the 3:1 floor for a non-text control, and worse than the chip it
  * replaced. On a touch device there is no hover to reveal these with, so this
- * IS the state they live in, and it is the only reply entry there is. */
+ * IS the state they live in. (The twin of this block on .chat__msg-reply adds
+ * that the entry it governs is a touch user's only way to reply; that clause
+ * belongs there, not here — this one governs 放大閱讀.) */
 @media (hover: none) {
   .chat__msg-expand {
     opacity: 1;
@@ -999,7 +1003,7 @@
  * EVERY bubble; the AC is 每一則 and it still holds. ONE shape keeps the old row
  * placement: an inline reply card, which replaces the bubble entirely and has no
  * corner to sit in. (This paragraph described the pre-owner-feedback layout for
- * five commits after it stopped being true.)
+ * five further commits to this file after it stopped being true.)
  *
  * It is ALWAYS in the layout (opacity, never display) so revealing it on hover
  * cannot shift the bubble sideways mid-hover. Coarse pointers have no hover to
@@ -1045,6 +1049,11 @@
 /* ② THE QUOTE ROW — the reference line at the TOP OF THE BUBBLE naming the
  * message this one answers (owner 2026-08-20: it used to float outside the
  * bubble and read as a separate strip rather than part of this message).
+ *
+ * Same exception as ①: an inline reply card has no bubble, so its quote row
+ * still renders outside the card. The two exceptions are the same shape and the
+ * same open question — whether the card should grow a corner and a quote slot of
+ * its own is a separate ticket, not this one.
  *
  * Modelled on the 精簡任務資訊 row a task-derived ask wears (.reply-card__task):
  * a truncating identity + text, then a jump control that keeps its intrinsic
@@ -1136,10 +1145,17 @@
  * to the original message", at 154px: with the excerpt and the name both shrunk
  * to nothing, a control that still refuses to give runs past the bubble's edge
  * and under `.chat__msg-actions`, which is absolutely positioned and paints on
- * top of it. Reviewed in Chromium against the real app shell — 5040 combinations
- * of width × language × bubble kind × name × excerpt — and it overlaps in 600 of
- * them, EVERY ONE in English: 360px and 375px (the two commonest phone widths)
- * and again at 721–728px, just past the two-column breakpoint.
+ * top of it.
+ *
+ * ⚠️ THE NUMBERS BELOW WERE RE-MEASURED AGAINST THE RUNNING APP, and they are not
+ * what this comment said first. The original figures came from a hand-built copy
+ * of the app's layout, and three of them were wrong: the English band is
+ * 280–367px (NOT 360 and 375 — at 375 there is 6–7.5px of margin left); 721–728
+ * does not overlap at all (at 721 the pane is 347px, the bubble's cap 270.7px,
+ * and the bubble shrinks to its own min-content of 217.8px, so the cap never
+ * bites); and it is not English-only — Chinese overlaps at 280–289 too. A
+ * reproduction of the layout is not the layout, and a number copied out of one
+ * is worth exactly what it was measured on.
  *
  * So it shrinks, ten times more eagerly than the name (the name says WHO; this
  * label is boilerplate the arrow already implies) and far less than the excerpt.
@@ -1149,12 +1165,12 @@
  *
  * ① `min-width: 0`. The button collapsed to ZERO, and the arrow, being
  *    `flex: none`, kept its 12px and painted straight out of the button box and
- *    under `.chat__msg-actions`. 1686 of 5616 scanned combinations, and CHINESE
- *    broke too — a later, denser scan (280–1600px, every pixel) puts the Chinese
- *    failure at 280–512 in one column and 721–899 in two, with 513–720 clean;
- *    an earlier note here said "every width up to 728", which was the shape of
- *    it but not the range. `elementFromPoint` on the arrow returned the reply
- *    button. A zero-width box also satisfies any
+ *    under `.chat__msg-actions`, and CHINESE broke too. The band depends on the
+ *    display NAME, which is free text, so there is no single range to quote:
+ *    measured against the running app, per pixel, a 22-character name fails at
+ *    280–384 and 721–734, a 44-character one at 280–514 and 721–901, a
+ *    56-character one at 280–561 and 721–962. `elementFromPoint` on the arrow
+ *    returned the reply button. A zero-width box also satisfies any
  *    assertion of the form "the button does not reach the corner controls",
  *    which is why the guards below measure the ARROW, not the box.
  * ② No `min-width` at all. Then the floor is the button's own min-content, and

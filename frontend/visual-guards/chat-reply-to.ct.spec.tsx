@@ -342,11 +342,12 @@ for (const width of [390, 1280]) {
 //
 // Say what this therefore does NOT cover: production has a discontinuity at the
 // two-column breakpoint (628px of pane at 720, 347px at 721) which no width in
-// this harness reproduces, so the 721–728 failure band the review found is NOT
-// guarded here. What is guarded is the mechanism — a control that cannot give
-// way ends up under the corner buttons — at the widths where this harness can
-// reproduce it. Reverting the fix reddens 300, 320 and 336; 360 and 390 stay
-// green, so those two are coverage of the shape, not of the failure.
+// this harness reproduces. Measuring the running app showed there is no failure
+// band there to guard — at 721 the bubble shrinks to its own min-content and the
+// width cap never bites — but that is a fact about the app, not something this
+// file can see; a future change to the breakpoint would go unnoticed here.
+// What IS guarded is the mechanism: a control that cannot give way ends up under
+// the corner buttons, at the widths this harness can reproduce it.
 for (const width of [300, 320, 336, 360, 390]) {
   test(`width ${width}: the English jump label never reaches the corner controls`, async ({
     mount,
@@ -357,11 +358,21 @@ for (const width of [300, 320, 336, 360, 390]) {
       <ChatReplyToStory jumpLabel="Go to the original message" />,
     );
 
-    // ⚠️ Of these four, only `row-mine` has ever gone red: every CSS mutation
-    // tried against this loop (floor 0, no floor, floor 12, no shrink) reddened
-    // that row alone. The other three are shape coverage — they exercise the
-    // arrangement, they do not currently reproduce the failure. Keep them for
-    // the shapes, but do not read a green from them as evidence.
+    // ⚠️ WHICH ROW CATCHES WHAT, measured rather than assumed — an earlier
+    // version of this note claimed only `row-mine` had ever gone red, which was
+    // taken on trust from a summary and is false:
+    //
+    //   floor 0     → row-mine at 300/320/336/360
+    //   floor 12    → row-mine at 300/320/336/360
+    //   no floor    → row-mine at 300; row-incoming-quote at 320 and 336
+    //   no shrink   → row-mine at 300; row-incoming-quote at 320 and 336
+    //
+    // So `row-incoming-quote` is the ONLY detector at 320 and 336 for two of the
+    // four — which is exactly why it was added (an incoming bubble reserves 56px
+    // for two corner controls where your own reserves 32). The loop stops at the
+    // first failing row, so a report naming a later row means the earlier ones
+    // passed. Do not delete rows from this list on the belief that one of them
+    // does the work.
     for (const row of [
       "row-mine",
       "row-mine-short",
