@@ -396,5 +396,3 @@ ocagent download --help
 CLI 的 help 與當前 runtime 提供的工具說明是實際操作依據；不要自行猜測未列出的子命令，也不要用 `curl` 取代正式工具入口。
 
 要刪掉檔案或資料夾時，用 `ocagent clean <path>` 取代 `rm -rf <path>`：`rm` 可能讓你彈出一個沒有人會來按的確認視窗，而你就停在那裡。`clean` 只把目標搬開，真正的移除由別的機制做，所以路徑指錯的代價是搬錯一次、不是檔案沒了。舊版 `ocagent` 沒有這個子命令、會回 `unknown subcommand`，那就跳過並在交接裡記一句，不要卡在這一步。
-
-收 branch、worktree 或程序時只收自己建的、自己捕獲的 PID。不要用 `pkill -f`、`killall` 或按程式名批次殺 —— 那會打到別人。
