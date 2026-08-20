@@ -241,11 +241,18 @@ for (const width of [390, 1280]) {
       expect(box.bw).toBe("0px");
     }
 
-    // 🔴 AND IT MUST STILL BE VISIBLE. "Follows the bubble" is satisfied just as
+    // 🔴 AND THE INK MUST BE READABLE. "Follows the bubble" is satisfied just as
     // well by ink at 5% — the two would still differ from each other, and this
     // test would still pass, while the control had effectively vanished. So the
     // rule is stated as contrast: WCAG's 3:1 floor for a non-text control,
     // measured against the bubble each button actually sits on.
+    //
+    // Precisely: this measures the INK, not the resting appearance. On a fine
+    // pointer these sit at `opacity: 0` until hover, so what is pinned here is
+    // the colour they are revealed IN; the reveal itself is pinned by the
+    // opacity assertion at the top of this file, and the state a touch user
+    // actually gets — where there is no reveal — is pinned by its own test
+    // under `hasTouch`, which does fold opacity into the contrast.
     for (const [btn, row] of [
       [incoming, "row-incoming"],
       [mine, "row-mine"],
@@ -321,10 +328,21 @@ for (const width of [390, 1280]) {
 // Chinese. Reviewed against the real app shell in Chromium, 600 of 5040 scanned
 // combinations overlapped and EVERY ONE of them was English.
 //
-// ⚠️ These widths are the CT harness's, and the harness has no app shell — no
-// 1040px cap, no 22px page padding, no 264px roster column. It is therefore
-// ROOMIER than production at the same number, which is why the narrow end goes
-// below 390 here: 336 in this harness is about 720 in the real one.
+// ⚠️ THESE WIDTHS ARE THE HARNESS'S, AND THEY DO NOT MAP ONTO PRODUCTION. The
+// harness has no app shell — no 1040px cap, no 22px page padding, no 264px
+// roster column — so the message pane it hands these rows is a different size at
+// the same number. Measured `.chat__messages` clientWidth: harness@336 = 288,
+// and production reaches 288 at a viewport of about 380. An earlier version of
+// this note guessed "336 here ≈ 720 there"; that was wrong by 340px, and it was
+// a guess, not a measurement.
+//
+// Say what this therefore does NOT cover: production has a discontinuity at the
+// two-column breakpoint (628px of pane at 720, 347px at 721) which no width in
+// this harness reproduces, so the 721–728 failure band the review found is NOT
+// guarded here. What is guarded is the mechanism — a control that cannot give
+// way ends up under the corner buttons — at the widths where this harness can
+// reproduce it. Reverting the fix reddens 300, 320 and 336; 360 and 390 stay
+// green, so those two are coverage of the shape, not of the failure.
 for (const width of [300, 320, 336, 360, 390]) {
   test(`width ${width}: the English jump label never reaches the corner controls`, async ({
     mount,
@@ -354,9 +372,33 @@ for (const width of [300, 320, 336, 360, 390]) {
         .locator(".chat__msg-bubble")
         .boundingBox())!;
 
-      // Under the buttons is the failure the review measured — and it is a
-      // silent one: the row still LOOKS fine, the control is simply not where
-      // the pointer lands.
+      // 🔴 MEASURE THE ARROW, NOT THE BOX. The first version of this loop
+      // asserted only on the button's own rectangle, and a later review showed
+      // why that guards nothing: with `min-width: 0` the button collapsed to
+      // ZERO width — satisfying every "does not reach the corner controls"
+      // assertion vacuously — while the arrow inside it, being `flex: none`,
+      // kept its 12px and painted outside the box and under the corner buttons.
+      // The box was innocent; the pixels were not.
+      const chevron = (await cmp
+        .getByTestId(row)
+        .locator(".chat__msg-quote__jump-chevron")
+        .boundingBox())!;
+
+      expect(
+        jump.width,
+        `${row}: the jump collapsed past its arrow`,
+      ).toBeGreaterThanOrEqual(11.5);
+      expect(
+        chevron.x + chevron.width,
+        `${row}: the arrow paints outside its own button`,
+      ).toBeLessThanOrEqual(jump.x + jump.width + 0.5);
+      expect(
+        chevron.x + chevron.width,
+        `${row}: the arrow reaches the corner controls`,
+      ).toBeLessThanOrEqual(acts.x + 0.5);
+
+      // …and the box itself, which is still worth stating now that it cannot be
+      // satisfied by vanishing.
       expect(
         jump.x + jump.width,
         `${row}: jump overlaps the corner controls`,
@@ -390,7 +432,10 @@ test("narrow 390: the reply entry and the banner x are focusable native buttons"
 // that branch; it is a context option, so this half of the file runs under its
 // own describe.
 test.describe("coarse pointer", () => {
-  test.use({ hasTouch: true, isMobile: true });
+  // `hasTouch` alone is what flips the media branch — verified by inverting each:
+  // hasTouch on / isMobile off keeps this green, hasTouch off / isMobile on turns
+  // it red. isMobile additionally rewrites the viewport meta, so it is left out.
+  test.use({ hasTouch: true });
 
   for (const width of [390, 1280]) {
   test(`width ${width}: on a touch device the entry is readable without hover`, async ({
