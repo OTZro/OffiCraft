@@ -328,7 +328,7 @@ for (const width of [390, 1280]) {
 // The story's default name is four characters, which is why this needs its own
 // mount: the existing banner test cannot see this failure at all.
 for (const width of [390, 1280]) {
-  test(`width ${width}: a long name gives way before the quoted text does`, async ({
+  test(`width ${width}: the quoted text gives way first, the long name last`, async ({
     mount,
     page,
   }) => {
@@ -356,6 +356,41 @@ for (const width of [390, 1280]) {
       overflow.scroll,
       "the text row must not be wider than the space it has",
     ).toBeLessThanOrEqual(overflow.client + 1);
+
+    // 🔴 AND THE PRIORITY ORDER, which the first version of this test also
+    // could not see: a reviewer deleted the excerpt's `flex: 1 10000 auto` and
+    // all 22 of these passed, while the picture changed underneath (name 303 →
+    // 131, excerpt 0 → 172 — measured here, both ways). The rule the CSS spends
+    // a paragraph on is that the EXCERPT absorbs the deficit and the NAME only
+    // gives once it has nothing left; without the asymmetry they share it and
+    // the name — the half that says WHO — is cut for a quote it did not need to
+    // keep. An earlier title on this test claimed the opposite of what it
+    // measures; it says the measured thing now.
+    const share = await banner.evaluate((el) => {
+      const w = el.querySelector(".chat__reply-banner__who") as HTMLElement;
+      const b = el.querySelector(".chat__reply-banner__body") as HTMLElement;
+      const t = el.querySelector(".chat__reply-banner__text") as HTMLElement;
+      return {
+        who: w.clientWidth,
+        body: b.clientWidth,
+        wants: w.scrollWidth + b.scrollWidth,
+        room: t.clientWidth,
+      };
+    });
+    if (share.wants > share.room) {
+      // Under pressure the order shows.
+      expect(
+        share.who,
+        "the name keeps its width until the excerpt has none left",
+      ).toBeGreaterThanOrEqual(share.body);
+    } else {
+      // No deficit at this width: NOTHING may be cut. This half is why the wide
+      // case is here at all — before it, 1280 could not tell any of these
+      // mutants apart and was pure decoration.
+      expect(share.who, "nothing to give way to").toBeGreaterThanOrEqual(
+        share.wants - share.body,
+      );
+    }
     // Still one line, still inside the composer.
     expect(bannerBox.height).toBeLessThan(36);
     expect(bannerBox.x + bannerBox.width).toBeLessThanOrEqual(width + 1);

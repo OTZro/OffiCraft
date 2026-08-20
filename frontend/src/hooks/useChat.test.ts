@@ -174,6 +174,32 @@ describe("useChat load routing (active vs background)", () => {
     expect(h.postChat).toHaveBeenCalledTimes(1);
   });
 
+  // T-4e95 r16 — the hook's own half of the reply link. `send`'s third argument
+  // is the only way a reply target reaches the wire, and dropping it here left
+  // all 2258 tests green: the banner still shows, the send still succeeds, and
+  // the server stores an ordinary message. ChatArea's tests cannot see it —
+  // they mock this very hook.
+  it("passes the reply target through to postChat, and omits it when there is none", async () => {
+    h.listChat.mockResolvedValue([]);
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await result.current.send("回你這句", undefined, "c-1");
+    });
+    expect(h.postChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ to: "b", body: "回你這句", replyTo: "c-1" }),
+    );
+
+    // The other direction: an ordinary message must not carry one.
+    await act(async () => {
+      await result.current.send("普通訊息");
+    });
+    expect(h.postChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ replyTo: undefined }),
+    );
+  });
+
   // The OTHER half of the same contract, and the one nothing was standing on:
   // every restore this feature does rests on "a send that really failed
   // rejects". A reviewer pulled the POST itself inside the try/catch added

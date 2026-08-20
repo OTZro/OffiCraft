@@ -80,6 +80,52 @@ describe("useQuotedMessages", () => {
     expect(h.listChatByIds).toHaveBeenCalledTimes(1);
   });
 
+  it("settles the ids that already spent their retry, even when the batch also holds fresh ones", async () => {
+    // A batch can hold BOTH kinds at once. The first version of the retry handed
+    // the extra go to the fresh ids and returned — leaving the spent ones in
+    // `askedRef` (never asked again) and absent from the map (never settled),
+    // and absent renders as 「…」: a spinner that never resolves, the one thing
+    // this file's header opens by promising it does not do.
+    //
+    // ⚠️ THE SEQUENCE IS THE TEST, and it took two tries to build. A mixed batch
+    // only forms when a NEW id becomes wanted on the very render the retry
+    // triggers — my first attempt just let c-A retry alone (measured call
+    // sequence [c-A],[c-A],[c-B],[c-B]) and passed under its own mutant. Holding
+    // the rejection and firing it in the SAME act() as the ids change is what
+    // merges them: [c-A],[c-A,c-B],[c-B]. The realistic shape is c-B scrolling
+    // out of the loaded window at that moment, which is what `have` models here.
+    let rejectFirst: (e: Error) => void = () => {};
+    h.listChatByIds
+      .mockImplementationOnce(() => new Promise((_, r) => (rejectFirst = r)))
+      .mockRejectedValue(new Error("down"));
+
+    const withB = new Map([["c-B", mkMsg("c-B")]]);
+    const { result, rerender } = renderHook(
+      ({ have }: { have: Map<string, ChatMessage> }) =>
+        useQuotedMessages(["c-A", "c-B"], have),
+      { initialProps: { have: withB } },
+    );
+    await waitFor(() => expect(h.listChatByIds).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      rerender({ have: EMPTY });
+      rejectFirst(new Error("blip"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The batch really was mixed — say so, or a later change could quietly turn
+    // this back into two single-id batches and the test would still pass.
+    expect(h.listChatByIds).toHaveBeenCalledWith(["c-A", "c-B"]);
+    // Both must reach a SETTLED answer. `null` is an answer; absent is not.
+    expect(result.current.has("c-A"), "c-A must not be left absent").toBe(true);
+    expect(result.current.has("c-B"), "c-B must not be left absent").toBe(true);
+  });
+
   it("retries a blip ONCE, then settles — a server that is down is not a loop", async () => {
     h.listChatByIds.mockRejectedValue(new Error("still down"));
 

@@ -119,7 +119,27 @@ export function useQuotedMessages(
             retriedRef.current.add(id);
             askedRef.current.delete(id);
           }
-          if (mountedRef.current) setAttempt((a) => a + 1);
+          // 🔴 THE REST OF THE BATCH STILL NEEDS AN ANSWER. A batch can hold
+          // both kinds at once — an id that has already had its one retry, next
+          // to one that has not — and the first version of this branch handed
+          // the retry to the fresh ones and then simply returned. The spent
+          // ones were left in `askedRef` (so never asked again) and absent from
+          // `fetched` (so never settled), and absent renders as 「…」: the
+          // spinner that never resolves, which this file's header opens by
+          // promising it does not do. Found by review with the sequence
+          // [A] → [A,B] → [B]; it needs a newly-quoted id to arrive on the very
+          // render the retry triggers, which is narrow but real (an SSE delta,
+          // or scrolling up for history, landing on that frame).
+          const spent = batch.filter((id) => retriedRef.current.has(id) && !fresh.includes(id));
+          if (!mountedRef.current) return;
+          if (spent.length > 0) {
+            setFetched((prev) => {
+              const next = new Map(prev);
+              for (const id of spent) next.set(id, null);
+              return next;
+            });
+          }
+          setAttempt((a) => a + 1);
           return;
         }
         rows = [];
