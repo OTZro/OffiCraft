@@ -71,12 +71,24 @@ for (const width of [390, 1280]) {
     expect(quoteBox.y).toBeGreaterThanOrEqual(bubbleBox.y - 0.5);
 
     // The jump control keeps its whole width — a cut 跳到原訊息 helps nobody;
-    // it is the quoted TEXT that gives way.
+    // it is the quoted TEXT (and, when it has to, the sender name) that gives
+    // way. The story deliberately uses an UNRESOLVED sender — a raw member id —
+    // because that is the long name this row really meets.
     const jump = (await cmp.getByTestId("quote-jump").boundingBox())!;
     expect(jump.x + jump.width).toBeLessThanOrEqual(
       bubbleBox.x + bubbleBox.width + 0.5,
     );
     expect(jump.width).toBeGreaterThan(40);
+
+    // 🔴 AND IT MUST NOT REACH THE CORNER CONTROLS. Measured, not inferred: a
+    // row whose min-content width exceeded the bubble pushed the jump ON TOP of
+    // the reply button — the affordance covering the affordance. Nothing about
+    // the DOM says that; only geometry does.
+    const acts = (await cmp
+      .getByTestId("row-mine")
+      .locator(".chat__msg-actions")
+      .boundingBox())!;
+    expect(jump.x + jump.width).toBeLessThanOrEqual(acts.x + 0.5);
   });
 
   test(`width ${width}: the 正在回覆 banner stays one line and its x stays reachable`, async ({

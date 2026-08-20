@@ -54,13 +54,22 @@ export function useQuotedMessages(
   // forever, which is precisely the "spinner that never resolves" this file's
   // header promises it does not do. `askedRef` is what prevents duplicate
   // requests; the only thing left worth guarding is writing state after unmount.
+  //
+  // 🔴 THE SETUP BODY IS LOAD-BEARING, not ceremony. <StrictMode> (main.tsx)
+  // double-invokes an effect in dev: setup → cleanup → setup. A cleanup-only
+  // version sets this false on that first teardown and nothing ever sets it
+  // back, so from mount onwards EVERY read is discarded and the quote sits at
+  // "…" — the exact symptom B1 was fixed to remove, reintroduced in dev only
+  // (production does not double-invoke, so it would have shipped looking fine
+  // and been broken for everyone developing it). Found by review, reproduced
+  // both ways before and after.
   const mountedRef = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
       mountedRef.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   useEffect(() => {
     if (wantedKey === "") return;
