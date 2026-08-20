@@ -88,7 +88,28 @@ export default function App({ onLogout }: { onLogout?: () => void } = {}) {
   // home, even when already inside a Settings sub-page.
   const [settingsNonce, setSettingsNonce] = useState(0);
 
+  // 辦公室 remembers the chat you were last in, so leaving for another tab and
+  // coming back does not drop you on the roster (owner 2026-08-20:「切換分頁的
+  // 時候可以固定住最後的對話視窗」). Only the peer id is remembered — NOT msgId
+  // / composeSeed / the member-detail overlay, which are one-shot intents
+  // (locate this message, seed the composer with a task no) and would re-fire
+  // on every return.
+  const lastOfficeChatRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (route.page === "office") lastOfficeChatRef.current = route.chatId;
+  }, [route.page, route.chatId]);
+
   function selectTab(next: Tab) {
+    // Restoring is for a tab SWITCH. Clicking 辦公室 while already inside it
+    // keeps its existing meaning — reset to the roster, the only way to close
+    // a chat on mobile — instead of re-opening what you just closed. The test
+    // is on route.page, not `tab`: the Settings overlay (#settings) resolves to
+    // tab "office" via that chain's fallback, and returning from Settings is a
+    // switch like any other.
+    if (next === "office" && route.page !== "office" && lastOfficeChatRef.current) {
+      setRoute({ page: "office", chatId: lastOfficeChatRef.current });
+      return;
+    }
     setRoute({ page: next });
   }
 
