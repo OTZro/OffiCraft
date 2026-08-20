@@ -1672,18 +1672,27 @@ export function ChatArea({
             {replyToId && (
               <div className="chat__reply-banner" data-testid="chat-reply-banner">
                 <ReplyIcon size={13} className="chat__reply-banner__icon" />
+                {/* 🔴 DO NOT NAME SOMEONE WE HAVE NOT RESOLVED. This used to
+                  * fall back to the peer's name whenever the quote had not come
+                  * back, which is a claim, not a placeholder: the target is by
+                  * construction one of TWO people (this conversation has only
+                  * two), so the fallback was a coin flip printed as a fact —
+                  * and it contradicted the same banner's own second half, which
+                  * was honestly saying 「較早的一則訊息」 right beside it. The
+                  * quote row's own version of this (`quoteWho`) already had the
+                  * rule right: no quote, no name. */}
                 <span className="chat__reply-banner__text">
                   <span className="chat__reply-banner__who">
                     {t.chat.replyingTo(
-                      replyQuote ? nameOf(replyQuote.from) : member.name,
+                      replyQuote
+                        ? nameOf(replyQuote.from)
+                        : replyQuote === null
+                          ? t.chat.replyQuoteGone
+                          : "\u2026",
                     )}
                   </span>
                   <span className="chat__reply-banner__body">
-                    {replyQuote
-                      ? quoteExcerpt(replyQuote)
-                      : replyQuote === null
-                        ? t.chat.replyQuoteGone
-                        : "\u2026"}
+                    {replyQuote ? quoteExcerpt(replyQuote) : ""}
                   </span>
                 </span>
                 <button

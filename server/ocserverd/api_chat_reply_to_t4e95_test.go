@@ -248,12 +248,41 @@ func TestChatReplyTo_ThePostChatToolSchemaAdvertisesIt(t *testing.T) {
 	}
 }
 
+// ⑥ THE META DOOR IS DOCUMENTED AS SHUT. ④ pins that a caller-supplied
+// meta.reply_to is discarded; this pins that the agent-facing description SAYS
+// SO. They are different failures: without ④ the door is open, without this the
+// door is shut and nobody was told — and what an agent reads is the meta
+// description, which still said "a misspelled key is stored rather than refused"
+// and "One key is different" after this feature made reply_to the second one.
+// An agent that believes that sends a link through meta, gets a 200, and finds
+// the key gone when it reads the message back. A promise no test holds is a
+// promise that goes stale on the next change; this one already had.
+func TestChatReplyTo_TheMetaDescriptionAdmitsTheDeletion(t *testing.T) {
+	desc := postChatInputSchemaDescriptionOf(t, "meta")
+	if desc == "" {
+		t.Fatal("post_chat's inputSchema must carry meta")
+	}
+	for _, promise := range []string{"meta.reply_to", "DELETES"} {
+		if !strings.Contains(desc, promise) {
+			t.Fatalf("meta's description must state %q — the handler removes "+
+				"that key before storing, silently, and this description is "+
+				"the only place an agent could learn it", promise)
+		}
+	}
+}
+
 // postChatInputSchemaDescriptionOfReplyTo reads reply_to's description out of
 // the FROZEN MCP catalog — the bytes tools/list actually serves an agent, not
 // the Go struct. Same reasoning as idsPropertyDescription: the promise an agent
 // reads and the behaviour the tests above pin have to be the same sentence, or
 // one of them drifts silently.
 func postChatInputSchemaDescriptionOfReplyTo(t *testing.T) string {
+	t.Helper()
+	return postChatInputSchemaDescriptionOf(t, "reply_to")
+}
+
+// postChatInputSchemaDescriptionOf is the same read for any one property.
+func postChatInputSchemaDescriptionOf(t *testing.T, prop string) string {
 	t.Helper()
 	raw, err := os.ReadFile("../../spec/mcp-catalog.json")
 	if err != nil {
@@ -274,7 +303,7 @@ func postChatInputSchemaDescriptionOfReplyTo(t *testing.T) string {
 	}
 	for _, tool := range catalog.Tools {
 		if tool.Name == "post_chat" {
-			return tool.InputSchema.Properties["reply_to"].Description
+			return tool.InputSchema.Properties[prop].Description
 		}
 	}
 	t.Fatalf("post_chat is missing from spec/mcp-catalog.json")

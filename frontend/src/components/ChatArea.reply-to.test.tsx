@@ -722,8 +722,79 @@ describe("ChatArea 回覆這則", () => {
     // The label is the SETTLED state, reached only after the by-id read has
     // been tried and missed — "not resolved yet" and "asked and not there" are
     // different states and the row must not show the miss before it is one.
+    //
+    // ⚠️ THIS PAIR IS THE TEST, not the waitFor alone. `waitFor` succeeds if its
+    // callback holds on the FIRST frame, so on its own it cannot tell the two
+    // states apart — a reviewer swapped the undefined and null arms (which ships
+    // both symptoms this hook's header promises never to ship: claiming a miss
+    // before asking, and never settling) and all 20 tests here stayed green.
+    // The unresolved assertion below is what makes that a red.
+    expect(quote.textContent, "not asked yet ⇒ neither a name nor a miss").toContain(
+      "\u2026",
+    );
+    expect(quote.textContent).not.toContain("較早的一則訊息");
     await waitFor(() =>
       expect(quote.textContent).toContain("較早的一則訊息"),
     );
+  });
+
+  it("the banner does NOT name anyone while the quoted message is unresolved", async () => {
+    // The banner used to fall back to the PEER's name whenever the quote had not
+    // come back. That is a claim, not a placeholder: this conversation has only
+    // two people, so the fallback is a coin flip printed as a fact — and it sat
+    // next to the banner's own second half honestly saying 「較早的一則訊息」.
+    // Reproduced before the fix as: 「正在回覆 Mira較早的一則訊息」.
+    // The way this really happens: the owner aimed at something, went away, and
+    // by the time they come back the target has scrolled out of the loaded
+    // window — so the draft restores a target the window cannot resolve.
+    messages = [mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" })];
+    saveChatDraft("m1", {
+      text: "",
+      attachments: [],
+      replyTo: "c-longgone",
+    });
+    const { container } = renderChat();
+
+    const b = banner(container)!;
+    expect(b).not.toBeNull();
+    // Not asked yet.
+    expect(b.textContent).toContain("\u2026");
+    expect(b.textContent, "never the peer's name").not.toContain("Mira");
+    // Asked and missed.
+    await waitFor(() => expect(b.textContent).toContain("較早的一則訊息"));
+    expect(b.textContent, "still never the peer's name").not.toContain("Mira");
+  });
+
+  it("a reply target does not follow the owner into the next conversation", async () => {
+    // The peer-switch block clears it in the same render-phase adjustment that
+    // swaps the draft, and its comment says MUST — but nothing was standing on
+    // that line: deleting it outright left all 241 ChatArea tests green. The
+    // failure it prevents is the silent one: a target from the previous room is
+    // refused by the server on every send, and the composer's only failure
+    // handling is a console.warn, so the message just disappears.
+    messages = [mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" })];
+    const { container, rerender } = render(
+      <I18nProvider>
+        <ChatArea member={m1} />
+      </I18nProvider>,
+    );
+    fireEvent.click(rowOf(container, "c-1").querySelector(".chat__msg-reply")!);
+    expect(banner(container), "aimed in m1").not.toBeNull();
+
+    rerender(
+      <I18nProvider>
+        <ChatArea member={m2} />
+      </I18nProvider>,
+    );
+    expect(banner(container), "m2 inherits nothing").toBeNull();
+
+    // Positive control: coming BACK must restore m1's own target, or "clear it
+    // always" would pass this test too.
+    rerender(
+      <I18nProvider>
+        <ChatArea member={m1} />
+      </I18nProvider>,
+    );
+    expect(banner(container), "m1 keeps its own").not.toBeNull();
   });
 });
