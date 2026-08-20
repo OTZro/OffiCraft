@@ -1075,8 +1075,8 @@
    * That measures "not needed at the widths and fixtures we guard", NOT "dead".
    * A later review found the row CAN still run past the bubble, but the trigger
    * is the jump control's width, not this clip — in both languages, and earliest
-   * on an incoming bubble that is itself a reply, which reserves the widest
-   * corner. That is fixed where it is caused — the jump shrinks now (see below)
+   * on an INCOMING bubble WITH A BODY (`!mine && m.body` → `--acts2`), which
+   * reserves the widest corner. Being a reply is not what widens it. That is fixed where it is caused — the jump shrinks now (see below)
    * — rather than by clipping here. Clipping here has a standing cost anyway: it cuts the focus ring off
    * 跳到原訊息, whose right edge is flush with the row's. */
   margin-bottom: 6px;
@@ -1156,9 +1156,10 @@
  *     that bubble; the second is a non sequitur. It argued from "at 721 the
  *     bubble shrinks to its own min-content, so the width cap never bites" —
  *     true, and beside the point, because what overflows is the reserved corner,
- *     not the cap. An INCOMING bubble that is itself a reply reserves 56px for
- *     two controls where your own reserves 32, and it overlaps right through
- *     721–746.
+ *     not the cap. An INCOMING bubble WITH A BODY reserves 56px for two
+ *     controls where your own reserves 32 (`!mine && m.body` → `--acts2`;
+ *     being a reply has nothing to do with it), and it DOES overlap past the
+ *     breakpoint. No range here — see the rule below.
  *   · Chinese is not exempt either: it overlaps at the narrow end too.
  * The range is a function of the bubble kind, the display name (free text) and
  * the language. The mechanism is what belongs in a comment; the numbers belong

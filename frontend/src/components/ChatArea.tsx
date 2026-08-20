@@ -1085,9 +1085,9 @@ export function ChatArea({
          * runs past the edge and under the corner buttons, which are absolutely
          * positioned and therefore painted on top of it. Measured against the
          * running app: it fails at the narrow end in BOTH languages, and again
-         * just past the two-column breakpoint on an incoming bubble that is
-         * itself a reply — that one reserves 56px of corner where your own
-         * reserves 32. Two earlier versions of this note quoted exact ranges;
+         * just past the two-column breakpoint on an INCOMING bubble WITH A BODY
+         * (`!mine && m.body` → `--acts2`) — that one reserves 56px of corner
+         * where your own reserves 32. Being a reply is not the condition. Two earlier versions of this note quoted exact ranges;
          * both were wrong, because the range moves with the bubble kind, the
          * language and the display name. The guard holds the numbers.
          * A trimmed label with its arrow still showing beats a control hidden

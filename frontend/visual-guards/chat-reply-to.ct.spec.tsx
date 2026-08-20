@@ -347,8 +347,9 @@ for (const width of [390, 1280]) {
 // Say what this therefore does NOT cover: production has a discontinuity at the
 // two-column breakpoint (628px of pane at 720, 347px at 721) which no width in
 // this harness reproduces — and there IS a failure band on the far side of it,
-// on an incoming bubble that is itself a reply (56px of reserved corner against
-// your own bubble's 32). An earlier version of this note said there was nothing
+// on an INCOMING bubble WITH A BODY (`!mine && m.body` → `--acts2`: 56px of
+// reserved corner against your own bubble's 32; being a reply is not the
+// condition). An earlier version of this note said there was nothing
 // there to guard; that was measured on own-bubbles only and it was wrong.
 // So: this file guards the MECHANISM — a control that cannot give way ends up
 // under the corner buttons — at the widths this harness can reproduce it, and a
