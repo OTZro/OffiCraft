@@ -2474,7 +2474,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Bounded LIGHT wake snapshot for the caller (identity-locked; recent chat + light open-task rows + size overview — peek sizes first, pull detail via get_task). CHAT is packed newest-first under a CHARACTER BUDGET, not a fixed message count, and stopping at the last message that still fits; each message carries from_name/to_name beside the ids and ts_display (full date + time + zone offset) beside the epoch ts, and folds in its reply card as `card` when it has one — read every ts_display against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked DIFFERENTLY: `body_omitted_chars` > 0 means THAT message is here with that many characters COLLAPSED away (another agent's line — the owner's line and your own hand-off notes to yourself are carried in full), re-read it with get_chat; `chat_earlier_omitted` is the other kind and it is a MAYBE, not a fact: that line was cut at a read or budget limit and nothing looked past the cut, so whole messages may be missing from this payload entirely — it is raised even when there is in fact nothing older. Its hint tells you how to CHECK and fetch them. The two are asymmetric ON PURPOSE: the collapse marker is CERTAIN (that message IS here, shortened, exact count); this one is not, and only the fetch settles it. Also carries the STUDIO FLOOR you wake up onto: roster (every member and contractor, each with online/offline status, the machine it runs on, and its duty capped at 1000 chars with `…` marking a cut, the cap applied after the doc's own leading title line is removed — who to ask for help; no insight/learning by owner ruling. Contractors additionally carry their bound task's status, waiting_reason, and step progress (progress_done/progress_total) — members leave these at their zero value; a contractor's 0/0 is ambiguous (a task with no steps yet, or no task at all) and task_status is what tells them apart, non-empty vs empty) and machines (the machine list plus you_are_on, your server-recorded machine binding — never derive it from a hostname).
+         * Bounded LIGHT wake snapshot for the caller (identity-locked; recent chat + light open-task rows + size overview — peek sizes first, pull detail via get_task). CHAT is packed newest-first under a CHARACTER BUDGET, not a fixed message count, and stopping at the last message that still fits; each message carries from_name/to_name beside the ids and ts_display (full date + time + zone offset) beside the epoch ts, and folds in its reply card as `card` when it has one — read every ts_display against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked DIFFERENTLY: `body_omitted_chars` > 0 means THAT message is here with that many characters COLLAPSED away (another agent's line — the owner's line and your own hand-off notes to yourself are carried in full), re-read it with get_chat; `chat_earlier_omitted` is the other kind and it is a MAYBE, not a fact: that line was cut at a read or budget limit and nothing looked past the cut, so whole messages may be missing from this payload entirely — it is raised even when there is in fact nothing older. Its hint tells you how to CHECK and fetch them. The two are asymmetric ON PURPOSE: the collapse marker is CERTAIN (that message IS here, shortened, exact count); this one is not, and only the fetch settles it. Also carries the STUDIO FLOOR you wake up onto: roster (every member and contractor, each with online/offline status, the machine it runs on, and its duty capped at 1000 chars with `…` marking a cut, the cap applied after the doc's own leading title line is removed — who to ask for help; no insight/learning by owner ruling. Contractors additionally carry their bound task's status, waiting_reason, and step progress (progress_done/progress_total) — members leave these at their zero value; a contractor's 0/0 is ambiguous (a task with no steps yet, or no task at all) and task_status is what tells them apart, non-empty vs empty) and machines (the machine list plus you_are_on, your server-recorded machine binding — never derive it from a hostname). It also carries `doc_capacity` — the long-lived capped documents in your reach that are CLOSE to full (your role documents, the boot documents, your open tasks' manuals, your open steps' notes), each with size/cap, what is left, and whether YOU can rewrite it or have to ask the person who can. The key is ABSENT when nothing is near, so its presence is the whole signal — act on it now, not when a write is refused.
          * @description A BOUNDED, deterministic wake snapshot for the caller (``resume_summary`` MCP
          *     tool, zero params; ``GET /api/resume-summary``).
          *
@@ -2525,7 +2525,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Size-only PEEK of the wake snapshot (identity-locked; overview counts/sizes + estimated_total_chars, NO chat/task content). estimated_total_chars is exactly chat_chars + tasks_detail_chars + roster_chars + machines_chars + steps_on_answered_card_chars, all five reported in overview: the WHOLE chat block as the snapshot renders it (chat_chars is the rendered block's cost, NOT the sum of the message bodies), plus the plan text its task rows omit, the two studio-floor blocks, and the named steps sitting on an answered card — what pulling the snapshot actually costs. Step one of the two-step boot: call this FIRST to size resume_summary, then either call resume_summary directly (small) or hand the pull to a cheap sub-agent that returns a digest (large).
+         * Size-only PEEK of the wake snapshot (identity-locked; overview counts/sizes + estimated_total_chars, NO chat/task content). estimated_total_chars is exactly chat_chars + tasks_detail_chars + roster_chars + machines_chars + steps_on_answered_card_chars + doc_capacity_chars, all six reported in overview: the WHOLE chat block as the snapshot renders it (chat_chars is the rendered block's cost, NOT the sum of the message bodies), plus the plan text its task rows omit, the two studio-floor blocks, the named steps sitting on an answered card, and the near-cap document rows (0 unless something is close to its cap) — what pulling the snapshot actually costs. Step one of the two-step boot: call this FIRST to size resume_summary, then either call resume_summary directly (small) or hand the pull to a cheap sub-agent that returns a digest (large).
          * @description The size-only PEEK of the wake snapshot (``peek_resume_summary_size`` MCP
          *     tool, zero params; ``GET /api/resume-summary-size``) — step ONE of the two-step
          *     boot.
@@ -2536,12 +2536,13 @@ export interface paths {
          *     resume_summary actually carries) plus ``estimated_total_chars`` — a derived
          *     single number to gate the boot decision on — and a fixed guidance ``note``.
          *     ``estimated_total_chars`` is exactly ``chat_chars`` + ``tasks_detail_chars`` +
-         *     ``roster_chars`` + ``machines_chars`` + ``steps_on_answered_card_chars``, all
-         *     five reported in ``overview``: the
+         *     ``roster_chars`` + ``machines_chars`` + ``steps_on_answered_card_chars`` +
+         *     ``doc_capacity_chars``, all six reported in ``overview``: the
          *     WHOLE chat block as the snapshot renders it (``chat_chars`` is the rendered
          *     block's cost, NOT the sum of the message bodies), plus the plan text its task
-         *     rows omit, the two studio-floor blocks, and the named steps sitting on an
-         *     answered card — what pulling the snapshot actually costs. It carries
+         *     rows omit, the two studio-floor blocks, the named steps sitting on an
+         *     answered card, and the near-cap document rows (0 unless one of the caller's
+         *     long-lived documents is close to its cap) — what pulling the snapshot actually costs. It carries
          *     NO chat bodies and NO task rows of any kind: peeking it costs a few hundred
          *     bytes, so a waking agent sizes ``resume_summary`` BEFORE deciding whether to
          *     pull it into its own context or hand the pull to a cheap sub-agent (e.g. haiku)
@@ -3353,7 +3354,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Write this step's working note: where the work stands and what comes next — the field the handover SOP means by 「把還在進行中的工作寫回 task step note」. WHAT TO WRITE — three things, then stop: (1) STATE — one sentence on where this step actually got to; (2) NEXT — one sentence on what whoever takes over does next; (3) EVIDENCE POINTERS — version ids, file and log paths, what you verified YOURSELF versus what you are taking on someone's word, and the limits of what was NOT done. Long narrative does not live here: reasoning and scope belong in the task description, reports and diffs belong on the task as artifacts. The note is the current state — not a report, not an append-only log. Writable in ANY step status (pending, in_progress, waiting_owner, waiting_external, done, superseded), unlike `waiting_reason`, which is locked to waiting_external. Wholesale write: `note` replaces whatever was there and "" clears it, so rewrite it as the work moves rather than appending; over 4,000 characters (counted in runes) is refused. Same executor/admin gate as every other task-driving write (403 otherwise). ⚠️ A task auto-closes when its last step is reported done and a closed task 409s — so write the note BEFORE the report that finishes the last step, not after.
+         * Write this step's working note: where the work stands and what comes next — the field the handover SOP means by 「把還在進行中的工作寫回 task step note」. WHAT TO WRITE — three things, then stop: (1) STATE — one sentence on where this step actually got to; (2) NEXT — one sentence on what whoever takes over does next; (3) EVIDENCE POINTERS — version ids, file and log paths, what you verified YOURSELF versus what you are taking on someone's word, and the limits of what was NOT done. Long narrative does not live here: reasoning and scope belong in the task description, reports and diffs belong on the task as artifacts. The note is the current state — not a report, not an append-only log. Writable in ANY step status (pending, in_progress, waiting_owner, waiting_external, done, superseded), unlike `waiting_reason`, which is locked to waiting_external. Wholesale write: `note` replaces whatever was there and "" clears it, so rewrite it as the work moves rather than appending; over 4,000 characters (counted in runes) is refused. Same executor/admin gate as every other task-driving write (403 otherwise). ⚠️ A task auto-closes when its last step is reported done and a closed task 409s — so write the note BEFORE the report that finishes the last step, not after. The receipt carries `size_chars` / `cap_chars`, so the room left is on every write instead of only on the 400 that refuses one; `get_task` reports the same pair per step as `note_size_chars` / `note_cap_chars`.
          * @description Write one step's working note (MCP ``update_step_note``, T-cc3e): what this step got to and what comes next. WHAT TO WRITE — three things, then stop: (1) STATE — one sentence on where this step actually got to; (2) NEXT — one sentence on what whoever takes over does next; (3) EVIDENCE POINTERS — version ids, file and log paths, what you verified YOURSELF versus what you are taking on someone's word, and the limits of what was NOT done. Long narrative does not live here: reasoning and scope belong in the task description, reports and diffs belong on the task as artifacts. The note is the current state — not a report, not an append-only log. Accepted in ANY STEP status — the note records where the work stands, which is orthogonal to the step state machine. Same executor/admin gate as every other task-driving write (403 otherwise), 404 for an unknown task, a step that does not belong to it, or a step a concurrent replan deleted; 400 when the note is over the 4,000-character limit (counted in runes); and 409 once the TASK is terminal — a task auto-closes when its last step is reported done, so a done step is writable while its task is still open and not after (a closed task's timeline is history, consistent with the frozen artifact set). The write also moves the task's updated_ts, which is what makes an already-open cockpit card re-read its steps. The write is wholesale: the body's ``note`` replaces whatever was there, and ``""`` clears it. Its own endpoint and its own MCP tool by charter §14 (intent-per-tool) — writing a note is a different intent from reporting a transition.
          */
         post: operations["handle_update_task_step_note_api_tasks__task_id__steps__step_id__note_post"];
@@ -4748,6 +4749,54 @@ export interface components {
             roles: components["schemas"]["RoleDocSizesDTO"][];
             /** Task Manuals */
             task_manuals: components["schemas"]["TaskManualDocSizesDTO"][];
+        };
+        /**
+         * DocCapacityRowDTO
+         * @description ONE long-lived document that is CLOSE to its character cap, as it appears in
+         *     ``resume_summary``'s ``doc_capacity`` block (T-6bd2).
+         *
+         *     Every capped document on this station refuses a write with 400 once it is full
+         *     and says nothing at all before that, so the number arrives at the one instant the
+         *     writer has no slack — and the cheapest way out of a refusal is to delete text
+         *     until the write fits. What gets deleted is the hand-off and the "what I did not
+         *     verify" paragraph, and the response to that shortened write is 200. This row
+         *     moves the same two numbers to a moment BEFORE any of that.
+         *
+         *     ``writable`` is what makes the row actionable rather than merely alarming: an
+         *     agent may rewrite its own step note and its task manual, but a role definition,
+         *     an insight, role lessons and the three boot documents all answer 403 to it.
+         *     ``action`` says which of those two situations this row is, in words.
+         *
+         *     Rows appear ONLY while a document is near its cap.
+         */
+        DocCapacityRowDTO: {
+            /**
+             * Doc
+             * @description The document, named the way its own write face names it — including the role key, type_key or task_no that says WHICH one.
+             */
+            doc: string;
+            /**
+             * Writable
+             * @description True when the READING agent may write this document itself; false when it cannot, in which case ``action`` names who can instead of asking the reader to attempt a write that could only be refused.
+             */
+            writable: boolean;
+            /** Size Chars */
+            size_chars: number;
+            /**
+             * Cap Chars
+             * @description The cap in force for THIS document's own segment. The segments do not share a number.
+             */
+            cap_chars: number;
+            /**
+             * Remaining Chars
+             * @description ``cap_chars - size_chars``, floored at 0.
+             */
+            remaining_chars: number;
+            /**
+             * Action
+             * @description What this reader is expected to do about it, derived from ``writable``: a writable document is one to rewrite to its CURRENT state now, while a non-writable one names the person to ask.
+             */
+            action: string;
         };
         /**
          * DocSummaryDTO
@@ -6599,7 +6648,7 @@ export interface components {
         };
         /**
          * ResumeOverviewDTO
-         * @description The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). ``chat_count`` / ``tasks_returned`` count what THIS snapshot carries; ``tasks_open_total`` is ALL the caller's open tasks (may exceed the bounded rows — page with ``list_tasks``); ``tasks_detail_chars`` sums every returned row's ``detail_chars`` (the plan text a full ``get_task`` pull would load); ``cards_waiting`` / ``cards_answered_recent`` count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with ``list_reply_cards``, cap with its ``limit``). ``roster_chars`` / ``machines_chars`` (T-1b09) size the two studio-floor blocks THIS snapshot carries — reported separately, and deliberately NOT folded into ``tasks_detail_chars``: that one counts text the snapshot does NOT carry (the plan text a later ``get_task`` would load), so mixing the two kinds of number is what made ``estimated_total_chars`` ambiguous in the first place. ``steps_on_answered_card`` counts the ``answered_card_steps`` rows across the returned tasks — steps sitting on a reply card the owner already answered while the step is still ``in_progress``, i.e. an answer nobody has picked up; ``steps_on_answered_card_chars`` sizes the text those rows carry and, like ``roster_chars``/``machines_chars``, IS folded into ``estimated_total_chars`` because the snapshot does carry it.
+         * @description The size/概要 block of the wake snapshot — the peek-then-decide signals (look at the SIZES first, then decide what to pull and whether to hand the digest to a sub-agent instead of loading it into your own context). ``chat_count`` / ``tasks_returned`` count what THIS snapshot carries; ``tasks_open_total`` is ALL the caller's open tasks (may exceed the bounded rows — page with ``list_tasks``); ``tasks_detail_chars`` sums every returned row's ``detail_chars`` (the plan text a full ``get_task`` pull would load); ``cards_waiting`` / ``cards_answered_recent`` count the CALLER'S reply cards still waiting on the owner / answered within the last 24h (pull with ``list_reply_cards``, cap with its ``limit``). ``roster_chars`` / ``machines_chars`` (T-1b09) size the two studio-floor blocks THIS snapshot carries — reported separately, and deliberately NOT folded into ``tasks_detail_chars``: that one counts text the snapshot does NOT carry (the plan text a later ``get_task`` would load), so mixing the two kinds of number is what made ``estimated_total_chars`` ambiguous in the first place. ``steps_on_answered_card`` counts the ``answered_card_steps`` rows across the returned tasks — steps sitting on a reply card the owner already answered while the step is still ``in_progress``, i.e. an answer nobody has picked up; ``steps_on_answered_card_chars`` sizes the text those rows carry and, like ``roster_chars``/``machines_chars``, IS folded into ``estimated_total_chars`` because the snapshot does carry it. ``doc_capacity_chars`` (T-6bd2) sizes the ``doc_capacity`` block the same way, and is folded in for the same reason: the snapshot CARRIES those rows. Leaving it out understated the peek by the whole block — measured on a station with nine near-cap documents, the peek reported 890 against a block of 1341 characters — which is the third time this same omission has had to be fixed (roster/machines, then the answered-card pointers). It is 0 whenever nothing is near its cap, which is the ordinary case.
          */
         ResumeOverviewDTO: {
             /** Cards Answered Recent */
@@ -6610,6 +6659,8 @@ export interface components {
             chat_chars: number;
             /** Chat Count */
             chat_count: number;
+            /** Doc Capacity Chars */
+            doc_capacity_chars?: number;
             /** Machines Chars */
             machines_chars?: number;
             /** Roster Chars */
@@ -6701,6 +6752,16 @@ export interface components {
          *         server-recorded machine binding (owner ruling rc-09476f535b59, 2026-08-03).
          *         Never derive "which machine am I on" from a hostname — our hosts report the
          *         same name as each other.
+         *       - ``doc_capacity``: PRESENT ONLY when one of the caller's long-lived capped
+         *         documents is close to full (T-6bd2) — its own role documents, the three boot
+         *         documents, the task manuals of its open tasks, and its open steps' notes.
+         *         It is here rather than on the write path because the write path's 400 arrives
+         *         at the instant the agent is recording something and has no time to compact
+         *         anything; a wake is when it has the most. Each row says whether THIS reader
+         *         can rewrite the document or has to ask someone who can. ABSENT — not an
+         *         empty array — when nothing is near, because a block that appeared on every
+         *         wake would be a block every agent learns to skip, and then the one wake that
+         *         mattered would look like all the others.
          *       - ``note``: a fixed reminder that this is a BOUNDED snapshot.
          *
          *     DETERMINISTIC (same server state → same output; no LLM) and read-only.
@@ -6708,6 +6769,11 @@ export interface components {
         ResumeSummaryDTO: {
             /** Chat */
             chat?: components["schemas"]["ChatMessageDTO"][];
+            /**
+             * Doc Capacity
+             * @description The long-lived documents in the caller's reach that are CLOSE to their character cap (T-6bd2). Absent when nothing is near — see the schema description above for why absence rather than an empty array. Additive-optional.
+             */
+            doc_capacity?: components["schemas"]["DocCapacityRowDTO"][];
             chat_earlier_omitted?: components["schemas"]["ResumeChatCutDTO"];
             /**
              * Generated At
@@ -6740,12 +6806,13 @@ export interface components {
          *     through the shared server path, so they cannot drift) plus
          *     ``estimated_total_chars`` — a derived single number the boot threshold gates on:
          *     exactly ``chat_chars`` + ``tasks_detail_chars`` + ``roster_chars`` +
-         *     ``machines_chars`` + ``steps_on_answered_card_chars``, all five reported in
-         *     ``overview``. That is the WHOLE chat
+         *     ``machines_chars`` + ``steps_on_answered_card_chars`` + ``doc_capacity_chars``,
+         *     all six reported in ``overview``. That is the WHOLE chat
          *     block as the snapshot renders it (``chat_chars`` is the rendered block's cost,
          *     NOT the sum of the message bodies), plus the plan text its task rows omit, the
-         *     two studio-floor blocks it carries and the answered-card pointers on its task
-         *     rows — and
+         *     two studio-floor blocks it carries, the answered-card pointers on its task
+         *     rows, and the near-cap document rows it carries (``doc_capacity_chars`` — 0
+         *     unless one of the caller's long-lived documents is close to its cap) — and
          *     a fixed guidance ``note``. It carries NO chat bodies and NO task rows: peeking
          *     it costs a few hundred bytes, so a waking agent can size ``resume_summary``
          *     BEFORE deciding whether to pull it into its own context or hand the pull to a
@@ -8564,6 +8631,18 @@ export interface components {
              * @default
              */
             note: string;
+            /**
+             * Note Size Chars
+             * @description The step note's current size in CHARACTERS. Additive-optional (T-6bd2).
+             * @default 0
+             */
+            note_size_chars: number;
+            /**
+             * Note Cap Chars
+             * @description The ceiling the step-note write faces enforce, REPORTED here so the room left can be computed from a read. Until T-6bd2 the step note was the one capped document whose remaining room appeared on no read at all — neither this view nor the wholesale write receipt carried it — so an agent only ever learned the number from the 400 that refused its write, which is both the latest possible moment and the cell that is hit most often. T-6bd2 reports the ceiling and does not move it. Additive-optional.
+             * @default 0
+             */
+            note_cap_chars: number;
             /** Order Idx */
             order_idx: number;
             /**
@@ -8610,6 +8689,18 @@ export interface components {
             step_status: string;
             /** Task Id */
             task_id: string;
+            /**
+             * Size Chars
+             * @description The stored note's size in CHARACTERS. Additive-optional (T-6bd2): the PATCH receipt has carried this pair since T-1667 and this wholesale one did not, so the writer that replaces a note outright — the common case, and the one that has just deleted the previous session's hand-off to make room — was the one writer told nothing about the room left.
+             * @default 0
+             */
+            size_chars: number;
+            /**
+             * Cap Chars
+             * @description The step-note ceiling in force; same value and same meaning as on the patch receipt. Additive-optional (T-6bd2).
+             * @default 0
+             */
+            cap_chars: number;
         };
         /**
          * TaskStepNotePatchDTO

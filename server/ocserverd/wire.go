@@ -994,7 +994,13 @@ type resumeSummaryDTO struct {
 	Roster             []resumeRosterMemberDTO `json:"roster"`
 	Machines           *resumeMachinesDTO      `json:"machines"`
 	Overview           resumeOverviewDTO       `json:"overview"`
-	Note               string                  `json:"note"`
+	// DocCapacity lists the long-lived documents in the caller's reach that are
+	// CLOSE to their character cap (T-6bd2), each with the two numbers and what
+	// THIS reader can do about it. `omitempty` is the whole point of the field:
+	// nothing near its cap → the key is absent, so the block never becomes
+	// something an agent learns to skip past on every wake. See doc_capacity.go.
+	DocCapacity []docCapacityRow `json:"doc_capacity,omitempty"`
+	Note        string           `json:"note"`
 }
 
 // resumeRosterMemberDTO is one entry of the studio floor a waking agent lands
@@ -1113,6 +1119,19 @@ type resumeOverviewDTO struct {
 	// carry, like roster_chars, not text it omits like tasks_detail_chars.
 	StepsOnAnsweredCard      int `json:"steps_on_answered_card"`
 	StepsOnAnsweredCardChars int `json:"steps_on_answered_card_chars"`
+	// DocCapacityChars sizes the doc_capacity block (T-6bd2) and is the SIXTH
+	// addend of estimated_total_chars.
+	//
+	// 🔴 THIS IS THE THIRD TIME THE SAME OMISSION HAS HAD TO BE FIXED. T-1b09
+	// added roster/machines after the peek understated the payload by the whole
+	// studio floor; T-f278 added the answered-card pointers and said in this
+	// very file that it was "the same mistake"; T-6bd2 then shipped a block the
+	// payload CARRIES and did not count it — measured, the peek reported 872
+	// while that block was 1350 bytes on the wire. The rule the three share is
+	// one line long and is the only test worth writing: if the payload CARRIES
+	// the text, it is an addend; if the caller would have to go and FETCH it
+	// (tasks_detail_chars), it is not.
+	DocCapacityChars int `json:"doc_capacity_chars"`
 }
 
 // resumeSummarySizeDTO is the size-only PEEK of the wake snapshot (T-7974
@@ -1239,6 +1258,14 @@ type taskStepNoteReceiptDTO struct {
 	StepID     string `json:"step_id"`
 	StepStatus string `json:"step_status"`
 	Note       string `json:"note"`
+	// SizeChars / CapChars close the gap T-6bd2 measured: the PATCH face's
+	// receipt has carried this pair since T-1667, and this wholesale one did
+	// not — so the writer that replaces a note outright (the common case, and
+	// the one that has just deleted the previous session's hand-off to make
+	// room) was the one writer told nothing about how much room is left. Same
+	// pair, same names, same ceiling as taskStepNotePatchResultDTO.
+	SizeChars int `json:"size_chars"`
+	CapChars  int `json:"cap_chars"`
 }
 
 type bootstrapDTO struct {
@@ -1283,9 +1310,26 @@ type taskStepDTO struct {
 	// unlike WaitingReason. This is the field the handover SOP has always meant
 	// by "把還在進行中的工作寫回 task step note"; before T-cc3e that instruction
 	// named nothing that existed. See TaskStepDTO in the spec.
-	Note       string  `json:"note"`
-	StartedTS  float64 `json:"started_ts"`
-	FinishedTS float64 `json:"finished_ts"`
+	Note string `json:"note"`
+	// NoteSizeChars / NoteCapChars are the note's two numbers, the same pair
+	// every other capped document on this station reports on its own read
+	// (T-6bd2). Until this ticket the step note was the ONE capped document
+	// whose remaining room could not be computed from any read at all: the
+	// wholesale write receipt omitted them and so did this view, so an agent
+	// only ever learned the number from the 400 that refused its write — the
+	// single worst moment to learn it, and the cell that gets hit most often.
+	//
+	// They are named for the field they measure rather than the bare
+	// size_chars/cap_chars the single-document DTOs use, because a step row
+	// carries three texts (name, dod, note) and an unqualified pair here would
+	// read as if it sized the row.
+	//
+	// ⚠️ NoteCapChars is REPORTED, never enforced here; the ceiling stays the
+	// write face's (stepNoteWithinLimit). T-6bd2 does not move it.
+	NoteSizeChars int     `json:"note_size_chars"`
+	NoteCapChars  int     `json:"note_cap_chars"`
+	StartedTS     float64 `json:"started_ts"`
+	FinishedTS    float64 `json:"finished_ts"`
 }
 
 // taskArtifactDTO is one pinned deliverable on a task's artifact set (T-3dc5).
@@ -1725,6 +1769,8 @@ func newTaskStepDTO(st TaskStep, cardStatus map[string]string) taskStepDTO {
 		ReplyCardStatus: cardStatus[st.ReplyCardID],
 		WaitingReason:   st.WaitingReason,
 		Note:            st.Note,
+		NoteSizeChars:   utf8.RuneCountInString(st.Note),
+		NoteCapChars:    chatBodyMaxChars,
 		StartedTS:       st.StartedTS,
 		FinishedTS:      st.FinishedTS,
 	}
