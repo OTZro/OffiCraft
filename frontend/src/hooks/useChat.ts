@@ -349,7 +349,24 @@ export function useChat(withId: string): UseChat {
       if (!trimmed && !(attachments && attachments.length > 0)) return;
       await api.postChat({ to: withId, body: trimmed, attachments, replyTo });
       // Reconcile by refetch so the sent message appears immediately.
-      await refetch();
+      //
+      // 🔴 ONCE THE POST HAS RETURNED, THIS SEND HAS SUCCEEDED. The refresh
+      // that follows is a different promise about a different thing, and it
+      // must not be allowed to reject this one: `refetch` calls `api.listChat`
+      // unguarded (unlike its own `refetchReads`, which already swallows), so a
+      // blip on the refresh used to surface to the caller as "the send failed".
+      // The composer believes that: it restores the message the owner just
+      // successfully sent — and since T-4e95 it restores it into the room's
+      // DRAFT, which outlives the page. The owner comes back to a composer
+      // holding a line that is already in the thread, with the reply banner
+      // still up, and Enter sends it a second time.
+      // A failed refresh costs a stale window until the next SSE delta; a
+      // rejected send costs a duplicate message. Log it and let the send stand.
+      try {
+        await refetch();
+      } catch (e) {
+        console.warn("useChat: post-send refetch failed (message was sent)", e);
+      }
     },
     [withId, refetch],
   );

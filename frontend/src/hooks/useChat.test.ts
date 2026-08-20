@@ -152,4 +152,25 @@ describe("useChat load routing (active vs background)", () => {
       expect(result.current.messages.map((m) => m.id)).toEqual(["c9"]),
     );
   });
+
+  // T-4e95 review r12 — the POST is the send; the refresh after it is not.
+  it("a send whose POST succeeded RESOLVES even when the refresh behind it fails", async () => {
+    // `refetch` calls listChat unguarded, so a blip on the refresh used to
+    // reject send() — and the caller cannot tell that apart from "the message
+    // never left". ChatArea acts on that: it restores the message into the
+    // room's DRAFT, which outlives the page, so the owner returns to a composer
+    // holding a line that is already in the thread and Enter sends it twice.
+    h.listChat.mockResolvedValueOnce([]); // the initial load
+    h.listChat.mockRejectedValueOnce(new Error("network blip")); // the post-send refresh
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      // Must NOT throw. `.rejects` would pass on a resolve-with-error too, so
+      // the assertion is the await itself completing.
+      await result.current.send("已經送出去的話");
+    });
+
+    expect(h.postChat).toHaveBeenCalledTimes(1);
+  });
 });

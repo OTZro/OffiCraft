@@ -26,7 +26,11 @@ import { I18nProvider } from "../i18n";
 import { ChatArea } from "./ChatArea";
 import type { Member } from "../types";
 import type { ChatMessage } from "../api/adapter";
-import { resetChatDrafts, getChatDraft } from "../lib/chatDraftStore";
+import {
+  resetChatDrafts,
+  getChatDraft,
+  saveChatDraft,
+} from "../lib/chatDraftStore";
 
 let messages: ChatMessage[] = [];
 const send = vi.fn(() => Promise.resolve());
@@ -105,6 +109,12 @@ function renderChatStrict() {
       </I18nProvider>
     </StrictMode>,
   );
+}
+
+function pngFile(name: string): File {
+  return new File([new Uint8Array([137, 80, 78, 71])], name, {
+    type: "image/png",
+  });
 }
 
 const input = (c: HTMLElement) =>
@@ -414,6 +424,16 @@ describe("ChatArea 回覆這則", () => {
       </I18nProvider>,
     );
     fireEvent.click(rowOf(container, "c-1").querySelector(".chat__msg-reply")!);
+    // A STAGED FILE TOO. Every earlier version of this test sent text only, so
+    // writing `attachments: []` into the store passed all of them — the third
+    // of the three things a failed send can lose had nothing standing on it.
+    fireEvent.change(
+      container.querySelector(".chat__file-input") as HTMLInputElement,
+      { target: { files: [pngFile("p.png")] } },
+    );
+    await waitFor(() =>
+      expect(container.querySelectorAll(".chat__preview-thumb").length).toBe(1),
+    );
     fireEvent.change(input(container), { target: { value: "給 m1 的" } });
     fireEvent.keyDown(input(container), { key: "Enter" });
 
@@ -439,9 +459,80 @@ describe("ChatArea 回覆這則", () => {
     // return left the text, the attachment and the reply target nowhere at all.
     // A reviewer replaced the whole restore with an unconditional `return` and
     // all 128 ChatArea tests stayed green. This is that missing assertion.
+    const kept = getChatDraft("m1");
+    expect(kept?.text).toBe("給 m1 的");
+    expect(kept?.replyTo).toBe("c-1");
+    expect(kept?.attachments).toHaveLength(1);
+    expect(kept?.attachments[0].filename).toBe("p.png");
+  });
+
+  it("puts a failed send back ON SCREEN when the owner never left the room", async () => {
+    // The room's draft is not enough on its own: if the owner is still looking
+    // at this conversation, the words have to come back to the composer they
+    // vanished from. A reviewer wrote the store and then returned immediately,
+    // never restoring the composer — and all 129 tests stayed green, because
+    // every one of them switched rooms or unmounted first. This is the case
+    // nothing was standing on.
+    messages = [mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" })];
+    let reject: (e: Error) => void = () => {};
+    send.mockImplementationOnce(
+      () => new Promise((_, r) => (reject = r)) as Promise<void>,
+    );
+
+    const { container } = renderChat();
+    fireEvent.click(rowOf(container, "c-1").querySelector(".chat__msg-reply")!);
+    fireEvent.change(input(container), { target: { value: "給 m1 的" } });
+    fireEvent.keyDown(input(container), { key: "Enter" });
+
+    expect(input(container).value, "optimistically cleared").toBe("");
+
+    await act(async () => {
+      reject(new Error("nope"));
+      await Promise.resolve();
+    });
+
+    expect(input(container).value).toBe("給 m1 的");
+    expect(banner(container), "still aimed at what it was answering").not.toBeNull();
+  });
+
+  it("fills only what the room does not already hold, field by field", async () => {
+    // The first version of the store write was all-or-nothing: it wrote nothing
+    // at all if the room held ANYTHING. So a room the owner had gone back to
+    // and put one thing into swallowed the rest of the failed message. The rule
+    // is per field — the same one the on-screen restore uses.
+    messages = [mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" })];
+    let reject: (e: Error) => void = () => {};
+    send.mockImplementationOnce(
+      () => new Promise((_, r) => (reject = r)) as Promise<void>,
+    );
+
+    const { container, rerender } = render(
+      <I18nProvider>
+        <ChatArea member={m1} />
+      </I18nProvider>,
+    );
+    fireEvent.click(rowOf(container, "c-1").querySelector(".chat__msg-reply")!);
+    fireEvent.change(input(container), { target: { value: "給 m1 的" } });
+    fireEvent.keyDown(input(container), { key: "Enter" });
+
+    rerender(
+      <I18nProvider>
+        <ChatArea member={m2} />
+      </I18nProvider>,
+    );
+    // m1 is not empty any more — but what it holds is only TEXT.
+    saveChatDraft("m1", { text: "我後來又打的", attachments: [] });
+
+    await act(async () => {
+      reject(new Error("nope"));
+      await Promise.resolve();
+    });
+
     expect(getChatDraft("m1")).toEqual({
-      text: "給 m1 的",
+      // theirs wins — two texts cannot share one composer
+      text: "我後來又打的",
       attachments: [],
+      // …but the reply target had nothing to collide with, so it survives
       replyTo: "c-1",
     });
   });

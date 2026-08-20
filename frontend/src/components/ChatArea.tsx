@@ -992,21 +992,29 @@ export function ChatArea({
       // this component is gone entirely (跳頁 mid-flight): setState on an
       // unmounted component discards the content just as quietly.
       //
-      // Only fill a room that is EMPTY — the same rule the state restores use
-      // below. If the owner went back and started typing again, that is theirs.
+      // FIELD BY FIELD, which is the rule the state restores below already use:
+      // fill only what the room does not already hold. The first version of
+      // this write was all-or-nothing on the whole draft, and a reviewer found
+      // the gap that opens: go back to that room, stage one image and type
+      // nothing, and the room is no longer "empty" — so the whole write was
+      // skipped and the failed message's TEXT and reply target went with it.
+      //
+      // What this still cannot save: if the owner has retyped in that room,
+      // their words win and the failed message's words are gone. Two texts
+      // cannot occupy one composer, and theirs is the one they can see. Said
+      // out loud rather than left to be discovered.
       const stored = getChatDraft(sendPeer);
-      if (
-        !stored ||
-        (stored.text.length === 0 &&
-          stored.attachments.length === 0 &&
-          !stored.replyTo)
-      ) {
-        saveChatDraft(sendPeer, {
-          text: draftSnapshot,
-          attachments: attachmentsSnapshot,
-          replyTo: replyToSnapshot ?? undefined,
-        });
-      }
+      saveChatDraft(sendPeer, {
+        text: stored && stored.text ? stored.text : draftSnapshot,
+        attachments:
+          stored && stored.attachments.length > 0
+            ? stored.attachments
+            : attachmentsSnapshot,
+        replyTo:
+          stored && stored.replyTo
+            ? stored.replyTo
+            : (replyToSnapshot ?? undefined),
+      });
       // Not this room any more → the words are back where they were typed, and
       // putting them on screen here would put one room's words, and one room's
       // reply target, into another.
