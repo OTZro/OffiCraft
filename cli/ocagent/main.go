@@ -54,6 +54,7 @@ var planeASubcommands = []struct{ name, help string }{
 	{"suicide", "self-terminate: kill my own tmux session (OC_SESSION) → SSE drops → offline"},
 	{"download", "fetch a chat attachment blob to a local file (streaming; --out <dir>)"},
 	{"upload", "stream a local file into the attachment store (prints the att id; --mime <type>)"},
+	{"clean", "get rid of a file or folder I made: quarantines it under my workdir (never rm)"},
 }
 
 func usage(out io.Writer) {
@@ -171,6 +172,19 @@ func realMain(argv []string, env func(string) string, in io.Reader, out io.Write
 			return 2
 		}
 		return cmdUpload(newStreamingClient(), cfg, args[0], *mimeType, out, os.Stderr)
+
+	case "clean":
+		// The ONE entry for "get rid of this file/folder I made" (owner
+		// 2026-08-16 / 2026-08-20). It deletes NOTHING — the target is moved
+		// under <my workdir>/trash/. The offboard document now names this
+		// command instead of spelling out mv/trash/rm, so the procedure lives
+		// in one place that a change actually reaches. See clean.go.
+		fs := flag.NewFlagSet("ocagent clean", flag.ContinueOnError)
+		fs.SetOutput(out)
+		if err := fs.Parse(rest); err != nil {
+			return 2
+		}
+		return cmdClean(cfg, fs.Args(), out)
 
 	case "version", "--version", "-v":
 		// Print WHICH build this is (git sha/time/dirty when stamped + always a
