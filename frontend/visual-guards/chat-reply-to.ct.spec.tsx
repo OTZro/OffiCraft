@@ -384,11 +384,21 @@ for (const width of [390, 1280]) {
         "the name keeps its width until the excerpt has none left",
       ).toBeGreaterThanOrEqual(share.body);
     } else {
-      // No deficit at this width: NOTHING may be cut. This half is why the wide
-      // case is here at all — before it, 1280 could not tell any of these
-      // mutants apart and was pure decoration.
-      expect(share.who, "nothing to give way to").toBeGreaterThanOrEqual(
-        share.wants - share.body,
+      // No deficit at this width, so NOTHING should be meaningfully cut.
+      //
+      // ⚠️ BE HONEST ABOUT WHAT THIS HALF CAN DO: it cannot see the shrink-order
+      // mutants at all. With no deficit there is nothing to share out, so both
+      // `flex: none` on the name and a missing `flex` on the excerpt render
+      // identically here — the 390 case above is the only detector. This is
+      // shape coverage, not failure coverage, and saying so beats leaving the
+      // next person to assume the wide row is guarding something.
+      //
+      // The 4px slack is not padding-to-taste: the first version of this line
+      // demanded exact equality, passed on macOS and went RED on CI at 528 vs
+      // 530 — two pixels of sub-pixel rounding in a different font stack. A
+      // geometry number tuned on one machine is a number about that machine.
+      expect(share.who, "nothing is cut when nothing needs to give").toBeGreaterThanOrEqual(
+        share.wants - share.body - 4,
       );
     }
     // Still one line, still inside the composer.
