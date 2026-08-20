@@ -9,7 +9,8 @@ import "strings"
 //	1. 系統互動   /api/system-interaction       (owner-editable; folds to the
 //	                                            seed when unedited — T-791e)
 //	2. 使用者自訂 /api/global-context           (owner-editable additive block)
-//	3. 啟動程序   /api/boot-sequence/{runtime}  (owner-editable studio SOP,
+//	3. 啟動程序   /api/boot-sequence/{runtime_key}
+//	                                            (owner-editable studio SOP,
 //	                                            per-runtime; same fold — see
 //	                                            below)
 //

@@ -4870,8 +4870,12 @@ export const mockApi: Api = {
   async getBootstrap(role: string): Promise<BootstrapView> {
     // Honest preview mirroring the backend buildBootContext slot order
     // (spec/lifecycle.md §2.2, as re-ordered by T-4595):
-    //   1. 系統互動 — the FOLDED block (owner's edit, else the shipped seed
-    //      — T-791e), FIRST;
+    //   1. 系統互動 — the SEED text, FIRST. ⚠️ The real server folds the
+    //      owner's edit over it (T-791e, buildBootContext →
+    //      systemInteractionText); THIS PREVIEW DOES NOT — it reads the seed
+    //      straight, so an edited block shows as the factory text here. The
+    //      fold exists in this file (foldBootDoc) and getBootstrap simply does
+    //      not call it;
     //   2. 使用者自訂 — the owner's ADDITIVE block, SKIPPED entirely when empty;
     //   3. `# Role:` + `# Insight (role)` + `# Lessons (role / task_type)` —
     //      the persona (Duty → Insight → Learning, the order the three blocks
@@ -4880,8 +4884,10 @@ export const mockApi: Api = {
     //      ENTIRELY when the folded text is blank, exactly like the owner block
     //      — the gate is the TEXT, never is_default/has_seed (those answer
     //      different questions and would emit an orphan header);
-    //   4. 啟動程序 — the FOLDED block for this runtime (same rule as slot 1),
-    //      LAST (recency-authoritative tail).
+    //   4. 啟動程序 — the Claude seed, LAST (recency-authoritative tail). Same
+    //      two gaps as slot 1: no fold, and no runtime either — getBootstrap
+    //      takes none, so it is always SEED_BOOT_SEQUENCE_MD. The worker path
+    //      (getWorkerBootContext) does branch on runtime.
     // The owner block moved from below the persona to above it so the two
     // assemblies line up: a
     // worker's boot context is this list minus slot 3, and with the owner block
