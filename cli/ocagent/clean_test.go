@@ -238,6 +238,37 @@ func TestCleanRefusesWhenTheQuarantineDirIsASymlink(t *testing.T) {
 	}
 }
 
+// The SAME escape one level deeper — and the one the first version missed.
+// `<root>/trash` is a real directory, but `<root>/trash/tmp` is a symlink out;
+// MkdirAll and Rename both follow it, so the file leaves the tree while the
+// command prints an in-tree path and exits 0. Reachable in two ordinary steps:
+// clean a directory that contains an outward symlink (parked under trash/
+// intact), then clean a real path whose rel traverses that parked name.
+func TestCleanRefusesWhenSomethingUnderTheQuarantineDirIsASymlink(t *testing.T) {
+	cfg, root := cleanFixture(t)
+	elsewhere := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "trash"), 0o755); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(root, "trash", "tmp")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	target := filepath.Join(root, "tmp", "x.txt")
+	writeFile(t, target, "mine")
+
+	rc, out := run(cfg, target)
+	if rc == 0 {
+		t.Fatalf("must not move through a nested symlink; out = %q", out)
+	}
+	if _, err := os.Lstat(target); err != nil {
+		t.Fatalf("the target must be untouched: %v", err)
+	}
+	entries, err := os.ReadDir(elsewhere)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("nothing may land outside the tree; entries = %v err = %v", entries, err)
+	}
+}
+
 // ── identity: without an id there is no "my workdir" to be inside of ─────────
 
 func TestCleanRefusesWithoutAnAgentIdentity(t *testing.T) {

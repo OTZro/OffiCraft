@@ -70,6 +70,45 @@ func cleanRoot(cfg Config) (string, error) {
 	return filepath.Clean(root), nil
 }
 
+// canonicalise resolves a path through symlinks WITHOUT requiring it to exist:
+// it walks up to the deepest ancestor that does exist, resolves that, and
+// re-attaches the missing tail. EvalSymlinks alone cannot be used because it
+// fails on a missing leaf — and a missing leaf is ordinary here (an idempotent
+// re-run, or a quarantine directory that has not been created yet).
+//
+// What it still catches is the escape that matters: a symlink anywhere in the
+// part that DOES exist.
+func canonicalise(abs string) string {
+	abs = filepath.Clean(abs)
+	existing := abs
+	var tail []string
+	for {
+		if _, err := os.Lstat(existing); err == nil {
+			break
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			// Walked to the filesystem root without finding anything that exists.
+			break
+		}
+		tail = append([]string{filepath.Base(existing)}, tail...)
+		existing = parent
+	}
+	if resolved, err := filepath.EvalSymlinks(existing); err == nil {
+		existing = resolved
+	}
+	return filepath.Clean(filepath.Join(append([]string{existing}, tail...)...))
+}
+
+// isUnder reports whether path is strictly inside root (the root itself is not).
+func isUnder(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // resolveInsideRoot canonicalises one caller-named path and proves it lands
 // strictly inside root.
 //
@@ -90,28 +129,7 @@ func resolveInsideRoot(root, arg string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cannot resolve: %w", err)
 	}
-	abs = filepath.Clean(abs)
-
-	// Walk up to the deepest ancestor that exists, resolve THAT, then re-attach
-	// the tail that does not exist yet.
-	existing := abs
-	var tail []string
-	for {
-		if _, err := os.Lstat(existing); err == nil {
-			break
-		}
-		parent := filepath.Dir(existing)
-		if parent == existing {
-			// Walked to the filesystem root without finding anything that exists.
-			break
-		}
-		tail = append([]string{filepath.Base(existing)}, tail...)
-		existing = parent
-	}
-	if resolved, err := filepath.EvalSymlinks(existing); err == nil {
-		existing = resolved
-	}
-	full := filepath.Clean(filepath.Join(append([]string{existing}, tail...)...))
+	full := canonicalise(abs)
 
 	rel, err := filepath.Rel(root, full)
 	if err != nil {
@@ -140,16 +158,6 @@ func resolveInsideRoot(root, arg string) (string, error) {
 // rather than being overwritten — re-running clean must never destroy the
 // evidence the previous run parked.
 func quarantineDest(root, target string) (string, error) {
-	// The quarantine directory must be a REAL directory in my tree. A symlink
-	// there would send every "quarantined" file wherever it points — the same
-	// escape resolveInsideRoot blocks on the way in, arriving through the way
-	// out. ocwarden refuses to purge a symlinked trash for exactly this reason
-	// (cli/CLAUDE.md §5); the writer has to refuse it too, or the two halves
-	// disagree about what the directory is.
-	quarantine := filepath.Join(root, quarantineDirName)
-	if fi, err := os.Lstat(quarantine); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("%s/ is a symlink, not a directory", quarantineDirName)
-	}
 	rel, err := filepath.Rel(root, target)
 	if err != nil {
 		return "", err
@@ -158,13 +166,48 @@ func quarantineDest(root, target string) (string, error) {
 	dest := base
 	for i := 2; ; i++ {
 		if _, err := os.Lstat(dest); os.IsNotExist(err) {
-			return dest, nil
+			break
 		}
 		if i > 1000 {
 			return "", fmt.Errorf("too many quarantined copies of %s", rel)
 		}
 		dest = fmt.Sprintf("%s-%d", base, i)
 	}
+
+	// 🔴 The landing site has to be proven inside the tree, not assumed.
+	//
+	// resolveInsideRoot guards the ENTRANCE; this guards the EXIT, and the two
+	// are separate escapes. Checking only `<root>/trash` itself is NOT enough:
+	// `dest` is `<root>/trash/<rel>`, and both MkdirAll and Rename follow every
+	// intermediate component — so a symlink one level deeper (say
+	// `<root>/trash/tmp -> /somewhere/else`) sends the file out of the tree
+	// while the command prints an in-tree path and exits 0. That shape is
+	// reachable in two ordinary steps: clean a directory that itself contains
+	// an outward symlink (it is parked under trash/ intact), then later clean a
+	// real path whose rel traverses that parked name.
+	//
+	// So: create the parent first, then resolve it and require it to still be
+	// under root. This mirrors what ocwarden does before purging trash
+	// (cli/ocwarden/trash.go compares EvalSymlinks on both sides) — one half
+	// checking with Lstat and the other with a real resolution would be two
+	// different definitions of the same directory.
+	parent := filepath.Dir(dest)
+	// 🔴 Check BEFORE creating. MkdirAll follows symlinks too, so validating
+	// afterwards is already too late: it would have created a directory on the
+	// far side of the link. canonicalise gives the resolved path without needing
+	// it to exist first, which is exactly the case here.
+	if !isUnder(root, canonicalise(parent)) {
+		return "", fmt.Errorf("the %s/ path leaves my workdir", quarantineDirName)
+	}
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return "", fmt.Errorf("cannot open quarantine: %w", err)
+	}
+	// And re-check what actually exists now: between the two calls the tail may
+	// have been created as a symlink, which the pre-check could not have seen.
+	if resolved, err := filepath.EvalSymlinks(parent); err != nil || !isUnder(root, resolved) {
+		return "", fmt.Errorf("the %s/ path leaves my workdir", quarantineDirName)
+	}
+	return dest, nil
 }
 
 // cmdClean is the whole command: validate EVERY path, then move.
@@ -187,7 +230,13 @@ func cmdClean(cfg Config, args []string, out io.Writer) int {
 	}
 
 	// ── phase 1: validate all, move none ────────────────────────────────────
-	targets := make([]string, 0, len(args))
+	// Each entry keeps the caller's spelling beside the resolved path: the
+	// output has to name the path THEY typed, and pairing them here means the
+	// two can never drift apart if the all-or-nothing gate below is ever
+	// relaxed (index-matching against args would silently mislabel every line
+	// after the first refusal).
+	type target struct{ arg, full string }
+	targets := make([]target, 0, len(args))
 	var refusals []string
 	for _, a := range args {
 		full, err := resolveInsideRoot(root, a)
@@ -195,7 +244,7 @@ func cmdClean(cfg Config, args []string, out io.Writer) int {
 			refusals = append(refusals, fmt.Sprintf("  %s — %v", a, err))
 			continue
 		}
-		targets = append(targets, full)
+		targets = append(targets, target{arg: a, full: full})
 	}
 	if len(refusals) > 0 {
 		fmt.Fprintf(out, "[ocagent] clean: refused, NOTHING was moved (my workdir is %s)\n", root)
@@ -207,29 +256,24 @@ func cmdClean(cfg Config, args []string, out io.Writer) int {
 
 	// ── phase 2: move ───────────────────────────────────────────────────────
 	rc := 0
-	for i, target := range targets {
-		if _, err := os.Lstat(target); os.IsNotExist(err) {
+	for _, t := range targets {
+		if _, err := os.Lstat(t.full); os.IsNotExist(err) {
 			// Idempotent: already gone is the state the caller asked for.
-			fmt.Fprintf(out, "[ocagent] clean: %s — already gone\n", args[i])
+			fmt.Fprintf(out, "[ocagent] clean: %s — already gone\n", t.arg)
 			continue
 		}
-		dest, err := quarantineDest(root, target)
+		dest, err := quarantineDest(root, t.full)
 		if err != nil {
-			fmt.Fprintf(out, "[ocagent] clean: %s — %v\n", args[i], err)
+			fmt.Fprintf(out, "[ocagent] clean: %s — %v\n", t.arg, err)
 			rc = 1
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			fmt.Fprintf(out, "[ocagent] clean: %s — cannot open quarantine: %v\n", args[i], err)
+		if err := os.Rename(t.full, dest); err != nil {
+			fmt.Fprintf(out, "[ocagent] clean: %s — not moved: %v\n", t.arg, err)
 			rc = 1
 			continue
 		}
-		if err := os.Rename(target, dest); err != nil {
-			fmt.Fprintf(out, "[ocagent] clean: %s — not moved: %v\n", args[i], err)
-			rc = 1
-			continue
-		}
-		fmt.Fprintf(out, "[ocagent] clean: %s → %s\n", args[i], dest)
+		fmt.Fprintf(out, "[ocagent] clean: %s → %s\n", t.arg, dest)
 	}
 	return rc
 }
