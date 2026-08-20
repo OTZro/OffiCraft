@@ -244,6 +244,16 @@ func TestCleanRefusesWhenTheQuarantineDirIsASymlink(t *testing.T) {
 // command prints an in-tree path and exits 0. Reachable in two ordinary steps:
 // clean a directory that contains an outward symlink (parked under trash/
 // intact), then clean a real path whose rel traverses that parked name.
+//
+// 🔴 The target is TWO levels under the symlinked name on purpose, and that is
+// the whole point of this fixture. With `<root>/tmp/x.txt` the destination
+// parent is `<root>/trash/tmp` — the symlink itself, which already exists — so
+// MkdirAll sees a directory and creates nothing, and "the outside stayed empty"
+// held even with the guard moved AFTER MkdirAll. The test could not tell the
+// two orders apart. With `<root>/tmp/sub/x.txt` the parent is
+// `<root>/trash/tmp/sub`, which does NOT exist, so a guard that runs late lets
+// MkdirAll punch a real directory through the link and into the outside tree —
+// and the emptiness assertion below finally reddens.
 func TestCleanRefusesWhenSomethingUnderTheQuarantineDirIsASymlink(t *testing.T) {
 	cfg, root := cleanFixture(t)
 	elsewhere := t.TempDir()
@@ -253,7 +263,7 @@ func TestCleanRefusesWhenSomethingUnderTheQuarantineDirIsASymlink(t *testing.T) 
 	if err := os.Symlink(elsewhere, filepath.Join(root, "trash", "tmp")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	target := filepath.Join(root, "tmp", "x.txt")
+	target := filepath.Join(root, "tmp", "sub", "x.txt")
 	writeFile(t, target, "mine")
 
 	rc, out := run(cfg, target)
@@ -321,5 +331,112 @@ func TestCleanIsDispatchedAndAdvertised(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "unknown subcommand") {
 		t.Fatalf("clean fell through to the default branch: %q", out.String())
+	}
+}
+
+// ── the leaf itself is a symlink: all three shapes, defined ─────────────────
+//
+// 🔴 The regression this pins: `clean <a symlink>` used to resolve the leaf and
+// move WHAT IT POINTED AT. Naming `inlink` deleted `d.txt` — a file the caller
+// never named — left `inlink` in place (now dangling), and exited 0. For the
+// command that replaces `rm -rf` on the close-out path, "reported success while
+// moving the wrong file" is the worst failure available.
+//
+// The contract, one line per shape:
+//   • points OUT of the tree  → refuse, touch nothing
+//   • points INSIDE the tree  → move the LINK, leave the pointee alone
+//   • dangling                → move the LINK (harmless: no bytes are behind it)
+
+func TestCleanMovesTheLinkItselfWhenTheTargetPointsInsideTheTree(t *testing.T) {
+	cfg, root := cleanFixture(t)
+	pointee := filepath.Join(root, "d.txt")
+	writeFile(t, pointee, "do not touch me")
+	link := filepath.Join(root, "inlink")
+	if err := os.Symlink(pointee, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	rc, out := run(cfg, link)
+	if rc != 0 {
+		t.Fatalf("an in-tree symlink is cleanable; rc = %d out = %q", rc, out)
+	}
+	// 🔴 THE assertion: the file the caller did NOT name is still there.
+	if got := mustReadFile(t, pointee); got != "do not touch me" {
+		t.Fatalf("the pointee must be untouched; got %q", got)
+	}
+	// The thing the caller DID name is gone from where it was...
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("the link the caller named must have moved away; err = %v", err)
+	}
+	// ...and parked under its OWN name, still a symlink.
+	parked := filepath.Join(root, "trash", "inlink")
+	fi, err := os.Lstat(parked)
+	if err != nil {
+		t.Fatalf("the link must be parked as %s: %v", parked, err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("what was parked must still be the symlink, not its target: mode = %v", fi.Mode())
+	}
+	if !strings.Contains(out, parked) {
+		t.Fatalf("the output must name where the LINK went, not the pointee; got %q", out)
+	}
+	// Nothing was parked under the pointee's name — that would mean the pointee moved.
+	if _, err := os.Lstat(filepath.Join(root, "trash", "d.txt")); !os.IsNotExist(err) {
+		t.Fatalf("the pointee must never be quarantined; err = %v", err)
+	}
+}
+
+func TestCleanMovesADanglingSymlink(t *testing.T) {
+	cfg, root := cleanFixture(t)
+	link := filepath.Join(root, "dangling")
+	if err := os.Symlink(filepath.Join(root, "gone-already.txt"), link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	rc, out := run(cfg, link)
+	if rc != 0 {
+		t.Fatalf("a dangling link is cleanable; rc = %d out = %q", rc, out)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("the dangling link must have moved; err = %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "trash", "dangling")); err != nil {
+		t.Fatalf("the dangling link must be parked: %v", err)
+	}
+}
+
+// The third exit shape: a component of the quarantine path is a DANGLING
+// symlink pointing outside. The resolved-ancestor pre-check cannot see where it
+// aims (EvalSymlinks has nothing to resolve), so this pins that the refusal
+// still happens — MkdirAll will not create a directory through a dangling link,
+// and phase 2 turns that into a non-zero exit rather than a silent escape.
+//
+// This is also the shape the deleted post-MkdirAll re-check was supposed to
+// catch. It refuses without it, which is half of why that check was dead.
+func TestCleanRefusesWhenTheQuarantinePathRunsThroughADanglingSymlink(t *testing.T) {
+	cfg, root := cleanFixture(t)
+	elsewhere := t.TempDir()
+	neverCreated := filepath.Join(elsewhere, "not-there-yet")
+	if err := os.MkdirAll(filepath.Join(root, "trash"), 0o755); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	if err := os.Symlink(neverCreated, filepath.Join(root, "trash", "tmp")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	target := filepath.Join(root, "tmp", "sub", "x.txt")
+	writeFile(t, target, "mine")
+
+	rc, out := run(cfg, target)
+	if rc == 0 {
+		t.Fatalf("must not move through a dangling quarantine link; out = %q", out)
+	}
+	if _, err := os.Lstat(target); err != nil {
+		t.Fatalf("the target must be untouched: %v", err)
+	}
+	if _, err := os.Lstat(neverCreated); !os.IsNotExist(err) {
+		t.Fatalf("nothing may be created outside the tree; err = %v", err)
+	}
+	if entries, err := os.ReadDir(elsewhere); err != nil || len(entries) != 0 {
+		t.Fatalf("nothing may land outside the tree; entries = %v err = %v", entries, err)
 	}
 }

@@ -71,31 +71,36 @@ func cleanRoot(cfg Config) (string, error) {
 }
 
 // canonicalise resolves a path through symlinks WITHOUT requiring it to exist:
-// it walks up to the deepest ancestor that does exist, resolves that, and
-// re-attaches the missing tail. EvalSymlinks alone cannot be used because it
-// fails on a missing leaf — and a missing leaf is ordinary here (an idempotent
-// re-run, or a quarantine directory that has not been created yet).
+// it walks up to the deepest ancestor that RESOLVES, resolves that, and
+// re-attaches the tail it walked past. EvalSymlinks alone cannot be used
+// because it fails on a missing leaf — and a missing leaf is ordinary here (an
+// idempotent re-run, or a quarantine directory that has not been created yet).
 //
 // What it still catches is the escape that matters: a symlink anywhere in the
-// part that DOES exist.
+// part that DOES resolve.
+//
+// 🔴 The loop condition is EvalSymlinks succeeding, not Lstat succeeding. A
+// DANGLING symlink is a path that Lstat answers for but EvalSymlinks cannot
+// resolve — with the Lstat condition the walk stopped there and the whole path
+// came back completely unresolved, so on any host whose workdir sits behind a
+// symlink (macOS: /tmp → /private/tmp, /var → /private/var) an ordinary
+// dangling link compared as OUTSIDE the root and `clean` refused it.
 func canonicalise(abs string) string {
 	abs = filepath.Clean(abs)
 	existing := abs
 	var tail []string
 	for {
-		if _, err := os.Lstat(existing); err == nil {
+		if resolved, err := filepath.EvalSymlinks(existing); err == nil {
+			existing = resolved
 			break
 		}
 		parent := filepath.Dir(existing)
 		if parent == existing {
-			// Walked to the filesystem root without finding anything that exists.
+			// Walked to the filesystem root without resolving anything.
 			break
 		}
 		tail = append([]string{filepath.Base(existing)}, tail...)
 		existing = parent
-	}
-	if resolved, err := filepath.EvalSymlinks(existing); err == nil {
-		existing = resolved
 	}
 	return filepath.Clean(filepath.Join(append([]string{existing}, tail...)...))
 }
@@ -109,14 +114,63 @@ func isUnder(root, path string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// resolveInsideRoot canonicalises one caller-named path and proves it lands
-// strictly inside root.
+// insideRoot runs the whole in-my-workdir judgement on ONE path. It is called
+// twice per argument — see resolveInsideRoot for why two paths, not one.
+func insideRoot(root, path, arg string) error {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return fmt.Errorf("outside my workdir: %s", arg)
+	}
+	if rel == "." {
+		return fmt.Errorf("that is my workdir itself, not something in it: %s", arg)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("outside my workdir: %s", arg)
+	}
+	// The quarantine directory is not cleanable: moving trash into trash nests
+	// forever, and the whole point of quarantine is that it is the one place
+	// this command does not touch.
+	if strings.Split(rel, string(filepath.Separator))[0] == quarantineDirName {
+		return fmt.Errorf("that is already in %s/: %s", quarantineDirName, arg)
+	}
+	return nil
+}
+
+// resolveInsideRoot proves one caller-named path lands strictly inside root and
+// returns the path the move must actually operate on.
 //
-// 🔴 The subtle half is that the target may NOT EXIST (idempotent re-runs), and
-// EvalSymlinks fails on a missing leaf. So it resolves the DEEPEST EXISTING
-// ANCESTOR and re-appends the missing tail: that still catches the attack that
-// matters — a symlink somewhere in the existing part pointing out of the tree —
-// while letting `clean` be re-run against something already gone.
+// 🔴 Two paths, two jobs — conflating them was a real escape.
+//
+//	VALIDATE against canonicalise(abs): every symlink resolved, so a link
+//	pointing out of the tree is caught no matter how it is spelled.
+//	OPERATE on abs, the caller's own spelling, UNRESOLVED.
+//
+// Returning the canonical path meant that `clean <a symlink>` handed
+// os.Rename the POINTEE. Rename does not follow a leaf symlink, so given
+// `inlink -> d.txt` (both in-tree) the command quarantined `d.txt` — a path
+// the caller never named — left `inlink` behind, now dangling, and exited 0.
+// A command that replaces `rm -rf` on the close-out path may not report
+// success while moving a different file than the one it was given.
+//
+// So the leaf symlink is treated as the object it is: it is what gets moved,
+// its target is not touched. Three shapes, all defined and all tested:
+//   - points OUT of the tree → REFUSED (canonicalise lands outside)
+//   - points INSIDE the tree → the LINK moves, the pointee stays
+//   - dangling               → the LINK moves (no bytes live behind it)
+//
+// Rejecting a symlink leaf outright was the other candidate. It is worse: an
+// agent's own leftovers routinely include symlinks (node_modules/.bin, venv,
+// build caches), so `clean` would refuse exactly the junk it exists to clear
+// and the agent would reach for `rm -rf` again — the outcome this command was
+// written to prevent.
+//
+// The intermediate components are a different question and stay resolved: a
+// symlinked DIRECTORY in the middle of the path is traversed by Rename itself,
+// so validating it unresolved would prove nothing about where the move lands.
+//
+// The other subtle half is that the target may NOT EXIST (idempotent re-runs),
+// which is why canonicalise resolves the deepest ancestor it can rather than
+// demanding the whole path resolve.
 //
 // "Strictly inside" excludes the root itself: `ocagent clean <my workdir>`
 // would quarantine the agent's whole home INTO its own quarantine directory,
@@ -129,25 +183,23 @@ func resolveInsideRoot(root, arg string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cannot resolve: %w", err)
 	}
-	full := canonicalise(abs)
+	abs = filepath.Clean(abs)
 
-	rel, err := filepath.Rel(root, full)
-	if err != nil {
-		return "", fmt.Errorf("outside my workdir: %s", arg)
-	}
-	if rel == "." {
-		return "", fmt.Errorf("that is my workdir itself, not something in it: %s", arg)
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("outside my workdir: %s", arg)
-	}
+	// The path to OPERATE on: directory canonicalised, leaf left alone. The
+	// directory has to be resolved or nothing compares — cleanRoot resolves the
+	// root, and on macOS an agent typing /tmp/... would otherwise look outside a
+	// root spelled /private/tmp/.... The leaf is left unresolved because it is
+	// the object the caller named.
+	full := filepath.Join(canonicalise(filepath.Dir(abs)), filepath.Base(abs))
 
-	// The quarantine directory is not cleanable: moving trash into trash nests
-	// forever, and the whole point of quarantine is that it is the one place
-	// this command does not touch.
-	first := strings.Split(rel, string(filepath.Separator))[0]
-	if first == quarantineDirName {
-		return "", fmt.Errorf("that is already in %s/: %s", quarantineDirName, arg)
+	// Both must be inside: the fully-resolved path is the security check, and
+	// the path that will actually be renamed has to be checked too — a guard
+	// covering only the other one would be guarding something that never runs.
+	if err := insideRoot(root, canonicalise(abs), arg); err != nil {
+		return "", err
+	}
+	if err := insideRoot(root, full, arg); err != nil {
+		return "", err
 	}
 	return full, nil
 }
@@ -186,8 +238,8 @@ func quarantineDest(root, target string) (string, error) {
 	// an outward symlink (it is parked under trash/ intact), then later clean a
 	// real path whose rel traverses that parked name.
 	//
-	// So: create the parent first, then resolve it and require it to still be
-	// under root. This mirrors what ocwarden does before purging trash
+	// So: resolve the parent and require it to be under root BEFORE anything is
+	// created. This mirrors what ocwarden does before purging trash
 	// (cli/ocwarden/trash.go compares EvalSymlinks on both sides) — one half
 	// checking with Lstat and the other with a real resolution would be two
 	// different definitions of the same directory.
@@ -202,11 +254,25 @@ func quarantineDest(root, target string) (string, error) {
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return "", fmt.Errorf("cannot open quarantine: %w", err)
 	}
-	// And re-check what actually exists now: between the two calls the tail may
-	// have been created as a symlink, which the pre-check could not have seen.
-	if resolved, err := filepath.EvalSymlinks(parent); err != nil || !isUnder(root, resolved) {
-		return "", fmt.Errorf("the %s/ path leaves my workdir", quarantineDirName)
-	}
+	// 🔴 There used to be a second EvalSymlinks(parent) re-check here, sold as
+	// "the tail may have been created as a symlink between the two calls". It
+	// was DEAD CODE — deleting it left every test green, and no test could be
+	// written for it, because single-threaded it cannot fire:
+	//
+	//   • if parent already exists, canonicalise(parent) IS EvalSymlinks(parent)
+	//     — the pre-check above already made exactly this comparison;
+	//   • if it does not, MkdirAll only ever creates real directories, never
+	//     symlinks, so the resolution afterwards equals the pre-check's answer;
+	//   • every shape that could make the two disagree (dangling link, symlink
+	//     loop, a plain file in the way) makes MkdirAll itself fail first, and
+	//     that error returns above.
+	//
+	// The only remaining gap was a genuine race — another process swapping a
+	// component in between — and the re-check did not close that either: Rename
+	// still runs after it, so the same swap one instruction later wins anyway.
+	// Closing it properly needs openat/renameat on a held fd, which is a real
+	// change, not a re-check. An untested guard that looks like it closes a hole
+	// it does not close is worse than its absence: the next reader trusts it.
 	return dest, nil
 }
 
