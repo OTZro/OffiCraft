@@ -938,6 +938,177 @@
     opacity: 0.55;
   }
 }
+/* ===== T-4e95 「回覆這則」 =====
+ *
+ * Three surfaces, one visual language: a left-turning arrow plus low-emphasis
+ * text, always in --color-text-muted on the surrounding surface, so a thread
+ * full of replies stays as quiet as one without them.
+ *
+ * ① THE ROW ENTRY. It lives on .chat__msg-line rather than inside the bubble:
+ * the bubble corner is already spoken for by 放大閱讀, which exists only on
+ * incoming text messages, while the AC is 每一則 — own messages, inline reply
+ * cards and attachment-only bubbles included. The row is the one container all
+ * of those share.
+ *
+ * It is ALWAYS in the layout (opacity, never display) so revealing it on hover
+ * cannot shift the bubble sideways mid-hover. Coarse pointers have no hover to
+ * reveal with, so there it sits at reduced emphasis — the same contract
+ * .chat__msg-expand already established. */
+.chat__msg-reply {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    color 0.15s,
+    background-color 0.15s,
+    opacity 0.15s;
+}
+.chat__msg:hover .chat__msg-reply,
+.chat__msg-reply:focus-visible {
+  opacity: 1;
+}
+.chat__msg-reply:hover {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+@media (hover: none) {
+  .chat__msg-reply {
+    opacity: 0.55;
+  }
+}
+
+/* ② THE QUOTE LINE above a bubble. A single clipped line on purpose: it is a
+ * POINTER to a message that exists in its own right, not a second rendering of
+ * it — letting it wrap would grow a copy of the original into the thread, which
+ * is exactly what carrying only the id was meant to avoid.
+ *
+ * The leading rule reads as "this hangs off the message above". It is a
+ * <button> only when the quoted row is really in the loaded window; otherwise
+ * the same markup renders as a <span> and the cursor/hover affordances below
+ * simply do not apply to it. */
+.chat__msg-quote {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  margin-bottom: 3px;
+  padding: 2px 6px 2px 5px;
+  border: none;
+  border-left: 2px solid color-mix(in srgb, var(--color-text-muted) 45%, transparent);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--color-text-muted) 8%, transparent);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+  text-align: left;
+  /* One line, always — see above. */
+  white-space: nowrap;
+  overflow: hidden;
+}
+.chat__msg--me .chat__msg-quote {
+  /* Mirror the bubble's own alignment so the quote hangs off the right edge. */
+  margin-left: auto;
+}
+.chat__msg-quote__icon {
+  flex: none;
+}
+.chat__msg-quote__who {
+  flex: none;
+  font-weight: 600;
+}
+.chat__msg-quote__body {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat__msg-quote--locatable {
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+.chat__msg-quote--locatable:hover,
+.chat__msg-quote--locatable:focus-visible {
+  color: var(--color-accent);
+  border-left-color: color-mix(in srgb, var(--color-accent) 60%, transparent);
+}
+
+/* ③ THE 「正在回覆」 BANNER, between the attachment previews and the input row.
+ * Full width and clipped to one line for the same reason as the quote line: the
+ * composer must not grow or jump as the owner aims at different messages. */
+.chat__reply-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 5px 6px 5px 8px;
+  border-left: 2px solid var(--color-accent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+}
+.chat__reply-banner__icon {
+  flex: none;
+  color: var(--color-accent);
+}
+.chat__reply-banner__text {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.chat__reply-banner__who {
+  flex: none;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.chat__reply-banner__body {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The x. Sized to the 24px touch box the composer's other controls use, and
+ * pinned to the far edge so it never moves as the quoted text changes length —
+ * an owner cancelling a reply is aiming at a fixed target. */
+.chat__reply-banner__x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    background-color 0.15s;
+}
+.chat__reply-banner__x:hover,
+.chat__reply-banner__x:focus-visible {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-overlay) 8%, transparent);
+}
+
 /* Attachment stack inside the bubble: each item (thumbnail / file chip) on its
  * own row, in message order. */
 .chat__msg-attachments {

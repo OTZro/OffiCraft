@@ -858,6 +858,22 @@ export const httpApi: Api = {
     return wire.map(toChatMessage);
   },
 
+  async listChatByIds(ids: string[]): Promise<ChatMessage[]> {
+    // GET /api/chat?ids=<id>&ids=<id> -> ChatMessageDTO[]: the named messages
+    // IN FULL, and NO read-watermark side effect. This is how the thread
+    // resolves a `reply_to` whose target has scrolled out of the loaded window
+    // — the alternative was shipping a copy of the quoted text beside every
+    // reply, which the owner ruled against (T-4e95).
+    //
+    // The server refuses the WHOLE call (404) when ANY id names no message, so
+    // callers batch only ids they were actually shown. At most 20 per call.
+    if (ids.length === 0) return [];
+    const wire = unwrap(
+      await client.GET("/api/chat", { params: { query: { ids } } }),
+    );
+    return wire.map(toChatMessage);
+  },
+
   async peekChat(withId: string, limit = 30): Promise<ChatMessage[]> {
     // READ-ONLY conversation view (no "list 即讀" watermark side effect): the
     // server ?peek=true (T-cf91) filters by ?with= and caps by limit EXACTLY
@@ -906,6 +922,7 @@ export const httpApi: Api = {
     to: string;
     body: string;
     attachments?: ChatAttachmentInput[];
+    replyTo?: string;
   }): Promise<ChatMessage> {
     // POST /api/chat {to, body, attachments?} -> ChatMessageDTO (server stamps
     // from/id/ts from the verified JWT sub). Addressing is by id (msg.to is a
@@ -921,6 +938,14 @@ export const httpApi: Api = {
         body: {
           to: msg.to,
           body: msg.body,
+          // The quote link, when this send is a reply. Omitted entirely when it
+          // is not, so an ordinary post's wire shape is unchanged. The server
+          // validates it (exists + same conversation) and is the only writer of
+          // the stored link.
+          // "" is the wire's "replies to nothing" — the same shape `body`
+          // uses, and what the generated request type requires. The server
+          // treats an empty value as no link at all.
+          reply_to: msg.replyTo ?? "",
           ...(attachments.length > 0
             ? {
                 attachments: attachments.map((a) => ({

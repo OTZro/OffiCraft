@@ -325,6 +325,10 @@ export function toChatMessage(w: WireChatMessage): ChatMessage {
     // The reply card folded onto this message (wake snapshot only). Absent on
     // every other chat read, so the honest null — the message carries no card.
     card: w.card ? toChatInlineReplyCard(w.card) : null,
+    // The quoted message's id (`reply_to`). Honest passthrough: the server
+    // sends "" for a message that replies to nothing, which reads as null here.
+    // Nothing else about the quote is on the wire, by design.
+    replyTo: w.reply_to ? w.reply_to : null,
   };
 }
 

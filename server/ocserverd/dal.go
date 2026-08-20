@@ -599,13 +599,13 @@ func (d *DAL) listChatBefore(participant, caller string, beforeTS float64, befor
 // the stream's total (ts, id) order — the by-id re-read behind
 // `get_chat?ids=` (T-a828). A blank id list reads nothing.
 //
-// 🔴 IT DOES NOT FILTER BY CALLER, AND THAT IS THE POINT. The handler has to
-// tell "no such message" (404) apart from "that conversation is not yours"
-// (403), and a query that filtered here would collapse both into an empty row
-// set — leaving the handler to guess, which is how a permission refusal ends up
-// worded as "not found" and a caller goes hunting for a message that is right
-// there. The participation check lives at the seam that knows who is asking
-// (chatMessagesTheCallerWasIn).
+// 🔴 IT DOES NOT FILTER BY CALLER. Since T-4e95 nothing above it does either:
+// the by-ids read reaches as far as the ordinary listing does, because the
+// listing filters on `with` — a PARTICIPANT — not on the caller, and two doors
+// onto the same rows must not disagree about who may open them. This function
+// was already caller-blind before that ruling (a query that filtered here would
+// have collapsed "no such message" and "not yours" into one empty row set,
+// leaving the handler to guess); it is now caller-blind all the way up.
 //
 // Ids are matched exactly and the result carries at most one row per id, so a
 // duplicated id cannot inflate the answer. Rows are returned for whichever ids

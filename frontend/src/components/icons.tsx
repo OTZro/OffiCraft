@@ -339,6 +339,19 @@ export function ExpandIcon({ size = 16, className }: IconProps) {
   );
 }
 
+/** Reply arrow — the 「回覆這則」 entry on a chat row, and the marker on the
+ * quote line above a message that replies to another (T-4e95). A left-turning
+ * arrow rather than a speech bubble: the action is aiming at an EXISTING
+ * message, not starting a new one, and ChatBubbleIcon already means the latter. */
+export function ReplyIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <polyline points="9 17 4 12 9 7" />
+      <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+    </svg>
+  );
+}
+
 /** Clock glyph — step 耗時 stamps + the 等待外部 reason row. */
 export function ClockIcon({ size = 16, className }: IconProps) {
   return (

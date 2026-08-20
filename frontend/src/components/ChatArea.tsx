@@ -15,6 +15,7 @@ import type {
 import { autosizeTextarea } from "../lib/autosize";
 import { getChatDraft, saveChatDraft } from "../lib/chatDraftStore";
 import { useChat } from "../hooks/useChat";
+import { useQuotedMessages } from "../hooks/useQuotedMessages";
 import { useWorkerCodenames } from "../hooks/useWorkerCodenames";
 import { formatDayLabel, splitByDay } from "../lib/dateFormat";
 import {
@@ -37,10 +38,12 @@ import { CurrentTaskTitle } from "./CurrentTaskTitle";
 import {
   BoltIcon,
   ChevronRightIcon,
+  CloseIcon,
   ExpandIcon,
   ImageIcon,
   MoonIcon,
   PaperclipIcon,
+  ReplyIcon,
   SendIcon,
   TasksIcon,
   UserGearIcon,
@@ -53,6 +56,10 @@ import { DispatchAlert } from "./DispatchAlert";
 // (NOT "ceo"). The mock stamps the same (MOCK_OWNER_ID) so a message reads as
 // "me" (right-aligned, from=你) in BOTH mock and real mode.
 const OWNER_ID = "owner";
+
+/** How much of a quoted message the reply banner / quote row shows. Long enough
+ * to recognise the sentence, short enough that the banner stays one line. */
+const QUOTE_EXCERPT_CHARS = 60;
 
 /** A message is INTER-AGENT (agent↔agent) when NEITHER endpoint is the owner:
  * owner↔agent always has the owner as one side; agent↔agent never does. This is
@@ -285,6 +292,15 @@ export function ChatArea({
   // in the peer-switch render block below. Staged attachments are restored
   // alongside (they live in useAttachmentStaging, set via its API).
   const [draft, setDraft] = useState(() => getChatDraft(member.id)?.text ?? "");
+  // T-4e95 「回覆這則」: the message the composer is currently replying to, or
+  // null in the ordinary send state. It rides the DRAFT store, not just this
+  // component's state, for the same reason the text does — a 跳頁-and-back that
+  // restored the words but silently dropped the reply target would send the
+  // message somewhere the owner did not aim it, and look like a normal restore
+  // while doing it.
+  const [replyToId, setReplyToId] = useState<string | null>(
+    () => getChatDraft(member.id)?.replyTo ?? null,
+  );
   // The staged attachments (pasted images AND/OR picked/dropped files), held
   // until the message is sent — the SHARED staging state machine
   // (useAttachmentStaging: size/count caps, paste/pick funnels, previews).
@@ -482,6 +498,10 @@ export function ChatArea({
     // functional set sees the just-cleared empty list and takes the snapshot).
     const restored = getChatDraft(member.id);
     setDraft(restored?.text ?? "");
+    // The reply target is per-conversation by construction (the server refuses a
+    // reply_to from another conversation), so it MUST swap with the peer — a
+    // target left over from the previous room would be refused on send.
+    setReplyToId(restored?.replyTo ?? null);
     clearAttachments();
     if (restored && restored.attachments.length > 0) {
       restoreAttachments(restored.attachments);
@@ -511,8 +531,12 @@ export function ChatArea({
   // window. An empty draft deletes the entry (saveChatDraft), giving the
   // "送出 / 手動清空後歸零" behavior for free.
   useEffect(() => {
-    saveChatDraft(member.id, { text: draft, attachments: pendingAttachments });
-  }, [member.id, draft, pendingAttachments]);
+    saveChatDraft(member.id, {
+      text: draft,
+      attachments: pendingAttachments,
+      replyTo: replyToId ?? undefined,
+    });
+  }, [member.id, draft, pendingAttachments, replyToId]);
 
   // T-e987 compose seed: prefill the composer once with "[<taskNo>] " when the
   // 任務卡 label routes here, but only into an EMPTY draft (never overwrite
@@ -610,6 +634,62 @@ export function ChatArea({
   // The newest message ts in the thread — the watermark the owner marks read up
   // to (0 when empty).
   const newestTs = messages.length > 0 ? messages[messages.length - 1].ts : 0;
+
+  // ===== T-4e95 quote resolution =====
+  //
+  // A reply carries the quoted message's ID AND NOTHING ELSE (owner ruling), so
+  // the quote has to be looked up. Two sources, in this order: the thread we
+  // already hold, then a by-id read for targets that have scrolled out of the
+  // loaded window. Nothing is copied onto the reply itself, which is the whole
+  // point — one message, one place.
+  const messageById = useMemo(
+    () => new Map(messages.map((m) => [m.id, m])),
+    [messages],
+  );
+  const quotedIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const m of messages) if (m.replyTo) ids.add(m.replyTo);
+    if (replyToId) ids.add(replyToId);
+    return Array.from(ids);
+  }, [messages, replyToId]);
+  const fetchedQuotes = useQuotedMessages(quotedIds, messageById);
+  // undefined = not resolved yet; null = asked and missed (the honest "an
+  // earlier message" label). The two are NOT the same state and the UI must not
+  // collapse them into one.
+  function quoteOf(id: string): ChatMessage | null | undefined {
+    return messageById.get(id) ?? fetchedQuotes.get(id);
+  }
+  // The quoted message the COMPOSER is aiming at (same three states).
+  const replyQuote = replyToId ? quoteOf(replyToId) : undefined;
+
+  // One line of the quoted message, for the banner and the quote row. Newlines
+  // and runs of spaces collapse — a quote is a pointer, not a rendering of the
+  // original, and a multi-line excerpt would push the composer around as the
+  // owner picks different targets. An attachment-only message has no text to
+  // quote and says so rather than showing an empty line.
+  function quoteExcerpt(q: ChatMessage): string {
+    const text = q.body.replace(/\s+/g, " ").trim();
+    if (text) {
+      return text.length > QUOTE_EXCERPT_CHARS
+        ? text.slice(0, QUOTE_EXCERPT_CHARS) + "\u2026"
+        : text;
+    }
+    return q.attachments.length > 0 ? t.chat.replyQuoteAttachment : "";
+  }
+
+  // Scroll a message into view and flash it — the "點得回去原訊息" half of the
+  // feature. Returns false when the row is not in the DOM (the quoted message
+  // is older than the loaded window): an honest miss, matching how the
+  // #office/chat/<id>/msg/<msgId> jump already behaves.
+  function locateMessage(id: string): boolean {
+    const el = messagesRef.current?.querySelector(`[data-msg-id="${id}"]`);
+    if (!el) return false;
+    el.scrollIntoView({ block: "center" });
+    // Located mid-thread → not at the bottom; a later arrival must not yank.
+    nearBottomRef.current = false;
+    setHighlightMsgId(id);
+    return true;
+  }
 
   // B3 跳到原訊息 — declared BEFORE the entry-positioning reactor below so the
   // jump consumes entry positioning first (the divider/bottom scroll must not
@@ -827,6 +907,7 @@ export function ChatArea({
     // silently swallowed.
     const draftSnapshot = draft;
     const attachmentsSnapshot = pendingAttachments;
+    const replyToSnapshot = replyToId;
     // ALL staged attachments ride the SAME message, in staged order.
     const attachments = attachmentsSnapshot.map((a) => ({
       dataB64: a.dataUri,
@@ -837,10 +918,14 @@ export function ChatArea({
     }));
     setDraft("");
     clearAttachments();
+    // Cleared with the rest of the composer: a reply target that survived its
+    // own send would silently attach itself to the NEXT message too.
+    setReplyToId(null);
     try {
       await send(
         draftSnapshot,
         attachments.length > 0 ? attachments : undefined,
+        replyToSnapshot ?? undefined,
       );
     } catch (e) {
       console.warn("ChatArea: send failed, restoring composer", e);
@@ -849,6 +934,9 @@ export function ChatArea({
       // new draft while the send was in flight, don't clobber it.
       setDraft((cur) => (cur ? cur : draftSnapshot));
       restoreAttachments(attachmentsSnapshot);
+      // Same rule as the text: put the target back only if the owner has not
+      // already aimed at something else while the send was in flight.
+      setReplyToId((cur) => (cur ? cur : replyToSnapshot));
     }
   }
 
@@ -951,6 +1039,64 @@ export function ChatArea({
         />
       </div>
     );
+    // T-4e95 ① the QUOTE LINE — a thin row above the bubble saying which
+    // message this one answers. The wire carries the quoted id and nothing
+    // else, so the sender name and the excerpt are resolved from the thread (or
+    // a by-id read) rather than copied onto the reply.
+    //
+    // Locatable ONLY when the quoted row is really in the loaded window: a
+    // button that scrolls nowhere is worse than a label that never claimed it
+    // would. Older-than-the-window renders as a plain span, matching how the
+    // #office/chat/<id>/msg/<msgId> jump already lands honestly.
+    const quoted = m.replyTo ? quoteOf(m.replyTo) : undefined;
+    const quoteLocatable = m.replyTo ? messageById.has(m.replyTo) : false;
+    const quoteWho = quoted ? nameOf(quoted.from) : "";
+    const quoteText = quoted
+      ? quoteExcerpt(quoted)
+      : quoted === null
+        ? t.chat.replyQuoteGone
+        : "\u2026";
+    const quoteInner = (
+      <>
+        <ReplyIcon size={11} className="chat__msg-quote__icon" />
+        {quoteWho && <span className="chat__msg-quote__who">{quoteWho}</span>}
+        <span className="chat__msg-quote__body">{quoteText}</span>
+      </>
+    );
+    const quoteLine = !m.replyTo ? null : quoteLocatable ? (
+      <button
+        type="button"
+        className="chat__msg-quote chat__msg-quote--locatable"
+        onClick={() => locateMessage(m.replyTo as string)}
+        title={t.chat.replyQuoteJump}
+      >
+        {quoteInner}
+      </button>
+    ) : (
+      <span className="chat__msg-quote">{quoteInner}</span>
+    );
+
+    // T-4e95 ② the REPLY ENTRY — on EVERY row, both directions, cards and
+    // attachment-only messages included (the AC is 每一則). It sits on the row
+    // rather than inside the bubble because the bubble corner is already taken
+    // by 放大閱讀 and exists only on incoming text messages; the row is the one
+    // container every message shape shares. Always rendered (opacity-revealed
+    // on hover) so appearing costs no layout shift.
+    const replyEntry = (
+      <button
+        type="button"
+        className="chat__msg-reply"
+        aria-label={t.chat.replyAction}
+        title={t.chat.replyAction}
+        onClick={() => {
+          setReplyToId(m.id);
+          inputRef.current?.focus();
+        }}
+      >
+        <ReplyIcon size={13} />
+      </button>
+    );
+
     return (
       <Fragment key={m.id}>
         {/* ② the "以下是未讀訊息" divider — a thin low-emphasis rule above the
@@ -981,7 +1127,11 @@ export function ChatArea({
               {read && <span className="chat__msg-read">{t.chat.read}</span>}
               <span className="chat__msg-time">{formatTime(m.ts)}</span>
             </div>
-            <div className="chat__msg-content">{content}</div>
+            <div className="chat__msg-content">
+              {quoteLine}
+              {content}
+            </div>
+            {replyEntry}
           </div>
         ) : (
           // LINE-style incoming: mirror of the outgoing row. The name label above
@@ -993,10 +1143,14 @@ export function ChatArea({
               <span className="chat__msg-name">{senderLabel}</span>
             </div>
             <div className="chat__msg-line">
-              <div className="chat__msg-content">{content}</div>
+              <div className="chat__msg-content">
+                {quoteLine}
+                {content}
+              </div>
               <div className="chat__msg-sidemeta">
                 <span className="chat__msg-time">{formatTime(m.ts)}</span>
               </div>
+              {replyEntry}
             </div>
           </>
           )}
@@ -1347,6 +1501,43 @@ export function ChatArea({
                   })
                 }
               />
+            )}
+            {/* T-4e95 ③ 「正在回覆」 — the LINE-style banner ABOVE the input
+             * row, naming who is being answered and quoting a slice of what
+             * they said, with an x that returns the composer to the ordinary
+             * send state.
+             *
+             * 🔴 THE x CLEARS THE TARGET AND NOTHING ELSE. Half-typed text and
+             * staged attachments stay exactly as they are — cancelling a reply
+             * is not cancelling the message, and a composer that emptied itself
+             * here would lose work the owner never asked to throw away. */}
+            {replyToId && (
+              <div className="chat__reply-banner" data-testid="chat-reply-banner">
+                <ReplyIcon size={13} className="chat__reply-banner__icon" />
+                <span className="chat__reply-banner__text">
+                  <span className="chat__reply-banner__who">
+                    {t.chat.replyingTo(
+                      replyQuote ? nameOf(replyQuote.from) : member.name,
+                    )}
+                  </span>
+                  <span className="chat__reply-banner__body">
+                    {replyQuote
+                      ? quoteExcerpt(replyQuote)
+                      : replyQuote === null
+                        ? t.chat.replyQuoteGone
+                        : "\u2026"}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  className="chat__reply-banner__x"
+                  aria-label={t.chat.replyCancel}
+                  title={t.chat.replyCancel}
+                  onClick={() => setReplyToId(null)}
+                >
+                  <CloseIcon size={14} />
+                </button>
+              </div>
             )}
             <div className="chat__composer-row">
               {/* Hidden native file input the attach button triggers. */}

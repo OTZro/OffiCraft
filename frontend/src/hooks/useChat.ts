@@ -59,7 +59,13 @@ interface UseChat {
   peerLastReadTs: number;
   // Send text and/or a LIST of staged attachments (files + images mixed) — all
   // riding the SAME message.
-  send: (body: string, attachments?: ChatAttachmentInput[]) => Promise<void>;
+  send: (
+    body: string,
+    attachments?: ChatAttachmentInput[],
+    /** T-4e95: the id of the message this send REPLIES TO, when it is a reply.
+     * Omitted on an ordinary send. */
+    replyTo?: string,
+  ) => Promise<void>;
   // Mark this conversation read up to `lastReadTs` (the owner's own watermark) —
   // called when the owner enters / scrolls to the bottom of the thread.
   markRead: (lastReadTs: number) => Promise<void>;
@@ -264,12 +270,16 @@ export function useChat(withId: string): UseChat {
   }, [withId, refetchReads]);
 
   const send = useCallback(
-    async (body: string, attachments?: ChatAttachmentInput[]) => {
+    async (
+      body: string,
+      attachments?: ChatAttachmentInput[],
+      replyTo?: string,
+    ) => {
       const trimmed = body.trim();
       // Allow sending when EITHER text or attachments are present; reject only a
       // truly empty message (no text AND no attachments) — mirrors the server's 400.
       if (!trimmed && !(attachments && attachments.length > 0)) return;
-      await api.postChat({ to: withId, body: trimmed, attachments });
+      await api.postChat({ to: withId, body: trimmed, attachments, replyTo });
       // Reconcile by refetch so the sent message appears immediately.
       await refetch();
     },
