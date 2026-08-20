@@ -176,10 +176,13 @@ func realMain(argv []string, env func(string) string, in io.Reader, out io.Write
 	case "clean":
 		// The ONE entry for "get rid of this file/folder I made" (owner
 		// 2026-08-16 / 2026-08-20). It deletes NOTHING — the target is moved
-		// under <my workdir>/trash/. The point is to end the hand-written
-		// procedure in seeds/offboard.md §5, which STILL spells out
-		// mv/trash/rm today — swapping it for this command is a separate
-		// change, queued behind that document's pending rewrite. See clean.go.
+		// under <my workdir>/trash/. It ended the hand-written procedure:
+		// seeds/offboard.md §4 and seeds/system_interaction.md §3.5/§3.6 now
+		// name this command instead of a directory.
+		// ⚠️ seeds/system_interaction.md 附錄 A tells the reader that an ocagent
+		// WITHOUT this subcommand answers 「unknown subcommand」, and to skip the
+		// item rather than stall. The default arm below prints exactly that
+		// phrase, so it is part of the contract, not just a default. See clean.go.
 		fs := flag.NewFlagSet("ocagent clean", flag.ContinueOnError)
 		fs.SetOutput(out)
 		if err := fs.Parse(rest); err != nil {

@@ -9,8 +9,10 @@
 // sitting in front of a headless agent to press Yes, so the agent hangs SILENTLY
 // until it is reaped. The fix is NOT "mv is safer than rm" — an experiment showed
 // relative/absolute x mv/rm all behave identically in that environment, so the verb
-// has ZERO discriminating power. The fix is WHO EXECUTES THE DELETE: the seeds now
-// tell agents to `mv` their scratch into <workdir>/trash/ and NEVER rm, and THIS
+// has ZERO discriminating power. The fix is WHO EXECUTES THE DELETE: agents move
+// their scratch aside and NEVER rm — since 2026-08-20 the seeds say that by naming
+// `ocagent clean <path>` rather than a directory, and that command quarantines
+// under <workdir>/trash/ — and THIS
 // file does the actual removal from ocwarden — an independent Go daemon started by
 // launchd with no claude in the chain, so the harness gate simply does not apply.
 //
@@ -28,9 +30,14 @@ import (
 	"path/filepath"
 )
 
-// trashDirName is the ONE directory name the seeds tell agents to mv into and the
-// ONE name this reaper will ever remove. Not configurable on purpose — a
-// configurable name is one more input that can be pointed somewhere else.
+// trashDirName is the ONE name this reaper will ever remove. Not configurable on
+// purpose — a configurable name is one more input that can be pointed somewhere
+// else.
+//
+// ⚠️ It is a SEPARATE literal from ocagent's quarantineDirName (cli/ocagent/clean.go),
+// not a shared constant: the two binaries ship independently, so they are two
+// declarations of the same agreement rather than one. Changing either alone
+// strands quarantined files instead of freeing them — change both, or neither.
 const trashDirName = "trash"
 
 // purgeTrash removes <workdir>/trashDirName, or refuses.
