@@ -28,8 +28,17 @@ const NAME_M = uniqueName('Reply M');
 const TARGET = 'the sentence that gets quoted back';
 const ANSWER = 'answering that one';
 // Enough filler that the target scrolls out of view — the jump has to be a real
-// scroll decision, not a no-op on a row already on screen.
-const FILLER = 24;
+// scroll decision, not a no-op on a row already on screen. (The spec asserts
+// that precondition rather than trusting it: see `not.toBeInViewport()` below.)
+//
+// 🔴 THIS NUMBER IS COUPLED TO THE CLIENT'S PAGE SIZE AND HAS ONLY 4 SPARE.
+// useChat loads CHAT_PAGE_SIZE = 30 messages and grows backwards only when the
+// owner scrolls up, which this spec never does. The thread here is
+// 1 target + FILLER (24) + 1 reply = 26 messages. Push FILLER past 28 and the
+// TARGET falls out of the loaded window: the quote row then renders the honest
+// 「較早的一則訊息」 miss with no jump control at all, and BOTH the quote
+// assertion and the jump would go red for a reason that has nothing to do with
+// 「回覆這則」 being broken. If the page size changes, this number moves with it.
 
 test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
   test('reply to a message: the banner names the sender, the send carries the link, the reply shows a quote row, and it jumps back', async ({
@@ -51,8 +60,11 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     await bootAuthedSpa(page, token);
     await page.locator('.member-card', { hasText: NAME_M }).click();
     const thread = page.locator('.chat__messages');
+    // EXISTENCE, not uniqueness: `target` is already `.first()`, so its count
+    // can only ever be 0 or 1 and a `toHaveCount(1)` here was dressing an
+    // existence check up as a uniqueness check it cannot perform.
     const target = thread.locator('.chat__msg', { hasText: TARGET }).first();
-    await expect(target).toHaveCount(1);
+    await expect(target).toBeVisible();
 
     // ── 點回覆 (the entry is hover-revealed but always occupies layout)
     await target.scrollIntoViewIfNeeded();
@@ -101,6 +113,16 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     await expect(quote).not.toContainText('較早的一則訊息');
 
     // ── 跳回原訊息
+    //
+    // 🔴 THE PRECONDITION IS PART OF THE TEST. Without it the final
+    // `toBeInViewport()` is satisfied by a target that simply never left the
+    // screen, and this assertion is vacuously true for a jump button that does
+    // nothing at all. It passes today only because the filler above happens to
+    // have pushed the target out — a layout coincidence, not a checked fact.
+    // Assert it, so a future change to FILLER or to the row height fails HERE,
+    // loudly, rather than quietly turning the assertion below into a no-op.
+    await expect(target).not.toBeInViewport();
+
     await quote.getByTestId('msg-quote-jump').click();
     await expect(target).toBeInViewport();
   });

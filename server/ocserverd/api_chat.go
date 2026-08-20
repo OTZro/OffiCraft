@@ -1393,10 +1393,15 @@ func resumeChatCollapseIsWorthIt(omitted int) bool {
 
 // resumeChatMessageChars is the rune cost ONE projected message puts on the
 // wire. It counts the body as CARRIED (post-collapse) plus everything the wake
-// format adds around it. Ids are deliberately NOT counted: they were already on
-// the wire before this format existed and were never in chat_chars, so counting
-// them now would move the number for a reason that has nothing to do with what
-// changed.
+// format adds around it. Ids are deliberately NOT counted — the rule is flatly
+// "no id-shaped field is billed", and it is a RULE rather than a history: an
+// earlier version of this note justified it as "they were already on the wire
+// before this format existed", which was true of `id`/`from`/`to` and FALSE of
+// `reply_to`, a field T-4e95 added. The conclusion did not change (an id is a
+// fixed-size handle the reader follows, not prose it has to read), but the
+// reason had to, because the old one silently stopped applying the moment a new
+// id-shaped field arrived. Applies to every id-shaped field, present and
+// future.
 func resumeChatMessageChars(d chatMessageDTO) int {
 	n := utf8.RuneCountInString(d.Body) +
 		utf8.RuneCountInString(d.FromName) +

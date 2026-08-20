@@ -31,6 +31,11 @@ import {
   getChatDraft,
   saveChatDraft,
 } from "../lib/chatDraftStore";
+// The ACTIVE dictionary, not a copy of its strings. These tests assert on the
+// i18n VALUE — a literal "回覆這則" here would go red the day someone re-words
+// the button, which is not a defect, and would stay green if the label were
+// swapped for a different key, which is.
+import { zh } from "../i18n/locales/zh";
 
 let messages: ChatMessage[] = [];
 const send = vi.fn(() => Promise.resolve());
@@ -188,6 +193,134 @@ describe("ChatArea 回覆這則", () => {
     // a decision on record rather than something that quietly happened.
     const cardEntry = rowOf(container, "c-3").querySelector(".chat__msg-reply")!;
     expect(cardEntry.closest(".chat__msg-bubble")).toBeNull();
+  });
+
+  // ── the accessibility surface ──────────────────────────────────────────────
+  //
+  // r18 F2: a reviewer stripped the aria-label AND title off all three controls,
+  // removed the focus hand-off, and blanked the attachment excerpt — and all 666
+  // frontend tests stayed green. Every test in this block exists because that
+  // mutant survived.
+
+  it("every control this feature adds has an accessible name", () => {
+    // All three are ICON-ONLY buttons: without a name they are announced as
+    // 「按鈕」 and a screen-reader user has three indistinguishable ones.
+    messages = [
+      mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" }),
+      mkMsg({
+        id: "c-2",
+        from: "owner",
+        to: "m1",
+        body: "回它",
+        ts: 2,
+        replyTo: "c-1",
+      }),
+    ];
+    const { container } = renderChat();
+
+    // Guard against the vacuous version of this test: an empty dictionary value
+    // would make every comparison below "" === "" and prove nothing.
+    for (const v of [
+      zh.chat.replyAction,
+      zh.chat.replyCancel,
+      zh.chat.replyQuoteJump,
+    ]) {
+      expect(v.length, "the dictionary value must not be empty").toBeGreaterThan(0);
+    }
+
+    const entry = rowOf(container, "c-1").querySelector(".chat__msg-reply")!;
+    expect(entry.getAttribute("aria-label")).toBe(zh.chat.replyAction);
+    expect(entry.getAttribute("title")).toBe(zh.chat.replyAction);
+
+    // The jump lives on the reply's own row and has a visible label too — but
+    // that label is the FIRST thing to be trimmed to an ellipsis when the bubble
+    // runs out of room (see the CT guard), so the accessible name may not depend
+    // on it surviving.
+    const jump = rowOf(container, "c-2").querySelector(
+      "[data-testid='msg-quote-jump']",
+    )!;
+    expect(jump.getAttribute("aria-label")).toBe(zh.chat.replyQuoteJump);
+    expect(jump.getAttribute("title")).toBe(zh.chat.replyQuoteJump);
+
+    fireEvent.click(entry);
+    const x = container.querySelector(".chat__reply-banner__x")!;
+    expect(x.getAttribute("aria-label")).toBe(zh.chat.replyCancel);
+    expect(x.getAttribute("title")).toBe(zh.chat.replyCancel);
+  });
+
+  it("clicking the entry puts the caret in the composer", () => {
+    // The point of the whole control is 「我要回這一則」 — landing the owner
+    // anywhere but the input means the next thing they type goes nowhere.
+    const { container } = renderChat();
+    expect(document.activeElement).not.toBe(input(container));
+
+    fireEvent.click(rowOf(container, "c-1").querySelector(".chat__msg-reply")!);
+
+    expect(document.activeElement).toBe(input(container));
+  });
+
+  it("cancelling with the x gives the focus BACK to the composer", () => {
+    // r18 F1. The x unmounts itself, and a focused element leaving the document
+    // hands focus to <body>: a keyboard user who cancels one reply is dropped at
+    // the top of the page and has to Tab through the entire thread to get back
+    // to the input. Reproduced before the fix.
+    const { container } = renderChat();
+    fireEvent.click(rowOf(container, "c-1").querySelector(".chat__msg-reply")!);
+    const x = container.querySelector(".chat__reply-banner__x") as HTMLElement;
+    // Focus really is on the x first — otherwise "focus ends up in the input"
+    // could be satisfied by it having never left.
+    x.focus();
+    expect(document.activeElement).toBe(x);
+
+    fireEvent.click(x);
+
+    expect(banner(container)).toBeNull();
+    expect(document.activeElement).toBe(input(container));
+  });
+
+  it("quotes an attachment-only message by its attachment label, never as a blank", () => {
+    // Reported in r16 and r17 and not fixed either time. A message with no text
+    // has nothing to excerpt, and 「正在回覆 X」 followed by empty space reads as
+    // a half-rendered banner rather than as a picture. Both surfaces that quote
+    // — the composer banner and the sent reply's quote row — have to say it.
+    messages = [
+      mkMsg({
+        id: "c-att",
+        from: "m1",
+        to: "owner",
+        ts: 1,
+        attachments: [
+          {
+            id: "a1",
+            url: "/x",
+            filename: "p.png",
+            mime: "image/png",
+            isImage: true,
+          },
+        ],
+      }),
+      mkMsg({
+        id: "c-reply",
+        from: "owner",
+        to: "m1",
+        body: "收到",
+        ts: 2,
+        replyTo: "c-att",
+      }),
+    ];
+    expect(zh.chat.replyQuoteAttachment.length).toBeGreaterThan(0);
+    const { container } = renderChat();
+
+    // ① the sent reply's quote row
+    const quoteBody = rowOf(container, "c-reply").querySelector(
+      ".chat__msg-quote__body",
+    )!;
+    expect(quoteBody.textContent).toBe(zh.chat.replyQuoteAttachment);
+
+    // ② the composer banner, aiming at the same message
+    fireEvent.click(rowOf(container, "c-att").querySelector(".chat__msg-reply")!);
+    const bannerBody = container.querySelector(".chat__reply-banner__body")!;
+    expect(bannerBody.textContent).toBe(zh.chat.replyQuoteAttachment);
   });
 
   it("clicking it names the quoted sender and quotes what they said, above the input", () => {

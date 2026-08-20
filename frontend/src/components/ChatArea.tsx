@@ -1137,6 +1137,15 @@ export function ChatArea({
             type="button"
             className="chat__msg-quote__jump"
             data-testid="msg-quote-jump"
+            /* 🔴 THE NAME CANNOT RIDE ON THE VISIBLE LABEL. That label is the
+             * first thing this row gives up when the bubble runs short (see
+             * the note above), so at the narrow end the accessible name would
+             * shrink with it — and a `text-overflow` ellipsis is a PAINT, so
+             * what a screen reader reads is the whole string while what the
+             * eye reads is a stub. Naming the control explicitly makes the two
+             * agree and survives the trim. */
+            aria-label={t.chat.replyQuoteJump}
+            title={t.chat.replyQuoteJump}
             onClick={() => locateMessage(m.replyTo as string)}
           >
             <span className="chat__msg-quote__jump-label">
@@ -1700,7 +1709,17 @@ export function ChatArea({
                   className="chat__reply-banner__x"
                   aria-label={t.chat.replyCancel}
                   title={t.chat.replyCancel}
-                  onClick={() => setReplyToId(null)}
+                  onClick={() => {
+                    setReplyToId(null);
+                    // 🔴 GIVE THE FOCUS BACK. This button is about to unmount
+                    // itself, and a focused element that leaves the document
+                    // hands focus to <body> — so a keyboard user who cancels
+                    // one reply is thrown to the top of the page and has to Tab
+                    // back through the whole thread to reach the composer. The
+                    // reply ENTRY already does this on the way in; the way out
+                    // was missing.
+                    inputRef.current?.focus();
+                  }}
                 >
                   <CloseIcon size={14} />
                 </button>

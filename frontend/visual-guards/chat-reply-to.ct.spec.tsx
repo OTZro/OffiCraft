@@ -463,6 +463,31 @@ for (const width of [300, 320, 336, 360, 390]) {
     // first failing row, so a report naming a later row means the earlier ones
     // passed. Do not delete rows from this list on the belief that one of them
     // does the work.
+    // 🔴 A CSS-PROPERTY ASSERTION, AND ONLY THAT. r18 F3: a reviewer deleted
+    // `overflow: hidden; text-overflow: ellipsis;` from
+    // `.chat__msg-quote__jump-label` and every geometric assertion in this file
+    // stayed green while the English label painted straight out of the bubble
+    // and over the arrow. The reason is mechanical: clipping is PAINT. The
+    // label's box is the same width to the pixel with and without those two
+    // declarations, and all three geometric probes a reviewer tried
+    // (getBoundingClientRect, Range, elementFromPoint) report the PRE-CLIP
+    // value. There is no measurement in this harness that can see it.
+    //
+    // ⚠️ SO BE HONEST ABOUT THE RANGE OF THIS ONE. It fails if and only if
+    // someone REMOVES (or overrides) these two declarations on this selector.
+    // It does NOT witness:
+    //   • that anything actually got trimmed at any width;
+    //   • the shrink ORDER (name vs excerpt vs label) — that is the separate
+    //     loop above, and it is measured, not asserted on properties;
+    //   • a truncation that stops working for some other reason (a parent that
+    //     grew, `min-width` restored, `white-space` changed, the label moved to
+    //     a different element).
+    // It is a tripwire on two lines of CSS, not a guarantee about the layout.
+    // Read it as such and do not let it stand in for a geometric guard.
+    const label = cmp.getByTestId("row-mine").locator(".chat__msg-quote__jump-label");
+    await expect(label).toHaveCSS("overflow", "hidden");
+    await expect(label).toHaveCSS("text-overflow", "ellipsis");
+
     for (const row of [
       "row-mine",
       "row-mine-short",

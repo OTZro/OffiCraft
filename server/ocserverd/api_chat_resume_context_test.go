@@ -959,3 +959,59 @@ func delimiterColumns(line string) int {
 }
 
 var delimiterCell = regexp.MustCompile(`^:?-+:?$`)
+
+// ── ⑥ the reply link survives into the wake snapshot ─────────────────────────
+
+// TestResumeChat_CarriesTheReplyLink pins that a message which answers another
+// one still SAYS SO in the snapshot an agent wakes up holding.
+//
+// 🔴 WHY THIS WAS MISSING AND WHY IT MATTERS. r18 F5: the same field is guarded
+// on the REST read path (two tests go red there), and the wake path shares
+// newChatMessageDTO with it — so it LOOKED covered. It was not: a mutant that
+// blanks d.ReplyTo inside resumeChatMessageDTO (the projection this path and
+// only this path runs) left the entire Go suite green at 430 seconds. Without
+// the link the waking agent reads a flat list in which 「好，就這樣做」 has no
+// visible connection to the question it answers, and the only cue that a
+// conversation had structure is gone.
+//
+// BOTH DIRECTIONS ARE THE TEST. Asserting only that the reply carries the id is
+// satisfied by a projection that stamps every message with something; asserting
+// only that the quoted message is empty is satisfied by one that stamps nothing.
+// Neither half alone is a guard.
+//
+// MUTANT (run, r18): add `d.ReplyTo = ""` at the end of resumeChatMessageDTO —
+// this test is the only one in the package that goes red.
+func TestResumeChat_CarriesTheReplyLink(t *testing.T) {
+	api := resumeCtxServer(t)
+
+	// The quoted message, and the one answering it. The link lives in meta
+	// (chatReplyToMetaKey) exactly as the post handler stamps it — the DTO is
+	// what is under test, not the stamping.
+	putChat(t, api, "c-asked", "m-peer", "m-exec", "要出還是等？", 100, nil)
+	putChat(t, api, "c-answer", "m-exec", "m-peer", "等，我還在追一個 leak", 101,
+		map[string]any{chatReplyToMetaKey: "c-asked"})
+
+	snap := resumeSnapshot(t, api, "m-exec")
+
+	// ① the reply points at what it answers…
+	answer := chatByID(t, snap, "c-answer")
+	if answer.ReplyTo != "c-asked" {
+		t.Fatalf("the wake snapshot must carry the reply link, got reply_to=%q", answer.ReplyTo)
+	}
+	// ② …and the message it points AT claims nothing of its own. This is the
+	// half that stops "stamp everything" from passing: a projection that copied
+	// the id onto every row would satisfy ① and be nonsense.
+	asked := chatByID(t, snap, "c-asked")
+	if asked.ReplyTo != "" {
+		t.Fatalf("a message that replies to nothing must carry an empty reply_to, got %q",
+			asked.ReplyTo)
+	}
+
+	// And it is really on the WIRE under its documented name — a field renamed
+	// or dropped from the JSON would still satisfy both checks above, because
+	// they read a Go struct the test decodes itself.
+	raw := resumeSnapshotRaw(t, api, "m-exec")
+	if !strings.Contains(raw, `"reply_to":"c-asked"`) {
+		t.Fatalf("reply_to must be on the wire under that name: %s", raw)
+	}
+}
