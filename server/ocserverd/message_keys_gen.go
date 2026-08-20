@@ -192,6 +192,7 @@ var messageKeys = map[string]bool{
 	"monitor.machine.onboardError":             true,
 	"monitor.machine.onboardNamePlaceholder":   true,
 	"monitor.machine.online":                   true,
+	"monitor.machine.reinstall":                true,
 	"monitor.machine.runtimeLoggedOut":         true,
 	"monitor.machine.runtimeLoggedOutHint":     true,
 	"monitor.machine.runtimeNoVersion":         true,

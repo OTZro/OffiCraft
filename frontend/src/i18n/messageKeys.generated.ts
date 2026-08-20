@@ -191,6 +191,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "monitor.machine.onboardError",
   "monitor.machine.onboardNamePlaceholder",
   "monitor.machine.online",
+  "monitor.machine.reinstall",
   "monitor.machine.runtimeLoggedOut",
   "monitor.machine.runtimeLoggedOutHint",
   "monitor.machine.runtimeNoVersion",

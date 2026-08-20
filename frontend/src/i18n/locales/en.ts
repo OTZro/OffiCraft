@@ -1081,6 +1081,7 @@ export const en: Dict = {
       onboardError: "Failed to add machine",
       // ── three verbs: install / uninstall / delete ──
       install: "Install",
+      reinstall: "Reinstall",
       uninstall: "Uninstall",
       deleteMachine: "Delete",
       // offline machine has no warden to uninstall (disabled-button tooltip)
