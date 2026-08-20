@@ -29,6 +29,20 @@ import (
 
 var pathParamRe = regexp.MustCompile(`\{([^}]+)\}`)
 
+func emptyPathParam(value any) bool {
+	if value == nil {
+		return true
+	}
+	s, isString := value.(string)
+	return isString && strings.TrimSpace(s) == ""
+}
+
+// unsafePathParam identifies values that path.Clean could reinterpret as a
+// separator or dot segment instead of leaving them as one route segment.
+func unsafePathParam(value string) bool {
+	return strings.Contains(value, "/") || value == "." || value == ".."
+}
+
 // toolName is the MCP tool name of a route row: the explicit override, else
 // derived from method+path — the frozen tool_name rule verbatim.
 func (s RouteSpec) toolName() string {
@@ -85,12 +99,13 @@ func pyArgString(v any) string {
 }
 
 // splitToolArguments splits the flat `arguments` object per spec/mcp.md §3.1:
-// path keys pop into the path template (a missing key substitutes the empty
-// string — no error at this layer), a GET route's remaining non-null keys
-// become the query string (list values expand doseq-style), any other
+// path keys pop into the path template, a GET route's remaining non-null keys
+// become the query string (list values expand doseq-style), and any other
 // method's remaining keys become the JSON body (an empty object when nothing
-// remains — a body is ALWAYS sent for a write route).
-func splitToolArguments(spec RouteSpec, arguments map[string]any) (reqPath string, rawQuery string, body []byte) {
+// remains — a body is ALWAYS sent for a write route). A missing or empty path
+// parameter, or a value that could be cleaned into a different route, is a
+// validation error before the loopback dispatch.
+func splitToolArguments(spec RouteSpec, arguments map[string]any) (reqPath string, rawQuery string, body []byte, err error) {
 	remaining := make(map[string]any, len(arguments))
 	for k, v := range arguments {
 		remaining[k] = v
@@ -99,11 +114,15 @@ func splitToolArguments(spec RouteSpec, arguments map[string]any) (reqPath strin
 	reqPath = spec.Path
 	for _, match := range pathParamRe.FindAllStringSubmatch(spec.Path, -1) {
 		name := match[1]
-		sub := ""
-		if value, ok := remaining[name]; ok {
-			sub = pyArgString(value)
-			delete(remaining, name)
+		value, ok := remaining[name]
+		if !ok || emptyPathParam(value) {
+			return "", "", nil, errors.New("field required: " + name)
 		}
+		sub := pyArgString(value)
+		if unsafePathParam(sub) {
+			return "", "", nil, errors.New("invalid path: " + name)
+		}
+		delete(remaining, name)
 		reqPath = strings.ReplaceAll(reqPath, "{"+name+"}", sub)
 	}
 
@@ -121,14 +140,14 @@ func splitToolArguments(spec RouteSpec, arguments map[string]any) (reqPath strin
 			}
 			query.Add(k, pyArgString(v))
 		}
-		return reqPath, query.Encode(), nil
+		return reqPath, query.Encode(), nil, nil
 	}
 
 	raw, err := json.Marshal(remaining)
 	if err != nil {
 		raw = []byte("{}")
 	}
-	return reqPath, "", raw
+	return reqPath, "", raw, nil
 }
 
 // loopbackRecorder captures the sub-response (status + body) of an in-process
@@ -170,9 +189,10 @@ func (s *apiServer) loopbackCall(r *http.Request, method, reqPath, rawQuery stri
 	if s.loopback == nil {
 		return 0, nil, errors.New("loopback handler not wired")
 	}
-	// Pre-clean the path so the mux serves the natural 404/405 instead of a
-	// 301 canonicalisation redirect (an empty path-param substitution leaves
-	// "//" in the path; spec §3.1 wants the route to 404/405 naturally).
+	// Pre-clean the path so the mux receives its canonical form instead of
+	// issuing a 301 canonicalisation redirect. Keep this normalization for
+	// non-canonical paths even though splitToolArguments rejects empty and
+	// route-reinterpreting path params.
 	cleaned := pathpkg.Clean(reqPath)
 	req := (&http.Request{
 		Method:     method,
