@@ -1018,14 +1018,14 @@
   align-items: center;
   gap: 4px;
   max-width: 100%;
-  /* 🔴 BOTH of these keep the row inside the bubble, and neither is decoration.
-   * Without them the row's min-content width wins: a long sender name (nameOf
-   * falls back to the RAW ID when the roster cannot resolve it — that is the
-   * realistic long name, not a hypothetical) pushed 跳到原訊息 past the
-   * bubble's right edge and ON TOP of the corner reply button. Measured in a
-   * real browser at 390px: 3.4px of overhang, covering the control. */
-  min-width: 0;
-  overflow: hidden;
+  /* NO `overflow: hidden` and no `min-width: 0` here, and that is a correction:
+   * an earlier version carried both under a comment claiming BOTH were
+   * load-bearing. Measured with one mutation each (CT `chat-reply-to`, both
+   * widths): removing either — or both — changed nothing, all guards stayed
+   * green. What actually keeps the row inside the bubble is further down: the
+   * name is capped, and the quoted text is the item that gives way. Clipping
+   * here was not free either — it cut the focus ring off 跳到原訊息, which sits
+   * flush against the row's right edge. */
   margin-bottom: 6px;
   padding-bottom: 5px;
   border-bottom: 1px solid color-mix(in srgb, var(--color-text-muted) 22%, transparent);
@@ -1036,13 +1036,25 @@
 .chat__msg-quote__icon {
   flex: none;
 }
-/* The sender name shrinks too. It used to be `flex: none` on the reasoning that
- * a name is short — which is false exactly when it matters: an unresolved
- * sender renders as its raw id. Two shrinkable items on one row is fine; what
- * is not fine is a row where NOTHING can give. */
+/* 🔴 THE NAME IS CAPPED, NOT SHRUNK — and the difference is the whole rule.
+ * It was `flex: none` first (a name is short), which overflowed the bubble and
+ * put 跳到原訊息 on top of the corner reply button: display names are free text
+ * the owner types, so "short" is an assumption, not a fact. Making it `flex:
+ * 0 1 auto` fixed that and broke the common case instead: flex distributes
+ * shrink IN PROPORTION to each item's basis, so the moment the quoted text was
+ * long enough to be cut, the name was cut with it — 「Mira」 rendered as 「M…」
+ * with room to spare (measured in the running app at 1180px, and down to a bare
+ * ellipsis at 390px). The name answers WHO is being replied to; losing it
+ * defeats the feature, while a trimmed excerpt still reads fine.
+ *
+ * So: it does not shrink (`flex: 0 0 auto`), and it cannot overflow either,
+ * because `max-width` caps it at 40% of the row and ellipsises past that. Long
+ * name → capped. Short name → intact. Both directions are pinned by CT, one
+ * story row each. */
 .chat__msg-quote__who {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
+  max-width: 40%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
