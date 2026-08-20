@@ -106,6 +106,15 @@ export function useQuotedMessages(
         // about the other ids" and then recorded a definitive negative for all
         // of them — it contradicted itself in three lines.
         //
+        // ⚠️ THE RETRY IS IMMEDIATE, AND THAT IS ITS LIMIT. There is no backoff:
+        // the extra attempt goes out on the next render, so a blip measured at
+        // more than a few tens of milliseconds is already spent by the time the
+        // server is back (a reviewer clocked the whole budget burning in 56ms).
+        // What this buys is the common case — one dropped request — not an
+        // outage. Said out loud because the previous version of this comment
+        // could be read as promising recovery, and a timer here would be a new
+        // moving part in code that has already shipped two effect-ordering bugs.
+        //
         // ALL OR NOTHING is still true, and it is what makes 4xx definitive:
         // one unknown id refuses the WHOLE call with a 404, and that refusal
         // will not change on a retry. Anything else — a 5xx, a dropped socket,

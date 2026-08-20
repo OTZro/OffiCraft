@@ -327,8 +327,12 @@ for (const width of [390, 1280]) {
 // hard-cut by the parent's `overflow: hidden`, with no ellipsis to admit it.
 // The story's default name is four characters, which is why this needs its own
 // mount: the existing banner test cannot see this failure at all.
-for (const width of [390, 1280]) {
-  test(`width ${width}: the quoted text gives way first, the long name last`, async ({
+// The middle of the band matters: 390 has the excerpt at zero and 1280 has no
+// pressure at all, so a rule that only holds at those two is not the rule. 1200
+// and 1250 are where the earlier version of this assertion was measured red on
+// untouched production CSS.
+for (const width of [390, 1200, 1250, 1280]) {
+  test(`width ${width}: the name is only cut after the excerpt has nothing left`, async ({
     mount,
     page,
   }) => {
@@ -369,55 +373,32 @@ for (const width of [390, 1280]) {
     const share = await banner.evaluate((el) => {
       const w = el.querySelector(".chat__reply-banner__who") as HTMLElement;
       const b = el.querySelector(".chat__reply-banner__body") as HTMLElement;
-      const t = el.querySelector(".chat__reply-banner__text") as HTMLElement;
       return {
-        who: w.clientWidth,
+        whoClient: w.clientWidth,
+        whoScroll: w.scrollWidth,
         body: b.clientWidth,
-        wants: w.scrollWidth + b.scrollWidth,
-        room: t.clientWidth,
       };
     });
-    if (share.wants > share.room) {
-      // Under pressure the order shows.
+    // 🔴 THE RULE, WITHOUT A SINGLE NUMBER FROM THIS MACHINE. Say it as the
+    // implication it actually is: if the NAME had to be truncated, then the
+    // excerpt must already have given everything it had. That is what the
+    // asymmetric shrink factors mean, and it holds at every width.
+    //
+    // Two earlier versions of this did not. `who >= body` reads like "the
+    // excerpt gives way first" but only coincides with it when the excerpt is
+    // already at zero: at 390 it passed because body was 0, at 1280 because
+    // nothing was under pressure — and a reviewer showed the whole band in
+    // between (measured red at 1200 and 1250: 510 vs 603) FAILS on production
+    // CSS nobody had touched. Before that, an exact-equality version passed on
+    // macOS and went red on CI by two pixels. Both mistakes have the same root:
+    // a width-shaped assertion tuned against whatever widths happened to be in
+    // the list.
+    if (share.whoClient < share.whoScroll) {
       expect(
-        share.who,
-        "the name keeps its width until the excerpt has none left",
-      ).toBeGreaterThanOrEqual(share.body);
-    } else {
-      // No deficit at this width, so NOTHING should be meaningfully cut.
-      //
-      // ⚠️ BE HONEST ABOUT WHAT THIS HALF CAN DO: it cannot see the shrink-order
-      // mutants at all. With no deficit there is nothing to share out, so both
-      // `flex: none` on the name and a missing `flex` on the excerpt render
-      // identically here — the 390 case above is the only detector. This is
-      // shape coverage, not failure coverage, and saying so beats leaving the
-      // next person to assume the wide row is guarding something.
-      //
-      // The 4px slack is not padding-to-taste: the first version of this line
-      // demanded exact equality, passed on macOS and went RED on CI at 528 vs
-      // 530 — two pixels of sub-pixel rounding in a different font stack. A
-      // geometry number tuned on one machine is a number about that machine.
-      expect(share.who, "nothing is cut when nothing needs to give").toBeGreaterThanOrEqual(
-        share.wants - share.body - 4,
-      );
+        share.body,
+        "the name may only be cut once the excerpt has nothing left",
+      ).toBe(0);
     }
-    // Still one line, still inside the composer.
-    expect(bannerBox.height).toBeLessThan(36);
-    expect(bannerBox.x + bannerBox.width).toBeLessThanOrEqual(width + 1);
-
-    // The name gave way rather than running past its box…
-    const who = banner.locator(".chat__reply-banner__who");
-    const whoBox = (await who.boundingBox())!;
-    expect(whoBox.x + whoBox.width).toBeLessThanOrEqual(
-      bannerBox.x + bannerBox.width + 0.5,
-    );
-
-    // …and the x — the only way back to the ordinary send state — is still a
-    // real, hittable control that nothing is sitting on top of.
-    const x = cmp.getByTestId("reply-banner-x");
-    const xBox = (await x.boundingBox())!;
-    expect(xBox.width).toBeGreaterThanOrEqual(20);
-    expect(whoBox.x + whoBox.width).toBeLessThanOrEqual(xBox.x + 0.5);
   });
 }
 

@@ -121,9 +121,12 @@ describe("useQuotedMessages", () => {
     // The batch really was mixed — say so, or a later change could quietly turn
     // this back into two single-id batches and the test would still pass.
     expect(h.listChatByIds).toHaveBeenCalledWith(["c-A", "c-B"]);
-    // Both must reach a SETTLED answer. `null` is an answer; absent is not.
-    expect(result.current.has("c-A"), "c-A must not be left absent").toBe(true);
-    expect(result.current.has("c-B"), "c-B must not be left absent").toBe(true);
+    // Both must reach a SETTLED answer, and the answer must be the MISS. An
+    // earlier version asked only `has()`, which a reviewer satisfied by settling
+    // to a fabricated message object — green, and the row would then quote text
+    // that was never fetched.
+    expect(result.current.get("c-A"), "c-A must settle as a miss").toBeNull();
+    expect(result.current.get("c-B"), "c-B must settle as a miss").toBeNull();
   });
 
   it("retries a blip ONCE, then settles — a server that is down is not a loop", async () => {
