@@ -63,6 +63,11 @@ export function useQuotedMessages(
   // (production does not double-invoke, so it would have shipped looking fine
   // and been broken for everyone developing it). Found by review, reproduced
   // both ways before and after.
+  //
+  // It has a witness now, which it did not at first: reverting this line left
+  // all 2239 tests green, so the paragraph above was the only thing standing
+  // between the bug and a re-introduction. ChatArea.reply-to.test.tsx renders
+  // the quote path inside <StrictMode> and goes red on exactly that revert.
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;

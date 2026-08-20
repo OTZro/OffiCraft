@@ -19,6 +19,7 @@
 // (visual-guards/chat-reply-to.ct.spec.tsx). A jsdom test that "checked" those
 // would be green against a completely unstyled button.
 
+import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
@@ -87,6 +88,21 @@ function renderChat() {
     <I18nProvider>
       <ChatArea member={m1} />
     </I18nProvider>,
+  );
+}
+
+/** The SAME tree the app actually mounts. main.tsx wraps the whole app in
+ * <StrictMode>, which in dev runs every effect setup → cleanup → setup. That
+ * is not a detail: it is a distinct execution order that has already broken
+ * this feature once (review D1) in a way production could not reproduce, so
+ * the quote path is rendered both ways. */
+function renderChatStrict() {
+  return render(
+    <StrictMode>
+      <I18nProvider>
+        <ChatArea member={m1} />
+      </I18nProvider>
+    </StrictMode>,
   );
 }
 
@@ -281,6 +297,37 @@ describe("ChatArea 回覆這則", () => {
     const { container } = renderChat();
     fireEvent.change(input(container), { target: { value: "一" } });
     fireEvent.change(input(container), { target: { value: "一二" } });
+
+    const quote = rowOf(container, "c-9").querySelector(".chat__msg-quote")!;
+    await waitFor(() =>
+      expect(quote.textContent).toContain("較早的一則訊息"),
+    );
+  });
+
+  it("still settles the quote under <StrictMode> — the dev-only double-invoke", async () => {
+    // T-4e95 review D1. The fix for B1 kept a `mounted` ref, and a version of
+    // it with ONLY a cleanup was correct under a single mount and broken under
+    // StrictMode: setup → cleanup → setup sets the ref false on that first
+    // teardown and nothing sets it back, so from mount onwards every by-id
+    // answer is discarded and the quote sits at "…" — B1's symptom, restored.
+    //
+    // 🔴 IT ONLY BREAKS IN DEV, which is why this test exists rather than a
+    // comment. main.tsx wraps the app in <StrictMode>; production does not
+    // double-invoke, so the broken version shipped looking perfectly fine and
+    // was broken for everyone developing against it. Rendering through the
+    // ordinary helper cannot see this at all: with the fix reverted, the whole
+    // 2239-test suite stayed green.
+    messages = [
+      mkMsg({
+        id: "c-9",
+        from: "owner",
+        to: "m1",
+        body: "回覆很久以前那則",
+        ts: 9,
+        replyTo: "c-longgone",
+      }),
+    ];
+    const { container } = renderChatStrict();
 
     const quote = rowOf(container, "c-9").querySelector(".chat__msg-quote")!;
     await waitFor(() =>

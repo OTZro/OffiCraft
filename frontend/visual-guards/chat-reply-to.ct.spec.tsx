@@ -91,6 +91,35 @@ for (const width of [390, 1280]) {
     expect(jump.x + jump.width).toBeLessThanOrEqual(acts.x + 0.5);
   });
 
+  test(`width ${width}: a short sender name in the quote row is never ellipsised`, async ({
+    mount,
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    const cmp = await mount(<ChatReplyToStory />);
+
+    const who = cmp.getByTestId("quote-who-short");
+    const body = cmp.getByTestId("quote-body-short");
+
+    // POSITIVE CONTROL first: the row really is tight enough to force a cut.
+    // Without this the assertion below would also pass on a row with acres of
+    // spare width — i.e. it would guard nothing.
+    const bodyCut = await body.evaluate(
+      (e) => e.scrollWidth > e.clientWidth + 0.5,
+    );
+    expect(bodyCut).toBe(true);
+
+    // 🔴 AND THE NAME SURVIVES IT. Two shrinkable items shrink in proportion,
+    // so the quoted text taking a cut used to drag the name down with it —
+    // 「Mira」 rendered as 「M…」 with room to spare. The name answers WHO;
+    // the quoted text is the part that may be trimmed.
+    const whoCut = await who.evaluate(
+      (e) => e.scrollWidth > e.clientWidth + 0.5,
+    );
+    expect(whoCut).toBe(false);
+    expect((await who.textContent())?.trim()).toBe("Mira");
+  });
+
   test(`width ${width}: the 正在回覆 banner stays one line and its x stays reachable`, async ({
     mount,
     page,
