@@ -20,24 +20,36 @@ export function ChatReplyToStory() {
             </div>
             <div className="chat__msg-line">
               <div className="chat__msg-content">
-                <div className="chat__msg-bubble">
+                <div className="chat__msg-bubble chat__msg-bubble--expandable chat__msg-bubble--acts2">
+                  <div className="chat__msg-actions">
+                    <button
+                      type="button"
+                      className="chat__msg-reply"
+                      aria-label="回覆這則"
+                      data-testid="reply-entry-incoming"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <polyline points="9 17 4 12 9 7" />
+                        <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      className="chat__msg-expand"
+                      aria-label="放大閱讀"
+                      data-testid="expand-entry-incoming"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <polyline points="14 4 20 4 20 10" />
+                      </svg>
+                    </button>
+                  </div>
                   <div className="chat__msg-text doc-md">{longQuote}</div>
                 </div>
               </div>
               <div className="chat__msg-sidemeta">
                 <span className="chat__msg-time">10:02</span>
               </div>
-              <button
-                type="button"
-                className="chat__msg-reply"
-                aria-label="回覆這則"
-                data-testid="reply-entry-incoming"
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <polyline points="9 17 4 12 9 7" />
-                  <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
-                </svg>
-              </button>
             </div>
           </div>
 
@@ -47,39 +59,44 @@ export function ChatReplyToStory() {
                 <span className="chat__msg-time">10:03</span>
               </div>
               <div className="chat__msg-content">
-                <button
-                  type="button"
-                  className="chat__msg-quote chat__msg-quote--locatable"
-                  data-testid="quote-row"
-                >
-                  <svg
-                    className="chat__msg-quote__icon"
-                    width="11"
-                    height="11"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                  >
-                    <polyline points="9 17 4 12 9 7" />
-                  </svg>
-                  <span className="chat__msg-quote__who">Mira</span>
-                  <span className="chat__msg-quote__body">{longQuote}</span>
-                </button>
-                <div className="chat__msg-bubble">
+                <div className="chat__msg-bubble chat__msg-bubble--acts1">
+                  <div className="chat__msg-actions">
+                    <button
+                      type="button"
+                      className="chat__msg-reply"
+                      aria-label="回覆這則"
+                      data-testid="reply-entry-mine"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <polyline points="9 17 4 12 9 7" />
+                        <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="chat__msg-quote" data-testid="quote-row">
+                    <svg
+                      className="chat__msg-quote__icon"
+                      width="11"
+                      height="11"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                    >
+                      <polyline points="9 17 4 12 9 7" />
+                    </svg>
+                    <span className="chat__msg-quote__who">Mira</span>
+                    <span className="chat__msg-quote__body">{longQuote}</span>
+                    <button
+                      type="button"
+                      className="chat__msg-quote__jump"
+                      data-testid="quote-jump"
+                    >
+                      跳到原訊息
+                    </button>
+                  </div>
                   <div className="chat__msg-text doc-md">好，我照這個做</div>
                 </div>
               </div>
-              <button
-                type="button"
-                className="chat__msg-reply"
-                aria-label="回覆這則"
-                data-testid="reply-entry-mine"
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <polyline points="9 17 4 12 9 7" />
-                  <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
-                </svg>
-              </button>
             </div>
           </div>
         </div>

@@ -981,6 +981,79 @@ export function ChatArea({
     // B3: a message carrying a reply-card link renders the CARD as its bubble
     // (spec §3: 請示以卡片形式直接出現在訊息串中，無額外橫幅) — the card
     // itself fetches its full shape and owns the answer / 重新決定 flow.
+    // T-4e95 ① the QUOTE LINE — a thin row above the bubble saying which
+    // message this one answers. The wire carries the quoted id and nothing
+    // else, so the sender name and the excerpt are resolved from the thread (or
+    // a by-id read) rather than copied onto the reply.
+    //
+    // Locatable ONLY when the quoted row is really in the loaded window: a
+    // button that scrolls nowhere is worse than a label that never claimed it
+    // would. Older-than-the-window renders as a plain span, matching how the
+    // #office/chat/<id>/msg/<msgId> jump already lands honestly.
+    const quoted = m.replyTo ? quoteOf(m.replyTo) : undefined;
+    const quoteLocatable = m.replyTo ? messageById.has(m.replyTo) : false;
+    const quoteWho = quoted ? nameOf(quoted.from) : "";
+    const quoteText = quoted
+      ? quoteExcerpt(quoted)
+      : quoted === null
+        ? t.chat.replyQuoteGone
+        : "\u2026";
+    const quoteLine = !m.replyTo ? null : (
+      <div className="chat__msg-quote" data-testid="msg-quote">
+        <ReplyIcon size={11} className="chat__msg-quote__icon" />
+        {quoteWho && <span className="chat__msg-quote__who">{quoteWho}</span>}
+        <span className="chat__msg-quote__body" title={quoteText}>
+          {quoteText}
+        </span>
+        {/* The jump is its own control, the way 查看任務詳情 is on a
+         * task-derived ask (ReplyCardTaskRef) — owner 2026-08-20. It exists
+         * ONLY when the quoted row is really in the loaded window: an
+         * affordance that scrolls nowhere is worse than a line that never
+         * offered one. The quoted text beside it truncates; the jump keeps its
+         * intrinsic width, because a cut 跳到原訊息 helps nobody. */}
+        {quoteLocatable && (
+          <button
+            type="button"
+            className="chat__msg-quote__jump"
+            data-testid="msg-quote-jump"
+            onClick={() => locateMessage(m.replyTo as string)}
+          >
+            {t.chat.replyQuoteJump}
+            <ChevronRightIcon size={12} />
+          </button>
+        )}
+      </div>
+    );
+
+    // T-4e95 ② the REPLY ENTRY. Owner 2026-08-20 moved it INTO the bubble's
+    // corner, beside 放大閱讀: out on the row it read as something belonging to
+    // the thread rather than to this message.
+    //
+    // The reason it started on the row is still true and had to be solved
+    // rather than argued with — 放大閱讀's corner exists ONLY on incoming text
+    // bubbles, and the AC is 每一則. So the corner is now a SHARED ACTION SLOT
+    // that every bubble reserves (own messages and attachment-only bubbles
+    // included), holding one or two controls.
+    //
+    // 🔴 THE ONE SHAPE THAT KEEPS THE ROW ENTRY is a reply-card message: its
+    // bubble is replaced by <ChatReplyCard>, a full-width surface with its own
+    // header controls, and hanging a floating action over it would collide with
+    // them. Stated here rather than silently: card rows are the exception.
+    const replyEntry = (
+      <button
+        type="button"
+        className="chat__msg-reply"
+        aria-label={t.chat.replyAction}
+        title={t.chat.replyAction}
+        onClick={() => {
+          setReplyToId(m.id);
+          inputRef.current?.focus();
+        }}
+      >
+        <ReplyIcon size={13} />
+      </button>
+    );
+
     const content = m.replyCardId ? (
       <ChatReplyCard
         replyCardId={m.replyCardId}
@@ -991,32 +1064,43 @@ export function ChatArea({
       <div
         className={
           "chat__msg-bubble" +
-          (!mine && m.body ? " chat__msg-bubble--expandable" : "")
+          // The corner ACTION SLOT reserves its own width so a hover can never
+          // reflow the text under it. Two controls need more room than one, and
+          // 放大閱讀 is the one that comes and goes.
+          (!mine && m.body
+            ? " chat__msg-bubble--expandable chat__msg-bubble--acts2"
+            : " chat__msg-bubble--acts1")
         }
       >
-        {/* 放大閱讀 — the corner button that reopens THIS message body in the
-         * shared full-view overlay, the same surface a .md attachment opens
-         * into. Only on INCOMING messages with text: an agent answer is the
-         * long-form side of the thread (the owner's own line is what they just
-         * typed), and an attachment-only bubble has no body to lay out — the
-         * file chip already carries its own 預覽 action. */}
-        {!mine && m.body && (
-          <button
-            type="button"
-            className="chat__msg-expand"
-            aria-label={t.chat.expandMessage}
-            title={t.chat.expandMessage}
-            onClick={() =>
-              setMdPreview({
-                kind: "message",
-                title: senderLabel,
-                source: m.body,
-              })
-            }
-          >
-            <ExpandIcon size={12} />
-          </button>
-        )}
+        {/* The bubble's corner actions (T-4e95). ONE slot, so the two controls
+         * cannot drift apart into two corners:
+         *   • 回覆這則 — on EVERY bubble, both directions.
+         *   • 放大閱讀 — reopens THIS message body in the shared full-view
+         *     overlay. Only on INCOMING messages with text: an agent answer is
+         *     the long-form side of the thread (the owner's own line is what
+         *     they just typed), and an attachment-only bubble has no body to lay
+         *     out — the file chip already carries its own 預覽 action. */}
+        <div className="chat__msg-actions">
+          {replyEntry}
+          {!mine && m.body && (
+            <button
+              type="button"
+              className="chat__msg-expand"
+              aria-label={t.chat.expandMessage}
+              title={t.chat.expandMessage}
+              onClick={() =>
+                setMdPreview({
+                  kind: "message",
+                  title: senderLabel,
+                  source: m.body,
+                })
+              }
+            >
+              <ExpandIcon size={12} />
+            </button>
+          )}
+        </div>
+        {quoteLine}
         {/* T-84c8: the message body is the purest owner/agent free text in the
          * app (and, via webhooks, can carry text from an EXTERNAL system), so
          * it renders through the shared XSS-safe `Markdown` — same posture as
@@ -1039,64 +1123,6 @@ export function ChatArea({
         />
       </div>
     );
-    // T-4e95 ① the QUOTE LINE — a thin row above the bubble saying which
-    // message this one answers. The wire carries the quoted id and nothing
-    // else, so the sender name and the excerpt are resolved from the thread (or
-    // a by-id read) rather than copied onto the reply.
-    //
-    // Locatable ONLY when the quoted row is really in the loaded window: a
-    // button that scrolls nowhere is worse than a label that never claimed it
-    // would. Older-than-the-window renders as a plain span, matching how the
-    // #office/chat/<id>/msg/<msgId> jump already lands honestly.
-    const quoted = m.replyTo ? quoteOf(m.replyTo) : undefined;
-    const quoteLocatable = m.replyTo ? messageById.has(m.replyTo) : false;
-    const quoteWho = quoted ? nameOf(quoted.from) : "";
-    const quoteText = quoted
-      ? quoteExcerpt(quoted)
-      : quoted === null
-        ? t.chat.replyQuoteGone
-        : "\u2026";
-    const quoteInner = (
-      <>
-        <ReplyIcon size={11} className="chat__msg-quote__icon" />
-        {quoteWho && <span className="chat__msg-quote__who">{quoteWho}</span>}
-        <span className="chat__msg-quote__body">{quoteText}</span>
-      </>
-    );
-    const quoteLine = !m.replyTo ? null : quoteLocatable ? (
-      <button
-        type="button"
-        className="chat__msg-quote chat__msg-quote--locatable"
-        onClick={() => locateMessage(m.replyTo as string)}
-        title={t.chat.replyQuoteJump}
-      >
-        {quoteInner}
-      </button>
-    ) : (
-      <span className="chat__msg-quote">{quoteInner}</span>
-    );
-
-    // T-4e95 ② the REPLY ENTRY — on EVERY row, both directions, cards and
-    // attachment-only messages included (the AC is 每一則). It sits on the row
-    // rather than inside the bubble because the bubble corner is already taken
-    // by 放大閱讀 and exists only on incoming text messages; the row is the one
-    // container every message shape shares. Always rendered (opacity-revealed
-    // on hover) so appearing costs no layout shift.
-    const replyEntry = (
-      <button
-        type="button"
-        className="chat__msg-reply"
-        aria-label={t.chat.replyAction}
-        title={t.chat.replyAction}
-        onClick={() => {
-          setReplyToId(m.id);
-          inputRef.current?.focus();
-        }}
-      >
-        <ReplyIcon size={13} />
-      </button>
-    );
-
     return (
       <Fragment key={m.id}>
         {/* ② the "以下是未讀訊息" divider — a thin low-emphasis rule above the
@@ -1128,10 +1154,10 @@ export function ChatArea({
               <span className="chat__msg-time">{formatTime(m.ts)}</span>
             </div>
             <div className="chat__msg-content">
-              {quoteLine}
+              {m.replyCardId && quoteLine}
               {content}
             </div>
-            {replyEntry}
+            {m.replyCardId && replyEntry}
           </div>
         ) : (
           // LINE-style incoming: mirror of the outgoing row. The name label above
@@ -1144,13 +1170,13 @@ export function ChatArea({
             </div>
             <div className="chat__msg-line">
               <div className="chat__msg-content">
-                {quoteLine}
+                {m.replyCardId && quoteLine}
                 {content}
               </div>
               <div className="chat__msg-sidemeta">
                 <span className="chat__msg-time">{formatTime(m.ts)}</span>
               </div>
-              {replyEntry}
+              {m.replyCardId && replyEntry}
             </div>
           </>
           )}

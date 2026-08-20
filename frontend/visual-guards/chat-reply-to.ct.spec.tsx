@@ -23,7 +23,10 @@ for (const width of [390, 1280]) {
     const cmp = await mount(<ChatReplyToStory />);
 
     const entry = cmp.getByTestId("reply-entry-incoming");
-    const bubble = cmp.getByTestId("row-incoming").locator(".chat__msg-bubble");
+    // The bubble's TEXT is what a reflow would move now that the controls live
+    // inside the bubble: measuring the bubble itself would miss a slot that
+    // grew and pushed the words sideways.
+    const bubble = cmp.getByTestId("row-incoming").locator(".chat__msg-text");
 
     // Hidden by OPACITY, not by display/visibility: it must still occupy space.
     await expect(entry).toHaveCSS("opacity", "0");
@@ -54,16 +57,26 @@ for (const width of [390, 1280]) {
     const bubbleBox = (await bubble.boundingBox())!;
 
     // ONE LINE. The quoted text is long enough to wrap to three or four lines
-    // if anything let it, so a height near the bubble's is the failure.
-    expect(quoteBox.height).toBeLessThan(bubbleBox.height);
-    expect(quoteBox.height).toBeLessThan(28);
+    // if anything let it, so a tall quote is the failure.
+    expect(quoteBox.height).toBeLessThan(30);
 
-    // …and the row it hangs off never pushes past the thread's viewport.
-    const messages = (await cmp.getByTestId("chat-messages").boundingBox())!;
-    expect(quoteBox.x).toBeGreaterThanOrEqual(messages.x - 0.5);
+    // INSIDE the bubble, not floating beside it (owner 2026-08-20). Measured
+    // rather than asserted on the DOM: a quote nested in the markup but pulled
+    // out visually would still read as a separate strip, which is the actual
+    // complaint.
+    expect(quoteBox.x).toBeGreaterThanOrEqual(bubbleBox.x - 0.5);
     expect(quoteBox.x + quoteBox.width).toBeLessThanOrEqual(
-      messages.x + messages.width + 0.5,
+      bubbleBox.x + bubbleBox.width + 0.5,
     );
+    expect(quoteBox.y).toBeGreaterThanOrEqual(bubbleBox.y - 0.5);
+
+    // The jump control keeps its whole width — a cut 跳到原訊息 helps nobody;
+    // it is the quoted TEXT that gives way.
+    const jump = (await cmp.getByTestId("quote-jump").boundingBox())!;
+    expect(jump.x + jump.width).toBeLessThanOrEqual(
+      bubbleBox.x + bubbleBox.width + 0.5,
+    );
+    expect(jump.width).toBeGreaterThan(40);
   });
 
   test(`width ${width}: the 正在回覆 banner stays one line and its x stays reachable`, async ({
@@ -102,7 +115,7 @@ test("narrow 390: the reply entry and the banner x are focusable native buttons"
   await page.setViewportSize({ width: 390, height: 800 });
   const cmp = await mount(<ChatReplyToStory />);
 
-  for (const id of ["reply-entry-incoming", "reply-banner-x"]) {
+  for (const id of ["reply-entry-incoming", "reply-banner-x", "quote-jump"]) {
     const control = cmp.getByTestId(id);
     await expect(control).toHaveJSProperty("tagName", "BUTTON");
     await control.focus();
