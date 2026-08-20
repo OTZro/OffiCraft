@@ -654,7 +654,12 @@ type ChatMessageDTO struct {
 
 	// ReplyCardStatus Read-time join: the CURRENT status (``waiting`` | ``answered``) of the reply card this message carries (``meta.reply_card_id``); ``""`` when the message carries no card. Lets the inline chat card (ChatReplyCard) decide AT MOUNT whether to load eagerly (waiting — show the answer composer) or lazily (answered — collapse, fetch the full card only when the owner expands it) WITHOUT a per-card GET. NOT stored — computed each read from the card's live status (the stored ``meta`` only ever holds the id, stamped ``waiting`` at open and never updated on answer).
 	ReplyCardStatus *string `json:"reply_card_status,omitempty"`
-	To              string  `json:"to"`
+
+	// ReplyTo The id of the message this one is REPLYING TO; ``""`` when it replies to nothing. Stamped at post time from ``ChatPostDTO.reply_to`` and never changed afterwards, and always an id in this message's own conversation (the post-time check refuses anything else).
+	//
+	// IT IS THE ID ALONE, deliberately: no sender, no display name and no excerpt of the quoted message is carried here. That text already exists under its own id, and a second copy of it shipped beside every reply is a copy that can disagree with the original. A reader that wants to show the quote re-reads that id with ``get_chat`` (``?ids=``), which reaches exactly as far as the ordinary listing does.
+	ReplyTo *string `json:"reply_to,omitempty"`
+	To      string  `json:"to"`
 
 	// ToName The addressee's DISPLAY name, resolved the same way as ``from_name``. ``to`` remains the address; this rides alongside it, never instead of it.
 	ToName *string  `json:"to_name,omitempty"`
@@ -673,7 +678,16 @@ type ChatPostDTO struct {
 	Attachments *[]ChatAttachmentInputDTO `json:"attachments,omitempty"`
 	Body        *string                   `json:"body,omitempty"`
 	Meta        *map[string]interface{}   `json:"meta,omitempty"`
-	To          string                    `json:"to"`
+
+	// ReplyTo OPTIONAL — the id of the message this one is REPLYING TO (a quote-reply, LINE-style). Omit it and nothing about the post changes.
+	//
+	// The referenced message must EXIST and must sit in the SAME CONVERSATION as the message you are posting: its {sender, recipient} pair must be the same two parties as {you, ``to``}. Anything else is a 400. Holding an id is not the same as having a reply target, and quoting out of a line you are not in would carry that text into a conversation it was never part of.
+	//
+	// THE SERVER IS THE ONLY WRITER OF THIS LINK: a ``meta.reply_to`` you send yourself is DISCARDED before the message is stored, so the relation cannot be forged from the client — this parameter is the only door.
+	//
+	// NOTHING IS COPIED. The stored message carries the id alone; no sender, no name and no excerpt of the quoted message rides along. A reader that wants to show what was quoted re-reads that id with ``get_chat`` (``?ids=``).
+	ReplyTo *string `json:"reply_to,omitempty"`
+	To      string  `json:"to"`
 }
 
 // ChatReadDTO API representation of one “domain.ChatReadReceipt“ — a per-conversation
@@ -3198,7 +3212,7 @@ type HandleListChatApiChatGetParams struct {
 	//
 	// ANSWERED ON ITS OWN: when ``ids`` is present, ``with``, ``limit``, ``before_ts``/``before_id`` and ``peek`` are NOT consulted, and a by-ids read NEVER advances a read watermark — re-reading a message you were already shown is not reading the conversation. Blank entries are dropped and duplicates collapse; an all-blank or empty set behaves exactly as if the parameter had not been sent.
 	//
-	// YOURS ONLY, AND ONLY HERE: an id whose ``sender`` and ``recipient`` are both someone other than the verified caller is REFUSED with 403, and ONE such id refuses the WHOLE call rather than just that entry. Holding an id is not permission to read a conversation between two other people, and no parameter widens a by-ids read past that. This bound belongs to THIS PARAMETER, not to ``get_chat`` as a whole: the ordinary listing filters on ``with`` — a PARTICIPANT — not on the caller, so a plain read of a peer's line still answers with a conversation the caller was never in (designed behaviour; ``caller_only`` is what narrows a listing to the caller). Do not read this paragraph as a claim about the endpoint.
+	// SAME REACH AS THE ORDINARY LISTING (T-4e95, owner ruling). A by-ids read is NOT narrowed to the caller's own conversations. It used to refuse with 403 any id whose ``sender`` and ``recipient`` were both someone else — and that bound guarded nothing, because the ordinary listing filters on ``with`` — a PARTICIPANT — not on the caller, so the very same message was already readable by asking for that peer's line (designed behaviour; ``caller_only`` is what narrows a listing to the caller). What the stricter rule actually produced was two doors onto the same rows disagreeing about who may open them, which cost an honest caller the ability to follow a ``reply_to`` while costing a dishonest one nothing. This door now states the listing's rule rather than a stricter one of its own; ``caller_only`` remains the way to narrow a read to yourself.
 	//
 	// ALL OR NOTHING ON AN UNKNOWN ID: an id no message carries refuses the WHOLE call with 404 and names it. Deliberately not 'skip it and return the rest': a short array is indistinguishable from the fold this parameter exists to undo, so a caller could not tell a deleted message from one it simply did not ask for.
 	//
