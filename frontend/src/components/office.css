@@ -1018,6 +1018,14 @@
   align-items: center;
   gap: 4px;
   max-width: 100%;
+  /* 🔴 BOTH of these keep the row inside the bubble, and neither is decoration.
+   * Without them the row's min-content width wins: a long sender name (nameOf
+   * falls back to the RAW ID when the roster cannot resolve it — that is the
+   * realistic long name, not a hypothetical) pushed 跳到原訊息 past the
+   * bubble's right edge and ON TOP of the corner reply button. Measured in a
+   * real browser at 390px: 3.4px of overhang, covering the control. */
+  min-width: 0;
+  overflow: hidden;
   margin-bottom: 6px;
   padding-bottom: 5px;
   border-bottom: 1px solid color-mix(in srgb, var(--color-text-muted) 22%, transparent);
@@ -1028,8 +1036,16 @@
 .chat__msg-quote__icon {
   flex: none;
 }
+/* The sender name shrinks too. It used to be `flex: none` on the reasoning that
+ * a name is short — which is false exactly when it matters: an unresolved
+ * sender renders as its raw id. Two shrinkable items on one row is fine; what
+ * is not fine is a row where NOTHING can give. */
 .chat__msg-quote__who {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
 }
 /* The only free-length thing on the row, so it is the one that shrinks.

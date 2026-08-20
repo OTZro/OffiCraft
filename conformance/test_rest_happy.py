@@ -2696,6 +2696,35 @@ def test_chat_reply_to_is_the_servers_link_not_the_callers(hctx: HCtx) -> None:
     assert served.status_code == 200, served.text
     assert served.json()[0]["reply_to"] == quoted_id
 
+    # A link OUT of this conversation. The docstring above claims this case and
+    # it was missing — the same class of defect as the lying http.ts comment
+    # this package also fixed, pointing the other way: a test file that says it
+    # guards three things and guards two.
+    #
+    # A THIRD party's line. Note what this is NOT: owner↔agent in the other
+    # direction would be the SAME conversation (the check compares the two
+    # {sender, recipient} pairs as sets, which is what makes replying to what
+    # someone sent you work at all), so it would be accepted and this assertion
+    # would be measuring nothing.
+    third = hctx.fresh_member()
+    elsewhere = hctx.client.post(
+        "/api/chat",
+        json={"to": third, "body": "another-thread"},
+        headers=_auth(hctx.owner_token),
+    )
+    assert elsewhere.status_code == 200, elsewhere.text
+    sideways = hctx.client.post(
+        "/api/chat",
+        json={
+            "to": "owner",
+            "body": "quoting sideways",
+            "reply_to": elsewhere.json()["id"],
+        },
+        headers=_auth(hctx.agent.token),
+    )
+    assert sideways.status_code == 400, sideways.text
+    assert "another conversation" in sideways.text
+
     # An id that names nothing is a 400 on the FIELD, not a 404 on the route.
     orphan = hctx.client.post(
         "/api/chat",

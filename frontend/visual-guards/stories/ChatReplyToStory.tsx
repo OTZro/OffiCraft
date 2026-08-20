@@ -8,6 +8,14 @@
 // the bubble column), and jsdom can measure none of them. The behavioural half
 // is already pinned in ChatArea.reply-to.test.tsx.
 export function ChatReplyToStory() {
+  // 🔴 A LONG SENDER, not "Mira". Two things make a long one real rather than
+  // hypothetical: display names are owner-set free text, and nameOf() falls
+  // back to the RAW member id when the roster cannot resolve the sender at all.
+  // The story used a four-character name and therefore walked straight past the
+  // overflow it exists to guard — measured: with the guard reverted, the story
+  // still passed. This length is the one that actually reproduces the failure
+  // (the jump reaching the corner controls) at 390px.
+  const unresolvedSender = "Eva Rhapsody Inbox (ow-8808ccf51794)";
   const longQuote =
     "這是一段很長的原文，長到足以在任何視窗寬度下超出引用列能容納的寬度，用來確認它會被裁成一行而不是把版面撐開或折行";
   return (
@@ -84,7 +92,7 @@ export function ChatReplyToStory() {
                     >
                       <polyline points="9 17 4 12 9 7" />
                     </svg>
-                    <span className="chat__msg-quote__who">Mira</span>
+                    <span className="chat__msg-quote__who">{unresolvedSender}</span>
                     <span className="chat__msg-quote__body">{longQuote}</span>
                     <button
                       type="button"
