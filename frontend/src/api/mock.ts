@@ -636,6 +636,18 @@ const INSIGHT_SEEDS: Record<string, string> = {
 // shows only the owner's own message. Fabricating an assistant reply here would
 // be as dishonest as a fake lastSeen for a never-online member.
 let chatLog: ChatMessage[] = [];
+// T-4e95: chat message ids used to be `mock-${Date.now()}` alone, and two posts
+// inside the same millisecond therefore got the SAME id — reproduced, not
+// theorised. That was survivable while nothing pointed AT a message; a reply
+// carries the quoted message's id and nothing else, so an ambiguous id makes
+// the quote resolve to whichever row happens to be first (and collides React's
+// keys besides). The real server mints `c-` + 12 random hex; this counter is the
+// mock's cheapest way to keep the same promise — one id, one message.
+//
+// Deliberately NOT reset by __resetMock: a counter that restarted could hand a
+// fresh message the id of one a test still holds a reference to, which is the
+// very ambiguity it exists to remove.
+let mockChatSeq = 0;
 
 // In-memory read receipts, keyed `{reader}::{peer}` → the monotonic last-read
 // watermark. Mirrors the BE chat_read table. In mock mode the OWNER reads its own
@@ -2892,7 +2904,7 @@ export const mockApi: Api = {
       }
     }
     const sent: ChatMessage = {
-      id: `mock-${stamp}`,
+      id: `mock-${stamp}-${++mockChatSeq}`,
       from: MOCK_OWNER_ID,
       to: msg.to,
       body: msg.body,
