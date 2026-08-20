@@ -472,7 +472,7 @@ ONE-SHOT, never a standing order):
 | `stop_grace` | 120 s | self-stop window before the robust stop — **unreachable today**: the arm that consumes it is guarded by `SoftOffboardGrace == 0` (see §4.3) |
 | `stop_retry` | 90 s | STOP/UNINSTALL re-dispatch window (lost-frame recovery) |
 | `recycle_grace` | 120 s | dump-stuck fallback from `refocus_since` — but the wait is **`recycleGraceFor(refocus_op)`, which answers *whether there is a clock at all* as well as how long**: an owner-pressed 重新聚焦 (`refocus_op = refocus`) is **not on a clock** (owner 2026-08-19, `rc-c540367065ad`) and is collected only by the agent's own stopped report or by 強制下線; `context_high` and `restart_self` already say 120 s and get exactly that |
-| `soft_offboard_grace` | 600 s | the window during which a close-out is treated as still in flight — **not a deadline**. Neither soft arm escalates any more: 下線 never did (`rc-27d1710174dd`) and 重新聚焦 stopped on 2026-08-19 (`rc-c540367065ad`), so what this value still does is make `decideDown` run **no clock at all** (§4.3) and keep a stopping member in the state where the 強制下線 button is on screen (`clearStaleStoppingOnOnline`). Compile-time constant (`SoftOffboardGraceSecs`), deliberately not owner-settable |
+| `soft_offboard_grace` | 600 s | how long a close-out may say NOTHING before its anchor is treated as residue — **not a deadline, and no longer measured from the anchor**. Neither soft arm escalates any more: 下線 never did (`rc-27d1710174dd`) and 重新聚焦 stopped on 2026-08-19 (`rc-c540367065ad`), so what this value still does is make `decideDown` run **no clock at all** (§4.3) and set the silence `clearStaleStoppingOnOnline` requires before it sweeps (§4.5) — which is what keeps the 強制下線 button on screen for as long as the close-out is still reporting. Compile-time constant (`SoftOffboardGraceSecs`), deliberately not owner-settable |
 | `backoff_base` / `backoff_cap` | 5 s / 300 s | exponential start backoff |
 | `circuit_threshold` / `circuit_cooldown` | 5 / 120 s | sticky breaker (verified hard failures only) |
 
@@ -513,7 +513,35 @@ ONE-SHOT, never a standing order):
   moment it observes the respawn-pending state (`desired_state==online ∧ ¬online ∧
   refocus_since>0`) so a slow/never-waking respawn can never be re-killed off a stale marker.
 - **Stale-stopping clear**: a desired-online member OBSERVED online while carrying
-  `stopping_since > 0` MUST have the anchor cleared (survived-stop / reconnect path).
+  `stopping_since > 0` MUST have the anchor cleared (survived-stop / reconnect path)
+  — but ONLY once it has been SILENT for `soft_offboard_grace`, where silence means
+  the later of `stopping_since` and the member's own last context report (the gauge's
+  `ts`) is that far in the past. 🔴 The clock is the member's silence, NOT the anchor's
+  age: a close-out is told to collect its sub-agents first, and that routinely runs
+  longer than the window, so dating the sweep from the anchor erased the owner's only
+  signal while the member was still working (T-2123 bought one window of grace; T-7723
+  changed the clock). A member with NO gauge record has said nothing the server can
+  date — the store is in-memory and a station re-exec blanks it fleet-wide — so that
+  case falls back to the anchor's age rather than reading the amnesia as silence.
+  ⚠️ The report is NOT a heartbeat: it is throttled to at most one burst per
+  `soft_offboard_grace`-independent 30 s window, and it is driven by the agent's
+  activity (Claude wires it to the statusLine redraw, codex to a tokenUsage-updated
+  event). So this discriminator sees a member that is still producing activity and
+  does NOT see one blocked inside a single long call — a close-out that spends the
+  whole window waiting on one sub-agent is still swept. Strict improvement, not a
+  complete fix.
+  ⚠️ Do NOT read that as "no clock-driven signal exists". One does, for codex only:
+  the session runs a 30 s identityHeartbeat whose report is stamped into a
+  DIFFERENT store (telemetry, not the gauge) and keeps ticking through a long tool
+  call. Reading it here is a behaviour change with its own trade-offs and is not
+  part of this rule; the point is that the gap above has a known candidate.
+  Two deliberate consequences, both owner-facing: a member that reports stopping
+  and then resumes ordinary work reads `stopping` for the rest of that session,
+  and while it reads `stopping` the cockpit offers 強制下線 rather than the
+  ordinary graceful 下線. `report_stopped` and any reboot clear the anchor, and
+  so does `activate` — but the non-destructive route to it is the chat's 就地喚醒
+  row, NOT the detail panel's Spawn, which for a `stopping` member opens the
+  settings dialog and never sends activate.
 
 ### 4.6 Dispatch discipline
 

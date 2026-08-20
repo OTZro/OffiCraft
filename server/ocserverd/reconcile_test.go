@@ -1197,6 +1197,98 @@ func TestClearStaleStoppingOnOnline(t *testing.T) {
 			t.Fatalf("nothing may be persisted either: %+v", persisted)
 		}
 	})
+
+	// T-7723: the owner reported a member 「開始收尾」 at 07:50 and asked TWICE at
+	// 08:12 why it had never reported stopping. It had — 22 minutes earlier, and
+	// this sweep had erased the anchor at minute 10 while the member was still
+	// landing packages and collecting sub-agents. The anchor's AGE cannot tell a
+	// close-out that is taking a while apart from one that was abandoned; what
+	// separates them is whether the member is still SAYING anything, and the
+	// gauge's report ts is the one signal the server has that originates in the
+	// member's own live session.
+	t.Run("keeps the anchor while the member is still reporting, past the whole window", func(t *testing.T) {
+		m := testAgent("m-s5")
+		m.StoppingSince = 900
+		putTestMember(t, s, m)
+		connectOnline(t, s, "m-s5")
+		now := 900 + SoftOffboardGraceSecs*3 // deep past the window
+		// …and it filed a context report one second ago.
+		s.gauge.Set("m-s5", map[string]any{"ts": now - 1})
+		members := []Member{m}
+		s.clearStaleStoppingOnOnline(members, now)
+		if members[0].StoppingSince != 900 {
+			t.Fatalf("a close-out that is still reporting must stay visible: %+v", members[0])
+		}
+		persisted, _ := s.dal.GetMember("m-s5")
+		if persisted.StoppingSince != 900 {
+			t.Fatalf("nothing may be persisted either: %+v", persisted)
+		}
+	})
+
+	// The reverse control, and the reason the sweep is not simply deleted: a
+	// member that reported stopping and then went QUIET is exactly the residue
+	// this sweep was written for. Its behaviour must not change at all.
+	t.Run("still clears when the member has gone quiet for the whole window", func(t *testing.T) {
+		m := testAgent("m-s6")
+		m.StoppingSince = 900
+		putTestMember(t, s, m)
+		connectOnline(t, s, "m-s6")
+		now := 900 + SoftOffboardGraceSecs*3
+		// Its last word came in long before the window closed.
+		s.gauge.Set("m-s6", map[string]any{"ts": now - SoftOffboardGraceSecs - 1})
+		members := []Member{m}
+		s.clearStaleStoppingOnOnline(members, now)
+		if members[0].StoppingSince != 0 {
+			t.Fatalf("a silent survived-stop anchor must still clear: %+v", members[0])
+		}
+		persisted, _ := s.dal.GetMember("m-s6")
+		if persisted.StoppingSince != 0 {
+			t.Fatalf("clear must persist: %+v", persisted)
+		}
+	})
+
+	// 🔴 The OTHER half of the max(), and it is the half that fires most often:
+	// the gauge's ts OUTLIVES the session that wrote it. anchorSessionBoot only
+	// refreshes boot_ts and clearSessionBootTS only deletes boot_ts — nothing
+	// ever clears ts — so a member that reports stopping right after a quiet
+	// stretch has an anchor NEWER than its last context report. Taking the
+	// gauge's ts on its own would then sweep a close-out that started seconds
+	// ago, which is worse than the behaviour this ticket exists to fix.
+	t.Run("a fresh anchor wins over a stale gauge report", func(t *testing.T) {
+		m := testAgent("m-s8")
+		now := 10_000.0
+		m.StoppingSince = now // reported stopping just now
+		putTestMember(t, s, m)
+		connectOnline(t, s, "m-s8")
+		// …but its last context report is older than the whole window.
+		s.gauge.Set("m-s8", map[string]any{"ts": now - SoftOffboardGraceSecs*2})
+		members := []Member{m}
+		s.clearStaleStoppingOnOnline(members, now)
+		if members[0].StoppingSince != now {
+			t.Fatalf("a just-reported close-out must not be swept by an old gauge ts: %+v", members[0])
+		}
+		persisted, _ := s.dal.GetMember("m-s8")
+		if persisted.StoppingSince != now {
+			t.Fatalf("nothing may be persisted either: %+v", persisted)
+		}
+	})
+
+	// 🔴 The gauge is in-memory and volatile by contract (hub.go): a station
+	// re-exec blanks it for everyone. A missing record must therefore mean "no
+	// opinion" and fall back to the anchor's age — the pre-T-7723 rule — so the
+	// volatile store can never make the outcome WORSE than it was before. Same
+	// fail-open shape as gaugeSecsSinceBoot's loop guard.
+	t.Run("falls back to the anchor age when there is no gauge record at all", func(t *testing.T) {
+		m := testAgent("m-s7")
+		m.StoppingSince = 900
+		putTestMember(t, s, m)
+		connectOnline(t, s, "m-s7")
+		members := []Member{m}
+		s.clearStaleStoppingOnOnline(members, 900+SoftOffboardGraceSecs)
+		if members[0].StoppingSince != 0 {
+			t.Fatalf("no gauge ⇒ the old rule decides, and it says clear: %+v", members[0])
+		}
+	})
 }
 
 // ── reconcileMemberNow ───────────────────────────────────────────────────────

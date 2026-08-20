@@ -109,7 +109,8 @@ const WakingTTLSecs = 90.0
 // this long to wind down before a stuck collect is force-killed.
 const StoppingTimeoutSecs = 120.0
 
-// SoftOffboardGraceSecs: how long a close-out is treated as still in flight.
+// SoftOffboardGraceSecs: how long a close-out may say NOTHING before its
+// anchor is treated as residue (T-7723 — silence, not the anchor's age).
 // The soft notice says "work the sequence, then call restart_self yourself" and
 // carries no countdown, and since 2026-08-19 NEITHER soft arm has one running
 // behind it: 下線 (rc-27d1710174dd 「不要兜底：只有你按強制下線才收它」) and
@@ -117,9 +118,13 @@ const StoppingTimeoutSecs = 120.0
 // own stopped report or by the owner pressing force-stop, and by nothing else.
 //
 // 🔴 So this is NOT a deadline any more, and nothing may re-read it as one.
-// What still uses it is clearStaleStoppingOnOnline — the window during which a
-// stopping member keeps its stopping state, which is what keeps the force-stop
-// button on screen for the owner to press. Escalation is his, not a timer's.
+// What still uses it is clearStaleStoppingOnOnline — but as a SILENCE window,
+// not an age: how long a close-out may say nothing before its anchor is treated
+// as residue (T-7723). A member that is still filing context reports keeps its
+// stopping state however long the close-out takes, which is what keeps the
+// force-stop button on screen for the owner to press. Escalation is his, not a
+// timer's — and it is only useful while the button is still there, which is the
+// whole reason the clock had to stop being the anchor's age.
 //
 // Setting it to 0 restores the pre-T-a9d6 timed wind-down wholesale.
 const SoftOffboardGraceSecs = 600.0
