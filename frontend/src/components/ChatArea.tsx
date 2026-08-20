@@ -977,9 +977,39 @@ export function ChatArea({
       );
     } catch (e) {
       console.warn("ChatArea: send failed, restoring composer", e);
-      // Not this room any more → the content belongs to the room it was typed
-      // in, and that room's draft still holds it. Restoring here would put one
-      // room's words, and one room's reply target, into another.
+      // 🔴 RESTORE INTO THE ROOM IT WAS TYPED IN — NOT the one on screen, and
+      // NOT nowhere. The first version of this guard was a bare `return` on the
+      // reasoning that "that room's draft still holds it". IT DOES NOT: the
+      // optimistic clear at the top of submit() runs while `member.id` is still
+      // the sending room, so the save effect calls saveChatDraft(sendPeer, {all
+      // empty}) — and an all-empty draft is DELETED, not stored. So the bare
+      // return traded "restored into the wrong room" (ugly, visible, and the
+      // words are still on screen) for "text, attachments AND reply target
+      // silently gone for good, with only a console.warn". That is worse, and
+      // it is exactly what the guard was added to prevent.
+      //
+      // Writing to the store rather than to state also covers the case where
+      // this component is gone entirely (跳頁 mid-flight): setState on an
+      // unmounted component discards the content just as quietly.
+      //
+      // Only fill a room that is EMPTY — the same rule the state restores use
+      // below. If the owner went back and started typing again, that is theirs.
+      const stored = getChatDraft(sendPeer);
+      if (
+        !stored ||
+        (stored.text.length === 0 &&
+          stored.attachments.length === 0 &&
+          !stored.replyTo)
+      ) {
+        saveChatDraft(sendPeer, {
+          text: draftSnapshot,
+          attachments: attachmentsSnapshot,
+          replyTo: replyToSnapshot ?? undefined,
+        });
+      }
+      // Not this room any more → the words are back where they were typed, and
+      // putting them on screen here would put one room's words, and one room's
+      // reply target, into another.
       if (peerIdRef.current !== sendPeer) return;
       // Restore the user's unsent content so it isn't silently lost. Only put
       // back what the user hasn't already retyped/restaged — if they started a
@@ -1087,7 +1117,9 @@ export function ChatArea({
          * running app: it fails at the narrow end in BOTH languages, and again
          * just past the two-column breakpoint on an INCOMING bubble WITH A BODY
          * (`!mine && m.body` → `--acts2`) — that one reserves 56px of corner
-         * where your own reserves 32. Being a reply is not the condition. Two earlier versions of this note quoted exact ranges;
+         * where your own reserves 32. Two conditions, not one: `!mine &&
+         * m.body` is what widens the corner, and `m.replyTo` is what puts a
+         * quote row there to overflow. The worst case is both together. Two earlier versions of this note quoted exact ranges;
          * both were wrong, because the range moves with the bubble kind, the
          * language and the display name. The guard holds the numbers.
          * A trimmed label with its arrow still showing beats a control hidden
@@ -1160,7 +1192,13 @@ export function ChatArea({
       >
         {/* The bubble's corner actions (T-4e95). ONE slot, so the two controls
          * cannot drift apart into two corners:
-         *   • 回覆這則 — on EVERY bubble, both directions.
+         *   • 回覆這則 — on every bubble of THIS conversation, both directions.
+         *     NOT on every bubble in the window: the owner also sees rows
+         *     between two other members, and the server refuses a reply that
+         *     crosses conversations, so `replyable` above withholds the entry
+         *     there (an entry that always 400s is worse than none). This line
+         *     said "on EVERY bubble" until the review that added `replyable`
+         *     — the claim and the code parted company in the same commit.
          *   • 放大閱讀 — reopens THIS message body in the shared full-view
          *     overlay. Only on INCOMING messages with text: an agent answer is
          *     the long-form side of the thread (the owner's own line is what

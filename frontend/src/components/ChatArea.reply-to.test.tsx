@@ -427,9 +427,56 @@ describe("ChatArea 回覆這則", () => {
       await Promise.resolve();
     });
 
+    // The room on screen is untouched…
     expect(input(container).value).toBe("");
     expect(banner(container)).toBeNull();
     expect(getChatDraft("m2")).toBeUndefined();
+
+    // …AND — the half this test used to be missing — the words are still
+    // somewhere. Three negative assertions are also all satisfied by throwing
+    // the message away, which is what the first version of the guard actually
+    // did: the optimistic clear had already deleted m1's draft, so the early
+    // return left the text, the attachment and the reply target nowhere at all.
+    // A reviewer replaced the whole restore with an unconditional `return` and
+    // all 128 ChatArea tests stayed green. This is that missing assertion.
+    expect(getChatDraft("m1")).toEqual({
+      text: "給 m1 的",
+      attachments: [],
+      replyTo: "c-1",
+    });
+  });
+
+  it("keeps a failed send when the owner has left the conversation entirely", async () => {
+    // Same defect, second door: 跳頁 while the send is in flight unmounts the
+    // composer, so restoring into component state discards it just as quietly
+    // as restoring into the wrong room did. The room's draft is the only place
+    // that outlives the component.
+    messages = [mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" })];
+    let reject: (e: Error) => void = () => {};
+    send.mockImplementationOnce(
+      () => new Promise((_, r) => (reject = r)) as Promise<void>,
+    );
+
+    const { container, unmount } = render(
+      <I18nProvider>
+        <ChatArea member={m1} />
+      </I18nProvider>,
+    );
+    fireEvent.click(rowOf(container, "c-1").querySelector(".chat__msg-reply")!);
+    fireEvent.change(input(container), { target: { value: "給 m1 的" } });
+    fireEvent.keyDown(input(container), { key: "Enter" });
+
+    unmount();
+    await act(async () => {
+      reject(new Error("nope"));
+      await Promise.resolve();
+    });
+
+    expect(getChatDraft("m1")).toEqual({
+      text: "給 m1 的",
+      attachments: [],
+      replyTo: "c-1",
+    });
   });
 
   it("still settles the quote under <StrictMode> — the dev-only double-invoke", async () => {
