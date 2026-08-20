@@ -307,11 +307,16 @@ def test_call_route_error_is_result_not_rpc_error(client, owner_token) -> None:
     assert result["structuredContent"] == body
 
 
-def test_call_missing_path_param_falls_through_naturally(client, owner_token) -> None:
-    """spec §3.1 rule 1: a missing path key substitutes the EMPTY string — no
-    -32602 at this layer; the loopback route 404s/405s naturally → isError."""
+def test_call_missing_path_param_returns_precise_validation(
+    client, owner_token
+) -> None:
+    """spec §3.1: a missing path value returns a named validation refusal."""
     result = _call(client, owner_token, "activate_member", {})
     assert result["isError"] is True, result
+    body = json.loads(_text(result))
+    assert body["error"]["code"] == "validation_error", body
+    assert body["error"]["message"] == "field required: member_id", body
+    assert result["structuredContent"] == body
 
 
 def test_call_forwards_caller_authorization(

@@ -180,9 +180,9 @@ func (s *apiServer) loopbackCall(r *http.Request, method, reqPath, rawQuery stri
 	if s.loopback == nil {
 		return 0, nil, errors.New("loopback handler not wired")
 	}
-	// Pre-clean the path so the mux serves the natural 404/405 instead of a
-	// 301 canonicalisation redirect (an empty path-param substitution leaves
-	// "//" in the path; spec §3.1 wants the route to 404/405 naturally).
+	// Pre-clean the path so the mux receives its canonical form instead of
+	// issuing a 301 canonicalisation redirect. Keep this normalization for
+	// non-canonical paths even though splitToolArguments rejects empty path params.
 	cleaned := pathpkg.Clean(reqPath)
 	req := (&http.Request{
 		Method:     method,

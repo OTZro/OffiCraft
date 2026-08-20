@@ -104,6 +104,30 @@ func TestSplitToolArgumentsPathQueryBody(t *testing.T) {
 	}
 }
 
+func TestLoopbackCallCleansPathBeforeDispatch(t *testing.T) {
+	var gotPath string
+	s := &apiServer{
+		loopback: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	}
+	outer := httptest.NewRequest(http.MethodGet, "http://loopback.test/mcp", nil)
+
+	status, _, err := s.loopbackCall(
+		outer, http.MethodGet, "/api/members//m-1", "", nil,
+	)
+	if err != nil {
+		t.Fatalf("loopbackCall: %v", err)
+	}
+	if status != http.StatusNoContent {
+		t.Fatalf("loopback status: got %d, want %d", status, http.StatusNoContent)
+	}
+	if gotPath != "/api/members/m-1" {
+		t.Fatalf("loopback path was not canonicalized: got %q", gotPath)
+	}
+}
+
 func TestCallToolResultMapping(t *testing.T) {
 	// 2xx object body: isError false, structuredContent == the parsed object.
 	result := callToolResult(200, []byte(`{"id":"m-1","cost":1.50}`))
