@@ -920,6 +920,20 @@
   align-items: center;
   gap: 2px;
 }
+/* 🔴 THE TWO CORNER BUTTONS FOLLOW THE BUBBLE (owner 2026-08-20, rc-8056a06aa2b8).
+ * They used to be little chips: `background: var(--color-card)` with a hairline
+ * border, which is invisible on an incoming bubble (same surface) and a foreign
+ * grey box on your own, because that one is painted in the accent green. The
+ * owner saw it and asked why the two buttons looked like different colours —
+ * measured, they were not: identical colour, background and border, on a bubble
+ * whose background they did not match.
+ *
+ * So no box: transparent ground, no border, and the ink is the BUBBLE's own
+ * colour at reduced strength (`currentColor` in the `color` property resolves
+ * to the inherited value, so this is the green on your messages and the plain
+ * text colour on theirs — one rule, no per-bubble override). Hover restores it
+ * to full strength and lays down a faint wash of the same colour, so the hover
+ * target still reads as a target without reintroducing a permanent box. */
 .chat__msg-expand {
   display: inline-flex;
   align-items: center;
@@ -927,15 +941,15 @@
   width: 22px;
   height: 22px;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--color-overlay) 10%, transparent);
+  border: none;
   border-radius: 6px;
-  background: var(--color-card);
-  color: var(--color-text-muted);
+  background: transparent;
+  color: color-mix(in srgb, currentColor 55%, transparent);
   cursor: pointer;
   opacity: 0;
   transition:
     color 0.15s,
-    border-color 0.15s,
+    background-color 0.15s,
     opacity 0.15s;
 }
 .chat__msg:hover .chat__msg-expand,
@@ -943,8 +957,8 @@
   opacity: 1;
 }
 .chat__msg-expand:hover {
-  color: var(--color-accent);
-  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  color: inherit;
+  background: color-mix(in srgb, currentColor 12%, transparent);
 }
 @media (hover: none) {
   .chat__msg-expand {
@@ -975,15 +989,15 @@
   width: 22px;
   height: 22px;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--color-overlay) 10%, transparent);
+  border: none;
   border-radius: 6px;
-  background: var(--color-card);
-  color: var(--color-text-muted);
+  background: transparent;
+  color: color-mix(in srgb, currentColor 55%, transparent);
   cursor: pointer;
   opacity: 0;
   transition:
     color 0.15s,
-    border-color 0.15s,
+    background-color 0.15s,
     opacity 0.15s;
 }
 .chat__msg:hover .chat__msg-reply,
@@ -991,8 +1005,8 @@
   opacity: 1;
 }
 .chat__msg-reply:hover {
-  color: var(--color-accent);
-  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  color: inherit;
+  background: color-mix(in srgb, currentColor 12%, transparent);
 }
 @media (hover: none) {
   .chat__msg-reply {
@@ -1018,14 +1032,15 @@
   align-items: center;
   gap: 4px;
   max-width: 100%;
-  /* NO `overflow: hidden` and no `min-width: 0` here, and that is a correction:
-   * an earlier version carried both under a comment claiming BOTH were
-   * load-bearing. Measured with one mutation each (CT `chat-reply-to`, both
-   * widths): removing either — or both — changed nothing, all guards stayed
-   * green. What actually keeps the row inside the bubble is further down: the
-   * name is capped, and the quoted text is the item that gives way. Clipping
-   * here was not free either — it cut the focus ring off 跳到原訊息, which sits
-   * flush against the row's right edge. */
+  /* NO `overflow: hidden` and no `min-width: 0` here — but the honest claim is
+   * narrow: an earlier comment called them load-bearing, and mutating each in
+   * turn (CT `chat-reply-to`, 390 and 1280) changed nothing, all guards green.
+   * That measures "not needed at the widths and fixtures we guard", NOT "dead".
+   * Below about 300px the clip is still the last thing that would trim this row
+   * — reviewed there and found cosmetic: `.chat__msg-actions` is absolutely
+   * positioned above, so the quote slides UNDER the corner buttons and they stay
+   * clickable. Against that, clipping here has a standing cost: it cuts the
+   * focus ring off 跳到原訊息, whose right edge is flush with the row's. */
   margin-bottom: 6px;
   padding-bottom: 5px;
   border-bottom: 1px solid color-mix(in srgb, var(--color-text-muted) 22%, transparent);
@@ -1036,35 +1051,45 @@
 .chat__msg-quote__icon {
   flex: none;
 }
-/* 🔴 THE NAME IS CAPPED, NOT SHRUNK — and the difference is the whole rule.
- * It was `flex: none` first (a name is short), which overflowed the bubble and
- * put 跳到原訊息 on top of the corner reply button: display names are free text
- * the owner types, so "short" is an assumption, not a fact. Making it `flex:
- * 0 1 auto` fixed that and broke the common case instead: flex distributes
- * shrink IN PROPORTION to each item's basis, so the moment the quoted text was
- * long enough to be cut, the name was cut with it — 「Mira」 rendered as 「M…」
- * with room to spare (measured in the running app at 1180px, and down to a bare
- * ellipsis at 390px). The name answers WHO is being replied to; losing it
- * defeats the feature, while a trimmed excerpt still reads fine.
+/* 🔴 THE EXCERPT GIVES WAY, THE NAME DOES NOT — and getting that ordering right
+ * took three tries, so the two that failed are written down.
  *
- * So: it does not shrink (`flex: 0 0 auto`), and it cannot overflow either,
- * because `max-width` caps it at 40% of the row and ellipsises past that. Long
- * name → capped. Short name → intact. Both directions are pinned by CT, one
- * story row each. */
+ * ① `flex: none` on the name (a name is short). Display names are free text the
+ *    owner types, so "short" is an assumption: a long one overflowed the bubble
+ *    and put 跳到原訊息 on top of the corner reply button.
+ * ② `flex: 0 1 auto` on the name. It stopped the overflow and broke the common
+ *    case instead — flex distributes shrink IN PROPORTION to each item's basis,
+ *    so the moment the excerpt was long enough to be cut, the name was cut with
+ *    it: 「Mira」 rendered as 「M…」 with room to spare.
+ * ③ `flex: 0 0 auto` + `max-width: 40%`. Worse than it looks: `.chat__msg-bubble`
+ *    is shrink-to-fit, and a PERCENTAGE max-width is ignored while the browser
+ *    computes intrinsic width. So the bubble was sized to the FULL name and the
+ *    cap then clipped it anyway — a 15-character name lost three characters at
+ *    1600px with a one-word excerpt and acres of empty row. Measured, 120 of 768
+ *    scanned combinations cut the name while the excerpt was untouched.
+ *
+ * What actually expresses the rule is an ASYMMETRIC shrink factor, below: the
+ * excerpt shrinks a hundred times more eagerly than the name, so it absorbs
+ * essentially all of any deficit and the name only starts to give once the
+ * excerpt has nothing left. No cap, no cliff, and nothing is cut while the row
+ * still has room. All three directions are pinned by CT, one story row each:
+ * long name, short name with a long excerpt, and a middling name with an
+ * excerpt too short to absorb anything. */
 .chat__msg-quote__who {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   min-width: 0;
-  max-width: 40%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
 }
-/* The only free-length thing on the row, so it is the one that shrinks.
- * `overflow: hidden` is load-bearing twice over: it clips the text AND it is
- * what lets this flex item go below its content width at all. */
+/* `flex-shrink: 100` is the asymmetry described above — not a magic number, just
+ * one large enough that the name's share of any deficit rounds to nothing while
+ * the excerpt has width left to give. `overflow: hidden` is load-bearing twice
+ * over: it clips the text AND it is what lets this flex item go below its
+ * content width at all. */
 .chat__msg-quote__body {
-  flex: 1 1 auto;
+  flex: 1 100 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
