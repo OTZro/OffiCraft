@@ -3680,9 +3680,11 @@ export const mockApi: Api = {
   },
 
   async stopWorker(id: string): Promise<OutsourceWorkerView> {
-    // 停止 (T-f190). Held down: set desired_state offline (member parity), clear any
-    // in-flight refocus, project presence "stopped". unknown/released → 404.
-    // Idempotent.
+    // 停止 (T-f190; a GRACEFUL close-out since T-ed79). Held down: desired_state
+    // offline (member parity) and the in-flight refocus cleared — but NO kill.
+    // The worker is shown its 下線程序 and keeps its session until it reports
+    // stopped, so a worker that was online projects "stopping" here, not
+    // "stopped". unknown/released → 404. Idempotent.
     const w = outsourceWorkers.find((x) => x.id === id);
     if (!w || w.status === "released") {
       throw mockApiError(
@@ -3692,6 +3694,65 @@ export const mockApi: Api = {
     }
     w.desiredState = "offline";
     w.refocusSince = null;
+    w.refocusOp = undefined;
+    w.presence = w.presence === "online" ? "stopping" : "stopped";
+    emitTopic("outsource_worker");
+    return {
+      ...withWorkerTaskJoin(structuredClone(w)),
+      unreadCount: unreadCountOf(w.id),
+    };
+  },
+
+  async acceleratedStopWorker(id: string): Promise<OutsourceWorkerView> {
+    // 加速停止 (T-ed79) — the MIDDLE rung. It escalates a wind-down that is
+    // ALREADY open, so its refusal is what makes it an escalation rather than a
+    // second stop button; the message names the rungs below it, mirroring the
+    // server's acceleratedStopWorkerNeedsAnOpenWindDownMsg.
+    const w = outsourceWorkers.find((x) => x.id === id);
+    if (!w || w.status === "released") {
+      throw mockApiError(
+        `http 404 for POST /api/outsource-workers/${id}/accelerated-stop`,
+        404, `outsource worker ${id} not found`
+      );
+    }
+    const windingDown =
+      (w.desiredState === "offline" && w.presence === "stopping") ||
+      (w.refocusSince ?? 0) > 0;
+    if (w.presence !== "online" && w.presence !== "stopping") {
+      throw mockApiError(
+        `http 409 for POST /api/outsource-workers/${id}/accelerated-stop`,
+        409, "加速停止 requires the worker to be online (no live session to accelerate)"
+      );
+    }
+    if (!windingDown) {
+      throw mockApiError(
+        `http 409 for POST /api/outsource-workers/${id}/accelerated-stop`,
+        409,
+        "加速停止 escalates a wind-down that is already open — this worker has not " +
+          "been asked to stop. Press 停止 or 重新聚焦 first"
+      );
+    }
+    w.refocusOp = "accelerated_stop";
+    emitTopic("outsource_worker");
+    return {
+      ...withWorkerTaskJoin(structuredClone(w)),
+      unreadCount: unreadCountOf(w.id),
+    };
+  },
+
+  async forceStopWorker(id: string): Promise<OutsourceWorkerView> {
+    // 強制停止 (T-ed79) — the THIRD rung, and the body /stop used to have: the
+    // session is killed on the spot, so the worker lands in "stopped" directly.
+    const w = outsourceWorkers.find((x) => x.id === id);
+    if (!w || w.status === "released") {
+      throw mockApiError(
+        `http 404 for POST /api/outsource-workers/${id}/force-stop`,
+        404, `outsource worker ${id} not found`
+      );
+    }
+    w.desiredState = "offline";
+    w.refocusSince = null;
+    w.refocusOp = undefined;
     w.presence = "stopped";
     emitTopic("outsource_worker");
     return {

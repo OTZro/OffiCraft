@@ -16,6 +16,7 @@ import { AvatarEditor } from "./AvatarEditor";
 import { Avatar } from "./Avatar";
 import { ResumeSummaryCard } from "./ResumeSummaryCard";
 import { LifecycleDot, presenceVisual } from "./LifecycleDot";
+import { MemberActionButtons } from "./MemberActionButtons";
 import { ScheduledMessagesCard } from "./ScheduledMessagesCard";
 // 🔴 This panel renders its settings dialog with the .machine-picker* classes,
 // so it must import their stylesheet ITSELF (T-7526). Both panels used to
@@ -45,8 +46,17 @@ interface WorkerDetailPanelProps {
   /** Refocus (換手 — T-32e1): kill+respawn the session onto the SAME task. The
    * worker twin of the member refocus. Undefined ⇒ the affordance is hidden. */
   onRefocus?: () => Promise<void>;
-  /** Stop (停止 — T-f190): kill + hold down (owner-explicit; no auto-revival). */
+  /** Stop (停止 — T-f190; a GRACEFUL close-out since T-ed79): hold the worker
+   * down and show it the 下線程序; the 收口 is its own report_stopped. The FIRST
+   * rung of 停止 → 加速停止 → 強制停止. */
   onStop?: () => Promise<void>;
+  /** 加速停止 (T-ed79) — the MIDDLE rung: put the wind-down that is already open
+   * on the server's clock and TELL the worker. Not a kill, so it needs no
+   * confirm. Undefined ⇒ the rung renders disabled (the honesty rule). */
+  onAcceleratedStop?: () => Promise<void>;
+  /** 強制停止 (T-ed79) — the THIRD rung: kill the session NOW, saying nothing.
+   * This panel gates it behind its own confirm. */
+  onForceStop?: () => Promise<void>;
   /** Wake (喚醒 — T-7526): clear the stop + re-dispatch. ⚠️ The WIRE is still
    * `POST /api/outsource-workers/{id}/restart` — a frozen contract (§13). Only
    * the owner-facing WORD changed (owner 2026-07-31 「應該要統一」: 重啟 retired,
@@ -90,6 +100,8 @@ export function WorkerDetailPanel({
   onRelocate,
   onRefocus,
   onStop,
+  onAcceleratedStop,
+  onForceStop,
   onWake,
   onSetModel,
   onFetchBootContext,
@@ -110,10 +122,16 @@ export function WorkerDetailPanel({
   // machine name.
   const online = worker.presence === "online";
   const offline = worker.presence === "offline";
-  // stopping/stopped are both the owner-explicit hold-down (desired offline) —
-  // the action row treats them as one 已停止 mode.
-  const stopped =
-    worker.presence === "stopped" || worker.presence === "stopping";
+  // 🔴 stopping and stopped are NO LONGER one mode (T-ed79). They were, while
+  // 停止 killed the session on the spot: `stopping` was a blink between the
+  // click and the kill landing, so folding it into 已停止 cost nothing. Now 停止
+  // is a close-out the worker WORKS, and `stopping` is the whole duration of it
+  // — the exact window in which the owner needs the two escalation rungs. Folding
+  // it into the 喚醒 arm would hide 加速停止 and 強制停止 for precisely as long as
+  // they are the only things that can end the wait, which is the staff-side
+  // defect T-2123 already had to fix once.
+  const stoppingNow = worker.presence === "stopping";
+  const stopped = worker.presence === "stopped";
   // 🔴 The action row keys off LIVENESS, not off who asked for it (T-7526). A worker
   // whose session died on its own reads `offline` — nobody pressed 停止, so the
   // old `stopped`-only test showed 停止 on a worker with nothing to stop, and the
@@ -121,6 +139,7 @@ export function WorkerDetailPanel({
   // states take the 喚醒 arm; the server's restart guard was widened the same
   // way (INTENT → LIVENESS), so the two sides now agree.
   const noLiveSession = stopped || offline;
+
   // 🔴 RELEASED is not a presence — it is the worker's own lifecycle end
   // (WorkerStatusReleased on the wire). It deliberately does NOT come from the
   // dot: `presence` is `undefined` for a released worker AND for one that was
@@ -133,7 +152,18 @@ export function WorkerDetailPanel({
   // worker that is not running, or change a running one. Same split as the
   // member panel's `online`, and it decides the dialog's title + confirm word
   // too, so the button can never promise something the click does not do.
-  const wakeMode = noLiveSession;
+  // 🔴 stoppingNow is deliberately on the WAKE side of this particular split,
+  // which is the opposite of where the button row puts it, and both are right
+  // because they answer different questions. The row asks "can the owner still
+  // escalate?" (yes — the session is alive and working its close-out); this
+  // asks "what does the ONE settings dialog DO when confirmed?", and for a
+  // worker the owner has already held down the answer is 喚醒: /restart is
+  // reachable there (its guard refuses only a worker that is BOTH not held down
+  // and online), so the confirm really does revive it. That is what makes the
+  // ladder's first rung — Spawn, which opens this same dialog — a genuine
+  // rescue rather than a button that opens a dialog promising 更改 and then
+  // changes nothing on a held-down worker.
+  const wakeMode = noLiveSession || stoppingNow;
   const machineText = worker.machine || t.workerDetail.notAssigned;
   // ── the four "changed, not applied yet" hints (T-7f28) ────────────────────
   // This panel had NONE of these — not even for 機器, which the member panel
@@ -212,12 +242,40 @@ export function WorkerDetailPanel({
   // member panel's shape. Only 停止 still acts on click.
   const [stopBusy, setStopBusy] = useState(false);
   const [stopError, setStopError] = useState(false);
+  const [forceStopConfirm, setForceStopConfirm] = useState(false);
   async function handleStop() {
     if (!onStop || stopBusy) return;
     setStopBusy(true);
     setStopError(false);
     try {
       await onStop();
+    } catch {
+      setStopError(true);
+    } finally {
+      setStopBusy(false);
+    }
+  }
+  // The other two rungs share stopBusy/stopError: they are one escalation on one
+  // row, and a per-rung spinner would let two of them look live at once.
+  async function handleAcceleratedStop() {
+    if (!onAcceleratedStop || stopBusy) return;
+    setStopBusy(true);
+    setStopError(false);
+    try {
+      await onAcceleratedStop();
+    } catch {
+      setStopError(true);
+    } finally {
+      setStopBusy(false);
+    }
+  }
+  async function confirmForceStop() {
+    if (!onForceStop || stopBusy) return;
+    setStopBusy(true);
+    setStopError(false);
+    try {
+      await onForceStop();
+      setForceStopConfirm(false);
     } catch {
       setStopError(true);
     } finally {
@@ -473,34 +531,96 @@ export function WorkerDetailPanel({
                 {t.mp.change}
               </button>
             )}
-            {wakeMode
-              ? onWake && (
-                  <button
-                    type="button"
-                    className="btn btn--accent-ghost"
-                    data-testid="worker-detail-wake"
-                    onClick={openSettings}
-                  >
-                    {t.lifecycle.action.spawn}
-                  </button>
-                )
-              : onStop && (
-                  <button
-                    type="button"
-                    className="btn btn--danger-ghost"
-                    data-testid="worker-detail-stop"
-                    disabled={stopBusy}
-                    onClick={() => void handleStop()}
-                  >
-                    {stopBusy ? t.workerDetail.stopping : t.workerDetail.stop}
-                  </button>
-                )}
+            {!noLiveSession ? (
+              /* 🔴 THE SAME LADDER AS 正職, FROM THE SAME COMPONENT (T-ed79,
+                 owner 2026-08-21 「往正職靠」＋「停止 → 加速停止 → 強制停止」).
+                 It renders MemberActionButtons rather than three worker-shaped
+                 buttons of its own, so the labels, the ORDER, the
+                 disabled-in-place rule and the danger styling are one
+                 implementation for both panels — the thing that used to drift
+                 was exactly this row. That also retires the panel-local 停止
+                 label (t.workerDetail.stop): one verb, one word, both panels. */
+              <MemberActionButtons
+                status={stoppingNow ? "stopping" : "online-awake"}
+                // Spawn is the wedge rescue MemberActionButtons already offers
+                // in `stopping`, and here it is real: wakeMode is true for a
+                // held-down worker, so this dialog's confirm reaches 喚醒.
+                onSpawn={stoppingNow && onWake ? openSettings : undefined}
+                onStop={onStop ? () => void handleStop() : undefined}
+                // No confirm on the middle rung, for the member panel's stated
+                // reason: 加速停止 gives the worker a deadline it is TOLD about
+                // and can still beat, so a second click costs nothing
+                // irreversible.
+                onAcceleratedStop={
+                  onAcceleratedStop
+                    ? () => void handleAcceleratedStop()
+                    : undefined
+                }
+                // The TOP rung keeps its confirm — it is the only irreversible
+                // one left on this row.
+                onForceStop={
+                  onForceStop ? () => setForceStopConfirm(true) : undefined
+                }
+                labels={
+                  stopBusy ? { stop: t.workerDetail.stopping } : undefined
+                }
+              />
+            ) : (
+              onWake && (
+                <button
+                  type="button"
+                  className="btn btn--accent-ghost"
+                  data-testid="worker-detail-wake"
+                  onClick={openSettings}
+                >
+                  {t.lifecycle.action.spawn}
+                </button>
+              )
+            )}
           </div>
           {stopError && (
             <div className="mp-field__hint mp-info2__error">
               {t.workerDetail.stopError}
             </div>
           )}
+        </div>
+      )}
+      {/* The TOP rung's confirm — the member panel's dialog, in the worker
+          panel's place. It is the ONE irreversible button on this row now that
+          停止 asks instead of kills, which is exactly why it kept its gate while
+          the other two did not. */}
+      {forceStopConfirm && (
+        <div
+          className="mp-confirm"
+          data-testid="worker-detail-force-stop-confirm"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="mp-confirm__box">
+            <div className="mp-confirm__title">{t.mp.forceStopConfirmTitle}</div>
+            <p className="mp-confirm__body">
+              {msg.memberForceStopConfirmBody(worker.codename)}
+            </p>
+            <div className="mp-confirm__actions">
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => setForceStopConfirm(false)}
+                disabled={stopBusy}
+              >
+                {t.common.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn btn--danger-ghost"
+                data-testid="worker-detail-force-stop-confirm-btn"
+                onClick={() => void confirmForceStop()}
+                disabled={stopBusy}
+              >
+                {stopBusy ? t.mp.forceStopBusy : t.mp.forceStopConfirmAction}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

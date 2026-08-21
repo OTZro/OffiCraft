@@ -334,8 +334,17 @@ export function OfficePage() {
         onRefocus={async () => {
           await api.refocusWorker(workerDetail.id);
         }}
+        // The escalation ladder, same three verbs and same order as 正職
+        // (T-ed79). 停止 no longer kills: it asks the worker to work its
+        // 下線程序 and waits for its own report_stopped.
         onStop={async () => {
           await api.stopWorker(workerDetail.id);
+        }}
+        onAcceleratedStop={async () => {
+          await api.acceleratedStopWorker(workerDetail.id);
+        }}
+        onForceStop={async () => {
+          await api.forceStopWorker(workerDetail.id);
         }}
         // 喚醒 (T-7526). The endpoint is still `restartWorker` → POST …/restart:
         // the frozen wire keeps its name, only the owner-facing word changed.

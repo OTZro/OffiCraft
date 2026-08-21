@@ -1341,9 +1341,34 @@ export const httpApi: Api = {
 
   async stopWorker(id: string): Promise<OutsourceWorkerView> {
     // POST /api/outsource-workers/{id}/stop -> OutsourceWorkerDTO (owner/admin-agent).
-    // Kills the session and holds the worker down (presence "stopping"/"stopped").
+    // Since T-ed79 this ASKS: it holds the worker down and shows it the 下線程序,
+    // and the 收口 is the worker's own report_stopped. The kill moved to
+    // forceStopWorker below.
     const wire = unwrap(
       await client.POST("/api/outsource-workers/{id}/stop", {
+        params: { path: { id } },
+      }),
+    );
+    return toOutsourceWorker(wire);
+  },
+
+  async acceleratedStopWorker(id: string): Promise<OutsourceWorkerView> {
+    // POST /api/outsource-workers/{id}/accelerated-stop -> OutsourceWorkerDTO
+    // (owner/admin-agent). The MIDDLE rung: puts an ALREADY-OPEN wind-down on the
+    // clock and tells the worker. 409 when nothing is open.
+    const wire = unwrap(
+      await client.POST("/api/outsource-workers/{id}/accelerated-stop", {
+        params: { path: { id } },
+      }),
+    );
+    return toOutsourceWorker(wire);
+  },
+
+  async forceStopWorker(id: string): Promise<OutsourceWorkerView> {
+    // POST /api/outsource-workers/{id}/force-stop -> OutsourceWorkerDTO
+    // (owner/admin-agent). The THIRD rung: kill NOW, hold down, say nothing.
+    const wire = unwrap(
+      await client.POST("/api/outsource-workers/{id}/force-stop", {
         params: { path: { id } },
       }),
     );

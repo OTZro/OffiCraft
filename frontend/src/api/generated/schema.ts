@@ -2192,6 +2192,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/outsource-workers/{id}/force-stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 強制停止 an outsource worker: kill the session NOW and hold it down; says nothing to it. Third rung of 停止 -> 加速停止 -> 強制停止.
+         * @description 強制停止 an outsource worker — the THIRD rung of the owner's escalation 停止 → 加速停止 → 強制停止 (T-ed79, owner 2026-08-21 「強制殺移到第三顆按鈕」) and the worker twin of ``force_stop_member``.
+         *
+         *     This is the body ``POST /api/outsource-workers/{id}/stop`` used to have, moved to its own button rather than removed: set ``desired_state='offline'``, clear any in-flight wind-down, stamp ``forced_stop_at`` + ``stopping_since`` and kill the session IMMEDIATELY, without re-dispatching.
+         *
+         *     It sends the worker NOTHING. The recipient is about to stop existing, so a sentence meant to change its behaviour has no reader — the same ruling ``force_stop_member`` carries — and ``forced_stop_at`` is what enforces that silence (``forcedEpochLive`` suppresses the offboard notice). Both anchors are stamped together because that predicate requires ``forced_stop_at >= stopping_since``: writing one without the other leaves a worker that had already announced its own wind-down still reading as 'working its close-out', which is the arm that speaks.
+         *
+         *     No online gate and no wind-down gate: a worker whose session is already gone still needs its intent held down and the record written. Idempotent. 404 unknown/released. Floor admin_agent (route requires=admin_agent), the same floor as the other worker lifecycle verbs; a plain agent is a flat 403.
+         */
+        post: operations["handle_force_stop_outsource_worker_api_outsource_workers__id__force_stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/outsource-workers/{id}/model": {
         parameters: {
             query?: never;
@@ -2242,14 +2268,14 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 加速停止 an outsource worker: put its ALREADY-OPEN handover on the stop.accelerated_grace_secs clock and tell it. 409 if none is open. Does NOT change what /stop means.
+         * 加速停止 an outsource worker: put its ALREADY-OPEN wind-down (a 停止 or a 換手) on the stop.accelerated_grace_secs clock and tell it. 409 if none is open.
          * @description 加速停止 for an outsource worker — the symmetric twin of ``accelerated_stop_member`` (owner 2026-08-21, 停止 → 加速停止 → 強制停止).
          *
          *     It puts a wind-down the worker is ALREADY inside on the ``stop.accelerated_grace_secs`` clock and tells it, by stamping ``refocus_op=accelerated_stop`` on the open handover epoch and re-stamping ``refocus_since`` from THIS press. The clock, the wire deadline and the sentence all come from the one ``winddownKindFor`` judgement members use — there is no separate worker rule.
          *
-         *     ⚠️ IT DOES NOT CHANGE WHAT ``POST /api/outsource-workers/{id}/stop`` MEANS. That verb still sets ``desired_state=offline`` and kills the session without re-dispatching; this endpoint neither calls it nor softens it. What this accelerates is the HANDOVER arm (refocus / relocate / model change / restart_self), which is the only arm a worker has that waits for the worker to finish.
+         *     🔴 IT COVERS BOTH ARMS since T-ed79, because ``POST /api/outsource-workers/{id}/stop`` is now itself a close-out that waits. On the 下線 arm (``desired_state=offline`` + ``stopping_since``) it re-stamps ``stopping_since`` from THIS press; on the 換手 arm (desired online + ``refocus_since``) it re-stamps ``refocus_since``. It used to 409 on a stopped worker, which was right while 停止 killed on the spot and would be a DEAD MIDDLE RUNG now.
          *
-         *     409 when the worker is not online, is released or stopped, or has no handover epoch open — an escalation with nothing to escalate is a mistake, not a stop.
+         *     409 when the worker is not online, is released, has no wind-down open, or was force-stopped — an escalation with nothing to escalate is a mistake, not a stop.
          */
         post: operations["handle_accelerated_stop_outsource_worker_api_outsource_workers__id__accelerated_stop_post"];
         delete?: never;
@@ -2308,8 +2334,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Stop (停止) an outsource worker (owner/admin agent; kill + hold down).
-         * @description Stop (停止) an outsource worker (T-f190 lifecycle): set desired_state='offline' (a direct mirror of member.desired_state — which makes every scheduler auto-revival path skip it: the shared reconcile-FSM rescue never revives an owner-held-down worker), clear any in-flight refocus, and kill the session WITHOUT re-dispatching. The worker projects presence 'stopping'/'stopped' (honest, never fake-green); the bound task stays in its own status. Idempotent. 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.
+         * Stop (停止) an outsource worker: ask it to work its 下線程序 and wait for its own report_stopped -- no kill, no deadline (owner/admin agent).
+         * @description Stop (停止) an outsource worker — a GRACEFUL CLOSE-OUT since T-ed79 (owner 2026-08-21 「往正職靠：外包那顆改成優雅停止，強制殺移到第三顆按鈕」), the worker twin of a member deactivate. It sets desired_state='offline' (a direct mirror of member.desired_state — which makes every scheduler auto-revival path skip it: the shared reconcile-FSM rescue never revives an owner-held-down worker), stamps stopping_since, clears any in-flight refocus epoch, fans the 下線程序 notice at the worker's OWN session and RETURNS. It does NOT kill: the 收口 is the worker's own report_stopped, exactly as on the staff 下線 arm, and there is NO deadline unless the owner presses 加速停止 (rc-27d1710174dd 「不要兜底」). It does NOT stamp forced_stop_at — that anchor belongs to force-stop, and it is what keeps THAT verb silent. An OFFLINE worker (no session to hear the notice) takes the immediate kill instead. The worker projects presence 'stopping'/'stopped' (honest, never fake-green); the bound task stays in its own status. Idempotent. 404 unknown/released. Escalate with POST /api/outsource-workers/{id}/accelerated-stop, then POST /api/outsource-workers/{id}/force-stop. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.
          */
         post: operations["handle_stop_outsource_worker_api_outsource_workers__id__stop_post"];
         delete?: never;
@@ -13351,6 +13377,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkerBootContextDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_force_stop_outsource_worker_api_outsource_workers__id__force_stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutsourceWorkerDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

@@ -1876,10 +1876,26 @@ export interface Api {
    * otherwise); stopped → 409; unknown/released → 404. Returns the freshly
    * projected worker. (T-32e1) */
   refocusWorker(id: string): Promise<OutsourceWorkerView>;
-  /** Stop a worker (`POST /api/outsource-workers/{id}/stop`, owner/admin-agent) — kill
-   * the session and hold it down (presence "stopping"/"stopped"); no auto-revival. The
-   * bound task stays put. Idempotent; unknown/released → 404. (T-f190) */
+  /** Stop a worker (`POST /api/outsource-workers/{id}/stop`, owner/admin-agent) — the
+   * FIRST rung of 停止 → 加速停止 → 強制停止 and, since T-ed79, a GRACEFUL
+   * CLOSE-OUT rather than a kill (owner 2026-08-21 「往正職靠：外包那顆改成優雅
+   * 停止」): it holds the worker down (desired offline, presence
+   * "stopping"/"stopped", no auto-revival), shows it the 下線程序 and WAITS for
+   * its own report_stopped. No deadline unless the owner escalates. The bound
+   * task stays put. Idempotent; unknown/released → 404. (T-f190, T-ed79) */
   stopWorker(id: string): Promise<OutsourceWorkerView>;
+  /** 加速停止 a worker (`POST /api/outsource-workers/{id}/accelerated-stop`,
+   * owner/admin-agent) — the MIDDLE rung. Puts the wind-down that is ALREADY open
+   * (a 停止 or a 換手) on the server's `stop.accelerated_grace_secs` clock and
+   * TELLS the worker; it is not a kill, so the worker can still finish early.
+   * 409 when nothing is winding down, when the worker is offline/released, or
+   * when it was force-stopped. (T-ed79) */
+  acceleratedStopWorker(id: string): Promise<OutsourceWorkerView>;
+  /** 強制停止 a worker (`POST /api/outsource-workers/{id}/force-stop`,
+   * owner/admin-agent) — the THIRD rung, and the body /stop used to have: kill the
+   * session NOW and hold it down. It says NOTHING to the worker (the recipient is
+   * about to stop existing). Idempotent; unknown/released → 404. (T-ed79) */
+  forceStopWorker(id: string): Promise<OutsourceWorkerView>;
   /** WAKE a worker with no live session (`POST /api/outsource-workers/{id}/restart`,
    * owner/admin-agent) — clear the stop and re-dispatch. ⚠️ The owner-facing word
    * is 喚醒 since T-7526 (「重啟」 retired, one verb across both panels); the
