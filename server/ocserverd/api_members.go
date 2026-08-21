@@ -140,8 +140,19 @@ func offboardKindOf(m Member, now float64) (kind string, carries bool) {
 		// wound down (and a cancelled wake is force-stopped outright, which is
 		// deliberately silent — see HandleForceStopMember).
 		//
-		// 🔴 And it stays SOFT forever, because nothing collects it on a clock:
-		// the owner ruled 下線 runs no countdown at all (rc-27d1710174dd), so a
+		// 🔴 THIS SOFT IS HARD-CODED, and deliberately does NOT read
+		// winddownKindFor (T-ed79). That function answers "what does this
+		// refocus_op mean", and this arm has no refocus_op to ask about: 下線 is
+		// a desired_state transition, not a wind-down CAUSE, and it stamps no
+		// epoch. Routing it through the single source would mean feeding it ""
+		// and depending on the DEFAULT arm — which agrees today (soft) but
+		// agrees by accident: the default exists so that an unruled *cause*
+		// gets no deadline, and coupling 下線's ruling to it would let a future
+		// change to the cause default silently move a ruling the owner made
+		// about a different thing. Two rulings that coincide are not one ruling.
+		//
+		// It stays SOFT forever, because nothing collects it on a clock: the
+		// owner ruled 下線 runs no countdown at all (rc-27d1710174dd), so a
 		// notice claiming 120 seconds here would be a promise nobody keeps —
 		// an agent would cut its hand-off short to beat a deadline that does
 		// not exist. Escalation on this arm is the owner pressing force-stop,
@@ -762,8 +773,12 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 // activate click uses (reconcileMemberNow). A LIVE member is auto-migrated onto
 // the chosen machine, but SINCE T-b6d9 GRACEFULLY: the pin is written together
 // with a refocus epoch, the agent gets the ordinary 下線程序 wake, and
-// the kill+re-spawn happens at the 收口 (its own report_stopped, or the recycle
-// arm's RecycleGrace ceiling). It used to be an immediate robust STOP with no
+// the kill+re-spawn happens at the 收口 — which since T-ed79 is its own
+// report_stopped or the owner's force-stop, and NOTHING ELSE. 🔴 A relocate has
+// no RecycleGrace ceiling any more: winddownKindFor answers soft for it, so
+// recycleGraceFor answers "no clock" and the recycle arm never times it out.
+// This line used to name that ceiling — a window an owner would wait out and
+// that never closes. It used to be an immediate robust STOP with no
 // warning at all (fbc5280). An offline member just re-pins so the next wake
 // lands there — no epoch, nothing to wind down. PLACEMENT ONLY — unlike activate it NEVER
 // touches desired_state (or the stopping/waking anchors): a relocate is not a

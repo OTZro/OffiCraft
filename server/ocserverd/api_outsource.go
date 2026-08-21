@@ -383,8 +383,12 @@ func (s *apiServer) writeWorkerProjection(w http.ResponseWriter, r *http.Request
 // route Requires=owner). The worker twin of refocus_member, member-shaped since
 // T-ea82: stamp refocus_since + fan the SOP 預告 at the worker's own session
 // (openWorkerHandoverGrace) and RETURN — the kill+respawn is owned by the 收口
-// drivers (the worker's report_stopped, the 120s grace deadline, or the offline
-// fallback inside the grace open), so a live worker gets to flush its handoff
+// drivers, which for THIS handler are exactly TWO: the worker's report_stopped,
+// or the offline fallback inside the grace open. 🔴 There is NO grace deadline
+// on this path — it stamps refocusOpRefocus below, and 重新聚焦 runs no clock
+// (winddownKindFor). This used to name "the 120s grace deadline" as a third
+// driver: a driver that does not exist here, and precisely the one an owner
+// would sit and wait for. So a live worker gets to flush its handoff
 // (step notes / learnings / baton) before the session is taken. ONLINE-ONLY
 // (409 otherwise — a context handover is meaningless with no live session, the
 // exact member gate); 404 for an unknown / released worker; 409 for a stopped

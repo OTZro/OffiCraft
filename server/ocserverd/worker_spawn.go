@@ -1126,15 +1126,20 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // to save now waits for the wind-down instead of firing instantly. STAFF ALREADY
 // PAY EXACTLY THIS: member_ownerop_winddown.go spells out that the staff twin has
 // NO ANALOGUE of this arm on purpose, and that omitting it "errs toward winding
-// down, i.e. toward the grace — the safe direction, and the wait is a CEILING not
-// a duration". Both halves of that argument carry over verbatim: the 收口 fires the
-// instant the worker answers report_stopped, so a session with nothing to save
-// still ends in seconds; StoppingTimeoutSecs (120s) is only the ceiling.
+// down — the safe direction". The half of that argument that still carries over
+// verbatim is the one that matters here: the 收口 fires the instant the worker
+// answers report_stopped, so a session with nothing to save still ends in
+// seconds.
 //
-// Everything else (online) opens the window — and the WAIT IS NOT THE
-// DEADLINE. StoppingTimeoutSecs is a ceiling, not a duration: the 收口 fires the
-// instant the worker answers report_stopped, so a session with nothing to save
-// ends in seconds. That is deliberately where the judgement is made, because the
+// 🔴 THE OTHER HALF NO LONGER HOLDS. It used to read "the wait is a CEILING not
+// a duration; StoppingTimeoutSecs (120s) is only the ceiling". Since T-ed79 the
+// owner verbs on this funnel are 停止 — recycleGraceFor answers "no clock" for
+// relocate and runtime/model, so autoHandoverWorker's grace-timeout arm never
+// fires for them. There is no 120 s ceiling behind this wait; report_stopped and
+// the offline fallback are the only 收口 drivers, plus the owner's force-stop.
+// A reader who prices this arm at "at most 120 s" is pricing the wrong thing.
+//
+// Everything else (online) opens the window. That is deliberately where the judgement is made, because the
 // only party that can see the agent's unsaved state is the agent. The server has
 // zero visibility into a transcript; any finer server-side test (context pct,
 // time since boot, message counts) would be a GUESS dressed as a criterion, and

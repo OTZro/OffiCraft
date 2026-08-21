@@ -1308,11 +1308,16 @@ export const httpApi: Api = {
     // POST /api/outsource-workers/{id}/refocus -> OutsourceWorkerDTO (owner/admin-agent,
     // online-only 409). Graceful (T-ea82): stamps the handover + nudges the worker
     // to flush, then the server kills+re-spawns a fresh worker on the same task;
-    // the outsource_worker SSE delta also fans so the list refetches. The flush
-    // window is a flat StoppingTimeoutSecs (~120s) ceiling — workers do NOT go
-    // through recycleGraceFor, so unlike a member's owner-pressed refocus there
-    // is no soft window in front of it. It is a ceiling, not a duration: the
-    // collect fires on the worker's stopped report if that comes first.
+    // the outsource_worker SSE delta also fans so the list refetches.
+    //
+    // 🔴 THERE IS NO CEILING ON THIS ONE. Workers read the SAME judgement as
+    // members (wire.go's refocusDeadlineOf → recycleGraceFor → winddownKindFor,
+    // and autoHandoverWorker's in-flight arm), and 重新聚焦 is soft, so nothing
+    // collects this epoch on a clock: the drivers are the worker's own stopped
+    // report and the offline fallback. This comment used to claim "a flat
+    // StoppingTimeoutSecs (~120s) ceiling — workers do NOT go through
+    // recycleGraceFor", which has been false since T-fe5e and is more false now
+    // that every member cause except context_high is soft too.
     const wire = unwrap(
       await client.POST("/api/outsource-workers/{id}/refocus", {
         params: { path: { id } },

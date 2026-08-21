@@ -427,9 +427,12 @@ func offboardNotice(where, closer string, finalCall bool, deadline float64, offb
 	// the cockpit's refocus_deadline — so there is no second source of truth to
 	// drift. deadline <= 0 means nothing collects this epoch on a clock, and
 	// then no time is quoted at all: offboardKindOf only returns "final" for a
-	// clocked arm (refocus_since > 0 and refocus_op != refocus), so a final call
-	// with no deadline is a contradiction, and printing epoch 0 formatted as
-	// 1970 would be worse than saying nothing.
+	// clocked arm, and since T-ed79 that condition is `refocus_op ==
+	// context_high` — NOT the old "refocus_since > 0 and refocus_op != refocus",
+	// which was the pre-inversion shape (everything clocked, 重新聚焦 carved
+	// out). The conclusion is unchanged, only the reason: a final call with no
+	// deadline is a contradiction, and printing epoch 0 formatted as 1970 would
+	// be worse than saying nothing.
 	if finalCall && deadline > 0 {
 		// .UTC() is not cosmetic. The reader is an AGENT, which need not be
 		// running on this host, and the whole point of the sentence is that the

@@ -180,10 +180,15 @@ type memberObservation struct {
 	Online       bool
 	RefocusSince float64
 	// RefocusOp is the CAUSE of that epoch (member.refocus_op). decideUp reads
-	// it for one reason only: an owner-pressed 重新聚焦 opens with the SOFT
-	// notice and is collected on NO clock at all, so this arm must never time
-	// it out. Every other cause is already a final call when it lands and gets
-	// its 120s. See recycleGraceFor.
+	// it for one reason only: to ask recycleGraceFor whether this epoch is on a
+	// clock AT ALL. Since T-ed79 almost none are — the SECOND context threshold
+	// (context_high) is the only clocked cause; 重新聚焦, 改機器, a model/runtime
+	// change, restart_self and the FIRST context threshold are all collected by
+	// the agent's own stopped report or the owner's force-stop. This used to say
+	// "every other cause is already a final call when it lands and gets its
+	// 120s", i.e. the exact inverse of today's rule — and it sits ~100 lines
+	// from recycleGraceFor, which says the correct thing. The ruling lives in
+	// ONE place (winddownKindFor); this arm must never re-derive it.
 	RefocusOp    string
 	AgentStopped bool // stopped_since > 0 (the graceful dump-done fact)
 	// The last warden command_result folded onto this member (api_monitoring.go
@@ -1391,9 +1396,17 @@ func bootStormTripped(secsSinceBoot *float64, minBootSecs float64) bool {
 // so stopped_since sat on a desired-online member forever. That latch is not
 // inert: it is exactly what armRefocusEpoch documents, and it is read by the
 // recycle arm of decideUp (which robust-stops on stopped_since > 0 the instant
-// ANY epoch is stamped) and by the SSE stop gate. Clearing it here is why the
-// stamp sites can be trusted to open a clean epoch even against a row that has
-// been sitting in the DB for days.
+// ANY epoch is stamped). Clearing it here is why the stamp sites can be trusted
+// to open a clean epoch even against a row that has been sitting in the DB for
+// days.
+//
+// 🔴 The SSE stop gate is NOT a second reader in this scope, and this comment
+// used to name it as one. api_infra.go's gate only fires on
+// `desired_state == offline`, and the first gate below `continue`s on anything
+// that is not desired online — so within this function's range the gate is
+// unreachable by construction. Citing a protection that cannot apply here made
+// the case for clearing the latch look stronger than it is; the decideUp reader
+// alone is the real reason, and it is sufficient.
 //
 // WHY THE `IsOnline` GATE IS SUFFICIENT here, and no close-out is cut short by
 // this: the arm only fires on desired online ∧ NOT online. A member with a live
