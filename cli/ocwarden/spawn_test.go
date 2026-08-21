@@ -726,13 +726,27 @@ func TestStart_NoClaudeBin(t *testing.T) {
 	// — it offered two exits and both were "go get claude". The third exit
 	// (change this member's runtime) has to be IN the sentence, so the whole
 	// sentence is the assertion.
-	want := "claude_bin_unresolved: this machine has no Claude Code. " +
-		"Any one of these fixes it: (1) change THIS member's runtime to Codex " +
-		"(成員設定 → 執行環境) — nothing to install if Codex is already set up here; " +
-		"(2) install Claude Code on this machine and sign in; " +
-		"(3) if claude IS installed here, re-run `ocwarden install` with " +
-		"OC_CLAUDE_BIN=/absolute/path/to/claude — the warden runs under launchd, " +
-		"whose PATH does not include ~/.local/bin."
+	want := "claude_bin_unresolved: no Claude Code on this machine. " +
+		"Fix any one: set this member's 執行環境 to Codex; " +
+		"install Claude Code here; or re-install the warden with OC_CLAUDE_BIN=<path>."
+	// The Codex exit is the hard acceptance criterion of this ticket and is
+	// asserted SEPARATELY from the equality above, so that a future edit which
+	// rewords the sentence cannot quietly drop it: whoever updates `want` to
+	// match their new wording has to defeat this line on purpose.
+	if !strings.Contains(out.Reason, "Codex") {
+		t.Errorf("the refusal must always offer the change-this-member's-runtime "+
+			"exit — that is the whole reason it was rewritten; got %q", out.Reason)
+	}
+	// One line, not a paragraph. last_op_reason is contractually a "structured
+	// one-line cause" (ocapi_gen.go) and the cockpit renders it un-truncated in
+	// red (.mp-lastop__reason). The version this replaced ran 431 display
+	// columns. The bound is deliberately loose — it is a wall-of-red guard, not
+	// a style rule — but it does fail on a relapse into prose.
+	if width := runewidth(out.Reason); width > 220 {
+		t.Errorf("refusal is %d display columns; last_op_reason is rendered "+
+			"un-truncated in the member panel and a paragraph there becomes a wall "+
+			"of red: %q", width, out.Reason)
+	}
 	if out.Reason != want {
 		t.Errorf("refusal reason\n got: %q\nwant: %q", out.Reason, want)
 	}
@@ -1072,4 +1086,27 @@ func TestTmuxDeliverNudge_NilSleepSafe(t *testing.T) {
 	if r.enterCount != 1 {
 		t.Fatalf("committed on first read → 1 Enter, got %d", r.enterCount)
 	}
+}
+
+// runewidth is a deliberately crude display-width count: CJK / fullwidth runes
+// take two columns where everything else takes one. It exists only so the
+// refusal-length guard in TestStart_NoClaudeBin measures the mixed zh/en string
+// the way the member panel actually renders it, instead of counting a 4-rune
+// 執行環境 as 4 columns.
+func runewidth(s string) int {
+	width := 0
+	for _, r := range s {
+		switch {
+		case r >= 0x1100 && r <= 0x115F, // Hangul Jamo
+			r >= 0x2E80 && r <= 0xA4CF, // CJK radicals … Yi
+			r >= 0xAC00 && r <= 0xD7A3, // Hangul syllables
+			r >= 0xF900 && r <= 0xFAFF, // CJK compatibility ideographs
+			r >= 0xFF00 && r <= 0xFF60, // fullwidth forms
+			r >= 0xFFE0 && r <= 0xFFE6:
+			width += 2
+		default:
+			width++
+		}
+	}
+	return width
 }
