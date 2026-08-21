@@ -1243,8 +1243,7 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 		if !aRefocusStampWouldReachTheAgent(*m) {
 			continue
 		}
-		m.RefocusSince = now
-		m.RefocusOp = refocusOpContextHigh
+		armRefocusEpoch(m, refocusOpContextHigh, now)
 		if err := s.putMember(*m, triggerServer); err != nil {
 			reconcileLog("recycle: auto-stamp persist failed for %s: %v", m.ID, err)
 			continue
@@ -1271,13 +1270,36 @@ func bootStormTripped(secsSinceBoot *float64, minBootSecs float64) bool {
 // (§4.5): clear the recycle markers the moment the respawn-pending state is
 // observed (desired online ∧ ¬online ∧ refocus_since>0 — the kill landed), so
 // a slow/never-waking respawn can never be re-killed off a stale marker.
+//
+// 🔴 It also clears a wind-down latch left behind with NO epoch at all. An agent
+// can report_stopping / report_stopped on its own, without anybody stamping
+// refocus_since — a spontaneous close-out, or one whose epoch was already
+// cleared — and the arm below used to skip those rows on `refocus_since <= 0`,
+// so stopped_since sat on a desired-online member forever. That latch is not
+// inert: it is exactly what armRefocusEpoch documents, and it is read by the
+// recycle arm of decideUp (which robust-stops on stopped_since > 0 the instant
+// ANY epoch is stamped) and by the SSE stop gate. Clearing it here is why the
+// stamp sites can be trusted to open a clean epoch even against a row that has
+// been sitting in the DB for days.
+//
+// WHY THE `IsOnline` GATE IS SUFFICIENT here, and no close-out is cut short by
+// this: the arm only fires on desired online ∧ NOT online. A member with a live
+// session is never touched, so an agent working its sequence (report_stopping
+// sent, report_stopped not yet) keeps its anchors for as long as it is
+// connected. If its socket really is gone while desired_state is still online,
+// reconcile's decideUp is already going to START a replacement session on this
+// same tick — with or without the latch, nothing is waiting for that close-out
+// to finish. What the latch WOULD do in that state is arm the two destructive
+// readers above against the next epoch. Clearing loses nothing that is still
+// being used and removes a trap; keeping it protects a close-out that no code
+// path is still honouring.
 func (s *apiServer) clearRecycleMarkersOnRespawn(members []Member) {
 	for i := range members {
 		m := &members[i]
 		if m.DesiredState != DesiredStateOnline {
 			continue
 		}
-		if m.RefocusSince <= 0.0 {
+		if m.RefocusSince <= 0.0 && m.StoppedSince <= 0.0 && m.StoppingSince <= 0.0 {
 			continue // plain respawn — nothing to clear
 		}
 		if s.hub.IsOnline(m.ID) {

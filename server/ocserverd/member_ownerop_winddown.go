@@ -178,6 +178,34 @@ func hasUncollectedOnlineOwnerOpState(refocusSince, stoppedSince float64, online
 	return online && !(refocusSince > 0.0 && stoppedSince > 0.0)
 }
 
+// armRefocusEpoch is the ONE way a refocus epoch is opened. It MUTATES m and
+// persists nothing: every caller folds it into its own single putMember, so the
+// stamp and whatever else that write carries are one row write and one delta.
+//
+// 🔴 The two zeroed anchors are the whole reason this is a named function and
+// not four hand-written lines. A NEW epoch must never inherit the PREVIOUS
+// wind-down's latch, and the two readers that latch feeds are both destructive:
+//
+//   - decideUp's recycle arm reads AgentStopped = stopped_since > 0 and, with a
+//     refocus marker present, robust-stops the member ON THE SPOT — zero grace,
+//     no close-out. A stale stopped_since therefore turns the very next epoch
+//     stamped on that member into an immediate kill, in the same tick, whatever
+//     opened it.
+//   - the SSE stop gate (api_infra.go) refuses a reconnect once stopped_since
+//     is set, so a stale latch also rejects the NEXT close-out's reconnect.
+//
+// Three of the four stamp sites used to write refocus_since/refocus_op alone
+// (POST /members/{id}/refocus, restart_self's staff arm, and the context
+// auto-stamp); only the owner-verb funnel below cleared the anchors. Sharing
+// one function is what makes "a fresh epoch starts from a clean sheet" a
+// property of the operation rather than of whoever remembered it.
+func armRefocusEpoch(m *Member, op string, now float64) {
+	m.RefocusSince = now
+	m.RefocusOp = op
+	m.StoppingSince = 0.0
+	m.StoppedSince = 0.0
+}
+
 // armMemberOwnerOpHandover stamps a FRESH refocus epoch on the member when
 // there is state to flush, and reports whether it did. It MUTATES m and
 // persists nothing: the caller folds this into its own single putMember so the
@@ -190,10 +218,7 @@ func (s *apiServer) armMemberOwnerOpHandover(m *Member, op string) bool {
 	if !s.memberHasStateToFlush(*m) {
 		return false
 	}
-	m.RefocusSince = nowSecs()
-	m.RefocusOp = op
-	m.StoppingSince = 0.0
-	m.StoppedSince = 0.0
+	armRefocusEpoch(m, op, nowSecs())
 	if grace, clocked := recycleGraceFor(op, s.reconcileCfg); clocked {
 		reconcileLog("recycle: %s %s — wind-down opened (collect on stopped-report or +%.0fs)",
 			op, m.ID, grace)

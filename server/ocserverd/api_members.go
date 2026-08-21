@@ -999,8 +999,7 @@ func (s *apiServer) HandleRefocusMemberApiMembersMemberIdRefocusPost(w http.Resp
 				"online (§3.4 #14)")
 		return
 	}
-	m.RefocusSince = nowSecs()
-	m.RefocusOp = refocusOpRefocus
+	armRefocusEpoch(m, refocusOpRefocus, nowSecs())
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
@@ -1259,8 +1258,7 @@ func (s *apiServer) HandleRestartSelfApiSelfRefocusPost(w http.ResponseWriter, r
 		s.writeMemberDTO(w, *fresh)
 		return
 	}
-	m.RefocusSince = now
-	m.RefocusOp = refocusOpRestartSelf
+	armRefocusEpoch(m, refocusOpRestartSelf, now)
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
