@@ -37,7 +37,12 @@ import "./dispatch-alert.css";
  * do not go looking at claude there" — instead of the machine-side advice
  * quoted above. That makes it AGREE with this panel rather than contradict it
  * in the undelivered case, and it does not change the reasoning here: this copy
- * still knows less than `last_op_reason` and must still point at it.)
+ * still knows less than `last_op_reason` and must still point at it.
+ * T-b3d0's follow-up adds a third form: when the target machine REPORTED no
+ * Claude Code and a ready Codex, the receipt names the runtime switch — "set
+ * this member's 執行環境 to Codex" — instead of sending the owner to inspect a
+ * claude that is not on that box. Same conclusion again: `last_op_reason` knows
+ * more than this copy does.)
  * The first version of this copy said "nothing reached the target machine" and
  * sent the owner to check the machine registry. In case (b) that CONTRADICTS
  * 「最近操作」 on the same panel and points at the wrong fix. Replacing a silent
