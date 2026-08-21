@@ -714,6 +714,36 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 		return
 	}
 	worker.DesiredState = DesiredStateOnline
+	// 🔴 A RESTART STARTS A NEW SESSION, SO IT STARTS FROM A CLEAN SHEET
+	// (T-ed79 parity #11). This handler used to write desired_state and NOTHING
+	// else, and worker_spawn.go names the leftover it produces by name: "NOTHING
+	// clears the second one — clearWorkerRefocus is only reachable while
+	// refocus_since > 0, and the restart handler writes desired_state and nothing
+	// else — so it outlives the whole stop→restart cycle."
+	//
+	// WHICH ANCHORS, and why exactly these:
+	//   * refocus_since / refocus_op / stopping_since / stopped_since all date
+	//     the session being REPLACED. Carried into the next one they are read as
+	//     facts about THAT one — and the pair (refocus > 0 ∧ stopped > 0) is read
+	//     by workerHasStateToFlush as "this epoch's wind-down is already
+	//     collected", which shoots the next 改機器 / 換 model on the spot with no
+	//     close-out. The epoch scoping in that predicate heals a stale
+	//     stopped_since ALONE; it cannot heal a stale PAIR, because a stale pair
+	//     is indistinguishable from a real collected epoch.
+	//   * forced_stop_at is deliberately KEPT — the staff activate's rule
+	//     verbatim. It does not describe this session; it describes the one
+	//     BEFORE it, and the reader who needs it most is the one that comes after
+	//     (dal.go, migrations/00057). Its max() upsert would fight a clear here
+	//     anyway.
+	//
+	// This is the SET, not the count: the staff activate clears two anchors
+	// (stopping/waking) because those are the two a member carries — a worker has
+	// no waking_since and does carry the two wind-down latches. Copying the staff
+	// LIST would have cleared neither of the two the code above points at.
+	worker.RefocusSince = 0.0
+	worker.RefocusOp = ""
+	worker.StoppingSince = 0.0
+	worker.StoppedSince = 0.0
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
 		internalError(w, err)

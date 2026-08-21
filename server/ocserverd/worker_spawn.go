@@ -1162,9 +1162,14 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // is a handover: collectWorkerHandover latches it as the 收口 of a refocus
 // epoch, and workerReportStopped's ELSE arm latches it for a report arriving
 // outside any handover (an ordinary 停止 where the worker says it has finished).
-// NOTHING clears the second one — clearWorkerRefocus is only reachable while
-// refocus_since > 0, and the restart handler writes desired_state and nothing
-// else — so it outlives the whole stop→restart cycle. Read GLOBALLY, that stale
+// The second one is latched with NO epoch to clear it — clearWorkerRefocus is
+// only reachable while refocus_since > 0, so nothing on the handover machinery
+// ever sees it. (Until T-ed79 parity #11 the restart handler wrote desired_state
+// and nothing else, so it outlived the whole stop→restart cycle too; 重啟 now
+// clears the anchors, which closes that ROUTE but not the state — an ordinary
+// stopped-report on a desired-online worker still produces it, and that is the
+// fixture TestOwnerOp_OrdinaryStopRestartStillWindsDownLater uses.) Read
+// GLOBALLY, that stale
 // latch claims "already collected" forever, and every later 改機器 / 換 model on
 // that worker is shot on the spot, for the rest of its life. Pairing it with
 // RefocusSince > 0 asks the question that was actually meant: is THIS epoch's
