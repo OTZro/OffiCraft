@@ -199,3 +199,89 @@ func TestUnsetRuntime_NothingReadyPersistsNothing(t *testing.T) {
 		t.Fatalf("START frame runtime = %q, want %q", got, RuntimeClaude)
 	}
 }
+
+// claudeLoginUnknownRuntimes is the shape a warden emits (after T-b3d0's
+// runtimeprobe fix) on a host where claude RESOLVES but neither presence check
+// found a credential: logged_in is ABSENT — unknown, not false. Codex on the
+// same host is installed and measurably logged in, so if unknown were read as
+// "signed out" this member would be resolved to codex and frozen there.
+const claudeLoginUnknownRuntimes = `{"runtimes":{"claude":{"installed":true},` +
+	`"codex":{"installed":true,"logged_in":true}}}`
+
+// TestSeedAssistantPrefersClaude_WhenClaudeLoginIsUnknown is the owner ruling
+// pinned to the placement outcome (「Installed 不知道不應該標記」).
+//
+// Claude is installed; whether it is logged in was never measured — the warden
+// has no claude login probe, only two presence checks. An unknown must not be
+// spent as a "no": resolution is IRREVERSIBLE (it writes the runtime column and
+// no backfill exists), so a guess here is permanent. Claude wins, and if the
+// host really is signed out the owner sees it at spawn — where the refusal
+// names the Codex option — instead of silently getting a different runtime.
+func TestSeedAssistantPrefersClaude_WhenClaudeLoginIsUnknown(t *testing.T) {
+	s := newReconcileTestServer(t)
+	connectOnline(t, s, ServerSelfHost)
+	if rec := doIngestTelemetry(s, ServerSelfHost, ServerSelfHost,
+		claudeLoginUnknownRuntimes); rec.Code != 200 {
+		t.Fatalf("telemetry ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	// Precondition: codex on this host IS ready, so choosing claude below is a
+	// real preference and not the only option left.
+	if caps := s.machineRuntimeCapabilities(ServerSelfHost); !runtimeCapabilityReady(caps[RuntimeCodex]) {
+		t.Fatalf("precondition: codex must be ready for this test to discriminate; caps = %#v", caps)
+	}
+	m := wakeSeedAssistant(t, s)
+
+	decision := s.reconcileOne(m, reconcileState{}, 1000)
+
+	if decision.Command != reconcileCmdStart {
+		t.Fatalf("want a dispatched START, got command %q reason %q",
+			decision.Command, decision.Reason)
+	}
+	if got := storedRuntime(t, s, seedMiraID); got != RuntimeClaude {
+		t.Fatalf("roster runtime = %q, want %q. An UNKNOWN claude login was read "+
+			"as a no and this member was permanently written to a different "+
+			"runtime — the exact irreversible guess the owner ruled out.",
+			got, RuntimeClaude)
+	}
+	if got := startFrameRuntime(t, s, ServerSelfHost); got != RuntimeClaude {
+		t.Fatalf("START frame runtime = %q, want %q", got, RuntimeClaude)
+	}
+}
+
+// TestSeedAssistantStillPicksCodex_WhenClaudeIsNotInstalled is the negative
+// control for the test above, and the regression guard for this ticket's whole
+// reason to exist. Absence of EVIDENCE about login must be permissive; absence
+// of the BINARY is a measurement and must stay decisive. If the fix above ever
+// widened into "always prefer claude", the codex-only box — the machine T-b3d0
+// exists to serve — would go back to being born claude and dying at spawn.
+func TestSeedAssistantStillPicksCodex_WhenClaudeIsNotInstalled(t *testing.T) {
+	s := newReconcileTestServer(t)
+	connectOnline(t, s, ServerSelfHost)
+	if rec := doIngestTelemetry(s, ServerSelfHost, ServerSelfHost,
+		codexOnlyRuntimes); rec.Code != 200 {
+		t.Fatalf("telemetry ingest: %d %s", rec.Code, rec.Body.String())
+	}
+	// Precondition: claude is REPORTED (installed:false), not missing from the
+	// map — the shape a real codex-only warden sends.
+	caps := s.machineRuntimeCapabilities(ServerSelfHost)
+	claude, reported := caps[RuntimeClaude]
+	if !reported || claude.Installed == nil || *claude.Installed {
+		t.Fatalf("precondition: want a reported claude entry with installed:false, got %#v", caps)
+	}
+	m := wakeSeedAssistant(t, s)
+
+	decision := s.reconcileOne(m, reconcileState{}, 1000)
+
+	if decision.Command != reconcileCmdStart {
+		t.Fatalf("want a dispatched START, got command %q reason %q",
+			decision.Command, decision.Reason)
+	}
+	if got := storedRuntime(t, s, seedMiraID); got != RuntimeCodex {
+		t.Fatalf("roster runtime = %q, want %q. claude is MEASURED absent on this "+
+			"box; treating that like an unknown re-breaks the codex-only machine "+
+			"this ticket exists for.", got, RuntimeCodex)
+	}
+	if got := startFrameRuntime(t, s, ServerSelfHost); got != RuntimeCodex {
+		t.Fatalf("START frame runtime = %q, want %q", got, RuntimeCodex)
+	}
+}
