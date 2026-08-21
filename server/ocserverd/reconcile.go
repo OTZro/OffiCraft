@@ -273,6 +273,18 @@ type reconcileDecision struct {
 	// tick turns this flag into a durable last_op receipt so the two are
 	// distinguishable in the UI.
 	StartTimedOut bool
+	// ReasonCode (T-ed79 #14) is the STRUCTURED half of Reason: one of the
+	// spawnReason* / placementReason* codes when this decision is a STALL the
+	// owner is owed an explanation for, "" when it is not.
+	//
+	// 🔴 "" IS THE DEFAULT AND IT MEANS 'OWES NOBODY ANYTHING'. Most decisions
+	// are converged states (online: converged, offline: converged, uninstall:
+	// converged) or steps in a wind-down that is proceeding normally. Stamping a
+	// receipt for those would turn every healthy member into a permanent SSE
+	// event stream and make the receipt meaningless — the field exists to name
+	// the cases where the member wants to be online and is NOT, and the reason
+	// was previously reachable only on the server's stderr.
+	ReasonCode string
 }
 
 func decisionNone(obs memberObservation, st reconcileState, reason string) reconcileDecision {
@@ -510,9 +522,14 @@ func decideUp(
 			// the STOP unconditionally — a true zombie is still reaped.
 			if now-st.OfflineSince < cfg.ZombieConfirmGrace {
 				st.Phase = reconcilePhaseStarting
-				return decisionNone(obs, st,
+				dec := decisionNone(obs, st,
 					"zombie suspect: START clobbered a live presence-deaf session — "+
 						"withholding takeover stop inside the reconnect-confirm grace")
+				dec.ReasonCode = spawnReasonZombieSuspect + ": a session for this member " +
+					"is still alive on its machine but is not answering, so the start " +
+					"bounced off it. The server waits to be sure it is not simply " +
+					"reconnecting before it takes the slot back"
+				return dec
 			}
 			st.Phase = reconcilePhaseStopping
 			st.LastCommand = reconcileCmdStop
@@ -537,12 +554,18 @@ func decideUp(
 	if st.CircuitOpen {
 		st.Phase = reconcilePhaseCircuitOpen
 		dec := decisionNone(obs, st, "circuit open: respawn disabled")
+		dec.ReasonCode = spawnReasonCircuitOpen + ": too many failed starts in a row, so " +
+			"the server has stopped retrying this member for now — it will try again " +
+			"by itself; fix what is failing on its machine, or 停止 and 活化 to start over"
 		dec.StartTimedOut = startTimedOut
 		return dec
 	}
 	if now < st.BackoffUntil {
 		st.Phase = reconcilePhaseBackoff
 		dec := decisionNone(obs, st, "backoff: awaiting retry window")
+		dec.ReasonCode = spawnReasonBackoff + ": the last start did not come up, so the " +
+			"next attempt is waiting out a back-off window — nothing is wrong with the " +
+			"button you pressed, the retry has not come round yet"
 		dec.StartTimedOut = startTimedOut
 		return dec
 	}
@@ -1139,7 +1162,85 @@ func (s *apiServer) reconcileTickMemberLocked(m Member, now float64) reconcileDe
 	reconcileLog("%s: desired=%s command=%s — %s",
 		m.ID, parseDesired(m.DesiredState), decision.Command, decision.Reason)
 	s.stampWakeObservability(&m, decision, now)
+	// AFTER the wake receipt, and it yields to it: stampWakeObservability owns the
+	// EXECUTION-level diagnosis ("the start went out and the agent never came
+	// up"), which is strictly more informative than this tick's DISPATCH-level one
+	// ("we are in back-off"). They collide on the very tick a lapse turns into
+	// back-off, and the single last_op_reason slot can hold only one.
+	if !decision.StartTimedOut {
+		s.stampMemberOpBlocked(m.ID, decision.ReasonCode, now)
+	}
 	return decision
+}
+
+// stampMemberOpBlocked records WHY a staff member the owner wants running is not
+// running, on the row the cockpit already reads — the staff twin of
+// stampWorkerPlacementBlocked, and the production end of T-ed79 #14.
+//
+// The contract-level parts (the last_op* fields, the isPlacementBlockedReason
+// clearing seam, the cockpit renderer) were ALREADY shared between the two
+// sides; what staff never had was anybody writing. decideUp reached "circuit
+// open", "backoff" and "zombie suspect" and reconcileLog'd each one to the
+// server's stderr, where no owner has ever looked. From the cockpit all three
+// were the same picture: a grey row.
+//
+// A BLANK code is a no-op, deliberately — see reconcileDecision.ReasonCode. This
+// function never clears: clearing belongs to stampWakeObservability's landed-START
+// path, which already drops any placement-blocked reason, and a converged tick
+// silently blanking the row would erase the diagnosis one tick after it appeared.
+//
+// Written only when the cause CHANGES (the anti-churn rule the worker stamp
+// documents at length: the cadence re-decides the same stall every 30s, so an
+// unconditional write would re-stamp last_op_at and fan a delta on every tick).
+// Re-read before the whole-row write, for the reason every other stamp here does.
+// Best-effort: a persist failure is logged and changes no decision.
+// stampMemberOpReceipt writes one op receipt onto an IN-MEMORY member the caller
+// is about to persist itself. It exists so an HTTP handler's explanation and the
+// change it explains are ONE row write and ONE delta — the same reason
+// armRefocusEpoch mutates instead of persisting.
+func stampMemberOpReceipt(m *Member, reason string, now float64) {
+	ok := false
+	m.LastOp = reconcileCmdStart
+	m.LastOpOK = &ok
+	m.LastOpLog = ""
+	m.LastOpReason = reason
+	m.LastOpAt = now
+}
+
+func (s *apiServer) stampMemberOpBlocked(memberID, reason string, now float64) {
+	if reason == "" {
+		return
+	}
+	fresh, err := s.dal.GetMember(memberID)
+	if err != nil || fresh == nil || fresh.RosterStatus != RosterStatusActive {
+		return
+	}
+	if fresh.LastOp == reconcileCmdStart && fresh.LastOpReason == reason {
+		return // already stamped with this exact cause — do not churn the row
+	}
+	// 🔴 THE ONE PRECEDENCE RULE, and it is the family's own (worker_spawn.go, the
+	// two codes deliberately outside spawnBlockedReasonCodes): a diagnosis of the
+	// PREVIOUS attempt must not be erased by a description of the current wait.
+	// wake_timeout says the start was dispatched and the agent never came up;
+	// never_collected says the frame never even reached the machine. Both are
+	// followed, one tick later, by exactly the back-off this function would stamp
+	// — so without this rule the retry loop would blank the only sentence that
+	// says what actually went wrong, every time, which is the trap 31751ae fixed
+	// for workers.
+	for _, sticky := range []string{wakeTimeoutReasonCode, spawnReasonNeverCollected} {
+		if strings.HasPrefix(fresh.LastOpReason, sticky+":") {
+			return
+		}
+	}
+	ok := false
+	fresh.LastOp = reconcileCmdStart
+	fresh.LastOpOK = &ok
+	fresh.LastOpLog = ""
+	fresh.LastOpReason = reason
+	fresh.LastOpAt = now
+	if err := s.putMember(*fresh, triggerServer); err != nil {
+		reconcileLog("%s: op-blocked stamp persist failed: %v", memberID, err)
+	}
 }
 
 // stampMemberPlacementBlocked names, on the member row the cockpit reads, the one

@@ -737,8 +737,17 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 	// change opens the SAME graceful wind-down 重新聚焦 has always had, so the
 	// member finishes what it was doing and comes back on the new value. Same
 	// single write: the epoch and the new value can never land apart.
+	heldDown := false
 	if launchIntentChanged {
-		s.armMemberOwnerOpHandover(m, memberOpModel)
+		// A member the owner has stopped takes the new value on its next 活化 and
+		// NOTHING happens now — which is right, and used to be indistinguishable
+		// from "it took effect". The receipt is folded into this same putMember so
+		// the value and the explanation land in one write and one delta.
+		heldDown = !s.armMemberOwnerOpHandover(m, memberOpModel) &&
+			m.DesiredState == DesiredStateOffline
+		if heldDown {
+			stampMemberOpReceipt(m, memberHeldDownReceipt(memberOpModel), nowSecs())
+		}
 	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
@@ -810,6 +819,21 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 	if dec.Command != reconcileCmdStart && !s.hub.IsOnline(m.ID) {
 		pending := true
 		dto.ActivationPending = &pending
+		// …and WHICH pending (T-ed79 #14). The flag is one bit and the comment
+		// above lists at least four states that reach it. The tick has already
+		// decided which one it is; stamp that on the row so the cockpit can say it
+		// instead of showing a pending badge with nothing behind it. An arm that
+		// named no code falls back to the generic "asked, nothing dispatched yet",
+		// which is still strictly more than the blank it replaces — and is
+		// deliberately NOT invented per-arm here: a new stall arm should name
+		// itself at the decision site, not be guessed at from this end.
+		reason := dec.ReasonCode
+		if reason == "" {
+			reason = spawnReasonWardenLost + ": 活化 was recorded, but nothing has been " +
+				"dispatched yet — the machine's warden did not take the start. It will " +
+				"be retried; if it stays here, check that machine"
+		}
+		s.stampMemberOpBlocked(m.ID, reason, nowSecs())
 	}
 	writeJSON(w, http.StatusOK, dto)
 }
@@ -884,6 +908,11 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 	// new pin and the epoch land together and the delta the agent wakes on
 	// already names the destination.
 	windDown := s.armMemberOwnerOpHandover(m, memberOpRelocate)
+	// Held down: the pin is stored and nothing is moved. Same receipt, same
+	// single write — see memberHeldDownReceipt.
+	if !windDown && m.DesiredState == DesiredStateOffline {
+		stampMemberOpReceipt(m, memberHeldDownReceipt(memberOpRelocate), nowSecs())
+	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
@@ -924,6 +953,27 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 		dto.RelocationDeferred = &deferred
 	}
 	writeJSON(w, http.StatusOK, dto)
+}
+
+// memberHeldDownReceipt is the sentence a staff owner-verb leaves on the row when
+// it was SAVED and nothing was started, because the owner has this member held
+// down (T-ed79 #4 / #14). It is the worker receipt's twin, verb-for-verb:
+// respawnWorkerForOwnerOp has written exactly this for 改機器 / 換 model / 重啟
+// since the reason-code family landed, and staff answered a clean 200 with an
+// empty row.
+//
+// 🔴 WHY THE STATE NEEDS A NAME AT ALL. Three different situations reach the
+// same silent 200 on these handlers — the owner pressed 停止 (this one), the
+// member is simply offline, and this epoch's wind-down was already collected —
+// and the owner has no way to tell them apart. Only the FIRST is one his own
+// earlier action caused, and it is the only one a receipt can resolve for him
+// ("重啟 it when you want it to run"). The other two are not stalls: an offline
+// member picks the value up at its next wake, which is the ordinary story, and
+// stamping a receipt for it would be noise on every edit made while a member is
+// asleep.
+func memberHeldDownReceipt(op string) string {
+	return spawnReasonHeldDown + ": the " + op + " was saved, but nothing was " +
+		"started — this member is stopped; 活化 it when you want it to run"
 }
 
 // clearMemberHandoverMarker zeroes the 換手 epoch a staff STOP has just made

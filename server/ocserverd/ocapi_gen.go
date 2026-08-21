@@ -3827,7 +3827,7 @@ type ServerInterface interface {
 	// Relocate an outsource worker to a machine (admin-gated).
 	// (POST /api/outsource-workers/{id}/relocate)
 	HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost(w http.ResponseWriter, r *http.Request, id string)
-	// Restart (重啟) an outsource worker that has no live session (owner/admin agent; 409 only when it is actually alive).
+	// Restart (重啟) an outsource worker (owner/admin agent; a live worker is displaced, not refused).
 	// (POST /api/outsource-workers/{id}/restart)
 	HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost(w http.ResponseWriter, r *http.Request, id string)
 	// Stop (停止) an outsource worker: ask it to work its 下線程序 and wait for its own report_stopped -- no kill, no deadline (owner/admin agent).

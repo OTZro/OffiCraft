@@ -1677,7 +1677,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Restart (重啟) an outsource worker that has no live session (owner/admin agent; 409 only when it is actually alive).",
+			Summary:  "Restart (重啟) an outsource worker (owner/admin agent; a live worker is displaced, not refused).",
 			MCPTool:  "restart_outsource_worker",
 		},
 		// ⚠️ set_outsource_worker_model sits at the machine FLOOR since T-ed79,

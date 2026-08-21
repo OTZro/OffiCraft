@@ -3773,15 +3773,19 @@ export const mockApi: Api = {
         404, `outsource worker ${id} not found`
       );
     }
-    // Mock ↔ http parity (T-7526): the guard asks whether the worker is ALIVE,
-    // not whether anyone pressed 停止. A worker whose session died on its own
-    // keeps desired_state=online and must still be revivable; a genuinely live
-    // one is still refused.
-    if (w.desiredState !== "offline" && w.presence === "online") {
-      throw mockApiError(
-        `http 409 for POST /api/outsource-workers/${id}/restart`,
-        409, "worker is still online — nothing to restart"
-      );
+    // Mock ↔ http parity (T-ed79 #10, owner 2026-08-21 「往正職靠：外包也不擋」):
+    // the over-spawn guard is GONE. A live worker is DISPLACED, not refused —
+    // the same shape 活化 has always had for a staff member — and the fact that
+    // the press found a live session is a receipt on the row instead of a 409.
+    if (w.presence === "online") {
+      w.lastOp = "start";
+      w.lastOpOk = false;
+      w.lastOpLog = "";
+      w.lastOpReason =
+        "session_alive: this worker was still running — 重啟 is replacing that " +
+        "session, not starting a first one. If it does not come back, its " +
+        "previous session was still holding the slot";
+      w.lastOpAt = Date.now() / 1000;
     }
     w.desiredState = "online";
     w.presence = "waking";

@@ -484,22 +484,19 @@ func TestStopWorker_Idempotent(t *testing.T) {
 }
 
 // TestRestartWorker_ClearsAndRedispatches: restart on a stopped worker sets
-// desired_state back online and re-dispatches (worker_start). A non-stopped
-// worker → 409. Mutant: dropping the still-alive guard → the LIVE case 200s
-// (a hidden double-spawn) → red. (The other half of that guard — a worker whose
-// session died on its own must NOT be refused — is
-// TestRestartWorker_RevivesAWorkerWhoseSessionDiedOnItsOwn below.)
+// desired_state back online and re-dispatches (worker_start).
+//
+// ⚠️ IT USED TO OPEN BY ASSERTING A 409 ON A LIVE WORKER. T-ed79 #10 removed
+// that refusal (owner 2026-08-21 「往正職靠：外包也不擋」), so the assertion was
+// deleted rather than inverted — the live case is now its own subject, with its
+// three faces, in worker_restart_no_guard_ted79_test.go. What is left here is
+// what this test was always really about: the STOPPED→restart path.
+// (The neighbouring half — a worker whose session died on its own must not be
+// refused — is TestRestartWorker_RevivesAWorkerWhoseSessionDiedOnItsOwn below.)
 func TestRestartWorker_ClearsAndRedispatches(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	workerID := newActiveOnlineWorker(t, api)
-
-	// Not stopped → 409.
-	rec := postWorker(t, api, workerID, "restart", nil,
-		api.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("restart of a live worker: want 409, got %d %s", rec.Code, rec.Body.String())
-	}
 
 	// Stop it, then restart → 200, marker cleared, worker_start dispatched.
 	// 強制停止 rather than 停止: this case wants the session GONE before the
@@ -507,7 +504,7 @@ func TestRestartWorker_ClearsAndRedispatches(t *testing.T) {
 	postWorker(t, api, workerID, "force-stop", nil,
 		api.HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost)
 	api.hub.DrainWardenCommands(ServerSelfHost)
-	rec = postWorker(t, api, workerID, "restart", nil,
+	rec := postWorker(t, api, workerID, "restart", nil,
 		api.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("restart: %d %s", rec.Code, rec.Body.String())

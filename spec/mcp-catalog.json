@@ -3363,7 +3363,7 @@
       "name": "stop_outsource_worker"
     },
     {
-      "description": "Restart (\u91cd\u555f) an outsource worker that has no live session (owner/admin agent; 409 only when it is actually alive).",
+      "description": "Restart (\u91cd\u555f) an outsource worker (owner/admin agent; a live worker is displaced, not refused).",
       "inputSchema": {
         "properties": {
           "id": {

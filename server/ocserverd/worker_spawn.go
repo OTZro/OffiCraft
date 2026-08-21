@@ -317,6 +317,22 @@ const (
 	spawnReasonWakeTimeout     = "wake_timeout"
 	spawnReasonNeverCollected  = "never_collected"
 	spawnReasonHeldDown        = "held_down"
+	// ── added by T-ed79 so the STAFF side has the same vocabulary (#14) ──────
+	// The three diagnoses decideUp used to reach and then only reconcileLog to
+	// stderr. All three answer the same owner question — "I pressed 活化 and it
+	// is still grey" — and all three are invalidated by a landed START, so all
+	// three are in the closed set below.
+	spawnReasonCircuitOpen   = "circuit_open"
+	spawnReasonBackoff       = "backoff"
+	spawnReasonZombieSuspect = "zombie_suspect"
+	// spawnReasonSessionAlive is the receipt 重啟 leaves when it was pressed on a
+	// worker that was STILL RUNNING (T-ed79 #10). That case used to be a flat
+	// 409 with a clear sentence; the owner ruled 外包也不擋 (外包對齊正職 — staff
+	// 活化 has no such guard), so the verb now goes through. The SENTENCE is what
+	// had to survive that: without it the owner would have traded one clear
+	// refusal for a warden-level "session_already_exists" bounce, which is the
+	// opposite direction from every other ruling in this ticket.
+	spawnReasonSessionAlive = "session_alive"
 	// KNOWN LIMITATION — the receipt is a SINGLE SLOT, not a history (owner ruling:
 	// keep it single for now, the structural fix is tracked on its own ticket). All
 	// of the codes here write the same last_op/last_op_reason pair, so the NEWEST
@@ -341,12 +357,18 @@ const (
 //     is not delivery — listing it would let each retry blank it and put the row
 //     straight back to the permanent silence this whole change removes;
 //   - held_down describes the owner's own 停止 standing, which no dispatch
-//     invalidates — only a restart does, and that writes its own receipt.
+//     invalidates — only a restart does, and that writes its own receipt;
+//   - session_alive is the same shape (T-ed79 #10): it records what the owner's
+//     重啟 FOUND — a session that was still running and is being displaced — and
+//     the dispatch that follows is the very thing it describes, not a refutation
+//     of it. Clearing it on the landed START would blank the receipt in exactly
+//     the case where it came true.
 var spawnBlockedReasonCodes = []string{
 	placementReasonNoMachine, placementReasonUnavailable,
 	spawnReasonNoLiveTask, spawnReasonBootContext, spawnReasonNoSecret,
 	spawnReasonTokenMint, spawnReasonFrameBuild, spawnReasonWardenLost,
 	spawnReasonRespawnDeferred,
+	spawnReasonCircuitOpen, spawnReasonBackoff, spawnReasonZombieSuspect,
 }
 
 // stampWorkerPlacementBlocked records WHY a worker was not dispatched, on the
@@ -369,6 +391,20 @@ var spawnBlockedReasonCodes = []string{
 // Best-effort by contract (the stampWakeObservability rule): a persistence
 // failure is logged and never changes the dispatch decision — observability must
 // not be able to stall the control loop.
+// stampWorkerOpReceipt writes one receipt onto an IN-MEMORY worker the caller is
+// about to persist itself — the twin of stampMemberOpReceipt, and the reason it
+// exists is the same: an owner verb's explanation and the change it explains
+// must be ONE row write and ONE delta. stampWorkerPlacementBlocked is the other
+// half of the pair, for callers (the tick) that own no write of their own.
+func stampWorkerOpReceipt(w *OutsourceWorker, reason string, now float64) {
+	ok := false
+	w.LastOp = reconcileCmdStart
+	w.LastOpOK = &ok
+	w.LastOpLog = ""
+	w.LastOpReason = reason
+	w.LastOpAt = now
+}
+
 func (s *apiServer) stampWorkerPlacementBlocked(w *OutsourceWorker, reason string, now float64) {
 	outsourceLog("spawn %s (%s): %s", w.ID, w.Codename, reason)
 	fresh, err := s.dal.GetOutsourceWorker(w.ID)

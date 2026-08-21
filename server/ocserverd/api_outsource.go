@@ -700,18 +700,36 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 		writeResolveError(w, errNotFound, "outsource worker", id)
 		return
 	}
-	// 🔴 The guard asks "is it ALIVE?", not "did anyone press STOP?" (T-7526).
-	// It used to be `DesiredState != offline` alone — pure INTENT — so a worker
-	// whose session died on its own still carried desired_state=online and the
-	// ONE endpoint that could bring it back answered 409. Nothing else could
-	// either (the panel's restart affordance keys off presence, which reads
-	// offline there), so the owner had no way to revive it at all.
-	// Both halves are load-bearing: a genuinely live worker is still refused, so
-	// restart can never become a hidden double-spawn.
-	if worker.DesiredState != DesiredStateOffline && s.hub.IsOnline(id) {
-		s.outsourceMu.Unlock()
-		writeError(w, http.StatusConflict, "worker is still online — nothing to restart")
-		return
+	// 🔴 THE OVER-SPAWN GUARD IS GONE (T-ed79 #10, owner 2026-08-21 「往正職靠：
+	// 外包也不擋」). It used to 409 a worker that was still ALIVE — first on pure
+	// INTENT (`DesiredState != offline`, T-7526 corrected that to liveness), then
+	// on liveness. Neither test has a staff twin: 活化 on a live member is simply
+	// honoured, and the owner ruled the two verbs must behave the same.
+	//
+	// WHAT MAKES THAT SAFE is the ORDER, not the guard: respawnWorkerForOwnerOp
+	// →	respawnWorkerNow kills the current session BEFORE it dispatches the
+	// fresh one, so "restart a live worker" is a displacement, never a second
+	// copy. Behind that, the warden's own local clobber-guard refuses to stomp a
+	// tmux session that is still there (cli/ocwarden/spawn.go), so even a kill
+	// that has not taken effect yet cannot end in two live sessions.
+	//
+	// 🔴 WHAT THE OWNER WOULD OTHERWISE HAVE LOST is the SENTENCE. The 409 told
+	// him something true and actionable; without it a restart pressed on a live
+	// worker would surface, if anything, as a warden-level "session_already_exists"
+	// bounce. That is the exact diagnosis-free blank #4/#12/#14 of this same
+	// ticket exist to remove, so the fact becomes a RECEIPT in the same
+	// reason-code family instead — stamped only when it is TRUE of this worker,
+	// and cleared by the landed START (spawnBlockedReasonCodes) so it never
+	// outlives the restart it describes.
+	if s.hub.IsOnline(id) {
+		// Folded onto the row this handler is about to persist, not written
+		// through stampWorkerPlacementBlocked: that helper re-reads and writes on
+		// its own, and the whole-row PutOutsourceWorker below would then clobber
+		// it. One write, one delta — the rule every owner verb here follows.
+		stampWorkerOpReceipt(worker, spawnReasonSessionAlive+
+			": this worker was still running — 重啟 is replacing that session, not "+
+			"starting a first one. If it does not come back, its previous session "+
+			"was still holding the slot", nowSecs())
 	}
 	worker.DesiredState = DesiredStateOnline
 	// 🔴 A RESTART STARTS A NEW SESSION, SO IT STARTS FROM A CLEAN SHEET
