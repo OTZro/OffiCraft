@@ -427,6 +427,19 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     // actually hands the thread — and this is the whole point, because the pane
     // is NOT a monotonic function of the viewport:
     //
+    // ⚠️ READ THIS TABLE AS A SHAPE, NOT AS EXPECTED VALUES, AND FOR TWO REASONS
+    // that are both about the table not matching this test's own run:
+    //   · it was taken with the display name 'Ada' (3 chars). This test builds a
+    //     5-character name instead (see the note above `NAME_W` — 'Ada' is not
+    //     unique across runs), so the excerpt widths it actually sees are a few
+    //     px short of the column below.
+    //   · the vw=560 row is NOT one of the widths this loop drives. It is here
+    //     because it is the far side of the OLD viewport breakpoint and shows
+    //     that the two rules agree there.
+    // The only assertion below is `chars > 0`. Nothing here is compared against
+    // these figures, and nothing should be: the point they carry is the
+    // 721/800/880 band dropping to zero under the viewport rule.
+    //
     //   vw   pane   label      excerpt px      excerpt px
     //                          (this fix)      (viewport rule, the mutant)
     //   560   468   collapsed      278             278
