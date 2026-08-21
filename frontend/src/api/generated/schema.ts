@@ -7635,7 +7635,7 @@ export interface components {
             notice_pct?: number | null;
             /**
              * Onboarding Dismissed
-             * @description Dismiss (true) or un-dismiss (false) the first-run onboarding banner for this install (T-0648). It stamps / clears ``dismissed_at`` on the ONE onboarding report row, which is what makes 知道了 survive a new tab, a reload and another device — the dismissal used to live in one browser tab's sessionStorage. A no-op (200, nothing written) when this database carries no onboarding report. Omit the field to leave the dismissal unchanged.
+             * @description Dismiss (true) or un-dismiss (false) the first-run onboarding banner for this install (T-0648). It stamps / clears ``dismissed_at`` on the ONE onboarding report row, which is what makes 知道了 survive a new tab, a reload and another device — the dismissal used to live in one browser tab's sessionStorage. 409 when there is no banner to close — no onboarding report at all, or a report that is not in the ``failed`` state; a stamp laid on a run that is still ``running`` would permanently close a warning nobody has seen yet. Omit the field to leave the dismissal unchanged.
              */
             onboarding_dismissed?: boolean | null;
             /**

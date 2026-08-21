@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"reflect"
 	"strings"
@@ -601,6 +602,23 @@ func TestUpdateSettings_OnboardingDismissedStampsTheReport(t *testing.T) {
 	if got := api.onboardingReport().DismissedAt; got != 0 {
 		t.Fatalf("un-dismissing must clear the stamp, got %v", got)
 	}
+
+	// 🔴 And the run that is STILL GOING cannot be stamped. The banner draws for
+	// `failed` only, so a stamp during the ~30s of `running` closes a warning
+	// nobody has seen — the exact failure this ticket exists to remove — and
+	// this route floors at principalAdminAgent, so an admin assistant can send
+	// it. The refusal must be LOUD: a quiet 200 would report the silencing as
+	// done while the report kept running towards a verdict nobody will read.
+	running := onboardingReportDTO{State: onboardingStateRunning, StartedAt: 9}
+	if err := api.putOnboardingReport(running); err != nil {
+		t.Fatalf("seed running report: %v", err)
+	}
+	if status, _ = doJSON(t, "PATCH", srv.URL+"/api/settings", owner, `{"onboarding_dismissed":true}`); status != http.StatusConflict {
+		t.Fatalf("dismissing a report that is still running: want 409, got %d", status)
+	}
+	if stored := api.onboardingReport(); !reflect.DeepEqual(*stored, running) {
+		t.Fatalf("a refused dismissal must leave the row alone:\n got %+v\nwant %+v", stored, running)
+	}
 }
 
 // 🔴 THE ZERO-COST INSURANCE the owner's ruling rests on. He knowingly accepted
@@ -647,6 +665,71 @@ func TestPutOnboardingReport_ANewReportClearsAnEarlierDismissal(t *testing.T) {
 	}
 	if got.State != onboardingStateFailed || got.StartedAt != 3 {
 		t.Fatalf("the stored report must be the FRESH one: %+v", got)
+	}
+}
+
+// 🔴 A RECOVERED REPORT IS NEVER BORN DISMISSED. recoverStaleOnboarding is the
+// ONE path that builds a report by EDITING the old blob instead of writing a
+// fresh one, so it is the one path that can carry a dismissal forward. If a
+// stamp could land while the run was still `running`, the FAILED report this
+// recovery writes would arrive already closed and the banner would never speak
+// once on that install — a warning silenced before it was ever shown.
+func TestRecoverStaleOnboarding_NeverWritesABornDismissedReport(t *testing.T) {
+	s := newReconcileTestServer(t)
+	if err := s.putOnboardingReport(onboardingReportDTO{
+		State: onboardingStateRunning, StartedAt: 1,
+	}); err != nil {
+		t.Fatalf("seed report: %v", err)
+	}
+	if err := s.setOnboardingDismissed(true); !errors.Is(err, errNoOnboardingBanner) {
+		t.Fatalf("dismissing a running report must be refused, got %v", err)
+	}
+	s.recoverStaleOnboarding()
+
+	got := s.onboardingReport()
+	if got == nil || got.State != onboardingStateFailed {
+		t.Fatalf("the interrupted run must still be closed out as failed, got %+v", got)
+	}
+	if got.DismissedAt != 0 {
+		t.Fatalf("the recovered report must speak: dismissed_at must be 0, got %v", got.DismissedAt)
+	}
+}
+
+// 🔴 A VERDICT THAT HAS NOT LANDED YET CANNOT BE OVERWRITTEN. This is the only
+// writer of the report row that comes in off an HTTP request — kick, finish and
+// recoverStale are one linear goroutine — and it reads and writes the report
+// WHOLESALE with no lock. Interleaved with finishOnboarding, a copy taken before
+// the verdict lands and written back after it would erase the failure and strand
+// the report in `running`: non-terminal, so no banner, and kickFirstRunOnboarding
+// never re-runs because a report exists. Refusing to write a non-failed report
+// at all is what removes that interleaving, so this test guards the write, not
+// the race: while the run is in flight this call must touch nothing.
+func TestSetOnboardingDismissed_LeavesAnInFlightRunAlone(t *testing.T) {
+	s := newReconcileTestServer(t)
+	running := onboardingReportDTO{State: onboardingStateRunning, StartedAt: 1}
+	if err := s.putOnboardingReport(running); err != nil {
+		t.Fatalf("seed report: %v", err)
+	}
+	err := s.setOnboardingDismissed(true)
+	if !errors.Is(err, errNoOnboardingBanner) {
+		t.Fatalf("dismissing an in-flight run must be refused, got %v", err)
+	}
+	if mid := s.onboardingReport(); !reflect.DeepEqual(*mid, running) {
+		t.Fatalf("a refused dismissal must not rewrite the row:\n got %+v\nwant %+v", mid, running)
+	}
+
+	// The run then reaches its verdict, and the verdict is what is stored.
+	s.finishOnboarding(running, []onboardingStepDTO{{
+		Name:   onboardingStepInstallWarden,
+		Code:   onboardingCodeInstallFailed,
+		Reason: "installing this machine's warden failed (exit 1)",
+	}})
+	got := s.onboardingReport()
+	if got == nil || got.State != onboardingStateFailed || len(got.Steps) != 1 {
+		t.Fatalf("the failure verdict must survive: %+v", got)
+	}
+	if got.DismissedAt != 0 {
+		t.Fatalf("the verdict must arrive undismissed, got %v", got.DismissedAt)
 	}
 }
 

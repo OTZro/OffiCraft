@@ -38,6 +38,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -513,9 +514,36 @@ func (s *apiServer) recoverStaleOnboarding() {
 	onboardingLog("closed out a stale `running` report from a previous process (interrupted run)")
 }
 
+// errNoOnboardingBanner refuses a 知道了 that has no banner to close: no report
+// at all, or a report whose state is not `failed`. It is reported as 409, never
+// as a silent 200 — see setOnboardingDismissed for why a quiet no-op here would
+// be the dangerous answer.
+var errNoOnboardingBanner = errors.New(
+	"no onboarding banner is up to dismiss — the first-run report is absent or not in a failed state")
+
 // setOnboardingDismissed stamps (or clears) the owner's 知道了 on the ONE stored
-// onboarding report (T-0648). A database with no report has nothing to dismiss:
-// that is a silent no-op, not an error — there is no banner up either.
+// onboarding report (T-0648).
+//
+// 🔴 ONLY A `failed` REPORT CAN BE DISMISSED, AND THAT GUARD IS THE WHOLE POINT.
+// The banner draws for exactly one state, so a stamp laid on any other state
+// closes a warning NOBODY EVER SAW — the one failure mode this ticket exists to
+// remove. PATCH /api/settings floors at principalAdminAgent, so an admin
+// assistant can send this during the ~30s the first run is still `running`, and
+// without the guard two things follow, both permanent:
+//
+//   - recoverStaleOnboarding is the ONE path that builds a new report by editing
+//     the old blob, so it carries dismissed_at forward: the FAILED report it
+//     writes is born already-dismissed and the banner never speaks on this
+//     install.
+//   - this read-modify-write is unlocked and is the only concurrent writer of
+//     the row (kick / finish / recoverStale are one linear goroutine). Interleaved
+//     with finishOnboarding it writes back its pre-verdict copy: the failure is
+//     erased, the report is stranded in `running` — non-terminal, so no banner —
+//     and kickFirstRunOnboarding never re-runs because a report exists.
+//
+// Refusing on any non-failed state closes both without a lock: there is nothing
+// to inherit and nothing to write back. The only writers left that can race are
+// two dismissals of the same failed report, which write the same stamp.
 //
 // 🔴 THE STAMP RIDES ON THE REPORT ROW, AND THAT IS DELIBERATE. The row is
 // rewritten WHOLESALE by putOnboardingReport, so a newly written report — the
@@ -524,8 +552,8 @@ func (s *apiServer) recoverStaleOnboarding() {
 // this to a row of its own would silently delete that property.
 func (s *apiServer) setOnboardingDismissed(dismissed bool) error {
 	report := s.onboardingReport()
-	if report == nil {
-		return nil
+	if report == nil || report.State != onboardingStateFailed {
+		return errNoOnboardingBanner
 	}
 	report.DismissedAt = 0
 	if dismissed {

@@ -651,10 +651,20 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 	// it does not live in the settings snapshot at all — it is a field on the
 	// onboarding report row, which settingsView already reads straight from the
 	// DAL (the run finishes in its own goroutine, so a snapshot copy would go
-	// stale). A database with no report has nothing to dismiss; that is a 200
-	// with nothing written, not an error, because there is no banner up either.
+	// stale).
+	//
+	// A dismissal with no banner behind it (no report, or a report that is not
+	// `failed`) is refused with 409 rather than absorbed as a quiet 200: on a
+	// run that is still `running` the stamp would close a warning nobody has
+	// seen yet, permanently — see setOnboardingDismissed. The banner is the only
+	// sender and it sends this field on its own, so the refusal does not strand
+	// a half-applied settings PATCH in practice.
 	if body.OnboardingDismissed != nil {
 		if err := s.setOnboardingDismissed(*body.OnboardingDismissed); err != nil {
+			if errors.Is(err, errNoOnboardingBanner) {
+				writeError(w, http.StatusConflict, err.Error())
+				return
+			}
 			internalError(w, err)
 			return
 		}
