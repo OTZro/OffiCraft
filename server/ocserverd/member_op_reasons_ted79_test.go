@@ -224,3 +224,52 @@ func TestBackoffDoesNotEraseTheWakeTimeoutDiagnosis(t *testing.T) {
 			"tick.", got)
 	}
 }
+
+// 🔴 …and the LIMIT of that rule. It protects one thing: a diagnosis of the
+// PREVIOUS attempt must not be blanked by a description of the CURRENT wait.
+// "backoff" and "circuit_open" are those descriptions. zombie_suspect and
+// warden_unreachable are not — they are fresh, actionable findings about what is
+// happening right now, strictly more informative than a stale wake_timeout, and
+// a guard that looks only at what is ON the row swallows them too.
+func TestAFreshDiagnosisIsNotSwallowedByAStickyOne(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		incoming string
+		wantWins bool
+	}{
+		{"zombie suspect", spawnReasonZombieSuspect, true},
+		{"warden unreachable", spawnReasonWardenLost, true},
+		{"backoff", spawnReasonBackoff, false},
+		{"circuit open", spawnReasonCircuitOpen, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newReconcileTestServer(t)
+			putWarden(t, s, "mach-a")
+			m := testAgent("m-sticky")
+			m.DesiredState = DesiredStateOnline
+			m.DesiredMachineID = "mach-a"
+			m.LastOp = reconcileCmdStart
+			m.LastOpReason = wakeTimeoutReasonCode + ": dispatched, never came up"
+			putTestMember(t, s, m)
+
+			s.stampMemberOpBlocked("m-sticky", tc.incoming+": the fresh finding", 1_000_000.0)
+
+			got := reasonOf(t, s, "m-sticky")
+			won := strings.HasPrefix(got, tc.incoming+":")
+			if won == tc.wantWins {
+				return
+			}
+			if tc.wantWins {
+				t.Errorf("last_op_reason = %q — %q was dropped in favour of a wake_timeout "+
+					"from the previous attempt. The precedence rule exists to stop the RETRY "+
+					"LOOP blanking a diagnosis, and this is not the retry loop: it is a new "+
+					"finding about what is wrong NOW, and the owner is left reading a stale "+
+					"sentence about a start that already failed.", got, tc.incoming)
+				return
+			}
+			t.Errorf("last_op_reason = %q — %q is a description of the CURRENT wait and it "+
+				"overwrote the only sentence that says what actually went wrong. Narrowing "+
+				"the guard must not let go of the thing the guard is for.", got, tc.incoming)
+		})
+	}
+}

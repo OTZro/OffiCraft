@@ -1252,6 +1252,17 @@ func stampMemberOpReceipt(m *Member, reason string, now float64) {
 	m.LastOpAt = now
 }
 
+// isStopgapRetryReason reports whether a reason code is the retry loop
+// DESCRIBING ITS OWN WAIT rather than diagnosing anything — the only class the
+// single-slot precedence rule in stampMemberOpBlocked yields to. Both members
+// are produced by decideUp's pacing arms and both re-derive every 30s for as
+// long as the stall lasts, which is what makes them able to blank a diagnosis
+// they know nothing about.
+func isStopgapRetryReason(reason string) bool {
+	return strings.HasPrefix(reason, spawnReasonBackoff+":") ||
+		strings.HasPrefix(reason, spawnReasonCircuitOpen+":")
+}
+
 func (s *apiServer) stampMemberOpBlocked(memberID, reason string, now float64) {
 	if reason == "" {
 		return
@@ -1264,18 +1275,24 @@ func (s *apiServer) stampMemberOpBlocked(memberID, reason string, now float64) {
 		return // already stamped with this exact cause — do not churn the row
 	}
 	// 🔴 THE ONE PRECEDENCE RULE, and it is the family's own (worker_spawn.go, the
-	// two codes deliberately outside spawnBlockedReasonCodes): a diagnosis of the
+	// codes deliberately outside spawnBlockedReasonCodes): a diagnosis of the
 	// PREVIOUS attempt must not be erased by a description of the current wait.
-	// wake_timeout says the start was dispatched and the agent never came up;
-	// never_collected says the frame never even reached the machine. Both are
-	// followed, one tick later, by exactly the back-off this function would stamp
-	// — so without this rule the retry loop would blank the only sentence that
-	// says what actually went wrong, every time, which is the trap 31751ae fixed
-	// for workers.
-	for _, sticky := range []string{wakeTimeoutReasonCode, spawnReasonNeverCollected} {
-		if strings.HasPrefix(fresh.LastOpReason, sticky+":") {
-			return
-		}
+	// wake_timeout says the start was dispatched and the agent never came up; it
+	// is followed, one tick later, by exactly the back-off this function would
+	// stamp — so without this rule the retry loop would blank the only sentence
+	// that says what actually went wrong, every time, which is the trap 31751ae
+	// fixed for workers.
+	//
+	// 🔴 IT TURNS ON THE INCOMING CODE, NOT ONLY ON WHAT IS ON THE ROW. The rule
+	// is about the RETRY LOOP, and only backoff/circuit_open are the retry loop
+	// describing its own wait. zombie_suspect and the activate handler's
+	// warden_unreachable are fresh, actionable findings about what is wrong NOW —
+	// strictly more informative than a wake_timeout from an attempt that has
+	// already failed — and a guard that read only the row swallowed those too,
+	// leaving the owner a stale sentence while the live fault went unsaid.
+	if isStopgapRetryReason(reason) &&
+		strings.HasPrefix(fresh.LastOpReason, wakeTimeoutReasonCode+":") {
+		return
 	}
 	ok := false
 	fresh.LastOp = reconcileCmdStart
