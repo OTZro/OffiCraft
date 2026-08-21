@@ -390,9 +390,10 @@ export function ChatArea({
   const [quoteOpenFailedId, setQuoteOpenFailedId] = useState<string | null>(
     null,
   );
-  // The in-flight latch. `quoteOpen` cannot do this job: two clicks landing in
-  // the same tick both read the PRE-UPDATE state and both would fire. A ref is
-  // written synchronously inside the handler, so the second click sees it.
+  // The in-flight latch. A `useState` flag cannot do this job: two clicks
+  // landing in the same tick both read the PRE-UPDATE state and both would
+  // fire. A ref is written synchronously inside the handler, so the second
+  // click sees it.
   const quoteBusyRef = useRef(false);
 
   /** Open the message a reply is answering, IN FULL, in the shared full-view
@@ -760,11 +761,13 @@ export function ChatArea({
   // the COMPOSER's banner can NAME the person being answered, which is a
   // question about what is loaded right now and can only be answered here.
   //
-  // 🔴 IT NO LONGER GATES THE QUOTE ROW'S CONTROL. It did — the row offered
-  // 「看原訊息」 only when the target was in this map — and the same owner ruling
+  // 🔴 IT NO LONGER GATES THE QUOTE ROW'S CONTROL. It did — the row offered the
+  // control only when the target was in this map, and back then it was labelled
+  // 「跳到原訊息」 because it scrolled rather than opened. The same owner ruling
   // that deleted the resolution deleted that gate too: the control is offered on
-  // every reply and reads its one message back on click (`openQuotedMessage`).
-  // The render condition is `m.replyTo && quoted`; it does not consult `messages`.
+  // every reply, is labelled 「看原訊息」, and reads its one message back on click
+  // (`openQuotedMessage`). The render condition is `m.replyTo && quoted`; it
+  // does not consult `messages`.
   const messageById = useMemo(
     () => new Map(messages.map((m) => [m.id, m])),
     [messages],

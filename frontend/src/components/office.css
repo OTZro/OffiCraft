@@ -1205,6 +1205,15 @@
  * declarations and a CSS-property tripwire test, all guarding a state the layout
  * can no longer enter.
  *
+ * ⚠️ THAT RUN IS NOT REPRODUCIBLE FROM THIS TREE — the same caveat
+ * `chat-reply-to.ct.spec.tsx` carries over its own copy of this claim. The three
+ * declarations are gone, so those mutants cannot be re-performed, and the suite
+ * count that run reported is not the CT file's count today. What IS reproducible
+ * is the modern equivalent, and it has been re-performed: `flex: none` →
+ * `flex: 0 10 auto` on the button leaves the whole CT file green, i.e. the
+ * conclusion holds against the tree as it stands. Do not read the sentence above
+ * as a run anyone can repeat.
+ *
  * So the button is `flex: none` again — the shape the first version had, now for
  * a reason that holds — and the give happens one level up, in the container
  * query. That also restores the geometry as a real witness: deleting the
@@ -1290,6 +1299,17 @@
  *   vw=800   pane 426    0/61
  *   vw=880   pane 506    3/61
  *   vw=1280  pane 666   28/61
+ *
+ * ⚠️ THIS TABLE AND THE ONE IN `e2e_test/tests/17_chat_reply_to.spec.js` DO NOT
+ * AGREE AT vw=880: that one's "viewport rule, the mutant" column reads 0 there,
+ * this one reads 3/61. Nobody has re-run either — both were taken on an isolated
+ * station, in different runs, and neither run can be repeated from this tree. No
+ * number here has been picked as the winner, because there is no evidence to
+ * pick one with. What the disagreement does NOT touch is the argument these rows
+ * carry: 0 and 3 of 61 characters are the same verdict — with the label present
+ * at pane 506 the excerpt says nothing — so the 520 threshold below rests on the
+ * same conclusion either way. Treat every figure here as a shape, not as an
+ * expected value; nothing asserts against them.
  *
  * Three whole bands where the row said nothing at all, and making the window
  * WIDER is what caused them. Chinese hits the same hole, over a narrower span.

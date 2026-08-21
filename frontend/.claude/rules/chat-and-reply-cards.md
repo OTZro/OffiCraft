@@ -108,7 +108,11 @@ effect 裡發請求。** 引用列畫的是 server 這次隨訊息一起送來�
 ⚠️ 但「點下去才撈」有兩條紀律：**一次點擊只准一次請求**（`quoteBusyRef` 這個
 in-flight latch，不是 state —— 同一個 tick 的兩次點擊都會讀到更新前的 state），
 失敗只記**一個** id、原地說一句，**不重試、不排隊、不在下一個 SSE 事件自癒**。
-兩條都由 `ChatArea.quote-no-fetch.test.tsx` 釘住。
+第一條由 `ChatArea.quote-no-fetch.test.tsx` 的
+「a click on the quote costs exactly one request, and repainting costs none」釘住；
+第二條由 `ChatArea.reply-to.test.tsx` 的
+「says so, in place and once, when that one read fails」釘住 —— 失敗路徑的證人在
+`reply-to` 那個檔案，不在 `quote-no-fetch`（後者的 api proxy 刻意不註冊失敗態）。
 
 ⚠️ 還有第三條：**讀取途中不准把那顆按鈕 `disabled`**。有過一個 loading 態這樣
 做，實測在真 Chromium 裡 disable 一顆**正被聚焦**的按鈕會讓它 blur，
