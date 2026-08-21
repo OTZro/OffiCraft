@@ -764,6 +764,81 @@ type wardenTargetArgs struct {
 	MemberID string `json:"member_id"`
 }
 
+// runtimeCapabilityReady is the HONEST readiness read of ONE reported runtime
+// entry: installed, and not known-logged-out.
+//
+// Deliberately NOT machineSupportsRuntime. That gate's Claude arm is
+// permissive by contract (it returns true for any reported claude entry, so the
+// OC_CLAUDE_CRED_CHECK=0 escape hatch keeps working), and a codex-only box does
+// report one: cli/ocwarden/runtimeprobe.go ALWAYS emits the claude key, as
+// {"installed": false}. Choosing a runtime off that permissive read would pick
+// claude on exactly the machines this resolution exists to serve.
+func runtimeCapabilityReady(c RuntimeCapabilityDTO) bool {
+	if c.Installed == nil || !*c.Installed {
+		return false
+	}
+	return c.LoggedIn == nil || *c.LoggedIn
+}
+
+// resolveEmptyRuntimeForPlacement fills a member's UNSET runtime from what the
+// target machine reports, and persists the choice on the roster row.
+//
+// WHY HERE. The out-of-box assistant is seeded with no runtime at all
+// (seedOutOfBox), and it must not be born hard-wired to Claude: it should run
+// whatever the box it is placed on actually has. The seed cannot make that
+// call — seedOutOfBox runs at migrate and at serve start, before any warden has
+// ever reported capabilities, so there is nothing to read. Placement is the
+// first moment BOTH facts exist (which machine, and what that machine has) and
+// the last moment before buildStartFrame stamps the runtime onto the wire.
+//
+// A member whose runtime is already set is never touched: this resolves an
+// ABSENT choice, it never overrides the owner's.
+//
+// NO HEARTBEAT YET (len(capabilities) == 0) => LEAVE IT UNSET, i.e. keep
+// today's behaviour exactly (NormalizeRuntime("") == claude, and
+// machineSupportsRuntime's legacy-warden arm lets it through). The two possible
+// mistakes are not equivalent. Refusing here would make a machine that was just
+// installed and has not reported yet unusable for every member — a NEW way to
+// be stuck. Letting it through only returns to the path that already exists
+// today, and that path's spawn-time failure now names the third option
+// (switch this member to Codex) instead of only telling the owner to go get
+// claude.
+func (s *apiServer) resolveEmptyRuntimeForPlacement(m *Member, warden string) {
+	if m.Kind == KindWarden || strings.TrimSpace(m.Runtime) != "" {
+		return
+	}
+	capabilities := s.machineRuntimeCapabilities(warden)
+	if len(capabilities) == 0 {
+		return
+	}
+	resolved := ""
+	switch {
+	case runtimeCapabilityReady(capabilities[RuntimeClaude]):
+		resolved = RuntimeClaude
+	case runtimeCapabilityReady(capabilities[RuntimeCodex]):
+		resolved = RuntimeCodex
+	default:
+		// Nothing on this box is ready. Persisting a guess would freeze the
+		// wrong answer onto the roster row forever; leave it unset and let the
+		// placement gate right below refuse and stamp the reason.
+		return
+	}
+	fresh, err := s.dal.GetMember(m.ID)
+	if err != nil || fresh == nil || fresh.RosterStatus != RosterStatusActive {
+		return
+	}
+	if strings.TrimSpace(fresh.Runtime) != "" {
+		// A concurrent owner edit picked one mid-tick; theirs wins.
+		m.Runtime = fresh.Runtime
+		return
+	}
+	m.Runtime = resolved
+	fresh.Runtime = resolved
+	if err := s.putMember(*fresh, triggerServer); err != nil {
+		reconcileLog("%s: runtime resolution persist failed: %v", m.ID, err)
+	}
+}
+
 // ── decide → dispatch (controller.py ServerReconciler.reconcile_one) ─────────
 
 // reconcileOne runs one member's decide → dispatch. A dispatch that is not
@@ -802,6 +877,10 @@ func (s *apiServer) reconcileOne(m Member, st reconcileState, now float64) recon
 			decision.DispatchUnlanded = true
 			return decision
 		}
+		// The target machine is now known and the START frame is not built
+		// yet: this is the last point that can still choose a runtime, and the
+		// first one that knows what this box actually reports (T-b3d0).
+		s.resolveEmptyRuntimeForPlacement(&m, warden)
 		if m.Kind != KindWarden && !s.machineSupportsRuntime(warden, m.Runtime) {
 			reconcileLog("%s: target warden %q does not report runtime %q ready — fail-closed",
 				m.ID, warden, NormalizeRuntime(m.Runtime))

@@ -308,6 +308,14 @@ func (d *DAL) GetMember(id string) (*Member, error) {
 	return &m, nil
 }
 
+// runtime is stored EXACTLY as given, including "" (T-b3d0). It used to be
+// normalized on the way in, which silently turned "no runtime chosen yet" into
+// a durable "claude" — the seed assistant was born a Claude member on a box
+// that may only have Codex. Every READER already calls NormalizeRuntime, so the
+// "" == claude reading is unchanged; what is preserved now is the DIFFERENCE
+// between "the owner picked claude" and "nobody has picked yet", which is what
+// resolveEmptyRuntimeForPlacement needs at placement time.
+//
 // PutMember upserts a member row (the repository.put_member twin; the SSE
 // delta is the service layer's job). On conflict it deliberately leaves
 // avatar_attachment_id untouched: ReplaceMemberAvatar/DeleteMemberAvatar are
@@ -375,7 +383,7 @@ func (d *DAL) PutMember(m Member) error {
 			-- SetMemberHandoverNoticedTS is the only writer that moves it.
 			-- Guarded by TestHandoverNotice_ClaimSurvivesAWholeRowUpsert:
 			-- adding this column to the SET list turns that test red.`,
-		m.ID, m.Name, m.Kind, m.RoleKey, NormalizeRuntime(m.Runtime), m.Model, m.ActualModel, m.Effort,
+		m.ID, m.Name, m.Kind, m.RoleKey, m.Runtime, m.Model, m.ActualModel, m.Effort,
 		m.ActualRuntime, m.ActualEffort,
 		m.DesiredState, m.DesiredMachineID, m.LastMachineID, m.SessionBootTS,
 		m.WakingSince, m.StoppingSince, m.StoppedSince, m.RefocusSince, m.RefocusOp,
