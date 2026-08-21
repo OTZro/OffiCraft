@@ -389,7 +389,7 @@ func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unr
 		// NO deadline rather than a time the owner would watch pass with nothing
 		// happening. Reading RecycleGrace straight would report exactly that kind
 		// of ceiling, for five causes out of six.
-		RefocusDeadline: refocusDeadlineOf(m.RefocusSince, s.reconcileCfg, m.RefocusOp),
+		RefocusDeadline: refocusDeadlineOf(m.RefocusSince, s.reconcileConfigLive(), m.RefocusOp),
 		LastOp:          m.LastOp,
 		LastOpOK:        m.LastOpOK,
 		LastOpLog:       m.LastOpLog,

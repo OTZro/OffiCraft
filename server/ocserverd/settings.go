@@ -64,6 +64,18 @@ const (
 	settingCodexCompactionThreshold = "codex.compaction_threshold"
 	settingCodexNoticeRound         = "codex.notice_round"
 	settingMonitoringRefreshSeconds = "monitoring.refresh_seconds"
+	// settingAcceleratedGraceSecs (T-ed79, owner 2026-08-21 「120 秒這個設定可以
+	// 調整，統一在第二門檻跟加速停止使用」) is the grace a CLOCKED wind-down gets,
+	// in seconds. Its shipped default is StoppingTimeoutSecs, which is where the
+	// 120 came from.
+	//
+	// 🔴 It is deliberately ONE key for BOTH clocked causes rather than one per
+	// cause. The clock (recycleGraceFor) and the sentence (offboardKindOf →
+	// offboardNoticeFor) already read a single judgement (winddownKindFor); a
+	// second knob would re-open the same split from the other end — the agent
+	// quoted one number while the tick collected on another. This key says HOW
+	// LONG; it never says WHO is on a clock.
+	settingAcceleratedGraceSecs = "stop.accelerated_grace_secs"
 	// settingOutsourceMaxParallel (M3, owner ruling ③) is the GLOBAL cap on
 	// concurrently live (assigned + active) outsource workers — the Phase 2
 	// assignment scheduler's admission knob; member tasks never count (H7).
@@ -213,6 +225,21 @@ const defaultOutsourceMaxParallel = 3
 const defaultCodexCompactionThreshold = 3
 const defaultMonitoringRefreshSeconds = 5
 
+// The stop.accelerated_grace_secs bounds. The default is StoppingTimeoutSecs —
+// the constant the 120 has always come from — so an install that never writes
+// the key behaves exactly as it did before the knob existed.
+//
+// The floor is 10 s rather than 1: the value is a hand-off window an agent is
+// told about and then works inside, and a single-digit one is indistinguishable
+// from force-stop while still printing a countdown clause that invites the agent
+// to use it. The ceiling is one hour — past that the clock stops being an
+// escalation and becomes the "no clock at all" the soft causes already have.
+const (
+	acceleratedGraceSecsDefault = int(StoppingTimeoutSecs)
+	minAcceleratedGraceSecs     = 10
+	maxAcceleratedGraceSecs     = 3600
+)
+
 // authSettings is the boot-time snapshot cmdServe stamps onto the apiServer.
 type authSettings struct {
 	secret                       []byte
@@ -224,6 +251,7 @@ type authSettings struct {
 	codexCompactionThreshold     int // codex.compaction_threshold — the FINAL round (handover)
 	codexNoticeRound             int // codex.notice_round — the FIRST, soft notice round (T-a9d6)
 	monitoringRefreshSeconds     int
+	acceleratedGraceSecs         int    // stop.accelerated_grace_secs (default acceleratedGraceSecsDefault)
 	outsourceMaxParallel         int    // task.outsource_max_parallel (default 3)
 	docCapCharsDuty              int    // doc.cap_chars.duty (default dutyCapCharsDefault)
 	docCapCharsInsight           int    // doc.cap_chars.insight (default contextDocMaxCharsDefault)
@@ -268,6 +296,7 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 		ctxhigh:                  cfg.SseContextHigh,
 		codexCompactionThreshold: defaultCodexCompactionThreshold,
 		monitoringRefreshSeconds: defaultMonitoringRefreshSeconds,
+		acceleratedGraceSecs:     acceleratedGraceSecsDefault,
 	}
 
 	stored, err := d.GetSetting(settingJWTSecret)
@@ -406,6 +435,21 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 			return out, fmt.Errorf("settings %s: must be 1..60: %q", settingMonitoringRefreshSeconds, *v)
 		}
 		out.monitoringRefreshSeconds = n
+	}
+	// stop.accelerated_grace_secs — range-checked at load for the same reason
+	// every other bounded integer here is: a hand-edited DB row must not install
+	// a grace the PATCH face would have refused. SAME bounds as that face
+	// (acceleratedGraceInRange), so a value that survives a save can never be the
+	// value that refuses to boot on the next start.
+	if v, err := d.GetSetting(settingAcceleratedGraceSecs); err != nil {
+		return out, err
+	} else if v != nil {
+		n, err := strconv.Atoi(*v)
+		if err != nil || !acceleratedGraceInRange(n) {
+			return out, fmt.Errorf("settings %s: %s: %q",
+				settingAcceleratedGraceSecs, acceleratedGraceRangeMsg, *v)
+		}
+		out.acceleratedGraceSecs = n
 	}
 
 	out.outsourceMaxParallel = defaultOutsourceMaxParallel

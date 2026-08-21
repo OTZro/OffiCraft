@@ -5418,6 +5418,12 @@
             "title": "Monitoring Refresh Seconds",
             "type": "integer"
           },
+          "accelerated_grace_secs": {
+            "default": 120,
+            "description": "\u52a0\u901f\u505c\u6b62 grace, in seconds (10 through 3600): how long a CLOCKED wind-down waits before the collection is forced. ONE value for every clocked cause \u2014 the SECOND context threshold (refocus_op=context_high) and the owner-pressed \u52a0\u901f\u505c\u6b62 (refocus_op=accelerated_stop) read it through the same recycleGraceFor pair, so the countdown the agent is quoted and the deadline the tick collects on can never be two different numbers. Soft causes stay unclocked whatever this says.",
+            "title": "Accelerated Grace Secs",
+            "type": "integer"
+          },
           "onboarding": {
             "anyOf": [
               {
@@ -5676,6 +5682,14 @@
             ],
             "description": "Minimum interval between monitoring and machine refreshes, in seconds. Must be 1 through 60.",
             "title": "Monitoring Refresh Seconds"
+          },
+          "accelerated_grace_secs": {
+            "anyOf": [
+              { "type": "integer" },
+              { "type": "null" }
+            ],
+            "description": "\u52a0\u901f\u505c\u6b62 grace, in seconds. Must be 10 through 3600. Applies to every CLOCKED wind-down cause at once (the second context threshold and the owner-pressed \u52a0\u901f\u505c\u6b62); it can never put a clock on a soft cause.",
+            "title": "Accelerated Grace Secs"
           },
           "org_name": {
             "anyOf": [

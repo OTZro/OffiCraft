@@ -7484,6 +7484,12 @@ export interface components {
              */
             monitoring_refresh_seconds: number;
             /**
+             * Accelerated Grace Secs
+             * @description 加速停止 grace, in seconds (10 through 3600): how long a CLOCKED wind-down waits before the collection is forced. ONE value for every clocked cause — the SECOND context threshold (refocus_op=context_high) and the owner-pressed 加速停止 (refocus_op=accelerated_stop) read it through the same recycleGraceFor pair, so the countdown the agent is quoted and the deadline the tick collects on can never be two different numbers. Soft causes stay unclocked whatever this says.
+             * @default 120
+             */
+            accelerated_grace_secs: number;
+            /**
              * Onboarding
              * @description The first-run onboarding report (T-ba62), or null when onboarding never ran on this database. Governance-gated (owner/admin agent) by virtue of living on GET /api/settings — a failed step's detail can carry local paths, so it must never reach the PUBLIC /api/auth/status probe.
              */
@@ -7648,6 +7654,11 @@ export interface components {
              * @description Minimum interval between monitoring and machine refreshes, in seconds. Must be 1 through 60.
              */
             monitoring_refresh_seconds?: number | null;
+            /**
+             * Accelerated Grace Secs
+             * @description 加速停止 grace, in seconds. Must be 10 through 3600. Applies to every CLOCKED wind-down cause at once (the second context threshold and the owner-pressed 加速停止); it can never put a clock on a soft cause.
+             */
+            accelerated_grace_secs?: number | null;
             /**
              * Org Name
              * @description The studio display name (T-d693) — trimmed, max 80 runes; "" clears it back to the localized default. A value longer than 80 runes is a 422.

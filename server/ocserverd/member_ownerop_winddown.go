@@ -270,7 +270,7 @@ func (s *apiServer) armMemberOwnerOpHandover(m *Member, op string) bool {
 		return false
 	}
 	armRefocusEpoch(m, op, nowSecs())
-	if grace, clocked := recycleGraceFor(op, s.reconcileCfg); clocked {
+	if grace, clocked := recycleGraceFor(op, s.reconcileConfigLive()); clocked {
 		reconcileLog("recycle: %s %s — wind-down opened (collect on stopped-report or +%.0fs)",
 			op, m.ID, grace)
 	} else {

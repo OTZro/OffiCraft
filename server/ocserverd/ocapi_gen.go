@@ -2306,6 +2306,9 @@ type SetPasswordDTO struct {
 
 // SettingsDTO The org-adjustable settings surface (`GET /api/settings`; owner or admin agent). `owner_token_ttl` controls owner-login JWTs; `agent_token_ttl` controls member and outsource-worker JWTs. They are independent and apply to newly minted tokens. Existing deployments migrate their former shared `auth.token_ttl` value into both successor settings, preserving current behaviour.
 type SettingsDTO struct {
+	// AcceleratedGraceSecs 加速停止 grace, in seconds (10 through 3600): how long a CLOCKED wind-down waits before the collection is forced. ONE value for every clocked cause — the SECOND context threshold (refocus_op=context_high) and the owner-pressed 加速停止 (refocus_op=accelerated_stop) read it through the same recycleGraceFor pair, so the countdown the agent is quoted and the deadline the tick collects on can never be two different numbers. Soft causes stay unclocked whatever this says.
+	AcceleratedGraceSecs *int `json:"accelerated_grace_secs,omitempty"`
+
 	// AgentTokenTtl Agent and outsource-worker JWT lifetime in seconds. Fresh installs default to 7 days.
 	AgentTokenTtl int `json:"agent_token_ttl"`
 
@@ -2403,7 +2406,9 @@ type SettingsDTO struct {
 // point: a cap can only ever be RAISED (owner ruling 2026-07-31), because
 // lowering one would turn documents that are legal today into shrink-only ones.
 type SettingsUpdateDTO struct {
-	AgentTokenTtl *int `json:"agent_token_ttl,omitempty"`
+	// AcceleratedGraceSecs 加速停止 grace, in seconds. Must be 10 through 3600. Applies to every CLOCKED wind-down cause at once (the second context threshold and the owner-pressed 加速停止); it can never put a clock on a soft cause.
+	AcceleratedGraceSecs *int `json:"accelerated_grace_secs,omitempty"`
+	AgentTokenTtl        *int `json:"agent_token_ttl,omitempty"`
 
 	// ChatBudgetChars The wake snapshot's chat block budget, in CHARACTERS (Unicode code points). Must be between 1000 and 13000. Unlike the `doc_cap_chars_*` knobs the floor is NOT the shipped default — this budget may be lowered as well as raised, because the chat block is repacked on every read rather than stored. The ceiling is pinned to how many messages the packer reads before packing and cannot be raised on its own.
 	ChatBudgetChars *int `json:"chat_budget_chars,omitempty"`

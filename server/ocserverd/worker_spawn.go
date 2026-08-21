@@ -733,7 +733,7 @@ func (s *apiServer) reconcileWorkerLiveness(w OutsourceWorker, now float64) {
 		LastOpKind:   canonicalWorkerLastOp(w.LastOp),
 		LastOpReason: w.LastOpReason,
 	}
-	decision := reconcileDecide(obs, st, s.reconcileCfg, now)
+	decision := reconcileDecide(obs, st, s.reconcileConfigLive(), now)
 	switch decision.Command {
 	case reconcileCmdStart:
 		// FSM-decided START: drop the flat pacing stamp (the FSM's own
@@ -1195,7 +1195,7 @@ func (s *apiServer) openOwnerOpHandover(w OutsourceWorker, op string) {
 	}
 	s.publishOutsourceWorker(w, triggerServer)
 	s.openWorkerHandoverGrace(w, triggerServer)
-	if grace, clocked := recycleGraceFor(op, s.reconcileCfg); clocked {
+	if grace, clocked := recycleGraceFor(op, s.reconcileConfigLive()); clocked {
 		outsourceLog("%s %s (%s): wind-down opened — collect on stopped-report or +%.0fs",
 			op, w.ID, w.Codename, grace)
 	} else {
@@ -1385,7 +1385,7 @@ func (s *apiServer) autoHandoverWorker(w OutsourceWorker, now float64) {
 		if w.StoppedSince <= 0.0 {
 			if !s.hub.IsOnline(w.ID) {
 				s.collectWorkerHandover(w, "grace-offline", triggerServer)
-			} else if grace, clocked := recycleGraceFor(w.RefocusOp, s.reconcileCfg); clocked &&
+			} else if grace, clocked := recycleGraceFor(w.RefocusOp, s.reconcileConfigLive()); clocked &&
 				now >= w.RefocusSince+grace {
 				s.collectWorkerHandover(w, "grace-timeout", triggerServer)
 			}
@@ -1480,7 +1480,7 @@ func (s *apiServer) openWorkerHandoverGrace(w OutsourceWorker, trigger string) {
 	// The log quotes the clock this epoch is ACTUALLY collected on. 重新聚焦 runs
 	// none (T-fe5e), and a line that named 120 s anyway would be the same lie the
 	// notice used to tell — read by whoever is debugging why nothing was collected.
-	if grace, clocked := recycleGraceFor(w.RefocusOp, s.reconcileCfg); clocked {
+	if grace, clocked := recycleGraceFor(w.RefocusOp, s.reconcileConfigLive()); clocked {
 		outsourceLog("handover %s (%s): grace opened — SOP nudge fanned, collect on "+
 			"stopped-report or +%.0fs", w.ID, w.Codename, grace)
 	} else {

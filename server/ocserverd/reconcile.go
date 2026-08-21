@@ -934,7 +934,7 @@ func (s *apiServer) reconcileOne(m Member, st reconcileState, now float64) recon
 		TargetMachine:  m.DesiredMachineID,
 		RunningMachine: s.hub.MachineOf(m.ID),
 	}
-	decision := reconcileDecide(obs, st, s.reconcileCfg, now)
+	decision := reconcileDecide(obs, st, s.reconcileConfigLive(), now)
 	switch decision.Command {
 	case reconcileCmdNone:
 		return decision

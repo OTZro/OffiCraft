@@ -61,6 +61,15 @@ type settingsDTO struct {
 	CodexNoticeRound         int `json:"codex_notice_round"`
 	MonitoringRefreshSeconds int `json:"monitoring_refresh_seconds"`
 	OutsourceMaxParallel     int `json:"outsource_max_parallel"`
+	// AcceleratedGraceSecs is the 加速停止 grace in seconds
+	// (stop.accelerated_grace_secs; T-ed79) — how long a CLOCKED wind-down waits
+	// before the collection is forced. It is ONE number on purpose: every clocked
+	// cause reads it through recycleGraceFor, so the countdown quoted in the
+	// agent's notice and the deadline the reconcile tick collects on are the same
+	// value by construction rather than by two settings that happen to agree.
+	// It cannot put a clock on a soft cause — winddownKindFor still decides WHO
+	// is clocked, and this only says HOW LONG.
+	AcceleratedGraceSecs int `json:"accelerated_grace_secs"`
 	// DocCapChars* are the live size caps on the accumulating context
 	// documents, in CHARACTERS (runes) — the same unit the patch receipts and
 	// the refusal message speak (T-3aeb). FIVE independent knobs: a role's
