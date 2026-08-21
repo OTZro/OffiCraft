@@ -926,6 +926,36 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 	writeJSON(w, http.StatusOK, dto)
 }
 
+// clearMemberHandoverMarker zeroes the 換手 epoch a staff STOP has just made
+// meaningless — the worker /stop's two lines, given a name (T-ed79 parity #9).
+// Both staff stop verbs call it; the two reasons are different and both are
+// worker-verbatim:
+//
+//   - 下線: a wind-down is a request to finish and come BACK. An explicit 停止
+//     says no session follows, so there is nothing left to hand over to. The
+//     epoch is not superseded, it is answered.
+//   - 強制停止: the session is being cut off. Nothing is being waited for.
+//
+// 🔴 THE HARM IT REMOVES IS NOT ON THIS ROW, IT IS ON THE NEXT ONE. Neither stop
+// verb is what reads refocus_since — decideDown owns a desired-offline member and
+// never looks. The reader is the GENERATION AFTER: activate clears stopping_since
+// and waking_since and deliberately clears NEITHER refocus_since nor
+// stopped_since, so a marker left here survives 下線 → 活化 intact, and decideUp's
+// recycle arm then reads "marker present, dump done" and robust-stops the
+// brand-new session on its first tick — zero grace, no close-out, for an epoch
+// that ended before it was born. armRefocusEpoch already describes this exact
+// destructive reader; what was missing was anybody clearing the marker on the
+// staff side.
+//
+// It does NOT touch stopping_since / stopped_since / forced_stop_at: those date
+// the stop itself, and forced_stop_at in particular is the durable record that a
+// session was cut off, which the next generation is precisely who needs to read
+// (dal.go, migrations/00057).
+func clearMemberHandoverMarker(m *Member) {
+	m.RefocusSince = 0.0
+	m.RefocusOp = ""
+}
+
 // POST /api/members/{member_id}/deactivate — desired_state=offline + an
 // UNCONDITIONAL stopping_since re-stamp (one exception, below).
 //
@@ -962,6 +992,7 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 	cancellingWake := PresenceState(*m, nowSecs(), s.hub.IsOnline(m.ID)) ==
 		MemberPresenceWaking
 	m.DesiredState = DesiredStateOffline
+	clearMemberHandoverMarker(m)
 	// …UNCONDITIONAL with ONE exception: a stop epoch that a FORCE-stop opened
 	// must not be re-stamped into a softer one. The SSE stop gate separates
 	// "close-out in flight" (admit the reconnect) from "cut off deliberately"
@@ -1031,6 +1062,7 @@ func (s *apiServer) HandleForceStopMemberApiMembersMemberIdForceStopPost(w http.
 		return
 	}
 	m.DesiredState = DesiredStateOffline
+	clearMemberHandoverMarker(m)
 	if m.StoppingSince <= 0.0 {
 		m.StoppingSince = nowSecs()
 	}
