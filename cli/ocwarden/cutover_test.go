@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -1140,4 +1141,123 @@ func TestAnchorPreflightAgreesWithTheRealAnchorBinary(t *testing.T) {
 			"promoting it, so an argv[0]-sensitive anchor would be validated under one "+
 			"name and deployed under another.", filepath.Base(renamed), err)
 	}
+}
+
+// TestRollbackReBootstrapExitZeroButUnregisteredBlamesBootstrap pins the same field
+// failure install.go's guard exists for (T-0648), on the path where the misnaming
+// costs the most: `launchctl bootstrap` exits 0 and registers NOTHING, the first
+// verb to notice is kickstart, and its exit 113 ("Could not find service … in
+// domain") gets written into the cutover.failed SENTINEL — the one diagnosis a
+// human still has after the process is gone. The rollback must name the step that
+// really failed (the re-bootstrap), and the sentinel must carry that same sentence.
+func TestRollbackReBootstrapExitZeroButUnregisteredBlamesBootstrap(t *testing.T) {
+	p := testPaths()
+	target := p.guiDomain + "/" + p.labelOrDefault()
+	f := newFakeCutover()
+	f.files[p.plistPath] = legacyPlist
+	// The install fails, so the rollback runs at all.
+	f.runErr[p.binPath+" install --force"] = errors.New("verify: no live pid")
+	// launchd never knows the label — not before the bootout, not on any probe of
+	// the bounded post-bootstrap wait — and kickstart then fails exactly the way it
+	// did in the field. Note the scripted text carries no "kickstart": the only
+	// source of that word would be the format string this guard replaces.
+	notFound := fmt.Errorf("exit status 113: Could not find service %q in domain for user gui: 501", p.labelOrDefault())
+	f.runErr["launchctl print "+target] = notFound
+	f.runErr["launchctl kickstart -k "+target] = notFound
+
+	ops := f.ops()
+	origRun := ops.runInstaller
+	overwritten := false
+	ops.runInstaller = func(name string, args ...string) (string, error) {
+		f.files[p.plistPath] = "<plist>ANCHOR</plist>"
+		overwritten = true
+		return origRun(name, args...)
+	}
+
+	rc := runCutover(ops, p, p.binPath, func(string, ...any) {})
+	if !overwritten {
+		t.Fatal("the overwrite hook never fired — no rollback ran, so this test proves nothing")
+	}
+	if rc == 0 {
+		t.Fatalf("runCutover = %d, want non-zero: the old shape was never loaded again", rc)
+	}
+	sentinel, ok := f.files[p.root+"/warden/"+cutoverFailedName]
+	if !ok {
+		t.Fatal("a failed rollback must still write the sentinel")
+	}
+	// The sentinel is the artifact under test: whatever it says IS the diagnosis.
+	if !strings.Contains(sentinel, "bootstrap") {
+		t.Errorf("sentinel = %q, want it to name the re-bootstrap step that actually failed", sentinel)
+	}
+	if strings.Contains(sentinel, "kickstart") {
+		t.Errorf("sentinel = %q, must not send the operator to debug kickstart", sentinel)
+	}
+	if !strings.Contains(sentinel, "registered nothing") || !strings.Contains(sentinel, p.plistPath) {
+		t.Errorf("sentinel = %q, want the registration diagnosis and the plist path %s to look at", sentinel, p.plistPath)
+	}
+	// kickstart is still ATTEMPTED — that is what keeps this diagnosis free: had
+	// launchd merely been slow, kickstart would have succeeded and the rollback
+	// would be byte-identical to before.
+	assertCalled(t, f.calls, "launchctl kickstart -k "+target)
+}
+
+// TestRollbackLateRegistrationStillRestores is the counter-example to the new probe
+// becoming a NEW way to lose a warden: launchd's registration can simply LAG a
+// bootstrap that exited 0. A machine whose label shows up on a later probe must roll
+// back exactly as before — rc 0, and no "registered nothing" claim, which would be a
+// lie written into a permanent sentinel.
+func TestRollbackLateRegistrationStillRestores(t *testing.T) {
+	p := testPaths()
+	target := p.guiDomain + "/" + p.labelOrDefault()
+	f := newFakeCutover()
+	f.files[p.plistPath] = legacyPlist
+	f.runErr[p.binPath+" install --force"] = errors.New("verify: no live pid")
+
+	ops := f.ops()
+	// print answers "not registered" until the 4th probe after the bootstrap, then
+	// reports a stable pid for the rest of the run (bootout's wait, then verify).
+	const registerAfterProbes = 4
+	bootstrapped, prints := false, 0
+	origRun := ops.run
+	ops.run = func(name string, args ...string) (string, error) {
+		if name == "launchctl" && len(args) > 0 {
+			switch args[0] {
+			case "bootstrap":
+				bootstrapped = true
+			case "print":
+				if !bootstrapped {
+					f.calls = append(f.calls, "launchctl print "+args[1])
+					return "", errors.New("Could not find service in domain for user gui: 501")
+				}
+				prints++
+				if prints < registerAfterProbes {
+					f.calls = append(f.calls, "launchctl print "+args[1])
+					return "", errors.New("Could not find service in domain for user gui: 501")
+				}
+			}
+		}
+		return origRun(name, args...)
+	}
+	origInstaller := ops.runInstaller
+	overwritten := false
+	ops.runInstaller = func(name string, args ...string) (string, error) {
+		f.files[p.plistPath] = "<plist>ANCHOR</plist>"
+		overwritten = true
+		return origInstaller(name, args...)
+	}
+
+	if rc := runCutover(ops, p, p.binPath, func(string, ...any) {}); rc != 0 {
+		t.Fatalf("runCutover = %d, want 0: a registration that merely lagged must still roll back", rc)
+	}
+	if !overwritten {
+		t.Fatal("the overwrite hook never fired — no rollback ran, so this test proves nothing")
+	}
+	if got := f.files[p.plistPath]; got != legacyPlist {
+		t.Fatalf("plist after rollback = %q, want the pre-conversion shape", got)
+	}
+	sentinel := f.files[p.root+"/warden/"+cutoverFailedName]
+	if strings.Contains(sentinel, "registered nothing") {
+		t.Errorf("sentinel = %q, must not claim the re-bootstrap registered nothing when it registered late", sentinel)
+	}
+	assertCalled(t, f.calls, "launchctl kickstart -k "+target)
 }
