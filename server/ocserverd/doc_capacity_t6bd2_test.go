@@ -125,6 +125,17 @@ func t6bd2FillAll(t *testing.T, s *apiServer, actor string) []string {
 	must(s.dal.PutTaskStep(TaskStep{ID: "ts-t6bd2000001", TaskID: "t-t6bd2000001",
 		OrderIdx: 0, Name: "probe step", Status: StepStatusInProgress,
 		Note: t6bd2Text(3200)}))
+	return t6bd2CarrierNames()
+}
+
+// t6bd2CarrierNames is the carrier list on its own, with NO fixture side effects.
+// It exists so the reconciliation in TestResumeSummaryDocCapacitySplits... can
+// compare the two hand-written lists without re-running t6bd2FillAll — which
+// re-seeds documents AND reassigns the probe task, so calling it a second time
+// mid-test is order-dependent in a way nothing declares (an independent review
+// measured it: moving that call above the capacity read drops three of the nine
+// rows, and the failure then points at the product rather than at the call).
+func t6bd2CarrierNames() []string {
 	return []string{
 		"role definition", "insight", "role lessons",
 		"system interaction", "offboard sequence", "boot sequence",
@@ -239,35 +250,148 @@ func TestResumeSummaryDocCapacityQuietWhenNothingIsNear(t *testing.T) {
 	}
 }
 
-// TestResumeSummaryDocCapacitySplitsWhatTheReaderCanAct on — the SECOND half of
-// the AC: the block must not tell a reader to do something that could only
-// answer 403.
+// TestResumeSummaryDocCapacitySplitsWhatTheReaderCanActOn — the SECOND half of
+// the AC. It used to say "the block must not tell a reader to do something that
+// could only answer 403", and it enforced that by asserting insight and role
+// lessons are NOT writable.
+//
+// 🔴 THAT WAS FALSE, AND THE TEST WAS PINNING THE FALSEHOOD. Measured
+// 2026-08-20 with zero-damage probes (patch_* with an anchor that cannot exist,
+// so the permission gate answers before anything is written):
+//
+//	patch_insight  role_key=<OWN role>     → 400 validation_error  ⇒ WRITABLE
+//	patch_lessons  role_key=<OWN role>     → 400 validation_error  ⇒ WRITABLE
+//	patch_insight  role_key=<ANOTHER role> → 403 (role-scoped refusal)
+//	update_role    role=<any>              → 403 "principal not permitted"
+//
+// An agent CAN write its own role's insight and lessons. The signal was telling
+// it "you cannot write this one (it answers 403 to you)" — a claim the reader
+// falsifies in one call, and a reminder caught lying is a reminder nobody reads
+// again. It was found by an agent that did exactly that, within seconds of
+// receiving the notice.
+//
+// ⇒ The rows split THREE ways, not two, because "technically writable" and
+// "yours to do right now" are different questions:
+//
+//	SELF    the reader's own working documents → rewrite it yourself
+//	MEMORY  the reader's own long-term memory  → yours to write, but compacting
+//	        it is not a close-out job; schedule it or ask the compactor
+//	ASK     documents the reader genuinely cannot write → name who can
+//
+// Only ASK makes a permission claim, and it is the only class measured to
+// deserve one.
 func TestResumeSummaryDocCapacitySplitsWhatTheReaderCanActOn(t *testing.T) {
-	s := t6bd2Server(t)
-	t6bd2FillAll(t, s, "mira")
-	rows := t6bd2Capacity(t, s, "mira")
-
-	writable := map[string]bool{
-		"task manual SOP": true, "task manual learnings": true, "step note": true,
-		"role definition": false, "insight": false, "role lessons": false,
-		"system interaction": false, "offboard sequence": false, "boot sequence": false,
+	// 🔴 TWO READERS, because `writable` is a fact about THE READER and four of
+	// the nine rows are gated at principalAdminAgent. Running this with only
+	// 銀月 (ROLE_KEY "assistant" → admin_agent; the discriminator is role_key,
+	// not Member.Kind — which every ordinary 正職 also carries as "assistant")
+	// is how the file previously asserted
+	// "role definition: not writable" about a reader who CAN write it — the
+	// exact class of lie property 2 exists to forbid, wearing the other hat.
+	// The ordinary member is the control; she is the case the ladder cannot
+	// express, since both callers rank principalAgent on the route floor.
+	for _, reader := range []struct {
+		name       string
+		actor      string
+		adminGated string // the class the admin-gated rows must land in
+	}{
+		{"an ordinary member cannot write them", "m-t6bd2", "ask"},
+		{"the admin assistant can", "mira", "self"},
+	} {
+		t.Run(reader.name, func(t *testing.T) {
+			t6bd2SplitCases(t, reader.actor, reader.adminGated)
+		})
 	}
-	for name, canWrite := range writable {
+}
+
+func t6bd2SplitCases(t *testing.T, actor, adminGated string) {
+	t.Helper()
+	s := t6bd2Server(t)
+	if actor != "mira" {
+		// A 正職 with a role of its own: same principalAgent floor as 銀月 on
+		// every route, but NOT admin-capable, which is the whole difference.
+		if err := s.dal.PutMember(Member{ID: actor, Name: actor,
+			Kind: KindAssistant, RoleKey: "r-t6bd2", Effort: "medium",
+			RosterStatus: RosterStatusActive}); err != nil {
+			t.Fatalf("put member: %v", err)
+		}
+	}
+	t6bd2FillAll(t, s, actor)
+	rows := t6bd2Capacity(t, s, actor)
+
+	const (
+		classSelf   = "self"
+		classMemory = "memory"
+		classAsk    = "ask"
+	)
+	class := map[string]string{
+		"task manual SOP": classSelf, "task manual learnings": classSelf,
+		"step note": classSelf,
+		// Writable by any reader with a role — measured, see the header.
+		"insight": classMemory, "role lessons": classMemory,
+		// Gated at principalAdminAgent, so the class DEPENDS ON THE READER:
+		// classAsk for an ordinary member (update_role / the boot-doc routes
+		// answer it 403), classSelf for the admin assistant (who passes the
+		// same gate, and must not be told to go and find herself).
+		"role definition":    adminGated,
+		"system interaction": adminGated, "offboard sequence": adminGated,
+		"boot sequence": adminGated,
+	}
+	// 🔴 THE TWO HAND-WRITTEN LISTS HAVE TO STAY THE SAME SET, and nothing else
+	// makes them so. The carrier names live twice — here, and in the list the
+	// exactly-N count in FiresForEveryCarrier compares against. Without this
+	// reconciliation the loop below simply never looks at a carrier missing from
+	// `class`: someone adding a tenth document fixes the count by appending one
+	// string to that other list, goes green, and ships a row whose sentence and
+	// `writable` no assertion has ever read. (An independent review measured
+	// exactly that edit passing the whole package.)
+	//
+	// This line alone only compares LENGTHS. What turns it into set equality is
+	// the t6bd2Row lookup inside the loop below, which fails with "no row naming
+	// X" the moment a name in `class` is not among the carriers. Neither half is
+	// sufficient on its own.
+	if fixture := t6bd2CarrierNames(); len(fixture) != len(class) {
+		t.Fatalf("the two carrier lists have drifted: t6bd2CarrierNames lists %d (%v), "+
+			"this test classifies %d — a carrier was added to one and not the "+
+			"other, so its sentence would go unpinned. Add it to `class` too.",
+			len(fixture), fixture, len(class))
+	}
+	for name, want := range class {
 		row := t6bd2Row(t, rows, name)
-		if row["writable"].(bool) != canWrite {
-			t.Fatalf("%q: writable must be %v for a reading agent, got %v",
-				name, canWrite, row["writable"])
+		gotWritable := row["writable"].(bool)
+		wantWritable := want != classAsk
+		if gotWritable != wantWritable {
+			t.Fatalf("%q: writable is a FACT about this reader's permissions and "+
+				"must be %v, got %v — re-measure with a zero-damage probe before "+
+				"changing this line", name, wantWritable, gotWritable)
 		}
-		action := row["action"].(string)
-		namesTheCompactor := strings.Contains(action, docCapacityCompactor)
-		if canWrite && namesTheCompactor {
-			t.Fatalf("%q is the reader's OWN document — sending it to someone else "+
-				"buys a round trip for a rewrite it could have done: %q", name, action)
+
+		// WHOLE STRING against the CONSTANT (owner ruling 2026-08-20,
+		// c-2502de439aaa: 「你如果要比對 context 就是比對一整份要一模一樣」).
+		//
+		// 🔴 AND IT IS STRICTLY STRONGER THAN THE KEYWORD CHECKS IT REPLACED.
+		// Those asked three separate questions — does it name the compactor,
+		// does it avoid "403"/"cannot write"/"not yours to write", does it say
+		// "yourself" — each of which a rewritten sentence could satisfy while
+		// meaning something else. Equality against the constant asks the only
+		// question this test is really about: DID THIS ROW GET THE RIGHT ONE OF
+		// THE THREE SENTENCES? The wording of each sentence is pinned where it
+		// is defined; the mapping is pinned here.
+		wantAction := map[string]string{
+			classSelf:   docCapacityActionSelf,
+			classMemory: docCapacityActionSelfMemory,
+			classAsk:    docCapacityActionAsk,
+		}[want]
+		if action := row["action"].(string); action != wantAction {
+			t.Fatalf("%q got the wrong sentence for this reader:\n got %q\nwant %q",
+				name, action, wantAction)
 		}
-		if !canWrite && !namesTheCompactor {
-			t.Fatalf("%q answers 403 to this reader, so the row MUST name who can "+
-				"write it instead of asking for a write that cannot land: %q", name, action)
-		}
+		// "The compactor is never sent to herself" is held by the equality above,
+		// not by a line of its own: every row that is classAsk for an ordinary
+		// member is called with classSelf for 銀月, so a build that referred her
+		// to herself fails that comparison. An extra `if want == classAsk &&
+		// actor == seedMiraID` would READ like a second guard while being
+		// unreachable — the classAsk cases only ever run as the ordinary member.
 	}
 }
 
@@ -413,5 +537,79 @@ func TestStepNoteWritesReportTheirOwnRoom(t *testing.T) {
 	}
 	if st.NoteCapChars == nil || *st.NoteCapChars != 4000 {
 		t.Fatalf("the step view must report the note's ceiling (4000), got %v", st.NoteCapChars)
+	}
+}
+
+// TestDocCapacitySentencesAreWhatWeApproved pins the SENTENCES THEMSELVES,
+// as whole literal strings, not which row gets which one.
+//
+// 🔴 WHY A LITERAL AND NOT A KEYWORD LIST. The first version of this test
+// forbade three phrasings of the lie ("403", "cannot write", "not yours to
+// write"). A reviewer broke it in one try: rewrite the sentence as "you do NOT
+// have permission to write this one (the server refuses it)" and it goes green
+// while the row's own `writable` field, two keys away, still says true. A
+// whitelist of ways to lie only ever buys back the ways someone already thought
+// of; the liar picks the fourth phrasing.
+//
+// 🔴 WHY IT IS NOT IN TENSION WITH THE EQUALITY IN THE TEST ABOVE. That one
+// compares a row against the constant, so both sides move together — rewrite a
+// constant into a lie and it still passes. It answers "did this row get the
+// right one of the three sentences?" This one answers the question the mapping
+// cannot: "is the sentence still the one we approved?" Only a literal can, and
+// it is also what the ruling on comparing text asks for (owner 2026-08-20,
+// c-2502de439aaa: 「你如果要比對 context 就是比對一整份要一模一樣」).
+//
+// 🔴 IT IS ONE OF THREE LAYERS, AND ON ITS OWN IT WOULD LEAVE A HOLE. This
+// test pins the CONTENT of the three sentences. Which row gets which one is
+// pinned by TestResumeSummaryDocCapacitySplitsWhatTheReaderCanActOn, and the
+// NUMBER of rows by TestResumeSummaryDocCapacityFiresForEveryCarrier's "exactly
+// 9 rows".
+//
+// ⚠️ THOSE TWO ARE NOT AUTOMATICALLY LINKED, and an earlier version of this
+// comment claimed they were. The count compares against t6bd2FillAll's return
+// slice; the mapping walks a SEPARATE hand-written map. Adding a tenth carrier
+// and appending one string to the first list passed the whole package —
+// measured, with a fourth sentence nobody had ever pinned. What ties them now
+// is the explicit reconciliation at the top of the split test's loop; it is
+// load-bearing, not tidiness. Check all three layers are still standing before
+// removing any of them.
+//
+// 🔴 WHAT TO DO WHEN THIS FAILS. Do not edit the literal to match the code
+// until you have read the new sentence and answered, for the reader that
+// actually receives it: does it claim a permission that reader HAS? does it
+// still tell a reader who CAN write the document that it can? Then update the
+// literal in the same commit. Turning this red is the point — it is the one
+// place that forces the sentence to be read by a human before it ships.
+func TestDocCapacitySentencesAreWhatWeApproved(t *testing.T) {
+	// Goes to a reader who CAN write the document, and must say so.
+	const wantSelf = "you can rewrite this one yourself: do it NOW, " +
+		"while there is still room, and rewrite it to its CURRENT state instead of appending"
+
+	// Long-term memory the reader CAN write but should not compact under time
+	// pressure. It must keep the "you can" half: dropping it (leaving only
+	// "compacting is not a close-out job, ask 銀月") tells no lie, but loses the
+	// one fact that stops the reader queueing behind her for a document that is
+	// its own. That regression shipped once and went green.
+	const wantSelfMemory = "you can write this one yourself, but " +
+		"compacting long-term memory is not a close-out job: schedule it, or ask " +
+		"銀月 (mira) to do it"
+
+	// The one sentence that DOES make a permission claim, because for the reader
+	// it is assigned to the claim is TRUE. It is here as the negative control:
+	// without it this test would still pass if every permission claim were
+	// stripped from the file, including the honest one.
+	const wantAsk = "去找銀月 (mira)" +
+		": this one is not yours to write, so compacting it is hers to do"
+
+	for _, tc := range []struct{ name, got, want string }{
+		{"docCapacityActionSelf", docCapacityActionSelf, wantSelf},
+		{"docCapacityActionSelfMemory", docCapacityActionSelfMemory, wantSelfMemory},
+		{"docCapacityActionAsk", docCapacityActionAsk, wantAsk},
+	} {
+		if tc.got != tc.want {
+			t.Fatalf("%s changed. Read the new sentence against the reader it goes to "+
+				"BEFORE updating this literal (see the comment above):\n got %q\nwant %q",
+				tc.name, tc.got, tc.want)
+		}
 	}
 }

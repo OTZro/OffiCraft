@@ -77,6 +77,20 @@ func t6bd2NoticeLine(t *testing.T, wire, substr string) string {
 	return ""
 }
 
+// t6bd2NoticeAction pulls the ACTION half off a rendered capacity line. The
+// renderer's shape is `- {doc}: {size}/{cap} chars, {left} left → {action}`
+// (docCapacityLines), so the action is everything after the arrow — which is
+// what lets this file compare it whole against the constant instead of hunting
+// for keywords inside it.
+func t6bd2NoticeAction(t *testing.T, line string) string {
+	t.Helper()
+	_, action, found := strings.Cut(line, " → ")
+	if !found {
+		t.Fatalf("a capacity line must carry its action after an arrow: %q", line)
+	}
+	return action
+}
+
 // TestHandoverNoticeTick_ClosuresAreNotRunAfterTheClaim — BLOCKER 1.
 //
 // 🔴 WHAT WAS ACTUALLY WRONG. decideHandoverNotice has no memory: once an agent
@@ -169,6 +183,24 @@ func TestHandoverNoticeTick_ANewSessionStillPaysAndStillSends(t *testing.T) {
 //
 // The reader here is NOT the compactor, so a green cannot come from the
 // sentence accidentally naming its own reader.
+//
+// 🔴 CORRECTED 2026-08-20. This test used to assert, in its own words, that
+// "an insight answers 403 to an ordinary agent" — and it does not. Measured
+// with a zero-damage probe (patch_insight with an anchor that cannot exist, so
+// the permission gate answers before anything is written):
+//
+//	patch_insight role_key=<OWN role>     → 400 validation_error  ⇒ WRITABLE
+//	patch_insight role_key=<ANOTHER role> → 403 (role-scoped refusal)
+//
+// The signal was telling readers "you cannot write this one (it answers 403 to
+// you)", an agent falsified it in one call within seconds of receiving the
+// notice, and this test was pinning the falsehood in place.
+//
+// ⇒ The property being guarded was always the RIGHT one — a row must hand the
+// reader an addressee, not just numbers — but its stated reason was wrong. The
+// addressee is there because compacting long-term memory under close-out
+// pressure is the failure this whole feature answers, NOT because the reader is
+// barred from the document.
 func TestSoftNoticeNamesWhoCanCompactWhatTheReaderCannot(t *testing.T) {
 	s := t6bd2Server(t)
 	reader := t6bd2NoticeReader(t, s)
@@ -176,18 +208,16 @@ func TestSoftNoticeNamesWhoCanCompactWhatTheReaderCannot(t *testing.T) {
 
 	line := t6bd2NoticeLine(t, t6bd2NoticeWire(t, s, reader), "insight (")
 
-	// An insight answers 403 to an ordinary agent, so the line must hand the
-	// reader an addressee rather than an instruction it cannot carry out.
-	if !strings.Contains(line, "去找") {
-		t.Fatalf("a row the reader cannot write must name WHO can compact it; "+
-			"this line only states the numbers: %s", line)
-	}
-	if !strings.Contains(line, "銀月") {
-		t.Fatalf("the referral must name the compactor: %s", line)
-	}
-	if strings.Contains(line, "you can rewrite this one yourself") {
-		t.Fatalf("an insight is not writable by an ordinary agent; telling it to "+
-			"rewrite it sends it into a 403: %s", line)
+	// WHOLE STRING against the CONSTANT (owner ruling 2026-08-20,
+	// c-2502de439aaa). The three keyword checks this replaces asked "does it
+	// name 銀月", "does it avoid 403/cannot write/not yours to write" and "does
+	// it say yourself" — a rewrite could satisfy all three and still be the
+	// wrong sentence. What this test is about is WHICH of the three sentences
+	// the long-term-memory row got, and equality asks exactly that.
+	if action := t6bd2NoticeAction(t, line); action != docCapacityActionSelfMemory {
+		t.Fatalf("a long-term-memory row must carry the memory sentence — it "+
+			"names who can compact it WITHOUT claiming a permission the reader "+
+			"has:\n got %q\nwant %q", action, docCapacityActionSelfMemory)
 	}
 
 	// And the CONTRAST is half the property: a row the reader CAN write must
@@ -195,9 +225,9 @@ func TestSoftNoticeNamesWhoCanCompactWhatTheReaderCannot(t *testing.T) {
 	// assertion above would pass for a notice that says one thing to everyone —
 	// which is the noise the block is designed not to be.
 	own := t6bd2NoticeLine(t, t6bd2NoticeWire(t, s, reader), "task manual SOP (")
-	if !strings.Contains(own, "you can rewrite this one yourself") {
+	if action := t6bd2NoticeAction(t, own); action != docCapacityActionSelf {
 		t.Fatalf("a manual the reader CAN write must tell it to do it itself, "+
-			"not send it to somebody else: %s", own)
+			"not send it to somebody else:\n got %q\nwant %q", action, docCapacityActionSelf)
 	}
 }
 

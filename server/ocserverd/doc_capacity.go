@@ -28,19 +28,45 @@ package main
 //     mattered looks like all the others. Nothing near the cap → no rows → the
 //     field is absent from the payload entirely.
 //
-//  2. IT SAYS SOMETHING DIFFERENT TO THE TWO CLASSES OF DOCUMENT. An agent can
-//     rewrite its own step note and its task manual; it CANNOT write a role
-//     definition, an insight, role lessons, or any of the three boot documents
-//     — those answer 403 to it. Telling every reader to "compact it now" would
-//     be telling most of them to go and do something that can only be refused,
-//     which is worse than silence because it burns the reader's trust in the
-//     whole block. The rows an agent cannot act on name the person who can.
+//  2. IT SAYS SOMETHING DIFFERENT TO THE DIFFERENT CLASSES OF DOCUMENT, AND
+//     WHAT IT SAYS ABOUT PERMISSION MUST BE TRUE. Telling every reader to
+//     "compact it now" would be telling some of them to go and do something
+//     that can only be refused. But the opposite error is worse, and this file
+//     shipped it: a row that tells a reader "you cannot write this one (it
+//     answers 403 to you)" about a document it CAN write is a claim the reader
+//     can falsify in one call — and a reminder caught lying is a reminder
+//     nobody reads again.
+//
+//     🔴 MEASURED 2026-08-20 (zero-damage probes: patch_* with an anchor that
+//     cannot exist, so the permission gate answers before anything is written):
+//
+//       patch_insight  role_key=<OWN role>     → 400 validation_error  ⇒ WRITABLE
+//       patch_lessons  role_key=<OWN role>     → 400 validation_error  ⇒ WRITABLE
+//       patch_insight  role_key=<ANOTHER role> → 403 "an agent may only
+//                                                 write its own role's insight"
+//       update_role    role=<any>              → 403 "principal not permitted"
+//
+//     ⇒ An agent CAN write its OWN role's insight and lessons. It cannot write
+//     a role definition (a different gate, and not role-scoped), any other
+//     role's documents, or the boot documents. The rows split three ways, not
+//     two — and the third one exists because "technically writable" and
+//     "yours to do under close-out pressure" are NOT the same question.
 
 import (
+	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"unicode/utf8"
 )
+
+// docCapLog emits one doc-capacity observability line to stderr. It exists for
+// the branch that DROPS a row rather than serving a self-contradicting one:
+// after the fail-soft the drop shares its exit with "nothing was near the cap",
+// so without this line the two are indistinguishable from outside.
+func docCapLog(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "[doc-capacity] "+format+"\n", args...)
+}
 
 // docCapacityCompactor is who to go to for a document the reading agent cannot
 // write. The owner ruled the compaction work itself belongs to 銀月 (T-6bd2's
@@ -61,8 +87,23 @@ const docCapacityCompactor = "銀月"
 const (
 	docCapacityActionSelf = "you can rewrite this one yourself: do it NOW, " +
 		"while there is still room, and rewrite it to its CURRENT state instead of appending"
+	// Long-term memory the reader CAN write, but should not compact while it is
+	// being collected. The permission claim is dropped because it was false
+	// (see the header): what is true here is not "you may not", it is "not now,
+	// and not alone". Compacting an insight is a judgement about which lessons
+	// still earn their space — the exact judgement that goes worst under time
+	// pressure, which is the defect this whole file answers.
+	docCapacityActionSelfMemory = "you can write this one yourself, but " +
+		"compacting long-term memory is not a close-out job: schedule it, or ask " +
+		docCapacityCompactor + " (" + seedMiraID + ") to do it"
+	// Documents THIS reader genuinely cannot write. This sentence DOES make a
+	// permission claim, which is why it is no longer attached by document TYPE:
+	// role definitions and the boot documents are gated at principalAdminAgent,
+	// so the claim is true for an ordinary member and FALSE for the admin
+	// assistant — who would also be told to go find herself. docCapacityFor
+	// picks between this and docCapacityActionSelf per reader.
 	docCapacityActionAsk = "去找" + docCapacityCompactor + " (" + seedMiraID + ")" +
-		": you cannot write this one (it answers 403 to you), so compacting it is hers to do"
+		": this one is not yours to write, so compacting it is hers to do"
 )
 
 // docCapacityNear is the whole threshold rule, in one place.
@@ -118,8 +159,9 @@ type docCapacityRow struct {
 	// can go straight to the tool that writes it rather than guessing.
 	Doc string `json:"doc"`
 	// Writable: true when the READING agent may write this document itself.
-	// It is the field Action is derived from, carried separately so a client
-	// can group without parsing prose.
+	// It is a FACT about permission and nothing else — Action is decided
+	// separately (see newDocCapacityRow) — and it is carried as its own field
+	// so a client can group by it without parsing prose.
 	Writable  bool   `json:"writable"`
 	SizeChars int    `json:"size_chars"`
 	CapChars  int    `json:"cap_chars"`
@@ -130,7 +172,14 @@ type docCapacityRow struct {
 // newDocCapacityRow builds a row, or nil when the document is not near its cap.
 // Every collector below funnels through here, which is what stops one cell from
 // acquiring its own private idea of "near".
-func newDocCapacityRow(doc string, sizeChars, capChars int, writable bool) *docCapacityRow {
+//
+// 🔴 `writable` IS A FACT AND `action` IS A DECISION, AND THEY ARE PASSED
+// SEPARATELY ON PURPOSE. They used to be one: action was derived from writable,
+// so the only way to route a row to 銀月 was to declare it unwritable — and
+// that is exactly how this file came to tell agents "it answers 403 to you"
+// about their own insight, which they can write. Keeping them apart means a row
+// can say "yours to write, but not now" without lying about permission.
+func newDocCapacityRow(doc string, sizeChars, capChars int, writable bool, action string) *docCapacityRow {
 	if !docCapacityNear(sizeChars, capChars) {
 		return nil
 	}
@@ -138,9 +187,38 @@ func newDocCapacityRow(doc string, sizeChars, capChars int, writable bool) *docC
 	if remaining < 0 {
 		remaining = 0
 	}
-	action := docCapacityActionAsk
-	if writable {
-		action = docCapacityActionSelf
+	// The ONE part of "does this sentence lie?" a machine can decide. The ask
+	// sentence makes a permission CLAIM, and `writable` states the same fact as
+	// a boolean two keys away — so a row carrying both is self-contradicting on
+	// its face, whatever the prose says. Everything else about these sentences
+	// needs a human (the literals in doc_capacity_t6bd2_test.go force one to
+	// read them), but this pairing does not: it survives someone rewriting the
+	// sentence AND updating the test literal in the same commit, which is the
+	// one move the literal test cannot catch.
+	//
+	// 🔴 IT OMITS THE ROW, IT DOES NOT PANIC, AND THAT IS NOT TIMIDITY. An
+	// independent review measured a panic here on the real path: mispair one
+	// row, and /api/resume-summary answers a bare EOF — no status, no body —
+	// DETERMINISTICALLY, so the agent reading it can never boot; the same
+	// function runs inside the SSE handler, so that agent could never be told
+	// to close out either. Dropping the row instead loses one reminder and
+	// keeps both payloads, which is the trade docCapacityFor's own header
+	// already made (see below). In development the signal is if anything
+	// louder: the same mispair fails
+	// TestResumeSummaryDocCapacityFiresForEveryCarrier AND both halves of
+	// ...SplitsWhatTheReaderCanActOn, rather than blowing the test process up.
+	if action == docCapacityActionAsk && writable {
+		// Dropped, but NOT silently. An omitted row is indistinguishable from a
+		// document that is simply not near its cap — docCapacityLines answers ""
+		// for an empty set, so this row's absence reads exactly like a healthy
+		// station (an independent review measured that: mispair the only near-cap
+		// document and the whole ⚠️ block disappears from the offboard notice).
+		// The header's best-effort omission covers a FAILED READ, which is
+		// temporary and self-healing; this is a PROGRAMMER ERROR, which is
+		// permanent and never heals, so it must not share that exit unannounced.
+		docCapLog("row %q pairs the ask sentence with writable=true — one of the "+
+			"two is wrong; the row was dropped", doc)
+		return nil
 	}
 	return &docCapacityRow{
 		Doc:       doc,
@@ -176,33 +254,65 @@ func (s *apiServer) docCapacityFor(actor string, stepNotes []docCapacityRow) []d
 		}
 	}
 
+	// 🔴 WHO IS READING DECIDES WHAT `writable` SAYS, for the rows whose write
+	// face is gated at principalAdminAgent. The admin assistant (ROLE_KEY
+	// "assistant" — the admin_agent discriminator is role_key; classifyMember
+	// checks Member.Kind first, but only to take wardens out, and Kind is
+	// "assistant" on every ordinary 正職 too) may write role definitions and
+	// the boot documents, so telling HER "this one is not yours to write, go
+	// find 銀月"
+	// is two falsehoods in one sentence: a permission claim that is wrong, and
+	// an instruction to go find herself. `writable` is documented as a FACT
+	// about THIS READER's permissions, so it has to be read off this reader.
+	//
+	// ⚠️ The insight / role-lessons / task-manual / step-note rows are NOT
+	// affected: their gate is "your own", which an ordinary member already
+	// passes, so admin capability changes nothing there.
+	adminCapable := false
+	if m, err := s.dal.GetMember(actor); err == nil && m != nil {
+		adminCapable = principalAtLeast(classifyMember(m), principalAdminAgent)
+	}
+	adminGatedAction := docCapacityActionAsk
+	if adminCapable {
+		adminGatedAction = docCapacityActionSelf
+	}
+
 	// ── the reader's own role documents ──────────────────────────────────────
 	// A contractor has no role and an unknown sub resolves to nothing; both mean
 	// "no role documents", not an error.
 	if m, err := s.dal.GetMember(actor); err == nil && m != nil && m.RoleKey != "" {
 		if duty, err := s.foldRoleDefDTO(m.RoleKey); err == nil && duty != nil {
+			// update_role answers 403 "principal not permitted" to an ordinary
+			// member — for its OWN role too. An admin-capable reader passes the
+			// same gate, hence the pair above rather than a constant false.
 			add(newDocCapacityRow("role definition ("+m.RoleKey+")",
-				duty.SizeChars, duty.CapChars, false))
+				duty.SizeChars, duty.CapChars, adminCapable, adminGatedAction))
 		}
 		if ins, err := s.foldInsightDTO(m.RoleKey); err == nil && ins != nil {
+			// 🔴 The reader's OWN insight — patch_insight lets it through
+			// (measured: 400, not 403). Writable, and the sentence says so.
 			add(newDocCapacityRow("insight ("+m.RoleKey+")",
-				ins.SizeChars, ins.CapChars, false))
+				ins.SizeChars, ins.CapChars, true, docCapacityActionSelfMemory))
 		}
 		if les, err := s.foldLessonsDTO(m.RoleKey, seedLessonsTaskType); err == nil && les != nil {
+			// Same gate as insight, same measurement (400, not 403).
 			add(newDocCapacityRow("role lessons ("+m.RoleKey+"/"+seedLessonsTaskType+")",
-				les.SizeChars, les.CapChars, false))
+				les.SizeChars, les.CapChars, true, docCapacityActionSelfMemory))
 		}
 	}
 
 	// ── the three boot documents ─────────────────────────────────────────────
-	// Station-wide rather than per-reader, and owner-only to write. They are in
+	// Station-wide rather than per-reader, and gated at principalAdminAgent to
+	// write (NOT owner-only — that is why the pair above is read per reader).
+	// They are in
 	// scope because they fail in the identical way (recon measured the refusal:
 	// same docCapRefusal sentence, same moment) — the only difference is that
 	// the person who hits it is usually the owner, which is precisely why no
 	// agent has ever been in a position to notice.
 	for _, spec := range s.docCapacityBootSpecs(actor) {
 		if dto, err := s.foldBootDocDTO(spec); err == nil && dto != nil {
-			add(newDocCapacityRow(spec.DocName, dto.SizeChars, dto.CapChars, false))
+			add(newDocCapacityRow(spec.DocName, dto.SizeChars, dto.CapChars,
+				adminCapable, adminGatedAction))
 		}
 	}
 
@@ -217,9 +327,11 @@ func (s *apiServer) docCapacityFor(actor string, stepNotes []docCapacityRow) []d
 			continue
 		}
 		add(newDocCapacityRow("task manual SOP ("+typeKey+")",
-			utf8.RuneCountInString(manual.SopMD), sopCap, true))
+			utf8.RuneCountInString(manual.SopMD), sopCap, true,
+			docCapacityActionSelf))
 		add(newDocCapacityRow("task manual learnings ("+typeKey+")",
-			utf8.RuneCountInString(manual.Learnings), learningsCap, true))
+			utf8.RuneCountInString(manual.Learnings), learningsCap, true,
+			docCapacityActionSelf))
 	}
 
 	// ── the reader's open steps' notes ───────────────────────────────────────
@@ -281,7 +393,8 @@ func stepNoteCapacityRow(taskNo, stepName, note string) *docCapacityRow {
 		label += ": " + stepName
 	}
 	label += ")"
-	return newDocCapacityRow(label, utf8.RuneCountInString(note), chatBodyMaxChars, true)
+	return newDocCapacityRow(label, utf8.RuneCountInString(note), chatBodyMaxChars, true,
+		docCapacityActionSelf)
 }
 
 // stepNoteCapacityFor is the step-note collector for callers that do NOT
