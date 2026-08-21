@@ -102,8 +102,18 @@ case "${1:-}" in
     # bootstrap exits 0 and registers NOTHING.
     if [[ -f "$SHIM_STATE/.bootstrapped" ]]; then
       [[ "${SHIM_BOOTSTRAP_REGISTERS:-1}" == "1" ]] || exit 1
-      [[ "${2:-}" == "$SHIM_EXPECT_TARGET" ]] || exit 1
-      printf 'gui/501/com.officraft.serve = {\n\tstate = running\n\tpid = 4242\n}\n'
+      # A SEPARATE target from SHIM_EXPECT_TARGET, and deliberately so. Those are
+      # two different questions: SHIM_EXPECT_TARGET answers "is something ALREADY
+      # running under the label the live-service gate is asking about" — which the
+      # namespace cases point at the MAIN label ON PURPOSE, so a namespaced run
+      # sees its own job as absent. SHIM_REGISTERED_TARGET answers "which label did
+      # this bootstrap actually register", which for those same runs is the
+      # NAMESPACED one. Collapsing the two left every namespaced case unable to
+      # confirm its own registration, i.e. zero coverage of the healthy path they
+      # walk. Still LABEL-AWARE: a poll that asks about the wrong target (say, a
+      # label with the gui domain dropped) must read as "not registered".
+      [[ "${2:-}" == "${SHIM_REGISTERED_TARGET:-$SHIM_EXPECT_TARGET}" ]] || exit 1
+      printf '%s = {\n\tstate = running\n\tpid = 4242\n}\n' "${2:-}"
       exit 0
     fi
     # once booted out, the label really is gone — lets the poll loop exit
@@ -281,6 +291,7 @@ run_install() {
     SHIM_EXPECT_TARGET="$EXPECT_TARGET" SHIM_NO_LISTEN="${SHIM_NO_LISTEN:-0}" \
     SHIM_PLUTIL_STDOUT_ERR="${SHIM_PLUTIL_STDOUT_ERR:-0}" SHIM_PLUTIL_LOG="${SHIM_PLUTIL_LOG:-}" \
     SHIM_BOOTSTRAP_REGISTERS="${SHIM_BOOTSTRAP_REGISTERS:-1}" SHIM_FAST_SLEEP="${SHIM_FAST_SLEEP:-0}" \
+    SHIM_REGISTERED_TARGET="${SHIM_REGISTERED_TARGET:-$EXPECT_TARGET}" \
     bash "$PKG/install.sh" "$@" </dev/null 2>&1)"
   RC=$?
 }
@@ -465,6 +476,18 @@ else
 fi
 case "$OUT" in *"http://127.0.0.1:7755/"*) ok "fresh install: the setup link the operator is handed is on 7755";; *) bad "fresh install: setup link is not on 7755 (output was: '$OUT')";; esac
 case "$OUT" in *8780*) bad "fresh install: the retired 8780 still appears in the run's output ('$OUT')";; *) ok "fresh install: no trace of the retired 8780 in the output";; esac
+# THE POSITIVE CONTROL FOR THE REGISTRATION POLL (case 9b is the negative one).
+# A poll that asks launchd the WRONG question — the bare label with the gui domain
+# dropped, say — answers "not registered" on a machine that is perfectly healthy:
+# every install then warns falsely, pays the full ~5s wait, and the moment the
+# port gate trips it prints the "registered nothing" diagnosis about a job that IS
+# registered. That is this ticket's own defect pointing the other way, and without
+# this line nothing in the suite could see it (measured: 107 ok / 0 failed).
+case "$OUT" in
+  *"still does not know"*) bad "fresh install: warns that launchd does not know a label that IS registered — the poll is asking about the wrong target:
+$OUT" ;;
+  *) ok "fresh install: the registration poll confirms the healthy label (no false 'still does not know')" ;;
+esac
 
 # ── 9b. bootstrap exits 0 and registers NOTHING → blame bootstrap (T-908d) ──
 # THE DEFECT. `launchctl bootstrap` can exit 0 while registering no job at all.
@@ -533,12 +556,21 @@ NS_TARGET="gui/$(id -u)/com.officraft.serve.$NS"
 
 # run_install_ns <job-state> <expect-target> [args…] — same as run_install but
 # lets a case choose WHICH label the launchctl oracle is willing to answer for.
+# The two SHIM_*_TARGET values differ here ON PURPOSE, and that is the whole point
+# of this helper: SHIM_EXPECT_TARGET stays on the MAIN label so the live-service
+# gate still sees the namespaced job as absent (10a), while SHIM_REGISTERED_TARGET
+# names the label the namespaced bootstrap actually registers. `env -i` DROPS
+# anything not listed, and until it was listed every namespaced case took the
+# "registration unconfirmed" branch — zero coverage of the healthy path they walk,
+# and 25 x 0.2s of real sleep each to get there (hence SHIM_FAST_SLEEP too).
 run_install_ns() {
   local job="$1" expect="$2"; shift 2
   OUT="$(cd "$WORK" && env -i \
     PATH="$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" \
     HOME="$FAKEHOME" SHIM_JOB="$job" SHIM_TRIPWIRE="$WORK/.tripwire" SHIM_STATE="$WORK" \
     SHIM_EXPECT_TARGET="$expect" SHIM_NO_LISTEN="${SHIM_NO_LISTEN:-0}" \
+    SHIM_REGISTERED_TARGET="$NS_TARGET" \
+    SHIM_BOOTSTRAP_REGISTERS="${SHIM_BOOTSTRAP_REGISTERS:-1}" SHIM_FAST_SLEEP="${SHIM_FAST_SLEEP:-0}" \
     bash "$PKG/install.sh" "$@" </dev/null 2>&1)"
   RC=$?
 }
@@ -573,6 +605,14 @@ if [[ -d "$FAKEHOME/.officraft-$NS" ]]; then
 else
   bad "ns install did NOT create ~/.officraft-$NS — it installed somewhere else"
 fi
+# Same positive control as case 9, on the NAMESPACED label — the one whose target
+# is built from a different string. A poll hard-wired to the main label, or one
+# that lost the gui domain, warns falsely here while case 9 stays green.
+case "$OUT" in
+  *"still does not know"*) bad "ns install: warns that launchd does not know $NS_TARGET, which it just registered:
+$OUT" ;;
+  *) ok "ns install: the registration poll confirms the NAMESPACED label" ;;
+esac
 if [[ -f "$FAKEHOME/Library/LaunchAgents/com.officraft.serve.$NS.plist" ]]; then
   ok "ns install wrote its own plist (com.officraft.serve.$NS.plist)"
 else
