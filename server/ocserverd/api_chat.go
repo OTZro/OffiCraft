@@ -645,6 +645,29 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 			Body: "你有一則新訊息。",
 		})
 	}
+	// 🔴 THIS internalError RUNS AFTER THE MESSAGE IS ALREADY COMMITTED, PUBLISHED
+	// AND PUSHED. PutChatWithAttachments, hub.Publish and enqueueWebPush have all
+	// happened by the time this line can fire, so a 500 here is a 500 about a
+	// message that IS in the database, IS on every open SSE stream, and HAS been
+	// pushed to the owner's phone. The browser's send path catches the failure
+	// and restores the draft — so the owner would see a message sitting in the
+	// thread AND still sitting in the composer, and pressing Enter would send it
+	// a second time.
+	//
+	// TODAY IT CANNOT FIRE, for exactly one reason: servedChatMessageDTO's only
+	// error is the reply-quote read, and the reply_to EXISTENCE GATE above
+	// already read that same single id through the same ListChatByIDs before
+	// anything was stored. A row that cannot be read fails there, at a point
+	// where nothing has been committed.
+	//
+	// ⚠️ THAT IS A COINCIDENCE OF THE CURRENT SHAPE, AND IT IS THE FIRST THING A
+	// BATCHING CHANGE WOULD BREAK. Batch the quote reads (the note on
+	// resumeChatBlock names that as a future change), or relax the gate to a
+	// cheaper existence check, and this branch becomes reachable — with the write
+	// already durable behind it. WHOEVER MAKES THAT CHANGE MUST FIX THIS FIRST:
+	// either build the DTO BEFORE the commit, or answer 200 with the quote
+	// omitted here (the message really was accepted; the echo is the only thing
+	// that failed). Do not leave a post-commit 500 on a path that can reach it.
 	dto, err := s.servedChatMessageDTO(msg)
 	if err != nil {
 		internalError(w, err)
@@ -712,10 +735,50 @@ func (s *apiServer) servedChatMessageDTO(m ChatMessage) (chatMessageDTO, error) 
 // The alternative considered and rejected: keep best-effort but widen the DTO so
 // the browser could distinguish "unreadable" from "gone". That buys a third
 // on-screen state, a third sentence in two locales, and a third thing to keep
-// true — to avoid a 500 on a fault that is already a 500 one line earlier in
-// every one of these handlers (the listing read itself). The whole point of
-// T-4e95 is that a wrong answer must not look like a right one; a 500 cannot be
-// mistaken for a quote.
+// true. The owner ruled against it on 2026-08-21: bad data should be noisy, and
+// a studio that keeps running quietly on top of it is the worse outcome.
+//
+// 🔴 SAY THE PRICE OUT LOUD, BECAUSE AN EARLIER VERSION OF THIS COMMENT DENIED
+// IT. It read: this only 500s on a fault that is "already a 500 one line earlier
+// in every one of these handlers (the listing read itself)". That is true of a
+// WHOLE-STORE fault and false of a SINGLE-ROW one — and a single row is the only
+// fault class anyone has actually been able to construct here (a `meta` column
+// that is not JSON makes scanChat fail for that row and no other). It is also
+// exactly what this file's own test seeds, and that test deliberately parks the
+// bad row in a THIRD PARTY'S conversation so the handler's own read does not
+// trip over it first. The comment asserted the opposite of what the test does.
+//
+// So, measured (same one bad row, unchanged, across the whole table):
+//
+//	                            before a reply quotes it   after
+//	GET /api/chat?ids=                   200                500
+//	GET /api/chat?before_ts= (page)      200                500
+//	GET /api/resume-summary              200                500
+//	GET /api/resume-summary-size         200                500
+//
+// The last two are the WAKE PATH, and that is the cost worth naming: an agent
+// that once replied to a row which later goes bad CANNOT BOOT — the first two
+// calls of its boot sequence are those two, and both 500. It does not matter
+// whether the bad row is in that agent's own thread: ListChatInvolving is capped
+// at resumeChatFetch (500), so a row in ANOTHER conversation, or simply older
+// than that agent's newest 500 messages, is never scanned by the snapshot's own
+// read — the quote join is the only thing that reaches it. This join therefore
+// UPGRADES a single unreadable row from "invisible" to "takes the studio down
+// until someone fixes the data", on purpose. That is the ruling; it is not an
+// accident and it is not free.
+//
+// 🔴 TWO OF THE FIVE DOORS THAT SERVE A QUOTE HAVE NO WITNESS ROW IN THAT TEST,
+// AND THE REASON IS NOT AN OVERSIGHT. Their error branch is UNREACHABLE for a
+// single-row fault, because each one hits the same bad row through a read of its
+// own FIRST (verified by mutating this function to swallow the error and
+// re-running all five: these two still 500, the other four turn 200):
+//   - GET /api/chat?with= — no cursor means a whole-table s.dal.ListChat().
+//   - POST /api/chat echo — the reply_to EXISTENCE gate above calls
+//     ListChatByIDs on that very id before anything is stored, and 500s there.
+//
+// A row for either would pass against a swallowing mutant, which is a guard that
+// proves nothing. If the POST gate is ever batched or relaxed, its echo branch
+// becomes reachable and needs its own row.
 func (s *apiServer) chatReplyQuote(replyTo string, names map[string]string) (*chatReplyQuoteDTO, error) {
 	if replyTo == "" {
 		return nil, nil
@@ -1549,13 +1612,27 @@ func resumeChatMessageChars(d chatMessageDTO) int {
 // `msgs` (resumeChatFetch is 500) and then throw most of them away — and since
 // T-4e95 every projection costs a POINT QUERY for the reply quote, the discarded
 // ones were pure waste that grew with the conversation and with nothing else.
-// Measured on a wake snapshot: 10.0ms → 32.2ms, 3.2×. Walking newest-first and
-// projecting each message as it is reached means the only DTO built past the
-// budget is the ONE that overflows it, whose cost is what ends the walk.
+// 🔴 SAY WHICH NUMBER IS WHICH. An earlier version of this line read
+// "10.0ms → 32.2ms, 3.2×", which reads like this change made the snapshot three
+// times SLOWER. It is the other way round. Measured here on a full window (500
+// messages, every one of them a reply, budget 13000, 20 runs after a warm-up):
+// BEFORE (project all 500, then walk) 6.6–7.8ms; AFTER (project inside the walk)
+// 1.1–1.8ms — 4.4× to 5.9× FASTER, and the gap widens with the conversation
+// because the discarded projections are what grow.
 //
 // The output is byte-for-byte what the two-pass version produced: same order,
-// same costs, same cut, no new branch. Batching the quote reads is a DIFFERENT
-// change and is deliberately not made here.
+// same costs, same cut, no new branch (checked on the same fixture: 113 messages
+// and 12995 chars either way).
+//
+// 🔴 THE ERROR BEHAVIOUR IS NOT THE SAME, THOUGH, and "byte-for-byte" on its own
+// invites the reader to assume nothing changed. The two-pass version projected
+// messages that the budget was always going to throw away, so an unreadable
+// quote on ONE OF THOSE took the whole snapshot to a 500 over a message that was
+// never going to be sent. The one-pass walk never touches them, so that 500 is
+// gone. Same bytes on the success path, strictly fewer failures on the other.
+//
+// Batching the quote reads is a DIFFERENT change and is deliberately not made
+// here.
 //
 // Returns the messages oldest→newest, the cut marker, and the block's rune cost.
 func (s *apiServer) resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string, cards map[string]ReplyCard, budget int) ([]chatMessageDTO, resumeChatCutDTO, int, error) {

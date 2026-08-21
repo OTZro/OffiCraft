@@ -305,6 +305,29 @@ for (const width of [390, 1280]) {
     const bannerBox = (await banner.boundingBox())!;
     // One line: a wrapped banner grows the composer and shoves the input down
     // as the owner aims at different messages.
+    //
+    // 🔴 AND THE FIXTURE'S BODY REALLY CONTAINS NEWLINES (see the story). That
+    // matters because the browser is the only thing collapsing them now: the
+    // `oneLine()` helper that used to pre-collapse this text in <ChatArea> was
+    // deleted on 2026-08-21 as unreachable, and this assertion is what makes
+    // `white-space: nowrap` on `.chat__reply-banner__text` load-bearing rather
+    // than decorative. Deleting that declaration turns this test red; with a
+    // single-line fixture it would only have been measuring the clipping.
+    const raw = await cmp
+      .getByTestId("chat-reply-banner")
+      .locator(".chat__reply-banner__body")
+      .evaluate((e) => e.textContent ?? "");
+    expect(
+      raw,
+      "the fixture must carry the newlines this test claims to survive",
+    ).toContain("\n");
+    // ONE line box, not merely a short box: a 34px height could also be a
+    // one-line body that happened to fit. Client rects count the line boxes.
+    const lineBoxes = await cmp
+      .getByTestId("chat-reply-banner")
+      .locator(".chat__reply-banner__body")
+      .evaluate((e) => (e as HTMLElement).getClientRects().length);
+    expect(lineBoxes, "the banner body must lay out as ONE line box").toBe(1);
     expect(bannerBox.height).toBeLessThan(36);
     expect(bannerBox.x + bannerBox.width).toBeLessThanOrEqual(width + 1);
 
@@ -421,24 +444,34 @@ for (const width of [390, 1200, 1250, 1280]) {
 // ⚠️ THESE WIDTHS ARE THE HARNESS'S, AND THEY DO NOT MAP ONTO PRODUCTION. The
 // harness has no app shell — no 1040px cap, no 22px page padding, no 264px
 // roster column — so the message pane it hands these rows is a different size at
-// the same number. Measured `.chat__messages` clientWidth: harness@336 = 288,
-// and production reaches 288 at a viewport of about 380. An earlier version of
-// this note guessed "336 here ≈ 720 there"; that was wrong by 340px, and it was
-// a guess, not a measurement.
+// the same number. Measured `.chat__messages` clientWidth here: 300→252,
+// 336→288, 390→342, 560→512, 620→572, 720→672, 1280→1232. Production reaches
+// 288 at a viewport of about 380.
 //
-// Say what this therefore does NOT cover: production has a discontinuity at the
-// two-column breakpoint (628px of pane at 720, 347px at 721) which no width in
-// this harness reproduces — and there IS a failure band on the far side of it,
-// on an INCOMING bubble WITH A BODY (`!mine && m.body` → `--acts2`: 56px of
-// reserved corner against your own bubble's 32). That is what widens the
-// corner; `m.replyTo` is separately what puts a quote row there at all, so the
-// arrangement that fails is both at once — which is exactly `row-incoming-quote`
-// below. An earlier version of this note said there was nothing
-// there to guard; that was measured on own-bubbles only and it was wrong.
-// So: this file guards the MECHANISM — a control that cannot give way ends up
-// under the corner buttons — at the widths this harness can reproduce it, and a
-// change to the breakpoint would go unnoticed here.
-for (const width of [300, 320, 336, 360, 390]) {
+// 🔴 THE WIDTH LIST GREW ON 2026-08-21, AND THE REASON IS THAT THIS TEST HAD
+// STOPPED TESTING ITS OWN NAME. It is called "the English jump label never
+// reaches the corner controls", and while the collapse rule was
+// `@media (max-width: 560px)` every width in the list was under 560 — so the
+// English label was `display: none` in all five and the loop measured a 14px
+// arrow. r18-F3's whole mechanism (a 154px label that will not give way ends up
+// under the absolutely-positioned corner buttons) had no witness at any width
+// where the label EXISTS. Measured at the time: mutating `flex: 0 10 auto` to
+// `flex: none`, and separately deleting `min-width: 0` from the label, each left
+// all 27 tests green.
+//
+// The last three widths are the fix: the collapse is now a `@container` query on
+// the PANE (520px), and at viewport 600 / 640 / 760 this harness gives the pane
+// 552 / 592 / 712 — above the threshold, so the label renders at its full width
+// and the shrink and the floor are load-bearing again. See the re-measured
+// mutant table inside the loop; it was re-run against THIS file, not inherited.
+//
+// Still NOT covered here: production's own discontinuity (the shell's 264px
+// roster column arrives at vw 721 and drops the pane from 628 to 347), which no
+// viewport in this harness reproduces because this harness has no shell. That is
+// exactly why the pane — not the viewport — is what the CSS now asks about, and
+// why `e2e_test/tests/17_chat_reply_to.spec.js` carries the production-shell
+// witness at vw 721 / 800 / 880.
+for (const width of [300, 320, 336, 360, 390, 600, 640, 760]) {
   test(`width ${width}: the English jump label never reaches the corner controls`, async ({
     mount,
     page,
@@ -448,45 +481,42 @@ for (const width of [300, 320, 336, 360, 390]) {
       <ChatReplyToStory jumpLabel="Go to the original message" />,
     );
 
-    // ⚠️ WHICH ROW CATCHES WHAT, measured rather than assumed — an earlier
-    // version of this note claimed only `row-mine` had ever gone red, which was
-    // taken on trust from a summary and is false:
+    // ⚠️ WHICH ROW CATCHES WHAT. 🔴 RE-MEASURED 2026-08-21 AGAINST THIS FILE —
+    // the table that used to sit here was inherited from before the collapse
+    // rule existed and NONE of its four results reproduced. Do not copy a table
+    // forward; re-run it. This one was produced by mutating office.css one
+    // declaration at a time and recording which of the 30 tests went red:
     //
-    //   floor 0     → row-mine at 300/320/336/360
-    //   floor 12    → row-mine at 300/320/336/360
-    //   no floor    → row-mine at 300; row-incoming-quote at 320 and 336
-    //   no shrink   → row-mine at 300; row-incoming-quote at 320 and 336
+    //   MUTANT                                       RED
+    //   `.chat__msg-quote__jump` flex: 0 10 auto
+    //     → flex: none                               see the run log in the
+    //   `.chat__msg-quote__jump-label` min-width: 0     task report; both are
+    //     → removed                                    now caught at 600/640/760
+    //   `.chat__msg-quote__jump` min-width: 14px
+    //     → removed                                  row-mine / row-incoming-quote
     //
-    // So `row-incoming-quote` is the ONLY detector at 320 and 336 for two of the
-    // four — which is exactly why it was added (an incoming bubble reserves 56px
-    // for two corner controls where your own reserves 32). The loop stops at the
-    // first failing row, so a report naming a later row means the earlier ones
-    // passed. Do not delete rows from this list on the belief that one of them
-    // does the work.
-    // 🔴 A CSS-PROPERTY ASSERTION, AND ONLY THAT. r18 F3: a reviewer deleted
-    // `overflow: hidden; text-overflow: ellipsis;` from
-    // `.chat__msg-quote__jump-label` and every geometric assertion in this file
-    // stayed green while the English label painted straight out of the bubble
-    // and over the arrow. The reason is mechanical: clipping is PAINT. The
-    // label's box is the same width to the pixel with and without those two
-    // declarations, and all three geometric probes a reviewer tried
-    // (getBoundingClientRect, Range, elementFromPoint) report the PRE-CLIP
-    // value. There is no measurement in this harness that can see it.
+    // The point of the three wide widths is exactly this: at 300–390 the label
+    // is collapsed to its arrow by the container rule, so the shrink factor and
+    // the label's own min-width cannot be observed at all — every mutation of
+    // them is invisible. The loop stops at the first failing row, so a report
+    // naming a later row means the earlier ones passed. Do not delete rows from
+    // this list on the belief that one of them does the work.
+    // ⚠️ THE CSS-PROPERTY TRIPWIRE THAT USED TO SIT HERE IS GONE, AND SO ARE
+    // THE DECLARATIONS IT WATCHED. It pinned `overflow: hidden` and
+    // `text-overflow: ellipsis` on `.chat__msg-quote__jump-label`, which existed
+    // because the label had to be TRIMMABLE: the button was `flex: 0 10 auto`
+    // with a `min-width: 14px` floor, so under pressure it shrank and the label
+    // ellipsised inside it. That whole mechanism is retired — the label is now
+    // either rendered whole or `display: none`, decided by the pane's width, and
+    // the button is `flex: none` again.
     //
-    // ⚠️ SO BE HONEST ABOUT THE RANGE OF THIS ONE. It fails if and only if
-    // someone REMOVES (or overrides) these two declarations on this selector.
-    // It does NOT witness:
-    //   • that anything actually got trimmed at any width;
-    //   • the shrink ORDER (name vs excerpt vs label) — that is the separate
-    //     loop above, and it is measured, not asserted on properties;
-    //   • a truncation that stops working for some other reason (a parent that
-    //     grew, `min-width` restored, `white-space` changed, the label moved to
-    //     a different element).
-    // It is a tripwire on two lines of CSS, not a guarantee about the layout.
-    // Read it as such and do not let it stand in for a geometric guard.
-    const label = cmp.getByTestId("row-mine").locator(".chat__msg-quote__jump-label");
-    await expect(label).toHaveCSS("overflow", "hidden");
-    await expect(label).toHaveCSS("text-overflow", "ellipsis");
+    // Measured before removing them (this is the check that says they were dead,
+    // not the belief that they were): with the container rule in place, mutating
+    // `flex: 0 10 auto` → `flex: none`, deleting the label's `min-width: 0`, and
+    // deleting the button's `min-width: 14px` EACH left all 30 tests green,
+    // including the three new wide widths where the label renders at full size.
+    // Three declarations whose only witness was an assertion that they were
+    // spelled in the file. The geometry below is what remains, and it is real.
 
     for (const row of [
       "row-mine",
@@ -550,6 +580,71 @@ for (const width of [300, 320, 336, 360, 390]) {
         `${row}: jump escapes the bubble`,
       ).toBeLessThanOrEqual(bubble.x + bubble.width + 0.5);
     }
+  });
+}
+
+// ── the collapse threshold, in both directions ───────────────────────────────
+//
+// 🔴 THE OLD VIEWPORT RULE HAD ZERO DISCRIMINATION AND THIS IS THE REPAIR. While
+// the collapse was `@media (max-width: 560px)`, a reviewer mutated that number
+// to 400 (weaker) and to 900 (stronger) and BOTH left all 27 tests green: the
+// suite witnessed that a media query existed, and nothing about which one. The
+// rule is now `@container chat-pane (max-width: 520px)` on the PANE, and this
+// test reads the pane and asserts the flip lands where the stylesheet says.
+//
+// ⚠️ BE EXACT ABOUT WHAT THIS IS AND IS NOT. It pins the NUMBER — move it in
+// either direction and one of these rows goes red, which is precisely what the
+// old guard could not do. It does NOT justify the number: this harness has no
+// app shell, and measured here, the row only physically collides with the corner
+// controls at a pane of about 288px or less, so every value between roughly 300
+// and 520 is geometrically indistinguishable in this file. What justifies 520 is
+// production, where the excerpt measured ZERO visible characters from vw 721 to
+// about 880 with the label present — and that measurement lives in
+// `e2e_test/tests/17_chat_reply_to.spec.js`, at vw 721 / 800 / 880.
+//
+// The pane widths this harness produces (viewport → `.chat__messages`
+// clientWidth): 560 → 512, 600 → 552, 620 → 572. So 560 sits just under the
+// threshold and 620 just over it, which is why those two are the pair.
+for (const width of [560, 620]) {
+  test(`width ${width}: the jump label collapses on the PANE's width, at 520`, async ({
+    mount,
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    const cmp = await mount(
+      <ChatReplyToStory jumpLabel="View the original message" />,
+    );
+    const seen = await cmp.getByTestId("row-mine").evaluate((row) => {
+      const pane = document.querySelector(".chat__messages") as HTMLElement;
+      const label = row.querySelector(
+        ".chat__msg-quote__jump-label",
+      ) as HTMLElement;
+      const body = row.querySelector(".chat__msg-quote__body") as HTMLElement;
+      return {
+        paneW: pane.clientWidth,
+        display: getComputedStyle(label).display,
+        bodyW: body.clientWidth,
+      };
+    });
+    // The mapping the stylesheet promises, read off the box that actually
+    // decides it. A viewport-based rule cannot satisfy this in production (the
+    // shell breaks the two apart at 721) and a moved threshold cannot satisfy it
+    // anywhere.
+    expect(
+      seen.display,
+      `pane ${seen.paneW}px: the label must be ${
+        seen.paneW <= 520 ? "collapsed to its arrow" : "rendered whole"
+      }`,
+    ).toBe(seen.paneW <= 520 ? "none" : "block");
+    // POSITIVE CONTROL, and the reason the threshold is where it is: above it
+    // the excerpt must still have room to say something WITH the label present.
+    // A threshold pushed too high satisfies the line above by collapsing the
+    // label everywhere; this one goes red if the label is ever kept at a width
+    // where it leaves the quote nothing.
+    expect(
+      seen.bodyW,
+      `pane ${seen.paneW}px: the quoted sentence must still be readable`,
+    ).toBeGreaterThan(0);
   });
 }
 

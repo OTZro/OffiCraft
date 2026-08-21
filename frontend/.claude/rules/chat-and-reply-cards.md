@@ -82,9 +82,15 @@ scrollback → 瞄準一則舊訊息 → 切到別的成員再切回來（草稿
 一格的資料來源是 server 這次讀取的答案，有資格做這個斷定。
 **不要把兩個 key 指到同一句，也不要為了這一格把查詢或補撈加回來。**
 
-**截短長度只有 server 有。** `chatReplyQuoteMaxChars`（60 runes）＋收斂空白都在
-server 做完才上線；前端不准再切一次（原本的 `QUOTE_EXCERPT_CHARS` 已刪）。畫面
-上的一行限制交給 CSS `text-overflow: ellipsis`。
+**截短是 server 做的，前端不准再切一次。** `chatReplyQuoteMaxChars`（60 runes）
+＋收斂空白都在 server 做完才上線（原本的 `QUOTE_EXCERPT_CHARS` 已刪）。畫面上的
+一行限制交給 CSS `text-overflow: ellipsis`。
+
+⚠️ **但那個數字有第二份副本**：`frontend/src/api/mock.ts` 的
+`MOCK_REPLY_QUOTE_MAX_CHARS`，離線預覽用（mock 沒有 server 可以問）。這一行以前
+寫「截短長度只有 server 有」，那是假的，而且兩邊的測試各自寫死 60，所以改 server
+不會弄紅前端。現在 `mock.reply-to.test.ts` 會去讀 `server/ocserverd/wire.go` 那一
+行，兩個數字不一致就紅 —— 要改長度，兩份一起改。
 
 **「跳回原訊息」跟引用內容是兩個問題，不要合成一個查詢。** 引用內容來自 wire；
 能不能跳來自 `messages`（已載入視窗）。兩者經常不一致，而且那是對的：常見的回覆

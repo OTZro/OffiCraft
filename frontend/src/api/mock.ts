@@ -834,9 +834,17 @@ function mockReplyCardStatusOf(
   return card ? card.status : null;
 }
 
-/** How much of a quoted message a quote line carries. Mirrors the SERVER's
- * `chatReplyQuoteMaxChars` — the mock has to hold its own copy because it has no
- * server to ask, and this is the one place it is written on this side. */
+/** How much of a quoted message a quote line carries. A MIRROR of the server's
+ * `chatReplyQuoteMaxChars` (server/ocserverd/wire.go) — the mock has no server to
+ * ask, so the number has to be written twice.
+ *
+ * 🔴 TWO COPIES, ONE GUARD. Both sides used to assert 60 against their own
+ * hard-coded literal (Go: `wantQuoteRunes`; here: the 61-rune expectation in
+ * mock.reply-to.test.ts), so moving the server's constant and updating only the
+ * Go test left this side green and cutting at the old length — offline preview
+ * disagreeing with the live product, which is the one failure the mock exists to
+ * prevent. `mock.reply-to.test.ts` now READS wire.go and fails when the two
+ * numbers differ; it is the reason a comment is enough here. */
 const MOCK_REPLY_QUOTE_MAX_CHARS = 60;
 
 /** Read-time join mirroring the server's `reply_to_chat`: the message a reply
@@ -2833,6 +2841,21 @@ export const mockApi: Api = {
     // Read-time joins (server parity) — a copy per message so callers never
     // mutate the log.
     return msgs.map(mockServedChatMessage);
+  },
+
+  async getChatMessage(id: string): Promise<ChatMessage> {
+    // Mock twin of GET /api/chat?ids=<id> — ONE named message in full, no
+    // read-watermark side effect. Caller-blind, exactly like the server: the
+    // by-ids door reaches as far as the ordinary listing does.
+    //
+    // THROWS on an unknown id, matching the server's all-or-nothing 404. That is
+    // not pedantry here: the quote row's whole design rests on a failure being
+    // said out loud instead of drawn as a plausible-looking blank, and a mock
+    // that resolved to `null` would let an offline session build a UI branch the
+    // real adapter can never reach.
+    const found = chatLog.find((m) => m.id === id);
+    if (!found) throw new Error(`no message carries id ${id}`);
+    return mockServedChatMessage(found);
   },
 
   async peekChat(withId: string, limit = 30): Promise<ChatMessage[]> {

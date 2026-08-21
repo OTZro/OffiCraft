@@ -44,6 +44,16 @@ export function ChatReplyToStory({
   // and the guard would assert nothing. Measured, not guessed — the first
   // version of that test passed at 390 and failed its own control at 1280.
   const veryLongQuote = longQuote.repeat(4);
+  // 🔴 THE BANNER'S BODY CARRIES REAL NEWLINES AND A RUN OF SPACES, on purpose.
+  // <ChatArea> used to hand this text through a `oneLine()` helper that collapsed
+  // whitespace before rendering; that helper was deleted on 2026-08-21 because
+  // `.chat__reply-banner__text { white-space: nowrap }` already does the job and
+  // nothing in 2284 tests could see the difference (mutating the helper to
+  // `return body;` left the whole suite green). The stylesheet is the single
+  // owner of that behaviour now, so the fixture has to actually contain the thing
+  // it is supposed to survive — otherwise the banner's one-line assertion below
+  // is only measuring clipping, not collapsing.
+  const bannerBody = "第一行\n\n第二行   有很多空白的第二行\n" + longQuote;
   // What nameOf() renders when the roster cannot resolve the sender: 15
   // characters. Too short to trip the corner-collision guard (measured: that
   // one needs 33), and exactly the length a percentage cap silently trimmed.
@@ -416,7 +426,7 @@ export function ChatReplyToStory({
           </svg>
           <span className="chat__reply-banner__text">
             <span className="chat__reply-banner__who">{bannerWho}</span>
-            <span className="chat__reply-banner__body">{longQuote}</span>
+            <span className="chat__reply-banner__body">{bannerBody}</span>
           </span>
           <button
             type="button"

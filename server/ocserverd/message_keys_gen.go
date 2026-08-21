@@ -70,6 +70,7 @@ var messageKeys = map[string]bool{
 	"chat.replyCancel":                         true,
 	"chat.replyQuoteGone":                      true,
 	"chat.replyQuoteJump":                      true,
+	"chat.replyQuoteOpenFailed":                true,
 	"chat.replyQuoteRole":                      true,
 	"chat.replyingToEarlier":                   true,
 	"chat.roleSettingsLink":                    true,

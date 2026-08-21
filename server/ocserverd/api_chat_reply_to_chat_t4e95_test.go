@@ -484,8 +484,9 @@ func TestReplyToChat_AnAttachmentOnlyOriginalQuotesAsEmpty(t *testing.T) {
 // that — which is why the doors below are the two that read a bounded set).
 //
 // MUTANT: restore `if err != nil || len(quoted) == 0 { return nil, nil }` in
-// chatReplyQuote — both doors below come back 200 with `reply_to_chat: null`
-// and this test goes red on each. Nothing else in the package moves.
+// chatReplyQuote — all FOUR doors below come back 200 with `reply_to_chat: null`
+// and this test goes red on the first of them. Nothing else in the package
+// moves.
 func TestReplyToChat_AnUnreadableOriginalFailsLoudlyRatherThanClaimingItIsGone(t *testing.T) {
 	srv, secret, db := newWiredTestServerWithDB(t)
 	tok, _ := mintJWT("mira", "agent", 300, secret, time.Now().Unix(), "")
@@ -506,10 +507,34 @@ func TestReplyToChat_AnUnreadableOriginalFailsLoudlyRatherThanClaimingItIsGone(t
 		t.Fatalf("seed reply: %v", err)
 	}
 
+	// 🔴 THE WAKE PATH IS IN THIS TABLE, and it is the door that matters most.
+	// The two reads below it are a browser refreshing a thread; these two are the
+	// FIRST TWO CALLS OF AN AGENT'S BOOT SEQUENCE, so an agent that once replied
+	// to a row which later goes bad cannot start at all. Measured on this very
+	// fixture: both answer 200 before the reply exists and 500 after, with the
+	// bad row unchanged — and the bad row is in a THIRD PARTY'S conversation, so
+	// the snapshot's own bounded read (ListChatInvolving, capped at
+	// resumeChatFetch) never scans it. Only the quote join reaches it.
+	//
+	// That cost is the accepted price of the 2026-08-21 ruling (bad data must be
+	// noisy), not a defect — but it must be VISIBLE in the suite, because it is
+	// the thing a future reader will want to weigh before changing this line.
+	//
+	// ⚠️ THE OTHER TWO SERVING DOORS ARE DELIBERATELY ABSENT — see chatReplyQuote.
+	// `GET /api/chat?with=` (whole-table ListChat) and the POST echo (the
+	// reply_to existence gate reads the same id before storing anything) each
+	// 500 on their OWN read of the bad row, so their quote branch is unreachable
+	// for a single-row fault. Verified by mutation: with the error swallowed in
+	// chatReplyQuote, those two still 500 while all four rows here turn 200. A
+	// row for either would be green against the mutant and would guard nothing.
 	doors := []struct {
 		name string
 		url  string
 	}{
+		{"GET /api/resume-summary (wake, boot step 1)",
+			srv.URL + "/api/resume-summary"},
+		{"GET /api/resume-summary-size (wake, boot step 2)",
+			srv.URL + "/api/resume-summary-size"},
 		{"GET /api/chat?ids=", srv.URL + "/api/chat?ids=c-reply"},
 		{"GET /api/chat?before_ts= (history page)",
 			srv.URL + "/api/chat?with=owner&before_ts=99999999999&before_id=zzzz"},

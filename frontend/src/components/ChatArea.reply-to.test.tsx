@@ -36,6 +36,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { ChatArea } from "./ChatArea";
+import { api } from "../api";
 import type { Member } from "../types";
 import type { ChatMessage } from "../api/adapter";
 import {
@@ -255,6 +256,10 @@ describe("ChatArea 回覆這則", () => {
         body: "回它",
         ts: 2,
         replyTo: "c-1",
+        // The control is offered when the server sent a snapshot. Without one
+        // the row prints 「這則訊息已不存在」 and offers nothing to open — see
+        // the GONE test below.
+        replyToChat: mkQuote("c-1", "m1", "他說的"),
       }),
     ];
     const { container } = renderChat();
@@ -524,7 +529,18 @@ describe("ChatArea 回覆這則", () => {
     );
   });
 
-  it("a sent reply shows what it answered, and the quote clicks back to it", () => {
+  it("a sent reply shows what it answered, and the control opens that message IN FULL", async () => {
+    // 🔴 THIS TEST WAS ABOUT SCROLLING UNTIL 2026-08-21. The control used to
+    // scroll the thread to the quoted row and flash it, which is why the old
+    // version asserted `chat__msg--located` and a scrollIntoView on c-1. The
+    // owner replaced that with 「撈那一則、跳 modal」: nothing scrolls, the one
+    // message is read back and opened in the shared full-view overlay.
+    //
+    // The old assertions are DELETED rather than kept alongside: they described
+    // a behaviour the component can no longer perform, and the highlight they
+    // named still exists for a DIFFERENT entry point (the reply-card /
+    // hash-route jump), so keeping them here would have quietly re-pointed this
+    // test at machinery the quote row does not drive.
     messages = [
       ...messages,
       mkMsg({
@@ -537,6 +553,14 @@ describe("ChatArea 回覆這則", () => {
         replyToChat: mkQuote("c-1", "m1", "第一個問題"),
       }),
     ];
+    // What comes BACK is deliberately longer than what the row shows: the row
+    // carries the server's 60-rune excerpt, the overlay carries the whole body.
+    // A component that opened the excerpt it already had would pass a weaker
+    // version of this test and fail this one.
+    const full = "第一個問題" + "，還有後面很長的一整段".repeat(12);
+    const get = vi
+      .spyOn(api, "getChatMessage")
+      .mockResolvedValue(mkMsg({ id: "c-1", from: "m1", to: "owner", body: full }));
     const { container } = renderChat();
 
     const quote = rowOf(container, "c-5").querySelector(".chat__msg-quote")!;
@@ -544,16 +568,119 @@ describe("ChatArea 回覆這則", () => {
     expect(quote.textContent).toContain("第一個問題");
     // It is part of the MESSAGE, not a strip beside it (owner 2026-08-20).
     expect(quote.closest(".chat__msg-bubble")).toBeTruthy();
-    // In the loaded window ⇒ the row offers a real jump control, and using it
-    // locates the quoted row (the same highlight the 跳到訊息 route uses).
+
     const jump = quote.querySelector("[data-testid='msg-quote-jump']")!;
     expect(jump).toBeTruthy();
     scrolled = [];
-    fireEvent.click(jump);
-    expect(rowOf(container, "c-1").className).toContain("chat__msg--located");
-    // …and it really asked THAT row to come into view. Without this, a handler
-    // that only set the highlight class would pass.
-    expect(scrolled).toContain(rowOf(container, "c-1"));
+    await act(async () => {
+      fireEvent.click(jump);
+    });
+
+    // ① it asked the server for THAT message, by id.
+    expect(get).toHaveBeenCalledWith("c-1");
+    // ② the overlay is open, titled with the quoted SENDER (not the id, and not
+    // the person doing the replying), carrying the WHOLE body.
+    const overlay = document.querySelector(".md-preview")!;
+    expect(overlay, "the original opens in the shared full-view overlay").toBeTruthy();
+    expect(overlay.querySelector(".md-preview__title")?.textContent).toContain("Mira");
+    expect(overlay.textContent).toContain("後面很長的一整段");
+    // ③ nothing scrolled. The redesign's whole point is that the thread does not
+    // move under the reader — and a scroll would also be the old behaviour
+    // surviving beside the new one.
+    expect(scrolled).toEqual([]);
+    // ④ and no row was flashed: `--located` belongs to the reply-card jump now.
+    expect(container.querySelector(".chat__msg--located")).toBeNull();
+    get.mockRestore();
+  });
+
+  it("offers the control even when the quoted message is nowhere in the loaded window", async () => {
+    // 🔴 THE CASE THAT USED TO HIDE THE BUTTON, AND IS THE COMMON ONE. `c-far`
+    // is not in `messages` at all: under the old design the row asked
+    // `messageById.has(m.replyTo)`, got false, and rendered no control — so the
+    // owner's ordinary reply, which almost always quotes something far above the
+    // window, offered nothing. The server sends the snapshot either way, and the
+    // read behind the control is by id, so the window has no say any more.
+    messages = [
+      mkMsg({
+        id: "c-7",
+        from: "owner",
+        to: "m1",
+        body: "回很久以前那則",
+        ts: 7,
+        replyTo: "c-far",
+        replyToChat: mkQuote("c-far", "m1", "很久以前說的"),
+      }),
+    ];
+    const get = vi
+      .spyOn(api, "getChatMessage")
+      .mockResolvedValue(
+        mkMsg({ id: "c-far", from: "m1", to: "owner", body: "很久以前說的全文" }),
+      );
+    const { container } = renderChat();
+
+    // Precondition: the target really is absent from the thread.
+    expect(rowOf(container, "c-far")).toBeNull();
+    const jump = rowOf(container, "c-7").querySelector(
+      "[data-testid='msg-quote-jump']",
+    ) as HTMLButtonElement;
+    expect(jump, "the window must not decide whether this is offered").not.toBeNull();
+
+    await act(async () => {
+      fireEvent.click(jump);
+    });
+    expect(get).toHaveBeenCalledWith("c-far");
+    expect(document.querySelector(".md-preview")?.textContent).toContain(
+      "很久以前說的全文",
+    );
+    get.mockRestore();
+  });
+
+  it("says so, in place and once, when that one read fails", async () => {
+    // A read that failed is NOT the same fact as an original that is gone, and
+    // the two must not be drawn with the same words. The quote LINE keeps
+    // showing what the server sent; the failure is said beside the button.
+    messages = [
+      mkMsg({
+        id: "c-8",
+        from: "owner",
+        to: "m1",
+        body: "回它",
+        ts: 8,
+        replyTo: "c-1",
+        replyToChat: mkQuote("c-1", "m1", "第一個問題"),
+      }),
+    ];
+    const get = vi
+      .spyOn(api, "getChatMessage")
+      .mockRejectedValue(new Error("boom"));
+    const { container } = renderChat();
+    const row = rowOf(container, "c-8");
+
+    await act(async () => {
+      fireEvent.click(row.querySelector("[data-testid='msg-quote-jump']")!);
+    });
+
+    // ① said, where it happened.
+    expect(
+      row.querySelector("[data-testid='msg-quote-error']")?.textContent,
+    ).toBe(zh.chat.replyQuoteOpenFailed);
+    // ② the quote line is UNTOUCHED — it must not turn into the 「已不存在」
+    // assertion, which is a claim about the world this failure cannot support.
+    const quote = row.querySelector(".chat__msg-quote__body")!;
+    expect(quote.textContent).toBe("第一個問題");
+    expect(row.textContent).not.toContain(zh.chat.replyQuoteGone);
+    // ③ no overlay opened on a body nobody fetched.
+    expect(document.querySelector(".md-preview")).toBeNull();
+    // ④ AND IT DOES NOT TRY AGAIN. Let every microtask and timer-free effect
+    // settle: a retry, a queued repair or an effect keyed on the error state
+    // would show up as a second call here. This is the smaller sibling of
+    // ChatArea.quote-no-fetch.test.tsx's guard.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(get, "a failure is final — no retry, no queue").toHaveBeenCalledTimes(1);
+    get.mockRestore();
   });
 
   it("offers the reply entry on EVERY row, the owner's own conversation or not", () => {
@@ -616,40 +743,15 @@ describe("ChatArea 回覆這則", () => {
     expect(text).toContain("CEO");
   });
 
-  it("opens a collapsed inter-agent block rather than offering a jump that goes nowhere", async () => {
-    // `quoteLocatable` asks the LOADED WINDOW; locateMessage searches the DOM.
-    // They are not the same set: an inter-agent run renders as one collapsed
-    // block, so a quote pointing into it rendered a live button that did
-    // nothing at all — the exact thing the quote line's own comment promises it
-    // will not ship.
-    messages = [
-      mkMsg({ id: "c-ia", from: "m1", to: "m9", body: "被引用的那則", ts: 1 }),
-      mkMsg({
-        id: "c-own",
-        from: "owner",
-        to: "m1",
-        body: "回覆它",
-        ts: 2,
-        replyTo: "c-ia",
-        replyToChat: mkQuote("c-ia", "m1", "被引用的那則"),
-      }),
-    ];
-    const { container } = renderChat();
-
-    // Precondition: the target really is out of the document to begin with.
-    expect(rowOf(container, "c-ia")).toBeNull();
-    const jump = rowOf(container, "c-own").querySelector(
-      "[data-testid='msg-quote-jump']",
-    ) as HTMLButtonElement;
-    expect(jump, "the quote is locatable, so the jump is offered").not.toBeNull();
-
-    fireEvent.click(jump);
-
-    await waitFor(() => expect(rowOf(container, "c-ia")).not.toBeNull());
-    // …and it really was asked to come into view. Expanding without scrolling
-    // would leave the owner looking at the same screen.
-    expect(scrolled).toContain(rowOf(container, "c-ia"));
-  });
+  // ⚠️ DELETED 2026-08-21: "opens a collapsed inter-agent block rather than
+  // offering a jump that goes nowhere". That test pinned the second half of
+  // `locateMessage` — a quote pointing into a COLLAPSED inter-agent run was in
+  // `messages` (so the button appeared) but not in the DOM (so the scroll found
+  // nothing), and the fix was to expand the block and scroll on the next paint.
+  // Nothing in that sentence exists any more: there is no window check, no
+  // expand-then-scroll, and no scroll. The scenario is covered by "offers the
+  // control even when the quoted message is nowhere in the loaded window" above,
+  // which is the general case that swallowed it.
 
   it("does not spill a failed send into whichever room is on screen when it fails", async () => {
     // The restore runs after an await and this component is REUSED across

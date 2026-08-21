@@ -44,8 +44,28 @@ vi.mock("../hooks/useChat", () => ({
 }));
 
 /** Every property the component tree pulls off the api client, RECORDED rather
- * than refused so a failure can name the call that broke the rule. */
+ * than refused so a failure can name the call that broke the rule.
+ *
+ * Reading a property is what is counted, not invoking it: a caller that grabs
+ * `api.getChatMessage` and holds it has already broken the rule this file
+ * exists for.
+ *
+ * `getChatMessage` is the one member that answers with something usable — the
+ * second test below CLICKS, and a proxy that handed back `[]` there would make
+ * "the click worked" indistinguishable from "the click did nothing". */
 const apiCalls: string[] = [];
+const quotedOriginal = {
+  id: "c-1",
+  from: "m1",
+  to: "owner",
+  body: "他說的，而且後面還有很長一段只有全文才看得到的內容",
+  ts: 1,
+  attachments: [],
+  replyCardId: null,
+  replyCardStatus: null,
+  replyTo: null,
+  replyToChat: null,
+};
 vi.mock("../api", () => ({
   USE_MOCK: true,
   api: new Proxy(
@@ -53,6 +73,9 @@ vi.mock("../api", () => ({
     {
       get(_t, prop) {
         apiCalls.push(String(prop));
+        if (prop === "getChatMessage") {
+          return () => Promise.resolve(quotedOriginal);
+        }
         return () => Promise.resolve([]);
       },
     },
@@ -164,5 +187,169 @@ describe("ChatArea: a quote costs no request", () => {
       apiCalls,
       "rendering a quote — present or missing — must reach for nothing",
     ).toEqual([]);
+  });
+
+  // ── 🔴 ONE CLICK, ONE REQUEST ────────────────────────────────────────────
+  //
+  // THIS IS THE MOST IMPORTANT ASSERTION IN THE FEATURE, and it is the reason a
+  // read was allowed back into this component at all.
+  //
+  // The 2026-08-21 redesign deleted a background refetcher (useQuotedMessages):
+  // it decided for itself which quoted ids were still owed, kept that debt
+  // across renders and peer switches, retried, and repaired earlier wrong
+  // answers when later events arrived. Twenty rounds of review produced more
+  // blocking findings out of that one machine than out of anything else in the
+  // task, because every one of its states drew the same pixels whether it was
+  // right or wrong.
+  //
+  // The redesign then put ONE read back — `api.getChatMessage`, behind a click.
+  // The shapes are not the same and the difference is entirely behavioural, not
+  // structural: a person presses a button, one message is asked for once, the
+  // answer is used immediately, and a failure is said out loud and forgotten.
+  // Nothing about the code SHAPE stops that from growing back into the machine;
+  // this test does. If it ever has to be relaxed, the machine is back.
+  //
+  // What it therefore pins, and each half matters:
+  //   ① a click fires EXACTLY ONE request;
+  //   ② repaints do not fire another — including a repaint caused by an
+  //      inbound message, which is precisely when the deleted collector ran;
+  //   ③ nothing at all is asked for before the click.
+  it("a click on the quote costs exactly one request, and repainting costs none", async () => {
+    messages = [
+      mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" }),
+      mkMsg({
+        id: "c-2",
+        from: "owner",
+        to: "m1",
+        body: "有的",
+        ts: 2,
+        replyTo: "c-1",
+        replyToChat: { id: "c-1", from: "m1", fromName: "", content: "他說的" },
+      }),
+    ];
+
+    const { container, rerender } = render(
+      <I18nProvider>
+        <ChatArea member={member} />
+      </I18nProvider>,
+    );
+    // ③ the paint alone asked for nothing.
+    expect(apiCalls).toEqual([]);
+
+    const jump = rowOf(container, "c-2").querySelector(
+      "[data-testid='msg-quote-jump']",
+    ) as HTMLButtonElement;
+    expect(jump, "the control is on the row").not.toBeNull();
+
+    await act(async () => {
+      fireEvent.click(jump);
+    });
+
+    // ① exactly one, and it is the by-id read and nothing else.
+    expect(
+      apiCalls.filter((c) => c === "getChatMessage"),
+      "one click must produce exactly one by-id read",
+    ).toHaveLength(1);
+    expect(
+      apiCalls.filter((c) => c !== "getChatMessage"),
+      "and nothing else may ride along with it",
+    ).toEqual([]);
+    // The answer really was used — otherwise ① is satisfied by a handler that
+    // fires a request and throws the result away.
+    expect(document.querySelector(".md-preview")?.textContent).toContain(
+      "只有全文才看得到",
+    );
+
+    // ①b A DOUBLE-CLICK IS ONE INTENT, NOT TWO. Two clicks in the same tick both
+    // see the PRE-UPDATE React state, which is why the handler latches on a ref
+    // rather than on state — measured: with the ref removed, this fires twice
+    // and everything else in the file stays green. An impatient owner
+    // double-clicking a control that has not answered yet is the ordinary way
+    // this happens.
+    apiCalls.length = 0;
+    await act(async () => {
+      fireEvent.click(jump);
+      fireEvent.click(jump);
+    });
+    expect(
+      apiCalls.filter((c) => c === "getChatMessage"),
+      "a double-click is still one request",
+    ).toHaveLength(1);
+
+    // ② now make the thread repaint the way it does in life: a new message
+    // arrives and the parent re-renders. The deleted collector fired HERE.
+    messages = [
+      ...messages,
+      mkMsg({ id: "c-3", from: "m1", to: "owner", body: "又一句", ts: 3 }),
+    ];
+    await act(async () => {
+      rerender(
+        <I18nProvider>
+          <ChatArea member={member} />
+        </I18nProvider>,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      apiCalls.filter((c) => c === "getChatMessage"),
+      "a repaint after the click must not ask again",
+    ).toHaveLength(1);
+  });
+
+  // ── the overlay this opens is reachable by keyboard ───────────────────────
+  //
+  // Measured before this existed: opening the full-view overlay left
+  // `document.activeElement` on the button OUTSIDE the portal, so Tab walked the
+  // page behind the backdrop and a keyboard user who pressed 「看原訊息」 got a
+  // dialog they were not in. The fix lives in MarkdownPreviewOverlay (it focuses
+  // its root on mount and restores on unmount); this asserts it through the path
+  // the quote row actually takes, because that is the entry point the redesign
+  // added and the one nobody had walked.
+  it("moves focus into the overlay it opens, and hands it back on close", async () => {
+    messages = [
+      mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" }),
+      mkMsg({
+        id: "c-2",
+        from: "owner",
+        to: "m1",
+        body: "有的",
+        ts: 2,
+        replyTo: "c-1",
+        replyToChat: { id: "c-1", from: "m1", fromName: "", content: "他說的" },
+      }),
+    ];
+    const { container } = render(
+      <I18nProvider>
+        <ChatArea member={member} />
+      </I18nProvider>,
+    );
+    const jump = rowOf(container, "c-2").querySelector(
+      "[data-testid='msg-quote-jump']",
+    ) as HTMLButtonElement;
+    jump.focus();
+    expect(document.activeElement).toBe(jump);
+
+    await act(async () => {
+      fireEvent.click(jump);
+    });
+    const overlay = document.querySelector(".md-preview") as HTMLElement;
+    expect(overlay).toBeTruthy();
+    expect(
+      (document.activeElement as HTMLElement | null)?.closest(".md-preview"),
+      "focus must land inside the dialog — aria-modal is a promise, not a behaviour",
+    ).toBe(overlay);
+
+    // Esc closes it as the top layer, and focus comes back to the control that
+    // was pressed — not to <body>, which would restart the next Tab from the
+    // top of the cockpit.
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Escape" });
+    });
+    expect(document.querySelector(".md-preview")).toBeNull();
+    expect(
+      document.activeElement,
+      "closing must return focus to the button that opened it",
+    ).toBe(jump);
   });
 });

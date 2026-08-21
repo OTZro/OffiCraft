@@ -14,7 +14,22 @@
 //     unconditionally — which is the whole of the current design.
 
 import { describe, it, expect, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { mockApi, __resetMock } from "./mock";
+
+// The Go constant this mock mirrors, read out of the source file rather than
+// copied. See the cross-language guard at the bottom of this file.
+const WIRE_GO = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "..",
+  "server",
+  "ocserverd",
+  "wire.go",
+);
 
 describe("mock 回覆這則 — server parity", () => {
   beforeEach(() => __resetMock());
@@ -137,5 +152,62 @@ describe("mock 回覆這則 — server parity", () => {
     expect(content).not.toMatch(/[\n\r]/);
     expect([...content]).toHaveLength(61); // 60 + the ellipsis
     expect(content.endsWith("\u2026")).toBe(true);
+  });
+
+  // ── the number itself, confronted with the server's ───────────────────────
+  //
+  // 🔴 THE DRIFT THIS CLOSES WAS SILENT AND THE COMMENTS SAID IT COULD NOT
+  // HAPPEN. wire.go called `chatReplyQuoteMaxChars` "THE ONLY DEFINITION OF THAT
+  // LENGTH ANYWHERE" and mock.ts called its own copy "the one place it is
+  // written on this side" — both written on the same day, about the same number,
+  // in two files. Neither was checked: the Go test asserts against its own
+  // literal 60 and the truncation test above asserts against its own 61, so
+  // changing the server to 40 and updating the Go test (which tells you to)
+  // leaves this whole suite green while offline preview keeps cutting at 60.
+  // A mock that previews a different product from the one that ships is exactly
+  // what the mock exists to prevent.
+  //
+  // So the number is READ from the server source, the way errorCodes.test.ts
+  // reads the shared status→code table. This does not make the mock derive its
+  // constant at runtime (it cannot — there is no server in offline preview); it
+  // makes the two copies unable to disagree quietly.
+  //
+  // ⚠️ WHAT IT DOES NOT PROMISE: it matches the literal spelling
+  // `chatReplyQuoteMaxChars = <digits>` on one line. Move that constant behind an
+  // expression, a build flag or another file and this guard goes quiet rather
+  // than red — so it also asserts the line was FOUND, which is the half that
+  // catches a rename.
+  it("cuts at the same length the server does — read out of wire.go, not copied", () => {
+    const src = readFileSync(WIRE_GO, "utf8");
+    const m = src.match(/^const chatReplyQuoteMaxChars = (\d+)$/m);
+    expect(
+      m,
+      "chatReplyQuoteMaxChars is no longer a plain one-line const in " +
+        "server/ocserverd/wire.go — this guard reads that line, so it has just " +
+        "stopped guarding. Point it at the new home before changing anything else.",
+    ).toBeTruthy();
+    const serverLen = Number(m![1]);
+    // Re-derived through the mock's own public behaviour rather than by
+    // importing the constant: what has to agree with the server is what the
+    // mock SERVES, not a number sitting beside it.
+    return (async () => {
+      __resetMock();
+      const quoted = await mockApi.postChat({
+        to: "mira",
+        body: "長".repeat(serverLen + 40),
+      });
+      const reply = await mockApi.postChat({
+        to: "mira",
+        body: "tl;dr",
+        replyTo: quoted.id,
+      });
+      expect(
+        [...reply.replyToChat!.content],
+        `the mock cuts the quote at a different length from the server ` +
+          `(server/ocserverd/wire.go says ${serverLen}). Offline preview would ` +
+          `render a quote line the live product never produces — change ` +
+          `MOCK_REPLY_QUOTE_MAX_CHARS in mock.ts to match.`,
+      ).toHaveLength(serverLen + 1); // + the ellipsis
+    })();
   });
 });

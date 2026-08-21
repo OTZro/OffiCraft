@@ -466,10 +466,24 @@ type chatReplyQuoteDTO struct {
 }
 
 // chatReplyQuoteMaxChars is how much of a quoted message a quote line carries,
-// in runes. THE ONLY DEFINITION OF THAT LENGTH ANYWHERE — the browser used to
-// hold its own copy (ChatArea's QUOTE_EXCERPT_CHARS, now deleted) and two
-// copies of a display rule are two rules that eventually disagree, with neither
-// of them wrong. 60 is the number that copy already used, kept so the rendered
+// in runes. It is the length the PRODUCT ships: the browser no longer cuts
+// anything of its own (ChatArea's QUOTE_EXCERPT_CHARS is deleted) and the one
+// line the reader sees is whatever this produces.
+//
+// 🔴 THERE IS EXACTLY ONE OTHER COPY OF THIS NUMBER, AND IT IS NOT DEAD.
+// An earlier version of this comment said "THE ONLY DEFINITION OF THAT LENGTH
+// ANYWHERE", which was false on the day it was written: frontend/src/api/mock.ts
+// holds MOCK_REPLY_QUOTE_MAX_CHARS for the offline preview, which has no server
+// to ask. Whoever changes this constant MUST change that one too, or offline
+// preview silently cuts at a different point from the live product — the exact
+// thing the mock exists to prevent.
+//
+// That is not left to this comment. frontend/src/api/mock.reply-to.test.ts reads
+// THIS LINE out of this file and fails if the two numbers differ, the way
+// errorCodes.test.ts pins the frontend to the shared error-code table. Keep the
+// `chatReplyQuoteMaxChars = <n>` spelling on one line; that guard matches it.
+//
+// 60 is the number the deleted browser copy already used, kept so the rendered
 // quote line does not change size under the owner as this ships.
 const chatReplyQuoteMaxChars = 60
 

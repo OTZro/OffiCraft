@@ -704,8 +704,18 @@ export const en: Dict = {
     replyAction: "Reply",
     replyingTo: (name: string) => `Replying to ${name}`,
     replyCancel: "Cancel reply",
-    replyQuoteJump: "Go to the original message",
+    // 🔴 THE LABEL CHANGED WITH THE BEHAVIOUR (owner ruling 2026-08-21). It was
+    // "Go to the original message" while the control scrolled the thread. It no
+    // longer scrolls anything: it reads that one message back and opens it in
+    // the full-view overlay. A button that says "go to" and opens a dialog is a
+    // small lie told on every reply row, so the words moved with the mechanism.
+    replyQuoteJump: "View the original message",
     replyQuoteGone: "This message no longer exists",
+    // The read behind replyQuoteJump failed. NOT a claim about whether the
+    // original exists — that is replyQuoteGone's job and it lives on the quote
+    // line itself. This one only says the fetch did not come back, and it is
+    // said once, beside the button that was pressed.
+    replyQuoteOpenFailed: "Could not load that message",
     // 🔴 THE BANNER'S MISS LINE IS NOT THE ROW'S, and the two must never be
     // swapped. The ROW asks "did this read build a quote?" — a no there means
     // the original really is gone, so that line is entitled to assert it.

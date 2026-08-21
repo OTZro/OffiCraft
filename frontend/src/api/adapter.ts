@@ -1649,6 +1649,29 @@ export interface Api {
    * http adapter fetches the unfiltered stream (`limit=-1`) and applies the
    * same participant filter + recent-window cap client-side. */
   peekChat(withId: string, limit?: number): Promise<ChatMessage[]>;
+  /** Read back ONE named message in full (`GET /api/chat?ids=<id>`), with NO
+   * read-watermark side effect. Rejects when the id names nothing (the server
+   * refuses the whole call) and when the read fails.
+   *
+   * 🔴 THIS IS NOT THE MACHINE THAT WAS DELETED, AND THE DIFFERENCE IS THE WHOLE
+   * POINT. Until 2026-08-21 the thread carried a background REFETCHER for quoted
+   * messages: it ran on its own, decided for itself which ids were still owed,
+   * kept that debt across renders and peers, retried, and repaired an earlier
+   * wrong answer when a later event arrived. That shape is gone and must not
+   * come back — three of its states ("fetched", "missing", "not asked yet") drew
+   * the same pixels, so a wrong answer looked exactly like a right one.
+   *
+   * What this is instead:
+   *   • it happens ONLY because a person clicked something;
+   *   • it asks for ONE message, once, and the answer is used immediately;
+   *   • a failure is said out loud where the click happened and then forgotten
+   *     — no retry, no queue, no state that outlives the click.
+   * There is deliberately no batching, no cache and no id set. If you find
+   * yourself adding one, you are rebuilding the deleted machine.
+   *
+   * `ChatArea.reply-to.test.tsx` pins "one click, one call" — that guard is what
+   * stands between this and the thing it replaced. */
+  getChatMessage(id: string): Promise<ChatMessage>;
   /** The M2 gallery query (`GET /api/chat/attachments?with=<memberId>`): every
    * attachment of the member's conversations, flattened newest→oldest —
    * owner↔member BOTH directions AND the member's inter-agent threads — each

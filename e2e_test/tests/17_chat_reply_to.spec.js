@@ -136,19 +136,50 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     // claim. Same string as the second test below, on purpose.
     await expect(quote).not.toContainText('這則訊息已不存在');
 
-    // ── 跳回原訊息
+    // ── 看原訊息
     //
-    // 🔴 THE PRECONDITION IS PART OF THE TEST. Without it the final
-    // `toBeInViewport()` is satisfied by a target that simply never left the
-    // screen, and this assertion is vacuously true for a jump button that does
-    // nothing at all. It passes today only because the filler above happens to
-    // have pushed the target out — a layout coincidence, not a checked fact.
-    // Assert it, so a future change to FILLER or to the row height fails HERE,
-    // loudly, rather than quietly turning the assertion below into a no-op.
-    await expect(target).not.toBeInViewport();
+    // 🔴 THIS USED TO BE A SCROLL, AND IT IS NOT ONE ANY MORE (owner ruling
+    // 2026-08-21: 「全部統一就撈那一則顯示出來就好」). The control reads that one
+    // message back from the server and opens it in the shared full-view overlay.
+    // The old assertions (`not.toBeInViewport()` then `toBeInViewport()`) are
+    // deleted rather than kept: the thread deliberately does not move now, so a
+    // viewport assertion would either be vacuous or wrong.
+    //
+    // The precondition that survives is a different one, and it is what makes
+    // the overlay assertion non-vacuous: the FULL body must be longer than the
+    // 60-rune excerpt the row already shows, so "the overlay opened on the
+    // original" cannot be satisfied by re-displaying text the page already had.
+    const jump = quote.getByTestId('msg-quote-jump');
+    await jump.focus();
+    await jump.click();
 
-    await quote.getByTestId('msg-quote-jump').click();
-    await expect(target).toBeInViewport();
+    const overlay = page.locator('.md-preview');
+    await expect(overlay).toBeVisible();
+    await expect(overlay.locator('.md-preview__title')).toContainText(NAME_M);
+    await expect(overlay).toContainText(TARGET);
+
+    // 🔴 FOCUS FOLLOWS THE DIALOG, BOTH WAYS. `aria-modal` is a promise, not a
+    // behaviour: before this shipped, opening the overlay left focus on the
+    // button OUTSIDE the portal, so a keyboard user who pressed 看原訊息 got a
+    // dialog they were not in and a Tab that walked the page behind it. Measured
+    // in this browser, not asserted from the source.
+    expect(
+      await page.evaluate(() =>
+        Boolean(document.activeElement?.closest('.md-preview')),
+      ),
+      'focus must land inside the overlay',
+    ).toBe(true);
+
+    // Esc closes it and focus comes back to the control that opened it — not to
+    // <body>, which would restart the next Tab at the top of the cockpit.
+    await page.keyboard.press('Escape');
+    await expect(overlay).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        () => document.activeElement?.getAttribute('data-testid') ?? null,
+      ),
+      'closing must hand focus back to the button that opened it',
+    ).toBe('msg-quote-jump');
   });
 
   // ── the case the old spec deliberately avoided ────────────────────────────
@@ -216,11 +247,17 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     await expect(quote).toBeVisible();
 
     // PRECONDITION, asserted rather than assumed: the quoted row really is NOT
-    // in the loaded window. The jump control is the honest witness of that — it
-    // is offered only for a target the client actually holds. Without this the
-    // assertion below is satisfied by a target that never left the window, and
-    // the test measures nothing.
-    await expect(replyRow.getByTestId('msg-quote-jump')).toHaveCount(0);
+    // in the loaded window.
+    //
+    // 🔴 THE OLD WITNESS FOR THIS WAS THE ABSENCE OF THE JUMP CONTROL, AND IT IS
+    // GONE. The control used to be offered only for a target the client already
+    // held, so `toHaveCount(0)` doubled as proof the target was out of the
+    // window. Since 2026-08-21 it is offered for EVERY reply — it reads the one
+    // message back rather than scrolling to it — so its presence says nothing
+    // about the window and its absence would now be a defect. Asserted the other
+    // way round below, and the window fact is carried by the id check that
+    // follows.
+    await expect(replyRow.getByTestId('msg-quote-jump')).toHaveCount(1);
     // …and by id, which is the unambiguous half. NOT `hasText: FAR_TARGET`:
     // measured, that matches ONE element — the reply itself, because the quote
     // row now carries the original's words INSIDE the reply's own `.chat__msg`.
@@ -244,7 +281,141 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     await expect(quote).toContainText(FAR_TARGET.slice(0, 20));
     expect(
       byIdsCalls,
-      'the quote must arrive with the reply — no by-ids read, ever',
+      'the quote must arrive with the reply — nothing may fetch it in the background',
     ).toBe(0);
+
+    // ── ③ 🔴 ONE CLICK, ONE REQUEST — IN A REAL BROWSER ────────────────────
+    //
+    // This is the same promise `ChatArea.quote-no-fetch.test.tsx` pins in jsdom,
+    // asserted here where the request is a real one over the network. It is the
+    // guard that stands between the redesigned control and the background
+    // refetcher that was deleted: that machine kept a list of ids it still owed,
+    // retried them, and repaired earlier answers when events arrived. Every one
+    // of those behaviours shows up here as a second increment.
+    await replyRow.getByTestId('msg-quote-jump').click();
+    await expect(page.locator('.md-preview')).toBeVisible();
+    await expect(page.locator('.md-preview')).toContainText(FAR_TARGET);
+    expect(byIdsCalls, 'one click must cost exactly one by-id read').toBe(1);
+
+    // …and it stays at one through a real repaint. Another message arrives, the
+    // thread refetches, the overlay is still up — nothing may ask again.
+    await postChatAs(request, tokM, 'owner', 'and one more while the overlay is open');
+    await expect(thread).toContainText('and one more while the overlay is open', {
+      timeout: 20000,
+    });
+    expect(
+      byIdsCalls,
+      'a repaint after the click must not ask again — that was the deleted collector',
+    ).toBe(1);
+  });
+
+  // ── 🔴 THE PRODUCTION SHELL IS THE ONLY PLACE THIS CAN BE SEEN ────────────
+  //
+  // The quote row's excerpt is the whole value of the row since 2026-08-21, and
+  // it was measured EMPTY across a wide band of window sizes — with the window
+  // WIDER than sizes where it was fine. Cause: the app shell brings in a 264px
+  // roster column at 721px, so `.chat__messages` drops from 628px to 347px in one
+  // step, while the collapse rule for the jump label was written against the
+  // VIEWPORT (`@media (max-width: 560px)`) and therefore handed the label back at
+  // exactly the width where the pane was smallest. Measured, English:
+  //
+  //   vw=560  pane=468  43/61 chars      vw=721  pane=347   0/61
+  //   vw=720  pane=628  48/61            vw=800  pane=426   0/61
+  //                                      vw=880  pane=506   3/61
+  //
+  // ⚠️ AND NO COMPONENT TEST CAN SEE IT. `chat-reply-to.ct.spec.tsx` mounts these
+  // rows with no app shell — no 1040px cap, no page padding, no roster column —
+  // so the 281px discontinuity does not exist there at any viewport. Measured:
+  // with the viewport rule in place, mutating `560px` to `400px` (weaker) and to
+  // `900px` (stronger) each left all 27 CT tests green. The CT file had even
+  // written the discontinuity down in a comment; it just had no way to fail on
+  // it. This spec is that way.
+  //
+  // The fix moves the condition onto the pane (`@container chat-pane
+  // (max-width: 520px)`); this test is what makes the number mean something in
+  // the shell it has to survive.
+  test('the quoted sentence is never squeezed to nothing at any window width (English)', async ({
+    page,
+  }) => {
+    test.setTimeout(120000);
+    const request = page.request;
+    const token = await ownerToken(request);
+    const NAME_W = uniqueName('Reply Wide');
+    const M = await hireMember(request, token, NAME_W);
+    const tokM = await mintMemberToken(request, token, M.id, 1);
+
+    const WIDE_TARGET =
+      'a sentence long enough that the quote row has to give something up';
+    const original = await postChatAs(request, tokM, 'owner', WIDE_TARGET);
+    const posted = await request.post(`${BASE}/api/chat`, {
+      headers: authHeaders(tokM),
+      data: { to: 'owner', body: 'answering it', reply_to: original.id },
+    });
+    expect(posted.status(), await posted.text()).toBe(200);
+
+    // ENGLISH IS THE FIXTURE, not a variant. 「跳到原訊息」/「看原訊息」 is 69px;
+    // "View the original message" is ~150px, and the label's width is the whole
+    // mechanism. A Chinese-only run walks straight past this.
+    //
+    // Set BOTH layers: the localStorage cache is what applies before login, and
+    // /api/settings is the server truth the login reconcile adopts afterwards —
+    // leaving the server on zh would flip the page back a moment after boot.
+    await request.patch(`${BASE}/api/settings`, {
+      headers: authHeaders(token),
+      data: { display_language: 'en' },
+    });
+    await page.goto('/');
+    await page.evaluate((t) => {
+      localStorage.setItem('oc_token', t);
+      localStorage.setItem('oc.language', 'en');
+    }, token);
+    await page.reload();
+    await page.locator('.member-card', { hasText: NAME_W }).click();
+
+    const quote = page.locator('.chat__messages').getByTestId('msg-quote');
+    await expect(quote).toBeVisible();
+    // The language really took — otherwise this whole test runs on the short
+    // Chinese label and measures a layout nobody is complaining about.
+    await expect(
+      page.getByTestId('msg-quote-jump').first(),
+    ).toHaveAttribute('aria-label', /original message/i);
+
+    // 721 and 800 measured ZERO; 880 measured 3. 720 and 1280 are the controls on
+    // either side — they were never broken, so a change that fixes the band by
+    // wrecking everything else still fails here.
+    for (const width of [720, 721, 800, 880, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      const seen = await quote
+        .locator('.chat__msg-quote__body')
+        .evaluate((el) => {
+          const pane = document.querySelector('.chat__messages');
+          const node = el.firstChild;
+          const clip = el.getBoundingClientRect();
+          let chars = 0;
+          if (node && node.nodeType === 3) {
+            const range = document.createRange();
+            const text = node.textContent ?? '';
+            for (let i = 0; i < text.length; i++) {
+              range.setStart(node, i);
+              range.setEnd(node, i + 1);
+              const r = range.getBoundingClientRect();
+              // Fully inside the element's own clip box — a character whose
+              // right edge is past it is painted away by `overflow: hidden`.
+              if (r.width > 0 && r.right <= clip.right + 0.5) chars++;
+            }
+          }
+          return { chars, paneW: pane ? pane.clientWidth : -1 };
+        });
+      // 🔴 COUNT CHARACTERS, NOT PIXELS OF BOX. The element keeps its box while
+      // showing nothing: `overflow: hidden` is PAINT, so `clientWidth` can be a
+      // healthy number over an empty row. Measuring per-character rects against
+      // the clip box is the only thing in this repo that sees the real defect.
+      expect(
+        seen.chars,
+        `vw=${width} (pane ${seen.paneW}px): the quoted sentence must not be ` +
+          `squeezed to nothing — this is the band where a viewport-based ` +
+          `breakpoint showed 0 of 61 characters while the window got WIDER`,
+      ).toBeGreaterThan(0);
+    }
   });
 });

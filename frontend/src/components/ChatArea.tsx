@@ -14,6 +14,7 @@ import type {
 } from "../api/adapter";
 import { autosizeTextarea } from "../lib/autosize";
 import { getChatDraft, saveChatDraft } from "../lib/chatDraftStore";
+import { api } from "../api";
 import { useChat } from "../hooks/useChat";
 import { useWorkerCodenames } from "../hooks/useWorkerCodenames";
 import { formatDayLabel, splitByDay } from "../lib/dateFormat";
@@ -56,20 +57,25 @@ import { DispatchAlert } from "./DispatchAlert";
 // "me" (right-aligned, from=你) in BOTH mock and real mode.
 const OWNER_ID = "owner";
 
-/** One line out of a message body, for the 「正在回覆」 banner. Newlines and runs
- * of spaces collapse — the banner is a pointer, not a rendering, and a
- * multi-line excerpt would push the composer around as the owner re-aims.
- *
- * 🔴 NO LENGTH HERE, AND THAT IS THE POINT. This used to cut at a
- * QUOTE_EXCERPT_CHARS constant, and the SERVER now owns that number
- * (chatReplyQuoteMaxChars) — two copies of one display rule, and on the day they
- * disagreed neither would have been wrong. The banner aims at a message this
- * client is already holding in full, so there is nothing to bound:
- * `.chat__reply-banner__body` is `overflow:hidden; text-overflow:ellipsis` and
- * the browser does the cutting, at whatever width the composer actually is. */
-function oneLine(body: string): string {
-  return body.replace(/\s+/g, " ").trim();
-}
+// ⚠️ `oneLine()` USED TO LIVE HERE AND WAS DELETED 2026-08-21. It collapsed
+// newlines and runs of spaces in the 「正在回覆」 banner's excerpt, and its own
+// comment said the reason was that "a multi-line excerpt would push the composer
+// around as the owner re-aims". That failure could not happen: office.css puts
+// `white-space: nowrap` on `.chat__reply-banner__text`, which the body inherits,
+// so the browser already collapses every newline to a space and lays the whole
+// thing out on one line. Measured in a real Chromium at 390px — banner height
+// 34px with a collapsed body and 34px with a deliberately un-collapsed one
+// carrying two blank lines and a run of spaces. Mutating the function's body to
+// `return body;` left all 2284 frontend tests green: it was the only surviving
+// mutant in the whole frontend pass.
+//
+// So the layout rule has exactly one owner now, and it is the stylesheet.
+// `.chat__reply-banner__text { white-space: nowrap }` is load-bearing and has a
+// witness: deleting it turns the CT 「正在回覆」 banner test red, and the CT story
+// feeds that banner a body WITH A NEWLINE so the collapse itself — not just the
+// clipping — is what the one-line assertion measures.
+//
+// It fed no `title` attribute and nothing else, so nothing else moved with it.
 
 /** A message is INTER-AGENT (agent↔agent) when NEITHER endpoint is the owner:
  * owner↔agent always has the owner as one side; agent↔agent never does. This is
@@ -356,6 +362,67 @@ export function ChatArea({
     | { kind: "staged-image"; title: string; imageSrc: string }
     | null
   >(null);
+  // T-4e95 「看原訊息」 — what the LAST click on a quote row is doing right now.
+  // `id` is the quoted message; "loading" means its one request is in flight,
+  // "error" means that one request failed and the row says so where the click
+  // happened.
+  //
+  // 🔴 ONE CLICK, ONE REQUEST, AND NOTHING THAT OUTLIVES IT. This is a click
+  // handler, not an effect: React does not re-run it, StrictMode does not
+  // double it, and no dependency array can make it fire again on a repaint. On
+  // success it goes back to null and the message opens in the shared overlay;
+  // on failure it holds exactly one "error" and stops. There is no retry, no
+  // queue, no id set and no repair on the next SSE event.
+  //
+  // That last paragraph is a promise about a machine that USED to exist here
+  // (useQuotedMessages, deleted 2026-08-21: background refetch, remembered debt,
+  // retries, self-healing) and whose three states drew identical pixels whether
+  // they were right or wrong. `ChatArea.quote-no-fetch.test.tsx` holds the line.
+  const [quoteOpen, setQuoteOpen] = useState<
+    { id: string; state: "loading" | "error" } | null
+  >(null);
+  // The in-flight latch. `quoteOpen` cannot do this job: two clicks landing in
+  // the same tick both read the PRE-UPDATE state and both would fire. A ref is
+  // written synchronously inside the handler, so the second click sees it.
+  const quoteBusyRef = useRef(false);
+
+  /** Open the message a reply is answering, IN FULL, in the shared full-view
+   * overlay — the same surface 放大閱讀 uses.
+   *
+   * Owner ruling 2026-08-21: 「全部統一就撈那一則顯示出來就好」. There is no
+   * scrolling and no "is it in the loaded window" question any more, so the
+   * control is offered for EVERY reply and behaves the same way every time.
+   * The quote row keeps showing the server's 60-char excerpt; this shows the
+   * whole body.
+   *
+   * A failure is said HERE, once, and is not written into the quote line — that
+   * line's sentence is a claim about whether the original EXISTS, and a read
+   * that failed says nothing about that.
+   *
+   * FOCUS IS NOT HANDLED HERE. MarkdownPreviewOverlay focuses itself on mount
+   * and hands focus back to whatever had it on unmount — which is this button,
+   * because a click is what got us here. Doing it a second time from this side
+   * would be two owners for one behaviour. */
+  async function openQuotedMessage(replyTo: string) {
+    if (quoteBusyRef.current) return;
+    quoteBusyRef.current = true;
+    setQuoteOpen({ id: replyTo, state: "loading" });
+    try {
+      const original = await api.getChatMessage(replyTo);
+      setQuoteOpen(null);
+      setMdPreview({
+        kind: "message",
+        title: nameOf(original.from),
+        source: original.body,
+      });
+    } catch {
+      // Deliberately swallowed rather than logged-and-retried: the person who
+      // clicked is told on screen, and there is nothing else to do about it.
+      setQuoteOpen({ id: replyTo, state: "error" });
+    } finally {
+      quoteBusyRef.current = false;
+    }
+  }
   // M2-3 file & image gallery panel (header icon toggles it).
   const [galleryOpen, setGalleryOpen] = useState(false);
   // The attachment whose share link was just copied (transient 「已複製」
@@ -366,9 +433,6 @@ export function ChatArea({
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     () => new Set(),
   );
-  // A jump whose target sat inside a COLLAPSED group: the group is expanded and
-  // the scroll runs once the row has painted (see locateMessage).
-  const [pendingLocateId, setPendingLocateId] = useState<string | null>(null);
   // Expanded 判定 is membership-based (T-bf82 收折 × 分頁): a group counts as
   // expanded when ANY of its message ids is in the set — a history prepend can
   // merge a loaded older run into an existing expanded block, CHANGING the
@@ -700,50 +764,21 @@ export function ChatArea({
   // resolves the id, and the sent row comes back with its quote attached.
   const replyQuote = replyToId ? messageById.get(replyToId) : undefined;
 
-  // Scroll a message into view and flash it — the "點得回去原訊息" half of the
-  // feature. Returns false when the row is not in the DOM (the quoted message
-  // is older than the loaded window): an honest miss, matching how the
-  // #office/chat/<id>/msg/<msgId> jump already behaves.
-  function locateMessage(id: string): boolean {
-    const el = messagesRef.current?.querySelector(`[data-msg-id="${id}"]`);
-    if (el) {
-      el.scrollIntoView({ block: "center" });
-      // Located mid-thread → not at the bottom; a later arrival must not yank.
-      nearBottomRef.current = false;
-      setHighlightMsgId(id);
-      return true;
-    }
-    // 🔴 IN THE WINDOW BUT NOT IN THE DOM — two different sets, and the quote
-    // line was testing the wrong one. An inter-agent run renders as ONE
-    // collapsed block, so its messages are in `messages` (which is what marks
-    // the quote locatable) and absent from the document (which is what this
-    // function searches). The button was offered and did nothing: the exact
-    // "affordance that scrolls nowhere" the quote line's own comment promises
-    // not to ship. Open the block that holds it and finish on the next paint.
-    // Adding the MESSAGE id is what expands its group, whichever day boundary
-    // the group ended up on (groupExpanded is membership-based).
-    if (messageById.has(id)) {
-      setExpandedGroups((prev) => new Set(prev).add(id));
-      setPendingLocateId(id);
-      return true;
-    }
-    return false;
-  }
-
-  // Second half of the jump above: the row only exists once the expand has
-  // painted, so the scroll cannot happen in the same tick as the click.
-  useEffect(() => {
-    if (!pendingLocateId) return;
-    const el = messagesRef.current?.querySelector(
-      `[data-msg-id="${pendingLocateId}"]`,
-    );
-    const id = pendingLocateId;
-    setPendingLocateId(null);
-    if (!el) return;
-    el.scrollIntoView({ block: "center" });
-    nearBottomRef.current = false;
-    setHighlightMsgId(id);
-  }, [pendingLocateId]);
+  // 🔴 THERE IS NO `locateMessage` ANY MORE, AND THE OTHER JUMP IS NOT IT.
+  // The quote row used to scroll the thread to the quoted row when that row
+  // happened to be loaded, and show no control when it was not. Owner ruling
+  // 2026-08-21 replaced that with 「撈那一則、跳 modal」 (openQuotedMessage
+  // above): one behaviour for every reply, no window-dependent affordance, and
+  // no scroll — which also retired the "the jump moves the viewport but not the
+  // FOCUS, so a keyboard user pressing it saw nothing happen" defect, because
+  // there is nothing left to scroll.
+  //
+  // ⚠️ WHAT SURVIVES, AND MUST: the `jumpToMsgId` reactor below. That is the
+  // REPLY-CARD / hash-route jump (#office/chat/<id>/msg/<msgId>), a different
+  // entry point with a different job — it lands the thread on a named row on
+  // ENTRY — and it owns `highlightMsgId` and the `--located` flash. It never
+  // called locateMessage. Deleting one did not touch the other, and
+  // `ChatArea.unread-jump.test.tsx` plus the reply-card jump tests pin it.
 
   // B3 跳到原訊息 — declared BEFORE the entry-positioning reactor below so the
   // jump consumes entry positioning first (the divider/bottom scroll must not
@@ -1093,18 +1128,7 @@ export function ChatArea({
     // server built that snapshot on this very read, so there is nothing to look
     // up and nothing that can still be pending.
     //
-    // Locatable ONLY when the quoted row is really in the loaded window: a
-    // button that scrolls nowhere is worse than a label that never claimed it
-    // would. Older-than-the-window renders as a plain span, matching how the
-    // #office/chat/<id>/msg/<msgId> jump already lands honestly.
     const quoted = m.replyToChat ?? null;
-    // 🔴 TWO DIFFERENT QUESTIONS, and only the first is about the quote text.
-    // `quoted` answers "what was said" and comes off the wire. This one answers
-    // "can I take you there", which is about the LOADED WINDOW and can only be
-    // asked locally. They disagree constantly, and that is correct: the common
-    // reply quotes something far above the window, so the row shows the quote in
-    // full and offers no jump.
-    const quoteLocatable = m.replyTo ? messageById.has(m.replyTo) : false;
     const quoteWho = quoted ? nameOf(quoted.from) : "";
     // 🔴 TWO OUTCOMES, NO THIRD. Either the server sent the snapshot or the
     // original is gone — there is no "not yet", because nothing is in flight.
@@ -1155,11 +1179,31 @@ export function ChatArea({
         <span className="chat__msg-quote__body" title={quoteText}>
           {quoteText}
         </span>
-        {/* The jump is its own control, the way 查看任務詳情 is on a
-         * task-derived ask (ReplyCardTaskRef) — owner 2026-08-20. It exists
-         * ONLY when the quoted row is really in the loaded window: an
-         * affordance that scrolls nowhere is worse than a line that never
-         * offered one.
+        {/* The control is its own element, the way 查看任務詳情 is on a
+         * task-derived ask (ReplyCardTaskRef) — owner 2026-08-20.
+         *
+         * 🔴 IT IS OFFERED FOR EVERY REPLY, UNCONDITIONALLY (owner ruling
+         * 2026-08-21: 「全部統一就撈那一則顯示出來就好」). It used to appear only
+         * when the quoted row was already in the loaded window, on the argument
+         * that an affordance which scrolls nowhere is worse than none — true of
+         * a control that SCROLLS. This one does not scroll: it reads that one
+         * message back from the server and opens it in the full-view overlay,
+         * so it works identically for a quote from ten seconds ago and one from
+         * ten thousand messages ago. The window-membership question is gone, and
+         * with it the row's only piece of local, disagreeable state.
+         *
+         * The row still shows the SERVER's 60-rune excerpt; the overlay shows
+         * the whole body. Nothing here re-cuts anything.
+         *
+         * ⚠️ ONE CONDITION SURVIVES, AND IT IS NOT THE WINDOW ONE. `quoted` —
+         * the server's snapshot — must be present. When it is absent this row is
+         * printing 「這則訊息已不存在」, which is the server's own answer from
+         * THIS read: the original is gone. Offering a control there would be
+         * offering to open a message we have just told the reader does not
+         * exist, and pressing it could only ever produce 「拿不到這則訊息」 one
+         * line below. That is not the window check coming back through a side
+         * door — the window is never consulted — it is the row declining to
+         * contradict itself.
          *
          * 🔴 THE LABEL IS ITS OWN ELEMENT so it can be the thing that truncates.
          * It used to keep its intrinsic width on the reasoning that a cut
@@ -1178,11 +1222,14 @@ export function ChatArea({
          * language and the display name. The guard holds the numbers.
          * A trimmed label with its arrow still showing beats a control hidden
          * under another control. */}
-        {quoteLocatable && (
+        {m.replyTo && quoted && (
           <button
             type="button"
             className="chat__msg-quote__jump"
             data-testid="msg-quote-jump"
+            disabled={
+              quoteOpen?.id === m.replyTo && quoteOpen.state === "loading"
+            }
             /* 🔴 THE NAME CANNOT RIDE ON THE VISIBLE LABEL. That label is the
              * first thing this row gives up when the bubble runs short (see
              * the note above), so at the narrow end the accessible name would
@@ -1192,7 +1239,7 @@ export function ChatArea({
              * agree and survives the trim. */
             aria-label={t.chat.replyQuoteJump}
             title={t.chat.replyQuoteJump}
-            onClick={() => locateMessage(m.replyTo as string)}
+            onClick={() => openQuotedMessage(m.replyTo as string)}
           >
             <span className="chat__msg-quote__jump-label">
               {t.chat.replyQuoteJump}
@@ -1202,6 +1249,27 @@ export function ChatArea({
               className="chat__msg-quote__jump-chevron"
             />
           </button>
+        )}
+        {/* 🔴 THE FAILURE IS SAID HERE, NOT IN THE QUOTE LINE. The line above
+         * either carries the server's excerpt or carries 「這則訊息已不存在」,
+         * and that sentence is a claim about whether the original EXISTS. A read
+         * that failed says nothing about that, so overwriting the line with it
+         * would turn a network fault into a false statement about the
+         * conversation — the exact confusion the whole redesign removed.
+         *
+         * It is also the end of the story: no retry, no second attempt on the
+         * next event, and it does not survive the next click on another row
+         * (one piece of state, last click wins). `role="status"` so a screen
+         * reader hears the outcome of the button it just pressed — the button
+         * itself keeps its own name. */}
+        {quoteOpen?.id === m.replyTo && quoteOpen.state === "error" && (
+          <span
+            className="chat__msg-quote__error"
+            data-testid="msg-quote-error"
+            role="status"
+          >
+            {t.chat.replyQuoteOpenFailed}
+          </span>
         )}
       </div>
     );
@@ -1763,7 +1831,10 @@ export function ChatArea({
                       : t.chat.replyingToEarlier}
                   </span>
                   <span className="chat__reply-banner__body">
-                    {replyQuote ? oneLine(replyQuote.body) : ""}
+                    {/* Raw, not pre-collapsed: `white-space: nowrap` on the
+                      * parent is what makes this one line — see the note where
+                      * `oneLine()` used to be. */}
+                    {replyQuote ? replyQuote.body : ""}
                   </span>
                 </span>
                 <button
