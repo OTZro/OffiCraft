@@ -648,6 +648,13 @@ export function toOutsourceWorker(w: WireOutsourceWorker): OutsourceWorkerView {
     refocusDeadline:
       w.refocus_deadline && w.refocus_deadline > 0 ? w.refocus_deadline : null,
     desiredState: w.desired_state ?? "online",
+    // Response-only, absent on every read face — passed through as-is so
+    // `undefined` keeps meaning "this answer does not carry the signal"
+    // (T-ed79 #5/#12). Coalescing them to false here would erase exactly the
+    // distinction the three fields exist to make.
+    relocationPending: w.relocation_pending ?? undefined,
+    relocationDeferred: w.relocation_deferred ?? undefined,
+    activationPending: w.activation_pending ?? undefined,
   };
 }
 

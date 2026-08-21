@@ -336,7 +336,7 @@ func (s *apiServer) relocateWorkerByID(w http.ResponseWriter, r *http.Request, i
 		internalError(w, err)
 		return
 	}
-	s.relocateWorkerNow(*worker)
+	outcome := s.relocateWorkerNow(*worker)
 	// Re-read the row so the response reflects the spawn stamp relocateWorkerNow
 	// wrote (last_spawn_target = the new machine) — not the pre-dispatch row.
 	if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
@@ -345,7 +345,20 @@ func (s *apiServer) relocateWorkerByID(w http.ResponseWriter, r *http.Request, i
 	s.publishOutsourceWorker(*worker, requestTrigger(r))
 	s.outsourceMu.Unlock()
 
-	s.writeWorkerProjection(w, r, *worker)
+	// The pin always lands (persisted above), so a relocate never FAILS on
+	// dispatch — but we OBSERVE it, the staff relocate's rule verbatim (T-8655 /
+	// T-927a). Two different non-landings answered the same clean 200 here: a
+	// wind-down opened by design, and a move that could not be dispatched at all.
+	s.writeWorkerProjectionWith(w, r, *worker, func(dto *outsourceWorkerDTO) {
+		if outcome.Pending() {
+			pending := true
+			dto.RelocationPending = &pending
+		}
+		if outcome.WoundDown {
+			deferred := true
+			dto.RelocationDeferred = &deferred
+		}
+	})
 }
 
 // writeWorkerProjection re-reads the per-request join maps (machine names, bound
@@ -354,6 +367,16 @@ func (s *apiServer) relocateWorkerByID(w http.ResponseWriter, r *http.Request, i
 // (relocate / refocus / stop / restart / model), so all serve the identical
 // projection the list + single GET do. Call WITHOUT s.outsourceMu held.
 func (s *apiServer) writeWorkerProjection(w http.ResponseWriter, r *http.Request, worker OutsourceWorker) {
+	s.writeWorkerProjectionWith(w, r, worker, nil)
+}
+
+// writeWorkerProjectionWith is writeWorkerProjection plus the RESPONSE-ONLY
+// pending flags an owner verb owes its caller (T-ed79 #5/#12). `overlay` is nil
+// for every read face and for the verbs that have nothing to defer; the flags it
+// sets are never persisted and never appear on a list/GET, exactly as their
+// MemberDTO twins do not.
+func (s *apiServer) writeWorkerProjectionWith(w http.ResponseWriter, r *http.Request,
+	worker OutsourceWorker, overlay func(*outsourceWorkerDTO)) {
 	machineNames, err := s.dal.MachineDisplayNames()
 	if err != nil {
 		internalError(w, err)
@@ -382,10 +405,14 @@ func (s *apiServer) writeWorkerProjection(w http.ResponseWriter, r *http.Request
 		internalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.projectWorker(
+	dto := s.projectWorker(
 		worker, task, unread[worker.ID], nowSecs(),
 		tele, s.gauge.Snapshot(), machineNames, accountDisplay,
-		s.taskTypeDisplayNames()))
+		s.taskTypeDisplayNames())
+	if overlay != nil {
+		overlay(&dto)
+	}
+	writeJSON(w, http.StatusOK, dto)
 }
 
 // POST /api/outsource-workers/{id}/refocus — the cockpit's 換手 (owner/admin agent since T-6020,
@@ -767,14 +794,26 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 		internalError(w, err)
 		return
 	}
-	s.respawnWorkerForOwnerOp(*worker, ownerOpRestart)
+	outcome := s.respawnWorkerForOwnerOp(*worker, ownerOpRestart)
 	if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
 		worker = fresh
 	}
 	s.publishOutsourceWorker(*worker, requestTrigger(r))
 	s.outsourceMu.Unlock()
 
-	s.writeWorkerProjection(w, r, *worker)
+	// 🔴 THE RETURN VALUE THAT USED TO BE DROPPED (T-ed79 #12). The intent is
+	// persisted above so the restart never FAILS on dispatch — and that is exactly
+	// what made the silence dangerous: a 重啟 whose worker_start never went out
+	// (no kill target for the session it replaces, a warden that would not take
+	// it, an unbuildable frame) answered a clean 200 with zero signal, which is
+	// the shape T-ba62 called 「整個 bug」 when it fixed the staff twin. WHICH
+	// cause is on last_op_reason, in the shared reason-code family (#14).
+	s.writeWorkerProjectionWith(w, r, *worker, func(dto *outsourceWorkerDTO) {
+		if outcome.Pending() {
+			pending := true
+			dto.ActivationPending = &pending
+		}
+	})
 }
 
 // POST /api/outsource-workers/{id}/model — the owner cockpit's runtime/model

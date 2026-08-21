@@ -1477,6 +1477,9 @@ type OutsourceWorkerDTO struct {
 	// Account The Claude account this worker's session runs under (telemetry entry keyed by the worker's actor id — the SAME per-actor telemetry the member roster reads). null when the worker has not reported one (never fabricated). T-f190 additive-optional.
 	Account *string `json:"account,omitempty"`
 
+	// ActivationPending Set true ONLY on the worker restart response when nothing was actually dispatched — the worker twin of ``MemberDTO.activation_pending`` (T-ed79 parity #12). The restart intent is persisted and the cadence retries, but no worker_start went out (no kill target for the session it must replace, an unreachable warden, an unbuildable frame). Without it a 重啟 against a machine that cannot take the worker answers a clean 200 with zero signal, which is indistinguishable from one that started — the exact bug T-ba62 named on the staff side. Read ``last_op_reason`` for WHICH cause. Absent/null on every other worker read.
+	ActivationPending *bool `json:"activation_pending,omitempty"`
+
 	// ActualEffort The effort level this worker's session is REPORTED to be running at — the same durably-persisted roster field ``MemberDTO.actual_effort`` serves (an ``ow-`` row IS a member row with ``kind=outsource``). Empty means nothing has ever reported one. Separate from, and NEVER a fallback to, the owner-configured ``effort`` launch setting this DTO round-trips (T-7f28).
 	ActualEffort *string `json:"actual_effort,omitempty"`
 
@@ -1552,6 +1555,12 @@ type OutsourceWorkerDTO struct {
 
 	// RefocusSince Epoch seconds of the in-flight context-handover stamp (T-32e1), 0 when none. >0 = a refocus (owner 換手 OR context-high auto-handover) is mid-flight; the FE maps 0→null. Additive-optional.
 	RefocusSince *float64 `json:"refocus_since,omitempty"`
+
+	// RelocationDeferred Set true on the worker relocate response when the move was DELIBERATELY deferred: the worker is live with uncollected state, so the server opened a graceful wind-down instead of dispatching now. The move lands when the worker answers report_stopped. This is the companion that disambiguates ``relocation_pending``, which is true for BOTH this case and a genuinely undispatched move: a consumer must NOT raise a "nothing was dispatched" alert while this field is true. Absent/null on every other worker read (T-ed79 parity #5).
+	RelocationDeferred *bool `json:"relocation_deferred,omitempty"`
+
+	// RelocationPending Set true ONLY on the worker relocate response when the owner-pinned move is scheduled but has not landed yet — the worker twin of ``MemberDTO.relocation_pending`` (T-ed79 parity #5). TWO causes, which this field does not distinguish: (a) the kill+respawn that moves a worker with nothing to flush could not be dispatched (no kill target, or the warden would not take the start) — the cadence retries; (b) a graceful wind-down window was opened, so nothing has been dispatched yet BY DESIGN. Read ``relocation_deferred`` to tell (b) apart from (a) — only (a) is a failure worth alerting on. Absent/null on every other worker read.
+	RelocationPending *bool `json:"relocation_pending,omitempty"`
 
 	// Runtime The worker's selected AI CLI runtime. Existing rows default to ``claude``.
 	Runtime *AgentRuntime `json:"runtime,omitempty"`

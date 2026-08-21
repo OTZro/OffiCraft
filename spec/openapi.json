@@ -3460,7 +3460,43 @@
             "title": "Presence",
             "type": "string"
           },
-          "refocus_deadline": {
+          "activation_pending": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set true ONLY on the worker restart response when nothing was actually dispatched \u2014 the worker twin of ``MemberDTO.activation_pending`` (T-ed79 parity #12). The restart intent is persisted and the cadence retries, but no worker_start went out (no kill target for the session it must replace, an unreachable warden, an unbuildable frame). Without it a \u91cd\u555f against a machine that cannot take the worker answers a clean 200 with zero signal, which is indistinguishable from one that started \u2014 the exact bug T-ba62 named on the staff side. Read ``last_op_reason`` for WHICH cause. Absent/null on every other worker read.",
+          "title": "Activation Pending"
+        },
+        "relocation_deferred": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set true on the worker relocate response when the move was DELIBERATELY deferred: the worker is live with uncollected state, so the server opened a graceful wind-down instead of dispatching now. The move lands when the worker answers report_stopped. This is the companion that disambiguates ``relocation_pending``, which is true for BOTH this case and a genuinely undispatched move: a consumer must NOT raise a \"nothing was dispatched\" alert while this field is true. Absent/null on every other worker read (T-ed79 parity #5).",
+          "title": "Relocation Deferred"
+        },
+        "relocation_pending": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set true ONLY on the worker relocate response when the owner-pinned move is scheduled but has not landed yet \u2014 the worker twin of ``MemberDTO.relocation_pending`` (T-ed79 parity #5). TWO causes, which this field does not distinguish: (a) the kill+respawn that moves a worker with nothing to flush could not be dispatched (no kill target, or the warden would not take the start) \u2014 the cadence retries; (b) a graceful wind-down window was opened, so nothing has been dispatched yet BY DESIGN. Read ``relocation_deferred`` to tell (b) apart from (a) \u2014 only (a) is a failure worth alerting on. Absent/null on every other worker read.",
+          "title": "Relocation Pending"
+        },
+        "refocus_deadline": {
             "default": 0.0,
             "description": "Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace). ZERO CARRIES TWO MEANINGS, and a client that reads it as one of them will be wrong about the other: no handover is in flight, OR a handover is in flight that NOTHING collects on a clock at all \u2014 which is now the NORMAL case rather than a carve-out: every cause except ``context_high`` is collected only by the agent's own ``report_stopped`` or by the owner pressing force-stop, and carries no deadline (owner 2026-08-21). ``refocus_op`` is what tells the two apart. Rendering no deadline is correct for both, and the sentence a client shows for an in-flight no-clock handover must not quote a time at all. Workers read the SAME judgement as members \u2014 there is no separate worker rule. Derived at read time, never stored. A CEILING, not a prediction: the collection fires the instant the worker answers ``report_stopped`` (T-7f28). Additive-optional.",
             "title": "Refocus Deadline",

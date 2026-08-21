@@ -3641,9 +3641,17 @@ export const mockApi: Api = {
       w.machine = m ? m.name : machineId;
     }
     emitTopic("outsource_worker");
+    // Mock ↔ http parity (T-ed79 #5): a LIVE worker's move is deferred to its
+    // 收口, so the answer says "scheduled, not landed" AND says which of the two
+    // kinds of not-landed it is. A worker with no live session is dispatched now
+    // and carries neither flag.
+    const deferred = w.presence === "online";
     return {
       ...withWorkerTaskJoin(structuredClone(w)),
       unreadCount: unreadCountOf(w.id),
+      ...(deferred
+        ? { relocationPending: true, relocationDeferred: true }
+        : {}),
     };
   },
 
@@ -3790,6 +3798,11 @@ export const mockApi: Api = {
     w.desiredState = "online";
     w.presence = "waking";
     emitTopic("outsource_worker");
+    // Mock ↔ http parity (T-ed79 #12): the mock always "dispatches", so it never
+    // reports activation_pending. The flag is deliberately NOT faked here — a
+    // mock that invents a pending state teaches the panel a story the server
+    // only tells in a condition this mock cannot reach (no kill target /
+    // unreachable warden).
     return {
       ...withWorkerTaskJoin(structuredClone(w)),
       unreadCount: unreadCountOf(w.id),

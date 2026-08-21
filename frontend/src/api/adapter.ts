@@ -594,6 +594,22 @@ export interface OutsourceWorkerView {
    * worker panel's identity action row. "" from a
    * pre-column row reads as online. */
   desiredState?: string;
+  /**
+   * RESPONSE-ONLY signals an owner verb leaves on its own answer (T-ed79 #5/#12,
+   * wire `relocation_pending` / `relocation_deferred` / `activation_pending`) —
+   * the worker twins of {@link MemberRelocateResult} / {@link MemberActivateResult}.
+   *
+   * `undefined` on every list/GET and on every verb that has nothing to defer, so
+   * "this answer does not carry the signal" stays distinguishable from "false".
+   *
+   * `relocationPending` is true for BOTH a deliberate deferral and a move that
+   * could not be dispatched at all; `relocationDeferred` is what tells them
+   * apart, and a consumer must NOT raise a "nothing was dispatched" alert while
+   * it is true.
+   */
+  relocationPending?: boolean;
+  relocationDeferred?: boolean;
+  activationPending?: boolean;
 }
 
 /** One task type (任務手冊) in the LIGHT list shape the tasks page needs for

@@ -1064,8 +1064,8 @@ func (s *apiServer) retryPendingWorkerStop(workerID string) {
 // backoff — acceptable only because this is owner-explicit and thus throttled by
 // a human's click rate.
 // Callers hold s.outsourceMu.
-func (s *apiServer) relocateWorkerNow(w OutsourceWorker) {
-	s.respawnWorkerForOwnerOp(w, ownerOpRelocate)
+func (s *apiServer) relocateWorkerNow(w OutsourceWorker) ownerOpOutcome {
+	return s.respawnWorkerForOwnerOp(w, ownerOpRelocate)
 }
 
 // respawnWorkerForOwnerOp is the ONE path behind every owner verb that changes a
@@ -1088,12 +1088,12 @@ func (s *apiServer) relocateWorkerNow(w OutsourceWorker) {
 // Everything after the branch is shared: kill the old session and make sure a
 // start is genuinely ATTEMPTED, with a receipt on every refusal.
 // Callers hold s.outsourceMu.
-func (s *apiServer) respawnWorkerForOwnerOp(w OutsourceWorker, op string) {
+func (s *apiServer) respawnWorkerForOwnerOp(w OutsourceWorker, op string) ownerOpOutcome {
 	if w.DesiredState == DesiredStateOffline {
 		s.stampWorkerPlacementBlocked(&w, spawnReasonHeldDown+": the "+op+" was saved, "+
 			"but nothing was started — this worker is stopped; 重啟 it when you want it "+
 			"to run", nowSecs())
-		return
+		return ownerOpOutcome{HeldDown: true}
 	}
 	// T-98f4 rule 2 — 「我建議所有換手都可以給他機會收尾」. All three verbs used to
 	// go straight to the kill: no refocus stamp, no 預告, no grace. The 換手
@@ -1103,10 +1103,36 @@ func (s *apiServer) respawnWorkerForOwnerOp(w OutsourceWorker, op string) {
 	// the same event (this session ends, a new one continues the task).
 	if !ownerOpRevivesStoppedWorker(op) && s.workerHasStateToFlush(w) {
 		s.openOwnerOpHandover(w, op)
-		return
+		return ownerOpOutcome{WoundDown: true}
 	}
-	s.respawnWorkerForOwnerOpNow(w, op)
+	return ownerOpOutcome{Dispatched: s.respawnWorkerForOwnerOpNow(w, op)}
 }
+
+// ownerOpOutcome is WHICH of the three things an owner verb did — the answer the
+// three callers used to throw away (T-ed79 #5/#12). Exactly one field is true.
+//
+// It exists because the HTTP faces owe their caller the same distinction the
+// staff faces already make. A relocate that opened a wind-down and a relocate
+// whose dispatch bounced off an unreachable warden both answer 200 with the new
+// pin on the row; only the second is a failure worth alerting on, and until this
+// type they were the same answer. MemberDTO has carried
+// relocation_pending / relocation_deferred / activation_pending for exactly this
+// reason since T-8655 / T-927a / T-ba62; the worker DTO carried none of them.
+type ownerOpOutcome struct {
+	// Dispatched: a worker_start actually went out to a warden.
+	Dispatched bool
+	// WoundDown: a graceful wind-down was opened instead. Nothing has been sent
+	// YET BY DESIGN — the move/model lands at the 收口. NOT a failure.
+	WoundDown bool
+	// HeldDown: desired_state is offline, so the change was saved and nothing was
+	// started. The row carries the held_down receipt.
+	HeldDown bool
+}
+
+// Pending reports whether the owner's verb has NOT landed yet — the union of the
+// two non-dispatch arms, which is exactly what relocation_pending /
+// activation_pending mean on the staff side ("scheduled, not yet landed").
+func (o ownerOpOutcome) Pending() bool { return !o.Dispatched }
 
 // The owner verbs that funnel through respawnWorkerForOwnerOp, named so the
 // wind-down table below cannot drift from its call sites (they were bare string
@@ -1258,16 +1284,16 @@ func (s *apiServer) openOwnerOpHandover(w OutsourceWorker, op string) {
 
 // respawnWorkerForOwnerOpNow is the IMMEDIATE arm (nothing to wind down): the
 // pre-T-98f4 body, unchanged. Callers hold s.outsourceMu.
-func (s *apiServer) respawnWorkerForOwnerOpNow(w OutsourceWorker, op string) {
+func (s *apiServer) respawnWorkerForOwnerOpNow(w OutsourceWorker, op string) bool {
 	if s.respawnWorkerNow(w, op) {
-		return
+		return true
 	}
 	// Deferred: no kill target on an ACTIVE worker. respawnWorkerNow has already
 	// stamped the deferral receipt; drop the pacing stamp its early return skipped
 	// and attempt the start anyway. notifyWorkerSpawn either dispatches (clearing
 	// that receipt) or replaces it with its own cause, so the row is never blank.
 	delete(s.workerSpawnAt, w.ID)
-	s.notifyWorkerSpawn(w, nowSecs())
+	return s.notifyWorkerSpawn(w, nowSecs())
 }
 
 // resolveWorkerKillTarget resolves the warden a worker kill frame is addressed
