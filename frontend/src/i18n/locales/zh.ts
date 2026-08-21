@@ -553,6 +553,10 @@ export const zh = {
   // 出來卻沒寫上 socket，receipt 會改寫成「指令從來沒送到那台機器、別去看那
   // 台機器的 claude」——在「真的沒送到」的情況下反而和這段文案一致。這裡的
   // 推理不變：這段字知道的仍然比 last_op_reason 少，還是要把人指回那一行。
+  //
+  // T-b3d0 後續再補一種：目標機器**回報過**自己沒有 Claude Code、而 codex 是
+  // 好的時候，receipt 會改寫成「把這位成員的執行環境改成 Codex」，不再叫人去
+  // 看那台機器上根本不存在的 claude。結論一樣：last_op_reason 比這段字準。
   dispatchAlert: {
     wakeTitle: "這次沒有送出喚醒指令",
     wakeBody:

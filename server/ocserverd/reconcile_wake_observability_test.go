@@ -370,3 +370,146 @@ func TestReconcile_WakeStampSkipsMemberRemovedMidTick(t *testing.T) {
 		t.Fatalf("a member removed after the snapshot must not be written back: %+v", removed)
 	}
 }
+
+// ── T-b3d0 follow-up: the LAST sentence must not be a claude-only dead end ──
+
+// lapseAStartOn dispatches a START for a claude member pinned to machineID and
+// then lets the start window lapse, returning the row as the owner would read
+// it on 「最近操作」.
+func lapseAStartOn(t *testing.T, s *apiServer, machineID, runtimes string) Member {
+	t.Helper()
+	putWarden(t, s, machineID)
+	connectOnline(t, s, machineID)
+	if rec := doIngestTelemetry(s, machineID, machineID, runtimes); rec.Code != 200 {
+		t.Fatalf("telemetry ingest for %s: %d %s", machineID, rec.Code, rec.Body.String())
+	}
+
+	m := testAgent("m-boot-" + machineID)
+	m.DesiredMachineID = machineID
+	m.Runtime = RuntimeClaude
+	putTestMember(t, s, m)
+
+	now := nowSecs()
+	s.reconcileMu.Lock()
+	dispatched := s.reconcileTickMemberLocked(m, now)
+	s.reconcileMu.Unlock()
+	if dispatched.Command != reconcileCmdStart {
+		t.Fatalf("%s: want a dispatched START, got %q (%s)",
+			machineID, dispatched.Command, dispatched.Reason)
+	}
+
+	reloaded, _ := s.dal.GetMember(m.ID)
+	s.reconcileMu.Lock()
+	lapsed := s.reconcileTickMemberLocked(*reloaded, now+s.reconcileCfg.StartTimeout+1)
+	s.reconcileMu.Unlock()
+	if !lapsed.StartTimedOut {
+		t.Fatalf("%s: the START must lapse its window, got %+v", machineID, lapsed)
+	}
+	got, err := s.dal.GetMember(m.ID)
+	if err != nil || got == nil {
+		t.Fatalf("reload %s: %v", m.ID, err)
+	}
+	return *got
+}
+
+// The ticket's hardest AC, at the exit T-b3d0 missed. The spawn-time refusal
+// already names the third exit (switch this member to Codex) — and then this
+// stamp overwrites it the moment the window lapses. On a machine that MEASURED
+// no claude, the sentence the owner is left holding must name that exit too.
+//
+// The two halves below are the same code path fed two machines that differ only
+// in what they reported, and they must not produce the same sentence:
+//
+//	mach-codex-only → {"claude":{"installed":false},"codex": ready}
+//	mach-has-claude → both installed and logged in
+//
+// MUTANT: restore the old single sentence (delete the codex-only arm of
+// wakeTimeoutReason) → the codex-only half goes RED on the whole-string compare
+// and the has-claude half stays green.
+func TestReconcile_WakeTimeoutNamesTheRuntimeSwitchOnACodexOnlyMachine(t *testing.T) {
+	s := newReconcileTestServer(t)
+
+	codexOnly := lapseAStartOn(t, s, "mach-codex-only", codexOnlyRuntimes)
+	hasClaude := lapseAStartOn(t, s, "mach-has-claude", bothRuntimes)
+
+	wantCodexOnly := "wake_timeout: the START was dispatched but the agent never came " +
+		"online within the start window — machine 'mach-codex-only' reports no Claude " +
+		"Code installed, so this member cannot boot there. Fix any one: set this " +
+		"member's 執行環境 to Codex (that machine has it ready); or install Claude Code " +
+		"on that machine (warden log: ocwarden.err.log)"
+	if codexOnly.LastOpReason != wantCodexOnly {
+		t.Errorf("a machine that reported NO claude must leave the owner a sentence "+
+			"naming the runtime switch.\n got: %q\nwant: %q",
+			codexOnly.LastOpReason, wantCodexOnly)
+	}
+
+	// The other world, and the reason the arm is conditional: this machine HAS
+	// claude, so sending its owner off to change the member's 執行環境 would be an
+	// active misdirection. It keeps today's sentence, verbatim.
+	wantHasClaude := "wake_timeout: the START was dispatched but the agent never came " +
+		"online within the start window — check that claude runs and is logged in on " +
+		"the target machine (warden log: ocwarden.err.log)"
+	if hasClaude.LastOpReason != wantHasClaude {
+		t.Errorf("a machine that HAS claude must keep the machine-side advice.\n got: %q\nwant: %q",
+			hasClaude.LastOpReason, wantHasClaude)
+	}
+
+	// The fixture discriminates only if the two really diverge — an assertion
+	// pair that cannot tell the two worlds apart is the failure mode this guard
+	// exists to avoid.
+	if codexOnly.LastOpReason == hasClaude.LastOpReason {
+		t.Fatalf("the two machines produced the SAME sentence (%q) — the fixture "+
+			"cannot tell a codex-only box from one that has claude", codexOnly.LastOpReason)
+	}
+}
+
+// A machine that has never reported capabilities is not evidence of anything.
+// The stamp must keep today's sentence rather than guess at a runtime switch
+// nobody has shown is available — the same permissive-on-unknown rule T-b3d0
+// adopted for resolution.
+func TestReconcile_WakeTimeoutKeepsTodaysSentenceWithoutCapabilities(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-quiet")
+	connectOnline(t, s, "mach-quiet")
+
+	m := testAgent("m-quiet")
+	m.DesiredMachineID = "mach-quiet"
+	putTestMember(t, s, m)
+
+	now := nowSecs()
+	s.reconcileMu.Lock()
+	s.reconcileTickMemberLocked(m, now)
+	s.reconcileMu.Unlock()
+	reloaded, _ := s.dal.GetMember("m-quiet")
+	s.reconcileMu.Lock()
+	s.reconcileTickMemberLocked(*reloaded, now+s.reconcileCfg.StartTimeout+1)
+	s.reconcileMu.Unlock()
+
+	got, _ := s.dal.GetMember("m-quiet")
+	want := "wake_timeout: the START was dispatched but the agent never came online " +
+		"within the start window — check that claude runs and is logged in on the " +
+		"target machine (warden log: ocwarden.err.log)"
+	if got.LastOpReason != want {
+		t.Fatalf("an unreported machine must not be read as a measurement.\n got: %q\nwant: %q",
+			got.LastOpReason, want)
+	}
+}
+
+// This is a MESSAGE change and nothing else: the receipt's verb, ok flag,
+// timestamp and the waking anchor it clears are untouched on the new arm, so a
+// wake that fails today still fails the same way — no new gate, nothing that
+// used to succeed now blocked.
+func TestReconcile_CodexOnlyWakeTimeoutChangesOnlyTheSentence(t *testing.T) {
+	s := newReconcileTestServer(t)
+	got := lapseAStartOn(t, s, "mach-codex-only", codexOnlyRuntimes)
+
+	if got.LastOp != reconcileCmdStart {
+		t.Errorf("last_op must still name the start, got %q", got.LastOp)
+	}
+	if got.LastOpOK == nil || *got.LastOpOK {
+		t.Errorf("a lapsed START must still record last_op_ok=false, got %v", got.LastOpOK)
+	}
+	if got.WakingSince != 0 {
+		t.Errorf("the stale waking anchor must still be cleared, got %v", got.WakingSince)
+	}
+}

@@ -764,6 +764,71 @@ type wardenTargetArgs struct {
 	MemberID string `json:"member_id"`
 }
 
+// machineLacksClaudeButHasCodex answers, from what the machine ITSELF reported,
+// whether "install/log into claude here" is a dead end on it while Codex is a
+// live option. Three separate positives are required, and every unknown answers
+// false:
+//
+//   - the machine has reported capabilities at all (a pre-capability warden, or
+//     one that has not heartbeat yet, tells us nothing);
+//   - it reported a claude entry whose `installed` is MEASURED false — the shape
+//     cli/ocwarden/runtimeprobe.go emits on a codex-only box, which always sends
+//     the claude key. A missing entry is not a measurement;
+//   - codex on that same machine is actually ready (runtimeCapabilityReady), so
+//     the option we are about to name can really be taken.
+//
+// The asymmetry is deliberate. Telling the owner of a codex-only box to go check
+// claude is a DEAD END — they can follow it forever and never arrive. Telling
+// the owner of a box that does have claude to go change the member's 執行環境 is
+// an ACTIVE MISDIRECTION: it asks them to abandon a runtime that is present and
+// to make a roster change that was never the problem. So the Codex sentence is
+// spoken only on positive evidence, and everything else keeps today's wording.
+func (s *apiServer) machineLacksClaudeButHasCodex(machineID string) bool {
+	if machineID == "" {
+		return false
+	}
+	capabilities := s.machineRuntimeCapabilities(machineID)
+	if len(capabilities) == 0 {
+		return false
+	}
+	claude, reported := capabilities[RuntimeClaude]
+	if !reported || claude.Installed == nil || *claude.Installed {
+		return false
+	}
+	return runtimeCapabilityReady(capabilities[RuntimeCodex])
+}
+
+// wakeTimeoutReason is the sentence stampWakeObservability writes when a START
+// lapsed its start window — the LAST thing an owner reads on 「最近操作」 for a
+// member that will not boot.
+//
+// T-b3d0 taught the spawn-time refusal to name three exits (switch this member
+// to Codex / install Claude Code / re-point OC_CLAUDE_BIN). That refusal is an
+// EXECUTION receipt, and this stamp OVERWRITES it the moment the window lapses:
+// on a codex-only machine the owner's final on-screen sentence went back to
+// "check that claude runs and is logged in", a road that has no end on a box
+// with no claude. Naming the third exit here is what makes the sentence the
+// owner actually keeps a sentence they can act on.
+//
+// The runtime is named rather than hardcoded to "claude" for the same reason:
+// a Codex member that fails to boot must not be sent to inspect a runtime it
+// does not use. NormalizeRuntime("") is claude, so an unset member reads exactly
+// as it does today.
+func (s *apiServer) wakeTimeoutReason(m Member) string {
+	runtime := NormalizeRuntime(m.Runtime)
+	if runtime == RuntimeClaude && s.machineLacksClaudeButHasCodex(m.DesiredMachineID) {
+		return wakeTimeoutReasonCode + ": the START was dispatched but the agent never " +
+			"came online within the start window — machine '" + m.DesiredMachineID +
+			"' reports no Claude Code installed, so this member cannot boot there. " +
+			"Fix any one: set this member's 執行環境 to Codex (that machine has it " +
+			"ready); or install Claude Code on that machine " +
+			"(warden log: ocwarden.err.log)"
+	}
+	return wakeTimeoutReasonCode + ": the START was dispatched but the agent never " +
+		"came online within the start window — check that " + runtime + " runs and is " +
+		"logged in on the target machine (warden log: ocwarden.err.log)"
+}
+
 // runtimeCapabilityReady is the HONEST readiness read of ONE reported runtime
 // entry: installed, and not known-logged-out.
 //
@@ -1042,9 +1107,7 @@ func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision
 		m.LastOp = reconcileCmdStart
 		m.LastOpOK = &ok
 		m.LastOpAt = now
-		m.LastOpReason = wakeTimeoutReasonCode + ": the START was dispatched but the agent never " +
-			"came online within the start window — check that claude runs and is " +
-			"logged in on the target machine (warden log: ocwarden.err.log)"
+		m.LastOpReason = s.wakeTimeoutReason(*m)
 		// T-66a2: the sentence above is only true when the frame actually
 		// reached the machine. If the warden's stream died mid-delivery the
 		// frame was dropped server-side and NOTHING on the target machine was
