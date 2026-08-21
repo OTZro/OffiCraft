@@ -185,9 +185,19 @@ owner 凌晨連續下了四條，逐條落地如下。四條共同的方向是�
 ⚠️ **≤720px 的 media query 是一起改的，不是順帶**：舊規則
 （`align-items: stretch` + `.member-actions { width: 100% }`）是為了把一個 **column** 撐開；
 原封不動套在 row 上，`justify-content: flex-end` 會讓兩顆鍵擠在右邊界——owner 明講不要的那個。
-現在窄螢幕下 `.mp-identity__buttons > * { flex: 1 1 0 }` 讓兩顆均分整張卡的寬度。
+當時窄螢幕下用 `.mp-identity__buttons > * { flex: 1 1 0 }` 讓兩顆均分整張卡的寬度。
 護欄：`visual-guards/identity-actions-row.ct.spec.tsx`（desktop ＋ narrow 兩個 viewport）。
 **兩個 viewport 各自承重**，見 mutants 檔的 R1 / R2。
+
+🔴 **T-ed79 之後，窄螢幕那一半不再成立**：owner 2026-08-21 把單顆 停止 換成
+停止 → 加速停止 → 強制停止，這一列變成四顆鍵。`flex: 1 1 0` 是把卡片對半分給
+更改 和「整組 `.member-actions`」，階梯在自己那半塞不下三顆四字鍵就往下疊三層，
+父層的 `align-items: center` 再把那塊方塊對著單顆 更改 垂直置中——結果 停止 跑到
+更改 **上面**。四顆同列在窄寬度做不到（階梯自然寬 ~300px，375 的卡片內寬 289），
+所以 ≤720px 改成 `flex: 1 1 100%` ＋ `align-items: stretch`：**一個直接子元素一條帶**，
+帶一 更改、帶二 整條階梯三顆均分。desktop 一列四顆不變。護欄跟著換釘的事實
+（desktop 一列四顆 / narrow 刻意兩帶 ＋ 兩個寬度都要「不重疊、不出卡片、標籤不被裁」），
+斷言沒有放寬，見 mutants 檔「T-ed79 重測」那節的 R1／R2／R3'／R4／R5。
 
 ### ② 「外包為什麼需要工作狀態這個UI介面」——狀態卡退場
 
