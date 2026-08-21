@@ -414,11 +414,11 @@ func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unr
 		RefocusOp:        m.RefocusOp,
 		// The grace this member's epoch is ACTUALLY collected on, and 0 when
 		// nothing collects it on time at all — which since T-ed79 is EVERY cause
-		// except the second context threshold (context_high), not just the
-		// owner-pressed 重新聚焦 this comment used to name. The cockpit must show
-		// NO deadline rather than a time the owner would watch pass with nothing
-		// happening. Reading RecycleGrace straight would report exactly that kind
-		// of ceiling, for five causes out of six.
+		// except the two 加速停止 arms (context_high and accelerated_stop), not
+		// just the owner-pressed 重新聚焦 this comment used to name. The cockpit
+		// must show NO deadline rather than a time the owner would watch pass with
+		// nothing happening. Reading RecycleGrace straight would report exactly
+		// that kind of ceiling, for most of the closed set.
 		RefocusDeadline: winddownDeadlineOf(m, s.reconcileConfigLive()),
 		LastOp:          m.LastOp,
 		LastOpOK:        m.LastOpOK,

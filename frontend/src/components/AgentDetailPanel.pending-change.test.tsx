@@ -222,12 +222,14 @@ describe("AgentDetailPanel · wind-down note", () => {
     expect(note).not.toContain("上次重新聚焦");
   });
 
-  // The other arm of the same composer. It is NOT server-reachable for an owner
-  // op today — only context_high is clocked, and context_high does not open
-  // this note — so this is a unit test of the render arm, kept so that the day
-  // a clocked owner-op cause is added (the adjustable 加速停止 in T-ed79's
-  // later blocks) the ceiling wording is still there rather than having rotted
-  // away unnoticed.
+  // The other arm of the same composer, and it is STILL not server-reachable.
+  // The gate above admits only refocusOp "relocate" / "runtime/model", and
+  // winddownKindFor makes both of those 停止 ⇒ deadline 0 ⇒ mapper null. The two
+  // clocked causes are context_high and the owner-pressed accelerated_stop
+  // (T-ed79), and NEITHER of them passes that gate — so no live combination
+  // produces a non-null deadline here. This stays a unit test of the render arm,
+  // kept so the ceiling wording does not rot away unnoticed before some future
+  // cause is both clocked and admitted by the gate.
   it("still quotes the ceiling when the wind-down IS on a clock", async () => {
     const deadline = 1_800_000_000;
     const { getByTestId } = await renderPanel({

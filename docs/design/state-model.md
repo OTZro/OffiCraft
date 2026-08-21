@@ -61,7 +61,7 @@
 **連線的 machine claim 不參與 handshake 判斷**。它用來標出 online 的位置、下架擋門,以及(後來新增的)**解析 kill 要送到哪一台 warden**、與 relocation backstop 臂的機器分歧判斷。
 
 🔴 **換機器現在有自動路徑了(T-b6d9),本段原本的「手動三步」推論已被推翻。**
-現況:owner 按一次「改機器」就是**一個動詞的自動換機**——handler 寫下新的 `desired_machine_id` 並開一個 refocus epoch,等 agent 收尾或寬限到期後把**舊機器上的** session robust STOP 掉;`desired_state` 全程維持 online,所以下一輪就在**新機器**上 START。`decideUp` 裡那條 relocation 臂已降級為 backstop,只處理「沒有人蓋 epoch 的 pin 分歧」。
+現況:owner 按一次「改機器」就是**一個動詞的自動換機**——handler 寫下新的 `desired_machine_id` 並開一個 refocus epoch,等 agent 自己回報收完（改機器**沒有時鐘**，T-ed79；owner 另外按加速停止才會有一條死線）後，把**舊機器上的** session robust STOP 掉;`desired_state` 全程維持 online,所以下一輪就在**新機器**上 START。`decideUp` 裡那條 relocation 臂已降級為 backstop,只處理「沒有人蓋 epoch 的 pin 分歧」。
 
 ⇒ 原文那三句話今天都不成立:①「沒有自動路徑」— 有,而且是 owner 面向的正式動作;②「A 上舊實例不會自己退」— 會,它會被收掉;③「手動三步」— 不是現行流程。
 

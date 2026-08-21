@@ -256,8 +256,9 @@ func offboardCloserFor(m Member) string {
 }
 
 // offboardNoticeFor composes the sentence for a member that is being wound
-// down: the ONE approved sentence, plus the 120-second clause when this is the
-// final call. It reads the session's own gauge so the agent is told where it
+// down: the ONE approved sentence, plus the deadline clause when this is the
+// final call (the deadline is winddownDeadlineOf, i.e. the anchor plus
+// stop.accelerated_grace_secs — owner-settable since T-ed79, not a constant). It reads the session's own gauge so the agent is told where it
 // actually is, not just that it is over the line — the owner's requirement that
 // the notice carry 「他現在 context / round 狀況，以及我們兩個系統數字是多少」.
 func (s *apiServer) offboardNoticeFor(m Member, kind string) string {

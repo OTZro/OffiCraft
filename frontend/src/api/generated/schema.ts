@@ -1716,21 +1716,27 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Force-stop: robust STOP now. On the offboard arm this is the ONLY thing that ever collects the member -- nothing times out.
+         * Force-stop: robust STOP now. On the offboard arm the server starts no clock of its own -- collection is the agent's report_stopped, the deadline the owner opens with 加速停止, or this.
          * @description Force-stop a member: IMMEDIATELY kill the live session.
          *
-         *     🔴 This is NOT a shortcut past a countdown — there is no countdown to shortcut.
+         *     🔴 This is NOT a shortcut past a countdown the SERVER started — it starts none.
          *     On the 下線 arm (``desired_state=offline`` on a still-online member) the reconcile
-         *     machine runs NO clock at all: ``decideDown`` returns decisionNone for as long as
+         *     machine runs NO clock of its own: ``decideDown`` returns decisionNone for as long as
          *     the member stays online, so a member whose agent never reports stopped is NEVER
          *     collected by the server. Owner ruling rc-27d1710174dd
          *     (「不要兜底：只有你按強制下線才收它」) — the escalation is deliberately his, not
          *     a timer's, because the notice the agent was shown promises no deadline.
          *
-         *     So there are exactly two things that end a soft offboard: the agent's own
-         *     ``report_stopped`` (that call dispatches the robust STOP itself), or THIS endpoint.
-         *     If neither happens the member stays in *stopping* indefinitely, which is the state
-         *     the cockpit surfaces this button in.
+         *     So there are exactly THREE things that end a soft offboard: the agent's own
+         *     ``report_stopped`` (that call dispatches the robust STOP itself); the deadline the
+         *     owner opens by pressing 加速停止 (``POST /api/members/{member_id}/accelerated-stop``,
+         *     the middle rung — it re-stamps ``stopping_since`` and writes
+         *     ``refocus_op=accelerated_stop``, and ``decideDown`` then collects at
+         *     ``stopping_since`` + ``stop.accelerated_grace_secs``); or THIS endpoint. That clock
+         *     is still the OWNER's, not the server's — nothing arms it unless he presses the
+         *     button, which is why it does not reopen rc-27d1710174dd. If none of the three
+         *     happens the member stays in *stopping* indefinitely, which is the state the cockpit
+         *     surfaces this button in.
          *
          *     ``stop_deadline`` / ``stop_grace`` still exist in the reconcile store and config,
          *     but the arm that consumes them is guarded by ``SoftOffboardGrace == 0`` and
@@ -5736,13 +5742,13 @@ export interface components {
             presence: string;
             /**
              * Refocus Deadline
-             * @description Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace). ZERO CARRIES TWO MEANINGS, and a client that reads it as one of them will be wrong about the other: no handover is in flight, OR a handover is in flight that NOTHING collects on a clock at all — which is now the NORMAL case rather than a carve-out: every cause except ``context_high`` is collected only by the agent's own ``report_stopped`` or by the owner pressing force-stop, and carries no deadline (owner 2026-08-21). ``refocus_op`` is what tells the two apart. Rendering no deadline is correct for both, and the sentence a client shows for an in-flight no-clock handover must not quote a time at all. Derived at read time, never stored. It exists so a client can say WHEN a pending launch change takes effect at the latest without hard-coding a server constant; the collection fires the instant the agent answers ``report_stopped``, so this is a CEILING, not a prediction (T-7f28). Additive-optional.
+             * @description Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace). ZERO CARRIES TWO MEANINGS, and a client that reads it as one of them will be wrong about the other: no handover is in flight, OR a handover is in flight that NOTHING collects on a clock at all — which is now the NORMAL case rather than a carve-out: every cause except ``context_high`` and ``accelerated_stop`` is collected only by the agent's own ``report_stopped`` or by the owner pressing force-stop, and carries no deadline (owner 2026-08-21). ``refocus_op`` is what tells the two apart. Rendering no deadline is correct for both, and the sentence a client shows for an in-flight no-clock handover must not quote a time at all. Derived at read time, never stored. It exists so a client can say WHEN a pending launch change takes effect at the latest without hard-coding a server constant; the collection fires the instant the agent answers ``report_stopped``, so this is a CEILING, not a prediction (T-7f28). Additive-optional.
              * @default 0
              */
             refocus_deadline: number;
             /**
              * Refocus Op
-             * @description Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. One of ``relocate`` (machine change), ``runtime/model`` (runtime / model / effort change), ``context_notice`` (FIRST context-pressure threshold), ``context_high`` (SECOND context-pressure threshold), ``refocus`` (owner-pressed refocus), ``restart_self`` (agent-requested) or ``token_expiry`` (the session's agent token is inside its last hour — the close-out is opened while the calls that file it still work). Stamped and cleared in lockstep with ``refocus_since``. THE CAUSE ALSO SAYS WHETHER ANYTHING IS ON A CLOCK: ``context_high`` is the only cause force-collected on a deadline; every other cause is collected by the agent's own ``report_stopped`` or by the owner pressing force-stop and carries none (owner 2026-08-21). A row can be promoted ``context_notice`` → ``context_high`` in place when context keeps climbing, which restamps ``refocus_since``. WAS: the cause lived only in a server log line, so a client could only say 'last refocus' — which reads as history — where it meant 'winding down right now so your change can take effect' (T-7f28). Additive-optional.
+             * @description Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. One of ``relocate`` (machine change), ``runtime/model`` (runtime / model / effort change), ``context_notice`` (FIRST context-pressure threshold), ``context_high`` (SECOND context-pressure threshold), ``refocus`` (owner-pressed refocus), ``restart_self`` (agent-requested), ``token_expiry`` (the session's agent token is inside its last hour — the close-out is opened while the calls that file it still work) or ``accelerated_stop`` (the owner pressed 加速停止 on a wind-down that was already open). Stamped and cleared in lockstep with ``refocus_since``. THE CAUSE ALSO SAYS WHETHER ANYTHING IS ON A CLOCK: ``context_high`` and ``accelerated_stop`` are the TWO causes force-collected on a deadline, and they share one grace (``stop.accelerated_grace_secs``); every other cause is collected by the agent's own ``report_stopped`` or by the owner pressing force-stop and carries none (owner 2026-08-21). A row can be promoted ``context_notice`` → ``context_high`` in place when context keeps climbing, which restamps ``refocus_since``. WAS: the cause lived only in a server log line, so a client could only say 'last refocus' — which reads as history — where it meant 'winding down right now so your change can take effect' (T-7f28). Additive-optional.
              * @default
              */
             refocus_op: string;
@@ -6334,13 +6340,13 @@ export interface components {
             relocation_pending?: boolean | null;
             /**
              * Refocus Deadline
-             * @description Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace). ZERO CARRIES TWO MEANINGS, and a client that reads it as one of them will be wrong about the other: no handover is in flight, OR a handover is in flight that NOTHING collects on a clock at all — which is now the NORMAL case rather than a carve-out: every cause except ``context_high`` is collected only by the agent's own ``report_stopped`` or by the owner pressing force-stop, and carries no deadline (owner 2026-08-21). ``refocus_op`` is what tells the two apart. Rendering no deadline is correct for both, and the sentence a client shows for an in-flight no-clock handover must not quote a time at all. Workers read the SAME judgement as members — there is no separate worker rule. Derived at read time, never stored. A CEILING, not a prediction: the collection fires the instant the worker answers ``report_stopped`` (T-7f28). Additive-optional.
+             * @description Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace). ZERO CARRIES TWO MEANINGS, and a client that reads it as one of them will be wrong about the other: no handover is in flight, OR a handover is in flight that NOTHING collects on a clock at all — which is now the NORMAL case rather than a carve-out: every cause except ``context_high`` and ``accelerated_stop`` is collected only by the agent's own ``report_stopped`` or by the owner pressing force-stop, and carries no deadline (owner 2026-08-21). ``refocus_op`` is what tells the two apart. Rendering no deadline is correct for both, and the sentence a client shows for an in-flight no-clock handover must not quote a time at all. Workers read the SAME judgement as members — there is no separate worker rule. Derived at read time, never stored. A CEILING, not a prediction: the collection fires the instant the worker answers ``report_stopped`` (T-7f28). Additive-optional.
              * @default 0
              */
             refocus_deadline: number;
             /**
              * Refocus Op
-             * @description Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. A SUBSET of ``MemberDTO.refocus_op``: ``relocate``, ``runtime/model``, ``refocus``, ``restart_self`` and ``context_high``. ``context_notice`` does NOT appear on this DTO — an outsource worker has only the second context threshold today. Stamped and cleared in lockstep with ``refocus_since`` (T-7f28). Additive-optional.
+             * @description Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. A SUBSET of ``MemberDTO.refocus_op``: ``relocate``, ``runtime/model``, ``refocus``, ``restart_self``, ``context_high`` and ``accelerated_stop``. ``context_notice`` and ``token_expiry`` do NOT appear on this DTO — an outsource worker has only the second context threshold, and the token-expiry pass is staff-only. Stamped and cleared in lockstep with ``refocus_since`` (T-7f28). Additive-optional.
              * @default
              */
             refocus_op: string;

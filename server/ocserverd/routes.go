@@ -392,7 +392,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleForceStopMemberApiMembersMemberIdForceStopPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Force-stop: robust STOP now. On the offboard arm this is the ONLY thing that ever collects the member -- nothing times out.",
+			Summary:  "Force-stop: robust STOP now. On the offboard arm the server starts no clock of its own -- collection is the agent's report_stopped, the deadline the owner opens with 加速停止, or this.",
 			MCPTool:  "force_stop_member",
 		},
 		{

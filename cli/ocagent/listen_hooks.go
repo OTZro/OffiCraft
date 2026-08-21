@@ -48,11 +48,12 @@ import (
 //
 // 🔴 A dead/unresponsive session that never reports is, for ALMOST EVERY
 // CAUSE, collected by NOBODY (owner 2026-08-21, T-ed79). The server's recycle
-// grace covers exactly one cause — the SECOND context threshold
-// (`context_high`); 重新聚焦, 改機器, a model/runtime change, the agent's own
-// restart_self and the FIRST context threshold all run NO clock at all and are
-// collected only by the stopped report or the owner's 強制停止 (recycleGraceFor
-// → winddownKindFor). This comment used to state the opposite default — "120 s
+// grace covers exactly two causes, and they are the two 加速停止 arms — the
+// SECOND context threshold (`context_high`) and the owner's own press
+// (`accelerated_stop`); 重新聚焦, 改機器, a model/runtime change, the agent's own
+// restart_self, the FIRST context threshold and token expiry all run NO clock at
+// all and are collected only by the stopped report or the owner's 強制停止
+// (recycleGraceFor → winddownKindFor). This comment used to state the opposite default — "120 s
 // for every cause except an owner-pressed 重新聚焦" — which was the
 // pre-T-ed79 rule, and this block is the ONLY written argument for why ocagent
 // carries no local timeout, so it has to be re-argued rather than deleted:
@@ -103,7 +104,7 @@ type windDownHook struct {
 	out     io.Writer
 	started bool // a repeated member delta carrying the SAME notice is silent
 	// lastNotice is the sentence already shown for this wind-down. The soft
-	// notice and the final call differ by the 120-second clause, so keying on
+	// notice and the final call differ by the deadline clause, so keying on
 	// the text is what lets the second one through without re-printing the
 	// first on every follow-up delta.
 	lastNotice string

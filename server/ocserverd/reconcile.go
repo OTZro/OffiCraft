@@ -204,10 +204,11 @@ type memberObservation struct {
 	RefocusSince float64
 	// RefocusOp is the CAUSE of that epoch (member.refocus_op). decideUp reads
 	// it for one reason only: to ask recycleGraceFor whether this epoch is on a
-	// clock AT ALL. Since T-ed79 almost none are — the SECOND context threshold
-	// (context_high) is the only clocked cause; 重新聚焦, 改機器, a model/runtime
-	// change, restart_self and the FIRST context threshold are all collected by
-	// the agent's own stopped report or the owner's force-stop. This used to say
+	// clock AT ALL. Since T-ed79 almost none are — the clocked causes are the two
+	// 加速停止 arms, the SECOND context threshold (context_high) and the owner's
+	// own press (accelerated_stop); 重新聚焦, 改機器, a model/runtime change,
+	// restart_self, the FIRST context threshold and token expiry are all
+	// collected by the agent's own stopped report or the owner's force-stop. This used to say
 	// "every other cause is already a final call when it lands and gets its
 	// 120s", i.e. the exact inverse of today's rule — and it sits ~100 lines
 	// from recycleGraceFor, which says the correct thing. The ruling lives in
@@ -401,11 +402,13 @@ func reconcileDecide(
 // before the collection is forced — and whether it is on a clock AT ALL.
 //
 // Almost nothing is (T-ed79). 重新聚焦, 改機器, model change, the agent's own
-// restart_self and the FIRST context threshold all have the same shape as 下線:
-// the agent is shown the sequence, and the collection is its own stopped report
-// or the owner pressing force-stop. Nothing collects them on time. The ONE
-// clocked cause is the SECOND context threshold (context_high) — 加速停止 — and
-// it gets exactly its RecycleGrace seconds.
+// restart_self, the FIRST context threshold and token expiry all have the same
+// shape as 下線: the agent is shown the sequence, and the collection is its own
+// stopped report or the owner pressing force-stop. Nothing collects them on
+// time. The clocked causes are the TWO 加速停止 arms — the SECOND context
+// threshold (context_high) and the owner's own press (accelerated_stop) — and
+// they get exactly their RecycleGrace seconds, from the SAME setting, because
+// winddownKindFor answers for both.
 //
 // 🔴 The bool is why this returns two values instead of a big number: it and
 // offboardKindOf are ONE judgement read from two places — the clock and the

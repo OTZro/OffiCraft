@@ -1330,7 +1330,8 @@ export const httpApi: Api = {
     // report and the offline fallback. This comment used to claim "a flat
     // StoppingTimeoutSecs (~120s) ceiling — workers do NOT go through
     // recycleGraceFor", which has been false since T-fe5e and is more false now
-    // that every member cause except context_high is soft too.
+    // that every member cause except the two 加速停止 arms (context_high and the
+    // owner-pressed accelerated_stop) is soft too.
     const wire = unwrap(
       await client.POST("/api/outsource-workers/{id}/refocus", {
         params: { path: { id } },

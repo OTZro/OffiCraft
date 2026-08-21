@@ -390,24 +390,37 @@ decides that time is up.
 - online → the member is `stopping` and the producer dispatches **NOTHING**, indefinitely.
   The agent has been handed the offboard sequence and is working it; a clock here would
   cut off a session that was told there is no countdown.
-- Collection **on this online arm** has two sources, neither of them a timer:
+- Collection **on this online arm** has three sources, and the server arms none of them:
   1. **the agent's own `report_stopped`** — that call itself dispatches the SINGLE robust
-     **STOP**, event-driven, not on the next tick; and
-  2. **the owner pressing 強制下線** — the SAME command, it only skips the waiting.
+     **STOP**, event-driven, not on the next tick;
+  2. **the owner pressing 加速停止** (T-ed79) — `POST /api/members/{id}/accelerated-stop`
+     re-stamps `stopping_since` and writes `refocus_op = accelerated_stop`, so `decideDown`
+     collects at `stopping_since + stop.accelerated_grace_secs` and `offboardKindOf`
+     quotes that same instant to the agent. This does NOT reopen `rc-27d1710174dd`: the
+     ruling is about the SERVER deciding time is up, and nothing here arms without the
+     owner's press; and
+  3. **the owner pressing 強制下線** — the SAME command, it only skips the waiting.
   (A member still `waking` is a different case and is NOT covered by this arm: deactivating
   a wake that has been dispatched but never connected force-stops it outright — nobody is
   inside being told anything. See §4.2 and `docs/design/offboard-flow.md` §三.)
 - There is no separate force-kill RPC either way: the warden self-escalates the kill.
-- 🔴 **An OUTSOURCE worker does not have these two arms — it has only the forced one.**
-  `POST /api/outsource-workers/{id}/stop` is named like the graceful 下線 but behaves like
-  強制下線: it sets `desired_state=offline` and kills the session on the spot, with no
-  grace, no 預告 and no chance to work the sequence. So it stamps what 強制下線 stamps
-  (`forced_stop_at` **and** `stopping_since`, T-c996) and the worker is told **nothing** —
-  the same ruling, now enforced on both sides rather than only on the staff side.
-  ⚠️ **The consequence is a real gap, not a design choice**: there is today no verb that
-  gives an outsource worker the graceful 下線 a staff member gets. Adding one is a change to
-  the owner's set of buttons, not a bug fix, so it is out of T-c996's scope and is recorded
-  here rather than silently filled in.
+- 🔴 **An OUTSOURCE worker now has all three arms too (T-ed79, owner 2026-08-21
+  「往正職靠：外包那顆改成優雅停止，強制殺移到第三顆按鈕」).**
+  `POST /api/outsource-workers/{id}/stop` is a GRACEFUL close-out: it sets
+  `desired_state=offline`, stamps `stopping_since`, clears any in-flight refocus epoch,
+  fans the 下線程序 notice at the worker's own session and **returns**. It does **not**
+  kill and it does **not** stamp `forced_stop_at` — that anchor is what keeps the FORCED
+  verb silent, and this verb's whole point is that the notice arrives. The 收口 is the
+  worker's own `report_stopped`, exactly as on the staff 下線 arm. An OFFLINE worker (no
+  session to hear the notice) still takes the immediate kill.
+  ⚠️ **The kill moved, it was not removed**: it is now
+  `POST /api/outsource-workers/{id}/force-stop`, which stamps `forced_stop_at` **and**
+  `stopping_since` (T-c996's pairing, unchanged) and says nothing. The middle rung
+  `POST /api/outsource-workers/{id}/accelerated-stop` covers BOTH worker arms — it used
+  to 409 on a `desired_state=offline` worker, which was right while 停止 killed on the
+  spot and would be a dead rung now.
+  ⚠️ **The gap this bullet used to record is closed**: there IS now a verb that gives an
+  outsource worker the graceful 下線 a staff member gets, and it is the one named 停止.
 - ✅ **The second outsource gap is closed (T-fe5e, owner 2026-08-19 `rc-5c478001de8a`)**: an
   outsource **重新聚焦** used to be collected on a flat 120 s clock — `autoHandoverWorker`
   (`worker_spawn.go`) timed a worker's in-flight handover out at
@@ -415,12 +428,14 @@ decides that time is up.
   that worker was sent said nothing about time. Both the in-flight arm and the worker DTO's
   `refocus_deadline` now go through the SAME `recycleGraceFor` / `refocusDeadlineOf` pair the
   staff side uses, so 重新聚焦 runs no clock on either kind. (T-ed79 then widened that set:
-  the only cause left on a clock, staff or worker, is `context_high`.) The owner ruled the two kinds identical and rejected the asymmetry argument that had
+  the only causes left on a clock, staff or worker, are `context_high` and the
+  owner-pressed `accelerated_stop`.) The owner ruled the two kinds identical and rejected the asymmetry argument that had
   been offered for keeping the clock (「如果正職只有一個任務 那跟外包的代價不一樣嗎」): a
   staff member holding a single task pays exactly what a worker holding one pays.
   ⚠️ **What that ruling costs, stated rather than buried**: a worker that never answers its
   stopped report now waits indefinitely, holding its task with it. The exit is the owner's
-  own 停止 button — the same exit the staff side has.
+  own hand — the same escalation the staff side has, and since T-ed79 the same three rungs:
+  停止 → 加速停止 → 強制停止.
 - 🔴 **Neither of those two paths re-dispatches.** Both go through the one-shot
   `dispatchRobustStopNow`, which enqueues once and does NOT write `last_command` /
   `last_command_at` — so the producer's de-dupe/re-dispatch discipline below never engages
@@ -534,9 +549,10 @@ ONE-SHOT, never a standing order):
   the kill event-driven, not on the next tick) OR `recycleGraceFor(refocus_op)` elapses
   (the dead-session fallback — an unresponsive session that never reports is force-stopped
   by the server; the agent side needs no timeout of its own. **The wait is not one number**:
-  `stop.accelerated_grace_secs` (default 120 s) for `context_high` (加速停止) and
-  **no fallback at all** for every other cause,
-  which waits indefinitely for the stopped report or the owner's 強制停止 — see
+  `stop.accelerated_grace_secs` (default 120 s) for the TWO 加速停止 causes —
+  `context_high` (the second context threshold) and `accelerated_stop` (the owner's
+  press) — and **no fallback at all** for every other cause,
+  which waits indefinitely for the stopped report or the owner's 加速停止 / 強制停止 — see
   the `recycle_grace` row in §4.4) → the SSE drop makes
   ¬online → the next tick's plain START respawns.
 - **The wake text is the document, not client copy**: the SERVER composes the

@@ -633,7 +633,7 @@ while [[ "$(date +%s)" -lt "$deadline" ]]; do
   sleep 3
 done
 if [[ "$cur_presence" != "offline" && "$cur_presence" != "stopped" ]]; then
-  log "cold relocate: $TEST_AGENT did not stop itself (presence='$cur_presence') — escalating with force-stop, the owner's second button"
+  log "cold relocate: $TEST_AGENT did not stop itself (presence='$cur_presence') — escalating with force-stop, the owner's last button"
   api_post_logged "/api/members/$TEST_AGENT/force-stop" '{}' >/dev/null || true
   deadline=$(( $(date +%s) + PRESENCE_TIMEOUT ))
   while [[ "$(date +%s)" -lt "$deadline" ]]; do
