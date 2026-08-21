@@ -107,16 +107,23 @@ for (const width of [390, 1280]) {
     );
     expect(quoteBox.y).toBeGreaterThanOrEqual(bubbleBox.y - 0.5);
 
-    // The jump stays inside the bubble. Its LABEL may be trimmed here — this row
-    // carries a deliberately extreme sender name, and something has to give —
-    // but the arrow may not: what survives must still read as "go somewhere".
+    // The jump stays inside the bubble. Its LABEL is not necessarily HERE at all,
+    // and when it is absent it is GONE, not shortened: the label's only rule in
+    // office.css is `display: none` inside `@container chat-pane
+    // (max-width: 520px)`, and this harness hands the pane 342px at viewport 390
+    // and 1232px at 1280 — so this loop sees the arrow alone at 390 and the whole
+    // label at 1280. Nothing in the stylesheet can TRIM it: the button is
+    // `flex: none` with `white-space: nowrap` and the label carries no
+    // `text-overflow` of its own. What may never go is the arrow: what survives
+    // must still read as "go somewhere".
     //
     // This replaces an earlier `jump.width > 40`, which encoded "the jump keeps
     // its whole width, a cut 跳到原訊息 helps nobody". That rule was measured
     // against the 69px Chinese string and could not survive the 154px English
     // one: a control that never gives way does not stay inside the bubble, it
-    // runs under the corner buttons. Trimming the label is the lesser loss, and
-    // the ordinary case is pinned separately below (short name → label intact).
+    // runs under the corner buttons. Dropping the whole label is the lesser
+    // loss, and which side of that the row is on is pinned separately below, on
+    // the pane's width ("the jump label collapses on the PANE's width, at 520").
     const jump = (await cmp.getByTestId("quote-jump").boundingBox())!;
     expect(jump.x + jump.width).toBeLessThanOrEqual(
       bubbleBox.x + bubbleBox.width + 0.5,
@@ -429,10 +436,21 @@ for (const width of [390, 1200, 1250, 1280]) {
 // proves both controls really are <button> elements — a <div onClick> mutant
 // takes the reply entry and the x out of reach for anyone not using a mouse.
 // 🔴 THE ENGLISH LABEL IS A DIFFERENT LAYOUT PROBLEM, not the same one in another
-// font. "Go to the original message" is 154px against 「跳到原訊息」's 69px, and
-// the control it lives in used to refuse to shrink, so it ran out of the bubble
-// and under `.chat__msg-actions`, which is absolutely positioned and paints on
-// top of it. Nothing in the suite could see that: every fixture was Chinese.
+// font. The whole control runs ~154px in English against ~69px in Chinese
+// (measured in this harness: the label alone is 140px vs 55px, and the button
+// adds a 12px chevron plus a 2px gap), and the control it lives in used to
+// refuse to shrink, so it ran out of the bubble and under
+// `.chat__msg-actions`, which is absolutely positioned and paints on top of it.
+// Nothing in the suite could see that: every fixture was Chinese.
+//
+// ⚠️ THE STRING THIS LOOP MOUNTS IS THE RETIRED LABEL, DELIBERATELY. The product
+// has said "View the original message" (`en.ts`, `chat.replyQuoteJump`) since
+// `d7752781` renamed it with the behaviour; "Go to the original message" is the
+// older and WIDER string, kept here because width is the whole mechanism and the
+// wider one is the worst case. Do not read a current product label off this
+// fixture, and do not "correct" it to the current one — that would loosen the
+// guard. The threshold loop further down mounts the CURRENT string on purpose,
+// because there the question is where the flip lands, not how wide the label is.
 //
 // Be exact about ONE thing and vague about another. Exact: the English string
 // reaches the failure first, and it is the fixture this loop needs. Vague: WHERE
@@ -457,7 +475,8 @@ for (const width of [390, 1200, 1250, 1280]) {
 // under the absolutely-positioned corner buttons) had no witness at any width
 // where the label EXISTS. Measured at the time: mutating `flex: 0 10 auto` to
 // `flex: none`, and separately deleting `min-width: 0` from the label, each left
-// all 27 tests green.
+// all 27 tests green. (⚠️ Not repeatable either: all three declarations are
+// gone, and 27 is not this file's count today — see the caveat inside the loop.)
 //
 // The last three widths are the fix: the collapse is now a `@container` query on
 // the PANE (520px), and at viewport 600 / 640 / 760 this harness gives the pane
@@ -624,7 +643,9 @@ for (const width of [300, 320, 336, 360, 390, 600, 640, 760]) {
 // 🔴 THE OLD VIEWPORT RULE HAD ZERO DISCRIMINATION AND THIS IS THE REPAIR. While
 // the collapse was `@media (max-width: 560px)`, a reviewer mutated that number
 // to 400 (weaker) and to 900 (stronger) and BOTH left all 27 tests green: the
-// suite witnessed that a media query existed, and nothing about which one. The
+// suite witnessed that a media query existed, and nothing about which one.
+// (⚠️ Not repeatable — that rule is gone, and 27 was this file's count then; it
+// is 32 now. The repaired version IS repeatable and is in the table above.) The
 // rule is now `@container chat-pane (max-width: 520px)` on the PANE, and this
 // test reads the pane and asserts the flip lands where the stylesheet says.
 //

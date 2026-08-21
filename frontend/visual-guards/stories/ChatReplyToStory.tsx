@@ -7,11 +7,31 @@
 // PRESENTATIONAL (hover reveal, one-line clipping, the quote row staying inside
 // the bubble column), and jsdom can measure none of them. The behavioural half
 // is already pinned in ChatArea.reply-to.test.tsx.
-/** `jumpLabel` exists because the label's WIDTH is the thing under test and it
- * is not the same in every language: zh is 「跳到原訊息」 at 69px, en is "Go to
- * the original message" at 154px, and the guard that matters (the jump must not
- * end up under the corner buttons) only fails on the long one. A story hard-
- * wired to Chinese measured a control 85px narrower than half the users see. */
+/** `jumpLabel` exists because the label's WIDTH is the thing under test and it is
+ * not the same in every language. Measured in THIS harness (11px, viewport 1280,
+ * i.e. a pane above the collapse threshold so the label renders whole) —
+ * label box / whole-button box:
+ *
+ *   「跳到原訊息」                   54.7px /  68.7px
+ *   「看原訊息」                     43.8px /  57.8px
+ *   "Go to the original message"   140.4px / 154.4px
+ *   "View the original message"    137.0px / 151.0px
+ *
+ * The guard that matters (the jump must not end up under the corner buttons)
+ * only fails on the long ones. A story hard-wired to Chinese measured a control
+ * ~85px narrower than half the users see.
+ *
+ * ⚠️ THE 69px / 154px QUOTED ELSEWHERE IN THIS PACKAGE ARE THE BUTTON, NOT THE
+ * STRING — the button adds a 12px chevron and a 2px gap on top of the label.
+ * Read those figures as whole-control widths.
+ *
+ * ⚠️ THE DEFAULT BELOW, AND THE ENGLISH STRING THE SPEC USUALLY PASSES, ARE THE
+ * RETIRED LABELS — deliberately, and they are NOT what the app renders. Since
+ * `d7752781` the product says 「看原訊息」 / "View the original message"
+ * (`chat.replyQuoteJump`). The retired pair is the WIDER pair (by ~11px in
+ * Chinese, ~3px in English), which is exactly why they are kept as worst-case
+ * width fixtures. Do not read a product label off this file, and do not swap
+ * them for the current strings: narrower fixtures loosen the geometric guards. */
 export function ChatReplyToStory({
   bannerWho = "正在回覆 Mira",
   jumpLabel = "跳到原訊息",

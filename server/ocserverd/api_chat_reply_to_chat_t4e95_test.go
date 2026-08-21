@@ -367,7 +367,8 @@ func TestReplyToChat_ContentIsShortenedAndFlattenedByTheServer(t *testing.T) {
 	srv, secret, db := newWiredTestServerWithDB(t)
 	tok, _ := mintJWT("mira", "agent", 300, secret, time.Now().Unix(), "")
 
-	// 92 runes of CJK across three lines, with a run of spaces in the middle.
+	// 90 runes of CJK across three lines (95 runes in all, counting the two
+	// newlines and the run of three spaces in the middle).
 	//
 	// 🔴 THE BLANK LINE IS EARLY ON PURPOSE. It has to survive INTO the 60 runes
 	// that are kept, or the collapse assertion below is satisfied by the cut

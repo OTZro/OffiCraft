@@ -114,6 +114,15 @@ in-flight latch，不是 state —— 同一個 tick 的兩次點擊都會讀到
 「says so, in place and once, when that one read fails」釘住 —— 失敗路徑的證人在
 `reply-to` 那個檔案，不在 `quote-no-fetch`（後者的 api proxy 刻意不註冊失敗態）。
 
+⚠️ **但要精確：第二條那個測試釘住的比這句話列舉的少。** 它實際斷言四件事——
+①失敗訊息說在原地、②引用列文字不變（不會變成「這則訊息已不存在」）、③不開覆蓋
+層、④`getChatMessage` 只被呼叫一次（不重試、不排隊）。**「只記一個 id」（單值
+語意，last click wins）與「不在下一個 SSE 事件自癒」這兩件今天沒有任何測試守
+著**：全庫 325 個 `*.test.ts*` / `*.spec.ts*` 裡，只有 `ChatArea.reply-to.test.tsx`
+這一個檔碰得到 `msg-quote-error`（陽性對照：`msg-quote-jump` 命中 4 檔）。它們
+目前只由碼本身保證——`quoteOpenFailedId` 是單一 state、`openQuotedMessage` 是唯
+一寫入點。**動這兩件事不會有測試變紅，請自己看碼。**
+
 ⚠️ 還有第三條：**讀取途中不准把那顆按鈕 `disabled`**。有過一個 loading 態這樣
 做，實測在真 Chromium 裡 disable 一顆**正被聚焦**的按鈕會讓它 blur，
 `MarkdownPreviewOverlay` 掛載時抓到的 opener 就成了 `<body>`，關掉覆蓋層時鍵盤

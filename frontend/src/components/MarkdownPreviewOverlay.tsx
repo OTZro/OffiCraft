@@ -5,7 +5,7 @@
 // actions: the header keeps a 下載 button (the same authed blob URL with a
 // download attribute) alongside the render.
 //
-// Self-contained like Lightbox (click backdrop / × / Esc closes; a click on the
+// Self-contained (click backdrop / × / Esc closes; a click on the
 // panel does not dismiss): the caller holds the open state and passes the blob's
 // serve url + display title. Shared by the chat attachment strip AND the task
 // artifact popover — one preview surface, not two.

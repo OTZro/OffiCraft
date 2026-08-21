@@ -161,7 +161,9 @@ export function ChatArea({
   // T-94c1 就地喚醒: wake this member from the chat itself (calls activateMember
   // in the parent). Optional — absent = no in-chat wake button (an outsource
   // worker is spawn/task-driven, not activate-woken, so the button would lie);
-  // the offline composer then degrades to the plain "go to member panel" bar.
+  // the composer then LOCKS to a plain, non-clickable 「目前離線中」 notice
+  // (`chat__composer-locked`, role="status") — there is no bar and nothing to
+  // click, because there is nothing to wake and no live panel to open.
   //
   // 🔴 May resolve with the activate's {@link MemberActivateResult} (T-7fa1).
   // `activationPending: true` = the wake was accepted but NOTHING was
@@ -1162,7 +1164,10 @@ export function ChatArea({
       /* 🔴 THE ONE THING THIS ROW EXISTS TO SAY HAS TO REACH THE A11Y TREE TOO.
        * Measured in a real browser on a real <ChatArea>: as a bare <div> this
        * row linearised into the reply as "Mira. Mira. 他說的. 跳到原訊息.
-       * 我說的" — role null, no name — so a screen-reader user could not tell
+       * 我說的" — role null, no name. (That transcript is verbatim from the
+       * measurement; the button said 「跳到原訊息」 then and says 「看原訊息」
+       * now. The shape is the point, not the string.) A screen-reader user
+       * could not tell
        * which sentence is the quotation and which one this person is saying
        * now, which is the whole feature. `.chat__msg-quote` is the only place
        * in this frontend that embeds someone else's sentence inside another
@@ -1222,11 +1227,23 @@ export function ChatArea({
          * door — the window is never consulted — it is the row declining to
          * contradict itself.
          *
-         * 🔴 THE LABEL IS ITS OWN ELEMENT so it can be the thing that truncates.
-         * It used to keep its intrinsic width on the reasoning that a cut
-         * 跳到原訊息 helps nobody — true of the Chinese string, which is 69px.
-         * The English one is "Go to the original message", 154px, and a control
-         * that cannot give way does not stay politely inside the bubble: it
+         * 🔴 THE LABEL IS ITS OWN ELEMENT so it can be the thing that
+         * DISAPPEARS. It is not trimmed and it never was made trimmable in the
+         * end: nothing in office.css can ellipsise it — the button is
+         * `flex: none` with `white-space: nowrap`, and the label's ONLY rule is
+         * `display: none` inside `@container chat-pane (max-width: 520px)`. So
+         * on a narrow pane the whole label goes and the arrow is what is left;
+         * on a wide one the label renders whole. Whole or absent, never cut.
+         *
+         * The control used to keep its intrinsic width on the reasoning that a
+         * cut 跳到原訊息 helps nobody — true of the Chinese control, which was
+         * 69px. The English one at the time was "Go to the original message" at
+         * 154px (both figures are the WHOLE BUTTON: label + 2px gap + 12px
+         * chevron). Today the labels read 「看原訊息」 / "View the original
+         * message" — `d7752781` renamed them with the behaviour — and the
+         * English control measures ~151px, so the pressure is unchanged. A
+         * control that cannot give way does not stay politely inside the
+         * bubble: it
          * runs past the edge and under the corner buttons, which are absolutely
          * positioned and therefore painted on top of it. Measured against the
          * running app: it fails at the narrow end in BOTH languages, and again
@@ -1237,7 +1254,7 @@ export function ChatArea({
          * quote row there to overflow. The worst case is both together. Two earlier versions of this note quoted exact ranges;
          * both were wrong, because the range moves with the bubble kind, the
          * language and the display name. The guard holds the numbers.
-         * A trimmed label with its arrow still showing beats a control hidden
+         * Dropping the whole label and keeping its arrow beats a control hidden
          * under another control. */}
         {m.replyTo && quoted && (
           <button
@@ -1245,12 +1262,14 @@ export function ChatArea({
             className="chat__msg-quote__jump"
             data-testid="msg-quote-jump"
             /* 🔴 THE NAME CANNOT RIDE ON THE VISIBLE LABEL. That label is the
-             * first thing this row gives up when the bubble runs short (see
-             * the note above), so at the narrow end the accessible name would
-             * shrink with it — and a `text-overflow` ellipsis is a PAINT, so
-             * what a screen reader reads is the whole string while what the
-             * eye reads is a stub. Naming the control explicitly makes the two
-             * agree and survives the trim. */
+             * first thing this row gives up when the PANE runs short (see the
+             * note above), and it does not shrink on the way out — below 520px
+             * of pane it is `display: none` outright. A name riding on it would
+             * not degrade, it would VANISH, leaving a button whose only content
+             * is a decorative chevron and whose accessible name is the empty
+             * string. Naming the control explicitly is what keeps it named in
+             * the half of the width range where the label is not rendered at
+             * all. */
             aria-label={t.chat.replyQuoteJump}
             title={t.chat.replyQuoteJump}
             onClick={() => openQuotedMessage(m.replyTo as string)}
@@ -1700,9 +1719,13 @@ export function ChatArea({
               {msg.chatOfflineTitle(member.name)}
             </div>
             {/* T-94c1: offline/stopped can now be messaged (queues until wake),
-             * so the hint no longer says "喚醒後才能開始對話" (which contradicted
-             * the unlocked composer below). The wake entry + queue notice live on
-             * the composer's wake row now, not on this card. */}
+             * so a peer WITH a queue path gets the queue hint instead of
+             * 「喚醒後才能開始對話」 (which contradicted the unlocked composer
+             * below). ⚠️ That sentence is not gone: `t.chat.offlineHint` still
+             * IS it, and the `: t.chat.offlineHint` branch below still prints it
+             * for a peer with NO queue path — where the composer is locked
+             * anyway, so it no longer contradicts anything. The wake entry +
+             * queue notice live on the composer's wake row, not on this card. */}
             <div className="chat__offline-hint">
               {offlineQueue
                 ? msg.chatOfflineQueueHint(member.name)

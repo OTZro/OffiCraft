@@ -555,7 +555,9 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 	// anything under any key — including the key the reply link is stored under.
 	// Delete it here, before anything else can read it: reply_to is validated
 	// and written by this handler alone, and a link that arrived pre-made would
-	// bypass both the existence check and the same-conversation check below.
+	// bypass the existence check below. (There is no same-conversation check any
+	// more — it was deleted on 2026-08-21; see chatReplyToForeignMsg's obituary
+	// further down. Existence is the whole gate now.)
 	delete(meta, chatReplyToMetaKey)
 	// EVERY item goes to the resolver — an item carrying neither id nor
 	// data_b64 is a 400 there, not a silent drop (T-e2b2).
@@ -692,8 +694,9 @@ func (s *apiServer) servedChatMessageDTO(m ChatMessage) (chatMessageDTO, error) 
 	}
 	// The quote, joined HERE so that EVERY door that serves a chat message
 	// serves it: the listing, the history page, the by-ids read and the POST
-	// echo all come through this one function. Putting it on the individual
-	// handlers instead would be four places for one rule, and the door someone
+	// echo — and the task-message box in api_tasks.go, the fifth — all come
+	// through this one function. Putting it on the individual handlers instead
+	// would be five places for one rule, and the door someone
 	// forgot would be indistinguishable on screen from a message whose original
 	// is genuinely gone.
 	//
@@ -767,11 +770,13 @@ func (s *apiServer) servedChatMessageDTO(m ChatMessage) (chatMessageDTO, error) 
 // until someone fixes the data", on purpose. That is the ruling; it is not an
 // accident and it is not free.
 //
-// 🔴 TWO OF THE FIVE DOORS THAT SERVE A QUOTE HAVE NO WITNESS ROW IN THAT TEST,
+// 🔴 TWO OF THE SIX MEASURED DOORS THAT SERVE A QUOTE HAVE NO WITNESS ROW IN
+// THAT TEST,
 // AND THE REASON IS NOT AN OVERSIGHT. Their error branch is UNREACHABLE for a
 // single-row fault, because each one hits the same bad row through a read of its
 // own FIRST (verified by mutating this function to swallow the error and
-// re-running all five: these two still 500, the other four turn 200):
+// re-running all six — the four in the table above plus these two: these two
+// still 500, the other four turn 200):
 //   - GET /api/chat?with= — no cursor means a whole-table s.dal.ListChat().
 //   - POST /api/chat echo — the reply_to EXISTENCE gate above calls
 //     ListChatByIDs on that very id before anything is stored, and 500s there.
@@ -779,6 +784,12 @@ func (s *apiServer) servedChatMessageDTO(m ChatMessage) (chatMessageDTO, error) 
 // A row for either would pass against a swallowing mutant, which is a guard that
 // proves nothing. If the POST gate is ever batched or relaxed, its echo branch
 // becomes reachable and needs its own row.
+//
+// ⚠️ AND THERE IS A SEVENTH DOOR THAT NOBODY MEASURED: GET
+// /api/members/{member_id}/resume-summary. It calls the identical
+// resumeSnapshotParts the two wake-path rows do, so it must 500 the same way —
+// but that is READ OFF THE CODE, not measured, and it is in neither the table
+// above nor the two exceptions below. Do not count it as witnessed.
 func (s *apiServer) chatReplyQuote(replyTo string, names map[string]string) (*chatReplyQuoteDTO, error) {
 	if replyTo == "" {
 		return nil, nil
@@ -877,7 +888,10 @@ func requestedChatIDs(ids *[]string) []string {
 // here would mark a whole thread read on the strength of one unfolded line —
 // the same reasoning that keeps a history page from advancing it.
 //
-// REFUSAL ORDER is cap → unknown id, and each refusal names the id it is about.
+// REFUSAL ORDER is cap → unknown id. The unknown-id refusal names the id; the
+// cap refusal cannot and does not — chatByIDsTooManyMsg is formatted with the
+// limit and the count asked for, deliberately (see its own note), because at
+// that point no single id is what is wrong.
 //
 // 🔴 NO PARTICIPATION CHECK, AND THAT IS A DELIBERATE WIDENING (T-4e95, owner
 // ruling). This path used to refuse with 403 any id whose sender and recipient

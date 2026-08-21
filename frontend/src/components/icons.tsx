@@ -209,7 +209,7 @@ export function UserIcon({ size = 16, className }: IconProps) {
 /** Person + gear — 角色設定 (T-dfae, owner 2026-07-17: 「可能是一個人加一個齒
  * 輪的圖案？」). A UserIcon whose torso is cut back to the left half so a small
  * gear can sit in the bottom-right corner without the two glyphs colliding.
- * The gear is a 6-tooth star-of-lines + hub rather than GearIcon's single
+ * The gear is an 8-tooth star-of-lines + hub rather than GearIcon's single
  * outline path: at this size GearIcon's fine detail muddies into a blob, and
  * this control has to read as "role settings" at a glance — the whole reason
  * owner rejected the plain ⚙. */
@@ -220,7 +220,7 @@ export function UserGearIcon({ size = 16, className }: IconProps) {
           the gear) */}
       <circle cx="9" cy="7" r="4" />
       <path d="M3 21v-2a4 4 0 0 1 4-4h5" />
-      {/* gear: hub + six spokes, bottom-right */}
+      {/* gear: hub + eight spokes (4 orthogonal + 4 diagonal), bottom-right */}
       <circle cx="17.5" cy="17.5" r="2.5" />
       <path d="M17.5 13v1.5M17.5 20.5V22M13 17.5h1.5M20.5 17.5H22" />
       <path d="m14.3 14.3 1.1 1.1M19.6 19.6l1.1 1.1M20.7 14.3l-1.1 1.1M15.4 19.6l-1.1 1.1" />
@@ -278,11 +278,12 @@ export function BriefcaseIcon({ size = 16, className }: IconProps) {
   );
 }
 
-/** Person-plus glyph — the "add a role / hire" cue used by BOTH the 正職
- * group header (jump to 角色誌) and the 外包 panel header (open the cap
- * popover). Owner ordering (2026-07-14): the PLUS sits FIRST (left), the
- * person SECOND (right) — a mirrored lucide "user-plus". A single shared
- * component so the two call sites stay pixel-identical. */
+/** Person-plus glyph — the "add a role / hire" cue on the roster's ONE
+ * 招攬新成員 button (`OfficePage.tsx`, `.office__recruit`). There is a single
+ * call site, not two headers: that button routes by the active tab (正職 →
+ * 角色誌 create mode, 外包 → the cap popover), so the two DESTINATIONS are real
+ * but the glyph is rendered once. Owner ordering (2026-07-14): the PLUS sits
+ * FIRST (left), the person SECOND (right) — a mirrored lucide "user-plus". */
 export function PersonPlusIcon({ size = 16, className }: IconProps) {
   return (
     <svg {...base(size)} className={className}>
@@ -320,8 +321,10 @@ export function ExternalLinkIcon({ size = 16, className }: IconProps) {
   );
 }
 
-/** Eye glyph — the 預覽 (in-cockpit preview) action on a .md attachment /
- * file artifact (T-a1c4 / T-3dc5), distinct from the download action. */
+/** Eye glyph — a generic "preview" cue. ⚠️ CURRENTLY UNRENDERED: nothing in
+ * `frontend/src` imports it. The 預覽 entry for a .md attachment / file artifact
+ * (T-a1c4 / T-3dc5) is the attachment chip itself in `AttachmentStrip.tsx`,
+ * which draws a paperclip. Kept for the day that cue needs its own glyph. */
 export function EyeIcon({ size = 16, className }: IconProps) {
   return (
     <svg {...base(size)} className={className}>
@@ -467,9 +470,11 @@ export function SendIcon({ size = 16, className }: IconProps) {
   );
 }
 
-/** Database-cylinder glyph (lucide "database") — the backup-health indicator's
- * HEALTHY / UNKNOWN face (T-da06). The colour, not the shape, carries the
- * verdict; the shape says "this control is about the database backup". */
+/** Database-cylinder glyph (lucide "database"). ⚠️ CURRENTLY UNRENDERED:
+ * nothing in `frontend/src` imports it. The 備份健康 card (T-da06,
+ * `BackupHealthCard` in `SettingsPage.tsx`) states its verdict in WORDS —
+ * `backupStatusLabel` plus a `data-backup-state` attribute — and draws no glyph
+ * at all. Do not read this line as describing a face that is on screen. */
 export function DatabaseIcon({ size = 16, className }: IconProps) {
   return (
     <svg {...base(size)} className={className}>
@@ -480,10 +485,12 @@ export function DatabaseIcon({ size = 16, className }: IconProps) {
   );
 }
 
-/** Triangle-exclamation glyph (lucide "alert-triangle") — the backup-health
- * indicator's UNHEALTHY face (T-da06). A DIFFERENT SHAPE, not merely a
- * different colour: colour alone is not a signal a colour-blind reader can
- * take, and this is the one indicator whose whole job is to be noticed. */
+/** Triangle-exclamation glyph (lucide "alert-triangle") — a generic warning
+ * face. ⚠️ CURRENTLY UNRENDERED, like DatabaseIcon above: the 備份健康 card
+ * (T-da06) carries its UNHEALTHY verdict in its status label text, not in a
+ * shape. The "a different shape, not merely a different colour" argument that
+ * used to sit here described an indicator this repo does not draw; if the card
+ * ever grows a glyph, that argument is the reason to use these two. */
 export function AlertTriangleIcon({ size = 16, className }: IconProps) {
   return (
     <svg {...base(size)} className={className}>

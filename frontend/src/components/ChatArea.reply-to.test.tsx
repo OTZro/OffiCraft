@@ -6,9 +6,12 @@
 // Locked here, one test per promise the AC makes:
 //   • EVERY row carries the entry — own messages, incoming, attachment-only,
 //     server-authored (sender="system") and card rows alike. Card rows are the
-//     one shape where it does NOT sit in a bubble corner (they have no bubble),
-//     and they render their quote through <ChatReplyCard> rather than the
-//     quote row — an exception the tests state rather than assume;
+//     one shape where it does NOT sit in a bubble corner (they have no bubble).
+//     Their QUOTE is still the ordinary quote row — <ChatReplyCard> renders no
+//     quote of any kind; the row simply hangs it on its own content column
+//     ABOVE the card instead of inside a bubble (ChatArea.reply-card-quote.test.tsx
+//     asserts it is inside neither) — an exception the tests state rather than
+//     assume;
 //   • the banner names the quoted sender and shows a slice of what they said;
 //   • the x clears ONLY the target — half-typed text survives it;
 //   • sending carries the target, and clears it (the NEXT message is not a
@@ -282,9 +285,9 @@ describe("ChatArea 回覆這則", () => {
     expect(entry.getAttribute("title")).toBe(zh.chat.replyAction);
 
     // The jump lives on the reply's own row and has a visible label too — but
-    // that label is the FIRST thing to be trimmed to an ellipsis when the bubble
-    // runs out of room (see the CT guard), so the accessible name may not depend
-    // on it surviving.
+    // that label is DELETED OUTRIGHT below 520px of pane (`@container chat-pane`
+    // in office.css), not trimmed: nothing in the stylesheet can ellipsise it.
+    // So the accessible name may not depend on it being rendered at all.
     const jump = rowOf(container, "c-2").querySelector(
       "[data-testid='msg-quote-jump']",
     )!;
@@ -302,6 +305,8 @@ describe("ChatArea 回覆這則", () => {
     // rather than a CT story: the quote row was a bare <div> (role null,
     // aria-label null), so a reply linearised into
     //   "Mira. Mira. 他說的. 跳到原訊息. 我回的"
+    // (verbatim from that measurement — the button said 「跳到原訊息」 then and
+    // says 「看原訊息」 now; the shape is the point, not the string)
     // — the same name twice, two sentences running together, and NOTHING saying
     // which one is being quoted and which one this person is saying now. That
     // distinction is the entire feature; a screen-reader user was the one

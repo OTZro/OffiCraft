@@ -84,7 +84,11 @@ describe("ChatArea: the card row's quote branch", () => {
     // the card's own body must not be what is shown here.
     expect(quotes[0].textContent).toContain("Mira");
     expect(quotes[0].textContent).toContain("第一個問題");
-    // In the loaded window ⇒ the jump is offered, with its accessible name.
+    // The server sent a quote ⇒ the jump is offered, with its accessible name.
+    // Window membership has no say here and never did on this branch: the render
+    // condition is `m.replyTo && quoted`, never `messages` (see
+    // ChatArea.reply-to.test.tsx's "offers the control even when the quoted
+    // message is nowhere in the loaded window").
     const jump = quotes[0].querySelector("[data-testid='msg-quote-jump']")!;
     expect(jump).toBeTruthy();
     expect(jump.getAttribute("aria-label")).toBe(zh.chat.replyQuoteJump);

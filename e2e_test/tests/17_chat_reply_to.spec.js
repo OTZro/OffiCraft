@@ -28,9 +28,12 @@ const {
 const NAME_M = uniqueName('Reply M');
 const TARGET = 'the sentence that gets quoted back';
 const ANSWER = 'answering that one';
-// Enough filler that the target scrolls out of view — the jump has to be a real
-// scroll decision, not a no-op on a row already on screen. (The spec asserts
-// that precondition rather than trusting it: see `not.toBeInViewport()` below.)
+// Enough filler that the target is OFF SCREEN — not so the jump can make a
+// "scroll decision" (it no longer scrolls anything; see the 看原訊息 test below,
+// which asserts the thread does NOT move), but so that "the overlay shows the
+// original" cannot be satisfied by text the page was already displaying. There
+// is deliberately NO viewport assertion left in this file; the precondition that
+// IS asserted is that the overlay's body is longer than the 60-rune excerpt.
 //
 // It stays comfortably INSIDE the client's page size (useChat loads
 // CHAT_PAGE_SIZE = 30 and only grows backwards when the owner scrolls up, which
@@ -350,7 +353,11 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
   // rows with no app shell — no 1040px cap, no page padding, no roster column —
   // so the 281px discontinuity does not exist there at any viewport. Measured:
   // with the viewport rule in place, mutating `560px` to `400px` (weaker) and to
-  // `900px` (stronger) each left all 27 CT tests green. The CT file had even
+  // `900px` (stronger) each left all 27 CT tests green. ⚠️ That run cannot be
+  // repeated from this tree — the rule it mutated is gone — and 27 was that
+  // file's test count then, not now (32 today). Under the CONTAINER rule the
+  // same two mutations each turn exactly one CT test red; that is the repair.
+  // The CT file had even
   // written the discontinuity down in a comment; it just had no way to fail on
   // it. This spec is that way.
   //
@@ -391,9 +398,15 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     });
     expect(posted.status(), await posted.text()).toBe(200);
 
-    // ENGLISH IS THE FIXTURE, not a variant. 「跳到原訊息」/「看原訊息」 is 69px;
-    // "View the original message" is ~150px, and the label's width is the whole
-    // mechanism. A Chinese-only run walks straight past this.
+    // ENGLISH IS THE FIXTURE, not a variant. The Chinese CONTROL is ~58px
+    // (「看原訊息」; the retired 「跳到原訊息」 was ~69px), the English one is
+    // ~150px, and that width is the whole mechanism. A Chinese-only run walks
+    // straight past this.
+    //
+    // ⚠️ SAY WHICH BOX EACH FIGURE IS. The ~150px here and the ~133px above are
+    // not a disagreement: ~150px is the whole BUTTON (label + 2px gap + 12px
+    // chevron), ~133px is the LABEL alone. Measured in the CT harness at the
+    // same 11px: label 137px, button 151px.
     //
     // 🔴 localStorage ONLY, AND THAT IS DELIBERATE. The obvious alternative is to
     // PATCH `/api/settings { display_language: "en" }`, since the login reconcile

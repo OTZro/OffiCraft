@@ -1108,9 +1108,14 @@
    * what reserves 56px is `!mine && m.body` — being a reply has no part in it —
    * but the row that then overflows is the QUOTE row, and that one renders only
    * when `m.replyTo` is set. So the worst case needs BOTH: incoming, with a
-   * body, and itself a reply. That is fixed where it is caused — the jump shrinks now (see below)
-   * — rather than by clipping here. Clipping here has a standing cost anyway: it cuts the focus ring off
-   * 跳到原訊息, whose right edge is flush with the row's. */
+   * body, and itself a reply. That is fixed where it is caused, but NOT by
+   * making the jump shrink — it does not shrink, it is `flex: none`. Below a
+   * 520px pane the jump's LABEL goes to `display: none` and the button
+   * collapses to its arrow (see the `@container chat-pane` block below); above
+   * that pane width the label renders whole. Whole or absent, never squeezed —
+   * and either way the give happens there rather than in a clip here. Clipping
+   * here has a standing cost anyway: it cuts the focus ring off 「看原訊息」,
+   * whose right edge is flush with the row's. */
   margin-bottom: 6px;
   padding-bottom: 5px;
   border-bottom: 1px solid color-mix(in srgb, var(--color-text-muted) 22%, transparent);
@@ -1187,9 +1192,11 @@
  * why, because the reasoning was sound and the mechanism was still wrong.
  *
  * The story: the control was `flex: 0 0 auto` on the argument that a cut
- * 跳到原訊息 helps nobody. That was measured against the Chinese string (69px)
- * and failed on the English one ("Go to the original message", 154px) — a
- * control that refuses to give runs past the bubble's edge and under
+ * 跳到原訊息 helps nobody. That was measured against the Chinese control (69px)
+ * and failed on the English one ("Go to the original message", 154px) — those
+ * two figures, here and everywhere else in this package, are the WHOLE BUTTON
+ * (label + 2px gap + 12px chevron); the labels themselves measure 55px and
+ * 140px. A control that refuses to give runs past the bubble's edge and under
  * `.chat__msg-actions`, which is absolutely positioned and paints on top of it.
  * The repair was to make the button shrinkable (`flex: 0 10 auto`) with a 14px
  * floor (arrow + gap) and let the LABEL ellipsise inside it.
@@ -1265,8 +1272,9 @@
  * Since 2026-08-21 the excerpt IS the row — the server ships the quoted
  * sentence with every reply and it is the only thing on the row that says what
  * is being answered. Measured in a real browser at that point: at 390px in
- * English the excerpt was down to 26px (0px at 320px) while "Go to the original
- * message" held 154px. On screen: 「Mira 他… Go to the original messa… ›」 — a
+ * English the excerpt was down to 26px (0px at 320px) while the "Go to the
+ * original message" control held 154px. On screen, with the shrink still in
+ * place: 「Mira 他… Go to the original messa… ›」 — a
  * label about going somewhere, crowding out the reason to go.
  *
  * So below the breakpoint the label collapses to its arrow and hands the width
@@ -1317,13 +1325,19 @@
  * 520 is the pane width, not a viewport width: above it the excerpt still has
  * room to say something with the label present (628 → 48 chars); at or below it
  * the label is the difference between a readable quote and an empty one (506 →
- * 3 chars with the label, and the ~154px it gives back is most of the row).
+ * 0 or 3 chars with the label — that is the very row the two tables disagree on,
+ * see the warning above; both figures carry the same verdict — while the ~150px
+ * the current English label gives back is most of the row). These are shapes
+ * too: the caveat above does not stop at its own paragraph.
  *
  * ⚠️ AND THE GUARD HAD TO MOVE TOO. `chat-reply-to.ct.spec.tsx` mounts these
  * rows with NO APP SHELL — no 1040px cap, no page padding, no roster column —
  * so it could never reproduce the discontinuity above and a mutation of the old
  * `560px` in EITHER direction (400, 900) left all 27 CT tests green: the guard
- * only ever witnessed that the rule existed. Now that the condition is the pane,
+ * only ever witnessed that the rule existed. ⚠️ That run cannot be repeated from
+ * this tree (the `560px` rule is gone) and 27 was that file's count then, not
+ * now — it has 32 tests today, and under the container rule the same two
+ * mutations each turn exactly one of them red. Now that the condition is the pane,
  * the CT harness CAN drive it (its own `.chat__messages` is the container), and
  * `17_chat_reply_to.spec.js` carries the production-shell witness at vw 721 /
  * 800 / 880 — the three widths that were empty. */
