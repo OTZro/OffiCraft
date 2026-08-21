@@ -163,7 +163,7 @@ var openapiOverweight = map[string][]string{
 // the next person to "repay" it by advertising the lever.
 //
 // update_settings.onboarding_dismissed: T-0648. The handler reads it (it stamps
-// the owner's 知道了 on the first-run onboarding report), and an agent COULD
+// the owner's 「不再顯示」 on the first-run onboarding report), and an agent COULD
 // honestly send it — it is withheld for what the lever DOES. The banner is the
 // one place a fresh install says WHY its assistant never woke up, and this
 // field is the owner's own acknowledgement of that warning; an agent has no

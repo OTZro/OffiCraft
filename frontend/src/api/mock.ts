@@ -4583,12 +4583,30 @@ export const mockApi: Api = {
     // onboarding_dismissed (T-0648) — server parity: the stamp lives ON the
     // report row, and only a `failed` report has a banner up to close. Every
     // other state is refused with 409, exactly as setOnboardingDismissed does:
-    // no report at all (mock mode's standing state), or a run still `running`,
-    // where a stamp would permanently close a warning nobody has seen. Like the
+    // no report at all (mock mode's standing state until a test seeds one via
+    // __injectMockOnboardingReport), or a run still `running`. What the
+    // `running` refusal buys server-side is not the stamp's visibility — a
+    // stamp there is wiped by whichever terminal path lands next — but the
+    // WRITE: the server's dismissal is an unlocked read-modify-write of the
+    // whole report row and the only writer that can run CONCURRENTLY with the
+    // run, so writing back a pre-verdict copy ERASES the failure and strands
+    // the report in `running`, where no banner draws and onboarding never
+    // re-runs. The mock has no concurrent writer to reproduce that, so it
+    // copies the REFUSAL, which is the part callers can observe. Like the
     // server, this runs LAST — the settings fields above are already applied
     // when the refusal is thrown.
     if (patch.onboardingDismissed !== undefined) {
       if (mockServerSettings.onboarding?.state !== "failed") {
+        // This sentence is a SECOND hand copy of errNoOnboardingBanner's, and
+        // it stays one: the repo's only cross-language string contracts are
+        // spec/openapi.json (which carries schema descriptions, never error
+        // envelope text) and the message-key generator (which reads
+        // locales/en.ts, i.e. UI wording, not server prose). Neither reaches an
+        // error message, so binding these two would mean inventing a third
+        // generator for one string. Nothing depends on the wording either: the
+        // tests on both sides assert the STATUS (and the code derived from it),
+        // and the banner's only caller discards the rejection entirely — it
+        // puts itself back up rather than showing the server's sentence.
         throw mockApiError(
           "http 409 for PATCH /api/settings",
           409,
@@ -5340,6 +5358,20 @@ export function __injectMockTaskType(t: TaskTypeView): void {
 export function __injectMockTaskManual(m: TaskManualView): void {
   taskManuals.push(structuredClone(m));
   emitTopic("task_manual");
+}
+
+// Test-only hook: seed the ONE first-run onboarding report, the way the server's
+// own kick / finish / recover would have left the row on disk. Mock mode ships
+// with no report at all (see the `onboarding: null` note on
+// DEFAULT_MOCK_SETTINGS) — this is the seeding caller that note is waiting for.
+// Without it the only reachable `onboarding_dismissed` branch is "no report",
+// so the half of the guard that REFUSES a stamp on a run still `running` — the
+// half the server comment calls the whole point — has nothing standing on it.
+// Cleared by __resetMock along with the rest of the settings blob.
+export function __injectMockOnboardingReport(
+  report: NonNullable<WireServerSettings["onboarding"]>
+): void {
+  mockServerSettings.onboarding = structuredClone(report);
 }
 
 // Test-only hook: flip a mock member's presence projection, the way the real

@@ -877,7 +877,7 @@ export interface OnboardingReportView {
   startedAt: number;
   finishedAt: number;
   steps: OnboardingStepView[];
-  /** When the owner pressed 知道了 on the banner (unix seconds; 0 = never;
+  /** When the owner pressed 「不再顯示」 on the banner (unix seconds; 0 = never;
    * T-0648). It rides on the REPORT, not on the browser, which is what makes
    * the dismissal survive a new tab. A report row written before this field
    * existed has no stamp, and that absence reads as 0 — never dismissed. */
@@ -936,11 +936,20 @@ export interface ServerSettingsPatch {
   displayWide?: boolean;
   /** Dismiss (true) or un-dismiss (false) the first-run onboarding banner
    * (T-0648) — it stamps / clears `dismissedAt` on the ONE onboarding report,
-   * so 知道了 outlives the tab it was pressed in. 409 when there is no banner
-   * to close: no onboarding report at all, or a report whose state is not
-   * `failed` — the banner draws for `failed` alone, so a stamp laid on a run
-   * that is still `running` would permanently close a warning nobody has
-   * seen. */
+   * so 「不再顯示」 outlives the tab it was pressed in. 409 when there is no
+   * banner to close: no onboarding report at all, or a report whose state is
+   * not `failed`.
+   *
+   * 🔴 THE `running` REFUSAL IS ABOUT THE WRITE, NOT ABOUT THE STAMP. A stamp
+   * laid on a still-`running` report could not silence anything anyway — both
+   * paths that reach a terminal state rewrite the row with `dismissedAt` back
+   * at 0. What is permanent is the write itself: server-side this is an
+   * unlocked read-modify-write of the WHOLE report row, and the only writer
+   * that can run CONCURRENTLY with the run (kick / finish / recoverStale are
+   * one linear goroutine), so interleaved with the run reaching its verdict it
+   * writes back its pre-verdict copy — the failure is ERASED, the report is
+   * stranded in `running` (non-terminal, so no banner draws) and first-run
+   * onboarding never re-runs, because a report exists. */
   onboardingDismissed?: boolean;
 }
 

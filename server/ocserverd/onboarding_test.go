@@ -526,7 +526,7 @@ func envOfMap(m map[string]string) func(string) string {
 	return func(k string) string { return m[k] }
 }
 
-// ── T-0648: the banner's 「知道了」 is a DURABLE, SERVER-SIDE dismissal ────────
+// ── T-0648: the banner's 「不再顯示」 is a DURABLE, SERVER-SIDE dismissal ──────
 //
 // Owner ruling rc-45eb8652b17f: 「永久關閉，不需另外開任務」. The dismissal used to
 // live in the browser's sessionStorage, so a second tab brought the banner

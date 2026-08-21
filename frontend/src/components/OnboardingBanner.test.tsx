@@ -140,6 +140,13 @@ describe("OnboardingBanner", () => {
   // FUNCTION, `??` sees a non-nullish hit and keeps it, and React renders a
   // function child as nothing — the banner would go blank exactly where it is
   // supposed to say what broke.
+  //
+  // The two inherited names are NOT the same shape, and one case cannot stand
+  // for the other: `toString` is a data property holding a function, while
+  // `__proto__` is an ACCESSOR whose getter returns an OBJECT. A guard written
+  // as "reject functions" passes `__proto__` straight through to React, which
+  // throws on an object child. Both names ride in the same report so the guard
+  // has to answer for the whole chain, not for the function half of it.
   it("falls back to the server reason for a code that names an Object.prototype member", async () => {
     getServerSettings.mockResolvedValue(
       settingsWith({
@@ -154,6 +161,13 @@ describe("OnboardingBanner", () => {
             reason: "a reason only the server knows how to word",
             detail: "",
           },
+          {
+            name: "wake_assistant",
+            ok: false,
+            code: "__proto__",
+            reason: "a second reason only the server knows how to word",
+            detail: "",
+          },
         ],
       })
     );
@@ -161,6 +175,9 @@ describe("OnboardingBanner", () => {
     const banner = await screen.findByTestId("onboarding-banner");
     expect(banner.textContent).toContain(
       "a reason only the server knows how to word"
+    );
+    expect(banner.textContent).toContain(
+      "a second reason only the server knows how to word"
     );
   });
 
@@ -252,7 +269,7 @@ describe("OnboardingBanner", () => {
     expect(screen.queryByTestId("onboarding-banner")).toBeNull();
   });
 
-  // ── 🔴 T-0648: 「知道了」 IS PERMANENT, AND THE SERVER IS WHERE IT LIVES ──────
+  // ── 🔴 T-0648: 「不再顯示」 IS PERMANENT, AND THE SERVER IS WHERE IT LIVES ────
   //
   // Owner ruling rc-45eb8652b17f (「永久關閉，不需另外開任務」), reported after
   // hitting the old behaviour himself: 「為什麼我重新點進網址又出現了？」 The
@@ -269,7 +286,7 @@ describe("OnboardingBanner", () => {
     steps: [{ name: "wake_assistant", ok: false, reason: "no warden yet", detail: "" }],
   };
 
-  it("writes the dismissal to the SERVER when 知道了 is pressed", async () => {
+  it("writes the dismissal to the SERVER when 「不再顯示」 is pressed", async () => {
     getServerSettings.mockResolvedValue(settingsWith(dismissibleReport));
     renderBanner();
     (await screen.findByTestId("onboarding-dismiss")).click();

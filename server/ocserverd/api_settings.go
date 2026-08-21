@@ -655,8 +655,9 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 	//
 	// A dismissal with no banner behind it (no report, or a report that is not
 	// `failed`) is refused with 409 rather than absorbed as a quiet 200: on a
-	// run that is still `running` the stamp would close a warning nobody has
-	// seen yet, permanently — see setOnboardingDismissed. The banner is the only
+	// run that is still `running` the refusal is what keeps this request's
+	// unlocked read-modify-write from interleaving with the run's own write and
+	// ERASING the verdict — see setOnboardingDismissed. The banner is the only
 	// sender and it sends this field on its own, so the refusal does not strand
 	// a half-applied settings PATCH in practice.
 	if body.OnboardingDismissed != nil {

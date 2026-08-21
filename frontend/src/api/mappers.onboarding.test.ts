@@ -1,6 +1,6 @@
 // 🔴 T-0648 — HOW AN ABSENT `dismissed_at` IS READ, pinned at the mapper.
 //
-// The onboarding banner's 「知道了」 is a durable, server-side dismissal: a stamp
+// The onboarding banner's 「不再顯示」 is a durable, server-side dismissal: a stamp
 // on the ONE onboarding report row. It shipped WITHOUT a migration and without
 // a backfill (owner ruling rc-45eb8652b17f), so every report row written before
 // the field existed arrives with no `dismissed_at` at all.

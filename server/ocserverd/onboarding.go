@@ -520,14 +520,14 @@ func (s *apiServer) recoverStaleOnboarding() {
 	onboardingLog("closed out a stale `running` report from a previous process (interrupted run)")
 }
 
-// errNoOnboardingBanner refuses a 知道了 that has no banner to close: no report
+// errNoOnboardingBanner refuses a 「不再顯示」 that has no banner to close: no report
 // at all, or a report whose state is not `failed`. It is reported as 409, never
 // as a silent 200 — see setOnboardingDismissed for why a quiet no-op here would
 // be the dangerous answer.
 var errNoOnboardingBanner = errors.New(
 	"no onboarding banner is up to dismiss — the first-run report is absent or not in a failed state")
 
-// setOnboardingDismissed stamps (or clears) the owner's 知道了 on the ONE stored
+// setOnboardingDismissed stamps (or clears) the owner's 「不再顯示」 on the ONE stored
 // onboarding report (T-0648).
 //
 // 🔴 ONLY A `failed` REPORT CAN BE DISMISSED, AND THAT GUARD IS THE WHOLE POINT.

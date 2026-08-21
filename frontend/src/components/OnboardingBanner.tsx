@@ -27,7 +27,7 @@ import "./onboarding.css";
  * a problem, and a banner that appears and then disappears on its own trains
  * the owner to ignore it.
  *
- * 🔴 DISMISSAL IS PERMANENT, AND IT IS THE SERVER'S (T-0648). 「知道了」 PATCHes
+ * 🔴 DISMISSAL IS PERMANENT, AND IT IS THE SERVER'S (T-0648). 「不再顯示」 PATCHes
  * `onboarding_dismissed`, which stamps `dismissed_at` on the ONE onboarding
  * report row; this component then simply believes that field. It used to be a
  * sessionStorage key — scoped to one TAB — so opening the same URL again
@@ -174,11 +174,23 @@ export function OnboardingBanner() {
   // and rendering it verbatim is how this banner can never be made to go
   // silent by a version skew. Deliberately NOT a generic "unknown error".
   //
-  // Only a STRING counts as a hit. An unguarded index answers an INHERITED
-  // member for a code like `toString`, and `??` keeps that function because a
-  // function is not nullish — React then renders it as nothing, blanking the
-  // one sentence this banner exists to show. Every Object.prototype name is a
-  // function, so the type test closes the whole prototype chain at once.
+  // Only a STRING counts as a hit. `reasons` is a plain object literal, so an
+  // unguarded index answers an INHERITED member for a code like `toString`,
+  // and `??` keeps it because it is not nullish — the one sentence this banner
+  // exists to show is then gone.
+  //
+  // 🔴 AND THE INHERITED MEMBERS ARE NOT ALL ONE SHAPE. All but one of
+  // Object.prototype's names are data properties holding FUNCTIONS, which React
+  // renders as nothing (blank banner); `__proto__` is the exception — an
+  // ACCESSOR whose getter returns an OBJECT, which React throws on ("Objects
+  // are not valid as a React child") — and this banner sits directly in App
+  // with no error boundary anywhere above it, so that throw unmounts the whole
+  // cockpit, not just the banner.
+  //
+  // A guard phrased as "reject functions" therefore closes only the first half.
+  // Requiring a string closes both at once, and needs no list of names: a real
+  // wording is always a string, so every miss falls through to the server's
+  // own sentence.
   const reasonText = (step: OnboardingStepView) => {
     const worded = (t.onboarding.reasons as Record<string, unknown>)[step.code];
     return typeof worded === "string" ? worded : step.reason;
