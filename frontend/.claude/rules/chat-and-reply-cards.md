@@ -92,9 +92,26 @@ scrollback → 瞄準一則舊訊息 → 切到別的成員再切回來（草稿
 不會弄紅前端。現在 `mock.reply-to.test.ts` 會去讀 `server/ocserverd/wire.go` 那一
 行，兩個數字不一致就紅 —— 要改長度，兩份一起改。
 
-**「跳回原訊息」跟引用內容是兩個問題，不要合成一個查詢。** 引用內容來自 wire；
-能不能跳來自 `messages`（已載入視窗）。兩者經常不一致，而且那是對的：常見的回覆
-引用的是視窗外很遠的一則，引用列照畫、跳鈕不給。
+**引用內容只從 wire 來，「看原訊息」是點下去才撈 —— 兩者都不准在 render 或
+effect 裡發請求。** 引用列畫的是 server 這次隨訊息一起送來的 `reply_to_chat`，
+沒有就畫 `chat.replyQuoteGone`，**不准為了補齊它去發任何請求**（那台背景補撈的
+機器 `useQuotedMessages` 已於 2026-08-21 刪除；`ChatArea.quote-no-fetch.test.tsx`
+的第一條就是「畫一則有引用、一則引用不見，api 一次都沒被碰」）。
+
+「看原訊息」按鈕則是 owner 2026-08-21 的裁定（`rc-8559fd6d3c94`：「全部統一就撈
+那一則顯示出來就好」）：**每一則有引用的列都給，不問那則在不在已載入視窗** ——
+`ChatArea.tsx` 的 render 條件是 `m.replyTo && quoted`，完全不查 `messages`。點下去
+用 `api.getChatMessage(replyTo)` 撈那一則，開跟 放大閱讀 同一片覆蓋層，**不捲動**。
+這一段是刻意合成的：以前它問「那則在不在視窗」來決定給不給鈕，owner 把它改成一律
+給、按了才撈，所以**不要再把窗口成員資格的判斷加回去**。
+
+⚠️ 但「點下去才撈」有兩條紀律：**一次點擊只准一次請求**（`quoteBusyRef` 這個
+in-flight latch，不是 state —— 同一個 tick 的兩次點擊都會讀到更新前的 state），
+失敗只記**一個** id、原地說一句，**不重試、不排隊、不在下一個 SSE 事件自癒**。
+兩條都由 `ChatArea.quote-no-fetch.test.tsx` 釘住。
+
+`messageById` 還活著，但它只回答**一個**問題：composer 上方的橫幅認不認得回覆
+對象。它**不**回答「能不能看原訊息」。
 
 **取消回覆的 x 只清回覆對象。** 不准順手清 `draft`、不准清
 `pendingAttachments`：取消回覆不是取消訊息。這條有測試釘住

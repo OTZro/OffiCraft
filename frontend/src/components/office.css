@@ -1255,10 +1255,17 @@
  * `aria-label={t.chat.replyQuoteJump}`, so a screen reader reads the same
  * sentence either way, and `title` keeps it on hover for a pointer.
  *
- * `display: none` rather than a shrink, deliberately: shrinking is what the
- * flex factors already do and it bottoms out at an ellipsis that still costs
- * width for no information ("G…"). The floor on `.chat__msg-quote__jump` (14px
- * = arrow + gap) is what the button is left with.
+ * `display: none` rather than a shrink, deliberately: an ellipsised label
+ * bottoms out at a stub that still costs width for no information ("G…").
+ *
+ * ⚠️ AND THERE IS NOTHING LEFT HERE THAT COULD SHRINK INSTEAD — do not read
+ * this paragraph as describing a fallback that still exists. The button is
+ * `flex: none` and `.chat__msg-quote__jump-label` has no rule of its own outside
+ * this query; the `flex: 0 10 auto` / button `min-width: 14px` / label
+ * `min-width: 0` trio that made a shrink possible was measured dead and deleted
+ * in the same change (`d7752781`, see the note above the block). So collapsing
+ * the label is not one of two options, it is the only give this control has, and
+ * what the button is left with is its chevron.
  *
  * 🔴 THE CONDITION IS THE PANE'S WIDTH, AND IT HAD TO BE. This shipped for one
  * round as `@media (max-width: 560px)` — the viewport — and that is the wrong

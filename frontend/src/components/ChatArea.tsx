@@ -757,8 +757,14 @@ export function ChatArea({
   // not that it is fast, it is that it has exactly one behaviour.
   //
   // `messageById` survives for ONE job, and it is not the quote text: whether
-  // the JUMP control can be offered, which is a question about what is loaded
-  // right now and can only be answered here.
+  // the COMPOSER's banner can NAME the person being answered, which is a
+  // question about what is loaded right now and can only be answered here.
+  //
+  // 🔴 IT NO LONGER GATES THE QUOTE ROW'S CONTROL. It did — the row offered
+  // 「看原訊息」 only when the target was in this map — and the same owner ruling
+  // that deleted the resolution deleted that gate too: the control is offered on
+  // every reply and reads its one message back on click (`openQuotedMessage`).
+  // The render condition is `m.replyTo && quoted`; it does not consult `messages`.
   const messageById = useMemo(
     () => new Map(messages.map((m) => [m.id, m])),
     [messages],
