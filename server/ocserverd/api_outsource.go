@@ -268,12 +268,21 @@ func (s *apiServer) HandleGetWorkerBootContextApiOutsourceWorkersIdBootContextGe
 
 // POST /api/outsource-workers/{id}/relocate — the cockpit's 改機器 for a worker
 // (route Requires=admin_agent since P7c — 外包對齊正職, the exact member relocate
-// floor). Writes the worker's pinned desired_machine_id, then re-spawns it onto
-// the chosen machine using the SAME 殺舊 session + 清 pacing semantics
-// the shared-FSM zombie-takeover uses (relocateWorkerNow), WITHOUT touching lifecycle (the
+// floor). Writes the worker's pinned desired_machine_id, then puts it through
+// relocateWorkerNow → respawnWorkerForOwnerOp, WITHOUT touching lifecycle (the
 // worker stays assigned/active — a relocate is a placement change, not a state
 // change). Returns the freshly-projected worker so the panel adopts the new pin
-// immediately. 404 for an unknown / already-released worker (a released worker
+// immediately.
+//
+// 🔴 IT DOES NOT KILL THE SESSION HERE, and this comment used to say it did.
+// Since T-98f4 a LIVE worker with anything to flush gets the graceful wind-down:
+// it keeps running ON THE OLD MACHINE until its own report_stopped (or the
+// owner's force-stop), and the kill+respawn onto the new pin happens at that
+// 收口. The immediate 殺舊 session + 清 pacing + 重生 path is what a worker with
+// nothing to flush takes. The old sentence described the verb this endpoint had
+// BEFORE that change; it is retracted here rather than deleted, because the same
+// claim also stood on the wire (spec/openapi.json) and in the MCP tool list, and
+// a reader who met it there should be able to find where it was withdrawn. 404 for an unknown / already-released worker (a released worker
 // has no session to move). machine_id is REQUIRED since owner 2026-07-27
 // (relocateNeedsMachineMsg): absent key ⇒ 422, explicit null / "" ⇒ 400.
 func (s *apiServer) HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost(w http.ResponseWriter, r *http.Request, id string) {

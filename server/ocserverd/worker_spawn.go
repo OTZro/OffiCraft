@@ -972,10 +972,21 @@ func (s *apiServer) retryPendingWorkerStop(workerID string) {
 
 // ── relocate (owner 改機器 — T-f190) ──────────────────────────────────────────
 
-// relocateWorkerNow re-spawns a worker onto its freshly-pinned desired_machine_id
-// using the SAME 殺舊 session + 清 pacing + 重生 semantics the FSM zombie-
-// takeover uses, DELIBERATELY without touching lifecycle (status stays assigned/active —
-// a relocate is a placement change, not a state change):
+// relocateWorkerNow moves a worker onto its freshly-pinned desired_machine_id,
+// DELIBERATELY without touching lifecycle (status stays assigned/active — a
+// relocate is a placement change, not a state change).
+//
+// 🔴 READ THIS BEFORE THE NUMBERED LIST. Since T-98f4 it delegates to
+// respawnWorkerForOwnerOp, so the three steps below are the arm taken by a
+// worker with NOTHING TO FLUSH (offline, or an epoch already collected). A live
+// worker takes the graceful arm instead: a wind-down is opened, the session
+// keeps running on the OLD machine, and steps 1-3 happen at the 收口 — its own
+// report_stopped, or the owner's force-stop. The list used to be presented as
+// what this function unconditionally does, which is why the same claim reached
+// the wire description and the MCP tool list and stood there unread.
+//
+// The immediate arm, using the SAME 殺舊 session + 清 pacing + 重生 semantics the
+// FSM zombie-takeover uses:
 //  1. worker_stop to the CURRENT last_spawn_target (when still online) to clear
 //     the session on the old machine — the same primitive the ghost-clear fires;
 //  2. drop the spawn pacing stamp so the re-dispatch is not throttled;
