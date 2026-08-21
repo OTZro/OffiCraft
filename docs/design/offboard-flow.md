@@ -166,8 +166,39 @@ server 的處理方式是**每一輪重新推導**——還活著就再送一次
 **這一次按下**起算。時鐘、wire 上的死線、講給 agent 的句子，三者都問同一個
 `winddownKindFor`。
 
-⚠️ **外包那邊只加了對稱的 endpoint，`/stop` 的語意一個字都沒動**——把外包停止改成
-優雅收工是另一個步驟的工作。
+### 🔴 外包的 `/stop` 也改成優雅收工了（owner 2026-08-21「往正職靠：外包那顆改成優雅停止，強制殺移到第三顆按鈕」）
+
+⚠️ **這一段推翻了它上一版寫的話**——上一版寫「外包那邊只加了對稱的 endpoint，
+`/stop` 的語意一個字都沒動」。那句在 owner 裁定的當下就過期了。
+
+`HandleStopOutsourceWorker…` 現在做的是：翻 `desired_state=offline`（保持「停止壓過
+一切自動復活」）、蓋 `stopping_since`、清掉 in-flight 的 refocus epoch、走
+`openWorkerHandoverGrace` 朝 worker 自己的 session 發那份 member-topic 的下線預告，然
+後**回傳**。它**不殺**、也**不蓋 `forced_stop_at`**。
+
+- **為什麼不蓋 `forced_stop_at`**：那個 anchor 存在的兩個理由，對優雅停止都反過來。
+  它是用來讓通知**沉默**的（`forcedEpochLive` → `offboardKindOf` 不掛 notice），可是
+  優雅停止的重點就是那則通知要送到；它也是「這個 session 是被切斷的」憑據，而這個
+  session 是被**請它自己收尾**的。那個 anchor 連同當場的 kill 一起搬到第三顆按鈕
+  `POST /api/outsource-workers/{id}/force-stop`。
+- **收口是 `workerReportStopped`**，而它需要一條新的臂。原本的收口閘是
+  `desired online ∧ refocus_since > 0`，而一個停止 epoch **兩個都不是**。少了那條臂，
+  外包按了停止之後會**永遠不被收掉**——比原本當場殺掉更糟。護欄：
+  `TestWorkerStop_ReportStoppedCollectsTheStopEpoch`。
+- **refocus epoch 還是被清掉，但理由換了**。原本的註解說「明示的停止壓過換手」——停止
+  把收尾丟掉然後殺。現在停止**本身就是**一種收尾，沒有東西被壓過：worker 繼續走同一份
+  下線程序，只是後面不再接一個新 session。清掉的理由變成機械的：
+  `autoHandoverWorker` 的 in-flight 臂是用 kill+**respawn** 收口的，留著它會把 owner 剛
+  壓下去的 worker 又叫起來。
+- **`desired_state` 一開始就翻成 offline，這是刻意的**，而且它不會讓別的東西提早收掉
+  worker：`autoHandoverWorker` 現在對 desired-offline 的 worker **最先**分流到停止臂並
+  return，排程 tick 的其他復活分支本來就跳過 held-down 的 worker。真正的風險方向是**被
+  respawn**，不是被提早收——上面那條清 refocus 的理由講的就是它。
+- **加速停止在外包身上也走得通了**。`/accelerated-stop` 原本對 `desired_state=offline`
+  回 409（在停止還是當場殺的年代是對的），那會讓 owner 只剩 停止 →（409）→ 強制停止。
+  它現在跟正職一樣吃兩條臂；下線那一臂重蓋 `stopping_since`、寫
+  `refocus_op=accelerated_stop`，`autoHandoverWorker` 的停止臂在 `stopping_since + grace`
+  收口。護欄：`TestWorkerStop_AcceleratedStopEscalatesTheStopEpochAndIsHonoured`。
 
 ### 🔴 token 到期前一小時也會開一條「停止」（owner 2026-08-21）
 

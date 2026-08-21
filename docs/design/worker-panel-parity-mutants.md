@@ -116,7 +116,7 @@ stylesheet、而唯一會 render machine picker 的 CT guard 在同一張票裡�
 | M11 | 無編輯的早退也套用到喚醒（照原值確認＝什麼都不做） | ④ | `喚醒 ASKS FIRST…` |
 | M12 | 狀態格（含「已釋放」）加回去 | ② | `released…and NO 已釋放 status cell remains` |
 | M13 | 離線原因跟著狀態格一起被刪 | ② | `離線: the dot reads 離線 and the structured reason survives…` |
-| M14 | 喚醒的字改回 worker 私有葉子 | ③ | `stop → the dot flips to 已停止 and the row swaps 更改／停止 for 喚醒` |
+| M14 | 喚醒的字改回 worker 私有葉子 | ③ | `停止 → the worker goes 停止中 and the row keeps the 加速停止／強制停止 rungs`（T-ed79 改名前叫 `stop → the dot flips to 已停止 and the row swaps 更改／停止 for 喚醒`——外包的 停止 從當場砍改成優雅收工，那顆斷言的結論整個反過來了） |
 | M15 | 外包的 `.mp-identity__buttons` 換掉（兩顆不再同一列） | ① | 同上那條 |
 | M16 | 正職的 `.mp-identity__buttons` 換掉 | ① | `puts 更改 and the stop action in the same button row, 更改 first` |
 | M16b | 正職那一列裡把「更改」拿掉（順序／存在性半邊） | ① | 上述 ＋ 既有的 `says 更改 for an online member…` |
