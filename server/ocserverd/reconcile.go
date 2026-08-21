@@ -157,6 +157,29 @@ type reconcileState struct {
 	LastCommand          string
 	LastCommandAt        float64
 	StopDeadline         float64
+	// RobustStopPendingAt (T-ed79) is when an OUT-OF-BAND robust STOP was last
+	// dispatched for this member by dispatchRobustStopNow — the force-stop
+	// button, the cancel-wake kill, and the report_stopped collect. 0 means none
+	// is outstanding.
+	//
+	// 🔴 WHY IT EXISTS. That dispatch is raw and best-effort: enqueueToWarden is
+	// fail-closed on a warden holding no live SSE downstream, so the frame is
+	// simply dropped. For the report_stopped collect that drop is terminal —
+	// decideUp's recycle arm is gated on refocus_since > 0 and decideDown's soft
+	// arm returns decisionNone for the whole window, so NO arm re-sends it. The
+	// member is left online on a session it has already declared finished, and
+	// nothing will ever kill and respawn it.
+	//
+	// 🔴 WHY THE ANCHOR IS THE DISPATCH AND NOT THE MEMBER'S LATCH. Re-deriving
+	// "this one needs collecting" from stopped_since would re-open the harm the
+	// first commit of this branch closed: 下線 → 活化 leaves a PREDECESSOR's
+	// stopped_since on a brand-new session with no epoch
+	// (TestWindDownKind_APredecessorsLatchDoesNotSilenceTheThresholds), and that
+	// session would be robust-stopped on its first tick with no close-out. A
+	// dispatch marker cannot say that: it is written only when a STOP was really
+	// sent for THIS session, and it is dropped the moment the session goes
+	// offline, so it can never be inherited by the next generation.
+	RobustStopPendingAt float64
 	// OfflineSince (T-9adc) is the first tick a desired-online member was
 	// OBSERVED offline (0 while online / never observed offline). It feeds the
 	// zombie-takeover second-confirmation window ONLY: the takeover STOP needs
@@ -271,6 +294,42 @@ func reconcileDecide(
 		st.CircuitOpen = false
 		st.Attempts = 0
 		st.BackoffUntil = 0.0
+	}
+	// ── the unlanded out-of-band robust STOP (T-ed79) ────────────────────────
+	// At-least-once for the ONE dispatch path that had no backstop at all. Runs
+	// BEFORE the desired-state switch because the member it describes is being
+	// collected regardless of which arm would otherwise own it, and because
+	// decideUp's converged arm would otherwise wipe the stop bookkeeping every
+	// tick.
+	//
+	// Cleared on the first offline observation: that is both the success signal
+	// (the warden killed the session) and the guarantee that the marker can
+	// never outlive the session it was dispatched for.
+	if st.RobustStopPendingAt > 0.0 {
+		switch {
+		case !obs.Online:
+			st.RobustStopPendingAt = 0.0
+		case now-st.RobustStopPendingAt >= cfg.StopRetry:
+			st.RobustStopPendingAt = now
+			st.Phase = reconcilePhaseStopping
+			st.LastCommand = reconcileCmdStop
+			st.LastCommandAt = now
+			return reconcileDecision{
+				Command: reconcileCmdStop, MemberID: obs.MemberID,
+				Reason: "robust stop: re-dispatch (out-of-band STOP unlanded — " +
+					"still online past stop_retry)",
+				State: st,
+				// Kill where the session ACTUALLY is, exactly as
+				// dispatchRobustStopNow addressed it (memberKillTargetWarden);
+				// "" falls back to wardenTargetOf in reconcileOne.
+				DispatchWarden: obs.RunningMachine,
+			}
+		default:
+			st.Phase = reconcilePhaseStopping
+			return decisionNone(obs, st,
+				"robust stop dispatched out-of-band — awaiting warden kill "+
+					"(within stop_retry)")
+		}
 	}
 	switch obs.Desired {
 	case DesiredStateUninstall:
@@ -1902,9 +1961,15 @@ func (s *apiServer) reconcileMemberNow(memberID string) reconcileDecision {
 // What it skips differs by caller, and only one of them has a clock to skip:
 //   - recycle kill: skips the remaining recycleGraceFor window, and the cadence
 //     STOP arm is still the idempotent backstop if this frame is lost.
-//   - force-stop / offboard: there is NO clock here and NO backstop — decideDown
-//     returns decisionNone for the whole soft window, so a lost frame leaves the
-//     member online until the owner presses the button again.
+//   - force-stop / offboard: there is NO clock here to skip — decideDown returns
+//     decisionNone for the whole soft window.
+//
+// 🔴 "Best-effort" no longer means "one shot" (T-ed79). Every dispatch from here
+// arms RobustStopPendingAt, so a frame the fail-closed enqueue gate drops on an
+// unreachable warden is re-sent by the cadence once the member is still online
+// past stop_retry. Before that, the report_stopped collect in particular had no
+// backstop at ALL: no arm of the decider re-derives it, so a single lost frame
+// parked the member online forever on a session it had already closed out.
 func (s *apiServer) dispatchRobustStopNow(memberID string) {
 	if s.noReconcile {
 		return
@@ -1920,10 +1985,31 @@ func (s *apiServer) dispatchRobustStopNow(memberID string) {
 	// while the session being collected still runs on the origin — addressing the
 	// destination there would leave the old session alive forever.
 	s.enqueueToWarden(memberID, s.memberKillTargetWarden(memberID), frame)
+	// Record the dispatch so the cadence can re-send it if it never lands
+	// (T-ed79). Armed UNCONDITIONALLY — including on the fail-closed refusal
+	// above, which is the case that needs it most: an unreachable warden is
+	// exactly how a collect goes missing. See reconcileState.RobustStopPendingAt
+	// and the arm at the top of reconcileDecide.
+	s.noteRobustStopDispatched(memberID, nowSecs())
 	// The robust kill (force-stop, report_stopped recycle, relocate) ends the
 	// current session: drop its boot_ts so the respawn's first connect re-stamps
 	// a fresh anchor (T-8fb2 boot_ts fix).
 	s.clearSessionBootTS(memberID)
+}
+
+// noteRobustStopDispatched arms the at-least-once retry for one out-of-band
+// robust STOP. Takes reconcileMu itself: every caller is an HTTP handler that
+// holds no reconcile lock. A member with no store entry yet gets a fresh state
+// — the marker is the only thing the entry needs to carry.
+func (s *apiServer) noteRobustStopDispatched(memberID string, now float64) {
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+	st, ok := s.reconcileStates[memberID]
+	if !ok {
+		st = newReconcileState()
+	}
+	st.RobustStopPendingAt = now
+	s.reconcileStates[memberID] = st
 }
 
 // identitySweepDedupeSecs is the window a member's cross-machine identity sweep
