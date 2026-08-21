@@ -558,7 +558,7 @@ export const zh = {
     },
     detailShow: "顯示詳細記錄",
     detailHide: "收起詳細記錄",
-    dismiss: "知道了",
+    dismiss: "不再顯示",
   },
   // ── 派送失敗告示（T-7fa1）──────────────────────────────────────────────
   // 「按了喚醒卻什麼都沒發生」的唯一出口：server 回 activation_pending 時，這

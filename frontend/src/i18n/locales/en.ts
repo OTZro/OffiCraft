@@ -486,7 +486,7 @@ export const en: Dict = {
     },
     detailShow: "Show details",
     detailHide: "Hide details",
-    dismiss: "Got it",
+    dismiss: "Don't show again",
   },
   // ── Undelivered-dispatch notice (T-7fa1) ─────────────────────────────────
   // 🔴 The copy's scope must equal the BOOL's scope (review r1 BLOCKER-1). The
