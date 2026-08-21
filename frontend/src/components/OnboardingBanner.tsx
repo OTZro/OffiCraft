@@ -173,9 +173,16 @@ export function OnboardingBanner() {
   // of; either way the server's own sentence is still the best thing we have,
   // and rendering it verbatim is how this banner can never be made to go
   // silent by a version skew. Deliberately NOT a generic "unknown error".
-  const reasonText = (step: OnboardingStepView) =>
-    (t.onboarding.reasons as Record<string, string | undefined>)[step.code] ??
-    step.reason;
+  //
+  // Only a STRING counts as a hit. An unguarded index answers an INHERITED
+  // member for a code like `toString`, and `??` keeps that function because a
+  // function is not nullish — React then renders it as nothing, blanking the
+  // one sentence this banner exists to show. Every Object.prototype name is a
+  // function, so the type test closes the whole prototype chain at once.
+  const reasonText = (step: OnboardingStepView) => {
+    const worded = (t.onboarding.reasons as Record<string, unknown>)[step.code];
+    return typeof worded === "string" ? worded : step.reason;
+  };
 
   return (
     <div className="onboarding-banner" role="status" data-testid="onboarding-banner">

@@ -4581,9 +4581,20 @@ export const mockApi: Api = {
       mockServerSettings.display_wide = patch.displayWide;
     }
     // onboarding_dismissed (T-0648) — server parity: the stamp lives ON the
-    // report row, and a database with no report has nothing to dismiss (a 200
-    // that writes nothing, because there is no banner up either).
-    if (patch.onboardingDismissed !== undefined && mockServerSettings.onboarding) {
+    // report row, and only a `failed` report has a banner up to close. Every
+    // other state is refused with 409, exactly as setOnboardingDismissed does:
+    // no report at all (mock mode's standing state), or a run still `running`,
+    // where a stamp would permanently close a warning nobody has seen. Like the
+    // server, this runs LAST — the settings fields above are already applied
+    // when the refusal is thrown.
+    if (patch.onboardingDismissed !== undefined) {
+      if (mockServerSettings.onboarding?.state !== "failed") {
+        throw mockApiError(
+          "http 409 for PATCH /api/settings",
+          409,
+          "no onboarding banner is up to dismiss — the first-run report is absent or not in a failed state"
+        );
+      }
       mockServerSettings.onboarding = {
         ...mockServerSettings.onboarding,
         dismissed_at: patch.onboardingDismissed ? Date.now() / 1000 : 0,

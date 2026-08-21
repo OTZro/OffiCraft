@@ -936,8 +936,11 @@ export interface ServerSettingsPatch {
   displayWide?: boolean;
   /** Dismiss (true) or un-dismiss (false) the first-run onboarding banner
    * (T-0648) — it stamps / clears `dismissedAt` on the ONE onboarding report,
-   * so 知道了 outlives the tab it was pressed in. A no-op when this server
-   * carries no onboarding report. */
+   * so 知道了 outlives the tab it was pressed in. 409 when there is no banner
+   * to close: no onboarding report at all, or a report whose state is not
+   * `failed` — the banner draws for `failed` alone, so a stamp laid on a run
+   * that is still `running` would permanently close a warning nobody has
+   * seen. */
   onboardingDismissed?: boolean;
 }
 

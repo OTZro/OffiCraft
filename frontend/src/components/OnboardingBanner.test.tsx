@@ -135,6 +135,35 @@ describe("OnboardingBanner", () => {
     );
   });
 
+  // A code that collides with a name on Object.prototype must take the SAME
+  // fallback. Looked up unguarded, `reasons["toString"]` answers an inherited
+  // FUNCTION, `??` sees a non-nullish hit and keeps it, and React renders a
+  // function child as nothing — the banner would go blank exactly where it is
+  // supposed to say what broke.
+  it("falls back to the server reason for a code that names an Object.prototype member", async () => {
+    getServerSettings.mockResolvedValue(
+      settingsWith({
+        state: "failed",
+        startedAt: 1,
+        finishedAt: 2,
+        steps: [
+          {
+            name: "install_warden",
+            ok: false,
+            code: "toString",
+            reason: "a reason only the server knows how to word",
+            detail: "",
+          },
+        ],
+      })
+    );
+    renderBanner();
+    const banner = await screen.findByTestId("onboarding-banner");
+    expect(banner.textContent).toContain(
+      "a reason only the server knows how to word"
+    );
+  });
+
   it("hides the raw tool log behind a toggle, then reveals it", async () => {
     getServerSettings.mockResolvedValue(
       settingsWith({
