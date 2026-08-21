@@ -1298,14 +1298,15 @@ func TestRunInstall_CodexOnlyHostIsValid(t *testing.T) {
 // field failure this guard exists for (T-0648): `launchctl bootstrap` exited 0 and
 // registered NOTHING, so the FIRST verb to notice was kickstart — and the operator
 // was handed kickstart's misleading exit 113 ("Could not find service ... in domain
-// for user gui: 501") and sent to debug a step that was never broken. The installer
-// must confirm the label is actually in the domain BEFORE kickstarting, and name the
-// step that really failed.
+// for user gui: 501") and sent to debug a step that was never broken. When the label
+// never shows up AND kickstart then fails, the installer must name the step that
+// really failed: bootstrap.
 func TestLaunchctlReinstall_BootstrapExitZeroButUnregisteredBlamesBootstrap(t *testing.T) {
 	f := newFakeSys()
-	// `print` never finds the label — before OR after a bootstrap that exits 0 —
-	// and kickstart then fails the way it did in the field: exit 113, "Could not
-	// find service". That 113 is the misleading message this guard deletes.
+	// `print` never finds the label — before OR after a bootstrap that exits 0, and
+	// not on any probe of the bounded wait — and kickstart then fails the way it did
+	// in the field: exit 113, "Could not find service". That 113 is the misleading
+	// message this guard deletes.
 	f.runFn = func(name string, args ...string) (string, error) {
 		if len(args) > 0 && (args[0] == "print" || args[0] == "kickstart") {
 			return "", fmt.Errorf("exit status 113: Could not find service %q in domain for user gui: 501", args[len(args)-1])
@@ -1323,9 +1324,68 @@ func TestLaunchctlReinstall_BootstrapExitZeroButUnregisteredBlamesBootstrap(t *t
 	if strings.Contains(err.Error(), "kickstart") {
 		t.Errorf("error = %q, must not send the operator to debug kickstart", err)
 	}
+	// kickstart is still ATTEMPTED — that is what makes this diagnosis free: had
+	// launchd merely been slow, kickstart would have succeeded and the install
+	// would be byte-identical to before. Only kickstart's failure promotes the
+	// unconfirmed registration to the error above.
+	sawKickstart := false
 	for _, r := range f.runs {
 		if len(r.args) > 0 && r.args[0] == "kickstart" {
-			t.Fatal("kickstart must not run once the label is known to be unregistered")
+			sawKickstart = true
 		}
 	}
+	if !sawKickstart {
+		t.Error("kickstart must still be attempted; an unconfirmed registration alone must not fail the install")
+	}
+}
+
+// TestLaunchctlReinstall_LateRegistrationStillInstalls is the counter-example to the
+// registration probe becoming a NEW way to brick an install: launchd's registration
+// can simply LAG a bootstrap that exited 0. A machine whose label shows up on a
+// later probe must install exactly as before — no error, and above all not the
+// "bootstrap registered nothing" diagnosis, which would be a lie here.
+func TestLaunchctlReinstall_LateRegistrationStillInstalls(t *testing.T) {
+	f := newFakeSys()
+	const registerAfterProbes = 4 // launchd is slow, not broken
+	bootstrapped := false
+	postBootstrapPrints := 0
+	f.runFn = func(name string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", nil
+		}
+		switch args[0] {
+		case "bootstrap":
+			bootstrapped = true
+		case "print":
+			if !bootstrapped {
+				return "", fmt.Errorf("Could not find service %q in domain for user gui: 501", args[1])
+			}
+			postBootstrapPrints++
+			if postBootstrapPrints < registerAfterProbes {
+				return "", fmt.Errorf("Could not find service %q in domain for user gui: 501", args[1])
+			}
+			return "com.officraft.ocwarden = {\n\tpid = 4242\n}", nil
+		}
+		return "", nil
+	}
+	i := &installer{out: io.Discard, sys: f.ops()}
+	if err := i.launchctlReinstall(fixedPaths()); err != nil {
+		t.Fatalf("a registration that merely lagged must still install, got: %v", err)
+	}
+	if postBootstrapPrints != registerAfterProbes {
+		t.Errorf("expected %d registration probes (lag then found), got %d", registerAfterProbes, postBootstrapPrints)
+	}
+	if f.slept != registerAfterProbes-1 {
+		t.Errorf("expected %d inter-probe sleeps, got %d", registerAfterProbes-1, f.slept)
+	}
+	sawKickstart := false
+	for _, r := range f.runs {
+		if len(r.args) > 0 && r.args[0] == "kickstart" {
+			sawKickstart = true
+		}
+	}
+	if !sawKickstart {
+		t.Error("a confirmed registration must still be kickstarted")
+	}
+	assertNoForbiddenProcessKill(t, f)
 }
