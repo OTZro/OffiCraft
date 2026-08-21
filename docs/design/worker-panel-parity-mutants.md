@@ -131,6 +131,23 @@ owner 最想按的 停止 反而跑到 更改 **上面**。實測 320／360／37
 | R4 | `.member-actions .btn + .btn { margin-left: -40px }`（＝真的互相疊上去） | narrow：`member-action-stop and member-action-accelerated-stop overlap by 32x30` |
 | R5 | 階梯每顆鍵鎖成 `flex: 0 0 52px; overflow: hidden`（＝標籤被裁掉，boundingBox 看不出來） | narrow：`member-action-accelerated-stop label clipped vertically` |
 
+#### 再重測：「按了才出現」把顆數也變成變數
+
+owner 2026-08-21 第二條裁定（「不是一開始就顯示三個按鈕」「按了才出現」）之後，這一列的
+**顆數本身**是狀態的函數：2（更改＋停止）／3（系統開的軟下線多一顆 加速停止）／
+4（owner 按過 停止，`stopping` 另外帶一顆 喚醒 救援）／5（上了時鐘再多 強制停止）。
+CASES 因此從兩種形狀改成**四種**，最寬的五顆那個 case 一字未動，另外補上最窄的兩顆——
+**沒有一條斷言被放寬**（same-row 容忍度 4、矩形交集、四邊卡片邊界、clientWidth/scrollWidth
+裁字檢查、跨距 70%／均分 20%、頁面橫捲軸全部原封不動）。desktop 那條 `one row of four`
+只是改名成 `one row, whole cluster`，量的還是 `[ALL.length]`。
+
+新增的行為 mutant（`MemberActionButtons.tsx`）：
+
+| # | Mutant | 紅了哪條 |
+|---|---|---|
+| M17 | 出現條件拿掉（`LADDER_BY_STAGE["accelerated"]`＝三顆一開始就都在） | `MemberActionButtons > reveals one more rung per stage and renders NO unreachable rung`：`online, nothing winding down: rungs revealed: expected [ 'member-action-stop', …(2) ] to deeply equal [ 'member-action-stop' ]`；外包端同時紅 `停止 → the worker goes 停止中 and 加速停止 is REVEALED, 強制停止 still is not` 與 `強制停止 appears only after 加速停止…`（`expected <button…> to be null`） |
+| M18 | 拿掉剛出現那顆的不可按窗口（`armed` 直接讀 `stage`） | `MemberActionButtons > holds a rung that JUST appeared inert until it arms` |
+
 R3'／R4／R5 是這次特地種來證明**新護欄仍有鑑別力**的三支：分別打「溢出卡片」「互相重疊」
 「看起來有寬度其實字被吃掉」，三支都紅。還原一律 `cp` 備份覆蓋回去，最後 `git diff --stat`
 確認只剩下真正要留的兩個檔。
@@ -145,7 +162,7 @@ R3'／R4／R5 是這次特地種來證明**新護欄仍有鑑別力**的三支�
 | M11 | 無編輯的早退也套用到喚醒（照原值確認＝什麼都不做） | ④ | `喚醒 ASKS FIRST…` |
 | M12 | 狀態格（含「已釋放」）加回去 | ② | `released…and NO 已釋放 status cell remains` |
 | M13 | 離線原因跟著狀態格一起被刪 | ② | `離線: the dot reads 離線 and the structured reason survives…` |
-| M14 | 喚醒的字改回 worker 私有葉子 | ③ | `停止 → the worker goes 停止中 and the row keeps the 加速停止／強制停止 rungs`（T-ed79 改名前叫 `stop → the dot flips to 已停止 and the row swaps 更改／停止 for 喚醒`——外包的 停止 從當場砍改成優雅收工，那顆斷言的結論整個反過來了） |
+| M14 | 喚醒的字改回 worker 私有葉子 | ③ | `停止 → the worker goes 停止中 and 加速停止 is REVEALED, 強制停止 still is not`（T-ed79 改名前叫 `stop → the dot flips to 已停止 and the row swaps 更改／停止 for 喚醒`——外包的 停止 從當場砍改成優雅收工，那顆斷言的結論整個反過來了） |
 | M15 | 外包的 `.mp-identity__buttons` 換掉（兩顆不再同一列） | ① | 同上那條 |
 | M16 | 正職的 `.mp-identity__buttons` 換掉 | ① | `puts 更改 and the stop action in the same button row, 更改 first` |
 | M16b | 正職那一列裡把「更改」拿掉（順序／存在性半邊） | ① | 上述 ＋ 既有的 `says 更改 for an online member…` |

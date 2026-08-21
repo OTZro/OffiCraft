@@ -18,11 +18,15 @@
 //   * narrow — the wrap is DESIGNED, not incidental: exactly TWO bands, 更改
 //     alone on the first, the WHOLE cluster on the second in owner order, each
 //     rung sharing the band evenly.
-//   * 🔴 BOTH SHAPES. `online-awake` is four buttons; `stopping` is FIVE (the
-//     panel keeps 更改 there, and BUTTON_SETS.stopping prepends the 喚醒 wedge
-//     rescue to the ladder). Five is the widest the card ever has to hold and it
-//     is the shape T-ed79 created, so measuring only the four-button case left
-//     the worst case unmeasured at 375px.
+//   * 🔴 EVERY SHAPE THE LADDER CAN BE. Owner 2026-08-21 「按了才出現」 made the
+//     rung set a function of how far up the escalation the actor already is, so
+//     the cluster is no longer one count: TWO buttons (更改 ＋ 停止, nothing
+//     winding down), THREE (a system-opened wind-down: 加速停止 revealed, still
+//     presence `online`), FOUR (owner pressed 停止 ⇒ presence `stopping`, which
+//     also gains the 喚醒 wedge rescue) and FIVE (the accelerated arm, 強制停止
+//     revealed). Five is still the widest the card ever has to hold; two is the
+//     one 375px now spends most of its time in. Measuring one count would leave
+//     both ends unmeasured.
 //   * both — no button overlaps another (a real rectangle-intersection test,
 //     strictly stronger than the old "停止 starts right of 更改"), no button
 //     escapes the card on ANY edge, no label is clipped inside its own button,
@@ -34,7 +38,7 @@
 //
 // Mutants (all MEASURED, see docs/design/worker-panel-parity-mutants.md):
 //   R1  `.mp-identity__buttons { flex-direction: column }` → DESKTOP red
-//       (`one row of four`). Narrow stays green on purpose: below 720px each
+//       (`one row, whole cluster`). Narrow stays green on purpose: below 720px each
 //       direct child already takes a full band, so a column is the same picture.
 //   R2  drop the ≤720px `.mp-identity__buttons` rules → narrow red: 更改 and the
 //       ladder go back to splitting the card in half and the ladder stacks
@@ -58,16 +62,26 @@ const VIEWPORTS = [
 // button and renders before the group.
 const LADDER = ["member-action-stop", "member-action-accelerated-stop", "member-action-force-stop"];
 
-// 🔴 TWO shapes, not one. `online-awake` is FOUR buttons; `stopping` is FIVE —
-// the panel keeps 更改 there (mappers folds presence "stopping" onto status
-// "online") and BUTTON_SETS.stopping prepends the 喚醒 wedge rescue to the
-// ladder. Five is the widest the card ever has to hold and it is the shape the
-// ladder created, so measuring only the four-button case leaves the worst case
-// unmeasured at 375px.
+// 🔴 FOUR shapes, not one — the four rungs-revealed states, spelled as the
+// (status, stage) pair the panels derive from the wire. `stopping` also carries
+// the 喚醒 wedge rescue ahead of the ladder (the panel keeps 更改 there too:
+// mappers folds presence "stopping" onto status "online"), which is what makes
+// the accelerated `stopping` row the FIVE-button worst case.
 const CASES = [
-  { status: "online-awake" as const, ids: ["mp-change", ...LADDER] },
+  { status: "online-awake" as const, stage: "none" as const, ids: ["mp-change", "member-action-stop"] },
+  {
+    status: "online-awake" as const,
+    stage: "soft" as const,
+    ids: ["mp-change", ...LADDER.slice(0, 2)],
+  },
   {
     status: "stopping" as const,
+    stage: "soft" as const,
+    ids: ["mp-change", "member-action-spawn", ...LADDER.slice(0, 2)],
+  },
+  {
+    status: "stopping" as const,
+    stage: "accelerated" as const,
     ids: ["mp-change", "member-action-spawn", ...LADDER],
   },
 ];
@@ -78,12 +92,14 @@ const SAME_ROW = 4;
 
 for (const vp of VIEWPORTS) for (const c of CASES) {
   const ALL = c.ids;
-  test(`${vp.name} / ${c.status}: 更改 ＋ the 停止 ladder lay out without overlapping or leaving the card`, async ({
+  test(`${vp.name} / ${c.status}+${c.stage} (${ALL.length} buttons): 更改 ＋ the 停止 ladder lay out without overlapping or leaving the card`, async ({
     mount,
     page,
   }) => {
     await page.setViewportSize({ width: vp.width, height: vp.height });
-    const cmp = await mount(<IdentityActionsRowStory status={c.status} />);
+    const cmp = await mount(
+      <IdentityActionsRowStory status={c.status} stage={c.stage} />,
+    );
 
     const boxes: Record<string, Box> = {};
     for (const id of ALL) {
@@ -161,7 +177,7 @@ for (const vp of VIEWPORTS) for (const c of CASES) {
     if (vp.name === "desktop") {
       // Owner 2026-07-31 「全部變成左右並排」, still true wherever there is room:
       // ONE band holding all four. A `flex-direction: column` regression dies here.
-      expect(bands.map((b) => b.length), "one row of four").toEqual([ALL.length]);
+      expect(bands.map((b) => b.length), "one row, whole cluster").toEqual([ALL.length]);
     } else {
       // 🔴 The wrap is DESIGNED (owner: 不要在窄螢幕擠成一團). Exactly two bands:
       // 更改 alone, then the whole ladder. Anything else — the ladder split

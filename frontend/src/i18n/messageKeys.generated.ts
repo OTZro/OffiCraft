@@ -125,7 +125,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "lifecycle.message.resumeReport",
   "lifecycle.message.windDown",
   "lifecycle.reason.alreadyStopping",
-  "lifecycle.reason.pressStopFirst",
+  "lifecycle.reason.justAppeared",
   "login.error",
   "login.passwordPlaceholder",
   "login.submit",

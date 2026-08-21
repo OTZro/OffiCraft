@@ -16,7 +16,7 @@ import { AvatarEditor } from "./AvatarEditor";
 import { Avatar } from "./Avatar";
 import { ResumeSummaryCard } from "./ResumeSummaryCard";
 import { LifecycleDot, presenceVisual } from "./LifecycleDot";
-import { MemberActionButtons } from "./MemberActionButtons";
+import { MemberActionButtons, stopLadderStageOf } from "./MemberActionButtons";
 import { ScheduledMessagesCard } from "./ScheduledMessagesCard";
 // 🔴 This panel renders its settings dialog with the .machine-picker* classes,
 // so it must import their stylesheet ITSELF (T-7526). Both panels used to
@@ -535,13 +535,17 @@ export function WorkerDetailPanel({
               /* 🔴 THE SAME LADDER AS 正職, FROM THE SAME COMPONENT (T-ed79,
                  owner 2026-08-21 「往正職靠」＋「停止 → 加速停止 → 強制停止」).
                  It renders MemberActionButtons rather than three worker-shaped
-                 buttons of its own, so the labels, the ORDER, the
-                 disabled-in-place rule and the danger styling are one
-                 implementation for both panels — the thing that used to drift
+                 buttons of its own, so the labels, the ORDER, WHICH RUNGS EXIST
+                 YET and the danger styling are one implementation for both panels — the thing that used to drift
                  was exactly this row. That also retires the panel-local 停止
                  label (t.workerDetail.stop): one verb, one word, both panels. */
               <MemberActionButtons
                 status={stoppingNow ? "stopping" : "online-awake"}
+                // 按了才出現 — the member panel's line, from the shared
+                // function: the worker DTO carries the same presence /
+                // desired_state / refocus_since / refocus_op, so 外包 climbs the
+                // ladder on exactly the same evidence 正職 does.
+                stage={stopLadderStageOf(worker)}
                 // Spawn is the wedge rescue MemberActionButtons already offers
                 // in `stopping`, and here it is real: wakeMode is true for a
                 // held-down worker, so this dialog's confirm reaches 喚醒.

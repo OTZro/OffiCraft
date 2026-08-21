@@ -34,7 +34,7 @@ import { ModelEffortEditor } from "./ModelEffortEditor";
 import { presenceVisual } from "./LifecycleDot";
 import type { LifecycleVisualStatus } from "./LifecycleDot";
 import { PresenceBadge } from "./PresenceBadge";
-import { MemberActionButtons } from "./MemberActionButtons";
+import { MemberActionButtons, stopLadderStageOf } from "./MemberActionButtons";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -881,6 +881,10 @@ export function MemberDetailPanel({
           )}
           <MemberActionButtons
             status={visual}
+            // 按了才出現 (owner 2026-08-21). The SAME reading 外包 uses, from the
+            // same function over the same wire fields — the two panels cannot
+            // disagree about which rung exists.
+            stage={stopLadderStageOf(member)}
             // Do not open a second settings flow while the first wake is in
             // flight. `waking` still renders Spawn as the recovery affordance,
             // but this local bridge keeps it honestly unavailable until the
@@ -901,9 +905,10 @@ export function MemberDetailPanel({
                 ? { spawn: t.machine.noOnlineMachine }
                 : undefined
             }
-            // The TOP rung — still behind a confirm, and now no longer the only
-            // escalation: 加速停止 sits to its left, which is where an impatient
-            // second click lands (see MemberActionButtons' ladder note).
+            // The TOP rung — still behind a confirm, and it does not exist at
+            // all until the wind-down is on the clock (stage `accelerated`), so
+            // an impatient second click on 加速停止 cannot reach it (see
+            // MemberActionButtons' LADDER_ARM_MS note).
             onForceStop={
               onForceStop ? () => setForceStopConfirm(true) : undefined
             }

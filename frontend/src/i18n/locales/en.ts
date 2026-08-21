@@ -432,13 +432,12 @@ export const en: Dict = {
       "accelerated-stop": "Accelerated stop",
       "force-stop": "Force stop",
     },
-    // The three buttons ARE the escalation order. A rung that cannot be pressed
-    // right now stays in place, disabled, with a reason — removing it would slide
-    // the next rung under the finger that was aiming for this one.
+    // The ladder is REVEALED, not disabled: a rung the owner has not unlocked
+    // yet is absent (owner 2026-08-21 「按了才出現」). Only two rungs ever render
+    // unpressable, and both say why.
     reason: {
-      pressStopFirst:
-        "Press Stop first — these escalate a stop, they are not another way to stop",
       alreadyStopping: "Already winding down — escalate to the right if it is taking too long",
+      justAppeared: "Just appeared — pausing a moment so a repeat click cannot escalate for you",
     },
     message: {
       windDown: "Winding down…",

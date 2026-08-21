@@ -121,7 +121,15 @@ describe("MemberDetailPanel — the 停止 ladder holds while a rung is in fligh
     const { getByTestId } = render(
       <I18nProvider>
         <MemberDetailPanel
-          member={mkMember({ status: "online", lifecycle: "stopping" })}
+          member={mkMember({
+            status: "online",
+            lifecycle: "stopping",
+            // 🔴 The stage the ladder reads is the SERVER's acceptance gate, not
+            // presence alone: the 下線 arm is desired-offline + a live session.
+            // Without the intent this fixture is a member nothing has asked to
+            // stop, and 加速停止 would not exist to click twice.
+            desiredState: "offline",
+          })}
           onBack={vi.fn()}
           onActivate={vi.fn()}
           onRelocate={vi.fn()}
@@ -130,9 +138,10 @@ describe("MemberDetailPanel — the 停止 ladder holds while a rung is in fligh
         />
       </I18nProvider>,
     );
-    // In `stopping` the panel offers 喚醒 + the three rungs, and 停止 itself is
-    // disabled by the ladder — the in-flight case this pins is the one the
-    // owner reaches by pressing 加速停止 twice.
+    // In `stopping` the panel offers 喚醒 ＋ 停止 (spent) ＋ 加速停止; the panel
+    // mounts already at that stage, so the reveal window is not in play and the
+    // in-flight case this pins is the one the owner reaches by pressing
+    // 加速停止 twice.
     const accelerated = getByTestId("member-action-accelerated-stop");
     fireEvent.click(accelerated);
     fireEvent.click(accelerated);

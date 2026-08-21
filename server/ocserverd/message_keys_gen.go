@@ -126,7 +126,7 @@ var messageKeys = map[string]bool{
 	"lifecycle.message.resumeReport":           true,
 	"lifecycle.message.windDown":               true,
 	"lifecycle.reason.alreadyStopping":         true,
-	"lifecycle.reason.pressStopFirst":          true,
+	"lifecycle.reason.justAppeared":            true,
 	"login.error":                              true,
 	"login.passwordPlaceholder":                true,
 	"login.submit":                             true,
