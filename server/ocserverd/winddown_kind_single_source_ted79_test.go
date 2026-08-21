@@ -48,6 +48,7 @@ var everyWindDownCause = []string{
 	refocusOpRestartSelf,
 	refocusOpContextHigh,
 	refocusOpContextNotice,
+	refocusOpTokenExpiry,
 	memberOpRelocate,
 	memberOpModel,
 	ownerOpRestart,

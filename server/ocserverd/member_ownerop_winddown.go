@@ -135,6 +135,20 @@ const (
 	refocusOpContextNotice = "context_notice"
 	refocusOpRefocus       = "refocus"      // owner pressed 重新聚焦
 	refocusOpRestartSelf   = "restart_self" // the agent asked for its own handover
+	// refocusOpTokenExpiry is the TOKEN-LIFETIME cause (T-ed79): the session's
+	// agent token is about to expire, so the wind-down is opened while the token
+	// still works. It is a plain 停止 — the agent is shown the sequence and
+	// collected by its own stopped report or by the owner's force-stop — for the
+	// same reason 重新聚焦 is: nothing here is an emergency the owner asked to be
+	// cut short, and a countdown would only make the close-out worse.
+	//
+	// 🔴 WHY IT HAS TO EXIST AT ALL: an expired agent token does not degrade
+	// gracefully. Every MCP call the offboard sequence makes — report_stopping,
+	// post_chat, the lesson write, report_stopped — goes through the same bearer
+	// token, so a session that reaches expiry mid-thought cannot file the
+	// hand-off it is being asked for; it can only fail. Renewal used to depend
+	// on the agent noticing on its own.
+	refocusOpTokenExpiry = "token_expiry"
 )
 
 // memberHasStateToFlush answers the one question the rule turns on: is there

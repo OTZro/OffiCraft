@@ -137,7 +137,7 @@ server 的處理方式是**每一輪重新推導**——還活著就再送一次
 | | 觸發 | 時鐘 | 收完之後 |
 |---|---|---|---|
 | **下線** | owner 把 desired_state 改成 offline | **沒有時鐘**。server 不倒數；對一個已經連上線的 agent 也不會自己送出停止命令（**例外見下方**） | **不重生**。就此結束 |
-| **換手（recycle）** | context **第一段**門檻、context **第二段**門檻、owner 按重新聚焦、owner 改機器、owner 換 model／runtime／effort、agent 自己 `restart_self` | **只有 context 第二段門檻上時鐘**（從 refocus 那一刻起算，一段 `RecycleGrace`）。**其餘每一個成因都完全沒有時鐘**，收口是 agent 自己的 stopped 回報或 owner 按強制停止 | **原地重生下一代**（desired_state 全程是 online） |
+| **換手（recycle）** | context **第一段**門檻、context **第二段**門檻、owner 按重新聚焦、owner 改機器、owner 換 model／runtime／effort、agent 自己 `restart_self`、**token 到期前一小時** | **只有 context 第二段門檻上時鐘**（從 refocus 那一刻起算，一段 `RecycleGrace`）。**其餘每一個成因都完全沒有時鐘**，收口是 agent 自己的 stopped 回報或 owner 按強制停止 | **原地重生下一代**（desired_state 全程是 online） |
 | **下架（uninstall）** | owner 要移除整台機器 | 沒有寬限（明確的 owner 動作） | 一次性意圖：warden 一離線就被消化掉 |
 
 ### 🔴 換手那條也幾乎全沒有時鐘（owner 2026-08-21）
@@ -147,6 +147,24 @@ server 的處理方式是**每一輪重新推導**——還活著就再送一次
 **final 是要指名的正條件，soft 是預設。** 以前反過來——什麼都 fall through 成「上時鐘」，只把 owner 按的重新聚焦挑出來當例外——結果是**每一個新成因都會不小心帶著一條死線出生**，包括 owner 已經裁定不該有的那些。現在要讓一個成因上時鐘，得在那一行**打字打出來**。
 
 ⚠️ **context 是兩段，不是一段。** 第一段（`context_notice`）只把收尾程序送到 agent 手上，**不上時鐘**；context 繼續爬才會**原地晉升**成第二段（`context_high`）並重打 `refocus_since`，那一刻才開始倒數。以前第一段只發一張 SSE band、完全不開換手，所以一個忽略了那一幀的 agent 會直接在第二段遇上「什麼都還沒開始收，而且只剩 120 秒」。
+
+### 🔴 token 到期前一小時也會開一條「停止」（owner 2026-08-21）
+
+原本 token 續期靠 agent 自己記得。問題是：**收尾程序的每一步都是拿那顆 token 打的 MCP
+呼叫**（`report_stopping`、`post_chat`、寫 lesson、`report_stopped`），所以 token 過期
+不是讓收尾變差，是讓收尾**完全做不到**——它只能一路 401。
+
+所以 `stampTokenExpiryWinddown` 在 tick 裡（緊接在 context 那兩段之後）對還在線、
+token 剩不到一小時的正職開一條 **停止**：`refocus_op = token_expiry`，**沒有時鐘**，
+收口一樣是 agent 自己的回報或 owner 的手。owner 的原話是「就是呼叫軟下線，然後等他
+report_stopped 以後再呼叫上線」。
+
+⚠️ **到期時間是推算的，不是記下來的**：`session_boot_ts + auth.agent_token_ttl`。
+token 在 START 派發那一刻鑄造，`session_boot_ts` 是之後 SSE 第一次連上才蓋的，所以這
+是一個**上界**——觸發只會**偏晚**，不會早於 token 存在。它讀的也是**當下**的
+`auth.agent_token_ttl`，不是鑄造當時那個值；中途改這顆設定會讓推算對已經鑄好的 token
+失準。兩個誤差都是刻意留的：要記真正的 `exp` 得加一個 durable 欄位，而這條成因是軟的，
+推錯的代價是白換一次手，不是被切斷。
 
 ⇒ **一個成員停在收尾狀態很久，預設不是異常。** 除非它的 `refocus_op` 是 `context_high`，否則本來就沒有任何東西會來收它——收口是它自己的回報，或 owner 的手。
 

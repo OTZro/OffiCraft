@@ -471,7 +471,7 @@ ONE-SHOT, never a standing order):
 | `start_timeout` | 90 s | START unconfirmed → failed spawn |
 | `stop_grace` | 120 s | self-stop window before the robust stop — **unreachable today**: the arm that consumes it is guarded by `SoftOffboardGrace == 0` (see §4.3) |
 | `stop_retry` | 90 s | STOP/UNINSTALL re-dispatch window (lost-frame recovery) |
-| `recycle_grace` | 120 s (owner-settable) | dump-stuck fallback from `refocus_since` — but the wait is **`recycleGraceFor(refocus_op)`, which answers *whether there is a clock at all* as well as how long**, and since T-ed79 both it and the sentence (`offboardKindOf`) read ONE judgement, `winddownKindFor`. **加速停止 is the only clocked kind, and its only cause is `context_high` — the SECOND context threshold.** Every other cause (`refocus`, `context_notice`, `relocate`, `runtime/model`, `restart_self`, and anything unnamed) is a plain **停止**: no clock at all, collected only by the agent's own stopped report or by 強制停止. FINAL is a positive condition, not a fallthrough — that is what stopped an owner verb the owner never put on a clock from carrying one. **The 120 is a DEFAULT, not a constant, since 2026-08-21**: `stop.accelerated_grace_secs` (10..3600) moves it, and it is deliberately ONE key for every clocked cause — the clock, the wire deadline and the sentence all reach it through the same `recycleGraceFor` pair, so an owner cannot end up with a countdown quoted to the agent that differs from the one the tick collects on. It says HOW LONG and never WHO: a soft cause stays uncollected at every value the key accepts |
+| `recycle_grace` | 120 s (owner-settable) | dump-stuck fallback from `refocus_since` — but the wait is **`recycleGraceFor(refocus_op)`, which answers *whether there is a clock at all* as well as how long**, and since T-ed79 both it and the sentence (`offboardKindOf`) read ONE judgement, `winddownKindFor`. **加速停止 is the only clocked kind, and its only cause is `context_high` — the SECOND context threshold.** Every other cause (`refocus`, `context_notice`, `relocate`, `runtime/model`, `restart_self`, `token_expiry`, and anything unnamed) is a plain **停止**: no clock at all, collected only by the agent's own stopped report or by 強制停止. FINAL is a positive condition, not a fallthrough — that is what stopped an owner verb the owner never put on a clock from carrying one. **The 120 is a DEFAULT, not a constant, since 2026-08-21**: `stop.accelerated_grace_secs` (10..3600) moves it, and it is deliberately ONE key for every clocked cause — the clock, the wire deadline and the sentence all reach it through the same `recycleGraceFor` pair, so an owner cannot end up with a countdown quoted to the agent that differs from the one the tick collects on. It says HOW LONG and never WHO: a soft cause stays uncollected at every value the key accepts |
 | `soft_offboard_grace` | 600 s | how long a close-out may say NOTHING before its anchor is treated as residue — **not a deadline, and no longer measured from the anchor**. Neither soft arm escalates any more: 下線 never did (`rc-27d1710174dd`) and 重新聚焦 stopped on 2026-08-19 (`rc-c540367065ad`), so what this value still does is make `decideDown` run **no clock at all** (§4.3) and set the silence `clearStaleStoppingOnOnline` requires before it sweeps (§4.5) — which is what keeps the 強制下線 button on screen for as long as the close-out is still reporting. Compile-time constant (`SoftOffboardGraceSecs`), deliberately not owner-settable |
 | `backoff_base` / `backoff_cap` | 5 s / 300 s | exponential start backoff |
 | `circuit_threshold` / `circuit_cooldown` | 5 / 120 s | sticky breaker (verified hard failures only) |
@@ -498,6 +498,31 @@ ONE-SHOT, never a standing order):
   him where he cannot see it. A member that has already reported stopped is not
   promoted either — it is collected on this tick.
 
+- **Token expiry opens a 停止 an hour before the token dies (T-ed79, owner
+  2026-08-21).** `stampTokenExpiryWinddown` runs in the same tick, straight after
+  the context pass, and stamps `refocus_op = token_expiry` on a live staff session
+  whose agent token is inside its last `tokenExpiryLeadSecs`. It is a plain 停止:
+  the owner's model for a token renewal is the same as for a refocus or a model
+  change — 「就是呼叫軟下線，然後等他 report_stopped 以後再呼叫上線」 — so the
+  collection is the agent's own stopped report or 強制停止, exactly as for every
+  other soft cause.
+  🔴 **The expiry is DERIVED, not stored**: `session_boot_ts + auth.agent_token_ttl`
+  (`tokenExpiryOf`). The token is minted at START dispatch and the anchor is
+  stamped later, on the SSE first-connect edge, so the derivation is an **upper
+  bound** — the trigger fires a little LATE, never before the token exists. It also
+  reads the CURRENT TTL setting rather than the one the token was minted with, so
+  changing `auth.agent_token_ttl` mid-session moves the estimate for sessions whose
+  tokens did not move. Both error terms are deliberate: recording the real `exp`
+  would need a durable per-session column, and this cause is soft, so being wrong
+  costs a wasted handover rather than a cut-off one.
+  🔴 **WHY IT HAS TO EXIST**: every step of the offboard sequence is an MCP call on
+  the session's own bearer token, so an expired token does not degrade the close-out
+  — it makes the close-out impossible.
+  Ordering matters: the context pass runs FIRST, because both passes skip a member
+  that already carries `refocus_since` and `canPromoteToAcceleratedStop` only
+  promotes a `context_notice` epoch — a token stamp landing first would therefore
+  block the second context threshold's 加速停止 on that member entirely.
+
 - A recycle never flips `desired_state` — it stays `online` throughout; the flow is:
   `refocus_since` stamped → member delta fans → the agent-side listener REFETCHES the
   member row and, on a confirmed NEW refocus epoch, surfaces the 下線程序 text the
@@ -509,7 +534,8 @@ ONE-SHOT, never a standing order):
   the kill event-driven, not on the next tick) OR `recycleGraceFor(refocus_op)` elapses
   (the dead-session fallback — an unresponsive session that never reports is force-stopped
   by the server; the agent side needs no timeout of its own. **The wait is not one number**:
-  120 s for `context_high` (加速停止) and **no fallback at all** for every other cause,
+  `stop.accelerated_grace_secs` (default 120 s) for `context_high` (加速停止) and
+  **no fallback at all** for every other cause,
   which waits indefinitely for the stopped report or the owner's 強制停止 — see
   the `recycle_grace` row in §4.4) → the SSE drop makes
   ¬online → the next tick's plain START respawns.

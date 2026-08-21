@@ -1409,6 +1409,118 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 	}
 }
 
+// tokenExpiryLeadSecs is how long BEFORE its agent token expires a live session
+// is asked to wind down (owner 2026-08-21: refocus／改 model／改機器「就是呼叫
+// 軟下線，然後等他 report_stopped 以後再呼叫上線」, and token renewal is the same
+// shape — the session has to end and be re-minted, so it may as well end the way
+// every other cause ends). One hour is the lead the owner named.
+const tokenExpiryLeadSecs = 3600.0
+
+// tokenExpiryOf derives WHEN a live session's agent token stops working, from
+// the two facts the server already stores. It returns 0 when the question
+// cannot be answered, and every caller must treat 0 as "do nothing".
+//
+// 🔴 THIS IS A DERIVATION, NOT A RECORD, AND THE ERROR TERM IS NAMED. The token
+// is minted in buildStartFrame at DISPATCH time with the TTL that was live then
+// (mintJWT sets exp = mint + ttl — jwt.go); session_boot_ts is stamped later, on
+// the SSE first-connect edge (anchorSessionBoot). So:
+//
+//   - session_boot_ts >= mint, therefore this estimate is an UPPER BOUND on the
+//     real expiry, too late by however long the boot took. The trigger built on
+//     it therefore fires slightly LATE — with a little under the full lead left
+//     — never early. That direction is the safe one: the window shrinks, it does
+//     not open before the token exists.
+//   - it reads the CURRENT agent_token_ttl, not the one the token was minted
+//     with. An owner who changes that setting mid-session moves this estimate
+//     for sessions whose tokens did not move. Raising the TTL therefore defers
+//     the wind-down past the real expiry (the session dies with no close-out —
+//     the pre-existing behaviour, not a new harm); lowering it winds sessions
+//     down early (a wasted, but safe, handover). Recording the real exp would
+//     need a durable per-session column, which this ticket deliberately did not
+//     add.
+//
+// ⚠️ Only staff sessions are derivable this way. A warden's credential is minted
+// by mintWardenToken with NO exp claim at all, so it never expires and this must
+// never be asked about one.
+func tokenExpiryOf(m Member, agentTokenTTL int64) float64 {
+	if m.Kind != KindAssistant || agentTokenTTL <= 0 || m.SessionBootTS <= 0 {
+		return 0
+	}
+	return m.SessionBootTS + float64(agentTokenTTL)
+}
+
+// stampTokenExpiryWinddown opens a plain 停止 on any live staff session whose
+// agent token is inside its last tokenExpiryLeadSecs — the same shape
+// stampContextHighRecycle uses for the context thresholds, and deliberately so:
+// what ends a session is one funnel, and a second one with its own guards would
+// be a second chance to get the guards wrong.
+//
+// The guards are COPIED from stampContextHighRecycle rather than re-derived,
+// cell for cell, because each of them is there for a reason that holds here
+// identically:
+//
+//   - refocus_since > 0 → skip. The marker IS the cooldown; without it this loop
+//     re-stamps every 30 s for the whole final hour, and each re-stamp would
+//     destroy the close-out already in progress. There is deliberately NO
+//     promotion arm (the context pair's one exception): token expiry never
+//     escalates into a different kind, so there is nothing to promote to.
+//   - stopped_since >= the gauge's boot_ts → skip. An agent that has already
+//     said 「我收完了」 is not asked again, and armRefocusEpoch would zero the
+//     anchors and destroy that report. The boot_ts test is what tells THIS
+//     session's report apart from a predecessor's latch (下線 → 活化 leaves one).
+//   - online-only, and only while the server still WANTS it online
+//     (aRefocusStampWouldReachTheAgent). A stamp that does not reach the agent
+//     is not a weaker signal, it is no signal — and it strands a marker that
+//     activate does not clear.
+//
+// The boot-storm guard is NOT copied, and that is not an oversight: it exists to
+// stop a fresh session being recycled off a gauge reading that is over the line
+// the instant it boots. A token that is within an hour of expiry on a session
+// that just booted is not a mis-reading — it is a session that genuinely has
+// less than an hour, and suppressing it would leave exactly the case this
+// trigger is for.
+func (s *apiServer) stampTokenExpiryWinddown(members []Member, now float64) {
+	ttl := s.agentTokenTTLValue()
+	for i := range members {
+		m := &members[i]
+		expiry := tokenExpiryOf(*m, ttl)
+		if expiry <= 0 {
+			continue // not derivable (no session anchor, or not a staff session)
+		}
+		if now < expiry-tokenExpiryLeadSecs {
+			continue // still outside the lead
+		}
+		if now >= expiry {
+			// Past the derived expiry the token is certainly dead (the estimate
+			// is an upper bound — see tokenExpiryOf), so the sequence this stamp
+			// asks for could not be filed: every step of it is an MCP call on
+			// that token. Opening a wind-down here would print instructions to a
+			// session that can only answer 401.
+			continue
+		}
+		if m.RefocusSince > 0.0 {
+			continue // already winding down — the marker IS the cooldown
+		}
+		record := s.gauge.Get(m.ID)
+		if bootTS, ok := gaugeBootTS(record); ok && m.StoppedSince >= bootTS {
+			continue // this session has already reported it is finished
+		}
+		if !s.hub.IsOnline(m.ID) {
+			continue
+		}
+		if !aRefocusStampWouldReachTheAgent(*m) {
+			continue
+		}
+		armRefocusEpoch(m, refocusOpTokenExpiry, now)
+		if err := s.putMember(*m, triggerServer); err != nil {
+			reconcileLog("recycle: token-expiry stamp persist failed for %s: %v", m.ID, err)
+			continue
+		}
+		reconcileLog("recycle: token-expiry 停止 for %s (token estimated to expire at %.0f, "+
+			"lead %.0fs)", m.ID, expiry, tokenExpiryLeadSecs)
+	}
+}
+
 // bootStormTripped is the pure loop-guard signal (context_high.py): true iff
 // the agent hit the HANDOVER line so soon after boot that its boot context
 // itself is over the line. FAIL-SAFE: missing/negative data never trips it;
@@ -1673,6 +1785,16 @@ func (s *apiServer) runReconcileTick(now float64) {
 		members = append(members, m)
 	}
 	s.stampContextHighRecycle(members, now)
+	// AFTER the context pair, and the order is load-bearing. Both passes skip a
+	// member that already carries refocus_since, so whichever runs first owns the
+	// epoch for that member. Reversed, a session that is BOTH out of context and
+	// near token expiry would be stamped token_expiry — a soft, unclocked cause —
+	// and stampContextHighRecycle's one promotion arm would then decline it
+	// (canPromoteToAcceleratedStop only promotes a context_notice epoch), so the
+	// second context threshold would never open its 加速停止 on that member at all.
+	// This order lets the context pair keep its own escalation, and the token pass
+	// picks up everyone the context pair did not claim.
+	s.stampTokenExpiryWinddown(members, now)
 	s.clearRecycleMarkersOnRespawn(members)
 	s.clearStaleStoppingOnOnline(members, now)
 	s.consumeUninstallIntentOnOffline(members)
