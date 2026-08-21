@@ -110,6 +110,15 @@ in-flight latch，不是 state —— 同一個 tick 的兩次點擊都會讀到
 失敗只記**一個** id、原地說一句，**不重試、不排隊、不在下一個 SSE 事件自癒**。
 兩條都由 `ChatArea.quote-no-fetch.test.tsx` 釘住。
 
+⚠️ 還有第三條：**讀取途中不准把那顆按鈕 `disabled`**。有過一個 loading 態這樣
+做，實測在真 Chromium 裡 disable 一顆**正被聚焦**的按鈕會讓它 blur，
+`MarkdownPreviewOverlay` 掛載時抓到的 opener 就成了 `<body>`，關掉覆蓋層時鍵盤
+使用者被丟回頁面最上面。防連點是 `quoteBusyRef` 的工作，不是 `disabled` 的。
+這條由 `ChatArea.quote-no-fetch.test.tsx` 的
+「stays enabled while its read is in flight」釘住；注意 **jsdom 不會**因為
+disabled 而 blur，所以那條測試裡真正有牙的是那句 `jump.disabled` 斷言本身，焦點
+那兩條在這一層自己不會紅。
+
 `messageById` 還活著，但它只回答**一個**問題：composer 上方的橫幅認不認得回覆
 對象。它**不**回答「能不能看原訊息」。
 

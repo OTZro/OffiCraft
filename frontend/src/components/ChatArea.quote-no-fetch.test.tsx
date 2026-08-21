@@ -54,6 +54,10 @@ vi.mock("../hooks/useChat", () => ({
  * second test below CLICKS, and a proxy that handed back `[]` there would make
  * "the click worked" indistinguishable from "the click did nothing". */
 const apiCalls: string[] = [];
+/** Armed by the ONE test that needs the read to still be in flight when it
+ * looks at the button. Null everywhere else, so every other test keeps the
+ * immediate answer it was written against. */
+let holdQuote: Promise<void> | null = null;
 const quotedOriginal = {
   id: "c-1",
   from: "m1",
@@ -74,7 +78,10 @@ vi.mock("../api", () => ({
       get(_t, prop) {
         apiCalls.push(String(prop));
         if (prop === "getChatMessage") {
-          return () => Promise.resolve(quotedOriginal);
+          return async () => {
+            if (holdQuote) await holdQuote;
+            return quotedOriginal;
+          };
         }
         return () => Promise.resolve([]);
       },
@@ -127,6 +134,7 @@ const rowOf = (c: HTMLElement, id: string) =>
 describe("ChatArea: a quote costs no request", () => {
   beforeEach(() => {
     resetChatDrafts();
+    holdQuote = null;
     apiCalls.length = 0;
     Element.prototype.scrollIntoView = function () {} as typeof Element.prototype.scrollIntoView;
   });
@@ -350,6 +358,93 @@ describe("ChatArea: a quote costs no request", () => {
     expect(
       document.activeElement,
       "closing must return focus to the button that opened it",
+    ).toBe(jump);
+  });
+
+  // ── and the control stays PRESSABLE while its read is in flight ───────────
+  //
+  // 🔴 THIS IS THE WITNESS THE `disabled` REMOVAL NEVER HAD. The first version
+  // of this feature carried `{ id, state: "loading" | "error" }` and put
+  // `disabled` on the button while the read was in flight. Measured in a real
+  // Chromium: disabling the FOCUSED button blurs it, so `document.activeElement`
+  // was already <body> by the time the overlay mounted, the overlay captured
+  // <body> as the element to hand focus back to, and closing it dropped a
+  // keyboard user at the top of the page. r22fix deleted the loading state for
+  // that reason and left nothing behind that would notice it coming back: I
+  // restored `d7752781`'s ChatArea.tsx verbatim (the `disabled` attribute and
+  // all) and every test in this file stayed GREEN.
+  //
+  // ⚠️ AND BE EXACT ABOUT WHICH ASSERTION HAS THE TEETH. jsdom does NOT blur an
+  // element when it is disabled, so the focus assertions here would not go red
+  // on their own — that half of the mechanism is only visible in a real engine.
+  // What catches the regression in this layer is the plain `disabled` read: put
+  // the attribute back and the first expect below fails. The focus assertions
+  // are kept because they state the property the attribute would break, and they
+  // are cheap; do not read them as the guard.
+  //
+  // The double-click protection this replaced is NOT lost — `quoteBusyRef` is
+  // what refuses the second click, and the "exactly one request" test above is
+  // its witness. That is the trade: a ref that refuses, not an attribute that
+  // blurs.
+  it("stays enabled while its read is in flight, so the overlay gets a real opener", async () => {
+    messages = [
+      mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" }),
+      mkMsg({
+        id: "c-2",
+        from: "owner",
+        to: "m1",
+        body: "有的",
+        ts: 2,
+        replyTo: "c-1",
+        replyToChat: { id: "c-1", from: "m1", fromName: "", content: "他說的" },
+      }),
+    ];
+    let release!: () => void;
+    holdQuote = new Promise<void>((r) => {
+      release = r;
+    });
+
+    const { container } = render(
+      <I18nProvider>
+        <ChatArea member={member} />
+      </I18nProvider>,
+    );
+    const jump = rowOf(container, "c-2").querySelector(
+      "[data-testid='msg-quote-jump']",
+    ) as HTMLButtonElement;
+    jump.focus();
+
+    await act(async () => {
+      fireEvent.click(jump);
+    });
+
+    // The read really has not answered yet — otherwise everything below is
+    // asserted about the settled state and proves nothing.
+    expect(
+      document.querySelector(".md-preview"),
+      "the read must still be in flight for this test to mean anything",
+    ).toBeNull();
+    expect(
+      jump.disabled,
+      "the control must not be disabled mid-read: disabling a focused button blurs it, and the overlay then captures <body> as its opener",
+    ).toBe(false);
+    expect(
+      document.activeElement,
+      "and focus must still be on the button that was pressed",
+    ).toBe(jump);
+
+    await act(async () => {
+      release();
+      await holdQuote;
+    });
+
+    expect(document.querySelector(".md-preview")).toBeTruthy();
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Escape" });
+    });
+    expect(
+      document.activeElement,
+      "the opener the overlay handed focus back to is the button, not <body>",
     ).toBe(jump);
   });
 });
