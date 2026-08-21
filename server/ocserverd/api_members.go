@@ -925,10 +925,19 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 	// button in stopping/stopped, but that is a UI fact, not a gate).
 	//
 	// The three conditions are each load-bearing. `stopping_since > 0` is what
-	// keeps this narrow to a LIVE forced epoch: activate clears the stop anchors
-	// but deliberately KEEPS forced_stop_at (it is the durable record that a
-	// past session was cut off), so testing forced_stop_at alone would strip the
-	// soft-offboard admission from every member that was ever force-stopped.
+	// keeps this narrow to a LIVE forced epoch: activate clears stopping_since
+	// and waking_since but deliberately KEEPS forced_stop_at (it is the durable
+	// record that a past session was cut off), so testing forced_stop_at alone
+	// would strip the soft-offboard admission from every member that was ever
+	// force-stopped.
+	//
+	// 🔴 "the stop anchors", which is what this used to say, is one anchor too
+	// many: activate does NOT clear stopped_since. That is not a nit — it is the
+	// reason a brand-new session can come up ONLINE carrying the PREVIOUS
+	// generation's report with no epoch (下線 → 活化), which is exactly the state
+	// stampContextHighRecycle's boot_ts test exists to tell apart from a live
+	// session's own report. A reader who believes the shorter sentence will
+	// conclude that state is unreachable and write the wrong guard.
 	//
 	// Consequence, deliberate: a forced epoch's anchor stops moving, so this
 	// call no longer restarts the grace clock for it. Nothing reads it that way

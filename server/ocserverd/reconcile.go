@@ -1306,6 +1306,45 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 		default:
 			continue
 		}
+		// 🔴 AN AGENT THAT HAS ALREADY SAID 「我收完了」 IS NOT ASKED AGAIN.
+		// report_stopped latches stopped_since on ANY staff member, epoch or not
+		// (owner rc-b08d49dc3b03), and then fires ONE best-effort
+		// dispatchRobustStopNow. A warden that is unreachable at that instant
+		// drops it, and nothing sweeps the row while the session is still up:
+		// clearRecycleMarkersOnRespawn skips anything online, and
+		// clearStaleStoppingOnOnline only ever zeroes stopping_since. So the
+		// member sits at desired-online ∧ online ∧ stopped_since>0 ∧ no epoch.
+		//
+		// Opening a wind-down there does two wrong things at once. armRefocusEpoch
+		// zeroes the anchors BY DESIGN — it cannot tell a fresh report from a
+		// stale latch and must keep zeroing them, because a stale one turns the
+		// next epoch into an immediate kill — so the stamp DESTROYS the agent's
+		// finished close-out; and the notice it fans asks a session that is
+		// already done to do it all again. Before T-ed79 the first threshold
+		// stamped nothing at all, so this door did not exist; giving it a
+		// wind-down is what opened it.
+		//
+		// Same ruling canPromoteToAcceleratedStop already makes a few lines up
+		// ("the promotion notice would reach a session that has said it is
+		// finished") — this is the arm that was missed, not a new policy.
+		//
+		// 🔴 THE BOOT_TS TEST IS LOAD-BEARING, not belt-and-braces. A latch can
+		// legitimately be a PREDECESSOR's: activate clears stopping_since and
+		// waking_since but NOT stopped_since, so 下線 → 活化 puts a brand-new
+		// session online carrying the previous generation's report with no epoch
+		// — exactly the fixture
+		// TestRefocusEpoch_NoStampSiteInheritsAStaleWindDownLatch pins. Skipping
+		// on that would exclude the member from BOTH thresholds for the rest of
+		// its life, which is a worse bug than the one this guard removes. The
+		// question is therefore not "is there a latch" but "did THIS connection
+		// file it", and that is the same question — and the same answer —
+		// actionableContextPct's stale guard already uses one field over: a
+		// predecessor session's leftover never triggers. No boot_ts means the
+		// question cannot be answered, and then the pre-existing path (stamp)
+		// stands.
+		if bootTS, ok := gaugeBootTS(record); ok && m.StoppedSince >= bootTS {
+			continue
+		}
 		promoting := false
 		if m.RefocusSince > 0.0 {
 			if !canPromoteToAcceleratedStop(*m, op) {
