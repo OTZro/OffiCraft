@@ -1346,6 +1346,63 @@ func (s *apiServer) stopWorkerNow(w OutsourceWorker) {
 		w.ID, w.Codename, old)
 }
 
+// workerOfflineConfirmGraceSecs is how long a worker must be CONTINUOUSLY
+// offline before the tick treats "its session is gone" as a fact and collects
+// its wind-down (T-ed79 #13, owner 2026-08-21 rc-7df3deb21b3b, verbatim:
+// 「反過來但是不要三分鐘這麼久 他重新連上線應該不需要這麼長」).
+//
+// 🔴 WHY IT HAS TO EXIST. hub.IsOnline is an instantaneous map lookup — zero
+// TTL, zero linger, and the listener is deleted the moment the SSE handler
+// returns. The collect arms below used to fire on ONE such sample. An ocagent
+// reconnects with a 1s→15s backoff while the tick samples every 30s, so an
+// ordinary network blip that happens to be sampled killed a live worker in the
+// middle of writing its hand-off, and the 收口 for that round was gone.
+//
+// 🔴 WHY 90. It is the worst case of an HONEST reconnect, added up from the
+// constants that produce it: the agent's 45s idle-read watchdog
+// (cli/ocagent/listen.go) + the 15s backoff cap + one 30s cadence tick ≈ 90s.
+// A worker still offline after that is not reconnecting, it is gone.
+// ZombieConfirmGrace (reconcile.go) is the same 90 with a full extra START
+// window of slack on top = 180s; the owner asked for shorter, so this is that
+// derivation with the doubling removed — not a rounder number.
+//   - DO NOT go below 90: that starts cutting off workers that are alive and
+//     have simply not noticed the socket died yet.
+//   - DO NOT reuse ZombieConfirmGrace: that window answers a different question
+//     (is this presence-deaf session a zombie worth taking over) and an owner
+//     tuning one must not silently move the other.
+//   - If a later ruling names a different number, it must remain a change to
+//     THIS ONE LINE. Nothing else may hard-code 90.
+const workerOfflineConfirmGraceSecs = 90.0
+
+// workerSessionConfirmedGone maintains the continuous-offline anchor for ONE
+// worker and answers the only question the collect arms are allowed to ask:
+// has this worker been offline long enough that "the session is gone" is a
+// fact rather than one sample?
+//
+// It is called ONCE per tick per ACTIVE worker, before any arm branches, so the
+// anchor is maintained on every path — including the ones that return without
+// collecting anything. An anchor that is only advanced by the arm that reads it
+// would arm itself on the first tick that happens to reach that arm, which is
+// not the same clock at all.
+//
+// An online observation is liveness proof and DROPS the anchor: a reconnect
+// inside the window cancels the collect outright, and a LATER disconnect starts
+// a fresh window rather than resuming the one the reconnect already answered.
+// That is the half that makes this a confirmation and not merely a delay.
+// Callers hold s.outsourceMu.
+func (s *apiServer) workerSessionConfirmedGone(workerID string, now float64) bool {
+	if s.hub.IsOnline(workerID) {
+		delete(s.workerOfflineSince, workerID)
+		return false
+	}
+	since, armed := s.workerOfflineSince[workerID]
+	if !armed {
+		s.workerOfflineSince[workerID] = now
+		return false
+	}
+	return now-since >= workerOfflineConfirmGraceSecs
+}
+
 // ── context-high auto-handover (ACTIVE-worker tick branch — T-32e1) ──────────
 
 // autoHandoverWorker is the ACTIVE-worker branch of the outsource tick: the
@@ -1364,6 +1421,11 @@ func (s *apiServer) stopWorkerNow(w OutsourceWorker) {
 // or stale) is a fail-safe no-op, never a kill on empty data. Callers hold
 // s.outsourceMu.
 func (s *apiServer) autoHandoverWorker(w OutsourceWorker, now float64) {
+	// The de-bounced liveness verdict, taken ONCE and before any branch so the
+	// anchor advances on every path (workerSessionConfirmedGone). Both collect
+	// arms below read THIS and never hub.IsOnline directly: a single instantaneous
+	// sample is what used to cut a live worker off mid-close-out (T-ed79 #13).
+	sessionGone := s.workerSessionConfirmedGone(w.ID, now)
 	// (0) THE 停止 EPOCH (T-ed79), and it is FIRST for a reason: everything below
 	// this block collects by kill+RESPAWN, which would revive a worker the owner
 	// has held down. A desired-offline worker leaves here whatever else is on its
@@ -1373,9 +1435,10 @@ func (s *apiServer) autoHandoverWorker(w OutsourceWorker, now float64) {
 	// (workerReportStopped's stop arm) — same as staff. The two cases handled
 	// here are the ones no report can ever answer:
 	//
-	//   * the session DIED mid-close-out. Nothing is left to flush and no report
-	//     is coming, so waiting is pure waste (the D6 rule, verbatim from the
-	//     handover arm).
+	//   * the session is CONFIRMED gone (workerOfflineConfirmGraceSecs of
+	//     continuous offline, not one sample — T-ed79 #13). Nothing is left to
+	//     flush and no report is coming, so waiting further is pure waste (the D6
+	//     rule, verbatim from the handover arm).
 	//   * the owner pressed 加速停止, which stamped refocus_op=accelerated_stop
 	//     and re-anchored stopping_since from HIS press. That is the ONLY clock
 	//     on this arm — recycleGraceFor answers "not clocked" for a plain 停止,
@@ -1386,7 +1449,7 @@ func (s *apiServer) autoHandoverWorker(w OutsourceWorker, now float64) {
 	if w.DesiredState == DesiredStateOffline {
 		if w.StoppingSince > 0.0 && w.StoppedSince <= 0.0 &&
 			!forcedEpochLive(memberFromWorker(w)) {
-			if !s.hub.IsOnline(w.ID) {
+			if sessionGone {
 				s.collectWorkerStop(w, "stop-session-gone", triggerServer)
 			} else if grace, clocked := recycleGraceFor(
 				w.RefocusOp, s.reconcileConfigLive()); clocked &&
@@ -1411,11 +1474,15 @@ func (s *apiServer) autoHandoverWorker(w OutsourceWorker, now float64) {
 		// OPEN — the old session is alive walking its SOP and NO kill has been
 		// dispatched yet, so a re-dispatch here would be the exact
 		// spawn-without-a-kill double-active the O-28 defer prevents. Collect
-		// (kill+respawn) only when the session died mid-grace (offline — nothing
-		// left can flush, waiting out the deadline is pure waste, D6) or the
-		// deadline passed; otherwise keep waiting for the stopped-report.
+		// (kill+respawn) only when the session is CONFIRMED gone (offline for the
+		// whole confirm window — nothing left can flush, waiting out the deadline
+		// is pure waste, D6) or the deadline passed; otherwise keep waiting for
+		// the stopped-report. 🔴 "offline" here is the DE-BOUNCED verdict, never a
+		// live IsOnline call: this arm is sampled every 30s while an agent's
+		// reconnect backoff runs up to 15s, so one raw sample cut live workers off
+		// mid-hand-off (T-ed79 #13).
 		if w.StoppedSince <= 0.0 {
-			if !s.hub.IsOnline(w.ID) {
+			if sessionGone {
 				s.collectWorkerHandover(w, "grace-offline", triggerServer)
 			} else if grace, clocked := recycleGraceFor(w.RefocusOp, s.reconcileConfigLive()); clocked &&
 				now >= w.RefocusSince+grace {
@@ -1502,6 +1569,17 @@ func (s *apiServer) clearWorkerRefocus(id, reason string) {
 // entirely and takes the legacy immediate kill+respawn: no session can hear the
 // 預告, so a grace would only waste the full deadline (D6). Callers hold
 // s.outsourceMu and have already persisted the refocus stamp.
+//
+// ⚠️ THIS ENTRY-POINT SAMPLE IS DELIBERATELY NOT DE-BOUNCED, unlike the tick
+// arms in autoHandoverWorker (workerOfflineConfirmGraceSecs, T-ed79 #13). It
+// runs once, synchronously, at the instant the owner pressed the button, and
+// there is no window to wait out here without parking the owner's verb: an
+// already-dead worker would sit for 90s doing nothing before anything happened.
+// The staff twin makes the identical judgement off the identical predicate
+// (member_ownerop_winddown.go: 「worker: !hub.IsOnline → immediate / staff: SAME
+// predicate」), so the two sides stay aligned on this one — #13 changed the
+// SAMPLED arm, which is the one a blip can hit without anybody pressing
+// anything, and left this one alone on purpose.
 func (s *apiServer) openWorkerHandoverGrace(w OutsourceWorker, trigger string) {
 	if !s.hub.IsOnline(w.ID) {
 		// 🔴 WHICH COLLECT depends on the INTENT, not on which caller got here

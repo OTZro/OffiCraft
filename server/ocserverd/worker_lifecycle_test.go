@@ -831,7 +831,12 @@ func TestCollectWorkerHandover_NoKillTarget_RollsBackEpochForFSMRescue(t *testin
 	api.outsourceMu.Lock()
 	delete(api.workerSpawnTarget, workerID) // server re-exec forgot the dispatch
 	w, _ = api.dal.GetOutsourceWorker(workerID)
+	// Two ticks: the first only ARMS the continuous-offline anchor (T-ed79 #13 —
+	// one offline sample no longer collects anything), the second is past the
+	// confirm window and is the one this test is about.
 	api.autoHandoverWorker(*w, now)
+	w, _ = api.dal.GetOutsourceWorker(workerID)
+	api.autoHandoverWorker(*w, now+workerOfflineConfirmGraceSecs)
 	api.outsourceMu.Unlock()
 
 	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
@@ -988,12 +993,19 @@ func TestAutoHandoverWorker_GraceTimeout_ForceCollects(t *testing.T) {
 	}
 }
 
-// TestAutoHandoverWorker_GraceOffline_CollectsImmediately (T-ea82 form ③ / D6):
-// a mid-grace worker whose session DIED (SSE gone) is collected on the next
-// tick — nothing left can flush, so waiting out the deadline is pure waste.
+// TestAutoHandoverWorker_GraceOffline_CollectsOnceConfirmed (T-ea82 form ③ / D6,
+// re-aimed by T-ed79 #13): a mid-grace worker whose session is GONE is collected
+// well before the grace deadline — nothing left can flush, so waiting out the
+// deadline is pure waste. What changed is only WHEN "gone" becomes a fact: since
+// owner 2026-08-21 (rc-7df3deb21b3b) it takes a full workerOfflineConfirmGraceSecs
+// of continuous offline instead of one instantaneous sample. Note the deadline
+// here is ~110s away and the collect still happens at +90s, so this remains the
+// D6 form and not the grace-timeout one.
+// The three faces of the window itself (inside / lapsed / cancelled by a
+// reconnect) are pinned in worker_offline_confirm_ted79_test.go.
 // Mutant: dropping the offline check in the in-flight arm → 0 frames until the
 // deadline (red).
-func TestAutoHandoverWorker_GraceOffline_CollectsImmediately(t *testing.T) {
+func TestAutoHandoverWorker_GraceOffline_CollectsOnceConfirmed(t *testing.T) {
 	const now = 100_000.0
 	api := newTasksTestServer(t)
 	api.noOutsource = true
@@ -1002,10 +1014,12 @@ func TestAutoHandoverWorker_GraceOffline_CollectsImmediately(t *testing.T) {
 	api.hub.DrainWardenCommands(ServerSelfHost)
 
 	w, _ := api.dal.GetOutsourceWorker(workerID)
-	api.autoHandoverWorker(*w, now) // deadline is ~110s away
+	api.autoHandoverWorker(*w, now) // arms the continuous-offline anchor
+	w, _ = api.dal.GetOutsourceWorker(workerID)
+	api.autoHandoverWorker(*w, now+workerOfflineConfirmGraceSecs)
 	frames := api.hub.DrainWardenCommands(ServerSelfHost)
 	if len(frames) != 2 {
-		t.Fatalf("an offline mid-grace worker must collect NOW (stop+start), got %d frames",
+		t.Fatalf("a confirmed-gone mid-grace worker must collect (stop+start), got %d frames",
 			len(frames))
 	}
 	if fresh, _ := api.dal.GetOutsourceWorker(workerID); fresh.StoppedSince <= 0 {

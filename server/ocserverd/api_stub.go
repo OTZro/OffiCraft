@@ -289,6 +289,15 @@ type apiServer struct {
 	// its siblings — a restart forgets the bench (worst case one re-pick of a
 	// still-bad machine, which re-benches on its next failure).
 	workerMachineCooldown map[string]float64
+	// workerOfflineSince (T-ed79 #13) → worker id → the ts of the FIRST offline
+	// observation in the current continuous-offline run; absent = last seen
+	// online. It is the de-bounce anchor for the wind-down collect arms, the
+	// worker twin of reconcileState.OfflineSince — kept here rather than on the
+	// worker row because it describes what the SERVER has observed, not
+	// something the worker did, and a restart must forget it (the next tick
+	// re-arms and the worker gets the full window again, which errs toward
+	// waiting). See workerOfflineConfirmGraceSecs.
+	workerOfflineSince map[string]float64
 	// ── software update check state (update_check.go; GitHub Releases) ───────
 	// updateMu guards updateCheck — the cached result of the last GitHub
 	// releases probe; /api/version reads it lock-briefly and NEVER waits on

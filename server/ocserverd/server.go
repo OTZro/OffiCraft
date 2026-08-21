@@ -390,6 +390,7 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 		workerMachinePref:            map[string]string{},
 		workerReconcileStates:        map[string]reconcileState{},
 		workerMachineCooldown:        map[string]float64{},
+		workerOfflineSince:           map[string]float64{},
 	}
 }
 
