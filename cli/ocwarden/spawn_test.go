@@ -763,13 +763,22 @@ func TestStart_ClaudeNotLoggedIn(t *testing.T) {
 	if out.OK {
 		t.Fatal("a logged-out claude must yield ok=false, not a silent OK")
 	}
-	if !strings.HasPrefix(out.Reason, "claude_not_logged_in:") {
-		t.Fatalf("refusal must carry a claude_not_logged_in reason, got %q", out.Reason)
-	}
-	for _, want := range []string{"cred_file=unset", "keychain=unset", "run `claude` once"} {
-		if !strings.Contains(out.Reason, want) {
-			t.Errorf("reason must carry %q (the actionable evidence), got %q", want, out.Reason)
-		}
+	// The WHOLE sentence, composed from this test's own input (the summary the
+	// stub credential seam returned). The keyword-sampling version this
+	// replaced could not see anything it did not happen to sample — including
+	// whether the summary leaked a credential VALUE rather than the
+	// value-free SET/unset shape, which is the one property this reason
+	// exists to keep.
+	want := fmt.Sprintf(
+		"claude_not_logged_in: no claude credential found on this host (%s) — "+
+			"run `claude` once as this user and complete login, then retry. "+
+			"To bypass this gate instead: re-run `ocwarden install` with "+
+			"OC_CLAUDE_CRED_CHECK=0 in its environment (the warden is a launchd "+
+			"job, so only the plist the installer stamps can change its env — "+
+			"exporting the variable in a shell has no effect on it)",
+		"cred_file=unset keychain=unset")
+	if out.Reason != want {
+		t.Errorf("refusal reason\n got: %q\nwant: %q", out.Reason, want)
 	}
 	// NO RESIDUE: no tmux session, no workdir files.
 	if len(run.calls) != 0 {
