@@ -137,8 +137,18 @@ server 的處理方式是**每一輪重新推導**——還活著就再送一次
 | | 觸發 | 時鐘 | 收完之後 |
 |---|---|---|---|
 | **下線** | owner 把 desired_state 改成 offline | **沒有時鐘**。server 不倒數；對一個已經連上線的 agent 也不會自己送出停止命令（**例外見下方**） | **不重生**。就此結束 |
-| **換手（recycle）** | context 逼近上限、owner 按重新聚焦、agent 自己 `restart_self`、換模型 | 從 refocus 那一刻起算。**owner 手按的那一種沒有時鐘**，收口是 agent 自己的 stopped 回報或 owner 按強制停止；其餘成因是單一段 | **原地重生下一代**（desired_state 全程是 online） |
+| **換手（recycle）** | context **第一段**門檻、context **第二段**門檻、owner 按重新聚焦、owner 改機器、owner 換 model／runtime／effort、agent 自己 `restart_self` | **只有 context 第二段門檻上時鐘**（從 refocus 那一刻起算，一段 `RecycleGrace`）。**其餘每一個成因都完全沒有時鐘**，收口是 agent 自己的 stopped 回報或 owner 按強制停止 | **原地重生下一代**（desired_state 全程是 online） |
 | **下架（uninstall）** | owner 要移除整台機器 | 沒有寬限（明確的 owner 動作） | 一次性意圖：warden 一離線就被消化掉 |
+
+### 🔴 換手那條也幾乎全沒有時鐘（owner 2026-08-21）
+
+判斷源只有一個：`winddownKindFor(refocus_op)`。時鐘（`recycleGraceFor`）與句子（`offboardKindOf`）都讀它，所以「有沒有在倒數」與「有沒有告訴 agent 它在倒數」不可能各說各話。
+
+**final 是要指名的正條件，soft 是預設。** 以前反過來——什麼都 fall through 成「上時鐘」，只把 owner 按的重新聚焦挑出來當例外——結果是**每一個新成因都會不小心帶著一條死線出生**，包括 owner 已經裁定不該有的那些。現在要讓一個成因上時鐘，得在那一行**打字打出來**。
+
+⚠️ **context 是兩段，不是一段。** 第一段（`context_notice`）只把收尾程序送到 agent 手上，**不上時鐘**；context 繼續爬才會**原地晉升**成第二段（`context_high`）並重打 `refocus_since`，那一刻才開始倒數。以前第一段只發一張 SSE band、完全不開換手，所以一個忽略了那一幀的 agent 會直接在第二段遇上「什麼都還沒開始收，而且只剩 120 秒」。
+
+⇒ **一個成員停在收尾狀態很久，預設不是異常。** 除非它的 `refocus_op` 是 `context_high`，否則本來就沒有任何東西會來收它——收口是它自己的回報，或 owner 的手。
 
 ### 🔴 下線那條沒有兜底計時器，這是刻意的
 
