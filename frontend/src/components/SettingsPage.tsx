@@ -843,6 +843,7 @@ function ServerParams({
   const [noticeDraft, setNoticeDraft] = useState<string | null>(null);
   const [codexNoticeDraft, setCodexNoticeDraft] = useState<string | null>(null);
   const [monitoringRefreshDraft, setMonitoringRefreshDraft] = useState<string | null>(null);
+  const [acceleratedGraceDraft, setAcceleratedGraceDraft] = useState<string | null>(null);
   // T-ae38, widened by T-30f1: five independent caps, so five independent
   // drafts. A shared draft would make typing in one field snap the others back.
   const [docCapDrafts, setDocCapDrafts] = useState<
@@ -911,6 +912,18 @@ function ServerParams({
     }
     setCodexHandoverDraft(null);
     if (n !== settings.codexCompactionThreshold) void onSave({ codexCompactionThreshold: n });
+  }
+
+  // 加速停止 的秒數 (T-ed79). ONE key for both clocked causes — the second
+  // context threshold and the owner's own press — so the countdown quoted to the
+  // agent can never differ from the one the tick collects on. Range mirrors the
+  // server's 422 exactly (settings.go: 10..3600).
+  function commitAcceleratedGrace() {
+    if (!settings || acceleratedGraceDraft === null) return;
+    const n = Number(acceleratedGraceDraft);
+    if (!Number.isInteger(n) || n < 10 || n > 3600) { setRangeError(true); setAcceleratedGraceDraft(null); return; }
+    setAcceleratedGraceDraft(null);
+    if (n !== settings.acceleratedGraceSecs) void onSave({ acceleratedGraceSecs: n });
   }
 
   function commitMonitoringRefresh() {
@@ -1118,6 +1131,21 @@ function ServerParams({
                 onKeyDown={(e) => { if (e.key === "Enter") commitCodexHandover(); }}
               />
               <span className="param-pct__sign">{t.settings.rounds}</span>
+            </div>
+          </div>
+
+          <div className="param-row">
+            <div className="param-row__body">
+              <div className="param-row__name">{t.settings.acceleratedGrace}</div>
+              <div className="param-row__sub">{t.settings.acceleratedGraceSub}</div>
+            </div>
+            <div className="param-pct">
+              <input id="param-accelerated-grace" className="param-input" type="number" min={10} max={3600}
+                aria-label={t.settings.acceleratedGrace}
+                value={acceleratedGraceDraft ?? String(settings.acceleratedGraceSecs)}
+                onChange={(e) => { setRangeError(false); onClearSaveError(); setAcceleratedGraceDraft(e.target.value); }}
+                onBlur={commitAcceleratedGrace} onKeyDown={(e) => { if (e.key === "Enter") commitAcceleratedGrace(); }} />
+              <span className="param-pct__sign">{t.settings.seconds}</span>
             </div>
           </div>
 

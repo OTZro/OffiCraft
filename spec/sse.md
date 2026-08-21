@@ -71,6 +71,13 @@ data: {"seq":42,"topic":"member","op":"patch","data":{"entity":"member","key":"o
     the deltas that carry a collection order (T-c9c0). That field is the sentence telling
     the agent it is being collected, `\n`-joined with the WHOLE 下線程序 document as the
     server holds it — the server PUSHES the checklist; the agent never fetches it back.
+    For an **outsource worker on a TYPED task** one more paragraph follows the document
+    (T-ed79): the 記憶回寫 order, naming that task type's 任務手冊 and the anchored
+    `get_task_manual` → `patch_task_learnings` pair by `type_key`. The 下線程序 says only
+    「回寫到長期記憶，位置看開機說明」; a worker lives one task and has no role to fall back
+    on, so the concrete address is resolved server-side and delivered with the order.
+    An **ad-hoc** (typeless) task carries NO such paragraph — the same criterion the
+    task-close nudge (§8) stays silent on: no type, no manual to write into.
     Present ONLY while `offboardKindOf` says this member is being collected, and inside
     those states it rides **every** write to that row, not just the first — **the client is
     what de-duplicates**, by keying on the sentence it last printed (a server-side "only

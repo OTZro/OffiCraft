@@ -364,6 +364,7 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 		secret:                       secret,
 		ownerTokenTTL:                tokenTTL,
 		agentTokenTTL:                defaultAgentTokenTTL,
+		acceleratedGraceSecs:         acceleratedGraceSecsDefault,
 		outsourceMaxParallel:         defaultOutsourceMaxParallel,
 		docCapCharsDuty:              dutyCapCharsDefault,
 		docCapCharsInsight:           contextDocMaxCharsDefault,
@@ -386,9 +387,11 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 		workerSpawnAttempts:          map[string]int{},
 		workerReclaimed:              map[string]bool{},
 		workerStopPending:            map[string]string{},
+		workerStopLanded:             map[string]workerStopDispatch{},
 		workerMachinePref:            map[string]string{},
 		workerReconcileStates:        map[string]reconcileState{},
 		workerMachineCooldown:        map[string]float64{},
+		workerOfflineSince:           map[string]float64{},
 	}
 }
 
@@ -531,6 +534,7 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 	api.codexCompactionThreshold = auth.codexCompactionThreshold
 	api.codexNoticeRound = auth.codexNoticeRound
 	api.monitoringRefreshSeconds = auth.monitoringRefreshSeconds
+	api.acceleratedGraceSecs = auth.acceleratedGraceSecs
 	api.outsourceMaxParallel = auth.outsourceMaxParallel
 	api.docCapCharsDuty = auth.docCapCharsDuty
 	api.docCapCharsInsight = auth.docCapCharsInsight

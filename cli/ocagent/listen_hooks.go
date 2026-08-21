@@ -28,9 +28,10 @@ import (
 // write them; 下線 was the ONE offboard path that never showed the agent the
 // checklist. The collection is now the server's, on the session's own
 // report_stopped, which collects it immediately. There is no timer behind that:
-// the owner ruled the only other way out is his force-stop button, so a session
-// that never reports simply stays up, visible to him as 停止中, until he presses
-// it (the warden killpg ladder is unchanged underneath).
+// the owner ruled the other ways out are HIS buttons — 加速停止, which arms a
+// deadline the agent is told about (T-ed79), and 強制停止 — so a session that
+// never reports simply stays up, visible to him as 停止中, until he presses one
+// of them (the warden killpg ladder is unchanged underneath).
 //
 // RECYCLE (desired_state=online ∧ refocus_since>0 — handover: a NEW me respawns):
 // ocagent does NOT report phases and does NOT self-kill. It WAKES the interactive
@@ -44,16 +45,31 @@ import (
 // refocus-marked, still-desired-online member fires an immediate event-driven
 // robust STOP (server api_members.go HandleReportStopped… → dispatchRobustStopNow
 // → warden killpg kills the tmux session, taking this listener with it) → the SSE
-// drop makes ¬online → the next tick's plain START respawns. A dead/unresponsive
-// session that never reports is covered by the server's recycle grace (120 s for
-// every cause except an owner-pressed 重新聚焦, which runs NO clock at all and is
-// collected only by the stopped report or the owner's 強制下線 —
-// recycleGraceFor): the reconcile tick dispatches the same
-// robust STOP once the grace elapses (spec/lifecycle.md §4.5) — so ocagent needs
-// NO local timeout and NO
-// self-kill; a client-side kill on a frozen-wire observable is impossible anyway
-// (the member DTO exposes no stopped_since, and `presence` still projects
-// "stopping" while this SSE is held).
+// drop makes ¬online → the next tick's plain START respawns.
+//
+// 🔴 A dead/unresponsive session that never reports is, for ALMOST EVERY
+// CAUSE, collected by NOBODY (owner 2026-08-21, T-ed79). The server's recycle
+// grace covers exactly two causes, and they are the two 加速停止 arms — the
+// SECOND context threshold (`context_high`) and the owner's own press
+// (`accelerated_stop`); 重新聚焦, 改機器, a model/runtime change, the agent's own
+// restart_self, the FIRST context threshold and token expiry all run NO clock at
+// all and are collected only by the stopped report or the owner's 強制停止
+// (recycleGraceFor → winddownKindFor). This comment used to state the opposite default — "120 s
+// for every cause except an owner-pressed 重新聚焦" — which was the
+// pre-T-ed79 rule, and this block is the ONLY written argument for why ocagent
+// carries no local timeout, so it has to be re-argued rather than deleted:
+//
+//   - WHERE A CLOCK EXISTS IT IS THE SERVER'S. The reconcile tick dispatches the
+//     same robust STOP once the grace elapses (spec/lifecycle.md §4.5), so a
+//     local timer would be a second, worse copy of a clock that already runs.
+//   - WHERE NO CLOCK EXISTS, THE OWNER RULED THAT NONE EXISTS. A local timeout
+//     would not be a backstop; it would be an unannounced deadline re-imposed by
+//     the client on exactly the causes he took it off — the agent cut off
+//     mid-hand-off, after the server's own notice promised it no deadline.
+//     Adding one is a change to the ruling, not a robustness fix.
+//   - AND IT IS NOT IMPLEMENTABLE ANYWAY. A client-side kill on a frozen-wire
+//     observable is impossible: the member DTO exposes no stopped_since, and
+//     `presence` still projects "stopping" while this SSE is held.
 //
 // All IO seams are injectable so tests drive the sequences with NO network and
 // NO tmux.
@@ -89,7 +105,7 @@ type windDownHook struct {
 	out     io.Writer
 	started bool // a repeated member delta carrying the SAME notice is silent
 	// lastNotice is the sentence already shown for this wind-down. The soft
-	// notice and the final call differ by the 120-second clause, so keying on
+	// notice and the final call differ by the deadline clause, so keying on
 	// the text is what lets the second one through without re-printing the
 	// first on every follow-up delta.
 	lastNotice string

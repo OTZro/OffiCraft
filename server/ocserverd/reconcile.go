@@ -157,6 +157,29 @@ type reconcileState struct {
 	LastCommand          string
 	LastCommandAt        float64
 	StopDeadline         float64
+	// RobustStopPendingAt (T-ed79) is when an OUT-OF-BAND robust STOP was last
+	// dispatched for this member by dispatchRobustStopNow — the force-stop
+	// button, the cancel-wake kill, and the report_stopped collect. 0 means none
+	// is outstanding.
+	//
+	// 🔴 WHY IT EXISTS. That dispatch is raw and best-effort: enqueueToWarden is
+	// fail-closed on a warden holding no live SSE downstream, so the frame is
+	// simply dropped. For the report_stopped collect that drop is terminal —
+	// decideUp's recycle arm is gated on refocus_since > 0 and decideDown's soft
+	// arm returns decisionNone for the whole window, so NO arm re-sends it. The
+	// member is left online on a session it has already declared finished, and
+	// nothing will ever kill and respawn it.
+	//
+	// 🔴 WHY THE ANCHOR IS THE DISPATCH AND NOT THE MEMBER'S LATCH. Re-deriving
+	// "this one needs collecting" from stopped_since would re-open the harm the
+	// first commit of this branch closed: 下線 → 活化 leaves a PREDECESSOR's
+	// stopped_since on a brand-new session with no epoch
+	// (TestWindDownKind_APredecessorsLatchDoesNotSilenceTheThresholds), and that
+	// session would be robust-stopped on its first tick with no close-out. A
+	// dispatch marker cannot say that: it is written only when a STOP was really
+	// sent for THIS session, and it is dropped the moment the session goes
+	// offline, so it can never be inherited by the next generation.
+	RobustStopPendingAt float64
 	// OfflineSince (T-9adc) is the first tick a desired-online member was
 	// OBSERVED offline (0 while online / never observed offline). It feeds the
 	// zombie-takeover second-confirmation window ONLY: the takeover STOP needs
@@ -180,12 +203,28 @@ type memberObservation struct {
 	Online       bool
 	RefocusSince float64
 	// RefocusOp is the CAUSE of that epoch (member.refocus_op). decideUp reads
-	// it for one reason only: an owner-pressed 重新聚焦 opens with the SOFT
-	// notice and is collected on NO clock at all, so this arm must never time
-	// it out. Every other cause is already a final call when it lands and gets
-	// its 120s. See recycleGraceFor.
-	RefocusOp    string
-	AgentStopped bool // stopped_since > 0 (the graceful dump-done fact)
+	// it for one reason only: to ask recycleGraceFor whether this epoch is on a
+	// clock AT ALL. Since T-ed79 almost none are — the clocked causes are the two
+	// 加速停止 arms, the SECOND context threshold (context_high) and the owner's
+	// own press (accelerated_stop); 重新聚焦, 改機器, a model/runtime change,
+	// restart_self, the FIRST context threshold and token expiry are all
+	// collected by the agent's own stopped report or the owner's force-stop. This used to say
+	// "every other cause is already a final call when it lands and gets its
+	// 120s", i.e. the exact inverse of today's rule — and it sits ~100 lines
+	// from recycleGraceFor, which says the correct thing. The ruling lives in
+	// ONE place (winddownKindFor); this arm must never re-derive it.
+	RefocusOp string
+	// StoppingSince is the 下線 arm's own anchor (member.stopping_since), and it
+	// is here for exactly ONE reader: the owner-pressed 加速停止 (T-ed79), whose
+	// grace runs from the press. decideDown had no durable anchor before — the
+	// pre-T-a9d6 timed path armed st.StopDeadline from the OBSERVATION, which is
+	// process-local and forgotten on restart. That was tolerable for a fallback
+	// nobody announced; it is not tolerable for a deadline the agent has been
+	// TOLD, because the sentence is composed from the durable row and would
+	// outlive a clock that lives only in memory. Reading the row keeps the two
+	// on the same fact across a station re-exec.
+	StoppingSince float64
+	AgentStopped  bool // stopped_since > 0 (the graceful dump-done fact)
 	// The last warden command_result folded onto this member (api_monitoring.go
 	// foldCommandResult → member.last_op*): the executed op kind + its structured
 	// cause. decideUp reads them to detect a START that bounced off the local
@@ -235,6 +274,18 @@ type reconcileDecision struct {
 	// tick turns this flag into a durable last_op receipt so the two are
 	// distinguishable in the UI.
 	StartTimedOut bool
+	// ReasonCode (T-ed79 #14) is the STRUCTURED half of Reason: one of the
+	// spawnReason* / placementReason* codes when this decision is a STALL the
+	// owner is owed an explanation for, "" when it is not.
+	//
+	// 🔴 "" IS THE DEFAULT AND IT MEANS 'OWES NOBODY ANYTHING'. Most decisions
+	// are converged states (online: converged, offline: converged, uninstall:
+	// converged) or steps in a wind-down that is proceeding normally. Stamping a
+	// receipt for those would turn every healthy member into a permanent SSE
+	// event stream and make the receipt meaningless — the field exists to name
+	// the cases where the member wants to be online and is NOT, and the reason
+	// was previously reachable only on the server's stderr.
+	ReasonCode string
 }
 
 func decisionNone(obs memberObservation, st reconcileState, reason string) reconcileDecision {
@@ -244,6 +295,51 @@ func decisionNone(obs memberObservation, st reconcileState, reason string) recon
 }
 
 // ── the pure decision function (machine.py decide) ───────────────────────────
+
+// ── the at-least-once robust STOP judgment (T-ed79, shared) ──────────────────
+//
+// ONE armed out-of-band robust STOP, three possible answers. The judgment behind
+// them — what arms it, how long a warden gets before the frame is presumed lost,
+// and what counts as "the session we killed is still running" — is the SAME for
+// a roster member and for an outsource worker, so BOTH producers read this one
+// function rather than each carrying a private copy of the rule. That is the
+// whole point of the ticket: a second parallel implementation on the outsource
+// side would be exactly the thing this change exists to delete.
+//
+// Producers:
+//   - member: dispatchRobustStopNow arms reconcileState.RobustStopPendingAt, the
+//     cadence judges it at the top of reconcileDecide (obs.Online is its `alive`).
+//   - worker: stopWorkerSessionOrPark arms workerStopLanded, the outsource tick
+//     judges it in retryUnlandedWorkerStop.
+type robustStopStep int
+
+const (
+	// robustStopDone — the killed session can no longer be shown to be running.
+	// Disarm: the marker must never outlive the session it was dispatched for.
+	robustStopDone robustStopStep = iota
+	// robustStopWait — still running, inside the retry window. A warden is
+	// entitled to its kill ladder; re-pushing here is frame spam, not safety.
+	robustStopWait
+	// robustStopResend — still running past the retry window. The one thing that
+	// can be true is that the kill never took: push it again.
+	robustStopResend
+)
+
+// robustStopRetryStep answers for one armed dispatch. `alive` is the caller's
+// evidence that the session THIS STOP was aimed at is still running — the member
+// producer reads obs.Online; the worker producer narrows that to "online AND
+// still claiming the machine the kill was addressed to", because a respawn puts
+// the same worker id back online on a session this STOP never addressed.
+func robustStopRetryStep(dispatchedAt float64, alive bool, stopRetry, now float64) robustStopStep {
+	switch {
+	case dispatchedAt <= 0.0 || !alive:
+		return robustStopDone
+	case now-dispatchedAt >= stopRetry:
+		return robustStopResend
+	default:
+		return robustStopWait
+	}
+}
 
 // reconcileDecide decides the single command for one member. Pure: a function
 // of (observation, state, config, now) — the dispatch IO lives in reconcileOne.
@@ -257,6 +353,42 @@ func reconcileDecide(
 		st.Attempts = 0
 		st.BackoffUntil = 0.0
 	}
+	// ── the unlanded out-of-band robust STOP (T-ed79) ────────────────────────
+	// At-least-once for the ONE dispatch path that had no backstop at all. Runs
+	// BEFORE the desired-state switch because the member it describes is being
+	// collected regardless of which arm would otherwise own it, and because
+	// decideUp's converged arm would otherwise wipe the stop bookkeeping every
+	// tick.
+	//
+	// Cleared on the first offline observation: that is both the success signal
+	// (the warden killed the session) and the guarantee that the marker can
+	// never outlive the session it was dispatched for.
+	if st.RobustStopPendingAt > 0.0 {
+		switch robustStopRetryStep(st.RobustStopPendingAt, obs.Online, cfg.StopRetry, now) {
+		case robustStopDone:
+			st.RobustStopPendingAt = 0.0
+		case robustStopResend:
+			st.RobustStopPendingAt = now
+			st.Phase = reconcilePhaseStopping
+			st.LastCommand = reconcileCmdStop
+			st.LastCommandAt = now
+			return reconcileDecision{
+				Command: reconcileCmdStop, MemberID: obs.MemberID,
+				Reason: "robust stop: re-dispatch (out-of-band STOP unlanded — " +
+					"still online past stop_retry)",
+				State: st,
+				// Kill where the session ACTUALLY is, exactly as
+				// dispatchRobustStopNow addressed it (memberKillTargetWarden);
+				// "" falls back to wardenTargetOf in reconcileOne.
+				DispatchWarden: obs.RunningMachine,
+			}
+		default: // robustStopWait
+			st.Phase = reconcilePhaseStopping
+			return decisionNone(obs, st,
+				"robust stop dispatched out-of-band — awaiting warden kill "+
+					"(within stop_retry)")
+		}
+	}
 	switch obs.Desired {
 	case DesiredStateUninstall:
 		return decideUninstall(obs, st, cfg, now)
@@ -269,12 +401,14 @@ func reconcileDecide(
 // recycleGraceFor is the one place that says how long a refocus epoch waits
 // before the collection is forced — and whether it is on a clock AT ALL.
 //
-// An owner-pressed 重新聚焦 is NOT (owner 2026-08-19, card rc-c540367065ad:
-// 「連時鐘一起拿掉」). It has the same shape as 下線: the agent is shown the
-// sequence, and the collection is its own stopped report or the owner pressing
-// force-stop. Nothing collects it on time. Every other cause (context pressure,
-// 改機器, model change, the agent's own restart_self) arrives already saying
-// 120 seconds, and gets exactly that.
+// Almost nothing is (T-ed79). 重新聚焦, 改機器, model change, the agent's own
+// restart_self, the FIRST context threshold and token expiry all have the same
+// shape as 下線: the agent is shown the sequence, and the collection is its own
+// stopped report or the owner pressing force-stop. Nothing collects them on
+// time. The clocked causes are the TWO 加速停止 arms — the SECOND context
+// threshold (context_high) and the owner's own press (accelerated_stop) — and
+// they get exactly their RecycleGrace seconds, from the SAME setting, because
+// winddownKindFor answers for both.
 //
 // 🔴 The bool is why this returns two values instead of a big number: it and
 // offboardKindOf are ONE judgement read from two places — the clock and the
@@ -285,7 +419,13 @@ func reconcileDecide(
 // all. If you ever put a clock back on this arm, offboardKindOf has to start
 // saying so in the same change.
 func recycleGraceFor(refocusOp string, cfg reconcileConfig) (grace float64, clocked bool) {
-	if refocusOp == refocusOpRefocus {
+	// 🔴 The WHICH-ARM question is not answered here any more (T-ed79). This
+	// function used to fall through to "clocked" for every op except 重新聚焦,
+	// while offboardKindOf answered the same question from its own list — two
+	// copies of one ruling, in two files, and the split this comment warns
+	// about is what happens the day they disagree. winddownKindFor is now the
+	// single read; all that is left here is HOW LONG a clocked arm gets.
+	if _, clocked := winddownKindFor(refocusOp); !clocked {
 		return 0, false
 	}
 	return cfg.RecycleGrace, true
@@ -430,9 +570,14 @@ func decideUp(
 			// the STOP unconditionally — a true zombie is still reaped.
 			if now-st.OfflineSince < cfg.ZombieConfirmGrace {
 				st.Phase = reconcilePhaseStarting
-				return decisionNone(obs, st,
+				dec := decisionNone(obs, st,
 					"zombie suspect: START clobbered a live presence-deaf session — "+
 						"withholding takeover stop inside the reconnect-confirm grace")
+				dec.ReasonCode = spawnReasonZombieSuspect + ": a session for this member " +
+					"is still alive on its machine but is not answering, so the start " +
+					"bounced off it. The server waits to be sure it is not simply " +
+					"reconnecting before it takes the slot back"
+				return dec
 			}
 			st.Phase = reconcilePhaseStopping
 			st.LastCommand = reconcileCmdStop
@@ -457,12 +602,18 @@ func decideUp(
 	if st.CircuitOpen {
 		st.Phase = reconcilePhaseCircuitOpen
 		dec := decisionNone(obs, st, "circuit open: respawn disabled")
+		dec.ReasonCode = spawnReasonCircuitOpen + ": too many failed starts in a row, so " +
+			"the server has stopped retrying this member for now — it will try again " +
+			"by itself; fix what is failing on its machine, or 停止 and 活化 to start over"
 		dec.StartTimedOut = startTimedOut
 		return dec
 	}
 	if now < st.BackoffUntil {
 		st.Phase = reconcilePhaseBackoff
 		dec := decisionNone(obs, st, "backoff: awaiting retry window")
+		dec.ReasonCode = spawnReasonBackoff + ": the last start did not come up, so the " +
+			"next attempt is waiting out a back-off window — nothing is wrong with the " +
+			"button you pressed, the retry has not come round yet"
 		dec.StartTimedOut = startTimedOut
 		return dec
 	}
@@ -512,13 +663,37 @@ func decideDown(
 	// The collection still happens the instant the agent says it is done: its
 	// stopped report dispatches the robust STOP (HandleReportStopped). What is
 	// gone is the server deciding that time is up.
-	if cfg.SoftOffboardGrace > 0 {
+	// 🔴 …UNLESS THE OWNER PRESSED 加速停止 ON THIS STOP (T-ed79). Everything the
+	// paragraph above says is about the SERVER starting a clock nobody asked for.
+	// This one is started by the owner, on the middle rung of his own escalation
+	// (停止 → 加速停止 → 強制停止), and the member has ALREADY been told about it:
+	// the same winddownKindFor answer makes offboardKindOf return `final`, so the
+	// notice quotes exactly this deadline. Asking one function is why the clock
+	// and the sentence cannot come apart here the way they used to on the 換手
+	// arm.
+	//
+	// The anchor is stopping_since, which the 加速停止 handler re-stamps as it
+	// writes the cause — the owner's grace runs from HIS press, not from a 停止 he
+	// may have pressed hours earlier. Past the deadline this falls THROUGH to the
+	// robust-stop dispatch at the bottom of this function (including its
+	// stop_retry de-dupe), rather than dispatching a second, parallel kill path.
+	acceleratedGrace, accelerated := recycleGraceFor(obs.RefocusOp, cfg)
+	accelerated = accelerated && obs.StoppingSince > 0.0
+	switch {
+	case accelerated && now < obs.StoppingSince+acceleratedGrace:
+		st.Phase = reconcilePhaseStopping
+		return decisionNone(obs, st,
+			"stopping: 加速停止 — within the grace the owner opened; collection is "+
+				"the agent's stopped report, or this deadline")
+	case accelerated:
+		// deadline lapsed → fall through to the robust stop below
+	case cfg.SoftOffboardGrace > 0:
 		st.Phase = reconcilePhaseStopping
 		return decisionNone(obs, st,
 			"stopping: agent is working its offboard sequence — collection is the "+
 				"agent's stopped report, or the owner's force-stop")
 	}
-	if st.StopDeadline == 0.0 {
+	if !accelerated && st.StopDeadline == 0.0 {
 		// The pre-T-a9d6 timed wind-down, reached by SoftOffboardGrace = 0 (a
 		// compile-time constant today, not an owner-facing setting): arm the
 		// grace clock from OBSERVING the intent, never from a dispatched
@@ -528,7 +703,7 @@ func decideDown(
 		return decisionNone(obs, st,
 			"stopping: grace window opened — awaiting agent selfstop")
 	}
-	if now < st.StopDeadline {
+	if !accelerated && now < st.StopDeadline {
 		st.Phase = reconcilePhaseStopping
 		return decisionNone(obs, st,
 			"stopping: within grace window — awaiting agent selfstop")
@@ -539,6 +714,9 @@ func decideDown(
 			"prior STOP unlanded)"
 		if firstDispatch {
 			reason = "robust stop: grace elapsed, still online"
+			if accelerated {
+				reason = "robust stop: 加速停止 grace elapsed, still online"
+			}
 		}
 		st.Phase = reconcilePhaseStopping
 		st.LastCommand = reconcileCmdStop
@@ -917,13 +1095,14 @@ func (s *apiServer) reconcileOne(m Member, st reconcileState, now float64) recon
 		Online:         s.hub.IsOnline(m.ID),
 		RefocusSince:   m.RefocusSince,
 		RefocusOp:      m.RefocusOp,
+		StoppingSince:  m.StoppingSince,
 		AgentStopped:   m.StoppedSince > 0.0,
 		LastOpKind:     m.LastOp,
 		LastOpReason:   m.LastOpReason,
 		TargetMachine:  m.DesiredMachineID,
 		RunningMachine: s.hub.MachineOf(m.ID),
 	}
-	decision := reconcileDecide(obs, st, s.reconcileCfg, now)
+	decision := reconcileDecide(obs, st, s.reconcileConfigLive(), now)
 	switch decision.Command {
 	case reconcileCmdNone:
 		return decision
@@ -1031,7 +1210,102 @@ func (s *apiServer) reconcileTickMemberLocked(m Member, now float64) reconcileDe
 	reconcileLog("%s: desired=%s command=%s — %s",
 		m.ID, parseDesired(m.DesiredState), decision.Command, decision.Reason)
 	s.stampWakeObservability(&m, decision, now)
+	// AFTER the wake receipt, and it yields to it: stampWakeObservability owns the
+	// EXECUTION-level diagnosis ("the start went out and the agent never came
+	// up"), which is strictly more informative than this tick's DISPATCH-level one
+	// ("we are in back-off"). They collide on the very tick a lapse turns into
+	// back-off, and the single last_op_reason slot can hold only one.
+	if !decision.StartTimedOut {
+		s.stampMemberOpBlocked(m.ID, decision.ReasonCode, now)
+	}
 	return decision
+}
+
+// stampMemberOpBlocked records WHY a staff member the owner wants running is not
+// running, on the row the cockpit already reads — the staff twin of
+// stampWorkerPlacementBlocked, and the production end of T-ed79 #14.
+//
+// The contract-level parts (the last_op* fields, the isPlacementBlockedReason
+// clearing seam, the cockpit renderer) were ALREADY shared between the two
+// sides; what staff never had was anybody writing. decideUp reached "circuit
+// open", "backoff" and "zombie suspect" and reconcileLog'd each one to the
+// server's stderr, where no owner has ever looked. From the cockpit all three
+// were the same picture: a grey row.
+//
+// A BLANK code is a no-op, deliberately — see reconcileDecision.ReasonCode. This
+// function never clears: clearing belongs to stampWakeObservability's landed-START
+// path, which already drops any placement-blocked reason, and a converged tick
+// silently blanking the row would erase the diagnosis one tick after it appeared.
+//
+// Written only when the cause CHANGES (the anti-churn rule the worker stamp
+// documents at length: the cadence re-decides the same stall every 30s, so an
+// unconditional write would re-stamp last_op_at and fan a delta on every tick).
+// Re-read before the whole-row write, for the reason every other stamp here does.
+// Best-effort: a persist failure is logged and changes no decision.
+// stampMemberOpReceipt writes one op receipt onto an IN-MEMORY member the caller
+// is about to persist itself. It exists so an HTTP handler's explanation and the
+// change it explains are ONE row write and ONE delta — the same reason
+// armRefocusEpoch mutates instead of persisting.
+func stampMemberOpReceipt(m *Member, reason string, now float64) {
+	ok := false
+	m.LastOp = reconcileCmdStart
+	m.LastOpOK = &ok
+	m.LastOpLog = ""
+	m.LastOpReason = reason
+	m.LastOpAt = now
+}
+
+// isStopgapRetryReason reports whether a reason code is the retry loop
+// DESCRIBING ITS OWN WAIT rather than diagnosing anything — the only class the
+// single-slot precedence rule in stampMemberOpBlocked yields to. Both members
+// are produced by decideUp's pacing arms and both re-derive every 30s for as
+// long as the stall lasts, which is what makes them able to blank a diagnosis
+// they know nothing about.
+func isStopgapRetryReason(reason string) bool {
+	return strings.HasPrefix(reason, spawnReasonBackoff+":") ||
+		strings.HasPrefix(reason, spawnReasonCircuitOpen+":")
+}
+
+func (s *apiServer) stampMemberOpBlocked(memberID, reason string, now float64) {
+	if reason == "" {
+		return
+	}
+	fresh, err := s.dal.GetMember(memberID)
+	if err != nil || fresh == nil || fresh.RosterStatus != RosterStatusActive {
+		return
+	}
+	if fresh.LastOp == reconcileCmdStart && fresh.LastOpReason == reason {
+		return // already stamped with this exact cause — do not churn the row
+	}
+	// 🔴 THE ONE PRECEDENCE RULE, and it is the family's own (worker_spawn.go, the
+	// codes deliberately outside spawnBlockedReasonCodes): a diagnosis of the
+	// PREVIOUS attempt must not be erased by a description of the current wait.
+	// wake_timeout says the start was dispatched and the agent never came up; it
+	// is followed, one tick later, by exactly the back-off this function would
+	// stamp — so without this rule the retry loop would blank the only sentence
+	// that says what actually went wrong, every time, which is the trap 31751ae
+	// fixed for workers.
+	//
+	// 🔴 IT TURNS ON THE INCOMING CODE, NOT ONLY ON WHAT IS ON THE ROW. The rule
+	// is about the RETRY LOOP, and only backoff/circuit_open are the retry loop
+	// describing its own wait. zombie_suspect and the activate handler's
+	// warden_unreachable are fresh, actionable findings about what is wrong NOW —
+	// strictly more informative than a wake_timeout from an attempt that has
+	// already failed — and a guard that read only the row swallowed those too,
+	// leaving the owner a stale sentence while the live fault went unsaid.
+	if isStopgapRetryReason(reason) &&
+		strings.HasPrefix(fresh.LastOpReason, wakeTimeoutReasonCode+":") {
+		return
+	}
+	ok := false
+	fresh.LastOp = reconcileCmdStart
+	fresh.LastOpOK = &ok
+	fresh.LastOpLog = ""
+	fresh.LastOpReason = reason
+	fresh.LastOpAt = now
+	if err := s.putMember(*fresh, triggerServer); err != nil {
+		reconcileLog("%s: op-blocked stamp persist failed: %v", memberID, err)
+	}
 }
 
 // stampMemberPlacementBlocked names, on the member row the cockpit reads, the one
@@ -1206,27 +1480,140 @@ func shouldAutoRefocus(runtime string, record map[string]any, cfg SseContextHigh
 // 🔴 announceSoftOffboardEscalation used to live here: the frame that told an
 // agent its soft 重新聚焦 had become the final call, 120 seconds out. It is gone
 // with the clock that justified it (owner 2026-08-19, card rc-c540367065ad) —
-// 重新聚焦 no longer escalates, so there is no promotion to announce. Its
-// de-duplication state (softEscalated / softOffboardEpoch) went with it. If a
-// clock ever comes back to that arm, this frame has to come back in the same
-// change, or the agent is collected having last been told there was no
-// countdown.
+// 重新聚焦 no longer escalates. Its de-duplication state (softEscalated /
+// softOffboardEpoch) went with it.
+//
+// ⚠️ T-ed79 brought a promotion back — context_notice → context_high — and it
+// deliberately did NOT bring this frame back. It is not needed: the notice
+// rides EVERY write to the member row (offboardDeltaPayload), and the promotion
+// IS a write, so the putMember that changes refocus_op carries the FINAL
+// sentence to the agent's own stream in the same delta. A second frame would be
+// a second copy of one event, de-duplicated by nothing. What the removed
+// function was really compensating for was an escalation that changed NO field
+// — a soft→final flip decided from the clock alone, invisible on the row. The
+// promotion changes refocus_op and refocus_since, so the row says it happened.
+// Pinned by TestContextThresholds_PromotionDeltaCarriesTheFinalSentence.
+
+// canPromoteToAcceleratedStop is the ONE exception to "an in-flight epoch is its
+// own cooldown": a member the FIRST context threshold put on a plain 停止 has
+// crossed the SECOND, so the same wind-down becomes 加速停止.
+//
+// 🔴 ONE DIRECTION, ONE CAUSE. An epoch the OWNER opened (重新聚焦, 改機器,
+// 換 model) or the agent opened for itself (restart_self) is never promoted, at
+// any pct: the owner deliberately asked for a stop with no clock, and quietly
+// turning it into one with a deadline would take that decision away from him in
+// the one place he cannot see it happen. Only context_notice → context_high.
+//
+// The stopped-report check is not tidiness either: a member that has already
+// reported stopped is collected by decideUp's recycle arm on this very tick, so
+// re-stamping refocus_since would move the deadline of a wind-down that is
+// already over, and the promotion notice would reach a session that has said it
+// is finished.
+func canPromoteToAcceleratedStop(m Member, op string) bool {
+	return op == refocusOpContextHigh &&
+		m.RefocusOp == refocusOpContextNotice &&
+		m.StoppedSince <= 0.0
+}
+
+// shouldNoticeRefocus is the FIRST threshold's actionable signal — the soft twin
+// of shouldAutoRefocus, reading the SAME gauge through the same stale guard so
+// the two thresholds can never disagree about where the session is.
+//
+// The codex arm asks codexNoticeDue rather than inventing a second rule: a codex
+// session hands over on compaction ROUNDS, so "the first threshold" means the
+// notice round, 60% through it — the same predicate the SSE advance notice fires
+// on. Reusing it is what keeps one runtime's two thresholds on one axis.
+func shouldNoticeRefocus(
+	runtime string, record map[string]any, cfg SseContextHighConfig,
+	codexNoticeRound, codexThreshold int,
+) bool {
+	pct := actionableContextPct(record, cfg.StaleGuard)
+	if NormalizeRuntime(runtime) == RuntimeCodex {
+		return codexNoticeDue(record, pct, codexNoticeRound, codexThreshold)
+	}
+	return cfg.NoticePct > 0 && pct != nil && *pct >= float64(cfg.NoticePct)
+}
 
 // stampContextHighRecycle auto-stamps refocus_since on any candidate whose
 // runtime-specific handover signal is actionable — the
 // automatic counterpart of the manual refocus button, reusing the SSE band's
 // stale-pct + boot-storm guards so an unreliable gauge never auto-recycles.
 // Mutates the in-slice member so the SAME tick's observation sees the marker.
+//
+// 🔴 BOTH thresholds open a wind-down now (T-ed79), and they open DIFFERENT
+// kinds. The first (notice_pct) opens a plain 停止 — refocus_op=context_notice,
+// no clock, no deadline in the sentence — because the owner's model is that an
+// agent near its limit is ASKED to wind down before it is collected on one. It
+// used to open nothing at all: the first threshold sent one SSE band and the
+// wind-down began only at the second, so an agent that missed the frame met the
+// final call with no close-out started.
+//
+// 🔴 …which is why the de-dup below has exactly ONE exception. `refocus_since >
+// 0 ⇒ skip` is the cooldown that stops this loop re-stamping every 30 s, and
+// with the first threshold now stamping, that same rule would have made the
+// SECOND threshold unreachable for the rest of the session: the promotion path
+// would be dead code and the notice epoch would be the last word, on an agent
+// that has since gone past the line where the owner wants it collected.
 func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 	ctxhigh := s.ctxHighConfig()
+	codexNoticeRound := s.codexNoticeRoundSetting()
 	for i := range members {
 		m := &members[i]
-		if m.RefocusSince > 0.0 {
-			continue // already recycling — the marker IS the cooldown
-		}
 		record := s.gauge.Get(m.ID)
-		if !shouldAutoRefocus(m.Runtime, record, ctxhigh, s.codexCompactionThreshold) {
+		op := ""
+		switch {
+		case shouldAutoRefocus(m.Runtime, record, ctxhigh, s.codexCompactionThreshold):
+			op = refocusOpContextHigh
+		case shouldNoticeRefocus(m.Runtime, record, ctxhigh, codexNoticeRound, s.codexCompactionThreshold):
+			op = refocusOpContextNotice
+		default:
 			continue
+		}
+		// 🔴 AN AGENT THAT HAS ALREADY SAID 「我收完了」 IS NOT ASKED AGAIN.
+		// report_stopped latches stopped_since on ANY staff member, epoch or not
+		// (owner rc-b08d49dc3b03), and then fires ONE best-effort
+		// dispatchRobustStopNow. A warden that is unreachable at that instant
+		// drops it, and nothing sweeps the row while the session is still up:
+		// clearRecycleMarkersOnRespawn skips anything online, and
+		// clearStaleStoppingOnOnline only ever zeroes stopping_since. So the
+		// member sits at desired-online ∧ online ∧ stopped_since>0 ∧ no epoch.
+		//
+		// Opening a wind-down there does two wrong things at once. armRefocusEpoch
+		// zeroes the anchors BY DESIGN — it cannot tell a fresh report from a
+		// stale latch and must keep zeroing them, because a stale one turns the
+		// next epoch into an immediate kill — so the stamp DESTROYS the agent's
+		// finished close-out; and the notice it fans asks a session that is
+		// already done to do it all again. Before T-ed79 the first threshold
+		// stamped nothing at all, so this door did not exist; giving it a
+		// wind-down is what opened it.
+		//
+		// Same ruling canPromoteToAcceleratedStop already makes a few lines up
+		// ("the promotion notice would reach a session that has said it is
+		// finished") — this is the arm that was missed, not a new policy.
+		//
+		// 🔴 THE BOOT_TS TEST IS LOAD-BEARING, not belt-and-braces. A latch can
+		// legitimately be a PREDECESSOR's: activate clears stopping_since and
+		// waking_since but NOT stopped_since, so 下線 → 活化 puts a brand-new
+		// session online carrying the previous generation's report with no epoch
+		// — exactly the fixture
+		// TestRefocusEpoch_NoStampSiteInheritsAStaleWindDownLatch pins. Skipping
+		// on that would exclude the member from BOTH thresholds for the rest of
+		// its life, which is a worse bug than the one this guard removes. The
+		// question is therefore not "is there a latch" but "did THIS connection
+		// file it", and that is the same question — and the same answer —
+		// actionableContextPct's stale guard already uses one field over: a
+		// predecessor session's leftover never triggers. No boot_ts means the
+		// question cannot be answered, and then the pre-existing path (stamp)
+		// stands.
+		if bootTS, ok := gaugeBootTS(record); ok && m.StoppedSince >= bootTS {
+			continue
+		}
+		promoting := false
+		if m.RefocusSince > 0.0 {
+			if !canPromoteToAcceleratedStop(*m, op) {
+				continue // already winding down — the marker IS the cooldown
+			}
+			promoting = true
 		}
 		if bootStormTripped(gaugeSecsSinceBoot(record, now), ctxhigh.MinBootSecs) {
 			continue // fresh boot already over the line → suppress (loop-guard)
@@ -1243,13 +1630,157 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 		if !aRefocusStampWouldReachTheAgent(*m) {
 			continue
 		}
-		m.RefocusSince = now
-		m.RefocusOp = refocusOpContextHigh
+		if promoting {
+			// PROMOTION, not a new epoch: the member is already winding down and
+			// keeps whatever it has reported. Only the kind and the clock change.
+			//
+			// ⚠️ RefocusSince is re-stamped, and that is the whole point. The
+			// deadline is refocus_since + grace, so promoting in place would put
+			// the deadline at the FIRST threshold's stamp — minutes in the past
+			// on any session that took the notice seriously — and `now >=
+			// refocus_since + grace` would be true on the very tick that
+			// announced it. The agent would be told "your deadline is <a moment
+			// already gone>" and collected in the same tick: a zero-second
+			// deadline, which is the exact harm this ticket exists to remove.
+			//
+			// armRefocusEpoch is deliberately NOT used: it clears the wind-down
+			// anchors, and here they belong to the close-out ALREADY IN FLIGHT.
+			// Clearing stopped_since would be worse than untidy — it would erase
+			// the agent's own "I am done" and cancel the collection this same
+			// tick was about to make.
+			m.RefocusSince = now
+			m.RefocusOp = refocusOpContextHigh
+		} else {
+			armRefocusEpoch(m, op, now)
+		}
 		if err := s.putMember(*m, triggerServer); err != nil {
 			reconcileLog("recycle: auto-stamp persist failed for %s: %v", m.ID, err)
 			continue
 		}
-		reconcileLog("recycle: auto-stamp refocus_since for %s (%s)", m.ID, NormalizeRuntime(m.Runtime))
+		if promoting {
+			// The FINAL sentence needs no frame of its own: offboardDeltaPayload
+			// composes the notice from refocus_op on EVERY write to the row, so
+			// the putMember above already carried it. (This is what the removed
+			// announceSoftOffboardEscalation used to do by hand; pinned by
+			// TestContextThresholds_PromotionDeltaCarriesTheFinalSentence.)
+			reconcileLog("recycle: promoted %s to %s (%s)", m.ID, refocusOpContextHigh,
+				NormalizeRuntime(m.Runtime))
+		} else {
+			reconcileLog("recycle: auto-stamp refocus_since for %s (%s, %s)", m.ID,
+				NormalizeRuntime(m.Runtime), op)
+		}
+	}
+}
+
+// tokenExpiryLeadSecs is how long BEFORE its agent token expires a live session
+// is asked to wind down (owner 2026-08-21: refocus／改 model／改機器「就是呼叫
+// 軟下線，然後等他 report_stopped 以後再呼叫上線」, and token renewal is the same
+// shape — the session has to end and be re-minted, so it may as well end the way
+// every other cause ends). One hour is the lead the owner named.
+const tokenExpiryLeadSecs = 3600.0
+
+// tokenExpiryOf derives WHEN a live session's agent token stops working, from
+// the two facts the server already stores. It returns 0 when the question
+// cannot be answered, and every caller must treat 0 as "do nothing".
+//
+// 🔴 THIS IS A DERIVATION, NOT A RECORD, AND THE ERROR TERM IS NAMED. The token
+// is minted in buildStartFrame at DISPATCH time with the TTL that was live then
+// (mintJWT sets exp = mint + ttl — jwt.go); session_boot_ts is stamped later, on
+// the SSE first-connect edge (anchorSessionBoot). So:
+//
+//   - session_boot_ts >= mint, therefore this estimate is an UPPER BOUND on the
+//     real expiry, too late by however long the boot took. The trigger built on
+//     it therefore fires slightly LATE — with a little under the full lead left
+//     — never early. That direction is the safe one: the window shrinks, it does
+//     not open before the token exists.
+//   - it reads the CURRENT agent_token_ttl, not the one the token was minted
+//     with. An owner who changes that setting mid-session moves this estimate
+//     for sessions whose tokens did not move. Raising the TTL therefore defers
+//     the wind-down past the real expiry (the session dies with no close-out —
+//     the pre-existing behaviour, not a new harm); lowering it winds sessions
+//     down early (a wasted, but safe, handover). Recording the real exp would
+//     need a durable per-session column, which this ticket deliberately did not
+//     add.
+//
+// ⚠️ Only staff sessions are derivable this way. A warden's credential is minted
+// by mintWardenToken with NO exp claim at all, so it never expires and this must
+// never be asked about one.
+func tokenExpiryOf(m Member, agentTokenTTL int64) float64 {
+	if m.Kind != KindAssistant || agentTokenTTL <= 0 || m.SessionBootTS <= 0 {
+		return 0
+	}
+	return m.SessionBootTS + float64(agentTokenTTL)
+}
+
+// stampTokenExpiryWinddown opens a plain 停止 on any live staff session whose
+// agent token is inside its last tokenExpiryLeadSecs — the same shape
+// stampContextHighRecycle uses for the context thresholds, and deliberately so:
+// what ends a session is one funnel, and a second one with its own guards would
+// be a second chance to get the guards wrong.
+//
+// The guards are COPIED from stampContextHighRecycle rather than re-derived,
+// cell for cell, because each of them is there for a reason that holds here
+// identically:
+//
+//   - refocus_since > 0 → skip. The marker IS the cooldown; without it this loop
+//     re-stamps every 30 s for the whole final hour, and each re-stamp would
+//     destroy the close-out already in progress. There is deliberately NO
+//     promotion arm (the context pair's one exception): token expiry never
+//     escalates into a different kind, so there is nothing to promote to.
+//   - stopped_since >= the gauge's boot_ts → skip. An agent that has already
+//     said 「我收完了」 is not asked again, and armRefocusEpoch would zero the
+//     anchors and destroy that report. The boot_ts test is what tells THIS
+//     session's report apart from a predecessor's latch (下線 → 活化 leaves one).
+//   - online-only, and only while the server still WANTS it online
+//     (aRefocusStampWouldReachTheAgent). A stamp that does not reach the agent
+//     is not a weaker signal, it is no signal — and it strands a marker that
+//     activate does not clear.
+//
+// The boot-storm guard is NOT copied, and that is not an oversight: it exists to
+// stop a fresh session being recycled off a gauge reading that is over the line
+// the instant it boots. A token that is within an hour of expiry on a session
+// that just booted is not a mis-reading — it is a session that genuinely has
+// less than an hour, and suppressing it would leave exactly the case this
+// trigger is for.
+func (s *apiServer) stampTokenExpiryWinddown(members []Member, now float64) {
+	ttl := s.agentTokenTTLValue()
+	for i := range members {
+		m := &members[i]
+		expiry := tokenExpiryOf(*m, ttl)
+		if expiry <= 0 {
+			continue // not derivable (no session anchor, or not a staff session)
+		}
+		if now < expiry-tokenExpiryLeadSecs {
+			continue // still outside the lead
+		}
+		if now >= expiry {
+			// Past the derived expiry the token is certainly dead (the estimate
+			// is an upper bound — see tokenExpiryOf), so the sequence this stamp
+			// asks for could not be filed: every step of it is an MCP call on
+			// that token. Opening a wind-down here would print instructions to a
+			// session that can only answer 401.
+			continue
+		}
+		if m.RefocusSince > 0.0 {
+			continue // already winding down — the marker IS the cooldown
+		}
+		record := s.gauge.Get(m.ID)
+		if bootTS, ok := gaugeBootTS(record); ok && m.StoppedSince >= bootTS {
+			continue // this session has already reported it is finished
+		}
+		if !s.hub.IsOnline(m.ID) {
+			continue
+		}
+		if !aRefocusStampWouldReachTheAgent(*m) {
+			continue
+		}
+		armRefocusEpoch(m, refocusOpTokenExpiry, now)
+		if err := s.putMember(*m, triggerServer); err != nil {
+			reconcileLog("recycle: token-expiry stamp persist failed for %s: %v", m.ID, err)
+			continue
+		}
+		reconcileLog("recycle: token-expiry 停止 for %s (token estimated to expire at %.0f, "+
+			"lead %.0fs)", m.ID, expiry, tokenExpiryLeadSecs)
 	}
 }
 
@@ -1271,13 +1802,44 @@ func bootStormTripped(secsSinceBoot *float64, minBootSecs float64) bool {
 // (§4.5): clear the recycle markers the moment the respawn-pending state is
 // observed (desired online ∧ ¬online ∧ refocus_since>0 — the kill landed), so
 // a slow/never-waking respawn can never be re-killed off a stale marker.
+//
+// 🔴 It also clears a wind-down latch left behind with NO epoch at all. An agent
+// can report_stopping / report_stopped on its own, without anybody stamping
+// refocus_since — a spontaneous close-out, or one whose epoch was already
+// cleared — and the arm below used to skip those rows on `refocus_since <= 0`,
+// so stopped_since sat on a desired-online member forever. That latch is not
+// inert: it is exactly what armRefocusEpoch documents, and it is read by the
+// recycle arm of decideUp (which robust-stops on stopped_since > 0 the instant
+// ANY epoch is stamped). Clearing it here is why the stamp sites can be trusted
+// to open a clean epoch even against a row that has been sitting in the DB for
+// days.
+//
+// 🔴 The SSE stop gate is NOT a second reader in this scope, and this comment
+// used to name it as one. api_infra.go's gate only fires on
+// `desired_state == offline`, and the first gate below `continue`s on anything
+// that is not desired online — so within this function's range the gate is
+// unreachable by construction. Citing a protection that cannot apply here made
+// the case for clearing the latch look stronger than it is; the decideUp reader
+// alone is the real reason, and it is sufficient.
+//
+// WHY THE `IsOnline` GATE IS SUFFICIENT here, and no close-out is cut short by
+// this: the arm only fires on desired online ∧ NOT online. A member with a live
+// session is never touched, so an agent working its sequence (report_stopping
+// sent, report_stopped not yet) keeps its anchors for as long as it is
+// connected. If its socket really is gone while desired_state is still online,
+// reconcile's decideUp is already going to START a replacement session on this
+// same tick — with or without the latch, nothing is waiting for that close-out
+// to finish. What the latch WOULD do in that state is arm the two destructive
+// readers above against the next epoch. Clearing loses nothing that is still
+// being used and removes a trap; keeping it protects a close-out that no code
+// path is still honouring.
 func (s *apiServer) clearRecycleMarkersOnRespawn(members []Member) {
 	for i := range members {
 		m := &members[i]
 		if m.DesiredState != DesiredStateOnline {
 			continue
 		}
-		if m.RefocusSince <= 0.0 {
+		if m.RefocusSince <= 0.0 && m.StoppedSince <= 0.0 && m.StoppingSince <= 0.0 {
 			continue // plain respawn — nothing to clear
 		}
 		if s.hub.IsOnline(m.ID) {
@@ -1486,6 +2048,16 @@ func (s *apiServer) runReconcileTick(now float64) {
 		members = append(members, m)
 	}
 	s.stampContextHighRecycle(members, now)
+	// AFTER the context pair, and the order is load-bearing. Both passes skip a
+	// member that already carries refocus_since, so whichever runs first owns the
+	// epoch for that member. Reversed, a session that is BOTH out of context and
+	// near token expiry would be stamped token_expiry — a soft, unclocked cause —
+	// and stampContextHighRecycle's one promotion arm would then decline it
+	// (canPromoteToAcceleratedStop only promotes a context_notice epoch), so the
+	// second context threshold would never open its 加速停止 on that member at all.
+	// This order lets the context pair keep its own escalation, and the token pass
+	// picks up everyone the context pair did not claim.
+	s.stampTokenExpiryWinddown(members, now)
 	s.clearRecycleMarkersOnRespawn(members)
 	s.clearStaleStoppingOnOnline(members, now)
 	s.consumeUninstallIntentOnOffline(members)
@@ -1555,9 +2127,15 @@ func (s *apiServer) reconcileMemberNow(memberID string) reconcileDecision {
 // What it skips differs by caller, and only one of them has a clock to skip:
 //   - recycle kill: skips the remaining recycleGraceFor window, and the cadence
 //     STOP arm is still the idempotent backstop if this frame is lost.
-//   - force-stop / offboard: there is NO clock here and NO backstop — decideDown
-//     returns decisionNone for the whole soft window, so a lost frame leaves the
-//     member online until the owner presses the button again.
+//   - force-stop / offboard: there is NO clock here to skip — decideDown returns
+//     decisionNone for the whole soft window.
+//
+// 🔴 "Best-effort" no longer means "one shot" (T-ed79). Every dispatch from here
+// arms RobustStopPendingAt, so a frame the fail-closed enqueue gate drops on an
+// unreachable warden is re-sent by the cadence once the member is still online
+// past stop_retry. Before that, the report_stopped collect in particular had no
+// backstop at ALL: no arm of the decider re-derives it, so a single lost frame
+// parked the member online forever on a session it had already closed out.
 func (s *apiServer) dispatchRobustStopNow(memberID string) {
 	if s.noReconcile {
 		return
@@ -1573,10 +2151,31 @@ func (s *apiServer) dispatchRobustStopNow(memberID string) {
 	// while the session being collected still runs on the origin — addressing the
 	// destination there would leave the old session alive forever.
 	s.enqueueToWarden(memberID, s.memberKillTargetWarden(memberID), frame)
+	// Record the dispatch so the cadence can re-send it if it never lands
+	// (T-ed79). Armed UNCONDITIONALLY — including on the fail-closed refusal
+	// above, which is the case that needs it most: an unreachable warden is
+	// exactly how a collect goes missing. See reconcileState.RobustStopPendingAt
+	// and the arm at the top of reconcileDecide.
+	s.noteRobustStopDispatched(memberID, nowSecs())
 	// The robust kill (force-stop, report_stopped recycle, relocate) ends the
 	// current session: drop its boot_ts so the respawn's first connect re-stamps
 	// a fresh anchor (T-8fb2 boot_ts fix).
 	s.clearSessionBootTS(memberID)
+}
+
+// noteRobustStopDispatched arms the at-least-once retry for one out-of-band
+// robust STOP. Takes reconcileMu itself: every caller is an HTTP handler that
+// holds no reconcile lock. A member with no store entry yet gets a fresh state
+// — the marker is the only thing the entry needs to carry.
+func (s *apiServer) noteRobustStopDispatched(memberID string, now float64) {
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+	st, ok := s.reconcileStates[memberID]
+	if !ok {
+		st = newReconcileState()
+	}
+	st.RobustStopPendingAt = now
+	s.reconcileStates[memberID] = st
 }
 
 // identitySweepDedupeSecs is the window a member's cross-machine identity sweep

@@ -179,10 +179,17 @@ func TestOwnerOp_RelocateWindsDownInsteadOfKilling(t *testing.T) {
 	}
 }
 
-// TestOwnerOp_WindDownEndsOnTheDeadlineToo: the wind-down must not be able to
-// hang forever on a worker that never answers. The grace deadline
-// (StoppingTimeoutSecs) is the ceiling, driven by the tick's in-flight arm.
-func TestOwnerOp_WindDownEndsOnTheDeadlineToo(t *testing.T) {
+// TestOwnerOp_WindDownRunsNoClock_AndEndsOnTheWorkersOwnReport: an owner verb
+// is a 停止 (T-ed79), so NOTHING collects it on a clock — not at
+// StoppingTimeoutSecs, not later. This test used to assert the opposite ("the
+// deadline is the ceiling"), which was true of the FALLTHROUGH that put every
+// unnamed cause on the clock, never of a ruling.
+//
+// The other half is here in the same test on purpose: "no clock" must not be
+// readable as "never ends". The 收口 is the worker's own stopped report (and,
+// on the arm this fixture cannot reach without tearing the socket down, its
+// session dying — the grace-offline branch of autoHandoverWorker).
+func TestOwnerOp_WindDownRunsNoClock_AndEndsOnTheWorkersOwnReport(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	workerID := newActiveOnlineWorker(t, api)
@@ -196,19 +203,30 @@ func TestOwnerOp_WindDownEndsOnTheDeadlineToo(t *testing.T) {
 	api.hub.DrainWardenCommands(ServerSelfHost)
 	w, _ := api.dal.GetOutsourceWorker(workerID)
 
-	// Just short of the deadline: still waiting, nothing dispatched.
-	api.outsourceMu.Lock()
-	api.autoHandoverWorker(*w, w.RefocusSince+StoppingTimeoutSecs-1)
-	api.outsourceMu.Unlock()
-	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
-		t.Fatalf("inside the grace window nothing may be dispatched, got %d frames", got)
+	// The old ceiling, and far past it: the worker is still working its SOP and
+	// nothing may be dispatched at it.
+	for _, elapsed := range []float64{
+		StoppingTimeoutSecs - 1, StoppingTimeoutSecs + 1, 100 * StoppingTimeoutSecs,
+	} {
+		api.outsourceMu.Lock()
+		api.autoHandoverWorker(*w, w.RefocusSince+elapsed)
+		api.outsourceMu.Unlock()
+		if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
+			t.Fatalf("+%.0fs after 換 model: nothing may be dispatched (this op runs "+
+				"no clock), got %d frames", elapsed, got)
+		}
 	}
-	// Past it: collected regardless.
-	api.outsourceMu.Lock()
-	api.autoHandoverWorker(*w, w.RefocusSince+StoppingTimeoutSecs+1)
-	api.outsourceMu.Unlock()
+
+	// …and the worker's own report IS the 收口: stop + start, at once.
+	rec = httptest.NewRecorder()
+	api.HandleReportStoppedApiSelfStoppedPost(rec,
+		taskReq(t, "POST", "/api/self/stopped", nil, workerID, "agent"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
+	}
 	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 2 {
-		t.Fatalf("the deadline must collect (stop+start), got %d frames", got)
+		t.Fatalf("the worker's own stopped report must collect it (stop+start), "+
+			"got %d frames", got)
 	}
 }
 
@@ -463,28 +481,28 @@ func TestOwnerOp_OrdinaryStopRestartStillWindsDownLater(t *testing.T) {
 	api.noOutsource = true
 	workerID := newActiveOnlineWorker(t, api)
 
-	// An ORDINARY 停止 → the worker reports it finished → 重啟. No handover
-	// anywhere in here: refocus_since is never stamped.
-	postWorker(t, api, workerID, "stop", nil,
-		api.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
+	// A stopped-report arriving OUTSIDE any handover: desired_state stays online
+	// and refocus_since was never stamped, so workerReportStopped falls through
+	// to the bare latch — stopped_since set, no kill, the session still alive.
+	// That is the stale latch this test is about.
+	//
+	// ⚠️ IT USED TO REACH THAT STATE VIA 停止 → report → 重啟, and T-ed79 parity
+	// #11 closed that route: the restart handler now clears the wind-down anchors
+	// it used to leave behind. The state itself is still perfectly reachable —
+	// this arm needs no owner verb at all — so the test keeps its subject and only
+	// changes how it gets there. (The rest of that route is covered by
+	// worker_restart_clears_markers_ted79_test.go.)
 	rec := httptest.NewRecorder()
 	api.HandleReportStoppedApiSelfStoppedPost(rec,
 		taskReq(t, "POST", "/api/self/stopped", nil, workerID, "agent"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
 	}
+	api.hub.DrainWardenCommands(ServerSelfHost)
 	w, _ := api.dal.GetOutsourceWorker(workerID)
 	if w.RefocusSince != 0 || w.StoppedSince <= 0 {
 		t.Fatalf("fixture: this test needs a NON-handover latch "+
 			"(refocus=%v stopped=%v)", w.RefocusSince, w.StoppedSince)
-	}
-	if rec := postWorker(t, api, workerID, "restart", nil,
-		api.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost); rec.Code != http.StatusOK {
-		t.Fatalf("restart: %d %s", rec.Code, rec.Body.String())
-	}
-	api.hub.DrainWardenCommands(ServerSelfHost)
-	if w, _ := api.dal.GetOutsourceWorker(workerID); w.StoppedSince <= 0 {
-		t.Fatal("fixture: the stale latch must survive the restart for this test to bite")
 	}
 	if !api.hub.IsOnline(workerID) {
 		t.Fatal("fixture: the worker must be online for the wind-down to be owed")

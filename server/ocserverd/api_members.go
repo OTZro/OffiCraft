@@ -99,13 +99,19 @@ func (s *apiServer) offboardDeltaPayload(m Member) map[string]any {
 // own context pressure walk the SAME sequence, and that what tells the
 // situations apart is whether there is still room:
 //
-//   - SOFT — 下線 (desired offline + a stopping anchor, the graceful arm) and
-//     重新聚焦. It says work the sequence, then call restart_self yourself; no
-//     countdown clause, because on these two arms there is no clock AT ALL —
-//     not now, and not later.
-//   - FINAL — every other refocus cause (context_high, 改機器, model/runtime,
-//     restart_self): the collection is already under way and the 120s recycle
+//   - SOFT (停止) — 下線 (desired offline + a stopping anchor, the graceful
+//     arm) and EVERY refocus cause except the one below: 重新聚焦, 改機器,
+//     model/runtime, restart_self, and the FIRST context threshold. It says
+//     work the sequence, then call restart_self yourself; no countdown clause,
+//     because on these arms there is no clock AT ALL — not now, and not later.
+//   - FINAL (加速停止) — the two 加速停止 causes, and only those: the SECOND
+//     context threshold (context_high) and the owner's own press
+//     (accelerated_stop). The collection is already under way and the recycle
 //     clock is running, so the sentence has to say so.
+//
+// 🔴 The membership is decided by winddownKindFor, not here and not in
+// recycleGraceFor. Both of those used to carry their own copy of the list, and
+// the copies were kept identical by hand (T-ed79).
 //
 // 🔴 The soft arm is the ONLY reason 下線 reaches the agent at all. Before this,
 // a deactivate stamped stopping_since and nothing else, so the notice condition
@@ -135,8 +141,19 @@ func offboardKindOf(m Member, now float64) (kind string, carries bool) {
 		// wound down (and a cancelled wake is force-stopped outright, which is
 		// deliberately silent — see HandleForceStopMember).
 		//
-		// 🔴 And it stays SOFT forever, because nothing collects it on a clock:
-		// the owner ruled 下線 runs no countdown at all (rc-27d1710174dd), so a
+		// 🔴 THIS SOFT IS HARD-CODED, and deliberately does NOT read
+		// winddownKindFor (T-ed79). That function answers "what does this
+		// refocus_op mean", and this arm has no refocus_op to ask about: 下線 is
+		// a desired_state transition, not a wind-down CAUSE, and it stamps no
+		// epoch. Routing it through the single source would mean feeding it ""
+		// and depending on the DEFAULT arm — which agrees today (soft) but
+		// agrees by accident: the default exists so that an unruled *cause*
+		// gets no deadline, and coupling 下線's ruling to it would let a future
+		// change to the cause default silently move a ruling the owner made
+		// about a different thing. Two rulings that coincide are not one ruling.
+		//
+		// It stays SOFT forever, because nothing collects it on a clock: the
+		// owner ruled 下線 runs no countdown at all (rc-27d1710174dd), so a
 		// notice claiming 120 seconds here would be a promise nobody keeps —
 		// an agent would cut its hand-off short to beat a deadline that does
 		// not exist. Escalation on this arm is the owner pressing force-stop,
@@ -165,6 +182,18 @@ func offboardKindOf(m Member, now float64) (kind string, carries bool) {
 		// speak. An outsource 停止 now stamps the same anchors (api_outsource.go)
 		// — it kills on the spot, so it IS this shape, whatever it is named.
 		if m.StoppingSince > 0 && !forcedEpochLive(m) {
+			// 🔴 …WITH ONE EXCEPTION, AND ONLY ONE: the owner pressed 加速停止 on
+			// this stop (T-ed79). The paragraphs above rule out a clock the
+			// SERVER starts; this is a clock the owner started, on the rung
+			// between "wait indefinitely" and "cut it off with no sentence at
+			// all". It reads winddownKindFor rather than testing the constant
+			// again, because the clock (decideDown) reads the same function —
+			// which is the whole reason 下線's hard-coded soft above is safe to
+			// leave hard-coded: the ONE arm that can carry a clock is the one
+			// arm that asks the single source.
+			if kind, clocked := winddownKindFor(m.RefocusOp); clocked {
+				return kind, true
+			}
 			return offboardKindSoft, true
 		}
 		return "", false
@@ -172,16 +201,17 @@ func offboardKindOf(m Member, now float64) (kind string, carries bool) {
 	if m.RefocusSince <= 0 {
 		return "", false
 	}
-	if m.RefocusOp == refocusOpRefocus {
-		// 🔴 SOFT forever, exactly like 下線 above, and for the same reason:
-		// recycleGraceFor runs NO clock on this arm (owner 2026-08-19, card
-		// rc-c540367065ad: 「連時鐘一起拿掉」). A countdown clause here would be
-		// a promise nobody keeps in the other direction — the sentence would
-		// start a 120s timer in the agent's head while nothing was coming to
-		// collect it. Escalation on this arm is the owner pressing force-stop.
-		return offboardKindSoft, true
-	}
-	return offboardKindFinal, true
+	// 🔴 ONE READ, not a second list (T-ed79). This arm used to spell the
+	// judgement out again — 重新聚焦 soft, everything else final — beside a
+	// recycleGraceFor that spelled out the same judgement in the other file.
+	// The sentence and the clock now come from winddownKindFor, so a cause that
+	// is told "no countdown" is, by construction, a cause nothing collects on a
+	// clock. A countdown clause on an uncollected arm starts a timer in the
+	// agent's head that nothing is counting; a clock on an unannounced arm cuts
+	// a hand-off off with no warning at all. Both are the same bug, and they
+	// are only reachable by making these two disagree.
+	kind, _ = winddownKindFor(m.RefocusOp)
+	return kind, true
 }
 
 const (
@@ -227,8 +257,9 @@ func offboardCloserFor(m Member) string {
 }
 
 // offboardNoticeFor composes the sentence for a member that is being wound
-// down: the ONE approved sentence, plus the 120-second clause when this is the
-// final call. It reads the session's own gauge so the agent is told where it
+// down: the ONE approved sentence, plus the deadline clause when this is the
+// final call (the deadline is winddownDeadlineOf, i.e. the anchor plus
+// stop.accelerated_grace_secs — owner-settable since T-ed79, not a constant). It reads the session's own gauge so the agent is told where it
 // actually is, not just that it is over the line — the owner's requirement that
 // the notice carry 「他現在 context / round 狀況，以及我們兩個系統數字是多少」.
 func (s *apiServer) offboardNoticeFor(m Member, kind string) string {
@@ -300,9 +331,45 @@ func (s *apiServer) offboardNoticeFor(m Member, kind string) string {
 	// The deadline quoted in the sentence and the deadline the cockpit shows come
 	// from ONE expression (T-d6a7). offboardKindOf only answers "final" for a
 	// clocked arm, so this is positive exactly when the sentence needs it.
-	return offboardNotice(where, offboardCloserFor(m), kind == offboardKindFinal,
-		refocusDeadlineOf(m.RefocusSince, s.reconcileCfg, m.RefocusOp),
+	notice := offboardNotice(where, offboardCloserFor(m), kind == offboardKindFinal,
+		winddownDeadlineOf(m, s.reconcileConfigLive()),
 		s.offboardText())
+	if clause := s.offboardManualWriteBackFor(m); clause != "" {
+		notice += "\n\n" + clause
+	}
+	return notice
+}
+
+// offboardManualWriteBackFor resolves the 記憶回寫 clause for THIS member: the
+// worker's bound task decides whether there is a 手冊 to write back into, and
+// offboardManualWriteBack composes the sentence.
+//
+// 🔴 OUTSOURCE ONLY, deliberately. A 正職 has a role of its own and its learnings
+// may belong to the ROLE rather than to any one task's type — which document a
+// staff member writes into is ruled by the boot doc's 「記憶與學習」 section, and
+// naming one document here would overrule it from the wrong place. A worker has
+// no role and outlives nothing: its one task IS its memory, which is why the
+// owner's ruling names 外包 and this gate does too.
+//
+// Best-effort by construction: an unreadable task row, a task with no type, or a
+// deleted manual all fall back to saying LESS (no clause, or the bare key as the
+// label) — never to blocking the 預告, which is the message that actually has to
+// arrive.
+func (s *apiServer) offboardManualWriteBackFor(m Member) string {
+	if m.Kind != KindOutsource || m.LinkedTaskID == nil || *m.LinkedTaskID == "" {
+		return ""
+	}
+	t, err := s.dal.GetTask(*m.LinkedTaskID)
+	if err != nil || t == nil {
+		return ""
+	}
+	label := ""
+	if t.TypeKey != "" {
+		if manual, err := s.dal.GetTaskManual(t.TypeKey); err == nil && manual != nil {
+			label = manualDisplayLabel(manual.DisplayName, t.TypeKey)
+		}
+	}
+	return offboardManualWriteBack(t.TypeKey, label)
 }
 
 // resolveAvatarMember admits active staff and outsource rows but rejects
@@ -672,8 +739,17 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 	// change opens the SAME graceful wind-down 重新聚焦 has always had, so the
 	// member finishes what it was doing and comes back on the new value. Same
 	// single write: the epoch and the new value can never land apart.
+	heldDown := false
 	if launchIntentChanged {
-		s.armMemberOwnerOpHandover(m, memberOpModel)
+		// A member the owner has stopped takes the new value on its next 活化 and
+		// NOTHING happens now — which is right, and used to be indistinguishable
+		// from "it took effect". The receipt is folded into this same putMember so
+		// the value and the explanation land in one write and one delta.
+		heldDown = !s.armMemberOwnerOpHandover(m, memberOpModel) &&
+			m.DesiredState == DesiredStateOffline
+		if heldDown {
+			stampMemberOpReceipt(m, memberHeldDownReceipt(memberOpModel), nowSecs())
+		}
 	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
@@ -745,6 +821,21 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 	if dec.Command != reconcileCmdStart && !s.hub.IsOnline(m.ID) {
 		pending := true
 		dto.ActivationPending = &pending
+		// …and WHICH pending (T-ed79 #14). The flag is one bit and the comment
+		// above lists at least four states that reach it. The tick has already
+		// decided which one it is; stamp that on the row so the cockpit can say it
+		// instead of showing a pending badge with nothing behind it. An arm that
+		// named no code falls back to the generic "asked, nothing dispatched yet",
+		// which is still strictly more than the blank it replaces — and is
+		// deliberately NOT invented per-arm here: a new stall arm should name
+		// itself at the decision site, not be guessed at from this end.
+		reason := dec.ReasonCode
+		if reason == "" {
+			reason = spawnReasonWardenLost + ": 活化 was recorded, but nothing has been " +
+				"dispatched yet — the machine's warden did not take the start. It will " +
+				"be retried; if it stays here, check that machine"
+		}
+		s.stampMemberOpBlocked(m.ID, reason, nowSecs())
 	}
 	writeJSON(w, http.StatusOK, dto)
 }
@@ -756,8 +847,12 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 // activate click uses (reconcileMemberNow). A LIVE member is auto-migrated onto
 // the chosen machine, but SINCE T-b6d9 GRACEFULLY: the pin is written together
 // with a refocus epoch, the agent gets the ordinary 下線程序 wake, and
-// the kill+re-spawn happens at the 收口 (its own report_stopped, or the recycle
-// arm's RecycleGrace ceiling). It used to be an immediate robust STOP with no
+// the kill+re-spawn happens at the 收口 — which since T-ed79 is its own
+// report_stopped or the owner's force-stop, and NOTHING ELSE. 🔴 A relocate has
+// no RecycleGrace ceiling any more: winddownKindFor answers soft for it, so
+// recycleGraceFor answers "no clock" and the recycle arm never times it out.
+// This line used to name that ceiling — a window an owner would wait out and
+// that never closes. It used to be an immediate robust STOP with no
 // warning at all (fbc5280). An offline member just re-pins so the next wake
 // lands there — no epoch, nothing to wind down. PLACEMENT ONLY — unlike activate it NEVER
 // touches desired_state (or the stopping/waking anchors): a relocate is not a
@@ -815,6 +910,11 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 	// new pin and the epoch land together and the delta the agent wakes on
 	// already names the destination.
 	windDown := s.armMemberOwnerOpHandover(m, memberOpRelocate)
+	// Held down: the pin is stored and nothing is moved. Same receipt, same
+	// single write — see memberHeldDownReceipt.
+	if !windDown && m.DesiredState == DesiredStateOffline {
+		stampMemberOpReceipt(m, memberHeldDownReceipt(memberOpRelocate), nowSecs())
+	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
@@ -857,6 +957,57 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 	writeJSON(w, http.StatusOK, dto)
 }
 
+// memberHeldDownReceipt is the sentence a staff owner-verb leaves on the row when
+// it was SAVED and nothing was started, because the owner has this member held
+// down (T-ed79 #4 / #14). It is the worker receipt's twin, verb-for-verb:
+// respawnWorkerForOwnerOp has written exactly this for 改機器 / 換 model / 重啟
+// since the reason-code family landed, and staff answered a clean 200 with an
+// empty row.
+//
+// 🔴 WHY THE STATE NEEDS A NAME AT ALL. Three different situations reach the
+// same silent 200 on these handlers — the owner pressed 停止 (this one), the
+// member is simply offline, and this epoch's wind-down was already collected —
+// and the owner has no way to tell them apart. Only the FIRST is one his own
+// earlier action caused, and it is the only one a receipt can resolve for him
+// ("重啟 it when you want it to run"). The other two are not stalls: an offline
+// member picks the value up at its next wake, which is the ordinary story, and
+// stamping a receipt for it would be noise on every edit made while a member is
+// asleep.
+func memberHeldDownReceipt(op string) string {
+	return spawnReasonHeldDown + ": the " + op + " was saved, but nothing was " +
+		"started — this member is stopped; 活化 it when you want it to run"
+}
+
+// clearMemberHandoverMarker zeroes the 換手 epoch a staff STOP has just made
+// meaningless — the worker /stop's two lines, given a name (T-ed79 parity #9).
+// Both staff stop verbs call it; the two reasons are different and both are
+// worker-verbatim:
+//
+//   - 下線: a wind-down is a request to finish and come BACK. An explicit 停止
+//     says no session follows, so there is nothing left to hand over to. The
+//     epoch is not superseded, it is answered.
+//   - 強制停止: the session is being cut off. Nothing is being waited for.
+//
+// 🔴 THE HARM IT REMOVES IS NOT ON THIS ROW, IT IS ON THE NEXT ONE. Neither stop
+// verb is what reads refocus_since — decideDown owns a desired-offline member and
+// never looks. The reader is the GENERATION AFTER: activate clears stopping_since
+// and waking_since and deliberately clears NEITHER refocus_since nor
+// stopped_since, so a marker left here survives 下線 → 活化 intact, and decideUp's
+// recycle arm then reads "marker present, dump done" and robust-stops the
+// brand-new session on its first tick — zero grace, no close-out, for an epoch
+// that ended before it was born. armRefocusEpoch already describes this exact
+// destructive reader; what was missing was anybody clearing the marker on the
+// staff side.
+//
+// It does NOT touch stopping_since / stopped_since / forced_stop_at: those date
+// the stop itself, and forced_stop_at in particular is the durable record that a
+// session was cut off, which the next generation is precisely who needs to read
+// (dal.go, migrations/00057).
+func clearMemberHandoverMarker(m *Member) {
+	m.RefocusSince = 0.0
+	m.RefocusOp = ""
+}
+
 // POST /api/members/{member_id}/deactivate — desired_state=offline + an
 // UNCONDITIONAL stopping_since re-stamp (one exception, below).
 //
@@ -893,6 +1044,7 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 	cancellingWake := PresenceState(*m, nowSecs(), s.hub.IsOnline(m.ID)) ==
 		MemberPresenceWaking
 	m.DesiredState = DesiredStateOffline
+	clearMemberHandoverMarker(m)
 	// …UNCONDITIONAL with ONE exception: a stop epoch that a FORCE-stop opened
 	// must not be re-stamped into a softer one. The SSE stop gate separates
 	// "close-out in flight" (admit the reconnect) from "cut off deliberately"
@@ -904,10 +1056,19 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 	// button in stopping/stopped, but that is a UI fact, not a gate).
 	//
 	// The three conditions are each load-bearing. `stopping_since > 0` is what
-	// keeps this narrow to a LIVE forced epoch: activate clears the stop anchors
-	// but deliberately KEEPS forced_stop_at (it is the durable record that a
-	// past session was cut off), so testing forced_stop_at alone would strip the
-	// soft-offboard admission from every member that was ever force-stopped.
+	// keeps this narrow to a LIVE forced epoch: activate clears stopping_since
+	// and waking_since but deliberately KEEPS forced_stop_at (it is the durable
+	// record that a past session was cut off), so testing forced_stop_at alone
+	// would strip the soft-offboard admission from every member that was ever
+	// force-stopped.
+	//
+	// 🔴 "the stop anchors", which is what this used to say, is one anchor too
+	// many: activate does NOT clear stopped_since. That is not a nit — it is the
+	// reason a brand-new session can come up ONLINE carrying the PREVIOUS
+	// generation's report with no epoch (下線 → 活化), which is exactly the state
+	// stampContextHighRecycle's boot_ts test exists to tell apart from a live
+	// session's own report. A reader who believes the shorter sentence will
+	// conclude that state is unreachable and write the wrong guard.
 	//
 	// Consequence, deliberate: a forced epoch's anchor stops moving, so this
 	// call no longer restarts the grace clock for it. Nothing reads it that way
@@ -924,8 +1085,8 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 	if cancellingWake {
 		// The same immediate robust STOP force-stop uses. NOT widened to the
 		// online case: a live member gets the no-countdown soft window instead,
-		// and it is collected only by its own report_stopped or the owner's
-		// force-stop — never from here.
+		// and it is collected by its own report_stopped or by the owner pressing
+		// 加速停止 / 強制停止 — never from here.
 		s.dispatchRobustStopNow(m.ID)
 	}
 	// Event-driven reconcile: move the member into `stopping` immediately rather
@@ -942,9 +1103,11 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 // to the member's warden, bypassing the ~30s cadence
 // (handlers.handle_force_stop_member).
 //
-// There is no grace clock here to bypass: the 下線 arm runs none, so apart from
-// the agent's own report_stopped this endpoint is the ONLY thing that ever
-// collects the member (owner ruling rc-27d1710174dd). See the endpoint's
+// There is no grace clock here to bypass: the SERVER arms none on the 下線 arm
+// (owner ruling rc-27d1710174dd). Three things end a soft offboard, and this is
+// the last of them: the agent's own report_stopped, the deadline the owner opens
+// by pressing 加速停止 (that clock is HIS, armed only by the press, which is why
+// it does not reopen the ruling), and this endpoint. See the endpoint's
 // description in spec/openapi.json, which says the same at length.
 func (s *apiServer) HandleForceStopMemberApiMembersMemberIdForceStopPost(w http.ResponseWriter, r *http.Request, memberId string) {
 	m, err := s.resolveMember(memberId)
@@ -953,6 +1116,7 @@ func (s *apiServer) HandleForceStopMemberApiMembersMemberIdForceStopPost(w http.
 		return
 	}
 	m.DesiredState = DesiredStateOffline
+	clearMemberHandoverMarker(m)
 	if m.StoppingSince <= 0.0 {
 		m.StoppingSince = nowSecs()
 	}
@@ -980,6 +1144,93 @@ func (s *apiServer) HandleForceStopMemberApiMembersMemberIdForceStopPost(w http.
 	s.writeMemberDTO(w, *m)
 }
 
+// acceleratedStopNeedsAnOpenWindDownMsg is the ONE wording of the refusal that
+// makes this an escalation rather than a second stop button. It names the rung
+// below it, because a 409 that only says "no" leaves the owner guessing which of
+// three buttons he was supposed to press first.
+const acceleratedStopNeedsAnOpenWindDownMsg = "加速停止 escalates a wind-down that is " +
+	"already open — this member has not been asked to stop. Press 停止 (deactivate) " +
+	"or 重新聚焦 (refocus) first"
+
+// POST /api/members/{member_id}/accelerated-stop — the MIDDLE rung of the
+// owner's escalation 停止 → 加速停止 → 強制停止 (owner 2026-08-21 「可以給我按鈕
+// 嗎」＋「停止 → 加速停止 → 強制停止」).
+//
+// 🔴 IT ESCALATES, IT DOES NOT INITIATE, and the 409 below is the whole
+// difference. A member that has not been asked to stop has been told nothing, so
+// putting it on a clock would be a deadline it never heard about — the exact
+// shape T-ed79 exists to remove. Pressing 停止 (or 重新聚焦) first is what makes
+// the member a party to the countdown this endpoint starts.
+//
+// 🔴 IT DOES NOT REOPEN rc-27d1710174dd (「不要兜底：只有你按強制下線才收它」).
+// That ruling is about the SERVER starting a clock on its own; decideDown still
+// runs none. This clock exists only because the owner pressed the button, which
+// is the same authority force-stop has always had — with a sentence attached
+// instead of silence.
+//
+// BOTH arms are handled, because the ladder has to work wherever the owner
+// started it:
+//
+//   - 下線 (desired_state=offline + stopping_since): re-stamp stopping_since from
+//     THIS press and write the cause. decideDown then collects at
+//     stopping_since + the grace, and offboardKindOf answers `final` off the same
+//     refocus_op, so the sentence quotes exactly that instant.
+//   - 換手 (desired online + refocus_since): re-stamp refocus_since and write the
+//     cause — the same promotion shape stampContextHighRecycle uses for
+//     context_notice → context_high, and re-stamping is load-bearing for the same
+//     reason: promoting in place would put the deadline at the ORIGINAL stamp,
+//     already in the past, and collect the member on the tick that announced it.
+//
+// A force-stopped epoch is refused: that session was cut off deliberately and is
+// not working a close-out, so a deadline addressed to it has no reader.
+func (s *apiServer) HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStopPost(w http.ResponseWriter, r *http.Request, memberId string) {
+	m, err := s.resolveMember(memberId)
+	if err != nil {
+		writeResolveError(w, err, "member", memberId)
+		return
+	}
+	// A live session is required for the same reason 重新聚焦 requires one: the
+	// notice this write fans travels down the member's own stream, and a clock
+	// nobody is listening to is a silent deadline.
+	if !s.hub.IsOnline(m.ID) {
+		writeError(w, http.StatusConflict,
+			"加速停止 requires a live session — there is nothing to accelerate on a "+
+				"member that is not connected")
+		return
+	}
+	now := nowSecs()
+	switch {
+	case m.DesiredState == DesiredStateOffline:
+		if m.StoppingSince <= 0.0 || forcedEpochLive(*m) {
+			writeError(w, http.StatusConflict, acceleratedStopNeedsAnOpenWindDownMsg)
+			return
+		}
+		// The owner's grace runs from HIS press, not from a 停止 he may have
+		// pressed hours ago. The other anchors are deliberately untouched: this
+		// is a promotion of the close-out already in flight, not a new one, and
+		// zeroing stopped_since here would erase an agent's 「我收完了」 and
+		// cancel the collection it had already earned.
+		m.StoppingSince = now
+	case m.RefocusSince > 0.0:
+		m.RefocusSince = now
+	default:
+		writeError(w, http.StatusConflict, acceleratedStopNeedsAnOpenWindDownMsg)
+		return
+	}
+	m.RefocusOp = refocusOpAcceleratedStop
+	if err := s.putMember(*m, requestTrigger(r)); err != nil {
+		internalError(w, err)
+		return
+	}
+	// Event-driven, so the clock the owner just started is visible on the next
+	// read rather than up to a cadence tick later. It dispatches nothing on this
+	// pass — the deadline is in the future by construction.
+	s.reconcileMemberNow(m.ID)
+	reconcileLog("加速停止: %s on the %s arm (collect at %.0f or on the stopped report)",
+		m.ID, m.DesiredState, winddownDeadlineOf(*m, s.reconcileConfigLive()))
+	s.writeMemberDTO(w, *m)
+}
+
 // POST /api/members/{member_id}/refocus — needs a live session (409 otherwise);
 // stamps refocus_since.
 //
@@ -999,8 +1250,7 @@ func (s *apiServer) HandleRefocusMemberApiMembersMemberIdRefocusPost(w http.Resp
 				"online (§3.4 #14)")
 		return
 	}
-	m.RefocusSince = nowSecs()
-	m.RefocusOp = refocusOpRefocus
+	armRefocusEpoch(m, refocusOpRefocus, nowSecs())
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
@@ -1259,8 +1509,7 @@ func (s *apiServer) HandleRestartSelfApiSelfRefocusPost(w http.ResponseWriter, r
 		s.writeMemberDTO(w, *fresh)
 		return
 	}
-	m.RefocusSince = now
-	m.RefocusOp = refocusOpRestartSelf
+	armRefocusEpoch(m, refocusOpRestartSelf, now)
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return

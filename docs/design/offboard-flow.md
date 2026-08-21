@@ -137,15 +137,96 @@ server 的處理方式是**每一輪重新推導**——還活著就再送一次
 | | 觸發 | 時鐘 | 收完之後 |
 |---|---|---|---|
 | **下線** | owner 把 desired_state 改成 offline | **沒有時鐘**。server 不倒數；對一個已經連上線的 agent 也不會自己送出停止命令（**例外見下方**） | **不重生**。就此結束 |
-| **換手（recycle）** | context 逼近上限、owner 按重新聚焦、agent 自己 `restart_self`、換模型 | 從 refocus 那一刻起算。**owner 手按的那一種沒有時鐘**，收口是 agent 自己的 stopped 回報或 owner 按強制停止；其餘成因是單一段 | **原地重生下一代**（desired_state 全程是 online） |
+| **換手（recycle）** | context **第一段**門檻、context **第二段**門檻、owner 按重新聚焦、owner 改機器、owner 換 model／runtime／effort、agent 自己 `restart_self`、**token 到期前一小時** | **只有 context 第二段門檻與 owner 按下的加速停止上時鐘**（從 refocus 那一刻起算，一段 `RecycleGrace`）。**其餘每一個成因都完全沒有時鐘**，收口是 agent 自己的 stopped 回報或 owner 按強制停止 | **原地重生下一代**（desired_state 全程是 online） |
 | **下架（uninstall）** | owner 要移除整台機器 | 沒有寬限（明確的 owner 動作） | 一次性意圖：warden 一離線就被消化掉 |
+
+### 🔴 換手那條也幾乎全沒有時鐘（owner 2026-08-21）
+
+判斷源只有一個：`winddownKindFor(refocus_op)`。時鐘（`recycleGraceFor`）與句子（`offboardKindOf`）都讀它，所以「有沒有在倒數」與「有沒有告訴 agent 它在倒數」不可能各說各話。
+
+**final 是要指名的正條件，soft 是預設。** 以前反過來——什麼都 fall through 成「上時鐘」，只把 owner 按的重新聚焦挑出來當例外——結果是**每一個新成因都會不小心帶著一條死線出生**，包括 owner 已經裁定不該有的那些。現在要讓一個成因上時鐘，得在那一行**打字打出來**。
+
+⚠️ **context 是兩段，不是一段。** 第一段（`context_notice`）只把收尾程序送到 agent 手上，**不上時鐘**；context 繼續爬才會**原地晉升**成第二段（`context_high`）並重打 `refocus_since`，那一刻才開始倒數。以前第一段只發一張 SSE band、完全不開換手，所以一個忽略了那一幀的 agent 會直接在第二段遇上「什麼都還沒開始收，而且只剩 120 秒」。
+
+### 🔴 owner 可以自己按「加速停止」（owner 2026-08-21）
+
+裁定原話是「可以給我按鈕嗎」＋「**停止 → 加速停止 → 強制停止**」。這是一條**升級
+路徑**：先按停止，等不下去按加速停止，再不行按強制停止。
+
+加速停止是中間那一段：它**不開始**一場收尾，它把**已經開的**那一場放上時鐘，並且
+**把那個時刻告訴他**（同一次寫入就會扇出帶死線的收尾通知）。沒有在收尾的成員按下去
+是 409 —— 對一個什麼都沒被告知的成員上時鐘，就是它從來沒聽過的死線，正是這張票要
+消掉的形狀。
+
+它**沒有推翻**「下線不兜底」那條裁定（rc-27d1710174dd）。那條講的是 **server 自己**
+決定時間到；`decideDown` 今天仍然不自己起任何時鐘。這條時鐘只有在 owner 按下去才
+存在，跟強制停止是同一種權威——只是多了一句話，而不是沉默。
+
+兩條臂都吃：下線那一臂重蓋 `stopping_since`、換手那一臂重蓋 `refocus_since`，都從
+**這一次按下**起算。時鐘、wire 上的死線、講給 agent 的句子，三者都問同一個
+`winddownKindFor`。
+
+### 🔴 外包的 `/stop` 也改成優雅收工了（owner 2026-08-21「往正職靠：外包那顆改成優雅停止，強制殺移到第三顆按鈕」）
+
+⚠️ **這一段推翻了它上一版寫的話**——上一版寫「外包那邊只加了對稱的 endpoint，
+`/stop` 的語意一個字都沒動」。那句在 owner 裁定的當下就過期了。
+
+`HandleStopOutsourceWorker…` 現在做的是：翻 `desired_state=offline`（保持「停止壓過
+一切自動復活」）、蓋 `stopping_since`、清掉 in-flight 的 refocus epoch、走
+`openWorkerHandoverGrace` 朝 worker 自己的 session 發那份 member-topic 的下線預告，然
+後**回傳**。它**不殺**、也**不蓋 `forced_stop_at`**。
+
+- **為什麼不蓋 `forced_stop_at`**：那個 anchor 存在的兩個理由，對優雅停止都反過來。
+  它是用來讓通知**沉默**的（`forcedEpochLive` → `offboardKindOf` 不掛 notice），可是
+  優雅停止的重點就是那則通知要送到；它也是「這個 session 是被切斷的」憑據，而這個
+  session 是被**請它自己收尾**的。那個 anchor 連同當場的 kill 一起搬到第三顆按鈕
+  `POST /api/outsource-workers/{id}/force-stop`。
+- **收口是 `workerReportStopped`**，而它需要一條新的臂。原本的收口閘是
+  `desired online ∧ refocus_since > 0`，而一個停止 epoch **兩個都不是**。少了那條臂，
+  外包按了停止之後會**永遠不被收掉**——比原本當場殺掉更糟。護欄：
+  `TestWorkerStop_ReportStoppedCollectsTheStopEpoch`。
+- **refocus epoch 還是被清掉，但理由換了**。原本的註解說「明示的停止壓過換手」——停止
+  把收尾丟掉然後殺。現在停止**本身就是**一種收尾，沒有東西被壓過：worker 繼續走同一份
+  下線程序，只是後面不再接一個新 session。清掉的理由變成機械的：
+  `autoHandoverWorker` 的 in-flight 臂是用 kill+**respawn** 收口的，留著它會把 owner 剛
+  壓下去的 worker 又叫起來。
+- **`desired_state` 一開始就翻成 offline，這是刻意的**，而且它不會讓別的東西提早收掉
+  worker：`autoHandoverWorker` 現在對 desired-offline 的 worker **最先**分流到停止臂並
+  return，排程 tick 的其他復活分支本來就跳過 held-down 的 worker。真正的風險方向是**被
+  respawn**，不是被提早收——上面那條清 refocus 的理由講的就是它。
+- **加速停止在外包身上也走得通了**。`/accelerated-stop` 原本對 `desired_state=offline`
+  回 409（在停止還是當場殺的年代是對的），那會讓 owner 只剩 停止 →（409）→ 強制停止。
+  它現在跟正職一樣吃兩條臂；下線那一臂重蓋 `stopping_since`、寫
+  `refocus_op=accelerated_stop`，`autoHandoverWorker` 的停止臂在 `stopping_since + grace`
+  收口。護欄：`TestWorkerStop_AcceleratedStopEscalatesTheStopEpochAndIsHonoured`。
+
+### 🔴 token 到期前一小時也會開一條「停止」（owner 2026-08-21）
+
+原本 token 續期靠 agent 自己記得。問題是：**收尾程序的每一步都是拿那顆 token 打的 MCP
+呼叫**（`report_stopping`、`post_chat`、寫 lesson、`report_stopped`），所以 token 過期
+不是讓收尾變差，是讓收尾**完全做不到**——它只能一路 401。
+
+所以 `stampTokenExpiryWinddown` 在 tick 裡（緊接在 context 那兩段之後）對還在線、
+token 剩不到一小時的正職開一條 **停止**：`refocus_op = token_expiry`，**沒有時鐘**，
+收口一樣是 agent 自己的回報或 owner 的手。owner 的原話是「就是呼叫軟下線，然後等他
+report_stopped 以後再呼叫上線」。
+
+⚠️ **到期時間是推算的，不是記下來的**：`session_boot_ts + auth.agent_token_ttl`。
+token 在 START 派發那一刻鑄造，`session_boot_ts` 是之後 SSE 第一次連上才蓋的，所以這
+是一個**上界**——觸發只會**偏晚**，不會早於 token 存在。它讀的也是**當下**的
+`auth.agent_token_ttl`，不是鑄造當時那個值；中途改這顆設定會讓推算對已經鑄好的 token
+失準。兩個誤差都是刻意留的：要記真正的 `exp` 得加一個 durable 欄位，而這條成因是軟的，
+推錯的代價是白換一次手，不是被切斷。
+
+⇒ **一個成員停在收尾狀態很久，預設不是異常。** 除非它的 `refocus_op` 是 `context_high` 或 `accelerated_stop`（上面那張表的兩個加速停止成因），否則本來就沒有任何東西會來收它——收口是它自己的回報，或 owner 的手。
 
 ### 🔴 下線那條沒有兜底計時器，這是刻意的
 
-對一個**已經連上線**的 agent，server **不會**替你收它。收口只有兩個來源：
+對一個**已經連上線**的 agent，server **不會**自己替你收它。收口有三個來源，**沒有一個是 server 自己起的**：
 
 1. **agent 自己說「我收完了」**
-2. **owner 按強制下線**
+2. **owner 按加速停止**——它重蓋 `stopping_since`、寫下 `refocus_op = accelerated_stop`，決策器就在 `stopping_since` ＋ 那段寬限收，句子也同時把那個時刻告訴 agent（見上面「owner 可以自己按加速停止」那節）。**這條時鐘是 owner 起的，不是 server 起的**，所以它沒有推翻下面那條裁定
+3. **owner 按強制下線**
 
 （例外：對一個**還在 waking**、START 已派但還沒連上來的 session 按下線，server 會**立刻**送出停止命令。那不是倒數到期，是**取消一個還沒開始的 session**——沒有人在裡面等著被通知。）
 
@@ -159,7 +240,7 @@ server 的處理方式是**每一輪重新推導**——還活著就再送一次
 
 🔴 **而那句話不只一份拷貝——它散在 spec、實作者手冊、端點說明、UI 文案、開機 seed 與碼註解裡**，每一輪掃都還會再冒出來。已處置與未處置的清單留在票上（T-a91a），**這裡刻意不寫數字**：這份文件前面三次寫下一個沒數過的計數，三次都錯。
 
-其中一份特別要緊：**那顆按鈕自己的說明**。它原本寫著「繞過 120 秒的寬限計時器」，等於告訴讀者「不按也會有人收」，**而那正是這條裁定唯一不能被誤解的地方**——按鈕是唯一的收口，讀者卻被告知它只是加速。
+其中一份特別要緊：**那顆按鈕自己的說明**。它原本寫著「繞過 120 秒的寬限計時器」，等於告訴讀者「不按也會有人收」，**而那正是這條裁定唯一不能被誤解的地方**——當時那顆按鈕是唯一的收口（今天多了加速停止那一顆，但兩顆都得 owner 動手，server 依然不兜底），讀者卻被告知它只是加速。
 
 ⇒ **盤點一句假話時，先問它有幾份拷貝，再問哪一份的讀者會照它行動**；而**「幾份」要真的數，不要估**。）
 
@@ -167,7 +248,7 @@ server 的處理方式是**每一輪重新推導**——還活著就再送一次
 
 **在換手那條路上，寬限是天花板而不是等待時間**：只要 agent 講了「我收完了」，收口**立刻**發生，不會等滿。寬限存在只是為了處理「它再也不會回話了」。
 
-**下線那條沒有這個天花板**——它的上限是 owner 的手，不是計時器。這兩條路差別很大，不要用同一句話蓋過去。
+**下線那條預設沒有這個天花板**——沒有 owner 動手就沒有上限；他按下加速停止之後才有一條，而那條的起點是**他按下的那一刻**，不是計時器自己起的。這兩條路差別很大，不要用同一句話蓋過去。
 
 ### 這三條蓋不住全部的 stop
 

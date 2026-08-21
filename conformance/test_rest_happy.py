@@ -1994,12 +1994,41 @@ SKIPPED_HAPPY: dict[str, str] = {
         "kill+respawn in the server unit tests (worker_lifecycle_test.go, "
         "TestRefocusWorker_*)."
     ),
+    "POST /api/members/{member_id}/accelerated-stop": (
+        "T-ed79 owner 加速停止 (the middle rung): every face of it needs a member "
+        "with a LIVE SSE session AND an already-open wind-down — the endpoint 409s "
+        "without both, and this black-box suite can mint neither. The 409s "
+        "(no session / nothing winding down / a forced epoch), the re-stamped "
+        "anchor, the refocus_op=accelerated_stop write and the deadline the tick "
+        "then collects on are pinned in the server unit tests "
+        "(accelerated_stop_endpoint_ted79_test.go)."
+    ),
+    "POST /api/outsource-workers/{id}/accelerated-stop": (
+        "T-ed79 加速停止 for a worker: the same two prerequisites as the member "
+        "twin above (a live worker session and an open wind-down), and a worker row "
+        "is mintable only by the Phase 2 scheduler. The below-owner-403 / "
+        "owner-404 faces are pinned in the auth matrix; both arms (下線 and 換手), "
+        "the 409s and the collect on the deadline in the server unit tests "
+        "(worker_graceful_stop_ted79_test.go "
+        "TestWorkerStop_AcceleratedStopEscalatesTheStopEpochAndIsHonoured)."
+    ),
     "POST /api/outsource-workers/{id}/stop": (
-        "T-f190 owner 停止: the positive face needs a LIVE worker row (no black-box "
-        "mint path). The below-owner-403 / owner-404 faces are pinned in the auth "
-        "matrix; the desired_state=offline set + refocus clear + session kill + no-revive "
-        "in the server unit tests (worker_lifecycle_test.go, TestStopWorker_* / "
+        "T-f190 owner 停止, a GRACEFUL close-out since T-ed79: the positive face "
+        "needs a LIVE worker row (no black-box mint path). The below-owner-403 / "
+        "owner-404 faces are pinned in the auth matrix; the desired_state=offline "
+        "set + refocus clear + 下線程序 notice + NO kill + collection on the "
+        "worker's own report_stopped in the server unit tests "
+        "(worker_graceful_stop_ted79_test.go, TestWorkerStop_* / "
         "TestStoppedWorker_TickNeverRevives)."
+    ),
+    "POST /api/outsource-workers/{id}/force-stop": (
+        "T-ed79 owner 強制停止 (the third rung; the body /stop used to have): the "
+        "positive face needs a LIVE worker row (no black-box mint path). The "
+        "below-owner-403 / owner-404 faces are pinned in the auth matrix; the "
+        "forced anchors + immediate session kill + no-revive + the SILENCE of the "
+        "forced arm in the server unit tests (worker_lifecycle_test.go "
+        "TestForceStopWorker_KillsAndHoldsDown, "
+        "worker_forced_stop_parity_tc996_test.go)."
     ),
     "POST /api/outsource-workers/{id}/restart": (
         "T-f190 owner 重啟: the positive face needs a STOPPED worker row (no "
@@ -2012,8 +2041,9 @@ SKIPPED_HAPPY: dict[str, str] = {
     ),
     "POST /api/outsource-workers/{id}/model": (
         "T-f190 owner 換 model: the positive face needs a LIVE worker row (no "
-        "black-box mint path). The below-owner-403 / owner-404 faces are pinned in "
-        "the auth matrix; the model/effort persist + active-respawn / "
+        "black-box mint path). The all-identities-404 faces are pinned in "
+        "the auth matrix (T-ed79 dropped this row to the machine floor, so there "
+        "is no below-floor 403 face left); the model/effort persist + active-respawn / "
         "assigned-persist-only in the server unit tests (worker_lifecycle_test.go, "
         "TestSetWorkerModel_*)."
     ),

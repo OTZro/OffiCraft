@@ -146,6 +146,14 @@ type apiServer struct {
 	// on a database round-trip. This lock protects one map and nothing else.
 	handoverNoticedMu        sync.Mutex
 	monitoringRefreshSeconds int
+	// acceleratedGraceSecs is the live 加速停止 grace in seconds
+	// (stop.accelerated_grace_secs; T-ed79), guarded by settingsMu like every
+	// other owner-adjustable number here. NOTHING reads this field directly:
+	// the ONE reader is reconcileConfigLive(), which folds it onto
+	// reconcileConfig.RecycleGrace so that every clocked cause keeps reaching it
+	// through the single recycleGraceFor pair. A second direct reader would be a
+	// second opinion about the same number, which is the split T-ed79 removed.
+	acceleratedGraceSecs int
 	// root anchors the repo-file assets (seeds / prebuilt binaries / frozen
 	// MCP catalog) — see assets.go.
 	root assetRoot
@@ -255,6 +263,17 @@ type apiServer struct {
 	// workerReclaimed; an extra or lost-after-restart stop is a no-op /
 	// re-parked on the next owner action).
 	workerStopPending map[string]string
+	// workerStopLanded (T-ed79 #6) → worker id → the worker_stop a warden
+	// ACCEPTED, and when. The sibling above covers the kill that never LEFT;
+	// this one covers the kill that left and never took EFFECT. A frame on a
+	// warden's FIFO is not a dead session — the drain deletes the whole FIFO
+	// before writing it and no ack exists anywhere on that path, so an empty
+	// backlog means "collected", not "delivered". The outsource tick judges the
+	// entry with the SAME robustStopRetryStep the member cadence uses and
+	// re-pushes the STOP while the killed session is still there. In-memory like
+	// its siblings: a restart forgets it (a lost retry is a no-op, and the next
+	// owner action re-arms).
+	workerStopLanded map[string]workerStopDispatch
 	// workerMachinePref is the per-worker spawn placement override a reassign
 	// carries (T-160e: the dialog picks model/effort/machine for the fresh
 	// worker; scheduler-minted workers read the manual instead). In-memory
@@ -281,6 +300,15 @@ type apiServer struct {
 	// its siblings — a restart forgets the bench (worst case one re-pick of a
 	// still-bad machine, which re-benches on its next failure).
 	workerMachineCooldown map[string]float64
+	// workerOfflineSince (T-ed79 #13) → worker id → the ts of the FIRST offline
+	// observation in the current continuous-offline run; absent = last seen
+	// online. It is the de-bounce anchor for the wind-down collect arms, the
+	// worker twin of reconcileState.OfflineSince — kept here rather than on the
+	// worker row because it describes what the SERVER has observed, not
+	// something the worker did, and a restart must forget it (the next tick
+	// re-arms and the worker gets the full window again, which errs toward
+	// waiting). See workerOfflineConfirmGraceSecs.
+	workerOfflineSince map[string]float64
 	// ── software update check state (update_check.go; GitHub Releases) ───────
 	// updateMu guards updateCheck — the cached result of the last GitHub
 	// releases probe; /api/version reads it lock-briefly and NEVER waits on
@@ -383,6 +411,34 @@ func (s *apiServer) agentTokenTTLValue() int64 {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
 	return s.agentTokenTTL
+}
+
+// reconcileConfigLive is the reconcile config as it stands RIGHT NOW: the
+// boot-time struct with the one owner-adjustable number folded in fresh on
+// every read.
+//
+// 🔴 EVERY read of s.reconcileCfg goes through here, and that is the whole
+// mechanism. reconcileConfig is a VALUE, copied at whatever moment it is read,
+// so a PATCH that only wrote the field would leave every already-copied config
+// quoting the old grace — the clock and the sentence would then disagree about
+// members that are mid-wind-down, which is exactly the failure this ticket
+// exists to make unreachable. Reading through one function means the deadline
+// the cockpit renders, the deadline quoted in the agent's notice and the
+// deadline the tick collects on are three reads of the same live number.
+//
+// It also keeps the PATCH write off s.reconcileCfg itself: that struct is read
+// from the cadence goroutine with no lock, and mutating it from an HTTP handler
+// would be a data race. The settings snapshot has its own lock and this is the
+// only place the two meet.
+func (s *apiServer) reconcileConfigLive() reconcileConfig {
+	cfg := s.reconcileCfg
+	s.settingsMu.RLock()
+	grace := s.acceleratedGraceSecs
+	s.settingsMu.RUnlock()
+	if grace > 0 {
+		cfg.RecycleGrace = float64(grace)
+	}
+	return cfg
 }
 
 // outsourceParallelCap returns the live outsource-worker concurrency cap.

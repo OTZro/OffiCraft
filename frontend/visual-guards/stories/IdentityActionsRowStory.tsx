@@ -14,13 +14,32 @@
 // Uses the REAL MemberActionButtons for the stop half, so the group's own
 // `.member-actions` flex/gap participates exactly as it does in the panel; the
 // 更改 button is the panel's own markup, verbatim.
+//
+// 🔴 The row is NOT one shape, and since owner 2026-08-21 「按了才出現」 it is
+// not even a fixed COUNT: the ladder is REVEALED one rung at a time, so the
+// cluster grows from TWO buttons (更改 ＋ 停止, nothing winding down) to FIVE
+// (更改 + the 喚醒 wedge rescue + all three rungs, on an accelerated `stopping`
+// member — the panel keeps 更改 there because mappers folds presence "stopping"
+// onto status "online"). Both ends have to be measured: five is the widest the
+// card ever has to hold, and two is the shape 375px now spends most of its time
+// in. The story therefore takes the SAME (status, stage) pair the panels derive
+// from the wire, not a status alone.
 import { I18nProvider } from "../../src/i18n";
-import { MemberActionButtons } from "../../src/components/MemberActionButtons";
+import {
+  MemberActionButtons,
+  type StopLadderStage,
+} from "../../src/components/MemberActionButtons";
 import "../../src/styles/theme.css";
 import "../../src/components/office.css";
 import "../../src/components/member-detail.css";
 
-export function IdentityActionsRowStory() {
+export function IdentityActionsRowStory({
+  status = "online-awake",
+  stage = "none",
+}: {
+  status?: "online-awake" | "stopping";
+  stage?: StopLadderStage;
+}) {
   return (
     <I18nProvider>
       {/* The real ancestor chain: the identity card is a flex row holding the
@@ -44,7 +63,21 @@ export function IdentityActionsRowStory() {
               >
                 更改
               </button>
-              <MemberActionButtons status="online-awake" onStop={() => {}} />
+              {/* Every rung that EXISTS at this stage gets a handler, so none is
+                  disabled for a reason the panel would not have — a disabled
+                  button still lays out, but its title tooltip is the only thing
+                  that differs and the measurements must not depend on it.
+                  Mounting straight at `stage` also arms the row immediately
+                  (LADDER_ARM_MS only fires on a stage CHANGE), so the geometry
+                  is measured in its settled state. */}
+              <MemberActionButtons
+                status={status}
+                stage={stage}
+                onSpawn={() => {}}
+                onStop={() => {}}
+                onAcceleratedStop={() => {}}
+                onForceStop={() => {}}
+              />
             </div>
           </div>
         </div>

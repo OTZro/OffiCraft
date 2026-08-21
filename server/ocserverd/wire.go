@@ -61,6 +61,15 @@ type settingsDTO struct {
 	CodexNoticeRound         int `json:"codex_notice_round"`
 	MonitoringRefreshSeconds int `json:"monitoring_refresh_seconds"`
 	OutsourceMaxParallel     int `json:"outsource_max_parallel"`
+	// AcceleratedGraceSecs is the 加速停止 grace in seconds
+	// (stop.accelerated_grace_secs; T-ed79) — how long a CLOCKED wind-down waits
+	// before the collection is forced. It is ONE number on purpose: every clocked
+	// cause reads it through recycleGraceFor, so the countdown quoted in the
+	// agent's notice and the deadline the reconcile tick collects on are the same
+	// value by construction rather than by two settings that happen to agree.
+	// It cannot put a clock on a soft cause — winddownKindFor still decides WHO
+	// is clocked, and this only says HOW LONG.
+	AcceleratedGraceSecs int `json:"accelerated_grace_secs"`
 	// DocCapChars* are the live size caps on the accumulating context
 	// documents, in CHARACTERS (runes) — the same unit the patch receipts and
 	// the refusal message speak (T-3aeb). FIVE independent knobs: a role's
@@ -1721,6 +1730,18 @@ type outsourceWorkerDTO struct {
 	RefocusOp       string  `json:"refocus_op"`
 	RefocusDeadline float64 `json:"refocus_deadline"`
 	DesiredState    string  `json:"desired_state"`
+	// The three RESPONSE-ONLY pending signals an owner verb owes its caller
+	// (T-ed79 #5/#12) — the worker twins of the MemberDTO fields of the same
+	// names, and pointers-with-omitempty for the same reason: they are absent on
+	// every read face and on every verb that has nothing to defer, so a consumer
+	// can tell "this answer does not carry the signal" from "the signal is false".
+	//
+	// RelocationPending/RelocationDeferred appear only on the relocate response,
+	// ActivationPending only on the restart response. The panel-parity doc listed
+	// their absence as A9 「外包端根本沒有訊號可顯示」.
+	RelocationPending  *bool `json:"relocation_pending,omitempty"`
+	RelocationDeferred *bool `json:"relocation_deferred,omitempty"`
+	ActivationPending  *bool `json:"activation_pending,omitempty"`
 }
 
 // outsourceWorkerProjection carries the per-worker runtime facts the DTO folds

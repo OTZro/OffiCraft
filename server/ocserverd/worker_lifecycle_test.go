@@ -414,38 +414,47 @@ func TestRefocusWorker_BanksCostAcrossRespawn(t *testing.T) {
 
 // ── stop (停止) / restart (重啟) ────────────────────────────────────────────────
 
-// TestStopWorker_KillsAndHoldsDown: stop stamps stopped_since, clears any
-// in-flight refocus, kills the session, and does NOT re-dispatch — the worker
-// projects spawn_state "stopped". Mutant: if stop called respawnWorkerNow (a
-// stray re-spawn) a worker_start frame would appear → the "no worker_start"
-// assertion goes red.
-func TestStopWorker_KillsAndHoldsDown(t *testing.T) {
+// TestForceStopWorker_KillsAndHoldsDown: 強制停止 stamps the forced anchors,
+// clears any in-flight refocus, kills the session, and does NOT re-dispatch —
+// the worker projects presence "stopping" while its SSE is still up. Mutant: if
+// it called respawnWorkerNow (a stray re-spawn) a start frame would appear.
+//
+// 🔴 THIS USED TO BE TestStopWorker_KillsAndHoldsDown, verbatim, against
+// /stop. It was re-aimed rather than deleted when 停止 became a graceful
+// close-out (T-ed79, owner 「強制殺移到第三顆按鈕」): the behaviour it pins did not
+// go away, it moved to a different button, and a deleted test would have left
+// the third rung with no proof it kills at all.
+func TestForceStopWorker_KillsAndHoldsDown(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	workerID := newActiveOnlineWorker(t, api)
-	// A prior in-flight refocus that the stop must supersede.
+	// A prior in-flight refocus that the force-stop must supersede.
 	w, _ := api.dal.GetOutsourceWorker(workerID)
 	w.RefocusSince = 900
 	_ = api.dal.PutOutsourceWorker(*w)
 
-	rec := postWorker(t, api, workerID, "stop", nil,
-		api.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
+	rec := postWorker(t, api, workerID, "force-stop", nil,
+		api.HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("stop: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("force-stop: %d %s", rec.Code, rec.Body.String())
 	}
 	w, _ = api.dal.GetOutsourceWorker(workerID)
 	if w.DesiredState != DesiredStateOffline {
-		t.Fatal("stop must set desired_state offline")
+		t.Fatal("force-stop must set desired_state offline")
 	}
 	if w.RefocusSince != 0 {
-		t.Fatal("stop must clear any in-flight refocus")
+		t.Fatal("force-stop must clear any in-flight refocus")
+	}
+	if w.ForcedStopAt <= 0 || !forcedEpochLive(memberFromWorker(*w)) {
+		t.Fatalf("force-stop must leave a LIVE forced epoch — that record is what "+
+			"keeps the notice silent: %+v", w)
 	}
 	frames := api.hub.DrainWardenCommands(ServerSelfHost)
 	if len(frames) != 1 {
-		t.Fatalf("stop must kill exactly the session (1 worker_stop), got %d", len(frames))
+		t.Fatalf("force-stop must kill exactly the session (1 stop), got %d", len(frames))
 	}
 	if rpc, _ := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStop {
-		t.Errorf("stop frame = %s, want worker_stop", rpc)
+		t.Errorf("kill frame = %s, want %s", rpc, reconcileCmdStop)
 	}
 	// presence through the DTO: offline-intent + still-online session reads "stopping".
 	dto := newOutsourceWorkerDTO(*w, nil, outsourceWorkerProjection{now: nowSecs(), online: true})
@@ -475,28 +484,27 @@ func TestStopWorker_Idempotent(t *testing.T) {
 }
 
 // TestRestartWorker_ClearsAndRedispatches: restart on a stopped worker sets
-// desired_state back online and re-dispatches (worker_start). A non-stopped
-// worker → 409. Mutant: dropping the still-alive guard → the LIVE case 200s
-// (a hidden double-spawn) → red. (The other half of that guard — a worker whose
-// session died on its own must NOT be refused — is
-// TestRestartWorker_RevivesAWorkerWhoseSessionDiedOnItsOwn below.)
+// desired_state back online and re-dispatches (worker_start).
+//
+// ⚠️ IT USED TO OPEN BY ASSERTING A 409 ON A LIVE WORKER. T-ed79 #10 removed
+// that refusal (owner 2026-08-21 「往正職靠：外包也不擋」), so the assertion was
+// deleted rather than inverted — the live case is now its own subject, with its
+// three faces, in worker_restart_no_guard_ted79_test.go. What is left here is
+// what this test was always really about: the STOPPED→restart path.
+// (The neighbouring half — a worker whose session died on its own must not be
+// refused — is TestRestartWorker_RevivesAWorkerWhoseSessionDiedOnItsOwn below.)
 func TestRestartWorker_ClearsAndRedispatches(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	workerID := newActiveOnlineWorker(t, api)
 
-	// Not stopped → 409.
-	rec := postWorker(t, api, workerID, "restart", nil,
-		api.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("restart of a live worker: want 409, got %d %s", rec.Code, rec.Body.String())
-	}
-
 	// Stop it, then restart → 200, marker cleared, worker_start dispatched.
-	postWorker(t, api, workerID, "stop", nil,
-		api.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
+	// 強制停止 rather than 停止: this case wants the session GONE before the
+	// restart, and 停止 now only asks for a close-out.
+	postWorker(t, api, workerID, "force-stop", nil,
+		api.HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost)
 	api.hub.DrainWardenCommands(ServerSelfHost)
-	rec = postWorker(t, api, workerID, "restart", nil,
+	rec := postWorker(t, api, workerID, "restart", nil,
 		api.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("restart: %d %s", rec.Code, rec.Body.String())
@@ -820,7 +828,12 @@ func TestCollectWorkerHandover_NoKillTarget_RollsBackEpochForFSMRescue(t *testin
 	api.outsourceMu.Lock()
 	delete(api.workerSpawnTarget, workerID) // server re-exec forgot the dispatch
 	w, _ = api.dal.GetOutsourceWorker(workerID)
+	// Two ticks: the first only ARMS the continuous-offline anchor (T-ed79 #13 —
+	// one offline sample no longer collects anything), the second is past the
+	// confirm window and is the one this test is about.
 	api.autoHandoverWorker(*w, now)
+	w, _ = api.dal.GetOutsourceWorker(workerID)
+	api.autoHandoverWorker(*w, now+workerOfflineConfirmGraceSecs)
 	api.outsourceMu.Unlock()
 
 	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
@@ -917,17 +930,20 @@ func TestAutoHandoverWorker_LoopBreak(t *testing.T) {
 
 // stampWorkerRefocus opens a handover epoch directly on the row (the stamp the
 // refocus handler / auto-stamp would have written) without any dispatch.
-// stampWorkerRefocus leaves RefocusOp EMPTY on purpose: empty is not
-// refocusOpRefocus, so every caller of this helper exercises the CLOCKED arm of
-// autoHandoverWorker. That is what these tests mean to cover, and it is why they
-// all stayed green through T-fe5e, which changed only the no-clock arm — the
-// 重新聚焦 arm is pinned separately in worker_refocus_no_clock_tfe5e_test.go.
-// Do not "fix" this by stamping refocusOpRefocus here; it would move a dozen
-// tests onto the other branch silently.
+// It stamps the ACCELERATED cause (the second context threshold) because every
+// caller of this helper means to exercise the CLOCKED arm of autoHandoverWorker.
+// It used to leave RefocusOp EMPTY for that purpose — empty was clocked by
+// fallthrough — which stopped being true when T-ed79 made FINAL the positive
+// condition and left exactly one clocked cause. Naming it is also closer to
+// production: no path stamps an epoch without an op. Do not "fix" this by
+// stamping one of the 停止 causes here; it would move a dozen tests onto the
+// no-clock branch silently, and that branch is pinned separately in
+// worker_refocus_no_clock_tfe5e_test.go.
 func stampWorkerRefocus(t *testing.T, api *apiServer, workerID string, since float64) {
 	t.Helper()
 	w, _ := api.dal.GetOutsourceWorker(workerID)
 	w.RefocusSince = since
+	w.RefocusOp = refocusOpContextHigh
 	w.StoppingSince = 0.0
 	w.StoppedSince = 0.0
 	if err := api.dal.PutOutsourceWorker(*w); err != nil {
@@ -974,12 +990,19 @@ func TestAutoHandoverWorker_GraceTimeout_ForceCollects(t *testing.T) {
 	}
 }
 
-// TestAutoHandoverWorker_GraceOffline_CollectsImmediately (T-ea82 form ③ / D6):
-// a mid-grace worker whose session DIED (SSE gone) is collected on the next
-// tick — nothing left can flush, so waiting out the deadline is pure waste.
+// TestAutoHandoverWorker_GraceOffline_CollectsOnceConfirmed (T-ea82 form ③ / D6,
+// re-aimed by T-ed79 #13): a mid-grace worker whose session is GONE is collected
+// well before the grace deadline — nothing left can flush, so waiting out the
+// deadline is pure waste. What changed is only WHEN "gone" becomes a fact: since
+// owner 2026-08-21 (rc-7df3deb21b3b) it takes a full workerOfflineConfirmGraceSecs
+// of continuous offline instead of one instantaneous sample. Note the deadline
+// here is ~110s away and the collect still happens at +90s, so this remains the
+// D6 form and not the grace-timeout one.
+// The three faces of the window itself (inside / lapsed / cancelled by a
+// reconnect) are pinned in worker_offline_confirm_ted79_test.go.
 // Mutant: dropping the offline check in the in-flight arm → 0 frames until the
 // deadline (red).
-func TestAutoHandoverWorker_GraceOffline_CollectsImmediately(t *testing.T) {
+func TestAutoHandoverWorker_GraceOffline_CollectsOnceConfirmed(t *testing.T) {
 	const now = 100_000.0
 	api := newTasksTestServer(t)
 	api.noOutsource = true
@@ -988,10 +1011,12 @@ func TestAutoHandoverWorker_GraceOffline_CollectsImmediately(t *testing.T) {
 	api.hub.DrainWardenCommands(ServerSelfHost)
 
 	w, _ := api.dal.GetOutsourceWorker(workerID)
-	api.autoHandoverWorker(*w, now) // deadline is ~110s away
+	api.autoHandoverWorker(*w, now) // arms the continuous-offline anchor
+	w, _ = api.dal.GetOutsourceWorker(workerID)
+	api.autoHandoverWorker(*w, now+workerOfflineConfirmGraceSecs)
 	frames := api.hub.DrainWardenCommands(ServerSelfHost)
 	if len(frames) != 2 {
-		t.Fatalf("an offline mid-grace worker must collect NOW (stop+start), got %d frames",
+		t.Fatalf("a confirmed-gone mid-grace worker must collect (stop+start), got %d frames",
 			len(frames))
 	}
 	if fresh, _ := api.dal.GetOutsourceWorker(workerID); fresh.StoppedSince <= 0 {

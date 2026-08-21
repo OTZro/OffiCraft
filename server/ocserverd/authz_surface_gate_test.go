@@ -655,6 +655,16 @@ var machineFloorWriteRulings = map[string]machineFloorRuling{
 			"with DELETE on the same {member_id} (admin_agent) is known and accepted. " +
 			"Full reasoning on the row in routes.go.",
 	},
+	"POST /api/outsource-workers/{id}/model": {
+		Ruling: "T-ed79 · owner 2026-08-21 · rc-376a41719e62",
+		Why: "brought DOWN two rungs to meet the staff face of the same act. The owner " +
+			"ruled 「如果原本正職可以改 model 外包就應該可以改…mira 是特殊的意義，他代替 " +
+			"owner 執行高權限動作」: the floor of 改 model is whatever PATCH " +
+			"/api/members/{member_id} carries (machine, T-5336), because it is the same " +
+			"housekeeping act on the other side of the roster, and admin_agent is " +
+			"reserved for acts delegated on the owner's behalf. The other four worker " +
+			"lifecycle rows were NOT moved. Full reasoning on the row in routes.go.",
+	},
 	"PATCH /api/accounts/{account_id}": {
 		Ruling: "T-5336 裁定 3 · owner 2026-07-27",
 		Why: "the account display-name overlay. The owner was asked in this very ticket " +

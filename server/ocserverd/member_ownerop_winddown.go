@@ -13,7 +13,8 @@ package main
 //
 //	重啟   (refocus_member / restart_self) — stamps, dispatches NOTHING, and the
 //	       reconcile recycle arm waits for report_stopped or the epoch's grace
-//	       (recycleGraceFor: 120s — except 重新聚焦, which runs no clock at all).
+//	       (recycleGraceFor — which since T-ed79 answers "no clock" for every
+//	       cause except 加速停止, the second context threshold).
 //	       FULL wind-down. UNCHANGED by this ticket (the sentinel).
 //	改機器 (relocate)                       — stamped nothing; reconcileMemberNow
 //	       took decideUp's relocate arm and dispatched a robust STOP ON THE
@@ -54,15 +55,17 @@ package main
 //	  staff: NO ANALOGUE, deliberately. assigned→active WAS the get_my_task
 //	  claim, a lifecycle step a staff member simply does not have; there is no
 //	  state in which a live staff session has PROVABLY never been handed work.
-//	  Omitting it errs toward winding down, i.e. toward the grace — the safe
-//	  direction, and the wait is a CEILING not a duration (below).
+//	  Omitting it errs toward winding down — the safe direction. It used to be
+//	  priced as "at most one grace CEILING"; since T-ed79 there is no ceiling on
+//	  this funnel at all (below), so the price is different, not smaller.
 //	  🔴 T-4595 RESOLVED THIS ASYMMETRY THE OTHER WAY: get_my_task is retired
 //	  and the flip moved to report_waking, the FIRST boot verb — so "active" no
 //	  longer proves a worker was ever handed task content, and the worker arm
 //	  was DELETED rather than kept as a stale proof. Both predicates now agree,
 //	  and they agree on THIS side of the argument: the safe direction. The cost
-//	  is the one this paragraph already priced for staff — at most one grace
-//	  ceiling, cut short the instant the session answers report_stopped.
+//	  is the one this paragraph already priced for staff — a wind-down window
+//	  that ends when the session answers report_stopped (T-ed79: and NOT before,
+//	  since neither staff owner-verb is on a clock).
 //
 //	worker: RefocusSince > 0 ∧ StoppedSince > 0 (this epoch already collected)
 //	  staff: COPIED VERBATIM, including the epoch scoping, because the two-latch
@@ -89,13 +92,20 @@ package main
 // server has zero visibility into an agent's transcript, so any finer test
 // (context pct, uptime, message counts) would be a guess dressed as a
 // criterion, and guessing wrong silently discards a round of learnings.
-// The grace is a CEILING — the 收口 fires the instant the agent answers
-// report_stopped, so a session with nothing to save ends in seconds.
+// 🔴 THERE IS NO CEILING ON THIS FUNNEL ANY MORE (T-ed79). This used to read
+// "the grace is a CEILING — the 收口 fires the instant the agent answers
+// report_stopped", which priced the wait as "at most RecycleGrace". Both staff
+// owner-verbs are 停止 now (winddownKindFor answers soft), so report_stopped is
+// not merely the EARLY exit, it is the ONLY one apart from the owner's
+// force-stop. A session with nothing to save still ends in seconds — that half
+// is unchanged, and it is what makes the honest fallback affordable — but a
+// session that never answers stays up until the owner presses the button.
 //
-// Cost, recorded honestly: after 改機器 / 換模型 the member lives at most one
-// grace window longer on the OLD machine / OLD model, and the cockpit shows
-// 換手中 for that window (refocus_since > 0 — the same projection 重新聚焦
-// already uses). That is the trade the owner asked for.
+// Cost, recorded honestly: after 改機器 / 換模型 the member keeps running on the
+// OLD machine / OLD model until it answers, with the cockpit showing 換手中 for
+// that whole time (refocus_since > 0 — the same projection 重新聚焦 already
+// uses). That is the trade the owner asked for, and it is now unbounded on
+// purpose rather than bounded by RecycleGrace.
 //
 // Agent-facing surface is unchanged (root CLAUDE.md §9c): same member-topic
 // delta, same refetch, same 下線程序 wake out of the same recycleHook. No new
@@ -115,9 +125,43 @@ const (
 // as history. They are stamped and cleared in lockstep with refocus_since —
 // a cause outliving its window would be worse than none.
 const (
-	refocusOpContextHigh = "context_high" // reconcile's context-pressure handover
-	refocusOpRefocus     = "refocus"      // owner pressed 重新聚焦
-	refocusOpRestartSelf = "restart_self" // the agent asked for its own handover
+	refocusOpContextHigh = "context_high" // second context threshold — 加速停止
+	// refocusOpContextNotice is the FIRST context threshold (notice_pct): a
+	// plain 停止, opened where the agent is only ASKED to wind down. It is named
+	// after the setting it fires on so the two cannot drift apart in a reader's
+	// head. Before T-ed79 the first threshold sent an SSE band and opened no
+	// wind-down at all, so an agent that ignored one frame met the SECOND
+	// threshold with no close-out started and 120 seconds to do it in.
+	refocusOpContextNotice = "context_notice"
+	refocusOpRefocus       = "refocus"      // owner pressed 重新聚焦
+	refocusOpRestartSelf   = "restart_self" // the agent asked for its own handover
+	// refocusOpTokenExpiry is the TOKEN-LIFETIME cause (T-ed79): the session's
+	// agent token is about to expire, so the wind-down is opened while the token
+	// still works. It is a plain 停止 — the agent is shown the sequence and
+	// collected by its own stopped report or by the owner's force-stop — for the
+	// same reason 重新聚焦 is: nothing here is an emergency the owner asked to be
+	// cut short, and a countdown would only make the close-out worse.
+	//
+	// 🔴 WHY IT HAS TO EXIST AT ALL: an expired agent token does not degrade
+	// gracefully. Every MCP call the offboard sequence makes — report_stopping,
+	// post_chat, the lesson write, report_stopped — goes through the same bearer
+	// token, so a session that reaches expiry mid-thought cannot file the
+	// hand-off it is being asked for; it can only fail. Renewal used to depend
+	// on the agent noticing on its own.
+	refocusOpTokenExpiry = "token_expiry"
+	// refocusOpAcceleratedStop is the OWNER-PRESSED 加速停止 (T-ed79, owner
+	// 2026-08-21 「停止 → 加速停止 → 強制停止」). It is the middle rung of a
+	// three-step escalation the owner walks by hand: 停止 asks and waits
+	// forever, 加速停止 says "you now have until T", 強制停止 cuts the session
+	// off with no sentence at all.
+	//
+	// 🔴 IT IS A CLOCK THE OWNER ASKED FOR, WHICH IS WHY IT DOES NOT REOPEN THE
+	// RULING 下線 CARRIES NO 兜底 (rc-27d1710174dd 「不要兜底：只有你按強制下線
+	// 才收它」). That ruling is about the SERVER deciding time is up on its own.
+	// Nothing here fires unless the owner presses the button, so the escalation
+	// is still his — this only gives his hand a rung between "wait indefinitely"
+	// and "kill now", which is the rung he asked for.
+	refocusOpAcceleratedStop = "accelerated_stop"
 )
 
 // memberHasStateToFlush answers the one question the rule turns on: is there
@@ -178,6 +222,75 @@ func hasUncollectedOnlineOwnerOpState(refocusSince, stoppedSince float64, online
 	return online && !(refocusSince > 0.0 && stoppedSince > 0.0)
 }
 
+// winddownKindFor is THE judgement about a wind-down cause, and the only one.
+// The clock (recycleGraceFor) and the sentence (offboardKindOf) both read it,
+// so the two cannot disagree about the same member — a clock nobody announces,
+// or a countdown nobody is counting, is now a change to ONE line rather than
+// two files that happen to agree.
+//
+// 🔴 FINAL IS THE POSITIVE CONDITION, and the default is SOFT. It used to be
+// the other way round — everything fell through to "on the clock" and 重新聚焦
+// was carved out as the single exception — which meant every new cause arrived
+// carrying a deadline by accident, including ones the owner had ruled must
+// carry none. Owner model (T-ed79): the only 加速停止 is the one context
+// pressure opens at the SECOND threshold; 停止 is everything else — the agent
+// is shown the sequence and collected by its own stopped report or by the owner
+// pressing force-stop. Adding a cause to the final set is now something you
+// have to TYPE, on this line, where the ruling is written down.
+//
+// (force-stop is not a kind here at all: it sends nothing and removes the
+// member on the spot — see HandleForceStopMember.)
+func winddownKindFor(op string) (kind string, clocked bool) {
+	// TWO causes are 加速停止, and they are the two the owner named: the one
+	// context pressure opens at the SECOND threshold, and the one he presses
+	// himself. They share ONE grace (stop.accelerated_grace_secs, folded onto
+	// cfg.RecycleGrace by reconcileConfigLive) because they are the same verb
+	// with two triggers — 「統一在第二門檻跟加速停止使用」 — so an owner tuning
+	// the number can never end up with the automatic and the manual arm
+	// counting different seconds.
+	if op == refocusOpContextHigh || op == refocusOpAcceleratedStop {
+		return offboardKindFinal, true
+	}
+	return offboardKindSoft, false
+}
+
+// armRefocusEpoch is the ONE way a refocus epoch is opened. It MUTATES m and
+// persists nothing: every caller folds it into its own single putMember, so the
+// stamp and whatever else that write carries are one row write and one delta.
+//
+// 🔴 The two zeroed anchors are the whole reason this is a named function and
+// not four hand-written lines. A NEW epoch must never inherit the PREVIOUS
+// wind-down's latch, and the reader that latch feeds is destructive:
+//
+//   - decideUp's recycle arm reads AgentStopped = stopped_since > 0 and, with a
+//     refocus marker present, robust-stops the member ON THE SPOT — zero grace,
+//     no close-out. A stale stopped_since therefore turns the very next epoch
+//     stamped on that member into an immediate kill, in the same tick, whatever
+//     opened it.
+//
+// 🔴 A SECOND bullet used to stand here — "the SSE stop gate (api_infra.go)
+// refuses a reconnect once stopped_since is set, so a stale latch also rejects
+// the NEXT close-out's reconnect". It is FALSE inside this function's range and
+// always was: that gate requires `desired_state == offline`, while every caller
+// of armRefocusEpoch is behind aRefocusStampWouldReachTheAgent, which is
+// `DesiredState == DesiredStateOnline`. The gate can never see one of these
+// rows. The remaining bullet is real, and it is enough on its own — one true
+// destructive reader justifies the shared function; a second, invented one only
+// teaches the next reader a protection that will not be there when they rely on
+// it.
+//
+// Three of the four stamp sites used to write refocus_since/refocus_op alone
+// (POST /members/{id}/refocus, restart_self's staff arm, and the context
+// auto-stamp); only the owner-verb funnel below cleared the anchors. Sharing
+// one function is what makes "a fresh epoch starts from a clean sheet" a
+// property of the operation rather than of whoever remembered it.
+func armRefocusEpoch(m *Member, op string, now float64) {
+	m.RefocusSince = now
+	m.RefocusOp = op
+	m.StoppingSince = 0.0
+	m.StoppedSince = 0.0
+}
+
 // armMemberOwnerOpHandover stamps a FRESH refocus epoch on the member when
 // there is state to flush, and reports whether it did. It MUTATES m and
 // persists nothing: the caller folds this into its own single putMember so the
@@ -190,11 +303,8 @@ func (s *apiServer) armMemberOwnerOpHandover(m *Member, op string) bool {
 	if !s.memberHasStateToFlush(*m) {
 		return false
 	}
-	m.RefocusSince = nowSecs()
-	m.RefocusOp = op
-	m.StoppingSince = 0.0
-	m.StoppedSince = 0.0
-	if grace, clocked := recycleGraceFor(op, s.reconcileCfg); clocked {
+	armRefocusEpoch(m, op, nowSecs())
+	if grace, clocked := recycleGraceFor(op, s.reconcileConfigLive()); clocked {
 		reconcileLog("recycle: %s %s — wind-down opened (collect on stopped-report or +%.0fs)",
 			op, m.ID, grace)
 	} else {

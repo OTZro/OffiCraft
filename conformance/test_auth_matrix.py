@@ -565,6 +565,16 @@ MATRIX: dict[str, Route] = {
         requires="admin_agent",
         path=_member_path("/api/members/{member_id}/force-stop"),
     ),
+    "POST /api/members/{member_id}/accelerated-stop": Route(
+        # positive faces: 409 — the fresh target has no live session, and
+        # 加速停止 is an ESCALATION of a wind-down that is already open. That
+        # refusal IS the contract (it is what keeps the button from being a
+        # second, harsher stop), so the choke face past the admin guard is what
+        # this row pins.
+        requires="admin_agent",
+        overrides={"owner": 409, "admin_agent": 409},
+        path=_member_path("/api/members/{member_id}/accelerated-stop"),
+    ),
     "POST /api/members/{member_id}/refocus": Route(
         # positive faces: 409 — the fresh target is OFFLINE and refocus is
         # online-only; the choke face (past the admin guard) is what we pin.
@@ -1379,6 +1389,16 @@ MATRIX: dict[str, Route] = {
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/refocus",
         overrides={"owner": 404, "admin_agent": 404},
     ),
+    "POST /api/outsource-workers/{id}/accelerated-stop": Route(
+        requires="admin_agent",
+        path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/accelerated-stop",
+        overrides={"owner": 404, "admin_agent": 404},
+    ),
+    "POST /api/outsource-workers/{id}/force-stop": Route(
+        requires="admin_agent",
+        path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/force-stop",
+        overrides={"owner": 404, "admin_agent": 404},
+    ),
     "POST /api/outsource-workers/{id}/stop": Route(
         requires="admin_agent",
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/stop",
@@ -1389,11 +1409,22 @@ MATRIX: dict[str, Route] = {
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/restart",
         overrides={"owner": 404, "admin_agent": 404},
     ),
+    # T-ed79, owner 2026-08-21 (rc-376a41719e62): 「如果原本正職可以改 model 外包就
+    # 應該可以改」— the machine floor of the STAFF face (PATCH /api/members/{id}),
+    # not the admin floor the other four worker lifecycle rows still carry.
     "POST /api/outsource-workers/{id}/model": Route(
-        requires="admin_agent",
+        requires="machine",
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/model",
         body=lambda _ctx, _i: {"model": "claude-opus-4-8"},
-        overrides={"owner": 404, "admin_agent": 404},
+        # Every identity now clears the floor, so every identity reaches the
+        # route's own semantics — a 404 for the nonexistent ow-nope.
+        overrides={
+            "owner": 404,
+            "admin_agent": 404,
+            "agent_self": 404,
+            "agent_other": 404,
+            "warden": 404,
+        },
     ),
     # ── task manuals (M3) ───────────────────────────────────────────────────
     "GET /api/task-manuals": Route(requires="machine"),

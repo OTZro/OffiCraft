@@ -43,7 +43,6 @@ var t6020Opened = map[[2]string]string{
 	{"POST", "/api/outsource-workers/{id}/refocus"}:                     "refocus_outsource_worker",
 	{"POST", "/api/outsource-workers/{id}/stop"}:                        "stop_outsource_worker",
 	{"POST", "/api/outsource-workers/{id}/restart"}:                     "restart_outsource_worker",
-	{"POST", "/api/outsource-workers/{id}/model"}:                       "set_outsource_worker_model",
 	{"DELETE", "/api/task-manuals/{type_key}"}:                          "delete_task_manual",
 }
 
@@ -82,6 +81,14 @@ var t6020Revised = map[[2]string]string{
 	// one subtraction the ladder cannot state: an OUTSOURCE worker is refused on
 	// its own task, because a 正職 and a contractor both rank principalAgent.
 	{"POST", "/api/tasks/{task_id}/terminate"}: "terminate_task",
+	// owner 2026-08-21, card rc-376a41719e62 (T-ed79):「如果原本正職可以改 model
+	// 外包就應該可以改，如果只有 mira 可以改，那就不變，正職跟外包一樣，mira 是特殊
+	// 的意義，他代替 owner 執行高權限動作。」— the floor is decided by the STAFF
+	// face of the same act (PATCH /api/members/{member_id}, machine floor since
+	// T-5336), not by how the verb looks on its own. It dropped two rungs, to
+	// principalMachine, and it is the ONLY one of the four worker lifecycle rows
+	// the ruling moved.
+	{"POST", "/api/outsource-workers/{id}/model"}: "set_outsource_worker_model",
 }
 
 // t6020RevisedFloor is the floor each revised row must now declare. Pinned as a
@@ -90,6 +97,7 @@ var t6020Revised = map[[2]string]string{
 var t6020RevisedFloor = map[[2]string]string{
 	{"POST", "/api/reply-cards/{card_id}/expire"}: principalAgent,
 	{"POST", "/api/tasks/{task_id}/terminate"}:    principalAgent,
+	{"POST", "/api/outsource-workers/{id}/model"}: principalMachine,
 }
 
 // t6020AllOpenedRows is every row the 2026-07-26 ruling opened — those still at
@@ -139,7 +147,7 @@ func t6020RouteIndex(t *testing.T) map[[2]string]RouteSpec {
 }
 
 func TestT6020OpenedRoutesSitAtTheAdminAgentFloor(t *testing.T) {
-	// 18 still at the admin floor + 1 later revised = the 19 the ruling opened.
+	// 16 still at the admin floor + 3 later revised = the 19 the ruling opened.
 	// Split this way so a revision has to MOVE a row (visible in the diff) rather
 	// than delete one; the sum keeps the historical count honest.
 	if len(t6020Opened)+len(t6020Revised) != 19 {
@@ -179,13 +187,14 @@ func TestT6020OpenedRoutesSitAtTheAdminAgentFloor(t *testing.T) {
 }
 
 func TestT6020RevisedRoutesSitAtTheirRevisedFloor(t *testing.T) {
-	// 🔴 THE COUNT LOCK. Two rows have been revised (expire_reply_card, owner
-	// 2026-08-07; terminate_task, owner 2026-08-20). A third one needs its own
+	// 🔴 THE COUNT LOCK. Three rows have been revised (expire_reply_card, owner
+	// 2026-08-07; terminate_task, owner 2026-08-20; set_outsource_worker_model,
+	// owner 2026-08-21). A fourth one needs its own
 	// owner ruling, and whoever adds it must edit this line in the same commit —
 	// that is the point: this table exempts a row from the admin-floor assertion
 	// above, so growing it must be a deliberate, visible act, never a side effect.
-	if len(t6020Revised) != 2 {
-		t.Fatalf("t6020Revised lists %d rows, expected 2 — a further revision needs its "+
+	if len(t6020Revised) != 3 {
+		t.Fatalf("t6020Revised lists %d rows, expected 3 — a further revision needs its "+
 			"OWN owner ruling, and this guard must be edited in the same commit",
 			len(t6020Revised))
 	}

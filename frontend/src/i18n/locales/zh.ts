@@ -488,7 +488,16 @@ export const zh = {
       spawn: "喚醒",
       cancel: "取消",
       stop: "停止",
+      // 升級路徑的中間段（owner 2026-08-21「停止 → 加速停止 → 強制停止」）：
+      // 給已經開始的收尾上一段時鐘，並且把那個時刻告訴他。不是殺，所以不做二次確認。
+      "accelerated-stop": "加速停止",
       "force-stop": "強制停止",
+    },
+    // 還輪不到的那一段不畫出來（owner 2026-08-21「按了才出現」）。只有兩顆會
+    // 「畫得出來但按不下」，而且都要說明原因。
+    reason: {
+      alreadyStopping: "已經在收尾中了；等不下去就往右按加速停止",
+      justAppeared: "剛剛才出現；先停一下，免得連按兩下替你升級",
     },
     message: {
       // 先關收尾:收尾中 → 壓縮中(dump)
@@ -825,6 +834,7 @@ export const zh = {
     // that phrasing reads as history, and the owner needs to know the change
     // is being APPLIED right now.
     windDownForChangeLabel: "正在收尾以套用你的改動",
+    windDownDeadlineLabel: "正在收尾，已給死線",
     windDownByLabel: "最晚",
     windDownEffectSuffix: "生效",
     standby: "待命中",
@@ -1621,7 +1631,7 @@ export const zh = {
     notice: "Claude 第一次通知",
     noticeSub: "記憶用到這個比例，就把下線程序送給它，請它收乾淨後自己換手（要比下面的最後通牒小）",
     handover: "Claude 最後通牒",
-    handoverSub: "到這個比例送最後通牒並自動換手，之後 120 秒強制回收（40–90%）",
+    handoverSub: "到這個比例送最後通牒並自動換手，之後依「加速停止秒數」強制回收（40–90%）",
     codexNotice: "Codex 第一次通知",
     codexNoticeSub: "第幾輪 context compaction 後把下線程序送給它（要比下面的回合數小）",
     codexHandover: "Codex 最後通牒回合",
@@ -1629,6 +1639,9 @@ export const zh = {
     monitoringRefresh: "監控刷新間隔",
     monitoringRefreshSub: "收到連續事件時，最多每隔幾秒刷新一次（1–60）",
     seconds: "秒",
+    acceleratedGrace: "加速停止秒數",
+    acceleratedGraceSub:
+      "按下加速停止之後，成員還有多少秒可以收尾；記憶第二段門檻自動換手也走同一個時鐘。這個時刻會原文告訴成員（10–3600）",
     rounds: "次",
     // T-ae38 起(T-30f1 又拆過一次):上限不再是一個。這些文件被刪掉的成本差很多
     // ——角色定義是常設說明、學習經驗是逐次累積的環境問答——所以不再共用同一把尺。

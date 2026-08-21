@@ -334,8 +334,17 @@ export function OfficePage() {
         onRefocus={async () => {
           await api.refocusWorker(workerDetail.id);
         }}
+        // The escalation ladder, same three verbs and same order as 正職
+        // (T-ed79). 停止 no longer kills: it asks the worker to work its
+        // 下線程序 and waits for its own report_stopped.
         onStop={async () => {
           await api.stopWorker(workerDetail.id);
+        }}
+        onAcceleratedStop={async () => {
+          await api.acceleratedStopWorker(workerDetail.id);
+        }}
+        onForceStop={async () => {
+          await api.forceStopWorker(workerDetail.id);
         }}
         // 喚醒 (T-7526). The endpoint is still `restartWorker` → POST …/restart:
         // the frozen wire keeps its name, only the owner-facing word changed.
@@ -423,10 +432,15 @@ export function OfficePage() {
           await api.deactivateMember(detail.id);
           await refetch();
         }}
-        // Force-stop (immediate kill): the offboard arm runs no clock, so this is
-        // the only server-side collection there is — the robust STOP goes to the
-        // warden now. Refetch
-        // and let server-driven presence surface stopped.
+        // Force-stop (immediate kill): the LAST rung — the robust STOP goes to
+        // the warden now. Refetch and let server-driven presence surface stopped.
+        // 加速停止 — the MIDDLE rung of 停止 → 加速停止 → 強制停止. Puts the
+        // wind-down that is already open on the server's clock and tells the
+        // member; it is NOT a kill, so the member can still finish early.
+        onAcceleratedStop={async () => {
+          await api.acceleratedStopMember(detail.id);
+          await refetch();
+        }}
         onForceStop={async () => {
           await api.forceStopMember(detail.id);
           await refetch();

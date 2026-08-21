@@ -1497,6 +1497,8 @@ const DEFAULT_MOCK_SETTINGS = {
   codex_compaction_threshold: 3,
   codex_notice_round: 2,
   monitoring_refresh_seconds: 5,
+  // 加速停止 grace — mirrors the server's shipped default (StoppingTimeoutSecs).
+  accelerated_grace_secs: 120,
   // M3 global outsource cap — mirrors the server's code-side default (3).
   outsource_max_parallel: 3,
   // T-ae38 document size caps — mirror the server's shipped defaults, which
@@ -2150,6 +2152,34 @@ export const mockApi: Api = {
     const w = findWire(id);
     w.desired_state = "offline";
     w.presence = "offline";
+  },
+
+  async acceleratedStopMember(id: string): Promise<void> {
+    // 加速停止 (mirror handle_accelerated_stop_member): the MIDDLE rung. It
+    // ESCALATES a wind-down that is already open — the mock reproduces the 409
+    // gate rather than the clock, because the gate is the part a cockpit can get
+    // wrong (offering the button where the server would refuse it) and the clock
+    // is server-side arithmetic the mock has no session to run.
+    const w = findWire(id);
+    // `stopping_since` is deliberately NOT on the wire, so the mock reads the
+    // projection the server derives from it — which is also the only thing the
+    // cockpit itself can see, and therefore the right basis for a mock whose job
+    // is to catch a cockpit offering a button the server would refuse.
+    const windingDown = w.presence === "stopping" || (w.refocus_since ?? 0) > 0;
+    if (!windingDown) {
+      throw mockApiError(
+        "http 409 for POST /api/members/{id}/accelerated-stop",
+        409,
+        "加速停止 escalates a wind-down that is already open — this member has not been asked to stop. Press 停止 (deactivate) or 重新聚焦 (refocus) first",
+      );
+    }
+    w.refocus_op = "accelerated_stop";
+    if (w.desired_state === "offline") {
+      w.refocus_deadline = Date.now() / 1000 + 120;
+    } else {
+      w.refocus_since = Date.now() / 1000;
+      w.refocus_deadline = w.refocus_since + 120;
+    }
   },
 
   async dismissMember(id: string): Promise<void> {
@@ -3611,9 +3641,17 @@ export const mockApi: Api = {
       w.machine = m ? m.name : machineId;
     }
     emitTopic("outsource_worker");
+    // Mock ↔ http parity (T-ed79 #5): a LIVE worker's move is deferred to its
+    // 收口, so the answer says "scheduled, not landed" AND says which of the two
+    // kinds of not-landed it is. A worker with no live session is dispatched now
+    // and carries neither flag.
+    const deferred = w.presence === "online";
     return {
       ...withWorkerTaskJoin(structuredClone(w)),
       unreadCount: unreadCountOf(w.id),
+      ...(deferred
+        ? { relocationPending: true, relocationDeferred: true }
+        : {}),
     };
   },
 
@@ -3650,9 +3688,11 @@ export const mockApi: Api = {
   },
 
   async stopWorker(id: string): Promise<OutsourceWorkerView> {
-    // 停止 (T-f190). Held down: set desired_state offline (member parity), clear any
-    // in-flight refocus, project presence "stopped". unknown/released → 404.
-    // Idempotent.
+    // 停止 (T-f190; a GRACEFUL close-out since T-ed79). Held down: desired_state
+    // offline (member parity) and the in-flight refocus cleared — but NO kill.
+    // The worker is shown its 下線程序 and keeps its session until it reports
+    // stopped, so a worker that was online projects "stopping" here, not
+    // "stopped". unknown/released → 404. Idempotent.
     const w = outsourceWorkers.find((x) => x.id === id);
     if (!w || w.status === "released") {
       throw mockApiError(
@@ -3662,6 +3702,65 @@ export const mockApi: Api = {
     }
     w.desiredState = "offline";
     w.refocusSince = null;
+    w.refocusOp = undefined;
+    w.presence = w.presence === "online" ? "stopping" : "stopped";
+    emitTopic("outsource_worker");
+    return {
+      ...withWorkerTaskJoin(structuredClone(w)),
+      unreadCount: unreadCountOf(w.id),
+    };
+  },
+
+  async acceleratedStopWorker(id: string): Promise<OutsourceWorkerView> {
+    // 加速停止 (T-ed79) — the MIDDLE rung. It escalates a wind-down that is
+    // ALREADY open, so its refusal is what makes it an escalation rather than a
+    // second stop button; the message names the rungs below it, mirroring the
+    // server's acceleratedStopWorkerNeedsAnOpenWindDownMsg.
+    const w = outsourceWorkers.find((x) => x.id === id);
+    if (!w || w.status === "released") {
+      throw mockApiError(
+        `http 404 for POST /api/outsource-workers/${id}/accelerated-stop`,
+        404, `outsource worker ${id} not found`
+      );
+    }
+    const windingDown =
+      (w.desiredState === "offline" && w.presence === "stopping") ||
+      (w.refocusSince ?? 0) > 0;
+    if (w.presence !== "online" && w.presence !== "stopping") {
+      throw mockApiError(
+        `http 409 for POST /api/outsource-workers/${id}/accelerated-stop`,
+        409, "加速停止 requires the worker to be online (no live session to accelerate)"
+      );
+    }
+    if (!windingDown) {
+      throw mockApiError(
+        `http 409 for POST /api/outsource-workers/${id}/accelerated-stop`,
+        409,
+        "加速停止 escalates a wind-down that is already open — this worker has not " +
+          "been asked to stop. Press 停止 or 重新聚焦 first"
+      );
+    }
+    w.refocusOp = "accelerated_stop";
+    emitTopic("outsource_worker");
+    return {
+      ...withWorkerTaskJoin(structuredClone(w)),
+      unreadCount: unreadCountOf(w.id),
+    };
+  },
+
+  async forceStopWorker(id: string): Promise<OutsourceWorkerView> {
+    // 強制停止 (T-ed79) — the THIRD rung, and the body /stop used to have: the
+    // session is killed on the spot, so the worker lands in "stopped" directly.
+    const w = outsourceWorkers.find((x) => x.id === id);
+    if (!w || w.status === "released") {
+      throw mockApiError(
+        `http 404 for POST /api/outsource-workers/${id}/force-stop`,
+        404, `outsource worker ${id} not found`
+      );
+    }
+    w.desiredState = "offline";
+    w.refocusSince = null;
+    w.refocusOp = undefined;
     w.presence = "stopped";
     emitTopic("outsource_worker");
     return {
@@ -3682,19 +3781,28 @@ export const mockApi: Api = {
         404, `outsource worker ${id} not found`
       );
     }
-    // Mock ↔ http parity (T-7526): the guard asks whether the worker is ALIVE,
-    // not whether anyone pressed 停止. A worker whose session died on its own
-    // keeps desired_state=online and must still be revivable; a genuinely live
-    // one is still refused.
-    if (w.desiredState !== "offline" && w.presence === "online") {
-      throw mockApiError(
-        `http 409 for POST /api/outsource-workers/${id}/restart`,
-        409, "worker is still online — nothing to restart"
-      );
+    // Mock ↔ http parity (T-ed79 #10, owner 2026-08-21 「往正職靠：外包也不擋」):
+    // the over-spawn guard is GONE. A live worker is DISPLACED, not refused —
+    // the same shape 活化 has always had for a staff member — and the fact that
+    // the press found a live session is a receipt on the row instead of a 409.
+    if (w.presence === "online") {
+      w.lastOp = "start";
+      w.lastOpOk = false;
+      w.lastOpLog = "";
+      w.lastOpReason =
+        "session_alive: this worker was still running — 重啟 is replacing that " +
+        "session, not starting a first one. If it does not come back, its " +
+        "previous session was still holding the slot";
+      w.lastOpAt = Date.now() / 1000;
     }
     w.desiredState = "online";
     w.presence = "waking";
     emitTopic("outsource_worker");
+    // Mock ↔ http parity (T-ed79 #12): the mock always "dispatches", so it never
+    // reports activation_pending. The flag is deliberately NOT faked here — a
+    // mock that invents a pending state teaches the panel a story the server
+    // only tells in a condition this mock cannot reach (no kill target /
+    // unreachable warden).
     return {
       ...withWorkerTaskJoin(structuredClone(w)),
       unreadCount: unreadCountOf(w.id),
@@ -4353,6 +4461,12 @@ export const mockApi: Api = {
         throw mockApiError("http 422 for PATCH /api/settings", 422, "codex_notice_round must be strictly below codex_compaction_threshold");
       }
     }
+    if (
+      patch.acceleratedGraceSecs !== undefined &&
+      (patch.acceleratedGraceSecs < 10 || patch.acceleratedGraceSecs > 3600)
+    ) {
+      throw mockApiError("http 422 for PATCH /api/settings", 422, "accelerated_grace_secs must be between 10 and 3600 seconds");
+    }
     if (patch.monitoringRefreshSeconds !== undefined && (patch.monitoringRefreshSeconds < 1 || patch.monitoringRefreshSeconds > 60)) {
       throw mockApiError("http 422 for PATCH /api/settings", 422, "monitoring_refresh_seconds must be between 1 and 60");
     }
@@ -4497,6 +4611,9 @@ export const mockApi: Api = {
     }
     if (patch.codexNoticeRound !== undefined) {
       mockServerSettings.codex_notice_round = patch.codexNoticeRound;
+    }
+    if (patch.acceleratedGraceSecs !== undefined) {
+      mockServerSettings.accelerated_grace_secs = patch.acceleratedGraceSecs;
     }
     if (patch.monitoringRefreshSeconds !== undefined) {
       mockServerSettings.monitoring_refresh_seconds = patch.monitoringRefreshSeconds;

@@ -380,13 +380,33 @@ export function AgentDetailPanel({
   // the reason it has not taken effect yet, and roughly when it will (T-7f28).
   // Only the two owner-op causes qualify: a context-pressure handover or a bare
   // 重新聚焦 is not applying anything of the owner's, so those keep the old line.
-  const windDownNote =
-    (vm.refocusOp === "relocate" || vm.refocusOp === "runtime/model") &&
+  //
+  // 🔴 THE DEADLINE IS NOT PART OF THE GATE (T-ed79). It used to be a second
+  // conjunct, and the day relocate and runtime/model became 停止 —
+  // winddownKindFor answers no-clock ⇒ refocusDeadlineOf returns 0 ⇒ the mapper
+  // maps 0 → null — that conjunct went permanently false and this whole note
+  // became unreachable, silently restoring the 「上次重新聚焦」 history line
+  // T-7f28 was written to remove. The cause decides WHETHER to say it; the
+  // deadline only decides WHICH of the two sentences, and null is the ordinary
+  // answer today, not a missing value.
+  //
+  // 🔴 …and the CLOCKED causes need a line of their own (T-ed79). accelerated_stop
+  // and context_high are the two that put the member on a deadline, and neither
+  // is applying a change of the owner's, so neither belongs in the sentence
+  // above. Without an arm here they fell through to 「上次重新聚焦 <time>」 — a
+  // PAST-TENSE history line printed while a deadline the owner started this
+  // second is counting down, and the deadline itself appeared nowhere in the UI
+  // at all. The owner pressing 加速停止 has to be able to see the clock he armed.
+  const deadlineText =
     vm.refocusDeadline != null
-      ? msg.agentWindDownForChange(
-          new Date(vm.refocusDeadline * 1000).toLocaleTimeString(),
-        )
+      ? new Date(vm.refocusDeadline * 1000).toLocaleTimeString()
       : null;
+  const windDownNote =
+    vm.refocusOp === "relocate" || vm.refocusOp === "runtime/model"
+      ? msg.agentWindDownForChange(deadlineText)
+      : vm.refocusOp === "accelerated_stop" || vm.refocusOp === "context_high"
+        ? msg.agentWindDownOnDeadline(deadlineText)
+        : null;
 
   // ── 最近操作 (last warden receipt) ─────────────────────────────────────────
   const hasLastOp = vm.lastOp !== "" && vm.lastOpAt != null;

@@ -73,6 +73,21 @@ const (
 // and the NEXT start died with `FATAL: load settings` (exit 1) — no warning at
 // save time. Whoever narrows or widens these bounds must edit this one place,
 // and both faces move together.
+// acceleratedGraceInRange is the SINGLE source of truth for which
+// stop.accelerated_grace_secs values this build accepts, for exactly the reason
+// outsourceParallelInRange below is: BOTH faces call it — the PATCH validator
+// and the boot-time loader in settings.go — so a value that survives a save can
+// never be the value that refuses to boot on the next start.
+func acceleratedGraceInRange(n int) bool {
+	return n >= minAcceleratedGraceSecs && n <= maxAcceleratedGraceSecs
+}
+
+// acceleratedGraceRangeMsg is the ONE wording of that refusal, derived from the
+// constants so it can never quote a range the code does not enforce.
+var acceleratedGraceRangeMsg = fmt.Sprintf(
+	"must be between %d and %d seconds",
+	minAcceleratedGraceSecs, maxAcceleratedGraceSecs)
+
 func outsourceParallelInRange(n int) bool {
 	return n >= minOutsourceParallel && n <= maxOutsourceParallel
 }
@@ -351,6 +366,12 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		writeError(w, http.StatusUnprocessableEntity, "monitoring_refresh_seconds must be between 1 and 60")
 		return
 	}
+	if body.AcceleratedGraceSecs != nil &&
+		!acceleratedGraceInRange(*body.AcceleratedGraceSecs) {
+		writeError(w, http.StatusUnprocessableEntity,
+			"accelerated_grace_secs "+acceleratedGraceRangeMsg)
+		return
+	}
 	if body.OutsourceMaxParallel != nil &&
 		!outsourceParallelInRange(*body.OutsourceMaxParallel) {
 		writeError(w, http.StatusUnprocessableEntity,
@@ -527,6 +548,15 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		}
 		s.monitoringRefreshSeconds = *body.MonitoringRefreshSeconds
 	}
+	if body.AcceleratedGraceSecs != nil {
+		if err := s.dal.PutSetting(settingAcceleratedGraceSecs,
+			strconv.Itoa(*body.AcceleratedGraceSecs)); err != nil {
+			s.settingsMu.Unlock()
+			internalError(w, err)
+			return
+		}
+		s.acceleratedGraceSecs = *body.AcceleratedGraceSecs
+	}
 	if body.OutsourceMaxParallel != nil {
 		if err := s.dal.PutSetting(settingOutsourceMaxParallel,
 			strconv.Itoa(*body.OutsourceMaxParallel)); err != nil {
@@ -692,6 +722,7 @@ func (s *apiServer) settingsView() settingsDTO {
 		CodexCompactionThreshold:     s.codexCompactionThreshold,
 		CodexNoticeRound:             s.codexNoticeRound,
 		MonitoringRefreshSeconds:     s.monitoringRefreshSeconds,
+		AcceleratedGraceSecs:         s.acceleratedGraceSecs,
 		OutsourceMaxParallel:         s.outsourceMaxParallel,
 		DocCapCharsDuty:              s.docCapCharsDuty,
 		DocCapCharsInsight:           s.docCapCharsInsight,

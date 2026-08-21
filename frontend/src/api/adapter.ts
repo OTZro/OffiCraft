@@ -594,6 +594,22 @@ export interface OutsourceWorkerView {
    * worker panel's identity action row. "" from a
    * pre-column row reads as online. */
   desiredState?: string;
+  /**
+   * RESPONSE-ONLY signals an owner verb leaves on its own answer (T-ed79 #5/#12,
+   * wire `relocation_pending` / `relocation_deferred` / `activation_pending`) —
+   * the worker twins of {@link MemberRelocateResult} / {@link MemberActivateResult}.
+   *
+   * `undefined` on every list/GET and on every verb that has nothing to defer, so
+   * "this answer does not carry the signal" stays distinguishable from "false".
+   *
+   * `relocationPending` is true for BOTH a deliberate deferral and a move that
+   * could not be dispatched at all; `relocationDeferred` is what tells them
+   * apart, and a consumer must NOT raise a "nothing was dispatched" alert while
+   * it is true.
+   */
+  relocationPending?: boolean;
+  relocationDeferred?: boolean;
+  activationPending?: boolean;
 }
 
 /** One task type (任務手冊) in the LIGHT list shape the tasks page needs for
@@ -789,6 +805,13 @@ export interface ServerSettingsView {
   codexCompactionThreshold: number;
   /** Minimum seconds between telemetry-triggered monitoring refreshes (1..60). */
   monitoringRefreshSeconds: number;
+  /** 加速停止 grace in seconds (10..3600; default 120) — how long a CLOCKED
+   * wind-down waits before the server forces the collection. ONE number for BOTH
+   * clocked causes (the second context threshold and the owner-pressed
+   * 加速停止), so the countdown an agent is quoted and the deadline the server
+   * collects on cannot be two different values. It says HOW LONG, never WHO: a
+   * soft cause stays uncollected at any value. */
+  acceleratedGraceSecs: number;
   /** M3: the GLOBAL cap on concurrently live outsource workers (-1..20;
    * **-1 ⇒ 無限 (unlimited — no global cap)**; 0 ⇒ outsource assignment is
    * PAUSED — the panel annotates it). */
@@ -895,6 +918,8 @@ export interface ServerSettingsPatch {
   codexNoticeRound?: number;
   codexCompactionThreshold?: number;
   monitoringRefreshSeconds?: number;
+  /** 加速停止 grace in seconds. Must be 10..3600. */
+  acceleratedGraceSecs?: number;
   outsourceMaxParallel?: number;
   /** T-ae38 document size caps, in characters. Each must be between THAT
    * segment's shipped default (`DOC_CAP_CHARS_DEFAULTS`) and 100000. */
@@ -1472,12 +1497,27 @@ export interface Api {
   /**
    * Force-stop (immediate kill): POST /api/members/{id}/force-stop → the server
    * dispatches the robust STOP straight to the warden NOW (the warden SIGKILLs the
-   * session). Not a shortcut past a countdown — the offboard arm runs none, so
-   * apart from the agent's own report_stopped this is the only collection. Backs the cockpit's
-   * "Force stop" escalation, surfaced once a member is already *stopping*. Does
-   * NOT flip online — the caller refetches; presence surfaces stopped.
+   * session). Not a shortcut past a countdown — the server arms none on this arm.
+   * It is the LAST of the three things that end a soft offboard: the agent's own
+   * report_stopped, the deadline the owner opens with acceleratedStopMember, and
+   * this. Backs the cockpit's "Force stop" escalation, surfaced once a member is
+   * already *stopping*. Does NOT flip online — the caller refetches; presence
+   * surfaces stopped.
    */
   forceStopMember(id: string): Promise<void>;
+  /**
+   * 加速停止 (accelerated stop): POST /api/members/{id}/accelerated-stop → put a
+   * wind-down that is ALREADY OPEN on the server's stop.accelerated_grace_secs
+   * clock and TELL the member (the write fans an offboard notice whose sentence
+   * now quotes a deadline).
+   *
+   * The MIDDLE rung of 停止 → 加速停止 → 強制停止 (owner 2026-08-21). It
+   * ESCALATES; it does not initiate: a member nobody has asked to stop is a 409,
+   * because a clock on a member that was told nothing is a deadline it never
+   * heard about. So is a member with no live session, and one already cut off by
+   * 強制停止. Does NOT flip online — the caller refetches.
+   */
+  acceleratedStopMember(id: string): Promise<void>;
   /**
    * Dismiss (soft delete): DELETE the member → status=removed + desired_state=offline.
    * PURE SEAM, no UI entry — the 解散 button was removed from MemberDetailPanel
@@ -1854,10 +1894,26 @@ export interface Api {
    * otherwise); stopped → 409; unknown/released → 404. Returns the freshly
    * projected worker. (T-32e1) */
   refocusWorker(id: string): Promise<OutsourceWorkerView>;
-  /** Stop a worker (`POST /api/outsource-workers/{id}/stop`, owner/admin-agent) — kill
-   * the session and hold it down (presence "stopping"/"stopped"); no auto-revival. The
-   * bound task stays put. Idempotent; unknown/released → 404. (T-f190) */
+  /** Stop a worker (`POST /api/outsource-workers/{id}/stop`, owner/admin-agent) — the
+   * FIRST rung of 停止 → 加速停止 → 強制停止 and, since T-ed79, a GRACEFUL
+   * CLOSE-OUT rather than a kill (owner 2026-08-21 「往正職靠：外包那顆改成優雅
+   * 停止」): it holds the worker down (desired offline, presence
+   * "stopping"/"stopped", no auto-revival), shows it the 下線程序 and WAITS for
+   * its own report_stopped. No deadline unless the owner escalates. The bound
+   * task stays put. Idempotent; unknown/released → 404. (T-f190, T-ed79) */
   stopWorker(id: string): Promise<OutsourceWorkerView>;
+  /** 加速停止 a worker (`POST /api/outsource-workers/{id}/accelerated-stop`,
+   * owner/admin-agent) — the MIDDLE rung. Puts the wind-down that is ALREADY open
+   * (a 停止 or a 換手) on the server's `stop.accelerated_grace_secs` clock and
+   * TELLS the worker; it is not a kill, so the worker can still finish early.
+   * 409 when nothing is winding down, when the worker is offline/released, or
+   * when it was force-stopped. (T-ed79) */
+  acceleratedStopWorker(id: string): Promise<OutsourceWorkerView>;
+  /** 強制停止 a worker (`POST /api/outsource-workers/{id}/force-stop`,
+   * owner/admin-agent) — the THIRD rung, and the body /stop used to have: kill the
+   * session NOW and hold it down. It says NOTHING to the worker (the recipient is
+   * about to stop existing). Idempotent; unknown/released → 404. (T-ed79) */
+  forceStopWorker(id: string): Promise<OutsourceWorkerView>;
   /** WAKE a worker with no live session (`POST /api/outsource-workers/{id}/restart`,
    * owner/admin-agent) — clear the stop and re-dispatch. ⚠️ The owner-facing word
    * is 喚醒 since T-7526 (「重啟」 retired, one verb across both panels); the

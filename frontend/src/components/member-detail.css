@@ -680,16 +680,24 @@
     flex-basis: 100%;
     align-items: stretch;
   }
-  /* The row spans the card and its members share the width evenly, so 更改 ＋
-   * 停止 stay side by side instead of crushing into the right edge. Direct
-   * children (the 更改 button and the .member-actions group) each take a share;
-   * the group's own buttons then fill that share. */
+  /* One BAND per direct child, each spanning the card (owner 2026-08-21 turned
+   * the single 停止 into the three-rung ladder 停止 → 加速停止 → 強制停止, and
+   * four buttons with 4-character labels do not share a phone-width row: the
+   * ladder alone wants ~300px at its natural size and the card's inner width at
+   * 375 is 289). So: band 1 = 更改, band 2 = the ladder, its three rungs sharing
+   * the full card width on ONE line.
+   *
+   * Before this, `flex: 1 1 0` split the card in half between 更改 and the
+   * WHOLE ladder group, which then stacked 3-deep inside its half while `align-
+   * items: center` floated it against the single 更改 button — a ragged
+   * three-line block, and the rung an owner reaches for first (停止) ended up
+   * ABOVE 更改 rather than beside it. */
   .mp-identity__buttons {
     align-self: stretch;
-    justify-content: stretch;
+    align-items: stretch;
   }
   .mp-identity__buttons > * {
-    flex: 1 1 0;
+    flex: 1 1 100%;
     min-width: 0;
   }
   .mp-identity__buttons .member-actions {

@@ -552,10 +552,24 @@ export const httpApi: Api = {
     // POST /api/members/{id}/force-stop -> MemberDTO. Escalates a *stopping* member
     // to an IMMEDIATE kill: the server dispatches the robust STOP straight to the
     // warden (the warden SIGKILLs). It is NOT a shortcut past a countdown — the
-    // offboard arm runs no clock, so apart from the agent's own report_stopped this
-    // is the only thing that ever collects it. Takes no body. Caller refetches;
-    // presence surfaces stopped.
+    // server arms none on this arm. Three things end a soft offboard and this is
+    // the last rung: the agent's own report_stopped, the deadline the owner opens
+    // with 加速停止 (acceleratedStopMember), and this. Takes no body. Caller
+    // refetches; presence surfaces stopped.
     await client.POST("/api/members/{member_id}/force-stop", {
+      params: { path: { member_id: id } },
+    });
+  },
+
+  async acceleratedStopMember(id: string): Promise<void> {
+    // POST /api/members/{id}/accelerated-stop -> MemberDTO. Puts an ALREADY-OPEN
+    // wind-down on the server's stop.accelerated_grace_secs clock and tells the
+    // member. 409 when nothing is winding down, when there is no live session, or
+    // when the member was already cut off by 強制停止 — the 409 is the contract,
+    // not an edge case: it is what keeps this from being a second stop button.
+    // Takes no body. Caller refetches; the member keeps its presence and gains a
+    // refocus_deadline.
+    await client.POST("/api/members/{member_id}/accelerated-stop", {
       params: { path: { member_id: id } },
     });
   },
@@ -1308,11 +1322,17 @@ export const httpApi: Api = {
     // POST /api/outsource-workers/{id}/refocus -> OutsourceWorkerDTO (owner/admin-agent,
     // online-only 409). Graceful (T-ea82): stamps the handover + nudges the worker
     // to flush, then the server kills+re-spawns a fresh worker on the same task;
-    // the outsource_worker SSE delta also fans so the list refetches. The flush
-    // window is a flat StoppingTimeoutSecs (~120s) ceiling — workers do NOT go
-    // through recycleGraceFor, so unlike a member's owner-pressed refocus there
-    // is no soft window in front of it. It is a ceiling, not a duration: the
-    // collect fires on the worker's stopped report if that comes first.
+    // the outsource_worker SSE delta also fans so the list refetches.
+    //
+    // 🔴 THERE IS NO CEILING ON THIS ONE. Workers read the SAME judgement as
+    // members (wire.go's refocusDeadlineOf → recycleGraceFor → winddownKindFor,
+    // and autoHandoverWorker's in-flight arm), and 重新聚焦 is soft, so nothing
+    // collects this epoch on a clock: the drivers are the worker's own stopped
+    // report and the offline fallback. This comment used to claim "a flat
+    // StoppingTimeoutSecs (~120s) ceiling — workers do NOT go through
+    // recycleGraceFor", which has been false since T-fe5e and is more false now
+    // that every member cause except the two 加速停止 arms (context_high and the
+    // owner-pressed accelerated_stop) is soft too.
     const wire = unwrap(
       await client.POST("/api/outsource-workers/{id}/refocus", {
         params: { path: { id } },
@@ -1323,9 +1343,34 @@ export const httpApi: Api = {
 
   async stopWorker(id: string): Promise<OutsourceWorkerView> {
     // POST /api/outsource-workers/{id}/stop -> OutsourceWorkerDTO (owner/admin-agent).
-    // Kills the session and holds the worker down (presence "stopping"/"stopped").
+    // Since T-ed79 this ASKS: it holds the worker down and shows it the 下線程序,
+    // and the 收口 is the worker's own report_stopped. The kill moved to
+    // forceStopWorker below.
     const wire = unwrap(
       await client.POST("/api/outsource-workers/{id}/stop", {
+        params: { path: { id } },
+      }),
+    );
+    return toOutsourceWorker(wire);
+  },
+
+  async acceleratedStopWorker(id: string): Promise<OutsourceWorkerView> {
+    // POST /api/outsource-workers/{id}/accelerated-stop -> OutsourceWorkerDTO
+    // (owner/admin-agent). The MIDDLE rung: puts an ALREADY-OPEN wind-down on the
+    // clock and tells the worker. 409 when nothing is open.
+    const wire = unwrap(
+      await client.POST("/api/outsource-workers/{id}/accelerated-stop", {
+        params: { path: { id } },
+      }),
+    );
+    return toOutsourceWorker(wire);
+  },
+
+  async forceStopWorker(id: string): Promise<OutsourceWorkerView> {
+    // POST /api/outsource-workers/{id}/force-stop -> OutsourceWorkerDTO
+    // (owner/admin-agent). The THIRD rung: kill NOW, hold down, say nothing.
+    const wire = unwrap(
+      await client.POST("/api/outsource-workers/{id}/force-stop", {
         params: { path: { id } },
       }),
     );
@@ -1683,6 +1728,7 @@ export const httpApi: Api = {
       codex_notice_round?: number;
       codex_compaction_threshold?: number;
       monitoring_refresh_seconds?: number;
+      accelerated_grace_secs?: number;
       outsource_max_parallel?: number;
       doc_cap_chars_duty?: number;
       doc_cap_chars_insight?: number;
@@ -1710,6 +1756,7 @@ export const httpApi: Api = {
     if (patch.codexNoticeRound !== undefined) body.codex_notice_round = patch.codexNoticeRound;
     if (patch.codexCompactionThreshold !== undefined) body.codex_compaction_threshold = patch.codexCompactionThreshold;
     if (patch.monitoringRefreshSeconds !== undefined) body.monitoring_refresh_seconds = patch.monitoringRefreshSeconds;
+    if (patch.acceleratedGraceSecs !== undefined) body.accelerated_grace_secs = patch.acceleratedGraceSecs;
     if (patch.outsourceMaxParallel !== undefined) {
       body.outsource_max_parallel = patch.outsourceMaxParallel;
     }

@@ -309,6 +309,36 @@ func refocusDeadlineOf(refocusSince float64, cfg reconcileConfig, refocusOp stri
 	return refocusDeadline(refocusSince, grace)
 }
 
+// winddownDeadlineOf is the ONE expression for "when is this member collected",
+// across BOTH wind-down axes, and every face that shows a deadline reads it: the
+// wire field (MemberDTO.refocus_deadline) and the sentence the agent is handed
+// (offboardNoticeFor).
+//
+// Two axes exist because 停止 and 換手 are genuinely different operations, not
+// because anybody wanted two:
+//
+//   - 換手 (desired_state stays online) anchors on refocus_since;
+//   - 下線 (desired_state=offline) anchors on stopping_since and has no
+//     refocus_since at all, so refocusDeadlineOf alone answers 0 for it — which
+//     was correct while that arm could never carry a clock, and stopped being
+//     correct the moment the owner got a 加速停止 button that works there.
+//
+// 🔴 The AUTHORITY on whether there is a clock is winddownKindFor in both arms,
+// asked once, here. A second test for the accelerated cause would be a second
+// copy of the ruling — the exact split T-ed79 removed — and the harm is
+// asymmetric and silent either way: an announced deadline nobody honours makes
+// an agent cut its hand-off short; an unannounced one cuts the hand-off off.
+func winddownDeadlineOf(m Member, cfg reconcileConfig) float64 {
+	if m.DesiredState == DesiredStateOffline {
+		grace, clocked := recycleGraceFor(m.RefocusOp, cfg)
+		if !clocked || m.StoppingSince <= 0 || forcedEpochLive(m) {
+			return 0.0
+		}
+		return m.StoppingSince + grace
+	}
+	return refocusDeadlineOf(m.RefocusSince, cfg, m.RefocusOp)
+}
+
 // observedHost resolves a member's OBSERVED machine (handlers.observed_host):
 // SSE machine claim → self-reported telemetry.machine; a warden attributes to
 // its own id. Honest-empty "" when nothing is observed.
@@ -383,11 +413,13 @@ func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unr
 		RefocusSince:     m.RefocusSince,
 		RefocusOp:        m.RefocusOp,
 		// The grace this member's epoch is ACTUALLY collected on, and 0 when
-		// nothing collects it on time at all — an owner-pressed 重新聚焦 runs no
-		// clock (owner 2026-08-19), so the cockpit must show NO deadline rather
-		// than a time the owner would watch pass with nothing happening. Reading
-		// RecycleGrace straight would report exactly that kind of ceiling.
-		RefocusDeadline: refocusDeadlineOf(m.RefocusSince, s.reconcileCfg, m.RefocusOp),
+		// nothing collects it on time at all — which since T-ed79 is EVERY cause
+		// except the two 加速停止 arms (context_high and accelerated_stop), not
+		// just the owner-pressed 重新聚焦 this comment used to name. The cockpit
+		// must show NO deadline rather than a time the owner would watch pass with
+		// nothing happening. Reading RecycleGrace straight would report exactly
+		// that kind of ceiling, for most of the closed set.
+		RefocusDeadline: winddownDeadlineOf(m, s.reconcileConfigLive()),
 		LastOp:          m.LastOp,
 		LastOpOK:        m.LastOpOK,
 		LastOpLog:       m.LastOpLog,

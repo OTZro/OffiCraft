@@ -1716,21 +1716,27 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Force-stop: robust STOP now. On the offboard arm this is the ONLY thing that ever collects the member -- nothing times out.
+         * Force-stop: robust STOP now. On the offboard arm the server starts no clock of its own -- collection is the agent's report_stopped, the deadline the owner opens with 加速停止, or this.
          * @description Force-stop a member: IMMEDIATELY kill the live session.
          *
-         *     🔴 This is NOT a shortcut past a countdown — there is no countdown to shortcut.
+         *     🔴 This is NOT a shortcut past a countdown the SERVER started — it starts none.
          *     On the 下線 arm (``desired_state=offline`` on a still-online member) the reconcile
-         *     machine runs NO clock at all: ``decideDown`` returns decisionNone for as long as
+         *     machine runs NO clock of its own: ``decideDown`` returns decisionNone for as long as
          *     the member stays online, so a member whose agent never reports stopped is NEVER
          *     collected by the server. Owner ruling rc-27d1710174dd
          *     (「不要兜底：只有你按強制下線才收它」) — the escalation is deliberately his, not
          *     a timer's, because the notice the agent was shown promises no deadline.
          *
-         *     So there are exactly two things that end a soft offboard: the agent's own
-         *     ``report_stopped`` (that call dispatches the robust STOP itself), or THIS endpoint.
-         *     If neither happens the member stays in *stopping* indefinitely, which is the state
-         *     the cockpit surfaces this button in.
+         *     So there are exactly THREE things that end a soft offboard: the agent's own
+         *     ``report_stopped`` (that call dispatches the robust STOP itself); the deadline the
+         *     owner opens by pressing 加速停止 (``POST /api/members/{member_id}/accelerated-stop``,
+         *     the middle rung — it re-stamps ``stopping_since`` and writes
+         *     ``refocus_op=accelerated_stop``, and ``decideDown`` then collects at
+         *     ``stopping_since`` + ``stop.accelerated_grace_secs``); or THIS endpoint. That clock
+         *     is still the OWNER's, not the server's — nothing arms it unless he presses the
+         *     button, which is why it does not reopen rc-27d1710174dd. If none of the three
+         *     happens the member stays in *stopping* indefinitely, which is the state the cockpit
+         *     surfaces this button in.
          *
          *     ``stop_deadline`` / ``stop_grace`` still exist in the reconcile store and config,
          *     but the arm that consumes them is guarded by ``SoftOffboardGrace == 0`` and
@@ -1750,6 +1756,34 @@ export interface paths {
          *     fans out on the intent write.
          */
         post: operations["handle_force_stop_member_api_members__member_id__force_stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/members/{member_id}/accelerated-stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 加速停止: put an ALREADY-OPEN wind-down on the stop.accelerated_grace_secs clock and tell the member. 409 if nothing is winding down -- press 停止 first. Middle rung of 停止 -> 加速停止 -> 強制停止.
+         * @description 加速停止 (accelerated stop) — the MIDDLE rung of the owner's three-step escalation 停止 → 加速停止 → 強制停止 (owner 2026-08-21).
+         *
+         *     停止 asks the member to work its offboard sequence and waits INDEFINITELY: nothing on the server ever collects it (owner ruling rc-27d1710174dd). 強制停止 kills the session on the spot and deliberately says nothing at all. This endpoint is the rung between them: it puts the wind-down that is ALREADY OPEN on a clock, and TELLS the member — the same write fans an offboard notice whose sentence now quotes a deadline.
+         *
+         *     It does NOT open a wind-down. A member that has not been asked to stop is a 409: press 停止 (deactivate) or 重新聚焦 (refocus) first, which is what makes this an ESCALATION rather than a second, harsher stop button. It also requires a live session (409) — there is nothing to accelerate on a member nobody is listening from — and refuses a member already cut off by 強制停止 (409): that session is not working a close-out, so a deadline would be addressed to nobody.
+         *
+         *     The grace is ``stop.accelerated_grace_secs`` (default 120 s), the SAME value the second context threshold uses — one setting for both clocked causes, so the automatic and the manual arm can never count different seconds. It runs from THIS press, not from an earlier 停止: the handler re-stamps ``stopping_since`` (or ``refocus_since`` on the 換手 arm) as it writes ``refocus_op=accelerated_stop``. When the deadline lapses the ordinary reconcile robust STOP collects the member; the agent's own ``report_stopped`` still ends it earlier, and 強制停止 still ends it immediately.
+         *
+         *     RBAC: route-table ``requires="admin_agent"`` — owner token or admin-role assistant; an ordinary agent → 403. A ``member`` delta fans out on the write.
+         */
+        post: operations["handle_accelerated_stop_member_api_members__member_id__accelerated_stop_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2164,6 +2198,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/outsource-workers/{id}/force-stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 強制停止 an outsource worker: kill the session NOW and hold it down; says nothing to it. Third rung of 停止 -> 加速停止 -> 強制停止.
+         * @description 強制停止 an outsource worker — the THIRD rung of the owner's escalation 停止 → 加速停止 → 強制停止 (T-ed79, owner 2026-08-21 「強制殺移到第三顆按鈕」) and the worker twin of ``force_stop_member``.
+         *
+         *     This is the body ``POST /api/outsource-workers/{id}/stop`` used to have, moved to its own button rather than removed: set ``desired_state='offline'``, clear any in-flight wind-down, stamp ``forced_stop_at`` + ``stopping_since`` and kill the session IMMEDIATELY, without re-dispatching.
+         *
+         *     It sends the worker NOTHING. The recipient is about to stop existing, so a sentence meant to change its behaviour has no reader — the same ruling ``force_stop_member`` carries — and ``forced_stop_at`` is what enforces that silence (``forcedEpochLive`` suppresses the offboard notice). Both anchors are stamped together because that predicate requires ``forced_stop_at >= stopping_since``: writing one without the other leaves a worker that had already announced its own wind-down still reading as 'working its close-out', which is the arm that speaks.
+         *
+         *     No online gate and no wind-down gate: a worker whose session is already gone still needs its intent held down and the record written. Idempotent. 404 unknown/released. Floor admin_agent (route requires=admin_agent), the same floor as the other worker lifecycle verbs; a plain agent is a flat 403.
+         */
+        post: operations["handle_force_stop_outsource_worker_api_outsource_workers__id__force_stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/outsource-workers/{id}/model": {
         parameters: {
             query?: never;
@@ -2174,8 +2234,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Change (換 model) an outsource worker's model/effort (owner/admin agent).
-         * @description Change (換 model) an outsource worker's model + effort (T-f190 lifecycle), the worker twin of the member model/effort edit. Persists the new model (blank ⇒ launcher default) and effort; when the worker is ACTIVE + online it kills+respawns so the new model takes effect NOW, otherwise (assigned/stopped) it only persists — the next spawn/restart bakes it in. 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.
+         * Change (換 model) an outsource worker's model/effort (same floor as the staff model edit).
+         * @description Change (換 model) an outsource worker's model + effort (T-f190 lifecycle), the worker twin of the member model/effort edit. Persists the new model (blank ⇒ launcher default) and effort; when the worker is ACTIVE + online AND a value actually CHANGED it opens a hand-over so the new model takes effect on the next session, otherwise (assigned/stopped, or nothing changed) it only persists — the next spawn/restart bakes it in. Re-saving the values a worker is already running on costs it nothing, the same old-against-new compare the staff face has always done. 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor machine (route requires=machine) since T-ed79, owner 2026-08-21: changing a model is the SAME act on both sides of the roster, so it carries the same floor as the staff face (PATCH /api/members/{member_id}, kept at the machine floor by owner 2026-07-27). A plain agent may call it. It is the one T-6020 row that left the admin_agent floor; refocus/relocate/stop/restart did not. Exposed as an MCP tool since T-6020.
          */
         post: operations["handle_set_outsource_worker_model_api_outsource_workers__id__model_post"];
         delete?: never;
@@ -2195,9 +2255,35 @@ export interface paths {
         put?: never;
         /**
          * Refocus (換手) an outsource worker's context (owner/admin agent, online-only else 409).
-         * @description Refocus (換手) an outsource worker (T-32e1): the worker twin of refocus_member. Stamps refocus_since, then kills the current session and re-spawns it so a FRESH worker picks the SAME bound task back up from its task plan / step notes (a worker has no member fold — continuity lives in the task). ONLINE-ONLY: 409 unless the worker is active with a live session; 409 for a stopped worker (restart first); 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.
+         * @description Refocus (換手) an outsource worker (T-32e1): the worker twin of refocus_member. Stamps refocus_since, then kills the current session and re-spawns it so a FRESH worker picks the SAME bound task back up from its task plan / step notes (a worker has no member fold — continuity lives in the task). ONLINE-ONLY: 409 unless the worker is active with a live session; 409 for a stopped worker (restart first); 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. ⚠️ T-ed79 moved ONE of the T-6020 four off this floor — set_outsource_worker_model, owner 2026-08-21 — and this row was NOT part of that ruling. Exposed as an MCP tool since T-6020.
          */
         post: operations["handle_refocus_outsource_worker_api_outsource_workers__id__refocus_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/outsource-workers/{id}/accelerated-stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 加速停止 an outsource worker: put its ALREADY-OPEN wind-down (a 停止 or a 換手) on the stop.accelerated_grace_secs clock and tell it. 409 if none is open.
+         * @description 加速停止 for an outsource worker — the symmetric twin of ``accelerated_stop_member`` (owner 2026-08-21, 停止 → 加速停止 → 強制停止).
+         *
+         *     It puts a wind-down the worker is ALREADY inside on the ``stop.accelerated_grace_secs`` clock and tells it, by stamping ``refocus_op=accelerated_stop`` on the open handover epoch and re-stamping ``refocus_since`` from THIS press. The clock, the wire deadline and the sentence all come from the one ``winddownKindFor`` judgement members use — there is no separate worker rule.
+         *
+         *     🔴 IT COVERS BOTH ARMS since T-ed79, because ``POST /api/outsource-workers/{id}/stop`` is now itself a close-out that waits. On the 下線 arm (``desired_state=offline`` + ``stopping_since``) it re-stamps ``stopping_since`` from THIS press; on the 換手 arm (desired online + ``refocus_since``) it re-stamps ``refocus_since``. It used to 409 on a stopped worker, which was right while 停止 killed on the spot and would be a DEAD MIDDLE RUNG now.
+         *
+         *     409 when the worker is not online, is released, has no wind-down open, or was force-stopped — an escalation with nothing to escalate is a mistake, not a stop.
+         */
+        post: operations["handle_accelerated_stop_outsource_worker_api_outsource_workers__id__accelerated_stop_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2215,7 +2301,7 @@ export interface paths {
         put?: never;
         /**
          * Relocate an outsource worker to a machine (admin-gated).
-         * @description Relocate an outsource worker to a machine (T-f190): the owner cockpit's 改機器 operation, the worker twin of member activate's machine bind. Writes desired_machine_id, kills the current session, and clears pacing so the next scheduler tick re-spawns on the chosen machine — the same 殺舊 session + 清 pacing + 讓下一 tick 重生 semantics the shared-FSM zombie-takeover uses, WITHOUT touching lifecycle (the worker stays assigned/active). Admin-gated since P7c (requires=admin_agent, the exact member relocate floor).
+         * @description Relocate an outsource worker to a machine (T-f190): the owner cockpit's 改機器 operation, the worker twin of the member relocate. Writes desired_machine_id immediately, then — since T-98f4 — hands the worker over GRACEFULLY rather than killing it on the spot: a LIVE session is told to wind down and keeps running on the OLD machine until it answers report_stopped (or the owner force-stops it); the kill and the re-spawn onto the chosen machine happen at that 收口. There is no deadline on that wait. A worker with no live session to flush (offline, or already collected) takes the immediate 殺舊 session + 清 pacing + 重生 path instead. Either way lifecycle is untouched (the worker stays assigned/active) — a relocate is a placement change, not a state change. ⚠️ RETRACTED, not quietly deleted: until T-98f4 this description promised an unconditional immediate kill followed by a re-spawn on the next scheduler tick. That claim stopped being true when the verb moved onto the graceful funnel, and it stood here unread for the whole time in between because nothing in the suite ever compared it against the code. Admin-gated since P7c (requires=admin_agent, the exact member relocate floor).
          */
         post: operations["handle_relocate_outsource_worker_api_outsource_workers__id__relocate_post"];
         delete?: never;
@@ -2234,8 +2320,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Restart (重啟) an outsource worker that has no live session (owner/admin agent; 409 only when it is actually alive).
-         * @description Restart (重啟) an outsource worker (T-f190 lifecycle), the inverse of stop: set desired_state back to 'online' and re-dispatch (重啟 = 再 dispatch, a fresh worker_start onto the pinned/preferred machine). The guard asks whether the worker is ALIVE, not whether anyone pressed stop (T-7526): 409 only when it is BOTH not held down (desired_state != offline) AND currently online. A worker whose session died on its own keeps desired_state=online and is restartable — it used to be a 409, which left the owner with no way to revive it at all. 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.
+         * Restart (重啟) an outsource worker (owner/admin agent; a live worker is displaced, not refused).
+         * @description Restart (重啟) an outsource worker (T-f190 lifecycle), the inverse of stop: set desired_state back to 'online' and re-dispatch (重啟 = 再 dispatch, a fresh worker_start onto the pinned/preferred machine). There is NO over-spawn guard any more (T-ed79, owner 2026-08-21 「往正職靠：外包也不擋」): a live worker is no longer refused, because 活化 on a live STAFF member is not refused either and the two verbs were ruled to behave the same. Pressing it on a running worker DISPLACES that session — the old one is killed before the new one is dispatched, and the warden's own local clobber-guard refuses to stomp a session that is still there — so it can never become a second copy. What the 409 used to tell you is now a receipt on the row instead of a refusal: last_op_reason carries session_alive when the press found a live session. It used to 409 whenever the worker was alive, and before T-7526 whenever desired_state was merely online, which left a worker whose session died on its own with no way to be revived at all. 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. ⚠️ T-ed79 moved ONE of the T-6020 four off this floor — set_outsource_worker_model, owner 2026-08-21 — and this row was NOT part of that ruling. Exposed as an MCP tool since T-6020.
          */
         post: operations["handle_restart_outsource_worker_api_outsource_workers__id__restart_post"];
         delete?: never;
@@ -2254,8 +2340,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Stop (停止) an outsource worker (owner/admin agent; kill + hold down).
-         * @description Stop (停止) an outsource worker (T-f190 lifecycle): set desired_state='offline' (a direct mirror of member.desired_state — which makes every scheduler auto-revival path skip it: the shared reconcile-FSM rescue never revives an owner-held-down worker), clear any in-flight refocus, and kill the session WITHOUT re-dispatching. The worker projects presence 'stopping'/'stopped' (honest, never fake-green); the bound task stays in its own status. Idempotent. 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.
+         * Stop (停止) an outsource worker: ask it to work its 下線程序 and wait for its own report_stopped -- no kill, no deadline (owner/admin agent).
+         * @description Stop (停止) an outsource worker — a GRACEFUL CLOSE-OUT since T-ed79 (owner 2026-08-21 「往正職靠：外包那顆改成優雅停止，強制殺移到第三顆按鈕」), the worker twin of a member deactivate. It sets desired_state='offline' (a direct mirror of member.desired_state — which makes every scheduler auto-revival path skip it: the shared reconcile-FSM rescue never revives an owner-held-down worker), stamps stopping_since, clears any in-flight refocus epoch, fans the 下線程序 notice at the worker's OWN session and RETURNS. It does NOT kill: the 收口 is the worker's own report_stopped, exactly as on the staff 下線 arm, and there is NO deadline unless the owner presses 加速停止 (rc-27d1710174dd 「不要兜底」). It does NOT stamp forced_stop_at — that anchor belongs to force-stop, and it is what keeps THAT verb silent. An OFFLINE worker (no session to hear the notice) takes the immediate kill instead. The worker projects presence 'stopping'/'stopped' (honest, never fake-green); the bound task stays in its own status. Idempotent. 404 unknown/released. Escalate with POST /api/outsource-workers/{id}/accelerated-stop, then POST /api/outsource-workers/{id}/force-stop. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. ⚠️ T-ed79 moved ONE of the T-6020 four off this floor — set_outsource_worker_model, owner 2026-08-21 — and this row was NOT part of that ruling. Exposed as an MCP tool since T-6020.
          */
         post: operations["handle_stop_outsource_worker_api_outsource_workers__id__stop_post"];
         delete?: never;
@@ -5656,13 +5742,13 @@ export interface components {
             presence: string;
             /**
              * Refocus Deadline
-             * @description Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace). ZERO CARRIES TWO MEANINGS, and a client that reads it as one of them will be wrong about the other: no handover is in flight, OR a handover is in flight that NOTHING collects on a clock at all — an owner-pressed ``refocus`` (owner 2026-08-19), whose deadline would otherwise be a time the cockpit renders and then watches pass. ``refocus_op`` is what tells the two apart. Rendering no deadline is correct for both. Derived at read time, never stored. It exists so a client can say WHEN a pending launch change takes effect at the latest without hard-coding a server constant; the collection fires the instant the agent answers ``report_stopped``, so this is a CEILING, not a prediction (T-7f28). Additive-optional.
+             * @description Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace). ZERO CARRIES TWO MEANINGS, and a client that reads it as one of them will be wrong about the other: no handover is in flight, OR a handover is in flight that NOTHING collects on a clock at all — which is now the NORMAL case rather than a carve-out: every cause except ``context_high`` and ``accelerated_stop`` is collected only by the agent's own ``report_stopped`` or by the owner pressing force-stop, and carries no deadline (owner 2026-08-21). ``refocus_op`` is what tells the two apart. Rendering no deadline is correct for both, and the sentence a client shows for an in-flight no-clock handover must not quote a time at all. Derived at read time, never stored. It exists so a client can say WHEN a pending launch change takes effect at the latest without hard-coding a server constant; the collection fires the instant the agent answers ``report_stopped``, so this is a CEILING, not a prediction (T-7f28). Additive-optional.
              * @default 0
              */
             refocus_deadline: number;
             /**
              * Refocus Op
-             * @description Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. One of ``relocate`` (machine change), ``runtime/model`` (runtime / model / effort change), ``context_high`` (automatic context-pressure handover), ``refocus`` (owner-pressed refocus) or ``restart_self`` (agent-requested). Stamped and cleared in lockstep with ``refocus_since``. WAS: the cause lived only in a server log line, so a client could only say 'last refocus' — which reads as history — where it meant 'winding down right now so your change can take effect' (T-7f28). Additive-optional.
+             * @description Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. One of ``relocate`` (machine change), ``runtime/model`` (runtime / model / effort change), ``context_notice`` (FIRST context-pressure threshold), ``context_high`` (SECOND context-pressure threshold), ``refocus`` (owner-pressed refocus), ``restart_self`` (agent-requested), ``token_expiry`` (the session's agent token is inside its last hour — the close-out is opened while the calls that file it still work) or ``accelerated_stop`` (the owner pressed 加速停止 on a wind-down that was already open). Stamped and cleared in lockstep with ``refocus_since``. THE CAUSE ALSO SAYS WHETHER ANYTHING IS ON A CLOCK: ``context_high`` and ``accelerated_stop`` are the TWO causes force-collected on a deadline, and they share one grace (``stop.accelerated_grace_secs``); every other cause is collected by the agent's own ``report_stopped`` or by the owner pressing force-stop and carries none (owner 2026-08-21). A row can be promoted ``context_notice`` → ``context_high`` in place when context keeps climbing, which restamps ``refocus_since``. WAS: the cause lived only in a server log line, so a client could only say 'last refocus' — which reads as history — where it meant 'winding down right now so your change can take effect' (T-7f28). Additive-optional.
              * @default
              */
             refocus_op: string;
@@ -6238,14 +6324,29 @@ export interface components {
              */
             presence: string;
             /**
+             * Activation Pending
+             * @description Set true ONLY on the worker restart response when nothing was actually dispatched — the worker twin of ``MemberDTO.activation_pending`` (T-ed79 parity #12). The restart intent is persisted and the cadence retries, but no worker_start went out (no kill target for the session it must replace, an unreachable warden, an unbuildable frame). Without it a 重啟 against a machine that cannot take the worker answers a clean 200 with zero signal, which is indistinguishable from one that started — the exact bug T-ba62 named on the staff side. Read ``last_op_reason`` for WHICH cause. Absent/null on every other worker read.
+             */
+            activation_pending?: boolean | null;
+            /**
+             * Relocation Deferred
+             * @description Set true on the worker relocate response when the move was DELIBERATELY deferred: the worker is live with uncollected state, so the server opened a graceful wind-down instead of dispatching now. The move lands when the worker answers report_stopped. This is the companion that disambiguates ``relocation_pending``, which is true for BOTH this case and a genuinely undispatched move: a consumer must NOT raise a "nothing was dispatched" alert while this field is true. Absent/null on every other worker read (T-ed79 parity #5).
+             */
+            relocation_deferred?: boolean | null;
+            /**
+             * Relocation Pending
+             * @description Set true ONLY on the worker relocate response when the owner-pinned move is scheduled but has not landed yet — the worker twin of ``MemberDTO.relocation_pending`` (T-ed79 parity #5). TWO causes, which this field does not distinguish: (a) the kill+respawn that moves a worker with nothing to flush could not be dispatched (no kill target, or the warden would not take the start) — the cadence retries; (b) a graceful wind-down window was opened, so nothing has been dispatched yet BY DESIGN. Read ``relocation_deferred`` to tell (b) apart from (a) — only (a) is a failure worth alerting on. Absent/null on every other worker read.
+             */
+            relocation_pending?: boolean | null;
+            /**
              * Refocus Deadline
-             * @description Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace), 0 when none is in flight. Derived at read time, never stored. A CEILING, not a prediction: the collection fires the instant the worker answers ``report_stopped`` (T-7f28). Additive-optional.
+             * @description Epoch seconds by which the in-flight handover stamped in ``refocus_since`` is force-collected (``refocus_since`` + the reconcile recycle grace). ZERO CARRIES TWO MEANINGS, and a client that reads it as one of them will be wrong about the other: no handover is in flight, OR a handover is in flight that NOTHING collects on a clock at all — which is now the NORMAL case rather than a carve-out: every cause except ``context_high`` and ``accelerated_stop`` is collected only by the agent's own ``report_stopped`` or by the owner pressing force-stop, and carries no deadline (owner 2026-08-21). ``refocus_op`` is what tells the two apart. Rendering no deadline is correct for both, and the sentence a client shows for an in-flight no-clock handover must not quote a time at all. Workers read the SAME judgement as members — there is no separate worker rule. Derived at read time, never stored. A CEILING, not a prediction: the collection fires the instant the worker answers ``report_stopped`` (T-7f28). Additive-optional.
              * @default 0
              */
             refocus_deadline: number;
             /**
              * Refocus Op
-             * @description Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. Same closed set as ``MemberDTO.refocus_op``. Stamped and cleared in lockstep with ``refocus_since`` (T-7f28). Additive-optional.
+             * @description Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. A SUBSET of ``MemberDTO.refocus_op``: ``relocate``, ``runtime/model``, ``refocus``, ``restart_self``, ``context_high`` and ``accelerated_stop``. ``context_notice`` and ``token_expiry`` do NOT appear on this DTO — an outsource worker has only the second context threshold, and the token-expiry pass is staff-only. Stamped and cleared in lockstep with ``refocus_since`` (T-7f28). Additive-optional.
              * @default
              */
             refocus_op: string;
@@ -7484,6 +7585,12 @@ export interface components {
              */
             monitoring_refresh_seconds: number;
             /**
+             * Accelerated Grace Secs
+             * @description 加速停止 grace, in seconds (10 through 3600): how long a CLOCKED wind-down waits before the collection is forced. ONE value for every clocked cause — the SECOND context threshold (refocus_op=context_high) and the owner-pressed 加速停止 (refocus_op=accelerated_stop) read it through the same recycleGraceFor pair, so the countdown the agent is quoted and the deadline the tick collects on can never be two different numbers. Soft causes stay unclocked whatever this says.
+             * @default 120
+             */
+            accelerated_grace_secs: number;
+            /**
              * Onboarding
              * @description The first-run onboarding report (T-ba62), or null when onboarding never ran on this database. Governance-gated (owner/admin agent) by virtue of living on GET /api/settings — a failed step's detail can carry local paths, so it must never reach the PUBLIC /api/auth/status probe.
              */
@@ -7648,6 +7755,11 @@ export interface components {
              * @description Minimum interval between monitoring and machine refreshes, in seconds. Must be 1 through 60.
              */
             monitoring_refresh_seconds?: number | null;
+            /**
+             * Accelerated Grace Secs
+             * @description 加速停止 grace, in seconds. Must be 10 through 3600. Applies to every CLOCKED wind-down cause at once (the second context threshold and the owner-pressed 加速停止); it can never put a clock on a soft cause.
+             */
+            accelerated_grace_secs?: number | null;
             /**
              * Org Name
              * @description The studio display name (T-d693) — trimmed, max 80 runes; "" clears it back to the localized default. A value longer than 80 runes is a 422.
@@ -12216,6 +12328,55 @@ export interface operations {
             };
         };
     };
+    handle_accelerated_stop_member_api_members__member_id__accelerated_stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
     handle_refocus_member_api_members__member_id__refocus_post: {
         parameters: {
             query?: never;
@@ -13268,6 +13429,55 @@ export interface operations {
             };
         };
     };
+    handle_force_stop_outsource_worker_api_outsource_workers__id__force_stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutsourceWorkerDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
     handle_set_outsource_worker_model_api_outsource_workers__id__model_post: {
         parameters: {
             query?: never;
@@ -13322,6 +13532,55 @@ export interface operations {
         };
     };
     handle_refocus_outsource_worker_api_outsource_workers__id__refocus_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutsourceWorkerDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_accelerated_stop_outsource_worker_api_outsource_workers__id__accelerated_stop_post: {
         parameters: {
             query?: never;
             header?: never;

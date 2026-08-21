@@ -306,7 +306,10 @@ describe("WorkerDetailPanel — honest presence states (A案 P6 member vocabular
     // released worker, so any of them would be a dead affordance.
     expect(queryTestId(document.body, "worker-detail-change")).toBeNull();
     expect(queryTestId(document.body, "worker-detail-wake")).toBeNull();
-    expect(queryTestId(document.body, "worker-detail-stop")).toBeNull();
+    // T-ed79: the stop rung is a MemberActionButtons cell now, so the id that
+    // proves its absence changed with it. A stale `worker-detail-stop` here
+    // would be a vacuously-true assertion about an id nothing renders any more.
+    expect(queryTestId(document.body, "member-action-stop")).toBeNull();
   });
 
   it("released vs merely OFFLINE are told apart, though both project the same grey dot", async () => {
@@ -706,19 +709,32 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
     await findByTestId("worker-detail-refocus-note");
   });
 
-  it("stop → the dot flips to 已停止 and the row swaps 更改／停止 for 喚醒", async () => {
+  // 🔴 REWRITTEN TWICE FOR T-ed79. First for 「往正職靠：外包那顆改成優雅停止，
+  // 強制殺移到第三顆按鈕」 — 停止 asks the worker to work its 下線程序, so the
+  // worker stays alive in 停止中 and the row keeps offering what can still end
+  // the wait. Then for owner 2026-08-21 「不是一開始就顯示三個按鈕」「按了才出現」:
+  // a live worker nobody has asked to stop shows ONE rung, and the escalations
+  // are REVEALED — so this now walks the ladder instead of reading it off a
+  // fixed row.
+  it("停止 → the worker goes 停止中 and 加速停止 is REVEALED, 強制停止 still is not", async () => {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
       mkWorker({ id: "ow-1", taskId: "t-1", presence: "online" }),
     );
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    // Live: 更改 ＋ 停止 side by side (owner 2026-07-31 「左右並排」).
+    // Live: 更改 ＋ the ONE rung that applies, side by side (owner 2026-07-31
+    // 「左右並排」), and the ladder is the SAME component the member panel
+    // renders, so the labels and the order are 正職's by construction.
     const change = await findByTestId("worker-detail-change");
-    const stop = await findByTestId("worker-detail-stop");
-    expect(stop.textContent).toBe(zh.workerDetail.stop);
-    expect(change.parentElement).toBe(stop.parentElement);
-    expect(stop.parentElement?.className).toContain("mp-identity__buttons");
-    // 更改 is written FIRST so the row reads 更改 ＋ 停止, in that order.
+    const stop = await findByTestId("member-action-stop");
+    expect(stop.textContent).toBe(zh.lifecycle.action.stop);
+    // 「按了才出現」 — absent, not greyed out.
+    expect(queryTestId(document.body, "member-action-accelerated-stop")).toBeNull();
+    expect(queryTestId(document.body, "member-action-force-stop")).toBeNull();
+    expect(stop.parentElement?.parentElement?.className).toContain(
+      "mp-identity__buttons",
+    );
+    // 更改 is written FIRST so the row reads 更改 ＋ 停止 → 加速停止 → 強制停止.
     expect(
       change.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -727,14 +743,63 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
     await waitFor(async () =>
       expect(
         (await findByTestId("worker-detail-header-dot")).getAttribute("aria-label"),
+      ).toBe(zh.office.presence.stopping),
+    );
+    // The escalation now exists — it is the only thing that can end a wait with
+    // no deadline — and it stays for the whole close-out. The rung ABOVE it
+    // still does not: a stop that has not been put on a clock is not a kill
+    // waiting to happen.
+    await findByTestId("member-action-accelerated-stop");
+    expect(queryTestId(document.body, "member-action-force-stop")).toBeNull();
+    expect(queryTestId(document.body, "worker-detail-wake")).toBeNull();
+  });
+
+  // 強制停止 is the rung that still kills, and it is the only one behind a
+  // confirm — the click alone must reach no endpoint. Reaching it at all now
+  // means walking the whole ladder, which is the point: 「強制停止應該是加速停止
+  // 按下的狀態才可以按」.
+  it("強制停止 appears only after 加速停止, ASKS FIRST, then kills and collapses the row to 喚醒", async () => {
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({ id: "ow-1", taskId: "t-1", presence: "online" }),
+    );
+    const force = vi.spyOn(api, "forceStopWorker");
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    // Rung 1 → rung 2. `waitFor` on the ENABLED state is not incidental: a rung
+    // that has just appeared spends LADDER_ARM_MS inert so a repeat click on the
+    // rung below cannot escalate for the owner (MemberActionButtons).
+    fireEvent.click(await findByTestId("member-action-stop"));
+    await waitFor(async () =>
+      expect(
+        (await findByTestId("member-action-accelerated-stop")).hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    // Still no kill button — the wind-down is open but not on a clock.
+    expect(queryTestId(document.body, "member-action-force-stop")).toBeNull();
+
+    // Rung 2 → rung 3.
+    fireEvent.click(await findByTestId("member-action-accelerated-stop"));
+    await waitFor(async () =>
+      expect(
+        (await findByTestId("member-action-force-stop")).hasAttribute("disabled"),
+      ).toBe(false),
+    );
+
+    fireEvent.click(await findByTestId("member-action-force-stop"));
+    await findByTestId("worker-detail-force-stop-confirm");
+    expect(force).not.toHaveBeenCalled();
+
+    fireEvent.click(await findByTestId("worker-detail-force-stop-confirm-btn"));
+    await waitFor(() => expect(force).toHaveBeenCalledWith("ow-1"));
+    await waitFor(async () =>
+      expect(
+        (await findByTestId("worker-detail-header-dot")).getAttribute("aria-label"),
       ).toBe(zh.office.presence.stopped),
     );
-    // …and the pair collapses to the ONE wake button.
     expect((await findByTestId("worker-detail-wake")).textContent).toBe(
       zh.lifecycle.action.spawn,
     );
-    expect(queryTestId(document.body, "worker-detail-change")).toBeNull();
-    expect(queryTestId(document.body, "worker-detail-stop")).toBeNull();
+    expect(queryTestId(document.body, "member-action-stop")).toBeNull();
   });
 
   it("喚醒 ASKS FIRST: it opens the settings dialog and reaches NO endpoint until confirmed", async () => {

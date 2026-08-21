@@ -385,7 +385,7 @@ func (s *apiServer) runOutsourceTick(now float64) {
 		// A refused live-worker kill (owner 停止/relocate toward a warden that
 		// dropped offline) is parked, never lost — re-fire it FIRST, before any
 		// branch below can re-spawn onto the same machine (P5a rework).
-		s.retryPendingWorkerStop(w.ID)
+		s.retryPendingWorkerStop(w.ID, now)
 		switch w.Status {
 		case WorkerStatusAssigned:
 			// Owner-explicit stop dominates every auto-revival (desired_state

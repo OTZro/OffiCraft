@@ -34,7 +34,7 @@ import { ModelEffortEditor } from "./ModelEffortEditor";
 import { presenceVisual } from "./LifecycleDot";
 import type { LifecycleVisualStatus } from "./LifecycleDot";
 import { PresenceBadge } from "./PresenceBadge";
-import { MemberActionButtons } from "./MemberActionButtons";
+import { MemberActionButtons, stopLadderStageOf } from "./MemberActionButtons";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -83,6 +83,12 @@ interface MemberDetailPanelProps {
   /** Graceful stop / cancel-wake → deactivateMember (desired_state=offline). Backs the
    * Stop (online) and Cancel (waking) actions. */
   onDeactivate?: () => void;
+  /** 加速停止 (the MIDDLE rung) → acceleratedStopMember. Puts the wind-down that
+   * is already open on the server's clock and tells the member. Offered only
+   * where the server will accept it (a member already *stopping*), and NOT gated
+   * behind a confirm: it is not a kill, the member still gets the grace and can
+   * still finish early. */
+  onAcceleratedStop?: () => void | Promise<void>;
   /** Force-stop (immediate kill) → forceStopMember. Backs the "Force stop" action
    * shown once the member is already *stopping*; the panel gates it behind a
    * confirm. May be async so the confirm can surface an in-flight state. */
@@ -102,6 +108,7 @@ export function MemberDetailPanel({
   onActivate,
   onRelocate,
   onDeactivate,
+  onAcceleratedStop,
   onForceStop,
   onRefocus,
   onRename,
@@ -124,6 +131,22 @@ export function MemberDetailPanel({
   // IMMEDIATE kill, so it opens this confirm before firing the force-stop endpoint.
   const [forceStopConfirm, setForceStopConfirm] = useState(false);
   const [forceStopBusy, setForceStopBusy] = useState(false);
+  // In-flight guard for the two rungs that fire on a single click, the worker
+  // panel's guard verbatim (WorkerDetailPanel's stopBusy). Without it a double
+  // click on 停止 sends deactivateMember twice, and the two rungs are a single
+  // escalation on a single row — one flag, so two of them can never look live
+  // at once. Force-stop keeps its own flag because it fires from the confirm
+  // dialog, not from the row.
+  const [stopBusy, setStopBusy] = useState(false);
+  async function runStopRung(fire?: () => void | Promise<void>) {
+    if (!fire || stopBusy) return;
+    setStopBusy(true);
+    try {
+      await fire();
+    } finally {
+      setStopBusy(false);
+    }
+  }
   async function confirmForceStop() {
     if (!onForceStop) return;
     setForceStopBusy(true);
@@ -858,21 +881,34 @@ export function MemberDetailPanel({
           )}
           <MemberActionButtons
             status={visual}
+            // 按了才出現 (owner 2026-08-21). The SAME reading 外包 uses, from the
+            // same function over the same wire fields — the two panels cannot
+            // disagree about which rung exists.
+            stage={stopLadderStageOf(member)}
             // Do not open a second settings flow while the first wake is in
             // flight. `waking` still renders Spawn as the recovery affordance,
             // but this local bridge keeps it honestly unavailable until the
             // activate result or server lifecycle settles.
             onSpawn={wakePendingActive || onlineMachines.length === 0 ? undefined : openSettings}
-            onCancel={onDeactivate}
-            onStop={onDeactivate}
+            onCancel={() => void runStopRung(onDeactivate)}
+            onStop={() => void runStopRung(onDeactivate)}
+            // The middle rung. No confirm: 加速停止 gives the member a deadline
+            // it is TOLD about and can still beat, so a second click costs
+            // nothing irreversible — unlike force-stop below.
+            onAcceleratedStop={
+              onAcceleratedStop
+                ? () => void runStopRung(onAcceleratedStop)
+                : undefined
+            }
             reasons={
               onlineMachines.length === 0
                 ? { spawn: t.machine.noOnlineMachine }
                 : undefined
             }
-            // In `stopping`, the Stop button IS force-stop → open the confirm first
-            // (an immediate kill; the offboard arm runs no clock, so this is the
-            // only escalation there is — see MemberActionButtons).
+            // The TOP rung — still behind a confirm, and it does not exist at
+            // all until the wind-down is on the clock (stage `accelerated`), so
+            // an impatient second click on 加速停止 cannot reach it (see
+            // MemberActionButtons' LADDER_ARM_MS note).
             onForceStop={
               onForceStop ? () => setForceStopConfirm(true) : undefined
             }

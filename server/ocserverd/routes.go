@@ -392,7 +392,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleForceStopMemberApiMembersMemberIdForceStopPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Force-stop: robust STOP now. On the offboard arm this is the ONLY thing that ever collects the member -- nothing times out.",
+			Summary:  "Force-stop: robust STOP now. On the offboard arm the server starts no clock of its own -- collection is the agent's report_stopped, the deadline the owner opens with 加速停止, or this.",
 			MCPTool:  "force_stop_member",
 		},
 		{
@@ -1644,9 +1644,16 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		{
 			// T-32e1/T-f190 worker lifecycle ops — owner mental model "外包只是
 			// 系統會幫我產生跟刪除的正職員工", so each reuses a member mechanism.
-			// T-6020 (owner 2026-07-26) gave all four the SAME admin_agent floor
-			// relocate already had in P7c — 外包對齊正職, one floor for the whole
-			// worker lifecycle. Plain agents remain 403 on every one.
+			// T-6020 (owner 2026-07-26) put FOUR of them at the SAME admin_agent
+			// floor relocate already had in P7c — 外包對齊正職, one floor for the
+			// worker lifecycle. Plain agents remain 403 on those.
+			//
+			// ⚠️ "all four" is what this note used to say, and since T-ed79 it is
+			// FALSE: /model left that floor (owner 2026-08-21, rc-376a41719e62 —
+			// the full ruling is on that row below). THREE of the T-6020 four are
+			// still here: refocus, stop, restart. /relocate is the fifth worker
+			// lifecycle row and it sits at admin_agent too, but it got there in
+			// P7c, not from this ruling.
 			Method:   "POST",
 			Path:     "/api/outsource-workers/{id}/refocus",
 			Handler:  w.HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost,
@@ -1661,7 +1668,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Stop (停止) an outsource worker: kill + hold down (owner/admin agent).",
+			Summary:  "Stop (停止) an outsource worker: ask it to work its 下線程序 and wait for its own report_stopped -- no kill, no deadline (owner/admin agent).",
 			MCPTool:  "stop_outsource_worker",
 		},
 		{
@@ -1670,16 +1677,39 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Restart (重啟) an outsource worker that has no live session (owner/admin agent; 409 only when it is actually alive).",
+			Summary:  "Restart (重啟) an outsource worker (owner/admin agent; a live worker is displaced, not refused).",
 			MCPTool:  "restart_outsource_worker",
 		},
+		// ⚠️ set_outsource_worker_model sits at the machine FLOOR since T-ed79,
+		// and it is the ONE T-6020 row that left the admin_agent floor. owner
+		// 2026-08-21 (rc-376a41719e62) was asked whether changing a worker's
+		// model is governance, and ruled, VERBATIM:
+		//
+		//	「如果原本正職可以改 model 外包就應該可以改，如果只有 mira 可以改，那就
+		//	 不變，正職跟外包一樣，mira 是特殊的意義，他代替 owner 執行高權限動作。」
+		//
+		// So the test is not "how dangerous does this look" — it is "what floor
+		// does the STAFF face of the same act sit at". PATCH /api/members/{id}
+		// (update_member) is at principalMachine and was itself examined and KEPT
+		// there by owner 2026-07-27 (T-5336, the note above that row). Changing a
+		// model is therefore office housekeeping on BOTH sides, and mira's
+		// admin_agent rank is reserved for acts the owner delegates, which this
+		// is not.
+		//
+		// 🔴 ONLY THIS ROW MOVED. refocus / relocate / stop / restart were already
+		// at the same floor as their staff twins before this ruling, and the
+		// ruling did not touch them — do not "finish the job" by lowering them.
+		//
+		// This note exists so the NEXT permission audit does not re-open the
+		// question, the way this one had to re-open T-5336's. Raising this row
+		// needs a fresh owner ruling, not a tidy-up commit.
 		{
 			Method:   "POST",
 			Path:     "/api/outsource-workers/{id}/model",
 			Handler:  w.HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost,
 			Auth:     authGated,
-			Requires: principalAdminAgent,
-			Summary:  "Change (換 model) an outsource worker's model/effort (owner/admin agent).",
+			Requires: principalMachine,
+			Summary:  "Change (換 model) an outsource worker's model/effort (same floor as the staff model edit).",
 			MCPTool:  "set_outsource_worker_model",
 		},
 		// ── Task manuals (M3) — agents create manuals + edit the CONTENT fields
@@ -1936,6 +1966,44 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Requires: principalAdminAgent,
 			Summary:  `Delete one custom theme; deleting the active one resets display_theme to "".`,
 			MCPTool:  "delete_theme",
+		},
+		// 🔴 APPENDED HERE, NOT BESIDE THE VERBS THEY ESCALATE (T-ed79). They read
+		// better next to /force-stop and /stop, and that is exactly where the first
+		// version of them was — which put accelerated_stop_member at route position
+		// 13 while its x-mcp.order was 118, and broke the ONE order shared by this
+		// table, spec/openapi.json's x-mcp.order and conformance/routes_manifest.json
+		// (test_tools_list_equals_frozen_snapshot_elementwise +
+		// test_catalog_hash_keys_off_tool_surface_only both go red on it, measured).
+		// The rule is stated in full at the custom-themes block above: x-mcp.order
+		// must be the consecutive range 0..N-1, so a NEW tool is appended or every
+		// tool after it is renumbered. The escalation ladder is a reading order for
+		// the OWNER, and it lives in the cockpit row (MemberActionButtons), not here.
+		{
+			Method:   "POST",
+			Path:     "/api/members/{member_id}/accelerated-stop",
+			Handler:  w.HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStopPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "加速停止: put an ALREADY-OPEN wind-down on the stop.accelerated_grace_secs clock and tell the member. 409 if nothing is winding down -- press 停止 first. Middle rung of 停止 -> 加速停止 -> 強制停止.",
+			MCPTool:  "accelerated_stop_member",
+		},
+		{
+			Method:   "POST",
+			Path:     "/api/outsource-workers/{id}/accelerated-stop",
+			Handler:  w.HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "加速停止 an outsource worker: put its ALREADY-OPEN wind-down (a 停止 or a 換手) on the stop.accelerated_grace_secs clock and tell it. 409 if none is open.",
+			MCPTool:  "accelerated_stop_outsource_worker",
+		},
+		{
+			Method:   "POST",
+			Path:     "/api/outsource-workers/{id}/force-stop",
+			Handler:  w.HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "強制停止 an outsource worker: kill the session NOW and hold it down; says nothing to it. Third rung of 停止 -> 加速停止 -> 強制停止.",
+			MCPTool:  "force_stop_outsource_worker",
 		},
 	}
 }

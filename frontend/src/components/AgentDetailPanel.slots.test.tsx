@@ -156,8 +156,12 @@ function mkPopulatedVM(): AgentDetailVM {
       machine: "→ Machine B",
     },
     refocusSince: 1,
+    // 🔴 refocus is 停止 (winddownKindFor), so the server derives
+    // refocus_deadline = 0 and the mapper maps 0 → null. This used to carry a
+    // non-zero deadline: harmless for what this file asserts, but it encoded a
+    // wire combination that is impossible both before and after T-ed79.
     refocusOp: "refocus",
-    refocusDeadline: 2,
+    refocusDeadline: null,
     lastOp: "wake",
     lastOpVerb: "wake",
     lastOpOk: true,

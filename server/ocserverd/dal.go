@@ -140,9 +140,12 @@ type Member struct {
 	StoppedSince  float64
 	RefocusSince  float64
 	// RefocusOp names the operation that opened the window RefocusSince stamps
-	// ("relocate" | "runtime/model" | "context_high" | "refocus" |
-	// "restart_self"), "" when none is in flight. Stamped and cleared in lockstep
-	// with RefocusSince — see refocusOp* in member_ownerop_winddown.go.
+	// ("relocate" | "runtime/model" | "context_notice" | "context_high" |
+	// "refocus" | "restart_self" | "token_expiry" | "accelerated_stop"), ""
+	// when none is in flight. Stamped and cleared in lockstep with RefocusSince.
+	// 🔴 This list is a COPY and nothing checks it: the closed set lives in
+	// refocusOp* (member_ownerop_winddown.go), which is where a new cause goes,
+	// and winddownKindFor is what decides what each one MEANS. Read those.
 	RefocusOp string
 	// ForcedStopAt is the durable record that a session was CUT OFF rather than
 	// collected (migrations/00057): unix seconds of the last force-stop, 0 when
