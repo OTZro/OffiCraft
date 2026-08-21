@@ -28,12 +28,13 @@ const {
 const NAME_M = uniqueName('Reply M');
 const TARGET = 'the sentence that gets quoted back';
 const ANSWER = 'answering that one';
-// Enough filler that the target is OFF SCREEN — not so the jump can make a
-// "scroll decision" (it no longer scrolls anything; see the 看原訊息 test below,
-// which asserts the thread does NOT move), but so that "the overlay shows the
-// original" cannot be satisfied by text the page was already displaying. There
-// is deliberately NO viewport assertion left in this file; the precondition that
-// IS asserted is that the overlay's body is longer than the 60-rune excerpt.
+// Enough filler that the target is OFF SCREEN, so that "the overlay shows the
+// original" cannot be satisfied by text the page was already displaying.
+//
+// ⚠️ NOTHING IN THIS FILE ASSERTS THAT THE THREAD STAYS PUT. The old
+// `not.toBeInViewport()` / `toBeInViewport()` pair was deleted along with the
+// scrolling and nothing was written to replace it, so re-introducing a scroll
+// would not turn this spec red.
 //
 // It stays comfortably INSIDE the client's page size (useChat loads
 // CHAT_PAGE_SIZE = 30 and only grows backwards when the owner scrolls up, which
@@ -145,14 +146,6 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     // 🔴 THIS USED TO BE A SCROLL, AND IT IS NOT ONE ANY MORE (owner ruling
     // 2026-08-21: 「全部統一就撈那一則顯示出來就好」). The control reads that one
     // message back from the server and opens it in the shared full-view overlay.
-    // The old assertions (`not.toBeInViewport()` then `toBeInViewport()`) are
-    // deleted rather than kept: the thread deliberately does not move now, so a
-    // viewport assertion would either be vacuous or wrong.
-    //
-    // The precondition that survives is a different one, and it is what makes
-    // the overlay assertion non-vacuous: the FULL body must be longer than the
-    // 60-rune excerpt the row already shows, so "the overlay opened on the
-    // original" cannot be satisfied by re-displaying text the page already had.
     const jump = quote.getByTestId('msg-quote-jump');
     await jump.focus();
     await jump.click();
@@ -382,7 +375,7 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     // test red for a reason it does not name.
     //
     // What this test is about is the BREAKPOINT'S AXIS, so the name is kept SHORT
-    // (~5 chars, ~21px) and the label's ~133px is the only variable left. Still
+    // (5 chars) and the jump label's width is the only variable left. Still
     // unique — `uniqueName` produces a 20-character name, which is exactly the
     // pressure this test must not measure, so it is built here instead of reused.
     const NAME_W = 'A' + Date.now().toString(36).slice(-4);
@@ -398,15 +391,9 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     });
     expect(posted.status(), await posted.text()).toBe(200);
 
-    // ENGLISH IS THE FIXTURE, not a variant. The Chinese CONTROL is ~58px
-    // (「看原訊息」; the retired 「跳到原訊息」 was ~69px), the English one is
-    // ~150px, and that width is the whole mechanism. A Chinese-only run walks
-    // straight past this.
-    //
-    // ⚠️ SAY WHICH BOX EACH FIGURE IS. The ~150px here and the ~133px above are
-    // not a disagreement: ~150px is the whole BUTTON (label + 2px gap + 12px
-    // chevron), ~133px is the LABEL alone. Measured in the CT harness at the
-    // same 11px: label 137px, button 151px.
+    // ENGLISH IS THE FIXTURE, not a variant. The English jump label is far wider
+    // than the Chinese one, and that width is the whole mechanism.
+    // A Chinese-only run walks straight past this.
     //
     // 🔴 localStorage ONLY, AND THAT IS DELIBERATE. The obvious alternative is to
     // PATCH `/api/settings { display_language: "en" }`, since the login reconcile
@@ -419,7 +406,7 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     // "en" (i18n/index.tsx), and an untouched studio has "", so the local cache
     // stands. The assertion below is what makes that a checked fact rather than
     // an assumption: if this ever stops working the test says so instead of
-    // quietly measuring the 69px Chinese label.
+    // quietly measuring the much narrower Chinese label.
     await page.goto('/');
     await page.evaluate((t) => {
       localStorage.setItem('oc_token', t);

@@ -1193,18 +1193,17 @@
  *
  * The story: the control was `flex: 0 0 auto` on the argument that a cut
  * 跳到原訊息 helps nobody. That was measured against the Chinese control (69px)
- * and failed on the English one ("Go to the original message", 154px) — those
- * two figures, here and everywhere else in this package, are the WHOLE BUTTON
- * (label + 2px gap + 12px chevron); the labels themselves measure 55px and
- * 140px. A control that refuses to give runs past the bubble's edge and under
- * `.chat__msg-actions`, which is absolutely positioned and paints on top of it.
+ * and failed on the English one ("Go to the original message", 154px) — both of
+ * those figures are the WHOLE BUTTON (label + 2px gap + 12px chevron), not the
+ * label alone. A control that refuses to give runs past the bubble's edge and
+ * under `.chat__msg-actions`, absolutely positioned and painting on top of it.
  * The repair was to make the button shrinkable (`flex: 0 10 auto`) with a 14px
  * floor (arrow + gap) and let the LABEL ellipsise inside it.
  *
  * 🔴 THAT REPAIR IS GONE, AND IT WAS MEASURED DEAD BEFORE IT WAS DELETED. Once
  * the label collapses to its arrow on a narrow PANE (the `@container` rule
  * below), there is no width at which the label is both present and squeezed:
- * above the threshold the row has room for all 151px of it, below the threshold
+ * above the threshold the row has room for the whole label, below the threshold
  * it is `display: none`. Mutating `flex: 0 10 auto` → `flex: none`, deleting the
  * button's `min-width: 14px`, and deleting the label's `min-width: 0` /
  * `overflow` / `text-overflow` each left the ENTIRE CT suite green — including
@@ -1326,9 +1325,9 @@
  * room to say something with the label present (628 → 48 chars); at or below it
  * the label is the difference between a readable quote and an empty one (506 →
  * 0 or 3 chars with the label — that is the very row the two tables disagree on,
- * see the warning above; both figures carry the same verdict — while the ~150px
- * the current English label gives back is most of the row). These are shapes
- * too: the caveat above does not stop at its own paragraph.
+ * see the warning above; both figures carry the same verdict — while what the
+ * current English label gives back is most of the row). These are shapes too:
+ * the caveat above does not stop at its own paragraph.
  *
  * ⚠️ AND THE GUARD HAD TO MOVE TOO. `chat-reply-to.ct.spec.tsx` mounts these
  * rows with NO APP SHELL — no 1040px cap, no page padding, no roster column —

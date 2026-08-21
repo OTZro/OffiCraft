@@ -186,12 +186,12 @@ describe("ChatArea 回覆這則", () => {
       // is a real message with a real id, and since the `replyable` gate was
       // deleted on 2026-08-21 it carries the entry like everything else — and
       // the entry WORKS, per the server's own gate rather than per one manual
-      // run: POST's `reply_to` check is `api_chat.go:601-613`, which asks
-      // `ListChatByIDs` whether the id exists and 400s only when it comes back
-      // empty. There is no sender condition in it, so a `sender="system"` row
-      // is as replyable as any other. It was missing from this table, which is
-      // how a row that renders differently from every other one gets no
-      // coverage at all.
+      // run: POST's `reply_to` gate lives in `api_chat.go`'s
+      // `HandlePostChatApiChatPost`, which asks `ListChatByIDs` whether the id
+      // exists and 400s only when it comes back empty. There is no sender
+      // condition in it, so a `sender="system"` row is as replyable as any
+      // other. It was missing from this table, which is how a row that renders
+      // differently from every other one gets no coverage at all.
       mkMsg({ id: "c-5", from: "system", to: "m1", body: "任務已轉手", ts: 5 }),
       // (its real wire shape: the server addresses a handover to the MEMBER, so
       // in the owner's thread it is an inter-agent row and starts collapsed —

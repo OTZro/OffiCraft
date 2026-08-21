@@ -1673,8 +1673,8 @@ export interface Api {
    * "a click on the quote costs exactly one request, and repainting costs none";
    * the failure half — said once, never retried — is
    * `ChatArea.reply-to.test.tsx`'s "says so, in place and once, when that one
-   * read fails". (That file's api proxy deliberately registers no failure state,
-   * which is why the two halves live apart.) Together they are what stands
+   * read fails". (`quote-no-fetch`'s api proxy deliberately registers no failure
+   * state, which is why the two halves live apart.) Together they are what stands
    * between this and the thing it replaced. */
   getChatMessage(id: string): Promise<ChatMessage>;
   /** The M2 gallery query (`GET /api/chat/attachments?with=<memberId>`): every
