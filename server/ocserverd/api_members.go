@@ -329,9 +329,45 @@ func (s *apiServer) offboardNoticeFor(m Member, kind string) string {
 	// The deadline quoted in the sentence and the deadline the cockpit shows come
 	// from ONE expression (T-d6a7). offboardKindOf only answers "final" for a
 	// clocked arm, so this is positive exactly when the sentence needs it.
-	return offboardNotice(where, offboardCloserFor(m), kind == offboardKindFinal,
+	notice := offboardNotice(where, offboardCloserFor(m), kind == offboardKindFinal,
 		winddownDeadlineOf(m, s.reconcileConfigLive()),
 		s.offboardText())
+	if clause := s.offboardManualWriteBackFor(m); clause != "" {
+		notice += "\n\n" + clause
+	}
+	return notice
+}
+
+// offboardManualWriteBackFor resolves the 記憶回寫 clause for THIS member: the
+// worker's bound task decides whether there is a 手冊 to write back into, and
+// offboardManualWriteBack composes the sentence.
+//
+// 🔴 OUTSOURCE ONLY, deliberately. A 正職 has a role of its own and its learnings
+// may belong to the ROLE rather than to any one task's type — which document a
+// staff member writes into is ruled by the boot doc's 「記憶與學習」 section, and
+// naming one document here would overrule it from the wrong place. A worker has
+// no role and outlives nothing: its one task IS its memory, which is why the
+// owner's ruling names 外包 and this gate does too.
+//
+// Best-effort by construction: an unreadable task row, a task with no type, or a
+// deleted manual all fall back to saying LESS (no clause, or the bare key as the
+// label) — never to blocking the 預告, which is the message that actually has to
+// arrive.
+func (s *apiServer) offboardManualWriteBackFor(m Member) string {
+	if m.Kind != KindOutsource || m.LinkedTaskID == nil || *m.LinkedTaskID == "" {
+		return ""
+	}
+	t, err := s.dal.GetTask(*m.LinkedTaskID)
+	if err != nil || t == nil {
+		return ""
+	}
+	label := ""
+	if t.TypeKey != "" {
+		if manual, err := s.dal.GetTaskManual(t.TypeKey); err == nil && manual != nil {
+			label = manualDisplayLabel(manual.DisplayName, t.TypeKey)
+		}
+	}
+	return offboardManualWriteBack(t.TypeKey, label)
 }
 
 // resolveAvatarMember admits active staff and outsource rows but rejects

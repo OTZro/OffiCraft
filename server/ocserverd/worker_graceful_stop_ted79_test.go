@@ -1,9 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 // worker_graceful_stop_ted79_test.go — 外包的 停止 becomes a close-out
@@ -193,5 +198,153 @@ func TestWorkerStop_AcceleratedStopEscalatesTheStopEpochAndIsHonoured(t *testing
 	}
 	if sawStart {
 		t.Fatal("a 停止 is held down: the deadline collect must kill WITHOUT re-spawning")
+	}
+}
+
+// ── 記憶回寫：the 下線預告 has to ASK for it, and only where there is a 手冊 ──
+
+// workerOffboardNoticeOverSSE presses `press` and returns the offboard_notice
+// the worker's OWN session actually RECEIVED — read back out of the bytes the
+// REAL GET /api/events handler wrote to its connection, not out of the payload
+// map the publisher built. That distinction is the whole point of this helper:
+// every other assertion in this file reads offboardDeltaPayload directly, which
+// is green even if nothing is ever fanned at the worker.
+func workerOffboardNoticeOverSSE(t *testing.T, api *apiServer, workerID string,
+	press func()) string {
+	t.Helper()
+	w := newFailAfterWrites(1 << 30)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	req = req.WithContext(context.WithValue(ctx, claimsContextKey,
+		map[string]any{"sub": workerID, "scope": "agent"}))
+	done := make(chan struct{})
+	go func() {
+		api.HandleEventsApiEventsGet(w, req)
+		close(done)
+	}()
+
+	notice := ""
+	deadline := time.Now().Add(5 * time.Second)
+	pressed := false
+	for notice == "" {
+		if time.Now().After(deadline) {
+			t.Fatalf("the worker's own session never received an offboard_notice "+
+				"(frames=%d)", len(w.written()))
+		}
+		select {
+		case <-done:
+			t.Fatal("the SSE handler returned before the 預告 arrived")
+		default:
+		}
+		// Press only once THIS connection is the live one: the fixture already
+		// holds a listener, and pressing before the takeover lands fans the 預告
+		// at the session being replaced.
+		if !pressed && len(w.written()) >= 1 {
+			pressed = true
+			press()
+		}
+		for _, frame := range w.written() {
+			if got := offboardNoticeInFrame(t, frame); got != "" {
+				notice = got
+				break
+			}
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the SSE handler never returned after cancellation")
+	}
+	t.Logf("frame as received by the worker session:\n%s", notice)
+	return notice
+}
+
+// offboardNoticeInFrame pulls offboard_notice out of one SSE wire frame, or ""
+// when this frame is not a member delta carrying one.
+func offboardNoticeInFrame(t *testing.T, frame []byte) string {
+	t.Helper()
+	_, data, ok := bytes.Cut(frame, []byte("data: "))
+	if !ok {
+		return ""
+	}
+	data, _, _ = bytes.Cut(data, []byte("\n"))
+	var env struct {
+		Data struct {
+			Payload struct {
+				OffboardNotice string `json:"offboard_notice"`
+			} `json:"payload"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(data, &env); err != nil {
+		return ""
+	}
+	return env.Data.Payload.OffboardNotice
+}
+
+// A worker doing a TYPED task is asked, in the 下線預告 it actually receives, to
+// fold this run's memory back into that type's 任務手冊 — addressed by type_key,
+// through the anchored patch verb.
+//
+// The 通道 is not what is at stake here (openWorkerHandoverGrace has fanned this
+// delta since T-ea82, and T-ed79 wired 停止 into it); the SENTENCE is. Without
+// it the worker is handed the generic 下線程序, which points at the boot doc's
+// 「記憶與學習」 section and never names the manual this particular run has.
+func TestWorkerStop_TypedTaskIsAskedToWriteBackToItsManual(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveOnlineWorker(t, api)
+
+	notice := workerOffboardNoticeOverSSE(t, api, workerID, func() {
+		postWorker(t, api, workerID, "stop", nil,
+			api.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
+	})
+
+	for _, want := range []string{"review-pr", "patch_task_learnings", "get_task_manual"} {
+		if !strings.Contains(notice, want) {
+			t.Errorf("the 下線預告 a typed worker received never mentions %q — the "+
+				"owner's ruling is that an outsource worker going offline writes its "+
+				"memory back into ITS 任務手冊, and a sentence that does not name the "+
+				"type or the verb is not that instruction:\n%s", want, notice)
+		}
+	}
+}
+
+// …and a worker doing an AD-HOC task is NOT — the exception is not a policy of
+// this ticket, it is the criterion the tree already carries: decideTaskCloseNudge
+// stays silent on `t.TypeKey == ""` because「an AD-HOC task (no type) has no
+// manual to write learnings into」. Asking for a write-back anyway would send the
+// worker looking for a manual that does not exist, on the one path where it has
+// no way to answer back.
+func TestWorkerStop_AdHocTaskIsNotAskedToWriteBackToAManual(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveOnlineWorker(t, api)
+
+	w, err := api.dal.GetOutsourceWorker(workerID)
+	if err != nil || w == nil {
+		t.Fatalf("read back worker: %v", err)
+	}
+	task, err := api.dal.GetTask(w.TaskID)
+	if err != nil || task == nil {
+		t.Fatalf("read back task: %v", err)
+	}
+	task.TypeKey = "" // 自由代辦: no type, therefore no manual
+	if err := api.dal.PutTask(*task); err != nil {
+		t.Fatalf("clear type_key: %v", err)
+	}
+
+	notice := workerOffboardNoticeOverSSE(t, api, workerID, func() {
+		postWorker(t, api, workerID, "stop", nil,
+			api.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
+	})
+
+	for _, unwanted := range []string{"patch_task_learnings", "任務手冊"} {
+		if strings.Contains(notice, unwanted) {
+			t.Errorf("an ad-hoc worker was told to write back to a 任務手冊 it does "+
+				"not have (%q appears in the 預告):\n%s", unwanted, notice)
+		}
 	}
 }
