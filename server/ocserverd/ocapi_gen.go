@@ -3809,12 +3809,15 @@ type ServerInterface interface {
 	// Read one outsource worker by id (detail-panel refresh).
 	// (GET /api/outsource-workers/{id})
 	HandleGetOutsourceWorkerApiOutsourceWorkersIdGet(w http.ResponseWriter, r *http.Request, id string)
-	// 加速停止 an outsource worker: put its ALREADY-OPEN handover on the stop.accelerated_grace_secs clock and tell it. 409 if none is open. Does NOT change what /stop means.
+	// 加速停止 an outsource worker: put its ALREADY-OPEN wind-down (a 停止 or a 換手) on the stop.accelerated_grace_secs clock and tell it. 409 if none is open.
 	// (POST /api/outsource-workers/{id}/accelerated-stop)
 	HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost(w http.ResponseWriter, r *http.Request, id string)
 	// Read an outsource worker's boot-context preview (owner/admin agent).
 	// (GET /api/outsource-workers/{id}/boot-context)
 	HandleGetWorkerBootContextApiOutsourceWorkersIdBootContextGet(w http.ResponseWriter, r *http.Request, id string)
+	// 強制停止 an outsource worker: kill the session NOW and hold it down; says nothing to it. Third rung of 停止 -> 加速停止 -> 強制停止.
+	// (POST /api/outsource-workers/{id}/force-stop)
+	HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost(w http.ResponseWriter, r *http.Request, id string)
 	// Change (換 model) an outsource worker's model/effort (owner/admin agent).
 	// (POST /api/outsource-workers/{id}/model)
 	HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(w http.ResponseWriter, r *http.Request, id string)
@@ -3827,7 +3830,7 @@ type ServerInterface interface {
 	// Restart (重啟) an outsource worker that has no live session (owner/admin agent; 409 only when it is actually alive).
 	// (POST /api/outsource-workers/{id}/restart)
 	HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost(w http.ResponseWriter, r *http.Request, id string)
-	// Stop (停止) an outsource worker (owner/admin agent; kill + hold down).
+	// Stop (停止) an outsource worker: ask it to work its 下線程序 and wait for its own report_stopped -- no kill, no deadline (owner/admin agent).
 	// (POST /api/outsource-workers/{id}/stop)
 	HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost(w http.ResponseWriter, r *http.Request, id string)
 	// Read the VAPID public key used to subscribe this owner's browser.
@@ -6196,6 +6199,32 @@ func (siw *ServerInterfaceWrapper) HandleGetWorkerBootContextApiOutsourceWorkers
 	handler.ServeHTTP(w, r)
 }
 
+// HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost operation middleware
 func (siw *ServerInterfaceWrapper) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(w http.ResponseWriter, r *http.Request) {
 
@@ -8156,6 +8185,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/outsource-workers/{id}", wrapper.HandleGetOutsourceWorkerApiOutsourceWorkersIdGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/outsource-workers/{id}/accelerated-stop", wrapper.HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/outsource-workers/{id}/boot-context", wrapper.HandleGetWorkerBootContextApiOutsourceWorkersIdBootContextGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/outsource-workers/{id}/force-stop", wrapper.HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/outsource-workers/{id}/model", wrapper.HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/outsource-workers/{id}/refocus", wrapper.HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/outsource-workers/{id}/relocate", wrapper.HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost)

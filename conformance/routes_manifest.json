@@ -204,13 +204,6 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": "accelerated_stop_member",
-    "method": "POST",
-    "path": "/api/members/{member_id}/accelerated-stop",
-    "requires": "admin_agent"
-  },
-  {
-    "auth": "gated",
     "mcp_tool": "report_waking",
     "method": "POST",
     "path": "/api/self/waking",
@@ -904,13 +897,6 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": "accelerated_stop_outsource_worker",
-    "method": "POST",
-    "path": "/api/outsource-workers/{id}/accelerated-stop",
-    "requires": "admin_agent"
-  },
-  {
-    "auth": "gated",
     "mcp_tool": "stop_outsource_worker",
     "method": "POST",
     "path": "/api/outsource-workers/{id}/stop",
@@ -1124,6 +1110,27 @@
     "mcp_tool": "delete_theme",
     "method": "DELETE",
     "path": "/api/themes/{theme_id}",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "accelerated_stop_member",
+    "method": "POST",
+    "path": "/api/members/{member_id}/accelerated-stop",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "accelerated_stop_outsource_worker",
+    "method": "POST",
+    "path": "/api/outsource-workers/{id}/accelerated-stop",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "force_stop_outsource_worker",
+    "method": "POST",
+    "path": "/api/outsource-workers/{id}/force-stop",
     "requires": "admin_agent"
   }
 ]

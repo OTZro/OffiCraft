@@ -397,15 +397,6 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		},
 		{
 			Method:   "POST",
-			Path:     "/api/members/{member_id}/accelerated-stop",
-			Handler:  w.HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStopPost,
-			Auth:     authGated,
-			Requires: principalAdminAgent,
-			Summary:  "加速停止: put an ALREADY-OPEN wind-down on the stop.accelerated_grace_secs clock and tell the member. 409 if nothing is winding down -- press 停止 first. Middle rung of 停止 -> 加速停止 -> 強制停止.",
-			MCPTool:  "accelerated_stop_member",
-		},
-		{
-			Method:   "POST",
 			Path:     "/api/self/waking",
 			Handler:  w.HandleReportWakingApiSelfWakingPost,
 			Auth:     authGated,
@@ -1666,20 +1657,11 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		},
 		{
 			Method:   "POST",
-			Path:     "/api/outsource-workers/{id}/accelerated-stop",
-			Handler:  w.HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost,
-			Auth:     authGated,
-			Requires: principalAdminAgent,
-			Summary:  "加速停止 an outsource worker: put its ALREADY-OPEN handover on the stop.accelerated_grace_secs clock and tell it. 409 if none is open. Does NOT change what /stop means.",
-			MCPTool:  "accelerated_stop_outsource_worker",
-		},
-		{
-			Method:   "POST",
 			Path:     "/api/outsource-workers/{id}/stop",
 			Handler:  w.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Stop (停止) an outsource worker: kill + hold down (owner/admin agent).",
+			Summary:  "Stop (停止) an outsource worker: ask it to work its 下線程序 and wait for its own report_stopped -- no kill, no deadline (owner/admin agent).",
 			MCPTool:  "stop_outsource_worker",
 		},
 		{
@@ -1954,6 +1936,44 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Requires: principalAdminAgent,
 			Summary:  `Delete one custom theme; deleting the active one resets display_theme to "".`,
 			MCPTool:  "delete_theme",
+		},
+		// 🔴 APPENDED HERE, NOT BESIDE THE VERBS THEY ESCALATE (T-ed79). They read
+		// better next to /force-stop and /stop, and that is exactly where the first
+		// version of them was — which put accelerated_stop_member at route position
+		// 13 while its x-mcp.order was 118, and broke the ONE order shared by this
+		// table, spec/openapi.json's x-mcp.order and conformance/routes_manifest.json
+		// (test_tools_list_equals_frozen_snapshot_elementwise +
+		// test_catalog_hash_keys_off_tool_surface_only both go red on it, measured).
+		// The rule is stated in full at the custom-themes block above: x-mcp.order
+		// must be the consecutive range 0..N-1, so a NEW tool is appended or every
+		// tool after it is renumbered. The escalation ladder is a reading order for
+		// the OWNER, and it lives in the cockpit row (MemberActionButtons), not here.
+		{
+			Method:   "POST",
+			Path:     "/api/members/{member_id}/accelerated-stop",
+			Handler:  w.HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStopPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "加速停止: put an ALREADY-OPEN wind-down on the stop.accelerated_grace_secs clock and tell the member. 409 if nothing is winding down -- press 停止 first. Middle rung of 停止 -> 加速停止 -> 強制停止.",
+			MCPTool:  "accelerated_stop_member",
+		},
+		{
+			Method:   "POST",
+			Path:     "/api/outsource-workers/{id}/accelerated-stop",
+			Handler:  w.HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "加速停止 an outsource worker: put its ALREADY-OPEN wind-down (a 停止 or a 換手) on the stop.accelerated_grace_secs clock and tell it. 409 if none is open.",
+			MCPTool:  "accelerated_stop_outsource_worker",
+		},
+		{
+			Method:   "POST",
+			Path:     "/api/outsource-workers/{id}/force-stop",
+			Handler:  w.HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "強制停止 an outsource worker: kill the session NOW and hold it down; says nothing to it. Third rung of 停止 -> 加速停止 -> 強制停止.",
+			MCPTool:  "force_stop_outsource_worker",
 		},
 	}
 }

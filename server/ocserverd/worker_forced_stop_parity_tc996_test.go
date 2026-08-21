@@ -16,29 +16,37 @@ import (
 // every worker that ever existed. Nothing failed; the silence just did not
 // apply on that side.
 //
-// 🔴 And the asymmetry is not cosmetic, because a worker 停止 IS the forced
-// shape: api_outsource.go's stop kills the session on the spot — no grace, no
-// warning, no 預告 — the same thing 強制下線 does to staff. So the ONE arm that
+// 🔴 And the asymmetry is not cosmetic, because a worker 強制停止 IS the forced
+// shape: api_outsource.go's force-stop kills the session on the spot — no grace,
+// no warning, no 預告 — the same thing 強制下線 does to staff. So the ONE arm that
 // is supposed to say nothing was the one arm that could still speak.
-func TestWorkerStopIsForcedShaped_SoItSaysNothing(t *testing.T) {
+//
+// 🔴 THE VERB UNDER TEST MOVED (T-ed79). Every 停止 below is now a 強制停止:
+// 停止 became the GRACEFUL close-out (owner 2026-08-21 「往正職靠：外包那顆改成優雅
+// 停止，強制殺移到第三顆按鈕」) and deliberately DOES speak — the notice is the
+// whole point of it. The ruling this file pins did not change; the button that
+// carries it did, and the graceful half is pinned by
+// worker_graceful_stop_ted79_test.go.
+func TestWorkerForceStopIsForcedShaped_SoItSaysNothing(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	workerID := newActiveOnlineWorker(t, api)
 
 	// The sequence that reaches it, and the reason this needed a test rather
-	// than a read: the notice rides `offline ∧ stopping_since > 0`, and only
-	// the worker's OWN report_stopping stamps that anchor. So it takes the
-	// worker politely announcing its wind-down FIRST, the owner pressing 停止
-	// SECOND, and the worker living long enough to file report_stopped THIRD —
-	// which is what publishes the delta the notice would ride.
+	// than a read: the notice rides `offline ∧ stopping_since > 0`, and until
+	// T-ed79 only the worker's OWN report_stopping stamped that anchor. So it
+	// takes the worker politely announcing its wind-down FIRST, the owner
+	// pressing 強制停止 SECOND, and the worker living long enough to file
+	// report_stopped THIRD — which is what publishes the delta the notice would
+	// ride.
 	rec := httptest.NewRecorder()
 	api.HandleReportStoppingApiSelfStoppingPost(rec,
 		taskReq(t, http.MethodPost, "/api/self/stopping", nil, workerID, "agent"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("report_stopping: %d %s", rec.Code, rec.Body.String())
 	}
-	postWorker(t, api, workerID, "stop", nil,
-		api.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
+	postWorker(t, api, workerID, "force-stop", nil,
+		api.HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost)
 	rec = httptest.NewRecorder()
 	api.HandleReportStoppedApiSelfStoppedPost(rec,
 		taskReq(t, http.MethodPost, "/api/self/stopped", nil, workerID, "agent"))
@@ -80,8 +88,8 @@ func TestWorkerStopIsForcedShaped_SoItSaysNothing(t *testing.T) {
 	// guard at all.
 	t.Run("…and the report_stopping that arrives AFTER the kill cannot re-open its mouth", func(t *testing.T) {
 		late := newActiveOnlineWorker(t, api)
-		postWorker(t, api, late, "stop", nil,
-			api.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
+		postWorker(t, api, late, "force-stop", nil,
+			api.HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost)
 		rec := httptest.NewRecorder()
 		api.HandleReportStoppingApiSelfStoppingPost(rec,
 			taskReq(t, http.MethodPost, "/api/self/stopping", nil, late, "agent"))
@@ -98,7 +106,7 @@ func TestWorkerStopIsForcedShaped_SoItSaysNothing(t *testing.T) {
 		}
 		lm := memberFromWorker(*w)
 		if !forcedEpochLive(lm) {
-			t.Fatalf("a stop that lands FIRST is still the forced epoch — a later "+
+			t.Fatalf("a force-stop that lands FIRST is still the forced epoch — a later "+
 				"report_stopping must not out-rank it (forced_stop_at=%v stopping_since=%v)",
 				lm.ForcedStopAt, lm.StoppingSince)
 		}

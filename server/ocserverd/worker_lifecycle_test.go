@@ -414,38 +414,47 @@ func TestRefocusWorker_BanksCostAcrossRespawn(t *testing.T) {
 
 // ── stop (停止) / restart (重啟) ────────────────────────────────────────────────
 
-// TestStopWorker_KillsAndHoldsDown: stop stamps stopped_since, clears any
-// in-flight refocus, kills the session, and does NOT re-dispatch — the worker
-// projects spawn_state "stopped". Mutant: if stop called respawnWorkerNow (a
-// stray re-spawn) a worker_start frame would appear → the "no worker_start"
-// assertion goes red.
-func TestStopWorker_KillsAndHoldsDown(t *testing.T) {
+// TestForceStopWorker_KillsAndHoldsDown: 強制停止 stamps the forced anchors,
+// clears any in-flight refocus, kills the session, and does NOT re-dispatch —
+// the worker projects presence "stopping" while its SSE is still up. Mutant: if
+// it called respawnWorkerNow (a stray re-spawn) a start frame would appear.
+//
+// 🔴 THIS USED TO BE TestStopWorker_KillsAndHoldsDown, verbatim, against
+// /stop. It was re-aimed rather than deleted when 停止 became a graceful
+// close-out (T-ed79, owner 「強制殺移到第三顆按鈕」): the behaviour it pins did not
+// go away, it moved to a different button, and a deleted test would have left
+// the third rung with no proof it kills at all.
+func TestForceStopWorker_KillsAndHoldsDown(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	workerID := newActiveOnlineWorker(t, api)
-	// A prior in-flight refocus that the stop must supersede.
+	// A prior in-flight refocus that the force-stop must supersede.
 	w, _ := api.dal.GetOutsourceWorker(workerID)
 	w.RefocusSince = 900
 	_ = api.dal.PutOutsourceWorker(*w)
 
-	rec := postWorker(t, api, workerID, "stop", nil,
-		api.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
+	rec := postWorker(t, api, workerID, "force-stop", nil,
+		api.HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("stop: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("force-stop: %d %s", rec.Code, rec.Body.String())
 	}
 	w, _ = api.dal.GetOutsourceWorker(workerID)
 	if w.DesiredState != DesiredStateOffline {
-		t.Fatal("stop must set desired_state offline")
+		t.Fatal("force-stop must set desired_state offline")
 	}
 	if w.RefocusSince != 0 {
-		t.Fatal("stop must clear any in-flight refocus")
+		t.Fatal("force-stop must clear any in-flight refocus")
+	}
+	if w.ForcedStopAt <= 0 || !forcedEpochLive(memberFromWorker(*w)) {
+		t.Fatalf("force-stop must leave a LIVE forced epoch — that record is what "+
+			"keeps the notice silent: %+v", w)
 	}
 	frames := api.hub.DrainWardenCommands(ServerSelfHost)
 	if len(frames) != 1 {
-		t.Fatalf("stop must kill exactly the session (1 worker_stop), got %d", len(frames))
+		t.Fatalf("force-stop must kill exactly the session (1 stop), got %d", len(frames))
 	}
 	if rpc, _ := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStop {
-		t.Errorf("stop frame = %s, want worker_stop", rpc)
+		t.Errorf("kill frame = %s, want %s", rpc, reconcileCmdStop)
 	}
 	// presence through the DTO: offline-intent + still-online session reads "stopping".
 	dto := newOutsourceWorkerDTO(*w, nil, outsourceWorkerProjection{now: nowSecs(), online: true})
@@ -493,8 +502,10 @@ func TestRestartWorker_ClearsAndRedispatches(t *testing.T) {
 	}
 
 	// Stop it, then restart → 200, marker cleared, worker_start dispatched.
-	postWorker(t, api, workerID, "stop", nil,
-		api.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
+	// 強制停止 rather than 停止: this case wants the session GONE before the
+	// restart, and 停止 now only asks for a close-out.
+	postWorker(t, api, workerID, "force-stop", nil,
+		api.HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost)
 	api.hub.DrainWardenCommands(ServerSelfHost)
 	rec = postWorker(t, api, workerID, "restart", nil,
 		api.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost)

@@ -1364,6 +1364,38 @@ func (s *apiServer) stopWorkerNow(w OutsourceWorker) {
 // or stale) is a fail-safe no-op, never a kill on empty data. Callers hold
 // s.outsourceMu.
 func (s *apiServer) autoHandoverWorker(w OutsourceWorker, now float64) {
+	// (0) THE 停止 EPOCH (T-ed79), and it is FIRST for a reason: everything below
+	// this block collects by kill+RESPAWN, which would revive a worker the owner
+	// has held down. A desired-offline worker leaves here whatever else is on its
+	// row.
+	//
+	// What collects a 停止 is the worker's own report_stopped
+	// (workerReportStopped's stop arm) — same as staff. The two cases handled
+	// here are the ones no report can ever answer:
+	//
+	//   * the session DIED mid-close-out. Nothing is left to flush and no report
+	//     is coming, so waiting is pure waste (the D6 rule, verbatim from the
+	//     handover arm).
+	//   * the owner pressed 加速停止, which stamped refocus_op=accelerated_stop
+	//     and re-anchored stopping_since from HIS press. That is the ONLY clock
+	//     on this arm — recycleGraceFor answers "not clocked" for a plain 停止,
+	//     so the ordinary case waits indefinitely, which is the owner's ruling
+	//     (rc-27d1710174dd) and not an oversight.
+	//
+	// A live FORCED epoch is excluded on both: its kill already went out.
+	if w.DesiredState == DesiredStateOffline {
+		if w.StoppingSince > 0.0 && w.StoppedSince <= 0.0 &&
+			!forcedEpochLive(memberFromWorker(w)) {
+			if !s.hub.IsOnline(w.ID) {
+				s.collectWorkerStop(w, "stop-session-gone", triggerServer)
+			} else if grace, clocked := recycleGraceFor(
+				w.RefocusOp, s.reconcileConfigLive()); clocked &&
+				now >= w.StoppingSince+grace {
+				s.collectWorkerStop(w, "stop-accelerated-deadline", triggerServer)
+			}
+		}
+		return
+	}
 	record := s.gauge.Get(w.ID)
 	// (1) mid-handover: refocus_since is the cooldown. Clear it once a session
 	// booted AFTER the stamp (respawn landed — boot_ts is stamped on the fresh
@@ -1472,6 +1504,16 @@ func (s *apiServer) clearWorkerRefocus(id, reason string) {
 // s.outsourceMu and have already persisted the refocus stamp.
 func (s *apiServer) openWorkerHandoverGrace(w OutsourceWorker, trigger string) {
 	if !s.hub.IsOnline(w.ID) {
+		// 🔴 WHICH COLLECT depends on the INTENT, not on which caller got here
+		// (T-ed79). The 停止 arm routes through this same function now, and its
+		// collect must never re-spawn: the owner has held the worker down. Read
+		// off desired_state so the branch cannot come apart from the intent the
+		// caller persisted, and so a worker that disconnects in the race between
+		// the stop handler's own liveness check and this call still lands here.
+		if w.DesiredState == DesiredStateOffline {
+			s.collectWorkerStop(w, "stop-offline", trigger)
+			return
+		}
 		s.collectWorkerHandover(w, "handover-offline", trigger)
 		return
 	}
@@ -1528,6 +1570,31 @@ func (s *apiServer) collectWorkerHandover(w OutsourceWorker, reason, trigger str
 		return false
 	}
 	return true
+}
+
+// collectWorkerStop is the 收口 of a 停止 epoch (T-ed79) — the twin of
+// collectWorkerHandover for a worker the owner has HELD DOWN.
+//
+// The whole difference is the last line, and it is the difference the owner
+// pressed the button for: latch the same durable dump-done marker, then kill
+// through stopWorkerNow (no re-dispatch) instead of respawnWorkerNow. Sharing
+// the handover funnel here would re-spawn a worker that was just stopped, which
+// is the one outcome 停止 must never produce.
+//
+// There is no rollback arm and no deferral: stopWorkerNow has no "no kill target"
+// failure to defer to — a missing target only means the session is already gone,
+// and desired_state=offline is what keeps it that way. Callers hold s.outsourceMu.
+func (s *apiServer) collectWorkerStop(w OutsourceWorker, reason, trigger string) {
+	if w.StoppedSince <= 0.0 {
+		w.StoppedSince = nowSecs()
+	}
+	if err := s.putMember(memberFromWorker(w), trigger); err != nil {
+		outsourceLog("stop collect %s (%s): stopped latch failed: %v", w.ID, reason, err)
+		return
+	}
+	s.stopWorkerNow(w)
+	outsourceLog("stop collect %s (%s): close-out collected — session killed, held down",
+		w.ID, reason)
 }
 
 // ── worker self-reports (T-ea82 — the /api/self presence verbs for ow- subs) ──
@@ -1626,8 +1693,29 @@ func (s *apiServer) workerReportStopped(id, trigger string) (*Member, error) {
 		return nil, err
 	}
 	if w.StoppedSince <= 0.0 {
-		if w.DesiredState == DesiredStateOnline && w.RefocusSince > 0.0 {
+		// 🔴 TWO 收口 ARMS, and the second one is the cell this ticket had to
+		// prove (T-ed79). The first arm alone was correct only while 停止 killed
+		// on the spot: it requires `desired online ∧ refocus_since > 0`, and a
+		// 停止 epoch is NEITHER — desired_state is offline and there is no
+		// refocus epoch (the stop clears it). With the graceful stop, a report
+		// arriving on that arm fell through to the bare latch below, which
+		// dispatches nothing at all: the worker would have said it was finished
+		// and then sat there alive on a closed-out session forever, which is
+		// strictly worse than the kill this verb used to do.
+		switch {
+		case w.DesiredState == DesiredStateOnline && w.RefocusSince > 0.0:
 			s.collectWorkerHandover(*w, "stopped-report", trigger)
+			if fresh, ferr := s.resolveLiveWorker(id); ferr == nil {
+				w = fresh
+			}
+			m := memberFromWorker(*w)
+			return &m, nil
+		case w.DesiredState == DesiredStateOffline && w.StoppingSince > 0.0 &&
+			!forcedEpochLive(memberFromWorker(*w)):
+			// The 停止 arm: kill, never re-spawn. forcedEpochLive is excluded
+			// because a force-stopped session was cut off rather than asked —
+			// its kill already went out and nothing is waiting for a report.
+			s.collectWorkerStop(*w, "stopped-report", trigger)
 			if fresh, ferr := s.resolveLiveWorker(id); ferr == nil {
 				w = fresh
 			}

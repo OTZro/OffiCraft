@@ -444,23 +444,43 @@ func (s *apiServer) HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost
 // POST /api/outsource-workers/{id}/accelerated-stop — the symmetric twin of the
 // member 加速停止 (T-ed79, owner 2026-08-21 「停止 → 加速停止 → 強制停止」).
 //
-// ⚠️ IT DOES NOT TOUCH WHAT THE WORKER'S 停止 MEANS. That verb (below) still sets
-// desired_state=offline and kills the session outright; making it a graceful
-// close-out is a SEPARATE piece of work owned by someone else, and this handler
-// deliberately neither calls it nor changes it. What this accelerates is the
-// HANDOVER arm — the one arm a worker has that waits for the worker to finish.
+// 🔴 IT NOW COVERS BOTH ARMS, because since T-ed79 the worker's 停止 is itself a
+// close-out that waits (see the /stop handler below). It used to 409 on
+// desired_state=offline and say so in its own comment — correct while 停止 killed
+// on the spot, and a DEAD MIDDLE RUNG the moment it stopped doing that: the owner
+// would have had 停止 → (409) → 強制停止, i.e. no rung between "wait forever" and
+// "cut it off". The two arms are exactly the member twin's:
 //
-// The gates mirror the worker refocus above cell for cell (released/unknown →
-// 404; held down → 409; not active-and-online → 409) plus the escalation gate the
-// member twin carries: no open epoch → 409, because an escalation with nothing to
-// escalate is a mistake and not a stop.
+//   - 下線 (desired_state=offline + stopping_since): re-stamp stopping_since from
+//     THIS press and write the cause. autoHandoverWorker's stop arm then collects
+//     at stopping_since + the grace, and offboardKindOf answers `final` off the
+//     same refocus_op, so the sentence quotes exactly that instant.
+//   - 換手 (desired online + refocus_since): re-stamp refocus_since and write the
+//     cause — the promotion shape the context arm already uses.
 //
-// refocus_since is re-stamped from THIS press for the reason the member arm
-// documents: the deadline is refocus_since + grace, so promoting in place would
-// quote an instant already gone. The two wind-down anchors are deliberately NOT
-// cleared — unlike the refocus handler above, which opens a NEW epoch, this
-// promotes the one in flight, and zeroing stopped_since would erase a worker's
-// own "I am done".
+// A force-stopped epoch is refused on both arms: that session was cut off
+// deliberately and is not working a close-out, so a deadline addressed to it has
+// no reader.
+//
+// The other gates mirror the worker refocus above cell for cell (released/unknown
+// → 404; not active-and-online → 409) plus the escalation gate the member twin
+// carries: no open epoch → 409, because an escalation with nothing to escalate is
+// a mistake and not a stop.
+//
+// The anchor is re-stamped from THIS press for the reason the member arm
+// documents: the deadline is anchor + grace, so promoting in place would quote an
+// instant already gone. The OTHER wind-down anchors are deliberately NOT cleared
+// — unlike the refocus handler above, which opens a NEW epoch, this promotes the
+// one in flight, and zeroing stopped_since would erase a worker's own "I am
+// done".
+// acceleratedStopWorkerNeedsAnOpenWindDownMsg names the rung BELOW this one, for
+// the reason its member twin does: a 409 that only says "no" leaves the owner
+// guessing which of three buttons he was supposed to press first. It names both
+// openers because a worker has two (停止 and 重新聚焦), and both are real.
+const acceleratedStopWorkerNeedsAnOpenWindDownMsg = "加速停止 escalates a wind-down " +
+	"that is already open — this worker has not been asked to stop. Press 停止 or " +
+	"重新聚焦 first"
+
 func (s *apiServer) HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost(w http.ResponseWriter, r *http.Request, id string) {
 	s.outsourceMu.Lock()
 	worker, err := s.dal.GetOutsourceWorker(id)
@@ -474,26 +494,27 @@ func (s *apiServer) HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcc
 		writeResolveError(w, errNotFound, "outsource worker", id)
 		return
 	}
-	if worker.DesiredState == DesiredStateOffline {
-		s.outsourceMu.Unlock()
-		writeError(w, http.StatusConflict,
-			"加速停止 requires a live worker — this one is stopped (restart it first)")
-		return
-	}
 	if worker.Status != WorkerStatusActive || !s.hub.IsOnline(worker.ID) {
 		s.outsourceMu.Unlock()
 		writeError(w, http.StatusConflict,
 			"加速停止 requires the worker to be online (no live session to accelerate)")
 		return
 	}
-	if worker.RefocusSince <= 0.0 {
+	switch {
+	case worker.DesiredState == DesiredStateOffline:
+		if worker.StoppingSince <= 0.0 || forcedEpochLive(memberFromWorker(*worker)) {
+			s.outsourceMu.Unlock()
+			writeError(w, http.StatusConflict, acceleratedStopWorkerNeedsAnOpenWindDownMsg)
+			return
+		}
+		worker.StoppingSince = nowSecs()
+	case worker.RefocusSince > 0.0:
+		worker.RefocusSince = nowSecs()
+	default:
 		s.outsourceMu.Unlock()
-		writeError(w, http.StatusConflict,
-			"加速停止 escalates a handover that is already open — this worker has not "+
-				"been asked to hand over. Press 重新聚焦 first")
+		writeError(w, http.StatusConflict, acceleratedStopWorkerNeedsAnOpenWindDownMsg)
 		return
 	}
-	worker.RefocusSince = nowSecs()
 	worker.RefocusOp = refocusOpAcceleratedStop
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
@@ -509,14 +530,48 @@ func (s *apiServer) HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcc
 	s.writeWorkerProjection(w, r, *worker)
 }
 
-// POST /api/outsource-workers/{id}/stop — the cockpit's 停止 (owner/admin agent since T-6020). The
-// worker twin of a member deactivate: set desired_state="offline" (a DIRECT mirror
-// of member.desired_state, which makes every scheduler auto-spawn branch skip the
-// worker — stuck-recovery and the paced re-dispatch must NOT quietly revive an
-// owner-held-down worker), clear any in-flight refocus (an explicit stop supersedes
-// a handover), and kill the session WITHOUT re-dispatching. The bound task stays in
-// its own status — a stop pauses the worker, it does not close or reassign the task.
-// Idempotent (re-stopping stays offline and re-kills harmlessly). 404 unknown/released.
+// POST /api/outsource-workers/{id}/stop — the cockpit's 停止 (owner/admin agent
+// since T-6020), and since T-ed79 a GRACEFUL CLOSE-OUT rather than a kill
+// (owner 2026-08-21 「往正職靠：外包那顆改成優雅停止，強制殺移到第三顆按鈕」).
+//
+// It is the worker twin of a member deactivate, and now that is true of what it
+// DOES and not merely of what it writes:
+//
+//   - desired_state="offline" — a DIRECT mirror of member.desired_state, which
+//     makes every scheduler auto-spawn branch skip the worker (stuck-recovery
+//     and the paced re-dispatch must NOT quietly revive an owner-held-down
+//     worker). Written FIRST, and it is what makes everything below safe: the
+//     collect at the end of this close-out kills without re-spawning.
+//   - stopping_since — the stop epoch's anchor. It is what offboardKindOf's
+//     desired-offline arm reads to attach the SOFT 下線程序 notice to the delta,
+//     so this stamp is the whole reason the worker hears anything at all.
+//   - NO forced_stop_at. That anchor belongs to 強制停止 (below), and both of
+//     its reasons are false here: it exists to keep the notice SILENT (this verb
+//     needs the notice to arrive) and to record that a session was CUT OFF (this
+//     session is being asked to close itself out).
+//   - NO kill. openWorkerHandoverGrace fans the member-topic 預告 at the
+//     worker's OWN session — the same machinery the 換手 arm has used since
+//     T-ea82, client-side unchanged — and the 收口 belongs to the worker's own
+//     report_stopped (workerReportStopped's stop arm). There is NO deadline
+//     unless the owner presses 加速停止, exactly as on the staff 下線 arm
+//     (rc-27d1710174dd 「不要兜底」).
+//
+// 🔴 THE CLEARED REFOCUS IS THE SAME LINE WITH A DIFFERENT MEANING. It used to
+// be "an explicit stop supersedes a handover" — the stop threw the close-out
+// away and killed. Since 停止 IS a close-out, nothing is superseded: the worker
+// keeps working the same 下線程序 it was already working, and all that changes
+// is that no new session follows it. The epoch is still cleared, and now for a
+// mechanical reason instead of a semantic one: autoHandoverWorker's in-flight
+// arm collects a refocus epoch by kill+RESPAWN, which would revive a worker the
+// owner just held down.
+//
+// An OFFLINE worker takes the immediate kill instead (the D6 rule
+// openWorkerHandoverGrace already applies to every other arm): no session can
+// hear the 預告, so a window would only park a dead worker forever.
+//
+// The bound task stays in its own status — a stop pauses the worker, it does not
+// close or reassign the task. Idempotent (re-stopping stays offline and re-opens
+// nothing). 404 unknown/released.
 func (s *apiServer) HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost(w http.ResponseWriter, r *http.Request, id string) {
 	s.outsourceMu.Lock()
 	worker, err := s.dal.GetOutsourceWorker(id)
@@ -531,23 +586,70 @@ func (s *apiServer) HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost(w htt
 		return
 	}
 	worker.DesiredState = DesiredStateOffline // owner-explicit stop intent (member parity)
-	worker.RefocusSince = 0.0                 // an explicit stop supersedes any in-flight handover
+	worker.RefocusSince = 0.0                 // see the 🔴 note above — mechanical, not semantic
 	worker.RefocusOp = ""                     // …and its cause goes with it
-	// 🔴 This verb is the FORCED shape, not the graceful one (T-c996). It kills
-	// the session below with no grace, no warning and no 預告 — exactly what
-	// 強制下線 does to a staff member — so it stamps the same two anchors that
-	// handler stamps, and for the same two reasons: forced_stop_at is what makes
-	// offboardKindOf stay silent (the owner's ruling that a session about to
-	// stop existing is told nothing), and it is the only durable record that
-	// this session was cut off rather than collected — without it, what a killed
-	// worker leaves behind is indistinguishable from what a worker with nothing
-	// to say leaves behind.
-	//
-	// Both anchors, together: forcedEpochLive scopes the record to a LIVE epoch
-	// by requiring forced_stop_at >= stopping_since, so stamping one without the
-	// other leaves a worker that had already announced its own wind-down
-	// (report_stopping) still reading as "working its close-out" — which is the
-	// arm that speaks.
+	// The stop epoch's anchor, stamped ONLY when this is not already a live
+	// FORCED epoch — the member deactivate's rule verbatim. Re-stamping a forced
+	// epoch's stopping_since would move it to the graceful side of
+	// forcedEpochLive and start speaking to a session that was cut off.
+	if !forcedEpochLive(memberFromWorker(*worker)) {
+		worker.StoppingSince = nowSecs()
+	}
+	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
+		s.outsourceMu.Unlock()
+		internalError(w, err)
+		return
+	}
+	// 預告 + wait (online), or the immediate kill (offline — nothing can hear
+	// it). openWorkerHandoverGrace re-reads liveness itself and routes a
+	// desired-offline worker to the stop collect, so the race between this
+	// handler and a disconnect cannot end in a respawn.
+	s.openWorkerHandoverGrace(*worker, requestTrigger(r))
+	// Re-read so the response/delta carry whatever the grace open banked.
+	if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
+		worker = fresh
+	}
+	s.publishOutsourceWorker(*worker, requestTrigger(r))
+	s.outsourceMu.Unlock()
+
+	s.writeWorkerProjection(w, r, *worker)
+}
+
+// POST /api/outsource-workers/{id}/force-stop — the THIRD rung of the owner's
+// escalation 停止 → 加速停止 → 強制停止, and the worker twin of
+// HandleForceStopMember (T-ed79, owner 2026-08-21 「強制殺移到第三顆按鈕」).
+//
+// This is the body the /stop verb used to have, moved to its own button rather
+// than removed: it stamps forced_stop_at + stopping_since and kills the session
+// on the spot. Both anchors, together, because forcedEpochLive scopes the record
+// to a LIVE epoch by requiring forced_stop_at >= stopping_since — stamping one
+// without the other leaves a worker that had already announced its own wind-down
+// (report_stopping) still reading as "working its close-out", which is the arm
+// that speaks (T-c996).
+//
+// It sends NOTHING: the recipient is about to stop existing, so a sentence meant
+// to change its behaviour has no reader — the same ruling api_members.go
+// enforces for staff, and forced_stop_at is what enforces it here.
+//
+// Idempotent (re-forcing stays offline and re-kills harmlessly). 404
+// unknown/released. No online gate: a worker whose session is already gone still
+// needs its intent held down and its record written.
+func (s *apiServer) HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost(w http.ResponseWriter, r *http.Request, id string) {
+	s.outsourceMu.Lock()
+	worker, err := s.dal.GetOutsourceWorker(id)
+	if err != nil {
+		s.outsourceMu.Unlock()
+		internalError(w, err)
+		return
+	}
+	if worker == nil || worker.Status == WorkerStatusReleased {
+		s.outsourceMu.Unlock()
+		writeResolveError(w, errNotFound, "outsource worker", id)
+		return
+	}
+	worker.DesiredState = DesiredStateOffline
+	worker.RefocusSince = 0.0 // nothing is being waited for any more
+	worker.RefocusOp = ""
 	forcedAt := nowSecs()
 	worker.ForcedStopAt = forcedAt
 	if worker.StoppingSince <= 0.0 || worker.StoppingSince > forcedAt {
@@ -559,7 +661,7 @@ func (s *apiServer) HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost(w htt
 		return
 	}
 	s.stopWorkerNow(*worker)
-	// Re-read so the response/delta carry the cost the stop just banked.
+	// Re-read so the response/delta carry the cost the kill just banked.
 	if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
 		worker = fresh
 	}

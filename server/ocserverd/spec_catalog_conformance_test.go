@@ -242,9 +242,6 @@ var knownToolDescriptionDrift = map[string]map[string]string{
 	"refocus_outsource_worker": {
 		"openapi_summary": "Refocus (換手) an outsource worker's context (owner/admin agent, online-only else 409).",
 	},
-	"stop_outsource_worker": {
-		"openapi_summary": "Stop (停止) an outsource worker (owner/admin agent; kill + hold down).",
-	},
 	"update_settings": {
 		"route_summary": "Edit settings (owner and agent token TTLs / handover threshold); live immediately.",
 	},

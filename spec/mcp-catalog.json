@@ -3348,7 +3348,7 @@
       "name": "refocus_outsource_worker"
     },
     {
-      "description": "Stop (\u505c\u6b62) an outsource worker: kill + hold down (owner/admin agent).",
+      "description": "Stop (\u505c\u6b62) an outsource worker: ask it to work its \u4e0b\u7dda\u7a0b\u5e8f and wait for its own report_stopped -- no kill, no deadline (owner/admin agent).",
       "inputSchema": {
         "properties": {
           "id": {
@@ -4081,7 +4081,7 @@
       "name": "accelerated_stop_member"
     },
     {
-      "description": "\u52a0\u901f\u505c\u6b62 an outsource worker: put its ALREADY-OPEN handover on the stop.accelerated_grace_secs clock and tell it. 409 if none is open. Does NOT change what /stop means.",
+      "description": "\u52a0\u901f\u505c\u6b62 an outsource worker: put its ALREADY-OPEN wind-down (a \u505c\u6b62 or a \u63db\u624b) on the stop.accelerated_grace_secs clock and tell it. 409 if none is open.",
       "inputSchema": {
         "properties": {
           "id": {
@@ -4094,6 +4094,21 @@
         "type": "object"
       },
       "name": "accelerated_stop_outsource_worker"
+    },
+    {
+      "description": "\u5f37\u5236\u505c\u6b62 an outsource worker: kill the session NOW and hold it down; says nothing to it. Third rung of \u505c\u6b62 -> \u52a0\u901f\u505c\u6b62 -> \u5f37\u5236\u505c\u6b62.",
+      "inputSchema": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "force_stop_outsource_worker"
     }
   ]
 }

@@ -1394,6 +1394,11 @@ MATRIX: dict[str, Route] = {
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/accelerated-stop",
         overrides={"owner": 404, "admin_agent": 404},
     ),
+    "POST /api/outsource-workers/{id}/force-stop": Route(
+        requires="admin_agent",
+        path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/force-stop",
+        overrides={"owner": 404, "admin_agent": 404},
+    ),
     "POST /api/outsource-workers/{id}/stop": Route(
         requires="admin_agent",
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/stop",
