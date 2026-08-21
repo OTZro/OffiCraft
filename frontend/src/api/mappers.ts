@@ -327,8 +327,23 @@ export function toChatMessage(w: WireChatMessage): ChatMessage {
     card: w.card ? toChatInlineReplyCard(w.card) : null,
     // The quoted message's id (`reply_to`). Honest passthrough: the server
     // sends "" for a message that replies to nothing, which reads as null here.
-    // Nothing else about the quote is on the wire, by design.
     replyTo: w.reply_to ? w.reply_to : null,
+    // WHAT was replied to (`reply_to_chat`), rebuilt server-side on every read.
+    // The key is OMITTED by the server both when this message is not a reply and
+    // when its original no longer exists — one null covers both, and the UI
+    // tells them apart by looking at `replyTo`, which never disappears.
+    //
+    // The three strings are taken as they arrive. `content` in particular is NOT
+    // re-shortened here: its length is defined on the server and nowhere else,
+    // so a second trim in the browser would be a second rule to keep in step.
+    replyToChat: w.reply_to_chat
+      ? {
+          id: w.reply_to_chat.id,
+          from: w.reply_to_chat.from,
+          fromName: w.reply_to_chat.from_name ?? "",
+          content: w.reply_to_chat.content ?? "",
+        }
+      : null,
   };
 }
 

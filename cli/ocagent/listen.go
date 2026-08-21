@@ -757,11 +757,14 @@ func fmtAgo(secs float64) string {
 //
 //	[ocagent] chat from boss (#c-reply, ↩#c-target, 2m ago): 這個再確認一下
 //
-// It is an EXISTENCE marker, exactly like the attachment badge — the quoted
-// sender/body do NOT ride here (they already live under that id; a copy beside
-// every reply is a second place for the same sentence to disagree with itself).
-// Its whole job is to tell the woken agent that a reply target EXISTS, because
-// an agent that gets no signal has no reason to spend a get_chat looking.
+// It is an EXISTENCE marker, exactly like the attachment badge: the quoted
+// sender and body are NOT printed. Since 2026-08-21 the wire DOES carry them
+// (`reply_to_chat`, built on every read), so this is a deliberate choice by this
+// line rather than a limit of the payload — one console line per inbound message
+// is a token cost every agent pays on every message, and a second sentence
+// inside it doubles that for a relation most messages do not have. The id is
+// enough to tell the woken agent a reply target EXISTS; get_chat is where the
+// text belongs, and it now comes back with the quote already attached.
 //
 // Advances the seen-id cursor and returns the unread count. `silent` (the boot
 // baseline) advances the cursor WITHOUT printing so connecting does not re-print

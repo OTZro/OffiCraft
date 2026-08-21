@@ -43,7 +43,7 @@ function mkMember(id: string, name: string): Member {
 function mkMsg(over: Partial<ChatMessage> & { id: string }): ChatMessage {
   return {
     from: "m1", to: "owner", body: "", ts: 1, attachments: [],
-    replyCardId: null, replyCardStatus: null, replyTo: null, ...over,
+    replyCardId: null, replyCardStatus: null, replyTo: null, replyToChat: null, ...over,
   };
 }
 const m1 = mkMember("m1", "Mira");
@@ -57,7 +57,16 @@ beforeEach(() => {
   messages = [
     mkMsg({ id: "c-1", from: "m1", body: "第一個問題" }),
     // The row under test: a CARD row that is ALSO a reply.
-    mkMsg({ id: "c-3", body: "請示", ts: 3, replyCardId: "rc-1", replyTo: "c-1" }),
+    mkMsg({
+      id: "c-3",
+      body: "請示",
+      ts: 3,
+      replyCardId: "rc-1",
+      replyTo: "c-1",
+      // The quote as the SERVER attaches it (T-4e95, 2026-08-21) — this row
+      // reads `reply_to_chat`, not the thread it happens to be sitting in.
+      replyToChat: { id: "c-1", from: "m1", fromName: "", content: "第一個問題" },
+    }),
   ];
 });
 
@@ -71,8 +80,8 @@ describe("ChatArea: the card row's quote branch", () => {
     // Denominator: the branch really did fire — a row with no quote at all
     // would also satisfy "not duplicated", so say both halves.
     expect(quotes.length, "one quote row, not zero and not two").toBe(1);
-    // It carries the QUOTED message's sender and text, resolved from the
-    // thread — the card's own body must not be what is shown here.
+    // It carries the QUOTED message's sender and text, read off the wire —
+    // the card's own body must not be what is shown here.
     expect(quotes[0].textContent).toContain("Mira");
     expect(quotes[0].textContent).toContain("第一個問題");
     // In the loaded window ⇒ the jump is offered, with its accessible name.

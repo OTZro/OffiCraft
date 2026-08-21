@@ -15,7 +15,6 @@ import type {
 import { autosizeTextarea } from "../lib/autosize";
 import { getChatDraft, saveChatDraft } from "../lib/chatDraftStore";
 import { useChat } from "../hooks/useChat";
-import { useQuotedMessages } from "../hooks/useQuotedMessages";
 import { useWorkerCodenames } from "../hooks/useWorkerCodenames";
 import { formatDayLabel, splitByDay } from "../lib/dateFormat";
 import {
@@ -57,9 +56,20 @@ import { DispatchAlert } from "./DispatchAlert";
 // "me" (right-aligned, from=你) in BOTH mock and real mode.
 const OWNER_ID = "owner";
 
-/** How much of a quoted message the reply banner / quote row shows. Long enough
- * to recognise the sentence, short enough that the banner stays one line. */
-const QUOTE_EXCERPT_CHARS = 60;
+/** One line out of a message body, for the 「正在回覆」 banner. Newlines and runs
+ * of spaces collapse — the banner is a pointer, not a rendering, and a
+ * multi-line excerpt would push the composer around as the owner re-aims.
+ *
+ * 🔴 NO LENGTH HERE, AND THAT IS THE POINT. This used to cut at a
+ * QUOTE_EXCERPT_CHARS constant, and the SERVER now owns that number
+ * (chatReplyQuoteMaxChars) — two copies of one display rule, and on the day they
+ * disagreed neither would have been wrong. The banner aims at a message this
+ * client is already holding in full, so there is nothing to bound:
+ * `.chat__reply-banner__body` is `overflow:hidden; text-overflow:ellipsis` and
+ * the browser does the cutting, at whatever width the composer actually is. */
+function oneLine(body: string): string {
+  return body.replace(/\s+/g, " ").trim();
+}
 
 /** A message is INTER-AGENT (agent↔agent) when NEITHER endpoint is the owner:
  * owner↔agent always has the owner as one side; agent↔agent never does. This is
@@ -646,45 +656,36 @@ export function ChatArea({
 
   // ===== T-4e95 quote resolution =====
   //
-  // A reply carries the quoted message's ID AND NOTHING ELSE (owner ruling), so
-  // the quote has to be looked up. Two sources, in this order: the thread we
-  // already hold, then a by-id read for targets that have scrolled out of the
-  // loaded window. Nothing is copied onto the reply itself, which is the whole
-  // point — one message, one place.
+  // 🔴 THERE IS NO RESOLUTION ANY MORE, AND THAT IS THE WHOLE REDESIGN (owner
+  // ruling, 2026-08-21). A reply arrives carrying `replyToChat` — the quoted
+  // sender and a server-shortened line of what they said — built by the server
+  // on every read, without exception. The row reads that field and stops.
+  //
+  // What used to be here: the wire carried the quoted ID alone, so this
+  // component looked the target up in the loaded window and, failing that, went
+  // and fetched it (useQuotedMessages, now deleted). That fetch could fail; a
+  // failure was drawn as a placeholder that was sometimes a lie; the lie was
+  // repaid on the next inbound SSE event. Each of those was a branch, and all of
+  // them paint the SAME PIXELS whether they are right or wrong — which is why
+  // the bugs that lived in them survived twenty rounds of review. Do not
+  // reintroduce a lookup here however cheap it looks: the value of this shape is
+  // not that it is fast, it is that it has exactly one behaviour.
+  //
+  // `messageById` survives for ONE job, and it is not the quote text: whether
+  // the JUMP control can be offered, which is a question about what is loaded
+  // right now and can only be answered here.
   const messageById = useMemo(
     () => new Map(messages.map((m) => [m.id, m])),
     [messages],
   );
-  const quotedIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const m of messages) if (m.replyTo) ids.add(m.replyTo);
-    if (replyToId) ids.add(replyToId);
-    return Array.from(ids);
-  }, [messages, replyToId]);
-  const fetchedQuotes = useQuotedMessages(quotedIds, messageById);
-  // undefined = not resolved yet; null = asked and missed (the honest "an
-  // earlier message" label). The two are NOT the same state and the UI must not
-  // collapse them into one.
-  function quoteOf(id: string): ChatMessage | null | undefined {
-    return messageById.get(id) ?? fetchedQuotes.get(id);
-  }
-  // The quoted message the COMPOSER is aiming at (same three states).
-  const replyQuote = replyToId ? quoteOf(replyToId) : undefined;
-
-  // One line of the quoted message, for the banner and the quote row. Newlines
-  // and runs of spaces collapse — a quote is a pointer, not a rendering of the
-  // original, and a multi-line excerpt would push the composer around as the
-  // owner picks different targets. An attachment-only message has no text to
-  // quote and says so rather than showing an empty line.
-  function quoteExcerpt(q: ChatMessage): string {
-    const text = q.body.replace(/\s+/g, " ").trim();
-    if (text) {
-      return text.length > QUOTE_EXCERPT_CHARS
-        ? text.slice(0, QUOTE_EXCERPT_CHARS) + "\u2026"
-        : text;
-    }
-    return q.attachments.length > 0 ? t.chat.replyQuoteAttachment : "";
-  }
+  // The message the COMPOSER is aiming at, resolved from the loaded window
+  // ALONE — no fetch, no fallback, no third state. The owner picks this target
+  // by clicking a row that is on screen, so it is in the window by construction.
+  // The one path that can miss is a draft restored from an earlier session whose
+  // target has since scrolled out; that renders as the same fixed sentence every
+  // other unshowable quote does, and SENDING IT STILL WORKS — the server
+  // resolves the id, and the sent row comes back with its quote attached.
+  const replyQuote = replyToId ? messageById.get(replyToId) : undefined;
 
   // Scroll a message into view and flash it — the "點得回去原訊息" half of the
   // feature. Returns false when the row is not in the DOM (the quoted message
@@ -1072,36 +1073,34 @@ export function ChatArea({
     // (spec §3: 請示以卡片形式直接出現在訊息串中，無額外橫幅) — the card
     // itself fetches its full shape and owns the answer / 重新決定 flow.
     // T-4e95 ① the QUOTE LINE — a thin row above the bubble saying which
-    // message this one answers. The wire carries the quoted id and nothing
-    // else, so the sender name and the excerpt are resolved from the thread (or
-    // a by-id read) rather than copied onto the reply.
+    // message this one answers. It reads `m.replyToChat` and NOTHING ELSE: the
+    // server built that snapshot on this very read, so there is nothing to look
+    // up and nothing that can still be pending.
     //
     // Locatable ONLY when the quoted row is really in the loaded window: a
     // button that scrolls nowhere is worse than a label that never claimed it
     // would. Older-than-the-window renders as a plain span, matching how the
     // #office/chat/<id>/msg/<msgId> jump already lands honestly.
-    // 🔴 THE ENTRY IS OFFERED ONLY WHERE A REPLY CAN ACTUALLY BE SENT. The AC
-    // says 每一則, and every row the owner can reply to has one — but this thread
-    // also renders messages the owner is not a party to: inter-agent runs, and
-    // server-authored 「系統」 lines. A reply carries the quoted id into a message
-    // addressed {owner, peer}, and the server refuses a target from another
-    // conversation — the owner's own ruling, not an accident. So an entry on
-    // those rows is a button that CANNOT work: it 400s every time, and the
-    // composer's only failure handling is a console.warn, so what the owner sees
-    // is the message vanishing with the banner still sitting there. An
-    // affordance that always fails is worse than none — the same argument the
-    // jump control below already makes.
-    const replyable =
-      (m.from === OWNER_ID && m.to === member.id) ||
-      (m.from === member.id && m.to === OWNER_ID);
-    const quoted = m.replyTo ? quoteOf(m.replyTo) : undefined;
+    const quoted = m.replyToChat ?? null;
+    // 🔴 TWO DIFFERENT QUESTIONS, and only the first is about the quote text.
+    // `quoted` answers "what was said" and comes off the wire. This one answers
+    // "can I take you there", which is about the LOADED WINDOW and can only be
+    // asked locally. They disagree constantly, and that is correct: the common
+    // reply quotes something far above the window, so the row shows the quote in
+    // full and offers no jump.
     const quoteLocatable = m.replyTo ? messageById.has(m.replyTo) : false;
     const quoteWho = quoted ? nameOf(quoted.from) : "";
-    const quoteText = quoted
-      ? quoteExcerpt(quoted)
-      : quoted === null
-        ? t.chat.replyQuoteGone
-        : "\u2026";
+    // 🔴 TWO OUTCOMES, NO THIRD. Either the server sent the snapshot or the
+    // original is gone — there is no "not yet", because nothing is in flight.
+    // The gone sentence is FIXED: not retried, not refreshed, and not revisited
+    // when the next event lands.
+    //
+    // `quoted.content` may legitimately be "" (the original carried only
+    // attachments). That renders as a named quote with an empty line, which is
+    // the truth; it must NOT be folded into the gone sentence, because "there
+    // was nothing to quote" and "there is nothing to quote FROM" are different
+    // facts about the conversation.
+    const quoteText = quoted ? quoted.content : t.chat.replyQuoteGone;
     const quoteLine = !m.replyTo ? null : (
       /* 🔴 THE ONE THING THIS ROW EXISTS TO SAY HAS TO REACH THE A11Y TREE TOO.
        * Measured in a real browser on a real <ChatArea>: as a bare <div> this
@@ -1205,7 +1204,17 @@ export function ChatArea({
     // bubble is replaced by <ChatReplyCard>, a full-width surface with its own
     // header controls, and hanging a floating action over it would collide with
     // them. Stated here rather than silently: card rows are the exception.
-    const replyEntry = !replyable ? null : (
+    //
+    // 🔴 OFFERED ON EVERY ROW IN THE WINDOW, INCLUDING THE ONES THE OWNER IS
+    // NOT A PARTY TO. This used to be gated behind a `replyable` flag —
+    // {owner, peer} rows only — because the server refused a reply_to that
+    // crossed conversations, so an entry on an inter-agent row would have 400'd
+    // on every press. The owner removed that refusal on 2026-08-21 FOR THIS
+    // EXACT CASE: 「引用另外兩個人對話裡的一句話來介入詢問」. With the gate gone
+    // the entry works there — the reply is addressed to this thread's peer as
+    // always, and it quotes the line the owner pointed at. Keeping the flag
+    // would have left the owner's ruling unreachable from the product.
+    const replyEntry = (
       <button
         type="button"
         className="chat__msg-reply"
@@ -1240,13 +1249,12 @@ export function ChatArea({
       >
         {/* The bubble's corner actions (T-4e95). ONE slot, so the two controls
          * cannot drift apart into two corners:
-         *   • 回覆這則 — on every bubble of THIS conversation, both directions.
-         *     NOT on every bubble in the window: the owner also sees rows
-         *     between two other members, and the server refuses a reply that
-         *     crosses conversations, so `replyable` above withholds the entry
-         *     there (an entry that always 400s is worse than none). This line
-         *     said "on EVERY bubble" until the review that added `replyable`
-         *     — the claim and the code parted company in the same commit.
+         *   • 回覆這則 — on EVERY bubble in the window, both directions, and
+         *     including the inter-agent rows the owner is not a party to. That
+         *     last part is new (2026-08-21): the server used to refuse a
+         *     reply_to that crossed conversations so the entry was withheld
+         *     there, and the owner removed that refusal precisely so the owner
+         *     could quote a line out of two other people's thread and step in.
          *   • 放大閱讀 — reopens THIS message body in the shared full-view
          *     overlay. Only on INCOMING messages with text: an agent answer is
          *     the long-form side of the thread (the owner's own line is what
@@ -1716,23 +1724,21 @@ export function ChatArea({
                   * fall back to the peer's name whenever the quote had not come
                   * back, which is a claim, not a placeholder: the target is by
                   * construction one of TWO people (this conversation has only
-                  * two), so the fallback was a coin flip printed as a fact —
-                  * and it contradicted the same banner's own second half, which
-                  * was honestly saying 「較早的一則訊息」 right beside it. The
-                  * quote row's own version of this (`quoteWho`) already had the
-                  * rule right: no quote, no name. */}
+                  * two), so the fallback was a coin flip printed as a fact.
+                  *
+                  * There used to be a THIRD state here — a 「…」 meaning "the
+                  * by-id read has not landed yet". It went with the read: nothing
+                  * is in flight any more, so a spinner would never resolve. */}
                 <span className="chat__reply-banner__text">
                   <span className="chat__reply-banner__who">
                     {t.chat.replyingTo(
                       replyQuote
                         ? nameOf(replyQuote.from)
-                        : replyQuote === null
-                          ? t.chat.replyQuoteGone
-                          : "\u2026",
+                        : t.chat.replyQuoteGone,
                     )}
                   </span>
                   <span className="chat__reply-banner__body">
-                    {replyQuote ? quoteExcerpt(replyQuote) : ""}
+                    {replyQuote ? oneLine(replyQuote.body) : ""}
                   </span>
                 </span>
                 <button

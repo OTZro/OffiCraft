@@ -658,11 +658,18 @@ func TestResumeChat_CutMarkerIsActionableAndDistinctFromCollapse(t *testing.T) {
 // TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries re-derives
 // chat_chars from the WIRE VALUES, field by field, over a payload that exercises
 // every contribution at once: a collapsed body, a full body, names, rendered
-// timestamps, a folded card, and the header.
+// timestamps, a folded card, A QUOTE LINE, and the header.
 //
 // 🔴 It deliberately does NOT call resumeChatMessageChars — an assertion written
 // against the production accountant is true by construction and would survive
 // every mutant of it.
+//
+// The QUOTE LINE (T-4e95, 2026-08-21) is billed for the same reason everything
+// else here is: `reply_to_chat.content` and `.from_name` are PROSE the payload
+// carries, so a snapshot full of replies costs runes the budget must see. Its
+// `id` is not billed, under this file's flat "no id-shaped field" rule. This
+// was added after a mutant run measured the gap: deleting the quote terms from
+// resumeChatMessageChars left the whole Go package green.
 //
 // MUTANT: drop ANY one term from resumeChatMessageChars, or drop the
 // generated_at / cut-hint terms from the overview, → red here. The peek/full
@@ -682,6 +689,12 @@ func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T)
 	putChat(t, api, "c-card", "m-exec", wireOwnerID, "請示", 100,
 		map[string]any{"reply_card_id": "rc-size"})
 	putChat(t, api, "c-long", "m-peer", "m-exec", strings.Repeat("長", 900), 101, nil)
+	// A REPLY, so the block carries a quote line whose content and from_name are
+	// prose the estimate has to cover. The target is c-card, already in the
+	// fixture — and the quote is built for it regardless of that, which is the
+	// server's own no-optimisation rule.
+	putChat(t, api, "c-reply", "m-exec", "m-peer", "那就先照這個做", 102,
+		map[string]any{chatReplyToMetaKey: "c-card"})
 
 	full := resumeSnapshot(t, api, "m-exec")
 	peek := peekResumeSize(t, api, "m-exec")
@@ -694,7 +707,7 @@ func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T)
 	}
 
 	want := len([]rune(full.GeneratedAt)) + len([]rune(full.ChatEarlierOmitted.Hint))
-	sawCard, sawCollapse := false, false
+	sawCard, sawCollapse, sawQuote := false, false, false
 	for _, m := range full.Chat {
 		want += len([]rune(m.Body)) +
 			len([]rune(m.FromName)) + len([]rune(m.ToName)) +
@@ -702,6 +715,13 @@ func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T)
 			len(strconv.Itoa(m.BodyOmittedChars))
 		if m.BodyOmittedChars > 0 {
 			sawCollapse = true
+		}
+		if m.ReplyToChat != nil {
+			sawQuote = true
+			// The quote's ID is deliberately NOT added — same flat rule as every
+			// other id-shaped field this estimate skips.
+			want += len([]rune(m.ReplyToChat.FromName)) +
+				len([]rune(m.ReplyToChat.Content))
 		}
 		if m.Card != nil {
 			sawCard = true
@@ -716,9 +736,9 @@ func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T)
 	}
 	// Anti-vacuity: if the payload did not actually exercise a card and a
 	// collapse, this whole comparison proves much less than it looks like.
-	if !sawCard || !sawCollapse {
-		t.Fatalf("fixture must exercise a folded card AND a collapsed body (card=%v collapse=%v)",
-			sawCard, sawCollapse)
+	if !sawCard || !sawCollapse || !sawQuote {
+		t.Fatalf("fixture must exercise a folded card AND a collapsed body AND a "+
+			"quote line (card=%v collapse=%v quote=%v)", sawCard, sawCollapse, sawQuote)
 	}
 	if full.Overview.ChatChars != want {
 		t.Fatalf("chat_chars must count everything the block carries: want %d, got %d",

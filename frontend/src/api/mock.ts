@@ -37,6 +37,7 @@ import type {
   Api,
   ChatCursor,
   ChatMessage,
+  ChatReplyQuote,
   ChatReadReceipt,
   ChatAttachmentInput,
   PushSubscriptionInput,
@@ -831,6 +832,56 @@ function mockReplyCardStatusOf(
   if (!replyCardId) return null;
   const card = replyCards.find((c) => c.id === replyCardId);
   return card ? card.status : null;
+}
+
+/** How much of a quoted message a quote line carries. Mirrors the SERVER's
+ * `chatReplyQuoteMaxChars` — the mock has to hold its own copy because it has no
+ * server to ask, and this is the one place it is written on this side. */
+const MOCK_REPLY_QUOTE_MAX_CHARS = 60;
+
+/** Read-time join mirroring the server's `reply_to_chat`: the message a reply
+ * quotes, snapshotted as the read happens.
+ *
+ * 🔴 UNCONDITIONAL, exactly like the server (T-4e95, owner ruling 2026-08-21).
+ * No "is it already in this window" check, no cache. null when the message
+ * replies to nothing AND null when it replies to something the log no longer
+ * carries — the caller tells the two apart by `replyTo`, which never
+ * disappears. Mock mode exists so an offline preview behaves like the real
+ * thing; a mock that only sometimes attached the quote would preview a bug the
+ * server does not have. */
+function mockReplyToChatOf(replyTo: string | null | undefined): ChatReplyQuote | null {
+  if (!replyTo) return null;
+  const quoted = chatLog.find((m) => m.id === replyTo);
+  if (!quoted) return null;
+  const oneLine = quoted.body.split(/\s+/).filter(Boolean).join(" ");
+  // Cut by CODE POINT, not by `.length`. The server counts runes, and
+  // String.prototype.length counts UTF-16 units — they agree on the CJK this
+  // studio is mostly written in and disagree on anything above the BMP (an
+  // emoji is two units and one rune), which is exactly the kind of quiet
+  // divergence a mock exists not to have.
+  const runes = [...oneLine];
+  return {
+    id: quoted.id,
+    from: quoted.from,
+    // "" like the server on every read that resolves no display names — which
+    // is every read the browser makes.
+    fromName: "",
+    content:
+      runes.length > MOCK_REPLY_QUOTE_MAX_CHARS
+        ? runes.slice(0, MOCK_REPLY_QUOTE_MAX_CHARS).join("") + "\u2026"
+        : oneLine,
+  };
+}
+
+/** One logged message as a READ serves it: a copy (so callers never mutate the
+ * log) carrying both read-time joins. Every mock chat read goes through this,
+ * for the same reason every server read goes through servedChatMessageDTO. */
+function mockServedChatMessage(m: ChatMessage): ChatMessage {
+  return {
+    ...m,
+    replyCardStatus: mockReplyCardStatusOf(m.replyCardId),
+    replyToChat: mockReplyToChatOf(m.replyTo),
+  };
 }
 
 /** Terminal task statuses (spec: 已完成/終止 為終態) — shared by the mock's
@@ -2779,28 +2830,9 @@ export const mockApi: Api = {
       const newest = Math.max(...msgs.map((m) => m.ts));
       markRead(MOCK_OWNER_ID, withId, newest);
     }
-    // Read-time reply_card_status join (server parity) — a copy per message so
-    // callers never mutate the log.
-    return msgs.map((m) => ({
-      ...m,
-      replyCardStatus: mockReplyCardStatusOf(m.replyCardId),
-    }));
-  },
-
-  async listChatByIds(ids: string[]): Promise<ChatMessage[]> {
-    // Mock twin of GET /api/chat?ids= — the named messages, oldest→newest, with
-    // NO read-watermark side effect. Caller-blind, exactly like the server since
-    // T-4e95. All-or-nothing on an unknown id (server parity: a short array is
-    // indistinguishable from a message that was simply not asked for).
-    if (ids.length === 0) return [];
-    const byId = new Map(chatLog.map((m) => [m.id, m]));
-    const found = ids.map((id) => byId.get(id));
-    const missing = ids.find((id) => !byId.has(id));
-    if (missing) throw new Error(`no message carries id ${missing}`);
-    return (found as ChatMessage[])
-      .slice()
-      .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-      .map((m) => ({ ...m, replyCardStatus: mockReplyCardStatusOf(m.replyCardId) }));
+    // Read-time joins (server parity) — a copy per message so callers never
+    // mutate the log.
+    return msgs.map(mockServedChatMessage);
   },
 
   async peekChat(withId: string, limit = 30): Promise<ChatMessage[]> {
@@ -2816,10 +2848,7 @@ export const mockApi: Api = {
     if (limit >= 0) {
       msgs = limit === 0 ? [] : msgs.slice(-limit);
     }
-    return msgs.map((m) => ({
-      ...m,
-      replyCardStatus: mockReplyCardStatusOf(m.replyCardId),
-    }));
+    return msgs.map(mockServedChatMessage);
   },
 
   async listChatAttachments(withId: string): Promise<GalleryAttachment[]> {
@@ -2884,24 +2913,14 @@ export const mockApi: Api = {
         isImage: mime.startsWith("image/"),
       };
     });
-    // The quote link (T-4e95). The mock enforces the SAME two refusals the
-    // server does, because the point of mock mode is that offline preview
-    // behaves like the real thing: the target must EXIST, and it must be in the
-    // SAME conversation as the message being posted. A mock that accepted
-    // anything would let an offline session build a reply the server rejects.
-    if (msg.replyTo) {
-      const quoted = chatLog.find((m) => m.id === msg.replyTo);
-      if (!quoted) {
-        throw new Error(`reply_to names no message (${msg.replyTo})`);
-      }
-      const sameConversation =
-        (quoted.from === MOCK_OWNER_ID && quoted.to === msg.to) ||
-        (quoted.from === msg.to && quoted.to === MOCK_OWNER_ID);
-      if (!sameConversation) {
-        throw new Error(
-          `reply_to (${msg.replyTo}) is a message in another conversation`
-        );
-      }
+    // The quote link (T-4e95). The mock enforces the SAME refusal the server
+    // does, and only that one: the target must EXIST. The same-conversation
+    // refusal that used to sit here went with the server's on 2026-08-21 —
+    // quoting a line out of another conversation is the use case now, and a
+    // mock that still refused it would make offline preview disagree with the
+    // real thing about the very behaviour this change exists to add.
+    if (msg.replyTo && !chatLog.some((m) => m.id === msg.replyTo)) {
+      throw new Error(`reply_to names no message (${msg.replyTo})`);
     }
     const sent: ChatMessage = {
       id: `mock-${stamp}-${++mockChatSeq}`,
@@ -2917,7 +2936,11 @@ export const mockApi: Api = {
       replyTo: msg.replyTo ?? null,
     };
     chatLog.push(sent);
-    return sent;
+    // Echoed through the SAME read projection the listing uses, because the
+    // server echoes through servedChatMessageDTO: a reply's quote is on the POST
+    // response too, and a mock that left it off would have the thread flicker
+    // between "quoted" and "not quoted" offline and not online.
+    return mockServedChatMessage(sent);
   },
 
   async markChatRead(mark: {

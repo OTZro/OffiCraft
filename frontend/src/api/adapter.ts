@@ -102,16 +102,41 @@ export interface ChatMessage {
    * rather than in a second, separately-joined card list. null ⇒ no card. */
   card?: ChatInlineReplyCardView | null;
   /** The id of the message this one is REPLYING TO (wire `reply_to`), or null
-   * when it replies to nothing. Always an id in THIS conversation — the server
-   * refuses a reply_to pointing anywhere else at post time.
-   *
-   * 🔴 THE ID ALONE (T-4e95, owner ruling). No name and no excerpt of the
-   * quoted message rides here: that text already exists under its own id, and a
-   * copy beside every reply is a second place for the same sentence to live.
-   * The thread resolves the quote from the messages it already holds, and falls
-   * back to a by-id read (`listChatByIds`) when the quoted message has scrolled
-   * out of the loaded window. */
+   * when it replies to nothing. It is the ONE fact about whether this message
+   * is a reply, and it never goes away. It may name a message in ANOTHER
+   * conversation (owner ruling, 2026-08-21). */
   replyTo?: string | null;
+  /** WHAT this message is replying to (wire `reply_to_chat`) — the quoted
+   * sender and a server-shortened line of what they said, rebuilt by the server
+   * on every read. null when `replyTo` is null, and null ALSO when `replyTo` is
+   * set but the quoted message no longer exists.
+   *
+   * 🔴 THE UI READS THIS AND NOTHING ELSE (T-4e95, owner ruling 2026-08-21).
+   * There is no lookup, no fallback to the loaded window, no re-fetch and no
+   * retry: either the snapshot is here or the original is gone, and "gone" is a
+   * settled answer that renders as one fixed sentence. The shape this replaced
+   * shipped the id alone and made the browser go and find the rest, which meant
+   * a request that could fail, a temporary lie on screen while it had failed,
+   * and a story about healing that lie later — three states that look identical
+   * to the eye whether they are right or wrong. */
+  replyToChat?: ChatReplyQuote | null;
+}
+
+/** The quoted message a reply carries with it (wire `ChatReplyQuoteDTO`).
+ *
+ * `from` / `fromName` are `ChatMessage`'s own convention: `from` is the ADDRESS
+ * and always present, `fromName` the display name beside it and `""` on the
+ * reads that resolve no names (everything but the wake snapshot) — so the
+ * thread resolves the name from its roster exactly as it does for any other
+ * sender rather than trusting this one to be filled. */
+export interface ChatReplyQuote {
+  id: string;
+  from: string;
+  fromName: string;
+  /** One line of the quoted body, already whitespace-collapsed and shortened BY
+   * THE SERVER (the length is defined there and nowhere else). `""` is an
+   * ordinary value — an attachment-only message has no text to quote. */
+  content: string;
 }
 
 /** One reply card folded onto the chat message that opened it (view model of
@@ -1624,17 +1649,6 @@ export interface Api {
    * http adapter fetches the unfiltered stream (`limit=-1`) and applies the
    * same participant filter + recent-window cap client-side. */
   peekChat(withId: string, limit?: number): Promise<ChatMessage[]>;
-  /** Re-read NAMED messages (`GET /api/chat?ids=`): those messages in full,
-   * oldest→newest, with NO read-watermark side effect. Caller-blind — it
-   * reaches exactly as far as the ordinary listing does (T-4e95 aligned the two
-   * doors; before that this one refused a message between two other members
-   * while `listChat` served the same row to the same caller).
-   *
-   * The thread uses it to resolve a `replyTo` whose target has scrolled out of
-   * the loaded window — the alternative was shipping a copy of the quoted text
-   * on every reply, which the owner ruled against. ALL OR NOTHING: one unknown
-   * id rejects the whole call (throws). At most 20 ids per call. */
-  listChatByIds(ids: string[]): Promise<ChatMessage[]>;
   /** The M2 gallery query (`GET /api/chat/attachments?with=<memberId>`): every
    * attachment of the member's conversations, flattened newest→oldest —
    * owner↔member BOTH directions AND the member's inter-agent threads — each
@@ -1658,8 +1672,9 @@ export interface Api {
     body: string;
     attachments?: ChatAttachmentInput[];
     /** The id of the message this post REPLIES TO, when it is a reply. The
-     * server validates it (must exist, must be in the SAME conversation) and is
-     * the only writer of the stored link — a forged `meta.reply_to` is dropped.
+     * server checks it EXISTS — and nothing else: a reply may quote a message
+     * out of another conversation (owner ruling, 2026-08-21). The server is the
+     * only writer of the stored link; a forged `meta.reply_to` is dropped.
      * Omitted on an ordinary post. */
     replyTo?: string;
   }): Promise<ChatMessage>;

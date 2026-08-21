@@ -694,15 +694,18 @@ export const en: Dict = {
     expandMessage: "Open full view",
     // T-4e95 reply-to-a-message: the per-row reply entry, the "replying to"
     // banner above the composer and its x, and the quote line that points a
-    // message back at the one it answers. replyQuoteGone is the honest miss —
-    // the quoted message is older than the loaded window and could not be read
-    // back; it neither pretends nor spins.
+    // message back at the one it answers.
+    //
+    // replyQuoteGone is the ONE miss sentence, and it is FIXED. Since
+    // 2026-08-21 the server ships the quoted message alongside every reply on
+    // every read, so the browser never waits for one: the only way this line
+    // appears is that the original is genuinely gone (cleared, or its sender
+    // removed). It is not retried and never re-resolves into something else.
     replyAction: "Reply",
     replyingTo: (name: string) => `Replying to ${name}`,
     replyCancel: "Cancel reply",
     replyQuoteJump: "Go to the original message",
-    replyQuoteGone: "an earlier message",
-    replyQuoteAttachment: "(attachment)",
+    replyQuoteGone: "This message no longer exists",
     // The quote row's own accessible name. This repo has no sr-only utility
     // (see MemberCard.presence-a11y.test.tsx), so the "this is a quotation, not
     // what this person is saying now" fact travels as an aria-label on the row.

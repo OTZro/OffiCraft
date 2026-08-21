@@ -781,14 +781,15 @@ export const zh = {
     expandMessage: "放大閱讀",
     // T-4e95「回覆這則」：每則訊息角落的回覆入口、輸入框上方的「正在回覆」
     // 橫幅與它的 x，以及訊息上方那條指回原訊息的引用列。
-    // replyQuoteGone 是誠實的落空：被回覆的那則已經捲出載入範圍，撈也撈不到
-    // ——不假裝還在，也不無限轉圈。
+    // replyQuoteGone 是唯一的落空文案，而且是**固定**的：被引用的那則訊息
+    // 已經不在了（被清掉、或發話的成員已經移除）。它不重試、不補撈、不會在
+    // 下一個事件來時自己變成別的樣子——因為 2026-08-21 起，引用內容是伺服器
+    // 每次讀取都現組後隨訊息一起送來的，前端沒有「還沒撈到」這個狀態。
     replyAction: "回覆這則",
     replyingTo: (name: string) => `正在回覆 ${name}`,
     replyCancel: "取消回覆",
     replyQuoteJump: "跳到原訊息",
-    replyQuoteGone: "較早的一則訊息",
-    replyQuoteAttachment: "（附件）",
+    replyQuoteGone: "這則訊息已不存在",
     // 引用列自己的無障礙名稱。本 repo 沒有 sr-only／visually-hidden utility
     // （見 MemberCard.presence-a11y.test.tsx），所以「這句是引用的，不是這個人
     // 現在說的」這件事只能靠 aria-label 帶。少了它，一則回覆在無障礙樹上會被

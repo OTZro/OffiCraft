@@ -10,8 +10,17 @@
 //   • sending carries the target, and clears it (the NEXT message is not a
 //     reply too);
 //   • switching targets, cancelling and re-aiming leaves no stale state;
-//   • a quote whose target is in the loaded window is clickable and locates it;
-//     one that is older renders as an honest label, not a dead button.
+//   • a quote renders WHAT THE SERVER SENT (`replyToChat`) and nothing else;
+//     when the server sent none, one fixed sentence and no dead button.
+//
+// 🔴 WHAT LEFT THIS FILE ON 2026-08-21, AND WHY IT IS NOT COMING BACK. The wire
+// used to carry the quoted id alone and this component fetched the rest
+// (useQuotedMessages). Half a dozen tests here pinned the states that fetch
+// created — "asked and missed", "not asked yet", the StrictMode double-invoke
+// that discarded the answer, the mid-flight re-render that cancelled it. Those
+// tests are deleted, not ported: the states are gone, and a test that keeps
+// asserting a state the code cannot enter is a test that passes for the wrong
+// reason forever.
 //
 // The api layer is mocked at the useChat seam, matching the other ChatArea
 // tests. GEOMETRY IS NOT TESTED HERE — jsdom has no layout engine, so hover
@@ -19,7 +28,6 @@
 // (visual-guards/chat-reply-to.ct.spec.tsx). A jsdom test that "checked" those
 // would be green against a completely unstyled button.
 
-import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
@@ -86,8 +94,18 @@ function mkMsg(over: Partial<ChatMessage> & { id: string }): ChatMessage {
     replyCardId: null,
     replyCardStatus: null,
     replyTo: null,
+    replyToChat: null,
     ...over,
   };
+}
+
+/** The quote the SERVER attaches to a reply (`reply_to_chat`). Written as a
+ * helper so every fixture builds it the one way the wire does: the content is
+ * already whitespace-collapsed and already shortened server-side, and
+ * `fromName` is "" on every read the browser makes (the thread resolves the
+ * name from its roster, exactly as it does for a message's own sender). */
+function mkQuote(id: string, from: string, content: string) {
+  return { id, from, fromName: "", content };
 }
 
 const m1 = mkMember("m1", "Mira");
@@ -98,21 +116,6 @@ function renderChat() {
     <I18nProvider>
       <ChatArea member={m1} />
     </I18nProvider>,
-  );
-}
-
-/** The SAME tree the app actually mounts. main.tsx wraps the whole app in
- * <StrictMode>, which in dev runs every effect setup → cleanup → setup. That
- * is not a detail: it is a distinct execution order that has already broken
- * this feature once (review D1) in a way production could not reproduce, so
- * the quote path is rendered both ways. */
-function renderChatStrict() {
-  return render(
-    <StrictMode>
-      <I18nProvider>
-        <ChatArea member={m1} />
-      </I18nProvider>
-    </StrictMode>,
   );
 }
 
@@ -248,7 +251,7 @@ describe("ChatArea 回覆這則", () => {
     expect(x.getAttribute("title")).toBe(zh.chat.replyCancel);
   });
 
-  it("tells the accessibility tree WHICH sentence is the quotation", async () => {
+  it("tells the accessibility tree WHICH sentence is the quotation", () => {
     // 🔴 THE GAP THIS PINS WAS MEASURED IN A REAL BROWSER, on a real <ChatArea>
     // rather than a CT story: the quote row was a bare <div> (role null,
     // aria-label null), so a reply linearised into
@@ -273,10 +276,13 @@ describe("ChatArea 回覆這則", () => {
         body: "我回的",
         ts: 2,
         replyTo: "c-1",
+        replyToChat: mkQuote("c-1", "m1", "他說的"),
       }),
-      // A quote whose target is not in the window and has not come back yet:
-      // there is no sender to name, and naming one would be a coin flip (the
-      // banner's own rule). It must still announce itself as a quotation.
+      // A reply whose ORIGINAL IS GONE: the server sent `reply_to` and no
+      // `reply_to_chat`, so there is no sender to name and naming one would be
+      // a coin flip (the banner's own rule). It must still announce itself as a
+      // quotation — that is the state most at risk of losing the role, because
+      // it is the one with the least in it.
       mkMsg({
         id: "c-3",
         from: "owner",
@@ -284,6 +290,7 @@ describe("ChatArea 回覆這則", () => {
         body: "回更早的",
         ts: 3,
         replyTo: "c-far",
+        replyToChat: null,
       }),
     ];
     // Guard against the vacuous version: an empty dictionary value would make
@@ -312,19 +319,13 @@ describe("ChatArea 回覆這則", () => {
     );
 
     // …and generically when we have not. No name, no claim — the same rule the
-    // banner and `quoteWho` already follow. Asserted BOTH before and after the
-    // by-id read misses: an unresolved quote and a settled-miss quote are two
-    // different states of the same row, and neither may drop the announcement.
-    within(rowOf(container, "c-3")).getByRole("blockquote", {
+    // banner and `quoteWho` already follow. Read SYNCHRONOUSLY on the first
+    // render, with no waitFor: there is nothing in flight, so a row that only
+    // became correct later would be a row that was wrong first.
+    const goneRow = within(rowOf(container, "c-3")).getByRole("blockquote", {
       name: zh.chat.replyQuoteRole,
     });
-    await waitFor(() =>
-      expect(
-        within(rowOf(container, "c-3")).getByRole("blockquote", {
-          name: zh.chat.replyQuoteRole,
-        }).textContent,
-      ).toContain(zh.chat.replyQuoteGone),
-    );
+    expect(goneRow.textContent).toContain(zh.chat.replyQuoteGone);
 
     // The message's OWN body is not inside the quotation — if it were, the tree
     // would be back to one undivided run of text.
@@ -365,11 +366,19 @@ describe("ChatArea 回覆這則", () => {
     expect(document.activeElement).toBe(input(container));
   });
 
-  it("quotes an attachment-only message by its attachment label, never as a blank", () => {
-    // Reported in r16 and r17 and not fixed either time. A message with no text
-    // has nothing to excerpt, and 「正在回覆 X」 followed by empty space reads as
-    // a half-rendered banner rather than as a picture. Both surfaces that quote
-    // — the composer banner and the sent reply's quote row — have to say it.
+  it("quotes a text-less original as a NAMED, EMPTY line — not as a missing one", () => {
+    // The server sends `content: ""` for an original that carried only
+    // attachments, and says so in the spec: "" is an ORDINARY value, and the way
+    // a missing original is said is the ABSENCE of the whole reply_to_chat
+    // object. Two different facts about the conversation — "there was nothing to
+    // quote" vs "there is nothing to quote FROM" — and the row must not fold one
+    // into the other.
+    //
+    // ⚠️ THIS REPLACES an earlier test that asserted a 「（附件）」 label here.
+    // That label was invented by the browser out of the quoted message's
+    // attachment list, which the browser only had because it was resolving the
+    // quote itself. It no longer resolves anything, and the owner ruled the
+    // empty content legal rather than have the server invent text for it.
     messages = [
       mkMsg({
         id: "c-att",
@@ -393,21 +402,18 @@ describe("ChatArea 回覆這則", () => {
         body: "收到",
         ts: 2,
         replyTo: "c-att",
+        replyToChat: mkQuote("c-att", "m1", ""),
       }),
     ];
-    expect(zh.chat.replyQuoteAttachment.length).toBeGreaterThan(0);
     const { container } = renderChat();
 
-    // ① the sent reply's quote row
-    const quoteBody = rowOf(container, "c-reply").querySelector(
-      ".chat__msg-quote__body",
-    )!;
-    expect(quoteBody.textContent).toBe(zh.chat.replyQuoteAttachment);
-
-    // ② the composer banner, aiming at the same message
-    fireEvent.click(rowOf(container, "c-att").querySelector(".chat__msg-reply")!);
-    const bannerBody = container.querySelector(".chat__reply-banner__body")!;
-    expect(bannerBody.textContent).toBe(zh.chat.replyQuoteAttachment);
+    const quote = rowOf(container, "c-reply").querySelector(".chat__msg-quote")!;
+    // The sender IS known, so the row names them…
+    expect(quote.querySelector(".chat__msg-quote__who")?.textContent).toBe("Mira");
+    // …the body is empty, honestly…
+    expect(quote.querySelector(".chat__msg-quote__body")?.textContent).toBe("");
+    // …and it is NOT the "gone" sentence, which is the whole point.
+    expect(quote.textContent).not.toContain(zh.chat.replyQuoteGone);
   });
 
   it("clicking it names the quoted sender and quotes what they said, above the input", () => {
@@ -483,7 +489,15 @@ describe("ChatArea 回覆這則", () => {
   it("a sent reply shows what it answered, and the quote clicks back to it", () => {
     messages = [
       ...messages,
-      mkMsg({ id: "c-5", from: "owner", to: "m1", body: "答案", ts: 5, replyTo: "c-1" }),
+      mkMsg({
+        id: "c-5",
+        from: "owner",
+        to: "m1",
+        body: "答案",
+        ts: 5,
+        replyTo: "c-1",
+        replyToChat: mkQuote("c-1", "m1", "第一個問題"),
+      }),
     ];
     const { container } = renderChat();
 
@@ -504,46 +518,17 @@ describe("ChatArea 回覆這則", () => {
     expect(scrolled).toContain(rowOf(container, "c-1"));
   });
 
-  it("resolves an out-of-window quote even when the composer re-renders mid-flight", async () => {
-    // T-4e95 review B1. The by-id read is fired from an effect keyed on the set
-    // of unresolved ids, and asking marks them in a ref WITHOUT re-rendering. So
-    // the very next render — one keystroke is enough — recomputes that key as
-    // empty, React tears down the previous effect, and a cleanup that cancelled
-    // the in-flight read would drop the answer. The ids are already marked
-    // asked, so nothing would ever ask again: the quote sits at "…" forever.
+  it("offers the reply entry on EVERY row, the owner's own conversation or not", () => {
+    // 🔴 THIS TEST WAS THE EXACT OPPOSITE UNTIL 2026-08-21, and the reversal is
+    // the owner's. It used to assert that an inter-agent row (Mira→Kyle) carries
+    // NO entry, because the server refused a reply_to that crossed conversations
+    // and the button would have 400'd on every press.
     //
-    // The typing below is the WHOLE test. Without it the effect is never torn
-    // down and the bug cannot appear — which is exactly why the existing
-    // out-of-window test passed while this was broken.
-    messages = [
-      mkMsg({
-        id: "c-9",
-        from: "owner",
-        to: "m1",
-        body: "回覆很久以前那則",
-        ts: 9,
-        replyTo: "c-longgone",
-      }),
-    ];
-    const { container } = renderChat();
-    fireEvent.change(input(container), { target: { value: "一" } });
-    fireEvent.change(input(container), { target: { value: "一二" } });
-
-    const quote = rowOf(container, "c-9").querySelector(".chat__msg-quote")!;
-    await waitFor(() =>
-      expect(quote.textContent).toContain("較早的一則訊息"),
-    );
-  });
-
-  it("offers NO reply entry on a message the owner is not a party to", () => {
-    // 🔴 THE AC IS 每一則, BUT A REPLY HAS TO BE SENDABLE. This thread also shows
-    // messages the owner is not in: an inter-agent run (Mira→Kyle), and the
-    // server-authored 「系統」 line. A reply addresses {owner, peer} and carries
-    // the quoted id, and the server refuses a target from another conversation —
-    // the owner's own ruling. So an entry on those rows is a button that 400s
-    // every time, and the composer only console.warns on failure: the message
-    // vanishes, the banner stays, nothing explains it. Reviewed and reproduced
-    // before this guard existed.
+    // The owner removed that refusal for one reason, stated as the requirement:
+    // 「引用另外兩個人對話裡的一句話來介入詢問」. So the entry on an inter-agent
+    // row is not a stray affordance, it is the feature — and the old assertion,
+    // left in place, would have quietly held the product back to the shape the
+    // ruling replaced.
     messages = [
       mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他問我的" }),
       mkMsg({ id: "c-own", from: "owner", to: "m1", body: "我回的", ts: 2 }),
@@ -551,8 +536,6 @@ describe("ChatArea 回覆這則", () => {
     ];
     const { container } = renderChat();
 
-    // Positive control: the rows that CAN be replied to still carry one, so a
-    // predicate that simply removed every entry would not pass this.
     for (const id of ["c-1", "c-own"]) {
       expect(
         rowOf(container, id).querySelector(".chat__msg-reply"),
@@ -560,8 +543,8 @@ describe("ChatArea 回覆這則", () => {
       ).not.toBeNull();
     }
     // The inter-agent run renders collapsed, so open it before looking — a row
-    // that is merely absent would satisfy this assertion without the predicate
-    // doing anything.
+    // that is merely absent would satisfy the assertion below without the
+    // component doing anything.
     fireEvent.click(
       container.querySelector(".chat__inter [aria-expanded]") as HTMLElement,
     );
@@ -569,11 +552,14 @@ describe("ChatArea 回覆這則", () => {
     expect(ia, "the inter-agent row is on screen once expanded").not.toBeNull();
     expect(
       ia.querySelector(".chat__msg-reply"),
-      "an inter-agent row must not offer a reply that cannot be sent",
-    ).toBeNull();
-    // NOT covered here: a server-authored 「系統」 line (sender "system"). It is
-    // refused by the same rule and the predicate excludes it, but it does not
-    // render as a plain row in this harness, so this guard does not witness it.
+      "the owner must be able to step into another pair's line by quoting it",
+    ).not.toBeNull();
+
+    // …and the entry really aims at THAT message: pressing it must put the
+    // inter-agent line in the composer banner, not the thread's peer. Without
+    // this half, an entry that existed but pointed somewhere else would pass.
+    fireEvent.click(ia.querySelector(".chat__msg-reply")!);
+    expect(banner(container)!.textContent).toContain("我轉給別人的");
   });
 
   it("names the owner's own message with the owner's label, never the raw id", () => {
@@ -607,6 +593,7 @@ describe("ChatArea 回覆這則", () => {
         body: "回覆它",
         ts: 2,
         replyTo: "c-ia",
+        replyToChat: mkQuote("c-ia", "m1", "被引用的那則"),
       }),
     ];
     const { container } = renderChat();
@@ -949,19 +936,22 @@ describe("ChatArea 回覆這則", () => {
     });
   });
 
-  it("still settles the quote under <StrictMode> — the dev-only double-invoke", async () => {
-    // T-4e95 review D1. The fix for B1 kept a `mounted` ref, and a version of
-    // it with ONLY a cleanup was correct under a single mount and broken under
-    // StrictMode: setup → cleanup → setup sets the ref false on that first
-    // teardown and nothing sets it back, so from mount onwards every by-id
-    // answer is discarded and the quote sits at "…" — B1's symptom, restored.
+  it("a reply whose original is GONE says one fixed sentence, at once and for good", () => {
+    // The state the server describes as `reply_to` set and `reply_to_chat`
+    // absent: the quoted message was cleared, or the member that held it is
+    // gone. It is SETTLED — the server rebuilt this snapshot on the read that
+    // produced this very row, so there is nothing left to try.
     //
-    // 🔴 IT ONLY BREAKS IN DEV, which is why this test exists rather than a
-    // comment. main.tsx wraps the app in <StrictMode>; production does not
-    // double-invoke, so the broken version shipped looking perfectly fine and
-    // was broken for everyone developing against it. Rendering through the
-    // ordinary helper cannot see this at all: with the fix reverted, the whole
-    // 2239-test suite stayed green.
+    // 🔴 READ SYNCHRONOUSLY, AND THAT IS HALF THE TEST. No `waitFor`: the
+    // sentence has to be right on the FIRST frame, because a row that only
+    // became correct later would have been WRONG first — and "wrong first,
+    // right later" is precisely the shape this redesign deleted. The version of
+    // this test that shipped before 2026-08-21 asserted the opposite: an
+    // ellipsis first, the miss second.
+    //
+    // That nothing later CHANGES it is a separate claim and lives in its own
+    // file (ChatArea.quote-no-fetch.test.tsx), which flushes every effect and
+    // microtask and then asserts the api was never touched.
     messages = [
       mkMsg({
         id: "c-9",
@@ -970,77 +960,85 @@ describe("ChatArea 回覆這則", () => {
         body: "回覆很久以前那則",
         ts: 9,
         replyTo: "c-longgone",
-      }),
-    ];
-    const { container } = renderChatStrict();
-
-    const quote = rowOf(container, "c-9").querySelector(".chat__msg-quote")!;
-    await waitFor(() =>
-      expect(quote.textContent).toContain("較早的一則訊息"),
-    );
-  });
-
-  it("a quote whose target is older than the loaded window says so instead of pretending", async () => {
-    messages = [
-      mkMsg({
-        id: "c-9",
-        from: "owner",
-        to: "m1",
-        body: "回覆很久以前那則",
-        ts: 9,
-        replyTo: "c-longgone",
+        replyToChat: null,
       }),
     ];
     const { container } = renderChat();
-
     const quote = rowOf(container, "c-9").querySelector(".chat__msg-quote")!;
-    // NO jump control: an affordance that scrolls nowhere is worse than a line
-    // that never offered one.
-    expect(quote.querySelector("[data-testid='msg-quote-jump']")).toBeNull();
-    // The label is the SETTLED state, reached only after the by-id read has
-    // been tried and missed — "not resolved yet" and "asked and not there" are
-    // different states and the row must not show the miss before it is one.
-    //
-    // ⚠️ THIS PAIR IS THE TEST, not the waitFor alone. `waitFor` succeeds if its
-    // callback holds on the FIRST frame, so on its own it cannot tell the two
-    // states apart — a reviewer swapped the undefined and null arms (which ships
-    // both symptoms this hook's header promises never to ship: claiming a miss
-    // before asking, and never settling) and all 20 tests here stayed green.
-    // The unresolved assertion below is what makes that a red.
-    expect(quote.textContent, "not asked yet ⇒ neither a name nor a miss").toContain(
+
+    // ① right immediately — and NOT via the ellipsis that used to mean
+    // "the by-id read has not landed yet".
+    expect(quote.textContent).toContain(zh.chat.replyQuoteGone);
+    expect(quote.textContent, "no spinner: nothing is in flight").not.toContain(
       "\u2026",
     );
-    expect(quote.textContent).not.toContain("較早的一則訊息");
-    await waitFor(() =>
-      expect(quote.textContent).toContain("較早的一則訊息"),
-    );
+    // ② NO jump control: an affordance that scrolls nowhere is worse than a
+    // line that never offered one.
+    expect(quote.querySelector("[data-testid='msg-quote-jump']")).toBeNull();
   });
 
-  it("the banner does NOT name anyone while the quoted message is unresolved", async () => {
+  it("the banner never names the peer for a target it cannot show", () => {
     // The banner used to fall back to the PEER's name whenever the quote had not
     // come back. That is a claim, not a placeholder: this conversation has only
-    // two people, so the fallback is a coin flip printed as a fact — and it sat
-    // next to the banner's own second half honestly saying 「較早的一則訊息」.
-    // Reproduced before the fix as: 「正在回覆 Mira較早的一則訊息」.
-    // The way this really happens: the owner aimed at something, went away, and
-    // by the time they come back the target has scrolled out of the loaded
-    // window — so the draft restores a target the window cannot resolve.
+    // two people, so the fallback is a coin flip printed as a fact.
+    //
+    // 🔴 HOW THIS STATE IS REACHED NOW, AND HOW IT IS NOT. The composer's target
+    // is resolved from the LOADED WINDOW alone — no fetch — so the only way to
+    // aim at something unshowable is a draft saved in an earlier session whose
+    // target has since scrolled out. There is no 「…」 phase on the way: nothing
+    // is being waited for, so the banner is in its final state on frame one.
     messages = [mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" })];
-    saveChatDraft("m1", {
-      text: "",
-      attachments: [],
-      replyTo: "c-longgone",
-    });
+    saveChatDraft("m1", { text: "", attachments: [], replyTo: "c-longgone" });
     const { container } = renderChat();
 
     const b = banner(container)!;
     expect(b).not.toBeNull();
-    // Not asked yet.
-    expect(b.textContent).toContain("\u2026");
+    expect(b.textContent).toContain(zh.chat.replyQuoteGone);
     expect(b.textContent, "never the peer's name").not.toContain("Mira");
-    // Asked and missed.
-    await waitFor(() => expect(b.textContent).toContain("較早的一則訊息"));
-    expect(b.textContent, "still never the peer's name").not.toContain("Mira");
+    expect(b.textContent, "and never a spinner").not.toContain("\u2026");
+  });
+
+  it("draws the quote from the WIRE, never from the message it can see", () => {
+    // 🔴 THE ONE TEST THAT SEPARATES THE TWO DESIGNS. Both rows are in the
+    // loaded window, so the old shape would have resolved the quote by looking
+    // `replyTo` up locally and rendering c-1's own body. The server's snapshot
+    // deliberately says something else here, and the row must show the server's
+    // version: the wire is the source, and "it is on screen anyway" is not a
+    // shortcut the component is allowed to take.
+    //
+    // This is not a hypothetical difference. The server SHORTENS the content
+    // (60 runes) and collapses its whitespace; a component that quietly fell
+    // back to the local body would render long, multi-line quotes for exactly
+    // the messages a reader can already see, and correct ones for the rest —
+    // an inconsistency nobody would think to look for.
+    messages = [
+      mkMsg({ id: "c-1", from: "m1", to: "owner", body: "第一個問題" }),
+      mkMsg({
+        id: "c-2",
+        from: "owner",
+        to: "m1",
+        body: "答案",
+        ts: 2,
+        replyTo: "c-1",
+        replyToChat: mkQuote("c-1", "m1", "伺服器組出來的那一行"),
+      }),
+    ];
+    const { container } = renderChat();
+
+    const body = rowOf(container, "c-2").querySelector(
+      ".chat__msg-quote__body",
+    )!;
+    expect(body.textContent).toBe("伺服器組出來的那一行");
+    expect(
+      body.textContent,
+      "the local copy of the quoted message must not win",
+    ).not.toBe("第一個問題");
+    // …and the JUMP is still offered, because that question IS answered locally:
+    // the target really is in the window. The two must not have been collapsed
+    // into one lookup.
+    expect(
+      rowOf(container, "c-2").querySelector("[data-testid='msg-quote-jump']"),
+    ).not.toBeNull();
   });
 
   it("a reply target does not follow the owner into the next conversation", async () => {

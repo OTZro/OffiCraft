@@ -737,11 +737,15 @@ describe("the roll-call: a field the seam gains cannot stay undrawn", () => {
         "id",
         "replyCardId",
         "replyCardStatus",
-        // T-4e95: the quoted message's id. It is an ID AND NOTHING ELSE by
-        // owner ruling, so there is no sibling name/excerpt field to expect
-        // beside it — a future one appearing here is exactly what this
-        // roll-call is for.
+        // T-4e95: the two halves of a reply, and they are deliberately two.
+        // `replyTo` is the id and says THAT this message is a reply; it never
+        // disappears. `replyToChat` is the quoted sender + a server-shortened
+        // line and says WHAT it replied to; it is rebuilt on every read and is
+        // legitimately null while `replyTo` is set (the original is gone).
+        // Collapsing them into one field is the change this roll-call is here
+        // to make announce itself.
         "replyTo",
+        "replyToChat",
         "to",
         "toName",
         "ts",

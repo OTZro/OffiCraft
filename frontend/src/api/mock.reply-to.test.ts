@@ -4,11 +4,14 @@
 // let someone build and demo a reply the real server rejects — the failure would
 // surface later, on a real backend, to somebody else.
 //
-// Pinned here, against the two refusals server/ocserverd/api_chat.go performs:
-//   • the quoted message must EXIST;
-//   • it must be in the SAME conversation as the message being posted;
+// Pinned here, against what server/ocserverd/api_chat.go actually does:
+//   • the quoted message must EXIST — the ONE refusal;
+//   • it does NOT have to be in the same conversation (owner ruling,
+//     2026-08-21). This was a refusal on both sides until that date, and a mock
+//     that still refused it would preview a product the server no longer is;
 //   • the accepted case really stores the link and serves it back;
-//   • the by-ids read is caller-blind and all-or-nothing, like the server's.
+//   • EVERY read attaches `replyToChat`, built from the log at read time,
+//     unconditionally — which is the whole of the current design.
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { mockApi, __resetMock } from "./mock";
@@ -55,27 +58,77 @@ describe("mock 回覆這則 — server parity", () => {
     expect(thread.some((m) => m.body === "孤兒")).toBe(false);
   });
 
-  it("refuses a reply_to that points at another conversation", async () => {
+  it("ACCEPTS a reply_to that points at another conversation", async () => {
+    // The reversal, and the reason the whole redesign exists: the owner quotes a
+    // line out of another conversation to step into it. This test read
+    // `.rejects.toThrow(/another conversation/)` until 2026-08-21.
     const elsewhere = await mockApi.postChat({ to: "kye", body: "別條線" });
 
-    await expect(
-      mockApi.postChat({ to: "mira", body: "側向引用", replyTo: elsewhere.id }),
-    ).rejects.toThrow(/another conversation/);
+    const reply = await mockApi.postChat({
+      to: "mira",
+      body: "側向引用",
+      replyTo: elsewhere.id,
+    });
+    expect(reply.replyTo).toBe(elsewhere.id);
+    // …and the quote crossed with it, or the reply is a pointer to nothing the
+    // reader can see.
+    expect(reply.replyToChat?.content).toBe("別條線");
   });
 
-  it("listChatByIds is caller-blind and all-or-nothing, like the server", async () => {
-    const a = await mockApi.postChat({ to: "mira", body: "一" });
-    const b = await mockApi.postChat({ to: "kye", body: "二" });
+  it("attaches replyToChat on EVERY read, with no condition", async () => {
+    // 🔴 SERVER PARITY IS THE POINT OF THIS TEST. The server builds the quote in
+    // servedChatMessageDTO, which every read door goes through; the mock builds
+    // it in mockServedChatMessage for the same reason. A mock that only attached
+    // it sometimes would make offline preview show a bug — a quote flickering
+    // between present and absent — that the real product does not have.
+    const quoted = await mockApi.postChat({ to: "mira", body: "被引用的那句" });
+    const reply = await mockApi.postChat({
+      to: "mira",
+      body: "答案",
+      replyTo: quoted.id,
+    });
 
-    // Two DIFFERENT conversations answered in one call: the by-ids read is not
-    // narrowed to any one thread (server parity since T-4e95).
-    const rows = await mockApi.listChatByIds([a.id, b.id]);
-    expect(rows.map((m) => m.id).sort()).toEqual([a.id, b.id].sort());
+    // ① the POST echo
+    expect(reply.replyToChat).toEqual({
+      id: quoted.id,
+      from: "owner",
+      fromName: "",
+      content: "被引用的那句",
+    });
+    // ② the listing, and ③ the read-only peek — both doors, both unconditional,
+    // and note the quoted message is IN both windows: "it is already here" is
+    // not a reason to skip it.
+    for (const [door, rows] of [
+      ["listChat", await mockApi.listChat("mira")],
+      ["peekChat", await mockApi.peekChat("mira")],
+    ] as const) {
+      const row = rows.find((m) => m.id === reply.id)!;
+      expect(row, `${door} must carry the reply`).toBeTruthy();
+      expect(row.replyToChat?.content, `${door} must carry the quote`).toBe(
+        "被引用的那句",
+      );
+      // …and a message that replies to nothing claims no quote, or a mock that
+      // stamped every row would pass the line above.
+      expect(rows.find((m) => m.id === quoted.id)?.replyToChat ?? null).toBeNull();
+    }
+  });
 
-    // One unknown id refuses the WHOLE call — a short array would be
-    // indistinguishable from "that message is gone".
-    await expect(mockApi.listChatByIds([a.id, "mock-gone"])).rejects.toThrow(
-      /mock-gone/,
-    );
+  it("shortens and flattens the quote content the way the server does", async () => {
+    // The length is the SERVER's (chatReplyQuoteMaxChars = 60) and the mock
+    // holds the only other copy of it. Asserted by rune count, not by a literal,
+    // so it stays true for the CJK this studio is mostly written in.
+    const quoted = await mockApi.postChat({
+      to: "mira",
+      body: "長".repeat(90) + "\n\n" + "話".repeat(30),
+    });
+    const reply = await mockApi.postChat({
+      to: "mira",
+      body: "tl;dr",
+      replyTo: quoted.id,
+    });
+    const content = reply.replyToChat!.content;
+    expect(content).not.toMatch(/[\n\r]/);
+    expect([...content]).toHaveLength(61); // 60 + the ellipsis
+    expect(content.endsWith("\u2026")).toBe(true);
   });
 });

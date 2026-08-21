@@ -18,6 +18,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -417,17 +418,97 @@ type chatMessageDTO struct {
 	Attachments     []chatAttachmentDTO `json:"attachments"`
 	// ReplyTo is the id of the message this one is REPLYING TO, "" when it
 	// replies to nothing. Stamped once at post time from ChatPostDTO.reply_to
-	// and never rewritten, and always an id in THIS message's own
-	// conversation — the post-time check refuses anything else.
+	// and never rewritten. It is the ONE fact about whether this message is a
+	// reply, and it never goes away — not even when the message it names does.
 	//
-	// 🔴 THE ID ALONE, and that is the whole design (T-4e95, owner ruling).
-	// No sender, no display name and no excerpt of the quoted message rides
-	// here. That text already exists under its own id; a copy of it shipped
-	// beside every reply is a second place for the same sentence to live and
-	// therefore a place it can disagree with itself. A reader that wants to
-	// show the quote re-reads the id with get_chat?ids=, which since T-4e95
-	// reaches exactly as far as the ordinary listing does.
+	// It may point OUT of this conversation (owner ruling, 2026-08-21): the
+	// owner replies to a line two other members exchanged in order to step in
+	// and ask about it. The post-time same-conversation refusal that used to
+	// live here is gone.
 	ReplyTo string `json:"reply_to"`
+	// ReplyToChat is the QUOTED MESSAGE, snapshotted at read time — nil (key
+	// omitted) when this message replies to nothing, and nil ALSO when it
+	// replies to something that can no longer be read.
+	//
+	// 🔴 BUILT UNCONDITIONALLY ON EVERY READ, and the absence of any condition
+	// is the design (T-4e95, owner ruling 2026-08-21, replacing the id-only
+	// wire). The previous shape shipped the id alone and left the reader to
+	// fetch what it named when it was not already on screen — which meant the
+	// reader had a fetch that could fail, a failure it had to render, and a
+	// story about healing that failure later. Every one of those was a branch,
+	// and a branch here looks IDENTICAL on screen whether it is right or wrong.
+	// There is deliberately no "the target is already in this batch" skip and
+	// no "only if asked" flag: the cheapest thing to get right is the thing
+	// that has one behaviour.
+	//
+	// nil-with-ReplyTo-set is a settled, permanent answer ("the original is
+	// gone"), NOT a miss to retry. Nothing on either side of this wire retries.
+	ReplyToChat *chatReplyQuoteDTO `json:"reply_to_chat,omitempty"`
+}
+
+// chatReplyQuoteDTO is the quoted message reduced to what a quote line draws:
+// who said it, and a short piece of what they said (ChatMessageDTO.reply_to_chat).
+//
+// From / FromName are chatMessageDTO's OWN convention, copied rather than
+// reinvented: From is the ADDRESS and always carried, FromName is the display
+// name carried IN ADDITION to it and left "" on the reads that do not resolve
+// names at all — exactly as chatMessageDTO.FromName behaves, and for the same
+// reason (a name that is really an id is worse than no name). chatGalleryEntryDTO
+// carries the same pair for the same reason.
+type chatReplyQuoteDTO struct {
+	ID       string `json:"id"`
+	From     string `json:"from"`
+	FromName string `json:"from_name"`
+	// Content is the quoted body as ONE line, shortened HERE — see
+	// chatReplyQuoteContent. "" is ordinary and legal: an attachment-only
+	// message has no text to quote.
+	Content string `json:"content"`
+}
+
+// chatReplyQuoteMaxChars is how much of a quoted message a quote line carries,
+// in runes. THE ONLY DEFINITION OF THAT LENGTH ANYWHERE — the browser used to
+// hold its own copy (ChatArea's QUOTE_EXCERPT_CHARS, now deleted) and two
+// copies of a display rule are two rules that eventually disagree, with neither
+// of them wrong. 60 is the number that copy already used, kept so the rendered
+// quote line does not change size under the owner as this ships.
+const chatReplyQuoteMaxChars = 60
+
+// chatReplyQuoteContent renders a quoted body as ONE quote line: runs of
+// whitespace (newlines included) collapse to single spaces, and the result is
+// cut to chatReplyQuoteMaxChars runes with an ellipsis standing in for what was
+// taken. A quote is a POINTER to a message, not a rendering of it — a
+// multi-line excerpt would push the reader's layout around for no gain.
+//
+// Cut by RUNES, never by bytes: a byte cut lands mid-codepoint on the very
+// content this studio is mostly written in.
+func chatReplyQuoteContent(body string) string {
+	oneLine := strings.Join(strings.Fields(body), " ")
+	r := []rune(oneLine)
+	if len(r) <= chatReplyQuoteMaxChars {
+		return oneLine
+	}
+	return string(r[:chatReplyQuoteMaxChars]) + "…"
+}
+
+// newChatReplyQuoteDTO projects the quoted MESSAGE into the quote line's view.
+//
+// names is nil on every read that does not resolve display names (the ordinary
+// listing, the by-ids read, the POST echo) and FromName is then "" — the SAME
+// answer chatMessageDTO.FromName gives on those reads, deliberately, so the
+// quote and the message it hangs under never disagree about whether this
+// payload carries names. Only the wake snapshot passes a map, and there the
+// owner's special case rides along with it.
+func newChatReplyQuoteDTO(m ChatMessage, names map[string]string) *chatReplyQuoteDTO {
+	fromName := ""
+	if names != nil {
+		fromName = resumeDisplayName(m.Sender, names)
+	}
+	return &chatReplyQuoteDTO{
+		ID:       m.ID,
+		From:     m.Sender,
+		FromName: fromName,
+		Content:  chatReplyQuoteContent(m.Body),
+	}
 }
 
 type chatGalleryEntryDTO struct {

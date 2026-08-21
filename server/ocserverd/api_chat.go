@@ -587,6 +587,17 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 		writeResolveError(w, err, "chat recipient", trimString(body.To))
 		return
 	}
+	// EXISTENCE IS THE ONLY GATE (owner ruling, 2026-08-21). There used to be a
+	// second one — the target had to sit in the SAME CONVERSATION as the message
+	// being posted — and it is deliberately gone: the owner wants to quote a
+	// line out of two other members' thread in order to step into it and ask
+	// about it, and that check made exactly that impossible. It was also never
+	// buying confidentiality, because the by-ids read already reaches as far as
+	// the ordinary listing does (serveChatByIDs' note) — the quoted text was
+	// readable before anyone quoted it.
+	//
+	// Existence stays, and stays a 400: an id naming no message is a mistake in
+	// THIS REQUEST, not a state of the world the server should store around.
 	if replyTo := trimString(strOrEmpty(body.ReplyTo)); replyTo != "" {
 		quoted, err := s.dal.ListChatByIDs([]string{replyTo})
 		if err != nil {
@@ -596,13 +607,6 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 		if len(quoted) == 0 {
 			writeError(w, http.StatusBadRequest,
 				fmt.Sprintf(chatReplyToUnknownMsg, replyTo))
-			return
-		}
-		if !sameChatConversation(
-			quoted[0].Sender, quoted[0].Recipient, currentActor(r), recipient,
-		) {
-			writeError(w, http.StatusBadRequest,
-				fmt.Sprintf(chatReplyToForeignMsg, replyTo))
 			return
 		}
 		meta[chatReplyToMetaKey] = replyTo
@@ -658,7 +662,43 @@ func (s *apiServer) servedChatMessageDTO(m ChatMessage) chatMessageDTO {
 			dto.ReplyCardStatus = c.Status
 		}
 	}
+	// The quote, joined HERE so that EVERY door that serves a chat message
+	// serves it: the listing, the history page, the by-ids read and the POST
+	// echo all come through this one function. Putting it on the individual
+	// handlers instead would be four places for one rule, and the door someone
+	// forgot would be indistinguishable on screen from a message whose original
+	// is genuinely gone.
+	dto.ReplyToChat = s.chatReplyQuote(dto.ReplyTo, nil)
 	return dto
+}
+
+// chatReplyQuote reads the message an id names and projects it into the quote
+// line's view. nil for "" (this message is not a reply) and nil for an id
+// nothing carries any more (the original was cleared, or the member it belonged
+// to is gone).
+//
+// 🔴 NO CONDITION, NO CACHE, NO BATCH (T-4e95, owner ruling 2026-08-21). One
+// point read per replying message, every time. Replies are rare and almost
+// always name something far out of the reader's loaded window, so the "it is
+// probably already on screen, skip it" optimisation would essentially never
+// fire — while costing a permanent second code path whose wrong answer looks
+// exactly like its right one.
+//
+// BEST EFFORT ON ERROR, matching the reply_card_status join directly above: a
+// failed lookup leaves the quote absent rather than failing the whole read. A
+// reader cannot act differently on "gone" and "the database hiccuped" anyway —
+// there is nothing to retry either way — and turning a chat listing into a 500
+// because one quoted row could not be read would take out the conversation to
+// protect one line of it.
+func (s *apiServer) chatReplyQuote(replyTo string, names map[string]string) *chatReplyQuoteDTO {
+	if replyTo == "" {
+		return nil
+	}
+	quoted, err := s.dal.ListChatByIDs([]string{replyTo})
+	if err != nil || len(quoted) == 0 {
+		return nil
+	}
+	return newChatReplyQuoteDTO(quoted[0], names)
 }
 
 // ── by-id re-read (T-a828) ───────────────────────────────────────────────────
@@ -710,13 +750,10 @@ const (
 	// not exist", which is a different and false statement.
 	chatReplyToUnknownMsg = "reply_to names no message (%s) — you can only reply to a message " +
 		"that exists; re-read the conversation and use the id it carries"
-	// chatReplyToForeignMsg refuses a reply_to pointing OUT of the conversation
-	// being posted into. Holding an id is not the same as having a reply target:
-	// a by-ids read reaches every conversation (see serveChatByIDs), so without
-	// this check a caller could quote a line out of two other members' thread and
-	// carry its text into a conversation it was never part of.
-	chatReplyToForeignMsg = "reply_to (%s) is a message in another conversation — a reply must " +
-		"quote a message between the same two parties as the message you are posting"
+	// (chatReplyToForeignMsg — the refusal for a reply_to pointing OUT of the
+	// conversation being posted into — was DELETED with the check itself on
+	// 2026-08-21, owner ruling. Quoting sideways into a thread is the use case
+	// now, not the abuse. See HandlePostChatApiChatPost.)
 )
 
 // requestedChatIDs normalises the repeatable ?ids= parameter: blanks dropped,
@@ -739,14 +776,6 @@ func requestedChatIDs(ids *[]string) []string {
 		out = append(out, id)
 	}
 	return out
-}
-
-// sameChatConversation asks whether two messages are between the SAME two
-// parties, in either direction. It is a set comparison, not an ordered one: a
-// reply travels the opposite way to the message it quotes, so requiring the
-// pairs to match positionally would refuse every honest reply.
-func sameChatConversation(aFrom, aTo, bFrom, bTo string) bool {
-	return (aFrom == bFrom && aTo == bTo) || (aFrom == bTo && aTo == bFrom)
 }
 
 // serveChatByIDs answers `?ids=` — the named messages IN FULL, oldest→newest.
@@ -1232,7 +1261,7 @@ func (s *apiServer) resumeSnapshotParts(actor string) (resumeWakeSnapshot, error
 	if err != nil {
 		return resumeWakeSnapshot{}, err
 	}
-	chat, cut, chatChars := resumeChatBlock(
+	chat, cut, chatChars := s.resumeChatBlock(
 		actor, msgs, names, cardsByID,
 		resumeChatPackBudget(s.chatBudget(), snap.GeneratedAt))
 	snap.Chat, snap.ChatCut = chat, cut
@@ -1326,8 +1355,13 @@ func resumeChatCarriesFullBody(subject string, m ChatMessage) bool {
 // resumeChatMessageDTO projects ONE message for the wake snapshot: names beside
 // ids, a rendered timestamp beside the epoch one, the body collapsed unless
 // exempt, and the reply card folded in place.
-func resumeChatMessageDTO(subject string, m ChatMessage, names map[string]string, cards map[string]ReplyCard) chatMessageDTO {
+func (s *apiServer) resumeChatMessageDTO(subject string, m ChatMessage, names map[string]string, cards map[string]ReplyCard) chatMessageDTO {
 	d := newChatMessageDTO(m)
+	// The SAME unconditional join the served path does (chatReplyQuote), with
+	// the snapshot's own name map handed in — so a waking agent reads what a
+	// reply was aimed at without a second tool call, exactly as the browser does
+	// without a second request.
+	d.ReplyToChat = s.chatReplyQuote(d.ReplyTo, names)
 	d.FromName = resumeDisplayName(m.Sender, names)
 	d.ToName = resumeDisplayName(m.Recipient, names)
 	d.TSDisplay = resumeDisplayTime(m.TS)
@@ -1408,6 +1442,14 @@ func resumeChatMessageChars(d chatMessageDTO) int {
 		utf8.RuneCountInString(d.ToName) +
 		utf8.RuneCountInString(d.TSDisplay) +
 		len(strconv.Itoa(d.BodyOmittedChars))
+	// The quote line is PROSE THIS PAYLOAD CARRIES, so it is billed like every
+	// other character the wake format adds. Its id is not, under the same flat
+	// rule as every other id-shaped field above — the rule, not a history about
+	// which fields happened to exist first.
+	if d.ReplyToChat != nil {
+		n += utf8.RuneCountInString(d.ReplyToChat.FromName) +
+			utf8.RuneCountInString(d.ReplyToChat.Content)
+	}
 	if d.Card != nil {
 		for _, o := range d.Card.Options {
 			n += utf8.RuneCountInString(o)
@@ -1451,14 +1493,14 @@ func resumeChatMessageChars(d chatMessageDTO) int {
 // construction, which is the defect this whole change exists to remove.
 //
 // Returns the messages oldest→newest, the cut marker, and the block's rune cost.
-func resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string, cards map[string]ReplyCard, budget int) ([]chatMessageDTO, resumeChatCutDTO, int) {
+func (s *apiServer) resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string, cards map[string]ReplyCard, budget int) ([]chatMessageDTO, resumeChatCutDTO, int) {
 	type packedMsg struct {
 		dto  chatMessageDTO
 		cost int
 	}
 	all := make([]packedMsg, 0, len(msgs))
 	for _, m := range msgs {
-		d := resumeChatMessageDTO(subject, m, names, cards)
+		d := s.resumeChatMessageDTO(subject, m, names, cards)
 		all = append(all, packedMsg{dto: d, cost: resumeChatMessageChars(d)})
 	}
 

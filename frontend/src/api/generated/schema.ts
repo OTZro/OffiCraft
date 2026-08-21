@@ -4685,12 +4685,22 @@ export interface components {
             reply_card_status: string;
             /**
              * Reply To
-             * @description The id of the message this one is REPLYING TO; ``""`` when it replies to nothing. Stamped at post time from ``ChatPostDTO.reply_to`` and never changed afterwards, and always an id in this message's own conversation (the post-time check refuses anything else).
+             * @description The id of the message this one is REPLYING TO; ``""`` when it replies to nothing. Stamped at post time from ``ChatPostDTO.reply_to`` and never changed afterwards. IT IS THE ONLY FACT ABOUT WHETHER THIS MESSAGE IS A REPLY — non-empty means yes, and it never disappears.
              *
-             *     IT IS THE ID ALONE, deliberately: no sender, no display name and no excerpt of the quoted message is carried here. That text already exists under its own id, and a second copy of it shipped beside every reply is a copy that can disagree with the original. A reader that wants to show the quote re-reads that id with ``get_chat`` (``?ids=``), which reaches exactly as far as the ordinary listing does.
+             *     The id MAY name a message in ANOTHER conversation: quoting a line two other people exchanged in order to step into it and ask about it is the point, not an accident (owner ruling, 2026-08-21).
+             *
+             *     WHAT WAS REPLIED TO travels beside it in ``reply_to_chat``, rebuilt on every read. The two answer different questions and a reader needs both: this one says a reply happened, that one says what it was aimed at — and that one can legitimately be absent while this one is set.
              * @default
              */
             reply_to: string;
+            /**
+             * @description A SNAPSHOT of the message ``reply_to`` names — who sent it and a short piece of what they said — built FRESH on every read. Never stored, never cached, and never a second source of truth: the quoted text lives in exactly one row and this is a projection of it taken at read time.
+             *
+             *     IT IS BUILT UNCONDITIONALLY for every message whose ``reply_to`` is non-empty. There is deliberately no "the target happens to be in this same batch, so skip it" optimisation and no "only when the client asks" flag: a reader must never have to decide whether to go and fetch something, because a reader that sometimes fetches is a reader that sometimes fails to.
+             *
+             *     ABSENT (``null``) means exactly one thing: ``reply_to`` is set and the message it names could not be read back — it was cleared, or it belonged to someone who is gone. That is a legitimate, permanent state and NOT an error; the message itself is served normally and ``reply_to`` is still on it. There is nothing to retry.
+             */
+            reply_to_chat?: components["schemas"]["ChatReplyQuoteDTO"] | null;
             /** To */
             to: string;
             /**
@@ -4735,11 +4745,13 @@ export interface components {
              * Reply To
              * @description OPTIONAL — the id of the message this one is REPLYING TO (a quote-reply, LINE-style). Omit it and nothing about the post changes.
              *
-             *     The referenced message must EXIST and must sit in the SAME CONVERSATION as the message you are posting: its {sender, recipient} pair must be the same two parties as {you, ``to``}. Anything else is a 400. Holding an id is not the same as having a reply target, and quoting out of a line you are not in would carry that text into a conversation it was never part of.
+             *     The referenced message must EXIST; an id that names nothing is a 400, because that is a mistake in this request rather than a state of the world.
+             *
+             *     IT DOES NOT HAVE TO BE IN THE CONVERSATION YOU ARE POSTING INTO (owner ruling, 2026-08-21). Quoting a line out of two other people's thread in order to step in and ask about it is the use case, not an abuse of one; the earlier same-conversation refusal is gone. Nothing is smuggled by doing so — a by-id read already reaches exactly as far as the ordinary listing does, so the quoted text was readable before the quote existed.
              *
              *     THE SERVER IS THE ONLY WRITER OF THIS LINK: a ``meta.reply_to`` you send yourself is DISCARDED before the message is stored, so the relation cannot be forged from the client — this parameter is the only door.
              *
-             *     NOTHING IS COPIED. The stored message carries the id alone; no sender, no name and no excerpt of the quoted message rides along. A reader that wants to show what was quoted re-reads that id with ``get_chat`` (``?ids=``).
+             *     NOTHING IS STORED TWICE. The stored message carries the id alone. What the quoted message SAID comes back on every read in ``ChatMessageDTO.reply_to_chat``, rebuilt from the original each time, so a reader never has to fetch it and a stale copy can never exist.
              * @default
              */
             reply_to: string;
@@ -4761,6 +4773,34 @@ export interface components {
             peer_id: string;
             /** Reader Id */
             reader_id: string;
+        };
+        /**
+         * ChatReplyQuoteDTO
+         * @description The message a reply QUOTES, reduced to what a quote line has to draw: who said it, and a short piece of what they said. Carried inside ``ChatMessageDTO.reply_to_chat`` and assembled at read time.
+         *
+         *     ``from`` / ``from_name`` follow ``ChatMessageDTO``'s own convention and nothing else: ``from`` is the ADDRESS and always present, ``from_name`` is the human name carried IN ADDITION to it. The pair is copied from the message DTO on purpose — a quote that named its sender differently from the way the rest of the chat names senders would be a second naming convention to keep in step.
+         */
+        ChatReplyQuoteDTO: {
+            /**
+             * Content
+             * @description The quoted message's body as a QUOTE LINE: whitespace collapsed to a single line and shortened by the SERVER to a fixed number of characters, with the ellipsis included when it was cut.
+             *
+             *     The length lives in exactly one place, and that place is the server. Two clients that each shortened this themselves would eventually disagree about how much of a quote is a quote, and neither would be wrong.
+             *
+             *     ``""`` IS AN ORDINARY, LEGAL VALUE: a message that carried only attachments has no text to quote. It is not a failure and not a placeholder for one — absence of the whole ``reply_to_chat`` object is how a missing original is said.
+             * @default
+             */
+            content: string;
+            /** From */
+            from: string;
+            /**
+             * From Name
+             * @description The quoted sender's DISPLAY name, resolved server-side exactly as ``ChatMessageDTO.from_name`` is — including the part that is easy to forget: only the reads that resolve names at all (the wake snapshot) fill it, and every other read leaves it ``""``. Honestly empty, never fabricated, and never a substitute for ``from``, which is always the address.
+             * @default
+             */
+            from_name: string;
+            /** Id */
+            id: string;
         };
         /**
          * ChatUnreadCountDTO

@@ -872,22 +872,6 @@ export const httpApi: Api = {
     return wire.map(toChatMessage);
   },
 
-  async listChatByIds(ids: string[]): Promise<ChatMessage[]> {
-    // GET /api/chat?ids=<id>&ids=<id> -> ChatMessageDTO[]: the named messages
-    // IN FULL, and NO read-watermark side effect. This is how the thread
-    // resolves a `reply_to` whose target has scrolled out of the loaded window
-    // — the alternative was shipping a copy of the quoted text beside every
-    // reply, which the owner ruled against (T-4e95).
-    //
-    // The server refuses the WHOLE call (404) when ANY id names no message, so
-    // callers batch only ids they were actually shown. At most 20 per call.
-    if (ids.length === 0) return [];
-    const wire = unwrap(
-      await client.GET("/api/chat", { params: { query: { ids } } }),
-    );
-    return wire.map(toChatMessage);
-  },
-
   async peekChat(withId: string, limit = 30): Promise<ChatMessage[]> {
     // READ-ONLY conversation view (no "list 即讀" watermark side effect): the
     // server ?peek=true (T-cf91) filters by ?with= and caps by limit EXACTLY
@@ -957,8 +941,8 @@ export const httpApi: Api = {
           // request type requires. (An earlier version of this comment said the
           // field was omitted on an ordinary post; it never was, and a comment
           // describing a wire shape the code does not produce is worse than no
-          // comment.) The server validates a non-empty value (exists + same
-          // conversation) and is the only writer of the stored link.
+          // comment.) The server checks a non-empty value EXISTS — and only
+          // that, since 2026-08-21 — and is the only writer of the stored link.
           reply_to: msg.replyTo ?? "",
           ...(attachments.length > 0
             ? {

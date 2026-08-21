@@ -2662,12 +2662,19 @@ def test_chat_reply_to_is_the_servers_link_not_the_callers(hctx: HCtx) -> None:
     """T-4e95 「回覆這則」 over the real wire.
 
     The repo charter puts the BEHAVIOURAL close-out of a wire change here, and
-    this field has three claims worth closing out over HTTP rather than only in
-    Go: the link round-trips, a link out of this conversation is refused, and a
-    caller-supplied ``meta.reply_to`` is discarded. The third is the one that
+    this field has four claims worth closing out over HTTP rather than only in
+    Go: the link round-trips, a link OUT of this conversation is ACCEPTED and
+    brings its quote with it, an id naming nothing is refused, and a
+    caller-supplied ``meta.reply_to`` is discarded. The last is the one that
     needs a real request the most — ``meta`` is copied through wholesale, so the
     only thing standing between a caller and an unvalidated link is a deletion
     the handler performs before it validates anything.
+
+    The second REVERSED on 2026-08-21 (owner ruling): this test asserted a 400
+    and an "another conversation" message until that date. The refusal is gone
+    because quoting a line out of two other people's thread in order to step in
+    and ask about it is the use case, and it was the one thing the refusal made
+    impossible.
     """
     quoted = hctx.client.post(
         "/api/chat",
@@ -2678,8 +2685,8 @@ def test_chat_reply_to_is_the_servers_link_not_the_callers(hctx: HCtx) -> None:
     quoted_id = quoted.json()["id"]
     assert quoted.json()["reply_to"] == "", "a plain post carries no link"
 
-    # The MAIN use case, and the direction a positional (rather than set)
-    # comparison would refuse: answering what the other party sent you.
+    # The commonest shape: answering what the other party sent you — a reply
+    # travelling the opposite way to the message it quotes.
     reply = hctx.client.post(
         "/api/chat",
         json={"to": "owner", "body": "reply-to-answer", "reply_to": quoted_id},
@@ -2695,17 +2702,19 @@ def test_chat_reply_to_is_the_servers_link_not_the_callers(hctx: HCtx) -> None:
     )
     assert served.status_code == 200, served.text
     assert served.json()[0]["reply_to"] == quoted_id
+    # …and the QUOTE came with it, built by the server on this read. This is the
+    # half that makes the link usable: without it the browser would have to go
+    # and fetch what the id names, which is the design this replaced.
+    quote = served.json()[0].get("reply_to_chat")
+    assert quote is not None, f"every read must carry the quote: {served.text}"
+    assert quote["id"] == quoted_id
+    assert quote["from"] == "owner"
+    assert quote["content"] == "reply-to-target"
 
-    # A link OUT of this conversation. The docstring above claims this case and
-    # it was missing — the same class of defect as the lying http.ts comment
-    # this package also fixed, pointing the other way: a test file that says it
-    # guards three things and guards two.
-    #
-    # A THIRD party's line. Note what this is NOT: owner↔agent in the other
-    # direction would be the SAME conversation (the check compares the two
-    # {sender, recipient} pairs as sets, which is what makes replying to what
-    # someone sent you work at all), so it would be accepted and this assertion
-    # would be measuring nothing.
+    # A link OUT of this conversation, over the real wire: ACCEPTED, and the
+    # quoted text crosses the boundary with it. A THIRD party's line, so this is
+    # genuinely another conversation — owner↔agent in the other direction would
+    # be the SAME one and would prove nothing.
     third = hctx.fresh_member()
     elsewhere = hctx.client.post(
         "/api/chat",
@@ -2722,8 +2731,13 @@ def test_chat_reply_to_is_the_servers_link_not_the_callers(hctx: HCtx) -> None:
         },
         headers=_auth(hctx.agent.token),
     )
-    assert sideways.status_code == 400, sideways.text
-    assert "another conversation" in sideways.text
+    assert sideways.status_code == 200, sideways.text
+    assert sideways.json()["reply_to"] == elsewhere.json()["id"]
+    sideways_quote = sideways.json().get("reply_to_chat")
+    assert sideways_quote is not None, (
+        f"a cross-conversation reply must still carry its quote: {sideways.text}"
+    )
+    assert sideways_quote["content"] == "another-thread"
 
     # An id that names nothing is a 400 on the FIELD, not a 404 on the route.
     orphan = hctx.client.post(
@@ -2748,6 +2762,28 @@ def test_chat_reply_to_is_the_servers_link_not_the_callers(hctx: HCtx) -> None:
     assert forged.status_code == 200, forged.text
     assert forged.json()["reply_to"] == "", "a meta-supplied link must not stand"
     assert forged.json()["meta"].get("keepme") == "yes"
+    assert forged.json().get("reply_to_chat") is None, (
+        "no link ⇒ no quote — a forged meta.reply_to must not conjure one either"
+    )
+
+    # A reply whose ORIGINAL CANNOT BE READ: the quote is absent, the link is
+    # not, and the message is served normally. Reached here the way a real
+    # station reaches it — the link was stamped by the server when the target
+    # existed, and the read happens against a target that no longer resolves.
+    # The POST door refuses an unknown id on purpose (asserted above), so this
+    # state cannot be created through it; the wake snapshot's own read path
+    # covers the equivalent case in Go.
+    #
+    # What is checked over the wire here is the ORDINARY, ALWAYS-PRESENT half:
+    # a message that replies to nothing carries no quote key at all.
+    plain = hctx.client.get(
+        f"/api/chat?ids={quoted_id}", headers=_auth(hctx.agent.token)
+    )
+    assert plain.status_code == 200, plain.text
+    assert plain.json()[0]["reply_to"] == ""
+    assert plain.json()[0].get("reply_to_chat") is None, (
+        "a message that answers nothing must carry no quote: " + plain.text
+    )
     assert "reply_to" not in forged.json()["meta"]
 
 

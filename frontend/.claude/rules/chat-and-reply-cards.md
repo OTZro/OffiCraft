@@ -8,7 +8,6 @@ paths:
   - "src/components/ScheduledMessagesCard*"
   - "src/components/replies.css"
   - "src/hooks/useChat*"
-  - "src/hooks/useQuotedMessages*"
   - "src/hooks/useReplyCard*"
   - "src/hooks/useScheduledMessages.ts"
   - "src/lib/composerKeys.ts"
@@ -45,42 +44,59 @@ view=full 只在 HTTP list seam 表示整個 pane 的一次請求，不上提到
 
 hash route #office/chat/<id>/msg/<msgId> 只做一次定位與 highlight；若訊息不在最近窗口就誠實落到底。回覆卡的 red badge 與聊天未讀互不清除；任務關聯卡共用卡身，只顯示任務標題與查看詳情連結。
 
-## 「回覆這則」（T-4e95）
+## 「回覆這則」（T-4e95，owner 2026-08-21 改設計）
 
-**回覆關係只有 id，沒有任何拷貝。** owner 裁定：被引用那句話已經在它自己的
-message id 底下，複製一份在每則回覆旁邊就是同一句話的第二個住處。要顯示引用
-內容，先從已載入的 `messages` 找，找不到才用 `useQuotedMessages` 走 by-id 讀
-回來 —— 不要為了省一次請求就在 wire 上加摘要欄位。
+**引用內容由 server 隨每次讀取現組，前端只讀不找。** 每則 `reply_to` 非空的
+訊息，server 會在**每一個**讀取出口（listing、history page、`?ids=`、POST 回
+應、wake snapshot）附上 `reply_to_chat = {id, from, from_name, content}`。前端
+畫引用列就是讀 `m.replyToChat`，**沒有查表、沒有 fallback、沒有補撈**。
 
-**引用有三態，不准壓成兩態**：還沒解決（`undefined`）、問過但沒拿到
-（`null`）、拿到（物件）。第二態要顯示「較早的一則訊息」這種誠實落空，第一態
-才是暫時的。把兩者畫成同一個樣子，使用者就分不出「還在找」和「找不到」。
+**這一段取代了原本的「只帶 id，前端自己撈」設計，理由要記住：** 舊設計裡撈得到
+／撈不到／還沒撈到是三個狀態，而它們在畫面上長得一模一樣，所以出錯時沒有人看得
+出來 —— 二十輪審查裡最多阻擋項就長在那台狀態機上。**不要因為「反正那則就在畫面
+上，省一次查詢」而把查表加回來**：有時會夾、有時不夾的優化，代價是 client 必須
+為「沒夾」的情況準備一條後路，而那條後路就是被刪掉的那台機器。
+
+**引用只有兩態，不准生出第三態**：server 給了快照（畫出來），或 server 沒給
+（畫**固定**的 `chat.replyQuoteGone`「這則訊息已不存在」）。**不重試、不補撈、
+不自癒**，也不准出現「…」這種還在等的樣子 —— 沒有任何東西在飛。
+`content` 是空字串是**合法**的（被引用的那則只有附件），要畫成「有名字、內容空
+白」，不可以折進「已不存在」。
+
+**已知且刻意接受的一個不精確：composer 上方的「正在回覆」橫幅**沒有
+`reply_to_chat` 可讀（那是回覆**送出後**才存在的東西），所以它只認已載入視窗裡
+的那則。owner 是點畫面上的列才選到對象的，所以正常情況一定認得出來；唯一認不出
+來的路徑是**上一次 session 存下來的草稿**，其對象後來捲出了視窗——這時橫幅會顯示
+同一句「這則訊息已不存在」，而那則其實還在。接受這個誤差的理由是：它只有一句話、
+沒有跨時間狀態，而且**照送仍然會成功**（server 認得那個 id，送出後那一列會帶著正
+確的引用回來）。**不要為了這一格把查詢或補撈加回來。**
+
+**截短長度只有 server 有。** `chatReplyQuoteMaxChars`（60 runes）＋收斂空白都在
+server 做完才上線；前端不准再切一次（原本的 `QUOTE_EXCERPT_CHARS` 已刪）。畫面
+上的一行限制交給 CSS `text-overflow: ellipsis`。
+
+**「跳回原訊息」跟引用內容是兩個問題，不要合成一個查詢。** 引用內容來自 wire；
+能不能跳來自 `messages`（已載入視窗）。兩者經常不一致，而且那是對的：常見的回覆
+引用的是視窗外很遠的一則，引用列照畫、跳鈕不給。
 
 **取消回覆的 x 只清回覆對象。** 不准順手清 `draft`、不准清
 `pendingAttachments`：取消回覆不是取消訊息。這條有測試釘住
 （`ChatArea.reply-to.test.tsx`）。
 
-**送出後一定要清掉回覆對象**，否則它會默默黏在下一則訊息上。
+**送出後一定要清掉回覆對象**，否則它會默默黏在下一則訊息上。送出**失敗**時的還
+原不准蓋掉使用者飛行中重新瞄準的對象。
 
-**`useQuotedMessages` 的 effect 不准用 cleanup 取消飛行中的請求。** 「已問過」
-記在 ref 裡而且不觸發 re-render，所以下一次 render（composer 打一個字就夠）會
-把 effect 的 key 算成空、React 跑上一個 effect 的 cleanup —— 取消掉的請求永遠
-不會再發一次，引用就卡在「…」。要防的只有 unmount 後寫 state（T-4e95 review
-B1，已有會紅的測試）。
+**每一則都有回覆入口 —— 包含 agent 之間的訊息。** server 端「必須同一場對話」
+的檢查已於 2026-08-21 拿掉，owner 的原話是要能「引用另外兩個人對話裡的一句話來
+介入詢問」。所以 `replyable` 這個 gate 已刪：入口出現在視窗裡的每一則上，回覆
+仍然寄給這條線的 peer，只是引用的是 owner 指到的那一句。
 
-**只要這一則回覆得動，就要有回覆入口**，包含你自己發的與只有附件的。氣泡的右上
-角是共用的 action slot（回覆＋放大閱讀），寬度依控制項數量預留，不要改成 hover
-才進版面 —— 那會讓滑過去時氣泡橫向跳動。
+**唯一的例外是位置，不是有無：請示卡那種訊息**的氣泡被 `<ChatReplyCard>` 換掉
+（那是一整片有自己 header 控制項的表面，浮一顆按鈕上去會撞在一起），所以入口留
+在列上。回得動，只是不在角落。
 
-**例外有兩個，形狀不一樣，不要混為一談：**
-
-1. **請示卡那種訊息 —— 入口還在，只是換位置。** 它的氣泡被 `<ChatReplyCard>`
-   換掉了，那是一整片有自己 header 控制項的表面，浮一顆按鈕上去會撞在一起，所以
-   入口留在列上。回得動，只是不在角落。
-2. **agent 之間的訊息與 server 寫的「系統」訊息 —— 連入口都沒有。** 這是
-   `replyable` 擋掉的：一則回覆只寄得到 {owner, peer}，server 會 400 掉指向別的
-   會話的 `reply_to`，而 composer 失敗時只有一行 console.warn —— 訊息會消失、
-   橫幅還留著、什麼都不解釋。**必定失敗的入口比沒有入口更糟**，所以這裡是真的
-   不給，不是換位置。
-
-兩條都有測試釘住（`ChatArea.reply-to.test.tsx`）。
+以上都有測試釘住（`ChatArea.reply-to.test.tsx`、`ChatArea.quote-no-fetch.test.tsx`、
+`ChatArea.reply-card-quote.test.tsx`、`mock.reply-to.test.ts`、`mappers.reply-to.test.ts`）。
+其中 `ChatArea.quote-no-fetch.test.tsx` 是「那台狀態機真的不在了」的證人：它把
+api client 換成記錄用的 proxy，畫一則有引用、一則引用不見的訊息，然後斷言**一次
+呼叫都沒有**。

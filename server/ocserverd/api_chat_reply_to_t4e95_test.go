@@ -3,24 +3,25 @@ package main
 // api_chat_reply_to_t4e95_test.go — `reply_to` (T-4e95): a message that quotes
 // another message.
 //
-// The owner's ruling shapes every assertion here, so it is worth stating once:
-// the link is an ID AND NOTHING ELSE. No sender, no name, no excerpt of the
-// quoted message is copied onto the reply, because that text already exists
-// under its own id and a copy beside every reply is a second place for the same
-// sentence to live. What that leaves the server responsible for is exactly
-// three things, one test each:
+// The owner's ruling of 2026-08-21 shapes every assertion here, so it is worth
+// stating once. The link is stored as an ID; what it POINTS AT is rebuilt and
+// shipped on every read (`reply_to_chat`, guarded in
+// api_chat_reply_to_chat_t4e95_test.go). This file is about the LINK: what the
+// server accepts, what it refuses, and what it will not let a caller forge.
 //
 //	① the link ROUND-TRIPS — post it, read it back, it is still there
-//	② a link to a message that does not exist is REFUSED
-//	③ a link OUT of this conversation is REFUSED — and this is the one that
-//	   matters now that a by-ids read reaches every conversation (T-4e95):
-//	   without it, a caller could quote a line out of two other members' thread
-//	   and carry it into a conversation it was never part of
+//	② a link to a message that does not exist is REFUSED — an id naming nothing
+//	   is a mistake in the request
+//	③ a link OUT of this conversation is ACCEPTED. This is the reversal: the
+//	   server used to refuse it, and the owner ruled the refusal out, because
+//	   replying to a line two other people exchanged in order to step in and ask
+//	   about it is the use case. Nothing is smuggled by allowing it — a by-ids
+//	   read already reaches every conversation, so the quoted text was readable
+//	   before anyone quoted it.
 //
 //	④ …plus the one that is not about the caller's honesty but about the
 //	   handler's: the meta map is copied through WHOLESALE, so a caller can put
-//	   a reply_to there directly. It must be discarded, or every check above is
-//	   decoration.
+//	   a reply_to there directly. It must be discarded, or ② is decoration.
 
 import (
 	"encoding/json"
@@ -110,11 +111,22 @@ func TestChatReplyTo_UnknownTargetIsRefusedAndNothingIsStored(t *testing.T) {
 	}
 }
 
-// ③ A link OUT of this conversation. Two shapes, and the first is the one a
-// naive check misses: a message the caller REALLY IS one end of, but in a
-// different thread. "Am I allowed to see it" is not the question — "is it in
-// THIS conversation" is.
-func TestChatReplyTo_ForeignConversationIsRefused(t *testing.T) {
+// ③ A link OUT of this conversation is ACCEPTED — and this test exists because
+// until 2026-08-21 it was a 400.
+//
+// 🔴 THIS IS THE ONE THAT PROVES THE DOOR IS OPEN. Both shapes the old check
+// refused are here: a message the caller really is one end of but in a different
+// thread, and a message strictly between two other members. The second is the
+// owner's actual use case, stated as such — 「引用另外兩個人對話裡的一句話來介入
+// 詢問」 — and the FIRST one is the one a half-hearted revert would leave broken,
+// because "am I a participant" is the plausible-looking rule someone reaches for
+// when deleting "is it the same conversation".
+//
+// The quote itself is asserted too, not just the 200: a server that accepted the
+// post and then quietly declined to build reply_to_chat for a foreign target
+// would pass a status-only test while shipping a reply with nothing visible
+// attached, which is the failure this feature is supposed to make impossible.
+func TestChatReplyTo_QuotingAnotherConversationIsAccepted(t *testing.T) {
 	srv, secret, db := newWiredTestServerWithDB(t)
 	tok, _ := mintJWT("mira", "agent", 300, secret, time.Now().Unix(), "")
 	dal := NewDAL(db)
@@ -126,49 +138,49 @@ func TestChatReplyTo_ForeignConversationIsRefused(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed other thread: %v", err)
 	}
-	// (b) a message strictly between two other members.
+	// (b) a message strictly between two other members — the owner's case.
 	if err := dal.PutChat(ChatMessage{
 		ID: "c-bystanders", Sender: "m-1", Recipient: "m-2",
-		Body: "not mira's business", TS: 2.0,
+		Body: "the sentence worth stepping in about", TS: 2.0,
 	}); err != nil {
 		t.Fatalf("seed bystanders: %v", err)
 	}
 
-	for _, target := range []string{"c-otherthread", "c-bystanders"} {
+	for _, tc := range []struct{ id, body string }{
+		{"c-otherthread", "a line in another thread"},
+		{"c-bystanders", "the sentence worth stepping in about"},
+	} {
 		status, raw := postedChat(t, srv.URL, tok,
-			`{"to":"owner","body":"quoting sideways","reply_to":"`+target+`"}`)
-		if status != 400 {
-			t.Fatalf("reply_to=%s must be refused, got %d %s", target, status, raw)
+			`{"to":"owner","body":"stepping in about `+tc.id+`","reply_to":"`+tc.id+`"}`)
+		if status != 200 {
+			t.Fatalf("reply_to=%s must be ACCEPTED since 2026-08-21, got %d %s",
+				tc.id, status, raw)
 		}
-		if !strings.Contains(raw, target) {
-			t.Fatalf("the refusal must name the id: %s", raw)
+		if _, replyTo := chatFields(t, raw); replyTo != tc.id {
+			t.Fatalf("the cross-conversation link must be stored, got %q want %q",
+				replyTo, tc.id)
 		}
-	}
-
-	// …and the honest case still works, so the check above is not just
-	// refusing everything.
-	status, raw := postedChat(t, srv.URL, tok, `{"to":"owner","body":"mine"}`)
-	if status != 200 {
-		t.Fatalf("control post: %d %s", status, raw)
-	}
-	mineID, _ := chatFields(t, raw)
-	status, raw = postedChat(t, srv.URL, tok,
-		`{"to":"owner","body":"quoting my own thread","reply_to":"`+mineID+`"}`)
-	if status != 200 {
-		t.Fatalf("a same-conversation reply must be accepted, got %d %s", status, raw)
+		// …and the quote really came along, so the reply is readable as a reply.
+		if !strings.Contains(raw, tc.body) {
+			t.Fatalf("reply_to_chat must carry the quoted body across the "+
+				"conversation boundary too: %s", raw)
+		}
 	}
 }
 
-// ③ (cont.) THE OTHER DIRECTION, and it is the MAIN USE CASE: replying to a
-// message the other party sent YOU. A reply travels the opposite way to the
-// message it quotes, so the same-conversation check has to compare the two
-// {sender, recipient} pairs as SETS, not positionally.
+// ③ (cont.) THE MAIN USE CASE: replying to a message the other party sent YOU.
 //
-// This test exists because a review (T-4e95, DoD 7) removed the reverse half of
-// sameChatConversation and the whole Go suite stayed green: every case above
-// quotes a message travelling the SAME way as the reply, so the reverse half
-// was uncovered production code. A guard nothing measures is a guard that
-// disappears the first time someone tidies it.
+// ⚠️ WHAT THIS TEST USED TO GUARD IS GONE. It was written to pin that
+// sameChatConversation compared the two {sender, recipient} pairs as SETS
+// rather than positionally — a reply travels the opposite way to the message it
+// quotes, and a positional comparison refused every honest reply. That function
+// was deleted with the same-conversation rule on 2026-08-21, so the property is
+// not merely untested now, it does not exist.
+//
+// It is kept, smaller in claim, because the SHAPE it drives is still the
+// commonest one in the product and nothing else in this file drives it: a reply
+// posted in the opposite direction to the message it quotes must round-trip its
+// link. Read it as coverage of the ordinary case, not as a guard on a rule.
 func TestChatReplyTo_ReplyingToWhatTheOtherPartySentYou(t *testing.T) {
 	srv, secret, db := newWiredTestServerWithDB(t)
 	tok, _ := mintJWT("mira", "agent", 300, secret, time.Now().Unix(), "")
@@ -240,10 +252,18 @@ func TestChatReplyTo_ThePostChatToolSchemaAdvertisesIt(t *testing.T) {
 			"that agents may specify a reply target, and a parameter absent " +
 			"from the schema is a parameter no agent will ever send")
 	}
-	for _, promise := range []string{"SAME CONVERSATION", "DISCARDED"} {
+	// The two things an agent cannot discover by trying: the ONE refusal that
+	// exists (the target must exist), and the fact that the conversation
+	// boundary is NOT one — an agent that believes the old rule simply never
+	// attempts the owner's use case, and gets no error to learn from.
+	for _, promise := range []string{
+		"must EXIST",
+		"DOES NOT HAVE TO BE IN THE CONVERSATION",
+		"DISCARDED",
+	} {
 		if !strings.Contains(desc, promise) {
-			t.Fatalf("the schema must state %q — the two refusals an agent will "+
-				"actually hit are the two this parameter documents", promise)
+			t.Fatalf("the schema must state %q — an agent only ever learns this "+
+				"parameter's rules by reading them: %s", promise, desc)
 		}
 	}
 }
