@@ -97,14 +97,43 @@ stylesheet、而唯一會 render machine picker 的 CT guard 在同一張票裡�
 
 | # | Mutant | 紅了哪條 |
 |---|---|---|
-| R1 | `.mp-identity__buttons { flex-direction: column }`（＝裁定前的形狀） | `identity-actions-row.ct.spec.tsx` **desktop ＋ narrow 兩條都紅** |
-| R2 | 刪掉 ≤720px 的 `.mp-identity__buttons` 兩條規則 | **只有 narrow 紅**（`the pair spans the card, not the right margin`） |
+| R1 | `.mp-identity__buttons { flex-direction: column }`（＝裁定前的形狀） | `identity-actions-row.ct.spec.tsx` **desktop 紅**（`one row of four`） |
+| R2 | 刪掉 ≤720px 的 `.mp-identity__buttons` 規則 | **只有 narrow 紅**（`band 1 = 更改, band 2 = the whole ladder`） |
 
 ⚠️ **R2 第一版是綠的，而且綠得很有道理** —— 拿掉窄螢幕規則後，`.mp-identity__actions` 的
 `align-items: stretch` 仍然把那一列撐滿，所以「同一列／沒溢出／在卡片內」**每一條都還是真的**；
 真正壞掉的是 `justify-content: flex-end` 讓兩顆鍵**擠在右邊界**——正是 owner 說的「擠成一團」。
-斷言因此改成量**跨距**（span > 卡寬 70%）與**均分**（兩顆寬度差 < 卡寬 20%）。
+斷言因此改成量**跨距**（span > 卡寬 70%）與**均分**（寬度差 < 卡寬 20%）。
 教訓與 T-d451 那條同族：**「東西還在」不等於「東西擺對」**。
+
+#### T-ed79 重測：三顆鍵之後，這條護欄釘的事實換了一個
+
+owner 2026-08-21 把單顆 停止 換成 停止 → 加速停止 → 強制停止 的階梯，於是
+**「更改 ＋ 停止 同一列」在窄寬度下不再是這個元件的事實**：四顆四字標籤在 375 的卡片
+（內寬 289）上排不下——光是階梯本身自然寬就要 ~300。護欄改成**依寬度分形狀**：
+desktop 仍然一列四顆（2026-07-31 那條裁定在有空間的地方照舊成立），narrow 釘的是
+**刻意的兩帶**（更改 一帶、整條階梯一帶、依 owner 順序、均分），外加**兩個寬度都成立**的
+「任兩顆不重疊（矩形交集）／四個邊都不出卡片／標籤不被自己的鍵裁掉／頁面不長橫捲軸」。
+**沒有任何一條斷言被放寬**——`toBeLessThan(4)` 那條的 same-row 容忍度原封不動，只是改成
+用來分帶；重疊檢查從「停止 起點在 更改 右邊」升級成真正的矩形交集，卡片邊界從 2 條（左右）
+升成 4 條，並新增了 clientWidth/scrollWidth 的裁字檢查。
+
+版面同時修了（`flex: 1 1 0` → `flex: 1 1 100%` ＋ `align-items: stretch`）：舊規則把卡片
+**對半分**給 更改 和整組階梯，階梯在自己那半裡疊成三層，`align-items: center` 再把這塊
+三層的方塊對著單顆 更改 垂直置中——這就是 `s.y - c.y = 38` 的來源，也就是為什麼
+owner 最想按的 停止 反而跑到 更改 **上面**。實測 320／360／375／390／430／600／720
+七個寬度：全部兩帶、階梯一行、`scrollWidth ≤ width`、`pageOver = 0`。
+
+| # | T-ed79 新增 mutant | 紅了哪條 |
+|---|---|---|
+| R3 | ≤720px 改 `flex-wrap: nowrap` ＋ `> * { flex: 0 0 auto }` | narrow：`band 1 = 更改, band 2 = the whole ladder` |
+| R3' | ≤720px 的 `.member-actions` 釘死 `width: 500px; flex-wrap: nowrap`（＝真的溢出卡片，帶形還是對的） | narrow：`mp-change right edge` |
+| R4 | `.member-actions .btn + .btn { margin-left: -40px }`（＝真的互相疊上去） | narrow：`member-action-stop and member-action-accelerated-stop overlap by 32x30` |
+| R5 | 階梯每顆鍵鎖成 `flex: 0 0 52px; overflow: hidden`（＝標籤被裁掉，boundingBox 看不出來） | narrow：`member-action-accelerated-stop label clipped vertically` |
+
+R3'／R4／R5 是這次特地種來證明**新護欄仍有鑑別力**的三支：分別打「溢出卡片」「互相重疊」
+「看起來有寬度其實字被吃掉」，三支都紅。還原一律 `cp` 備份覆蓋回去，最後 `git diff --stat`
+確認只剩下真正要留的兩個檔。
 
 ### 行為（`WorkerDetailPanel.tsx` / `MemberDetailPanel.tsx`）
 
