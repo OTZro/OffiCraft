@@ -455,6 +455,25 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     // that is what "the CT harness has no app shell" means in practice.
     for (const width of [720, 721, 800, 880, 1280]) {
       await page.setViewportSize({ width, height: 900 });
+      // 🔴 WAIT FOR THE SHELL, NOT FOR A TIMEOUT, AND THIS IS NOT FLAKE-PADDING.
+      // Crossing 720 tears the layout in two for a frame: the grid flips to
+      // `264px 1fr` from CSS the instant the media query does, but the roster
+      // column is React state (`useIsMobile`), so for one paint `.office` has
+      // the two-column track list and only ONE child — and the thread lands in
+      // the 264px roster track. 264 − 48 of `.chat__body` padding = a 216px
+      // pane, which starves the excerpt to zero and reports `vw=721 (pane
+      // 216px)`. No viewport settles there: above 720 the pane is `vw − 374`
+      // (347 at 721), below it the thread owns the whole width. Measuring
+      // mid-tear measures a layout nobody can stop at.
+      // Whoever is tempted to delete this: without it the race lands about
+      // half the time (measured, 9 of 20 runs red, always with that same
+      // `pane 216px` line); with it, 0 of 20. So a green run proves nothing
+      // about deleting it — only a run counted in the dozens does, and the
+      // dozen was already counted.
+      await page.waitForFunction(
+        (w) => !!document.querySelector('.office__members') === w > 720,
+        width,
+      );
       const seen = await quote
         .locator('.chat__msg-quote__body')
         .evaluate((el) => {
