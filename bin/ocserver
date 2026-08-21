@@ -383,7 +383,15 @@ resolve_runtime_stamps() {
     log "WARNING: no agent runtime resolved (neither claude nor codex) — wardens installed via the cockpit's bootstrap-here on THIS host will refuse every spawn (runtime_bin_unresolved)."
     log "WARNING: fix: install one, or export OC_CLAUDE_BIN=/absolute/path/to/claude or OC_CODEX_BIN=/absolute/path/to/codex and re-run 'ocserver install' (safe — idempotent)."
   elif [[ -z "$claude_bin" ]]; then
-    log "NOTE: claude not resolved here — codex members work, claude members on this host would hit claude_bin_unresolved (export OC_CLAUDE_BIN=/absolute/path/to/claude and re-run to fix)."
+    # "codex members work" used to be the whole sentence, and out of the box it
+    # was a comfort that did not apply: the one member a fresh install ships
+    # with had no runtime of its own and was read as a claude member, so on THIS
+    # host it was the member that could not start. A member with no runtime of
+    # its own is now resolved against what this host reports, at placement time
+    # (T-b3d0) — so state that, and confine the failure to the case that really
+    # is one: a member someone deliberately set to claude.
+    log "NOTE: claude not resolved here — this host runs codex. A member with no runtime chosen for it is placed on what this host reports, so the out-of-box assistant starts on codex; only a member you deliberately set to claude cannot start here."
+    log "NOTE: to run claude members on this host: install claude, or export OC_CLAUDE_BIN=/absolute/path/to/claude and re-run 'ocserver install' (safe — idempotent). Otherwise set that member's 執行環境 to codex."
   elif [[ -z "$codex_bin" ]]; then
     log "NOTE: codex not resolved here — claude members work, codex members on this host would hit runtime_bin_unresolved (export OC_CODEX_BIN=/absolute/path/to/codex and re-run to fix)."
   fi
