@@ -116,7 +116,15 @@ func TestServedChatMessageDTOJoinsLiveReplyCardStatus(t *testing.T) {
 	}
 
 	// A card-bearing message reflects the card's LIVE status.
-	if got := s.servedChatMessageDTO(msg).ReplyCardStatus; got != replyCardStatusWaiting {
+	mustDTO := func(m ChatMessage) chatMessageDTO {
+		t.Helper()
+		d, err := s.servedChatMessageDTO(m)
+		if err != nil {
+			t.Fatalf("servedChatMessageDTO: %v", err)
+		}
+		return d
+	}
+	if got := mustDTO(msg).ReplyCardStatus; got != replyCardStatusWaiting {
 		t.Fatalf("waiting join: got %q want waiting", got)
 	}
 	// Answering the card flips the read-time join (it is NOT stored on the msg).
@@ -125,12 +133,12 @@ func TestServedChatMessageDTOJoinsLiveReplyCardStatus(t *testing.T) {
 	if err := s.dal.PutReplyCard(card); err != nil {
 		t.Fatalf("answer card: %v", err)
 	}
-	if got := s.servedChatMessageDTO(msg).ReplyCardStatus; got != replyCardStatusAnswered {
+	if got := mustDTO(msg).ReplyCardStatus; got != replyCardStatusAnswered {
 		t.Fatalf("answered flip: got %q want answered", got)
 	}
 	// A plain message (no reply_card_id) has an empty status.
 	plain := ChatMessage{ID: "c-2", Sender: "m-a", Recipient: wireOwnerID, Body: "hi", TS: 11}
-	if got := s.servedChatMessageDTO(plain).ReplyCardStatus; got != "" {
+	if got := mustDTO(plain).ReplyCardStatus; got != "" {
 		t.Fatalf("plain message must carry empty reply_card_status, got %q", got)
 	}
 }

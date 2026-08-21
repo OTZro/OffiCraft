@@ -553,6 +553,74 @@ for (const width of [300, 320, 336, 360, 390]) {
   });
 }
 
+// 🔴 WHAT THE ROW IS FOR MUST GET THE WIDTH. Since 2026-08-21 the quoted
+// SENTENCE is shipped with the reply and is the entire value of this row; the
+// jump label is boilerplate the arrow already implies (and `aria-label` still
+// carries in full). The shrink order in office.css was tuned before that — it
+// let the jump keep its intrinsic width and the excerpt absorb everything — and
+// measured in a real browser it produced 「Mira 他… Go to the original messa… ›」:
+// at 390px/en the excerpt held 26px and the label 154px; at 320px the excerpt
+// was 0.
+//
+// ⚠️ THE EXISTING GUARDS HAVE ZERO DISCRIMINATION HERE, which is why this one
+// exists as its own loop. Everything above measures where the jump ENDS (does it
+// reach the corner buttons, does the arrow paint outside its box); a 0px excerpt
+// satisfies every one of them perfectly. Nothing in this file asked how much of
+// the quote survived.
+//
+// STATED WITHOUT A NUMBER FROM THIS MACHINE, on purpose — this file has been
+// burned three times by width-shaped constants. The claim is an ORDERING
+// between two things on the same row, and it holds at any width where both are
+// present. English, because it reaches the failure first (154px vs 69px), and
+// the narrow end, because that is where the row runs out of width at all.
+for (const width of [320, 360, 390]) {
+  test(`width ${width}: the quoted sentence outranks the jump's boilerplate`, async ({
+    mount,
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    const cmp = await mount(
+      <ChatReplyToStory jumpLabel="Go to the original message" />,
+    );
+
+    // ① THE LONG-EXCERPT ROW. Its quoted text cannot fit at these widths, so
+    // something must be trimmed — and what is left of the quote must still be
+    // worth more room than the control that only says how to navigate to it.
+    // (Measured both ways at 390: 47px of quote against a 154px label before,
+    // 188px against a 14px arrow after. At 320 the quote was flatly 0.)
+    const share = await cmp.getByTestId("row-mine-short").evaluate((row) => {
+      const b = row.querySelector(".chat__msg-quote__body") as HTMLElement;
+      const j = row.querySelector(".chat__msg-quote__jump") as HTMLElement;
+      return { body: b.clientWidth, jump: j.clientWidth };
+    });
+    expect(
+      share.body,
+      "the quoted sentence is the row; the jump label is not",
+    ).toBeGreaterThan(share.jump);
+
+    // ② AND A SHORT QUOTE MUST SURVIVE WHOLE. This row quotes one character —
+    // there is no version of "not enough room" that justifies eating it. A
+    // cut here is the layout spending the row's width on boilerplate.
+    const cut = await cmp
+      .getByTestId("quote-body-incoming")
+      .evaluate((e) => e.scrollWidth > e.clientWidth + 0.5);
+    expect(cut, "a one-character quote was trimmed away").toBe(false);
+
+    // ③ POSITIVE CONTROL: the jump is still THERE and still usable. The two
+    // assertions above are also satisfied by deleting the control outright,
+    // which would take the only way back to the original with it.
+    const chevron = (await cmp
+      .getByTestId("row-mine-short")
+      .locator(".chat__msg-quote__jump-chevron")
+      .boundingBox())!;
+    expect(chevron.width).toBeGreaterThanOrEqual(11.5);
+    await expect(cmp.getByTestId("quote-jump-short")).toHaveJSProperty(
+      "tagName",
+      "BUTTON",
+    );
+  });
+}
+
 test("narrow 390: the reply entry and the banner x are focusable native buttons", async ({
   mount,
   page,

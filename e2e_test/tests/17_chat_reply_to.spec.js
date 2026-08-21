@@ -63,7 +63,7 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     // The message that will be replied TO comes from the member, so the banner
     // has a name to print that is NOT the owner's — a banner that printed the
     // wrong one of the two people is the r14 bug, and only a real name catches it.
-    await postChatAs(request, tokM, 'owner', TARGET);
+    const targetMsg = await postChatAs(request, tokM, 'owner', TARGET);
     for (let i = 1; i <= FILLER; i++) {
       await postChatAs(request, tokM, 'owner', `filler ${i}`);
     }
@@ -71,10 +71,16 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     await bootAuthedSpa(page, token);
     await page.locator('.member-card', { hasText: NAME_M }).click();
     const thread = page.locator('.chat__messages');
-    // EXISTENCE, not uniqueness: `target` is already `.first()`, so its count
-    // can only ever be 0 or 1 and a `toHaveCount(1)` here was dressing an
-    // existence check up as a uniqueness check it cannot perform.
-    const target = thread.locator('.chat__msg', { hasText: TARGET }).first();
+    // 🔴 BY ID, NOT BY TEXT. `hasText: TARGET` matches TWO rows once the reply
+    // exists — the original, and the reply itself, whose quote row carries the
+    // original's words INSIDE its own `.chat__msg`. `.first()` happened to land
+    // on the original (a reply's ts is necessarily later than what it quotes and
+    // the thread is ordered by ts), but that is a property of the data, not
+    // something this locator says, and an earlier comment here claimed the count
+    // "can only ever be 0 or 1", which was simply false. The id is unambiguous
+    // and it is what the second test already uses.
+    const target = thread.locator(`[data-msg-id="${targetMsg.id}"]`);
+    await expect(target).toHaveCount(1);
     await expect(target).toBeVisible();
 
     // ── 點回覆 (the entry is hover-revealed but always occupies layout)
@@ -116,12 +122,19 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     ).toBe(original.id);
 
     // ── 引用列 on the reply's own row, carrying the quoted text.
-    const replyRow = thread.locator('.chat__msg', { hasText: ANSWER }).first();
+    const replyRow = thread.locator(`[data-msg-id="${reply.id}"]`);
     const quote = replyRow.getByTestId('msg-quote');
     await expect(quote).toBeVisible();
     await expect(quote).toContainText(TARGET.slice(0, 12));
-    // …and NOT the honest-miss label: the quoted row is in the loaded window.
-    await expect(quote).not.toContainText('較早的一則訊息');
+    // …and NOT the miss sentence. 🔴 THE STRING HERE MUST BE ONE THE PRODUCT CAN
+    // ACTUALLY PRINT ON THIS ROW, or this line is a tautology defended by a
+    // comment. It was 「較早的一則訊息」 for one round, after the row's copy had
+    // already been changed away from it — the phrase existed nowhere else in the
+    // repo, so the assertion could never go red. The quote ROW's miss sentence is
+    // `chat.replyQuoteGone`; 「較早的一則訊息」 now belongs to the composer BANNER
+    // (`chat.replyingToEarlier`), which is a different element and a different
+    // claim. Same string as the second test below, on purpose.
+    await expect(quote).not.toContainText('這則訊息已不存在');
 
     // ── 跳回原訊息
     //

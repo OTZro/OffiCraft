@@ -15,6 +15,14 @@ paths:
   - "src/lib/chatDraftStore.ts"
   - "src/lib/hashRoute.ts"
   - "src/api/mock.scheduled-messages.test.ts"
+  # 🔴 THE WIRE LAYER IS IN SCOPE, and it was not. The T-4e95 rule below —
+  # "the quote content is assembled by the SERVER; the mock says the same thing;
+  # the frontend never shortens it again" — is IMPLEMENTED in these three files
+  # and nowhere in src/components. Whoever edits the mock is exactly the person
+  # this rule is written for, and they could not see it.
+  - "src/api/mappers.ts"
+  - "src/api/mock.ts"
+  - "src/api/adapter.ts"
   - "visual-guards/scheduled-message-*"
 ---
 
@@ -63,13 +71,16 @@ hash route #office/chat/<id>/msg/<msgId> 只做一次定位與 highlight；若�
 `content` 是空字串是**合法**的（被引用的那則只有附件），要畫成「有名字、內容空
 白」，不可以折進「已不存在」。
 
-**已知且刻意接受的一個不精確：composer 上方的「正在回覆」橫幅**沒有
-`reply_to_chat` 可讀（那是回覆**送出後**才存在的東西），所以它只認已載入視窗裡
-的那則。owner 是點畫面上的列才選到對象的，所以正常情況一定認得出來；唯一認不出
-來的路徑是**上一次 session 存下來的草稿**，其對象後來捲出了視窗——這時橫幅會顯示
-同一句「這則訊息已不存在」，而那則其實還在。接受這個誤差的理由是：它只有一句話、
-沒有跨時間狀態，而且**照送仍然會成功**（server 認得那個 id，送出後那一列會帶著正
-確的引用回來）。**不要為了這一格把查詢或補撈加回來。**
+**橫幅有自己的文案，不准借用訊息列那一句。** composer 上方的「正在回覆」橫幅沒有
+`reply_to_chat` 可讀（那是回覆**送出後**才存在的東西），它只認**已載入視窗**裡的
+那則（`messageById`）。而「不在已載入視窗」跟「訊息不存在」是兩件事：往上捲載入
+scrollback → 瞄準一則舊訊息 → 切到別的成員再切回來（草稿連同對象一起還原，但視窗
+只重載最新一頁）⇒ 橫幅認不出對象，**而那則訊息還在、照送也會成功**（`reply_to`
+存得對，讀回來的 `reply_to_chat` 內容完整）。
+所以橫幅畫的是**與狀態無關的實話** `chat.replyingToEarlier`「正在回覆較早的一則
+訊息」；斷定句 `chat.replyQuoteGone`「這則訊息已不存在」**只屬於訊息列**，因為那
+一格的資料來源是 server 這次讀取的答案，有資格做這個斷定。
+**不要把兩個 key 指到同一句，也不要為了這一格把查詢或補撈加回來。**
 
 **截短長度只有 server 有。** `chatReplyQuoteMaxChars`（60 runes）＋收斂空白都在
 server 做完才上線；前端不准再切一次（原本的 `QUOTE_EXCERPT_CHARS` 已刪）。畫面

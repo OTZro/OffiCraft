@@ -1223,6 +1223,37 @@
 .chat__msg-quote__jump-chevron {
   flex: none;
 }
+/* 🔴 NARROW: THE LABEL GOES, THE ARROW STAYS — because the PREMISE of the
+ * shrink order above changed underneath it.
+ *
+ * That order (excerpt 10000 → jump 10 → name 1) was tuned when the quote row
+ * carried an id and the browser fetched the rest: the row's job was to POINT,
+ * so keeping 「跳到原訊息」 legible mattered and the excerpt was a courtesy.
+ * Since 2026-08-21 the excerpt IS the row — the server ships the quoted
+ * sentence with every reply and it is the only thing on the row that says what
+ * is being answered. Measured in a real browser at that point: at 390px in
+ * English the excerpt was down to 26px (0px at 320px) while "Go to the original
+ * message" held 154px. On screen: 「Mira 他… Go to the original messa… ›」 — a
+ * label about going somewhere, crowding out the reason to go.
+ *
+ * So below the breakpoint the label collapses to its arrow and hands the width
+ * back. Nothing is lost semantically: the button already carries
+ * `aria-label={t.chat.replyQuoteJump}`, so a screen reader reads the same
+ * sentence either way, and `title` keeps it on hover for a pointer.
+ *
+ * `display: none` rather than a shrink, deliberately: shrinking is what the
+ * flex factors already do and it bottoms out at an ellipsis that still costs
+ * width for no information ("G…"). The floor on `.chat__msg-quote__jump` (14px
+ * = arrow + gap) is what the button is left with.
+ *
+ * The width guard is `chat-reply-to.ct.spec.tsx` — the one that measures how
+ * much of the EXCERPT survives. The pre-existing CT only checked that the jump
+ * did not cover the corner buttons, which a 26px excerpt satisfies perfectly. */
+@media (max-width: 560px) {
+  .chat__msg-quote__jump-label {
+    display: none;
+  }
+}
 .chat__msg-quote__jump:hover,
 .chat__msg-quote__jump:focus-visible {
   text-decoration: underline;

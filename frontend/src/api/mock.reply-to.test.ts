@@ -117,9 +117,16 @@ describe("mock 回覆這則 — server parity", () => {
     // The length is the SERVER's (chatReplyQuoteMaxChars = 60) and the mock
     // holds the only other copy of it. Asserted by rune count, not by a literal,
     // so it stays true for the CJK this studio is mostly written in.
+    //
+    // 🔴 THE BLANK LINE MUST LAND INSIDE THE 60 RUNES THAT ARE KEPT. This
+    // fixture used to put it at rune 90 — past the cut — so `not.toMatch(/[\n\r]/)`
+    // below was satisfied by the TRUNCATION, not by the whitespace collapse, and
+    // a mock that dropped the collapse entirely would still have passed it. The
+    // Go test of the same name learned this and wrote it down; this one had not
+    // applied the lesson.
     const quoted = await mockApi.postChat({
       to: "mira",
-      body: "長".repeat(90) + "\n\n" + "話".repeat(30),
+      body: "長".repeat(10) + "\n\n" + "話".repeat(30) + "   " + "短".repeat(50),
     });
     const reply = await mockApi.postChat({
       to: "mira",

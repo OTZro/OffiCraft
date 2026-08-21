@@ -112,8 +112,18 @@ func TestReplyToChat_CrossesTheConversationBoundary(t *testing.T) {
 // doors rather than four tests over one door each. The failure it exists to
 // catch is a door someone forgot — and a per-door test file makes exactly that
 // failure invisible, because the forgotten door has no file. Listing every door
-// in one table means adding a fifth door without adding a row here is the only
-// way to escape it, and that is a visible omission in a diff.
+// in one table means adding a door without adding a row here is the only way to
+// escape it, and that is a visible omission in a diff.
+//
+// ⚠️ THERE IS A FIFTH CALL SITE AND IT IS DELIBERATELY NOT A ROW:
+// `POST /api/tasks/{task_id}/message` (api_tasks.go) also serves through
+// servedChatMessageDTO. It builds its own `meta` and that meta never contains
+// `reply_to`, so `dto.ReplyTo` is "" on every message it can ever emit and
+// chatReplyQuote returns nil by its first line — a row here could only assert
+// "no quote", which is true of any function at all and would pin nothing. It is
+// named here rather than left out silently, because "there are four doors" was
+// already false when this table was written. If that handler ever learns to
+// stamp `reply_to`, it becomes a real door and needs a real row.
 //
 // MUTANT: move the `dto.ReplyToChat = …` line out of servedChatMessageDTO into
 // any single handler — this test goes red on the three it is no longer on.
@@ -194,8 +204,15 @@ func TestReplyToChat_IsBuiltOnEveryReadDoor(t *testing.T) {
 // It also pins the thing only this door has: the snapshot resolves DISPLAY
 // NAMES, so the quote carries `from_name` here and "" everywhere else.
 //
-// MUTANT: delete the `d.ReplyToChat = s.chatReplyQuote(…)` line from
-// resumeChatMessageDTO — only this test goes red.
+// MUTANT (run): delete the `d.ReplyToChat = s.chatReplyQuote(…)` line from
+// resumeChatMessageDTO — TWO tests go red, this one and
+// TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries, which bills the
+// quote's runes into chat_chars and therefore also notices when the quote stops
+// being built. An earlier version of this note claimed "only this test"; that
+// was never measured and it is wrong. The overlap is fine — this is still the
+// only test that says WHAT the quote must contain on this door — but a mutant
+// note that overstates its exclusivity invites the next reviewer to delete the
+// other one as redundant.
 func TestReplyToChat_IsBuiltInTheWakeSnapshot(t *testing.T) {
 	api := resumeCtxServer(t)
 
@@ -442,5 +459,96 @@ func TestReplyToChat_AnAttachmentOnlyOriginalQuotesAsEmpty(t *testing.T) {
 	}
 	if q.ID != "c-photo" || q.From != "owner" {
 		t.Fatalf("the quote must still name the original and its sender, got %+v", *q)
+	}
+}
+
+
+// ── ④ (cont.) A READ FAILURE IS NOT A MISS ───────────────────────────────────
+//
+// 🔴 THE HOLE THIS CLOSES. chatReplyQuote used to say
+// `if err != nil || len(quoted) == 0 { return nil }` — one nil for two facts
+// that are not the same fact. The browser draws absence as ONE FIXED,
+// ASSERTIVE sentence 「這則訊息已不存在」, so a database that merely failed to
+// answer produced a confident claim that a message which is still sitting in
+// that database is gone. The r21 review mutated `err != nil` into a panic and
+// NOTHING went red: zero coverage on a line carrying a lie.
+//
+// FAULT INJECTION, WITHOUT A PRODUCTION SEAM. `s.dal` is a concrete *DAL over
+// sqlite and there is no interface to substitute, so the fault is put in the
+// DATA: a chat row whose `meta` column is not JSON makes scanChat — and
+// therefore ListChatByIDs — return an error for that row and only that row.
+// The corrupt row is parked in a conversation between two OTHER members, so the
+// door under test never scans it directly; the only thing that reaches it is the
+// quote join. Without that separation the handler's own listing read would fail
+// first and the test would pass for the wrong reason (measured: on
+// `GET /api/chat?with=`, which does a whole-table ListChat, it does exactly
+// that — which is why the doors below are the two that read a bounded set).
+//
+// MUTANT: restore `if err != nil || len(quoted) == 0 { return nil, nil }` in
+// chatReplyQuote — both doors below come back 200 with `reply_to_chat: null`
+// and this test goes red on each. Nothing else in the package moves.
+func TestReplyToChat_AnUnreadableOriginalFailsLoudlyRatherThanClaimingItIsGone(t *testing.T) {
+	srv, secret, db := newWiredTestServerWithDB(t)
+	tok, _ := mintJWT("mira", "agent", 300, secret, time.Now().Unix(), "")
+
+	// The quoted message: someone else's conversation (legal to quote since the
+	// 2026-08-21 widening) and UNREADABLE — `meta` is not JSON.
+	if _, err := db.Exec(`
+		INSERT INTO chat_message (id, sender, recipient, body, ts, meta)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		"c-unreadable", "m-a", "m-b", "我覺得那個 leak 在 warden", 1.0,
+		"{this is not json"); err != nil {
+		t.Fatalf("seed corrupt row: %v", err)
+	}
+	if err := NewDAL(db).PutChat(ChatMessage{
+		ID: "c-reply", Sender: "mira", Recipient: "owner", Body: "我跟進", TS: 2.0,
+		Meta: map[string]any{chatReplyToMetaKey: "c-unreadable"},
+	}); err != nil {
+		t.Fatalf("seed reply: %v", err)
+	}
+
+	doors := []struct {
+		name string
+		url  string
+	}{
+		{"GET /api/chat?ids=", srv.URL + "/api/chat?ids=c-reply"},
+		{"GET /api/chat?before_ts= (history page)",
+			srv.URL + "/api/chat?with=owner&before_ts=99999999999&before_id=zzzz"},
+	}
+	for _, door := range doors {
+		status, raw := doRaw(t, "GET", door.url, tok, "", nil)
+		if status != 500 {
+			t.Fatalf("%s: a quote that could not be READ must fail loudly, not "+
+				"come back as the fixed 「這則訊息已不存在」 sentence — got %d %s",
+				door.name, status, raw)
+		}
+	}
+
+	// …and the SAME door answers 200 for a target that is genuinely absent.
+	// Without this half the assertion above is satisfied by a server that 500s
+	// on every miss, which would be the opposite defect (a cleared message would
+	// take out the conversation that quotes it).
+	if err := NewDAL(db).PutChat(ChatMessage{
+		ID: "c-reply-gone", Sender: "mira", Recipient: "owner", Body: "這則的目標真的沒了",
+		TS: 3.0, Meta: map[string]any{chatReplyToMetaKey: "c-never-existed"},
+	}); err != nil {
+		t.Fatalf("seed gone reply: %v", err)
+	}
+	status, raw := doRaw(t, "GET", srv.URL+"/api/chat?ids=c-reply-gone", tok, "", nil)
+	if status != 200 {
+		t.Fatalf("a genuinely missing original is a settled state, not an "+
+			"error: got %d %s", status, raw)
+	}
+	rows := decodeReplyQuotes(t, raw)
+	row, ok := rows["c-reply-gone"]
+	if !ok {
+		t.Fatalf("the reply itself must still be served: %s", raw)
+	}
+	if row.ReplyTo != "c-never-existed" {
+		t.Fatalf("reply_to must survive a missing target, got %q", row.ReplyTo)
+	}
+	if row.ReplyToChat != nil {
+		t.Fatalf("a missing original must leave the quote ABSENT, got %+v",
+			*row.ReplyToChat)
 	}
 }

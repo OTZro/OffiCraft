@@ -256,7 +256,13 @@ export function ChatArea({
   const unknownOwIds = useMemo(() => {
     const out = new Set<string>();
     for (const m of messages) {
-      for (const id of [m.from, m.to]) {
+      // 🔴 THE QUOTED SENDER IS A PARTICIPANT TOO. `m.replyToChat.from` is an
+      // id this thread RENDERS (`quoteWho = nameOf(quoted.from)`), so leaving it
+      // out of this set meant the codename fallback never fired for it: the very
+      // same released outsource worker showed a codename on its own row and a
+      // raw `ow-…` id when quoted — and the quote row's aria-label read
+      // 「引用 ow-8808ccf51794」. One display path, two identities.
+      for (const id of [m.from, m.to, m.replyToChat?.from ?? ""]) {
         if (
           id.startsWith("ow-") &&
           id !== member.id &&
@@ -517,9 +523,16 @@ export function ChatArea({
     // functional set sees the just-cleared empty list and takes the snapshot).
     const restored = getChatDraft(member.id);
     setDraft(restored?.text ?? "");
-    // The reply target is per-conversation by construction (the server refuses a
-    // reply_to from another conversation), so it MUST swap with the peer — a
-    // target left over from the previous room would be refused on send.
+    // 🔴 THE TARGET MUST SWAP WITH THE PEER, and since 2026-08-21 the reason is
+    // the OPPOSITE of the one that used to be written here. The server had a
+    // `sameChatConversation` check and refused a cross-conversation `reply_to`
+    // with a 400, so forgetting this line was noisy, visible, and left the draft
+    // intact. That check is GONE (owner ruling: quoting sideways into another
+    // conversation is the use case). Forgetting this line now SENDS SUCCESSFULLY
+    // — a message to the new peer carrying a quote row built from the old
+    // conversation, which the server faithfully assembles and shows the
+    // recipient. The guard got MORE load-bearing when the refusal went away, not
+    // less: do not remove it on the belief that the server still catches this.
     setReplyToId(restored?.replyTo ?? null);
     clearAttachments();
     if (restored && restored.attachments.length > 0) {
@@ -953,9 +966,12 @@ export function ChatArea({
     // and the owner can switch peers during it — this component is REUSED across
     // peers, so the restore landed in whoever was on screen when the failure came
     // back, and the save effect then persisted it into THAT peer's draft. The
-    // reply target makes it worse than untidy: a target from another room is
-    // refused by the server on every send, so the new room's composer would 400
-    // silently until the owner noticed the banner and cleared it by hand.
+    // reply target makes it worse than untidy, and worse than it used to be: the
+    // server's `sameChatConversation` refusal was deleted on 2026-08-21, so a
+    // target from another room is no longer 400'd — it is accepted, and the new
+    // room's message goes out quoting a sentence from a conversation it has
+    // nothing to do with, which the recipient then reads as context. The failure
+    // mode flipped from a visible refusal to a silent mis-send.
     const sendPeer = member.id;
     // ALL staged attachments ride the SAME message, in staged order.
     const attachments = attachmentsSnapshot.map((a) => ({
@@ -1728,14 +1744,23 @@ export function ChatArea({
                   *
                   * There used to be a THIRD state here — a 「…」 meaning "the
                   * by-id read has not landed yet". It went with the read: nothing
-                  * is in flight any more, so a spinner would never resolve. */}
+                  * is in flight any more, so a spinner would never resolve.
+                  *
+                  * 🔴 AND IT IS NOT THE QUOTE ROW'S SENTENCE EITHER. `replyQuote`
+                  * comes from `messageById` — the LOADED WINDOW — so an unresolved
+                  * target here does NOT mean the message is gone. Scroll back, aim
+                  * at an old row, switch peers and come back to a freshly-loaded
+                  * newest page: the target is still there, the send still succeeds,
+                  * and the quote comes back whole on the reply's own row. Printing
+                  * 「這則訊息已不存在」 in that state is a falsifiable claim about
+                  * the world made from a fact about this browser's scroll position.
+                  * `replyingToEarlier` is state-independent and stays true in both
+                  * cases. */}
                 <span className="chat__reply-banner__text">
                   <span className="chat__reply-banner__who">
-                    {t.chat.replyingTo(
-                      replyQuote
-                        ? nameOf(replyQuote.from)
-                        : t.chat.replyQuoteGone,
-                    )}
+                    {replyQuote
+                      ? t.chat.replyingTo(nameOf(replyQuote.from))
+                      : t.chat.replyingToEarlier}
                   </span>
                   <span className="chat__reply-banner__body">
                     {replyQuote ? oneLine(replyQuote.body) : ""}

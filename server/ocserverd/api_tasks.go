@@ -1176,7 +1176,16 @@ func (s *apiServer) HandlePostTaskMessageApiTasksTaskIdMessagePost(w http.Respon
 	s.hub.Publish("chat", "patch", "chat", wireOwnerID+"::"+msg.ID,
 		map[string]any{"id": msg.ID, "from": msg.Sender, "to": msg.Recipient},
 		audienceMembers(msg.Sender, msg.Recipient), requestTrigger(r))
-	writeJSON(w, http.StatusOK, s.servedChatMessageDTO(msg))
+	// THE FIFTH READ DOOR onto servedChatMessageDTO. The meta this handler builds
+	// never carries `reply_to`, so the quote join is a no-op here today — but it
+	// goes through the same one function on purpose, so the day it does carry one
+	// there is nothing to remember.
+	dto, err := s.servedChatMessageDTO(msg)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dto)
 }
 
 // POST /api/tasks/{task_id}/reassign — the owner/admin handover action

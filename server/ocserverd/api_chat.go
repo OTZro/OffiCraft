@@ -645,7 +645,12 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 			Body: "你有一則新訊息。",
 		})
 	}
-	writeJSON(w, http.StatusOK, s.servedChatMessageDTO(msg))
+	dto, err := s.servedChatMessageDTO(msg)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dto)
 }
 
 // servedChatMessageDTO builds the chat-message view AND joins the live reply
@@ -655,7 +660,7 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 // stored meta only ever holds the id (stamped waiting at open, never updated on
 // answer), so the status MUST be joined here. Best-effort: a lookup miss/error
 // leaves "" (the FE then just fetches the card, as it did before this field).
-func (s *apiServer) servedChatMessageDTO(m ChatMessage) chatMessageDTO {
+func (s *apiServer) servedChatMessageDTO(m ChatMessage) (chatMessageDTO, error) {
 	dto := newChatMessageDTO(m)
 	if id := replyCardIDFromMeta(m.Meta); id != "" {
 		if c, err := s.dal.GetReplyCard(id); err == nil && c != nil {
@@ -668,8 +673,18 @@ func (s *apiServer) servedChatMessageDTO(m ChatMessage) chatMessageDTO {
 	// handlers instead would be four places for one rule, and the door someone
 	// forgot would be indistinguishable on screen from a message whose original
 	// is genuinely gone.
-	dto.ReplyToChat = s.chatReplyQuote(dto.ReplyTo, nil)
-	return dto
+	//
+	// It is also the ONE join on this function that returns an error rather than
+	// swallowing it — see chatReplyQuote. reply_card_status above is genuinely
+	// best-effort (a miss just makes the browser fetch the card, as it did
+	// before that field existed); the quote is not, because its absence is drawn
+	// as an assertion.
+	quote, err := s.chatReplyQuote(dto.ReplyTo, nil)
+	if err != nil {
+		return chatMessageDTO{}, err
+	}
+	dto.ReplyToChat = quote
+	return dto, nil
 }
 
 // chatReplyQuote reads the message an id names and projects it into the quote
@@ -684,21 +699,35 @@ func (s *apiServer) servedChatMessageDTO(m ChatMessage) chatMessageDTO {
 // fire — while costing a permanent second code path whose wrong answer looks
 // exactly like its right one.
 //
-// BEST EFFORT ON ERROR, matching the reply_card_status join directly above: a
-// failed lookup leaves the quote absent rather than failing the whole read. A
-// reader cannot act differently on "gone" and "the database hiccuped" anyway —
-// there is nothing to retry either way — and turning a chat listing into a 500
-// because one quoted row could not be read would take out the conversation to
-// protect one line of it.
-func (s *apiServer) chatReplyQuote(replyTo string, names map[string]string) *chatReplyQuoteDTO {
+// 🔴 A READ FAILURE IS NOT A MISS, AND THIS FUNCTION MUST NOT CONFLATE THEM.
+// Absence here is rendered by the browser as one FIXED, ASSERTIVE sentence —
+// 「這則訊息已不存在」 / "This message no longer exists" — which is a claim about
+// the world. `len(quoted) == 0` earns that claim: the row is not there. `err !=
+// nil` does not: the database could not answer, the message is very probably
+// still sitting in it, and printing the gone sentence turns a transient fault
+// into a false statement the reader has no way to see through. So the error goes
+// UP and this read fails loudly (500), the way every other DAL error on these
+// handlers already does.
+//
+// The alternative considered and rejected: keep best-effort but widen the DTO so
+// the browser could distinguish "unreadable" from "gone". That buys a third
+// on-screen state, a third sentence in two locales, and a third thing to keep
+// true — to avoid a 500 on a fault that is already a 500 one line earlier in
+// every one of these handlers (the listing read itself). The whole point of
+// T-4e95 is that a wrong answer must not look like a right one; a 500 cannot be
+// mistaken for a quote.
+func (s *apiServer) chatReplyQuote(replyTo string, names map[string]string) (*chatReplyQuoteDTO, error) {
 	if replyTo == "" {
-		return nil
+		return nil, nil
 	}
 	quoted, err := s.dal.ListChatByIDs([]string{replyTo})
-	if err != nil || len(quoted) == 0 {
-		return nil
+	if err != nil {
+		return nil, err
 	}
-	return newChatReplyQuoteDTO(quoted[0], names)
+	if len(quoted) == 0 {
+		return nil, nil
+	}
+	return newChatReplyQuoteDTO(quoted[0], names), nil
 }
 
 // ── by-id re-read (T-a828) ───────────────────────────────────────────────────
@@ -821,7 +850,12 @@ func (s *apiServer) serveChatByIDs(w http.ResponseWriter, r *http.Request, ids [
 	}
 	out := []chatMessageDTO{}
 	for _, m := range msgs {
-		out = append(out, s.servedChatMessageDTO(m))
+		dto, err := s.servedChatMessageDTO(m)
+		if err != nil {
+			internalError(w, err)
+			return
+		}
+		out = append(out, dto)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -886,7 +920,12 @@ func (s *apiServer) HandleListChatApiChatGet(w http.ResponseWriter, r *http.Requ
 		}
 		out := []chatMessageDTO{}
 		for _, m := range msgs {
-			out = append(out, s.servedChatMessageDTO(m))
+			dto, err := s.servedChatMessageDTO(m)
+			if err != nil {
+				internalError(w, err)
+				return
+			}
+			out = append(out, dto)
 		}
 		writeJSON(w, http.StatusOK, out)
 		return
@@ -941,7 +980,12 @@ func (s *apiServer) HandleListChatApiChatGet(w http.ResponseWriter, r *http.Requ
 	}
 	out := []chatMessageDTO{}
 	for _, m := range msgs {
-		out = append(out, s.servedChatMessageDTO(m))
+		dto, err := s.servedChatMessageDTO(m)
+		if err != nil {
+			internalError(w, err)
+			return
+		}
+		out = append(out, dto)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -1261,9 +1305,12 @@ func (s *apiServer) resumeSnapshotParts(actor string) (resumeWakeSnapshot, error
 	if err != nil {
 		return resumeWakeSnapshot{}, err
 	}
-	chat, cut, chatChars := s.resumeChatBlock(
+	chat, cut, chatChars, err := s.resumeChatBlock(
 		actor, msgs, names, cardsByID,
 		resumeChatPackBudget(s.chatBudget(), snap.GeneratedAt))
+	if err != nil {
+		return resumeWakeSnapshot{}, err
+	}
 	snap.Chat, snap.ChatCut = chat, cut
 
 	tasks, tasksOpenTotal, stepNotes, err := s.resumeTasksFor(actor, cardsByID)
@@ -1355,13 +1402,19 @@ func resumeChatCarriesFullBody(subject string, m ChatMessage) bool {
 // resumeChatMessageDTO projects ONE message for the wake snapshot: names beside
 // ids, a rendered timestamp beside the epoch one, the body collapsed unless
 // exempt, and the reply card folded in place.
-func (s *apiServer) resumeChatMessageDTO(subject string, m ChatMessage, names map[string]string, cards map[string]ReplyCard) chatMessageDTO {
+func (s *apiServer) resumeChatMessageDTO(subject string, m ChatMessage, names map[string]string, cards map[string]ReplyCard) (chatMessageDTO, error) {
 	d := newChatMessageDTO(m)
 	// The SAME unconditional join the served path does (chatReplyQuote), with
 	// the snapshot's own name map handed in — so a waking agent reads what a
 	// reply was aimed at without a second tool call, exactly as the browser does
-	// without a second request.
-	d.ReplyToChat = s.chatReplyQuote(d.ReplyTo, names)
+	// without a second request. Its error rides up the same way: a wake snapshot
+	// that could not read a quote fails, rather than telling the waking agent a
+	// message it was answering no longer exists.
+	quote, err := s.chatReplyQuote(d.ReplyTo, names)
+	if err != nil {
+		return chatMessageDTO{}, err
+	}
+	d.ReplyToChat = quote
 	d.FromName = resumeDisplayName(m.Sender, names)
 	d.ToName = resumeDisplayName(m.Recipient, names)
 	d.TSDisplay = resumeDisplayTime(m.TS)
@@ -1397,7 +1450,7 @@ func (s *apiServer) resumeChatMessageDTO(subject string, m ChatMessage, names ma
 			}
 		}
 	}
-	return d
+	return d, nil
 }
 
 // resumeChatCollapseIsWorthIt answers whether folding a body actually SAVES
@@ -1492,18 +1545,20 @@ func resumeChatMessageChars(d chatMessageDTO) int {
 // packer that spent the whole constant would put overview.chat_chars over it by
 // construction, which is the defect this whole change exists to remove.
 //
+// 🔴 PROJECT INSIDE THE WALK, NOT BEFORE IT. This used to build a DTO for ALL
+// `msgs` (resumeChatFetch is 500) and then throw most of them away — and since
+// T-4e95 every projection costs a POINT QUERY for the reply quote, the discarded
+// ones were pure waste that grew with the conversation and with nothing else.
+// Measured on a wake snapshot: 10.0ms → 32.2ms, 3.2×. Walking newest-first and
+// projecting each message as it is reached means the only DTO built past the
+// budget is the ONE that overflows it, whose cost is what ends the walk.
+//
+// The output is byte-for-byte what the two-pass version produced: same order,
+// same costs, same cut, no new branch. Batching the quote reads is a DIFFERENT
+// change and is deliberately not made here.
+//
 // Returns the messages oldest→newest, the cut marker, and the block's rune cost.
-func (s *apiServer) resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string, cards map[string]ReplyCard, budget int) ([]chatMessageDTO, resumeChatCutDTO, int) {
-	type packedMsg struct {
-		dto  chatMessageDTO
-		cost int
-	}
-	all := make([]packedMsg, 0, len(msgs))
-	for _, m := range msgs {
-		d := s.resumeChatMessageDTO(subject, m, names, cards)
-		all = append(all, packedMsg{dto: d, cost: resumeChatMessageChars(d)})
-	}
-
+func (s *apiServer) resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string, cards map[string]ReplyCard, budget int) ([]chatMessageDTO, resumeChatCutDTO, int, error) {
 	// The read filled its window, so older messages MAY exist that were never
 	// even fetched. Reported as a cut whether or not the budget stopped the walk.
 	//
@@ -1511,26 +1566,31 @@ func (s *apiServer) resumeChatBlock(subject string, msgs []ChatMessage, names ma
 	// nothing older reports a cut that is not there. That costs a reader one
 	// wasted get_chat; the opposite error costs it a conversation it never learns
 	// exists.
-	atFetchCap := len(all) >= resumeChatFetch
+	atFetchCap := len(msgs) >= resumeChatFetch
 
 	used := 0
-	first := len(all) // index of the OLDEST message that made it in
 	dropped := false
-	for i := len(all) - 1; i >= 0; i-- { // newest first: `all` is oldest→newest
-		if used+all[i].cost > budget {
+	// Newest first (`msgs` is oldest→newest), so this collects in reverse.
+	rev := make([]chatMessageDTO, 0, len(msgs))
+	for i := len(msgs) - 1; i >= 0; i-- {
+		d, err := s.resumeChatMessageDTO(subject, msgs[i], names, cards)
+		if err != nil {
+			return nil, resumeChatCutDTO{}, 0, err
+		}
+		cost := resumeChatMessageChars(d)
+		if used+cost > budget {
 			// Everything from here back is older, so the walk is over.
 			dropped = true
 			break
 		}
-		used += all[i].cost
-		first = i
+		used += cost
+		rev = append(rev, d)
 	}
 
-	// `all` is already the one chronological stream the chat surface serves, so
-	// the surviving suffix is in order with no re-sort needed.
+	// Back into the one chronological stream the chat surface serves.
 	chat := []chatMessageDTO{}
-	for i := first; i < len(all); i++ {
-		chat = append(chat, all[i].dto)
+	for i := len(rev) - 1; i >= 0; i-- {
+		chat = append(chat, rev[i])
 	}
 
 	cut := resumeChatCutDTO{}
@@ -1538,7 +1598,7 @@ func (s *apiServer) resumeChatBlock(subject string, msgs []ChatMessage, names ma
 		cut.Omitted = true
 		cut.Hint = resumeChatCutHint
 	}
-	return chat, cut, used
+	return chat, cut, used, nil
 }
 
 // resumeChatPackBudget is what resumeChatBlock may spend on MESSAGES, once the

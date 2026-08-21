@@ -4,7 +4,11 @@
 // it answered and can be clicked back to it.
 //
 // Locked here, one test per promise the AC makes:
-//   • EVERY row carries the entry — own messages, incoming, and card rows;
+//   • EVERY row carries the entry — own messages, incoming, attachment-only,
+//     server-authored (sender="system") and card rows alike. Card rows are the
+//     one shape where it does NOT sit in a bubble corner (they have no bubble),
+//     and they render their quote through <ChatReplyCard> rather than the
+//     quote row — an exception the tests state rather than assume;
 //   • the banner names the quoted sender and shows a slice of what they said;
 //   • the x clears ONLY the target — half-typed text survives it;
 //   • sending carries the target, and clears it (the NEXT message is not a
@@ -44,10 +48,23 @@ import {
 // the button, which is not a defect, and would stay green if the label were
 // swapped for a different key, which is.
 import { zh } from "../i18n/locales/zh";
+// The composed (function-valued) half of the same dictionary — `outsourceLabel`
+// is 「外包 · 代號」 in one place and this test must not spell it a second time.
+import { makeMessages } from "../i18n/compose";
+const zhMsg = makeMessages(zh, "zh");
 
 let messages: ChatMessage[] = [];
 const send = vi.fn(() => Promise.resolve());
 
+// Released-worker codename cache. The REAL hook lazily fetches
+// GET /api/outsource-workers/{id}; here it is a fixed map keyed off the ids it
+// is HANDED — which is exactly the seam the quoted-sender test below needs, and
+// the reason it is a filter rather than a constant map: an id the component
+// never puts into `unknownOwIds` never reaches this mock and never resolves.
+vi.mock("../hooks/useWorkerCodenames", () => ({
+  useWorkerCodenames: (ids: readonly string[]) =>
+    new Map(ids.filter((id) => id === "ow-rel").map((id) => [id, "R-2"])),
+}));
 vi.mock("../hooks/useChat", () => ({
   useChat: () => ({
     messages,
@@ -161,13 +178,34 @@ describe("ChatArea 回覆這則", () => {
           { id: "a1", url: "/x", filename: "p.png", mime: "image/png", isImage: true },
         ],
       }),
+      // 🔴 A SERVER-AUTHORED ROW. `sender="system"` (T-ba04 reassign handover)
+      // is a real message with a real id, and since the `replyable` gate was
+      // deleted on 2026-08-21 it carries the entry like everything else — and
+      // the entry WORKS: a reply naming one of these ids is accepted by the
+      // real server (verified against it, 200). It was missing from this table,
+      // which is how a row that renders differently from every other one gets
+      // no coverage at all.
+      mkMsg({ id: "c-5", from: "system", to: "m1", body: "任務已轉手", ts: 5 }),
+      // (its real wire shape: the server addresses a handover to the MEMBER, so
+      // in the owner's thread it is an inter-agent row and starts collapsed —
+      // the test below expands it rather than pretending it is addressed to the
+      // owner, because a fixture that is not the shape the server emits guards
+      // the wrong row.)
     ];
   });
 
-  it("EVERY message row carries a reply entry — incoming, own, card and attachment-only alike", () => {
+  it("EVERY message row carries a reply entry — incoming, own, card, attachment-only and server-authored alike", () => {
     const { container } = renderChat();
+    // Inter-agent runs (the server-authored handover among them) render
+    // COLLAPSED by default. Expand them so this table sees every row it lists
+    // rather than silently skipping the shapes that start folded.
+    for (const toggle of Array.from(
+      container.querySelectorAll(".chat__inter-toggle"),
+    )) {
+      fireEvent.click(toggle);
+    }
     expect(replyButtons(container)).toHaveLength(messages.length);
-    // …and each one really belongs to a row, so four buttons stacked in one
+    // …and each one really belongs to a row, so a pile of buttons stacked in one
     // corner could not pass.
     for (const m of messages) {
       expect(rowOf(container, m.id).querySelector(".chat__msg-reply")).toBeTruthy();
@@ -617,8 +655,12 @@ describe("ChatArea 回覆這則", () => {
     // The restore runs after an await and this component is REUSED across
     // peers. Reviewed and reproduced: the previous room's text AND its reply
     // target were restored into the next room and persisted into that room's
-    // draft. The target half is worse than untidy — it belongs to another
-    // conversation, so the new room's composer then 400s on every send.
+    // draft. The target half is worse than untidy, and it got worse on
+    // 2026-08-21: the server's cross-conversation refusal was deleted, so a
+    // target belonging to another room is no longer 400'd on send — it is
+    // ACCEPTED, and the message goes out to the new peer quoting a sentence from
+    // a conversation it has nothing to do with. The failure mode went from a
+    // visible refusal to a silent mis-send, which is why this is guarded.
     messages = [mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" })];
     let reject: (e: Error) => void = () => {};
     send.mockImplementationOnce(
@@ -977,15 +1019,26 @@ describe("ChatArea 回覆這則", () => {
     expect(quote.querySelector("[data-testid='msg-quote-jump']")).toBeNull();
   });
 
-  it("the banner never names the peer for a target it cannot show", () => {
+  it("the banner says something TRUE about a target outside the loaded window — never the row's 「已不存在」 assertion", () => {
     // The banner used to fall back to the PEER's name whenever the quote had not
     // come back. That is a claim, not a placeholder: this conversation has only
     // two people, so the fallback is a coin flip printed as a fact.
     //
-    // 🔴 HOW THIS STATE IS REACHED NOW, AND HOW IT IS NOT. The composer's target
-    // is resolved from the LOADED WINDOW alone — no fetch — so the only way to
-    // aim at something unshowable is a draft saved in an earlier session whose
-    // target has since scrolled out. There is no 「…」 phase on the way: nothing
+    // 🔴 AND THE SECOND CLAIM IS JUST AS WRONG, which is what this test is for
+    // now. The banner resolves its target from the LOADED WINDOW alone
+    // (`messageById`) — no fetch — so "not found here" says nothing whatever
+    // about whether the message exists. The reachable path needs no hard reload:
+    // scroll up to load scrollback, aim at an old row, switch to another member
+    // and come back (the thread reloads only the newest page). The message is
+    // still on the server, the send still succeeds, and the reply's own quote
+    // row comes back complete — measured. Printing 「這則訊息已不存在」 in that
+    // state is a claim the owner can disprove by sending the message.
+    //
+    // So the banner carries a STATE-INDEPENDENT sentence, and the assertive one
+    // is reserved for the quote row, where the server's answer earns it.
+    //
+    // The fixture is that path in miniature: a saved draft aimed at an id the
+    // loaded window does not contain. There is no 「…」 phase on the way — nothing
     // is being waited for, so the banner is in its final state on frame one.
     messages = [mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" })];
     saveChatDraft("m1", { text: "", attachments: [], replyTo: "c-longgone" });
@@ -993,9 +1046,58 @@ describe("ChatArea 回覆這則", () => {
 
     const b = banner(container)!;
     expect(b).not.toBeNull();
-    expect(b.textContent).toContain(zh.chat.replyQuoteGone);
+    expect(b.textContent).toContain(zh.chat.replyingToEarlier);
+    expect(
+      b.textContent,
+      "the banner cannot see past the loaded window, so it may not assert the " +
+        "message is gone",
+    ).not.toContain(zh.chat.replyQuoteGone);
     expect(b.textContent, "never the peer's name").not.toContain("Mira");
     expect(b.textContent, "and never a spinner").not.toContain("\u2026");
+
+    // …and the two sentences really are different strings, or the assertion
+    // above would be vacuous the day someone points both keys at one value.
+    expect(zh.chat.replyingToEarlier).not.toContain(zh.chat.replyQuoteGone);
+  });
+
+  it("names a QUOTED released outsource worker by codename, exactly as its own row does", () => {
+    // 🔴 ONE MEMBER, TWO IDENTITIES. `unknownOwIds` — the list fed to the lazy
+    // codename lookup — was built from `m.from` / `m.to` only, and the quote row
+    // renders a THIRD id: `nameOf(m.replyToChat.from)`. So a released worker
+    // whose own row said 「外包 · R-2」 was printed as the raw `ow-rel` the
+    // moment someone quoted it, and the row's accessible name degraded with it
+    // (「引用 ow-rel」). Both halves are asserted, because the aria-label is the
+    // only thing a screen-reader user gets.
+    //
+    // The fixture is deliberate: the quoted sender appears NOWHERE else in the
+    // window (no row of its own), so nothing but the quote can put it into the
+    // lookup. A test where the worker also has a visible row would pass with the
+    // bug still in place.
+    messages = [
+      mkMsg({ id: "c-1", from: "m1", to: "owner", body: "先看這個" }),
+      mkMsg({
+        id: "c-2",
+        from: "owner",
+        to: "m1",
+        body: "我回外包那句",
+        ts: 2,
+        replyTo: "c-far",
+        replyToChat: mkQuote("c-far", "ow-rel", "外包那句話"),
+      }),
+    ];
+    const { container } = renderChat();
+
+    const quote = rowOf(container, "c-2").querySelector(".chat__msg-quote")!;
+    expect(quote.querySelector(".chat__msg-quote__who")?.textContent).toBe(
+      zhMsg.outsourceLabel("R-2"),
+    );
+    expect(
+      quote.querySelector(".chat__msg-quote__who")?.textContent,
+      "never the raw id the roster could not resolve",
+    ).not.toBe("ow-rel");
+    expect(quote.getAttribute("aria-label")).toBe(
+      zh.chat.replyQuoteRoleWho(zhMsg.outsourceLabel("R-2")),
+    );
   });
 
   it("draws the quote from the WIRE, never from the message it can see", () => {
@@ -1045,9 +1147,14 @@ describe("ChatArea 回覆這則", () => {
     // The peer-switch block clears it in the same render-phase adjustment that
     // swaps the draft, and its comment says MUST — but nothing was standing on
     // that line: deleting it outright left all 241 ChatArea tests green. The
-    // failure it prevents is the silent one: a target from the previous room is
-    // refused by the server on every send, and the composer's only failure
-    // handling is a console.warn, so the message just disappears.
+    // failure it prevents used to be a loud one — the server refused a reply_to
+    // that crossed conversations, so a leftover target 400'd on every send and
+    // the composer's console.warn swallowed it. That refusal was DELETED on
+    // 2026-08-21 (owner: quoting sideways is the use case), which makes this
+    // guard MORE load-bearing, not less: the send now SUCCEEDS, and a message to
+    // the new peer arrives carrying a quote row built from the previous room —
+    // assembled faithfully by the server and shown to the recipient as context.
+    // Do not delete this on the belief that the server still catches it.
     messages = [mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" })];
     const { container, rerender } = render(
       <I18nProvider>

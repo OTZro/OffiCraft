@@ -70,6 +70,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "chat.replyQuoteGone",
   "chat.replyQuoteJump",
   "chat.replyQuoteRole",
+  "chat.replyingToEarlier",
   "chat.roleSettingsLink",
   "chat.send",
   "chat.shareLinkCopied",
