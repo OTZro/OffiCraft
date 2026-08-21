@@ -3378,7 +3378,7 @@
       "name": "restart_outsource_worker"
     },
     {
-      "description": "Change (\u63db model) an outsource worker's model/effort (owner/admin agent).",
+      "description": "Change (\u63db model) an outsource worker's model/effort (same floor as the staff model edit).",
       "inputSchema": {
         "properties": {
           "effort": {

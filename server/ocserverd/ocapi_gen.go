@@ -3818,7 +3818,7 @@ type ServerInterface interface {
 	// 強制停止 an outsource worker: kill the session NOW and hold it down; says nothing to it. Third rung of 停止 -> 加速停止 -> 強制停止.
 	// (POST /api/outsource-workers/{id}/force-stop)
 	HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost(w http.ResponseWriter, r *http.Request, id string)
-	// Change (換 model) an outsource worker's model/effort (owner/admin agent).
+	// Change (換 model) an outsource worker's model/effort (same floor as the staff model edit).
 	// (POST /api/outsource-workers/{id}/model)
 	HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(w http.ResponseWriter, r *http.Request, id string)
 	// Refocus (換手) an outsource worker's context (owner/admin agent, online-only else 409).

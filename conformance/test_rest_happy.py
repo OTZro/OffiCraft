@@ -2041,8 +2041,9 @@ SKIPPED_HAPPY: dict[str, str] = {
     ),
     "POST /api/outsource-workers/{id}/model": (
         "T-f190 owner 換 model: the positive face needs a LIVE worker row (no "
-        "black-box mint path). The below-owner-403 / owner-404 faces are pinned in "
-        "the auth matrix; the model/effort persist + active-respawn / "
+        "black-box mint path). The all-identities-404 faces are pinned in "
+        "the auth matrix (T-ed79 dropped this row to the machine floor, so there "
+        "is no below-floor 403 face left); the model/effort persist + active-respawn / "
         "assigned-persist-only in the server unit tests (worker_lifecycle_test.go, "
         "TestSetWorkerModel_*)."
     ),

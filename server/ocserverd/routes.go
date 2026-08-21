@@ -1644,9 +1644,16 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		{
 			// T-32e1/T-f190 worker lifecycle ops — owner mental model "外包只是
 			// 系統會幫我產生跟刪除的正職員工", so each reuses a member mechanism.
-			// T-6020 (owner 2026-07-26) gave all four the SAME admin_agent floor
-			// relocate already had in P7c — 外包對齊正職, one floor for the whole
-			// worker lifecycle. Plain agents remain 403 on every one.
+			// T-6020 (owner 2026-07-26) put FOUR of them at the SAME admin_agent
+			// floor relocate already had in P7c — 外包對齊正職, one floor for the
+			// worker lifecycle. Plain agents remain 403 on those.
+			//
+			// ⚠️ "all four" is what this note used to say, and since T-ed79 it is
+			// FALSE: /model left that floor (owner 2026-08-21, rc-376a41719e62 —
+			// the full ruling is on that row below). THREE of the T-6020 four are
+			// still here: refocus, stop, restart. /relocate is the fifth worker
+			// lifecycle row and it sits at admin_agent too, but it got there in
+			// P7c, not from this ruling.
 			Method:   "POST",
 			Path:     "/api/outsource-workers/{id}/refocus",
 			Handler:  w.HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost,
@@ -1673,13 +1680,36 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Restart (重啟) an outsource worker that has no live session (owner/admin agent; 409 only when it is actually alive).",
 			MCPTool:  "restart_outsource_worker",
 		},
+		// ⚠️ set_outsource_worker_model sits at the machine FLOOR since T-ed79,
+		// and it is the ONE T-6020 row that left the admin_agent floor. owner
+		// 2026-08-21 (rc-376a41719e62) was asked whether changing a worker's
+		// model is governance, and ruled, VERBATIM:
+		//
+		//	「如果原本正職可以改 model 外包就應該可以改，如果只有 mira 可以改，那就
+		//	 不變，正職跟外包一樣，mira 是特殊的意義，他代替 owner 執行高權限動作。」
+		//
+		// So the test is not "how dangerous does this look" — it is "what floor
+		// does the STAFF face of the same act sit at". PATCH /api/members/{id}
+		// (update_member) is at principalMachine and was itself examined and KEPT
+		// there by owner 2026-07-27 (T-5336, the note above that row). Changing a
+		// model is therefore office housekeeping on BOTH sides, and mira's
+		// admin_agent rank is reserved for acts the owner delegates, which this
+		// is not.
+		//
+		// 🔴 ONLY THIS ROW MOVED. refocus / relocate / stop / restart were already
+		// at the same floor as their staff twins before this ruling, and the
+		// ruling did not touch them — do not "finish the job" by lowering them.
+		//
+		// This note exists so the NEXT permission audit does not re-open the
+		// question, the way this one had to re-open T-5336's. Raising this row
+		// needs a fresh owner ruling, not a tidy-up commit.
 		{
 			Method:   "POST",
 			Path:     "/api/outsource-workers/{id}/model",
 			Handler:  w.HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost,
 			Auth:     authGated,
-			Requires: principalAdminAgent,
-			Summary:  "Change (換 model) an outsource worker's model/effort (owner/admin agent).",
+			Requires: principalMachine,
+			Summary:  "Change (換 model) an outsource worker's model/effort (same floor as the staff model edit).",
 			MCPTool:  "set_outsource_worker_model",
 		},
 		// ── Task manuals (M3) — agents create manuals + edit the CONTENT fields
