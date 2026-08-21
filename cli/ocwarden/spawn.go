@@ -826,12 +826,28 @@ func (d SpawnDeps) start(p StartParams) SpawnOutcome {
 			// the same reason it is there: the runtime is a per-member setting,
 			// so it is usually the cheapest fix.
 			//
-			// Compressed from 406 display columns to 249 (the sibling runs 182
-			// under a 220 guard). It is allowed the extra because of the one
-			// clause the sibling could drop and this one cannot: `grep -rn
-			// OC_CLAUDE_CRED_CHECK docs/ bin/ spec/` returns NOTHING, so this
-			// string is the only place the "a shell export cannot reach a
-			// launchd job" trap is written down at all.
+			// WIDTH, MEASURED WITH THE SUMMARY A REAL HOST PRODUCES — not the
+			// two-source one the test used to stub. probeClaudeCreds marks
+			// cred_file, keychain AND all four claudeCredEnvKeys, so a
+			// signed-out Mac renders six "=unset" pairs: 140 columns of the
+			// total on its own. This message went 516 -> 359 columns. The
+			// sibling constant runs 182 under a 220 guard because it
+			// interpolates nothing at all. So the gap between them is the
+			// SUMMARY, not the prose — and shrinking the summary is a separate
+			// change, because its value-free construction is a security
+			// contract (see claudecreds.go). Guard set at 380 here, above 359.
+			//
+			// The launchd clause stays, but NOT for the reason an earlier draft
+			// of this comment gave. That draft claimed this string is "the only
+			// place the trap is written down at all" — FALSE, and an
+			// independent reviewer caught it: claudecreds_test.go explains the
+			// same trap verbatim, and install.go carries the plist relay that
+			// makes the escape hatch real in the first place. What IS true, and
+			// is the actual reason to keep it: no USER-FACING doc says it —
+			// `grep -rn OC_CLAUDE_CRED_CHECK docs/ bin/ spec/` is empty, so an
+			// owner who reads this line and goes looking finds nothing.
+			// Writing it into docs/guide/troubleshooting.md is the real fix and
+			// is not this ticket's.
 			return SpawnOutcome{OK: false, Reason: fmt.Sprintf(
 				"claude_not_logged_in: no claude credential here (%s). "+
 					"Fix any one: set this member's 執行環境 to Codex; "+

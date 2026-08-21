@@ -768,7 +768,13 @@ func TestStart_ClaudeNotLoggedIn(t *testing.T) {
 		Home:      "/tmp",
 		ClaudeBin: fxClaudeBin,
 		ClaudeCreds: func() claudeCredStatus {
-			return claudeCredStatus{Present: false, Summary: "cred_file=unset keychain=unset"}
+			// THE SHAPE A REAL HOST PRODUCES, not a convenient short one.
+			// probeClaudeCreds marks cred_file, keychain and all four
+			// claudeCredEnvKeys, so a signed-out Mac renders SIX pairs. Stubbing
+			// two made the width assertion below measure a string that is 110
+			// columns shorter than anything an owner ever sees — the guard was
+			// green on a message that does not exist.
+			return claudeCredStatus{Present: false, Summary: sixSourceUnsetSummary}
 		},
 		WriteFile: func(p, c string, _ os.FileMode) error { wrote[p] = c; return nil },
 		MkdirAll:  func(string, os.FileMode) error { return nil },
@@ -788,7 +794,7 @@ func TestStart_ClaudeNotLoggedIn(t *testing.T) {
 			"Fix any one: set this member's 執行環境 to Codex; "+
 			"run `claude` once as this user; or re-install the warden "+
 			"with OC_CLAUDE_CRED_CHECK=0 (shell exports do not reach it).",
-		"cred_file=unset keychain=unset")
+		sixSourceUnsetSummary)
 	if out.Reason != want {
 		t.Errorf("refusal reason\n got: %q\nwant: %q", out.Reason, want)
 	}
@@ -799,13 +805,25 @@ func TestStart_ClaudeNotLoggedIn(t *testing.T) {
 	// failure this ticket opened on. The whole-sentence compare above would
 	// also catch it, but it would read as "someone reworded a string"; this
 	// one names the property.
-	if !strings.Contains(out.Reason, "執行環境") {
+	// 🔴 PIN THE RUNTIME BY NAME, not by the Chinese label around it. An
+	// independent reviewer broke the first version of this assertion by
+	// rewriting the sentence to "set this member's 執行環境 elsewhere" and
+	// updating `want` to match: the whole-sentence compare went green, this
+	// line went green, and the message no longer told anyone about Codex at
+	// all. The label is the container; "Codex" is the property. The sibling
+	// test (TestStart_NoClaudeBin) already pins it this way.
+	if !strings.Contains(out.Reason, "Codex") {
 		t.Errorf("the signed-out refusal must still name the Codex exit, got %q", out.Reason)
 	}
-	// Same wall-of-red ceiling as claudeBinUnresolvedReason, loosened by the
-	// one clause that exists nowhere else (see the comment on this arm in
-	// spawn.go). Measured 249 at the time of writing.
-	if width := runewidth(out.Reason); width > 260 {
+	if !strings.Contains(out.Reason, "執行環境") {
+		t.Errorf("the Codex exit must name the per-member setting the owner edits, got %q", out.Reason)
+	}
+	// Wall-of-red ceiling, measured against the SIX-source summary above —
+	// i.e. what an owner actually sees. 359 at the time of writing (the old
+	// wording was 516). It cannot meet claudeBinUnresolvedReason's 220 because
+	// that one is a constant with no summary interpolated at all; 140 of these
+	// columns are the summary itself. Shrinking THAT is a separate change.
+	if width := runewidth(out.Reason); width > 380 {
 		t.Errorf("refusal reason is %d display columns; keep it short enough to read "+
 			"on the member row (was 406 before T-b3d0)", width)
 	}
@@ -1125,3 +1143,11 @@ func runewidth(s string) int {
 	}
 	return width
 }
+
+// sixSourceUnsetSummary is what probeClaudeCreds returns on a signed-out darwin
+// host with HOME set: cred_file, keychain, then every claudeCredEnvKeys entry,
+// each rendered "<name>=unset" and space-joined. Kept here (rather than a short
+// stand-in) so the width assertions measure the string an owner actually reads.
+const sixSourceUnsetSummary = "cred_file=unset keychain=unset " +
+	"ANTHROPIC_API_KEY=unset ANTHROPIC_AUTH_TOKEN=unset " +
+	"CLAUDE_CODE_USE_BEDROCK=unset CLAUDE_CODE_USE_VERTEX=unset"
