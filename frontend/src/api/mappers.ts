@@ -1099,6 +1099,9 @@ export function toOnboardingReport(
     steps: (w.steps ?? []).map((s) => ({
       name: s.name,
       ok: s.ok ?? false,
+      // Absent = no code (an older server, or a success). "" then falls through
+      // to `reason` in the banner, which is exactly the pre-T-0648 behaviour.
+      code: s.code ?? "",
       reason: s.reason ?? "",
       detail: s.detail ?? "",
     })),

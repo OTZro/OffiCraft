@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
-import { api, type OnboardingReportView } from "../api";
+import {
+  api,
+  type OnboardingReportView,
+  type OnboardingStepView,
+} from "../api";
 import {
   adoptServerSettings,
   loadServerSettings,
@@ -156,6 +160,23 @@ export function OnboardingBanner() {
         ? t.onboarding.stepWakeAssistant
         : name;
 
+  // The sentence that says WHAT BROKE, in the reader's language (T-0648).
+  //
+  // The server's `reason` is English engineer-facing prose composed in
+  // onboarding.go, so it was the one thing on this otherwise-translated banner
+  // that could not be translated — and a server-side wording change should not
+  // be able to rewrite the UI either. So the cause travels as a CLOSED `code`
+  // and the wording lives here, the same split backupHealth.ts already uses.
+  //
+  // 🔴 THE FALLBACK IS LOAD-BEARING, in BOTH directions. An older server sends
+  // no code at all, and a newer one can send a code this build has never heard
+  // of; either way the server's own sentence is still the best thing we have,
+  // and rendering it verbatim is how this banner can never be made to go
+  // silent by a version skew. Deliberately NOT a generic "unknown error".
+  const reasonText = (step: OnboardingStepView) =>
+    (t.onboarding.reasons as Record<string, string | undefined>)[step.code] ??
+    step.reason;
+
   return (
     <div className="onboarding-banner" role="status" data-testid="onboarding-banner">
       <div className="onboarding-banner__head">
@@ -189,7 +210,7 @@ export function OnboardingBanner() {
             <span className="onboarding-banner__step">{stepLabel(s.name)}</span>
             {/* The REASON is the payload — a step name alone is the same
                 silence with a label on it. */}
-            <span className="onboarding-banner__reason">{s.reason}</span>
+            <span className="onboarding-banner__reason">{reasonText(s)}</span>
           </li>
         ))}
       </ul>

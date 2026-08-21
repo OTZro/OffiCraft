@@ -121,6 +121,11 @@ func TestOnboarding_InstallFailureIsLoudAndDoesNotWake(t *testing.T) {
 	if !strings.Contains(st.Reason, "exit 1") {
 		t.Errorf("the reason must name the installer's exit code, got %q", st.Reason)
 	}
+	// T-0648: and the machine-readable half of that same cause, which is what
+	// the cockpit renders in the reader's language instead of this English.
+	if st.Code != onboardingCodeInstallFailed {
+		t.Errorf("code = %q, want %q — without it the banner has nothing to translate and falls back to this English sentence", st.Code, onboardingCodeInstallFailed)
+	}
 	if !strings.Contains(st.Detail, "claude_bin_unresolved") {
 		t.Errorf("the failing installer log must be KEPT (it carries the actual cause), got %q", st.Detail)
 	}
@@ -666,5 +671,59 @@ func TestOnboardingReport_LegacyBlobWithNoDismissedAtIsNotDismissed(t *testing.T
 	}
 	if view := s.settingsView().Onboarding; view == nil || view.DismissedAt != 0 {
 		t.Fatalf("the settings read must pass that absence through unchanged, got %+v", view)
+	}
+}
+
+// TestOnboardingStep_EveryFailureCarriesACode is a SOURCE scan, and it is a
+// source scan on purpose (T-0648): the failure branches of onboarding.go are
+// spread across three functions and a panic recover, several of them reachable
+// only from states no unit test constructs, so "run them all and look" is not
+// a coverage this suite actually has. What the cockpit depends on is a rule
+// about the SHAPE of every step literal, and the rule can be checked directly.
+//
+// The rule: a step literal that is not an explicit success (`OK: true`) MUST
+// set Code. A failure with no code renders the server's English `reason` — the
+// exact untranslated sentence this change exists to remove — and it does so
+// silently, on a path nobody looks at until an install is already broken.
+func TestOnboardingStep_EveryFailureCarriesACode(t *testing.T) {
+	src, err := os.ReadFile("onboarding.go")
+	if err != nil {
+		t.Fatalf("read onboarding.go: %v", err)
+	}
+	body := string(src)
+	const lit = "onboardingStepDTO{"
+	n := 0
+	for idx := 0; ; {
+		k := strings.Index(body[idx:], lit)
+		if k < 0 {
+			break
+		}
+		start := idx + k + len(lit)
+		// `[]onboardingStepDTO{{...}}` — step into the element literal.
+		if start < len(body) && body[start] == '{' {
+			start++
+		}
+		end := strings.Index(body[start:], "}")
+		if end < 0 {
+			t.Fatalf("unterminated %s literal at offset %d", lit, start)
+		}
+		step := body[start : start+end]
+		idx = start + end
+		if strings.TrimSpace(step) == "" {
+			continue // the empty `[]onboardingStepDTO{}` accumulator
+		}
+		if strings.Contains(step, "OK: true") {
+			continue // an explicit success has nothing to explain
+		}
+		n++
+		if !strings.Contains(step, "Code:") {
+			t.Errorf("a failing onboardingStepDTO literal sets no Code:\n%s", step)
+		}
+	}
+	// A scan that matched nothing would pass while guarding nothing. The count
+	// is not pinned to an exact number — branches may legitimately be added —
+	// but it must plausibly be all of them.
+	if n < 8 {
+		t.Fatalf("scanned only %d failing step literals; the scan has stopped seeing onboarding.go's failure branches", n)
 	}
 }

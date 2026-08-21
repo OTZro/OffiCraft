@@ -65,6 +65,34 @@ const (
 	onboardingStateFailed  = "failed"
 )
 
+// Onboarding failure CODES — the closed machine vocabulary of onboardingStepDTO
+// (T-0648). Every failing step carries one.
+//
+// WHY THEY EXIST. The banner is the one place a fresh install says why its
+// assistant never woke, and every other word on it is in the reader's language
+// — but the sentence that says WHAT BROKE arrived as `Reason`, which is English
+// engineer-facing prose composed here. A server-side string cannot be
+// translated by a cockpit, and a server-side wording change should not be able
+// to silently rewrite the UI. So the cause travels as a CODE and the cockpit
+// owns the sentence — the same split backup health already uses (backup_health
+// .go's `code` ↔ frontend/src/lib/backupHealth.ts).
+//
+// `Reason` stays exactly as it was and is still the FALLBACK: a cockpit that
+// does not know a code renders it verbatim, so adding a code here can never
+// make an older cockpit go silent, and the codes that embed a Go error string
+// keep saying what that error was.
+const (
+	onboardingCodeInstallFailed       = "install_failed"       // ocwarden install exited non-zero
+	onboardingCodeInstallerUnrunnable = "installer_unrunnable" // the installer could not be run at all
+	onboardingCodeUninstallIntent     = "uninstall_intent"     // a residual uninstall intent could not be cleared
+	onboardingCodeRosterMissing       = "roster_missing"       // this server's machine row is not in the roster
+	onboardingCodeAssistantMissing    = "assistant_missing"    // the seeded assistant is not in the roster
+	onboardingCodeWakeNotRecorded     = "wake_not_recorded"    // the wake intent could not be persisted
+	onboardingCodeWakeUndispatched    = "wake_undispatched"    // intent persisted, but no START went out
+	onboardingCodeInterrupted         = "interrupted"          // the server restarted mid-run
+	onboardingCodeFaulted             = "faulted"              // the run panicked
+)
+
 // wardenOnlineWait bounds step 2. A freshly bootstrapped warden connects in
 // about a second; 30s is generous enough that a slow launchd start is not
 // mistaken for a broken install, and short enough that a genuinely broken one
@@ -252,6 +280,7 @@ func (s *apiServer) kickFirstRunOnboardingWith(run onboardingRunner) {
 				onboardingLog("FAULT: %v", r)
 				s.finishOnboarding(running, []onboardingStepDTO{{
 					Name:   onboardingStepInstallWarden,
+					Code:   onboardingCodeFaulted,
 					Reason: "onboarding faulted — see the server log",
 				}})
 			}
@@ -290,6 +319,7 @@ func (s *apiServer) runFirstRunOnboarding(run onboardingRunner, report onboardin
 	if err != nil || machine == nil {
 		steps = append(steps, onboardingStepDTO{
 			Name: onboardingStepInstallWarden,
+			Code: onboardingCodeRosterMissing,
 			Reason: "this server's machine row is missing from the roster — the " +
 				"out-of-box seed did not run; restart the server and try again",
 		})
@@ -300,6 +330,7 @@ func (s *apiServer) runFirstRunOnboarding(run onboardingRunner, report onboardin
 	if err := s.clearResidualUninstall(machine, triggerServer); err != nil {
 		steps = append(steps, onboardingStepDTO{
 			Name:   onboardingStepInstallWarden,
+			Code:   onboardingCodeUninstallIntent,
 			Reason: "could not clear a residual uninstall intent on this machine: " + err.Error(),
 		})
 		return s.finishOnboarding(report, steps)
@@ -319,6 +350,7 @@ func (s *apiServer) runFirstRunOnboarding(run onboardingRunner, report onboardin
 	if err != nil {
 		steps = append(steps, onboardingStepDTO{
 			Name:   onboardingStepInstallWarden,
+			Code:   onboardingCodeInstallerUnrunnable,
 			Reason: "could not run the warden installer on this host: " + err.Error(),
 		})
 		return s.finishOnboarding(report, steps)
@@ -328,6 +360,7 @@ func (s *apiServer) runFirstRunOnboarding(run onboardingRunner, report onboardin
 		// the actual cause (claude_bin_unresolved, a launchd refusal, …).
 		steps = append(steps, onboardingStepDTO{
 			Name: onboardingStepInstallWarden,
+			Code: onboardingCodeInstallFailed,
 			Reason: "installing this machine's warden failed (exit " +
 				strconv.Itoa(res.ExitCode) + ") — the assistant was NOT woken, because a " +
 				"wake with no warden to run it would just sit grey with no reason",
@@ -365,6 +398,7 @@ func (s *apiServer) wakeAssistantStep(
 	if err != nil || mira == nil {
 		steps = append(steps, onboardingStepDTO{
 			Name: onboardingStepWakeAssistant,
+			Code: onboardingCodeAssistantMissing,
 			Reason: "the seeded assistant is missing from the roster — the " +
 				"out-of-box seed did not run; restart the server and try again",
 		})
@@ -376,6 +410,7 @@ func (s *apiServer) wakeAssistantStep(
 	if err := s.putMember(*mira, triggerServer); err != nil {
 		steps = append(steps, onboardingStepDTO{
 			Name:   onboardingStepWakeAssistant,
+			Code:   onboardingCodeWakeNotRecorded,
 			Reason: "could not record the wake intent for the assistant: " + err.Error(),
 		})
 		return s.finishOnboarding(report, steps)
@@ -399,6 +434,7 @@ func (s *apiServer) wakeAssistantStep(
 		// so is the difference between "starting up" and "quietly nothing".
 		steps = append(steps, onboardingStepDTO{
 			Name: onboardingStepWakeAssistant,
+			Code: onboardingCodeWakeUndispatched,
 			Reason: "the assistant is set to come online, but no start command has " +
 				"been dispatched yet (" + dec.Reason + ") — most often this " +
 				"machine's warden has not connected back to the server. The server " +
@@ -463,6 +499,7 @@ func (s *apiServer) recoverStaleOnboarding() {
 	}
 	report.Steps = append(report.Steps, onboardingStepDTO{
 		Name: onboardingStepInstallWarden,
+		Code: onboardingCodeInterrupted,
 		Reason: "automatic first-run setup was interrupted (the server restarted " +
 			"while it was still running), so it did not finish. Install this " +
 			"machine from 監控 › 機器 › 「安裝」, then bring the assistant online.",

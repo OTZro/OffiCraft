@@ -126,8 +126,13 @@ type settingsDTO struct {
 // the whole point of the report is that a new owner can read WHY the assistant
 // is not awake instead of staring at an unexplained grey member.
 type onboardingStepDTO struct {
-	Name   string `json:"name"`
-	OK     bool   `json:"ok"`
+	Name string `json:"name"`
+	OK   bool   `json:"ok"`
+	// Code is the CLOSED failure vocabulary (T-0648) — see onboarding.go's
+	// onboardingCode* constants. Set on every failing step, empty on success.
+	// It is what lets the cockpit write the owner's sentence itself; Reason
+	// stays as the English fallback for a code the client does not know.
+	Code   string `json:"code"`
 	Reason string `json:"reason"`
 	Detail string `json:"detail"`
 }

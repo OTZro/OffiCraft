@@ -467,6 +467,23 @@ export const en: Dict = {
       "After you set your password the server installs this machine and wakes your assistant automatically. One step did not pass:",
     stepInstallWarden: "Install this machine",
     stepWakeAssistant: "Wake the assistant",
+    // Failure reasons (T-0648), keyed by the server's `code` — see zh.ts for
+    // WHY these live here instead of being shipped as the server's `reason`,
+    // and for why only the codes whose sentence is entirely fixed text are
+    // listed (the four that embed a Go error string keep the server's own
+    // wording, which IS the diagnosis).
+    reasons: {
+      install_failed:
+        "This machine could not be installed, so the assistant was not woken — waking one onto a machine that is not set up would just leave a grey member with no reason. The details below are the installer's full output.",
+      roster_missing:
+        "This server's own machine record is missing from the roster — the out-of-box setup did not finish. Restart the server and try again.",
+      assistant_missing:
+        "The assistant that ships with the studio is missing from the roster — the out-of-box setup did not finish. Restart the server and try again.",
+      interrupted:
+        "Automatic setup was interrupted partway through (the server restarted while it was running), so it never finished. Install this machine yourself from Monitor › Machines › Install, then bring the assistant online.",
+      faulted:
+        "Automatic setup stopped with an internal error. The server log has the details.",
+    },
     detailShow: "Show details",
     detailHide: "Hide details",
     dismiss: "Got it",

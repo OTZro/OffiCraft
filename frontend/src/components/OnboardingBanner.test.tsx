@@ -76,6 +76,65 @@ describe("OnboardingBanner", () => {
     expect(banner.textContent).toContain("、喚醒助理。");
   });
 
+  // T-0648: the banner was Chinese everywhere EXCEPT the one sentence that says
+  // what actually broke — that arrived as the server's English engineer-facing
+  // `reason`. The closed `code` vocabulary is what the cockpit translates (the
+  // same shape backupHealth already uses); the raw `reason` stays only as the
+  // fallback for a code this build does not know.
+  it("renders the localized sentence for a coded reason, not the server English", async () => {
+    getServerSettings.mockResolvedValue(
+      settingsWith({
+        state: "failed",
+        startedAt: 1,
+        finishedAt: 2,
+        steps: [
+          {
+            name: "install_warden",
+            ok: false,
+            code: "install_failed",
+            reason: "installing this machine's warden failed (exit 1)",
+            detail: "[ocwarden install] FATAL: launchctl kickstart failed",
+          },
+        ],
+      })
+    );
+    renderBanner();
+    const banner = await screen.findByTestId("onboarding-banner");
+    expect(banner.textContent).toContain("這台機器沒有安裝成功");
+    // The English engineer sentence must be GONE from the banner body — a
+    // translation that merely sits beside the original has not translated it.
+    expect(banner.textContent).not.toContain(
+      "installing this machine's warden failed"
+    );
+    // …and the engineer payload it carried (the exit code) must not have been
+    // literal-translated into the owner's sentence either.
+    expect(banner.textContent).not.toContain("exit 1");
+  });
+
+  it("falls back to the server reason for a code this build does not know", async () => {
+    getServerSettings.mockResolvedValue(
+      settingsWith({
+        state: "failed",
+        startedAt: 1,
+        finishedAt: 2,
+        steps: [
+          {
+            name: "install_warden",
+            ok: false,
+            code: "a_code_from_a_newer_server",
+            reason: "something this cockpit has no wording for",
+            detail: "",
+          },
+        ],
+      })
+    );
+    renderBanner();
+    const banner = await screen.findByTestId("onboarding-banner");
+    expect(banner.textContent).toContain(
+      "something this cockpit has no wording for"
+    );
+  });
+
   it("hides the raw tool log behind a toggle, then reveals it", async () => {
     getServerSettings.mockResolvedValue(
       settingsWith({

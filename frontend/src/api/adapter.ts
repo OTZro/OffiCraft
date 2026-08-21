@@ -862,6 +862,10 @@ export interface ServerSettingsView {
 export interface OnboardingStepView {
   name: string;
   ok: boolean;
+  /** The CLOSED failure vocabulary (T-0648) the cockpit translates — see
+   * `onboardingReasonText`. "" on success, and on any report a server wrote
+   * before the field existed; that case renders `reason` verbatim. */
+  code: string;
   reason: string;
   detail: string;
 }
