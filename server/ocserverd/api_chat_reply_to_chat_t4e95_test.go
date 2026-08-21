@@ -462,7 +462,6 @@ func TestReplyToChat_AnAttachmentOnlyOriginalQuotesAsEmpty(t *testing.T) {
 	}
 }
 
-
 // ── ④ (cont.) A READ FAILURE IS NOT A MISS ───────────────────────────────────
 //
 // 🔴 THE HOLE THIS CLOSES. chatReplyQuote used to say
