@@ -239,9 +239,11 @@ func TestContextThresholds_PromotionDeltaCarriesTheFinalSentence(t *testing.T) {
 			"there is no countdown, and is now on a 120s clock it has not been " +
 			"told about")
 	}
-	// The whole composed sentence, from the same fixed inputs: 65% is what the
-	// gauge holds at the promotion, and the deadline is the promoted stamp plus
-	// the grace — 2026-02-01T00:17:00Z (noticeAt + 900 + 120).
+	// The whole composed sentence, from the same fixed inputs: 50% is what the
+	// gauge holds at the promotion (the fixture's thresholds are 40% / 50%; the
+	// comment used to say 65%, which matched neither the fixture nor the want),
+	// and the deadline is the promoted stamp plus the grace —
+	// 2026-02-01T00:17:00Z (noticeAt + 900 + 120).
 	want := "context 50% (your limits: 40% / 50%)" +
 		" — offboard now: work the sequence below, then call restart_self" +
 		" yourself. Your deadline is 2026-02-01T00:17:00Z."
