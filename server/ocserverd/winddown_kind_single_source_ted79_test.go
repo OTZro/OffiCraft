@@ -1,6 +1,14 @@
 package main
 
-import "testing"
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+)
 
 // winddown_kind_single_source_ted79_test.go — the clock and the sentence are
 // ONE judgement, asserted through the two readers rather than through the
@@ -88,6 +96,87 @@ func TestWindDownKind_OnlyTheSecondContextThresholdIsAccelerated(t *testing.T) {
 		wantFinal := op == refocusOpContextHigh
 		if (kind == offboardKindFinal) != wantFinal || clocked != wantFinal {
 			t.Fatalf("%s: got kind=%q clocked=%v, want final=%v", op, kind, clocked, wantFinal)
+		}
+	}
+}
+
+// 🔴 …AND THE CLOSURE IS CHECKED BY MACHINE, because "I read the constants and
+// they are all in the list" is precisely the step that failed. everyWindDownCause
+// shipped missing refocusOpContextNotice — the value this ticket itself added —
+// and a hand-written list can only ever lag the declarations it claims to close
+// over. This test re-derives the declarations from the package source and fails
+// on the DIFFERENCE, so adding a constant without adding its value is a red
+// build rather than a silent hole in two other tests.
+//
+// The prefixes are the naming convention the three const blocks already use
+// (refocusOp* in member_ownerop_winddown.go, memberOp* beside it, ownerOp* in
+// worker_spawn.go). A cause added under a FOURTH prefix would still slip past —
+// so the failure message names the convention, which is the thing to keep.
+func TestWindDownKind_TheClosedSetIsActuallyClosed(t *testing.T) {
+	const prefixes = "refocusOp, memberOp, ownerOp"
+
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse package source: %v", err)
+	}
+
+	declared := map[string]string{} // wire value -> the constant that declares it
+	for _, pkg := range pkgs {
+		for _, f := range pkg.Files {
+			for _, d := range f.Decls {
+				gd, ok := d.(*ast.GenDecl)
+				if !ok || gd.Tok != token.CONST {
+					continue
+				}
+				for _, spec := range gd.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for i, name := range vs.Names {
+						if !strings.HasPrefix(name.Name, "refocusOp") &&
+							!strings.HasPrefix(name.Name, "memberOp") &&
+							!strings.HasPrefix(name.Name, "ownerOp") {
+							continue
+						}
+						if i >= len(vs.Values) {
+							continue
+						}
+						lit, ok := vs.Values[i].(*ast.BasicLit)
+						if !ok || lit.Kind != token.STRING {
+							continue
+						}
+						v, err := strconv.Unquote(lit.Value)
+						if err != nil || v == "" {
+							continue
+						}
+						declared[v] = name.Name
+					}
+				}
+			}
+		}
+	}
+	if len(declared) == 0 {
+		t.Fatal("found no wind-down cause constants at all — the naming convention " +
+			"this test keys on (" + prefixes + ") has moved, and the closure check " +
+			"is silently checking nothing")
+	}
+
+	covered := map[string]bool{}
+	for _, op := range everyWindDownCause {
+		covered[op] = true
+	}
+	for value, constName := range declared {
+		if !covered[value] {
+			t.Errorf("everyWindDownCause is missing %s = %q. It calls itself the "+
+				"closed set of refocus_op values, and a value it omits is a value "+
+				"BOTH guards in this file are blind to — that is how a mutant giving "+
+				"the first context threshold an undeclared 120 s deadline passed "+
+				"them. Add the value in the same edit that adds the constant.",
+				constName, value)
 		}
 	}
 }
