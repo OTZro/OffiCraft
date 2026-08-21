@@ -453,6 +453,14 @@ export function MarkdownPreviewOverlay({
   // already handled as a layer, and a half-built trap that leaks on one edge is
   // worse than none. What is promised here is "focus goes in, and comes back",
   // and that is what the tests assert.
+  //
+  // ⚠️ THE OPENER IS WHATEVER HAD FOCUS AT MOUNT, so a caller that BLURS its own
+  // control before opening this hands over the wrong element and the restore
+  // lands on <body>. That is not hypothetical: T-4e95's quote-row button briefly
+  // carried `disabled` while its read was in flight, which blurs a focused
+  // button, and the restore was measured landing on BODY in a real Chromium
+  // every time. The fix was on the caller's side (the attribute is gone), and
+  // this note is here so the next caller does not rediscover it.
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
     rootRef.current?.focus();

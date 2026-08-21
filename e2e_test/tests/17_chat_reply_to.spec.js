@@ -1,6 +1,7 @@
 // e2e_test/tests/17_chat_reply_to.spec.js
 // T-4e95 · 回覆這則 — the whole spine in ONE real browser against ONE real server:
-//   點回覆 → 橫幅指名對象 → 送出 → 對方那一列出現引用列 → 點引用列跳回原訊息。
+//   點回覆 → 橫幅指名對象 → 送出 → 對方那一列出現引用列 → 點引用列把原訊息撈回來
+//   在放大閱讀的覆蓋層裡看全文（owner 2026-08-21 改設計：不再捲動）。
 //
 // WHY THIS EXISTS AND WHAT ONLY IT CAN SEE
 // Every jsdom test in this feature stops at a seam. ChatArea's tests mock
@@ -52,7 +53,7 @@ const FILLER = 24;
 const FAR_FILLER = 200;
 
 test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
-  test('reply to a message: the banner names the sender, the send carries the link, the reply shows a quote row, and it jumps back', async ({
+  test('reply to a message: the banner names the sender, the send carries the link, the reply shows a quote row, and it opens the original in full', async ({
     page,
   }) => {
     const request = page.request;
@@ -225,19 +226,41 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     });
     expect(posted.status(), await posted.text()).toBe(200);
 
-    // 🔴 THE INSTRUMENT. Every by-ids read is counted BEFORE the SPA boots, so
-    // a read fired during the first paint cannot slip past. It is not blocked —
-    // blocking would prove the row renders without the answer, which is a
-    // weaker claim than proving nothing asked.
-    let byIdsCalls = 0;
-    await page.route(
-      (url) =>
-        url.pathname === '/api/chat' && url.searchParams.getAll('ids').length > 0,
-      async (route) => {
-        byIdsCalls += 1;
-        return route.continue();
-      },
-    );
+    // 🔴 THE INSTRUMENT. Every by-ids read is counted BEFORE the SPA boots, so a
+    // read fired during the first paint cannot slip past. Nothing is blocked —
+    // blocking would prove the row renders without the answer, which is a weaker
+    // claim than proving nothing asked.
+    //
+    // ⚠️ COUNTED IN THE PAGE, NOT IN `page.route`. This used to intercept with a
+    // route handler that did `byIdsCalls += 1; route.continue()`, which is
+    // adequate for asserting ZERO and is NOT adequate for asserting ONE:
+    // measured on this harness, a single click was counted twice on some runs
+    // and once on others, because the continued request can re-enter the
+    // handler. A guard whose whole job is "exactly one" cannot be built on a
+    // counter that sometimes says two — it would have been dismissed as flake
+    // and deleted. Wrapping `fetch` in an init script counts the calls the
+    // application actually makes, once each, and runs before any page script on
+    // every navigation.
+    await page.addInitScript(() => {
+      window.__ocByIds = 0;
+      const orig = window.fetch;
+      window.fetch = function (input, ...rest) {
+        try {
+          const raw = typeof input === 'string' ? input : input.url;
+          const u = new URL(raw, location.href);
+          if (
+            u.pathname === '/api/chat' &&
+            u.searchParams.getAll('ids').length > 0
+          ) {
+            window.__ocByIds += 1;
+          }
+        } catch {
+          /* a request whose url will not parse is not a by-ids read */
+        }
+        return orig.call(this, input, ...rest);
+      };
+    });
+    const byIds = () => page.evaluate(() => window.__ocByIds);
 
     await bootAuthedSpa(page, token);
     await page.locator('.member-card', { hasText: NAME_FAR }).click();
@@ -280,7 +303,7 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     });
     await expect(quote).toContainText(FAR_TARGET.slice(0, 20));
     expect(
-      byIdsCalls,
+      await byIds(),
       'the quote must arrive with the reply — nothing may fetch it in the background',
     ).toBe(0);
 
@@ -295,7 +318,7 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     await replyRow.getByTestId('msg-quote-jump').click();
     await expect(page.locator('.md-preview')).toBeVisible();
     await expect(page.locator('.md-preview')).toContainText(FAR_TARGET);
-    expect(byIdsCalls, 'one click must cost exactly one by-id read').toBe(1);
+    expect(await byIds(), 'one click must cost exactly one by-id read').toBe(1);
 
     // …and it stays at one through a real repaint. Another message arrives, the
     // thread refetches, the overlay is still up — nothing may ask again.
@@ -304,7 +327,7 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
       timeout: 20000,
     });
     expect(
-      byIdsCalls,
+      await byIds(),
       'a repaint after the click must not ask again — that was the deleted collector',
     ).toBe(1);
   });
@@ -340,7 +363,22 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     test.setTimeout(120000);
     const request = page.request;
     const token = await ownerToken(request);
-    const NAME_W = uniqueName('Reply Wide');
+    // 🔴 A SHORT DISPLAY NAME, ON PURPOSE, AND IT IS NOT A CONVENIENCE. The quote
+    // row's shrink order gives the excerpt away 10000× more eagerly than the
+    // sender's name (office.css, and `chat-reply-to.ct.spec.tsx` pins that
+    // ordering deliberately: the name says WHO is being answered). So a LONG
+    // name starves the excerpt to zero on its own, at pane widths where the jump
+    // label has nothing to do with it — measured here with the harness's usual
+    // `uniqueName('Reply Wide')` (20 chars): 0 visible characters at vw=721 even
+    // with the label correctly collapsed. That is a different question about a
+    // different declaration, and letting it ride in this test would make the
+    // test red for a reason it does not name.
+    //
+    // What this test is about is the BREAKPOINT'S AXIS, so the name is kept SHORT
+    // (~5 chars, ~21px) and the label's ~133px is the only variable left. Still
+    // unique — `uniqueName` produces a 20-character name, which is exactly the
+    // pressure this test must not measure, so it is built here instead of reused.
+    const NAME_W = 'A' + Date.now().toString(36).slice(-4);
     const M = await hireMember(request, token, NAME_W);
     const tokM = await mintMemberToken(request, token, M.id, 1);
 
@@ -357,13 +395,18 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     // "View the original message" is ~150px, and the label's width is the whole
     // mechanism. A Chinese-only run walks straight past this.
     //
-    // Set BOTH layers: the localStorage cache is what applies before login, and
-    // /api/settings is the server truth the login reconcile adopts afterwards —
-    // leaving the server on zh would flip the page back a moment after boot.
-    await request.patch(`${BASE}/api/settings`, {
-      headers: authHeaders(token),
-      data: { display_language: 'en' },
-    });
+    // 🔴 localStorage ONLY, AND THAT IS DELIBERATE. The obvious alternative is to
+    // PATCH `/api/settings { display_language: "en" }`, since the login reconcile
+    // adopts the server value over the local cache — and it works. It also leaves
+    // the WHOLE STUDIO in English for every test that runs afterwards: doing it
+    // that way turned the first test in this very file red, because it looks for
+    // a button named 「回覆這則」. Measured, not guessed.
+    //
+    // The reconcile adopts the server value only when it is literally "zh" or
+    // "en" (i18n/index.tsx), and an untouched studio has "", so the local cache
+    // stands. The assertion below is what makes that a checked fact rather than
+    // an assumption: if this ever stops working the test says so instead of
+    // quietly measuring the 69px Chinese label.
     await page.goto('/');
     await page.evaluate((t) => {
       localStorage.setItem('oc_token', t);
@@ -380,9 +423,27 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
       page.getByTestId('msg-quote-jump').first(),
     ).toHaveAttribute('aria-label', /original message/i);
 
-    // 721 and 800 measured ZERO; 880 measured 3. 720 and 1280 are the controls on
-    // either side — they were never broken, so a change that fixes the band by
-    // wrecking everything else still fails here.
+    // Measured on this server, English, name 'Ada', with the pane the shell
+    // actually hands the thread — and this is the whole point, because the pane
+    // is NOT a monotonic function of the viewport:
+    //
+    //   vw   pane   label      excerpt px      excerpt px
+    //                          (this fix)      (viewport rule, the mutant)
+    //   560   468   collapsed      278             278
+    //   720   628   whole          302             302
+    //   721   347   collapsed       91               0   ← the band
+    //   800   426   collapsed      153               0
+    //   880   506   collapsed      215               0
+    //  1280   666   whole          205             205
+    //
+    // 720 and 1280 are the controls on either side — they were never broken, so
+    // a change that "fixes" the band by wrecking everything else still fails
+    // here. 560 is the far side of the old viewport breakpoint.
+    //
+    // MUTANT (run): put the rule back on the viewport
+    // (`@media (max-width: 560px)`) and this test goes red at vw=721 with 0 of
+    // 61 characters, then again at 800 and 880. Nothing else in the repo moves —
+    // that is what "the CT harness has no app shell" means in practice.
     for (const width of [720, 721, 800, 880, 1280]) {
       await page.setViewportSize({ width, height: 900 });
       const seen = await quote

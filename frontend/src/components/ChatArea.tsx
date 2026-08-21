@@ -362,25 +362,34 @@ export function ChatArea({
     | { kind: "staged-image"; title: string; imageSrc: string }
     | null
   >(null);
-  // T-4e95 「看原訊息」 — what the LAST click on a quote row is doing right now.
-  // `id` is the quoted message; "loading" means its one request is in flight,
-  // "error" means that one request failed and the row says so where the click
-  // happened.
+  // T-4e95 「看原訊息」 — the quoted message whose LAST open attempt failed, or
+  // null. ONE value, and it is the whole memory this feature keeps.
+  //
+  // 🔴 THERE IS NO "LOADING" STATE HERE, AND THAT IS A DECISION, NOT AN
+  // OMISSION. One was written first — `{ id, state: "loading" | "error" }` —
+  // and it drove a `disabled` attribute on the button while the read was in
+  // flight. Measured in a real Chromium: disabling the focused button BLURS it,
+  // so `document.activeElement` was already <body> by the time the overlay
+  // mounted, the overlay captured <body> as the element to return focus to, and
+  // closing the overlay dropped a keyboard user at the top of the page. A
+  // spinner state that breaks focus to prevent a double-click the ref below
+  // already prevents is a bad trade. The read is one point query; there is
+  // nothing worth drawing for its duration.
   //
   // 🔴 ONE CLICK, ONE REQUEST, AND NOTHING THAT OUTLIVES IT. This is a click
   // handler, not an effect: React does not re-run it, StrictMode does not
   // double it, and no dependency array can make it fire again on a repaint. On
-  // success it goes back to null and the message opens in the shared overlay;
-  // on failure it holds exactly one "error" and stops. There is no retry, no
-  // queue, no id set and no repair on the next SSE event.
+  // success this stays null and the message opens in the shared overlay; on
+  // failure it holds exactly one id and stops. No retry, no queue, no id set,
+  // no repair on the next SSE event.
   //
   // That last paragraph is a promise about a machine that USED to exist here
   // (useQuotedMessages, deleted 2026-08-21: background refetch, remembered debt,
   // retries, self-healing) and whose three states drew identical pixels whether
   // they were right or wrong. `ChatArea.quote-no-fetch.test.tsx` holds the line.
-  const [quoteOpen, setQuoteOpen] = useState<
-    { id: string; state: "loading" | "error" } | null
-  >(null);
+  const [quoteOpenFailedId, setQuoteOpenFailedId] = useState<string | null>(
+    null,
+  );
   // The in-flight latch. `quoteOpen` cannot do this job: two clicks landing in
   // the same tick both read the PRE-UPDATE state and both would fire. A ref is
   // written synchronously inside the handler, so the second click sees it.
@@ -406,10 +415,9 @@ export function ChatArea({
   async function openQuotedMessage(replyTo: string) {
     if (quoteBusyRef.current) return;
     quoteBusyRef.current = true;
-    setQuoteOpen({ id: replyTo, state: "loading" });
+    setQuoteOpenFailedId(null);
     try {
       const original = await api.getChatMessage(replyTo);
-      setQuoteOpen(null);
       setMdPreview({
         kind: "message",
         title: nameOf(original.from),
@@ -418,7 +426,7 @@ export function ChatArea({
     } catch {
       // Deliberately swallowed rather than logged-and-retried: the person who
       // clicked is told on screen, and there is nothing else to do about it.
-      setQuoteOpen({ id: replyTo, state: "error" });
+      setQuoteOpenFailedId(replyTo);
     } finally {
       quoteBusyRef.current = false;
     }
@@ -1227,9 +1235,6 @@ export function ChatArea({
             type="button"
             className="chat__msg-quote__jump"
             data-testid="msg-quote-jump"
-            disabled={
-              quoteOpen?.id === m.replyTo && quoteOpen.state === "loading"
-            }
             /* 🔴 THE NAME CANNOT RIDE ON THE VISIBLE LABEL. That label is the
              * first thing this row gives up when the bubble runs short (see
              * the note above), so at the narrow end the accessible name would
@@ -1262,7 +1267,7 @@ export function ChatArea({
          * (one piece of state, last click wins). `role="status"` so a screen
          * reader hears the outcome of the button it just pressed — the button
          * itself keeps its own name. */}
-        {quoteOpen?.id === m.replyTo && quoteOpen.state === "error" && (
+        {quoteOpenFailedId === m.replyTo && (
           <span
             className="chat__msg-quote__error"
             data-testid="msg-quote-error"
