@@ -532,10 +532,13 @@ var errNoOnboardingBanner = errors.New(
 //
 // 🔴 ONLY A `failed` REPORT CAN BE DISMISSED, AND THAT GUARD IS THE WHOLE POINT.
 // The banner draws for exactly one state, so a stamp laid on any other state
-// closes a warning NOBODY EVER SAW — the one failure mode this ticket exists to
-// remove. PATCH /api/settings floors at principalAdminAgent, so an admin
-// assistant can send this during the ~30s the first run is still `running`, and
-// without the guard two things follow, both permanent:
+// closes nothing anyone could be looking at. On its own that would be merely
+// pointless — a stamp laid on a `running` report cannot even survive to a
+// terminal state, because both paths that reach one rewrite the row with the
+// stamp back at 0. What makes the guard load-bearing is the WRITE it refuses.
+// PATCH /api/settings floors at principalAdminAgent, so an admin assistant can
+// send this during the ~30s the first run is still `running`, and without the
+// guard two things follow, both permanent:
 //
 //   - recoverStaleOnboarding is the ONE path that builds a new report by editing
 //     the old blob rather than writing a fresh DTO, so it is where an inherited
@@ -543,10 +546,15 @@ var errNoOnboardingBanner = errors.New(
 //     banner on this install for good. It now clears the stamp itself, so this
 //     guard and that clearing pin the same property from both ends.
 //   - this read-modify-write is unlocked and is the only concurrent writer of
-//     the row (kick / finish / recoverStale are one linear goroutine). Interleaved
-//     with finishOnboarding it writes back its pre-verdict copy: the failure is
-//     erased, the report is stranded in `running` — non-terminal, so no banner —
-//     and kickFirstRunOnboarding never re-runs because a report exists.
+//     the row. kick, the run's finish and recoverStale are THREE different
+//     goroutines that never run in parallel: recoverStale runs at boot before
+//     the listener binds (server.go), kick runs inside the set-password request
+//     — which holds settingsMu and admits only the first caller — and finish
+//     runs in the goroutine that request spawns. One happens-before chain.
+//     Interleaved with finishOnboarding it writes back its pre-verdict copy:
+//     the failure is erased, the report is stranded in `running` —
+//     non-terminal, so no banner — and kickFirstRunOnboarding never re-runs
+//     because a report exists.
 //
 // Refusing on any non-failed state closes both without a lock: there is nothing
 // to inherit and nothing to write back. The only writers left that can race are

@@ -603,12 +603,20 @@ func TestUpdateSettings_OnboardingDismissedStampsTheReport(t *testing.T) {
 		t.Fatalf("un-dismissing must clear the stamp, got %v", got)
 	}
 
-	// 🔴 And the run that is STILL GOING cannot be stamped. The banner draws for
-	// `failed` only, so a stamp during the ~30s of `running` closes a warning
-	// nobody has seen — the exact failure this ticket exists to remove — and
-	// this route floors at principalAdminAgent, so an admin assistant can send
-	// it. The refusal must be LOUD: a quiet 200 would report the silencing as
-	// done while the report kept running towards a verdict nobody will read.
+	// 🔴 And the run that is STILL GOING cannot be stamped — but NOT because the
+	// stamp would outlive the run. It could not: both paths to a terminal state
+	// rewrite the row with dismissed_at back at 0 (finishOnboarding persists the
+	// DTO kickFirstRunOnboardingWith captured BY VALUE when it claimed the slot,
+	// whose DismissedAt is the zero value; recoverStaleOnboarding zeroes it
+	// outright). What the refusal removes is the WRITE. This request's read-modify-write of the
+	// WHOLE row is unlocked and is the only writer that can race the run, so
+	// interleaved with the run reaching its verdict it would write back its
+	// pre-verdict copy and ERASE the failure — see
+	// TestSetOnboardingDismissed_LeavesAnInFlightRunAlone, which pins that from
+	// the function side. This route floors at principalAdminAgent, so an admin
+	// assistant can send it during the ~30s (wardenOnlineWait) the first run is
+	// still `running`. The refusal must be LOUD: a quiet 200 would report a
+	// dismissal that never landed as done.
 	running := onboardingReportDTO{State: onboardingStateRunning, StartedAt: 9}
 	if err := api.putOnboardingReport(running); err != nil {
 		t.Fatalf("seed running report: %v", err)
@@ -725,11 +733,13 @@ func TestRecoverStaleOnboarding_NeverWritesABornDismissedReport(t *testing.T) {
 
 // 🔴 A VERDICT THAT HAS NOT LANDED YET CANNOT BE OVERWRITTEN. This is the only
 // writer of the report row that comes in off an HTTP request — kick, finish and
-// recoverStale are one linear goroutine — and it reads and writes the report
-// WHOLESALE with no lock. Interleaved with finishOnboarding, a copy taken before
-// the verdict lands and written back after it would erase the failure and strand
-// the report in `running`: non-terminal, so no banner, and kickFirstRunOnboarding
-// never re-runs because a report exists. Refusing to write a non-failed report
+// recoverStale are three different goroutines that never run in parallel (boot,
+// the set-password request, and the goroutine that request spawns: one
+// happens-before chain) — and it reads and writes the report WHOLESALE with no
+// lock. Interleaved with finishOnboarding, a copy taken before the verdict lands
+// and written back after it would erase the failure and strand the report in
+// `running`: non-terminal, so no banner, and kickFirstRunOnboarding never
+// re-runs because a report exists. Refusing to write a non-failed report
 // at all is what removes that interleaving, so this test guards the write, not
 // the race: while the run is in flight this call must touch nothing.
 func TestSetOnboardingDismissed_LeavesAnInFlightRunAlone(t *testing.T) {

@@ -4598,15 +4598,17 @@ export const mockApi: Api = {
     if (patch.onboardingDismissed !== undefined) {
       if (mockServerSettings.onboarding?.state !== "failed") {
         // This sentence is a SECOND hand copy of errNoOnboardingBanner's, and
-        // it stays one: the repo's only cross-language string contracts are
-        // spec/openapi.json (which carries schema descriptions, never error
-        // envelope text) and the message-key generator (which reads
-        // locales/en.ts, i.e. UI wording, not server prose). Neither reaches an
-        // error message, so binding these two would mean inventing a third
-        // generator for one string. Nothing depends on the wording either: the
-        // tests on both sides assert the STATUS (and the code derived from it),
-        // and the banner's only caller discards the rejection entirely — it
-        // puts itself back up rather than showing the server's sentence.
+        // it stays one: NOT ONE cross-language string contract in this repo
+        // reaches error-envelope text. Every `drift-*` gate in the Makefile
+        // regenerates from a source that carries something else — schema
+        // descriptions (spec/openapi.json), UI wording (locales/en.ts),
+        // --color-* names (styles/theme.css), --font-* names and safe-family
+        // stacks (themeFonts.source.json). Binding these two copies would mean
+        // inventing a generator for one string. Nothing depends on the wording
+        // either: the tests on both sides assert the STATUS (and the code
+        // derived from it), and the banner's only caller discards the rejection
+        // entirely — it puts itself back up rather than showing the server's
+        // sentence.
         throw mockApiError(
           "http 409 for PATCH /api/settings",
           409,

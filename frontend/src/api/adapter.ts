@@ -945,8 +945,10 @@ export interface ServerSettingsPatch {
    * paths that reach a terminal state rewrite the row with `dismissedAt` back
    * at 0. What is permanent is the write itself: server-side this is an
    * unlocked read-modify-write of the WHOLE report row, and the only writer
-   * that can run CONCURRENTLY with the run (kick / finish / recoverStale are
-   * one linear goroutine), so interleaved with the run reaching its verdict it
+   * that can run CONCURRENTLY with the run (kick, finish and recoverStale are
+   * three different goroutines that never run in parallel — boot, the
+   * set-password request, and the goroutine that request spawns form one
+   * happens-before chain), so interleaved with the run reaching its verdict it
    * writes back its pre-verdict copy — the failure is ERASED, the report is
    * stranded in `running` (non-terminal, so no banner draws) and first-run
    * onboarding never re-runs, because a report exists. */
