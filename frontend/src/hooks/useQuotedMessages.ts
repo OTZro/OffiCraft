@@ -49,9 +49,18 @@ export function useQuotedMessages(
   // Ids already asked for (resolved OR missed OR in flight). Kept in a ref so
   // asking does not itself re-run the effect.
   const askedRef = useRef<Set<string>>(new Set());
-  // Ids that have already had their ONE retry after a transient failure. Bounds
-  // the retry below to a single extra attempt per id, so a server that is down
-  // costs one repeat and not a loop.
+  // Ids that have already had their ONE immediate retry after a transient
+  // failure. Never cleared, so the immediate retry below fires at most once per
+  // id for the life of the hook.
+  //
+  // ⚠️ THAT IS A BOUND ON THE *IMMEDIATE* RETRY, NOT ON TOTAL WORK, and the
+  // sentence here used to overclaim it as "a server that is down costs one
+  // repeat and not a loop". Since `staleRef` below exists, a down server costs
+  // one read PER BURST that releases the debt: the collector un-asks the marked
+  // ids, they go through the ordinary path, the call fails, `fresh` is empty
+  // (they are all in this set), so they are re-marked and settled again — one
+  // call, no second immediate go. Still not a loop, because nothing here
+  // triggers the next attempt: only an inbound event does.
   const retriedRef = useRef<Set<string>>(new Set());
   // 🔴 "THE QUOTE LINE LIES FOREVER AFTER A SUSTAINED OUTAGE" (T-4e95). The one
   // retry above bounds the cost of a down server, and that bound was the bug:
@@ -74,7 +83,18 @@ export function useQuotedMessages(
   //
   // ⚠️ THE GAP THIS LEAVES OPEN, VERBATIM AND ON PURPOSE:
   // 「下一個事件來就補」意味著:如果那條線之後再也沒有任何事件,就還是不會補。
-  // If no further chat / chat_read delta ever arrives on this connection, the
+  //
+  // "Event" is wider than real traffic, though, and the gap is narrower than
+  // that sentence alone reads. `SSE_RESYNC_TOPICS` (api/http.ts) contains both
+  // `chat` and `chat_read`, and `resyncAll()` fans ONE SYNTHETIC DELTA PER
+  // TOPIC to every subscriber — on every SUBSEQUENT EventSource open (a genuine
+  // reconnect; the first open is skipped) and on every return to the foreground
+  // (`visibilitychange` → visible, and `window` focus). So the debt is also
+  // collected by dropping and re-establishing the stream, or by switching away
+  // from the tab/app and back, not only by someone actually sending a message.
+  //
+  // What is left is the case where NONE of those happen: nobody speaks, the
+  // connection never drops, and the tab is never left. Then the
   // row keeps saying 「較早的一則訊息」 until something remounts or the page
   // reloads. That residual is a KNOWN, ACCEPTED trade made by the owner in
   // exchange for a smaller change. Do not read this as "the lying quote line is
@@ -190,12 +210,21 @@ export function useQuotedMessages(
           // outlives the effect instance that writes it, and the precedent
           // shipped exactly this bug once by guarding only its `.then` arm and
           // letting the `.catch` arm mark debt for a torn-down instance
-          // (fa952c5d, second commit). The narrow "writes the debt onto a
-          // SUCCESSOR" version of that is not reachable here — the flag that
-          // gates it is keyed to the COMPONENT (`mountedRef`, `[]` deps), and
-          // once it is false this component is gone and its refs with it, so
-          // there is no successor sharing this Set. What the guard does buy is
-          // the plain one: an unmounted hook writes no state and no debt.
+          // (fa952c5d, second commit).
+          //
+          // ⚠️ A PREVIOUS VERSION OF THIS PARAGRAPH ARGUED THE SUCCESSOR CASE
+          // AWAY AND WAS WRONG: it claimed that once `mountedRef` is false the
+          // component is gone and its refs with it, so no successor shares this
+          // Set. Under <StrictMode> that is false — during setup→cleanup→setup
+          // the flag reads false while the component is very much alive, and
+          // `staleRef` is the SAME Set object across all three phases, so the
+          // successor is this component itself. The conclusion (debt write goes
+          // below the guard) survives; the reason does not. The reason that
+          // does hold is simply that a write we cannot see the outcome of is a
+          // write we should not make: past the guard, an unmounted — or
+          // mid-StrictMode-teardown — instance settles no state, so marking
+          // debt for state it will never settle would leave a mark with no
+          // matching `null` in `fetched` behind it.
           if (!mountedRef.current) return;
           if (spent.length > 0) {
             // These ids are about to be SETTLED as a miss with no answer behind
@@ -217,12 +246,19 @@ export function useQuotedMessages(
         rows = [];
       }
       if (!mountedRef.current) return;
-      // Landed OR definitively refused ⇒ whatever we owed on these ids is paid
-      // off. A blip ⇒ mark, and let the sink pay it on the next event.
-      for (const id of batch) {
-        if (blip) staleRef.current.add(id);
-        else staleRef.current.delete(id);
-      }
+      // A blip ⇒ mark, and let the sink pay it on the next event.
+      //
+      // There is deliberately NO `else staleRef.current.delete(id)` here, and
+      // there used to be. It could never delete anything: every id that reaches
+      // `staleRef` is also in `askedRef` (the batch adds it before the read and
+      // neither the spent nor the blip arm removes it), and the ONE thing that
+      // removes an id from `askedRef` — the sink below — does `staleRef.clear()`
+      // in the very next statement. So no id can be both marked and wanted at
+      // the same time, and a batch id is therefore never in `staleRef` when we
+      // get here. It was dead code that no test could see, and reviewers kept
+      // reading it as proof that a landed read cancels its own debt; the mark is
+      // released by the sink, which is where the clearing genuinely happens.
+      if (blip) for (const id of batch) staleRef.current.add(id);
       const byId = new Map(rows.map((m) => [m.id, m]));
       setFetched((prev) => {
         const next = new Map(prev);
@@ -248,10 +284,21 @@ export function useQuotedMessages(
         if (staleRef.current.size === 0) return;
         for (const id of staleRef.current) askedRef.current.delete(id);
         staleRef.current.clear();
-        // Un-asking alone changes no state, so the very next render could
-        // recompute an IDENTICAL `wantedKey`, React would see unchanged deps,
-        // and the re-read we just enabled would never fire. Same reason
-        // `attempt` exists for the retry above.
+        // 🔴 THIS LINE IS THE WHOLE FIX, not bookkeeping. The two statements
+        // above are a ref delete and a Set clear — NEITHER RENDERS. Without
+        // this bump nothing recomputes `wantedKey`, the re-read never goes out,
+        // and the debt has already been thrown away, so every later event hits
+        // the `size === 0` return above: the quote line goes back to lying
+        // forever. Same reason `attempt` exists for the retry above.
+        //
+        // ⚠️ THE REAL PAGE HIDES THIS BY ACCIDENT. `useChat` refetches on the
+        // same chat delta and repaints <ChatArea>, so a build without this line
+        // still LOOKS self-healing in the browser — borrowed repaints, not this
+        // hook's own. That is why the guardrail lives in a test that does NOT
+        // call rerender() between the emit and the wait
+        // (useQuotedMessages.test.ts, "re-asks after a sustained outage…"):
+        // a hand-written repaint there makes deleting this line invisible, and
+        // for one review round it was.
         setAttempt((a) => a + 1);
       })
     );

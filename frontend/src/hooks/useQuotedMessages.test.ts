@@ -229,9 +229,19 @@ describe("useQuotedMessages: a blip-miss is marked and paid on the next event", 
     expect(result.current.get("c-1")).toBeNull();
 
     // The server comes back, and the next chat delta pays the debt.
+    //
+    // 🔴 NO rerender() BETWEEN THE EMIT AND THE WAIT, ON PURPOSE. Paying the
+    // debt is `askedRef.delete` + `staleRef.clear()`, neither of which repaints
+    // — the hook's own `setAttempt` in the sink is the ONLY thing that makes
+    // `wantedKey` recompute and the re-read go out. A rerender() here does that
+    // repaint BY HAND and the test then passes against a sink that clears the
+    // debt and never asks again (verified: removing that `setAttempt` left all
+    // 7 tests green while the rerender() was here). The real page hides the
+    // same hole by accident — `useChat` refetches on that same chat delta and
+    // repaints <ChatArea> — so this assertion is the only place the hook's own
+    // ability to repaint itself is visible at all.
     h.listChatByIds.mockReset().mockResolvedValue([mkMsg("c-1")]);
     await emit(aChatDelta);
-    rerender();
 
     await waitFor(() => expect(result.current.get("c-1")?.id).toBe("c-1"));
     expect(h.listChatByIds).toHaveBeenCalledWith(["c-1"]);
@@ -282,6 +292,44 @@ describe("useQuotedMessages: a blip-miss is marked and paid on the next event", 
     rerender();
 
     expect(h.listChatByIds.mock.calls.length).toBe(callsAfterRecovery);
+    expect(result.current.get("c-1")?.id).toBe("c-1");
+  });
+
+  it("spends the WHOLE mark on one event, including ids nothing re-reads", async () => {
+    // `staleRef.current.clear()` releases the whole mark, not just the ids that
+    // happen to still be quoted. Deleting it is invisible in the happy path —
+    // the re-read succeeds either way — so this pins the tail: c-2 goes out of
+    // the loaded window before the event lands, so no read ever covers it. If
+    // the mark survived, c-2 would keep the debt non-empty forever and EVERY
+    // later chat delta would un-ask the whole marked set again, re-issuing a
+    // read for c-1, which is still on screen. The cost is a wasted by-ids call
+    // per message anyone sends anywhere, not a wrong answer — which is exactly
+    // why nothing else here can see it.
+    h.listChatByIds.mockRejectedValue(new Error("down"));
+
+    const { result, rerender } = renderHook(
+      ({ ids }: { ids: string[] }) => useQuotedMessages(ids, EMPTY),
+      { ...strict, initialProps: { ids: ["c-1", "c-2"] } },
+    );
+
+    await waitFor(() => expect(result.current.get("c-1")).toBeNull());
+    expect(result.current.get("c-2")).toBeNull();
+
+    // c-2 scrolls out of the loaded window: it is still marked, but nothing
+    // will ask for it again.
+    rerender({ ids: ["c-1"] });
+
+    h.listChatByIds.mockReset().mockResolvedValue([mkMsg("c-1")]);
+    await emit(aChatDelta);
+    await waitFor(() => expect(result.current.get("c-1")?.id).toBe("c-1"));
+    expect(h.listChatByIds).toHaveBeenCalledWith(["c-1"]);
+    const callsAfterCollection = h.listChatByIds.mock.calls.length;
+
+    await emit(aChatDelta);
+    await emit(aChatDelta);
+    rerender({ ids: ["c-1"] });
+
+    expect(h.listChatByIds.mock.calls.length).toBe(callsAfterCollection);
     expect(result.current.get("c-1")?.id).toBe("c-1");
   });
 });
