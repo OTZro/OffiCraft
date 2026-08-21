@@ -1138,7 +1138,12 @@ func (i *installer) launchctlReinstall(p wardenPaths) error {
 	}
 	if _, err := i.sys.run("launchctl", "kickstart", "-k", target); err != nil {
 		if unregistered != nil {
-			return fmt.Errorf("launchctl bootstrap exited 0 but registered nothing — launchd does not know %s, so the job was never loaded; the plist to look at is %s: %w", target, p.plistPath, unregistered)
+			// Name the step that actually failed (bootstrap), but do NOT drop what the
+			// next verb reported: narrowing the evidence to our own diagnosis is how a
+			// second, unrelated failure reason becomes invisible. Neither wrapped text
+			// carries the word "kickstart" — that word only ever came from the format
+			// string below — so carrying both keeps the blame right AND the evidence whole.
+			return fmt.Errorf("launchctl bootstrap exited 0 but registered nothing — launchd does not know %s, so the job was never loaded; the plist to look at is %s: %w (the next verb then reported: %v)", target, p.plistPath, unregistered, err)
 		}
 		return fmt.Errorf("launchctl kickstart failed for %s: %w", target, err)
 	}

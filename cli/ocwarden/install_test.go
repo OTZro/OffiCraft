@@ -1389,3 +1389,35 @@ func TestLaunchctlReinstall_LateRegistrationStillInstalls(t *testing.T) {
 	}
 	assertNoForbiddenProcessKill(t, f)
 }
+
+// TestLaunchctlReinstall_UnregisteredBlameKeepsTheNextVerbsOwnReason pins the half
+// of the diagnosis that is easy to lose: naming bootstrap must not COST the evidence.
+// The label never registers AND kickstart then fails for a reason of its OWN (not the
+// familiar 113) — the operator must get both, or a second, unrelated failure reason
+// disappears behind our own diagnosis.
+func TestLaunchctlReinstall_UnregisteredBlameKeepsTheNextVerbsOwnReason(t *testing.T) {
+	f := newFakeSys()
+	f.runFn = func(name string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "print" {
+			return "", fmt.Errorf("exit status 113: Could not find service %q in domain for user gui: 501", args[len(args)-1])
+		}
+		if len(args) > 0 && args[0] == "kickstart" {
+			return "", fmt.Errorf("exit status 125: Domain does not support specified action")
+		}
+		return "", nil
+	}
+	i := &installer{out: io.Discard, sys: f.ops()}
+	err := i.launchctlReinstall(fixedPaths())
+	if err == nil {
+		t.Fatal("a bootstrap that registered nothing must fail the install")
+	}
+	if !strings.Contains(err.Error(), "bootstrap") {
+		t.Errorf("error = %q, want it to name the bootstrap step that actually failed", err)
+	}
+	if strings.Contains(err.Error(), "kickstart") {
+		t.Errorf("error = %q, must not send the operator to debug kickstart", err)
+	}
+	if !strings.Contains(err.Error(), "Domain does not support specified action") {
+		t.Errorf("error = %q, want the next verb's OWN reason carried through, not swallowed by our diagnosis", err)
+	}
+}
