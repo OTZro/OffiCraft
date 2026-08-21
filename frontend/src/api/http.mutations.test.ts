@@ -382,3 +382,51 @@ describe("httpApi · scheduled-message custom_months keeps undefined ≠ []", ()
     expect(renamed.label).toBe("改名");
   });
 });
+
+// T-4e95 r16 — the WRITE half of the reply link, which nothing was standing on.
+//
+// r15 found the READ half (`mappers.ts`) had no witness and pinned it. The
+// write half is the mirror image and had none either: change this one line to
+// send `""` and 「回覆這則」 is gone in the real app — the banner still shows,
+// the send still succeeds, and the server stores an ordinary message. All 2258
+// tests stayed green on that change.
+//
+// Nothing else in the jsdom suite covers it, and that is a measured claim, not
+// an impression:
+// ChatArea's tests mock the whole `useChat` seam; `mock.reply-to.test.ts` drives
+// the MOCK adapter, which never reaches this file; conformance drives real HTTP
+// from Python, which proves the SERVER is right and says nothing about what the
+// browser sends.
+describe("httpApi · postChat carries the reply link (T-4e95)", () => {
+  const WIRE_MSG = {
+    id: "c-2",
+    from: "owner",
+    to: "m1",
+    body: "回你這句",
+    ts: 2,
+    meta: {},
+    reply_card_id: "",
+    reply_card_status: "",
+    reply_to: "c-1",
+    body_omitted_chars: 0,
+  };
+
+  it("sends reply_to when the composer is aimed at a message", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse(WIRE_MSG));
+    await httpApi.postChat({ to: "m1", body: "回你這句", replyTo: "c-1" });
+    const { url, method, body } = await lastRequest();
+    expect(url).toBe("/api/chat");
+    expect(method).toBe("POST");
+    expect(JSON.parse(String(body)).reply_to).toBe("c-1");
+  });
+
+  it("sends the empty string — the wire's 'replies to nothing' — otherwise", async () => {
+    // Both directions matter: always-"" and always-a-target are each a way to
+    // break this, and one assertion alone cannot tell them apart.
+    fetchMock.mockImplementation(async () =>
+      jsonResponse({ ...WIRE_MSG, reply_to: "" }),
+    );
+    await httpApi.postChat({ to: "m1", body: "普通訊息" });
+    expect(JSON.parse(String((await lastRequest()).body)).reply_to).toBe("");
+  });
+});

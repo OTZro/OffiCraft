@@ -486,6 +486,65 @@ func TestDrainChat_NoAttachmentsPrintsIdWithoutBadge(t *testing.T) {
 	}
 }
 
+// T-4e95 ①: a message carrying `reply_to` prints the reply EXISTENCE marker,
+// and the marker names the TARGET id — not this message's own id. The agent can
+// already get_chat the target itself; what it cannot do is guess that a target
+// exists at all, so without this slot it never goes looking. Asserted against
+// the fixture's real target value: a "does it contain ↩" check would pass
+// against a marker pointing at the wrong message.
+func TestDrainChat_ReplyToPrintsMarkerNamingTheTarget(t *testing.T) {
+	const selfID = "CM-REPLY-7T2"   // distinctive: cannot be matched by accident
+	const targetID = "CM-TARGET-9Q" // distinctive, and NOT a substring of selfID
+	srv, _ := chatServer(t, `[{"id":"`+selfID+`","from":"boss","to":"kyle",
+		"body":"這個再確認一下","reply_to":"`+targetID+`","ts":`+
+		fmt.Sprint(time.Now().Unix()-130)+`}]`)
+	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
+	var out bytes.Buffer
+	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
+	got := out.String()
+	if !strings.Contains(got, "↩#"+targetID) {
+		t.Errorf("the notification must mark that this message replies to %q, "+
+			"otherwise the woken agent has no signal to follow: %q", targetID, got)
+	}
+	if strings.Contains(got, "↩#"+selfID) {
+		t.Errorf("the marker must point at the TARGET, not at this message: %q", got)
+	}
+	if !strings.Contains(got, "#"+selfID) {
+		t.Errorf("the message's own id tag must survive alongside the marker: %q", got)
+	}
+	want := "[ocagent] chat from boss (#" + selfID + ", ↩#" + targetID + ", 2m ago): 這個再確認一下\n"
+	if got != want {
+		t.Fatalf("reply_to drain out = %q want %q", got, want)
+	}
+}
+
+// T-4e95 ②: the OTHER half of the guard — a message WITHOUT `reply_to` must not
+// grow the slot. Every agent pays for this line on every message, so a marker
+// that shows up (even empty, even as a stray separator) on the ordinary case is
+// a regression, not a cosmetic one. Byte-for-byte, and separately: no ↩ at all.
+func TestDrainChat_NoReplyToOmitsTheMarkerEntirely(t *testing.T) {
+	for _, tc := range []struct{ name, wire string }{
+		{"absent", `{"id":"m1","from":"boss","to":"kyle","body":"hi"}`},
+		{"empty", `{"id":"m1","from":"boss","to":"kyle","body":"hi","reply_to":""}`},
+		{"blank", `{"id":"m1","from":"boss","to":"kyle","body":"hi","reply_to":"   "}`},
+		{"null", `{"id":"m1","from":"boss","to":"kyle","body":"hi","reply_to":null}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := chatServer(t, "["+tc.wire+"]")
+			cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
+			var out bytes.Buffer
+			drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
+			got := out.String()
+			if strings.Contains(got, "↩") {
+				t.Errorf("no reply target ⇒ NO marker, got %q", got)
+			}
+			if want := "[ocagent] chat from boss (#m1): hi\n"; got != want {
+				t.Fatalf("no-reply_to drain out = %q want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestFmtAgo(t *testing.T) {
 	for _, tc := range []struct {
 		secs float64

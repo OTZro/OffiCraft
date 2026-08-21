@@ -692,6 +692,53 @@ export const en: Dict = {
     // full-view overlay (a long answer is hard to read in the thread column).
     // Own messages do not carry it.
     expandMessage: "Open full view",
+    // T-4e95 reply-to-a-message: the per-row reply entry, the "replying to"
+    // banner above the composer and its x, and the quote line that points a
+    // message back at the one it answers.
+    //
+    // replyQuoteGone is the QUOTE ROW's miss sentence, and it is FIXED. Since
+    // 2026-08-21 the server ships the quoted message alongside every reply on
+    // every read, so the browser never waits for one: the only way this line
+    // appears is that the original is genuinely gone (cleared, or its sender
+    // removed). It is not retried and never re-resolves into something else.
+    replyAction: "Reply",
+    replyingTo: (name: string) => `Replying to ${name}`,
+    replyCancel: "Cancel reply",
+    // 🔴 THE LABEL CHANGED WITH THE BEHAVIOUR (owner ruling 2026-08-21). It was
+    // "Go to the original message" while the control scrolled the thread. It no
+    // longer scrolls anything: it reads that one message back and opens it in
+    // the full-view overlay. A button that says "go to" and opens a dialog is a
+    // small lie told on every reply row, so the words moved with the mechanism.
+    replyQuoteJump: "View the original message",
+    replyQuoteGone: "This message no longer exists",
+    // The read behind replyQuoteJump failed. NOT a claim about whether the
+    // original exists — that is replyQuoteGone's job and it lives on the quote
+    // line itself. This one only says the fetch did not come back, and it is
+    // said once, beside the button that was pressed.
+    replyQuoteOpenFailed: "Could not load that message",
+    // 🔴 THE BANNER'S MISS LINE IS NOT THE ROW'S, and the two must never be
+    // swapped. The ROW asks "did this read build a quote?" — a no there means
+    // the original really is gone, so that line is entitled to assert it.
+    // The BANNER asks something else entirely: it resolves the target from the
+    // LOADED WINDOW alone (messageById). Scroll back, aim at an old message,
+    // switch peers and come back to a freshly-loaded newest page, and the
+    // message is still there and the send still succeeds — the stored
+    // `reply_to` is right and the quote comes back whole — while the banner
+    // cannot see it. Printing the row's assertion here tells the owner
+    // something he can disprove himself.
+    // So the banner says the state-independent true thing instead.
+    replyingToEarlier: "Replying to an earlier message",
+    // The quote row's own accessible name. This repo has no sr-only utility
+    // (see MemberCard.presence-a11y.test.tsx), so the "this is a quotation, not
+    // what this person is saying now" fact travels as an aria-label on the row.
+    // Without it the accessibility tree linearises a reply as
+    // "Mira. Mira. what they said. View the original message. what I said" —
+    // the one thing this feature exists to convey is the thing a screen reader
+    // could not hear. replyQuoteRole is the version for a quote whose original
+    // is gone, so there is no sender to name; replyQuoteRoleWho names them when
+    // there is one.
+    replyQuoteRole: "Quoted message",
+    replyQuoteRoleWho: (name: string) => `Quoted message from ${name}`,
   },
   mp: {
     back: "Back",

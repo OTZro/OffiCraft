@@ -97,6 +97,7 @@ const WIRE: WireResumeSummary = {
       ts_display: "2026-08-12 22:13:04 +08:00",
       body_omitted_chars: 0,
       reply_card_status: "answered",
+      reply_to: "",
       attachments: [],
       card: {
         options: ["照這個形狀做", "先擋著等下一輪"],
@@ -122,6 +123,7 @@ const WIRE: WireResumeSummary = {
       // the server. Not the same thing as chat_earlier_omitted below.
       body_omitted_chars: 1284,
       reply_card_status: "",
+      reply_to: "",
       attachments: [
         {
           id: "att-9",
@@ -735,6 +737,15 @@ describe("the roll-call: a field the seam gains cannot stay undrawn", () => {
         "id",
         "replyCardId",
         "replyCardStatus",
+        // T-4e95: the two halves of a reply, and they are deliberately two.
+        // `replyTo` is the id and says THAT this message is a reply; it never
+        // disappears. `replyToChat` is the quoted sender + a server-shortened
+        // line and says WHAT it replied to; it is rebuilt on every read and is
+        // legitimately null while `replyTo` is set (the original is gone).
+        // Collapsing them into one field is the change this roll-call is here
+        // to make announce itself.
+        "replyTo",
+        "replyToChat",
         "to",
         "toName",
         "ts",

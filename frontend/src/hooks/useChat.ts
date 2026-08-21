@@ -59,7 +59,13 @@ interface UseChat {
   peerLastReadTs: number;
   // Send text and/or a LIST of staged attachments (files + images mixed) — all
   // riding the SAME message.
-  send: (body: string, attachments?: ChatAttachmentInput[]) => Promise<void>;
+  send: (
+    body: string,
+    attachments?: ChatAttachmentInput[],
+    /** T-4e95: the id of the message this send REPLIES TO, when it is a reply.
+     * Omitted on an ordinary send. */
+    replyTo?: string,
+  ) => Promise<void>;
   // Mark this conversation read up to `lastReadTs` (the owner's own watermark) —
   // called when the owner enters / scrolls to the bottom of the thread.
   markRead: (lastReadTs: number) => Promise<void>;
@@ -332,14 +338,35 @@ export function useChat(withId: string): UseChat {
   }, [withId, refetchReads]);
 
   const send = useCallback(
-    async (body: string, attachments?: ChatAttachmentInput[]) => {
+    async (
+      body: string,
+      attachments?: ChatAttachmentInput[],
+      replyTo?: string,
+    ) => {
       const trimmed = body.trim();
       // Allow sending when EITHER text or attachments are present; reject only a
       // truly empty message (no text AND no attachments) — mirrors the server's 400.
       if (!trimmed && !(attachments && attachments.length > 0)) return;
-      await api.postChat({ to: withId, body: trimmed, attachments });
+      await api.postChat({ to: withId, body: trimmed, attachments, replyTo });
       // Reconcile by refetch so the sent message appears immediately.
-      await refetch();
+      //
+      // 🔴 ONCE THE POST HAS RETURNED, THIS SEND HAS SUCCEEDED. The refresh
+      // that follows is a different promise about a different thing, and it
+      // must not be allowed to reject this one: `refetch` calls `api.listChat`
+      // unguarded (unlike its own `refetchReads`, which already swallows), so a
+      // blip on the refresh used to surface to the caller as "the send failed".
+      // The composer believes that: it restores the message the owner just
+      // successfully sent — and since T-4e95 it restores it into the room's
+      // DRAFT, which outlives the page. The owner comes back to a composer
+      // holding a line that is already in the thread, with the reply banner
+      // still up, and Enter sends it a second time.
+      // A failed refresh costs a stale window until the next SSE delta; a
+      // rejected send costs a duplicate message. Log it and let the send stand.
+      try {
+        await refetch();
+      } catch (e) {
+        console.warn("useChat: post-send refetch failed (message was sent)", e);
+      }
     },
     [withId, refetch],
   );

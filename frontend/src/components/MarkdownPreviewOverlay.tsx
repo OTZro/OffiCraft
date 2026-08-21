@@ -5,7 +5,7 @@
 // actions: the header keeps a 下載 button (the same authed blob URL with a
 // download attribute) alongside the render.
 //
-// Self-contained like Lightbox (click backdrop / × / Esc closes; a click on the
+// Self-contained (click backdrop / × / Esc closes; a click on the
 // panel does not dismiss): the caller holds the open state and passes the blob's
 // serve url + display title. Shared by the chat attachment strip AND the task
 // artifact popover — one preview surface, not two.
@@ -434,6 +434,44 @@ export function MarkdownPreviewOverlay({
   const rootRef = useRef<HTMLDivElement>(null);
   useEscapeLayer(onClose, rootRef);
 
+  // 🔴 A DIALOG THE KEYBOARD NEVER ENTERS IS NOT A DIALOG. Measured before this
+  // existed: open the overlay from any of its three entry points and
+  // `document.activeElement` was still the button that opened it, OUTSIDE the
+  // portal — so Tab walked the page behind the backdrop, the zoom controls and
+  // the close button were reachable only by tabbing through the whole cockpit
+  // first, and a screen reader was still reading the thread. `aria-modal="true"`
+  // is a promise to assistive tech, not a behaviour the browser implements.
+  //
+  // So: focus the root on mount (it takes `tabIndex={-1}` for exactly this — it
+  // is not in the tab order, it is a landing spot), and hand focus BACK to
+  // whatever had it when the overlay closes. The restore is the half people
+  // forget and the half a keyboard user notices: without it, closing drops focus
+  // onto <body> and the next Tab restarts from the top of the page instead of
+  // resuming beside the control that was pressed.
+  //
+  // Deliberately NOT a focus trap. This repo has no trap primitive, Esc is
+  // already handled as a layer, and a half-built trap that leaks on one edge is
+  // worse than none. What is promised here is "focus goes in, and comes back",
+  // and that is what the tests assert.
+  //
+  // ⚠️ THE OPENER IS WHATEVER HAD FOCUS AT MOUNT, so a caller that BLURS its own
+  // control before opening this hands over the wrong element and the restore
+  // lands on <body>. That is not hypothetical: T-4e95's quote-row button briefly
+  // carried `disabled` while its read was in flight, which blurs a focused
+  // button, and the restore was measured landing on BODY in a real Chromium
+  // every time. The fix was on the caller's side (the attribute is gone), and
+  // this note is here so the next caller does not rediscover it.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    rootRef.current?.focus();
+    return () => {
+      // The opener can be gone (its row unmounted while the overlay was up), in
+      // which case there is nothing to restore to and focus falls to <body> —
+      // the same place it would have been anyway.
+      if (opener && opener.isConnected) opener.focus();
+    };
+  }, []);
+
   // T-76cd — PORTALLED TO `document.body`, and that is a correctness property,
   // not tidiness. `z-index: 1100` is only worth what its nearest stacking-context
   // ancestor is worth: rendered in place, this overlay sat inside the task
@@ -457,6 +495,7 @@ export function MarkdownPreviewOverlay({
     <div
       ref={rootRef}
       className="md-preview"
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       aria-label={title}

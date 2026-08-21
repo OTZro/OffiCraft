@@ -37,6 +37,7 @@ import type {
   Api,
   ChatCursor,
   ChatMessage,
+  ChatReplyQuote,
   ChatReadReceipt,
   ChatAttachmentInput,
   PushSubscriptionInput,
@@ -636,6 +637,18 @@ const INSIGHT_SEEDS: Record<string, string> = {
 // shows only the owner's own message. Fabricating an assistant reply here would
 // be as dishonest as a fake lastSeen for a never-online member.
 let chatLog: ChatMessage[] = [];
+// T-4e95: chat message ids used to be `mock-${Date.now()}` alone, and two posts
+// inside the same millisecond therefore got the SAME id — reproduced, not
+// theorised. That was survivable while nothing pointed AT a message; a reply
+// carries the quoted message's id and nothing else, so an ambiguous id makes
+// the quote resolve to whichever row happens to be first (and collides React's
+// keys besides). The real server mints `c-` + 12 random hex; this counter is the
+// mock's cheapest way to keep the same promise — one id, one message.
+//
+// Deliberately NOT reset by __resetMock: a counter that restarted could hand a
+// fresh message the id of one a test still holds a reference to, which is the
+// very ambiguity it exists to remove.
+let mockChatSeq = 0;
 
 // In-memory read receipts, keyed `{reader}::{peer}` → the monotonic last-read
 // watermark. Mirrors the BE chat_read table. In mock mode the OWNER reads its own
@@ -819,6 +832,64 @@ function mockReplyCardStatusOf(
   if (!replyCardId) return null;
   const card = replyCards.find((c) => c.id === replyCardId);
   return card ? card.status : null;
+}
+
+/** How much of a quoted message a quote line carries. A MIRROR of the server's
+ * `chatReplyQuoteMaxChars` (server/ocserverd/wire.go) — the mock has no server to
+ * ask, so the number has to be written twice.
+ *
+ * 🔴 TWO COPIES, ONE GUARD. Both sides used to assert 60 against their own
+ * hard-coded literal (Go: `wantQuoteRunes`; here: the 61-rune expectation in
+ * mock.reply-to.test.ts), so moving the server's constant and updating only the
+ * Go test left this side green and cutting at the old length — offline preview
+ * disagreeing with the live product, which is the one failure the mock exists to
+ * prevent. `mock.reply-to.test.ts` now READS wire.go and fails when the two
+ * numbers differ; it is the reason a comment is enough here. */
+const MOCK_REPLY_QUOTE_MAX_CHARS = 60;
+
+/** Read-time join mirroring the server's `reply_to_chat`: the message a reply
+ * quotes, snapshotted as the read happens.
+ *
+ * 🔴 UNCONDITIONAL, exactly like the server (T-4e95, owner ruling 2026-08-21).
+ * No "is it already in this window" check, no cache. null when the message
+ * replies to nothing AND null when it replies to something the log no longer
+ * carries — the caller tells the two apart by `replyTo`, which never
+ * disappears. Mock mode exists so an offline preview behaves like the real
+ * thing; a mock that only sometimes attached the quote would preview a bug the
+ * server does not have. */
+function mockReplyToChatOf(replyTo: string | null | undefined): ChatReplyQuote | null {
+  if (!replyTo) return null;
+  const quoted = chatLog.find((m) => m.id === replyTo);
+  if (!quoted) return null;
+  const oneLine = quoted.body.split(/\s+/).filter(Boolean).join(" ");
+  // Cut by CODE POINT, not by `.length`. The server counts runes, and
+  // String.prototype.length counts UTF-16 units — they agree on the CJK this
+  // studio is mostly written in and disagree on anything above the BMP (an
+  // emoji is two units and one rune), which is exactly the kind of quiet
+  // divergence a mock exists not to have.
+  const runes = [...oneLine];
+  return {
+    id: quoted.id,
+    from: quoted.from,
+    // "" like the server on every read that resolves no display names — which
+    // is every read the browser makes.
+    fromName: "",
+    content:
+      runes.length > MOCK_REPLY_QUOTE_MAX_CHARS
+        ? runes.slice(0, MOCK_REPLY_QUOTE_MAX_CHARS).join("") + "\u2026"
+        : oneLine,
+  };
+}
+
+/** One logged message as a READ serves it: a copy (so callers never mutate the
+ * log) carrying both read-time joins. Every mock chat read goes through this,
+ * for the same reason every server read goes through servedChatMessageDTO. */
+function mockServedChatMessage(m: ChatMessage): ChatMessage {
+  return {
+    ...m,
+    replyCardStatus: mockReplyCardStatusOf(m.replyCardId),
+    replyToChat: mockReplyToChatOf(m.replyTo),
+  };
 }
 
 /** Terminal task statuses (spec: 已完成/終止 為終態) — shared by the mock's
@@ -2767,12 +2838,24 @@ export const mockApi: Api = {
       const newest = Math.max(...msgs.map((m) => m.ts));
       markRead(MOCK_OWNER_ID, withId, newest);
     }
-    // Read-time reply_card_status join (server parity) — a copy per message so
-    // callers never mutate the log.
-    return msgs.map((m) => ({
-      ...m,
-      replyCardStatus: mockReplyCardStatusOf(m.replyCardId),
-    }));
+    // Read-time joins (server parity) — a copy per message so callers never
+    // mutate the log.
+    return msgs.map(mockServedChatMessage);
+  },
+
+  async getChatMessage(id: string): Promise<ChatMessage> {
+    // Mock twin of GET /api/chat?ids=<id> — ONE named message in full, no
+    // read-watermark side effect. Caller-blind, exactly like the server: the
+    // by-ids door reaches as far as the ordinary listing does.
+    //
+    // THROWS on an unknown id, matching the server's all-or-nothing 404. That is
+    // not pedantry here: the quote row's whole design rests on a failure being
+    // said out loud instead of drawn as a plausible-looking blank, and a mock
+    // that resolved to `null` would let an offline session build a UI branch the
+    // real adapter can never reach.
+    const found = chatLog.find((m) => m.id === id);
+    if (!found) throw new Error(`no message carries id ${id}`);
+    return mockServedChatMessage(found);
   },
 
   async peekChat(withId: string, limit = 30): Promise<ChatMessage[]> {
@@ -2788,10 +2871,7 @@ export const mockApi: Api = {
     if (limit >= 0) {
       msgs = limit === 0 ? [] : msgs.slice(-limit);
     }
-    return msgs.map((m) => ({
-      ...m,
-      replyCardStatus: mockReplyCardStatusOf(m.replyCardId),
-    }));
+    return msgs.map(mockServedChatMessage);
   },
 
   async listChatAttachments(withId: string): Promise<GalleryAttachment[]> {
@@ -2831,6 +2911,7 @@ export const mockApi: Api = {
     to: string;
     body: string;
     attachments?: ChatAttachmentInput[];
+    replyTo?: string;
   }): Promise<ChatMessage> {
     // Record the owner's message into the in-memory log and echo it back. The
     // sender is MOCK_OWNER_ID ("owner") — matching the real backend, which
@@ -2855,8 +2936,17 @@ export const mockApi: Api = {
         isImage: mime.startsWith("image/"),
       };
     });
+    // The quote link (T-4e95). The mock enforces the SAME refusal the server
+    // does, and only that one: the target must EXIST. The same-conversation
+    // refusal that used to sit here went with the server's on 2026-08-21 —
+    // quoting a line out of another conversation is the use case now, and a
+    // mock that still refused it would make offline preview disagree with the
+    // real thing about the very behaviour this change exists to add.
+    if (msg.replyTo && !chatLog.some((m) => m.id === msg.replyTo)) {
+      throw new Error(`reply_to names no message (${msg.replyTo})`);
+    }
     const sent: ChatMessage = {
-      id: `mock-${stamp}`,
+      id: `mock-${stamp}-${++mockChatSeq}`,
       from: MOCK_OWNER_ID,
       to: msg.to,
       body: msg.body,
@@ -2866,9 +2956,14 @@ export const mockApi: Api = {
       // owner-posted message never carries one (mirrors the server).
       replyCardId: null,
       replyCardStatus: null,
+      replyTo: msg.replyTo ?? null,
     };
     chatLog.push(sent);
-    return sent;
+    // Echoed through the SAME read projection the listing uses, because the
+    // server echoes through servedChatMessageDTO: a reply's quote is on the POST
+    // response too, and a mock that left it off would have the thread flicker
+    // between "quoted" and "not quoted" offline and not online.
+    return mockServedChatMessage(sent);
   },
 
   async markChatRead(mark: {

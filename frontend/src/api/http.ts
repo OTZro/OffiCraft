@@ -872,6 +872,31 @@ export const httpApi: Api = {
     return wire.map(toChatMessage);
   },
 
+  async getChatMessage(id: string): Promise<ChatMessage> {
+    // GET /api/chat?ids=<id> -> ChatMessageDTO[] with exactly one row. The
+    // server's by-ids door is all-or-nothing, so an id that names nothing is a
+    // 404 for the whole call and `unwrap` throws — which is what the caller
+    // wants: it has one thing to open and either opens it or says it could not.
+    //
+    // ⚠️ ONE ID, ON PURPOSE — see Api.getChatMessage. The endpoint takes up to
+    // 20; this adapter never sends more than one, because the only caller is a
+    // click on one quote row. A `listChatByIds(ids[])` shape lived here until
+    // 2026-08-21 and existed to feed a background batch refetcher; that machine
+    // was deleted and the plural signature was the seam it grew out of.
+    const wire = unwrap(
+      await client.GET("/api/chat", { params: { query: { ids: [id] } } }),
+    );
+    const first = wire[0];
+    if (!first) {
+      // Defensive: the server answers 404 rather than an empty array for an
+      // unknown id, so this is unreachable today. It is a throw and not a null
+      // because the caller's contract is "give me the message or fail" — a null
+      // here would hand it a fourth state to draw.
+      throw new Error(`GET /api/chat?ids=${id} returned no row`);
+    }
+    return toChatMessage(first);
+  },
+
   async peekChat(withId: string, limit = 30): Promise<ChatMessage[]> {
     // READ-ONLY conversation view (no "list 即讀" watermark side effect): the
     // server ?peek=true (T-cf91) filters by ?with= and caps by limit EXACTLY
@@ -920,6 +945,7 @@ export const httpApi: Api = {
     to: string;
     body: string;
     attachments?: ChatAttachmentInput[];
+    replyTo?: string;
   }): Promise<ChatMessage> {
     // POST /api/chat {to, body, attachments?} -> ChatMessageDTO (server stamps
     // from/id/ts from the verified JWT sub). Addressing is by id (msg.to is a
@@ -935,6 +961,14 @@ export const httpApi: Api = {
         body: {
           to: msg.to,
           body: msg.body,
+          // The quote link. ALWAYS SENT — "" is the wire's "replies to
+          // nothing", the same shape `body` uses, and what the generated
+          // request type requires. (An earlier version of this comment said the
+          // field was omitted on an ordinary post; it never was, and a comment
+          // describing a wire shape the code does not produce is worse than no
+          // comment.) The server checks a non-empty value EXISTS — and only
+          // that, since 2026-08-21 — and is the only writer of the stored link.
+          reply_to: msg.replyTo ?? "",
           ...(attachments.length > 0
             ? {
                 attachments: attachments.map((a) => ({

@@ -14,6 +14,7 @@ import type {
 } from "../api/adapter";
 import { autosizeTextarea } from "../lib/autosize";
 import { getChatDraft, saveChatDraft } from "../lib/chatDraftStore";
+import { api } from "../api";
 import { useChat } from "../hooks/useChat";
 import { useWorkerCodenames } from "../hooks/useWorkerCodenames";
 import { formatDayLabel, splitByDay } from "../lib/dateFormat";
@@ -37,10 +38,12 @@ import { CurrentTaskTitle } from "./CurrentTaskTitle";
 import {
   BoltIcon,
   ChevronRightIcon,
+  CloseIcon,
   ExpandIcon,
   ImageIcon,
   MoonIcon,
   PaperclipIcon,
+  ReplyIcon,
   SendIcon,
   TasksIcon,
   UserGearIcon,
@@ -53,6 +56,26 @@ import { DispatchAlert } from "./DispatchAlert";
 // (NOT "ceo"). The mock stamps the same (MOCK_OWNER_ID) so a message reads as
 // "me" (right-aligned, from=你) in BOTH mock and real mode.
 const OWNER_ID = "owner";
+
+// ⚠️ `oneLine()` USED TO LIVE HERE AND WAS DELETED 2026-08-21. It collapsed
+// newlines and runs of spaces in the 「正在回覆」 banner's excerpt, and its own
+// comment said the reason was that "a multi-line excerpt would push the composer
+// around as the owner re-aims". That failure could not happen: office.css puts
+// `white-space: nowrap` on `.chat__reply-banner__text`, which the body inherits,
+// so the browser already collapses every newline to a space and lays the whole
+// thing out on one line. Measured in a real Chromium at 390px — banner height
+// 34px with a collapsed body and 34px with a deliberately un-collapsed one
+// carrying two blank lines and a run of spaces. Mutating the function's body to
+// `return body;` left all 2284 frontend tests green: it was the only surviving
+// mutant in the whole frontend pass.
+//
+// So the layout rule has exactly one owner now, and it is the stylesheet.
+// `.chat__reply-banner__text { white-space: nowrap }` is load-bearing and has a
+// witness: deleting it turns the CT 「正在回覆」 banner test red, and the CT story
+// feeds that banner a body WITH A NEWLINE so the collapse itself — not just the
+// clipping — is what the one-line assertion measures.
+//
+// It fed no `title` attribute and nothing else, so nothing else moved with it.
 
 /** A message is INTER-AGENT (agent↔agent) when NEITHER endpoint is the owner:
  * owner↔agent always has the owner as one side; agent↔agent never does. This is
@@ -239,7 +262,13 @@ export function ChatArea({
   const unknownOwIds = useMemo(() => {
     const out = new Set<string>();
     for (const m of messages) {
-      for (const id of [m.from, m.to]) {
+      // 🔴 THE QUOTED SENDER IS A PARTICIPANT TOO. `m.replyToChat.from` is an
+      // id this thread RENDERS (`quoteWho = nameOf(quoted.from)`), so leaving it
+      // out of this set meant the codename fallback never fired for it: the very
+      // same released outsource worker showed a codename on its own row and a
+      // raw `ow-…` id when quoted — and the quote row's aria-label read
+      // 「引用 ow-8808ccf51794」. One display path, two identities.
+      for (const id of [m.from, m.to, m.replyToChat?.from ?? ""]) {
         if (
           id.startsWith("ow-") &&
           id !== member.id &&
@@ -258,6 +287,12 @@ export function ChatArea({
   // it is not in the passed roster.
   const nameOf = (id: string): string => {
     if (id === member.id) return member.name;
+    // 🔴 THE OWNER HAS A NAME TOO. T-4e95 is the first display path that feeds
+    // the owner's OWN id into nameOf — replying to your own message names the
+    // sender in the composer banner and in the quote row — and without this it
+    // fell through to the raw id and printed 「正在回覆 owner」 at a reader whose
+    // own topbar says 「CEO（你）」.
+    if (id === OWNER_ID) return t.user;
     // Server-authored messages (T-ba04 reassign handover, sender="system") are
     // not a roster member — render the synthetic sender as the localized 「系統」
     // label instead of the raw "system" id.
@@ -285,6 +320,15 @@ export function ChatArea({
   // in the peer-switch render block below. Staged attachments are restored
   // alongside (they live in useAttachmentStaging, set via its API).
   const [draft, setDraft] = useState(() => getChatDraft(member.id)?.text ?? "");
+  // T-4e95 「回覆這則」: the message the composer is currently replying to, or
+  // null in the ordinary send state. It rides the DRAFT store, not just this
+  // component's state, for the same reason the text does — a 跳頁-and-back that
+  // restored the words but silently dropped the reply target would send the
+  // message somewhere the owner did not aim it, and look like a normal restore
+  // while doing it.
+  const [replyToId, setReplyToId] = useState<string | null>(
+    () => getChatDraft(member.id)?.replyTo ?? null,
+  );
   // The staged attachments (pasted images AND/OR picked/dropped files), held
   // until the message is sent — the SHARED staging state machine
   // (useAttachmentStaging: size/count caps, paste/pick funnels, previews).
@@ -318,6 +362,76 @@ export function ChatArea({
     | { kind: "staged-image"; title: string; imageSrc: string }
     | null
   >(null);
+  // T-4e95 「看原訊息」 — the quoted message whose LAST open attempt failed, or
+  // null. ONE value, and it is the whole memory this feature keeps.
+  //
+  // 🔴 THERE IS NO "LOADING" STATE HERE, AND THAT IS A DECISION, NOT AN
+  // OMISSION. One was written first — `{ id, state: "loading" | "error" }` —
+  // and it drove a `disabled` attribute on the button while the read was in
+  // flight. Measured in a real Chromium: disabling the focused button BLURS it,
+  // so `document.activeElement` was already <body> by the time the overlay
+  // mounted, the overlay captured <body> as the element to return focus to, and
+  // closing the overlay dropped a keyboard user at the top of the page. A
+  // spinner state that breaks focus to prevent a double-click the ref below
+  // already prevents is a bad trade. The read is one point query; there is
+  // nothing worth drawing for its duration.
+  //
+  // 🔴 ONE CLICK, ONE REQUEST, AND NOTHING THAT OUTLIVES IT. This is a click
+  // handler, not an effect: React does not re-run it, StrictMode does not
+  // double it, and no dependency array can make it fire again on a repaint. On
+  // success this stays null and the message opens in the shared overlay; on
+  // failure it holds exactly one id and stops. No retry, no queue, no id set,
+  // no repair on the next SSE event.
+  //
+  // That last paragraph is a promise about a machine that USED to exist here
+  // (useQuotedMessages, deleted 2026-08-21: background refetch, remembered debt,
+  // retries, self-healing) and whose three states drew identical pixels whether
+  // they were right or wrong. `ChatArea.quote-no-fetch.test.tsx` holds the line.
+  const [quoteOpenFailedId, setQuoteOpenFailedId] = useState<string | null>(
+    null,
+  );
+  // The in-flight latch. A `useState` flag cannot do this job: two clicks
+  // landing in the same tick both read the PRE-UPDATE state and both would
+  // fire. A ref is written synchronously inside the handler, so the second
+  // click sees it.
+  const quoteBusyRef = useRef(false);
+
+  /** Open the message a reply is answering, IN FULL, in the shared full-view
+   * overlay — the same surface 放大閱讀 uses.
+   *
+   * Owner ruling 2026-08-21: 「全部統一就撈那一則顯示出來就好」. There is no
+   * scrolling and no "is it in the loaded window" question any more, so the
+   * control is offered for EVERY reply and behaves the same way every time.
+   * The quote row keeps showing the server's 60-char excerpt; this shows the
+   * whole body.
+   *
+   * A failure is said HERE, once, and is not written into the quote line — that
+   * line's sentence is a claim about whether the original EXISTS, and a read
+   * that failed says nothing about that.
+   *
+   * FOCUS IS NOT HANDLED HERE. MarkdownPreviewOverlay focuses itself on mount
+   * and hands focus back to whatever had it on unmount — which is this button,
+   * because a click is what got us here. Doing it a second time from this side
+   * would be two owners for one behaviour. */
+  async function openQuotedMessage(replyTo: string) {
+    if (quoteBusyRef.current) return;
+    quoteBusyRef.current = true;
+    setQuoteOpenFailedId(null);
+    try {
+      const original = await api.getChatMessage(replyTo);
+      setMdPreview({
+        kind: "message",
+        title: nameOf(original.from),
+        source: original.body,
+      });
+    } catch {
+      // Deliberately swallowed rather than logged-and-retried: the person who
+      // clicked is told on screen, and there is nothing else to do about it.
+      setQuoteOpenFailedId(replyTo);
+    } finally {
+      quoteBusyRef.current = false;
+    }
+  }
   // M2-3 file & image gallery panel (header icon toggles it).
   const [galleryOpen, setGalleryOpen] = useState(false);
   // The attachment whose share link was just copied (transient 「已複製」
@@ -482,6 +596,17 @@ export function ChatArea({
     // functional set sees the just-cleared empty list and takes the snapshot).
     const restored = getChatDraft(member.id);
     setDraft(restored?.text ?? "");
+    // 🔴 THE TARGET MUST SWAP WITH THE PEER, and since 2026-08-21 the reason is
+    // the OPPOSITE of the one that used to be written here. The server had a
+    // `sameChatConversation` check and refused a cross-conversation `reply_to`
+    // with a 400, so forgetting this line was noisy, visible, and left the draft
+    // intact. That check is GONE (owner ruling: quoting sideways into another
+    // conversation is the use case). Forgetting this line now SENDS SUCCESSFULLY
+    // — a message to the new peer carrying a quote row built from the old
+    // conversation, which the server faithfully assembles and shows the
+    // recipient. The guard got MORE load-bearing when the refusal went away, not
+    // less: do not remove it on the belief that the server still catches this.
+    setReplyToId(restored?.replyTo ?? null);
     clearAttachments();
     if (restored && restored.attachments.length > 0) {
       restoreAttachments(restored.attachments);
@@ -511,8 +636,12 @@ export function ChatArea({
   // window. An empty draft deletes the entry (saveChatDraft), giving the
   // "送出 / 手動清空後歸零" behavior for free.
   useEffect(() => {
-    saveChatDraft(member.id, { text: draft, attachments: pendingAttachments });
-  }, [member.id, draft, pendingAttachments]);
+    saveChatDraft(member.id, {
+      text: draft,
+      attachments: pendingAttachments,
+      replyTo: replyToId ?? undefined,
+    });
+  }, [member.id, draft, pendingAttachments, replyToId]);
 
   // T-e987 compose seed: prefill the composer once with "[<taskNo>] " when the
   // 任務卡 label routes here, but only into an EMPTY draft (never overwrite
@@ -610,6 +739,63 @@ export function ChatArea({
   // The newest message ts in the thread — the watermark the owner marks read up
   // to (0 when empty).
   const newestTs = messages.length > 0 ? messages[messages.length - 1].ts : 0;
+
+  // ===== T-4e95 quote resolution =====
+  //
+  // 🔴 THERE IS NO RESOLUTION ANY MORE, AND THAT IS THE WHOLE REDESIGN (owner
+  // ruling, 2026-08-21). A reply arrives carrying `replyToChat` — the quoted
+  // sender and a server-shortened line of what they said — built by the server
+  // on every read, without exception. The row reads that field and stops.
+  //
+  // What used to be here: the wire carried the quoted ID alone, so this
+  // component looked the target up in the loaded window and, failing that, went
+  // and fetched it (useQuotedMessages, now deleted). That fetch could fail; a
+  // failure was drawn as a placeholder that was sometimes a lie; the lie was
+  // repaid on the next inbound SSE event. Each of those was a branch, and all of
+  // them paint the SAME PIXELS whether they are right or wrong — which is why
+  // the bugs that lived in them survived twenty rounds of review. Do not
+  // reintroduce a lookup here however cheap it looks: the value of this shape is
+  // not that it is fast, it is that it has exactly one behaviour.
+  //
+  // `messageById` survives for ONE job, and it is not the quote text: whether
+  // the COMPOSER's banner can NAME the person being answered, which is a
+  // question about what is loaded right now and can only be answered here.
+  //
+  // 🔴 IT NO LONGER GATES THE QUOTE ROW'S CONTROL. It did — the row offered the
+  // control only when the target was in this map, and back then it was labelled
+  // 「跳到原訊息」 because it scrolled rather than opened. The same owner ruling
+  // that deleted the resolution deleted that gate too: the control is offered on
+  // every reply, is labelled 「看原訊息」, and reads its one message back on click
+  // (`openQuotedMessage`). The render condition is `m.replyTo && quoted`; it
+  // does not consult `messages`.
+  const messageById = useMemo(
+    () => new Map(messages.map((m) => [m.id, m])),
+    [messages],
+  );
+  // The message the COMPOSER is aiming at, resolved from the loaded window
+  // ALONE — no fetch, no fallback, no third state. The owner picks this target
+  // by clicking a row that is on screen, so it is in the window by construction.
+  // The one path that can miss is a draft restored from an earlier session whose
+  // target has since scrolled out; that renders as the same fixed sentence every
+  // other unshowable quote does, and SENDING IT STILL WORKS — the server
+  // resolves the id, and the sent row comes back with its quote attached.
+  const replyQuote = replyToId ? messageById.get(replyToId) : undefined;
+
+  // 🔴 THERE IS NO `locateMessage` ANY MORE, AND THE OTHER JUMP IS NOT IT.
+  // The quote row used to scroll the thread to the quoted row when that row
+  // happened to be loaded, and show no control when it was not. Owner ruling
+  // 2026-08-21 replaced that with 「撈那一則、跳 modal」 (openQuotedMessage
+  // above): one behaviour for every reply, no window-dependent affordance, and
+  // no scroll — which also retired the "the jump moves the viewport but not the
+  // FOCUS, so a keyboard user pressing it saw nothing happen" defect, because
+  // there is nothing left to scroll.
+  //
+  // ⚠️ WHAT SURVIVES, AND MUST: the `jumpToMsgId` reactor below. That is the
+  // REPLY-CARD / hash-route jump (#office/chat/<id>/msg/<msgId>), a different
+  // entry point with a different job — it lands the thread on a named row on
+  // ENTRY — and it owns `highlightMsgId` and the `--located` flash. It never
+  // called locateMessage. Deleting one did not touch the other, and
+  // `ChatArea.unread-jump.test.tsx` plus the reply-card jump tests pin it.
 
   // B3 跳到原訊息 — declared BEFORE the entry-positioning reactor below so the
   // jump consumes entry positioning first (the divider/bottom scroll must not
@@ -827,6 +1013,18 @@ export function ChatArea({
     // silently swallowed.
     const draftSnapshot = draft;
     const attachmentsSnapshot = pendingAttachments;
+    const replyToSnapshot = replyToId;
+    // 🔴 WHICH ROOM THIS SEND BELONGS TO. The restore below runs after an await,
+    // and the owner can switch peers during it — this component is REUSED across
+    // peers, so the restore landed in whoever was on screen when the failure came
+    // back, and the save effect then persisted it into THAT peer's draft. The
+    // reply target makes it worse than untidy, and worse than it used to be: the
+    // server's `sameChatConversation` refusal was deleted on 2026-08-21, so a
+    // target from another room is no longer 400'd — it is accepted, and the new
+    // room's message goes out quoting a sentence from a conversation it has
+    // nothing to do with, which the recipient then reads as context. The failure
+    // mode flipped from a visible refusal to a silent mis-send.
+    const sendPeer = member.id;
     // ALL staged attachments ride the SAME message, in staged order.
     const attachments = attachmentsSnapshot.map((a) => ({
       dataB64: a.dataUri,
@@ -837,18 +1035,67 @@ export function ChatArea({
     }));
     setDraft("");
     clearAttachments();
+    // Cleared with the rest of the composer: a reply target that survived its
+    // own send would silently attach itself to the NEXT message too.
+    setReplyToId(null);
     try {
       await send(
         draftSnapshot,
         attachments.length > 0 ? attachments : undefined,
+        replyToSnapshot ?? undefined,
       );
     } catch (e) {
       console.warn("ChatArea: send failed, restoring composer", e);
+      // 🔴 RESTORE INTO THE ROOM IT WAS TYPED IN — NOT the one on screen, and
+      // NOT nowhere. The first version of this guard was a bare `return` on the
+      // reasoning that "that room's draft still holds it". IT DOES NOT: the
+      // optimistic clear at the top of submit() runs while `member.id` is still
+      // the sending room, so the save effect calls saveChatDraft(sendPeer, {all
+      // empty}) — and an all-empty draft is DELETED, not stored. So the bare
+      // return traded "restored into the wrong room" (ugly, visible, and the
+      // words are still on screen) for "text, attachments AND reply target
+      // silently gone for good, with only a console.warn". That is worse, and
+      // it is exactly what the guard was added to prevent.
+      //
+      // Writing to the store rather than to state also covers the case where
+      // this component is gone entirely (跳頁 mid-flight): setState on an
+      // unmounted component discards the content just as quietly.
+      //
+      // FIELD BY FIELD, which is the rule the state restores below already use:
+      // fill only what the room does not already hold. The first version of
+      // this write was all-or-nothing on the whole draft, and a reviewer found
+      // the gap that opens: go back to that room, stage one image and type
+      // nothing, and the room is no longer "empty" — so the whole write was
+      // skipped and the failed message's TEXT and reply target went with it.
+      //
+      // What this still cannot save: if the owner has retyped in that room,
+      // their words win and the failed message's words are gone. Two texts
+      // cannot occupy one composer, and theirs is the one they can see. Said
+      // out loud rather than left to be discovered.
+      const stored = getChatDraft(sendPeer);
+      saveChatDraft(sendPeer, {
+        text: stored && stored.text ? stored.text : draftSnapshot,
+        attachments:
+          stored && stored.attachments.length > 0
+            ? stored.attachments
+            : attachmentsSnapshot,
+        replyTo:
+          stored && stored.replyTo
+            ? stored.replyTo
+            : (replyToSnapshot ?? undefined),
+      });
+      // Not this room any more → the words are back where they were typed, and
+      // putting them on screen here would put one room's words, and one room's
+      // reply target, into another.
+      if (peerIdRef.current !== sendPeer) return;
       // Restore the user's unsent content so it isn't silently lost. Only put
       // back what the user hasn't already retyped/restaged — if they started a
       // new draft while the send was in flight, don't clobber it.
       setDraft((cur) => (cur ? cur : draftSnapshot));
       restoreAttachments(attachmentsSnapshot);
+      // Same rule as the text: put the target back only if the owner has not
+      // already aimed at something else while the send was in flight.
+      setReplyToId((cur) => (cur ? cur : replyToSnapshot));
     }
   }
 
@@ -893,6 +1140,210 @@ export function ChatArea({
     // B3: a message carrying a reply-card link renders the CARD as its bubble
     // (spec §3: 請示以卡片形式直接出現在訊息串中，無額外橫幅) — the card
     // itself fetches its full shape and owns the answer / 重新決定 flow.
+    // T-4e95 ① the QUOTE LINE — a thin row above the bubble saying which
+    // message this one answers. It reads `m.replyToChat` and NOTHING ELSE: the
+    // server built that snapshot on this very read, so there is nothing to look
+    // up and nothing that can still be pending.
+    //
+    const quoted = m.replyToChat ?? null;
+    const quoteWho = quoted ? nameOf(quoted.from) : "";
+    // 🔴 TWO OUTCOMES, NO THIRD. Either the server sent the snapshot or the
+    // original is gone — there is no "not yet", because nothing is in flight.
+    // The gone sentence is FIXED: not retried, not refreshed, and not revisited
+    // when the next event lands.
+    //
+    // `quoted.content` may legitimately be "" (the original carried only
+    // attachments). That renders as a named quote with an empty line, which is
+    // the truth; it must NOT be folded into the gone sentence, because "there
+    // was nothing to quote" and "there is nothing to quote FROM" are different
+    // facts about the conversation.
+    const quoteText = quoted ? quoted.content : t.chat.replyQuoteGone;
+    const quoteLine = !m.replyTo ? null : (
+      /* 🔴 THE ONE THING THIS ROW EXISTS TO SAY HAS TO REACH THE A11Y TREE TOO.
+       * Measured in a real browser on a real <ChatArea>: as a bare <div> this
+       * row linearised into the reply as "Mira. Mira. 他說的. 跳到原訊息.
+       * 我說的" — role null, no name. (That transcript is verbatim from the
+       * measurement; the button said 「跳到原訊息」 then and says 「看原訊息」
+       * now. The shape is the point, not the string.) A screen-reader user
+       * could not tell
+       * which sentence is the quotation and which one this person is saying
+       * now, which is the whole feature. `.chat__msg-quote` is the only place
+       * in this frontend that embeds someone else's sentence inside another
+       * person's message, so the gap is this feature's own, not the app's.
+       *
+       * role="blockquote" + aria-label, NOT a visually-hidden prefix: this repo
+       * has no sr-only utility (MemberCard.presence-a11y.test.tsx says so in as
+       * many words), and inventing one for a single row would be a new global
+       * primitive smuggled in under a quote line. The label names the quoted
+       * sender when we have resolved one and stays generic when we have not —
+       * the same "no quote, no name" rule the banner and `quoteWho` already
+       * follow. */
+      <div
+        className="chat__msg-quote"
+        data-testid="msg-quote"
+        role="blockquote"
+        aria-label={
+          quoteWho ? t.chat.replyQuoteRoleWho(quoteWho) : t.chat.replyQuoteRole
+        }
+      >
+        {/* Decorative twin of the label above it: the row already SAYS it is a
+         * quote through its aria-label, so an unnamed <img> node in the tree
+         * beside it is pure noise. Only this one is hidden — the rest of the
+         * app's icons are a separate, pre-existing question. */}
+        <ReplyIcon
+          size={11}
+          className="chat__msg-quote__icon"
+          aria-hidden="true"
+        />
+        {quoteWho && <span className="chat__msg-quote__who">{quoteWho}</span>}
+        <span className="chat__msg-quote__body" title={quoteText}>
+          {quoteText}
+        </span>
+        {/* The control is its own element, the way 查看任務詳情 is on a
+         * task-derived ask (ReplyCardTaskRef) — owner 2026-08-20.
+         *
+         * 🔴 IT IS OFFERED FOR EVERY REPLY, UNCONDITIONALLY (owner ruling
+         * 2026-08-21: 「全部統一就撈那一則顯示出來就好」). It used to appear only
+         * when the quoted row was already in the loaded window, on the argument
+         * that an affordance which scrolls nowhere is worse than none — true of
+         * a control that SCROLLS. This one does not scroll: it reads that one
+         * message back from the server and opens it in the full-view overlay,
+         * so it works identically for a quote from ten seconds ago and one from
+         * ten thousand messages ago. The window-membership question is gone, and
+         * with it the row's only piece of local, disagreeable state.
+         *
+         * The row still shows the SERVER's 60-rune excerpt; the overlay shows
+         * the whole body. Nothing here re-cuts anything.
+         *
+         * ⚠️ ONE CONDITION SURVIVES, AND IT IS NOT THE WINDOW ONE. `quoted` —
+         * the server's snapshot — must be present. When it is absent this row is
+         * printing 「這則訊息已不存在」, which is the server's own answer from
+         * THIS read: the original is gone. Offering a control there would be
+         * offering to open a message we have just told the reader does not
+         * exist, and pressing it could only ever produce 「拿不到這則訊息」 one
+         * line below. That is not the window check coming back through a side
+         * door — the window is never consulted — it is the row declining to
+         * contradict itself.
+         *
+         * 🔴 THE LABEL IS ITS OWN ELEMENT so it can be the thing that
+         * DISAPPEARS. It is not trimmed and it never was made trimmable in the
+         * end: nothing in office.css can ellipsise it — the button is
+         * `flex: none` with `white-space: nowrap`, and the label's ONLY rule is
+         * `display: none` inside `@container chat-pane (max-width: 520px)`. So
+         * on a narrow pane the whole label goes and the arrow is what is left;
+         * on a wide one the label renders whole. Whole or absent, never cut.
+         *
+         * The control used to keep its intrinsic width on the reasoning that a
+         * cut 跳到原訊息 helps nobody — true of the Chinese control, which was
+         * 69px. The English one at the time was "Go to the original message" at
+         * 154px (both figures are the WHOLE BUTTON: label + 2px gap + 12px
+         * chevron). Today the labels read 「看原訊息」 / "View the original
+         * message" — `d7752781` renamed them with the behaviour — and the
+         * English control measures ~151px, so the pressure is unchanged. A
+         * control that cannot give way does not stay politely inside the
+         * bubble: it
+         * runs past the edge and under the corner buttons, which are absolutely
+         * positioned and therefore painted on top of it. Measured against the
+         * running app: it fails at the narrow end in BOTH languages, and again
+         * just past the two-column breakpoint on an INCOMING bubble WITH A BODY
+         * (`!mine && m.body` → `--acts2`) — that one reserves 56px of corner
+         * where your own reserves 32. Two conditions, not one: `!mine &&
+         * m.body` is what widens the corner, and `m.replyTo` is what puts a
+         * quote row there to overflow. The worst case is both together. Two earlier versions of this note quoted exact ranges;
+         * both were wrong, because the range moves with the bubble kind, the
+         * language and the display name. The guard holds the numbers.
+         * Dropping the whole label and keeping its arrow beats a control hidden
+         * under another control. */}
+        {m.replyTo && quoted && (
+          <button
+            type="button"
+            className="chat__msg-quote__jump"
+            data-testid="msg-quote-jump"
+            /* 🔴 THE NAME CANNOT RIDE ON THE VISIBLE LABEL. That label is the
+             * first thing this row gives up when the PANE runs short (see the
+             * note above), and it does not shrink on the way out — below 520px
+             * of pane it is `display: none` outright. A name riding on it would
+             * not degrade, it would VANISH, leaving a button whose only content
+             * is a decorative chevron and whose accessible name is the empty
+             * string. Naming the control explicitly is what keeps it named in
+             * the half of the width range where the label is not rendered at
+             * all. */
+            aria-label={t.chat.replyQuoteJump}
+            title={t.chat.replyQuoteJump}
+            onClick={() => openQuotedMessage(m.replyTo as string)}
+          >
+            <span className="chat__msg-quote__jump-label">
+              {t.chat.replyQuoteJump}
+            </span>
+            <ChevronRightIcon
+              size={12}
+              className="chat__msg-quote__jump-chevron"
+            />
+          </button>
+        )}
+        {/* 🔴 THE FAILURE IS SAID HERE, NOT IN THE QUOTE LINE. The line above
+         * either carries the server's excerpt or carries 「這則訊息已不存在」,
+         * and that sentence is a claim about whether the original EXISTS. A read
+         * that failed says nothing about that, so overwriting the line with it
+         * would turn a network fault into a false statement about the
+         * conversation — the exact confusion the whole redesign removed.
+         *
+         * It is also the end of the story: no retry, no second attempt on the
+         * next event, and it does not survive the next click on another row
+         * (one piece of state, last click wins). `role="status"` so a screen
+         * reader hears the outcome of the button it just pressed — the button
+         * itself keeps its own name. */}
+        {quoteOpenFailedId === m.replyTo && (
+          <span
+            className="chat__msg-quote__error"
+            data-testid="msg-quote-error"
+            role="status"
+          >
+            {t.chat.replyQuoteOpenFailed}
+          </span>
+        )}
+      </div>
+    );
+
+    // T-4e95 ② the REPLY ENTRY. Owner 2026-08-20 moved it INTO the bubble's
+    // corner, beside 放大閱讀: out on the row it read as something belonging to
+    // the thread rather than to this message.
+    //
+    // The reason it started on the row is still true and had to be solved
+    // rather than argued with — 放大閱讀's corner exists ONLY on incoming text
+    // bubbles, and the AC is 每一則. So the corner is now a SHARED ACTION SLOT
+    // that every bubble reserves (own messages and attachment-only bubbles
+    // included), holding one or two controls.
+    //
+    // 🔴 THE ONE SHAPE THAT KEEPS THE ROW ENTRY is a reply-card message: its
+    // bubble is replaced by <ChatReplyCard>, a full-width surface with its own
+    // header controls, and hanging a floating action over it would collide with
+    // them. Stated here rather than silently: card rows are the exception.
+    //
+    // 🔴 OFFERED ON EVERY ROW IN THE WINDOW, INCLUDING THE ONES THE OWNER IS
+    // NOT A PARTY TO. This used to be gated behind a `replyable` flag —
+    // {owner, peer} rows only — because the server refused a reply_to that
+    // crossed conversations, so an entry on an inter-agent row would have 400'd
+    // on every press. The owner removed that refusal on 2026-08-21 FOR THIS
+    // EXACT CASE: 「引用另外兩個人對話裡的一句話來介入詢問」. With the gate gone
+    // the entry works there — the reply is addressed to this thread's peer as
+    // always, and it quotes the line the owner pointed at. Keeping the flag
+    // would have left the owner's ruling unreachable from the product.
+    const replyEntry = (
+      <button
+        type="button"
+        className="chat__msg-reply"
+        aria-label={t.chat.replyAction}
+        title={t.chat.replyAction}
+        onClick={() => {
+          setReplyToId(m.id);
+          inputRef.current?.focus();
+        }}
+      >
+        <ReplyIcon size={13} />
+      </button>
+    );
+
     const content = m.replyCardId ? (
       <ChatReplyCard
         replyCardId={m.replyCardId}
@@ -903,32 +1354,48 @@ export function ChatArea({
       <div
         className={
           "chat__msg-bubble" +
-          (!mine && m.body ? " chat__msg-bubble--expandable" : "")
+          // The corner ACTION SLOT reserves its own width so a hover can never
+          // reflow the text under it. Two controls need more room than one, and
+          // 放大閱讀 is the one that comes and goes.
+          (!mine && m.body
+            ? " chat__msg-bubble--expandable chat__msg-bubble--acts2"
+            : " chat__msg-bubble--acts1")
         }
       >
-        {/* 放大閱讀 — the corner button that reopens THIS message body in the
-         * shared full-view overlay, the same surface a .md attachment opens
-         * into. Only on INCOMING messages with text: an agent answer is the
-         * long-form side of the thread (the owner's own line is what they just
-         * typed), and an attachment-only bubble has no body to lay out — the
-         * file chip already carries its own 預覽 action. */}
-        {!mine && m.body && (
-          <button
-            type="button"
-            className="chat__msg-expand"
-            aria-label={t.chat.expandMessage}
-            title={t.chat.expandMessage}
-            onClick={() =>
-              setMdPreview({
-                kind: "message",
-                title: senderLabel,
-                source: m.body,
-              })
-            }
-          >
-            <ExpandIcon size={12} />
-          </button>
-        )}
+        {/* The bubble's corner actions (T-4e95). ONE slot, so the two controls
+         * cannot drift apart into two corners:
+         *   • 回覆這則 — on EVERY bubble in the window, both directions, and
+         *     including the inter-agent rows the owner is not a party to. That
+         *     last part is new (2026-08-21): the server used to refuse a
+         *     reply_to that crossed conversations so the entry was withheld
+         *     there, and the owner removed that refusal precisely so the owner
+         *     could quote a line out of two other people's thread and step in.
+         *   • 放大閱讀 — reopens THIS message body in the shared full-view
+         *     overlay. Only on INCOMING messages with text: an agent answer is
+         *     the long-form side of the thread (the owner's own line is what
+         *     they just typed), and an attachment-only bubble has no body to lay
+         *     out — the file chip already carries its own 預覽 action. */}
+        <div className="chat__msg-actions">
+          {replyEntry}
+          {!mine && m.body && (
+            <button
+              type="button"
+              className="chat__msg-expand"
+              aria-label={t.chat.expandMessage}
+              title={t.chat.expandMessage}
+              onClick={() =>
+                setMdPreview({
+                  kind: "message",
+                  title: senderLabel,
+                  source: m.body,
+                })
+              }
+            >
+              <ExpandIcon size={12} />
+            </button>
+          )}
+        </div>
+        {quoteLine}
         {/* T-84c8: the message body is the purest owner/agent free text in the
          * app (and, via webhooks, can carry text from an EXTERNAL system), so
          * it renders through the shared XSS-safe `Markdown` — same posture as
@@ -981,7 +1448,11 @@ export function ChatArea({
               {read && <span className="chat__msg-read">{t.chat.read}</span>}
               <span className="chat__msg-time">{formatTime(m.ts)}</span>
             </div>
-            <div className="chat__msg-content">{content}</div>
+            <div className="chat__msg-content">
+              {m.replyCardId && quoteLine}
+              {content}
+            </div>
+            {m.replyCardId && replyEntry}
           </div>
         ) : (
           // LINE-style incoming: mirror of the outgoing row. The name label above
@@ -993,10 +1464,14 @@ export function ChatArea({
               <span className="chat__msg-name">{senderLabel}</span>
             </div>
             <div className="chat__msg-line">
-              <div className="chat__msg-content">{content}</div>
+              <div className="chat__msg-content">
+                {m.replyCardId && quoteLine}
+                {content}
+              </div>
               <div className="chat__msg-sidemeta">
                 <span className="chat__msg-time">{formatTime(m.ts)}</span>
               </div>
+              {m.replyCardId && replyEntry}
             </div>
           </>
           )}
@@ -1347,6 +1822,72 @@ export function ChatArea({
                   })
                 }
               />
+            )}
+            {/* T-4e95 ③ 「正在回覆」 — the LINE-style banner ABOVE the input
+             * row, naming who is being answered and quoting a slice of what
+             * they said, with an x that returns the composer to the ordinary
+             * send state.
+             *
+             * 🔴 THE x CLEARS THE TARGET AND NOTHING ELSE. Half-typed text and
+             * staged attachments stay exactly as they are — cancelling a reply
+             * is not cancelling the message, and a composer that emptied itself
+             * here would lose work the owner never asked to throw away. */}
+            {replyToId && (
+              <div className="chat__reply-banner" data-testid="chat-reply-banner">
+                <ReplyIcon size={13} className="chat__reply-banner__icon" />
+                {/* 🔴 DO NOT NAME SOMEONE WE HAVE NOT RESOLVED. This used to
+                  * fall back to the peer's name whenever the quote had not come
+                  * back, which is a claim, not a placeholder: the target is by
+                  * construction one of TWO people (this conversation has only
+                  * two), so the fallback was a coin flip printed as a fact.
+                  *
+                  * There used to be a THIRD state here — a 「…」 meaning "the
+                  * by-id read has not landed yet". It went with the read: nothing
+                  * is in flight any more, so a spinner would never resolve.
+                  *
+                  * 🔴 AND IT IS NOT THE QUOTE ROW'S SENTENCE EITHER. `replyQuote`
+                  * comes from `messageById` — the LOADED WINDOW — so an unresolved
+                  * target here does NOT mean the message is gone. Scroll back, aim
+                  * at an old row, switch peers and come back to a freshly-loaded
+                  * newest page: the target is still there, the send still succeeds,
+                  * and the quote comes back whole on the reply's own row. Printing
+                  * 「這則訊息已不存在」 in that state is a falsifiable claim about
+                  * the world made from a fact about this browser's scroll position.
+                  * `replyingToEarlier` is state-independent and stays true in both
+                  * cases. */}
+                <span className="chat__reply-banner__text">
+                  <span className="chat__reply-banner__who">
+                    {replyQuote
+                      ? t.chat.replyingTo(nameOf(replyQuote.from))
+                      : t.chat.replyingToEarlier}
+                  </span>
+                  <span className="chat__reply-banner__body">
+                    {/* Raw, not pre-collapsed: `white-space: nowrap` on the
+                      * parent is what makes this one line — see the note where
+                      * `oneLine()` used to be. */}
+                    {replyQuote ? replyQuote.body : ""}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  className="chat__reply-banner__x"
+                  aria-label={t.chat.replyCancel}
+                  title={t.chat.replyCancel}
+                  onClick={() => {
+                    setReplyToId(null);
+                    // 🔴 GIVE THE FOCUS BACK. This button is about to unmount
+                    // itself, and a focused element that leaves the document
+                    // hands focus to <body> — so a keyboard user who cancels
+                    // one reply is thrown to the top of the page and has to Tab
+                    // back through the whole thread to reach the composer. The
+                    // reply ENTRY already does this on the way in; the way out
+                    // was missing.
+                    inputRef.current?.focus();
+                  }}
+                >
+                  <CloseIcon size={14} />
+                </button>
+              </div>
             )}
             <div className="chat__composer-row">
               {/* Hidden native file input the attach button triggers. */}

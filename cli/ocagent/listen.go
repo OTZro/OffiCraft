@@ -749,8 +749,23 @@ func fmtAgo(secs float64) string {
 // Only the id goes in — filenames, attachment ids and mimes stay OUT, because
 // this line is a token cost every agent pays on every message; get_chat is where
 // that detail belongs. The relative age is computed client-side from the message
-// ts. Either tag half is dropped when the wire carries no id / no ts, and a
-// message with neither prints without the parenthesised tag at all.
+// ts. Any tag slot is dropped when the wire carries no id / no reply_to / no ts,
+// and a message with none of them prints without the parenthesised tag at all.
+//
+// The middle slot is the REPLY marker (T-4e95): `↩#<id>` naming the message this
+// one is replying to, present only when the wire's `reply_to` is non-empty:
+//
+//	[ocagent] chat from boss (#c-reply, ↩#c-target, 2m ago): 這個再確認一下
+//
+// It is an EXISTENCE marker, exactly like the attachment badge: the quoted
+// sender and body are NOT printed. Since 2026-08-21 the wire DOES carry them
+// (`reply_to_chat`, built on every read), so this is a deliberate choice by this
+// line rather than a limit of the payload — one console line per inbound message
+// is a token cost every agent pays on every message, and a second sentence
+// inside it doubles that for a relation most messages do not have. The id is
+// enough to tell the woken agent a reply target EXISTS; get_chat is where the
+// text belongs, and it now comes back with the quote already attached.
+//
 // Advances the seen-id cursor and returns the unread count. `silent` (the boot
 // baseline) advances the cursor WITHOUT printing so connecting does not re-print
 // history. R7: reads ONLY the refetched authority, never a delta. Mirrors drain_chat.
@@ -804,9 +819,12 @@ func drainChat(client httpClient, cfg Config, seen map[string]bool, out io.Write
 			continue
 		}
 		if !silent {
-			tag := make([]string, 0, 2)
+			tag := make([]string, 0, 3)
 			if mid != "" {
 				tag = append(tag, "#"+mid)
+			}
+			if rt := strings.TrimSpace(strOrEmpty(m["reply_to"])); rt != "" {
+				tag = append(tag, "↩#"+rt)
 			}
 			if ts, ok := m["ts"].(float64); ok && ts > 0 {
 				tag = append(tag, fmtAgo(now-ts)+" ago")

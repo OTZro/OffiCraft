@@ -11,8 +11,10 @@ package main
 //
 //	① a caller's own ids come back IN FULL          — the positive control, so
 //	                                                  ② cannot pass vacuously
-//	② an id between two other members is REFUSED    — and the refusal teaches
-//	                                                  no way around itself
+//	② an id between two other members is SERVED     — and it is served exactly
+//	                                                  as far as the ordinary
+//	                                                  listing already serves it
+//	                                                  (T-4e95 aligned the two)
 //	③ more ids than the cap is REFUSED              — and the refusal states
 //	                                                  the cap
 //	④ an id no message carries refuses the WHOLE    — the documented behaviour,
@@ -120,63 +122,64 @@ func TestChatByIDs_NeverAdvancesTheReadWatermark(t *testing.T) {
 	}
 }
 
-// ② THE PERMISSION BOUNDARY — the most important cell. Knowing an id must not
-// be the same thing as being allowed to read it.
+// ② TWO DOORS, ONE RULE (T-4e95, owner ruling). This cell used to pin a 403 on
+// an id between two other members. That refusal is gone, and what replaced it is
+// not "no rule" — it is the rule the ORDINARY LISTING already enforced, now
+// enforced identically by both doors.
 //
-// Both halves are load-bearing: the refusal itself, AND the fact that the
-// refused call returns NOTHING (naming one foreign id alongside your own must
-// not hand back the ones that happen to be yours, or a caller learns to probe
-// in batches and read the leftovers).
-func TestChatByIDs_AMessageBetweenOtherMembersIsRefused(t *testing.T) {
+// Why the old assertion had to move rather than be deleted: the 403 never
+// withheld anything. `?with=` filters on a PARTICIPANT, not on the caller, so
+// the very same row was already served to the very same caller through the
+// listing. Two doors onto one row disagreeing about who may open them is a
+// discrepancy, and the only party it actually cost was an honest caller trying
+// to follow a message's reply_to.
+//
+// So this test asserts the AGREEMENT, in both directions:
+//   - the by-ids door serves a bystander the row (re-adding the 403 reddens it);
+//   - the listing door serves the same bystander the same row (narrowing the
+//     listing instead of this door also reddens it).
+//
+// A future ticket may decide this reach is wrong. If so it is wrong for BOTH
+// doors, and this test is what makes fixing only one of them impossible.
+func TestChatByIDs_ReachesExactlyAsFarAsTheOrdinaryListing(t *testing.T) {
 	s := &apiServer{dal: newTestDAL(t), hub: NewHub()}
 	seedFoldableThreads(t, s)
 
-	rec := chatByIDs(s, "owner", "c-theirs")
-	if rec.Code != 403 {
-		t.Fatalf("an id the caller was not a party to must be refused, got %d: %s",
+	// m-3 is a bystander: neither end of c-theirs (m-1 ↔ m-2).
+	rec := chatByIDs(s, "m-3", "c-theirs")
+	if rec.Code != 200 {
+		t.Fatalf("a by-ids read must reach as far as the listing does, got %d: %s",
 			rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "c-theirs") {
-		t.Fatalf("the refusal must name the id it is about: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "not for the owner") {
+		t.Fatalf("the named message must come back whole: %s", rec.Body.String())
 	}
 
+	// The other half of the agreement, measured rather than assumed: the SAME
+	// bystander asking the ORDINARY listing for that conversation gets the same
+	// row. Without this half, someone could satisfy the test above by opening
+	// this door while quietly closing the other one.
+	peer := "m-1"
+	listed := chatGetRec(s, "m-3", HandleListChatApiChatGetParams{With: &peer})
+	if listed.Code != 200 {
+		t.Fatalf("precondition: the listing must answer, got %d: %s",
+			listed.Code, listed.Body.String())
+	}
+	if !strings.Contains(listed.Body.String(), "not for the owner") {
+		t.Fatalf("the listing is what sets the reach — if it no longer serves "+
+			"this row, the two doors are being narrowed apart: %s",
+			listed.Body.String())
+	}
+
+	// Mixed call: naming a bystander's id alongside your own is now an ordinary
+	// read, not a probe — both come back.
 	mixed := chatByIDs(s, "owner", "c-mine-1", "c-theirs")
-	if mixed.Code != 403 {
-		t.Fatalf("one foreign id must refuse the whole call, got %d: %s",
-			mixed.Code, mixed.Body.String())
+	if mixed.Code != 200 {
+		t.Fatalf("a mixed call must answer, got %d: %s", mixed.Code, mixed.Body.String())
 	}
-	if strings.Contains(mixed.Body.String(), "first half of the plan") {
-		t.Fatalf("a refused call must not leak the ids that WERE readable: %s",
-			mixed.Body.String())
-	}
-}
-
-// ② (cont.) The refusal must not teach a way around itself.
-//
-// This is a real failure mode in an agent-facing API, not a style note: an
-// agent reads the error and does what it says next. A refusal that mentions any
-// other lever — a flag, another parameter, another endpoint, someone else's
-// token — converts a boundary into a puzzle. The assertion is over the WORDS the
-// refusal may not contain, plus a positive half (it must state the rule), so
-// deleting the message entirely cannot pass.
-func TestChatByIDs_TheRefusalTeachesNoWayAround(t *testing.T) {
-	s := &apiServer{dal: newTestDAL(t), hub: NewHub()}
-	seedFoldableThreads(t, s)
-	body := strings.ToLower(chatByIDs(s, "owner", "c-theirs").Body.String())
-
-	for _, bypass := range []string{
-		"caller_only", "before_ts", "before_id", "?with=", "limit=-1",
-		"owner token", "admin", "instead", "unless", "workaround",
-	} {
-		if strings.Contains(body, strings.ToLower(bypass)) {
-			t.Fatalf("the permission refusal must not point at %q as a way around it: %s",
-				bypass, body)
-		}
-	}
-	// Positive half: it has to SAY the rule, otherwise an empty message would
-	// satisfy every check above.
-	if !strings.Contains(body, "only") || !strings.Contains(body, "sent or received") {
-		t.Fatalf("the refusal must state the rule it is enforcing: %s", body)
+	if !strings.Contains(mixed.Body.String(), "first half of the plan") ||
+		!strings.Contains(mixed.Body.String(), "not for the owner") {
+		t.Fatalf("both named ids must be answered: %s", mixed.Body.String())
 	}
 }
 
@@ -247,7 +250,11 @@ func TestChatByIDs_TheDocumentedUnknownIDRuleIsTheShippedOne(t *testing.T) {
 		"ALL OR NOTHING ON AN UNKNOWN ID",
 		"refuses the WHOLE call with 404",
 		"AT MOST 20 DISTINCT IDS",
-		"REFUSED with 403",
+		// T-4e95: the sentence that replaced "REFUSED with 403". The doc must
+		// state the reach the handler actually has — a schema still promising a
+		// permission refusal the code no longer performs is the same false
+		// promise this file exists to prevent, pointing the other way.
+		"SAME REACH AS THE ORDINARY LISTING",
 	} {
 		if !strings.Contains(desc, promise) {
 			t.Fatalf("the ids schema must document %q — the behaviour is pinned by "+
@@ -414,9 +421,9 @@ func TestChatByIDs_RepeatedQueryParameterReachesTheHandler(t *testing.T) {
 	if strings.Contains(body, "c-theirs") {
 		t.Fatalf("?ids= was ignored — this is the ordinary stream, not a by-id read: %s", body)
 	}
-	// The boundary holds over real HTTP too. m-1 is one end of c-theirs, so the
-	// bystander has to be a third member.
-	if code, body := ask("m-3", "ids=c-theirs"); code != 403 {
-		t.Fatalf("a bystander must be refused over the wire too: %d %s", code, body)
+	// The T-4e95 reach holds over real HTTP too, not just through the handler:
+	// m-1 is one end of c-theirs, so the bystander has to be a third member.
+	if code, body := ask("m-3", "ids=c-theirs"); code != 200 {
+		t.Fatalf("a bystander must be served over the wire too: %d %s", code, body)
 	}
 }

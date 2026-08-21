@@ -101,6 +101,42 @@ export interface ChatMessage {
    * that opened it (wire `card`) — so the decision reads IN the chat stream
    * rather than in a second, separately-joined card list. null ⇒ no card. */
   card?: ChatInlineReplyCardView | null;
+  /** The id of the message this one is REPLYING TO (wire `reply_to`), or null
+   * when it replies to nothing. It is the ONE fact about whether this message
+   * is a reply, and it never goes away. It may name a message in ANOTHER
+   * conversation (owner ruling, 2026-08-21). */
+  replyTo?: string | null;
+  /** WHAT this message is replying to (wire `reply_to_chat`) — the quoted
+   * sender and a server-shortened line of what they said, rebuilt by the server
+   * on every read. null when `replyTo` is null, and null ALSO when `replyTo` is
+   * set but the quoted message no longer exists.
+   *
+   * 🔴 THE UI READS THIS AND NOTHING ELSE (T-4e95, owner ruling 2026-08-21).
+   * There is no lookup, no fallback to the loaded window, no re-fetch and no
+   * retry: either the snapshot is here or the original is gone, and "gone" is a
+   * settled answer that renders as one fixed sentence. The shape this replaced
+   * shipped the id alone and made the browser go and find the rest, which meant
+   * a request that could fail, a temporary lie on screen while it had failed,
+   * and a story about healing that lie later — three states that look identical
+   * to the eye whether they are right or wrong. */
+  replyToChat?: ChatReplyQuote | null;
+}
+
+/** The quoted message a reply carries with it (wire `ChatReplyQuoteDTO`).
+ *
+ * `from` / `fromName` are `ChatMessage`'s own convention: `from` is the ADDRESS
+ * and always present, `fromName` the display name beside it and `""` on the
+ * reads that resolve no names (everything but the wake snapshot) — so the
+ * thread resolves the name from its roster exactly as it does for any other
+ * sender rather than trusting this one to be filled. */
+export interface ChatReplyQuote {
+  id: string;
+  from: string;
+  fromName: string;
+  /** One line of the quoted body, already whitespace-collapsed and shortened BY
+   * THE SERVER (the length is defined there and nowhere else). `""` is an
+   * ordinary value — an attachment-only message has no text to quote. */
+  content: string;
 }
 
 /** One reply card folded onto the chat message that opened it (view model of
@@ -1613,6 +1649,34 @@ export interface Api {
    * http adapter fetches the unfiltered stream (`limit=-1`) and applies the
    * same participant filter + recent-window cap client-side. */
   peekChat(withId: string, limit?: number): Promise<ChatMessage[]>;
+  /** Read back ONE named message in full (`GET /api/chat?ids=<id>`), with NO
+   * read-watermark side effect. Rejects when the id names nothing (the server
+   * refuses the whole call) and when the read fails.
+   *
+   * 🔴 THIS IS NOT THE MACHINE THAT WAS DELETED, AND THE DIFFERENCE IS THE WHOLE
+   * POINT. Until 2026-08-21 the thread carried a background REFETCHER for quoted
+   * messages: it ran on its own, decided for itself which ids were still owed,
+   * kept that debt across renders and peers, retried, and repaired an earlier
+   * wrong answer when a later event arrived. That shape is gone and must not
+   * come back — three of its states ("fetched", "missing", "not asked yet") drew
+   * the same pixels, so a wrong answer looked exactly like a right one.
+   *
+   * What this is instead:
+   *   • it happens ONLY because a person clicked something;
+   *   • it asks for ONE message, once, and the answer is used immediately;
+   *   • a failure is said out loud where the click happened and then forgotten
+   *     — no retry, no queue, no state that outlives the click.
+   * There is deliberately no batching, no cache and no id set. If you find
+   * yourself adding one, you are rebuilding the deleted machine.
+   *
+   * "One click, one call" is pinned by `ChatArea.quote-no-fetch.test.tsx`'s
+   * "a click on the quote costs exactly one request, and repainting costs none";
+   * the failure half — said once, never retried — is
+   * `ChatArea.reply-to.test.tsx`'s "says so, in place and once, when that one
+   * read fails". (`quote-no-fetch`'s api proxy deliberately registers no failure
+   * state, which is why the two halves live apart.) Together they are what stands
+   * between this and the thing it replaced. */
+  getChatMessage(id: string): Promise<ChatMessage>;
   /** The M2 gallery query (`GET /api/chat/attachments?with=<memberId>`): every
    * attachment of the member's conversations, flattened newest→oldest —
    * owner↔member BOTH directions AND the member's inter-agent threads — each
@@ -1635,6 +1699,12 @@ export interface Api {
     to: string;
     body: string;
     attachments?: ChatAttachmentInput[];
+    /** The id of the message this post REPLIES TO, when it is a reply. The
+     * server checks it EXISTS — and nothing else: a reply may quote a message
+     * out of another conversation (owner ruling, 2026-08-21). The server is the
+     * only writer of the stored link; a forged `meta.reply_to` is dropped.
+     * Omitted on an ordinary post. */
+    replyTo?: string;
   }): Promise<ChatMessage>;
   /** Mark a conversation (with `peer`) read up to `lastReadTs` — the caller's own
    * read watermark (reader = the verified JWT sub server-side; anti-spoof). The

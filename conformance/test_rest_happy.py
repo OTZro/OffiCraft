@@ -2658,6 +2658,134 @@ def test_upload_then_ref_post_roundtrip(hctx: HCtx) -> None:
     assert again.status_code == 200, again.text
 
 
+def test_chat_reply_to_is_the_servers_link_not_the_callers(hctx: HCtx) -> None:
+    """T-4e95 「回覆這則」 over the real wire.
+
+    The repo charter puts the BEHAVIOURAL close-out of a wire change here, and
+    this field has four claims worth closing out over HTTP rather than only in
+    Go: the link round-trips, a link OUT of this conversation is ACCEPTED and
+    brings its quote with it, an id naming nothing is refused, and a
+    caller-supplied ``meta.reply_to`` is discarded. The last is the one that
+    needs a real request the most — ``meta`` is copied through wholesale, so the
+    only thing standing between a caller and an unvalidated link is a deletion
+    the handler performs before it validates anything.
+
+    The second REVERSED on 2026-08-21 (owner ruling): this test asserted a 400
+    and an "another conversation" message until that date. The refusal is gone
+    because quoting a line out of two other people's thread in order to step in
+    and ask about it is the use case, and it was the one thing the refusal made
+    impossible.
+    """
+    quoted = hctx.client.post(
+        "/api/chat",
+        json={"to": hctx.agent.member_id, "body": "reply-to-target"},
+        headers=_auth(hctx.owner_token),
+    )
+    assert quoted.status_code == 200, quoted.text
+    quoted_id = quoted.json()["id"]
+    assert quoted.json()["reply_to"] == "", "a plain post carries no link"
+
+    # The commonest shape: answering what the other party sent you — a reply
+    # travelling the opposite way to the message it quotes.
+    reply = hctx.client.post(
+        "/api/chat",
+        json={"to": "owner", "body": "reply-to-answer", "reply_to": quoted_id},
+        headers=_auth(hctx.agent.token),
+    )
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["reply_to"] == quoted_id
+
+    # Read it back off the wire — the POST response is built from the row the
+    # handler just made, so it would look right even if nothing were stored.
+    served = hctx.client.get(
+        f"/api/chat?ids={reply.json()['id']}", headers=_auth(hctx.agent.token)
+    )
+    assert served.status_code == 200, served.text
+    assert served.json()[0]["reply_to"] == quoted_id
+    # …and the QUOTE came with it, built by the server on this read. This is the
+    # half that makes the link usable: without it the browser would have to go
+    # and fetch what the id names, which is the design this replaced.
+    quote = served.json()[0].get("reply_to_chat")
+    assert quote is not None, f"every read must carry the quote: {served.text}"
+    assert quote["id"] == quoted_id
+    assert quote["from"] == "owner"
+    assert quote["content"] == "reply-to-target"
+
+    # A link OUT of this conversation, over the real wire: ACCEPTED, and the
+    # quoted text crosses the boundary with it. A THIRD party's line, so this is
+    # genuinely another conversation — owner↔agent in the other direction would
+    # be the SAME one and would prove nothing.
+    third = hctx.fresh_member()
+    elsewhere = hctx.client.post(
+        "/api/chat",
+        json={"to": third, "body": "another-thread"},
+        headers=_auth(hctx.owner_token),
+    )
+    assert elsewhere.status_code == 200, elsewhere.text
+    sideways = hctx.client.post(
+        "/api/chat",
+        json={
+            "to": "owner",
+            "body": "quoting sideways",
+            "reply_to": elsewhere.json()["id"],
+        },
+        headers=_auth(hctx.agent.token),
+    )
+    assert sideways.status_code == 200, sideways.text
+    assert sideways.json()["reply_to"] == elsewhere.json()["id"]
+    sideways_quote = sideways.json().get("reply_to_chat")
+    assert sideways_quote is not None, (
+        f"a cross-conversation reply must still carry its quote: {sideways.text}"
+    )
+    assert sideways_quote["content"] == "another-thread"
+
+    # An id that names nothing is a 400 on the FIELD, not a 404 on the route.
+    orphan = hctx.client.post(
+        "/api/chat",
+        json={"to": "owner", "body": "orphan", "reply_to": "c-nosuchmessage"},
+        headers=_auth(hctx.agent.token),
+    )
+    assert orphan.status_code == 400, orphan.text
+    assert "c-nosuchmessage" in orphan.text
+
+    # A caller-supplied meta.reply_to is DISCARDED — while the rest of meta,
+    # which really is free-form passthrough, survives.
+    forged = hctx.client.post(
+        "/api/chat",
+        json={
+            "to": "owner",
+            "body": "forged-link",
+            "meta": {"reply_to": quoted_id, "keepme": "yes"},
+        },
+        headers=_auth(hctx.agent.token),
+    )
+    assert forged.status_code == 200, forged.text
+    assert forged.json()["reply_to"] == "", "a meta-supplied link must not stand"
+    assert forged.json()["meta"].get("keepme") == "yes"
+    assert forged.json().get("reply_to_chat") is None, (
+        "no link ⇒ no quote — a forged meta.reply_to must not conjure one either"
+    )
+
+    # A reply whose ORIGINAL CANNOT BE READ: the quote is absent, the link is
+    # not, and the message is served normally. Reached here the way a real
+    # station reaches it — the link was stamped by the server when the target
+    # existed, and the read happens against a target that no longer resolves.
+    # The POST door refuses an unknown id on purpose (asserted above), so this
+    # state cannot be created through it.
+    #
+    # What is checked over the wire here is the ORDINARY, ALWAYS-PRESENT half:
+    # a message that replies to nothing carries no quote key at all.
+    plain = hctx.client.get(
+        f"/api/chat?ids={quoted_id}", headers=_auth(hctx.agent.token)
+    )
+    assert plain.status_code == 200, plain.text
+    assert plain.json()[0]["reply_to"] == ""
+    assert plain.json()[0].get("reply_to_chat") is None, (
+        "a message that answers nothing must carry no quote: " + plain.text
+    )
+    assert "reply_to" not in forged.json()["meta"]
+
+
 def test_chat_recipient_validation_preserves_offline_mailbox(hctx: HCtx) -> None:
     """A valid member remains a durable mailbox while disconnected, but an
     invented recipient is rejected instead of becoming an orphaned chat row."""

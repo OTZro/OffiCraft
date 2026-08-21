@@ -152,4 +152,68 @@ describe("useChat load routing (active vs background)", () => {
       expect(result.current.messages.map((m) => m.id)).toEqual(["c9"]),
     );
   });
+
+  // T-4e95 review r12 — the POST is the send; the refresh after it is not.
+  it("a send whose POST succeeded RESOLVES even when the refresh behind it fails", async () => {
+    // `refetch` calls listChat unguarded, so a blip on the refresh used to
+    // reject send() — and the caller cannot tell that apart from "the message
+    // never left". ChatArea acts on that: it restores the message into the
+    // room's DRAFT, which outlives the page, so the owner returns to a composer
+    // holding a line that is already in the thread and Enter sends it twice.
+    h.listChat.mockResolvedValueOnce([]); // the initial load
+    h.listChat.mockRejectedValueOnce(new Error("network blip")); // the post-send refresh
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      // Must NOT throw. `.rejects` would pass on a resolve-with-error too, so
+      // the assertion is the await itself completing.
+      await result.current.send("已經送出去的話");
+    });
+
+    expect(h.postChat).toHaveBeenCalledTimes(1);
+  });
+
+  // T-4e95 r16 — the hook's own half of the reply link. `send`'s third argument
+  // is the only way a reply target reaches the wire, and dropping it here left
+  // all 2258 tests green: the banner still shows, the send still succeeds, and
+  // the server stores an ordinary message. ChatArea's tests cannot see it —
+  // they mock this very hook.
+  it("passes the reply target through to postChat, and omits it when there is none", async () => {
+    h.listChat.mockResolvedValue([]);
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await result.current.send("回你這句", undefined, "c-1");
+    });
+    expect(h.postChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ to: "b", body: "回你這句", replyTo: "c-1" }),
+    );
+
+    // The other direction: an ordinary message must not carry one.
+    await act(async () => {
+      await result.current.send("普通訊息");
+    });
+    expect(h.postChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ replyTo: undefined }),
+    );
+  });
+
+  // The OTHER half of the same contract, and the one nothing was standing on:
+  // every restore this feature does rests on "a send that really failed
+  // rejects". A reviewer pulled the POST itself inside the try/catch added
+  // above and all 2248 tests stayed green — a message that never left would
+  // then vanish with no restore, no draft and not even a console.warn. This is
+  // the assertion that makes that a red.
+  it("a send whose POST FAILED still rejects — the caller must be able to tell", async () => {
+    h.listChat.mockResolvedValueOnce([]); // the initial load
+    h.postChat.mockRejectedValueOnce(new Error("server said no"));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(1));
+
+    await expect(result.current.send("沒送出去的話")).rejects.toThrow(
+      "server said no",
+    );
+  });
 });
