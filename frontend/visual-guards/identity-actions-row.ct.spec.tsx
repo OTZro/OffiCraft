@@ -13,11 +13,16 @@
 //
 // So the invariant is now width-shaped, and NOTHING it used to catch was
 // dropped:
-//   * wide — all four still share ONE row (the 2026-07-31 ruling, still true
-//     wherever there is room).
+//   * wide — the whole cluster still shares ONE row (the 2026-07-31 ruling,
+//     still true wherever there is room).
 //   * narrow — the wrap is DESIGNED, not incidental: exactly TWO bands, 更改
-//     alone on the first, the WHOLE ladder on the second in owner order, each
+//     alone on the first, the WHOLE cluster on the second in owner order, each
 //     rung sharing the band evenly.
+//   * 🔴 BOTH SHAPES. `online-awake` is four buttons; `stopping` is FIVE (the
+//     panel keeps 更改 there, and BUTTON_SETS.stopping prepends the 喚醒 wedge
+//     rescue to the ladder). Five is the widest the card ever has to hold and it
+//     is the shape T-ed79 created, so measuring only the four-button case left
+//     the worst case unmeasured at 375px.
 //   * both — no button overlaps another (a real rectangle-intersection test,
 //     strictly stronger than the old "停止 starts right of 更改"), no button
 //     escapes the card on ANY edge, no label is clipped inside its own button,
@@ -52,19 +57,33 @@ const VIEWPORTS = [
 // The ladder in the owner's order. 更改 leads because it is the panel's own
 // button and renders before the group.
 const LADDER = ["member-action-stop", "member-action-accelerated-stop", "member-action-force-stop"];
-const ALL = ["mp-change", ...LADDER];
+
+// 🔴 TWO shapes, not one. `online-awake` is FOUR buttons; `stopping` is FIVE —
+// the panel keeps 更改 there (mappers folds presence "stopping" onto status
+// "online") and BUTTON_SETS.stopping prepends the 喚醒 wedge rescue to the
+// ladder. Five is the widest the card ever has to hold and it is the shape the
+// ladder created, so measuring only the four-button case leaves the worst case
+// unmeasured at 375px.
+const CASES = [
+  { status: "online-awake" as const, ids: ["mp-change", ...LADDER] },
+  {
+    status: "stopping" as const,
+    ids: ["mp-change", "member-action-spawn", ...LADDER],
+  },
+];
 
 type Box = { x: number; y: number; width: number; height: number };
 
 const SAME_ROW = 4;
 
-for (const vp of VIEWPORTS) {
-  test(`${vp.name}: 更改 ＋ the 停止 ladder lay out without overlapping or leaving the card`, async ({
+for (const vp of VIEWPORTS) for (const c of CASES) {
+  const ALL = c.ids;
+  test(`${vp.name} / ${c.status}: 更改 ＋ the 停止 ladder lay out without overlapping or leaving the card`, async ({
     mount,
     page,
   }) => {
     await page.setViewportSize({ width: vp.width, height: vp.height });
-    const cmp = await mount(<IdentityActionsRowStory />);
+    const cmp = await mount(<IdentityActionsRowStory status={c.status} />);
 
     const boxes: Record<string, Box> = {};
     for (const id of ALL) {
@@ -147,13 +166,21 @@ for (const vp of VIEWPORTS) {
       // 🔴 The wrap is DESIGNED (owner: 不要在窄螢幕擠成一團). Exactly two bands:
       // 更改 alone, then the whole ladder. Anything else — the ladder split
       // across lines, or a rung sharing 更改's line — is the "crammed" shape.
-      expect(bands, "band 1 = 更改, band 2 = the whole ladder").toEqual([["mp-change"], LADDER]);
+      // 更改 leads a band of its own; nothing after it may share that band, and
+      // the ladder stays contiguous and in owner order wherever it lands.
+      expect(bands[0], "band 1 = 更改 alone").toEqual(["mp-change"]);
+      expect(
+        bands.slice(1).flat(),
+        "the rest of the cluster keeps its order below 更改",
+      ).toEqual(ALL.slice(1));
+      expect(bands.length, "at most two bands — 不要擠成一團").toBeLessThanOrEqual(2);
 
       // The ladder band spans the card rather than huddling in the right margin
       // (the pre-≤720px shape kept every "same row / inside the card" assertion
       // TRUE while doing exactly that, which is why SPREAD has to be measured).
-      const first = boxes[LADDER[0]];
-      const last = boxes[LADDER[LADDER.length - 1]];
+      const rest = ALL.slice(1);
+      const first = boxes[rest[0]];
+      const last = boxes[rest[rest.length - 1]];
       expect(
         last.x + last.width - first.x,
         "the ladder spans the card, not the right margin",
@@ -162,7 +189,7 @@ for (const vp of VIEWPORTS) {
         card.width * 0.7,
       );
       // Evenly, not one fat rung beside a sliver.
-      const widths = LADDER.map((id) => boxes[id].width);
+      const widths = rest.map((id) => boxes[id].width);
       expect(
         Math.max(...widths) - Math.min(...widths),
         "the rungs share the band",

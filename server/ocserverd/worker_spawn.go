@@ -1326,9 +1326,12 @@ func (s *apiServer) workerHasStateToFlush(w OutsourceWorker) bool {
 // fresh refocus epoch (stale wind-down latches cleared — a new epoch never
 // inherits an old latch) and fan the SOP 預告, exactly as workerRestartSelf and
 // the context-high auto-handover do. NO kill goes out here; the 收口 belongs to
-// the worker's own report_stopped or autoHandoverWorker's grace deadline, and by
-// then the caller's new pin / model is already on the row, so the respawn picks
-// it up. A persist fault falls back to the immediate path rather than dropping
+// the worker's own report_stopped, the confirmed-offline fallback, or the owner
+// escalating to 加速停止 — NOT to a grace deadline, because these ops carry no
+// clock (see the 🔴 note above: recycleGraceFor answers "not clocked" for
+// relocate and runtime/model, so autoHandoverWorker's grace-timeout arm never
+// fires for them). By then the caller's new pin / model is already on the row,
+// so the respawn picks it up. A persist fault falls back to the immediate path rather than dropping
 // the owner's verb on the floor. Callers hold s.outsourceMu.
 func (s *apiServer) openOwnerOpHandover(w OutsourceWorker, op string) {
 	w.RefocusSince = nowSecs()
@@ -1712,8 +1715,10 @@ func (s *apiServer) clearWorkerRefocus(id, reason string) {
 // 下線程序 handover wake — the member machinery verbatim, zero client change)
 // and RETURN — the kill is owned by the 收口 drivers (the worker's own
 // report_stopped, or — on the ops that ARE on a clock — the recycleGraceFor
-// deadline in autoHandoverWorker's in-flight arm; 重新聚焦 has no such deadline,
-// so on that arm report_stopped is the ONLY 收口 driver, T-fe5e). An OFFLINE worker skips the window
+// deadline in autoHandoverWorker's in-flight arm; 重新聚焦 opens no such deadline
+// itself (T-fe5e), so on that arm the drivers are report_stopped, the
+// confirmed-offline fallback, and the owner escalating to 加速停止, which
+// re-stamps the anchor and IS a clock). An OFFLINE worker skips the window
 // entirely and takes the legacy immediate kill+respawn: no session can hear the
 // 預告, so a grace would only waste the full deadline (D6). Callers hold
 // s.outsourceMu and have already persisted the refocus stamp.

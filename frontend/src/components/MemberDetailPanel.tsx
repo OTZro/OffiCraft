@@ -131,6 +131,22 @@ export function MemberDetailPanel({
   // IMMEDIATE kill, so it opens this confirm before firing the force-stop endpoint.
   const [forceStopConfirm, setForceStopConfirm] = useState(false);
   const [forceStopBusy, setForceStopBusy] = useState(false);
+  // In-flight guard for the two rungs that fire on a single click, the worker
+  // panel's guard verbatim (WorkerDetailPanel's stopBusy). Without it a double
+  // click on 停止 sends deactivateMember twice, and the two rungs are a single
+  // escalation on a single row — one flag, so two of them can never look live
+  // at once. Force-stop keeps its own flag because it fires from the confirm
+  // dialog, not from the row.
+  const [stopBusy, setStopBusy] = useState(false);
+  async function runStopRung(fire?: () => void | Promise<void>) {
+    if (!fire || stopBusy) return;
+    setStopBusy(true);
+    try {
+      await fire();
+    } finally {
+      setStopBusy(false);
+    }
+  }
   async function confirmForceStop() {
     if (!onForceStop) return;
     setForceStopBusy(true);
@@ -870,13 +886,15 @@ export function MemberDetailPanel({
             // but this local bridge keeps it honestly unavailable until the
             // activate result or server lifecycle settles.
             onSpawn={wakePendingActive || onlineMachines.length === 0 ? undefined : openSettings}
-            onCancel={onDeactivate}
-            onStop={onDeactivate}
+            onCancel={() => void runStopRung(onDeactivate)}
+            onStop={() => void runStopRung(onDeactivate)}
             // The middle rung. No confirm: 加速停止 gives the member a deadline
             // it is TOLD about and can still beat, so a second click costs
             // nothing irreversible — unlike force-stop below.
             onAcceleratedStop={
-              onAcceleratedStop ? () => void onAcceleratedStop() : undefined
+              onAcceleratedStop
+                ? () => void runStopRung(onAcceleratedStop)
+                : undefined
             }
             reasons={
               onlineMachines.length === 0

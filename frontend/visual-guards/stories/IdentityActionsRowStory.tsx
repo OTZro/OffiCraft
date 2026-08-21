@@ -14,13 +14,24 @@
 // Uses the REAL MemberActionButtons for the stop half, so the group's own
 // `.member-actions` flex/gap participates exactly as it does in the panel; the
 // 更改 button is the panel's own markup, verbatim.
+//
+// 🔴 The row is NOT one shape. `stopping` renders FIVE buttons on the member
+// panel — 更改 (the panel keeps it: mappers folds presence "stopping" onto
+// status "online") plus BUTTON_SETS.stopping, which leads with the 喚醒 wedge
+// rescue ahead of the three rungs. That is the WIDEST case the card ever has to
+// hold, and it is the one the ladder created, so the story is parameterised
+// rather than pinned to the four-button `online-awake` shape.
 import { I18nProvider } from "../../src/i18n";
 import { MemberActionButtons } from "../../src/components/MemberActionButtons";
 import "../../src/styles/theme.css";
 import "../../src/components/office.css";
 import "../../src/components/member-detail.css";
 
-export function IdentityActionsRowStory() {
+export function IdentityActionsRowStory({
+  status = "online-awake",
+}: {
+  status?: "online-awake" | "stopping";
+}) {
   return (
     <I18nProvider>
       {/* The real ancestor chain: the identity card is a flex row holding the
@@ -44,7 +55,17 @@ export function IdentityActionsRowStory() {
               >
                 更改
               </button>
-              <MemberActionButtons status="online-awake" onStop={() => {}} />
+              {/* Every rung gets a handler so none is disabled for a reason
+                  the panel would not have — a disabled button still lays out,
+                  but its title tooltip is the only thing that differs and the
+                  measurements must not depend on it. */}
+              <MemberActionButtons
+                status={status}
+                onSpawn={() => {}}
+                onStop={() => {}}
+                onAcceleratedStop={() => {}}
+                onForceStop={() => {}}
+              />
             </div>
           </div>
         </div>

@@ -557,9 +557,25 @@ func (s *apiServer) HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcc
 		internalError(w, err)
 		return
 	}
-	// The FINAL sentence needs no frame of its own: the worker projection composes
-	// the notice from refocus_op on every write, so this publish carries it — the
-	// same property the member promotion relies on.
+	// 🔴 THE FINAL SENTENCE NEEDS ITS OWN FRAME, and this call is the only thing
+	// that fans one. publishOutsourceWorker below is the OWNER cockpit's patch —
+	// audience owner-only, payload {id, codename, status} — so it reaches the
+	// worker's stream never and carries offboard_notice never. There is no
+	// worker-side putMember re-fanning offboardDeltaPayload on every write, which
+	// is the property the member promotion actually relies on; the worker's only
+	// fan-out of the 預告 is right here. Without it this press starts the
+	// autoHandoverWorker clock ("stop-accelerated-deadline") while the last thing
+	// the worker heard was the 停止 SOFT sentence — a clock with no sentence,
+	// which is the exact harm this ticket exists to remove.
+	//
+	// Same call the 停止 opener makes, for the same reasons: it re-reads liveness
+	// itself, so a disconnect racing the online gate above lands on the collect
+	// that matches the persisted intent instead of a respawn.
+	s.openWorkerHandoverGrace(*worker, requestTrigger(r))
+	// Re-read so the response/delta carry whatever the grace open banked.
+	if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
+		worker = fresh
+	}
 	s.publishOutsourceWorker(*worker, requestTrigger(r))
 	s.outsourceMu.Unlock()
 

@@ -744,6 +744,10 @@ export const en: Dict = {
     machineMovingToLabel: "→ Moving to",
     pendingChangeLabel: "→ Changing to",
     windDownForChangeLabel: "Winding down to apply your change",
+    // 加速停止 / the second context threshold (T-ed79): the ONLY two causes that
+    // put the member on a clock. Saying "winding down" without the time would
+    // leave the owner blind to the deadline he just started.
+    windDownDeadlineLabel: "Winding down on a deadline",
     windDownByLabel: "by",
     windDownEffectSuffix: "at the latest",
     standby: "On standby",
@@ -1527,7 +1531,7 @@ export const en: Dict = {
       "At this level the offboard sequence is sent, and the agent is asked to close out and hand over under its own power (must be below the final call)",
     handover: "Claude final call",
     handoverSub:
-      "At this level the final notice goes out and the handover fires; 120 seconds later the session is collected (40–90%)",
+      "At this level the final notice goes out and the handover fires; the session is collected once stop.accelerated_grace_secs elapses (40–90%)",
     codexNotice: "Codex first notice",
     codexNoticeSub:
       "The compaction round at which the offboard sequence is sent (must be below the final round)",
@@ -1537,6 +1541,9 @@ export const en: Dict = {
     monitoringRefresh: "Monitoring refresh interval",
     monitoringRefreshSub: "Minimum seconds between monitoring refreshes (1–60)",
     seconds: "seconds",
+    acceleratedGrace: "Accelerated stop deadline",
+    acceleratedGraceSub:
+      "How long an agent has once 加速停止 is pressed — and the same clock the second context threshold runs. The agent is told this exact instant (10–3600)",
     rounds: "rounds",
     // T-ae38 (split again by T-30f1): one cap became many. Deleting from these
     // documents costs wildly different amounts — a role definition is a

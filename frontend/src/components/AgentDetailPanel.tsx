@@ -389,14 +389,24 @@ export function AgentDetailPanel({
   // T-7f28 was written to remove. The cause decides WHETHER to say it; the
   // deadline only decides WHICH of the two sentences, and null is the ordinary
   // answer today, not a missing value.
+  //
+  // 🔴 …and the CLOCKED causes need a line of their own (T-ed79). accelerated_stop
+  // and context_high are the two that put the member on a deadline, and neither
+  // is applying a change of the owner's, so neither belongs in the sentence
+  // above. Without an arm here they fell through to 「上次重新聚焦 <time>」 — a
+  // PAST-TENSE history line printed while a deadline the owner started this
+  // second is counting down, and the deadline itself appeared nowhere in the UI
+  // at all. The owner pressing 加速停止 has to be able to see the clock he armed.
+  const deadlineText =
+    vm.refocusDeadline != null
+      ? new Date(vm.refocusDeadline * 1000).toLocaleTimeString()
+      : null;
   const windDownNote =
     vm.refocusOp === "relocate" || vm.refocusOp === "runtime/model"
-      ? msg.agentWindDownForChange(
-          vm.refocusDeadline != null
-            ? new Date(vm.refocusDeadline * 1000).toLocaleTimeString()
-            : null,
-        )
-      : null;
+      ? msg.agentWindDownForChange(deadlineText)
+      : vm.refocusOp === "accelerated_stop" || vm.refocusOp === "context_high"
+        ? msg.agentWindDownOnDeadline(deadlineText)
+        : null;
 
   // ── 最近操作 (last warden receipt) ─────────────────────────────────────────
   const hasLastOp = vm.lastOp !== "" && vm.lastOpAt != null;

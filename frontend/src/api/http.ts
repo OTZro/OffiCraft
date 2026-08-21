@@ -552,9 +552,10 @@ export const httpApi: Api = {
     // POST /api/members/{id}/force-stop -> MemberDTO. Escalates a *stopping* member
     // to an IMMEDIATE kill: the server dispatches the robust STOP straight to the
     // warden (the warden SIGKILLs). It is NOT a shortcut past a countdown — the
-    // offboard arm runs no clock, so apart from the agent's own report_stopped this
-    // is the only thing that ever collects it. Takes no body. Caller refetches;
-    // presence surfaces stopped.
+    // server arms none on this arm. Three things end a soft offboard and this is
+    // the last rung: the agent's own report_stopped, the deadline the owner opens
+    // with 加速停止 (acceleratedStopMember), and this. Takes no body. Caller
+    // refetches; presence surfaces stopped.
     await client.POST("/api/members/{member_id}/force-stop", {
       params: { path: { member_id: id } },
     });

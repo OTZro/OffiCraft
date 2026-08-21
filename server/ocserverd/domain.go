@@ -114,8 +114,9 @@ const StoppingTimeoutSecs = 120.0
 // The soft notice says "work the sequence, then call restart_self yourself" and
 // carries no countdown, and since 2026-08-19 NEITHER soft arm has one running
 // behind it: 下線 (rc-27d1710174dd 「不要兜底：只有你按強制下線才收它」) and
-// 重新聚焦 (rc-c540367065ad 「連時鐘一起拿掉」) are both collected by the agent's
-// own stopped report or by the owner pressing force-stop, and by nothing else.
+// 重新聚焦 (rc-c540367065ad 「連時鐘一起拿掉」) are collected by the agent's own
+// stopped report, or by the owner pressing 加速停止 (T-ed79 — that clock is his,
+// and it only exists once he presses) or 強制停止, and by nothing else.
 //
 // 🔴 So this is NOT a deadline any more, and nothing may re-read it as one.
 // What still uses it is clearStaleStoppingOnOnline — but as a SILENCE window,

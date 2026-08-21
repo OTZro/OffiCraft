@@ -28,9 +28,10 @@ import (
 // write them; 下線 was the ONE offboard path that never showed the agent the
 // checklist. The collection is now the server's, on the session's own
 // report_stopped, which collects it immediately. There is no timer behind that:
-// the owner ruled the only other way out is his force-stop button, so a session
-// that never reports simply stays up, visible to him as 停止中, until he presses
-// it (the warden killpg ladder is unchanged underneath).
+// the owner ruled the other ways out are HIS buttons — 加速停止, which arms a
+// deadline the agent is told about (T-ed79), and 強制停止 — so a session that
+// never reports simply stays up, visible to him as 停止中, until he presses one
+// of them (the warden killpg ladder is unchanged underneath).
 //
 // RECYCLE (desired_state=online ∧ refocus_since>0 — handover: a NEW me respawns):
 // ocagent does NOT report phases and does NOT self-kill. It WAKES the interactive

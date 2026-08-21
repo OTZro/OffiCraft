@@ -75,6 +75,7 @@ export interface Messages {
    * which since T-ed79 is every cause except the second context threshold. The
    * no-clock sentence must not contain any time at all. */
   agentWindDownForChange: (by: string | null) => string;
+  agentWindDownOnDeadline: (by: string | null) => string;
   // ── RESUME SUMMARY · the COLLAPSE marker (T-8b0d follow-up) ──
   // 🔴 There is deliberately NO composer for the TRUNCATION marker beside it.
   // A shared composer is exactly how the two would drift into sharing a word,
@@ -260,6 +261,18 @@ export function makeMessages(t: Dict, language: Lang): Messages {
       by === null
         ? mp.windDownForChangeLabel
         : `${mp.windDownForChangeLabel}${sp}·${sp}${mp.windDownByLabel} ${by} ${mp.windDownEffectSuffix}`,
+
+    // 「正在收尾，已給死線 · 最晚 14:32 生效」 — the two CLOCKED causes
+    // (accelerated_stop, context_high). Same 最晚 wording as above and for the
+    // same reason: the collect fires the instant the agent reports stopped, so
+    // the time is a ceiling. 🔴 Unlike the arm above, `by === null` here is NOT
+    // an ordinary answer — a clocked cause always carries a deadline — so the
+    // fallback exists only so a stale/absent field degrades to a true sentence
+    // rather than a placeholder time.
+    agentWindDownOnDeadline: (by) =>
+      by === null
+        ? mp.windDownDeadlineLabel
+        : `${mp.windDownDeadlineLabel}${sp}·${sp}${mp.windDownByLabel} ${by} ${mp.windDownEffectSuffix}`,
 
     // MARK shape, not sentence shape: one word plus the count, and nothing
     // else. What "folded" MEANS is stated once per chat block

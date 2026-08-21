@@ -222,14 +222,11 @@ describe("AgentDetailPanel · wind-down note", () => {
     expect(note).not.toContain("上次重新聚焦");
   });
 
-  // The other arm of the same composer, and it is STILL not server-reachable.
-  // The gate above admits only refocusOp "relocate" / "runtime/model", and
-  // winddownKindFor makes both of those 停止 ⇒ deadline 0 ⇒ mapper null. The two
-  // clocked causes are context_high and the owner-pressed accelerated_stop
-  // (T-ed79), and NEITHER of them passes that gate — so no live combination
-  // produces a non-null deadline here. This stays a unit test of the render arm,
-  // kept so the ceiling wording does not rot away unnoticed before some future
-  // cause is both clocked and admitted by the gate.
+  // The other arm of the same composer, and on THIS gate it is still not
+  // server-reachable: winddownKindFor makes relocate / runtime-model 停止 ⇒
+  // deadline 0 ⇒ mapper null. Kept as a unit test of the render arm so the
+  // ceiling wording does not rot. The two CLOCKED causes have their own
+  // sentence now — see below.
   it("still quotes the ceiling when the wind-down IS on a clock", async () => {
     const deadline = 1_800_000_000;
     const { getByTestId } = await renderPanel({
@@ -244,15 +241,42 @@ describe("AgentDetailPanel · wind-down note", () => {
     expect(note).toContain("最晚");
   });
 
-  it("keeps the plain history line for a handover the owner did not cause", async () => {
-    // A context-pressure handover is not applying anything of the owner's, so
-    // announcing "applying your change" there would be a lie.
+  // 🔴 The two CLOCKED causes get their OWN sentence, and it quotes the clock.
+  // They are not applying a change of the owner's, so 「正在收尾以套用你的改動」
+  // would be a lie — but falling through to 「上次重新聚焦 <time>」 was worse: a
+  // PAST-TENSE history line printed while a deadline is counting down, with the
+  // deadline itself shown nowhere in the UI. The owner who just pressed 加速停止
+  // has to be able to see the clock he armed (T-ed79).
+  it.each(["accelerated_stop", "context_high"] as const)(
+    "announces the deadline while %s is winding down",
+    async (op) => {
+      const deadline = 1_800_000_120;
+      const { getByTestId, queryByTestId } = await renderPanel({
+        refocusSince: 1_800_000_000,
+        refocusOp: op,
+        refocusDeadline: deadline,
+      });
+      const note = getByTestId("mp-wind-down-note").textContent ?? "";
+      expect(note).toContain("正在收尾，已給死線");
+      expect(note).toContain(new Date(deadline * 1000).toLocaleTimeString());
+      expect(note).toContain("最晚");
+      // Never "applying your change" — nothing of the owner's is being applied.
+      expect(note).not.toContain("套用你的改動");
+      // …and the history line it replaces is gone.
+      expect(queryByTestId("mp-refocus-since")).toBeNull();
+      expect(note).not.toContain("上次重新聚焦");
+    },
+  );
+
+  it("keeps the plain history line for an unclocked handover the owner did not cause", async () => {
+    // A bare 重新聚焦 applies nothing of the owner's AND runs no clock, so there
+    // is neither a change to announce nor a time to quote.
     const { queryByTestId } = await renderPanel({
       refocusSince: 1_800_000_000,
-      refocusOp: "context_high",
-      refocusDeadline: 1_800_000_120,
+      refocusOp: "refocus",
     });
     expect(queryByTestId("mp-wind-down-note")).toBeNull();
+    expect(queryByTestId("mp-refocus-since")).not.toBeNull();
   });
 
   it("says nothing when no wind-down is in flight", async () => {

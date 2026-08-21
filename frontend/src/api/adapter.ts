@@ -1497,10 +1497,12 @@ export interface Api {
   /**
    * Force-stop (immediate kill): POST /api/members/{id}/force-stop → the server
    * dispatches the robust STOP straight to the warden NOW (the warden SIGKILLs the
-   * session). Not a shortcut past a countdown — the offboard arm runs none, so
-   * apart from the agent's own report_stopped this is the only collection. Backs the cockpit's
-   * "Force stop" escalation, surfaced once a member is already *stopping*. Does
-   * NOT flip online — the caller refetches; presence surfaces stopped.
+   * session). Not a shortcut past a countdown — the server arms none on this arm.
+   * It is the LAST of the three things that end a soft offboard: the agent's own
+   * report_stopped, the deadline the owner opens with acceleratedStopMember, and
+   * this. Backs the cockpit's "Force stop" escalation, surfaced once a member is
+   * already *stopping*. Does NOT flip online — the caller refetches; presence
+   * surfaces stopped.
    */
   forceStopMember(id: string): Promise<void>;
   /**

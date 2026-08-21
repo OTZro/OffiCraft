@@ -212,6 +212,20 @@ func TestWorkerStop_AcceleratedStopEscalatesTheStopEpochAndIsHonoured(t *testing
 func workerOffboardNoticeOverSSE(t *testing.T, api *apiServer, workerID string,
 	press func()) string {
 	t.Helper()
+	notice, frames := workerOffboardNoticeOverSSEOrEmpty(t, api, workerID, press)
+	if notice == "" {
+		t.Fatalf("the worker's own session never received an offboard_notice "+
+			"(frames=%d)", frames)
+	}
+	return notice
+}
+
+// workerOffboardNoticeOverSSEOrEmpty is the same read, but hands the caller the
+// silence instead of failing on it — so a test whose subject IS the missing
+// frame can say what was missing rather than reporting a helper timeout.
+func workerOffboardNoticeOverSSEOrEmpty(t *testing.T, api *apiServer, workerID string,
+	press func()) (string, int) {
+	t.Helper()
 	w := newFailAfterWrites(1 << 30)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -229,8 +243,7 @@ func workerOffboardNoticeOverSSE(t *testing.T, api *apiServer, workerID string,
 	pressed := false
 	for notice == "" {
 		if time.Now().After(deadline) {
-			t.Fatalf("the worker's own session never received an offboard_notice "+
-				"(frames=%d)", len(w.written()))
+			break
 		}
 		select {
 		case <-done:
@@ -259,7 +272,7 @@ func workerOffboardNoticeOverSSE(t *testing.T, api *apiServer, workerID string,
 		t.Fatal("the SSE handler never returned after cancellation")
 	}
 	t.Logf("frame as received by the worker session:\n%s", notice)
-	return notice
+	return notice, len(w.written())
 }
 
 // offboardNoticeInFrame pulls offboard_notice out of one SSE wire frame, or ""
@@ -346,5 +359,96 @@ func TestWorkerStop_AdHocTaskIsNotAskedToWriteBackToAManual(t *testing.T) {
 			t.Errorf("an ad-hoc worker was told to write back to a 任務手冊 it does "+
 				"not have (%q appears in the 預告):\n%s", unwanted, notice)
 		}
+	}
+}
+
+// ── the 加速停止 deadline has to reach the worker, not just the row ──────────
+
+// deadlineClause is the literal offboardNotice appends for a final call. The
+// tests below match on the CLAUSE, not on a formatted time, because the point
+// is whether the sentence declares a deadline at all.
+const deadlineClause = "Your deadline is "
+
+// 🔴 THE HARM THIS WHOLE TICKET EXISTS TO PREVENT, on the outsource half.
+//
+// 加速停止 puts the worker on a clock — autoHandoverWorker collects it at
+// stopping_since + grace ("stop-accelerated-deadline"). Every other assertion
+// about that clock reads the ROW or the payload map the publisher builds, and
+// all of them are green while the worker's own session receives nothing: the
+// handler used to publish only on the owner-only `outsource_worker` topic, whose
+// payload is {id, codename, status}. The last sentence the worker had heard was
+// the 停止 SOFT notice — "no deadline" — while the clock was already running.
+//
+// So this reads the bytes the REAL GET /api/events handler wrote to the worker's
+// OWN connection. A guard that verifies the composing functions cannot see this:
+// what broke was DELIVERY, not the judgement.
+func TestWorkerAcceleratedStop_TellsTheWorkerAboutTheClockItStarted(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveOnlineWorker(t, api)
+
+	// Open the wind-down first, on the fixture's connection: the rung under test
+	// is the ESCALATION, and the SOFT notice that opening fans is not what this
+	// test reads.
+	postWorker(t, api, workerID, "stop", nil,
+		api.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
+
+	notice, frames := workerOffboardNoticeOverSSEOrEmpty(t, api, workerID, func() {
+		rec := postWorker(t, api, workerID, "accelerated-stop", nil,
+			api.HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost)
+		if rec.Code != http.StatusOK {
+			t.Errorf("加速停止: %d %s", rec.Code, rec.Body.String())
+		}
+	})
+	if notice == "" {
+		t.Fatalf("加速停止 started a clock the worker was never told about: its own "+
+			"session received %d frame(s) and NOT ONE offboard_notice. The last "+
+			"thing this worker heard is the 停止 SOFT sentence, which says there is "+
+			"no deadline — and autoHandoverWorker will collect it at "+
+			"stopping_since + grace anyway. That is a clock with no sentence: the "+
+			"worker is cut off mid-hand-off with no warning at all.", frames)
+	}
+	if !strings.Contains(notice, deadlineClause) {
+		t.Fatalf("the worker DID receive a 預告, but it is still the SOFT one — no "+
+			"deadline clause, while the 加速停止 clock runs. The sentence and the "+
+			"clock have to agree on the wire, not merely in winddownKindFor:\n%s",
+			notice)
+	}
+	w, err := api.dal.GetOutsourceWorker(workerID)
+	if err != nil || w == nil {
+		t.Fatalf("read back: %v", err)
+	}
+	// The clause has to quote the deadline THIS press anchored, or the worker is
+	// working to a time nothing counts.
+	grace, clocked := recycleGraceFor(w.RefocusOp, api.reconcileConfigLive())
+	if !clocked {
+		t.Fatal("加速停止 must put the stop epoch on a clock")
+	}
+	want := time.Unix(int64(w.StoppingSince+grace), 0).UTC().Format(time.RFC3339)
+	if !strings.Contains(notice, deadlineClause+want+".") {
+		t.Fatalf("the 預告 quotes a deadline that is not the one the collect uses "+
+			"(want %q, the anchor this press re-stamped plus the grace):\n%s",
+			want, notice)
+	}
+}
+
+// …and the OTHER half, which is the one a careless fix breaks: a plain 停止 runs
+// NO clock (owner rc-27d1710174dd), so its sentence must still quote no time.
+// Making 加速停止 speak by fanning a final notice from every outsource write
+// would grow a deadline on this arm too — a countdown in the agent's head that
+// nothing is counting, the same bug seen from the other side.
+func TestWorkerStop_SentenceOnTheWireQuotesNoDeadline(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveOnlineWorker(t, api)
+
+	notice := workerOffboardNoticeOverSSE(t, api, workerID, func() {
+		postWorker(t, api, workerID, "stop", nil,
+			api.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
+	})
+	if strings.Contains(notice, deadlineClause) {
+		t.Fatalf("a plain 停止 is collected by the worker's own report_stopped or by "+
+			"強制停止 — nothing counts a clock on this arm, so quoting a deadline "+
+			"promises what nobody keeps:\n%s", notice)
 	}
 }

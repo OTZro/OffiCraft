@@ -432,10 +432,8 @@ export function OfficePage() {
           await api.deactivateMember(detail.id);
           await refetch();
         }}
-        // Force-stop (immediate kill): the offboard arm runs no clock, so this is
-        // the only server-side collection there is — the robust STOP goes to the
-        // warden now. Refetch
-        // and let server-driven presence surface stopped.
+        // Force-stop (immediate kill): the LAST rung — the robust STOP goes to
+        // the warden now. Refetch and let server-driven presence surface stopped.
         // 加速停止 — the MIDDLE rung of 停止 → 加速停止 → 強制停止. Puts the
         // wind-down that is already open on the server's clock and tells the
         // member; it is NOT a kill, so the member can still finish early.

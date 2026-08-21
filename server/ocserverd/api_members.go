@@ -104,9 +104,10 @@ func (s *apiServer) offboardDeltaPayload(m Member) map[string]any {
 //     model/runtime, restart_self, and the FIRST context threshold. It says
 //     work the sequence, then call restart_self yourself; no countdown clause,
 //     because on these arms there is no clock AT ALL — not now, and not later.
-//   - FINAL (加速停止) — the SECOND context threshold (context_high) alone: the
-//     collection is already under way and the recycle clock is running, so the
-//     sentence has to say so.
+//   - FINAL (加速停止) — the two 加速停止 causes, and only those: the SECOND
+//     context threshold (context_high) and the owner's own press
+//     (accelerated_stop). The collection is already under way and the recycle
+//     clock is running, so the sentence has to say so.
 //
 // 🔴 The membership is decided by winddownKindFor, not here and not in
 // recycleGraceFor. Both of those used to carry their own copy of the list, and
@@ -1084,8 +1085,8 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 	if cancellingWake {
 		// The same immediate robust STOP force-stop uses. NOT widened to the
 		// online case: a live member gets the no-countdown soft window instead,
-		// and it is collected only by its own report_stopped or the owner's
-		// force-stop — never from here.
+		// and it is collected by its own report_stopped or by the owner pressing
+		// 加速停止 / 強制停止 — never from here.
 		s.dispatchRobustStopNow(m.ID)
 	}
 	// Event-driven reconcile: move the member into `stopping` immediately rather
@@ -1102,9 +1103,11 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 // to the member's warden, bypassing the ~30s cadence
 // (handlers.handle_force_stop_member).
 //
-// There is no grace clock here to bypass: the 下線 arm runs none, so apart from
-// the agent's own report_stopped this endpoint is the ONLY thing that ever
-// collects the member (owner ruling rc-27d1710174dd). See the endpoint's
+// There is no grace clock here to bypass: the SERVER arms none on the 下線 arm
+// (owner ruling rc-27d1710174dd). Three things end a soft offboard, and this is
+// the last of them: the agent's own report_stopped, the deadline the owner opens
+// by pressing 加速停止 (that clock is HIS, armed only by the press, which is why
+// it does not reopen the ruling), and this endpoint. See the endpoint's
 // description in spec/openapi.json, which says the same at length.
 func (s *apiServer) HandleForceStopMemberApiMembersMemberIdForceStopPost(w http.ResponseWriter, r *http.Request, memberId string) {
 	m, err := s.resolveMember(memberId)
