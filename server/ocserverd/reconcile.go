@@ -295,6 +295,51 @@ func decisionNone(obs memberObservation, st reconcileState, reason string) recon
 
 // ── the pure decision function (machine.py decide) ───────────────────────────
 
+// ── the at-least-once robust STOP judgment (T-ed79, shared) ──────────────────
+//
+// ONE armed out-of-band robust STOP, three possible answers. The judgment behind
+// them — what arms it, how long a warden gets before the frame is presumed lost,
+// and what counts as "the session we killed is still running" — is the SAME for
+// a roster member and for an outsource worker, so BOTH producers read this one
+// function rather than each carrying a private copy of the rule. That is the
+// whole point of the ticket: a second parallel implementation on the outsource
+// side would be exactly the thing this change exists to delete.
+//
+// Producers:
+//   - member: dispatchRobustStopNow arms reconcileState.RobustStopPendingAt, the
+//     cadence judges it at the top of reconcileDecide (obs.Online is its `alive`).
+//   - worker: stopWorkerSessionOrPark arms workerStopLanded, the outsource tick
+//     judges it in retryUnlandedWorkerStop.
+type robustStopStep int
+
+const (
+	// robustStopDone — the killed session can no longer be shown to be running.
+	// Disarm: the marker must never outlive the session it was dispatched for.
+	robustStopDone robustStopStep = iota
+	// robustStopWait — still running, inside the retry window. A warden is
+	// entitled to its kill ladder; re-pushing here is frame spam, not safety.
+	robustStopWait
+	// robustStopResend — still running past the retry window. The one thing that
+	// can be true is that the kill never took: push it again.
+	robustStopResend
+)
+
+// robustStopRetryStep answers for one armed dispatch. `alive` is the caller's
+// evidence that the session THIS STOP was aimed at is still running — the member
+// producer reads obs.Online; the worker producer narrows that to "online AND
+// still claiming the machine the kill was addressed to", because a respawn puts
+// the same worker id back online on a session this STOP never addressed.
+func robustStopRetryStep(dispatchedAt float64, alive bool, stopRetry, now float64) robustStopStep {
+	switch {
+	case dispatchedAt <= 0.0 || !alive:
+		return robustStopDone
+	case now-dispatchedAt >= stopRetry:
+		return robustStopResend
+	default:
+		return robustStopWait
+	}
+}
+
 // reconcileDecide decides the single command for one member. Pure: a function
 // of (observation, state, config, now) — the dispatch IO lives in reconcileOne.
 func reconcileDecide(
@@ -318,10 +363,10 @@ func reconcileDecide(
 	// (the warden killed the session) and the guarantee that the marker can
 	// never outlive the session it was dispatched for.
 	if st.RobustStopPendingAt > 0.0 {
-		switch {
-		case !obs.Online:
+		switch robustStopRetryStep(st.RobustStopPendingAt, obs.Online, cfg.StopRetry, now) {
+		case robustStopDone:
 			st.RobustStopPendingAt = 0.0
-		case now-st.RobustStopPendingAt >= cfg.StopRetry:
+		case robustStopResend:
 			st.RobustStopPendingAt = now
 			st.Phase = reconcilePhaseStopping
 			st.LastCommand = reconcileCmdStop
@@ -336,7 +381,7 @@ func reconcileDecide(
 				// "" falls back to wardenTargetOf in reconcileOne.
 				DispatchWarden: obs.RunningMachine,
 			}
-		default:
+		default: // robustStopWait
 			st.Phase = reconcilePhaseStopping
 			return decisionNone(obs, st,
 				"robust stop dispatched out-of-band — awaiting warden kill "+

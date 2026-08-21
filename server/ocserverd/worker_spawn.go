@@ -661,6 +661,14 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 		// path's to clear, not the stale parked stop's.
 		delete(s.workerStopPending, w.ID)
 	}
+	if s.workerStopLanded[w.ID].Target == warden {
+		// Same rule, same reason, for the kill that DID go out (T-ed79 #6): the
+		// session about to claim this machine is the one this START is creating,
+		// so presence there can no longer be read as "the old kill failed".
+		// A START toward a DIFFERENT machine leaves the arm standing — that is
+		// the 改機器 shape, where the old box still owes us a dead session.
+		delete(s.workerStopLanded, w.ID)
+	}
 	// 🔴 A LANDED START BEGINS A NEW SESSION — drop the previous session's
 	// boot_ts anchor here, at the dispatch, exactly like the member producer does
 	// (reconcile.go, right after its own accepted enqueue). T-4235: the anchor is
@@ -794,7 +802,7 @@ func (s *apiServer) reconcileWorkerLiveness(w OutsourceWorker, now float64) {
 			return
 		}
 		s.workerReconcileStates[w.ID] = decision.State
-		s.stopWorkerSessionOrPark(target, w.ID)
+		s.stopWorkerSessionOrPark(target, w.ID, now)
 		// This target kept a ghost the clobber-guard refused to overwrite — bench
 		// it for this worker so no respawn lands on it while the reap is still in
 		// flight. STALE-COMMENT FIX (T-98f4): this used to claim the respawn
@@ -976,33 +984,95 @@ func (s *apiServer) enqueueWorkerStop(target, workerID string) bool {
 	return true
 }
 
-// stopWorkerSessionOrPark fires the worker_stop toward target and, when the
-// fail-closed gate refuses it (target unreachable), PARKS it in
-// workerStopPending so the scheduler tick re-fires it once the target is back —
-// a live-worker kill is never silently lost (owner ruling: 殘活 session 零容忍).
+// stopWorkerSessionOrPark fires the worker_stop toward target and covers BOTH
+// ways that kill can fail to end the session — owner ruling: 殘活 session 零容忍.
+//
+//   - the gate REFUSES it (target unreachable): parked in workerStopPending, and
+//     the scheduler tick re-fires it once the target is back;
+//   - the gate ACCEPTS it and the session outlives it anyway: armed in
+//     workerStopLanded, and the tick re-pushes it once the session is still
+//     there past stop_retry (T-ed79 #6, retryUnlandedWorkerStop). Landing on a
+//     FIFO is NOT delivery — nothing on that path observes a reader — so the
+//     accepted case needed a backstop exactly as much as the refused one. This
+//     is the member producer's at-least-once posture (dispatchRobustStopNow
+//     arms RobustStopPendingAt unconditionally), and it reads the SAME judgment
+//     function the member cadence reads (robustStopRetryStep).
+//
 // The shared caller seam for the kill sites that must not treat a refusal as
-// success (respawnWorkerNow, stopWorkerNow). Callers hold s.outsourceMu.
-func (s *apiServer) stopWorkerSessionOrPark(target, workerID string) {
+// success (respawnWorkerNow, stopWorkerNow, the FSM zombie takeover).
+// Callers hold s.outsourceMu.
+func (s *apiServer) stopWorkerSessionOrPark(target, workerID string, now float64) {
 	if s.enqueueWorkerStop(target, workerID) {
+		s.workerStopLanded[workerID] = workerStopDispatch{Target: target, At: now}
 		return
 	}
+	// The refusal supersedes whatever went out before it: the kill is owed again
+	// from scratch, and the parked path is the one that owns it now.
+	delete(s.workerStopLanded, workerID)
 	s.workerStopPending[workerID] = target
 	outsourceLog("worker_stop %s: target %s unreachable — parked, tick will re-fire",
 		workerID, target)
+}
+
+// workerStopDispatch is ONE worker_stop a warden accepted, awaiting proof that
+// the session it addressed actually died.
+type workerStopDispatch struct {
+	Target string  // the machine the frame was handed to
+	At     float64 // when it went out — the stop_retry clock
 }
 
 // retryPendingWorkerStop re-fires a parked worker_stop (see workerStopPending)
 // once per tick until the target warden is reachable and drains it; the
 // successful enqueue clears the parking (inside enqueueWorkerStop). Killing an
 // absent session is a clean no-op by construction, so a late retry can never
-// hurt. Callers hold s.outsourceMu.
-func (s *apiServer) retryPendingWorkerStop(workerID string) {
+// hurt. With nothing parked it falls through to the OTHER half of the same
+// promise: a kill that did leave and did not take (T-ed79 #6). The parked half
+// keeps its per-tick pace — it has never even reached a warden, so there is no
+// kill ladder to wait out. Callers hold s.outsourceMu.
+func (s *apiServer) retryPendingWorkerStop(workerID string, now float64) {
 	target := s.workerStopPending[workerID]
 	if target == "" {
+		s.retryUnlandedWorkerStop(workerID, now)
 		return
 	}
 	if s.enqueueWorkerStop(target, workerID) {
+		s.workerStopLanded[workerID] = workerStopDispatch{Target: target, At: now}
 		outsourceLog("worker_stop %s: parked kill re-fired → %s", workerID, target)
+	}
+}
+
+// retryUnlandedWorkerStop re-pushes a worker_stop the warden ACCEPTED but whose
+// session is demonstrably still running — the outsource twin of the member
+// cadence's robust-stop arm, judged by the same robustStopRetryStep.
+//
+// 🔴 WHAT COUNTS AS "still running" IS NARROWER THAN PRESENCE, and it has to be.
+// hub.IsOnline keys on the WORKER id, not on a session: after a restart or a
+// 改機器 the same id is online again on a session this STOP never addressed, and
+// reading presence alone would keep firing at the old machine for as long as the
+// worker lives. The machine claim is what tells the two apart — the same fact
+// the member re-dispatch aims by (obs.RunningMachine). A worker online somewhere
+// ELSE means the addressed session is gone from our point of view; the residual
+// (if any) belongs to the cross-machine identity sweep, not to this retry.
+//
+// The complementary hazard — a restart IN PLACE, where the fresh session claims
+// the very machine the kill was aimed at — is disarmed at the dispatch instead:
+// notifyWorkerSpawn drops this arm when its START targets the same machine,
+// exactly as it already drops a parked kill there.
+//
+// Callers hold s.outsourceMu.
+func (s *apiServer) retryUnlandedWorkerStop(workerID string, now float64) {
+	armed, ok := s.workerStopLanded[workerID]
+	if !ok {
+		return
+	}
+	alive := s.hub.IsOnline(workerID) && s.hub.MachineOf(workerID) == armed.Target
+	switch robustStopRetryStep(armed.At, alive, s.reconcileConfigLive().StopRetry, now) {
+	case robustStopDone:
+		delete(s.workerStopLanded, workerID)
+	case robustStopResend:
+		outsourceLog("worker_stop %s: session still live on %s past stop_retry — "+
+			"the kill did not take, re-dispatching", workerID, armed.Target)
+		s.stopWorkerSessionOrPark(armed.Target, workerID, now)
 	}
 }
 
@@ -1380,7 +1450,7 @@ func (s *apiServer) respawnWorkerNow(w OutsourceWorker, reason string) bool {
 	// later edge idempotent), so the respawn never zeroes the visible spend.
 	s.bankLiveCost(w.ID)
 	if old != "" { // "" here ⇒ non-active, no session to kill (guarded above)
-		s.stopWorkerSessionOrPark(old, w.ID)
+		s.stopWorkerSessionOrPark(old, w.ID, nowSecs())
 	}
 	// The kill ends the current session: drop its boot_ts so the fresh session's
 	// connect re-stamps an anchor NEWER than refocus_since — the autoHandoverWorker
@@ -1409,7 +1479,7 @@ func (s *apiServer) stopWorkerNow(w OutsourceWorker) {
 	// respawnWorkerNow — the shared bankLiveCost fold, idempotent per edge).
 	s.bankLiveCost(w.ID)
 	if old != "" {
-		s.stopWorkerSessionOrPark(old, w.ID)
+		s.stopWorkerSessionOrPark(old, w.ID, nowSecs())
 	} else {
 		// No respawn follows a stop, so a missing target is only loud, not
 		// deferred — desired_state=offline already holds the worker down, and a

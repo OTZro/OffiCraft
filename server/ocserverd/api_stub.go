@@ -263,6 +263,17 @@ type apiServer struct {
 	// workerReclaimed; an extra or lost-after-restart stop is a no-op /
 	// re-parked on the next owner action).
 	workerStopPending map[string]string
+	// workerStopLanded (T-ed79 #6) → worker id → the worker_stop a warden
+	// ACCEPTED, and when. The sibling above covers the kill that never LEFT;
+	// this one covers the kill that left and never took EFFECT. A frame on a
+	// warden's FIFO is not a dead session — the drain deletes the whole FIFO
+	// before writing it and no ack exists anywhere on that path, so an empty
+	// backlog means "collected", not "delivered". The outsource tick judges the
+	// entry with the SAME robustStopRetryStep the member cadence uses and
+	// re-pushes the STOP while the killed session is still there. In-memory like
+	// its siblings: a restart forgets it (a lost retry is a no-op, and the next
+	// owner action re-arms).
+	workerStopLanded map[string]workerStopDispatch
 	// workerMachinePref is the per-worker spawn placement override a reassign
 	// carries (T-160e: the dialog picks model/effort/machine for the fresh
 	// worker; scheduler-minted workers read the manual instead). In-memory

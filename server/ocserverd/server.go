@@ -387,6 +387,7 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 		workerSpawnAttempts:          map[string]int{},
 		workerReclaimed:              map[string]bool{},
 		workerStopPending:            map[string]string{},
+		workerStopLanded:             map[string]workerStopDispatch{},
 		workerMachinePref:            map[string]string{},
 		workerReconcileStates:        map[string]reconcileState{},
 		workerMachineCooldown:        map[string]float64{},
