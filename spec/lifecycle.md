@@ -478,6 +478,26 @@ ONE-SHOT, never a standing order):
 
 ### 4.5 Recycle (refocus / context-high auto-handover)
 
+- **Context pressure opens a wind-down at BOTH thresholds, and they are different
+  kinds (T-ed79).** `stampContextHighRecycle` stamps `refocus_op = context_notice`
+  when the session crosses the FIRST threshold (`ctx.notice_pct`; codex: the notice
+  round, 60% through it) — a plain **停止**, no clock, nothing in the sentence about
+  time — and `refocus_op = context_high` at the SECOND (`ctx.handover_pct`; codex:
+  the compaction threshold) — **加速停止**, on the `recycle_grace` clock. Before this
+  the first threshold opened nothing at all: it emitted one SSE band (§6 of
+  spec/sse.md, unchanged) and the wind-down began only at the second, so an agent
+  that missed that one frame met the final call with no close-out started.
+- **The ONE promotion is `context_notice` → `context_high`**, and it **MUST re-stamp
+  `refocus_since`**: the deadline is `refocus_since + grace`, so promoting in place
+  would quote a deadline already in the past and collect the member on the same tick
+  that announced it. The promotion needs no frame of its own — the notice rides every
+  write to the member row, and the promotion IS a write. Nothing else is ever
+  promoted: an epoch opened by the owner (`refocus` / `relocate` / `runtime/model`)
+  or by the agent (`restart_self`) stays a 停止 at any percentage, because turning the
+  owner's explicit no-clock stop into a clocked one would take that decision away from
+  him where he cannot see it. A member that has already reported stopped is not
+  promoted either — it is collected on this tick.
+
 - A recycle never flips `desired_state` — it stays `online` throughout; the flow is:
   `refocus_since` stamped → member delta fans → the agent-side listener REFETCHES the
   member row and, on a confirmed NEW refocus epoch, surfaces the 下線程序 text the

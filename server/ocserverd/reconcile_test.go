@@ -807,17 +807,24 @@ func TestRunReconcileTick(t *testing.T) {
 		connectOnline(t, s, ServerSelfHost)
 		connectOnline(t, s, m.ID)
 		now := 10000.0
+		// 99% with two compactions is the notice ROUND, not the ceiling: a codex
+		// session hands over on compaction count, so the percentage must not put
+		// it on the accelerated stop. T-ed79: the notice round DOES open the
+		// plain 停止 (it is the first threshold on the codex axis).
 		s.gauge.Set(m.ID, map[string]any{"context_pct": 99.0, "context_pct_ts": now - 10, "boot_ts": now - 500, "compaction_count": 2})
 		s.runReconcileTick(now)
 		got, _ := s.dal.GetMember(m.ID)
-		if got.RefocusSince != 0 {
-			t.Fatalf("Codex must ignore percent-only handover, got %+v", got)
+		if got.RefocusOp != refocusOpContextNotice {
+			t.Fatalf("Codex must ignore percent-only handover (want the notice "+
+				"round's 停止, %q), got %+v", refocusOpContextNotice, got)
 		}
 		s.gauge.Set(m.ID, map[string]any{"context_pct": 20.0, "context_pct_ts": now - 5, "boot_ts": now - 500, "compaction_count": 3})
 		s.runReconcileTick(now + 1)
 		got, _ = s.dal.GetMember(m.ID)
-		if got.RefocusSince != now+1 {
-			t.Fatalf("third Codex compaction must trigger refocus, got %+v", got)
+		if got.RefocusSince != now+1 || got.RefocusOp != refocusOpContextHigh {
+			t.Fatalf("the third Codex compaction must promote to %q and RE-STAMP "+
+				"refocus_since (a deadline measured from the notice round is "+
+				"already in the past), got %+v", refocusOpContextHigh, got)
 		}
 	})
 
@@ -1075,16 +1082,29 @@ func TestStampContextHighRecycle(t *testing.T) {
 		}
 	})
 
-	t.Run("skips a below-handover gauge and an offline member", func(t *testing.T) {
+	t.Run("below the handover line opens a 停止, not the accelerated stop", func(t *testing.T) {
 		s, members := newHot(t)
 		connectOnline(t, s, "m-hot")
-		// One point below the handover line — including the region where the
-		// advance notice fires (T-c382). Being NOTIFIED must never recycle; only
-		// crossing the handover threshold does.
+		// One point below the handover line, and above the notice line. T-ed79:
+		// this region DOES open a wind-down now — the plain one, which nothing
+		// collects on a clock. What it must never do is open the accelerated
+		// stop, which is what crossing the handover threshold is for.
 		s.gauge.Set("m-hot", freshGauge(now, float64(s.ctxhigh.HandoverPct-1)))
 		s.stampContextHighRecycle(members, now)
+		if members[0].RefocusOp != refocusOpContextNotice {
+			t.Fatalf("one point below the handover line: refocus_op = %q, want %q",
+				members[0].RefocusOp, refocusOpContextNotice)
+		}
+	})
+
+	t.Run("skips a below-notice gauge and an offline member", func(t *testing.T) {
+		s, members := newHot(t)
+		connectOnline(t, s, "m-hot")
+		s.gauge.Set("m-hot", freshGauge(now, float64(s.ctxhigh.NoticePct-1)))
+		s.stampContextHighRecycle(members, now)
 		if members[0].RefocusSince != 0 {
-			t.Fatal("below the handover line must not recycle")
+			t.Fatalf("below the FIRST threshold nothing may be opened, got op=%q",
+				members[0].RefocusOp)
 		}
 
 		s2, members2 := newHot(t) // no SSE connection → offline

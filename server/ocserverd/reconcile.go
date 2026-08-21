@@ -1212,27 +1212,101 @@ func shouldAutoRefocus(runtime string, record map[string]any, cfg SseContextHigh
 // 🔴 announceSoftOffboardEscalation used to live here: the frame that told an
 // agent its soft 重新聚焦 had become the final call, 120 seconds out. It is gone
 // with the clock that justified it (owner 2026-08-19, card rc-c540367065ad) —
-// 重新聚焦 no longer escalates, so there is no promotion to announce. Its
-// de-duplication state (softEscalated / softOffboardEpoch) went with it. If a
-// clock ever comes back to that arm, this frame has to come back in the same
-// change, or the agent is collected having last been told there was no
-// countdown.
+// 重新聚焦 no longer escalates. Its de-duplication state (softEscalated /
+// softOffboardEpoch) went with it.
+//
+// ⚠️ T-ed79 brought a promotion back — context_notice → context_high — and it
+// deliberately did NOT bring this frame back. It is not needed: the notice
+// rides EVERY write to the member row (offboardDeltaPayload), and the promotion
+// IS a write, so the putMember that changes refocus_op carries the FINAL
+// sentence to the agent's own stream in the same delta. A second frame would be
+// a second copy of one event, de-duplicated by nothing. What the removed
+// function was really compensating for was an escalation that changed NO field
+// — a soft→final flip decided from the clock alone, invisible on the row. The
+// promotion changes refocus_op and refocus_since, so the row says it happened.
+// Pinned by TestContextThresholds_PromotionDeltaCarriesTheFinalSentence.
+
+// canPromoteToAcceleratedStop is the ONE exception to "an in-flight epoch is its
+// own cooldown": a member the FIRST context threshold put on a plain 停止 has
+// crossed the SECOND, so the same wind-down becomes 加速停止.
+//
+// 🔴 ONE DIRECTION, ONE CAUSE. An epoch the OWNER opened (重新聚焦, 改機器,
+// 換 model) or the agent opened for itself (restart_self) is never promoted, at
+// any pct: the owner deliberately asked for a stop with no clock, and quietly
+// turning it into one with a deadline would take that decision away from him in
+// the one place he cannot see it happen. Only context_notice → context_high.
+//
+// The stopped-report check is not tidiness either: a member that has already
+// reported stopped is collected by decideUp's recycle arm on this very tick, so
+// re-stamping refocus_since would move the deadline of a wind-down that is
+// already over, and the promotion notice would reach a session that has said it
+// is finished.
+func canPromoteToAcceleratedStop(m Member, op string) bool {
+	return op == refocusOpContextHigh &&
+		m.RefocusOp == refocusOpContextNotice &&
+		m.StoppedSince <= 0.0
+}
+
+// shouldNoticeRefocus is the FIRST threshold's actionable signal — the soft twin
+// of shouldAutoRefocus, reading the SAME gauge through the same stale guard so
+// the two thresholds can never disagree about where the session is.
+//
+// The codex arm asks codexNoticeDue rather than inventing a second rule: a codex
+// session hands over on compaction ROUNDS, so "the first threshold" means the
+// notice round, 60% through it — the same predicate the SSE advance notice fires
+// on. Reusing it is what keeps one runtime's two thresholds on one axis.
+func shouldNoticeRefocus(
+	runtime string, record map[string]any, cfg SseContextHighConfig,
+	codexNoticeRound, codexThreshold int,
+) bool {
+	pct := actionableContextPct(record, cfg.StaleGuard)
+	if NormalizeRuntime(runtime) == RuntimeCodex {
+		return codexNoticeDue(record, pct, codexNoticeRound, codexThreshold)
+	}
+	return cfg.NoticePct > 0 && pct != nil && *pct >= float64(cfg.NoticePct)
+}
 
 // stampContextHighRecycle auto-stamps refocus_since on any candidate whose
 // runtime-specific handover signal is actionable — the
 // automatic counterpart of the manual refocus button, reusing the SSE band's
 // stale-pct + boot-storm guards so an unreliable gauge never auto-recycles.
 // Mutates the in-slice member so the SAME tick's observation sees the marker.
+//
+// 🔴 BOTH thresholds open a wind-down now (T-ed79), and they open DIFFERENT
+// kinds. The first (notice_pct) opens a plain 停止 — refocus_op=context_notice,
+// no clock, no deadline in the sentence — because the owner's model is that an
+// agent near its limit is ASKED to wind down before it is collected on one. It
+// used to open nothing at all: the first threshold sent one SSE band and the
+// wind-down began only at the second, so an agent that missed the frame met the
+// final call with no close-out started.
+//
+// 🔴 …which is why the de-dup below has exactly ONE exception. `refocus_since >
+// 0 ⇒ skip` is the cooldown that stops this loop re-stamping every 30 s, and
+// with the first threshold now stamping, that same rule would have made the
+// SECOND threshold unreachable for the rest of the session: the promotion path
+// would be dead code and the notice epoch would be the last word, on an agent
+// that has since gone past the line where the owner wants it collected.
 func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 	ctxhigh := s.ctxHighConfig()
+	codexNoticeRound := s.codexNoticeRoundSetting()
 	for i := range members {
 		m := &members[i]
-		if m.RefocusSince > 0.0 {
-			continue // already recycling — the marker IS the cooldown
-		}
 		record := s.gauge.Get(m.ID)
-		if !shouldAutoRefocus(m.Runtime, record, ctxhigh, s.codexCompactionThreshold) {
+		op := ""
+		switch {
+		case shouldAutoRefocus(m.Runtime, record, ctxhigh, s.codexCompactionThreshold):
+			op = refocusOpContextHigh
+		case shouldNoticeRefocus(m.Runtime, record, ctxhigh, codexNoticeRound, s.codexCompactionThreshold):
+			op = refocusOpContextNotice
+		default:
 			continue
+		}
+		promoting := false
+		if m.RefocusSince > 0.0 {
+			if !canPromoteToAcceleratedStop(*m, op) {
+				continue // already winding down — the marker IS the cooldown
+			}
+			promoting = true
 		}
 		if bootStormTripped(gaugeSecsSinceBoot(record, now), ctxhigh.MinBootSecs) {
 			continue // fresh boot already over the line → suppress (loop-guard)
@@ -1249,12 +1323,45 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 		if !aRefocusStampWouldReachTheAgent(*m) {
 			continue
 		}
-		armRefocusEpoch(m, refocusOpContextHigh, now)
+		if promoting {
+			// PROMOTION, not a new epoch: the member is already winding down and
+			// keeps whatever it has reported. Only the kind and the clock change.
+			//
+			// ⚠️ RefocusSince is re-stamped, and that is the whole point. The
+			// deadline is refocus_since + grace, so promoting in place would put
+			// the deadline at the FIRST threshold's stamp — minutes in the past
+			// on any session that took the notice seriously — and `now >=
+			// refocus_since + grace` would be true on the very tick that
+			// announced it. The agent would be told "your deadline is <a moment
+			// already gone>" and collected in the same tick: a zero-second
+			// deadline, which is the exact harm this ticket exists to remove.
+			//
+			// armRefocusEpoch is deliberately NOT used: it clears the wind-down
+			// anchors, and here they belong to the close-out ALREADY IN FLIGHT.
+			// Clearing stopped_since would be worse than untidy — it would erase
+			// the agent's own "I am done" and cancel the collection this same
+			// tick was about to make.
+			m.RefocusSince = now
+			m.RefocusOp = refocusOpContextHigh
+		} else {
+			armRefocusEpoch(m, op, now)
+		}
 		if err := s.putMember(*m, triggerServer); err != nil {
 			reconcileLog("recycle: auto-stamp persist failed for %s: %v", m.ID, err)
 			continue
 		}
-		reconcileLog("recycle: auto-stamp refocus_since for %s (%s)", m.ID, NormalizeRuntime(m.Runtime))
+		if promoting {
+			// The FINAL sentence needs no frame of its own: offboardDeltaPayload
+			// composes the notice from refocus_op on EVERY write to the row, so
+			// the putMember above already carried it. (This is what the removed
+			// announceSoftOffboardEscalation used to do by hand; pinned by
+			// TestContextThresholds_PromotionDeltaCarriesTheFinalSentence.)
+			reconcileLog("recycle: promoted %s to %s (%s)", m.ID, refocusOpContextHigh,
+				NormalizeRuntime(m.Runtime))
+		} else {
+			reconcileLog("recycle: auto-stamp refocus_since for %s (%s, %s)", m.ID,
+				NormalizeRuntime(m.Runtime), op)
+		}
 	}
 }
 

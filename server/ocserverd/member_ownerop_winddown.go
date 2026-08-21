@@ -116,9 +116,16 @@ const (
 // as history. They are stamped and cleared in lockstep with refocus_since —
 // a cause outliving its window would be worse than none.
 const (
-	refocusOpContextHigh = "context_high" // reconcile's context-pressure handover
-	refocusOpRefocus     = "refocus"      // owner pressed 重新聚焦
-	refocusOpRestartSelf = "restart_self" // the agent asked for its own handover
+	refocusOpContextHigh = "context_high" // second context threshold — 加速停止
+	// refocusOpContextNotice is the FIRST context threshold (notice_pct): a
+	// plain 停止, opened where the agent is only ASKED to wind down. It is named
+	// after the setting it fires on so the two cannot drift apart in a reader's
+	// head. Before T-ed79 the first threshold sent an SSE band and opened no
+	// wind-down at all, so an agent that ignored one frame met the SECOND
+	// threshold with no close-out started and 120 seconds to do it in.
+	refocusOpContextNotice = "context_notice"
+	refocusOpRefocus       = "refocus"      // owner pressed 重新聚焦
+	refocusOpRestartSelf   = "restart_self" // the agent asked for its own handover
 )
 
 // memberHasStateToFlush answers the one question the rule turns on: is there
