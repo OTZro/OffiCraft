@@ -160,7 +160,27 @@ func rollback(ops cutoverOps, p wardenPaths, old []byte, target string, logf fun
 	if _, err := ops.run("launchctl", "bootstrap", p.guiDomain, p.plistPath); err != nil {
 		return fmt.Errorf("re-bootstrap old shape: %w", err)
 	}
+	// CONFIRM the re-bootstrap actually registered the label before handing on to
+	// kickstart (T-0648's shape): `launchctl bootstrap` can exit 0 and register
+	// NOTHING, and the first verb to notice is the next one — kickstart — whose
+	// exit 113 "Could not find service" names a step that was never broken. On
+	// THIS path that misnaming is not a transient console line: it is written
+	// into the cutover.failed sentinel and becomes the only diagnosis anybody
+	// reads afterwards. Registration can also merely LAG the exit-0 bootstrap, so
+	// a timeout here must NOT fail the rollback on its own — only kickstart also
+	// failing proves the label is really absent.
+	unregistered := cutoverWaitRegistered(ops, target)
+	if unregistered != nil {
+		logf("WARN: launchd still does not know %s after re-bootstrap exited 0; kickstarting anyway", target)
+	}
 	if _, err := ops.run("launchctl", "kickstart", "-k", target); err != nil {
+		if unregistered != nil {
+			// Name the step that actually failed (the re-bootstrap) and carry the
+			// next verb's report rather than replacing it — narrowing the evidence to
+			// our own diagnosis is how a second, unrelated failure reason becomes
+			// invisible in a sentinel nobody can re-run.
+			return fmt.Errorf("re-bootstrap of the old shape exited 0 but registered nothing — launchd does not know %s, so the old job was never loaded; the plist to look at is %s: %w (the next verb then reported: %v)", target, p.plistPath, unregistered, err)
+		}
 		return fmt.Errorf("kickstart old shape: %w", err)
 	}
 	if err := cutoverVerifyAlive(ops, target); err != nil {
@@ -181,6 +201,23 @@ func cutoverWaitGone(ops cutoverOps, target string) bool {
 		ops.sleep(bootoutPollInterval)
 	}
 	return false
+}
+
+// cutoverWaitRegistered is a HAND COPY of install's registeredUntilFound, for the
+// same reason cutoverWaitGone is a hand copy of bootoutUntilGone: registeredUntilFound
+// is typed on sysOps and this path runs on cutoverOps (the Go types do not meet),
+// and keeping it local means the ROLLBACK path cannot be broken by a future change
+// to the install path's bounds. Same bounded shape: a registered label answers the
+// FIRST probe and pays zero sleeps; a timeout is NOT fatal — the caller decides.
+func cutoverWaitRegistered(ops cutoverOps, target string) error {
+	var err error
+	for k := 0; k < registerPollAttempts; k++ {
+		if _, err = ops.run("launchctl", "print", target); err == nil {
+			return nil
+		}
+		ops.sleep(registerPollInterval)
+	}
+	return err
 }
 
 // cutoverVerifyAlive requires the restored job to hold ONE pid across a settle

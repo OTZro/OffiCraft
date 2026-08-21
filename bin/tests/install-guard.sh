@@ -95,6 +95,27 @@ cat > "$SHIMDIR/launchctl" <<'SH'
 echo "launchctl $*" >> "$SHIM_TRIPWIRE"
 case "${1:-}" in
   print)
+    # A BOOTSTRAPPED LABEL IS REGISTERED. Without this the stub answered "gone"
+    # for the rest of the run, which is not what launchd does and would make the
+    # post-bootstrap registration poll (T-908d) time out on every green case.
+    # SHIM_BOOTSTRAP_REGISTERS=0 is the opt-in for the failure being guarded:
+    # bootstrap exits 0 and registers NOTHING.
+    if [[ -f "$SHIM_STATE/.bootstrapped" ]]; then
+      [[ "${SHIM_BOOTSTRAP_REGISTERS:-1}" == "1" ]] || exit 1
+      # A SEPARATE target from SHIM_EXPECT_TARGET, and deliberately so. Those are
+      # two different questions: SHIM_EXPECT_TARGET answers "is something ALREADY
+      # running under the label the live-service gate is asking about" — which the
+      # namespace cases point at the MAIN label ON PURPOSE, so a namespaced run
+      # sees its own job as absent. SHIM_REGISTERED_TARGET answers "which label did
+      # this bootstrap actually register", which for those same runs is the
+      # NAMESPACED one. Collapsing the two left every namespaced case unable to
+      # confirm its own registration, i.e. zero coverage of the healthy path they
+      # walk. Still LABEL-AWARE: a poll that asks about the wrong target (say, a
+      # label with the gui domain dropped) must read as "not registered".
+      [[ "${2:-}" == "${SHIM_REGISTERED_TARGET:-$SHIM_EXPECT_TARGET}" ]] || exit 1
+      printf '%s = {\n\tstate = running\n\tpid = 4242\n}\n' "${2:-}"
+      exit 0
+    fi
     # once booted out, the label really is gone — lets the poll loop exit
     [[ -f "$SHIM_STATE/.booted-out" ]] && exit 1
     # asked about a label that is not the one under test → nothing registered
@@ -169,7 +190,10 @@ for a in "$@"; do
     -iTCP:*) QPORT="${a#-iTCP:}" ;;
   esac
 done
-if [[ -f "$SHIM_STATE/.bootstrapped" ]]; then
+# A job launchd never registered cannot be listening. Keeping this stub's
+# answer tied to .bootstrapped ALONE would let the "registered nothing" case
+# sail through the health gate and never reach the message under test.
+if [[ -f "$SHIM_STATE/.bootstrapped" && "${SHIM_BOOTSTRAP_REGISTERS:-1}" == "1" ]]; then
   echo "ocserverd 4242 tester 5u IPv4 0x0 0t0 TCP 127.0.0.1:${QPORT:-7755} (LISTEN)"
   exit 0
 fi
@@ -200,7 +224,17 @@ SH
 printf '#!/usr/bin/env bash\nexit 0\n' > "$SHIMDIR/tmux"
 printf '#!/usr/bin/env bash\necho "9.9.9 (Claude Code)"\nexit 0\n' > "$SHIMDIR/claude"
 
-chmod +x "$SHIMDIR"/uname "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux "$SHIMDIR"/claude "$SHIMDIR"/plutil
+# sleep: the REAL tool unless a case opts out. The bounded-poll cases below burn
+# 25 x 0.2s + 50 x 0.2s of wall clock waiting for two timeouts whose LENGTH is not
+# what they assert on — SHIM_FAST_SLEEP=1 removes the wait without removing a
+# single assertion. Off by default so no other case silently stops waiting.
+cat > "$SHIMDIR/sleep" <<'SH'
+#!/usr/bin/env bash
+[[ "${SHIM_FAST_SLEEP:-0}" == "1" ]] && exit 0
+exec /bin/sleep "$@"
+SH
+
+chmod +x "$SHIMDIR"/uname "$SHIMDIR"/launchctl "$SHIMDIR"/lsof "$SHIMDIR"/tmux "$SHIMDIR"/claude "$SHIMDIR"/plutil "$SHIMDIR"/sleep
 
 PLIST_REL="Library/LaunchAgents/com.officraft.serve.plist"
 
@@ -247,6 +281,7 @@ PL
 # assertion about the gate firing is therefore also an assertion that it asked
 # launchd about THIS job and no other.
 EXPECT_TARGET="gui/$(id -u)/com.officraft.serve"
+GUI_EXPECT="gui/$(id -u)"
 
 run_install() {
   local job="$1"; shift
@@ -255,6 +290,8 @@ run_install() {
     HOME="$FAKEHOME" SHIM_JOB="$job" SHIM_TRIPWIRE="$WORK/.tripwire" SHIM_STATE="$WORK" \
     SHIM_EXPECT_TARGET="$EXPECT_TARGET" SHIM_NO_LISTEN="${SHIM_NO_LISTEN:-0}" \
     SHIM_PLUTIL_STDOUT_ERR="${SHIM_PLUTIL_STDOUT_ERR:-0}" SHIM_PLUTIL_LOG="${SHIM_PLUTIL_LOG:-}" \
+    SHIM_BOOTSTRAP_REGISTERS="${SHIM_BOOTSTRAP_REGISTERS:-1}" SHIM_FAST_SLEEP="${SHIM_FAST_SLEEP:-0}" \
+    SHIM_REGISTERED_TARGET="${SHIM_REGISTERED_TARGET:-$EXPECT_TARGET}" \
     bash "$PKG/install.sh" "$@" </dev/null 2>&1)"
   RC=$?
 }
@@ -439,6 +476,65 @@ else
 fi
 case "$OUT" in *"http://127.0.0.1:7755/"*) ok "fresh install: the setup link the operator is handed is on 7755";; *) bad "fresh install: setup link is not on 7755 (output was: '$OUT')";; esac
 case "$OUT" in *8780*) bad "fresh install: the retired 8780 still appears in the run's output ('$OUT')";; *) ok "fresh install: no trace of the retired 8780 in the output";; esac
+# THE POSITIVE CONTROL FOR THE REGISTRATION POLL (case 9b is the negative one).
+# A poll that asks launchd the WRONG question — the bare label with the gui domain
+# dropped, say — answers "not registered" on a machine that is perfectly healthy:
+# every install then warns falsely, pays the full ~5s wait, and the moment the
+# port gate trips it prints the "registered nothing" diagnosis about a job that IS
+# registered. That is this ticket's own defect pointing the other way, and without
+# this line nothing in the suite could see it (measured: 107 ok / 0 failed).
+case "$OUT" in
+  *"still does not know"*) bad "fresh install: warns that launchd does not know a label that IS registered — the poll is asking about the wrong target:
+$OUT" ;;
+  *) ok "fresh install: the registration poll confirms the healthy label (no false 'still does not know')" ;;
+esac
+
+# ── 9b. bootstrap exits 0 and registers NOTHING → blame bootstrap (T-908d) ──
+# THE DEFECT. `launchctl bootstrap` can exit 0 while registering no job at all.
+# kickstart is swallowed here with `|| true`, so the first thing to notice was the
+# PORT HEALTH GATE, which then printed "the '<label>' service was registered but
+# nothing is listening on port …" — a sentence that is literally FALSE in this
+# state — and handed the operator `launchctl bootout <target>`, which fails with
+# the same "Could not find service" the message failed to mention.
+#
+# The assertions are about WHICH DIAGNOSIS the operator gets, and the negative one
+# (the false "was registered" sentence) is the one carrying the defect: an
+# implementation that merely ADDS a warning and leaves the old sentence in place
+# still ships the lie, and only the negative catches that.
+reset_fixture fresh
+SHIM_BOOTSTRAP_REGISTERS=0 SHIM_FAST_SLEEP=1 run_install absent
+check "bootstrap registered nothing: the install FAILS instead of reporting success" "1" "$RC"
+case "$OUT" in
+  *"registered nothing"*) ok "bootstrap registered nothing: the failure names the bootstrap step that actually failed" ;;
+  *) bad "bootstrap registered nothing: the failure does not name the bootstrap step:
+$OUT" ;;
+esac
+case "$OUT" in
+  *"was registered but nothing is listening"*) bad "bootstrap registered nothing: still prints the FALSE 'was registered' sentence:
+$OUT" ;;
+  *) ok "bootstrap registered nothing: the false 'was registered' sentence is gone" ;;
+esac
+# The remediation has to WORK in the state it is printed in. bootout of a label
+# launchd does not know fails, so this branch must not offer it.
+case "$OUT" in
+  *"launchctl bootout"*) bad "bootstrap registered nothing: offers a bootout that fails for the very reason being reported:
+$OUT" ;;
+  *) ok "bootstrap registered nothing: does not offer a bootout that cannot work here" ;;
+esac
+case "$OUT" in
+  *"launchctl bootstrap $GUI_EXPECT $FAKEHOME/$PLIST_REL"*) ok "bootstrap registered nothing: offers a retry that names the real domain and plist" ;;
+  *) bad "bootstrap registered nothing: no usable retry command naming the plist:
+$OUT" ;;
+esac
+# The poll is BOUNDED and the kickstart still happens: the label lagging into
+# registration must remain an ordinary successful install. Case 9 above is that
+# control (same path, SHIM_BOOTSTRAP_REGISTERS defaulted to 1, rc 0) — this one
+# only has to prove the registration was actually interrogated after the load.
+if tripwire_has "launchctl bootstrap"; then
+  ok "bootstrap registered nothing: the bootstrap was really attempted (not a refusal from an earlier gate)"
+else
+  bad "bootstrap registered nothing: no bootstrap in the tripwire — the run never reached the step under test"
+fi
 
 # ── 10. --namespace: isolation BY CONSTRUCTION (T-5047) ─────────────────────
 # WHY THESE CASES EXIST. Before them, the 39 cases above passed identically with
@@ -460,12 +556,21 @@ NS_TARGET="gui/$(id -u)/com.officraft.serve.$NS"
 
 # run_install_ns <job-state> <expect-target> [args…] — same as run_install but
 # lets a case choose WHICH label the launchctl oracle is willing to answer for.
+# The two SHIM_*_TARGET values differ here ON PURPOSE, and that is the whole point
+# of this helper: SHIM_EXPECT_TARGET stays on the MAIN label so the live-service
+# gate still sees the namespaced job as absent (10a), while SHIM_REGISTERED_TARGET
+# names the label the namespaced bootstrap actually registers. `env -i` DROPS
+# anything not listed, and until it was listed every namespaced case took the
+# "registration unconfirmed" branch — zero coverage of the healthy path they walk,
+# and 25 x 0.2s of real sleep each to get there (hence SHIM_FAST_SLEEP too).
 run_install_ns() {
   local job="$1" expect="$2"; shift 2
   OUT="$(cd "$WORK" && env -i \
     PATH="$SHIMDIR:/usr/bin:/bin:/usr/sbin:/sbin" \
     HOME="$FAKEHOME" SHIM_JOB="$job" SHIM_TRIPWIRE="$WORK/.tripwire" SHIM_STATE="$WORK" \
     SHIM_EXPECT_TARGET="$expect" SHIM_NO_LISTEN="${SHIM_NO_LISTEN:-0}" \
+    SHIM_REGISTERED_TARGET="$NS_TARGET" \
+    SHIM_BOOTSTRAP_REGISTERS="${SHIM_BOOTSTRAP_REGISTERS:-1}" SHIM_FAST_SLEEP="${SHIM_FAST_SLEEP:-0}" \
     bash "$PKG/install.sh" "$@" </dev/null 2>&1)"
   RC=$?
 }
@@ -500,6 +605,14 @@ if [[ -d "$FAKEHOME/.officraft-$NS" ]]; then
 else
   bad "ns install did NOT create ~/.officraft-$NS — it installed somewhere else"
 fi
+# Same positive control as case 9, on the NAMESPACED label — the one whose target
+# is built from a different string. A poll hard-wired to the main label, or one
+# that lost the gui domain, warns falsely here while case 9 stays green.
+case "$OUT" in
+  *"still does not know"*) bad "ns install: warns that launchd does not know $NS_TARGET, which it just registered:
+$OUT" ;;
+  *) ok "ns install: the registration poll confirms the NAMESPACED label" ;;
+esac
 if [[ -f "$FAKEHOME/Library/LaunchAgents/com.officraft.serve.$NS.plist" ]]; then
   ok "ns install wrote its own plist (com.officraft.serve.$NS.plist)"
 else

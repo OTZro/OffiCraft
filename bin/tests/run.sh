@@ -74,6 +74,23 @@ else
   bad "bin/tests/install-guard.sh is missing"
 fi
 
+# ── bin/ocserver bootstrap→kickstart blame (T-908d) ─────────────────────────
+# Own file, own launchctl shim, own tempdir. It drives `bootstrap_and_confirm`
+# through bin/ocserver's hidden `bootstrap-and-confirm` seam — until it existed,
+# drop_and_load's load step had NO unit coverage at all, only a one-line grep in
+# install-claude-stamp.sh whose own comment calls itself the last unguarded link.
+OCSLOAD="$HERE/ocserver-load-guard.sh"
+echo
+if [[ -f "$OCSLOAD" ]]; then
+  if run_guard "$OCSLOAD"; then
+    ok "ocserver bootstrap-blame suite passed"
+  else
+    bad "ocserver bootstrap-blame suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/ocserver-load-guard.sh is missing"
+fi
+
 # ── default-port contract (oc.toml.example ↔ bin/ocserver render guard) ─────
 # Own file, own tempdir. The template and render_oc_toml's literal guard are a
 # contract with no compiler behind it: drift in either direction is invisible
