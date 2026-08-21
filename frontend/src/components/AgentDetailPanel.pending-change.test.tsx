@@ -195,9 +195,42 @@ describe("AgentDetailPanel · pending-change hints", () => {
 });
 
 describe("AgentDetailPanel · wind-down note", () => {
-  it("says the change is being applied, with a ceiling, instead of when the last refocus was", async () => {
-    const deadline = 1_800_000_000;
+  // 🔴 THIS is the shape the server actually produces today (T-ed79): an owner
+  // op is 停止, so refocus_deadline lands as 0 and the mapper maps it to null.
+  // The previous version of this test hand-built a non-zero deadline on a
+  // runtime/model row — a combination the server can no longer emit — so it
+  // stayed green while the note it guards had become unreachable in the app.
+  // A fixture that bypasses the mapper is only a guard if it is a state the
+  // mapper can still output.
+  it("says the change is being applied — with no time at all — when nothing is on a clock", async () => {
     const { getByTestId, queryByTestId } = await renderPanel({
+      refocusSince: 1_800_000_000,
+      refocusOp: "runtime/model",
+      refocusDeadline: null,
+      model: "claude-opus-5",
+    });
+    const note = getByTestId("mp-wind-down-note").textContent ?? "";
+    expect(note).toContain("正在收尾以套用你的改動");
+    // No clock ⇒ no time may appear. 最晚/生效 is the ceiling wording, and a
+    // bare digit would be a time leaking through a placeholder.
+    expect(note).not.toContain("最晚");
+    expect(note).not.toContain("生效");
+    expect(note).not.toMatch(/\d/);
+    // The history line it replaces must be gone — two lines saying different
+    // things about the same window is worse than either alone.
+    expect(queryByTestId("mp-refocus-since")).toBeNull();
+    expect(note).not.toContain("上次重新聚焦");
+  });
+
+  // The other arm of the same composer. It is NOT server-reachable for an owner
+  // op today — only context_high is clocked, and context_high does not open
+  // this note — so this is a unit test of the render arm, kept so that the day
+  // a clocked owner-op cause is added (the adjustable 加速停止 in T-ed79's
+  // later blocks) the ceiling wording is still there rather than having rotted
+  // away unnoticed.
+  it("still quotes the ceiling when the wind-down IS on a clock", async () => {
+    const deadline = 1_800_000_000;
+    const { getByTestId } = await renderPanel({
       refocusSince: deadline - 120,
       refocusOp: "runtime/model",
       refocusDeadline: deadline,
@@ -206,10 +239,7 @@ describe("AgentDetailPanel · wind-down note", () => {
     const note = getByTestId("mp-wind-down-note").textContent ?? "";
     expect(note).toContain("正在收尾以套用你的改動");
     expect(note).toContain(new Date(deadline * 1000).toLocaleTimeString());
-    // The history line it replaces must be gone — two lines saying different
-    // things about the same window is worse than either alone.
-    expect(queryByTestId("mp-refocus-since")).toBeNull();
-    expect(note).not.toContain("上次重新聚焦");
+    expect(note).toContain("最晚");
   });
 
   it("keeps the plain history line for a handover the owner did not cause", async () => {

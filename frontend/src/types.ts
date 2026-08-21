@@ -101,12 +101,18 @@ export interface Member {
   refocusSince: number | null;
 
   /** Which operation opened the in-flight wind-down (wire `refocus_op`):
-   * "relocate" | "runtime/model" | "context_high" | "refocus" |
-   * "restart_self"; "" when none. */
+   * "relocate" | "runtime/model" | "context_notice" | "context_high" |
+   * "refocus" | "restart_self"; "" when none. `context_notice` is the FIRST
+   * context threshold (T-ed79) and the server has been sending it since; it was
+   * missing from this list, which is the whole value of writing the set down. */
   refocusOp?: string;
   /** Epoch by which that wind-down is collected at the latest (wire
    * `refocus_deadline`), null when none is in flight. A CEILING, not a
-   * prediction — the collect fires as soon as the agent reports stopped. */
+   * prediction — the collect fires as soon as the agent reports stopped.
+   *
+   * 🔴 null ALSO means "in flight, but on no clock at all", which since T-ed79
+   * is every cause except `context_high`. `refocusOp` is what tells the two
+   * apart; never read null as "nothing is happening". */
   refocusDeadline?: number | null;
   /** The DURABLE last-observed machine (wire `actual_machine`). `machine`
    * above blanks the moment the member stops running; this survives, so a

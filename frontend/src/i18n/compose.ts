@@ -71,7 +71,10 @@ export interface Messages {
   memberMachineMovingTo: (machine: string) => string;
   agentPendingChange: (value: string) => string;
   workerMachineMovingTo: (machine: string) => string;
-  agentWindDownForChange: (by: string) => string;
+  /** `by` is the deadline text, or null when the wind-down is on NO clock —
+   * which since T-ed79 is every cause except the second context threshold. The
+   * no-clock sentence must not contain any time at all. */
+  agentWindDownForChange: (by: string | null) => string;
   // ── RESUME SUMMARY · the COLLAPSE marker (T-8b0d follow-up) ──
   // 🔴 There is deliberately NO composer for the TRUNCATION marker beside it.
   // A shared composer is exactly how the two would drift into sharing a word,
@@ -246,8 +249,17 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     // 「正在收尾以套用你的改動 · 最晚 14:32 生效」 — the deadline is a CEILING
     // (the collect fires as soon as the agent reports stopped), so the wording
     // says 最晚 rather than promising a time.
+    //
+    // 🔴 `by === null` is the NORMAL case since T-ed79, not a degenerate one:
+    // relocate and runtime/model are 停止 (no clock), so refocus_deadline
+    // arrives as 0 → null and there is no time to quote. The label alone IS the
+    // sentence then — appending 「最晚 … 生效」 with a placeholder, or falling
+    // back to the 「上次重新聚焦」 history line, would both put back the
+    // misreading T-7f28 removed. Nothing time-shaped may appear in this arm.
     agentWindDownForChange: (by) =>
-      `${mp.windDownForChangeLabel}${sp}·${sp}${mp.windDownByLabel} ${by} ${mp.windDownEffectSuffix}`,
+      by === null
+        ? mp.windDownForChangeLabel
+        : `${mp.windDownForChangeLabel}${sp}·${sp}${mp.windDownByLabel} ${by} ${mp.windDownEffectSuffix}`,
 
     // MARK shape, not sentence shape: one word plus the count, and nothing
     // else. What "folded" MEANS is stated once per chat block
