@@ -33,10 +33,22 @@ func collectRuntimeCapabilities(env func(string) string, runner CmdRunner,
 	// stops claiming something we did not measure.
 	//
 	// The cost is accepted and named: a host that IS genuinely signed out now
-	// gets picked for claude and fails at spawn instead — where
-	// claude_not_logged_in / claude_bin_unresolved tells the owner what to do,
-	// including switching the member to Codex. A visible failure beats an
-	// invisible irreversible guess.
+	// gets picked for claude and fails at spawn instead. Be precise about WHICH
+	// refusal that is — an installed-but-signed-out host resolves ClaudeBin, so
+	// it can only ever land on claude_not_logged_in, never on
+	// claude_bin_unresolved. When this comment was first written, that arm did
+	// NOT name the Codex exit, so the sentence backing this trade-off was false
+	// for the only path it describes. Both arms now lead with "set this
+	// member's 執行環境 to Codex", and a test pins it on each.
+	//
+	// The harder half of the justification, which this comment used to omit:
+	// the spawn-side gate accepts FOUR env-carried credential sources that this
+	// probe never looks at (claudeCredEnvKeys — two direct keys plus the
+	// Bedrock / Vertex managed-auth flags, where no local claude login exists at
+	// all). So a host on Bedrock or Vertex reported logged_in:false and, before
+	// this change, was PERSISTED as codex — a machine that could have run claude
+	// perfectly well, pinned to the other runtime with no way back.
+	// A visible failure beats an invisible irreversible guess.
 	if claudeBin != "" {
 		if value, ok := claude["cred_file"].(bool); ok && value {
 			claudeCap["logged_in"] = true

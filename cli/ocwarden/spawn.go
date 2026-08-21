@@ -815,13 +815,29 @@ func (d SpawnDeps) start(p StartParams) SpawnOutcome {
 	// carries the value-free SET/unset summary ONLY (see claudecreds.go).
 	if runtimeName == "claude" && d.ClaudeCreds != nil {
 		if st := d.ClaudeCreds(); !st.Present {
+			// SAME OWNER-FACING CONTRACT AS claudeBinUnresolvedReason, and it is
+			// this arm — not that one — that the heartbeat probe's "omit an
+			// unmeasured login rather than call it a no" trade-off actually
+			// lands on: a host with claude INSTALLED but signed out resolves
+			// ClaudeBin, so it can never reach the bin_unresolved arm. Every
+			// earlier wording here offered two exits and BOTH were "go get
+			// claude logged in" — the same disease this ticket exists to cure,
+			// re-created in a narrower cell. The Codex exit is named FIRST for
+			// the same reason it is there: the runtime is a per-member setting,
+			// so it is usually the cheapest fix.
+			//
+			// Compressed from 406 display columns to 249 (the sibling runs 182
+			// under a 220 guard). It is allowed the extra because of the one
+			// clause the sibling could drop and this one cannot: `grep -rn
+			// OC_CLAUDE_CRED_CHECK docs/ bin/ spec/` returns NOTHING, so this
+			// string is the only place the "a shell export cannot reach a
+			// launchd job" trap is written down at all.
 			return SpawnOutcome{OK: false, Reason: fmt.Sprintf(
-				"claude_not_logged_in: no claude credential found on this host (%s) — "+
-					"run `claude` once as this user and complete login, then retry. "+
-					"To bypass this gate instead: re-run `ocwarden install` with "+
-					"OC_CLAUDE_CRED_CHECK=0 in its environment (the warden is a launchd "+
-					"job, so only the plist the installer stamps can change its env — "+
-					"exporting the variable in a shell has no effect on it)", st.Summary)}
+				"claude_not_logged_in: no claude credential here (%s). "+
+					"Fix any one: set this member's 執行環境 to Codex; "+
+					"run `claude` once as this user; or re-install the warden "+
+					"with OC_CLAUDE_CRED_CHECK=0 (shell exports do not reach it).",
+				st.Summary)}
 		}
 	}
 	// idempotent clobber-guard: REFUSE to stomp a live session. This is a LOCAL

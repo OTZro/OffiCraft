@@ -784,15 +784,30 @@ func TestStart_ClaudeNotLoggedIn(t *testing.T) {
 	// value-free SET/unset shape, which is the one property this reason
 	// exists to keep.
 	want := fmt.Sprintf(
-		"claude_not_logged_in: no claude credential found on this host (%s) — "+
-			"run `claude` once as this user and complete login, then retry. "+
-			"To bypass this gate instead: re-run `ocwarden install` with "+
-			"OC_CLAUDE_CRED_CHECK=0 in its environment (the warden is a launchd "+
-			"job, so only the plist the installer stamps can change its env — "+
-			"exporting the variable in a shell has no effect on it)",
+		"claude_not_logged_in: no claude credential here (%s). "+
+			"Fix any one: set this member's 執行環境 to Codex; "+
+			"run `claude` once as this user; or re-install the warden "+
+			"with OC_CLAUDE_CRED_CHECK=0 (shell exports do not reach it).",
 		"cred_file=unset keychain=unset")
 	if out.Reason != want {
 		t.Errorf("refusal reason\n got: %q\nwant: %q", out.Reason, want)
+	}
+	// THE EXIT THAT MUST NOT SILENTLY LEAVE. This arm is the one a
+	// claude-installed-but-signed-out host lands on, so if it ever stops
+	// naming the per-member runtime switch, the owner is back to being told
+	// to go fix a runtime they may have deliberately declined — the exact
+	// failure this ticket opened on. The whole-sentence compare above would
+	// also catch it, but it would read as "someone reworded a string"; this
+	// one names the property.
+	if !strings.Contains(out.Reason, "執行環境") {
+		t.Errorf("the signed-out refusal must still name the Codex exit, got %q", out.Reason)
+	}
+	// Same wall-of-red ceiling as claudeBinUnresolvedReason, loosened by the
+	// one clause that exists nowhere else (see the comment on this arm in
+	// spawn.go). Measured 249 at the time of writing.
+	if width := runewidth(out.Reason); width > 260 {
+		t.Errorf("refusal reason is %d display columns; keep it short enough to read "+
+			"on the member row (was 406 before T-b3d0)", width)
 	}
 	// NO RESIDUE: no tmux session, no workdir files.
 	if len(run.calls) != 0 {

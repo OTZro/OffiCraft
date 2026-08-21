@@ -1276,6 +1276,17 @@ function HardwareBadMark() {
  * a perfectly good version — an installed, up-to-date, logged-out runtime is
  * exactly the case the operator needs to see.
  *
+ * ⚠️ THAT MARK IS CURRENTLY REACHABLE FOR CODEX ONLY. Since T-b3d0 the warden
+ * OMITS claude's `logged_in` when it cannot find evidence rather than sending
+ * `false` (it was calling an unmeasured login a no, and placement then pinned
+ * such a host to codex irreversibly — see runtimeprobe.go). Absent arrives here
+ * as null, and null is not `=== false`, so a genuinely signed-out claude host
+ * now shows "installed + version" with nothing saying it cannot run. That is a
+ * KNOWN diagnostic loss, taken deliberately over the irreversible mis-pin; the
+ * failure surfaces on the member row at spawn instead (claude_not_logged_in,
+ * which names the Codex exit). Do not "fix" this by making the collector send
+ * false again — restoring the badge that way restores the mis-pin with it.
+ *
  * `fallbackVersion` exists only for Claude: the machine registry has carried
  * its own `claude_version` since T-97ee/T-7c5b, and an older warden reports
  * that without a capability map. Using it keeps the Claude column meaning
