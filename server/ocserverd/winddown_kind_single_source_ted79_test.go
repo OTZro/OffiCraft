@@ -22,12 +22,25 @@ import "testing"
 // constant names. The unknown op is the load-bearing case for "final is the
 // POSITIVE condition": under the old fallthrough it would have been clocked,
 // which is how a cause nobody ruled on ends up carrying a deadline.
+//
+// 🔴 This list only guards what it NAMES. It shipped missing
+// refocusOpContextNotice — the one value T-ed79 itself added — and with that
+// hole a mutant that gave the FIRST context threshold an unannounced 120 s
+// deadline (`if refocusOp == refocusOpContextNotice { return cfg.RecycleGrace,
+// true }` at the top of recycleGraceFor) passed BOTH tests below. A closed set
+// that lags the constants it is closing over is not a guard. Every constant in
+// member_ownerop_winddown.go's two const blocks AND worker_spawn.go's ownerOp
+// block belongs here — ownerOpRestart ("restart") is a worker-only value that
+// reaches recycleGraceFor through openOwnerOpHandover and was missing too. Add
+// the value in the same edit that adds the constant.
 var everyWindDownCause = []string{
 	refocusOpRefocus,
 	refocusOpRestartSelf,
 	refocusOpContextHigh,
+	refocusOpContextNotice,
 	memberOpRelocate,
 	memberOpModel,
+	ownerOpRestart,
 	"an_op_no_constant_names",
 }
 
