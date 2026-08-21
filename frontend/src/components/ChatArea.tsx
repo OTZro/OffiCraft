@@ -1103,8 +1103,39 @@ export function ChatArea({
         ? t.chat.replyQuoteGone
         : "\u2026";
     const quoteLine = !m.replyTo ? null : (
-      <div className="chat__msg-quote" data-testid="msg-quote">
-        <ReplyIcon size={11} className="chat__msg-quote__icon" />
+      /* 🔴 THE ONE THING THIS ROW EXISTS TO SAY HAS TO REACH THE A11Y TREE TOO.
+       * Measured in a real browser on a real <ChatArea>: as a bare <div> this
+       * row linearised into the reply as "Mira. Mira. 他說的. 跳到原訊息.
+       * 我說的" — role null, no name — so a screen-reader user could not tell
+       * which sentence is the quotation and which one this person is saying
+       * now, which is the whole feature. `.chat__msg-quote` is the only place
+       * in this frontend that embeds someone else's sentence inside another
+       * person's message, so the gap is this feature's own, not the app's.
+       *
+       * role="blockquote" + aria-label, NOT a visually-hidden prefix: this repo
+       * has no sr-only utility (MemberCard.presence-a11y.test.tsx says so in as
+       * many words), and inventing one for a single row would be a new global
+       * primitive smuggled in under a quote line. The label names the quoted
+       * sender when we have resolved one and stays generic when we have not —
+       * the same "no quote, no name" rule the banner and `quoteWho` already
+       * follow. */
+      <div
+        className="chat__msg-quote"
+        data-testid="msg-quote"
+        role="blockquote"
+        aria-label={
+          quoteWho ? t.chat.replyQuoteRoleWho(quoteWho) : t.chat.replyQuoteRole
+        }
+      >
+        {/* Decorative twin of the label above it: the row already SAYS it is a
+         * quote through its aria-label, so an unnamed <img> node in the tree
+         * beside it is pure noise. Only this one is hidden — the rest of the
+         * app's icons are a separate, pre-existing question. */}
+        <ReplyIcon
+          size={11}
+          className="chat__msg-quote__icon"
+          aria-hidden="true"
+        />
         {quoteWho && <span className="chat__msg-quote__who">{quoteWho}</span>}
         <span className="chat__msg-quote__body" title={quoteText}>
           {quoteText}

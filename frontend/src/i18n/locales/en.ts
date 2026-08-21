@@ -703,6 +703,16 @@ export const en: Dict = {
     replyQuoteJump: "Go to the original message",
     replyQuoteGone: "an earlier message",
     replyQuoteAttachment: "(attachment)",
+    // The quote row's own accessible name. This repo has no sr-only utility
+    // (see MemberCard.presence-a11y.test.tsx), so the "this is a quotation, not
+    // what this person is saying now" fact travels as an aria-label on the row.
+    // Without it the accessibility tree linearises a reply as
+    // "Mira. Mira. what they said. Go to the original message. what I said" —
+    // the one thing this feature exists to convey is the thing a screen reader
+    // could not hear. replyQuoteRole is the version for a quote whose sender is
+    // not resolved yet (or is gone); replyQuoteRoleWho names them when it is.
+    replyQuoteRole: "Quoted message",
+    replyQuoteRoleWho: (name: string) => `Quoted message from ${name}`,
   },
   mp: {
     back: "Back",

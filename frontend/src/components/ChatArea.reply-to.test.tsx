@@ -21,7 +21,7 @@
 
 import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { ChatArea } from "./ChatArea";
 import type { Member } from "../types";
@@ -246,6 +246,93 @@ describe("ChatArea 回覆這則", () => {
     const x = container.querySelector(".chat__reply-banner__x")!;
     expect(x.getAttribute("aria-label")).toBe(zh.chat.replyCancel);
     expect(x.getAttribute("title")).toBe(zh.chat.replyCancel);
+  });
+
+  it("tells the accessibility tree WHICH sentence is the quotation", async () => {
+    // 🔴 THE GAP THIS PINS WAS MEASURED IN A REAL BROWSER, on a real <ChatArea>
+    // rather than a CT story: the quote row was a bare <div> (role null,
+    // aria-label null), so a reply linearised into
+    //   "Mira. Mira. 他說的. 跳到原訊息. 我回的"
+    // — the same name twice, two sentences running together, and NOTHING saying
+    // which one is being quoted and which one this person is saying now. That
+    // distinction is the entire feature; a screen-reader user was the one
+    // audience it never reached.
+    //
+    // `.chat__msg-quote` is the only construct in this frontend that embeds
+    // someone else's sentence inside another person's message, so this is not
+    // the app's general icon/landmark posture — it is this feature's own hole.
+    // The row therefore carries role="blockquote" and a NAME, asserted here
+    // through getByRole so it is the computed accessibility tree being read,
+    // not the attribute we happened to type.
+    messages = [
+      mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" }),
+      mkMsg({
+        id: "c-2",
+        from: "owner",
+        to: "m1",
+        body: "我回的",
+        ts: 2,
+        replyTo: "c-1",
+      }),
+      // A quote whose target is not in the window and has not come back yet:
+      // there is no sender to name, and naming one would be a coin flip (the
+      // banner's own rule). It must still announce itself as a quotation.
+      mkMsg({
+        id: "c-3",
+        from: "owner",
+        to: "m1",
+        body: "回更早的",
+        ts: 3,
+        replyTo: "c-far",
+      }),
+    ];
+    // Guard against the vacuous version: an empty dictionary value would make
+    // the name assertions below compare "" with "" and prove nothing.
+    expect(zh.chat.replyQuoteRole.length).toBeGreaterThan(0);
+    expect(zh.chat.replyQuoteRoleWho("Mira").length).toBeGreaterThan(
+      zh.chat.replyQuoteRole.length,
+    );
+
+    const { container } = renderChat();
+
+    // Named with the person being quoted when we have resolved one…
+    const quoted = within(rowOf(container, "c-2")).getByRole("blockquote", {
+      name: zh.chat.replyQuoteRoleWho("Mira"),
+    });
+    // …and the row really is the quote line, not something else that happens to
+    // carry the name.
+    expect(quoted.querySelector(".chat__msg-quote__body")?.textContent).toBe(
+      "他說的",
+    );
+    // The glyph beside it is decorative: the row already SAYS it is a quote, so
+    // an unnamed `img` node next to that name is noise a screen reader reads out
+    // for nothing.
+    expect(quoted.querySelector("svg")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+
+    // …and generically when we have not. No name, no claim — the same rule the
+    // banner and `quoteWho` already follow. Asserted BOTH before and after the
+    // by-id read misses: an unresolved quote and a settled-miss quote are two
+    // different states of the same row, and neither may drop the announcement.
+    within(rowOf(container, "c-3")).getByRole("blockquote", {
+      name: zh.chat.replyQuoteRole,
+    });
+    await waitFor(() =>
+      expect(
+        within(rowOf(container, "c-3")).getByRole("blockquote", {
+          name: zh.chat.replyQuoteRole,
+        }).textContent,
+      ).toContain(zh.chat.replyQuoteGone),
+    );
+
+    // The message's OWN body is not inside the quotation — if it were, the tree
+    // would be back to one undivided run of text.
+    expect(
+      within(rowOf(container, "c-2"))
+        .getByRole("blockquote")
+        .textContent?.includes("我回的"),
+    ).toBe(false);
   });
 
   it("clicking the entry puts the caret in the composer", () => {
@@ -768,6 +855,64 @@ describe("ChatArea 回覆這則", () => {
     expect(kept?.text).toBe("我後來又打的");
     expect(kept?.replyTo, "the room's own aim, not the failed send's").toBe(
       "c-2",
+    );
+  });
+
+  it("does not re-aim the composer at the failed send when the owner has already aimed somewhere else", async () => {
+    // 🔴 THE SAME "only fill what the room does not already hold" rule as the
+    // draft text beside it — but for the reply TARGET, and in the room the
+    // owner never left. The sequence: aim at c-1, Enter (the target is cleared
+    // optimistically), and while the send is still in flight re-aim at c-2. The
+    // send then fails. Putting c-1 back would silently overwrite the aim the
+    // owner can SEE in the banner, and the next Enter would hang the reply on
+    // the wrong message — a wrong send, not just a tidy-up.
+    //
+    // The production guard for this is `setReplyToId((cur) => (cur ? cur : …))`
+    // and its `cur ?` arm had ZERO coverage (v8: counts [0]): flattening it to
+    // `setReplyToId(replyToSnapshot)` left the WHOLE suite green — and with
+    // this test present that same flattening is the only red in it. Its twin
+    // for the draft text was witnessed; this one was not. Everything else in this
+    // group changes rooms or unmounts first, which is exactly why none of them
+    // can reach the on-screen restore at all.
+    messages = [
+      mkMsg({ id: "c-1", from: "m1", to: "owner", body: "第一句" }),
+      mkMsg({ id: "c-2", from: "m1", to: "owner", body: "第二句", ts: 2 }),
+    ];
+    let reject: (e: Error) => void = () => {};
+    send.mockImplementationOnce(
+      () => new Promise((_, r) => (reject = r)) as Promise<void>,
+    );
+
+    const { container } = renderChat();
+    fireEvent.click(rowOf(container, "c-1").querySelector(".chat__msg-reply")!);
+    fireEvent.change(input(container), { target: { value: "給 c-1 的" } });
+    fireEvent.keyDown(input(container), { key: "Enter" });
+
+    // Optimistically cleared, send still in flight.
+    expect(banner(container), "the aim went with the send").toBeNull();
+
+    // The owner re-aims at a DIFFERENT message while the send is away.
+    fireEvent.click(rowOf(container, "c-2").querySelector(".chat__msg-reply")!);
+    const bodyOf = (c: HTMLElement) =>
+      c.querySelector(".chat__reply-banner__body")?.textContent;
+    expect(bodyOf(container), "now aimed at c-2").toBe("第二句");
+
+    await act(async () => {
+      reject(new Error("nope"));
+      await Promise.resolve();
+    });
+
+    // The banner must still be showing what the OWNER aimed at, not what the
+    // failed send was aimed at.
+    expect(banner(container)).not.toBeNull();
+    expect(bodyOf(container), "the owner's later aim wins").toBe("第二句");
+    // And sending now must carry c-2 — the banner and the wire agreeing is the
+    // part that actually costs a wrong message when it breaks.
+    send.mockClear();
+    fireEvent.change(input(container), { target: { value: "給 c-2 的" } });
+    fireEvent.keyDown(input(container), { key: "Enter" });
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith("給 c-2 的", undefined, "c-2"),
     );
   });
 

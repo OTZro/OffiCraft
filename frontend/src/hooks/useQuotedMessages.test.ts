@@ -279,9 +279,12 @@ describe("useQuotedMessages: a blip-miss is marked and paid on the next event", 
     await waitFor(() => expect(result.current.get("c-1")).toBeNull());
     rerender();
 
+    // NO rerender() between the emit and the wait, for the same reason the
+    // first test in this describe spells out: a hand-written repaint here would
+    // let this test pass against a sink that pays the debt and never asks
+    // again. The hook's own `setAttempt` is what has to do the repainting.
     h.listChatByIds.mockReset().mockResolvedValue([mkMsg("c-1")]);
     await emit(aChatDelta);
-    rerender();
     await waitFor(() => expect(result.current.get("c-1")?.id).toBe("c-1"));
 
     // Debt paid. Every further chat delta must find nothing owed — otherwise a
@@ -295,16 +298,33 @@ describe("useQuotedMessages: a blip-miss is marked and paid on the next event", 
     expect(result.current.get("c-1")?.id).toBe("c-1");
   });
 
-  it("spends the WHOLE mark on one event, including ids nothing re-reads", async () => {
-    // `staleRef.current.clear()` releases the whole mark, not just the ids that
-    // happen to still be quoted. Deleting it is invisible in the happy path —
-    // the re-read succeeds either way — so this pins the tail: c-2 goes out of
-    // the loaded window before the event lands, so no read ever covers it. If
-    // the mark survived, c-2 would keep the debt non-empty forever and EVERY
-    // later chat delta would un-ask the whole marked set again, re-issuing a
-    // read for c-1, which is still on screen. The cost is a wasted by-ids call
-    // per message anyone sends anywhere, not a wrong answer — which is exactly
-    // why nothing else here can see it.
+  it("un-asks EVERY marked id on that one event, not just the first of them", async () => {
+    // ⚠️ WHAT THIS USED TO CLAIM AND ONLY HALF DID. The version before this one
+    // marked c-1 and c-2, dropped c-2 out of the window, and then watched c-1
+    // recover, under a comment claiming it pinned "the whole mark" being
+    // released. Measured, both directions: deleting `staleRef.current.clear()`
+    // did go red (the surviving mark re-asks c-1 on the next delta), but a sink
+    // that un-asks only the FIRST id with debt left all 8 tests in this file
+    // green — because c-1 was that first id, so stopping there still healed the
+    // one row on screen. Half the sentence had a witness; the other half did
+    // not, and the comment did not distinguish them.
+    //
+    // The order is inverted here so the id that must be re-read is the one the
+    // mark reaches LAST. c-1 and c-2 are marked in that order (the batch is
+    // marked in batch order), then c-1 scrolls out of the loaded window and c-2
+    // stays on screen. A collector that stops after the first marked id un-asks
+    // c-1 — which nothing wants — and c-2 stays in `askedRef` forever, so its
+    // row never leaves 「較早的一則訊息」 no matter how many events arrive.
+    //
+    // (It is not the only witness for that arm any more: the sibling file's
+    // "pays TWO debted ids in the same batch on one burst" also goes red on the
+    // first-only mutant. What is fixed here is this test's own comment, which
+    // claimed a guarantee it did not carry.)
+    //
+    // The tail assertions still pin `.clear()` itself: without it the mark
+    // survives the collection, and the very next chat delta un-asks c-2 again
+    // and re-issues a read for it — a wasted by-ids call per message anyone in
+    // the company sends, which is the cost this line exists to avoid.
     h.listChatByIds.mockRejectedValue(new Error("down"));
 
     const { result, rerender } = renderHook(
@@ -314,22 +334,31 @@ describe("useQuotedMessages: a blip-miss is marked and paid on the next event", 
 
     await waitFor(() => expect(result.current.get("c-1")).toBeNull());
     expect(result.current.get("c-2")).toBeNull();
+    // Both really were in ONE batch — that is what puts them in the mark in
+    // this order. Two separate batches would make the ordering accidental and
+    // the discrimination above meaningless.
+    expect(h.listChatByIds).toHaveBeenCalledWith(["c-1", "c-2"]);
 
-    // c-2 scrolls out of the loaded window: it is still marked, but nothing
-    // will ask for it again.
-    rerender({ ids: ["c-1"] });
+    // c-1 — the FIRST id in the mark — scrolls out of the loaded window: still
+    // marked, but nothing will ever ask for it again. c-2 is still on screen.
+    rerender({ ids: ["c-2"] });
 
-    h.listChatByIds.mockReset().mockResolvedValue([mkMsg("c-1")]);
+    h.listChatByIds.mockReset().mockResolvedValue([mkMsg("c-2")]);
     await emit(aChatDelta);
-    await waitFor(() => expect(result.current.get("c-1")?.id).toBe("c-1"));
-    expect(h.listChatByIds).toHaveBeenCalledWith(["c-1"]);
+
+    // No rerender() before this wait, for the reason the first test in this
+    // describe spells out: the repaint has to be the hook's own.
+    await waitFor(() => expect(result.current.get("c-2")?.id).toBe("c-2"));
+    // …and the read that resolved it asked for c-2 alone: c-1 is out of the
+    // window, so a collector may not drag it back into a request.
+    expect(h.listChatByIds.mock.calls).toEqual([[["c-2"]]]);
     const callsAfterCollection = h.listChatByIds.mock.calls.length;
 
     await emit(aChatDelta);
     await emit(aChatDelta);
-    rerender({ ids: ["c-1"] });
+    rerender({ ids: ["c-2"] });
 
     expect(h.listChatByIds.mock.calls.length).toBe(callsAfterCollection);
-    expect(result.current.get("c-1")?.id).toBe("c-1");
+    expect(result.current.get("c-2")?.id).toBe("c-2");
   });
 });

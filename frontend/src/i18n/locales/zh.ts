@@ -789,6 +789,14 @@ export const zh = {
     replyQuoteJump: "跳到原訊息",
     replyQuoteGone: "較早的一則訊息",
     replyQuoteAttachment: "（附件）",
+    // 引用列自己的無障礙名稱。本 repo 沒有 sr-only／visually-hidden utility
+    // （見 MemberCard.presence-a11y.test.tsx），所以「這句是引用的，不是這個人
+    // 現在說的」這件事只能靠 aria-label 帶。少了它，一則回覆在無障礙樹上會被
+    // 攤平成「Mira。Mira。他說的。跳到原訊息。我說的」——這功能唯一要傳達的
+    // 資訊，螢幕閱讀器使用者剛好聽不到。replyQuoteRole 是還沒解析出作者
+    // （或作者已不可考）時用的，replyQuoteRoleWho 是解析得出來時用的。
+    replyQuoteRole: "引用",
+    replyQuoteRoleWho: (name: string) => `引用 ${name}`,
   },
   mp: {
     back: "返回",

@@ -71,6 +71,7 @@ var messageKeys = map[string]bool{
 	"chat.replyQuoteAttachment":                true,
 	"chat.replyQuoteGone":                      true,
 	"chat.replyQuoteJump":                      true,
+	"chat.replyQuoteRole":                      true,
 	"chat.roleSettingsLink":                    true,
 	"chat.send":                                true,
 	"chat.shareLinkCopied":                     true,
