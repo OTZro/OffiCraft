@@ -161,9 +161,7 @@ export function ChatArea({
   // T-94c1 就地喚醒: wake this member from the chat itself (calls activateMember
   // in the parent). Optional — absent = no in-chat wake button (an outsource
   // worker is spawn/task-driven, not activate-woken, so the button would lie);
-  // the composer then LOCKS to a plain, non-clickable 「目前離線中」 notice
-  // (`chat__composer-locked`, role="status") — there is no bar and nothing to
-  // click, because there is nothing to wake and no live panel to open.
+  // the offline composer then degrades to the plain "go to member panel" bar.
   //
   // 🔴 May resolve with the activate's {@link MemberActivateResult} (T-7fa1).
   // `activationPending: true` = the wake was accepted but NOTHING was
@@ -1719,13 +1717,9 @@ export function ChatArea({
               {msg.chatOfflineTitle(member.name)}
             </div>
             {/* T-94c1: offline/stopped can now be messaged (queues until wake),
-             * so a peer WITH a queue path gets the queue hint instead of
-             * 「喚醒後才能開始對話」 (which contradicted the unlocked composer
-             * below). ⚠️ That sentence is not gone: `t.chat.offlineHint` still
-             * IS it, and the `: t.chat.offlineHint` branch below still prints it
-             * for a peer with NO queue path — where the composer is locked
-             * anyway, so it no longer contradicts anything. The wake entry +
-             * queue notice live on the composer's wake row, not on this card. */}
+             * so the hint no longer says "喚醒後才能開始對話" (which contradicted
+             * the unlocked composer below). The wake entry + queue notice live on
+             * the composer's wake row now, not on this card. */}
             <div className="chat__offline-hint">
               {offlineQueue
                 ? msg.chatOfflineQueueHint(member.name)

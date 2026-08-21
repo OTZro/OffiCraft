@@ -760,8 +760,21 @@ func (s *apiServer) servedChatMessageDTO(m ChatMessage) (chatMessageDTO, error) 
 //	GET /api/resume-summary-size         200                500
 //
 // The last two are the WAKE PATH, and that is the cost worth naming: an agent
-// that once replied to a row which later goes bad CANNOT BOOT — the first two
-// calls of its boot sequence are those two, and both 500. It does not matter
+// that once replied to a row which later goes bad CANNOT BOOT — both of those
+// calls are in its boot sequence, and both 500.
+//
+// ⚠️ DO NOT READ "the boot sequence" AS SOMETHING THIS REPO PINS. 啟動程序 is a
+// per-studio, owner-EDITABLE document (replace_boot_sequence / reset_boot_sequence),
+// not a fixture in this tree, so no test here can hold it to any order and this
+// sentence cannot be verified for a running studio at all — to check a real one,
+// read that studio's live doc via get_boot_sequence, not this comment. What IS
+// checkable is the shipped seed, `seeds/boot_sequence.md`, and against it the
+// ordering is OFF BY ONE: step 1 is report_waking (neither of these endpoints),
+// and step 2 is peek_resume_summary_size then resume_summary — so they are the
+// SECOND and THIRD calls there, not the first two. That does not weaken the
+// point, which is only that both sit early enough to be hit before the agent can
+// do anything else. It does mean the count is not load-bearing; do not build on
+// it. It does not matter
 // whether the bad row is in that agent's own thread: ListChatInvolving is capped
 // at resumeChatFetch (500), so a row in ANOTHER conversation, or simply older
 // than that agent's newest 500 messages, is never scanned by the snapshot's own
