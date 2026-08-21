@@ -622,7 +622,39 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 				"runtime must be one of [claude codex]; got '"+runtime+"'")
 			return
 		}
-		launchIntentChanged = launchIntentChanged || runtime != m.Runtime
+		// COMPARE WHAT THE WIRE CARRIES, NOT WHAT THE COLUMN HOLDS. An unset
+		// runtime is not a third value: NormalizeRuntime("") is claude, that is
+		// what buildStartFrame stamps, and that is what the running session is
+		// already on. A raw `runtime != m.Runtime` reads "" as different from
+		// "claude" and charges the owner a wind-down + 重新聚焦 for a save that
+		// changes nothing the agent could observe.
+		//
+		// THIS PACKAGE OPENED THAT READING. An earlier draft of this comment
+		// claimed the defect predates T-b3d0; it does not. PutMember used to
+		// bind NormalizeRuntime(m.Runtime), so every persisted row held a
+		// concrete "claude" — the out-of-box assistant's included — and the raw
+		// comparison never fired spuriously. The commit before this one is what
+		// stopped normalizing on the way in, so that "nobody has picked yet"
+		// stays distinguishable from "the owner picked claude"; that is what
+		// makes "" durable, and therefore what makes this comparison wrong. The
+		// damage is repaired inside the package that created it.
+		//
+		// seedOutOfBox never writing a runtime is true but does not carry the
+		// claim on its own: it only covers what the seed literal contains, not
+		// what the write path then stored. Rows that already exist keep
+		// whatever is on disk (installs running the released code are on
+		// "claude"); the rows that sit on "" are the ones written from here on
+		// — a fresh seed, or a member dispatched before its machine has ever
+		// reported capabilities (resolveEmptyRuntimeForPlacement leaves it
+		// unset there by design). For those, the first owner to open
+		// 成員設定 and press 儲存 on the runtime she was already running
+		// would pay a recycle for a no-op edit.
+		//
+		// The WRITE below still lands: "" -> "claude" is a real intent the owner
+		// stated, and persisting it stops placement from resolving that member
+		// against some other machine later. Only the recycle is withheld.
+		launchIntentChanged = launchIntentChanged ||
+			NormalizeRuntime(runtime) != NormalizeRuntime(m.Runtime)
 		m.Runtime = runtime
 	}
 	if body.Effort != nil {

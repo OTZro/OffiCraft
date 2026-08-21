@@ -722,6 +722,32 @@ type SpawnDeps struct {
 	Sleep func(time.Duration)
 }
 
+// claudeBinUnresolvedReason is the owner-facing refusal for "this member wants
+// Claude and this machine has none". It names all THREE exits; the cheapest —
+// changing the member's runtime, which installs nothing — is FIRST, because
+// position is what carries "cheapest" once the prose explaining it is gone.
+//
+// LENGTH IS A FEATURE HERE, NOT A COMPROMISE. This string is a last_op_reason,
+// whose declared contract (ocapi_gen.go MemberDTO.LastOpReason) is a
+// "structured one-line cause" — as distinct from the free-form last_op_log
+// dump. The cockpit renders it accordingly: .mp-lastop__reason
+// (frontend/components/member-detail.css) is word-break:break-word with no
+// truncation and no expander, in --color-danger. A prose paragraph there does
+// not become a paragraph; it becomes a wall of red the owner has to read past
+// to find the one sentence that matters. The first draft ran 431 display
+// columns — roughly six wrapped lines of it.
+//
+// So the remediation is compressed to labels, not explanations: each exit is
+// the shortest phrase that still lets an owner act on it. What was dropped is
+// only the reasoning behind exit 3 (that launchd's PATH is not the shell's) —
+// recoverable from the install docs, and irrelevant to the two exits an owner
+// on a codex-only box will actually take. What is NOT droppable, and stays
+// first, is the Codex exit: this refusal exists because owners were being sent
+// to install a runtime they had deliberately declined.
+const claudeBinUnresolvedReason = "claude_bin_unresolved: no Claude Code on this machine. " +
+	"Fix any one: set this member's 執行環境 to Codex; " +
+	"install Claude Code here; or re-install the warden with OC_CLAUDE_BIN=<path>."
+
 // start EXECUTES one server-downpushed spawn. It does NOT decide whether to spawn
 // (that is the server's placement call); it only refuses to CLOBBER a live local
 // session (a local safety guard, distinct from the server's over-spawn guard).
@@ -762,7 +788,14 @@ func (d SpawnDeps) start(p StartParams) SpawnOutcome {
 	}
 	// The selected runtime must be resolvable. A machine may carry either or both.
 	if runtimeName == "claude" && d.ClaudeBin == "" {
-		return SpawnOutcome{OK: false, Reason: "claude_bin_unresolved: set OC_CLAUDE_BIN or put claude on the daemon PATH (~/.local/bin absent from launchd PATH)"}
+		// Written for the OWNER, who reads this on the member row's
+		// last_op_reason (T-b3d0). Every earlier wording offered only two
+		// exits and BOTH of them were "go get claude" — so an owner who had
+		// deliberately installed Codex alone (a supported configuration) was
+		// sent to install, log in to, and pay for a runtime they never
+		// intended to use. The runtime is a per-member setting, so the
+		// cheapest fix is usually neither of the other two; it is named first.
+		return SpawnOutcome{OK: false, Reason: claudeBinUnresolvedReason}
 	}
 	if runtimeName == "codex" {
 		if d.CodexBin == "" {
@@ -782,13 +815,45 @@ func (d SpawnDeps) start(p StartParams) SpawnOutcome {
 	// carries the value-free SET/unset summary ONLY (see claudecreds.go).
 	if runtimeName == "claude" && d.ClaudeCreds != nil {
 		if st := d.ClaudeCreds(); !st.Present {
+			// SAME OWNER-FACING CONTRACT AS claudeBinUnresolvedReason, and it is
+			// this arm — not that one — that the heartbeat probe's "omit an
+			// unmeasured login rather than call it a no" trade-off actually
+			// lands on: a host with claude INSTALLED but signed out resolves
+			// ClaudeBin, so it can never reach the bin_unresolved arm. Every
+			// earlier wording here offered two exits and BOTH were "go get
+			// claude logged in" — the same disease this ticket exists to cure,
+			// re-created in a narrower cell. The Codex exit is named FIRST for
+			// the same reason it is there: the runtime is a per-member setting,
+			// so it is usually the cheapest fix.
+			//
+			// WIDTH, MEASURED WITH THE SUMMARY A REAL HOST PRODUCES — not the
+			// two-source one the test used to stub. probeClaudeCreds marks
+			// cred_file, keychain AND all four claudeCredEnvKeys, so a
+			// signed-out Mac renders six "=unset" pairs: 140 columns of the
+			// total on its own. This message went 516 -> 359 columns. The
+			// sibling constant runs 182 under a 220 guard because it
+			// interpolates nothing at all. So the gap between them is the
+			// SUMMARY, not the prose — and shrinking the summary is a separate
+			// change, because its value-free construction is a security
+			// contract (see claudecreds.go). Guard set at 380 here, above 359.
+			//
+			// The launchd clause stays, but NOT for the reason an earlier draft
+			// of this comment gave. That draft claimed this string is "the only
+			// place the trap is written down at all" — FALSE, and an
+			// independent reviewer caught it: claudecreds_test.go explains the
+			// same trap verbatim, and install.go carries the plist relay that
+			// makes the escape hatch real in the first place. What IS true, and
+			// is the actual reason to keep it: no USER-FACING doc says it —
+			// `grep -rn OC_CLAUDE_CRED_CHECK docs/ bin/ spec/` is empty, so an
+			// owner who reads this line and goes looking finds nothing.
+			// Writing it into docs/guide/troubleshooting.md is the real fix and
+			// is not this ticket's.
 			return SpawnOutcome{OK: false, Reason: fmt.Sprintf(
-				"claude_not_logged_in: no claude credential found on this host (%s) — "+
-					"run `claude` once as this user and complete login, then retry. "+
-					"To bypass this gate instead: re-run `ocwarden install` with "+
-					"OC_CLAUDE_CRED_CHECK=0 in its environment (the warden is a launchd "+
-					"job, so only the plist the installer stamps can change its env — "+
-					"exporting the variable in a shell has no effect on it)", st.Summary)}
+				"claude_not_logged_in: no claude credential here (%s). "+
+					"Fix any one: set this member's 執行環境 to Codex; "+
+					"run `claude` once as this user; or re-install the warden "+
+					"with OC_CLAUDE_CRED_CHECK=0 (shell exports do not reach it).",
+				st.Summary)}
 		}
 	}
 	// idempotent clobber-guard: REFUSE to stomp a live session. This is a LOCAL

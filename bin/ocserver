@@ -383,7 +383,27 @@ resolve_runtime_stamps() {
     log "WARNING: no agent runtime resolved (neither claude nor codex) — wardens installed via the cockpit's bootstrap-here on THIS host will refuse every spawn (runtime_bin_unresolved)."
     log "WARNING: fix: install one, or export OC_CLAUDE_BIN=/absolute/path/to/claude or OC_CODEX_BIN=/absolute/path/to/codex and re-run 'ocserver install' (safe — idempotent)."
   elif [[ -z "$claude_bin" ]]; then
-    log "NOTE: claude not resolved here — codex members work, claude members on this host would hit claude_bin_unresolved (export OC_CLAUDE_BIN=/absolute/path/to/claude and re-run to fix)."
+    # "codex members work" used to be the whole sentence, and out of the box it
+    # was a comfort that did not apply: the one member a fresh install ships
+    # with had no runtime of its own and was read as a claude member, so on THIS
+    # host it was the member that could not start. A member with no runtime of
+    # its own is now resolved against what this host reports, at placement time
+    # (T-b3d0) — so state that, and confine the failure to the case that really
+    # is one: a member someone deliberately set to claude.
+    #
+    # AND SAY WHEN. Resolution reads the capability map the warden reports, and
+    # that map lives in the server's in-memory telemetry store (server.go:361,
+    # newMemStore) — it is NOT persisted, so every server start and every
+    # self-update re-exec empties it. Between a restart and the next heartbeat
+    # (30s cadence) the server has nothing to resolve against, leaves the
+    # runtime unset, and an unset runtime still normalises to claude on the
+    # wire: that member is dispatched as claude once and fails to spawn. It
+    # recovers by itself on the next tick after the heartbeat lands, so this is
+    # a window, not a defect — but an unqualified "starts on codex" promises
+    # something this NOTE cannot deliver at that moment, and the person reading
+    # it is standing at exactly the restart it applies to.
+    log "NOTE: claude not resolved here — this host runs codex. Once this host has reported its runtimes (first warden heartbeat after a server start, ~30s), a member with no runtime chosen for it is placed on what this host reports, so the out-of-box assistant starts on codex; only a member you deliberately set to claude cannot start here. Before that first heartbeat a not-yet-resolved member is still dispatched as claude and will fail one spawn, then recover."
+    log "NOTE: to run claude members on this host: install claude, or export OC_CLAUDE_BIN=/absolute/path/to/claude and re-run 'ocserver install' (safe — idempotent). Otherwise set that member's 執行環境 to codex."
   elif [[ -z "$codex_bin" ]]; then
     log "NOTE: codex not resolved here — claude members work, codex members on this host would hit runtime_bin_unresolved (export OC_CODEX_BIN=/absolute/path/to/codex and re-run to fix)."
   fi

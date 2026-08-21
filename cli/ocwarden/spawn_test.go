@@ -721,8 +721,34 @@ func TestStart_NoClaudeBin(t *testing.T) {
 	if out.OK {
 		t.Fatal("unresolvable claude bin must yield ok=false")
 	}
-	if !strings.HasPrefix(out.Reason, "claude_bin_unresolved:") {
-		t.Errorf("unresolved claude bin must carry a claude_bin_unresolved reason, got %q", out.Reason)
+	// Full equality, not a prefix/contains probe: the ONLY thing that was ever
+	// wrong with this refusal lived in the part a prefix assert does not read
+	// — it offered two exits and both were "go get claude". The third exit
+	// (change this member's runtime) has to be IN the sentence, so the whole
+	// sentence is the assertion.
+	want := "claude_bin_unresolved: no Claude Code on this machine. " +
+		"Fix any one: set this member's 執行環境 to Codex; " +
+		"install Claude Code here; or re-install the warden with OC_CLAUDE_BIN=<path>."
+	// The Codex exit is the hard acceptance criterion of this ticket and is
+	// asserted SEPARATELY from the equality above, so that a future edit which
+	// rewords the sentence cannot quietly drop it: whoever updates `want` to
+	// match their new wording has to defeat this line on purpose.
+	if !strings.Contains(out.Reason, "Codex") {
+		t.Errorf("the refusal must always offer the change-this-member's-runtime "+
+			"exit — that is the whole reason it was rewritten; got %q", out.Reason)
+	}
+	// One line, not a paragraph. last_op_reason is contractually a "structured
+	// one-line cause" (ocapi_gen.go) and the cockpit renders it un-truncated in
+	// red (.mp-lastop__reason). The version this replaced ran 431 display
+	// columns. The bound is deliberately loose — it is a wall-of-red guard, not
+	// a style rule — but it does fail on a relapse into prose.
+	if width := runewidth(out.Reason); width > 220 {
+		t.Errorf("refusal is %d display columns; last_op_reason is rendered "+
+			"un-truncated in the member panel and a paragraph there becomes a wall "+
+			"of red: %q", width, out.Reason)
+	}
+	if out.Reason != want {
+		t.Errorf("refusal reason\n got: %q\nwant: %q", out.Reason, want)
 	}
 	if len(run.calls) != 0 {
 		t.Errorf("must not touch tmux when claude bin is unresolved, got %v", run.calls)
@@ -742,7 +768,13 @@ func TestStart_ClaudeNotLoggedIn(t *testing.T) {
 		Home:      "/tmp",
 		ClaudeBin: fxClaudeBin,
 		ClaudeCreds: func() claudeCredStatus {
-			return claudeCredStatus{Present: false, Summary: "cred_file=unset keychain=unset"}
+			// THE SHAPE A REAL HOST PRODUCES, not a convenient short one.
+			// probeClaudeCreds marks cred_file, keychain and all four
+			// claudeCredEnvKeys, so a signed-out Mac renders SIX pairs. Stubbing
+			// two made the width assertion below measure a string that is 110
+			// columns shorter than anything an owner ever sees — the guard was
+			// green on a message that does not exist.
+			return claudeCredStatus{Present: false, Summary: sixSourceUnsetSummary}
 		},
 		WriteFile: func(p, c string, _ os.FileMode) error { wrote[p] = c; return nil },
 		MkdirAll:  func(string, os.FileMode) error { return nil },
@@ -751,13 +783,49 @@ func TestStart_ClaudeNotLoggedIn(t *testing.T) {
 	if out.OK {
 		t.Fatal("a logged-out claude must yield ok=false, not a silent OK")
 	}
-	if !strings.HasPrefix(out.Reason, "claude_not_logged_in:") {
-		t.Fatalf("refusal must carry a claude_not_logged_in reason, got %q", out.Reason)
+	// The WHOLE sentence, composed from this test's own input (the summary the
+	// stub credential seam returned). The keyword-sampling version this
+	// replaced could not see anything it did not happen to sample — including
+	// whether the summary leaked a credential VALUE rather than the
+	// value-free SET/unset shape, which is the one property this reason
+	// exists to keep.
+	want := fmt.Sprintf(
+		"claude_not_logged_in: no claude credential here (%s). "+
+			"Fix any one: set this member's 執行環境 to Codex; "+
+			"run `claude` once as this user; or re-install the warden "+
+			"with OC_CLAUDE_CRED_CHECK=0 (shell exports do not reach it).",
+		sixSourceUnsetSummary)
+	if out.Reason != want {
+		t.Errorf("refusal reason\n got: %q\nwant: %q", out.Reason, want)
 	}
-	for _, want := range []string{"cred_file=unset", "keychain=unset", "run `claude` once"} {
-		if !strings.Contains(out.Reason, want) {
-			t.Errorf("reason must carry %q (the actionable evidence), got %q", want, out.Reason)
-		}
+	// THE EXIT THAT MUST NOT SILENTLY LEAVE. This arm is the one a
+	// claude-installed-but-signed-out host lands on, so if it ever stops
+	// naming the per-member runtime switch, the owner is back to being told
+	// to go fix a runtime they may have deliberately declined — the exact
+	// failure this ticket opened on. The whole-sentence compare above would
+	// also catch it, but it would read as "someone reworded a string"; this
+	// one names the property.
+	// 🔴 PIN THE RUNTIME BY NAME, not by the Chinese label around it. An
+	// independent reviewer broke the first version of this assertion by
+	// rewriting the sentence to "set this member's 執行環境 elsewhere" and
+	// updating `want` to match: the whole-sentence compare went green, this
+	// line went green, and the message no longer told anyone about Codex at
+	// all. The label is the container; "Codex" is the property. The sibling
+	// test (TestStart_NoClaudeBin) already pins it this way.
+	if !strings.Contains(out.Reason, "Codex") {
+		t.Errorf("the signed-out refusal must still name the Codex exit, got %q", out.Reason)
+	}
+	if !strings.Contains(out.Reason, "執行環境") {
+		t.Errorf("the Codex exit must name the per-member setting the owner edits, got %q", out.Reason)
+	}
+	// Wall-of-red ceiling, measured against the SIX-source summary above —
+	// i.e. what an owner actually sees. 359 at the time of writing (the old
+	// wording was 516). It cannot meet claudeBinUnresolvedReason's 220 because
+	// that one is a constant with no summary interpolated at all; 140 of these
+	// columns are the summary itself. Shrinking THAT is a separate change.
+	if width := runewidth(out.Reason); width > 380 {
+		t.Errorf("refusal reason is %d display columns; keep it short enough to read "+
+			"on the member row (was 406 before T-b3d0)", width)
 	}
 	// NO RESIDUE: no tmux session, no workdir files.
 	if len(run.calls) != 0 {
@@ -1052,3 +1120,34 @@ func TestTmuxDeliverNudge_NilSleepSafe(t *testing.T) {
 		t.Fatalf("committed on first read → 1 Enter, got %d", r.enterCount)
 	}
 }
+
+// runewidth is a deliberately crude display-width count: CJK / fullwidth runes
+// take two columns where everything else takes one. It exists only so the
+// refusal-length guard in TestStart_NoClaudeBin measures the mixed zh/en string
+// the way the member panel actually renders it, instead of counting a 4-rune
+// 執行環境 as 4 columns.
+func runewidth(s string) int {
+	width := 0
+	for _, r := range s {
+		switch {
+		case r >= 0x1100 && r <= 0x115F, // Hangul Jamo
+			r >= 0x2E80 && r <= 0xA4CF, // CJK radicals … Yi
+			r >= 0xAC00 && r <= 0xD7A3, // Hangul syllables
+			r >= 0xF900 && r <= 0xFAFF, // CJK compatibility ideographs
+			r >= 0xFF00 && r <= 0xFF60, // fullwidth forms
+			r >= 0xFFE0 && r <= 0xFFE6:
+			width += 2
+		default:
+			width++
+		}
+	}
+	return width
+}
+
+// sixSourceUnsetSummary is what probeClaudeCreds returns on a signed-out darwin
+// host with HOME set: cred_file, keychain, then every claudeCredEnvKeys entry,
+// each rendered "<name>=unset" and space-joined. Kept here (rather than a short
+// stand-in) so the width assertions measure the string an owner actually reads.
+const sixSourceUnsetSummary = "cred_file=unset keychain=unset " +
+	"ANTHROPIC_API_KEY=unset ANTHROPIC_AUTH_TOKEN=unset " +
+	"CLAUDE_CODE_USE_BEDROCK=unset CLAUDE_CODE_USE_VERTEX=unset"
