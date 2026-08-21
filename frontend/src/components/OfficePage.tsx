@@ -427,6 +427,13 @@ export function OfficePage() {
         // the only server-side collection there is — the robust STOP goes to the
         // warden now. Refetch
         // and let server-driven presence surface stopped.
+        // 加速停止 — the MIDDLE rung of 停止 → 加速停止 → 強制停止. Puts the
+        // wind-down that is already open on the server's clock and tells the
+        // member; it is NOT a kill, so the member can still finish early.
+        onAcceleratedStop={async () => {
+          await api.acceleratedStopMember(detail.id);
+          await refetch();
+        }}
         onForceStop={async () => {
           await api.forceStopMember(detail.id);
           await refetch();

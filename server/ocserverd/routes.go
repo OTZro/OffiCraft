@@ -397,6 +397,15 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		},
 		{
 			Method:   "POST",
+			Path:     "/api/members/{member_id}/accelerated-stop",
+			Handler:  w.HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStopPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "加速停止: put an ALREADY-OPEN wind-down on the stop.accelerated_grace_secs clock and tell the member. 409 if nothing is winding down -- press 停止 first. Middle rung of 停止 -> 加速停止 -> 強制停止.",
+			MCPTool:  "accelerated_stop_member",
+		},
+		{
+			Method:   "POST",
 			Path:     "/api/self/waking",
 			Handler:  w.HandleReportWakingApiSelfWakingPost,
 			Auth:     authGated,
@@ -1654,6 +1663,15 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Requires: principalAdminAgent,
 			Summary:  "Refocus (換手) an outsource worker (owner/admin agent, online-only else 409).",
 			MCPTool:  "refocus_outsource_worker",
+		},
+		{
+			Method:   "POST",
+			Path:     "/api/outsource-workers/{id}/accelerated-stop",
+			Handler:  w.HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "加速停止 an outsource worker: put its ALREADY-OPEN handover on the stop.accelerated_grace_secs clock and tell it. 409 if none is open. Does NOT change what /stop means.",
+			MCPTool:  "accelerated_stop_outsource_worker",
 		},
 		{
 			Method:   "POST",

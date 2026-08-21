@@ -83,6 +83,12 @@ interface MemberDetailPanelProps {
   /** Graceful stop / cancel-wake → deactivateMember (desired_state=offline). Backs the
    * Stop (online) and Cancel (waking) actions. */
   onDeactivate?: () => void;
+  /** 加速停止 (the MIDDLE rung) → acceleratedStopMember. Puts the wind-down that
+   * is already open on the server's clock and tells the member. Offered only
+   * where the server will accept it (a member already *stopping*), and NOT gated
+   * behind a confirm: it is not a kill, the member still gets the grace and can
+   * still finish early. */
+  onAcceleratedStop?: () => void | Promise<void>;
   /** Force-stop (immediate kill) → forceStopMember. Backs the "Force stop" action
    * shown once the member is already *stopping*; the panel gates it behind a
    * confirm. May be async so the confirm can surface an in-flight state. */
@@ -102,6 +108,7 @@ export function MemberDetailPanel({
   onActivate,
   onRelocate,
   onDeactivate,
+  onAcceleratedStop,
   onForceStop,
   onRefocus,
   onRename,
@@ -865,14 +872,20 @@ export function MemberDetailPanel({
             onSpawn={wakePendingActive || onlineMachines.length === 0 ? undefined : openSettings}
             onCancel={onDeactivate}
             onStop={onDeactivate}
+            // The middle rung. No confirm: 加速停止 gives the member a deadline
+            // it is TOLD about and can still beat, so a second click costs
+            // nothing irreversible — unlike force-stop below.
+            onAcceleratedStop={
+              onAcceleratedStop ? () => void onAcceleratedStop() : undefined
+            }
             reasons={
               onlineMachines.length === 0
                 ? { spawn: t.machine.noOnlineMachine }
                 : undefined
             }
-            // In `stopping`, the Stop button IS force-stop → open the confirm first
-            // (an immediate kill; the offboard arm runs no clock, so this is the
-            // only escalation there is — see MemberActionButtons).
+            // The TOP rung — still behind a confirm, and now no longer the only
+            // escalation: 加速停止 sits to its left, which is where an impatient
+            // second click lands (see MemberActionButtons' ladder note).
             onForceStop={
               onForceStop ? () => setForceStopConfirm(true) : undefined
             }

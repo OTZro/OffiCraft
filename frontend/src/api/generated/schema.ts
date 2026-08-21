@@ -1756,6 +1756,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/members/{member_id}/accelerated-stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 加速停止: put an ALREADY-OPEN wind-down on the stop.accelerated_grace_secs clock and tell the member. 409 if nothing is winding down -- press 停止 first. Middle rung of 停止 -> 加速停止 -> 強制停止.
+         * @description 加速停止 (accelerated stop) — the MIDDLE rung of the owner's three-step escalation 停止 → 加速停止 → 強制停止 (owner 2026-08-21).
+         *
+         *     停止 asks the member to work its offboard sequence and waits INDEFINITELY: nothing on the server ever collects it (owner ruling rc-27d1710174dd). 強制停止 kills the session on the spot and deliberately says nothing at all. This endpoint is the rung between them: it puts the wind-down that is ALREADY OPEN on a clock, and TELLS the member — the same write fans an offboard notice whose sentence now quotes a deadline.
+         *
+         *     It does NOT open a wind-down. A member that has not been asked to stop is a 409: press 停止 (deactivate) or 重新聚焦 (refocus) first, which is what makes this an ESCALATION rather than a second, harsher stop button. It also requires a live session (409) — there is nothing to accelerate on a member nobody is listening from — and refuses a member already cut off by 強制停止 (409): that session is not working a close-out, so a deadline would be addressed to nobody.
+         *
+         *     The grace is ``stop.accelerated_grace_secs`` (default 120 s), the SAME value the second context threshold uses — one setting for both clocked causes, so the automatic and the manual arm can never count different seconds. It runs from THIS press, not from an earlier 停止: the handler re-stamps ``stopping_since`` (or ``refocus_since`` on the 換手 arm) as it writes ``refocus_op=accelerated_stop``. When the deadline lapses the ordinary reconcile robust STOP collects the member; the agent's own ``report_stopped`` still ends it earlier, and 強制停止 still ends it immediately.
+         *
+         *     RBAC: route-table ``requires="admin_agent"`` — owner token or admin-role assistant; an ordinary agent → 403. A ``member`` delta fans out on the write.
+         */
+        post: operations["handle_accelerated_stop_member_api_members__member_id__accelerated_stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/members/{member_id}/refocus": {
         parameters: {
             query?: never;
@@ -2198,6 +2226,32 @@ export interface paths {
          * @description Refocus (換手) an outsource worker (T-32e1): the worker twin of refocus_member. Stamps refocus_since, then kills the current session and re-spawns it so a FRESH worker picks the SAME bound task back up from its task plan / step notes (a worker has no member fold — continuity lives in the task). ONLINE-ONLY: 409 unless the worker is active with a live session; 409 for a stopped worker (restart first); 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. Exposed as an MCP tool since T-6020.
          */
         post: operations["handle_refocus_outsource_worker_api_outsource_workers__id__refocus_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/outsource-workers/{id}/accelerated-stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 加速停止 an outsource worker: put its ALREADY-OPEN handover on the stop.accelerated_grace_secs clock and tell it. 409 if none is open. Does NOT change what /stop means.
+         * @description 加速停止 for an outsource worker — the symmetric twin of ``accelerated_stop_member`` (owner 2026-08-21, 停止 → 加速停止 → 強制停止).
+         *
+         *     It puts a wind-down the worker is ALREADY inside on the ``stop.accelerated_grace_secs`` clock and tells it, by stamping ``refocus_op=accelerated_stop`` on the open handover epoch and re-stamping ``refocus_since`` from THIS press. The clock, the wire deadline and the sentence all come from the one ``winddownKindFor`` judgement members use — there is no separate worker rule.
+         *
+         *     ⚠️ IT DOES NOT CHANGE WHAT ``POST /api/outsource-workers/{id}/stop`` MEANS. That verb still sets ``desired_state=offline`` and kills the session without re-dispatching; this endpoint neither calls it nor softens it. What this accelerates is the HANDOVER arm (refocus / relocate / model change / restart_self), which is the only arm a worker has that waits for the worker to finish.
+         *
+         *     409 when the worker is not online, is released or stopped, or has no handover epoch open — an escalation with nothing to escalate is a mistake, not a stop.
+         */
+        post: operations["handle_accelerated_stop_outsource_worker_api_outsource_workers__id__accelerated_stop_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -12227,6 +12281,55 @@ export interface operations {
             };
         };
     };
+    handle_accelerated_stop_member_api_members__member_id__accelerated_stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
     handle_refocus_member_api_members__member_id__refocus_post: {
         parameters: {
             query?: never;
@@ -13333,6 +13436,55 @@ export interface operations {
         };
     };
     handle_refocus_outsource_worker_api_outsource_workers__id__refocus_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutsourceWorkerDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_accelerated_stop_outsource_worker_api_outsource_workers__id__accelerated_stop_post: {
         parameters: {
             query?: never;
             header?: never;

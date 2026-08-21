@@ -3731,6 +3731,9 @@ type ServerInterface interface {
 	// Partially update a member's name / runtime / model / effort. Blank name, invalid runtime or invalid effort → 422, and changing a launch-intent field arms a graceful handover.
 	// (PATCH /api/members/{member_id})
 	HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWriter, r *http.Request, memberId string)
+	// 加速停止: put an ALREADY-OPEN wind-down on the stop.accelerated_grace_secs clock and tell the member. 409 if nothing is winding down -- press 停止 first. Middle rung of 停止 -> 加速停止 -> 強制停止.
+	// (POST /api/members/{member_id}/accelerated-stop)
+	HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStopPost(w http.ResponseWriter, r *http.Request, memberId string)
 	// Activate: write desired_state=online intent (does NOT flip online).
 	// (POST /api/members/{member_id}/activate)
 	HandleActivateMemberApiMembersMemberIdActivatePost(w http.ResponseWriter, r *http.Request, memberId string)
@@ -3806,6 +3809,9 @@ type ServerInterface interface {
 	// Read one outsource worker by id (detail-panel refresh).
 	// (GET /api/outsource-workers/{id})
 	HandleGetOutsourceWorkerApiOutsourceWorkersIdGet(w http.ResponseWriter, r *http.Request, id string)
+	// 加速停止 an outsource worker: put its ALREADY-OPEN handover on the stop.accelerated_grace_secs clock and tell it. 409 if none is open. Does NOT change what /stop means.
+	// (POST /api/outsource-workers/{id}/accelerated-stop)
+	HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost(w http.ResponseWriter, r *http.Request, id string)
 	// Read an outsource worker's boot-context preview (owner/admin agent).
 	// (GET /api/outsource-workers/{id}/boot-context)
 	HandleGetWorkerBootContextApiOutsourceWorkersIdBootContextGet(w http.ResponseWriter, r *http.Request, id string)
@@ -5472,6 +5478,32 @@ func (siw *ServerInterfaceWrapper) HandleUpdateMemberApiMembersMemberIdPatch(w h
 	handler.ServeHTTP(w, r)
 }
 
+// HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStopPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStopPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "member_id" -------------
+	var memberId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "member_id", r.PathValue("member_id"), &memberId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "member_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStopPost(w, r, memberId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleActivateMemberApiMembersMemberIdActivatePost operation middleware
 func (siw *ServerInterfaceWrapper) HandleActivateMemberApiMembersMemberIdActivatePost(w http.ResponseWriter, r *http.Request) {
 
@@ -6103,6 +6135,32 @@ func (siw *ServerInterfaceWrapper) HandleGetOutsourceWorkerApiOutsourceWorkersId
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.HandleGetOutsourceWorkerApiOutsourceWorkersIdGet(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -8070,6 +8128,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/members/{member_id}", wrapper.HandleDismissMemberApiMembersMemberIdDelete)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/members/{member_id}", wrapper.HandleGetMemberApiMembersMemberIdGet)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/members/{member_id}", wrapper.HandleUpdateMemberApiMembersMemberIdPatch)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/members/{member_id}/accelerated-stop", wrapper.HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStopPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/members/{member_id}/activate", wrapper.HandleActivateMemberApiMembersMemberIdActivatePost)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/members/{member_id}/avatar", wrapper.HandleDeleteMemberAvatarApiMembersMemberIdAvatarDelete)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/members/{member_id}/avatar", wrapper.HandlePutMemberAvatarApiMembersMemberIdAvatarPut)
@@ -8095,6 +8154,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/offboard/reset", wrapper.HandleResetOffboardApiOffboardResetPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/outsource-workers", wrapper.HandleListOutsourceWorkersApiOutsourceWorkersGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/outsource-workers/{id}", wrapper.HandleGetOutsourceWorkerApiOutsourceWorkersIdGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/outsource-workers/{id}/accelerated-stop", wrapper.HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/outsource-workers/{id}/boot-context", wrapper.HandleGetWorkerBootContextApiOutsourceWorkersIdBootContextGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/outsource-workers/{id}/model", wrapper.HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/outsource-workers/{id}/refocus", wrapper.HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost)

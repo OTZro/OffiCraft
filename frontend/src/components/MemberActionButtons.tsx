@@ -17,7 +17,7 @@ import type { LifecycleVisualStatus } from "./LifecycleDot";
 /** UI-only lifecycle status (shares the five-state visual union). */
 export type LifecycleStatus = LifecycleVisualStatus;
 
-type ActionKey = "spawn" | "cancel" | "stop" | "force-stop";
+type ActionKey = "spawn" | "cancel" | "stop" | "accelerated-stop" | "force-stop";
 
 /** Per-status button set (order = display order), aligned to the backend's real
  * five-state presence and its real mutation endpoints (activate / deactivate).
@@ -32,16 +32,15 @@ type ActionKey = "spawn" | "cancel" | "stop" | "force-stop";
  * ALSO offer Spawn (=wake) as a FORCE-REVIVE rescue path — backed by the same
  * activate endpoint, which unconditionally clears the winding-down anchors and always
  * revives the member ("always revive from a wrong state"). Spawn is listed FIRST in
- * these wedged states = rescue-first. In `stopping` the Stop button becomes
- * FORCE-STOP (=force-stop endpoint): the member is already inside its soft offboard
- * window, which runs NO clock — nothing on the server will ever collect it, so this
- * button is not an impatient shortcut, it is the ONLY escalation there is (owner
- * ruling rc-27d1710174dd). It is an IMMEDIATE kill (robust STOP straight to the
- * warden), not another graceful deactivate — the parent gates it behind a confirm.
- * 🔴 Since T-7723 that window is no longer bounded by the anchor's age: a member
+ * these wedged states = rescue-first. Both live states now carry the FULL
+ * escalation ladder 停止 → 加速停止 → 強制停止 (owner 2026-08-21) — see
+ * LADDER_REASONS below for which rung is live where, and why the unavailable one
+ * is disabled in place instead of removed.
+ * 🔴 Since T-7723 the soft window is not bounded by the anchor's age: a member
  * that is still filing context reports stays `stopping` for as long as its
- * session lives, so this set — and the absence of an ordinary graceful Stop in
- * it — is what the owner sees for that whole time, not for ten minutes.
+ * session lives, so this set is what the owner sees for that whole time, not for
+ * ten minutes. That is exactly why the middle rung had to exist: before it, the
+ * only thing that could end a wait of unknown length was an immediate kill.
  * ⚠️ The non-destructive way out is NOT the Spawn button in this set: a
  * `stopping` member maps to tri-state `status: "online"` (api/mappers.ts), the
  * detail panel derives `online` from that, and its Spawn opens the settings
@@ -55,13 +54,58 @@ type ActionKey = "spawn" | "cancel" | "stop" | "force-stop";
 const BUTTON_SETS: Record<LifecycleStatus, ActionKey[]> = {
   offline: ["spawn"],
   waking: ["cancel", "spawn"],
-  "online-awake": ["stop"],
-  stopping: ["spawn", "force-stop"],
+  "online-awake": ["stop", "accelerated-stop", "force-stop"],
+  stopping: ["spawn", "stop", "accelerated-stop", "force-stop"],
   stopped: ["spawn"],
 };
 
+/** THE ESCALATION LADDER, and its ORDER is the ruling (owner 2026-08-21:
+ * 「停止 → 加速停止 → 強制停止」). All three rungs render in both live states, in
+ * this order, in these positions — the rung that is not available right now is
+ * DISABLED IN PLACE rather than removed.
+ *
+ * 🔴 That "in place" is a deliberate choice about MIS-CLICKS, and it is the
+ * OPPOSITE of what this file used to do. `stopping` used to REPLACE the Stop
+ * button with Force stop — same slot, same position, different and irreversible
+ * action — so an owner who pressed 停止 and pressed again in the same place
+ * killed the session outright. With a fixed three-slot ladder the second press
+ * lands on 加速停止, which is the rung he actually wants, and 強制停止 keeps its
+ * own position from the first render so it is never where a repeat click goes.
+ *
+ * ⚠️ THIS PARTICULAR CHOICE IS NOT AN OWNER RULING. He ruled the ORDER
+ * ("停止 → 加速停止 → 強制停止") and asked for the buttons; what a rung does
+ * while it is unavailable was not covered, and this is the implementer's answer.
+ *
+ * Which rungs are live follows what the SERVER will actually accept, so no
+ * button here is a dead affordance:
+ *  - `online-awake` — nothing is winding down, so 加速停止 and 強制停止 are both
+ *    disabled with a reason: the server answers 409 for 加速停止 (it escalates a
+ *    wind-down, it does not open one) and 強制停止 belongs after a stop was
+ *    asked for, not instead of asking.
+ *  - `stopping` — 停止 has been pressed, so IT is the disabled one (pressing it
+ *    again re-stamps an anchor and changes nothing the owner can see), and both
+ *    escalations are live. Spawn stays first as the rescue path this state has
+ *    always offered.
+ * A rung whose handler the parent does not supply renders disabled either way —
+ * the pre-existing honesty rule, unchanged. */
+type LadderReasonKey = "pressStopFirst" | "alreadyStopping";
+
+const LADDER_REASONS: Partial<
+  Record<LifecycleStatus, Partial<Record<ActionKey, LadderReasonKey>>>
+> = {
+  "online-awake": {
+    "accelerated-stop": "pressStopFirst",
+    "force-stop": "pressStopFirst",
+  },
+  stopping: { stop: "alreadyStopping" },
+};
+
 /** Destructive actions get the danger-ghost styling. */
-const DANGER_ACTIONS = new Set<ActionKey>(["stop", "force-stop"]);
+const DANGER_ACTIONS = new Set<ActionKey>([
+  "stop",
+  "accelerated-stop",
+  "force-stop",
+]);
 
 // (Refocus was removed as a header action — see MemberDetailPanel's context cell.)
 
@@ -70,8 +114,12 @@ interface MemberActionButtonsProps {
   onSpawn?: () => void;
   onCancel?: () => void;
   onStop?: () => void;
-  /** Force-stop (immediate kill) — offered ONLY in the `stopping` state, where the
-   * Stop button IS this action. The parent should gate it behind a confirm. */
+  /** 加速停止 — the MIDDLE rung: put the wind-down that is already open on the
+   * server's clock and TELL the member. Not a kill, so it needs no confirm; the
+   * member is still given the grace and can still finish early. */
+  onAcceleratedStop?: () => void;
+  /** Force-stop (immediate kill) — the TOP rung. The parent should gate it
+   * behind a confirm. */
   onForceStop?: () => void;
   /** Optional per-action hint shown as the button `title` when that action is
    * DISABLED (no handler) — e.g. "no online machine" on spawn. Honest: it only
@@ -89,6 +137,7 @@ export function MemberActionButtons({
   onSpawn,
   onCancel,
   onStop,
+  onAcceleratedStop,
   onForceStop,
   reasons,
   labels,
@@ -98,8 +147,10 @@ export function MemberActionButtons({
   const handlers: Record<ActionKey, (() => void) | undefined> = {
     spawn: onSpawn,
     cancel: onCancel,
-    stop: onStop,
-    "force-stop": onForceStop,
+    stop: status === "stopping" ? undefined : onStop,
+    "accelerated-stop":
+      status === "stopping" ? onAcceleratedStop : undefined,
+    "force-stop": status === "stopping" ? onForceStop : undefined,
   };
 
   const keys = BUTTON_SETS[status];
@@ -111,7 +162,14 @@ export function MemberActionButtons({
         const variant = DANGER_ACTIONS.has(key)
           ? "btn--danger-ghost"
           : "btn--accent-ghost";
-        const reason = !handler ? reasons?.[key] : undefined;
+        // The parent's own reason wins (it knows things this component cannot,
+        // e.g. "no online machine"); the ladder reason is the fallback that
+        // explains a rung disabled by the ESCALATION ORDER rather than by a
+        // missing handler.
+        const ladderKey = LADDER_REASONS[status]?.[key];
+        const reason = handler
+          ? undefined
+          : reasons?.[key] ?? (ladderKey ? t.lifecycle.reason[ladderKey] : undefined);
         return (
           <button
             key={key}

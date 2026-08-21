@@ -560,6 +560,19 @@ export const httpApi: Api = {
     });
   },
 
+  async acceleratedStopMember(id: string): Promise<void> {
+    // POST /api/members/{id}/accelerated-stop -> MemberDTO. Puts an ALREADY-OPEN
+    // wind-down on the server's stop.accelerated_grace_secs clock and tells the
+    // member. 409 when nothing is winding down, when there is no live session, or
+    // when the member was already cut off by 強制停止 — the 409 is the contract,
+    // not an edge case: it is what keeps this from being a second stop button.
+    // Takes no body. Caller refetches; the member keeps its presence and gains a
+    // refocus_deadline.
+    await client.POST("/api/members/{member_id}/accelerated-stop", {
+      params: { path: { member_id: id } },
+    });
+  },
+
   async dismissMember(id: string): Promise<void> {
     // DELETE /api/members/{id} -> MemberDTO (soft delete: status=removed +
     // desired_state=offline). Caller refetches (the row drops from the roster) and
@@ -1688,6 +1701,7 @@ export const httpApi: Api = {
       codex_notice_round?: number;
       codex_compaction_threshold?: number;
       monitoring_refresh_seconds?: number;
+      accelerated_grace_secs?: number;
       outsource_max_parallel?: number;
       doc_cap_chars_duty?: number;
       doc_cap_chars_insight?: number;
@@ -1715,6 +1729,7 @@ export const httpApi: Api = {
     if (patch.codexNoticeRound !== undefined) body.codex_notice_round = patch.codexNoticeRound;
     if (patch.codexCompactionThreshold !== undefined) body.codex_compaction_threshold = patch.codexCompactionThreshold;
     if (patch.monitoringRefreshSeconds !== undefined) body.monitoring_refresh_seconds = patch.monitoringRefreshSeconds;
+    if (patch.acceleratedGraceSecs !== undefined) body.accelerated_grace_secs = patch.acceleratedGraceSecs;
     if (patch.outsourceMaxParallel !== undefined) {
       body.outsource_max_parallel = patch.outsourceMaxParallel;
     }

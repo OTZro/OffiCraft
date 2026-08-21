@@ -149,6 +149,19 @@ const (
 	// hand-off it is being asked for; it can only fail. Renewal used to depend
 	// on the agent noticing on its own.
 	refocusOpTokenExpiry = "token_expiry"
+	// refocusOpAcceleratedStop is the OWNER-PRESSED 加速停止 (T-ed79, owner
+	// 2026-08-21 「停止 → 加速停止 → 強制停止」). It is the middle rung of a
+	// three-step escalation the owner walks by hand: 停止 asks and waits
+	// forever, 加速停止 says "you now have until T", 強制停止 cuts the session
+	// off with no sentence at all.
+	//
+	// 🔴 IT IS A CLOCK THE OWNER ASKED FOR, WHICH IS WHY IT DOES NOT REOPEN THE
+	// RULING 下線 CARRIES NO 兜底 (rc-27d1710174dd 「不要兜底：只有你按強制下線
+	// 才收它」). That ruling is about the SERVER deciding time is up on its own.
+	// Nothing here fires unless the owner presses the button, so the escalation
+	// is still his — this only gives his hand a rung between "wait indefinitely"
+	// and "kill now", which is the rung he asked for.
+	refocusOpAcceleratedStop = "accelerated_stop"
 )
 
 // memberHasStateToFlush answers the one question the rule turns on: is there
@@ -228,7 +241,14 @@ func hasUncollectedOnlineOwnerOpState(refocusSince, stoppedSince float64, online
 // (force-stop is not a kind here at all: it sends nothing and removes the
 // member on the spot — see HandleForceStopMember.)
 func winddownKindFor(op string) (kind string, clocked bool) {
-	if op == refocusOpContextHigh {
+	// TWO causes are 加速停止, and they are the two the owner named: the one
+	// context pressure opens at the SECOND threshold, and the one he presses
+	// himself. They share ONE grace (stop.accelerated_grace_secs, folded onto
+	// cfg.RecycleGrace by reconcileConfigLive) because they are the same verb
+	// with two triggers — 「統一在第二門檻跟加速停止使用」 — so an owner tuning
+	// the number can never end up with the automatic and the manual arm
+	// counting different seconds.
+	if op == refocusOpContextHigh || op == refocusOpAcceleratedStop {
 		return offboardKindFinal, true
 	}
 	return offboardKindSoft, false

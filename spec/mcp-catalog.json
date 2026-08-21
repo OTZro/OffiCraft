@@ -224,6 +224,18 @@
             "description": "Minimum interval between monitoring and machine refreshes, in seconds (1 through 60).",
             "title": "Monitoring Refresh Seconds"
           },
+          "accelerated_grace_secs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "\u52a0\u901f\u505c\u6b62 grace, in seconds. Must be 10 through 3600. Applies to every CLOCKED wind-down cause at once (the second context threshold and the owner-pressed \u52a0\u901f\u505c\u6b62); it can never put a clock on a soft cause.",
+            "title": "Accelerated Grace Secs"
+          },
           "org_name": {
             "anyOf": [
               {
@@ -4052,6 +4064,36 @@
         "type": "object"
       },
       "name": "delete_theme"
+    },
+    {
+      "description": "\u52a0\u901f\u505c\u6b62: put an ALREADY-OPEN wind-down on the stop.accelerated_grace_secs clock and tell the member. 409 if nothing is winding down -- press \u505c\u6b62 first. Middle rung of \u505c\u6b62 -> \u52a0\u901f\u505c\u6b62 -> \u5f37\u5236\u505c\u6b62.",
+      "inputSchema": {
+        "properties": {
+          "member_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "member_id"
+        ],
+        "type": "object"
+      },
+      "name": "accelerated_stop_member"
+    },
+    {
+      "description": "\u52a0\u901f\u505c\u6b62 an outsource worker: put its ALREADY-OPEN handover on the stop.accelerated_grace_secs clock and tell it. 409 if none is open. Does NOT change what /stop means.",
+      "inputSchema": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "accelerated_stop_outsource_worker"
     }
   ]
 }

@@ -441,6 +441,74 @@ func (s *apiServer) HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost
 	s.writeWorkerProjection(w, r, *worker)
 }
 
+// POST /api/outsource-workers/{id}/accelerated-stop — the symmetric twin of the
+// member 加速停止 (T-ed79, owner 2026-08-21 「停止 → 加速停止 → 強制停止」).
+//
+// ⚠️ IT DOES NOT TOUCH WHAT THE WORKER'S 停止 MEANS. That verb (below) still sets
+// desired_state=offline and kills the session outright; making it a graceful
+// close-out is a SEPARATE piece of work owned by someone else, and this handler
+// deliberately neither calls it nor changes it. What this accelerates is the
+// HANDOVER arm — the one arm a worker has that waits for the worker to finish.
+//
+// The gates mirror the worker refocus above cell for cell (released/unknown →
+// 404; held down → 409; not active-and-online → 409) plus the escalation gate the
+// member twin carries: no open epoch → 409, because an escalation with nothing to
+// escalate is a mistake and not a stop.
+//
+// refocus_since is re-stamped from THIS press for the reason the member arm
+// documents: the deadline is refocus_since + grace, so promoting in place would
+// quote an instant already gone. The two wind-down anchors are deliberately NOT
+// cleared — unlike the refocus handler above, which opens a NEW epoch, this
+// promotes the one in flight, and zeroing stopped_since would erase a worker's
+// own "I am done".
+func (s *apiServer) HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost(w http.ResponseWriter, r *http.Request, id string) {
+	s.outsourceMu.Lock()
+	worker, err := s.dal.GetOutsourceWorker(id)
+	if err != nil {
+		s.outsourceMu.Unlock()
+		internalError(w, err)
+		return
+	}
+	if worker == nil || worker.Status == WorkerStatusReleased {
+		s.outsourceMu.Unlock()
+		writeResolveError(w, errNotFound, "outsource worker", id)
+		return
+	}
+	if worker.DesiredState == DesiredStateOffline {
+		s.outsourceMu.Unlock()
+		writeError(w, http.StatusConflict,
+			"加速停止 requires a live worker — this one is stopped (restart it first)")
+		return
+	}
+	if worker.Status != WorkerStatusActive || !s.hub.IsOnline(worker.ID) {
+		s.outsourceMu.Unlock()
+		writeError(w, http.StatusConflict,
+			"加速停止 requires the worker to be online (no live session to accelerate)")
+		return
+	}
+	if worker.RefocusSince <= 0.0 {
+		s.outsourceMu.Unlock()
+		writeError(w, http.StatusConflict,
+			"加速停止 escalates a handover that is already open — this worker has not "+
+				"been asked to hand over. Press 重新聚焦 first")
+		return
+	}
+	worker.RefocusSince = nowSecs()
+	worker.RefocusOp = refocusOpAcceleratedStop
+	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
+		s.outsourceMu.Unlock()
+		internalError(w, err)
+		return
+	}
+	// The FINAL sentence needs no frame of its own: the worker projection composes
+	// the notice from refocus_op on every write, so this publish carries it — the
+	// same property the member promotion relies on.
+	s.publishOutsourceWorker(*worker, requestTrigger(r))
+	s.outsourceMu.Unlock()
+
+	s.writeWorkerProjection(w, r, *worker)
+}
+
 // POST /api/outsource-workers/{id}/stop — the cockpit's 停止 (owner/admin agent since T-6020). The
 // worker twin of a member deactivate: set desired_state="offline" (a DIRECT mirror
 // of member.desired_state, which makes every scheduler auto-spawn branch skip the

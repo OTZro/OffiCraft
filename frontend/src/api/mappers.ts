@@ -957,6 +957,9 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
     codexNoticeRound: w.codex_notice_round,
     codexCompactionThreshold: w.codex_compaction_threshold ?? 3,
     monitoringRefreshSeconds: w.monitoring_refresh_seconds ?? 5,
+    // 120 is the server's shipped default (StoppingTimeoutSecs), the value an
+    // install that never touched the knob runs on.
+    acceleratedGraceSecs: w.accelerated_grace_secs ?? 120,
     outsourceMaxParallel: w.outsource_max_parallel ?? 0,
     // ?? that segment's shipped default, not 0: a server too old to send the
     // field still caps at it, and a 0 here would read as "no cap" to every

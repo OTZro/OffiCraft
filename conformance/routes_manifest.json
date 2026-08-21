@@ -204,6 +204,13 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": "accelerated_stop_member",
+    "method": "POST",
+    "path": "/api/members/{member_id}/accelerated-stop",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "report_waking",
     "method": "POST",
     "path": "/api/self/waking",
@@ -893,6 +900,13 @@
     "mcp_tool": "refocus_outsource_worker",
     "method": "POST",
     "path": "/api/outsource-workers/{id}/refocus",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "accelerated_stop_outsource_worker",
+    "method": "POST",
+    "path": "/api/outsource-workers/{id}/accelerated-stop",
     "requires": "admin_agent"
   },
   {

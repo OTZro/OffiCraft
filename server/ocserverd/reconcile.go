@@ -189,8 +189,18 @@ type memberObservation struct {
 	// 120s", i.e. the exact inverse of today's rule — and it sits ~100 lines
 	// from recycleGraceFor, which says the correct thing. The ruling lives in
 	// ONE place (winddownKindFor); this arm must never re-derive it.
-	RefocusOp    string
-	AgentStopped bool // stopped_since > 0 (the graceful dump-done fact)
+	RefocusOp string
+	// StoppingSince is the 下線 arm's own anchor (member.stopping_since), and it
+	// is here for exactly ONE reader: the owner-pressed 加速停止 (T-ed79), whose
+	// grace runs from the press. decideDown had no durable anchor before — the
+	// pre-T-a9d6 timed path armed st.StopDeadline from the OBSERVATION, which is
+	// process-local and forgotten on restart. That was tolerable for a fallback
+	// nobody announced; it is not tolerable for a deadline the agent has been
+	// TOLD, because the sentence is composed from the durable row and would
+	// outlive a clock that lives only in memory. Reading the row keeps the two
+	// on the same fact across a station re-exec.
+	StoppingSince float64
+	AgentStopped  bool // stopped_since > 0 (the graceful dump-done fact)
 	// The last warden command_result folded onto this member (api_monitoring.go
 	// foldCommandResult → member.last_op*): the executed op kind + its structured
 	// cause. decideUp reads them to detect a START that bounced off the local
@@ -523,13 +533,37 @@ func decideDown(
 	// The collection still happens the instant the agent says it is done: its
 	// stopped report dispatches the robust STOP (HandleReportStopped). What is
 	// gone is the server deciding that time is up.
-	if cfg.SoftOffboardGrace > 0 {
+	// 🔴 …UNLESS THE OWNER PRESSED 加速停止 ON THIS STOP (T-ed79). Everything the
+	// paragraph above says is about the SERVER starting a clock nobody asked for.
+	// This one is started by the owner, on the middle rung of his own escalation
+	// (停止 → 加速停止 → 強制停止), and the member has ALREADY been told about it:
+	// the same winddownKindFor answer makes offboardKindOf return `final`, so the
+	// notice quotes exactly this deadline. Asking one function is why the clock
+	// and the sentence cannot come apart here the way they used to on the 換手
+	// arm.
+	//
+	// The anchor is stopping_since, which the 加速停止 handler re-stamps as it
+	// writes the cause — the owner's grace runs from HIS press, not from a 停止 he
+	// may have pressed hours earlier. Past the deadline this falls THROUGH to the
+	// robust-stop dispatch at the bottom of this function (including its
+	// stop_retry de-dupe), rather than dispatching a second, parallel kill path.
+	acceleratedGrace, accelerated := recycleGraceFor(obs.RefocusOp, cfg)
+	accelerated = accelerated && obs.StoppingSince > 0.0
+	switch {
+	case accelerated && now < obs.StoppingSince+acceleratedGrace:
+		st.Phase = reconcilePhaseStopping
+		return decisionNone(obs, st,
+			"stopping: 加速停止 — within the grace the owner opened; collection is "+
+				"the agent's stopped report, or this deadline")
+	case accelerated:
+		// deadline lapsed → fall through to the robust stop below
+	case cfg.SoftOffboardGrace > 0:
 		st.Phase = reconcilePhaseStopping
 		return decisionNone(obs, st,
 			"stopping: agent is working its offboard sequence — collection is the "+
 				"agent's stopped report, or the owner's force-stop")
 	}
-	if st.StopDeadline == 0.0 {
+	if !accelerated && st.StopDeadline == 0.0 {
 		// The pre-T-a9d6 timed wind-down, reached by SoftOffboardGrace = 0 (a
 		// compile-time constant today, not an owner-facing setting): arm the
 		// grace clock from OBSERVING the intent, never from a dispatched
@@ -539,7 +573,7 @@ func decideDown(
 		return decisionNone(obs, st,
 			"stopping: grace window opened — awaiting agent selfstop")
 	}
-	if now < st.StopDeadline {
+	if !accelerated && now < st.StopDeadline {
 		st.Phase = reconcilePhaseStopping
 		return decisionNone(obs, st,
 			"stopping: within grace window — awaiting agent selfstop")
@@ -550,6 +584,9 @@ func decideDown(
 			"prior STOP unlanded)"
 		if firstDispatch {
 			reason = "robust stop: grace elapsed, still online"
+			if accelerated {
+				reason = "robust stop: 加速停止 grace elapsed, still online"
+			}
 		}
 		st.Phase = reconcilePhaseStopping
 		st.LastCommand = reconcileCmdStop
@@ -928,6 +965,7 @@ func (s *apiServer) reconcileOne(m Member, st reconcileState, now float64) recon
 		Online:         s.hub.IsOnline(m.ID),
 		RefocusSince:   m.RefocusSince,
 		RefocusOp:      m.RefocusOp,
+		StoppingSince:  m.StoppingSince,
 		AgentStopped:   m.StoppedSince > 0.0,
 		LastOpKind:     m.LastOp,
 		LastOpReason:   m.LastOpReason,

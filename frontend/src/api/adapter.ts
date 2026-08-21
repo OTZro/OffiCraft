@@ -789,6 +789,13 @@ export interface ServerSettingsView {
   codexCompactionThreshold: number;
   /** Minimum seconds between telemetry-triggered monitoring refreshes (1..60). */
   monitoringRefreshSeconds: number;
+  /** 加速停止 grace in seconds (10..3600; default 120) — how long a CLOCKED
+   * wind-down waits before the server forces the collection. ONE number for BOTH
+   * clocked causes (the second context threshold and the owner-pressed
+   * 加速停止), so the countdown an agent is quoted and the deadline the server
+   * collects on cannot be two different values. It says HOW LONG, never WHO: a
+   * soft cause stays uncollected at any value. */
+  acceleratedGraceSecs: number;
   /** M3: the GLOBAL cap on concurrently live outsource workers (-1..20;
    * **-1 ⇒ 無限 (unlimited — no global cap)**; 0 ⇒ outsource assignment is
    * PAUSED — the panel annotates it). */
@@ -895,6 +902,8 @@ export interface ServerSettingsPatch {
   codexNoticeRound?: number;
   codexCompactionThreshold?: number;
   monitoringRefreshSeconds?: number;
+  /** 加速停止 grace in seconds. Must be 10..3600. */
+  acceleratedGraceSecs?: number;
   outsourceMaxParallel?: number;
   /** T-ae38 document size caps, in characters. Each must be between THAT
    * segment's shipped default (`DOC_CAP_CHARS_DEFAULTS`) and 100000. */
@@ -1478,6 +1487,19 @@ export interface Api {
    * NOT flip online — the caller refetches; presence surfaces stopped.
    */
   forceStopMember(id: string): Promise<void>;
+  /**
+   * 加速停止 (accelerated stop): POST /api/members/{id}/accelerated-stop → put a
+   * wind-down that is ALREADY OPEN on the server's stop.accelerated_grace_secs
+   * clock and TELL the member (the write fans an offboard notice whose sentence
+   * now quotes a deadline).
+   *
+   * The MIDDLE rung of 停止 → 加速停止 → 強制停止 (owner 2026-08-21). It
+   * ESCALATES; it does not initiate: a member nobody has asked to stop is a 409,
+   * because a clock on a member that was told nothing is a deadline it never
+   * heard about. So is a member with no live session, and one already cut off by
+   * 強制停止. Does NOT flip online — the caller refetches.
+   */
+  acceleratedStopMember(id: string): Promise<void>;
   /**
    * Dismiss (soft delete): DELETE the member → status=removed + desired_state=offline.
    * PURE SEAM, no UI entry — the 解散 button was removed from MemberDetailPanel

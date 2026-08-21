@@ -49,6 +49,7 @@ var everyWindDownCause = []string{
 	refocusOpContextHigh,
 	refocusOpContextNotice,
 	refocusOpTokenExpiry,
+	refocusOpAcceleratedStop,
 	memberOpRelocate,
 	memberOpModel,
 	ownerOpRestart,
@@ -88,13 +89,17 @@ func TestWindDownKind_TheClockAndTheSentenceCannotDisagree(t *testing.T) {
 	}
 }
 
-// The ruling itself, stated as membership: 加速停止 is the second context
-// threshold and nothing else. Every other cause — the owner's buttons, the
-// agent's own restart_self, the first context threshold — is a plain 停止.
-func TestWindDownKind_OnlyTheSecondContextThresholdIsAccelerated(t *testing.T) {
+// The ruling itself, stated as membership: 加速停止 has exactly TWO causes —
+// the SECOND context threshold, and the owner pressing the button (T-ed79,
+// 「停止 → 加速停止 → 強制停止」). Every other cause — the owner's other verbs,
+// the agent's own restart_self, the FIRST context threshold, token expiry — is a
+// plain 停止. The manual cause is on this list rather than carved out precisely
+// because it is a clock: the owner asking for one is what makes it legal, and
+// nothing else may grow one without being typed onto this line.
+func TestWindDownKind_加速停止HasExactlyTwoCauses(t *testing.T) {
 	for _, op := range everyWindDownCause {
 		kind, clocked := winddownKindFor(op)
-		wantFinal := op == refocusOpContextHigh
+		wantFinal := op == refocusOpContextHigh || op == refocusOpAcceleratedStop
 		if (kind == offboardKindFinal) != wantFinal || clocked != wantFinal {
 			t.Fatalf("%s: got kind=%q clocked=%v, want final=%v", op, kind, clocked, wantFinal)
 		}

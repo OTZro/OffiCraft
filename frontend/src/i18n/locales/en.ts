@@ -426,7 +426,19 @@ export const en: Dict = {
       spawn: "Wake",
       cancel: "Cancel",
       stop: "Stop",
+      // The middle rung of the owner's escalation (2026-08-21, 停止 → 加速停止
+      // → 強制停止): put the close-out already under way on a clock and tell
+      // the member the instant. Not a kill, so no confirm.
+      "accelerated-stop": "Accelerated stop",
       "force-stop": "Force stop",
+    },
+    // The three buttons ARE the escalation order. A rung that cannot be pressed
+    // right now stays in place, disabled, with a reason — removing it would slide
+    // the next rung under the finger that was aiming for this one.
+    reason: {
+      pressStopFirst:
+        "Press Stop first — these escalate a stop, they are not another way to stop",
+      alreadyStopping: "Already winding down — escalate to the right if it is taking too long",
     },
     message: {
       windDown: "Winding down…",

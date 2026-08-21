@@ -565,6 +565,16 @@ MATRIX: dict[str, Route] = {
         requires="admin_agent",
         path=_member_path("/api/members/{member_id}/force-stop"),
     ),
+    "POST /api/members/{member_id}/accelerated-stop": Route(
+        # positive faces: 409 — the fresh target has no live session, and
+        # 加速停止 is an ESCALATION of a wind-down that is already open. That
+        # refusal IS the contract (it is what keeps the button from being a
+        # second, harsher stop), so the choke face past the admin guard is what
+        # this row pins.
+        requires="admin_agent",
+        overrides={"owner": 409, "admin_agent": 409},
+        path=_member_path("/api/members/{member_id}/accelerated-stop"),
+    ),
     "POST /api/members/{member_id}/refocus": Route(
         # positive faces: 409 — the fresh target is OFFLINE and refocus is
         # online-only; the choke face (past the admin guard) is what we pin.
@@ -1377,6 +1387,11 @@ MATRIX: dict[str, Route] = {
     "POST /api/outsource-workers/{id}/refocus": Route(
         requires="admin_agent",
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/refocus",
+        overrides={"owner": 404, "admin_agent": 404},
+    ),
+    "POST /api/outsource-workers/{id}/accelerated-stop": Route(
+        requires="admin_agent",
+        path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/accelerated-stop",
         overrides={"owner": 404, "admin_agent": 404},
     ),
     "POST /api/outsource-workers/{id}/stop": Route(

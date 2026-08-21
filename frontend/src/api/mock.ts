@@ -1497,6 +1497,8 @@ const DEFAULT_MOCK_SETTINGS = {
   codex_compaction_threshold: 3,
   codex_notice_round: 2,
   monitoring_refresh_seconds: 5,
+  // 加速停止 grace — mirrors the server's shipped default (StoppingTimeoutSecs).
+  accelerated_grace_secs: 120,
   // M3 global outsource cap — mirrors the server's code-side default (3).
   outsource_max_parallel: 3,
   // T-ae38 document size caps — mirror the server's shipped defaults, which
@@ -2150,6 +2152,34 @@ export const mockApi: Api = {
     const w = findWire(id);
     w.desired_state = "offline";
     w.presence = "offline";
+  },
+
+  async acceleratedStopMember(id: string): Promise<void> {
+    // 加速停止 (mirror handle_accelerated_stop_member): the MIDDLE rung. It
+    // ESCALATES a wind-down that is already open — the mock reproduces the 409
+    // gate rather than the clock, because the gate is the part a cockpit can get
+    // wrong (offering the button where the server would refuse it) and the clock
+    // is server-side arithmetic the mock has no session to run.
+    const w = findWire(id);
+    // `stopping_since` is deliberately NOT on the wire, so the mock reads the
+    // projection the server derives from it — which is also the only thing the
+    // cockpit itself can see, and therefore the right basis for a mock whose job
+    // is to catch a cockpit offering a button the server would refuse.
+    const windingDown = w.presence === "stopping" || (w.refocus_since ?? 0) > 0;
+    if (!windingDown) {
+      throw mockApiError(
+        "http 409 for POST /api/members/{id}/accelerated-stop",
+        409,
+        "加速停止 escalates a wind-down that is already open — this member has not been asked to stop. Press 停止 (deactivate) or 重新聚焦 (refocus) first",
+      );
+    }
+    w.refocus_op = "accelerated_stop";
+    if (w.desired_state === "offline") {
+      w.refocus_deadline = Date.now() / 1000 + 120;
+    } else {
+      w.refocus_since = Date.now() / 1000;
+      w.refocus_deadline = w.refocus_since + 120;
+    }
   },
 
   async dismissMember(id: string): Promise<void> {
@@ -4353,6 +4383,12 @@ export const mockApi: Api = {
         throw mockApiError("http 422 for PATCH /api/settings", 422, "codex_notice_round must be strictly below codex_compaction_threshold");
       }
     }
+    if (
+      patch.acceleratedGraceSecs !== undefined &&
+      (patch.acceleratedGraceSecs < 10 || patch.acceleratedGraceSecs > 3600)
+    ) {
+      throw mockApiError("http 422 for PATCH /api/settings", 422, "accelerated_grace_secs must be between 10 and 3600 seconds");
+    }
     if (patch.monitoringRefreshSeconds !== undefined && (patch.monitoringRefreshSeconds < 1 || patch.monitoringRefreshSeconds > 60)) {
       throw mockApiError("http 422 for PATCH /api/settings", 422, "monitoring_refresh_seconds must be between 1 and 60");
     }
@@ -4497,6 +4533,9 @@ export const mockApi: Api = {
     }
     if (patch.codexNoticeRound !== undefined) {
       mockServerSettings.codex_notice_round = patch.codexNoticeRound;
+    }
+    if (patch.acceleratedGraceSecs !== undefined) {
+      mockServerSettings.accelerated_grace_secs = patch.acceleratedGraceSecs;
     }
     if (patch.monitoringRefreshSeconds !== undefined) {
       mockServerSettings.monitoring_refresh_seconds = patch.monitoringRefreshSeconds;
