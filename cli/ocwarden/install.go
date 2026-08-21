@@ -1069,6 +1069,33 @@ func bootoutUntilGone(sys sysOps, target string) bool {
 	return false
 }
 
+// Post-bootstrap registration poll — THE SAME STANCE as bootoutUntilGone's bounded
+// wait above, and deliberately so: launchd's registration can lag a `launchctl
+// bootstrap` that already exited 0, so the answer to "is it registered?" is a
+// bounded poll, not a single zero-retry question. A label that IS registered
+// answers the FIRST probe, so a healthy machine pays one `launchctl print` and zero
+// sleeps. Like bootoutUntilGone, a timeout is NOT fatal — the caller decides.
+const (
+	registerPollAttempts = bootoutPollAttempts
+	registerPollInterval = bootoutPollInterval
+)
+
+// registeredUntilFound POLLS `launchctl print <target>` until launchd reports the
+// label registered. Returns nil once found, or the last probe's error if the label
+// is still unknown after the bounded wait (the caller decides — launchctlReinstall
+// warns and kickstarts anyway, same shape as bootoutUntilGone's caller).
+func registeredUntilFound(sys sysOps, target string) error {
+	var err error
+	for k := 0; k < registerPollAttempts; k++ {
+		// `launchctl print` exits zero for a registered label → found.
+		if _, err = sys.run("launchctl", "print", target); err == nil {
+			return nil
+		}
+		sys.sleep(registerPollInterval)
+	}
+	return err
+}
+
 // launchctlReinstall boots out the existing instance UNDER THIS LABEL ONLY
 // (idempotent reinstall; bootout error is tolerated = "not currently loaded"),
 // POLLS until the old registration is truly gone (bootout is async — see
@@ -1083,6 +1110,7 @@ func (i *installer) launchctlReinstall(p wardenPaths) error {
 		i.logf("DRYRUN would run: launchctl bootout %s  (tolerate not-loaded)", target)
 		i.logf("DRYRUN would: poll `launchctl print %s` until the label is gone (bootout is async; bounded ~%ds)", target, bootoutPollAttempts*int(bootoutPollInterval/time.Millisecond)/1000)
 		i.logf("DRYRUN would run: launchctl bootstrap %s %s", p.guiDomain, p.plistPath)
+		i.logf("DRYRUN would: poll `launchctl print %s` until the label is registered (bootstrap can exit 0 and register nothing; bounded ~%ds, non-fatal)", target, registerPollAttempts*int(registerPollInterval/time.Millisecond)/1000)
 		i.logf("DRYRUN would run: launchctl kickstart -k %s", target)
 		return nil
 	}
@@ -1094,7 +1122,29 @@ func (i *installer) launchctlReinstall(p wardenPaths) error {
 	if _, err := i.sys.run("launchctl", "bootstrap", p.guiDomain, p.plistPath); err != nil {
 		return fmt.Errorf("launchctl bootstrap failed for %s: %w", p.plistPath, err)
 	}
+	// CONFIRM the bootstrap actually registered the label (T-0648) — POLLED and
+	// TOLERATED, byte-for-byte the stance bootoutUntilGone takes above. `launchctl
+	// bootstrap` can exit 0 and register NOTHING, and when it does the first verb
+	// to notice is the next one — kickstart — which fails with exit 113 "Could not
+	// find service ... in domain": a message that sent the operator to debug a step
+	// that was never broken. But registration can also merely LAG the exit-0
+	// bootstrap, so a timeout here must NOT fail the install: if launchd was just
+	// slow, kickstart succeeds and not one byte of the install's behaviour changes.
+	// Only when kickstart ALSO fails is the label really absent — and then this is
+	// the diagnosis, replacing kickstart's misleading message below.
+	unregistered := registeredUntilFound(i.sys, target)
+	if unregistered != nil {
+		i.logf("WARN: launchd still does not know %s ~%ds after bootstrap exited 0; kickstarting anyway", label, registerPollAttempts*int(registerPollInterval/time.Millisecond)/1000)
+	}
 	if _, err := i.sys.run("launchctl", "kickstart", "-k", target); err != nil {
+		if unregistered != nil {
+			// Name the step that actually failed (bootstrap), but do NOT drop what the
+			// next verb reported: narrowing the evidence to our own diagnosis is how a
+			// second, unrelated failure reason becomes invisible. Neither wrapped text
+			// carries the word "kickstart" — that word only ever came from the format
+			// string below — so carrying both keeps the blame right AND the evidence whole.
+			return fmt.Errorf("launchctl bootstrap exited 0 but registered nothing — launchd does not know %s, so the job was never loaded; the plist to look at is %s: %w (the next verb then reported: %v)", target, p.plistPath, unregistered, err)
+		}
 		return fmt.Errorf("launchctl kickstart failed for %s: %w", target, err)
 	}
 	i.logf("bootstrapped + kickstarted %s (exact label; python warden untouched)", label)

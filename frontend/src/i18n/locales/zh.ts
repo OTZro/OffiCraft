@@ -532,9 +532,33 @@ export const zh = {
     intro: "設完密碼之後,系統會自動幫你裝好這台機器、喚醒助理。這次有一步沒過:",
     stepInstallWarden: "安裝這台機器",
     stepWakeAssistant: "喚醒助理",
+    // ── 失敗原因(T-0648)────────────────────────────────────────────────
+    // 這幾句取代 server 送來的 reason。server 那一份是寫給工程師看的英文,橫幅
+    // 其他每一個字都是讀的人的語言,只有那一句不是——而一句 server 端組出來的
+    // 字串,座艙翻不動。鍵名就是 server 的 code(closed vocabulary)。
+    //
+    // 🔴 這裡只翻「整句都是固定文字」的那幾個 code。server 另外四個 code
+    // (installer_unrunnable / uninstall_intent / wake_not_recorded /
+    // wake_undispatched)的句子裡嵌著一段 Go 的錯誤字串,那段字就是診斷本身,
+    // 翻成中文會把它弄丟——所以刻意不列在這裡,由座艙原樣顯示 server 的
+    // reason。少一句中文,好過少一段診斷。
+    //
+    // ⚠️ 譯文是寫給使用者看的:exit code、launchd label 這種東西不進來(它們
+    //    在下面的「詳細記錄」裡,那一區維持原文,那是給工程師的)。
+    reasons: {
+      install_failed:
+        "這台機器沒有安裝成功,所以助理沒有被喚醒——喚醒一台沒裝好的機器,只會留下一個沒有原因的灰色成員。下面的詳細記錄是安裝當下的完整輸出。",
+      roster_missing:
+        "這台伺服器自己的機器紀錄不在名冊裡,出廠設定沒有跑完。把伺服器重開再試一次。",
+      assistant_missing:
+        "出廠附的那位助理不在名冊裡,出廠設定沒有跑完。把伺服器重開再試一次。",
+      interrupted:
+        "自動設定跑到一半被打斷了(伺服器在那當下重開),所以沒有做完。請到 監控 › 機器 › 「安裝」 自己裝這台機器,再把助理叫上線。",
+      faulted: "自動設定中途出錯停住了。伺服器的記錄裡有當下的細節。",
+    },
     detailShow: "顯示詳細記錄",
     detailHide: "收起詳細記錄",
-    dismiss: "知道了",
+    dismiss: "不再顯示",
   },
   // ── 派送失敗告示（T-7fa1）──────────────────────────────────────────────
   // 「按了喚醒卻什麼都沒發生」的唯一出口：server 回 activation_pending 時，這

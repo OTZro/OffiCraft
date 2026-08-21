@@ -64,7 +64,7 @@ func TestResolveTeardownPaths(t *testing.T) {
 // pattern-kill.
 func TestRunTeardown_BootoutExactLabelThenConfirmThenRemove(t *testing.T) {
 	f := newFakeSys()
-	f.runFn = labelGoneRunFn
+	f.runFn = labelGoneRunFn()
 	i := &installer{out: io.Discard, sys: f.ops()}
 	p := fixedTeardownPaths()
 	if ok := i.runTeardown(p); !ok {
@@ -118,7 +118,7 @@ func TestRunTeardown_DryRunTouchesNothing(t *testing.T) {
 // (true, non-empty log).
 func TestDoTeardown_OK_BootoutConfirmedThenRemove_ReturnsTrueAndLog(t *testing.T) {
 	f := newFakeSys()
-	f.runFn = labelGoneRunFn
+	f.runFn = labelGoneRunFn()
 	p := fixedTeardownPaths()
 	ok, log := doTeardown(f.ops(), false, p)
 	if !ok {
@@ -191,7 +191,7 @@ func TestDoTeardown_Idempotent_AllAbsent_StillOK(t *testing.T) {
 // uninstall RPC uses this to refuse self-exit.
 func TestDoTeardown_RemoveFailure_ReturnsFalse(t *testing.T) {
 	f := newFakeSys()
-	f.runFn = labelGoneRunFn // bootout confirmed — the failure below is the sole cause
+	f.runFn = labelGoneRunFn() // bootout confirmed — the failure below is the sole cause
 	p := fixedTeardownPaths()
 	f.removeErr[p.plistPath] = fmt.Errorf("permission denied")
 	ok, log := doTeardown(f.ops(), false, p)

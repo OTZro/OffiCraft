@@ -3202,8 +3202,14 @@
         "type": "object"
       },
       "OnboardingReportDTO": {
-        "description": "The result of the automatic first-run onboarding that runs right after the owner sets the initial password (T-ba62): install this host's warden, then bring the seeded assistant online. ``state`` is ``running`` / ``ok`` / ``failed``. ``steps`` carries one entry per attempted step in order. ``finished_at`` is the unix seconds the run ended (0 while running). Null on the settings read when onboarding never ran (an install that predates it, or a database that already had a password).",
+        "description": "The result of the automatic first-run onboarding that runs right after the owner sets the initial password (T-ba62): install this host's warden, then bring the seeded assistant online. ``state`` is ``running`` / ``ok`` / ``failed``. ``steps`` carries one entry per attempted step in order. ``finished_at`` is the unix seconds the run ended (0 while running). Null on the settings read when onboarding never ran (an install that predates it, or a database that already had a password). ``dismissed_at`` is the unix seconds the owner pressed 「不再顯示」 on the cockpit banner (0 = nobody ever did, which is also how every report row written before the field existed reads — there is no migration).",
         "properties": {
+          "dismissed_at": {
+            "default": 0.0,
+            "description": "Unix seconds the owner dismissed the cockpit banner for this report; 0 = never dismissed. The dismissal lives HERE, on the report row itself, so it survives a new tab, a reload and another device — it used to live in one browser tab's sessionStorage, which is why it came back. It is written through PATCH /api/settings ``onboarding_dismissed``, and because this row is rewritten WHOLESALE, any newly written report carries 0 and the banner speaks again.",
+            "title": "Dismissed At",
+            "type": "number"
+          },
           "finished_at": {
             "default": 0.0,
             "title": "Finished At",
@@ -3236,8 +3242,13 @@
         "type": "object"
       },
       "OnboardingStepDTO": {
-        "description": "One step of the automatic first-run onboarding (T-ba62). ``name`` is a stable machine key (``install_warden`` / ``wake_assistant``); ``ok`` is the step's verdict; ``reason`` is a one-line human-readable cause, ALWAYS populated on a failure so the cockpit can say WHY the assistant is not awake instead of showing an unexplained grey member. ``detail`` carries the raw tool log for a failed step (empty on success) — it is owner-gated, never public.",
+        "description": "One step of the automatic first-run onboarding (T-ba62). ``name`` is a stable machine key (``install_warden`` / ``wake_assistant``); ``ok`` is the step's verdict; ``reason`` is a one-line human-readable cause, ALWAYS populated on a failure so the cockpit can say WHY the assistant is not awake instead of showing an unexplained grey member. ``detail`` carries the raw tool log for a failed step (empty on success) — it is owner-gated, never public. ``code`` (T-0648) is the CLOSED machine vocabulary for that same cause, set on every failure: ``install_failed`` / ``installer_unrunnable`` / ``uninstall_intent`` / ``roster_missing`` / ``assistant_missing`` / ``wake_not_recorded`` / ``wake_undispatched`` / ``interrupted`` / ``faulted``; empty on success and on every report written before this field existed. It exists so a cockpit can render the sentence in the READER'S language rather than shipping ``reason``, which is English engineer-facing prose. A code the client does not recognise falls back to ``reason`` verbatim, so a newer server can never make an older cockpit go silent.",
         "properties": {
+          "code": {
+            "default": "",
+            "title": "Code",
+            "type": "string"
+          },
           "detail": {
             "default": "",
             "title": "Detail",
@@ -5633,6 +5644,18 @@
             ],
             "description": "The FIRST offboard point (T-a9d6): the SOFT notice. 1..89, and strictly below handover_pct.",
             "title": "Notice Pct"
+          },
+          "onboarding_dismissed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Dismiss (true) or un-dismiss (false) the first-run onboarding banner for this install (T-0648). It stamps / clears ``dismissed_at`` on the ONE onboarding report row, which is what makes 「不再顯示」 survive a new tab, a reload and another device — the dismissal used to live in one browser tab's sessionStorage. 409 when there is no banner to close — no onboarding report at all, or a report that is not in the ``failed`` state. Refusing a run that is still ``running`` is not about the stamp outliving the run: a stamp laid there could not survive to a terminal state anyway, because both paths that reach one (finishOnboarding, recoverStaleOnboarding) rewrite the row with ``dismissed_at`` back at 0. It is about the WRITE. The server's write is an unlocked read-modify-write of the whole report row and the only writer that can run CONCURRENTLY with the run (kick, finish and recoverStale are three different goroutines that never run in parallel: boot, the set-password request, and the goroutine that request spawns form one happens-before chain), so interleaved with the run reaching its verdict it writes back its pre-verdict copy: the failure is ERASED, the report is stranded in ``running`` — non-terminal, so no banner draws — and first-run onboarding never re-runs, because a report exists. Omit the field to leave the dismissal unchanged.",
+            "title": "Onboarding Dismissed"
           },
           "codex_notice_round": {
             "anyOf": [

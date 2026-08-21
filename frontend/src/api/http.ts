@@ -1701,6 +1701,7 @@ export const httpApi: Api = {
       display_theme?: string;
       display_language?: string;
       display_wide?: boolean;
+      onboarding_dismissed?: boolean;
     } = {};
     if (patch.ownerTokenTtl !== undefined) body.owner_token_ttl = patch.ownerTokenTtl;
     if (patch.agentTokenTtl !== undefined) body.agent_token_ttl = patch.agentTokenTtl;
@@ -1754,6 +1755,9 @@ export const httpApi: Api = {
     }
     if (patch.displayWide !== undefined) {
       body.display_wide = patch.displayWide;
+    }
+    if (patch.onboardingDismissed !== undefined) {
+      body.onboarding_dismissed = patch.onboardingDismissed;
     }
     const wire = unwrap(await client.PATCH("/api/settings", { body }));
     return toServerSettings(wire);

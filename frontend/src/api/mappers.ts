@@ -1091,9 +1091,17 @@ export function toOnboardingReport(
     state: w.state,
     startedAt: w.started_at ?? 0,
     finishedAt: w.finished_at ?? 0,
+    // 🔴 ABSENT = NEVER DISMISSED (T-0648). There is no migration, so every
+    // report row written before the field existed arrives without it. 0 is the
+    // honest reading of that absence; the other one would swallow the banner on
+    // every install that predates this change.
+    dismissedAt: w.dismissed_at ?? 0,
     steps: (w.steps ?? []).map((s) => ({
       name: s.name,
       ok: s.ok ?? false,
+      // Absent = no code (an older server, or a success). "" then falls through
+      // to `reason` in the banner, which is exactly the pre-T-0648 behaviour.
+      code: s.code ?? "",
       reason: s.reason ?? "",
       detail: s.detail ?? "",
     })),

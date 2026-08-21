@@ -161,9 +161,28 @@ var openapiOverweight = map[string][]string{
 // NOT knownCatalogDrift: that map is debt to be repaid, and every entry there
 // was traced to its read and confirmed MISSING. Filing this there would invite
 // the next person to "repay" it by advertising the lever.
+//
+// update_settings.onboarding_dismissed: T-0648. The handler reads it (it stamps
+// the owner's 「不再顯示」 on the first-run onboarding report), and an agent COULD
+// honestly send it — it is withheld for what the lever DOES. The banner is the
+// one place a fresh install says WHY its assistant never woke up, and this
+// field is the owner's own acknowledgement of that warning; an agent has no
+// honest occasion to silence a message addressed to the owner, and the write is
+// now permanent (the report is the only thing that could clear it, and nothing
+// writes a second one today). The cockpit banner's button is the only intended
+// caller. The neighbouring cockpit-personal acts — change-password, the two
+// push-subscription writes — are owner-only AND MCPExclude for the same
+// reasoning; this one rides the shared settings route, so the tools/list face
+// is where that line gets drawn.
+//
+// ⚠️ UNLIKE list_reply_cards.view ABOVE, THIS ENTRY IS NOT OWNER-APPROVED YET.
+// It is the conservative default while the question is with him: advertising it
+// later is one line here plus the descriptor, and un-advertising it after
+// agents have seen it is not.
 var deliberatelyOffMCP = map[string][]string{
 	"ingest_telemetry": {"warden_shape", "cutover_effect"},
 	"list_reply_cards": {"view"},
+	"update_settings":  {"onboarding_dismissed"},
 }
 
 type openapiSpec struct {

@@ -647,6 +647,29 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		s.displayWide = *body.DisplayWide
 	}
 	s.settingsMu.Unlock()
+	// onboarding_dismissed (T-0648) is written OUTSIDE settingsMu, and last:
+	// it does not live in the settings snapshot at all — it is a field on the
+	// onboarding report row, which settingsView already reads straight from the
+	// DAL (the run finishes in its own goroutine, so a snapshot copy would go
+	// stale).
+	//
+	// A dismissal with no banner behind it (no report, or a report that is not
+	// `failed`) is refused with 409 rather than absorbed as a quiet 200: on a
+	// run that is still `running` the refusal is what keeps this request's
+	// unlocked read-modify-write from interleaving with the run's own write and
+	// ERASING the verdict — see setOnboardingDismissed. The banner is the only
+	// sender and it sends this field on its own, so the refusal does not strand
+	// a half-applied settings PATCH in practice.
+	if body.OnboardingDismissed != nil {
+		if err := s.setOnboardingDismissed(*body.OnboardingDismissed); err != nil {
+			if errors.Is(err, errNoOnboardingBanner) {
+				writeError(w, http.StatusConflict, err.Error())
+				return
+			}
+			internalError(w, err)
+			return
+		}
+	}
 	if updaterChanged {
 		// Force-expire the update-check cache + refresh in the background so
 		// the software-update card reflects the new channel without waiting

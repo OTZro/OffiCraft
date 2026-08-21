@@ -99,6 +99,7 @@ import type {
   WireDeleteResult,
   WireUninstallResult,
   WireMachine,
+  WireServerSettings,
 } from "./wire";
 import {
   toMember,
@@ -1539,6 +1540,12 @@ const DEFAULT_MOCK_SETTINGS = {
   // Layout width (T-756f) — OFF out of the box, mirroring the server (the
   // cockpit ships with the narrow centred column).
   display_wide: false,
+  // The first-run onboarding report (T-ba62). Null in the mock and staying
+  // that way: mock mode is a healthy studio, and a seeded FAILED report would
+  // hang the "your studio is broken" banner over every mock page. Declared
+  // rather than omitted so `onboarding_dismissed` below has something real to
+  // write to when a caller does seed one.
+  onboarding: null as WireServerSettings["onboarding"],
 };
 
 // ── Themes (T-83ef): their OWN store, keyed by id ────────────────────────────
@@ -4573,6 +4580,46 @@ export const mockApi: Api = {
     if (patch.displayWide !== undefined) {
       mockServerSettings.display_wide = patch.displayWide;
     }
+    // onboarding_dismissed (T-0648) — server parity: the stamp lives ON the
+    // report row, and only a `failed` report has a banner up to close. Every
+    // other state is refused with 409, exactly as setOnboardingDismissed does:
+    // no report at all (mock mode's standing state until a test seeds one via
+    // __injectMockOnboardingReport), or a run still `running`. What the
+    // `running` refusal buys server-side is not the stamp's visibility — a
+    // stamp there is wiped by whichever terminal path lands next — but the
+    // WRITE: the server's dismissal is an unlocked read-modify-write of the
+    // whole report row and the only writer that can run CONCURRENTLY with the
+    // run, so writing back a pre-verdict copy ERASES the failure and strands
+    // the report in `running`, where no banner draws and onboarding never
+    // re-runs. The mock has no concurrent writer to reproduce that, so it
+    // copies the REFUSAL, which is the part callers can observe. Like the
+    // server, this runs LAST — the settings fields above are already applied
+    // when the refusal is thrown.
+    if (patch.onboardingDismissed !== undefined) {
+      if (mockServerSettings.onboarding?.state !== "failed") {
+        // This sentence is a SECOND hand copy of errNoOnboardingBanner's, and
+        // it stays one: NOT ONE cross-language string contract in this repo
+        // reaches error-envelope text. Every `drift-*` gate in the Makefile
+        // regenerates from a source that carries something else — schema
+        // descriptions (spec/openapi.json), UI wording (locales/en.ts),
+        // --color-* names (styles/theme.css), --font-* names and safe-family
+        // stacks (themeFonts.source.json). Binding these two copies would mean
+        // inventing a generator for one string. Nothing depends on the wording
+        // either: the tests on both sides assert the STATUS (and the code
+        // derived from it), and the banner's only caller discards the rejection
+        // entirely — it puts itself back up rather than showing the server's
+        // sentence.
+        throw mockApiError(
+          "http 409 for PATCH /api/settings",
+          409,
+          "no onboarding banner is up to dismiss — the first-run report is absent or not in a failed state"
+        );
+      }
+      mockServerSettings.onboarding = {
+        ...mockServerSettings.onboarding,
+        dismissed_at: patch.onboardingDismissed ? Date.now() / 1000 : 0,
+      };
+    }
     return toServerSettings(structuredClone(mockServerSettings));
   },
 
@@ -5313,6 +5360,20 @@ export function __injectMockTaskType(t: TaskTypeView): void {
 export function __injectMockTaskManual(m: TaskManualView): void {
   taskManuals.push(structuredClone(m));
   emitTopic("task_manual");
+}
+
+// Test-only hook: seed the ONE first-run onboarding report, the way the server's
+// own kick / finish / recover would have left the row on disk. Mock mode ships
+// with no report at all (see the `onboarding: null` note on
+// DEFAULT_MOCK_SETTINGS) — this is the seeding caller that note is waiting for.
+// Without it the only reachable `onboarding_dismissed` branch is "no report",
+// so the half of the guard that REFUSES a stamp on a run still `running` — the
+// half the server comment calls the whole point — has nothing standing on it.
+// Cleared by __resetMock along with the rest of the settings blob.
+export function __injectMockOnboardingReport(
+  report: NonNullable<WireServerSettings["onboarding"]>
+): void {
+  mockServerSettings.onboarding = structuredClone(report);
 }
 
 // Test-only hook: flip a mock member's presence projection, the way the real

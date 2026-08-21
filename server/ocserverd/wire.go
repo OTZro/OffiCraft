@@ -126,8 +126,13 @@ type settingsDTO struct {
 // the whole point of the report is that a new owner can read WHY the assistant
 // is not awake instead of staring at an unexplained grey member.
 type onboardingStepDTO struct {
-	Name   string `json:"name"`
-	OK     bool   `json:"ok"`
+	Name string `json:"name"`
+	OK   bool   `json:"ok"`
+	// Code is the CLOSED failure vocabulary (T-0648) — see onboarding.go's
+	// onboardingCode* constants. Set on every failing step, empty on success.
+	// It is what lets the cockpit write the owner's sentence itself; Reason
+	// stays as the English fallback for a code the client does not know.
+	Code   string `json:"code"`
 	Reason string `json:"reason"`
 	Detail string `json:"detail"`
 }
@@ -137,6 +142,14 @@ type onboardingReportDTO struct {
 	StartedAt  float64             `json:"started_at"`
 	FinishedAt float64             `json:"finished_at"`
 	Steps      []onboardingStepDTO `json:"steps"`
+	// DismissedAt is when the owner pressed 「不再顯示」 on the cockpit banner
+	// (T-0648): unix seconds, 0 = never dismissed. It lives on the REPORT, not
+	// in the browser, which is the whole point — a per-tab dismissal came back
+	// on the next tab. Absent in the JSON means 0 means never dismissed: every
+	// report row written before this field existed reads that way, and there is
+	// no migration, so the honest reading of the absence is the one that keeps
+	// the warning visible.
+	DismissedAt float64 `json:"dismissed_at"`
 }
 
 // themeFetchResultDTO carries a link-fetched theme bundle back to the cockpit
