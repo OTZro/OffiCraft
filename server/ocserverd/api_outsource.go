@@ -722,9 +722,10 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 
 // POST /api/outsource-workers/{id}/model — the owner cockpit's runtime/model
 // edit (owner/admin agent since T-6020), the worker twin of the member runtime/model/effort edit.
-// Persist the new values; when the worker is ACTIVE + online, kill+respawn
-// so the new model takes effect NOW, otherwise (assigned / stopped) only persist —
-// the next spawn / restart bakes it in ("active 時 kill+respawn 立即生效, assigned 時
+// Persist the new values; when the worker is ACTIVE + online AND a launch intent
+// actually changed, hand it over so the new model takes effect on the next
+// session, otherwise (assigned / stopped / nothing changed) only persist — the
+// next spawn / restart bakes it in ("active 時 kill+respawn 立即生效, assigned 時
 // 下次 spawn 生效"). 404 unknown/released.
 func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(w http.ResponseWriter, r *http.Request, id string) {
 	var body OutsourceWorkerModelDTO
@@ -743,8 +744,22 @@ func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(
 		writeResolveError(w, errNotFound, "outsource worker", id)
 		return
 	}
+	// The three LAUNCH INTENTS, compared old-against-new — the staff face's rule
+	// verbatim (HandleUpdateMember, T-b6d9). Only a value that ACTUALLY changed
+	// can be stale in the running session, so only a value that actually changed
+	// is worth a session for. Re-saving what the worker is already running on used
+	// to open a wind-down and end in kill+respawn: a round of work thrown away to
+	// store a value that was already stored, which is exactly the shape a cockpit
+	// dialog produces every time the owner opens it and presses save.
+	//
+	// Compared on the SAME normalised form that gets persisted (trimmed), so
+	// " sonnet" against "sonnet" is honestly not a change; an unset field is
+	// nothing at all, never an implicit blank.
+	launchIntentChanged := false
 	if body.Model != nil {
-		worker.Model = strings.TrimSpace(*body.Model) // blank ⇒ launcher default
+		model := strings.TrimSpace(*body.Model) // blank ⇒ launcher default
+		launchIntentChanged = launchIntentChanged || model != worker.Model
+		worker.Model = model
 	}
 	if body.Runtime != nil {
 		runtime := string(*body.Runtime)
@@ -754,6 +769,7 @@ func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(
 				"runtime must be one of [claude codex]; got '"+runtime+"'")
 			return
 		}
+		launchIntentChanged = launchIntentChanged || runtime != worker.Runtime
 		worker.Runtime = runtime
 	}
 	if body.Effort != nil {
@@ -764,6 +780,7 @@ func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(
 				"effort must be one of [high low max medium]; got '"+effort+"'")
 			return
 		}
+		launchIntentChanged = launchIntentChanged || effort != worker.Effort
 		worker.Effort = effort
 	}
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
@@ -771,12 +788,12 @@ func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(
 		internalError(w, err)
 		return
 	}
-	// Take effect immediately only for a LIVE session; an assigned worker adopts
-	// the new model at its next spawn. Whether the owner wants it running at all
+	// Take effect immediately only for a LIVE session whose launch intent actually
+	// CHANGED; an assigned worker adopts the new model at its next spawn. Whether the owner wants it running at all
 	// is deliberately NOT re-asked here — respawnWorkerForOwnerOp owns that single
 	// branch point for all three owner verbs, and asking twice is how the two
 	// copies drift (this one used to skip silently, leaving no receipt).
-	if worker.Status == WorkerStatusActive && s.hub.IsOnline(worker.ID) {
+	if launchIntentChanged && worker.Status == WorkerStatusActive && s.hub.IsOnline(worker.ID) {
 		s.respawnWorkerForOwnerOp(*worker, ownerOpModel)
 		if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
 			worker = fresh
