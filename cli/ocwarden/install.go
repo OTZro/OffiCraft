@@ -1083,6 +1083,7 @@ func (i *installer) launchctlReinstall(p wardenPaths) error {
 		i.logf("DRYRUN would run: launchctl bootout %s  (tolerate not-loaded)", target)
 		i.logf("DRYRUN would: poll `launchctl print %s` until the label is gone (bootout is async; bounded ~%ds)", target, bootoutPollAttempts*int(bootoutPollInterval/time.Millisecond)/1000)
 		i.logf("DRYRUN would run: launchctl bootstrap %s %s", p.guiDomain, p.plistPath)
+		i.logf("DRYRUN would: confirm `launchctl print %s` now finds the label (bootstrap can exit 0 and register nothing)", target)
 		i.logf("DRYRUN would run: launchctl kickstart -k %s", target)
 		return nil
 	}
@@ -1093,6 +1094,15 @@ func (i *installer) launchctlReinstall(p wardenPaths) error {
 	}
 	if _, err := i.sys.run("launchctl", "bootstrap", p.guiDomain, p.plistPath); err != nil {
 		return fmt.Errorf("launchctl bootstrap failed for %s: %w", p.plistPath, err)
+	}
+	// CONFIRM the bootstrap actually registered the label (T-0648). `launchctl
+	// bootstrap` can exit 0 and register NOTHING, and when it does the first verb
+	// to notice is the next one — kickstart — which fails with exit 113 "Could not
+	// find service ... in domain". That message sent the operator to debug
+	// kickstart, a step that was never broken. Asking launchd directly, here, means
+	// the install fails at the step that actually failed.
+	if _, err := i.sys.run("launchctl", "print", target); err != nil {
+		return fmt.Errorf("launchctl bootstrap exited 0 but registered nothing — launchd does not know %s, so the job was never loaded; the plist to look at is %s: %w", target, p.plistPath, err)
 	}
 	if _, err := i.sys.run("launchctl", "kickstart", "-k", target); err != nil {
 		return fmt.Errorf("launchctl kickstart failed for %s: %w", target, err)
