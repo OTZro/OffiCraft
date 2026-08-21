@@ -135,9 +135,18 @@ func TestOffboardKindOf_WhoGetsWhichSentence(t *testing.T) {
 		{"重新聚焦 at the old flip", Member{DesiredState: DesiredStateOnline, RefocusSince: t0, RefocusOp: refocusOpRefocus}, t0 + SoftOffboardGraceSecs, soft, true},
 		{"重新聚焦 an hour later", Member{DesiredState: DesiredStateOnline, RefocusSince: t0, RefocusOp: refocusOpRefocus}, t0 + 3600, soft, true},
 
-		{"context pressure", Member{DesiredState: DesiredStateOnline, RefocusSince: t0, RefocusOp: refocusOpContextHigh}, t0 + 1, final, true},
-		{"改機器", Member{DesiredState: DesiredStateOnline, RefocusSince: t0, RefocusOp: memberOpRelocate}, t0 + 1, final, true},
-		{"the agent's own restart_self", Member{DesiredState: DesiredStateOnline, RefocusSince: t0, RefocusOp: refocusOpRestartSelf}, t0 + 1, final, true},
+		// 🔴 T-ed79: the FINAL sentence is the accelerated stop, and the
+		// accelerated stop is the SECOND context threshold — nothing else. The
+		// three rows below used to read final by FALLTHROUGH, which is how an
+		// owner verb the owner never put on a clock ended up quoting a deadline.
+		{"context pressure, second threshold", Member{DesiredState: DesiredStateOnline, RefocusSince: t0, RefocusOp: refocusOpContextHigh}, t0 + 1, final, true},
+		{"改機器", Member{DesiredState: DesiredStateOnline, RefocusSince: t0, RefocusOp: memberOpRelocate}, t0 + 1, soft, true},
+		{"換 model / runtime", Member{DesiredState: DesiredStateOnline, RefocusSince: t0, RefocusOp: memberOpModel}, t0 + 1, soft, true},
+		{"the agent's own restart_self", Member{DesiredState: DesiredStateOnline, RefocusSince: t0, RefocusOp: refocusOpRestartSelf}, t0 + 1, soft, true},
+		// An op no constant names is SOFT, not final: the default has to be the
+		// arm that promises nothing, or a cause nobody ruled on arrives with a
+		// deadline attached.
+		{"an op no constant names", Member{DesiredState: DesiredStateOnline, RefocusSince: t0, RefocusOp: "an_op_no_constant_names"}, t0 + 1, soft, true},
 
 		{"online and untouched", Member{DesiredState: DesiredStateOnline}, t0, "", false},
 	}
@@ -291,15 +300,18 @@ func TestRecycleGraceFor_MatchesTheClockThatActuallyCollects(t *testing.T) {
 		clocked bool
 	}
 	cases := map[string]want{
-		// The owner's button says there is no countdown, so there must not be
-		// one — not now, and not after any window.
-		refocusOpRefocus: {0, false},
-		// Everything else arrives already saying 120 seconds.
+		// 停止 — the agent is shown the sequence and collected by its own
+		// stopped report or by force-stop. No countdown, so no clock: not now,
+		// and not after any window. T-ed79 moved the four rows after the first
+		// one here; they were clocked by FALLTHROUGH, never by ruling.
+		refocusOpRefocus:          {0, false},
+		refocusOpRestartSelf:      {0, false},
+		memberOpRelocate:          {0, false},
+		memberOpModel:             {0, false},
+		"":                        {0, false},
+		"an_op_no_constant_names": {0, false},
+		// 加速停止 — the ONE clocked cause, and it arrives already saying so.
 		refocusOpContextHigh: {cfg.RecycleGrace, true},
-		refocusOpRestartSelf: {cfg.RecycleGrace, true},
-		memberOpRelocate:     {cfg.RecycleGrace, true},
-		memberOpModel:        {cfg.RecycleGrace, true},
-		"":                   {cfg.RecycleGrace, true},
 	}
 	for op, w := range cases {
 		grace, clocked := recycleGraceFor(op, cfg)

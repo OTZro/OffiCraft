@@ -917,17 +917,20 @@ func TestAutoHandoverWorker_LoopBreak(t *testing.T) {
 
 // stampWorkerRefocus opens a handover epoch directly on the row (the stamp the
 // refocus handler / auto-stamp would have written) without any dispatch.
-// stampWorkerRefocus leaves RefocusOp EMPTY on purpose: empty is not
-// refocusOpRefocus, so every caller of this helper exercises the CLOCKED arm of
-// autoHandoverWorker. That is what these tests mean to cover, and it is why they
-// all stayed green through T-fe5e, which changed only the no-clock arm — the
-// 重新聚焦 arm is pinned separately in worker_refocus_no_clock_tfe5e_test.go.
-// Do not "fix" this by stamping refocusOpRefocus here; it would move a dozen
-// tests onto the other branch silently.
+// It stamps the ACCELERATED cause (the second context threshold) because every
+// caller of this helper means to exercise the CLOCKED arm of autoHandoverWorker.
+// It used to leave RefocusOp EMPTY for that purpose — empty was clocked by
+// fallthrough — which stopped being true when T-ed79 made FINAL the positive
+// condition and left exactly one clocked cause. Naming it is also closer to
+// production: no path stamps an epoch without an op. Do not "fix" this by
+// stamping one of the 停止 causes here; it would move a dozen tests onto the
+// no-clock branch silently, and that branch is pinned separately in
+// worker_refocus_no_clock_tfe5e_test.go.
 func stampWorkerRefocus(t *testing.T, api *apiServer, workerID string, since float64) {
 	t.Helper()
 	w, _ := api.dal.GetOutsourceWorker(workerID)
 	w.RefocusSince = since
+	w.RefocusOp = refocusOpContextHigh
 	w.StoppingSince = 0.0
 	w.StoppedSince = 0.0
 	if err := api.dal.PutOutsourceWorker(*w); err != nil {

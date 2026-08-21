@@ -1222,9 +1222,13 @@ func TestNewOutsourceWorkerDTO_GoldenWireShape(t *testing.T) {
 		LastOpAt:         1501.0,
 		DesiredMachineID: "mac-2",
 		RefocusSince:     1600.0,
-		RefocusOp:        memberOpRelocate,
-		DesiredState:     "online",
-		BankedCost:       3.25,
+		// The ACCELERATED cause on purpose: it is the one wind-down that still
+		// carries a deadline (T-ed79), so the golden keeps a NON-ZERO
+		// refocus_deadline on the wire. A 停止 cause here would pin 0 and stop
+		// telling the reader whether the field is derived at all.
+		RefocusOp:    refocusOpContextHigh,
+		DesiredState: "online",
+		BankedCost:   3.25,
 		// The reported twins are deliberately DIFFERENT from the configured
 		// values above: a golden where they matched would still pass if the
 		// builder served the configured field by mistake (T-7f28).
@@ -1265,7 +1269,7 @@ func TestNewOutsourceWorkerDTO_GoldenWireShape(t *testing.T) {
 		{
 			name: "every field populated",
 			w:    fullWorker, task: fullTask, p: fullProjection,
-			want: `{"id":"ow-1","avatar_url":"","codename":"O-7","runtime":"claude","model":"claude-sonnet-4-5","effort":"high","actual_model":"claude-opus-5","actual_runtime":"codex","actual_effort":"medium","status":"active","task_id":"t-1","task_title":"review 1","task_status":"in_progress","task_no":"T-1","task_created_ts":900,"task_type_key":"tm-review","task_type_name":"程式碼審查 (tm-review)","created_ts":1000,"unread_count":4,"presence":"online","machine":"Mac Studio (mac-1)","desired_machine_id":"mac-2","actual_machine":"mac-1","account":"alice@example.com","context_pct":42,"cost":1.5,"banked_cost":3.25,"last_op":"worker_start","last_op_ok":true,"last_op_log":"spawned ok","last_op_reason":"","last_op_at":1501,"creator_id":"m-9","delegated_by":"Bob","refocus_since":1600,"refocus_op":"relocate","refocus_deadline":1720,"desired_state":"online"}`,
+			want: `{"id":"ow-1","avatar_url":"","codename":"O-7","runtime":"claude","model":"claude-sonnet-4-5","effort":"high","actual_model":"claude-opus-5","actual_runtime":"codex","actual_effort":"medium","status":"active","task_id":"t-1","task_title":"review 1","task_status":"in_progress","task_no":"T-1","task_created_ts":900,"task_type_key":"tm-review","task_type_name":"程式碼審查 (tm-review)","created_ts":1000,"unread_count":4,"presence":"online","machine":"Mac Studio (mac-1)","desired_machine_id":"mac-2","actual_machine":"mac-1","account":"alice@example.com","context_pct":42,"cost":1.5,"banked_cost":3.25,"last_op":"worker_start","last_op_ok":true,"last_op_log":"spawned ok","last_op_reason":"","last_op_at":1501,"creator_id":"m-9","delegated_by":"Bob","refocus_since":1600,"refocus_op":"context_high","refocus_deadline":1720,"desired_state":"online"}`,
 		},
 		{
 			name: "bare row honest empties",

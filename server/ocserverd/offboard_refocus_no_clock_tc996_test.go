@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 )
 
@@ -29,7 +28,7 @@ import (
 // `return cfg.SoftOffboardGrace + cfg.RecycleGrace, true` for refocusOpRefocus
 // — the exact pre-T-c996 clock — turns THIS test red and, without it, left the
 // whole ocserverd suite green.
-func TestRefocusIsCollectedByNoClock_ButEveryOtherCauseStillIs(t *testing.T) {
+func TestOnly加速停止IsCollectedByAClock_EverythingElseIsNot(t *testing.T) {
 	cfg := defaultReconcileConfig()
 	t0 := 1_000_000.0
 
@@ -44,19 +43,28 @@ func TestRefocusIsCollectedByNoClock_ButEveryOtherCauseStillIs(t *testing.T) {
 	// that no window exists, rather than that this one is generous.
 	const aYear = 365 * 24 * 3600.0
 
-	t.Run("重新聚焦 is never timed out, however long it takes", func(t *testing.T) {
-		for _, elapsed := range []float64{
-			1,
-			cfg.RecycleGrace,                         // the old flat clock
-			cfg.SoftOffboardGrace,                    // the old sentence flip
-			cfg.SoftOffboardGrace + cfg.RecycleGrace, // the old collection, exactly
-			aYear,
+	// T-ed79 widened the no-clock set from {重新聚焦} to everything except the
+	// SECOND context threshold: 改機器, model/runtime and restart_self used to
+	// be collected on the clock by FALLTHROUGH, which is how a cause the owner
+	// never put on a clock ended up on one. The loop below is unchanged in
+	// shape; the list it runs over is the ruling.
+	t.Run("停止 causes are never timed out, however long they take", func(t *testing.T) {
+		for _, op := range []string{
+			refocusOpRefocus, refocusOpRestartSelf, memberOpRelocate, memberOpModel,
 		} {
-			d := reconcileDecide(obsRefocused(refocusOpRefocus), newReconcileState(), cfg, t0+elapsed)
-			if d.Command == reconcileCmdStop {
-				t.Fatalf("+%.0fs: 重新聚焦 was collected on a clock — the notice it was "+
-					"sent says there is none, so this is a silent deadline (%s)",
-					elapsed, d.Reason)
+			for _, elapsed := range []float64{
+				1,
+				cfg.RecycleGrace,                         // the old flat clock
+				cfg.SoftOffboardGrace,                    // the old sentence flip
+				cfg.SoftOffboardGrace + cfg.RecycleGrace, // the old collection, exactly
+				aYear,
+			} {
+				d := reconcileDecide(obsRefocused(op), newReconcileState(), cfg, t0+elapsed)
+				if d.Command == reconcileCmdStop {
+					t.Fatalf("%s at +%.0fs: collected on a clock — the notice it was sent "+
+						"says there is none, so this is a silent deadline (%s)",
+						op, elapsed, d.Reason)
+				}
 			}
 		}
 	})
@@ -64,8 +72,8 @@ func TestRefocusIsCollectedByNoClock_ButEveryOtherCauseStillIs(t *testing.T) {
 	// The positive control, and it is the whole reason the case above means
 	// anything: this arm reaches the SAME code path and IS collected. If both
 	// went quiet the test above would pass for the wrong reason.
-	t.Run("every other cause still gets exactly its 120 seconds", func(t *testing.T) {
-		for _, op := range []string{refocusOpContextHigh, refocusOpRestartSelf, memberOpRelocate, memberOpModel} {
+	t.Run("加速停止 still gets exactly its 120 seconds", func(t *testing.T) {
+		for _, op := range []string{refocusOpContextHigh} {
 			before := reconcileDecide(obsRefocused(op), newReconcileState(), cfg, t0+cfg.RecycleGrace-1)
 			if before.Command == reconcileCmdStop {
 				t.Fatalf("%s: collected BEFORE its grace elapsed (%s)", op, before.Reason)
@@ -130,11 +138,42 @@ func TestRefocusNoticeNeverStartsACountdown_ButAContextLimitStillDoes(t *testing
 		assertQuotesNoTime(t, fmt.Sprintf("重新聚焦 at +%.0fs", age), notice)
 	}
 
-	// The positive control: the causes that really are on the clock must still
+	// …and the 停止 causes T-ed79 moved off the clock are silent about time for
+	// the same reason 重新聚焦 is: nothing is coming to collect them either.
+	for _, op := range []string{refocusOpRestartSelf, memberOpRelocate, memberOpModel} {
+		assertQuotesNoTime(t, op, noticeAt(t, op, 1))
+	}
+
+	// The positive control: the ONE cause that really is on the clock must still
 	// say when it runs out, or an agent under context pressure would take its
-	// time and be cut off.
-	if notice := noticeAt(t, refocusOpContextHigh, 1); !strings.Contains(notice, "Your deadline is ") {
-		t.Fatalf("a context-limit handover IS on the clock and must say when it "+
-			"runs out:\n%s", notice)
+	// time and be cut off. Asserted as the WHOLE composed sentence against a
+	// literal — a substring match on "Your deadline is " would have passed just
+	// as happily on a sentence that had lost its instant, its opener, or its
+	// closer, and this file exists because of a wording that nothing caught.
+	//
+	// The literal is pinned to a fixed epoch and to the shipped thresholds, both
+	// re-checked below, so a settings change fails as a stale FIXTURE rather
+	// than as a mysterious diff.
+	if cfg := s.ctxHighConfig(); cfg.NoticePct != 40 || cfg.HandoverPct != 50 {
+		t.Fatalf("stale fixture: the sentence below names the shipped 40%%/50%% "+
+			"limits, but this server is configured %d%%/%d%%", cfg.NoticePct, cfg.HandoverPct)
+	}
+	if grace, clocked := recycleGraceFor(refocusOpContextHigh, s.reconcileCfg); !clocked || grace != 120 {
+		t.Fatalf("stale fixture: the instant below assumes a 120s clock, got "+
+			"grace=%.0f clocked=%v", grace, clocked)
+	}
+	const (
+		finalEpoch = 1_769_904_000 // 2026-02-01T00:00:00Z
+		wantFinal  = "close-out (your limits: 40% / 50%)" +
+			" — offboard now: work the sequence below, then call restart_self" +
+			" yourself. Your deadline is 2026-02-01T00:02:00Z."
+	)
+	m := testAgent("m-notice-final")
+	m.RefocusSince = finalEpoch
+	m.RefocusOp = refocusOpContextHigh
+	putTestMember(t, s, m)
+	notice, _ := s.offboardDeltaPayload(m)["offboard_notice"].(string)
+	if got := composedSentence(notice); got != wantFinal {
+		t.Fatalf("加速停止 sentence:\n got: %q\nwant: %q", got, wantFinal)
 	}
 }

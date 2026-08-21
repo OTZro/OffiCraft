@@ -315,9 +315,14 @@ func TestReconcileDecide(t *testing.T) {
 		}
 	})
 
+	// The stuck-dump force-stop belongs to the ONE cause that runs a clock —
+	// 加速停止, the second context threshold (T-ed79). The op is named here
+	// because it is what the grace is read from; an unnamed op is a 停止 and is
+	// collected by the agent's own stopped report, asserted above.
 	t.Run("recycle grace elapsed force-stops a stuck dump", func(t *testing.T) {
 		obs := obsOf("m", DesiredStateOnline, true)
 		obs.RefocusSince = 1000
+		obs.RefocusOp = refocusOpContextHigh
 		d := reconcileDecide(obs, newReconcileState(), cfg, 1000+cfg.RecycleGrace)
 		if d.Command != reconcileCmdStop {
 			t.Fatalf("grace elapsed must force-stop: %+v", d)

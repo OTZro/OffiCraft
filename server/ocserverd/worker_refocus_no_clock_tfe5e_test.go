@@ -60,8 +60,12 @@ func TestWorkerRefocusIsCollectedByNoClock_ButEveryOtherCauseStillIs(t *testing.
 		}
 	})
 
-	// POSITIVE CONTROL: a clocked cause (改機器) is still collected on time.
-	t.Run("relocate is still collected on the clock", func(t *testing.T) {
+	// T-ed79: 換 model / 改機器 are 停止 too, on the WORKER side as well. The
+	// owner's parity ruling quoted above (rc-5c478001de8a) is what decides this:
+	// workers and staff read ONE judgement (winddownKindFor), so an op that
+	// stopped being clocked for staff cannot stay clocked here without
+	// recreating exactly the split this pair of tickets removed.
+	t.Run("換 model is not collected on a clock either", func(t *testing.T) {
 		api := newTasksTestServer(t)
 		api.noOutsource = true
 		workerID := newActiveOnlineWorker(t, api)
@@ -75,7 +79,43 @@ func TestWorkerRefocusIsCollectedByNoClock_ButEveryOtherCauseStillIs(t *testing.
 		api.hub.DrainWardenCommands(ServerSelfHost)
 		w, _ := api.dal.GetOutsourceWorker(workerID)
 		if w.RefocusOp == refocusOpRefocus {
-			t.Fatalf("the control must NOT be the refocus arm (op = %q)", w.RefocusOp)
+			t.Fatalf("the arm under test must NOT be the refocus arm (op = %q)", w.RefocusOp)
+		}
+
+		for _, elapsed := range []float64{
+			StoppingTimeoutSecs + 1, 10 * StoppingTimeoutSecs, 100 * StoppingTimeoutSecs,
+		} {
+			api.outsourceMu.Lock()
+			api.autoHandoverWorker(*w, w.RefocusSince+elapsed)
+			api.outsourceMu.Unlock()
+			if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
+				t.Fatalf("+%.0fs after 換 model: nothing may be dispatched, got %d frames",
+					elapsed, got)
+			}
+		}
+	})
+
+	// POSITIVE CONTROL: the ONE clocked cause (加速停止 — the second context
+	// threshold) is still collected on time. Without it, "never collected" and
+	// "the arm stopped being reached" look identical.
+	t.Run("加速停止 is still collected on the clock", func(t *testing.T) {
+		api := newTasksTestServer(t)
+		api.noOutsource = true
+		workerID := newActiveOnlineWorker(t, api)
+
+		rec := postWorker(t, api, workerID, "refocus", nil,
+			api.HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("refocus: %d %s", rec.Code, rec.Body.String())
+		}
+		api.hub.DrainWardenCommands(ServerSelfHost)
+		w, _ := api.dal.GetOutsourceWorker(workerID)
+		// Re-stamped as the accelerated cause: this arm is opened by context
+		// pressure in production (worker_spawn.go), which needs a gauge fixture
+		// the handler above does not; the op is what the clock reads.
+		w.RefocusOp = refocusOpContextHigh
+		if err := api.dal.PutOutsourceWorker(*w); err != nil {
+			t.Fatalf("put worker: %v", err)
 		}
 
 		api.outsourceMu.Lock()
@@ -106,8 +146,10 @@ func TestWorkerDTORefocusDeadlineFollowsTheCollectingClock(t *testing.T) {
 		want float64
 	}{
 		{"重新聚焦 quotes no deadline at all", refocusOpRefocus, 0},
-		{"改機器 still quotes the deadline it is collected on", "relocate", since + StoppingTimeoutSecs},
-		{"context_high still quotes it too", "context_high", since + StoppingTimeoutSecs},
+		{"改機器 quotes no deadline either (T-ed79: it is a 停止)", "relocate", 0},
+		{"換 model quotes none", memberOpModel, 0},
+		{"restart_self quotes none", refocusOpRestartSelf, 0},
+		{"加速停止 still quotes the deadline it is collected on", refocusOpContextHigh, since + StoppingTimeoutSecs},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

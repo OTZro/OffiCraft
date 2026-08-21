@@ -269,12 +269,12 @@ func reconcileDecide(
 // recycleGraceFor is the one place that says how long a refocus epoch waits
 // before the collection is forced — and whether it is on a clock AT ALL.
 //
-// An owner-pressed 重新聚焦 is NOT (owner 2026-08-19, card rc-c540367065ad:
-// 「連時鐘一起拿掉」). It has the same shape as 下線: the agent is shown the
-// sequence, and the collection is its own stopped report or the owner pressing
-// force-stop. Nothing collects it on time. Every other cause (context pressure,
-// 改機器, model change, the agent's own restart_self) arrives already saying
-// 120 seconds, and gets exactly that.
+// Almost nothing is (T-ed79). 重新聚焦, 改機器, model change, the agent's own
+// restart_self and the FIRST context threshold all have the same shape as 下線:
+// the agent is shown the sequence, and the collection is its own stopped report
+// or the owner pressing force-stop. Nothing collects them on time. The ONE
+// clocked cause is the SECOND context threshold (context_high) — 加速停止 — and
+// it gets exactly its RecycleGrace seconds.
 //
 // 🔴 The bool is why this returns two values instead of a big number: it and
 // offboardKindOf are ONE judgement read from two places — the clock and the
@@ -285,7 +285,13 @@ func reconcileDecide(
 // all. If you ever put a clock back on this arm, offboardKindOf has to start
 // saying so in the same change.
 func recycleGraceFor(refocusOp string, cfg reconcileConfig) (grace float64, clocked bool) {
-	if refocusOp == refocusOpRefocus {
+	// 🔴 The WHICH-ARM question is not answered here any more (T-ed79). This
+	// function used to fall through to "clocked" for every op except 重新聚焦,
+	// while offboardKindOf answered the same question from its own list — two
+	// copies of one ruling, in two files, and the split this comment warns
+	// about is what happens the day they disagree. winddownKindFor is now the
+	// single read; all that is left here is HOW LONG a clocked arm gets.
+	if _, clocked := winddownKindFor(refocusOp); !clocked {
 		return 0, false
 	}
 	return cfg.RecycleGrace, true

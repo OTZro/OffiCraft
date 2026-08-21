@@ -13,7 +13,8 @@ package main
 //
 //	重啟   (refocus_member / restart_self) — stamps, dispatches NOTHING, and the
 //	       reconcile recycle arm waits for report_stopped or the epoch's grace
-//	       (recycleGraceFor: 120s — except 重新聚焦, which runs no clock at all).
+//	       (recycleGraceFor — which since T-ed79 answers "no clock" for every
+//	       cause except 加速停止, the second context threshold).
 //	       FULL wind-down. UNCHANGED by this ticket (the sentinel).
 //	改機器 (relocate)                       — stamped nothing; reconcileMemberNow
 //	       took decideUp's relocate arm and dispatched a robust STOP ON THE
@@ -176,6 +177,31 @@ func aRefocusStampWouldReachTheAgent(m Member) bool {
 
 func hasUncollectedOnlineOwnerOpState(refocusSince, stoppedSince float64, online bool) bool {
 	return online && !(refocusSince > 0.0 && stoppedSince > 0.0)
+}
+
+// winddownKindFor is THE judgement about a wind-down cause, and the only one.
+// The clock (recycleGraceFor) and the sentence (offboardKindOf) both read it,
+// so the two cannot disagree about the same member — a clock nobody announces,
+// or a countdown nobody is counting, is now a change to ONE line rather than
+// two files that happen to agree.
+//
+// 🔴 FINAL IS THE POSITIVE CONDITION, and the default is SOFT. It used to be
+// the other way round — everything fell through to "on the clock" and 重新聚焦
+// was carved out as the single exception — which meant every new cause arrived
+// carrying a deadline by accident, including ones the owner had ruled must
+// carry none. Owner model (T-ed79): the only 加速停止 is the one context
+// pressure opens at the SECOND threshold; 停止 is everything else — the agent
+// is shown the sequence and collected by its own stopped report or by the owner
+// pressing force-stop. Adding a cause to the final set is now something you
+// have to TYPE, on this line, where the ruling is written down.
+//
+// (force-stop is not a kind here at all: it sends nothing and removes the
+// member on the spot — see HandleForceStopMember.)
+func winddownKindFor(op string) (kind string, clocked bool) {
+	if op == refocusOpContextHigh {
+		return offboardKindFinal, true
+	}
+	return offboardKindSoft, false
 }
 
 // armRefocusEpoch is the ONE way a refocus epoch is opened. It MUTATES m and

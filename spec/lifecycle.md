@@ -414,8 +414,8 @@ decides that time is up.
   `refocus_since + StoppingTimeoutSecs` and **never read `refocus_op`** — while the notice
   that worker was sent said nothing about time. Both the in-flight arm and the worker DTO's
   `refocus_deadline` now go through the SAME `recycleGraceFor` / `refocusDeadlineOf` pair the
-  staff side uses, so 重新聚焦 runs no clock on either kind and every other cause keeps its
-  120 s. The owner ruled the two kinds identical and rejected the asymmetry argument that had
+  staff side uses, so 重新聚焦 runs no clock on either kind. (T-ed79 then widened that set:
+  the only cause left on a clock, staff or worker, is `context_high`.) The owner ruled the two kinds identical and rejected the asymmetry argument that had
   been offered for keeping the clock (「如果正職只有一個任務 那跟外包的代價不一樣嗎」): a
   staff member holding a single task pays exactly what a worker holding one pays.
   ⚠️ **What that ruling costs, stated rather than buried**: a worker that never answers its
@@ -471,7 +471,7 @@ ONE-SHOT, never a standing order):
 | `start_timeout` | 90 s | START unconfirmed → failed spawn |
 | `stop_grace` | 120 s | self-stop window before the robust stop — **unreachable today**: the arm that consumes it is guarded by `SoftOffboardGrace == 0` (see §4.3) |
 | `stop_retry` | 90 s | STOP/UNINSTALL re-dispatch window (lost-frame recovery) |
-| `recycle_grace` | 120 s | dump-stuck fallback from `refocus_since` — but the wait is **`recycleGraceFor(refocus_op)`, which answers *whether there is a clock at all* as well as how long**: an owner-pressed 重新聚焦 (`refocus_op = refocus`) is **not on a clock** (owner 2026-08-19, `rc-c540367065ad`) and is collected only by the agent's own stopped report or by 強制下線; `context_high` and `restart_self` already say 120 s and get exactly that |
+| `recycle_grace` | 120 s | dump-stuck fallback from `refocus_since` — but the wait is **`recycleGraceFor(refocus_op)`, which answers *whether there is a clock at all* as well as how long**, and since T-ed79 both it and the sentence (`offboardKindOf`) read ONE judgement, `winddownKindFor`. **加速停止 is the only clocked kind, and its only cause is `context_high` — the SECOND context threshold.** Every other cause (`refocus`, `context_notice`, `relocate`, `runtime/model`, `restart_self`, and anything unnamed) is a plain **停止**: no clock at all, collected only by the agent's own stopped report or by 強制停止. FINAL is a positive condition, not a fallthrough — that is what stopped an owner verb the owner never put on a clock from carrying one |
 | `soft_offboard_grace` | 600 s | how long a close-out may say NOTHING before its anchor is treated as residue — **not a deadline, and no longer measured from the anchor**. Neither soft arm escalates any more: 下線 never did (`rc-27d1710174dd`) and 重新聚焦 stopped on 2026-08-19 (`rc-c540367065ad`), so what this value still does is make `decideDown` run **no clock at all** (§4.3) and set the silence `clearStaleStoppingOnOnline` requires before it sweeps (§4.5) — which is what keeps the 強制下線 button on screen for as long as the close-out is still reporting. Compile-time constant (`SoftOffboardGraceSecs`), deliberately not owner-settable |
 | `backoff_base` / `backoff_cap` | 5 s / 300 s | exponential start backoff |
 | `circuit_threshold` / `circuit_cooldown` | 5 / 120 s | sticky breaker (verified hard failures only) |
@@ -489,8 +489,8 @@ ONE-SHOT, never a standing order):
   the kill event-driven, not on the next tick) OR `recycleGraceFor(refocus_op)` elapses
   (the dead-session fallback — an unresponsive session that never reports is force-stopped
   by the server; the agent side needs no timeout of its own. **The wait is not one number**:
-  120 s for `context_high` / `restart_self`, and **no fallback at all** for an owner-pressed
-  `refocus`, which waits indefinitely for the stopped report or the owner's 強制下線 — see
+  120 s for `context_high` (加速停止) and **no fallback at all** for every other cause,
+  which waits indefinitely for the stopped report or the owner's 強制停止 — see
   the `recycle_grace` row in §4.4) → the SSE drop makes
   ¬online → the next tick's plain START respawns.
 - **The wake text is the document, not client copy**: the SERVER composes the

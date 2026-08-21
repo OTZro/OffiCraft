@@ -154,6 +154,12 @@ const (
 	deadlineEpochSince = 1_769_904_000 // 2026-02-01T00:00:00Z
 	deadlineEpochGrace = 120           // the recycle clock that actually collects
 	deadlineEpochWant  = "2026-02-01T00:02:00Z"
+	// The whole sentence the server composes for that epoch on a member with no
+	// gauge reading, under the shipped 40%/50% limits. Asserted verbatim rather
+	// than by substring — see the call sites.
+	deadlineEpochSentence = "close-out (your limits: 40% / 50%)" +
+		" — offboard now: work the sequence below, then call restart_self" +
+		" yourself. Your deadline is " + deadlineEpochWant + "."
 )
 
 func TestFinalCallQuotesAnAbsoluteDeadlineFromTheSameSourceAsTheCockpit(t *testing.T) {
@@ -174,8 +180,11 @@ func TestFinalCallQuotesAnAbsoluteDeadlineFromTheSameSourceAsTheCockpit(t *testi
 		return notice, m
 	}
 
-	// THE CLOCKED ARMS: an absolute deadline, equal to the one on the wire.
-	for _, op := range []string{refocusOpContextHigh, "restart_self", "relocate"} {
+	// THE CLOCKED ARM: an absolute deadline, equal to the one on the wire.
+	// T-ed79 left exactly one — the second context threshold. restart_self and
+	// relocate used to be here, on the clock by fallthrough rather than by
+	// ruling; they are now asserted as no-clock arms below, beside 重新聚焦.
+	for _, op := range []string{refocusOpContextHigh} {
 		t.Run("clocked: "+op, func(t *testing.T) {
 			grace, clocked := recycleGraceFor(op, cfg)
 			if !clocked {
@@ -187,9 +196,14 @@ func TestFinalCallQuotesAnAbsoluteDeadlineFromTheSameSourceAsTheCockpit(t *testi
 			}
 
 			notice, m := noticeFrom(t, op, deadlineEpochSince)
-			if !strings.Contains(notice, "Your deadline is "+deadlineEpochWant+".") {
-				t.Fatalf("%s must quote the absolute deadline %s:\n%s",
-					op, deadlineEpochWant, notice)
+			// The WHOLE composed sentence, not a substring of it: a
+			// strings.Contains on the deadline clause passes just as happily on
+			// a sentence that has lost its opener, its closer, or its position
+			// clause, and this file is here because one wording change went
+			// unnoticed. (The 下線程序 document folded in under the newline is
+			// the owner's prose and is not asserted — see composedSentence.)
+			if got := composedSentence(notice); got != deadlineEpochSentence {
+				t.Fatalf("%s sentence:\n got: %q\nwant: %q", op, got, deadlineEpochSentence)
 			}
 
 			// ONE source of truth: the sentence and the cockpit field must name the
@@ -210,14 +224,16 @@ func TestFinalCallQuotesAnAbsoluteDeadlineFromTheSameSourceAsTheCockpit(t *testi
 		})
 	}
 
-	// THE UNCLOCKED ARM (control in the other direction): no time at all —
+	// THE UNCLOCKED ARMS (control in the other direction): no time at all —
 	// neither a duration nor a deadline, because nothing is coming to collect.
-	t.Run("no clock: "+refocusOpRefocus, func(t *testing.T) {
-		for _, age := range []float64{1, SoftOffboardGraceSecs + 1, 10 * SoftOffboardGraceSecs} {
-			notice, _ := noticeFrom(t, refocusOpRefocus, nowSecs()-age)
-			assertQuotesNoTime(t, "重新聚焦", notice)
-		}
-	})
+	for _, op := range []string{refocusOpRefocus, refocusOpRestartSelf, memberOpRelocate, memberOpModel} {
+		t.Run("no clock: "+op, func(t *testing.T) {
+			for _, age := range []float64{1, SoftOffboardGraceSecs + 1, 10 * SoftOffboardGraceSecs} {
+				notice, _ := noticeFrom(t, op, nowSecs()-age)
+				assertQuotesNoTime(t, op, notice)
+			}
+		})
+	}
 }
 
 // …and the instant is rendered in UTC no matter what timezone the SERVER
@@ -243,9 +259,12 @@ func TestDeadlineIsRenderedInUTCWhateverTheServerProcessTimezone(t *testing.T) {
 
 			notice := offboardNotice("context 50% (your limits: 40% / 50%)",
 				offboardCloserRestartSelf, true, deadlineEpochSince+deadlineEpochGrace, "")
-			if !strings.Contains(notice, "Your deadline is "+deadlineEpochWant+".") {
-				t.Fatalf("a server running in %s must still quote %s:\n%s",
-					zone, deadlineEpochWant, notice)
+			want := "context 50% (your limits: 40% / 50%)" +
+				" — offboard now: work the sequence below, then call restart_self" +
+				" yourself. Your deadline is " + deadlineEpochWant + "."
+			if notice != want {
+				t.Fatalf("a server running in %s composed:\n got: %q\nwant: %q",
+					zone, notice, want)
 			}
 		})
 	}

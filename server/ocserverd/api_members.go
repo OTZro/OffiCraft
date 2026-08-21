@@ -99,13 +99,18 @@ func (s *apiServer) offboardDeltaPayload(m Member) map[string]any {
 // own context pressure walk the SAME sequence, and that what tells the
 // situations apart is whether there is still room:
 //
-//   - SOFT — 下線 (desired offline + a stopping anchor, the graceful arm) and
-//     重新聚焦. It says work the sequence, then call restart_self yourself; no
-//     countdown clause, because on these two arms there is no clock AT ALL —
-//     not now, and not later.
-//   - FINAL — every other refocus cause (context_high, 改機器, model/runtime,
-//     restart_self): the collection is already under way and the 120s recycle
-//     clock is running, so the sentence has to say so.
+//   - SOFT (停止) — 下線 (desired offline + a stopping anchor, the graceful
+//     arm) and EVERY refocus cause except the one below: 重新聚焦, 改機器,
+//     model/runtime, restart_self, and the FIRST context threshold. It says
+//     work the sequence, then call restart_self yourself; no countdown clause,
+//     because on these arms there is no clock AT ALL — not now, and not later.
+//   - FINAL (加速停止) — the SECOND context threshold (context_high) alone: the
+//     collection is already under way and the recycle clock is running, so the
+//     sentence has to say so.
+//
+// 🔴 The membership is decided by winddownKindFor, not here and not in
+// recycleGraceFor. Both of those used to carry their own copy of the list, and
+// the copies were kept identical by hand (T-ed79).
 //
 // 🔴 The soft arm is the ONLY reason 下線 reaches the agent at all. Before this,
 // a deactivate stamped stopping_since and nothing else, so the notice condition
@@ -172,16 +177,17 @@ func offboardKindOf(m Member, now float64) (kind string, carries bool) {
 	if m.RefocusSince <= 0 {
 		return "", false
 	}
-	if m.RefocusOp == refocusOpRefocus {
-		// 🔴 SOFT forever, exactly like 下線 above, and for the same reason:
-		// recycleGraceFor runs NO clock on this arm (owner 2026-08-19, card
-		// rc-c540367065ad: 「連時鐘一起拿掉」). A countdown clause here would be
-		// a promise nobody keeps in the other direction — the sentence would
-		// start a 120s timer in the agent's head while nothing was coming to
-		// collect it. Escalation on this arm is the owner pressing force-stop.
-		return offboardKindSoft, true
-	}
-	return offboardKindFinal, true
+	// 🔴 ONE READ, not a second list (T-ed79). This arm used to spell the
+	// judgement out again — 重新聚焦 soft, everything else final — beside a
+	// recycleGraceFor that spelled out the same judgement in the other file.
+	// The sentence and the clock now come from winddownKindFor, so a cause that
+	// is told "no countdown" is, by construction, a cause nothing collects on a
+	// clock. A countdown clause on an uncollected arm starts a timer in the
+	// agent's head that nothing is counting; a clock on an unannounced arm cuts
+	// a hand-off off with no warning at all. Both are the same bug, and they
+	// are only reachable by making these two disagree.
+	kind, _ = winddownKindFor(m.RefocusOp)
+	return kind, true
 }
 
 const (

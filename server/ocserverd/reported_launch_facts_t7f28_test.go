@@ -221,9 +221,13 @@ func TestRefocusOp_IsStampedAndClearedWithTheWindow(t *testing.T) {
 	if dto.RefocusSince <= 0 {
 		t.Fatalf("refocus_since must be stamped alongside the cause")
 	}
-	if want := dto.RefocusSince + s.reconcileCfg.RecycleGrace; dto.RefocusDeadline != want {
-		t.Errorf("refocus_deadline = %v, want %v (the collect ceiling)",
-			dto.RefocusDeadline, want)
+	// 換 model is a 停止 (T-ed79): nothing collects it on a clock, so the panel
+	// must render NO deadline. 0 is how the wire says that — a positive number
+	// here would put a countdown on screen that the reconcile tick has no
+	// intention of honouring.
+	if dto.RefocusDeadline != 0 {
+		t.Errorf("refocus_deadline = %v, want 0 — 換 model runs no clock",
+			dto.RefocusDeadline)
 	}
 
 	// The cause must not outlive its window: report_waking closes both.
