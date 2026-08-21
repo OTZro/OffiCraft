@@ -251,8 +251,8 @@ describe("ChatArea 回覆這則", () => {
   // mutant survived.
 
   it("every control this feature adds has an accessible name", () => {
-    // All three are ICON-ONLY buttons: without a name they are announced as
-    // 「按鈕」 and a screen-reader user has three indistinguishable ones.
+    // Without an accessible name all three are announced as 「按鈕」 and a
+    // screen-reader user has three indistinguishable ones.
     messages = [
       mkMsg({ id: "c-1", from: "m1", to: "owner", body: "他說的" }),
       mkMsg({

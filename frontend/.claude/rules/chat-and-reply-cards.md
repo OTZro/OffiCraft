@@ -118,8 +118,8 @@ in-flight latch，不是 state —— 同一個 tick 的兩次點擊都會讀到
 ①失敗訊息說在原地、②引用列文字不變（不會變成「這則訊息已不存在」）、③不開覆蓋
 層、④`getChatMessage` 只被呼叫一次（不重試、不排隊）。**「只記一個 id」（單值
 語意，last click wins）與「不在下一個 SSE 事件自癒」這兩件今天沒有任何測試守
-著**：全庫 325 個 `*.test.ts*` / `*.spec.ts*` 裡，只有 `ChatArea.reply-to.test.tsx`
-這一個檔碰得到 `msg-quote-error`（陽性對照：`msg-quote-jump` 命中 4 檔）。它們
+著**：全庫的測試檔裡，只有 `ChatArea.reply-to.test.tsx` 這一個檔碰得到
+`msg-quote-error`（陽性對照：`msg-quote-jump` 命中 4 個測試檔）。它們
 目前只由碼本身保證——`quoteOpenFailedId` 是單一 state、`openQuotedMessage` 是唯
 一寫入點。**動這兩件事不會有測試變紅，請自己看碼。**
 

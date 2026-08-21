@@ -176,10 +176,10 @@ for (const width of [390, 1280]) {
     expect(whoCut).toBe(false);
     expect((await who.textContent())?.trim()).toBe("Mira");
 
-    // …and the jump keeps its whole label in the ordinary case. The label CAN
-    // be trimmed (that is what stops the English string running under the
-    // corner buttons), but only after the excerpt has nothing left to give —
-    // never on a row like this one.
+    // …and the jump's label is whole here. Nothing in the stylesheet can trim
+    // it — the button is `flex: none` with `white-space: nowrap` and the label
+    // carries no `text-overflow` — so the label is present whole or absent
+    // outright, never cut. This is a floor, not a discriminator.
     const labelCut = await cmp
       .getByTestId("row-mine-short")
       .locator(".chat__msg-quote__jump-label")
@@ -738,8 +738,6 @@ for (const width of [320, 360, 390]) {
     // ① THE LONG-EXCERPT ROW. Its quoted text cannot fit at these widths, so
     // something must be trimmed — and what is left of the quote must still be
     // worth more room than the control that only says how to navigate to it.
-    // (Measured both ways at 390: 47px of quote against a 154px label before,
-    // 188px against a 14px arrow after. At 320 the quote was flatly 0.)
     const share = await cmp.getByTestId("row-mine-short").evaluate((row) => {
       const b = row.querySelector(".chat__msg-quote__body") as HTMLElement;
       const j = row.querySelector(".chat__msg-quote__jump") as HTMLElement;

@@ -4698,7 +4698,7 @@ export interface components {
              *
              *     IT IS BUILT UNCONDITIONALLY for every message whose ``reply_to`` is non-empty. There is deliberately no "the target happens to be in this same batch, so skip it" optimisation and no "only when the client asks" flag: a reader must never have to decide whether to go and fetch something, because a reader that sometimes fetches is a reader that sometimes fails to.
              *
-             *     ABSENT (``null``) means exactly one thing: ``reply_to`` is set and the message it names could not be read back — it was cleared, or it belonged to someone who is gone. That is a legitimate, permanent state and NOT an error; the message itself is served normally and ``reply_to`` is still on it. There is nothing to retry.
+             *     ABSENT (``null``) means exactly one thing: ``reply_to`` is set and the message it names is no longer there — it was cleared, or it belonged to someone who is gone. That is a legitimate, permanent state and NOT an error; the message itself is served normally and ``reply_to`` is still on it. There is nothing to retry.
              */
             reply_to_chat?: components["schemas"]["ChatReplyQuoteDTO"] | null;
             /** To */

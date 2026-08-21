@@ -427,8 +427,8 @@ type chatMessageDTO struct {
 	// live here is gone.
 	ReplyTo string `json:"reply_to"`
 	// ReplyToChat is the QUOTED MESSAGE, snapshotted at read time — nil (key
-	// omitted) when this message replies to nothing, and nil ALSO when it
-	// replies to something that can no longer be read.
+	// omitted) when this message replies to nothing, and nil ALSO when the
+	// message it names is no longer there.
 	//
 	// 🔴 BUILT UNCONDITIONALLY ON EVERY READ, and the absence of any condition
 	// is the design (T-4e95, owner ruling 2026-08-21, replacing the id-only
@@ -470,7 +470,7 @@ type chatReplyQuoteDTO struct {
 // anything of its own (ChatArea's QUOTE_EXCERPT_CHARS is deleted) and the one
 // line the reader sees is whatever this produces.
 //
-// 🔴 THERE IS EXACTLY ONE OTHER COPY OF THIS NUMBER, AND IT IS NOT DEAD.
+// 🔴 THIS NUMBER HAS A SECOND, BEHAVIOUR-DEFINING COPY, AND IT IS NOT DEAD.
 // An earlier version of this comment said "THE ONLY DEFINITION OF THAT LENGTH
 // ANYWHERE", which was false on the day it was written: frontend/src/api/mock.ts
 // holds MOCK_REPLY_QUOTE_MAX_CHARS for the offline preview, which has no server

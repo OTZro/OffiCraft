@@ -509,11 +509,11 @@ func TestReplyToChat_AnUnreadableOriginalFailsLoudlyRatherThanClaimingItIsGone(t
 	}
 
 	// 🔴 THE WAKE PATH IS IN THIS TABLE, and it is the door that matters most.
-	// The two reads below it are a browser refreshing a thread; these two are the
-	// FIRST TWO CALLS OF AN AGENT'S BOOT SEQUENCE, so an agent that once replied
-	// to a row which later goes bad cannot start at all. Measured on this very
-	// fixture: both answer 200 before the reply exists and 500 after, with the
-	// bad row unchanged — and the bad row is in a THIRD PARTY'S conversation, so
+	// The two reads below it are a browser refreshing a thread; these two run
+	// while an agent is waking, so an agent that once replied to a row which
+	// later goes bad cannot start at all. Measured on this very fixture: both
+	// answer 200 before the reply exists and 500 after, with the bad row
+	// unchanged — and the bad row is in a THIRD PARTY'S conversation, so
 	// the snapshot's own bounded read (ListChatInvolving, capped at
 	// resumeChatFetch) never scans it. Only the quote join reaches it.
 	//
@@ -532,9 +532,9 @@ func TestReplyToChat_AnUnreadableOriginalFailsLoudlyRatherThanClaimingItIsGone(t
 		name string
 		url  string
 	}{
-		{"GET /api/resume-summary (wake, boot step 1)",
+		{"GET /api/resume-summary (wake)",
 			srv.URL + "/api/resume-summary"},
-		{"GET /api/resume-summary-size (wake, boot step 2)",
+		{"GET /api/resume-summary-size (wake)",
 			srv.URL + "/api/resume-summary-size"},
 		{"GET /api/chat?ids=", srv.URL + "/api/chat?ids=c-reply"},
 		{"GET /api/chat?before_ts= (history page)",

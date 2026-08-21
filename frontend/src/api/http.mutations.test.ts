@@ -391,7 +391,8 @@ describe("httpApi · scheduled-message custom_months keeps undefined ≠ []", ()
 // the send still succeeds, and the server stores an ordinary message. All 2258
 // tests stayed green on that change.
 //
-// Nothing else covers it, and that is a measured claim, not an impression:
+// Nothing else in the jsdom suite covers it, and that is a measured claim, not
+// an impression:
 // ChatArea's tests mock the whole `useChat` seam; `mock.reply-to.test.ts` drives
 // the MOCK adapter, which never reaches this file; conformance drives real HTTP
 // from Python, which proves the SERVER is right and says nothing about what the

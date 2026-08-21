@@ -921,13 +921,7 @@
  * afford; a chat bubble shrink-wraps its content, so on a one-line message the
  * button lands squarely on the last characters — a hovered 「短訊息也有按鈕嗎？」
  * lost its 「？」. Reserved space costs 43px of right padding on an incoming text
- * bubble (56 reserved − the bubble's own 13) and never hides a glyph. It said
- * ~19px until T-4e95: that was 32 − 13, the width of ONE control, and the corner
- * carries two on the rows the owner can actually reply to. It is a RESERVATION,
- * not a count: a row the owner is not a party to keeps the 56px and shows only
- * 放大閱讀, so ~24px of it sits empty there. Left that way on purpose — the
- * reservation is the thing three rounds of geometry were measured against, and
- * over-reserving cannot overflow. Fixing it would mean re-measuring all of it.
+ * bubble (56 reserved − the bubble's own 13) and never hides a glyph.
  *
  * Coarse pointers have no hover to reveal it with, so there it is always
  * visible — at FULL strength since T-4e95, not the reduced one this line used to

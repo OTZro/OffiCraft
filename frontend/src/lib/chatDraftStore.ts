@@ -44,10 +44,10 @@ export function getChatDraft(peerId: string): ChatDraft | undefined {
   return drafts.get(peerId);
 }
 
-/** Persist a peer's draft. An EMPTY draft (no text and no attachments) deletes
- * the entry instead of storing a blank — this is the "送出 / 手動清空後歸零"
- * path, so a later return finds nothing to restore (and the compose seed is free
- * to inject into the genuinely-empty composer). */
+/** Persist a peer's draft. An EMPTY draft (no text, no attachments and no reply
+ * target) deletes the entry instead of storing a blank — this is the "送出 /
+ * 手動清空後歸零" path, so a later return finds nothing to restore (and the
+ * compose seed is free to inject into the genuinely-empty composer). */
 export function saveChatDraft(peerId: string, draft: ChatDraft): void {
   // "Empty" now includes the reply target: a composer holding ONLY a reply
   // target (no text, no attachments) is still a composer the owner has put into

@@ -2771,8 +2771,7 @@ def test_chat_reply_to_is_the_servers_link_not_the_callers(hctx: HCtx) -> None:
     # station reaches it — the link was stamped by the server when the target
     # existed, and the read happens against a target that no longer resolves.
     # The POST door refuses an unknown id on purpose (asserted above), so this
-    # state cannot be created through it; the wake snapshot's own read path
-    # covers the equivalent case in Go.
+    # state cannot be created through it.
     #
     # What is checked over the wire here is the ORDINARY, ALWAYS-PRESENT half:
     # a message that replies to nothing carries no quote key at all.

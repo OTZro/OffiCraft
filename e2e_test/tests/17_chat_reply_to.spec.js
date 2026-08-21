@@ -12,7 +12,6 @@
 // them. r16 measured the consequence: deleting `replyTo` from useChat's postChat
 // call, and separately forcing `reply_to: ""` in http.ts, each left the whole
 // 2258-test frontend suite green while 「回覆這則」 was dead in the real app.
-// This spec is the only thing that fails on either.
 const { test, expect } = require('@playwright/test');
 const {
   BASE,

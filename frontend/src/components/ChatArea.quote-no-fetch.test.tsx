@@ -2,8 +2,9 @@
 // 2026-08-21).
 //
 // 🔴 THIS FILE IS THE WITNESS THAT THE STATE MACHINE IS REALLY GONE, and it is
-// the only test in the tree that a re-introduced lookup cannot satisfy by
-// happening to return the right answer.
+// the only jsdom test that a re-introduced lookup cannot satisfy by happening
+// to return the right answer. (`17_chat_reply_to.spec.js` counts the same thing
+// in a real browser, far more slowly.)
 //
 // What it replaces: the wire used to carry the quoted message's ID alone, so
 // <ChatArea> resolved the rest — from the loaded window if it was there, and

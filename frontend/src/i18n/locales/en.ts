@@ -734,8 +734,9 @@ export const en: Dict = {
     // Without it the accessibility tree linearises a reply as
     // "Mira. Mira. what they said. View the original message. what I said" —
     // the one thing this feature exists to convey is the thing a screen reader
-    // could not hear. replyQuoteRole is the version for a quote whose sender is
-    // not resolved yet (or is gone); replyQuoteRoleWho names them when it is.
+    // could not hear. replyQuoteRole is the version for a quote whose original
+    // is gone, so there is no sender to name; replyQuoteRoleWho names them when
+    // there is one.
     replyQuoteRole: "Quoted message",
     replyQuoteRoleWho: (name: string) => `Quoted message from ${name}`,
   },
