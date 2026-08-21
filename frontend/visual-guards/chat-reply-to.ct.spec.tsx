@@ -462,8 +462,14 @@ for (const width of [390, 1200, 1250, 1280]) {
 // The last three widths are the fix: the collapse is now a `@container` query on
 // the PANE (520px), and at viewport 600 / 640 / 760 this harness gives the pane
 // 552 / 592 / 712 — above the threshold, so the label renders at its full width
-// and the shrink and the floor are load-bearing again. See the re-measured
-// mutant table inside the loop; it was re-run against THIS file, not inherited.
+// and the geometry below is measured with a 154px label actually present.
+//
+// ⚠️ WHAT THOSE THREE WIDTHS DO NOT RESTORE: the shrink and the floor. They are
+// gone (r22fix deleted `flex: 0 10 auto`, the button's `min-width: 14px` and the
+// label's `min-width: 0` together) and no width brings them back — above the
+// threshold the label is whole, below it it is `display: none`, and there is no
+// state in between for a shrink to happen in. See the mutant table inside the
+// loop, which was run against THIS file, not inherited.
 //
 // Still NOT covered here: production's own discontinuity (the shell's 264px
 // roster column arrives at vw 721 and drops the pane from 628 to 347), which no
@@ -481,26 +487,52 @@ for (const width of [300, 320, 336, 360, 390, 600, 640, 760]) {
       <ChatReplyToStory jumpLabel="Go to the original message" />,
     );
 
-    // ⚠️ WHICH ROW CATCHES WHAT. 🔴 RE-MEASURED 2026-08-21 AGAINST THIS FILE —
-    // the table that used to sit here was inherited from before the collapse
-    // rule existed and NONE of its four results reproduced. Do not copy a table
-    // forward; re-run it. This one was produced by mutating office.css one
-    // declaration at a time and recording which of the 30 tests went red:
+    // ⚠️ WHICH DECLARATION HAS A WITNESS, AND WHICH HAS NONE.
     //
-    //   MUTANT                                       RED
-    //   `.chat__msg-quote__jump` flex: 0 10 auto
-    //     → flex: none                               see the run log in the
-    //   `.chat__msg-quote__jump-label` min-width: 0     task report; both are
-    //     → removed                                    now caught at 600/640/760
-    //   `.chat__msg-quote__jump` min-width: 14px
-    //     → removed                                  row-mine / row-incoming-quote
+    // 🔴 RE-MEASURED 2026-08-22 AGAINST THIS FILE. The table that sat here on
+    // 2026-08-21 named three mutants that CANNOT BE PERFORMED — it asked for
+    // `flex: 0 10 auto`, the label's `min-width: 0` and the button's
+    // `min-width: 14px` to be mutated, and all three had been deleted from
+    // office.css by the very commit that wrote the table. It also pointed at a
+    // "run log in the task report" that is not in this repository. Do not copy a
+    // table forward, and do not cite evidence that does not live beside the code.
     //
-    // The point of the three wide widths is exactly this: at 300–390 the label
-    // is collapsed to its arrow by the container rule, so the shrink factor and
-    // the label's own min-width cannot be observed at all — every mutation of
-    // them is invisible. The loop stops at the first failing row, so a report
-    // naming a later row means the earlier ones passed. Do not delete rows from
-    // this list on the belief that one of them does the work.
+    // Run: one declaration at a time in `src/components/office.css`, restored
+    // from a `cp` backup between runs, `npx playwright test -c
+    // playwright-ct.config.ts chat-reply-to`. Baseline: 32 passed.
+    //
+    //   MUTANT                              RESULT
+    //   @container … max-width: 520px→400   1 failed / 31 · width 560
+    //                                       "pane 512px: the label must be
+    //                                       collapsed to its arrow"
+    //   @container … max-width: 520px→900   1 failed / 31 · width 620
+    //                                       "pane 572px: the label must be
+    //                                       rendered whole"
+    //   the whole @container block deleted  7 failed / 25 · widths 300/320/336
+    //                                       "row-mine: the arrow reaches the
+    //                                       corner controls", width 560, and
+    //                                       widths 320/360/390 of "the quoted
+    //                                       sentence outranks the jump's
+    //                                       boilerplate"
+    //   .chat__msg-quote__body              2 failed / 30 · widths 390/1280
+    //     flex: 1 10000 auto → 1 1 auto     "a short sender name in the quote
+    //                                       row is never ellipsised"
+    //   .chat__msg-quote__jump              32 passed — NO WITNESS
+    //     flex: none → flex: 0 10 auto
+    //   .chat__msg-quote__jump-chevron      32 passed — NO WITNESS
+    //     flex: none → flex: 1 1 auto
+    //
+    // 🔴 READ THE LAST TWO ROWS AS THEY ARE WRITTEN. Those two declarations are
+    // not guarded by anything in this suite, and that is a consequence of the
+    // redesign rather than a hole to plug here: a button that is never asked to
+    // shrink has no observable flex behaviour. What the widths 600/640/760 buy
+    // is not a witness for them — it is that the corner-collision geometry below
+    // is measured at all with the label present, which before 2026-08-21 it
+    // never was.
+    //
+    // The loop stops at the first failing row, so a report naming a later row
+    // means the earlier ones passed. Do not delete widths from this list on the
+    // belief that one of them does the work.
     // ⚠️ THE CSS-PROPERTY TRIPWIRE THAT USED TO SIT HERE IS GONE, AND SO ARE
     // THE DECLARATIONS IT WATCHED. It pinned `overflow: hidden` and
     // `text-overflow: ellipsis` on `.chat__msg-quote__jump-label`, which existed
@@ -510,13 +542,15 @@ for (const width of [300, 320, 336, 360, 390, 600, 640, 760]) {
     // either rendered whole or `display: none`, decided by the pane's width, and
     // the button is `flex: none` again.
     //
-    // Measured before removing them (this is the check that says they were dead,
-    // not the belief that they were): with the container rule in place, mutating
-    // `flex: 0 10 auto` → `flex: none`, deleting the label's `min-width: 0`, and
-    // deleting the button's `min-width: 14px` EACH left all 30 tests green,
-    // including the three new wide widths where the label renders at full size.
-    // Three declarations whose only witness was an assertion that they were
-    // spelled in the file. The geometry below is what remains, and it is real.
+    // They were removed on the strength of a measurement taken while they still
+    // existed — each of the three mutated with the container rule in place, each
+    // leaving the suite green. ⚠️ THAT RUN IS NOT REPRODUCIBLE FROM THIS TREE:
+    // the declarations are gone, so the mutants cannot be re-performed, and the
+    // count it reported ("all 30 tests") is not this file's count (32 today).
+    // What IS reproducible, and what the table above records, is the modern
+    // equivalent of the same question — `flex: none` → `flex: 0 10 auto` on the
+    // button leaves all 32 green — which is the same conclusion reached against
+    // the file as it stands. The geometry below is what remains, and it is real.
 
     for (const row of [
       "row-mine",
@@ -549,13 +583,15 @@ for (const width of [300, 320, 336, 360, 390, 600, 640, 760]) {
         .locator(".chat__msg-quote__jump-chevron")
         .boundingBox())!;
 
-      // This one catches a collapse to zero and nothing finer — with a 14px
-      // floor the width is 14 whatever happens, so do not read it as pinning
-      // that number. What pins 14 is the next assertion: at a floor of 12 the
-      // arrow starts painting 2px outside its own button and that is the FIRST
-      // assertion to go red. (Measured, by setting the floor to 12. "First", not
-      // "only": the loop stops at the first failure, so what comes after it is
-      // untested rather than known-green.)
+      // This one catches a collapse to zero and nothing finer. ⚠️ IT PINS NO
+      // NUMBER. There is no `min-width` floor on this button any more — the
+      // width it reports is whatever its content comes to (collapsed: the
+      // chevron; whole: chevron + gap + label), so 11.5 is a floor below which
+      // the control has visibly vanished, not a declaration read back out of the
+      // stylesheet. An earlier version of this note claimed the next assertion
+      // pinned 14 "measured by setting the floor to 12"; that floor no longer
+      // exists and the mutant cannot be performed. What the next assertion
+      // actually catches is the arrow painting outside its own button box.
       expect(
         jump.width,
         `${row}: the jump collapsed past its arrow`,

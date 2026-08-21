@@ -1157,14 +1157,24 @@
   font-weight: 600;
 }
 /* 🔴 THE SHRINK FACTORS ARE A PRIORITY ORDER, written as orders of magnitude:
- * excerpt 10000 → jump label 10 → name 1. Flex shares a deficit in proportion to
- * `factor × basis`, so each step down is far enough that the ones below it round
- * away while the one above still has width to give; when an item bottoms out at
- * zero flex freezes it and the rest share what is left, which is exactly the
- * hand-off we want. The gaps have to be this wide: at 100 the excerpt still left
- * the jump 0.3% of a 2300px deficit — 7px, enough to visibly clip the label.
- * `overflow: hidden` is load-bearing twice over: it clips the text AND it is
- * what lets this flex item go below its content width at all. */
+ * excerpt 10000 → name 1. Flex shares a deficit in proportion to
+ * `factor × basis`, so the step down is far enough that the name rounds away
+ * while the excerpt still has width to give; when an item bottoms out at zero
+ * flex freezes it and the rest share what is left, which is exactly the hand-off
+ * we want. `overflow: hidden` is load-bearing twice over: it clips the text AND
+ * it is what lets this flex item go below its content width at all.
+ *
+ * ⚠️ THE JUMP IS NO LONGER A STEP IN THIS ORDER. It used to sit between the two
+ * at a factor of 10 (and the gaps had to be wide: at 100 the excerpt still left
+ * the jump 0.3% of a 2300px deficit — 7px, enough to visibly clip the label).
+ * Since 2026-08-21 the button is `flex: none` and the label is either rendered
+ * whole or `display: none` — it never shrinks, so it takes no share of any
+ * deficit. There are two factors here now, not three.
+ *
+ * MUTANT (run 2026-08-22 against this file): `flex: 1 10000 auto` →
+ * `flex: 1 1 auto` ⇒ 2 failed / 30 passed in `chat-reply-to.ct.spec.tsx`,
+ * red at widths 390 and 1280 of "a short sender name in the quote row is never
+ * ellipsised". */
 .chat__msg-quote__body {
   flex: 1 10000 auto;
   overflow: hidden;
