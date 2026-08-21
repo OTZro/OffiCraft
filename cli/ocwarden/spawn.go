@@ -722,6 +722,17 @@ type SpawnDeps struct {
 	Sleep func(time.Duration)
 }
 
+// claudeBinUnresolvedReason is the owner-facing refusal for "this member wants
+// Claude and this machine has none". It names all THREE exits, cheapest first:
+// changing the member's runtime needs nothing installed at all.
+const claudeBinUnresolvedReason = "claude_bin_unresolved: this machine has no Claude Code. " +
+	"Any one of these fixes it: (1) change THIS member's runtime to Codex " +
+	"(成員設定 → 執行環境) — nothing to install if Codex is already set up here; " +
+	"(2) install Claude Code on this machine and sign in; " +
+	"(3) if claude IS installed here, re-run `ocwarden install` with " +
+	"OC_CLAUDE_BIN=/absolute/path/to/claude — the warden runs under launchd, " +
+	"whose PATH does not include ~/.local/bin."
+
 // start EXECUTES one server-downpushed spawn. It does NOT decide whether to spawn
 // (that is the server's placement call); it only refuses to CLOBBER a live local
 // session (a local safety guard, distinct from the server's over-spawn guard).
@@ -762,7 +773,14 @@ func (d SpawnDeps) start(p StartParams) SpawnOutcome {
 	}
 	// The selected runtime must be resolvable. A machine may carry either or both.
 	if runtimeName == "claude" && d.ClaudeBin == "" {
-		return SpawnOutcome{OK: false, Reason: "claude_bin_unresolved: set OC_CLAUDE_BIN or put claude on the daemon PATH (~/.local/bin absent from launchd PATH)"}
+		// Written for the OWNER, who reads this on the member row's
+		// last_op_reason (T-b3d0). Every earlier wording offered only two
+		// exits and BOTH of them were "go get claude" — so an owner who had
+		// deliberately installed Codex alone (a supported configuration) was
+		// sent to install, log in to, and pay for a runtime they never
+		// intended to use. The runtime is a per-member setting, so the
+		// cheapest fix is usually neither of the other two; it is named first.
+		return SpawnOutcome{OK: false, Reason: claudeBinUnresolvedReason}
 	}
 	if runtimeName == "codex" {
 		if d.CodexBin == "" {

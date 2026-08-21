@@ -721,8 +721,20 @@ func TestStart_NoClaudeBin(t *testing.T) {
 	if out.OK {
 		t.Fatal("unresolvable claude bin must yield ok=false")
 	}
-	if !strings.HasPrefix(out.Reason, "claude_bin_unresolved:") {
-		t.Errorf("unresolved claude bin must carry a claude_bin_unresolved reason, got %q", out.Reason)
+	// Full equality, not a prefix/contains probe: the ONLY thing that was ever
+	// wrong with this refusal lived in the part a prefix assert does not read
+	// — it offered two exits and both were "go get claude". The third exit
+	// (change this member's runtime) has to be IN the sentence, so the whole
+	// sentence is the assertion.
+	want := "claude_bin_unresolved: this machine has no Claude Code. " +
+		"Any one of these fixes it: (1) change THIS member's runtime to Codex " +
+		"(成員設定 → 執行環境) — nothing to install if Codex is already set up here; " +
+		"(2) install Claude Code on this machine and sign in; " +
+		"(3) if claude IS installed here, re-run `ocwarden install` with " +
+		"OC_CLAUDE_BIN=/absolute/path/to/claude — the warden runs under launchd, " +
+		"whose PATH does not include ~/.local/bin."
+	if out.Reason != want {
+		t.Errorf("refusal reason\n got: %q\nwant: %q", out.Reason, want)
 	}
 	if len(run.calls) != 0 {
 		t.Errorf("must not touch tmux when claude bin is unresolved, got %v", run.calls)
