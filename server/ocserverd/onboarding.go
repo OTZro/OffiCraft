@@ -507,6 +507,12 @@ func (s *apiServer) recoverStaleOnboarding() {
 	})
 	report.State = onboardingStateFailed
 	report.FinishedAt = nowSecs()
+	// The stamp describes who closed THIS report, so it does not survive into the
+	// one being written here. This is the only path that edits the old blob rather
+	// than writing a fresh DTO, so it is the only path where "a new report speaks"
+	// is not automatic — and a recovery that inherited a stamp would publish a
+	// FAILED report already closed, silencing a warning nobody ever saw.
+	report.DismissedAt = 0
 	if err := s.putOnboardingReport(*report); err != nil {
 		onboardingLog("could not close out the stale onboarding report: %v", err)
 		return
@@ -532,9 +538,10 @@ var errNoOnboardingBanner = errors.New(
 // without the guard two things follow, both permanent:
 //
 //   - recoverStaleOnboarding is the ONE path that builds a new report by editing
-//     the old blob, so it carries dismissed_at forward: the FAILED report it
-//     writes is born already-dismissed and the banner never speaks on this
-//     install.
+//     the old blob rather than writing a fresh DTO, so it is where an inherited
+//     stamp would publish a FAILED report born already-dismissed, silencing the
+//     banner on this install for good. It now clears the stamp itself, so this
+//     guard and that clearing pin the same property from both ends.
 //   - this read-modify-write is unlocked and is the only concurrent writer of
 //     the row (kick / finish / recoverStale are one linear goroutine). Interleaved
 //     with finishOnboarding it writes back its pre-verdict copy: the failure is

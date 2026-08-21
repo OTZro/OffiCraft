@@ -693,6 +693,34 @@ func TestRecoverStaleOnboarding_NeverWritesABornDismissedReport(t *testing.T) {
 	if got.DismissedAt != 0 {
 		t.Fatalf("the recovered report must speak: dismissed_at must be 0, got %v", got.DismissedAt)
 	}
+
+	// 🔴 AND THE RECOVERY CLEARS THE STAMP ITSELF, not merely because the only
+	// caller upstream refuses to lay one. The check above drives the row through
+	// setOnboardingDismissed, so it can only ever observe an UNSTAMPED blob — it
+	// proves the guard, not this function. A stamped `running` blob is reachable
+	// without that guard: it is what every install that stored one before the
+	// guard existed already has on disk, and a hand-edited or restored row is the
+	// same shape. Seed one directly, so the two worlds — stamped and unstamped —
+	// are actually distinguishable here, and require the recovered FAILED report
+	// to speak in both.
+	s2 := newReconcileTestServer(t)
+	if err := s2.putOnboardingReport(onboardingReportDTO{
+		State: onboardingStateRunning, StartedAt: 1, DismissedAt: 1750000000,
+	}); err != nil {
+		t.Fatalf("seed stamped running report: %v", err)
+	}
+	if seeded := s2.onboardingReport(); seeded == nil || seeded.DismissedAt == 0 {
+		t.Fatalf("the fixture must actually carry a stamp, got %+v", seeded)
+	}
+	s2.recoverStaleOnboarding()
+
+	got = s2.onboardingReport()
+	if got == nil || got.State != onboardingStateFailed {
+		t.Fatalf("the interrupted run must still be closed out as failed, got %+v", got)
+	}
+	if got.DismissedAt != 0 {
+		t.Fatalf("a recovered report must not inherit an earlier dismissal: dismissed_at must be 0, got %v", got.DismissedAt)
+	}
 }
 
 // 🔴 A VERDICT THAT HAS NOT LANDED YET CANNOT BE OVERWRITTEN. This is the only
