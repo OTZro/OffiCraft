@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
-import { type OnboardingReportView } from "../api";
+import { api, type OnboardingReportView } from "../api";
 import {
+  adoptServerSettings,
   loadServerSettings,
   refreshServerSettings,
 } from "../hooks/sharedServerSettings";
@@ -22,11 +23,23 @@ import "./onboarding.css";
  * a problem, and a banner that appears and then disappears on its own trains
  * the owner to ignore it.
  *
- * Dismissal is per-session (sessionStorage): the underlying condition is
- * durable, so a permanent dismissal would hide a still-broken studio forever,
- * while re-nagging on every render would be noise.
+ * 🔴 DISMISSAL IS PERMANENT, AND IT IS THE SERVER'S (T-0648). 「知道了」 PATCHes
+ * `onboarding_dismissed`, which stamps `dismissed_at` on the ONE onboarding
+ * report row; this component then simply believes that field. It used to be a
+ * sessionStorage key — scoped to one TAB — so opening the same URL again
+ * brought the banner straight back. The owner hit that himself and ruled the
+ * dismissal permanent (rc-45eb8652b17f).
+ *
+ * ⚠️ WHAT HE KNOWINGLY BOUGHT, SAID PLAINLY: nothing in this build ever writes
+ * a SECOND onboarding report, so on a given install "permanent" today means
+ * this banner never speaks again once dismissed — even if the studio is still
+ * broken. That is his call, not an oversight, and the code is arranged so it
+ * costs nothing to undo: the stamp rides ON the report, the report row is
+ * rewritten WHOLESALE, so the day anything writes a fresh report (a re-detect,
+ * a re-run) the dismissal goes with the old blob and the banner speaks again
+ * with nobody having to remember to clear it. Moving the stamp to a row of its
+ * own would silently delete that property.
  */
-const DISMISS_KEY = "oc.onboarding.dismissed";
 
 /** Poll cadence + ceiling for the non-terminal states (see the effect below). */
 export const ONBOARDING_POLL_MS = 3000;
@@ -67,9 +80,10 @@ function isTerminal(report: OnboardingReportView | null): boolean {
 export function OnboardingBanner() {
   const { t } = useI18n();
   const [report, setReport] = useState<OnboardingReportView | null>(null);
-  const [dismissed, setDismissed] = useState(
-    () => sessionStorage.getItem(DISMISS_KEY) === "1"
-  );
+  // Optimistic only — the durable answer is report.dismissedAt, which the very
+  // next read carries. This state exists so the press feels instant and so the
+  // banner does not flash back while the PATCH is in the air.
+  const [justDismissed, setJustDismissed] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
 
   // POLL until the report reaches a terminal state.
@@ -128,7 +142,10 @@ export function OnboardingBanner() {
     };
   }, []);
 
-  if (dismissed || !report || report.state !== "failed") return null;
+  if (justDismissed || !report || report.state !== "failed") return null;
+  // > 0, not truthiness of a flag: a report with no stamp — every row written
+  // before this field existed — reads 0 and still speaks.
+  if (report.dismissedAt > 0) return null;
   const failed = report.steps.filter((s) => !s.ok);
   if (failed.length === 0) return null;
 
@@ -148,8 +165,18 @@ export function OnboardingBanner() {
           className="onboarding-banner__dismiss"
           data-testid="onboarding-dismiss"
           onClick={() => {
-            sessionStorage.setItem(DISMISS_KEY, "1");
-            setDismissed(true);
+            setJustDismissed(true);
+            void api
+              .patchServerSettings({ onboardingDismissed: true })
+              // The echo IS the new truth for every other reader of the shared
+              // settings snapshot in this tab.
+              .then(adoptServerSettings)
+              .catch(() => {
+                // The write did not land, so the dismissal is not durable —
+                // put the banner back rather than let the owner believe he has
+                // silenced something the server never heard about.
+                setJustDismissed(false);
+              });
           }}
         >
           {t.onboarding.dismiss}

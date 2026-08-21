@@ -99,6 +99,7 @@ import type {
   WireDeleteResult,
   WireUninstallResult,
   WireMachine,
+  WireServerSettings,
 } from "./wire";
 import {
   toMember,
@@ -1539,6 +1540,12 @@ const DEFAULT_MOCK_SETTINGS = {
   // Layout width (T-756f) — OFF out of the box, mirroring the server (the
   // cockpit ships with the narrow centred column).
   display_wide: false,
+  // The first-run onboarding report (T-ba62). Null in the mock and staying
+  // that way: mock mode is a healthy studio, and a seeded FAILED report would
+  // hang the "your studio is broken" banner over every mock page. Declared
+  // rather than omitted so `onboarding_dismissed` below has something real to
+  // write to when a caller does seed one.
+  onboarding: null as WireServerSettings["onboarding"],
 };
 
 // ── Themes (T-83ef): their OWN store, keyed by id ────────────────────────────
@@ -4572,6 +4579,15 @@ export const mockApi: Api = {
     // omitted field never changes it (PATCH semantics, server parity).
     if (patch.displayWide !== undefined) {
       mockServerSettings.display_wide = patch.displayWide;
+    }
+    // onboarding_dismissed (T-0648) — server parity: the stamp lives ON the
+    // report row, and a database with no report has nothing to dismiss (a 200
+    // that writes nothing, because there is no banner up either).
+    if (patch.onboardingDismissed !== undefined && mockServerSettings.onboarding) {
+      mockServerSettings.onboarding = {
+        ...mockServerSettings.onboarding,
+        dismissed_at: patch.onboardingDismissed ? Date.now() / 1000 : 0,
+      };
     }
     return toServerSettings(structuredClone(mockServerSettings));
   },

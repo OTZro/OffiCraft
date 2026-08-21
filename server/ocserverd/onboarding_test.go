@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -516,4 +518,153 @@ func TestWardenPaths_MirrorTheOcwardenDerivation(t *testing.T) {
 
 func envOfMap(m map[string]string) func(string) string {
 	return func(k string) string { return m[k] }
+}
+
+// ── T-0648: the banner's 「知道了」 is a DURABLE, SERVER-SIDE dismissal ────────
+//
+// Owner ruling rc-45eb8652b17f: 「永久關閉，不需另外開任務」. The dismissal used to
+// live in the browser's sessionStorage, so a second tab brought the banner
+// straight back ("為什麼我重新點進網址又出現了？"). It is now a field on the ONE
+// onboarding report row, which is what makes it survive tabs, reloads and
+// devices — and what makes the three properties below testable at all.
+
+// The write path: a dismissal is stamped into the report row itself, so any
+// later reader — a new tab, another device, a fresh cockpit load — sees it.
+func TestUpdateSettings_OnboardingDismissedStampsTheReport(t *testing.T) {
+	api, srv, d, _ := newSettingsTestServer(t, "dismiss-pass")
+	status, data := doJSON(t, "POST", srv.URL+"/api/login", "", `{"password":"dismiss-pass"}`)
+	if status != 200 {
+		t.Fatalf("login: %d", status)
+	}
+	owner := data["token"].(string)
+
+	failed := onboardingReportDTO{
+		State:     onboardingStateFailed,
+		StartedAt: 1,
+		Steps: []onboardingStepDTO{{
+			Name:   onboardingStepInstallWarden,
+			Reason: "installing this machine's warden failed (exit 1)",
+		}},
+	}
+	if err := api.putOnboardingReport(failed); err != nil {
+		t.Fatalf("seed report: %v", err)
+	}
+	if got := api.onboardingReport().DismissedAt; got != 0 {
+		t.Fatalf("a report nobody dismissed must read dismissed_at=0, got %v", got)
+	}
+
+	status, data = doJSON(t, "PATCH", srv.URL+"/api/settings", owner, `{"onboarding_dismissed":true}`)
+	if status != 200 {
+		t.Fatalf("PATCH onboarding_dismissed: want 200, got %d (%v)", status, data)
+	}
+	echoed, ok := data["onboarding"].(map[string]any)
+	if !ok {
+		t.Fatalf("the PATCH echo must carry the onboarding report, got %v", data["onboarding"])
+	}
+	if at, _ := echoed["dismissed_at"].(float64); at <= 0 {
+		t.Fatalf("the echoed report must carry the dismissal stamp, got %v", echoed["dismissed_at"])
+	}
+
+	// Durable in the ONE report row — not in a second row, and not in a client.
+	raw, err := d.GetSetting(settingOnboardingReport)
+	if err != nil || raw == nil {
+		t.Fatalf("read back the report row: %v %v", raw, err)
+	}
+	var stored onboardingReportDTO
+	if err := json.Unmarshal([]byte(*raw), &stored); err != nil {
+		t.Fatalf("stored report is unreadable: %v", err)
+	}
+	if stored.DismissedAt <= 0 {
+		t.Fatalf("the dismissal must be durable in %s, got %+v", settingOnboardingReport, stored)
+	}
+	// Everything else about the report is untouched: a dismissal hides the
+	// banner, it does not rewrite what the run actually found.
+	stored.DismissedAt = 0
+	if !reflect.DeepEqual(stored, failed) {
+		t.Fatalf("a dismissal must change nothing but the stamp:\n got %+v\nwant %+v", stored, failed)
+	}
+
+	// And the ordinary settings read serves it to every later client.
+	if view := api.settingsView().Onboarding; view == nil || view.DismissedAt <= 0 {
+		t.Fatalf("GET /api/settings must carry the dismissal, got %+v", view)
+	}
+
+	// false is the un-dismissal — the banner speaks again.
+	if status, _ = doJSON(t, "PATCH", srv.URL+"/api/settings", owner, `{"onboarding_dismissed":false}`); status != 200 {
+		t.Fatalf("PATCH onboarding_dismissed=false: want 200, got %d", status)
+	}
+	if got := api.onboardingReport().DismissedAt; got != 0 {
+		t.Fatalf("un-dismissing must clear the stamp, got %v", got)
+	}
+}
+
+// 🔴 THE ZERO-COST INSURANCE the owner's ruling rests on. He knowingly accepted
+// that today nothing writes a SECOND onboarding report, so a permanent
+// dismissal means this banner never speaks again on this install. What keeps
+// that from being permanent-forever is that the report is ONE row written
+// WHOLESALE: whenever a new report is written, the dismissal goes with the old
+// blob and the banner is live again. Nobody has to remember to clear it.
+//
+// If a future 「重新偵測」 lands, THIS is the property that makes it correct for
+// free — and this test is what stops someone from "helpfully" carrying the old
+// stamp forward into the new report.
+func TestPutOnboardingReport_ANewReportClearsAnEarlierDismissal(t *testing.T) {
+	s := newReconcileTestServer(t)
+	dismissed := onboardingReportDTO{
+		State:       onboardingStateFailed,
+		StartedAt:   1,
+		FinishedAt:  2,
+		DismissedAt: 1750000000,
+		Steps: []onboardingStepDTO{{
+			Name:   onboardingStepInstallWarden,
+			Reason: "installing this machine's warden failed (exit 1)",
+		}},
+	}
+	if err := s.putOnboardingReport(dismissed); err != nil {
+		t.Fatalf("seed dismissed report: %v", err)
+	}
+
+	// A fresh run finishes and persists its verdict — exactly the shape a future
+	// re-detect would take.
+	fresh := s.finishOnboarding(
+		onboardingReportDTO{State: onboardingStateRunning, StartedAt: 3},
+		[]onboardingStepDTO{{Name: onboardingStepInstallWarden, Reason: "still broken"}},
+	)
+	if fresh.DismissedAt != 0 {
+		t.Fatalf("the returned fresh report must not inherit the stamp, got %v", fresh.DismissedAt)
+	}
+	got := s.onboardingReport()
+	if got == nil {
+		t.Fatalf("the fresh report must be stored")
+	}
+	if got.DismissedAt != 0 {
+		t.Fatalf("a NEW report must clear the earlier dismissal, got dismissed_at=%v", got.DismissedAt)
+	}
+	if got.State != onboardingStateFailed || got.StartedAt != 3 {
+		t.Fatalf("the stored report must be the FRESH one: %+v", got)
+	}
+}
+
+// 🔴 ABSENT FIELD = NEVER DISMISSED. There is no migration and no backfill:
+// every report row written before T-0648 carries no dismissed_at at all. The
+// honest reading of that absence is "nobody has dismissed this" — the banner
+// still speaks. Reading it the other way round would silently swallow the
+// warning on every install that predates this change.
+func TestOnboardingReport_LegacyBlobWithNoDismissedAtIsNotDismissed(t *testing.T) {
+	s := newReconcileTestServer(t)
+	legacy := `{"state":"failed","started_at":1,"finished_at":2,` +
+		`"steps":[{"name":"install_warden","ok":false,"reason":"installing this machine's warden failed (exit 1)","detail":""}]}`
+	if err := s.dal.PutSetting(settingOnboardingReport, legacy); err != nil {
+		t.Fatalf("seed legacy blob: %v", err)
+	}
+	got := s.onboardingReport()
+	if got == nil {
+		t.Fatalf("a legacy report must still be readable")
+	}
+	if got.DismissedAt != 0 {
+		t.Fatalf("a blob with no dismissed_at must read as never dismissed, got %v", got.DismissedAt)
+	}
+	if view := s.settingsView().Onboarding; view == nil || view.DismissedAt != 0 {
+		t.Fatalf("the settings read must pass that absence through unchanged, got %+v", view)
+	}
 }

@@ -6035,9 +6035,15 @@ export interface components {
         };
         /**
          * OnboardingReportDTO
-         * @description The result of the automatic first-run onboarding that runs right after the owner sets the initial password (T-ba62): install this host's warden, then bring the seeded assistant online. ``state`` is ``running`` / ``ok`` / ``failed``. ``steps`` carries one entry per attempted step in order. ``finished_at`` is the unix seconds the run ended (0 while running). Null on the settings read when onboarding never ran (an install that predates it, or a database that already had a password).
+         * @description The result of the automatic first-run onboarding that runs right after the owner sets the initial password (T-ba62): install this host's warden, then bring the seeded assistant online. ``state`` is ``running`` / ``ok`` / ``failed``. ``steps`` carries one entry per attempted step in order. ``finished_at`` is the unix seconds the run ended (0 while running). Null on the settings read when onboarding never ran (an install that predates it, or a database that already had a password). ``dismissed_at`` is the unix seconds the owner pressed 知道了 on the cockpit banner (0 = nobody ever did, which is also how every report row written before the field existed reads — there is no migration).
          */
         OnboardingReportDTO: {
+            /**
+             * Dismissed At
+             * @description Unix seconds the owner dismissed the cockpit banner for this report; 0 = never dismissed. The dismissal lives HERE, on the report row itself, so it survives a new tab, a reload and another device — it used to live in one browser tab's sessionStorage, which is why it came back. It is written through PATCH /api/settings ``onboarding_dismissed``, and because this row is rewritten WHOLESALE, any newly written report carries 0 and the banner speaks again.
+             * @default 0
+             */
+            dismissed_at: number;
             /**
              * Finished At
              * @default 0
@@ -7622,6 +7628,11 @@ export interface components {
              * @description The FIRST offboard point (T-a9d6): the SOFT notice. 1..89, and strictly below handover_pct.
              */
             notice_pct?: number | null;
+            /**
+             * Onboarding Dismissed
+             * @description Dismiss (true) or un-dismiss (false) the first-run onboarding banner for this install (T-0648). It stamps / clears ``dismissed_at`` on the ONE onboarding report row, which is what makes 知道了 survive a new tab, a reload and another device — the dismissal used to live in one browser tab's sessionStorage. A no-op (200, nothing written) when this database carries no onboarding report. Omit the field to leave the dismissal unchanged.
+             */
+            onboarding_dismissed?: boolean | null;
             /**
              * Codex Notice Round
              * @description The codex SOFT-notice compaction round (T-a9d6). 1..10, and strictly below codex_compaction_threshold.

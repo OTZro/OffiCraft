@@ -137,6 +137,14 @@ type onboardingReportDTO struct {
 	StartedAt  float64             `json:"started_at"`
 	FinishedAt float64             `json:"finished_at"`
 	Steps      []onboardingStepDTO `json:"steps"`
+	// DismissedAt is when the owner pressed 知道了 on the cockpit banner
+	// (T-0648): unix seconds, 0 = never dismissed. It lives on the REPORT, not
+	// in the browser, which is the whole point — a per-tab dismissal came back
+	// on the next tab. Absent in the JSON means 0 means never dismissed: every
+	// report row written before this field existed reads that way, and there is
+	// no migration, so the honest reading of the absence is the one that keeps
+	// the warning visible.
+	DismissedAt float64 `json:"dismissed_at"`
 }
 
 // themeFetchResultDTO carries a link-fetched theme bundle back to the cockpit

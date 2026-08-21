@@ -647,6 +647,18 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		s.displayWide = *body.DisplayWide
 	}
 	s.settingsMu.Unlock()
+	// onboarding_dismissed (T-0648) is written OUTSIDE settingsMu, and last:
+	// it does not live in the settings snapshot at all — it is a field on the
+	// onboarding report row, which settingsView already reads straight from the
+	// DAL (the run finishes in its own goroutine, so a snapshot copy would go
+	// stale). A database with no report has nothing to dismiss; that is a 200
+	// with nothing written, not an error, because there is no banner up either.
+	if body.OnboardingDismissed != nil {
+		if err := s.setOnboardingDismissed(*body.OnboardingDismissed); err != nil {
+			internalError(w, err)
+			return
+		}
+	}
 	if updaterChanged {
 		// Force-expire the update-check cache + refresh in the background so
 		// the software-update card reflects the new channel without waiting

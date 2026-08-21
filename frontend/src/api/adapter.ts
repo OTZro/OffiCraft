@@ -873,6 +873,11 @@ export interface OnboardingReportView {
   startedAt: number;
   finishedAt: number;
   steps: OnboardingStepView[];
+  /** When the owner pressed 知道了 on the banner (unix seconds; 0 = never;
+   * T-0648). It rides on the REPORT, not on the browser, which is what makes
+   * the dismissal survive a new tab. A report row written before this field
+   * existed has no stamp, and that absence reads as 0 — never dismissed. */
+  dismissedAt: number;
 }
 
 /** Partial settings edit — only supplied fields change (server 422s a
@@ -925,6 +930,11 @@ export interface ServerSettingsPatch {
   /** Turn the WIDE cockpit layout on/off (T-756f). Omit to leave it
    * unchanged — a plain bool, so there is nothing to "clear" it to. */
   displayWide?: boolean;
+  /** Dismiss (true) or un-dismiss (false) the first-run onboarding banner
+   * (T-0648) — it stamps / clears `dismissedAt` on the ONE onboarding report,
+   * so 知道了 outlives the tab it was pressed in. A no-op when this server
+   * carries no onboarding report. */
+  onboardingDismissed?: boolean;
 }
 
 /** Fields the owner may edit on a member (PATCH; every field optional).

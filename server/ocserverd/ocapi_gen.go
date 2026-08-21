@@ -1453,12 +1453,14 @@ type MonitoringSessionDTO struct {
 // MonitoringSessionDTORuntime The runtime this session REPORTED it is running (the roster row's “actual_runtime“). Honest-empty until something reports one, and it NEVER falls back to the owner-configured “runtime“ launch setting. WAS: this served the CONFIGURED value under a comment claiming it folded through the reported telemetry, so the cell flipped the instant the owner changed the setting and a runtime switch that had not happened yet was indistinguishable from one that had (T-7f28). NOT an “AgentRuntime“ $ref like the CONFIGURED runtime fields: this one admits "" for "nothing has reported yet", and the closed two-value vocabulary has no member for that. Widening the shared enum instead would have let "unknown" leak into every owner-configured runtime field, where it is not a legal setting.
 type MonitoringSessionDTORuntime string
 
-// OnboardingReportDTO The result of the automatic first-run onboarding that runs right after the owner sets the initial password (T-ba62): install this host's warden, then bring the seeded assistant online. “state“ is “running“ / “ok“ / “failed“. “steps“ carries one entry per attempted step in order. “finished_at“ is the unix seconds the run ended (0 while running). Null on the settings read when onboarding never ran (an install that predates it, or a database that already had a password).
+// OnboardingReportDTO The result of the automatic first-run onboarding that runs right after the owner sets the initial password (T-ba62): install this host's warden, then bring the seeded assistant online. “state“ is “running“ / “ok“ / “failed“. “steps“ carries one entry per attempted step in order. “finished_at“ is the unix seconds the run ended (0 while running). Null on the settings read when onboarding never ran (an install that predates it, or a database that already had a password). “dismissed_at“ is the unix seconds the owner pressed 知道了 on the cockpit banner (0 = nobody ever did, which is also how every report row written before the field existed reads — there is no migration).
 type OnboardingReportDTO struct {
-	FinishedAt *float64             `json:"finished_at,omitempty"`
-	StartedAt  *float64             `json:"started_at,omitempty"`
-	State      string               `json:"state"`
-	Steps      *[]OnboardingStepDTO `json:"steps,omitempty"`
+	// DismissedAt Unix seconds the owner dismissed the cockpit banner for this report; 0 = never dismissed. The dismissal lives HERE, on the report row itself, so it survives a new tab, a reload and another device — it used to live in one browser tab's sessionStorage, which is why it came back. It is written through PATCH /api/settings ``onboarding_dismissed``, and because this row is rewritten WHOLESALE, any newly written report carries 0 and the banner speaks again.
+	DismissedAt *float64             `json:"dismissed_at,omitempty"`
+	FinishedAt  *float64             `json:"finished_at,omitempty"`
+	StartedAt   *float64             `json:"started_at,omitempty"`
+	State       string               `json:"state"`
+	Steps       *[]OnboardingStepDTO `json:"steps,omitempty"`
 }
 
 // OnboardingStepDTO One step of the automatic first-run onboarding (T-ba62). “name“ is a stable machine key (“install_warden“ / “wake_assistant“); “ok“ is the step's verdict; “reason“ is a one-line human-readable cause, ALWAYS populated on a failure so the cockpit can say WHY the assistant is not awake instead of showing an unexplained grey member. “detail“ carries the raw tool log for a failed step (empty on success) — it is owner-gated, never public.
@@ -2452,6 +2454,9 @@ type SettingsUpdateDTO struct {
 
 	// NoticePct The FIRST offboard point (T-a9d6): the SOFT notice. 1..89, and strictly below handover_pct.
 	NoticePct *int `json:"notice_pct,omitempty"`
+
+	// OnboardingDismissed Dismiss (true) or un-dismiss (false) the first-run onboarding banner for this install (T-0648). It stamps / clears ``dismissed_at`` on the ONE onboarding report row, which is what makes 知道了 survive a new tab, a reload and another device — the dismissal used to live in one browser tab's sessionStorage. A no-op (200, nothing written) when this database carries no onboarding report. Omit the field to leave the dismissal unchanged.
+	OnboardingDismissed *bool `json:"onboarding_dismissed,omitempty"`
 
 	// OrgName The studio display name (T-d693) — trimmed, max 80 runes; "" clears it back to the localized default. A value longer than 80 runes is a 422.
 	OrgName              *string `json:"org_name,omitempty"`

@@ -16,9 +16,13 @@ import {
 } from "./OnboardingBanner";
 
 const getServerSettings = vi.fn();
+const patchServerSettings = vi.fn();
 
 vi.mock("../api", () => ({
-  api: { getServerSettings: () => getServerSettings() },
+  api: {
+    getServerSettings: () => getServerSettings(),
+    patchServerSettings: (patch: unknown) => patchServerSettings(patch),
+  },
 }));
 
 function settingsWith(onboarding: unknown) {
@@ -37,6 +41,8 @@ describe("OnboardingBanner", () => {
   beforeEach(() => {
     sessionStorage.clear();
     getServerSettings.mockReset();
+    patchServerSettings.mockReset();
+    patchServerSettings.mockImplementation(async () => settingsWith(null));
   });
 
   it("shows the failed step and its REASON", async () => {
@@ -158,27 +164,57 @@ describe("OnboardingBanner", () => {
     expect(screen.queryByTestId("onboarding-banner")).toBeNull();
   });
 
-  it("stays dismissed for the session once dismissed", async () => {
-    getServerSettings.mockResolvedValue(
-      settingsWith({
-        state: "failed",
-        startedAt: 1,
-        finishedAt: 2,
-        steps: [{ name: "wake_assistant", ok: false, reason: "no warden yet", detail: "" }],
-      })
-    );
-    const first = renderBanner();
-    (await screen.findByTestId("onboarding-dismiss")).click();
-    await waitFor(() => expect(screen.queryByTestId("onboarding-banner")).toBeNull());
-    first.unmount();
+  // ── 🔴 T-0648: 「知道了」 IS PERMANENT, AND THE SERVER IS WHERE IT LIVES ──────
+  //
+  // Owner ruling rc-45eb8652b17f (「永久關閉，不需另外開任務」), reported after
+  // hitting the old behaviour himself: 「為什麼我重新點進網址又出現了？」 The
+  // dismissal used to be a sessionStorage key, which is scoped to ONE TAB — a
+  // second tab, or the same URL opened again, brought the banner straight back.
+  // These three cases pin the whole contract: the press writes to the server,
+  // a session that remembers nothing locally still stays quiet, and a report
+  // row that carries no stamp at all still speaks.
+  const dismissibleReport = {
+    state: "failed",
+    startedAt: 1,
+    finishedAt: 2,
+    dismissedAt: 0,
+    steps: [{ name: "wake_assistant", ok: false, reason: "no warden yet", detail: "" }],
+  };
 
+  it("writes the dismissal to the SERVER when 知道了 is pressed", async () => {
+    getServerSettings.mockResolvedValue(settingsWith(dismissibleReport));
     renderBanner();
-    // ONE read for both mounts (T-8115): the banner's first read joins the
-    // shared /api/settings snapshot, so the remount is answered from it rather
-    // than re-downloading 639 kB. The subject here is the dismissal, and it
-    // holds with the report already in hand.
-    await waitFor(() => expect(getServerSettings).toHaveBeenCalledTimes(1));
+    (await screen.findByTestId("onboarding-dismiss")).click();
+    await waitFor(() =>
+      expect(patchServerSettings).toHaveBeenCalledWith({ onboardingDismissed: true })
+    );
+    await waitFor(() => expect(screen.queryByTestId("onboarding-banner")).toBeNull());
+  });
+
+  it("stays quiet in a brand-new frontend session that remembers nothing locally", async () => {
+    // A NEW session: no sessionStorage, no cached snapshot, nothing but what
+    // the server says. Under the old per-tab dismissal this rendered the banner
+    // all over again — the whole bug.
+    sessionStorage.clear();
+    getServerSettings.mockResolvedValue(
+      settingsWith({ ...dismissibleReport, dismissedAt: 1750000000 })
+    );
+    renderBanner();
+    await waitFor(() => expect(getServerSettings).toHaveBeenCalled());
     expect(screen.queryByTestId("onboarding-banner")).toBeNull();
+  });
+
+  it("still speaks for a report row that carries no dismissal stamp at all", async () => {
+    // There is no migration: every report written before T-0648 has no
+    // dismissed_at. Absent must read as "nobody dismissed this" — the other
+    // reading would swallow the warning on every pre-existing install.
+    const { dismissedAt: _omitted, ...legacyReport } = dismissibleReport;
+    getServerSettings.mockResolvedValue(settingsWith(legacyReport));
+    renderBanner();
+    const step = await screen.findByTestId("onboarding-step-wake_assistant");
+    expect(step.querySelector(".onboarding-banner__reason")?.textContent).toBe(
+      "no warden yet"
+    );
   });
 });
 

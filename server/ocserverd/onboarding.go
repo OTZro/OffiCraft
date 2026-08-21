@@ -476,6 +476,27 @@ func (s *apiServer) recoverStaleOnboarding() {
 	onboardingLog("closed out a stale `running` report from a previous process (interrupted run)")
 }
 
+// setOnboardingDismissed stamps (or clears) the owner's 知道了 on the ONE stored
+// onboarding report (T-0648). A database with no report has nothing to dismiss:
+// that is a silent no-op, not an error — there is no banner up either.
+//
+// 🔴 THE STAMP RIDES ON THE REPORT ROW, AND THAT IS DELIBERATE. The row is
+// rewritten WHOLESALE by putOnboardingReport, so a newly written report — the
+// shape any future re-detection would take — carries dismissed_at=0 and the
+// banner speaks again with nobody having to remember to clear anything. Moving
+// this to a row of its own would silently delete that property.
+func (s *apiServer) setOnboardingDismissed(dismissed bool) error {
+	report := s.onboardingReport()
+	if report == nil {
+		return nil
+	}
+	report.DismissedAt = 0
+	if dismissed {
+		report.DismissedAt = nowSecs()
+	}
+	return s.putOnboardingReport(*report)
+}
+
 func (s *apiServer) putOnboardingReport(report onboardingReportDTO) error {
 	raw, err := json.Marshal(report)
 	if err != nil {
