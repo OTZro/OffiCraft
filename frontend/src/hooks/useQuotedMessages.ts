@@ -17,18 +17,27 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { ApiError } from "../api/errors";
+import { createDeltaSink } from "../lib/deltaSink";
 import type { ChatMessage } from "../api/adapter";
 
 /** The server refuses more than 20 ids per by-ids call, so batch to that. */
 const BY_IDS_MAX = 20;
 
+// The SSE topics that count as "the next event" for the debt below. Same pair
+// as useChat's own CHAT_TOPICS, and deliberately NOT widened: a `monitoring` or
+// `task` delta is not this surface's event, debt or no debt — the outer topic
+// gate stays exactly as narrow as the precedent's (T-929f).
+const QUOTE_TOPICS = new Set(["chat", "chat_read"]);
+
 /**
  * Resolve `ids` that `have` does not already carry, one batch per new set.
  *
  * Returns the fetched-quote map only — callers read `have` first and fall back
- * to this. Nothing is refetched: an id already resolved (or already missed)
- * is never asked for again, so a thread that re-renders on every SSE delta
- * does not re-issue the same read.
+ * to this. An id already resolved, or already ANSWERED with a miss, is never
+ * asked for again, so a thread that re-renders on every SSE delta does not
+ * re-issue the same read. The one exception is T-4e95's debt (see `staleRef`):
+ * an id whose miss came from a blip rather than from an answer is un-asked
+ * ONCE when the next relevant burst arrives.
  */
 export function useQuotedMessages(
   ids: string[],
@@ -44,6 +53,40 @@ export function useQuotedMessages(
   // the retry below to a single extra attempt per id, so a server that is down
   // costs one repeat and not a loop.
   const retriedRef = useRef<Set<string>>(new Set());
+  // 🔴 "THE QUOTE LINE LIES FOREVER AFTER A SUSTAINED OUTAGE" (T-4e95). The one
+  // retry above bounds the cost of a down server, and that bound was the bug:
+  // TWO failures settled the id as `null` — a SETTLED miss — and nothing ever
+  // revisited it. Measured on the real thing, not reasoned: `attempts under a
+  // sustained outage: 2`, then `[after-room-switch] quoteBody="較早的一則訊息"`
+  // with `attempts after room switch: 2 (was 2) — re-asked=false`. Changing
+  // rooms does not help because `askedRef`/`fetched` never expire AND OfficePage
+  // mounts <ChatArea> without a key, so this hook does not remount when the
+  // owner switches who they are talking to. Only a full page reload cleared it.
+  //
+  // The fix is the owner's ruling of 2026-08-20, verbatim: 「不要重試，只要
+  // 『標起來、下一個事件來就補』就好（改動更小）」. NO retry loop, NO backoff,
+  // NO timer — the retry count above is untouched. This set is the mark: ids
+  // whose miss came from a BLIP rather than from an answer. A relevant SSE burst
+  // un-asks exactly those ids once, and the ordinary path re-reads them.
+  //
+  // A 4xx never lands here. The all-or-nothing 404 an unknown id causes IS an
+  // answer, and re-asking an answer on every chat delta would be a poll.
+  //
+  // ⚠️ THE GAP THIS LEAVES OPEN, VERBATIM AND ON PURPOSE:
+  // 「下一個事件來就補」意味著:如果那條線之後再也沒有任何事件,就還是不會補。
+  // If no further chat / chat_read delta ever arrives on this connection, the
+  // row keeps saying 「較早的一則訊息」 until something remounts or the page
+  // reloads. That residual is a KNOWN, ACCEPTED trade made by the owner in
+  // exchange for a smaller change. Do not read this as "the lying quote line is
+  // fixed"; read it as "the line now self-heals on the next event instead of
+  // never".
+  //
+  // ⚠️ StrictMode: this ref is only ever written from the fetch's outcome and
+  // from the sink — NEVER from a cleanup. A ref written only on the way out gets
+  // stuck off forever under setup→cleanup→setup, which is how the precedent
+  // (fa952c5d) broke itself once; `mountedRef` below is the one that needs the
+  // setup-body write, and it has one.
+  const staleRef = useRef<Set<string>>(new Set());
   // Bumped when a transient failure un-asks a batch. It is part of the effect
   // key ON PURPOSE: un-asking alone changes no state, so without this the very
   // next render can recompute an IDENTICAL key, React sees unchanged deps, and
@@ -92,6 +135,9 @@ export function useQuotedMessages(
     for (const id of batch) askedRef.current.add(id);
     void (async () => {
       let rows: ChatMessage[] = [];
+      // Did this batch end as a BLIP (a miss we have no answer for) rather than
+      // as an answer? Only a blip is worth marking; see staleRef.
+      let blip = false;
       try {
         rows = await api.listChatByIds(batch);
       } catch (e) {
@@ -140,8 +186,22 @@ export function useQuotedMessages(
           // render the retry triggers, which is narrow but real (an SSE delta,
           // or scrolling up for history, landing on that frame).
           const spent = batch.filter((id) => retriedRef.current.has(id) && !fresh.includes(id));
+          // 🔴 THE DEBT WRITE GOES BELOW THIS GUARD, NEVER ABOVE IT. `staleRef`
+          // outlives the effect instance that writes it, and the precedent
+          // shipped exactly this bug once by guarding only its `.then` arm and
+          // letting the `.catch` arm mark debt for a torn-down instance
+          // (fa952c5d, second commit). The narrow "writes the debt onto a
+          // SUCCESSOR" version of that is not reachable here — the flag that
+          // gates it is keyed to the COMPONENT (`mountedRef`, `[]` deps), and
+          // once it is false this component is gone and its refs with it, so
+          // there is no successor sharing this Set. What the guard does buy is
+          // the plain one: an unmounted hook writes no state and no debt.
           if (!mountedRef.current) return;
           if (spent.length > 0) {
+            // These ids are about to be SETTLED as a miss with no answer behind
+            // them — mark, do not retry. The sink below un-asks them once, on
+            // the next relevant burst.
+            for (const id of spent) staleRef.current.add(id);
             setFetched((prev) => {
               const next = new Map(prev);
               for (const id of spent) next.set(id, null);
@@ -151,9 +211,18 @@ export function useQuotedMessages(
           setAttempt((a) => a + 1);
           return;
         }
+        // A definitive refusal is an ANSWER; anything else that reaches here is
+        // an id that has spent its one retry and still has nothing behind it.
+        blip = !definitive;
         rows = [];
       }
       if (!mountedRef.current) return;
+      // Landed OR definitively refused ⇒ whatever we owed on these ids is paid
+      // off. A blip ⇒ mark, and let the sink pay it on the next event.
+      for (const id of batch) {
+        if (blip) staleRef.current.add(id);
+        else staleRef.current.delete(id);
+      }
       const byId = new Map(rows.map((m) => [m.id, m]));
       setFetched((prev) => {
         const next = new Map(prev);
@@ -162,6 +231,32 @@ export function useQuotedMessages(
       });
     })();
   }, [wantedKey]);
+
+  // T-4e95: the debt's ONLY collector. No timer, no backoff, no retry loop —
+  // the next relevant burst un-asks the marked ids exactly once and the ordinary
+  // path above re-reads them.
+  useEffect(() => {
+    const unsubscribe = api.subscribeEvents(
+      createDeltaSink((batch) => {
+        if (![...batch.topics].some((t) => QUOTE_TOPICS.has(t))) return;
+        // 🔴 NO DEBT ⇒ NO RE-READ. This is not an optimisation, it is the
+        // contract: `askedRef` is what stops a thread that re-renders on every
+        // SSE delta from re-issuing the same read (see this hook's header), and
+        // deleting this line would turn every chat delta in the company into a
+        // fresh by-ids call for every quote on screen. Only an id whose miss has
+        // no answer behind it may be un-asked, and only once per mark.
+        if (staleRef.current.size === 0) return;
+        for (const id of staleRef.current) askedRef.current.delete(id);
+        staleRef.current.clear();
+        // Un-asking alone changes no state, so the very next render could
+        // recompute an IDENTICAL `wantedKey`, React would see unchanged deps,
+        // and the re-read we just enabled would never fire. Same reason
+        // `attempt` exists for the retry above.
+        setAttempt((a) => a + 1);
+      })
+    );
+    return unsubscribe;
+  }, []);
 
   return fetched;
 }
