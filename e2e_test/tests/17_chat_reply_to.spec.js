@@ -28,9 +28,6 @@ const {
 const NAME_M = uniqueName('Reply M');
 const TARGET = 'the sentence that gets quoted back';
 const ANSWER = 'answering that one';
-// Enough filler that the target is OFF SCREEN, so that "the overlay shows the
-// original" cannot be satisfied by text the page was already displaying.
-//
 // ⚠️ NOTHING IN THIS FILE ASSERTS THAT THE THREAD STAYS PUT. The old
 // `not.toBeInViewport()` / `toBeInViewport()` pair was deleted along with the
 // scrolling and nothing was written to replace it, so re-introducing a scroll
@@ -39,8 +36,8 @@ const ANSWER = 'answering that one';
 // It stays comfortably INSIDE the client's page size (useChat loads
 // CHAT_PAGE_SIZE = 30 and only grows backwards when the owner scrolls up, which
 // this test never does): 1 target + 24 filler + 1 reply = 26 rows, so the target
-// is loaded, off screen, and the jump is offered. That combination is what the
-// first test below needs.
+// is LOADED — which is what the first test below needs, since it hovers the
+// target row and presses 回覆這則.
 //
 // The SECOND test needs the opposite and says so with its own number.
 const FILLER = 24;
