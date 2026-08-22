@@ -648,7 +648,12 @@ func (s *apiServer) HandleHireMemberApiMembersPost(w http.ResponseWriter, r *htt
 			"effort must be one of [high low max medium]; got '"+*body.Effort+"'")
 		return
 	}
-	runtime := RuntimeClaude
+	// UNSET when the caller names none. The empty runtime is the durable
+	// "nobody has picked yet" (T-b3d0), and it is what lets
+	// resolveEmptyRuntimeForPlacement choose against the machine this member is
+	// actually placed on — a codex-only box hires a Codex member. Hard-coding
+	// claude here made that resolver unreachable from every creation path.
+	runtime := ""
 	if body.Runtime != nil {
 		runtime = string(*body.Runtime)
 		if !ValidRuntime(runtime) {

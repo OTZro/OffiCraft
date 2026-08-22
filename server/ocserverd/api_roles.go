@@ -175,7 +175,11 @@ func (s *apiServer) HandleCreateRoleApiRolesPost(w http.ResponseWriter, r *http.
 			"effort must be one of [high low max medium]; got '"+*body.Effort+"'")
 		return
 	}
-	runtime := RuntimeClaude
+	// UNSET when the caller names none — the cockpit's 招攬新成員 sends only a
+	// name, so this is THE path a founding member is born on. Leaving it empty
+	// hands the choice to resolveEmptyRuntimeForPlacement at placement time
+	// (T-ae8b), instead of pinning every new member to claude at birth.
+	runtime := ""
 	if body.Runtime != nil {
 		runtime = string(*body.Runtime)
 		if !ValidRuntime(runtime) {
