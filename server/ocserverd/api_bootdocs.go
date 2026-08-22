@@ -467,9 +467,36 @@ func (s *apiServer) taskNoticeText(kind string, values map[string]string) string
 // fold the overlay over the seed, fill the names this kind declares, join the
 // halves. "" on any fault — see the two callers above for why every one of them
 // omits the notice instead of degrading to a template.
+//
+// 🔴 A SPLIT KIND WHOSE STORED TEXT HAS NO MARKER IS A FAULT HERE, and refusing
+// it is the whole reason this check exists rather than living in DocRendered.
+// DocRendered takes a text and a join and cannot know what the kind DECLARED, so
+// its no-marker branch returns the text unchanged — correct for the boot folds,
+// which staple whole documents together and whose readers lose nothing when a
+// document has no head. A NOTICE is the opposite: its read-only head IS the
+// sentence, so the same lenient branch ships an agent the instructions with the
+// facts sliced off, and it ships them as a NON-EMPTY string, so every "we did
+// not send it" fallback downstream stays disarmed.
+//
+// The 加速停止 arm is where that costs the most and it is not hypothetical: the
+// head is the only place the deadline appears, so a headless notice quotes no
+// instant while winddownDeadlineOf is positive and reconcile is already counting
+// — and 下線程序 §1 tells an agent to read "no instant" as a soft wind-down. It
+// would let its sub-agents finish inside a window that is closing.
+//
+// 🔴 THE REACHABLE WAY IN IS AN OVERLAY WRITTEN BEFORE THE MARKER EXISTED.
+// docBodyMarker arrived with the split and NO migration rewrote the rows that
+// were already there, so any installation that had edited one of these documents
+// before that release is holding exactly this shape. The write face refuses to
+// CREATE one (bootDocContentOK demands the head back verbatim), which is why
+// nothing else in the tree notices — it guards writes from here on, not rows
+// already stored.
 func (s *apiServer) eventNoticeText(spec bootDocSpec, values map[string]string) string {
 	dto, err := s.foldBootDocDTO(spec)
 	if err != nil || dto == nil {
+		return ""
+	}
+	if _, _, split := DocSplitHeadBody(dto.Text); spec.Split && !split {
 		return ""
 	}
 	text, err := RenderDocVars(dto.Text, spec.Vars, values)

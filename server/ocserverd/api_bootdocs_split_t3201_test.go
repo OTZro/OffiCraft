@@ -359,6 +359,114 @@ func TestEventNoticeText_SendsTheBodyTheOwnerEditedAndNotTheShippedSeed(t *testi
 	}
 }
 
+// 🔴 THE ROW THE MARKER RELEASE LEFT BEHIND. docBodyMarker arrived with the
+// split and no migration rewrote the overlays already in the database, so an
+// installation that had edited one of these documents before that release is
+// holding a stored text with no marker in it at all. Nothing else in the tree
+// sees that shape: the write face refuses to CREATE one (asserted below), so
+// every write-side guard is looking the other way, and DocRendered's no-marker
+// branch hands the text back unchanged.
+//
+// For a NOTICE that is the whole document minus its head — the instructions with
+// the facts sliced off — and it goes out NON-EMPTY, which is worse than a fault
+// that returns "": every downstream "we did not send it" fallback reads a
+// non-empty notice as a delivered one and stays disarmed. On the 加速停止 arm
+// the sliced-off half is the only place the deadline appears, so an agent under
+// a running clock is handed a notice quoting no instant, and 下線程序 §1 tells it
+// to read that as a soft wind-down.
+//
+// The row is seeded DIRECTLY here, and that is the honest fixture rather than a
+// shortcut: the write face cannot produce this shape, which is exactly why it
+// survived unnoticed. The refusal is asserted first so this stays true.
+func TestEventNoticeText_ASplitKindStoredWithNoMarkerIsNotSentAtAll(t *testing.T) {
+	const where = "context 59% (your limits: 55% / 65%)"
+	const epoch = 1755870180
+	for _, tc := range []struct {
+		kind string
+		send func(s *apiServer) string
+	}{
+		{docKindOffboard, func(s *apiServer) string {
+			return s.winddownNoticeText(offboardKindSoft, where, 0)
+		}},
+		{docKindAcceleratedStop, func(s *apiServer) string {
+			return s.winddownNoticeText(offboardKindFinal, where, epoch)
+		}},
+		{docKindTaskReassignPredecessor, func(s *apiServer) string {
+			return s.taskNoticeText(docKindTaskReassignPredecessor, map[string]string{
+				"task_no": "T-7e91", "new_executor_label": "Rei",
+			})
+		}},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			s := newEventProcServer(t)
+			spec, _, body := splitSeed(t, s, tc.kind)
+
+			// Positive control: the notice IS sent while the document is whole,
+			// so the "" below is this fixture's doing and not a dead server.
+			if tc.send(s) == "" {
+				t.Fatal("nothing was sent even before the marker was removed")
+			}
+
+			// The write face cannot make this row — which is why seeding it
+			// directly is the only way to test the shape an old release left.
+			w := httptest.NewRecorder()
+			s.replaceBootDoc(w, ownerPost("/x"), spec, body, false)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("the write face accepted a marker-less document: %d (%s) — if "+
+					"that is now allowed, this shape is reachable from the cockpit too",
+					w.Code, w.Body.String())
+			}
+
+			if err := s.dal.PutBootDocument(BootDocument{
+				Kind: spec.Kind, Key: spec.Key, Text: body,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			// The row really is there and really has no marker — otherwise the
+			// "" below would be measuring nothing.
+			dto, err := s.foldBootDocDTO(spec)
+			if err != nil || dto == nil || dto.Text != body {
+				t.Fatalf("fixture did not land: %+v %v", dto, err)
+			}
+			if _, _, split := DocSplitHeadBody(dto.Text); split {
+				t.Fatal("the fixture still carries a marker, so it is not the pre-marker shape")
+			}
+
+			if got := tc.send(s); got != "" {
+				t.Fatalf("a document with no read-only head must not be sent at all — "+
+					"a non-empty notice also disarms every fallback downstream. It went "+
+					"out as:\n%s", got)
+			}
+		})
+	}
+}
+
+// 🔴 AND THE BOOT FOLDS KEEP THE LENIENT BRANCH, deliberately. The refusal above
+// belongs to notices, where the head IS the sentence; a boot document's head is
+// its title line, and a reader that gets the body without it still boots. Making
+// the fold refuse would turn one stale overlay into agents that cannot start —
+// far worse than the hole it closes. This case is the fence around that
+// asymmetry, so tightening the notice path later cannot quietly take the boot
+// path with it.
+func TestSystemInteractionText_AMarkerLessOverlayStillBoots(t *testing.T) {
+	s := newEventProcServer(t)
+	spec := s.systemInteractionSpec()
+	const stored = "# Global Context（AI 工作室 · 成員 boot context）\n\n舊版沒有分隔線的內容。\n"
+	if err := s.dal.PutBootDocument(BootDocument{
+		Kind: spec.Kind, Key: spec.Key, Text: stored,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.systemInteractionText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != stored {
+		t.Fatalf("the boot fold must hand a marker-less overlay back unchanged:\n got %q\nwant %q",
+			got, stored)
+	}
+}
+
 // 🔴 WHY THE OTHER WIRED DOCUMENT HAS NO CASE ABOVE, asserted rather than left
 // as a note in a report: 〈解除阻擋〉 is READ-ONLY, so no write face can put an
 // overlay under it and "the owner's edit reaches the agent" is not a path that
