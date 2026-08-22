@@ -433,6 +433,41 @@ func (s *apiServer) winddownNoticeText(kind, where string, deadline float64) str
 		// one epoch has to render to one constant string.
 		values["deadline"] = time.Unix(int64(deadline), 0).UTC().Format(time.RFC3339)
 	}
+	return s.eventNoticeText(spec, values)
+}
+
+// taskNoticeText is the WHOLE chat notice one TASK event posts to the executor
+// it concerns: the document for this kind, its {variables} filled from the live
+// task facts, and its two halves joined the way this kind joins them (T-3201).
+// The wind-down pair took this road first; these documents differ only in
+// carrying more names and in being addressed by kind rather than by an arm.
+//
+// 🔴 THE KIND IS THE WHOLE OF WHICH WORDS GO OUT, so passing the wrong constant
+// sends an agent another event's instructions. It cannot be caught downstream:
+// both documents open with a [T-xxxx] number and read as a coherent notice, so
+// a predecessor told to hand over would simply be told instead that something
+// stopped blocking it. The send-site tests compare the posted body against the
+// whole expected text for that reason — a keyword probe passes on either.
+//
+// It answers "" on ANY fault, and every caller posts nothing rather than
+// posting that: a name nothing filled would otherwise reach an agent as
+// `{blocker_title}`, which reads like a real title and names no task.
+//
+// TrimSpace because a document is a FILE and ends with a newline, while a chat
+// row is one message — the same trim buildBootContext does to every block it
+// staples. The wind-down notices do not take it: theirs is an SSE field whose
+// bytes the client de-dupes against, and trimming it now would change what
+// every agent already receives.
+func (s *apiServer) taskNoticeText(kind string, values map[string]string) string {
+	return strings.TrimSpace(
+		s.eventNoticeText(s.mustBootDocSpec(kind, bootDocSingletonKey), values))
+}
+
+// eventNoticeText is the one road from a document to the bytes an agent reads:
+// fold the overlay over the seed, fill the names this kind declares, join the
+// halves. "" on any fault — see the two callers above for why every one of them
+// omits the notice instead of degrading to a template.
+func (s *apiServer) eventNoticeText(spec bootDocSpec, values map[string]string) string {
 	dto, err := s.foldBootDocDTO(spec)
 	if err != nil || dto == nil {
 		return ""

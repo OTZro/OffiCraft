@@ -1546,12 +1546,17 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	// could edit. A frozen task is still reassignable (owner 2026-08-11, T-b9f6);
 	// what changed is where the agent is told what frozen means.
 	no := TaskNo(t.ID)
+	// The predecessor's notice IS the 轉派程序 document (T-3201): its read-only
+	// head names the task and the successor, its editable body is what to do
+	// about it. It used to be this Go concatenation, which is exactly what the
+	// owner could not find when he went looking for the words an agent is sent.
+	// "" means it could not be rendered — post nothing rather than a template.
 	if oldExecutor != "" {
-		s.postTaskChat(*t, wireSystemSender, oldExecutor,
-			"["+no+"] 此任務已轉派給 "+newExecutorLabel+"。"+
-				"請停止推進，改為去跟接手人做交接：對方接手後會主動 post_chat 找你，"+
-				"他問目前進度、進行中的事項、有哪些雷要注意，你都要答得出來，直到他確認交接完成。交接完成後這張任務就不再是你的了。",
-			trigger)
+		if notice := s.taskNoticeText(docKindTaskReassignPredecessor, map[string]string{
+			"task_no": no, "new_executor_label": newExecutorLabel,
+		}); notice != "" {
+			s.postTaskChat(*t, wireSystemSender, oldExecutor, notice, trigger)
+		}
 	}
 	if oldExecutor != "" && newExecutorID != "" {
 		predecessorLabel := s.executorLabel(oldKind, oldExecutor)

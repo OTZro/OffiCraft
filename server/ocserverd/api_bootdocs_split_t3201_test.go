@@ -165,14 +165,24 @@ func TestTaskReassignPredecessorDoc_HeadPlusBodyIsTodaysChatNotice(t *testing.T)
 		"task_no": "T-7e91", "new_executor_label": "Rei",
 	}) + spec.Join + body
 
-	// Today's literal, api_tasks.go, plus the seed FILE's trailing newline —
-	// the send site trims what it staples, the way buildBootContext already
-	// does, and wiring that up is the next package's work.
+	// The literal api_tasks.go used to concatenate, plus the seed FILE's
+	// trailing newline — a document is a file and ends with one, a chat row is
+	// one message, so the send site trims what it posts the way buildBootContext
+	// trims every block it staples.
 	want := "[T-7e91] 此任務已轉派給 Rei。請停止推進，改為去跟接手人做交接：" +
 		"對方接手後會主動 post_chat 找你，他問目前進度、進行中的事項、有哪些雷要注意，" +
 		"你都要答得出來，直到他確認交接完成。交接完成後這張任務就不再是你的了。\n"
 	if got != want {
 		t.Fatalf("the folded document is not today's reassign notice:\n got %q\nwant %q", got, want)
+	}
+	// …and the same bytes the live producer builds, which is what makes the
+	// hand-written literal above a statement about the SERVER and not about
+	// this file.
+	if live := s.taskNoticeText(docKindTaskReassignPredecessor, map[string]string{
+		"task_no": "T-7e91", "new_executor_label": "Rei",
+	}); live != strings.TrimSpace(want) {
+		t.Fatalf("the live producer sent something else:\n got %q\nlive %q",
+			strings.TrimSpace(want), live)
 	}
 }
 
@@ -211,6 +221,61 @@ func TestTaskUnblockedDoc_HeadIsVerbatimAndTheBodyIsTheApprovedRewrite(t *testin
 	// landed" would also be satisfied by a document carrying both.
 	if strings.Contains(body, "這張任務現在可以開始") {
 		t.Fatal("the pre-rewrite sentence is still in the body; the branches replace it, they do not join it")
+	}
+	// 🔴 AND THE LIVE PRODUCER ANSWERS IT. Until the wiring package this
+	// document and the sentence releaseDependentsOnClose actually posted were
+	// two different texts, and the approval above was landed in the seed while
+	// the wire kept the old one — a divergence every test here passed over
+	// because none of them asked the server what it sends.
+	if live := s.taskNoticeText(docKindTaskUnblocked, map[string]string{
+		"blocked_task_no": "T-0002", "blocker_task_no": "T-0001",
+		"blocker_title": "把票搬進文件", "blocker_status": "done",
+	}); live != gotHead+spec.Join+strings.TrimSuffix(body, "\n") {
+		t.Fatalf("the live producer sent something else:\n got %q\nlive %q",
+			gotHead+spec.Join+strings.TrimSuffix(body, "\n"), live)
+	}
+}
+
+// The other half of the variable mechanism at the TASK send sites, the same
+// pair of assertions winddownNoticeText carries: a document reaches an agent
+// with no {name} slot left in it, or it does not reach the agent at all.
+//
+// "No braces in what was sent" is satisfied trivially by a server that sends
+// nothing, so both cases are asserted here — a notice whose values are all
+// supplied must be non-empty, and a notice missing one must come back "" rather
+// than as the template. `{blocker_title}` reads like a real title and names no
+// task; an agent cannot tell it was never filled.
+func TestTaskNoticeText_SendsNoUnfilledVariableAndRefusesRatherThanShippingOne(t *testing.T) {
+	s := newEventProcServer(t)
+	full := map[string]map[string]string{
+		docKindTaskReassignPredecessor: {"task_no": "T-7e91", "new_executor_label": "Rei"},
+		docKindTaskUnblocked: {
+			"blocked_task_no": "T-0002", "blocker_task_no": "T-0001",
+			"blocker_title": "把票搬進文件", "blocker_status": "done",
+		},
+	}
+	for kind, values := range full {
+		t.Run(kind, func(t *testing.T) {
+			got := s.taskNoticeText(kind, values)
+			if got == "" {
+				t.Fatal("nothing was sent at all — every assertion here would pass vacuously")
+			}
+			if bad := DocVarsIn(got); len(bad) > 0 {
+				t.Fatalf("the notice reached the agent with %v still in it: %q", bad, got)
+			}
+			for missing := range values {
+				short := map[string]string{}
+				for k, v := range values {
+					if k != missing {
+						short[k] = v
+					}
+				}
+				if out := s.taskNoticeText(kind, short); out != "" {
+					t.Errorf("with no value for {%s} the notice must not be sent at "+
+						"all — it went out as:\n%s", missing, out)
+				}
+			}
+		})
 	}
 }
 
