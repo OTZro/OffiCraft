@@ -66,6 +66,22 @@ func DocJoinHeadBody(head, body string) string {
 func DocRendered(text, join string) string {
 	head, body, split := DocSplitHeadBody(text)
 	if !split {
+		// 🔴 THE LENIENT BRANCH IS DELIBERATE — DO NOT TIGHTEN IT HERE. This
+		// function takes a text and a join; it cannot know whether the KIND
+		// declared Split, so it has no standing to call a missing marker a
+		// fault. The strictness lives one layer up, in eventNoticeText, which
+		// holds the spec: a NOTICE whose kind declares Split and whose stored
+		// text has no marker is refused there, because a notice's read-only
+		// head IS its sentence and the body alone is the instructions with the
+		// facts sliced off.
+		//
+		// A BOOT FOLD is the opposite and must keep landing here: its head is
+		// only the document's TITLE line, so a reader that gets the body
+		// without it still boots. Refusing at this line would turn one stale
+		// pre-marker overlay into agents that cannot start — far worse than the
+		// hole the notice-side refusal closes. Pinned by
+		// TestSystemInteractionText_AMarkerLessOverlayStillBoots; tightening
+		// here reddens it.
 		return text
 	}
 	return head + join + body

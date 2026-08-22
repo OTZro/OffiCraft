@@ -434,8 +434,8 @@ func TestEventNoticeText_ASplitKindStoredWithNoMarkerIsNotSentAtAll(t *testing.T
 
 			if got := tc.send(s); got != "" {
 				t.Fatalf("a document with no read-only head must not be sent at all — "+
-					"a non-empty notice also disarms every fallback downstream. It went "+
-					"out as:\n%s", got)
+					"on the member arm a non-empty notice disarms offboardFallback, and "+
+					"on the arms with no fallback it simply misleads. It went out as:\n%s", got)
 			}
 		})
 	}

@@ -475,8 +475,16 @@ func (s *apiServer) taskNoticeText(kind string, values map[string]string) string
 // which staple whole documents together and whose readers lose nothing when a
 // document has no head. A NOTICE is the opposite: its read-only head IS the
 // sentence, so the same lenient branch ships an agent the instructions with the
-// facts sliced off, and it ships them as a NON-EMPTY string, so every "we did
-// not send it" fallback downstream stays disarmed.
+// facts sliced off — and it ships them NON-EMPTY, which is worse than "" for two
+// different reasons depending on the arm.
+//
+// ONE arm has a net: the member delta drives cli/ocagent's offboardFallback,
+// which arms on an ABSENT notice, so a fragment disarms it — no correct notice
+// and no warning either. The other three (the context-high band and the two task
+// chat rows) have no equivalent, so there a fragment and "" are equally silent
+// and the reason to refuse is simply that the fragment MISLEADS: 轉派程序's body
+// says 「請停止推進，改為去跟接手人做交接」 while WHICH task lives only in the
+// head, so a predecessor holding several would not know which one to stop.
 //
 // The 加速停止 arm is where that costs the most and it is not hypothetical: the
 // head is the only place the deadline appears, so a headless notice quotes no
