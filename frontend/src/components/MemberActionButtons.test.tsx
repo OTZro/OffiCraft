@@ -296,6 +296,14 @@ describe("MemberActionButtons", () => {
     // burst of clicks and the next rung: the upgrade happens in the slot the
     // finger is already resting on. Deleting the cooldown — or shortening it to
     // zero — fails here by name.
+    // The window has to be long enough to be a guard at all: a "cooldown" of
+    // zero, or of one frame, is the same as none for a hand that double-clicks.
+    // Pinned first so shortening the constant fails HERE, with its own message,
+    // rather than somewhere downstream.
+    expect(
+      LADDER_ARM_MS,
+      "the cooldown must cover a platform double-click (~250-500ms)",
+    ).toBeGreaterThanOrEqual(250);
     vi.useFakeTimers();
     const onAcceleratedStop = vi.fn();
     const { getByTestId, rerender } = render(
