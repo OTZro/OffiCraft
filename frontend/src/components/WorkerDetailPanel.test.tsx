@@ -309,7 +309,16 @@ describe("WorkerDetailPanel — honest presence states (A案 P6 member vocabular
     // T-ed79: the stop rung is a MemberActionButtons cell now, so the id that
     // proves its absence changed with it. A stale `worker-detail-stop` here
     // would be a vacuously-true assertion about an id nothing renders any more.
-    expect(queryTestId(document.body, "member-action-stop")).toBeNull();
+    // A released worker is on no rung at all, so every id the one ladder cell
+    // can carry has to be absent — checking only 停止 would pass on a panel that
+    // rendered the kill button.
+    for (const id of [
+      "member-action-stop",
+      "member-action-accelerated-stop",
+      "member-action-force-stop",
+    ]) {
+      expect(queryTestId(document.body, id), id).toBeNull();
+    }
   });
 
   it("released vs merely OFFLINE are told apart, though both project the same grey dot", async () => {
@@ -709,32 +718,36 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
     await findByTestId("worker-detail-refocus-note");
   });
 
-  // 🔴 REWRITTEN TWICE FOR T-ed79. First for 「往正職靠：外包那顆改成優雅停止，
-  // 強制殺移到第三顆按鈕」 — 停止 asks the worker to work its 下線程序, so the
-  // worker stays alive in 停止中 and the row keeps offering what can still end
-  // the wait. Then for owner 2026-08-21 「不是一開始就顯示三個按鈕」「按了才出現」:
-  // a live worker nobody has asked to stop shows ONE rung, and the escalations
-  // are REVEALED — so this now walks the ladder instead of reading it off a
-  // fixed row.
-  it("停止 → the worker goes 停止中 and 加速停止 is REVEALED, 強制停止 still is not", async () => {
+  // 🔴 REWRITTEN THREE TIMES FOR T-ed79. First for 「往正職靠：外包那顆改成優雅
+  // 停止，強制殺移到第三顆按鈕」 — 停止 asks the worker to work its 下線程序, so
+  // the worker stays alive in 停止中 and the row keeps offering what can still
+  // end the wait. Then for owner 2026-08-21 「不是一開始就顯示三個按鈕」「按了才
+  // 出現」: the escalations are REVEALED rather than greyed out, so this walks
+  // the ladder instead of reading it off a fixed row. Then for owner 2026-08-22
+  // 「同一個按鈕 升級的概念 不是不同按鈕」: what the walk finds at each step is
+  // no longer "one MORE rung beside the last" but the SAME cell carrying the
+  // next action — so the step that used to add 加速停止 to a row containing 停止
+  // now REPLACES 停止 with it, and this test asserts that replacement.
+  it("停止 → the worker goes 停止中 and the ladder cell UPGRADES to 加速停止, not to a second button", async () => {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
       mkWorker({ id: "ow-1", taskId: "t-1", presence: "online" }),
     );
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    // Live: 更改 ＋ the ONE rung that applies, side by side (owner 2026-07-31
+    // Live: 更改 ＋ the ONE ladder cell, side by side (owner 2026-07-31
     // 「左右並排」), and the ladder is the SAME component the member panel
-    // renders, so the labels and the order are 正職's by construction.
+    // renders, so the label and the upgrade order are 正職's by construction.
     const change = await findByTestId("worker-detail-change");
     const stop = await findByTestId("member-action-stop");
     expect(stop.textContent).toBe(zh.lifecycle.action.stop);
-    // 「按了才出現」 — absent, not greyed out.
+    // The rungs above are absent, not greyed out — and after 2026-08-22 there
+    // is nowhere for them to be: the cell IS 停止 at this stage.
     expect(queryTestId(document.body, "member-action-accelerated-stop")).toBeNull();
     expect(queryTestId(document.body, "member-action-force-stop")).toBeNull();
     expect(stop.parentElement?.parentElement?.className).toContain(
       "mp-identity__buttons",
     );
-    // 更改 is written FIRST so the row reads 更改 ＋ 停止 → 加速停止 → 強制停止.
+    // 更改 is written FIRST so the row reads 更改 ＋ the ladder cell.
     expect(
       change.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -746,44 +759,54 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
       ).toBe(zh.office.presence.stopping),
     );
     // The escalation now exists — it is the only thing that can end a wait with
-    // no deadline — and it stays for the whole close-out. The rung ABOVE it
-    // still does not: a stop that has not been put on a clock is not a kill
-    // waiting to happen.
-    await findByTestId("member-action-accelerated-stop");
+    // no deadline — and it exists IN THE SLOT 停止 occupied, which is the
+    // 2026-08-22 shape. 停止 is therefore gone rather than left beside it
+    // (spent): the old premise, that the pressed rung stays put and the new one
+    // takes a fresh slot, no longer holds. The rung ABOVE is still absent: a
+    // stop that has not been put on a clock is not a kill waiting to happen.
+    const upgraded = await findByTestId("member-action-accelerated-stop");
+    expect(upgraded.textContent).toBe(zh.lifecycle.action["accelerated-stop"]);
+    expect(queryTestId(document.body, "member-action-stop")).toBeNull();
     expect(queryTestId(document.body, "member-action-force-stop")).toBeNull();
     expect(queryTestId(document.body, "worker-detail-wake")).toBeNull();
   });
 
   // 強制停止 is the rung that still kills, and it is the only one behind a
-  // confirm — the click alone must reach no endpoint. Reaching it at all now
-  // means walking the whole ladder, which is the point: 「強制停止應該是加速停止
-  // 按下的狀態才可以按」.
-  it("強制停止 appears only after 加速停止, ASKS FIRST, then kills and collapses the row to 喚醒", async () => {
+  // confirm — the click alone must reach no endpoint. Reaching it at all means
+  // walking the whole ladder, which is the point: 「強制停止應該是加速停止按下的
+  // 狀態才可以按」. Since 2026-08-22 the walk happens in ONE slot, so each step
+  // below also asserts that the rung below it is gone.
+  it("強制停止 is reached only by upgrading through 加速停止, ASKS FIRST, then kills and collapses the row to 喚醒", async () => {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
       mkWorker({ id: "ow-1", taskId: "t-1", presence: "online" }),
     );
     const force = vi.spyOn(api, "forceStopWorker");
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    // Rung 1 → rung 2. `waitFor` on the ENABLED state is not incidental: a rung
-    // that has just appeared spends LADDER_ARM_MS inert so a repeat click on the
-    // rung below cannot escalate for the owner (MemberActionButtons).
+    // Rung 1 → rung 2. `waitFor` on the ENABLED state is not incidental: a cell
+    // that has just UPGRADED spends LADDER_ARM_MS inert so a repeat click on the
+    // rung below cannot escalate for the owner (MemberActionButtons) — and after
+    // 2026-08-22 that cooldown is the only thing that can, because the upgrade
+    // lands under the finger that pressed the previous rung.
     fireEvent.click(await findByTestId("member-action-stop"));
     await waitFor(async () =>
       expect(
         (await findByTestId("member-action-accelerated-stop")).hasAttribute("disabled"),
       ).toBe(false),
     );
-    // Still no kill button — the wind-down is open but not on a clock.
+    // Still no kill button — the wind-down is open but not on a clock — and
+    // 停止 has been upgraded away rather than left beside it.
     expect(queryTestId(document.body, "member-action-force-stop")).toBeNull();
+    expect(queryTestId(document.body, "member-action-stop")).toBeNull();
 
-    // Rung 2 → rung 3.
+    // Rung 2 → rung 3, in the same slot again.
     fireEvent.click(await findByTestId("member-action-accelerated-stop"));
     await waitFor(async () =>
       expect(
         (await findByTestId("member-action-force-stop")).hasAttribute("disabled"),
       ).toBe(false),
     );
+    expect(queryTestId(document.body, "member-action-accelerated-stop")).toBeNull();
 
     fireEvent.click(await findByTestId("member-action-force-stop"));
     await findByTestId("worker-detail-force-stop-confirm");

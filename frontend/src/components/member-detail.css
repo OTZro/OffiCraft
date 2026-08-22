@@ -680,12 +680,15 @@
     flex-basis: 100%;
     align-items: stretch;
   }
-  /* One BAND per direct child, each spanning the card (owner 2026-08-21 turned
-   * the single 停止 into the three-rung ladder 停止 → 加速停止 → 強制停止, and
-   * four buttons with 4-character labels do not share a phone-width row: the
-   * ladder alone wants ~300px at its natural size and the card's inner width at
-   * 375 is 289). So: band 1 = 更改, band 2 = the ladder, its three rungs sharing
-   * the full card width on ONE line.
+  /* One BAND per direct child, each spanning the card. It arrived because owner
+   * 2026-08-21 turned the single 停止 into a three-rung row that could not share
+   * a phone-width line (the card's inner width at 375 is 289); owner 2026-08-22
+   * collapsed the ladder back to ONE upgrading button, so the cluster is at most
+   * 更改 ＋ 喚醒 ＋ that button and would now fit on one line at 375 too. The
+   * band shape is KEPT deliberately: a full-width tap target per action is the
+   * phone shape the owner asked for (不要在窄螢幕擠成一團), and nothing about the
+   * ruling asked for the narrow layout to change. So: band 1 = 更改, band 2 = the
+   * action group, its buttons sharing the full card width on ONE line.
    *
    * Before this, `flex: 1 1 0` split the card in half between 更改 and the
    * WHOLE ladder group, which then stacked 3-deep inside its half while `align-

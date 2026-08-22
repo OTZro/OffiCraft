@@ -11,8 +11,9 @@
  * Honesty (no dead affordances): every action handler is an OPTIONAL prop. A
  * button is interactive ONLY when its handler is supplied; otherwise it renders
  * disabled and carries no click behaviour. A rung that is not REACHABLE yet is a
- * different thing again — it is not rendered at all (owner 2026-08-21
- * 「按了才出現」).
+ * different thing again — it is not rendered at all, because since owner
+ * 2026-08-22 (「同一個按鈕 升級的概念 不是不同按鈕」) the ladder is ONE button
+ * that BECOMES the next rung; there is no second slot for an unreachable one.
  */
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
@@ -27,12 +28,13 @@ type ActionKey = "spawn" | "cancel" | "stop" | "accelerated-stop" | "force-stop"
  *
  * 🔴 OWNER 2026-08-21, and it REPLACES the fixed three-slot ladder this file
  * shipped hours earlier: 「加速停止應該是已經按下停止的狀態下才可以按，強制停止應該
- * 是加速停止按下的狀態才可以按，不是一開始就顯示三個按鈕」「按了才出現」. A rung
- * that is not reachable yet is NOT rendered disabled — it is not rendered.
+ * 是加速停止按下的狀態才可以按，不是一開始就顯示三個按鈕」「按了才出現」, as narrowed by
+ * owner 2026-08-22 to ONE upgrading button: the stage says WHICH rung that
+ * button currently IS, not how many rungs are on screen.
  *
- *  - `none`         — nothing is winding down. Only 停止 exists.
- *  - `soft`         — a soft wind-down is OPEN. 加速停止 appears.
- *  - `accelerated`  — that wind-down is on the clock. 強制停止 appears.
+ *  - `none`         — nothing is winding down. The button is 停止.
+ *  - `soft`         — a soft wind-down is OPEN. The button is 加速停止.
+ *  - `accelerated`  — that wind-down is on the clock. The button is 強制停止.
  */
 export type StopLadderStage = "none" | "soft" | "accelerated";
 
@@ -103,39 +105,46 @@ export function stopLadderStageOf(f: StopLadderFacts): StopLadderStage {
   return CLOCKED_OPS.has(f.refocusOp ?? "") ? "accelerated" : "soft";
 }
 
-/** The rungs that EXIST at each stage, in the owner's order. Growing to the
- * RIGHT is load-bearing, not cosmetic — see LADDER_ARM_MS. */
-const LADDER_BY_STAGE: Record<StopLadderStage, ActionKey[]> = {
-  none: ["stop"],
-  soft: ["stop", "accelerated-stop"],
-  accelerated: ["stop", "accelerated-stop", "force-stop"],
+/** THE RUNG THE ONE LADDER BUTTON IS AT, per stage.
+ *
+ * 🔴 OWNER 2026-08-22 (reply card rc-2afe8b557e9c, option [D]) — this REPLACES
+ * the revealed-side-by-side row: 「停止 → 加速停止 → 強制停止 UI 顯示怪怪的，他
+ * 應該體感上像是同一個按鈕 升級的概念 不是不同按鈕」. So the ladder is ONE
+ * button in ONE slot whose label, action and testid change as the actor climbs;
+ * the spent rung is no longer kept beside it.
+ *
+ * 🔴 WHAT THAT COSTS, so the next reader does not "restore" it by accident: the
+ * previous row's first guard was SLOT SEPARATION — the pressed rung stayed put,
+ * spent, so the newly revealed one took a fresh slot and no slot was ever
+ * recycled into a harsher action. One button IS that recycled slot, by
+ * construction. The owner was told that verbatim on the card, was offered a
+ * long-press top rung [C] and a confirm dialog [B], and chose [D] — the plain
+ * upgrade with no new guard. LADDER_ARM_MS below is therefore the ONLY thing
+ * standing between a burst of clicks and 強制停止; do not weaken it, and do not
+ * add a guard here that the owner declined. */
+const RUNG_BY_STAGE: Record<StopLadderStage, ActionKey> = {
+  none: "stop",
+  soft: "accelerated-stop",
+  accelerated: "force-stop",
 };
 
 /**
  * 🔴 THE DOUBLE-CLICK GUARD, and it is the whole reason this component owns a
  * timer instead of staying a pure function of its props.
  *
- * 「按了才出現」 means the escalation grows under the cursor that just pressed
- * the rung below it, and this ladder gets LESS reversible as it grows (強制停止
- * sends nothing and cuts the session dead). Nothing must be able to carry an
- * owner from 停止 to 強制停止 on a burst of clicks. Two things stop it:
- *
- *  1. THE PRESSED RUNG STAYS PUT. 停止 is never removed when the wind-down
- *     opens — it stays in slot 1, spent (disabled, with `alreadyStopping`), so
- *     the rung that appears takes a NEW slot to its right and no slot is ever
- *     recycled into a harsher action. This is the protection the fixed
- *     three-slot version was built around; it survives the ruling intact.
- *  2. A RUNG THAT JUST APPEARED IS INERT. Slot separation is only as good as
- *     the layout, and the layout reflows (`stopping` also gains the 喚醒 rescue,
- *     and at ≤720px the whole cluster re-wraps). So a newly revealed rung
- *     renders disabled for this window and arms itself after it — a click that
- *     was already travelling when the button materialised lands on nothing.
+ * The escalation upgrades under the cursor that just pressed the rung below it,
+ * and it gets LESS reversible as it climbs (強制停止 sends nothing and cuts the
+ * session dead). Since owner 2026-08-22 the upgrade happens IN PLACE, so this is
+ * the whole of the protection: A RUNG THAT JUST UPGRADED IS INERT. The button
+ * renders with its new label already — the upgrade is honest and visible — but
+ * disabled for this window, arming itself after it, so a click that was already
+ * travelling when the action changed lands on nothing.
  *
  * COST, stated plainly: an owner who deliberately climbs the ladder waits this
  * long at each step, and a presentational component now holds state. 350ms is
  * chosen to cover a double-click (the platform threshold is ~250–500ms) while
- * staying under the round trip that reveals the rung in the first place, so in
- * practice it is spent, not waited.
+ * staying under the round trip that upgrades the button in the first place, so
+ * in practice it is spent, not waited.
  */
 export const LADDER_ARM_MS = 350;
 
@@ -165,22 +174,23 @@ const PREFIX_SETS: Record<LifecycleStatus, ActionKey[]> = {
 };
 
 /** Which statuses carry the ladder at all. `offline` / `stopped` / `waking`
- * have no live session to wind down, so none of the three rungs belongs there —
- * `waking` keeps Cancel, which IS its stop. */
+ * have no live session to wind down, so the ladder button does not belong there
+ * at all — `waking` keeps Cancel, which IS its stop. */
 const LADDER_STATUSES = new Set<LifecycleStatus>(["online-awake", "stopping"]);
 
-/** The one rung that renders and is deliberately NOT pressable: 停止 once the
- * wind-down it opened is already running. It stays put (guard 1 above) and says
- * why — pressing it again only re-stamps an anchor nothing on screen reflects,
- * and 加速停止 is the way on. */
+/** The two ways the single ladder button renders and is deliberately NOT
+ * pressable, each of which says why rather than going silent:
+ * `alreadyStopping` — it still reads 停止 while a stop is visibly running;
+ * `justAppeared`    — it JUST upgraded, and is serving out LADDER_ARM_MS. */
 type LadderReasonKey = "alreadyStopping" | "justAppeared";
 
 // (Refocus was removed as a header action — see MemberDetailPanel's context cell.)
 
 interface MemberActionButtonsProps {
   status: LifecycleStatus;
-  /** How far up 停止 → 加速停止 → 強制停止 this actor already is. Both panels
-   * derive it from the SAME `stopLadderStageOf` over the SAME wire fields.
+  /** How far up 停止 → 加速停止 → 強制停止 this actor already is — i.e. WHICH
+   * rung the single ladder button currently is. Both panels derive it from the
+   * SAME `stopLadderStageOf` over the SAME wire fields.
    * Defaults to `none`: a caller that knows nothing about wind-downs (the
    * IdentityRealIdStory fixture) gets the un-escalated row, never a kill button.
    */
@@ -188,12 +198,12 @@ interface MemberActionButtonsProps {
   onSpawn?: () => void;
   onCancel?: () => void;
   onStop?: () => void;
-  /** 加速停止 — the MIDDLE rung: put the wind-down that is already open on the
-   * server's clock and TELL the member. Not a kill, so it needs no confirm; the
+  /** 加速停止 — what the one ladder button BECOMES at stage `soft`: put the
+   * wind-down that is already open on the server's clock and TELL the member. Not a kill, so it needs no confirm; the
    * member is still given the grace and can still finish early. */
   onAcceleratedStop?: () => void;
-  /** Force-stop (immediate kill) — the TOP rung. The parent should gate it
-   * behind a confirm. */
+  /** Force-stop (immediate kill) — what the one ladder button becomes at stage
+   * `accelerated`. The parent should gate it behind a confirm. */
   onForceStop?: () => void;
   /** Optional per-action hint shown as the button `title` when that action is
    * DISABLED (no handler) — e.g. "no online machine" on spawn. Honest: it only
@@ -220,10 +230,10 @@ export function MemberActionButtons({
   const { t } = useI18n();
 
   // The stage the row is allowed to ACT on. It starts wherever the row first
-  // mounted — opening a panel on an already-accelerated member arms everything
-  // immediately, because nothing appeared under anybody's finger — and then
-  // follows `stage` one LADDER_ARM_MS behind, which is the inert window a rung
-  // that just materialised spends before it will take a click.
+  // mounted — opening a panel on an already-accelerated member arms the button
+  // immediately, because nothing changed under anybody's finger — and then
+  // follows `stage` one LADDER_ARM_MS behind, which is the inert window the
+  // button spends after upgrading, before it will take a click.
   const [armedStage, setArmedStage] = useState<StopLadderStage>(stage);
   useEffect(() => {
     if (stage === armedStage) return;
@@ -231,13 +241,17 @@ export function MemberActionButtons({
     return () => clearTimeout(id);
   }, [stage, armedStage]);
 
-  const shown = LADDER_STATUSES.has(status) ? LADDER_BY_STAGE[stage] : [];
-  // Set membership, not an ordinal comparison, so a stage that goes DOWN
-  // (the wind-down was collected) leaves the smaller surviving row fully live
-  // instead of waiting out a window for buttons that were there all along.
-  const armed = new Set(
-    LADDER_STATUSES.has(status) ? LADDER_BY_STAGE[armedStage] : [],
-  );
+  // Exactly one ladder cell, or none where there is no live session to wind
+  // down. The rung is the stage's, so the SAME slot carries 停止 → 加速停止 →
+  // 強制停止 as the actor climbs.
+  const rung = LADDER_STATUSES.has(status) ? RUNG_BY_STAGE[stage] : undefined;
+  const shown = rung ? [rung] : [];
+  // The button is live only once the stage it is showing is the one it has
+  // ARMED. Any change of rung — up or down — restarts the window, because after
+  // the 2026-08-22 ruling every change swaps the action under a resting cursor.
+  const armedRung = LADDER_STATUSES.has(status)
+    ? RUNG_BY_STAGE[armedStage]
+    : undefined;
 
   const ladderReason: Partial<Record<ActionKey, LadderReasonKey>> = {};
   const handlers: Record<ActionKey, (() => void) | undefined> = {
@@ -247,17 +261,18 @@ export function MemberActionButtons({
     "accelerated-stop": onAcceleratedStop,
     "force-stop": onForceStop,
   };
-  // 停止 is spent once the stop it asked for is visibly running. It is NOT
-  // removed: its slot is what keeps 加速停止 from landing where the finger was.
-  if (status === "stopping") {
+  // 停止 is spent once the stop it asked for is visibly running. Normally the
+  // upgrade has already moved this cell on to 加速停止 by then; this covers the
+  // residual world where presence says `stopping` but the wind-down facts have
+  // not (yet) put the actor on a rung — pressing 停止 again only re-stamps an
+  // anchor nothing on screen reflects.
+  if (status === "stopping" && rung === "stop") {
     handlers.stop = undefined;
     ladderReason.stop = "alreadyStopping";
   }
-  for (const key of shown) {
-    if (!armed.has(key)) {
-      handlers[key] = undefined;
-      ladderReason[key] = "justAppeared";
-    }
+  if (rung && rung !== armedRung) {
+    handlers[rung] = undefined;
+    ladderReason[rung] = "justAppeared";
   }
 
   const keys = [...PREFIX_SETS[status], ...shown];
@@ -281,7 +296,11 @@ export function MemberActionButtons({
           <button
             key={key}
             type="button"
-            // Address actions by IDENTITY, not by position (review r1 SHOULD-3):
+            // Address actions by IDENTITY, not by position (review r1 SHOULD-3).
+        // The ladder cell's id CHANGES as it upgrades (member-action-stop →
+        // -accelerated-stop → -force-stop): the id names the action the button
+        // will perform, which is the only thing a test or a screen reader can
+        // safely act on.
             // PREFIX_SETS puts spawn FIRST only for offline/stopped — in
             // `waking` the first button is Cancel. A test that reaches for
             // ".member-actions button" therefore silently clicks the wrong

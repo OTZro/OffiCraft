@@ -15,20 +15,28 @@
 // `.member-actions` flex/gap participates exactly as it does in the panel; the
 // 更改 button is the panel's own markup, verbatim.
 //
-// 🔴 The row is NOT one shape, and since owner 2026-08-21 「按了才出現」 it is
-// not even a fixed COUNT: the ladder is REVEALED one rung at a time, so the
-// cluster grows from TWO buttons (更改 ＋ 停止, nothing winding down) to FIVE
-// (更改 + the 喚醒 wedge rescue + all three rungs, on an accelerated `stopping`
-// member — the panel keeps 更改 there because mappers folds presence "stopping"
-// onto status "online"). Both ends have to be measured: five is the widest the
-// card ever has to hold, and two is the shape 375px now spends most of its time
-// in. The story therefore takes the SAME (status, stage) pair the panels derive
-// from the wire, not a status alone.
+// 🔴 The row is NOT one shape. Owner 2026-08-21 made the ladder REVEALED, and
+// owner 2026-08-22 made it ONE BUTTON THAT UPGRADES (「同一個按鈕 升級的概念 不是
+// 不同按鈕」), so the cluster is 更改 ＋ at most the 喚醒 wedge rescue ＋ exactly
+// one ladder cell: TWO buttons on a live actor, THREE on a `stopping` one (the
+// panel keeps 更改 there because mappers folds presence "stopping" onto status
+// "online"). Both counts have to be measured — three is the widest the card ever
+// has to hold now, two is what 375px spends most of its time in — and so does
+// every rung the one cell can carry, because 強制停止 is the longest label and a
+// cell that fits 停止 is not evidence that it fits that.
+//
+// 🔴 BOTH PANELS, from ONE story. 正職 and 外包 render the same
+// `.mp-identity__actions > .mp-identity__buttons` shell around the same
+// MemberActionButtons; only the panel-owned 更改 button's testid differs. The
+// `panel` prop reproduces that difference rather than asserting it away, so a
+// geometry regression that only shows up on the outsource panel cannot hide
+// behind the member panel's measurements.
 import { I18nProvider } from "../../src/i18n";
 import {
   MemberActionButtons,
   type StopLadderStage,
 } from "../../src/components/MemberActionButtons";
+import { CHANGE_TESTID } from "./identityPanelIds";
 import "../../src/styles/theme.css";
 import "../../src/components/office.css";
 import "../../src/components/member-detail.css";
@@ -36,9 +44,11 @@ import "../../src/components/member-detail.css";
 export function IdentityActionsRowStory({
   status = "online-awake",
   stage = "none",
+  panel = "member",
 }: {
   status?: "online-awake" | "stopping";
   stage?: StopLadderStage;
+  panel?: "member" | "worker";
 }) {
   return (
     <I18nProvider>
@@ -59,11 +69,11 @@ export function IdentityActionsRowStory({
               <button
                 type="button"
                 className="btn btn--accent-ghost"
-                data-testid="mp-change"
+                data-testid={CHANGE_TESTID[panel]}
               >
                 更改
               </button>
-              {/* Every rung that EXISTS at this stage gets a handler, so none is
+              {/* The ladder cell gets a handler for every rung, so it is never
                   disabled for a reason the panel would not have — a disabled
                   button still lays out, but its title tooltip is the only thing
                   that differs and the measurements must not depend on it.
