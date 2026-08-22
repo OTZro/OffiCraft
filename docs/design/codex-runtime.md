@@ -211,6 +211,35 @@ reads (`last_op_reason` — `no_machine_selected`, and `machine_unavailable` for
 outsource worker whose named machine cannot take it), and reconcile retries after
 telemetry or placement changes.
 
+### An UNSET runtime is resolved at placement, from that machine
+
+A member row may hold NO runtime at all. That is a durable third state, distinct from
+"the owner picked claude" (T-b3d0): `seedOutOfBox` writes Mira with no runtime, and the
+two creation paths that mint a member — `hire_member` (`POST /api/members`) and
+`POST /api/roles`, the cockpit's 招攬新成員 — leave it empty when the caller names none
+(T-ae8b). `resolveEmptyRuntimeForPlacement` (`server/ocserverd/reconcile.go`) fills it at
+the first START dispatch, from the target machine's reported `runtimes` map, and persists
+the choice on the roster row: claude if ready, else codex if ready, else nothing — an
+unready box is refused by the placement gate rather than guessed at. A member whose
+runtime is already set is never touched; the owner's choice always wins. No capability
+map reported yet leaves it unset, which is today's legacy behaviour
+(`NormalizeRuntime("") == claude`).
+
+🔴 **The consequence, which is deliberate and owner-known: hiring is not a pure
+function of the request.** The same `hire_member` call yields a Claude member on one
+machine and a Codex member on another, because the answer is read from the machine at
+placement time, not from the request. This is the point — a codex-only box must be able
+to hire without first installing Claude Code — but it means the runtime a new member ends
+up on **cannot be predicted from the request alone**. A caller who needs a specific
+runtime must name it explicitly; naming it also pins it permanently.
+
+Nothing about this is visible on the wire. Every DTO runs `NormalizeRuntime`, so an unset
+row is reported as `claude` in API responses and in the cockpit, exactly as before; only
+the persisted value changed. One trap follows from that pairing: the cockpit's 喚醒／更改
+dialog seeds its runtime cell from the normalized value (`member.runtime || "claude"`,
+`MemberDetailPanel.tsx`) and submits the cell on confirm, so confirming that dialog on an
+unset member writes a concrete `claude` and permanently disables the resolution above.
+
 ## Launch policy
 
 The selected adapter receives the shared launch knobs:
