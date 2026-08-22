@@ -1,9 +1,13 @@
 package main
 
-// api_bootdocs.go — the two boot-context document kinds the owner may now
-// edit (T-791e):
-// 系統互動 (system_interaction/global) and 啟動程序 (boot_sequence/claude,
-// boot_sequence/codex).
+// api_bootdocs.go — the boot-context documents the owner may edit (T-791e,
+// widened to the lifecycle event procedures by T-3201).
+//
+// 🔴 THE MECHANISM IS SPECIFIED IN docs/design/boot-documents.md — fold, cap,
+// the read-only head, the variable rules, what each write face refuses and why
+// reset carries no cap. That document deliberately does NOT list which
+// documents exist; bootDocRegistry below is the only list, and list_boot_docs
+// is how a caller asks.
 //
 // WHY THIS EXISTS (owner, 2026-08-13, verbatim): 「我們可以把系統互動改成可以修改
 // 嗎 跟銀月的 insight 一樣是有 history / restore to default」「不用每次都改 code」
