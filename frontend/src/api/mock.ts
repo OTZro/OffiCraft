@@ -874,6 +874,11 @@ function mockReplyToChatOf(replyTo: string | null | undefined): ChatReplyQuote |
     // "" like the server on every read that resolves no display names — which
     // is every read the browser makes.
     fromName: "",
+    // The QUOTED message's own recipient — the mock joins it off the same log
+    // row the server joins it off, so an offline preview draws the same
+    // 「寄件者 → 收件者」 a live one does, cross-conversation quotes included.
+    to: quoted.to,
+    toName: "",
     content:
       runes.length > MOCK_REPLY_QUOTE_MAX_CHARS
         ? runes.slice(0, MOCK_REPLY_QUOTE_MAX_CHARS).join("") + "\u2026"

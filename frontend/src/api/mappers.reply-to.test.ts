@@ -57,6 +57,13 @@ describe("toChatMessage · reply_to_chat", () => {
           id: "c-1",
           from: "m1",
           from_name: "小佩",
+          // 🔴 A RECIPIENT THAT IS NOT THIS MESSAGE'S PEER. BASE is owner→m1;
+          // the quoted line is m1→m2, i.e. out of ANOTHER conversation, which
+          // is the shape the wire exists to carry (owner ruling 2026-08-21).
+          // Using "owner" here would make a mapper that read the WRONG field —
+          // the enclosing message's `to` — pass.
+          to: "m2",
+          to_name: "阿凱",
           content: "被引用的那一行",
         },
       } as unknown as Parameters<typeof toChatMessage>[0]).replyToChat,
@@ -64,6 +71,8 @@ describe("toChatMessage · reply_to_chat", () => {
       id: "c-1",
       from: "m1",
       fromName: "小佩",
+      to: "m2",
+      toName: "阿凱",
       content: "被引用的那一行",
     });
   });
@@ -84,10 +93,11 @@ describe("toChatMessage · reply_to_chat", () => {
     const m = toChatMessage({
       ...BASE,
       reply_to: "c-photo",
-      reply_to_chat: { id: "c-photo", from: "m1" },
+      reply_to_chat: { id: "c-photo", from: "m1", to: "owner" },
     } as unknown as Parameters<typeof toChatMessage>[0]);
     expect(m.replyToChat).not.toBeNull();
     expect(m.replyToChat!.content).toBe("");
     expect(m.replyToChat!.fromName).toBe("");
+    expect(m.replyToChat!.toName).toBe("");
   });
 });

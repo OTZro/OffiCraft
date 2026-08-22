@@ -101,6 +101,19 @@ func TestReplyToChat_CrossesTheConversationBoundary(t *testing.T) {
 		t.Fatalf("the quote must name the original and its sender, got %+v",
 			*got.ReplyToChat)
 	}
+	// 🔴 THE ADDRESSEE IS THE QUOTED MESSAGE'S OWN, AND THIS IS THE ONLY CELL
+	// WHERE THE WRONG ANSWER IS DISTINGUISHABLE. The reply travels mira→owner
+	// while the quoted line travelled m-1→m-2, so a projection that reached for
+	// the ENCLOSING message's recipient — the plausible mistake, and the one a
+	// same-conversation fixture cannot catch — would say "owner" here.
+	//
+	// MUTANT ①: drop To from chatReplyQuoteDTO → this is what says so.
+	// MUTANT ②: project the replying message's recipient instead of the quoted
+	// one's → red here, green in every other test in this file.
+	if got.ReplyToChat.To != "m-2" {
+		t.Fatalf("the quote must name the ORIGINAL's addressee (m-2), not the "+
+			"recipient of the reply carrying it, got to=%q", got.ReplyToChat.To)
+	}
 	if got.ReplyToChat.Content != "我覺得那個 leak 在 warden" {
 		t.Fatalf("the quote must carry what was said, got %q", got.ReplyToChat.Content)
 	}
@@ -236,6 +249,13 @@ func TestReplyToChat_IsBuiltInTheWakeSnapshot(t *testing.T) {
 		t.Fatalf("on the read that resolves names, the quote must carry the "+
 			"sender's name beside the id, got from_name=%q from=%q",
 			answer.ReplyToChat.FromName, answer.ReplyToChat.From)
+	}
+	// The addressee half of the same convention: both ids always, both names on
+	// this door only. c-asked went m-peer→m-exec, so the pair is 小佩 → 阿執.
+	if answer.ReplyToChat.To != "m-exec" || answer.ReplyToChat.ToName != "阿執" {
+		t.Fatalf("the quote must carry the addressee's id AND, on this door, the "+
+			"name beside it, got to=%q to_name=%q",
+			answer.ReplyToChat.To, answer.ReplyToChat.ToName)
 	}
 	// A message that answers nothing claims no quote — without this half a
 	// projection that stamped every row would pass.

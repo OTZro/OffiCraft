@@ -43,3 +43,9 @@ owner unread 只由共享的 lib/ownerUnread.ts 判定：chat.to 或 chat_read.r
 所有 mount 都經 loadServerSettings，不可各自直接呼叫 settings API。共享層負責 single-flight、快取與 generation；同 tab 的 patch echo、登入變更與明確 refresh 要 invalidate。不要加 TTL，也不要假定跨 tab 即時同步。
 
 舊 GET 不得覆寫已採用的 patch。onboarding: null 是正常終態；running 在 set-password 前要先持久化，輪詢直到 failed/success，讀取錯誤也要繼續輪詢。
+
+## owner 的顯示名字
+
+`t.user` 是**主題**給「人類」的預設稱謂（預設「CEO（你）」、仙俠主題「市長（你）」），**不是 owner 設的名字**。owner 真正的暱稱在 server（`/api/settings` 的 `owner_name`），由 `useOwnerName` 讀。凡是把 owner 當**參與者**畫出來的面（聊天區 `nameOf` 的 owner 分支、文件歷史的修改者列），一律讀 `useOwnerDisplayName(t.user)`，不可直接印 `t.user` —— 兩種畫法並存時，同一個人會在同一個畫面上有兩個名字（2026-08-22 owner 實機回報）。
+
+`useOwnerDisplayName` 走 `OwnerNameProvider`（App 提供，值來自那唯一一次 `useOwnerName`），**不是各自再 mount 一次 hook**：`<ChatArea>` 在畫一條對話時不准碰 api client（`ChatArea.quote-no-fetch.test.tsx` 斷言呼叫數為 0），再掛一個 mount-fetch 會直接把它弄紅。沒有 provider 時退回 `fallback`，那也正是「還沒載入」與「載入失敗」的答案 —— 失敗絕不可以偽裝成一個名字。

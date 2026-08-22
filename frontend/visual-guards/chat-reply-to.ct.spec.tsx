@@ -10,7 +10,13 @@
 //     不受這一則控制；一旦允許折行，一句長訊息就會把版面撐開，或把輸入框往下推。
 //  ③ 引用列必須留在氣泡那一欄裡，不得溢出訊息串的可視寬度（窄視窗尤其）。
 //
-// 兩個寬度都量：手機寬與桌面寬在這個元件上是不同的失敗面。
+// 四個寬度都量：手機寬、小平板寬與桌面寬在這個元件上是不同的失敗面。
+// 🔴 375 與 720 是 2026-08-22 加的。那一天引用列從「寄件者」變成「寄件者 →
+// 收件者」——同一條列多了一個名字加一個箭頭，而它本來就是這個元件最會溢出的
+// 那一列。只量 390／1280 量到的是兩個端點：窄到跳轉標籤整個消失，與寬到什麼
+// 都塞得下。375 是實機最窄的那一格；720 落在 520 這個 container 斷點的另一
+// 側（pane 672px：標籤畫得出來，卻沒有 1280 的餘裕），正是變長之後最先撞牆
+// 的那一段。
 import { test, expect } from "@playwright/experimental-ct-react";
 import { ChatReplyToStory } from "./stories/ChatReplyToStory";
 
@@ -47,7 +53,7 @@ function contrast(fg: string, bg: string): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-for (const width of [390, 1280]) {
+for (const width of [375, 390, 720, 1280]) {
   test(`width ${width}: the reply entry is hover-revealed but never re-flows the row`, async ({
     mount,
     page,
@@ -111,8 +117,8 @@ for (const width of [390, 1280]) {
     // and when it is absent it is GONE, not shortened: the label's only rule in
     // office.css is `display: none` inside `@container chat-pane
     // (max-width: 520px)`, and this harness hands the pane 342px at viewport 390
-    // and 1232px at 1280 — so this loop sees the arrow alone at 390 and the whole
-    // label at 1280. Nothing in the stylesheet can TRIM it: the button is
+    // and 1232px at 1280 — so this loop sees the arrow alone at 375/390 and the
+    // whole label at 720/1280. Nothing in the stylesheet can TRIM it: the button is
     // `flex: none` with `white-space: nowrap` and the label carries no
     // `text-overflow` of its own. What may never go is the arrow: what survives
     // must still read as "go somewhere".
@@ -174,7 +180,7 @@ for (const width of [390, 1280]) {
       (e) => e.scrollWidth > e.clientWidth + 0.5,
     );
     expect(whoCut).toBe(false);
-    expect((await who.textContent())?.trim()).toBe("Mira");
+    expect((await who.textContent())?.trim()).toBe("Mira → 韓立");
 
     // …and the jump's label is whole here. Nothing in the stylesheet can trim
     // it — the button is `flex: none` with `white-space: nowrap` and the label
@@ -217,7 +223,7 @@ for (const width of [390, 1280]) {
       (e) => e.scrollWidth > e.clientWidth + 0.5,
     );
     expect(whoCut).toBe(false);
-    expect((await who.textContent())?.trim()).toBe("ow-8808ccf51794");
+    expect((await who.textContent())?.trim()).toBe("ow-8808ccf51794 → 韓立");
   });
 
   test(`width ${width}: the corner buttons take their ink from the bubble they sit on`, async ({

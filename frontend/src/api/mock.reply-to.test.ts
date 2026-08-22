@@ -103,11 +103,15 @@ describe("mock 回覆這則 — server parity", () => {
       replyTo: quoted.id,
     });
 
-    // ① the POST echo
+    // ① the POST echo. Whole-object equality, so a field the mock forgets to
+    // join (the recipient half arrived after the sender half did) is a failure
+    // here rather than a silently thinner quote in offline preview.
     expect(reply.replyToChat).toEqual({
       id: quoted.id,
       from: "owner",
       fromName: "",
+      to: "mira",
+      toName: "",
       content: "被引用的那句",
     });
     // ② the listing, and ③ the read-only peek — both doors, both unconditional,

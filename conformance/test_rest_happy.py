@@ -2709,6 +2709,7 @@ def test_chat_reply_to_is_the_servers_link_not_the_callers(hctx: HCtx) -> None:
     assert quote is not None, f"every read must carry the quote: {served.text}"
     assert quote["id"] == quoted_id
     assert quote["from"] == "owner"
+    assert quote["to"] == hctx.agent.member_id
     assert quote["content"] == "reply-to-target"
 
     # A link OUT of this conversation, over the real wire: ACCEPTED, and the
@@ -2738,6 +2739,19 @@ def test_chat_reply_to_is_the_servers_link_not_the_callers(hctx: HCtx) -> None:
         f"a cross-conversation reply must still carry its quote: {sideways.text}"
     )
     assert sideways_quote["content"] == "another-thread"
+    # THE ADDRESSEE IS THE QUOTED MESSAGE'S OWN. This reply travels agent→owner
+    # while the line it quotes travelled owner→third, so a projection that read
+    # the ENCLOSING message's recipient would answer "owner" — the one wrong
+    # answer that every same-conversation row above cannot tell apart.
+    assert sideways_quote["from"] == "owner"
+    assert sideways_quote["to"] == third, (
+        "the quote must name the ORIGINAL's addressee, not the recipient of "
+        f"the reply carrying it: {sideways.text}"
+    )
+    # Names are the OTHER half of the convention and are NOT resolved on this
+    # door — only the wake snapshot fills them.
+    assert sideways_quote.get("from_name", "") == ""
+    assert sideways_quote.get("to_name", "") == ""
 
     # An id that names nothing is a 400 on the FIELD, not a 404 on the route.
     orphan = hctx.client.post(

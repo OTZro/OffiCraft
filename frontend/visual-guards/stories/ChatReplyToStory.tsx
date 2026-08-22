@@ -33,13 +33,14 @@
  * width fixtures. Do not read a product label off this file, and do not swap
  * them for the current strings: narrower fixtures loosen the geometric guards. */
 export function ChatReplyToStory({
-  bannerWho = "正在回覆 Mira",
+  bannerWho = "正在回覆 Mira → 韓立",
   jumpLabel = "跳到原訊息",
 }: {
   /** The banner's WHO half. A prop for the same reason `jumpLabel` is one: its
    * WIDTH is the thing under test, and display names are free text. The default
-   * is four characters — which is exactly why the long-name case needed its own
-   * mount rather than trusting this row. */
+   * is the production shape 「正在回覆 寄件者 → 收件者」 — still short, which is
+   * exactly why the long-name case needs its own mount rather than trusting
+   * this row. */
   bannerWho?: string;
   jumpLabel?: string;
 } = {}) {
@@ -56,6 +57,13 @@ export function ChatReplyToStory({
   // It is NOT the only row that matters: a short name is the everyday case and
   // it broke in the opposite direction, so row 3 below pins that half.
   const unresolvedSender = "Eva Rhapsody Inbox (ow-8808ccf51794)";
+  // 🔴 THE QUOTE ROW DRAWS 「寄件者 → 收件者」 (T-4e95 fix, 2026-08-22), so the
+  // `who` fixtures below carry BOTH halves — that is the string production puts
+  // in that span, and a story still holding the sender alone would be measuring
+  // a row narrower than the one that ships. The addressee is the QUOTED
+  // message's own; it is a third party here on purpose, because a quote may come
+  // out of a conversation neither end of this thread is in.
+  const quotedRecipient = "韓立";
   const longQuote =
     "這是一段很長的原文，長到足以在任何視窗寬度下超出引用列能容納的寬度，用來確認它會被裁成一行而不是把版面撐開或折行";
   // A SEPARATE, much longer quote for the short-name row. The row below is the
@@ -158,7 +166,9 @@ export function ChatReplyToStory({
                     >
                       <polyline points="9 17 4 12 9 7" />
                     </svg>
-                    <span className="chat__msg-quote__who">{unresolvedSender}</span>
+                    <span className="chat__msg-quote__who">
+                      {`${unresolvedSender} → ${quotedRecipient}`}
+                    </span>
                     <span className="chat__msg-quote__body">{longQuote}</span>
                     <button
                       type="button"
@@ -230,7 +240,7 @@ export function ChatReplyToStory({
                       <polyline points="9 17 4 12 9 7" />
                     </svg>
                     <span className="chat__msg-quote__who" data-testid="quote-who-short">
-                      Mira
+                      {`Mira → ${quotedRecipient}`}
                     </span>
                     <span className="chat__msg-quote__body" data-testid="quote-body-short">
                       {veryLongQuote}
@@ -307,7 +317,7 @@ export function ChatReplyToStory({
                       <polyline points="9 17 4 12 9 7" />
                     </svg>
                     <span className="chat__msg-quote__who" data-testid="quote-who-tight">
-                      {rawIdSender}
+                      {`${rawIdSender} → ${quotedRecipient}`}
                     </span>
                     <span className="chat__msg-quote__body" data-testid="quote-body-tight">
                       好
@@ -395,7 +405,7 @@ export function ChatReplyToStory({
                       <polyline points="9 17 4 12 9 7" />
                     </svg>
                     <span className="chat__msg-quote__who" data-testid="quote-who-incoming">
-                      CEO
+                      {`CEO → ${quotedRecipient}`}
                     </span>
                     <span className="chat__msg-quote__body" data-testid="quote-body-incoming">
                       好

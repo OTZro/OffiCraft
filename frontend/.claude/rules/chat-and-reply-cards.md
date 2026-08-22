@@ -56,8 +56,16 @@ hash route #office/chat/<id>/msg/<msgId> 只做一次定位與 highlight；若�
 
 **引用內容由 server 隨每次讀取現組，前端只讀不找。** 每則 `reply_to` 非空的
 訊息，server 會在**每一個**讀取出口（listing、history page、`?ids=`、POST 回
-應、wake snapshot）附上 `reply_to_chat = {id, from, from_name, content}`。前端
+應、wake snapshot）附上
+`reply_to_chat = {id, from, from_name, to, to_name, content}`。前端
 畫引用列就是讀 `m.replyToChat`，**沒有查表、沒有 fallback、沒有補撈**。
+
+**引用列畫的是「寄件者 → 收件者」，而那個收件者是被引訊息自己的 `to`。**
+不是這條線的對方 —— 引用可以跨對話（2026-08-21 裁定），兩者剛好在那個情況下不
+一樣，而那正是這個欄位存在的理由。`nameOf` 本來就會退到原始 id，所以兩邊永遠有
+字可印：**沒有空白態、沒有「未知」佔位字**。`from_name` 與 `to_name` 同一組規
+則：只有 wake snapshot 那條讀法會填，其餘一律 `""`，要指認人一律用 id。
+composer 上方的橫幅走同一個形狀（它從已載入視窗解析，是第二條到同一句話的路）。
 
 **這一段取代了原本的「只帶 id，前端自己撈」設計，理由要記住：** 舊設計裡撈得到
 ／撈不到／還沒撈到是三個狀態，而它們在畫面上長得一模一樣，所以出錯時沒有人看得

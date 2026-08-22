@@ -15,6 +15,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, within } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
+import { OwnerNameProvider } from "../hooks/useOwnerName";
 import { zh } from "../i18n/locales/zh";
 import { DocumentHistoryEntry } from "./DocumentHistoryEntry";
 import { __resetMock, mockApi } from "../api/mock";
@@ -45,14 +46,21 @@ function roster(): Member[] {
 
 /** Mount the entry and open its list — the history is behind the button now,
  * so every actor assertion goes through the click that fetches it. */
-async function openList() {
+async function openList(ownerName?: string) {
+  const entry = (
+    <DocumentHistoryEntry
+      kind="lessons"
+      docKey="r-engineer::review-pr"
+      title={s.historyLessonsTitle}
+    />
+  );
   const utils = render(
     <I18nProvider>
-      <DocumentHistoryEntry
-        kind="lessons"
-        docKey="r-engineer::review-pr"
-        title={s.historyLessonsTitle}
-      />
+      {ownerName === undefined ? (
+        entry
+      ) : (
+        <OwnerNameProvider value={ownerName}>{entry}</OwnerNameProvider>
+      )}
     </I18nProvider>
   );
   fireEvent.click(utils.getByTestId("doc-history-entry-lessons"));
@@ -103,7 +111,29 @@ describe("DocumentHistoryEntry · 修改者", () => {
     expect(row.textContent).not.toContain(s.historyActorTail);
   });
 
-  it("calls the OWNER by the cockpit's own label, not by his wire id", async () => {
+  it("calls the OWNER by the NAME HE SET when he has set one", async () => {
+    // 🔴 `t.user` IS THE THEME'S DEFAULT WORD FOR THE HUMAN, NOT HIS NAME —
+    // 「CEO（你）」 as shipped, 「市長（你）」 under 仙俠 — while the nickname he
+    // actually set lives behind /api/settings. Printing the default here while
+    // his own profile pill reads 「韓立（你）」 puts one person under two names
+    // on one screen (owner report, 2026-08-22; the chat thread had the same
+    // defect and is fixed in the same change).
+    const utils = await openList("韓立");
+    // Anti-vacuity: the default and the nickname must actually differ.
+    expect(zh.user).not.toBe("韓立");
+
+    const row = utils.getByTestId("doc-history-item-3");
+    expect(row.textContent).toContain("韓立");
+    expect(row.textContent).not.toContain(zh.user);
+
+    // …and one click deeper is not a second implementation of the rule.
+    fireEvent.click(utils.getByTestId("doc-history-open-3"));
+    expect(utils.getByTestId("doc-history-modal").textContent).toContain("韓立");
+  });
+
+  it("falls back to the cockpit's own label when he has set no name, and never to his wire id", async () => {
+    // No provider — which is also where a settings read that FAILED lands, on
+    // purpose: a failure may never masquerade as a name.
     const utils = await openList();
     const row = utils.getByTestId("doc-history-item-3");
 

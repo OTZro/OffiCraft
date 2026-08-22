@@ -17,6 +17,7 @@ import { getChatDraft, saveChatDraft } from "../lib/chatDraftStore";
 import { api } from "../api";
 import { useChat } from "../hooks/useChat";
 import { useWorkerCodenames } from "../hooks/useWorkerCodenames";
+import { useOwnerDisplayName } from "../hooks/useOwnerName";
 import { formatDayLabel, splitByDay } from "../lib/dateFormat";
 import {
   ATTACH_ACCEPT,
@@ -282,17 +283,35 @@ export function ChatArea({
   }, [messages, workers, member.id]);
   const codenames = useWorkerCodenames(unknownOwIds);
 
+  // The owner's own display name, taken from the ONE place the cockpit already
+  // resolved it (App's useOwnerName, handed down by OwnerNameProvider). Read
+  // through context rather than by mounting the hook again: this component must
+  // not fetch while it paints — ChatArea.quote-no-fetch.test.tsx asserts the api
+  // client is touched zero times to render a thread.
+  const ownerDisplayName = useOwnerDisplayName(t.user);
   // Resolve a participant id → display name: prefer a roster match, else the raw
   // id (never fabricate). The window's own `member` is always resolvable even if
   // it is not in the passed roster.
   const nameOf = (id: string): string => {
     if (id === member.id) return member.name;
-    // 🔴 THE OWNER HAS A NAME TOO. T-4e95 is the first display path that feeds
-    // the owner's OWN id into nameOf — replying to your own message names the
-    // sender in the composer banner and in the quote row — and without this it
-    // fell through to the raw id and printed 「正在回覆 owner」 at a reader whose
-    // own topbar says 「CEO（你）」.
-    if (id === OWNER_ID) return t.user;
+    // 🔴 THE OWNER HAS A NAME TOO, AND IT IS THE ONE HE SET. T-4e95 is the first
+    // display path that feeds the owner's OWN id into nameOf — replying to your
+    // own message names the sender in the composer banner and in the quote row —
+    // and without this branch it fell through to the raw id and printed
+    // 「正在回覆 owner」.
+    //
+    // 🔴 `t.user` IS THE THEME'S DEFAULT WORD FOR THE HUMAN, NOT HIS NAME —
+    // 「CEO（你）」 as shipped, 「市長（你）」 under the 仙俠 theme — and the
+    // nickname he actually set lives server-side behind /api/settings
+    // (hooks/useOwnerName). Printing the default here while his own profile pill
+    // reads 「韓立（你）」 renders one person under two names on one screen; the
+    // owner reported exactly that from the running cockpit. It is a regression
+    // of this ticket, not old debt: this branch is what T-4e95 added.
+    //
+    // `ownerDisplayName` resolves to the stored nickname when there is one and
+    // to `t.user` otherwise — INCLUDING when the settings read failed, because a
+    // failure must never masquerade as "no name set" (useOwnerName's own rule).
+    if (id === OWNER_ID) return ownerDisplayName;
     // Server-authored messages (T-ba04 reassign handover, sender="system") are
     // not a roster member — render the synthetic sender as the localized 「系統」
     // label instead of the raw "system" id.
@@ -308,6 +327,12 @@ export function ChatArea({
     if (codename !== undefined) return msg.outsourceLabel(codename);
     return id;
   };
+  // 「寄件者 → 收件者」 — the ONE spelling of a message's direction in this
+  // component. The message rows have written it this way for inter-agent
+  // traffic since before T-4e95; the quote row and the composer banner now use
+  // the SAME join, so a reader never meets two ways of saying who-to-whom.
+  const directionLabel = (from: string, to: string): string =>
+    `${nameOf(from)} → ${nameOf(to)}`;
   // Is the owner ACTUALLY looking (window focused + tab visible)? Read side
   // effects (mark-read below) are gated on this: a backgrounded window must
   // never consume unread state (the roster badge has to survive until the
@@ -1123,9 +1148,7 @@ export function ChatArea({
     // (the recipient is implicit — it's this thread's owner side). Names resolve
     // through the roster (`nameOf`), falling back to the raw id — never blank.
     const senderLabel =
-      m.to !== OWNER_ID
-        ? `${nameOf(m.from)} → ${nameOf(m.to)}`
-        : nameOf(m.from);
+      m.to !== OWNER_ID ? directionLabel(m.from, m.to) : nameOf(m.from);
     // Per-message read state (LINE-style): every own message the peer's real
     // last-read watermark covers shows its own "已讀". Honest — driven only by a
     // recorded watermark, never fabricated.
@@ -1146,7 +1169,19 @@ export function ChatArea({
     // up and nothing that can still be pending.
     //
     const quoted = m.replyToChat ?? null;
-    const quoteWho = quoted ? nameOf(quoted.from) : "";
+    // 🔴 WHO SAID IT **AND WHO THEY SAID IT TO**. `from` alone reads as though
+    // the quoted line had been said in this thread, and since 2026-08-21 that is
+    // exactly the case it gets wrong: the owner may quote a line two OTHER
+    // members exchanged in order to step into it, and the quote row then named a
+    // sender while silently implying the wrong listener.
+    //
+    // The recipient is the QUOTED MESSAGE's own (`quoted.to`, server-projected
+    // on this very read) — NEVER this window's peer, which is the plausible
+    // wrong answer and is wrong precisely when the quote crosses conversations.
+    //
+    // There is no third rendering when a name does not resolve: `nameOf` already
+    // falls back to the raw id, so both halves always have characters to print.
+    const quoteWho = quoted ? directionLabel(quoted.from, quoted.to) : "";
     // 🔴 TWO OUTCOMES, NO THIRD. Either the server sent the snapshot or the
     // original is gone — there is no "not yet", because nothing is in flight.
     // The gone sentence is FIXED: not retried, not refreshed, and not revisited
@@ -1857,8 +1892,14 @@ export function ChatArea({
                   * cases. */}
                 <span className="chat__reply-banner__text">
                   <span className="chat__reply-banner__who">
+                    {/* The same 「寄件者 → 收件者」 the quote row draws, off
+                      * the LOADED message this banner resolves (see above) —
+                      * so aiming at a line from another conversation says whose
+                      * line it was, here as well as on the sent row. */}
                     {replyQuote
-                      ? t.chat.replyingTo(nameOf(replyQuote.from))
+                      ? t.chat.replyingTo(
+                          directionLabel(replyQuote.from, replyQuote.to),
+                        )
                       : t.chat.replyingToEarlier}
                   </span>
                   <span className="chat__reply-banner__body">

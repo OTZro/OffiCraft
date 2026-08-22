@@ -1591,6 +1591,7 @@ func resumeChatMessageChars(d chatMessageDTO) int {
 	// which fields happened to exist first.
 	if d.ReplyToChat != nil {
 		n += utf8.RuneCountInString(d.ReplyToChat.FromName) +
+			utf8.RuneCountInString(d.ReplyToChat.ToName) +
 			utf8.RuneCountInString(d.ReplyToChat.Content)
 	}
 	if d.Card != nil {

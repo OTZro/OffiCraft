@@ -65,7 +65,14 @@ beforeEach(() => {
       replyTo: "c-1",
       // The quote as the SERVER attaches it (T-4e95, 2026-08-21) — this row
       // reads `reply_to_chat`, not the thread it happens to be sitting in.
-      replyToChat: { id: "c-1", from: "m1", fromName: "", content: "第一個問題" },
+      replyToChat: {
+        id: "c-1",
+        from: "m1",
+        fromName: "",
+        to: "owner",
+        toName: "",
+        content: "第一個問題",
+      },
     }),
   ];
 });

@@ -39,6 +39,7 @@ import {
 import { useDocumentSeed } from "../hooks/useDocumentSeed";
 import { useMembers } from "../hooks/useMembers";
 import { useServerSettings } from "../hooks/useServerSettings";
+import { useOwnerDisplayName } from "../hooks/useOwnerName";
 import { OWNER_ACTOR_ID, actorDisplayName } from "../lib/actorLabel";
 import { capForKind, contentSizes, docCapBlockedFields } from "../api/docCap";
 import type { DocCaps } from "../api/docCap";
@@ -163,11 +164,17 @@ export function DocumentHistoryEntry({
   const listRef = useRef<HTMLDivElement>(null);
   useEscapeLayer(() => setOpen(false), listRef, open && reading === null);
 
+  // 🔴 owner 設過的暱稱，不是主題的預設稱謂。`t.user` 是主題給「人類」的預設
+  // 字（預設「CEO（你）」、仙俠主題「市長（你）」），而他真正設的名字在
+  // /api/settings（hooks/useOwnerName）。兩處各印一套，同一個人在同一個畫面上
+  // 就有兩個名字 —— 聊天區那一格是同一個毛病，一起修。
+  // 載入失敗與「沒設過」一樣落回 t.user，絕不編造名字（useOwnerName 的規則）。
+  const ownerDisplayName = useOwnerDisplayName(t.user);
   const actorLine = (actorId: string) =>
     // 座艙自己寫的版本掛的是 owner token 的 sub，名冊裡永遠查不到 —— 沒有這一支
     // 分岔，owner 在自己的修改上看到的只有 "owner" 四個字母 (裁定 2026-07-31)。
     actorId === OWNER_ACTOR_ID
-      ? t.user
+      ? ownerDisplayName
       : msg.docHistoryActor(actorDisplayName(actorId, members), actorId);
 
   const nowSecs = Date.now() / 1000;

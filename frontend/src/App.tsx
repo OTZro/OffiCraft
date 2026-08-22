@@ -25,7 +25,7 @@ import { OnboardingBanner } from "./components/OnboardingBanner";
 import { InlineEdit } from "./components/InlineEdit";
 import { PushNotifications } from "./components/PushNotifications";
 import { useOrgName } from "./hooks/useOrgName";
-import { useOwnerName } from "./hooks/useOwnerName";
+import { OwnerNameProvider, useOwnerName } from "./hooks/useOwnerName";
 import { useReplyCardCount } from "./hooks/useReplyCardCount";
 import { useChatUnread } from "./hooks/useChatUnread";
 import { useTaskCount } from "./hooks/useTaskCount";
@@ -108,6 +108,11 @@ export default function App({ onLogout }: { onLogout?: () => void } = {}) {
   }, [profileOpen]);
 
   return (
+    // The owner's nickname is published to the WHOLE tree, not just the pill:
+    // the chat thread and document history render him as a participant and must
+    // say the same name the pill does (T-4e95 — he set 「韓立」 and the thread
+    // was still printing the theme's default word for the human).
+    <OwnerNameProvider value={userName}>
     <div className="app">
       <header className="topbar">
         <div className="topbar__brand">
@@ -291,5 +296,6 @@ export default function App({ onLogout }: { onLogout?: () => void } = {}) {
         )}
       </main>
     </div>
+    </OwnerNameProvider>
   );
 }
