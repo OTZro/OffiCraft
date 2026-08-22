@@ -677,31 +677,23 @@ const resumeTasksN = 5
 // ListReplyCards full-table scan (id → card); it is passed IN rather than
 // re-queried here, so answered_card_steps costs this path no extra query. A nil
 // map is legal and simply yields no answered_card_steps rows.
-//
-// The THIRD return is the near-cap step-note rows (T-6bd2). It rides this
-// function for the same reason the answered-card pointer does: the step rows
-// are ALREADY loaded here to compute the current node and detail_chars, so a
-// separate collector would re-run ListTaskSteps once per open task on every
-// wake to re-read bytes this loop is already holding. Only steps close to the
-// ceiling produce a row; see docCapacityNear.
-func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]resumeTaskDTO, int, []docCapacityRow, error) {
+func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]resumeTaskDTO, int, error) {
 	out := []resumeTaskDTO{}
-	stepNotes := []docCapacityRow{}
 	if actor == "" {
-		return out, 0, stepNotes, nil
+		return out, 0, nil
 	}
 	tasks, err := s.dal.ListOpenTasksByExecutor(actor, resumeTasksN)
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, 0, err
 	}
 	total, err := s.dal.CountOpenTasksByExecutor(actor)
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, 0, err
 	}
 	for _, t := range tasks {
 		steps, err := s.dal.ListTaskSteps(t.ID)
 		if err != nil {
-			return nil, 0, nil, err
+			return nil, 0, err
 		}
 		currentID, currentName := "", ""
 		detailChars := 0
@@ -728,14 +720,6 @@ func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]
 				currentID, currentName = st.ID, st.Name
 			}
 			detailChars += len([]rune(st.Name)) + len([]rune(st.DoD))
-			// A TERMINAL step's note is finished writing: warning about the room
-			// left in a note nobody will add to again is the noise property 1 of
-			// doc_capacity.go forbids.
-			if !StepIsTerminal(st.Status) {
-				if row := stepNoteCapacityRow(TaskNo(t.ID), st.Name, st.Note); row != nil {
-					stepNotes = append(stepNotes, *row)
-				}
-			}
 		}
 		done, stepTotal := TaskProgress(steps)
 		out = append(out, resumeTaskDTO{
@@ -756,7 +740,7 @@ func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]
 			AnsweredCardSteps: answered,
 		})
 	}
-	return out, total, stepNotes, nil
+	return out, total, nil
 }
 
 // ── C.1 the read face ────────────────────────────────────────────────────────

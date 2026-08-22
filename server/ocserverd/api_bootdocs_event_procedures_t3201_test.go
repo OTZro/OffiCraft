@@ -297,19 +297,13 @@ func TestFoldBootDocDTO_ReadOnlyKindServesItsSeed(t *testing.T) {
 	}
 }
 
-func TestDocCapacityBootSpecs_CoversEveryEventProcedure(t *testing.T) {
-	s := newEventProcServer(t)
-	got := map[string]bool{}
-	for _, spec := range s.docCapacityBootSpecs("nobody") {
-		got[spec.Kind] = true
-	}
-	for _, kind := range eventProcKinds() {
-		if !got[kind] {
-			t.Errorf("kind %q is missing from the capacity report — its reader learns of a "+
-				"capacity problem only when a write is refused", kind)
-		}
-	}
-}
+// The capacity report this file used to pin these documents into is GONE — the
+// whole 「哪些文件快滿了」 notice was removed in the same ticket (owner
+// rc-5d06304ca54b: every capped document already reports size and cap on its own
+// read face, so the notice was a second way to learn something the reader was
+// already holding). The test that required every event procedure to appear in it
+// went with it rather than being weakened: keeping an assertion whose subject no
+// longer exists is how a suite starts describing a build nobody ships.
 
 func TestDocumentHistoryKeepFor_EditableEventProceduresKeepTen(t *testing.T) {
 	for _, kind := range eventProcKinds() {
