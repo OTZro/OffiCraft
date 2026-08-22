@@ -660,3 +660,47 @@ func materializeBinary(dir, name string, data []byte) (string, error) {
 	}
 	return dst, nil
 }
+
+// The six event-procedure documents T-3201 adds. Same shape as the offboard
+// singleton above — one document per event, key "global" — because what an
+// agent should do when a task closes does not depend on which runtime it is.
+//
+// 🔴 THE SEEDS ARE TODAY'S PROGRAM TEXT, MOVED WITHOUT A WORD CHANGED. Every
+// sentence in these six files is currently a Go string literal (sse_bands.go's
+// offboardOpener/offboardNotice and decideTaskCloseNudge, api_tasks.go's
+// reassign notices, api_tasks_handoff.go's dependency-released notice); the
+// interpolation points are the ONLY thing that changed shape, becoming the
+// {name} variables this kind declares. Splitting each one into a read-only head
+// and an owner-editable body is the NEXT change — keeping it out of this one is
+// what lets the diff prove no wording moved.
+// bootDocSingletonKey is the document key every non-boot_sequence boot document
+// uses. Named rather than repeated so a caller addressing "the one document of
+// this kind" says so, instead of spelling a magic "global" that reads like the
+// 全域脈絡 document it is not.
+const bootDocSingletonKey = "global"
+
+const (
+	acceleratedStopSeedMD  = "accelerated_stop.md"
+	acceleratedStopDocKey  = "global"
+	docKindAcceleratedStop = "accelerated_stop"
+
+	taskCloseoutSeedMD  = "task_closeout.md"
+	taskCloseoutDocKey  = "global"
+	docKindTaskCloseout = "task_closeout"
+
+	taskReassignPredecessorSeedMD  = "task_reassign_predecessor.md"
+	taskReassignPredecessorDocKey  = "global"
+	docKindTaskReassignPredecessor = "task_reassign_predecessor"
+
+	taskTakeoverWithPredecessorSeedMD  = "task_takeover_with_predecessor.md"
+	taskTakeoverWithPredecessorDocKey  = "global"
+	docKindTaskTakeoverWithPredecessor = "task_takeover_with_predecessor"
+
+	taskTakeoverFreshSeedMD  = "task_takeover_fresh.md"
+	taskTakeoverFreshDocKey  = "global"
+	docKindTaskTakeoverFresh = "task_takeover_fresh"
+
+	taskUnblockedSeedMD  = "task_unblocked.md"
+	taskUnblockedDocKey  = "global"
+	docKindTaskUnblocked = "task_unblocked"
+)

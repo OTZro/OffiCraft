@@ -130,6 +130,7 @@ import {
   BOOT_DOC_HISTORY_KEPT,
   contentSizes,
   docCapBlocked,
+  wholeDocWipeBlocked,
 } from "./docCap";
 import {
   CHAT_BUDGET_CHARS_DEFAULT,
@@ -4919,6 +4920,17 @@ export const mockApi: Api = {
     // stream out of a typo'd runtime key would be the mock inventing a
     // document the server has no route for.
     const before = foldBootDoc(kind, key);
+    // The wipe guard the server has carried since T-2d99. An empty boot
+    // document is not a small document, it is an agent with no instructions,
+    // and the cockpit sends no allow_shrink, so there is no legal way to reach
+    // it from here at all.
+    if (wholeDocWipeBlocked(before.text, text)) {
+      throw mockApiError(
+        `http 400 for POST /api/${kind.replace(/_/g, "-")}/${key}`,
+        400,
+        "this would replace the existing document with an empty one"
+      );
+    }
     // The server's floor, mirrored: over cap AND not getting shorter is
     // refused. The cockpit blocks first (it has the number on screen), so
     // reaching this is either a stale page or a non-cockpit caller.

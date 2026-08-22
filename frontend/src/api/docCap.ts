@@ -124,6 +124,22 @@ export function runeLength(s: string): number {
 }
 
 /**
+ * Mirrors WholeDocWipeBlocked: emptying a document that had content is refused.
+ * A whole-doc replace legitimately shrinks a lot, so only the WIPE is guarded;
+ * the server bypasses it on an explicit allow_shrink=true, which no cockpit
+ * gesture sends.
+ *
+ * 🔴 IT EXISTS BECAUSE THE MOCK ADAPTER DID NOT HAVE IT. The real server has
+ * refused this since T-2d99; `mock.saveBootDoc` mirrored the cap and not the
+ * wipe, so demo mode would happily blank a boot document that the server would
+ * have refused — the two faces disagreeing about the one gesture nobody reaches
+ * by accident.
+ */
+export function wholeDocWipeBlocked(before: string, after: string): boolean {
+  return before.trim() !== "" && after.trim() === "";
+}
+
+/**
  * Mirrors DocCapBlocked: replacing `before` with `after` is refused when the
  * proposal is over the cap AND is not getting shorter. The three branches,
  * boundaries included:

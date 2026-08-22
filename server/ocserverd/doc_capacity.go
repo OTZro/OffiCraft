@@ -349,6 +349,18 @@ func (s *apiServer) docCapacityFor(actor string, stepNotes []docCapacityRow) []d
 // number about a document this reader never reads.
 func (s *apiServer) docCapacityBootSpecs(actor string) []bootDocSpec {
 	specs := []bootDocSpec{s.systemInteractionSpec(), s.offboardSpec()}
+	// The T-3201 event procedures, read-only ones included: an agent that is
+	// about to be handed one of these still benefits from knowing its size,
+	// and leaving a document off this list means the first news of a capacity
+	// problem is a refused write.
+	for _, kind := range []string{
+		docKindAcceleratedStop, docKindTaskCloseout, docKindTaskReassignPredecessor,
+		docKindTaskTakeoverWithPredecessor, docKindTaskTakeoverFresh, docKindTaskUnblocked,
+	} {
+		if spec, ok := s.bootDocSpecFor(kind, bootDocSingletonKey); ok {
+			specs = append(specs, spec)
+		}
+	}
 	runtime := ""
 	if m, err := s.dal.GetMember(actor); err == nil && m != nil {
 		runtime = m.Runtime

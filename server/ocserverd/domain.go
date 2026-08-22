@@ -1060,6 +1060,18 @@ const (
 	systemInteractionCapCharsDefault = 60000
 	bootSequenceCapCharsDefault      = 15000
 	offboardCapCharsDefault          = 15000
+	// taskEventCapCharsDefault caps each of the four task-event procedures
+	// (T-3201). Same number as the offboard sequence and for the same reason:
+	// these are short procedures an agent reads mid-flight, not accumulating
+	// memory, and the ceiling exists to stop one growing into a handbook.
+	//
+	// 🔴 A CONSTANT, NOT YET A `doc.cap_chars.*` SETTING. Every cap above is
+	// adjustable at runtime through SettingsDTO, and making these six the same
+	// would add fields to a wire contract — spec/openapi.json, the generated
+	// MCP catalog and the cockpit's settings surface all move with it. That is
+	// an interface change this ticket owes the owner a look at before it
+	// happens, so the number is code until he has had it.
+	taskEventCapCharsDefault = 15000
 )
 
 // min*CapChars / maxDocCapChars bound the adjustable caps. Each floor is THAT

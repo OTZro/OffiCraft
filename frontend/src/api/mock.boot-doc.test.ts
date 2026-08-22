@@ -149,6 +149,24 @@ describe("mockApi · boot-context blocks", () => {
     // to reproduce here.)
   });
 
+  it("refuses a save that empties a document, and retains no version for it", async () => {
+    // The real server has refused this since T-2d99; the mock did not, so demo
+    // mode would blank a boot document the server would have kept. An empty
+    // boot sequence is not a small document, it is an agent with no
+    // instructions.
+    const before = await mockApi.getBootDoc("boot_sequence", "claude");
+    for (const wipe of ["", "   ", "\n\t "]) {
+      await expect(
+        mockApi.saveBootDoc("boot_sequence", "claude", wipe)
+      ).rejects.toMatchObject({ status: 400 });
+    }
+    expect(await mockApi.getBootDoc("boot_sequence", "claude")).toMatchObject({
+      text: before.text,
+      isDefault: true,
+    });
+    expect(await documentRevisions(mockApi, "boot_sequence", "claude")).toHaveLength(0);
+  });
+
   it("retains no version when a save changes nothing", async () => {
     // Ten slots stop meaning much if a no-op save spends one. Owner ruling, and
     // it matters precisely on the surface where someone pastes, looks, and

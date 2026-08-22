@@ -30,6 +30,7 @@ package main
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -47,29 +48,162 @@ type bootDocSpec struct {
 	// rejected — naming the wrong document sends the reader to edit the wrong
 	// one (the defect insightWriteAuthz exists to avoid on the authz face).
 	DocName string
+	// Vars are the {name} variables this document may use. nil opts the kind
+	// out of variable validation entirely (the three documents that shipped
+	// before T-3201 do — see doc_vars.go); a non-nil empty slice means the
+	// document is validated and allows none.
+	Vars []string
+	// ReadOnly marks a document the owner may READ but never edit. The owner's
+	// ruling, verbatim: 「以前 global context 是固定內容我們也是會顯示 只是不給改」
+	// — so these still have a seed, still fold, still reach the cockpit, and
+	// only the write faces refuse.
+	ReadOnly bool
+}
+
+// bootDocReg is ONE row per editable boot-context document kind: everything
+// bootDocSpecFor needs to answer for it, in one place.
+//
+// 🔴 A TABLE, NOT A SWITCH, AND THE REASON IS MEASURED. Adding the offboard
+// document (bfe95d1f) meant editing eight hand-maintained switches and lists
+// scattered over six files, and four of them have NO gate at all — a missing
+// arm compiles, serves 200, and shows the wrong text or none. Kinds resolved
+// from one slice cannot be in it for the specFor face and absent from the
+// history face, which is the class of defect that produced this comment.
+type bootDocReg struct {
+	Kind string
+	// Keys are the document keys this kind serves, in the order a refusal
+	// should name them. Every kind but boot_sequence has exactly one.
+	Keys []string
+	// SeedFor answers the seed filename for one of Keys. A func rather than a
+	// field because boot_sequence's two keys have two different seeds, and the
+	// two contradict each other in step 3 — serving the wrong one is a silent
+	// failure to boot (see bootSequenceSeedName).
+	SeedFor  func(key string) string
+	DocName  func(key string) string
+	Cap      func(s *apiServer) int
+	Vars     []string
+	ReadOnly bool
+}
+
+// taskEventDocVars name the same facts today's Go string literals interpolate,
+// spelled the way the seed files spell them. They are declared per kind rather
+// than shared so a name that only makes sense for one event cannot silently be
+// used by another.
+var bootDocRegistry = []bootDocReg{{
+	Kind:    docKindSystemInteraction,
+	Keys:    []string{systemInteractionDocKey},
+	SeedFor: func(string) string { return systemInteractionSeedMD },
+	DocName: func(string) string { return "system interaction block" },
+	Cap:     func(s *apiServer) int { return s.systemInteractionCap() },
+}, {
+	Kind: docKindBootSequence,
+	Keys: []string{bootSequenceKeyClaude, bootSequenceKeyCodex},
+	// bootSequenceSeedName, not a literal map: it is documented as the one
+	// place in the tree that decides which runtime gets which sequence, and it
+	// holds that title only as long as nobody writes a second one beside it.
+	SeedFor: bootSequenceSeedName,
+	DocName: func(key string) string { return "boot sequence (" + key + ")" },
+	Cap:     func(s *apiServer) int { return s.bootSequenceCap() },
+}, {
+	// 下線程序 (T-c9c0). A SINGLETON: being collected is the same procedure for
+	// every agent and every runtime, so there is deliberately no runtime axis
+	// here to get wrong.
+	Kind:    docKindOffboard,
+	Keys:    []string{offboardDocKey},
+	SeedFor: func(string) string { return offboardSeedMD },
+	DocName: func(string) string { return "offboard sequence" },
+	Cap:     func(s *apiServer) int { return s.offboardCap() },
+}, {
+	// 加速停止 (T-3201). Shares the offboard cap on purpose, the same way the
+	// two boot sequences share one: it is the same procedure under a shorter
+	// clock, and a second ceiling would be a second number to keep in step
+	// without a second thing to say about it.
+	Kind:    docKindAcceleratedStop,
+	Keys:    []string{acceleratedStopDocKey},
+	SeedFor: func(string) string { return acceleratedStopSeedMD },
+	DocName: func(string) string { return "accelerated stop sequence" },
+	Cap:     func(s *apiServer) int { return s.offboardCap() },
+	Vars:    []string{"where", "closer", "deadline"},
+}, {
+	Kind:    docKindTaskCloseout,
+	Keys:    []string{taskCloseoutDocKey},
+	SeedFor: func(string) string { return taskCloseoutSeedMD },
+	DocName: func(string) string { return "task close-out procedure" },
+	Cap:     func(s *apiServer) int { return s.taskEventCap() },
+	Vars:    []string{"task_no", "status", "type_key", "manual_label"},
+}, {
+	Kind:    docKindTaskReassignPredecessor,
+	Keys:    []string{taskReassignPredecessorDocKey},
+	SeedFor: func(string) string { return taskReassignPredecessorSeedMD },
+	DocName: func(string) string { return "task reassign procedure (predecessor)" },
+	Cap:     func(s *apiServer) int { return s.taskEventCap() },
+	Vars:    []string{"task_no", "new_executor_label"},
+}, {
+	Kind:    docKindTaskTakeoverWithPredecessor,
+	Keys:    []string{taskTakeoverWithPredecessorDocKey},
+	SeedFor: func(string) string { return taskTakeoverWithPredecessorSeedMD },
+	DocName: func(string) string { return "task takeover procedure (with predecessor)" },
+	Cap:     func(s *apiServer) int { return s.taskEventCap() },
+	Vars:    []string{"task_no", "title", "predecessor_label", "old_executor_id", "note"},
+}, {
+	// 🔴 READ-ONLY. Owner's ruling, verbatim: 「以前 global context 是固定內容
+	// 我們也是會顯示 只是不給改」. It is a document rather than a string literal
+	// so the owner can SEE what an agent is told; the write faces refuse.
+	Kind:     docKindTaskTakeoverFresh,
+	Keys:     []string{taskTakeoverFreshDocKey},
+	SeedFor:  func(string) string { return taskTakeoverFreshSeedMD },
+	DocName:  func(string) string { return "task takeover procedure (new assignment)" },
+	Cap:      func(s *apiServer) int { return s.taskEventCap() },
+	Vars:     []string{"task_no", "title", "note"},
+	ReadOnly: true,
+}, {
+	Kind:     docKindTaskUnblocked,
+	Keys:     []string{taskUnblockedDocKey},
+	SeedFor:  func(string) string { return taskUnblockedSeedMD },
+	DocName:  func(string) string { return "dependency-released notice" },
+	Cap:      func(s *apiServer) int { return s.taskEventCap() },
+	Vars:     []string{"blocked_task_no", "blocker_task_no", "blocker_title", "blocker_status"},
+	ReadOnly: true,
+}}
+
+// bootDocRegFor finds the row for a kind.
+func bootDocRegFor(kind string) (bootDocReg, bool) {
+	for _, reg := range bootDocRegistry {
+		if reg.Kind == kind {
+			return reg, true
+		}
+	}
+	return bootDocReg{}, false
+}
+
+func (reg bootDocReg) serves(key string) bool {
+	for _, k := range reg.Keys {
+		if k == key {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *apiServer) systemInteractionSpec() bootDocSpec {
-	return bootDocSpec{
-		Kind:     docKindSystemInteraction,
-		Key:      systemInteractionDocKey,
-		SeedFile: systemInteractionSeedMD,
-		Cap:      s.systemInteractionCap(),
-		DocName:  "system interaction block",
-	}
+	return s.mustBootDocSpec(docKindSystemInteraction, systemInteractionDocKey)
 }
 
-// offboardSpec resolves the 下線程序 document (T-c9c0). Singleton shape, key
-// `global`, exactly like systemInteractionSpec: there is no runtime axis here on
-// purpose — being collected is the same procedure for every agent.
 func (s *apiServer) offboardSpec() bootDocSpec {
-	return bootDocSpec{
-		Kind:     docKindOffboard,
-		Key:      offboardDocKey,
-		SeedFile: offboardSeedMD,
-		Cap:      s.offboardCap(),
-		DocName:  "offboard sequence",
+	return s.mustBootDocSpec(docKindOffboard, offboardDocKey)
+}
+
+// mustBootDocSpec resolves a pair this binary is built with. It panics rather
+// than returning ok=false because every caller passes a constant pair from the
+// registry itself: a false here would mean the binary shipped with a kind whose
+// own accessor cannot address it, and degrading that to an empty spec would
+// hand a caller a document with no seed, no cap and no name.
+func (s *apiServer) mustBootDocSpec(kind, key string) bootDocSpec {
+	spec, ok := s.bootDocSpecFor(kind, key)
+	if !ok {
+		panic("boot document " + kind + "/" + key + " is not in bootDocRegistry")
 	}
+	return spec
 }
 
 // bootSequenceSpecFor resolves the boot-sequence document for a runtime key as
@@ -78,80 +212,58 @@ func (s *apiServer) offboardSpec() bootDocSpec {
 // because falling back is precisely how a codex reader ends up holding the
 // sequence that keeps it from booting.
 func (s *apiServer) bootSequenceSpecFor(runtimeKey string) (bootDocSpec, bool) {
-	seed, ok := bootSequenceSeedForKey(runtimeKey)
-	if !ok {
-		return bootDocSpec{}, false
-	}
-	return bootDocSpec{
-		Kind:     docKindBootSequence,
-		Key:      runtimeKey,
-		SeedFile: seed,
-		Cap:      s.bootSequenceCap(),
-		DocName:  "boot sequence (" + runtimeKey + ")",
-	}, true
+	return s.bootDocSpecFor(docKindBootSequence, runtimeKey)
 }
 
 // bootDocSpecFor resolves ANY (kind, key) pair naming an editable boot-context
 // block — the form the document-history faces address documents in. ok=false
-// means the pair names none of the three.
+// means the pair names none of them.
 func (s *apiServer) bootDocSpecFor(kind, key string) (bootDocSpec, bool) {
-	switch kind {
-	case docKindSystemInteraction:
-		if key != systemInteractionDocKey {
-			return bootDocSpec{}, false
-		}
-		return s.systemInteractionSpec(), true
-	case docKindBootSequence:
-		return s.bootSequenceSpecFor(key)
-	case docKindOffboard:
-		if key != offboardDocKey {
-			return bootDocSpec{}, false
-		}
-		return s.offboardSpec(), true
+	reg, ok := bootDocRegFor(kind)
+	if !ok || !reg.serves(key) {
+		return bootDocSpec{}, false
 	}
-	return bootDocSpec{}, false
+	return bootDocSpec{
+		Kind:     reg.Kind,
+		Key:      key,
+		SeedFile: reg.SeedFor(key),
+		Cap:      reg.Cap(s),
+		DocName:  reg.DocName(key),
+		Vars:     reg.Vars,
+		ReadOnly: reg.ReadOnly,
+	}, true
 }
 
 // bootDocHistoryKeyKnown is bootDocSpecFor's server-free half: does this
-// (kind, key) name one of the three documents at all? The document-history
-// faces ask this BEFORE they list or restore, so an address this server does
-// not serve is refused rather than answered with an empty version list — "you
-// used the wrong key" and "this document has no versions yet" must not look the
-// same.
+// (kind, key) name one of these documents at all? The document-history faces
+// ask this BEFORE they list or restore, so an address this server does not
+// serve is refused rather than answered with an empty version list — "you used
+// the wrong key" and "this document has no versions yet" must not look the same.
 func bootDocHistoryKeyKnown(kind, key string) bool {
-	switch kind {
-	case docKindSystemInteraction:
-		return key == systemInteractionDocKey
-	case docKindBootSequence:
-		_, ok := bootSequenceSeedForKey(key)
-		return ok
-	case docKindOffboard:
-		return key == offboardDocKey
-	}
-	return false
+	reg, ok := bootDocRegFor(kind)
+	return ok && reg.serves(key)
 }
 
 // unknownBootDocKeyMsg names the keys that DO exist for this kind, for the same
 // reason writeUnknownBootSequence does: a caller holding a typo needs to be able
 // to tell it from a document that is simply empty.
 //
-// 🔴 SWITCH, NOT AN IF/ELSE: it used to answer the system-interaction key for
-// every kind that was not boot_sequence, so a fourth kind would silently have
-// been described by the wrong key. A kind nobody taught it now says so instead
-// of naming a key that does not belong to it.
+// 🔴 IT READS THE REGISTRY, NOT A SECOND LIST. It used to be a switch that
+// answered the system-interaction key for every kind that was not
+// boot_sequence, so a fourth kind was described by a key that did not belong to
+// it; the switch was then taught each kind by hand, which is the same defect
+// one edit later. A kind nobody registered says so instead of naming a key.
 func unknownBootDocKeyMsg(kind, key string) string {
-	var want string
-	switch kind {
-	case docKindSystemInteraction:
-		want = "'" + systemInteractionDocKey + "'"
-	case docKindBootSequence:
-		want = "'" + bootSequenceKeyClaude + "' or '" + bootSequenceKeyCodex + "'"
-	case docKindOffboard:
-		want = "'" + offboardDocKey + "'"
-	default:
+	reg, ok := bootDocRegFor(kind)
+	if !ok {
 		return "document history kind '" + kind + "' names no editable document on this server"
 	}
-	return "document history key '" + key + "' does not name a " + kind + " document — the key is " + want
+	quoted := make([]string, 0, len(reg.Keys))
+	for _, k := range reg.Keys {
+		quoted = append(quoted, "'"+k+"'")
+	}
+	return "document history key '" + key + "' does not name a " + kind +
+		" document — the key is " + strings.Join(quoted, " or ")
 }
 
 // foldBootDocDTO folds one block: overlay ⊕ the embedded seed.
@@ -296,6 +408,10 @@ func (s *apiServer) writeBootDoc(r *http.Request, spec bootDocSpec, current *boo
 
 // replaceBootDoc is the whole-document replace shared by both blocks.
 func (s *apiServer) replaceBootDoc(w http.ResponseWriter, r *http.Request, spec bootDocSpec, text string, allowShrink bool) {
+	if spec.ReadOnly {
+		writeError(w, http.StatusMethodNotAllowed, bootDocReadOnlyRefusal(spec))
+		return
+	}
 	current, err := s.foldBootDocDTO(spec)
 	if err != nil {
 		internalError(w, err)
@@ -316,6 +432,14 @@ func (s *apiServer) replaceBootDoc(w http.ResponseWriter, r *http.Request, spec 
 	// only way to learn any of them.
 	if DocCapBlocked(spec.Cap, current.Text, text) {
 		writeError(w, http.StatusBadRequest, docCapRefusal(spec.Cap, spec.DocName, current.Text, text))
+		return
+	}
+	// Variable validation (T-3201). Last of the three because it is the only
+	// one that judges the CONTENT rather than the size: a caller whose write is
+	// both oversized and misspelt learns about the size first, which is the one
+	// it can act on without re-reading the document.
+	if bad := DocVarsUndeclared(text, spec.Vars); len(bad) > 0 {
+		writeError(w, http.StatusBadRequest, docVarWriteRefusal(spec.DocName, bad, spec.Vars))
 		return
 	}
 	if _, err := s.writeBootDoc(r, spec, current,
@@ -344,6 +468,18 @@ func (s *apiServer) replaceBootDoc(w http.ResponseWriter, r *http.Request, spec 
 // TO, and the same 404 is what GET .../seed answers, so a surface offering the
 // reset and a surface offering the comparison agree.
 func (s *apiServer) resetBootDoc(w http.ResponseWriter, r *http.Request, spec bootDocSpec) {
+	// 🔴 A READ-ONLY DOCUMENT IS REFUSED HERE TOO, and 405 rather than a
+	// success is the deliberate choice. "Restore to default" on a document that
+	// can never leave the default is not a harmless no-op: this path is a
+	// WRITE — it tombstones an overlay row, retains a history revision and fans
+	// a global_context frame — so answering 200 would put a revision and a
+	// refresh on every surface for a document nothing changed, and would tell
+	// a caller that a reset face exists for it. There is nothing to restore TO
+	// that is not already what is being read.
+	if spec.ReadOnly {
+		writeError(w, http.StatusMethodNotAllowed, bootDocReadOnlyRefusal(spec))
+		return
+	}
 	seedMD, hasSeed, err := s.root.seedBlockMD(spec.SeedFile)
 	if err != nil {
 		internalError(w, err)
@@ -468,4 +604,15 @@ func writeUnknownBootSequence(w http.ResponseWriter, runtimeKey string) {
 	writeError(w, http.StatusNotFound,
 		"no boot sequence for runtime '"+runtimeKey+"' — the runtimes with their own boot sequence are '"+
 			bootSequenceKeyClaude+"' and '"+bootSequenceKeyCodex+"'")
+}
+
+// bootDocReadOnlyRefusal is the ONE sentence every write face answers for a
+// read-only document, the way docCapRefusal and docWipeRefusal are the one text
+// behind their gates. It says what the document IS rather than that the caller
+// lacks a permission: no principal can edit it, so pointing at authz would send
+// an owner looking for a role to grant.
+func bootDocReadOnlyRefusal(spec bootDocSpec) string {
+	return "the " + spec.DocName + " is a read-only document — it is shown so you can " +
+		"see what agents are told, but no caller may edit it and there is no version " +
+		"of it other than the shipped one; nothing was written"
 }
