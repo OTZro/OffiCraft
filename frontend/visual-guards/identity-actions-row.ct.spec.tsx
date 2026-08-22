@@ -45,8 +45,8 @@
 // `column` leaves every vitest assertion green. This spec measures real boxes.
 //
 // Mutants (all MEASURED, see docs/design/worker-panel-parity-mutants.md):
-//   R0  put the ladder back to rungs standing side by side (LADDER_BY_STAGE
-//       returning an array) → red at EVERY width, on BOTH panels, on
+//   R0  put the ladder back to rungs standing side by side (RUNG_BY_STAGE
+//       returning an array again) → red at EVERY width, on BOTH panels, on
 //       `the ladder is ONE button, whatever rung it is on`.
 //   R1  `.mp-identity__buttons { flex-direction: column }` → DESKTOP red
 //       (`one row, whole cluster`). Narrow stays green on purpose: below 720px each
