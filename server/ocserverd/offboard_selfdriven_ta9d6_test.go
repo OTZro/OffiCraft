@@ -748,11 +748,11 @@ func TestPutMemberCarriesForcedStopAtForwardOnly(t *testing.T) {
 // The offboard document now names ONE close-out verb, report_stopped, on both
 // arms — owner, verbatim (c-5b3d8f192a0b): 「我預期是 report_stopped，因為是
 // server 控制他上下線，他只是要回報執行狀態。restart_self 真正的用途應該是我在
-// 對話中跟他說你做完這件事情自己重啟」. Today's code still interpolates
-// offboardCloserFor, which says restart_self whenever a member is still wanted
-// online — so the arm the document changes is exactly this one: an agent that
-// asked for its own restart, was given the wind-down, and then ends the
-// sequence with report_stopped instead.
+// 對話中跟他說你做完這件事情自己重啟」. The code that interpolated
+// offboardCloserFor — which said restart_self whenever a member was still
+// wanted online — is deleted, so the arm the document changed is exactly this
+// one: an agent that asked for its own restart, was given the wind-down, and
+// now ends the sequence with report_stopped instead.
 //
 // Everything in the tree that says this is safe is READ from the code. The two
 // arms above cover no-epoch-online (respawns) and no-epoch-offline (stays

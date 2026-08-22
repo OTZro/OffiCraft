@@ -243,12 +243,17 @@ func forcedEpochLive(m Member) bool {
 		m.ForcedStopAt >= m.StoppingSince
 }
 
-// offboardNoticeFor composes the sentence for a member that is being wound
-// down: the ONE approved sentence, plus the deadline clause when this is the
-// final call (the deadline is winddownDeadlineOf, i.e. the anchor plus
-// stop.accelerated_grace_secs — owner-settable since T-ed79, not a constant). It reads the session's own gauge so the agent is told where it
-// actually is, not just that it is over the line — the owner's requirement that
-// the notice carry 「他現在 context / round 狀況，以及我們兩個系統數字是多少」.
+// offboardNoticeFor resolves the ONE fact a wind-down notice needs that the
+// document cannot carry — {where}, this session's own position — and hands it,
+// with the kind and the deadline, to winddownNoticeText, which owns everything
+// else about the sentence.
+//
+// It reads the session's own gauge so the agent is told where it actually is,
+// not just that it is over the line — the owner's requirement that the notice
+// carry 「他現在 context / round 狀況，以及我們兩個系統數字是多少」. The deadline
+// is winddownDeadlineOf, i.e. the anchor plus stop.accelerated_grace_secs
+// (owner-settable since T-ed79, not a constant), and it is the same expression
+// the cockpit's refocus_deadline reads.
 func (s *apiServer) offboardNoticeFor(m Member, kind string) string {
 	cfg := s.ctxHighConfig()
 	// The gauge is absent on a server assembled without one (and a session that

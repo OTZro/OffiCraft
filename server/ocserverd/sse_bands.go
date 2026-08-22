@@ -508,7 +508,7 @@ func decideTaskCloseNudge(t Task, manualLabel string) *taskCloseSignal {
 // notices by comparing the whole sentence verbatim (cli/ocagent listen_hooks),
 // so anything time- or progress-varying in here would re-wake a worker that is
 // already working its close-out on every write to its row — the exact trap
-// documented on offboardNotice's deadline clause.
+// documented on winddownNoticeText's deadline value.
 func offboardManualWriteBack(typeKey, manualLabel string) string {
 	if typeKey == "" {
 		return ""

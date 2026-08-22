@@ -145,18 +145,19 @@ var bootDocRegistry = []bootDocReg{{
 	SeedFor: func(string) string { return offboardSeedMD },
 	DocName: func(string) string { return "offboard sequence" },
 	Cap:     func(s *apiServer) int { return s.offboardCap() },
-	// The head is offboardNotice's own opener sentence, moved into the document
-	// (T-3201) so the owner can read the words an agent is actually sent — the
-	// complaint that opened this ticket was that he could not.
+	// The head is the opening sentence the server used to build in Go, moved
+	// into the document (T-3201) so the owner can read the words an agent is
+	// actually sent — the complaint that opened this ticket was that he could
+	// not. winddownNoticeText renders it; nothing else composes it any more.
 	//
 	// 🔴 {closer} IS GONE AND report_stopped IS SPELLED OUT. owner, verbatim
 	// (c-5b3d8f192a0b): 「我預期是 report_stopped，因為是 server 控制他上下線」,
 	// and again (rc-5d044f0c1266): 「下線程序為什麼要看到 restart_self，這個已經
 	// 不在下線程序要被呼叫了」. restart_self is a REQUEST an agent makes when it
 	// was told to restart itself after finishing something, not a close-out
-	// verb; it now lives in 系統互動's tool notes. See the divergence pinned in
-	// api_bootdocs_split_t3201_test.go: today's code still says restart_self on
-	// the refocus arm, and that arm is what changes.
+	// verb; it now lives in 系統互動's tool notes. The Go builder that used to
+	// interpolate a per-member closer beside this document is deleted — this
+	// head is the only place the sentence exists, on both arms.
 	Split: true,
 	Join:  "\n",
 	Vars:  []string{"where"},

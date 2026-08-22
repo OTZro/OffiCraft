@@ -54,8 +54,8 @@ import (
 // English quantity phrasing is not ("a couple of", "half an", "a few more"), so
 // a partial numeral whitelist would rebuild the
 // same false confidence the literal whitelist had, one layer down. The sentence
-// is composed from one fixed template in offboardNotice, so a spelled-out
-// duration can only get there by someone typing one on purpose.
+// is the read-only head of one document, so a spelled-out duration can only get
+// there by someone typing one on purpose.
 //
 // ⚠️ The unit is what the pattern turns on, never the digit, because a real
 // notice is full of legitimate numbers: "context 35% (your limits: 40% / 50%)",
@@ -314,8 +314,8 @@ func TestTimeShapeGuardReadsRealNoticesCorrectly(t *testing.T) {
 	// it turned five tests red on a notice the server composed correctly. The
 	// document describes the STEPS; how long anything takes there is a human
 	// telling a human to hurry, not the server quoting a clock. Appended here
-	// rather than left to the staged copy so this stays covered even on a tree
-	// where the embed is empty and offboardText answers "".
+	// rather than left to the staged copy so this stays covered wherever the
+	// owner's own copy of the document happens to sit.
 	notices["下線程序 prose under the sentence"] = s.winddownNoticeText(offboardKindSoft,
 		"context 50% (your limits: 40% / 50%)", 0) +
 		"\n⚠️ 第 5 步收拾暫存最多花 5 分鐘，別在這裡耗掉交接時間。"

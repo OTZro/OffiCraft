@@ -665,14 +665,14 @@ func materializeBinary(dir, name string, data []byte) (string, error) {
 // singleton above — one document per event, key "global" — because what an
 // agent should do when a task closes does not depend on which runtime it is.
 //
-// 🔴 THE SEEDS ARE TODAY'S PROGRAM TEXT, MOVED WITHOUT A WORD CHANGED. Every
-// sentence in these six files is currently a Go string literal (sse_bands.go's
-// offboardOpener/offboardNotice and decideTaskCloseNudge, api_tasks.go's
-// reassign notices, api_tasks_handoff.go's dependency-released notice); the
-// interpolation points are the ONLY thing that changed shape, becoming the
-// {name} variables this kind declares. Splitting each one into a read-only head
-// and an owner-editable body is the NEXT change — keeping it out of this one is
-// what lets the diff prove no wording moved.
+// 🔴 THE SEEDS ARE THE PROGRAM TEXT THESE NOTICES USED TO BE, MOVED WITHOUT A
+// WORD CHANGED. Every sentence in these six files was a Go string literal
+// (sse_bands.go's offboard sentence builder and decideTaskCloseNudge,
+// api_tasks.go's reassign notices, api_tasks_handoff.go's dependency-released
+// notice); the interpolation points are the ONLY thing that changed shape,
+// becoming the {name} variables this kind declares. The two stop procedures are
+// wired to their send sites and the builder is deleted; the four task documents
+// are not sent by anything yet.
 // bootDocSingletonKey is the document key every non-boot_sequence boot document
 // uses. Named rather than repeated so a caller addressing "the one document of
 // this kind" says so, instead of spelling a magic "global" that reads like the

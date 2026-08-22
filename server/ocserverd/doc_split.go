@@ -56,8 +56,8 @@ func DocJoinHeadBody(head, body string) string {
 // halves are joined with the separator this document's send site uses today.
 //
 // 🔴 join IS PER DOCUMENT AND IS NOT COSMETIC. Today's three send shapes really
-// are three: buildBootContext joins its blocks with a blank line, offboardNotice
-// staples the document under its sentence with a single "\n", and the task
+// are three: buildBootContext joins its blocks with a blank line, the wind-down
+// notices staple the body under the sentence with a single "\n", and the task
 // notices run head and body together inside ONE paragraph with nothing between
 // them. Rendering all of them the same way would change what every agent reads
 // on at least two of the three — which is exactly the silent content change the
