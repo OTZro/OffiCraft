@@ -905,10 +905,22 @@ export function MemberDetailPanel({
                 ? { spawn: t.machine.noOnlineMachine }
                 : undefined
             }
-            // The TOP rung — still behind a confirm, and it does not exist at
-            // all until the wind-down is on the clock (stage `accelerated`), so
-            // an impatient second click on 加速停止 cannot reach it (see
-            // MemberActionButtons' LADDER_ARM_MS note).
+            // The TOP rung. Since owner 2026-08-22 (「同一個按鈕 升級的概念」) it
+            // is reached by UPGRADING THIS SAME CELL, so it arrives under the
+            // finger that just pressed 加速停止 — the older claim that a second
+            // click "cannot reach it" was true of the side-by-side row and is FALSE
+            // here. What IS true, measured:
+            //   * from the first pressable 停止 it takes THREE clicks on this one
+            //     cell, each ≥LADDER_ARM_MS (350ms) after the upgrade — 349ms is
+            //     still inert — so 700ms minimum; ten instant clicks fire
+            //     force-stop ZERO times.
+            //   * this handler only OPENS the confirm below. The kill needs one
+            //     more click, in a different place.
+            // So the real mis-kill path is 3 clicks here + 700ms + 1 click in the
+            // dialog. That is the whole of it: the owner was offered a long-press
+            // top rung and a stronger confirm on rc-2afe8b557e9c and declined both,
+            // knowingly buying "two quick clicks on one cell can escalate". Do not
+            // call this a protection, and do not add one here that he turned down.
             onForceStop={
               onForceStop ? () => setForceStopConfirm(true) : undefined
             }

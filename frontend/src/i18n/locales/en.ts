@@ -429,15 +429,17 @@ export const en: Dict = {
       // The middle rung of the owner's escalation (2026-08-21, 停止 → 加速停止
       // → 強制停止): put the close-out already under way on a clock and tell
       // the member the instant. Not a kill, so no confirm.
+      // 🔴 owner 2026-08-22: these three words are ONE button's label at three
+      // stages, not three buttons side by side (「同一個按鈕 升級的概念」). Same
+      // keys, same words — what changed is that one slot now carries them all.
       "accelerated-stop": "Accelerated stop",
       "force-stop": "Force stop",
     },
-    // The ladder is REVEALED, not disabled: a rung the owner has not unlocked
-    // yet is absent (owner 2026-08-21 「按了才出現」). Only two rungs ever render
-    // unpressable, and both say why.
+    // The one ladder slot has exactly two unpressable presentations, and both
+    // say why.
     reason: {
-      alreadyStopping: "Already winding down — escalate to the right if it is taking too long",
-      justAppeared: "Just appeared — pausing a moment so a repeat click cannot escalate for you",
+      alreadyStopping: "Already winding down — this button upgrades to Accelerated stop once the close-out is on a clock",
+      justAppeared: "Just upgraded — pausing a moment so a repeat click cannot escalate for you",
     },
     message: {
       windDown: "Winding down…",

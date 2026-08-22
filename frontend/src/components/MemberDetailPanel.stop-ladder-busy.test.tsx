@@ -8,8 +8,9 @@
 // other does not a gap this ticket opened rather than an old one.
 //
 // The rungs are DELIBERATELY tested as one: they share a single flag because
-// they are one escalation on one row, so 停止 in flight must also hold
-// 加速停止 — two rungs looking live at once is the thing the flag prevents.
+// they are one escalation. Since owner 2026-08-22 they are also literally one
+// BUTTON (「同一個按鈕 升級的概念」), so the flag now guards a slot rather than a
+// row — a stop still in flight must not let the cell that replaces it fire.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
@@ -138,9 +139,10 @@ describe("MemberDetailPanel — the 停止 ladder holds while a rung is in fligh
         />
       </I18nProvider>,
     );
-    // In `stopping` the panel offers 喚醒 ＋ 停止 (spent) ＋ 加速停止; the panel
-    // mounts already at that stage, so the reveal window is not in play and the
-    // in-flight case this pins is the one the owner reaches by pressing
+    // In `stopping` the panel offers 喚醒 ＋ the ONE ladder cell, which at this
+    // stage IS 加速停止 (owner 2026-08-22 — 停止 is not kept beside it any more).
+    // The panel mounts already at that stage, so LADDER_ARM_MS is not in play
+    // and the in-flight case this pins is the one the owner reaches by pressing
     // 加速停止 twice.
     const accelerated = getByTestId("member-action-accelerated-stop");
     fireEvent.click(accelerated);

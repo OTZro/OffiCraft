@@ -2,7 +2,7 @@
 // and the outsource panel (they share `.mp-identity__buttons` in
 // member-detail.css).
 //
-// WHAT THIS GUARD PINS, AND WHY IT CHANGED (T-ed79)
+// WHAT THIS GUARD PINS, AND WHY IT CHANGED TWICE (T-ed79)
 // It used to pin "更改 ＋ 停止 sit on ONE row" at BOTH widths — true of the
 // two-button world (owner 2026-07-31 「全部變成左右並排」). Owner 2026-08-21
 // replaced the single 停止 with the three-rung ladder 停止 → 加速停止 →
@@ -19,14 +19,22 @@
 //     alone on the first, the WHOLE cluster on the second in owner order, each
 //     rung sharing the band evenly.
 //   * 🔴 EVERY SHAPE THE LADDER CAN BE. Owner 2026-08-21 「按了才出現」 made the
-//     rung set a function of how far up the escalation the actor already is, so
-//     the cluster is no longer one count: TWO buttons (更改 ＋ 停止, nothing
-//     winding down), THREE (a system-opened wind-down: 加速停止 revealed, still
-//     presence `online`), FOUR (owner pressed 停止 ⇒ presence `stopping`, which
-//     also gains the 喚醒 wedge rescue) and FIVE (the accelerated arm, 強制停止
-//     revealed). Five is still the widest the card ever has to hold; two is the
-//     one 375px now spends most of its time in. Measuring one count would leave
-//     both ends unmeasured.
+//     rung set a function of how far up the escalation the actor already is, and
+//     owner 2026-08-22 (「同一個按鈕 升級的概念 不是不同按鈕」) collapsed the row
+//     to ONE cell that upgrades. So the cluster is TWO buttons on a live actor
+//     (更改 ＋ the cell) and THREE on a `stopping` one (the 喚醒 wedge rescue
+//     joins them) — and the cell itself carries a different LABEL per stage,
+//     which is a distinct measurement because 強制停止 is the longest of the
+//     three and a cell that fits 停止 is no evidence that it fits that. The four
+//     cases below are therefore still four: they now vary the label inside the
+//     one cell instead of the number of cells.
+//     🔴 WHAT THIS GUARD STOPPED PINNING, and why: the FOUR- and FIVE-button
+//     worst cases are gone from the product, not from the measurement by choice.
+//     They existed only because the spent rungs stayed on screen beside the live
+//     one. Nothing about them was dropped while still reachable.
+//   * both panels — 正職 and 外包 share this shell and this component, and each
+//     case below runs against both, so a regression that only reproduces on the
+//     outsource panel cannot hide behind the member panel's geometry.
 //   * both — no button overlaps another (a real rectangle-intersection test,
 //     strictly stronger than the old "停止 starts right of 更改"), no button
 //     escapes the card on ANY edge, no label is clipped inside its own button,
@@ -37,6 +45,9 @@
 // `column` leaves every vitest assertion green. This spec measures real boxes.
 //
 // Mutants (all MEASURED, see docs/design/worker-panel-parity-mutants.md):
+//   R0  put the ladder back to rungs standing side by side (RUNG_BY_STAGE
+//       returning an array again) → red at EVERY width, on BOTH panels, on
+//       `the ladder is ONE button, whatever rung it is on`.
 //   R1  `.mp-identity__buttons { flex-direction: column }` → DESKTOP red
 //       (`one row, whole cluster`). Narrow stays green on purpose: below 720px each
 //       direct child already takes a full band, so a column is the same picture.
@@ -52,54 +63,74 @@
 //       label-clipping check, which is the one a bounding box cannot see.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { IdentityActionsRowStory } from "./stories/IdentityActionsRowStory";
+import { CHANGE_TESTID } from "./stories/identityPanelIds";
 
+// 🔴 THREE widths, one on each side of the ≤720px media query and one ON it.
+// 720 is INSIDE the query (`max-width: 720px` is inclusive) and is the width
+// where the band layout is closest to fitting on one line — an off-by-one in the
+// breakpoint shows up here and nowhere else.
 const VIEWPORTS = [
-  { name: "desktop", width: 1200, height: 900 },
-  { name: "narrow", width: 375, height: 780 },
+  { name: "desktop-1280", width: 1280, height: 900, narrow: false },
+  { name: "boundary-720", width: 720, height: 900, narrow: true },
+  { name: "phone-375", width: 375, height: 780, narrow: true },
 ];
 
-// The ladder in the owner's order. 更改 leads because it is the panel's own
-// button and renders before the group.
-const LADDER = ["member-action-stop", "member-action-accelerated-stop", "member-action-force-stop"];
+// Both panels render this cluster from the same component; only the panel-owned
+// 更改 button's testid differs.
+const PANELS = ["member", "worker"] as const;
 
-// 🔴 FOUR shapes, not one — the four rungs-revealed states, spelled as the
-// (status, stage) pair the panels derive from the wire. `stopping` also carries
-// the 喚醒 wedge rescue ahead of the ladder (the panel keeps 更改 there too:
-// mappers folds presence "stopping" onto status "online"), which is what makes
-// the accelerated `stopping` row the FIVE-button worst case.
+// Which rung the ONE ladder cell is, per stage. 更改 leads every case because it
+// is the panel's own button and renders before the group.
+const RUNG = {
+  none: "member-action-stop",
+  soft: "member-action-accelerated-stop",
+  accelerated: "member-action-force-stop",
+} as const;
+
+// 🔴 FOUR shapes — the four (status, stage) pairs the panels derive from the
+// wire. `stopping` also carries the 喚醒 wedge rescue ahead of the ladder cell
+// (the panel keeps 更改 there too: mappers folds presence "stopping" onto status
+// "online"), which is what makes the `stopping` cases the THREE-button worst
+// case. `ids` is a function of the panel because only 更改's testid differs.
 const CASES = [
-  { status: "online-awake" as const, stage: "none" as const, ids: ["mp-change", "member-action-stop"] },
-  {
-    status: "online-awake" as const,
-    stage: "soft" as const,
-    ids: ["mp-change", ...LADDER.slice(0, 2)],
-  },
-  {
-    status: "stopping" as const,
-    stage: "soft" as const,
-    ids: ["mp-change", "member-action-spawn", ...LADDER.slice(0, 2)],
-  },
-  {
-    status: "stopping" as const,
-    stage: "accelerated" as const,
-    ids: ["mp-change", "member-action-spawn", ...LADDER],
-  },
+  { status: "online-awake" as const, stage: "none" as const, wedge: false },
+  { status: "online-awake" as const, stage: "soft" as const, wedge: false },
+  { status: "stopping" as const, stage: "soft" as const, wedge: true },
+  { status: "stopping" as const, stage: "accelerated" as const, wedge: true },
 ];
+
+function idsFor(panel: (typeof PANELS)[number], c: (typeof CASES)[number]) {
+  return [
+    CHANGE_TESTID[panel],
+    ...(c.wedge ? ["member-action-spawn"] : []),
+    RUNG[c.stage],
+  ];
+}
 
 type Box = { x: number; y: number; width: number; height: number };
 
 const SAME_ROW = 4;
 
-for (const vp of VIEWPORTS) for (const c of CASES) {
-  const ALL = c.ids;
-  test(`${vp.name} / ${c.status}+${c.stage} (${ALL.length} buttons): 更改 ＋ the 停止 ladder lay out without overlapping or leaving the card`, async ({
+for (const vp of VIEWPORTS) for (const panel of PANELS) for (const c of CASES) {
+  const ALL = idsFor(panel, c);
+  test(`${vp.name} / ${panel} / ${c.status}+${c.stage} (${ALL.length} buttons): 更改 ＋ the one 停止 ladder cell lay out without overlapping or leaving the card`, async ({
     mount,
     page,
   }) => {
     await page.setViewportSize({ width: vp.width, height: vp.height });
     const cmp = await mount(
-      <IdentityActionsRowStory status={c.status} stage={c.stage} />,
+      <IdentityActionsRowStory status={c.status} stage={c.stage} panel={panel} />,
     );
+    // 🔴 EXACTLY ONE ladder cell, measured in the real layout. The geometry
+    // assertions below all iterate `ALL`, so a build that put the spent rungs
+    // back beside the live one would simply not measure them — this is what
+    // makes the count itself a pinned fact at every width and on both panels.
+    const ladderCells = await cmp
+      .locator(
+        "[data-testid='member-action-stop'], [data-testid='member-action-accelerated-stop'], [data-testid='member-action-force-stop']",
+      )
+      .count();
+    expect(ladderCells, "the ladder is ONE button, whatever rung it is on").toBe(1);
 
     const boxes: Record<string, Box> = {};
     for (const id of ALL) {
@@ -174,7 +205,7 @@ for (const vp of VIEWPORTS) for (const c of CASES) {
       );
     }
 
-    if (vp.name === "desktop") {
+    if (!vp.narrow) {
       // Owner 2026-07-31 「全部變成左右並排」, still true wherever there is room:
       // ONE band holding all four. A `flex-direction: column` regression dies here.
       expect(bands.map((b) => b.length), "one row, whole cluster").toEqual([ALL.length]);
@@ -184,7 +215,7 @@ for (const vp of VIEWPORTS) for (const c of CASES) {
       // across lines, or a rung sharing 更改's line — is the "crammed" shape.
       // 更改 leads a band of its own; nothing after it may share that band, and
       // the ladder stays contiguous and in owner order wherever it lands.
-      expect(bands[0], "band 1 = 更改 alone").toEqual(["mp-change"]);
+      expect(bands[0], "band 1 = 更改 alone").toEqual([CHANGE_TESTID[panel]]);
       expect(
         bands.slice(1).flat(),
         "the rest of the cluster keeps its order below 更改",
@@ -201,7 +232,7 @@ for (const vp of VIEWPORTS) for (const c of CASES) {
         last.x + last.width - first.x,
         "the ladder spans the card, not the right margin",
       ).toBeGreaterThan(card.width * 0.7);
-      expect(boxes["mp-change"].width, "更改 spans the card too").toBeGreaterThan(
+      expect(boxes[CHANGE_TESTID[panel]].width, "更改 spans the card too").toBeGreaterThan(
         card.width * 0.7,
       );
       // Evenly, not one fat rung beside a sliver.
