@@ -219,8 +219,12 @@ two creation paths that mint a member — `hire_member` (`POST /api/members`) an
 `POST /api/roles`, the cockpit's 招攬新成員 — leave it empty when the caller names none
 (T-ae8b). `resolveEmptyRuntimeForPlacement` (`server/ocserverd/reconcile.go`) fills it at
 the first START dispatch, from the target machine's reported `runtimes` map, and persists
-the choice on the roster row: claude if ready, else codex if ready, else nothing — an
-unready box is refused by the placement gate rather than guessed at. A member whose
+the choice on the roster row: claude if ready, else codex if ready, else nothing is
+persisted — the resolver refuses to freeze a guess onto the row. It does NOT follow that
+an unready box is refused: the runtime stays unset, `NormalizeRuntime` folds it to
+`claude`, and `machineSupportsRuntime`'s claude arm is deliberately permissive
+(`api_machines.go` — the `OC_CLAUDE_CRED_CHECK=0` escape hatch), so the START is still
+dispatched and the failure surfaces at spawn time, not at the gate. A member whose
 runtime is already set is never touched; the owner's choice always wins. No capability
 map reported yet leaves it unset, which is today's legacy behaviour
 (`NormalizeRuntime("") == claude`).
@@ -237,8 +241,13 @@ Nothing about this is visible on the wire. Every DTO runs `NormalizeRuntime`, so
 row is reported as `claude` in API responses and in the cockpit, exactly as before; only
 the persisted value changed. One trap follows from that pairing: the cockpit's 喚醒／更改
 dialog seeds its runtime cell from the normalized value (`member.runtime || "claude"`,
-`MemberDetailPanel.tsx`) and submits the cell on confirm, so confirming that dialog on an
-unset member writes a concrete `claude` and permanently disables the resolution above.
+`MemberDetailPanel.tsx`). Confirming it UNCHANGED is safe — both submit paths compute
+`launchChanged` over runtime/model/effort first and skip `patchMember` when nothing moved,
+and the offline wake branch sits outside that guard — so an untouched dialog writes no
+runtime. The trap is narrower and easier to walk into: editing **model or effort** makes
+`launchChanged` true, and the seeded runtime cell rides along in the same PATCH. That
+writes a concrete `claude` onto a member nobody chose one for, permanently disabling the
+resolution above.
 
 ## Launch policy
 
