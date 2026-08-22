@@ -308,6 +308,65 @@ func TestBootDoc_OverCapIsRefusedWithAllThreeNumbers(t *testing.T) {
 	}
 }
 
+// ── #3b — emptying a document with content needs allow_shrink ────────────────
+
+// The wipe guard (WholeDocWipeBlocked) had NO test on any of its five write
+// seams: deleting the three lines in replaceBootDoc left the whole build green,
+// so a boot sequence could be erased to nothing by a well-formed {"text": ""}
+// and nothing would say so. An agent whose boot sequence is empty is an agent
+// with no instructions, and it fails silently — nothing that never boots is
+// around to report it.
+//
+// Asserted on BEHAVIOUR only (status + what the document reads back as), never
+// on the refusal wording.
+func TestBootDoc_WipingADocWithContentIsRefusedUnlessAllowShrink(t *testing.T) {
+	f := newBootDocFixture(t)
+	for _, c := range bootDocCases() {
+		t.Run(c.name, func(t *testing.T) {
+			stored := f.read(t, c.path)
+			if strings.TrimSpace(stored.Text) == "" {
+				t.Fatalf("precondition: %s reads blank, so there is nothing to wipe and every "+
+					"assertion below would be vacuous", c.name)
+			}
+			// Both shapes of "empty": the literal empty string, and a body that
+			// only LOOKS non-empty. The guard trims, so whitespace must be
+			// refused too — otherwise " " is a bypass anyone finds by accident.
+			for _, probe := range []struct{ name, text string }{
+				{"empty_string", ""},
+				{"whitespace_only", "   \n\t\n  "},
+			} {
+				t.Run(probe.name, func(t *testing.T) {
+					status, body := f.replace(t, c.path, f.owner, probe.text)
+					if status != http.StatusBadRequest {
+						t.Fatalf("wiping %s must be refused without allow_shrink; got %d %s",
+							c.name, status, body)
+					}
+					// Status alone would pass on a refusal that had already
+					// written. Read the document back.
+					after := f.read(t, c.path)
+					if after.Text != stored.Text || after.IsDefault != stored.IsDefault {
+						t.Fatalf("the refused wipe CHANGED the document: is_default %v→%v, %d→%d chars",
+							stored.IsDefault, after.IsDefault,
+							utf8.RuneCountInString(stored.Text), utf8.RuneCountInString(after.Text))
+					}
+				})
+			}
+			// The bypass really is a bypass: allow_shrink=true empties it. This
+			// is today's behaviour and is pinned so the guard above cannot be
+			// "fixed" into a wall with no way through.
+			status, body := f.do(t, http.MethodPost, c.path, f.owner,
+				map[string]any{"text": "", "allow_shrink": true})
+			if status != http.StatusOK {
+				t.Fatalf("allow_shrink=true must let the wipe through; got %d %s", status, body)
+			}
+			if after := f.read(t, c.path); after.Text != "" || after.IsDefault {
+				t.Fatalf("after an allowed wipe the document should read empty and not-default; "+
+					"got is_default=%v, %d chars", after.IsDefault, utf8.RuneCountInString(after.Text))
+			}
+		})
+	}
+}
+
 // ── #4 — a plain member may read but not write ───────────────────────────────
 
 func TestBootDoc_PlainAgentIsRefusedEveryWriteButStillReads(t *testing.T) {
