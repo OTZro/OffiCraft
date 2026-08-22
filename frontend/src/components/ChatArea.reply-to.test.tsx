@@ -38,6 +38,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
+import { OwnerNameProvider } from "../hooks/useOwnerName";
 import { ChatArea } from "./ChatArea";
 import { api } from "../api";
 import type { Member } from "../types";
@@ -123,10 +124,16 @@ function mkMsg(over: Partial<ChatMessage> & { id: string }): ChatMessage {
 /** The quote the SERVER attaches to a reply (`reply_to_chat`). Written as a
  * helper so every fixture builds it the one way the wire does: the content is
  * already whitespace-collapsed and already shortened server-side, and
- * `fromName` is "" on every read the browser makes (the thread resolves the
- * name from its roster, exactly as it does for a message's own sender). */
-function mkQuote(id: string, from: string, content: string) {
-  return { id, from, fromName: "", content };
+ * `fromName` / `toName` are "" on every read the browser makes (the thread
+ * resolves both names from its roster, exactly as it does for a message's own
+ * sender and recipient).
+ *
+ * `to` is a REQUIRED positional argument, not an option with a default: the
+ * quoted message's addressee is the half a caller is most likely to leave to
+ * chance, and the cross-conversation case below turns entirely on it being
+ * something other than this thread's peer. */
+function mkQuote(id: string, from: string, to: string, content: string) {
+  return { id, from, fromName: "", to, toName: "", content };
 }
 
 const m1 = mkMember("m1", "Mira");
@@ -265,7 +272,7 @@ describe("ChatArea 回覆這則", () => {
         // The control is offered when the server sent a snapshot. Without one
         // the row prints 「這則訊息已不存在」 and offers nothing to open — see
         // the GONE test below.
-        replyToChat: mkQuote("c-1", "m1", "他說的"),
+        replyToChat: mkQuote("c-1", "m1", "owner", "他說的"),
       }),
     ];
     const { container } = renderChat();
@@ -327,7 +334,7 @@ describe("ChatArea 回覆這則", () => {
         body: "我回的",
         ts: 2,
         replyTo: "c-1",
-        replyToChat: mkQuote("c-1", "m1", "他說的"),
+        replyToChat: mkQuote("c-1", "m1", "owner", "他說的"),
       }),
       // A reply whose ORIGINAL IS GONE: the server sent `reply_to` and no
       // `reply_to_chat`, so there is no sender to name and naming one would be
@@ -347,15 +354,15 @@ describe("ChatArea 回覆這則", () => {
     // Guard against the vacuous version: an empty dictionary value would make
     // the name assertions below compare "" with "" and prove nothing.
     expect(zh.chat.replyQuoteRole.length).toBeGreaterThan(0);
-    expect(zh.chat.replyQuoteRoleWho("Mira").length).toBeGreaterThan(
-      zh.chat.replyQuoteRole.length,
-    );
+    expect(
+      zh.chat.replyQuoteRoleWho(`Mira → ${zh.user}`).length,
+    ).toBeGreaterThan(zh.chat.replyQuoteRole.length);
 
     const { container } = renderChat();
 
     // Named with the person being quoted when we have resolved one…
     const quoted = within(rowOf(container, "c-2")).getByRole("blockquote", {
-      name: zh.chat.replyQuoteRoleWho("Mira"),
+      name: zh.chat.replyQuoteRoleWho(`Mira → ${zh.user}`),
     });
     // …and the row really is the quote line, not something else that happens to
     // carry the name.
@@ -453,21 +460,24 @@ describe("ChatArea 回覆這則", () => {
         body: "收到",
         ts: 2,
         replyTo: "c-att",
-        replyToChat: mkQuote("c-att", "m1", ""),
+        replyToChat: mkQuote("c-att", "m1", "owner", ""),
       }),
     ];
     const { container } = renderChat();
 
     const quote = rowOf(container, "c-reply").querySelector(".chat__msg-quote")!;
-    // The sender IS known, so the row names them…
-    expect(quote.querySelector(".chat__msg-quote__who")?.textContent).toBe("Mira");
+    // The sender IS known, so the row names them — with the addressee, which is
+    // the shape every quote row draws.
+    expect(quote.querySelector(".chat__msg-quote__who")?.textContent).toBe(
+      `Mira → ${zh.user}`,
+    );
     // …the body is empty, honestly…
     expect(quote.querySelector(".chat__msg-quote__body")?.textContent).toBe("");
     // …and it is NOT the "gone" sentence, which is the whole point.
     expect(quote.textContent).not.toContain(zh.chat.replyQuoteGone);
   });
 
-  it("clicking it names the quoted sender and quotes what they said, above the input", () => {
+  it("clicking it names the quoted sender AND addressee, and quotes what they said, above the input", () => {
     const { container } = renderChat();
     expect(banner(container)).toBeNull();
 
@@ -475,7 +485,13 @@ describe("ChatArea 回覆這則", () => {
 
     const b = banner(container)!;
     expect(b).toBeTruthy();
-    expect(b.textContent).toContain("Mira");
+    // 「寄件者 → 收件者」, whole string: the banner is the SECOND code path to
+    // that sentence (it resolves its target from the loaded window, not from
+    // `reply_to_chat`), and it drew the sender alone for the same reason the
+    // quote row did — a quoted line that reads as if it had been said at you.
+    expect(b.querySelector(".chat__reply-banner__who")?.textContent).toBe(
+      zh.chat.replyingTo(`Mira → ${zh.user}`),
+    );
     expect(b.textContent).toContain("第一個問題");
     // The banner belongs to the COMPOSER, not the thread: it must sit inside
     // the footer, above the input row. Placing it in the message list would
@@ -558,7 +574,7 @@ describe("ChatArea 回覆這則", () => {
         body: "答案",
         ts: 5,
         replyTo: "c-1",
-        replyToChat: mkQuote("c-1", "m1", "第一個問題"),
+        replyToChat: mkQuote("c-1", "m1", "owner", "第一個問題"),
       }),
     ];
     // What comes BACK is deliberately longer than what the row shows: the row
@@ -616,7 +632,7 @@ describe("ChatArea 回覆這則", () => {
         body: "回很久以前那則",
         ts: 7,
         replyTo: "c-far",
-        replyToChat: mkQuote("c-far", "m1", "很久以前說的"),
+        replyToChat: mkQuote("c-far", "m1", "owner", "很久以前說的"),
       }),
     ];
     const get = vi
@@ -655,7 +671,7 @@ describe("ChatArea 回覆這則", () => {
         body: "回它",
         ts: 8,
         replyTo: "c-1",
-        replyToChat: mkQuote("c-1", "m1", "第一個問題"),
+        replyToChat: mkQuote("c-1", "m1", "owner", "第一個問題"),
       }),
     ];
     const get = vi
@@ -1192,21 +1208,21 @@ describe("ChatArea 回覆這則", () => {
         body: "我回外包那句",
         ts: 2,
         replyTo: "c-far",
-        replyToChat: mkQuote("c-far", "ow-rel", "外包那句話"),
+        replyToChat: mkQuote("c-far", "ow-rel", "owner", "外包那句話"),
       }),
     ];
     const { container } = renderChat();
 
     const quote = rowOf(container, "c-2").querySelector(".chat__msg-quote")!;
     expect(quote.querySelector(".chat__msg-quote__who")?.textContent).toBe(
-      zhMsg.outsourceLabel("R-2"),
+      `${zhMsg.outsourceLabel("R-2")} → ${zh.user}`,
     );
     expect(
       quote.querySelector(".chat__msg-quote__who")?.textContent,
       "never the raw id the roster could not resolve",
     ).not.toBe("ow-rel");
     expect(quote.getAttribute("aria-label")).toBe(
-      zh.chat.replyQuoteRoleWho(zhMsg.outsourceLabel("R-2")),
+      zh.chat.replyQuoteRoleWho(`${zhMsg.outsourceLabel("R-2")} → ${zh.user}`),
     );
   });
 
@@ -1232,7 +1248,7 @@ describe("ChatArea 回覆這則", () => {
         body: "答案",
         ts: 2,
         replyTo: "c-1",
-        replyToChat: mkQuote("c-1", "m1", "伺服器組出來的那一行"),
+        replyToChat: mkQuote("c-1", "m1", "owner", "伺服器組出來的那一行"),
       }),
     ];
     const { container } = renderChat();
@@ -1289,5 +1305,132 @@ describe("ChatArea 回覆這則", () => {
       </I18nProvider>,
     );
     expect(banner(container), "m1 keeps its own").not.toBeNull();
+  });
+
+  // ── the quote says WHO TO, and it is the ORIGINAL's addressee ──────────────
+  //
+  // 🔴 THE ONE CELL THIS WHOLE FIELD EXISTS FOR. Since 2026-08-21 a reply may
+  // quote a line out of a conversation the replier is in neither end of, and a
+  // quote row that names only the sender then reads as though that line had
+  // been said HERE. The addressee it must print is the QUOTED message's own —
+  // and the plausible wrong answer (this thread's peer) is available, adjacent,
+  // and identical-looking in every same-conversation fixture in this file.
+  //
+  // So the fixture makes the two DIFFER: the quoted line went m2 → ow-rel, and
+  // this window is m1. Neither end of the quoted message is a participant in
+  // the thread drawing it.
+  //
+  // MUTANT ①: drop `to` from the wire (`ChatReplyQuoteDTO`) — the quote row can
+  // no longer name an addressee and this test is what says so.
+  // MUTANT ②: wire the recipient to this thread's peer (`member.id`) instead of
+  // `quoted.to`. MEASURED, not assumed: four tests in this file redden, not one
+  // — the other three quote a message of THIS conversation whose addressee is
+  // the owner, and the mutant renames him to the peer, which those tests happen
+  // to notice. What only THIS test can say is the part that matters: the two
+  // answers are DIFFERENT PEOPLE here, so a green run cannot mean "the peer was
+  // the right answer all along". Do not delete the other three as redundant;
+  // do not read this note as claiming exclusivity it does not have.
+  it("names the QUOTED message's own addressee, not this thread's peer", () => {
+    messages = [
+      mkMsg({ id: "c-1", from: "m1", to: "owner", body: "先看這個" }),
+      mkMsg({
+        id: "c-2",
+        from: "owner",
+        to: "m1",
+        body: "你們那句我插一句",
+        ts: 2,
+        replyTo: "c-elsewhere",
+        replyToChat: mkQuote("c-elsewhere", "m2", "ow-rel", "那個 leak 在 warden"),
+      }),
+    ];
+    // m2 is on the ROSTER but not in this thread — so its name resolving here
+    // proves the row went through `nameOf`, and the id it fed in came off the
+    // quote rather than off the window.
+    const { container } = render(
+      <I18nProvider>
+        <ChatArea member={m1} members={[m1, m2]} />
+      </I18nProvider>,
+    );
+
+    const who = rowOf(container, "c-2").querySelector(
+      ".chat__msg-quote__who",
+    )!.textContent;
+    // Whole-string equality, both halves at once: a partial match on the sender
+    // would pass against a row that printed the sender alone.
+    expect(who).toBe("Kyle → ow-rel");
+    // …and it is emphatically NOT this window's peer, which is the answer a
+    // recipient read off the wrong object produces.
+    expect(who, "the peer of THIS thread is not the quoted addressee").not.toBe(
+      `Kyle → ${m1.name}`,
+    );
+    // The accessible name carries the same pair — the a11y tree is the only
+    // place a screen-reader user learns who was being addressed.
+    expect(
+      rowOf(container, "c-2")
+        .querySelector(".chat__msg-quote")!
+        .getAttribute("aria-label"),
+    ).toBe(zh.chat.replyQuoteRoleWho("Kyle → ow-rel"));
+  });
+
+  // ── the owner is called what HE called himself ─────────────────────────────
+  //
+  // 🔴 REPORTED FROM THE RUNNING COCKPIT: the profile pill read 「韓立（你）」
+  // and this thread called the same person 「市長（你）」 — the 仙俠 theme's
+  // DEFAULT word for the human (`t.user`), which is what the owner branch of
+  // `nameOf` was printing. One person, two names, one screen.
+  //
+  // MUTANT: put `return t.user` back in `nameOf`'s owner branch — the first
+  // test below goes red and the second stays green, because the second is
+  // exactly the state in which the default IS the right answer.
+  describe("the owner's own name", () => {
+    beforeEach(() => {
+      messages = [
+        mkMsg({ id: "c-1", from: "owner", to: "m1", body: "我說的" }),
+        mkMsg({
+          id: "c-2",
+          from: "m1",
+          to: "owner",
+          body: "收到",
+          ts: 2,
+          replyTo: "c-1",
+          replyToChat: mkQuote("c-1", "owner", "m1", "我說的"),
+        }),
+      ];
+    });
+
+    it("prints the nickname he set, not the theme's default word for him", () => {
+      const { container } = render(
+        <I18nProvider>
+          <OwnerNameProvider value="韓立">
+            <ChatArea member={m1} />
+          </OwnerNameProvider>
+        </I18nProvider>,
+      );
+      // Anti-vacuity: the two strings must actually differ, or every assertion
+      // below is true of both the fixed and the broken component.
+      expect(zh.user).not.toBe("韓立");
+
+      expect(
+        rowOf(container, "c-2").querySelector(".chat__msg-quote__who")
+          ?.textContent,
+      ).toBe(`韓立 → ${m1.name}`);
+      // The composer banner is the other surface that names him, and it
+      // resolves the name by a different route (the loaded window, not
+      // `reply_to_chat`) — the two must not disagree about who he is.
+      fireEvent.click(rowOf(container, "c-1").querySelector(".chat__msg-reply")!);
+      expect(
+        banner(container)!.querySelector(".chat__reply-banner__who")?.textContent,
+      ).toBe(zh.chat.replyingTo(`韓立 → ${m1.name}`));
+    });
+
+    it("falls back to the localized default when he has set none", () => {
+      // No provider — which is also what a settings read that FAILED resolves
+      // to, deliberately: a failure may never masquerade as a name.
+      const { container } = renderChat();
+      expect(
+        rowOf(container, "c-2").querySelector(".chat__msg-quote__who")
+          ?.textContent,
+      ).toBe(`${zh.user} → ${m1.name}`);
+    });
   });
 });

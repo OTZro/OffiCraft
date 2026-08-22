@@ -124,15 +124,22 @@ export interface ChatMessage {
 
 /** The quoted message a reply carries with it (wire `ChatReplyQuoteDTO`).
  *
- * `from` / `fromName` are `ChatMessage`'s own convention: `from` is the ADDRESS
- * and always present, `fromName` the display name beside it and `""` on the
- * reads that resolve no names (everything but the wake snapshot) — so the
+ * `from` / `fromName` and `to` / `toName` are `ChatMessage`'s own convention:
+ * the bare id is the ADDRESS and always present, the name beside it is `""` on
+ * the reads that resolve no names (everything but the wake snapshot) — so the
  * thread resolves the name from its roster exactly as it does for any other
- * sender rather than trusting this one to be filled. */
+ * participant rather than trusting this one to be filled.
+ *
+ * 🔴 `to` IS THE QUOTED MESSAGE'S OWN ADDRESSEE, never the peer of the thread
+ * the reply is drawn in. A quote may come out of another conversation entirely
+ * (owner ruling 2026-08-21), and that is exactly when the two differ — which is
+ * the case the field exists for. */
 export interface ChatReplyQuote {
   id: string;
   from: string;
   fromName: string;
+  to: string;
+  toName: string;
   /** One line of the quoted body, already whitespace-collapsed and shortened BY
    * THE SERVER (the length is defined there and nowhere else). `""` is an
    * ordinary value — an attachment-only message has no text to quote. */

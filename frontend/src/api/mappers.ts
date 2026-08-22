@@ -333,14 +333,20 @@ export function toChatMessage(w: WireChatMessage): ChatMessage {
     // when its original no longer exists — one null covers both, and the UI
     // tells them apart by looking at `replyTo`, which never disappears.
     //
-    // The three strings are taken as they arrive. `content` in particular is NOT
+    // The strings are taken as they arrive. `content` in particular is NOT
     // re-shortened here: its length is defined on the server and nowhere else,
     // so a second trim in the browser would be a second rule to keep in step.
+    //
+    // `to` rides across for the same reason `from` does: the quote line draws
+    // 「寄件者 → 收件者」, and the recipient it draws is the QUOTED message's,
+    // not this thread's peer — a quote may come from another conversation.
     replyToChat: w.reply_to_chat
       ? {
           id: w.reply_to_chat.id,
           from: w.reply_to_chat.from,
           fromName: w.reply_to_chat.from_name ?? "",
+          to: w.reply_to_chat.to,
+          toName: w.reply_to_chat.to_name ?? "",
           content: w.reply_to_chat.content ?? "",
         }
       : null,

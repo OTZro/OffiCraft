@@ -6,11 +6,22 @@
 //
 //  ① 回覆入口是 hover 才顯形的，但**永遠占著版面**。用 display:none 做隱藏會讓
 //     氣泡在滑過去的當下橫向跳一格 —— 那是使用者感覺得到、jsdom 完全看不到的。
-//  ② 引用列與「正在回覆」橫幅都必須裁成一行。它們攜帶的是別人訊息的原文，長度
-//     不受這一則控制；一旦允許折行，一句長訊息就會把版面撐開，或把輸入框往下推。
+//  ② 引用列與「正在回覆」橫幅的**每一行**都必須裁掉溢出。它們攜帶的是別人訊息的
+//     原文，長度不受這一則控制；一旦允許折行，一句長訊息就會把版面撐開，或把輸入
+//     框往下推。🔴 2026-08-22 起兩者都是**固定兩行**（第一行「寄件者 → 收件者」，
+//     第二行被引的內容 —— owner 裁定），所以這裡量的是「恰好兩個行框、每半各一
+//     個」，不是「總高小於一行」。行數固定，所以瞄準不同訊息時 composer 仍然不會
+//     跳動 —— 那才是這一條原本要守的事。
 //  ③ 引用列必須留在氣泡那一欄裡，不得溢出訊息串的可視寬度（窄視窗尤其）。
 //
-// 兩個寬度都量：手機寬與桌面寬在這個元件上是不同的失敗面。
+// 四個寬度都量：手機寬、小平板寬與桌面寬在這個元件上是不同的失敗面。
+// 🔴 375 與 720 是 2026-08-22 加的。那一天引用列從「寄件者」變成「寄件者 →
+// 收件者」——同一條列多了一個名字加一個箭頭，而它本來就是這個元件最會溢出的
+// 那一列。（同一天稍後 owner 把那一列拆成兩行，因為多出來的那半是直接從句子身上
+// 扣寬度；拆完之後最先撞牆的不再是句子，而是第一行的控制項。）只量 390／1280 量到的是兩個端點：窄到跳轉標籤整個消失，與寬到什麼
+// 都塞得下。375 是實機最窄的那一格；720 落在 520 這個 container 斷點的另一
+// 側（pane 672px：標籤畫得出來，卻沒有 1280 的餘裕），正是變長之後最先撞牆
+// 的那一段。
 import { test, expect } from "@playwright/experimental-ct-react";
 import { ChatReplyToStory } from "./stories/ChatReplyToStory";
 
@@ -47,7 +58,7 @@ function contrast(fg: string, bg: string): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-for (const width of [390, 1280]) {
+for (const width of [375, 390, 720, 1280]) {
   test(`width ${width}: the reply entry is hover-revealed but never re-flows the row`, async ({
     mount,
     page,
@@ -81,7 +92,7 @@ for (const width of [390, 1280]) {
     expect(Math.abs(after!.width - before!.width)).toBeLessThanOrEqual(0.5);
   });
 
-  test(`width ${width}: the quote row is clipped to one line and stays inside the thread`, async ({
+  test(`width ${width}: the quote row is two lines, each clipped, and stays inside the thread`, async ({
     mount,
     page,
   }) => {
@@ -93,9 +104,29 @@ for (const width of [390, 1280]) {
     const quoteBox = (await quote.boundingBox())!;
     const bubbleBox = (await bubble.boundingBox())!;
 
-    // ONE LINE. The quoted text is long enough to wrap to three or four lines
-    // if anything let it, so a tall quote is the failure.
-    expect(quoteBox.height).toBeLessThan(30);
+    // 🔴 TWO LINES, AND EXACTLY TWO. Owner ruling 2026-08-22 split this row —
+    // 「誰跟誰說話」 on one line, the quoted sentence on the next — because the
+    // two were competing for one line's width and the sentence was losing (see
+    // `.chat__msg-quote` in office.css for the measurement that forced it).
+    // This assertion used to read `< 30` for one line; it is not a relaxation to
+    // two, because the two LINE BOXES are counted individually below. The
+    // quoted text is long enough to wrap to three or four lines if anything let
+    // it, so a third line is still the failure.
+    //
+    // Measured in this harness at all four widths: 36.7px. 46 is a ceiling with
+    // room for a font, not a reading of a declaration.
+    expect(quoteBox.height).toBeLessThan(46);
+    expect(quoteBox.height).toBeGreaterThan(24);
+    const boxes = await quote.evaluate((el) => ({
+      head: (
+        el.querySelector(".chat__msg-quote__head") as HTMLElement
+      ).getClientRects().length,
+      body: (
+        el.querySelector(".chat__msg-quote__body") as HTMLElement
+      ).getClientRects().length,
+    }));
+    expect(boxes.head, "line 1 (who → whom) must be ONE line box").toBe(1);
+    expect(boxes.body, "line 2 (the sentence) must be ONE line box").toBe(1);
 
     // INSIDE the bubble, not floating beside it (owner 2026-08-20). Measured
     // rather than asserted on the DOM: a quote nested in the markup but pulled
@@ -111,8 +142,8 @@ for (const width of [390, 1280]) {
     // and when it is absent it is GONE, not shortened: the label's only rule in
     // office.css is `display: none` inside `@container chat-pane
     // (max-width: 520px)`, and this harness hands the pane 342px at viewport 390
-    // and 1232px at 1280 — so this loop sees the arrow alone at 390 and the whole
-    // label at 1280. Nothing in the stylesheet can TRIM it: the button is
+    // and 1232px at 1280 — so this loop sees the arrow alone at 375/390 and the
+    // whole label at 720/1280. Nothing in the stylesheet can TRIM it: the button is
     // `flex: none` with `white-space: nowrap` and the label carries no
     // `text-overflow` of its own. What may never go is the arrow: what survives
     // must still read as "go somewhere".
@@ -174,7 +205,7 @@ for (const width of [390, 1280]) {
       (e) => e.scrollWidth > e.clientWidth + 0.5,
     );
     expect(whoCut).toBe(false);
-    expect((await who.textContent())?.trim()).toBe("Mira");
+    expect((await who.textContent())?.trim()).toBe("Mira → 韓立");
 
     // …and the jump's label is whole here. Nothing in the stylesheet can trim
     // it — the button is `flex: none` with `white-space: nowrap` and the label
@@ -217,7 +248,7 @@ for (const width of [390, 1280]) {
       (e) => e.scrollWidth > e.clientWidth + 0.5,
     );
     expect(whoCut).toBe(false);
-    expect((await who.textContent())?.trim()).toBe("ow-8808ccf51794");
+    expect((await who.textContent())?.trim()).toBe("ow-8808ccf51794 → 韓立");
   });
 
   test(`width ${width}: the corner buttons take their ink from the bubble they sit on`, async ({
@@ -301,7 +332,7 @@ for (const width of [390, 1280]) {
     expect(parseColour(hovered.wash)[3]).toBeGreaterThan(0);
   });
 
-  test(`width ${width}: the 正在回覆 banner stays one line and its x stays reachable`, async ({
+  test(`width ${width}: the 正在回覆 banner is two clipped lines and its x stays reachable`, async ({
     mount,
     page,
   }) => {
@@ -310,8 +341,13 @@ for (const width of [390, 1280]) {
 
     const banner = cmp.getByTestId("chat-reply-banner");
     const bannerBox = (await banner.boundingBox())!;
-    // One line: a wrapped banner grows the composer and shoves the input down
-    // as the owner aims at different messages.
+    // 🔴 TWO LINES SINCE 2026-08-22, AND THE RULE IT ENFORCES DID NOT CHANGE.
+    // The banner is the composer's own copy of the quote row and it was split
+    // the same way (owner ruling; see `.chat__reply-banner__text`). What this
+    // test was always defending is that the composer does not GROW OR JUMP as
+    // the owner aims at different messages — and a fixed two lines does not
+    // jump. Each half is still clipped to exactly one line box, which is
+    // asserted per element below rather than inferred from the total height.
     //
     // 🔴 AND THE FIXTURE'S BODY REALLY CONTAINS NEWLINES (see the story). That
     // matters because the browser is the only thing collapsing them now: the
@@ -335,7 +371,15 @@ for (const width of [390, 1280]) {
       .locator(".chat__reply-banner__body")
       .evaluate((e) => (e as HTMLElement).getClientRects().length);
     expect(lineBoxes, "the banner body must lay out as ONE line box").toBe(1);
-    expect(bannerBox.height).toBeLessThan(36);
+    const whoBoxes = await cmp
+      .getByTestId("chat-reply-banner")
+      .locator(".chat__reply-banner__who")
+      .evaluate((e) => (e as HTMLElement).getClientRects().length);
+    expect(whoBoxes, "the banner who must lay out as ONE line box").toBe(1);
+    // TWO of them and no more. Measured here at all four widths: 42.4px (34px
+    // when this was one line). A third line means something wrapped.
+    expect(bannerBox.height).toBeLessThan(52);
+    expect(bannerBox.height).toBeGreaterThan(36);
     expect(bannerBox.x + bannerBox.width).toBeLessThanOrEqual(width + 1);
 
     // The x must remain a real, hittable control at BOTH widths — it is the
@@ -353,82 +397,89 @@ for (const width of [390, 1280]) {
 // 🔴 A LONG DISPLAY NAME MUST NOT EAT THE BANNER. The name half was `flex: none`
 // until r15 — the same assumption that failed on the quote row and took three
 // tries to get right there. Display names are free text the owner types, so an
-// unshrinkable name squeezes the excerpt beside it toward zero and is then
-// hard-cut by the parent's `overflow: hidden`, with no ellipsis to admit it.
+// unshrinkable name is hard-cut by the parent's `overflow: hidden`, with no
+// ellipsis to admit it.
+//
+// 🔴 AND THE PREMISE OF THE SECOND HALF OF THIS TEST CHANGED ON 2026-08-22.
+// Until then the name and the excerpt shared ONE line, and what this loop
+// asserted was the arbitration between them: an asymmetric shrink factor
+// (excerpt 10000, name 1) meant the excerpt absorbed the whole deficit and the
+// name only gave once the excerpt had nothing left — stated here as the
+// implication "if the name was truncated, the excerpt must already be at zero".
+// The banner is two lines now (owner ruling), so there is no deficit to share:
+// each half owns the full width of the text column. The implication is not
+// weakened, it is VACUOUS — the excerpt is never at zero, so the old assertion
+// could only ever pass by the name never being cut, which is not the rule. What
+// replaces it is the STRONGER statement the split actually buys: however long
+// the name gets, the excerpt still has the whole line.
+//
 // The story's default name is four characters, which is why this needs its own
-// mount: the existing banner test cannot see this failure at all.
-// The middle of the band matters: 390 has the excerpt at zero and 1280 has no
-// pressure at all, so a rule that only holds at those two is not the rule. 1200
-// and 1250 are where the earlier version of this assertion was measured red on
-// untouched production CSS.
+// mount: the existing banner test cannot see this failure at all. 1200 and 1250
+// are where the earlier version of this assertion was measured red on untouched
+// production CSS; they are kept because they are the middle of the band.
 for (const width of [390, 1200, 1250, 1280]) {
-  test(`width ${width}: the name is only cut after the excerpt has nothing left`, async ({
+  test(`width ${width}: a long display name is ellipsised inside its own line and takes nothing from the excerpt`, async ({
     mount,
     page,
   }) => {
     await page.setViewportSize({ width, height: 800 });
+    // ⚠️ THE FIXTURE NAME IS REPEATED AND THAT IS NOT DECORATION. Measured here:
+    // one copy comes to exactly the text column's width at viewport 1280 (856px
+    // = 856px) and two copies to exactly it again (970 = 970), so the positive
+    // control below could not fire at the three wide widths and the test would
+    // have been asserting the rule on a name under no pressure at all. Four
+    // copies put the name past the column at every width in this list, with room
+    // that is not a rounding coincidence.
+    const longName =
+      "一個非常非常長的顯示名稱這是負責人自己在設定裡打進去的沒有任何上限也沒有人會攔他";
     const cmp = await mount(
-      <ChatReplyToStory bannerWho="正在回覆 一個非常非常長的顯示名稱這是負責人自己在設定裡打進去的沒有任何上限也沒有人會攔他" />,
+      <ChatReplyToStory bannerWho={`正在回覆 ${longName.repeat(4)}`} />,
     );
 
     const banner = cmp.getByTestId("chat-reply-banner");
-    const bannerBox = (await banner.boundingBox())!;
     // 🔴 THE ASSERTION THAT ACTUALLY SEES IT, and it took two tries to find.
     // The first version of this test measured bounding boxes and passed under
     // the very mutant it was written for — `overflow: hidden` on the parent
     // clips the PAINT, so a name that has run past its container still reports
     // a box inside it. What does move is the parent's own scrollWidth: an
-    // unshrinkable name makes the text row wider than the space it has.
-    // (Measured here, both ways: fixed → 309/309 and the name truncates at 303
-    // with 510 of content behind the ellipsis; `flex: none` → 516 of content in
-    // a 309 box, hard-cut, no ellipsis.)
+    // unshrinkable name makes the text column wider than the space it has.
     const overflow = await banner.evaluate((el) => {
       const t = el.querySelector(".chat__reply-banner__text") as HTMLElement;
       return { client: t.clientWidth, scroll: t.scrollWidth };
     });
     expect(
       overflow.scroll,
-      "the text row must not be wider than the space it has",
+      "the text column must not be wider than the space it has",
     ).toBeLessThanOrEqual(overflow.client + 1);
 
-    // 🔴 AND THE PRIORITY ORDER, which the first version of this test also
-    // could not see: a reviewer deleted the excerpt's `flex: 1 10000 auto` and
-    // all 22 of these passed, while the picture changed underneath (name 303 →
-    // 131, excerpt 0 → 172 — measured here, both ways). The rule the CSS spends
-    // a paragraph on is that the EXCERPT absorbs the deficit and the NAME only
-    // gives once it has nothing left; without the asymmetry they share it and
-    // the name — the half that says WHO — is cut for a quote it did not need to
-    // keep. An earlier title on this test claimed the opposite of what it
-    // measures; it says the measured thing now.
     const share = await banner.evaluate((el) => {
       const w = el.querySelector(".chat__reply-banner__who") as HTMLElement;
       const b = el.querySelector(".chat__reply-banner__body") as HTMLElement;
+      const t = el.querySelector(".chat__reply-banner__text") as HTMLElement;
       return {
         whoClient: w.clientWidth,
         whoScroll: w.scrollWidth,
         body: b.clientWidth,
+        column: t.clientWidth,
       };
     });
-    // 🔴 THE RULE, WITHOUT A SINGLE NUMBER FROM THIS MACHINE. Say it as the
-    // implication it actually is: if the NAME had to be truncated, then the
-    // excerpt must already have given everything it had. That is what the
-    // asymmetric shrink factors mean, and it holds at every width.
-    //
-    // Two earlier versions of this did not. `who >= body` reads like "the
-    // excerpt gives way first" but only coincides with it when the excerpt is
-    // already at zero: at 390 it passed because body was 0, at 1280 because
-    // nothing was under pressure — and a reviewer showed the whole band in
-    // between (measured red at 1200 and 1250: 510 vs 603) FAILS on production
-    // CSS nobody had touched. Before that, an exact-equality version passed on
-    // macOS and went red on CI by two pixels. Both mistakes have the same root:
-    // a width-shaped assertion tuned against whatever widths happened to be in
-    // the list.
-    if (share.whoClient < share.whoScroll) {
-      expect(
-        share.body,
-        "the name may only be cut once the excerpt has nothing left",
-      ).toBe(0);
-    }
+    // POSITIVE CONTROL: the name really is under pressure at this width — this
+    // fixture is long enough that it cannot fit anywhere in the list, so a
+    // version of the banner where it DID fit would be measuring nothing.
+    expect(
+      share.whoScroll,
+      "the fixture name must be longer than the line it is given",
+    ).toBeGreaterThan(share.whoClient);
+
+    // 🔴 AND THE EXCERPT IS UNTOUCHED BY IT. This is the whole point of the
+    // split: the name's overflow is now the name's problem. Before it, at 390
+    // this same fixture drove the excerpt to 0px — the banner named someone and
+    // then said nothing about what they had said.
+    expect(
+      share.body,
+      "the excerpt keeps the whole line however long the name is",
+    ).toBe(share.column);
+    expect(share.body).toBeGreaterThan(0);
   });
 }
 
@@ -518,28 +569,37 @@ for (const width of [300, 320, 336, 360, 390, 600, 640, 760]) {
     //
     // Run: one declaration at a time in `src/components/office.css`, restored
     // from a `cp` backup between runs, `npx playwright test -c
-    // playwright-ct.config.ts chat-reply-to`. Baseline: 32 passed.
+    // playwright-ct.config.ts chat-reply-to`. RE-RUN 2026-08-22 after the row was
+    // split into two lines; baseline 45 passed. (The table this replaces claimed
+    // a baseline of 32, which was already wrong when it was written — the file
+    // had 44 tests before this change added one. Do not copy a count forward.)
     //
     //   MUTANT                              RESULT
-    //   @container … max-width: 520px→400   1 failed / 31 · width 560
+    //   @container … max-width: 520px→400   1 failed / 44 · width 560
     //                                       "pane 512px: the label must be
     //                                       collapsed to its arrow"
-    //   @container … max-width: 520px→900   1 failed / 31 · width 620
+    //   @container … max-width: 520px→900   1 failed / 44 · width 620
     //                                       "pane 572px: the label must be
     //                                       rendered whole"
-    //   the whole @container block deleted  7 failed / 25 · widths 300/320/336
+    //   the whole @container block deleted  3 failed / 42 · widths 300/320 of
     //                                       "row-mine: the arrow reaches the
-    //                                       corner controls", width 560, and
-    //                                       widths 320/360/390 of "the quoted
-    //                                       sentence outranks the jump's
-    //                                       boilerplate"
-    //   .chat__msg-quote__body              2 failed / 30 · widths 390/1280
-    //     flex: 1 10000 auto → 1 1 auto     "a short sender name in the quote
-    //                                       row is never ellipsised"
-    //   .chat__msg-quote__jump              32 passed — NO WITNESS
+    //                                       corner controls", and width 560
+    //   the two-line split reverted         5 failed / 40 · all four widths of
+    //   (`.chat__msg-quote` back to a row,  "the quote row is two lines…", and
+    //    `__head` display: contents,        "pane 347px: the quoted sentence
+    //    `__body` flex: 1 10000 auto)       still has characters"
+    //   .chat__msg-quote__jump              45 passed — NO WITNESS
     //     flex: none → flex: 0 10 auto
-    //   .chat__msg-quote__jump-chevron      32 passed — NO WITNESS
+    //   .chat__msg-quote__jump-chevron      45 passed — NO WITNESS
     //     flex: none → flex: 1 1 auto
+    //
+    // ⚠️ THE @container BLOCK'S WITNESS NARROWED FROM 7 ROWS TO 3, AND THAT IS A
+    // CONSEQUENCE OF THE SPLIT, NOT A REGRESSION IN THE GUARD. Four of the seven
+    // were "the quoted sentence outranks the jump's boilerplate" and width 336 —
+    // both of which measured the label stealing width from the EXCERPT. It
+    // cannot: they are not on the same line any more. What is left is the label
+    // colliding with the corner controls, which is a real failure and is still
+    // caught.
     //
     // 🔴 READ THE LAST TWO ROWS AS THEY ARE WRITTEN. Those two declarations are
     // not guarded by anything in this suite, and that is a consequence of the
@@ -738,6 +798,14 @@ for (const width of [320, 360, 390]) {
     // ① THE LONG-EXCERPT ROW. Its quoted text cannot fit at these widths, so
     // something must be trimmed — and what is left of the quote must still be
     // worth more room than the control that only says how to navigate to it.
+    //
+    // ⚠️ AND SINCE 2026-08-22 THIS PARTICULAR COMPARISON HAS LITTLE LEFT TO
+    // DISCRIMINATE — say so rather than let it read as a live guard. The two are
+    // on different lines now, so the excerpt gets the whole row by construction
+    // and this can only fail if the split itself is undone (in which case the
+    // two tests named in the mutant table go red first and more loudly). It is
+    // kept because the RULE it states is still the rule, and because ② and ③
+    // below are not covered anywhere else.
     const share = await cmp.getByTestId("row-mine-short").evaluate((row) => {
       const b = row.querySelector(".chat__msg-quote__body") as HTMLElement;
       const j = row.querySelector(".chat__msg-quote__jump") as HTMLElement;
@@ -770,6 +838,101 @@ for (const width of [320, 360, 390]) {
     );
   });
 }
+
+// ── 🔴 PANE 347px — THE CT HOLE THIS PACKAGE LEFT, NOW PLUGGED ──────────────
+//
+// The regression this test would have caught reached the PR and was found by
+// `e2e_test/tests/17_chat_reply_to.spec.js` alone: T-4e95 put the recipient on
+// the quote row (「寄件者 → 收件者」), the row was one line, and the two halves
+// competed for it. At the pane the production shell hands the thread just past
+// its two-column breakpoint — 347px at vw 721 — the name pair took 101px and the
+// quoted sentence was left with 18px: 3 of 61 characters here, 0 on the CI
+// runner's fonts.
+//
+// ⚠️ WHY THE CT FILE COULD NOT SEE IT BEFORE, AND WHAT CHANGED. The reason this
+// file gives for the miss elsewhere is that this harness has NO APP SHELL — no
+// 1040px cap, no page padding, no 264px roster column — so production's 281px
+// discontinuity at vw 721 does not exist here at any viewport. That is still
+// true and it is still why the e2e spec exists. But the discontinuity was only
+// ever how production ARRIVES at a 347px pane; the defect is a property OF that
+// pane width, and this harness can be driven to it directly: measured, the
+// viewport→pane mapping here is `vw − 48`, so viewport 395 gives the pane
+// exactly 347px. What could not be reproduced was the shell; the number can be.
+//
+// The row it measures is `row-mine-pane347`, whose sender name, addressee and
+// 61-character English sentence are copied field for field from that spec's
+// fixture (see the story). The measurement is that spec's too — per-character
+// rects against the element's own clip box, because `overflow: hidden` is PAINT
+// and `clientWidth` stays healthy over an empty row.
+test("pane 347px: the quoted sentence still has characters (the width the shell hands the thread at vw 721)", async ({
+  mount,
+  page,
+}) => {
+  await page.setViewportSize({ width: 395, height: 900 });
+  const cmp = await mount(
+    <ChatReplyToStory jumpLabel="View the original message" />,
+  );
+
+  const seen = await cmp
+    .getByTestId("quote-body-pane347")
+    .evaluate((el) => {
+      const pane = document.querySelector(".chat__messages") as HTMLElement;
+      const node = el.firstChild;
+      const clip = el.getBoundingClientRect();
+      let chars = 0;
+      if (node && node.nodeType === 3) {
+        const range = document.createRange();
+        const text = node.textContent ?? "";
+        for (let i = 0; i < text.length; i++) {
+          range.setStart(node, i);
+          range.setEnd(node, i + 1);
+          const r = range.getBoundingClientRect();
+          if (r.width > 0 && r.right <= clip.right + 0.5) chars++;
+        }
+      }
+      return { chars, total: (el.textContent ?? "").length, paneW: pane.clientWidth };
+    });
+
+  // PRECONDITION, asserted rather than assumed: this really is the pane width
+  // the production shell produces at vw 721. If the harness's own geometry ever
+  // moves, this says so instead of quietly measuring some other pane.
+  expect(seen.paneW, "the viewport must put the pane at 347px").toBe(347);
+
+  // The same claim the e2e spec makes, at the same pane width. Measured after
+  // the two-line split: 47 of 66 characters.
+  //
+  // ⚠️ AND ON ITS OWN IT WOULD GUARD NOTHING HERE — say so rather than let a
+  // green run imply otherwise. MUTANT (run against this file): revert the row to
+  // one line (`.chat__msg-quote` back to a row, `__head` to `display: contents`,
+  // `__body` back to `flex: 1 10000 auto`) and this line still PASSES, with 20
+  // of 66 characters. The same pane width in the production shell leaves 3 of 61
+  // (0 on the CI runner) because the shell's bubble is ~96px narrower than this
+  // harness's at the same pane. So the character count is a knife edge that
+  // production falls off and this harness does not, and the assertion that
+  // actually discriminates is the geometric one below.
+  expect(
+    seen.chars,
+    `pane ${seen.paneW}px: the quoted sentence must not be squeezed to nothing`,
+  ).toBeGreaterThan(0);
+
+  // 🔴 THE ONE THAT CARRIES THE WEIGHT: the excerpt owns the whole row. That is
+  // the mechanism rather than the symptom — on a line of its own there is
+  // nothing beside it to lose width to, at ANY pane width and in any font. Under
+  // the one-line mutant above this reports 114px of a 255px row and goes red.
+  const geom = await cmp.getByTestId("quote-row-pane347").evaluate((row) => {
+    const b = row.querySelector(".chat__msg-quote__body") as HTMLElement;
+    const h = row.querySelector(".chat__msg-quote__head") as HTMLElement;
+    return {
+      bodyW: b.clientWidth,
+      rowW: row.clientWidth,
+      headBoxes: h.getClientRects().length,
+      bodyBoxes: b.getClientRects().length,
+    };
+  });
+  expect(geom.bodyW, "the sentence gets the full row width").toBe(geom.rowW);
+  expect(geom.headBoxes).toBe(1);
+  expect(geom.bodyBoxes).toBe(1);
+});
 
 test("narrow 390: the reply entry and the banner x are focusable native buttons", async ({
   mount,

@@ -56,8 +56,27 @@ hash route #office/chat/<id>/msg/<msgId> 只做一次定位與 highlight；若�
 
 **引用內容由 server 隨每次讀取現組，前端只讀不找。** 每則 `reply_to` 非空的
 訊息，server 會在**每一個**讀取出口（listing、history page、`?ids=`、POST 回
-應、wake snapshot）附上 `reply_to_chat = {id, from, from_name, content}`。前端
+應、wake snapshot）附上
+`reply_to_chat = {id, from, from_name, to, to_name, content}`。前端
 畫引用列就是讀 `m.replyToChat`，**沒有查表、沒有 fallback、沒有補撈**。
+
+**引用列畫的是「寄件者 → 收件者」，而那個收件者是被引訊息自己的 `to`。**
+不是這條線的對方 —— 引用可以跨對話（2026-08-21 裁定），兩者剛好在那個情況下不
+一樣，而那正是這個欄位存在的理由。`nameOf` 本來就會退到原始 id，所以兩邊永遠有
+字可印：**沒有空白態、沒有「未知」佔位字**。`from_name` 與 `to_name` 同一組規
+則：只有 wake snapshot 那條讀法會填，其餘一律 `""`，要指認人一律用 id。
+composer 上方的橫幅走同一個形狀（它從已載入視窗解析，是第二條到同一句話的路）。
+
+**引用列與橫幅都是兩行：第一行「寄件者 → 收件者」，第二行被引的那句話。**
+（owner 2026-08-22 裁定）原本兩者擠在同一行，而 flex 的收縮順序讓句子先讓位，所以
+「→ 收件者」一加上去就等於直接從句子身上扣寬度：實測 vw=721（app shell 的成員欄
+把 pane 砍到 347px）時名字那半 101px、句子那半只剩 18px —— 本機 3/61 字、CI runner
+0/61 字。**兩行是把競爭拿掉，不是去仲裁它**：句子獨占一整行之後，任何長度的名字都
+拿不走它的寬度。代價是垂直空間（引用列 20.8px→36.7px，橫幅 34px→42.4px）。
+兩個渲染面**要一起改**——它們是兩條獨立碼路（訊息列讀 `replyToChat`，橫幅讀
+`messageById`），只改一邊會讓同一句引文在兩個地方長得不一樣。
+名字那半在極窄 pane 仍然只是 `text-overflow: ellipsis` 截短（同一個 span、同一個
+箭頭、同一個順序），**不是第三種畫法**。
 
 **這一段取代了原本的「只帶 id，前端自己撈」設計，理由要記住：** 舊設計裡撈得到
 ／撈不到／還沒撈到是三個狀態，而它們在畫面上長得一模一樣，所以出錯時沒有人看得
@@ -83,8 +102,8 @@ scrollback → 瞄準一則舊訊息 → 切到別的成員再切回來（草稿
 **不要把兩個 key 指到同一句，也不要為了這一格把查詢或補撈加回來。**
 
 **截短是 server 做的，前端不准再切一次。** `chatReplyQuoteMaxChars`（60 runes）
-＋收斂空白都在 server 做完才上線（原本的 `QUOTE_EXCERPT_CHARS` 已刪）。畫面上的
-一行限制交給 CSS `text-overflow: ellipsis`。
+＋收斂空白都在 server 做完才上線（原本的 `QUOTE_EXCERPT_CHARS` 已刪）。畫面上每一行的
+長度限制交給 CSS `text-overflow: ellipsis`（引用列有兩行，各自裁各自的）。
 
 ⚠️ **但那個數字有第二份副本**：`frontend/src/api/mock.ts` 的
 `MOCK_REPLY_QUOTE_MAX_CHARS`，離線預覽用（mock 沒有 server 可以問）。這一行以前

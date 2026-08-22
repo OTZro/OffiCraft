@@ -1087,9 +1087,28 @@
  * of the original inside the reply, which is exactly what carrying only the id
  * was meant to avoid. */
 .chat__msg-quote {
+  /* 🔴 TWO LINES SINCE 2026-08-22 (owner: 「換成兩行？ 一行是誰跟誰說話 一行是
+   * 內容？」). Line 1 is 「寄件者 → 收件者」 plus the control; line 2 is the
+   * quoted sentence. It was ONE line until T-4e95 added the recipient half, and
+   * the two halves then fought over the same horizontal space — with the excerpt
+   * losing, because it is the item that gives way first (see the shrink note
+   * below). Measured in the running app, English, a 5-character sender name, at
+   * vw=721 where the shell's roster column drops the pane to 347px:
+   * who 101px / excerpt 18px — 3 of 61 characters, and 0 on the CI runner.
+   * Splitting the line removes the competition instead of arbitrating it: the
+   * addressee cannot be dropped (it is the whole point of the field) and the
+   * sentence cannot be dropped (it is the whole point of the row).
+   *
+   * The COST is vertical: a quote row is ~16px taller than it was, on every
+   * reply, in a dense thread. Measured in this browser (CT harness, identical at
+   * 375/390/720/1280): 20.8px before, 36.7px after. The composer banner pays the
+   * same kind of toll, less of it: 34px before, 42.4px after — it has no
+   * `line-height` gap between its two halves. That was the trade the ruling
+   * made. */
   display: flex;
-  align-items: center;
-  gap: 4px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
   max-width: 100%;
   /* NO `overflow: hidden` and no `min-width: 0` here — but the honest claim is
    * narrow: an earlier comment called them load-bearing, and mutating each in
@@ -1117,19 +1136,35 @@
   line-height: 1.35;
   color: var(--color-text-muted);
 }
+/* Line 1. The only shrinkable thing on it is the name pair, so a long
+ * 「寄件者 → 收件者」 ellipsises rather than pushing the control out of the
+ * bubble — the same give the sender half already had, now covering both halves.
+ * That is a truncation of the existing drawing, not a second drawing: the arrow
+ * and both names stay in the same span, in the same order. */
+.chat__msg-quote__head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
 .chat__msg-quote__icon {
   flex: none;
 }
-/* 🔴 THE EXCERPT GIVES WAY, THE NAME DOES NOT — and getting that ordering right
- * took three tries, so the two that failed are written down.
+/* 🔴 THE NAME PAIR IS THE ONLY THING ON LINE 1 THAT GIVES WAY — and getting
+ * that right took three tries, so the two that failed are written down. They are
+ * still worth keeping: the failures were about a NAME, and the name is still
+ * here.
  *
  * ① `flex: none` on the name (a name is short). Display names are free text the
  *    owner types, so "short" is an assumption: a long one overflowed the bubble
  *    and put 跳到原訊息 on top of the corner reply button.
- * ② `flex: 0 1 auto` on the name. It stopped the overflow and broke the common
- *    case instead — flex distributes shrink IN PROPORTION to each item's basis,
- *    so the moment the excerpt was long enough to be cut, the name was cut with
- *    it: 「Mira」 rendered as 「M…」 with room to spare.
+ * ② `flex: 0 1 auto` on the name, WHILE THE EXCERPT WAS ON THE SAME LINE. It
+ *    stopped the overflow and broke the common case instead — flex distributes
+ *    shrink IN PROPORTION to each item's basis, so the moment the excerpt was
+ *    long enough to be cut, the name was cut with it: 「Mira」 rendered as
+ *    「M…」 with room to spare. That was repaired with an ASYMMETRIC shrink
+ *    factor (excerpt 10000, name 1) which is now GONE, because the two are no
+ *    longer on the same line — see `.chat__msg-quote` above.
  * ③ `flex: 0 0 auto` + `max-width: 40%`. Worse than it looks: `.chat__msg-bubble`
  *    is shrink-to-fit, and a PERCENTAGE max-width is ignored while the browser
  *    computes intrinsic width. So the bubble was sized to the FULL name and the
@@ -1137,16 +1172,20 @@
  *    1600px with a one-word excerpt and acres of empty row. Measured, 120 of 768
  *    scanned combinations cut the name while the excerpt was untouched.
  *
- * What actually expresses the rule is an ASYMMETRIC shrink factor, below: the
- * excerpt shrinks far more eagerly than the name, so it absorbs essentially all
- * of any deficit and the name only starts to give once the excerpt has nothing
- * left. No cap, no cliff, and nothing is cut while the row still has room.
+ * 🔴 SO THE PREMISE OF THIS DECLARATION CHANGED ON 2026-08-22 AND THE
+ * DECLARATION DID NOT. It used to be one shrinkable item competing with another
+ * (the excerpt) for one line's width, arbitrated by shrink factors. It is now
+ * the ONLY shrinkable item on line 1, competing with nothing — the icon, the
+ * jump and the failure sentence are all `flex: none`. What it still buys is ①:
+ * a free-text name that cannot shrink pushes the control out of the bubble and
+ * under the corner buttons. What it no longer costs is ②, because the excerpt
+ * is not there to be dragged down with it.
  *
- * Three story rows carry the three shapes — long name, short name with a long
- * excerpt, middling name with an excerpt too short to absorb anything — but be
- * precise about what each PINS: reverting the asymmetry reddens the short-name
- * row, and the third row reddens only on a percentage cap. Between them they
- * cover the two ways this has actually broken, not every way it could. */
+ * ⚠️ AND WHAT IT DEGRADES TO IS AN ELLIPSIS, NOT A THIRD DRAWING. On a pane too
+ * narrow for the whole pair, 「A → B」 becomes 「A → B…」 / 「A → …」 — the same
+ * span, the same arrow, the same order, cut by `text-overflow` exactly as the
+ * sender half alone always was. Nothing switches to a different shape and
+ * nothing is dropped. */
 .chat__msg-quote__who {
   flex: 0 1 auto;
   min-width: 0;
@@ -1155,27 +1194,16 @@
   white-space: nowrap;
   font-weight: 600;
 }
-/* 🔴 THE SHRINK FACTORS ARE A PRIORITY ORDER, written as orders of magnitude:
- * excerpt 10000 → name 1. Flex shares a deficit in proportion to
- * `factor × basis`, so the step down is far enough that the name rounds away
- * while the excerpt still has width to give; when an item bottoms out at zero
- * flex freezes it and the rest share what is left, which is exactly the hand-off
- * we want. `overflow: hidden` is load-bearing twice over: it clips the text AND
- * it is what lets this flex item go below its content width at all.
- *
- * ⚠️ THE JUMP IS NO LONGER A STEP IN THIS ORDER. It used to sit between the two
- * at a factor of 10 (and the gaps had to be wide: at 100 the excerpt still left
- * the jump 0.3% of a 2300px deficit — 7px, enough to visibly clip the label).
- * Since 2026-08-21 the button is `flex: none` and the label is either rendered
- * whole or `display: none` — it never shrinks, so it takes no share of any
- * deficit. There are two factors here now, not three.
- *
- * MUTANT (run 2026-08-22 against this file): `flex: 1 10000 auto` →
- * `flex: 1 1 auto` ⇒ 2 failed / 30 passed in `chat-reply-to.ct.spec.tsx`,
- * red at widths 390 and 1280 of "a short sender name in the quote row is never
- * ellipsised". */
+/* Line 2, the sentence. `flex: none` in a COLUMN flex container means "do not
+ * shrink my height"; the width comes from `align-items: stretch`, i.e. the whole
+ * row. There is no shrink factor here any more because there is nothing beside
+ * it to share a deficit with — that is exactly what the two-line split bought,
+ * and it is why the excerpt can no longer be squeezed to nothing at pane 347px.
+ * Still one line and still clipped: the quoted text belongs to a different
+ * message and its length is not this message's to grow. */
 .chat__msg-quote__body {
-  flex: 1 10000 auto;
+  flex: none;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1356,8 +1384,11 @@
 }
 
 /* ③ THE 「正在回覆」 BANNER, between the attachment previews and the input row.
- * Full width and clipped to one line for the same reason as the quote line: the
- * composer must not grow or jump as the owner aims at different messages. */
+ * Full width; TWO lines since 2026-08-22 — 「正在回覆 寄件者 → 收件者」 on one,
+ * the excerpt on the next — each clipped to one line, for the same reason as the
+ * quote row: the composer must not grow or jump as the owner aims at different
+ * messages, and a wrapped excerpt would do exactly that. See
+ * `.chat__reply-banner__text` for why the split. */
 .chat__reply-banner {
   display: flex;
   align-items: center;
@@ -1375,29 +1406,40 @@
   flex: none;
   color: var(--color-accent);
 }
+/* 🔴 TWO LINES HERE TOO, AND FOR THE SAME REASON — this is the second render
+ * surface of the same sentence and it is a SEPARATE code path (<ChatArea>
+ * resolves the banner's quote out of `messageById`, the row's out of the wire's
+ * `replyToChat`). Splitting one and not the other would leave the composer
+ * saying 「正在回覆 A → B」 and the excerpt beside it starving on exactly the
+ * pane widths the row was just repaired for, and would make the two surfaces
+ * disagree about the shape of the same quotation.
+ *
+ * The banner's stated rule was "clipped to one line … the composer must not grow
+ * or jump as the owner aims at different messages". The second half still holds
+ * and is the one that mattered: the banner's height is now a CONSTANT two lines
+ * regardless of which message is aimed at, so it still never jumps. What it does
+ * do is sit ~16px taller than it did, once, for as long as a reply is armed. */
 .chat__reply-banner__text {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
 }
-/* 🔴 THE SAME RULE THE QUOTE ROW ALREADY LEARNED, applied here too. This was
- * `flex: none` on the reasoning that a name is short — the exact assumption
- * that failed on the row版 and cost three tries there (see
- * `.chat__msg-quote__who` above). Display names are free text the owner types,
- * so a long one could not shrink: the excerpt beside it was squeezed toward
- * zero and the name itself was hard-cut by the parent's `overflow: hidden`,
- * with no ellipsis to say so.
+/* One per line, each ellipsised on its own. `flex: none` is about HEIGHT here —
+ * these are items of a column flex container — and the width comes from
+ * `align-items: stretch`, so each gets the whole banner.
  *
- * The shrink factors are the row's, deliberately — 10000 on the excerpt, 1 on
- * the name — so the excerpt absorbs essentially all of any deficit and the name
- * only gives once the excerpt has nothing left. Those numbers were measured on
- * the running app for the row; reusing them keeps one rule in this file, not
- * two that drift. */
+ * 🔴 THE SHRINK FACTORS THAT USED TO BE HERE ARE GONE, AND SO IS WHAT THEY WERE
+ * FOR. They were the row's own asymmetry (10000 on the excerpt, 1 on the name),
+ * copied deliberately so one rule governed both surfaces. That rule arbitrated a
+ * fight for one line's width; there is no fight left to arbitrate. A long
+ * display name now ellipsises inside its own line and takes nothing from the
+ * excerpt at all — which is strictly what the asymmetry was trying to
+ * approximate, and it no longer bottoms the excerpt out at zero on the way. */
 .chat__reply-banner__who {
-  flex: 0 1 auto;
+  flex: none;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1405,7 +1447,7 @@
   color: var(--color-text);
 }
 .chat__reply-banner__body {
-  flex: 1 10000 auto;
+  flex: none;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

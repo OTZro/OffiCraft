@@ -665,11 +665,12 @@ func TestResumeChat_CutMarkerIsActionableAndDistinctFromCollapse(t *testing.T) {
 // every mutant of it.
 //
 // The QUOTE LINE (T-4e95, 2026-08-21) is billed for the same reason everything
-// else here is: `reply_to_chat.content` and `.from_name` are PROSE the payload
-// carries, so a snapshot full of replies costs runes the budget must see. Its
-// `id` is not billed, under this file's flat "no id-shaped field" rule. This
-// was added after a mutant run measured the gap: deleting the quote terms from
-// resumeChatMessageChars left the whole Go package green.
+// else here is: `reply_to_chat.content`, `.from_name` and `.to_name` are PROSE
+// the payload carries, so a snapshot full of replies costs runes the budget
+// must see. Its `id`, `from` and `to` are not billed, under this file's flat
+// "no id-shaped field" rule. This was added after a mutant run measured the
+// gap: deleting the quote terms from resumeChatMessageChars left the whole Go
+// package green.
 //
 // MUTANT: drop ANY one term from resumeChatMessageChars, or drop the
 // generated_at / cut-hint terms from the overview, → red here. The peek/full
@@ -718,9 +719,10 @@ func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T)
 		}
 		if m.ReplyToChat != nil {
 			sawQuote = true
-			// The quote's ID is deliberately NOT added — same flat rule as every
-			// other id-shaped field this estimate skips.
+			// The quote's ID / from / to are deliberately NOT added — same flat
+			// rule as every other id-shaped field this estimate skips.
 			want += len([]rune(m.ReplyToChat.FromName)) +
+				len([]rune(m.ReplyToChat.ToName)) +
 				len([]rune(m.ReplyToChat.Content))
 		}
 		if m.Card != nil {

@@ -1366,7 +1366,7 @@
         "type": "object"
       },
       "ChatReplyQuoteDTO": {
-        "description": "The message a reply QUOTES, reduced to what a quote line has to draw: who said it, and a short piece of what they said. Carried inside ``ChatMessageDTO.reply_to_chat`` and assembled at read time.\n\n``from`` / ``from_name`` follow ``ChatMessageDTO``'s own convention and nothing else: ``from`` is the ADDRESS and always present, ``from_name`` is the human name carried IN ADDITION to it. The pair is copied from the message DTO on purpose — a quote that named its sender differently from the way the rest of the chat names senders would be a second naming convention to keep in step.",
+        "description": "The message a reply QUOTES, reduced to what a quote line has to draw: who said it, WHO THEY SAID IT TO, and a short piece of what they said. Carried inside ``ChatMessageDTO.reply_to_chat`` and assembled at read time.\n\n``from`` / ``from_name`` and ``to`` / ``to_name`` follow ``ChatMessageDTO``'s own convention and nothing else: the bare id is the ADDRESS and always present, the ``_name`` beside it is the human name carried IN ADDITION to it and filled only by the reads that resolve names at all. The pairs are copied from the message DTO on purpose — a quote that named its participants differently from the way the rest of the chat names them would be a second naming convention to keep in step.\n\nTHE ADDRESSEE IS PART OF THE QUOTE BECAUSE A QUOTE MAY COME FROM ANOTHER CONVERSATION (owner ruling, 2026-08-21). ``from`` alone reads as though the quoted line was said in the thread it is being drawn in, which is exactly wrong for the case the ruling opened: stepping into two other members' thread. ``to`` is the quoted message's OWN addressee — never the peer of the thread the reply lives in.",
         "properties": {
           "content": {
             "default": "",
@@ -1387,11 +1387,22 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "to": {
+            "title": "To",
+            "type": "string"
+          },
+          "to_name": {
+            "default": "",
+            "description": "The quoted ADDRESSEE's DISPLAY name, resolved exactly as ``to_name`` on the message DTO is, and filled by exactly the same reads ``from_name`` is: only the wake snapshot resolves names, every other read leaves it ``\"\"``. Honestly empty, never fabricated, and never a substitute for ``to``, which is always the address.",
+            "title": "To Name",
+            "type": "string"
           }
         },
         "required": [
           "id",
-          "from"
+          "from",
+          "to"
         ],
         "title": "ChatReplyQuoteDTO",
         "additionalProperties": false,

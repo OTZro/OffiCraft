@@ -154,7 +154,14 @@ describe("ChatArea: a quote costs no request", () => {
         body: "有的",
         ts: 2,
         replyTo: "c-1",
-        replyToChat: { id: "c-1", from: "m1", fromName: "", content: "他說的" },
+        replyToChat: {
+          id: "c-1",
+          from: "m1",
+          fromName: "",
+          to: "owner",
+          toName: "",
+          content: "他說的",
+        },
       }),
       mkMsg({
         id: "c-3",
@@ -233,7 +240,14 @@ describe("ChatArea: a quote costs no request", () => {
         body: "有的",
         ts: 2,
         replyTo: "c-1",
-        replyToChat: { id: "c-1", from: "m1", fromName: "", content: "他說的" },
+        replyToChat: {
+          id: "c-1",
+          from: "m1",
+          fromName: "",
+          to: "owner",
+          toName: "",
+          content: "他說的",
+        },
       }),
     ];
 
@@ -325,7 +339,14 @@ describe("ChatArea: a quote costs no request", () => {
         body: "有的",
         ts: 2,
         replyTo: "c-1",
-        replyToChat: { id: "c-1", from: "m1", fromName: "", content: "他說的" },
+        replyToChat: {
+          id: "c-1",
+          from: "m1",
+          fromName: "",
+          to: "owner",
+          toName: "",
+          content: "他說的",
+        },
       }),
     ];
     const { container } = render(
@@ -397,7 +418,14 @@ describe("ChatArea: a quote costs no request", () => {
         body: "有的",
         ts: 2,
         replyTo: "c-1",
-        replyToChat: { id: "c-1", from: "m1", fromName: "", content: "他說的" },
+        replyToChat: {
+          id: "c-1",
+          from: "m1",
+          fromName: "",
+          to: "owner",
+          toName: "",
+          content: "他說的",
+        },
       }),
     ];
     let release!: () => void;
