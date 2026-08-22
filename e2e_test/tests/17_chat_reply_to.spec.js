@@ -52,7 +52,32 @@ const FILLER = 24;
 // back. 200 rows guarantees the target is nowhere near the window.
 const FAR_FILLER = 200;
 
+// 🔴 THE OWNER'S DISPLAY NAME IS A FIXTURE HERE, NOT A CONSTANT. Since T-4e95 a
+// quote names 「寄件者 → 收件者」, and when the owner is the recipient the name
+// printed is the one HE set (`/api/settings owner_name`), falling back to the
+// theme's default word for the human. Writing 「CEO（你）」 into an expectation
+// would pin the FALLBACK — a string that lives in `src/i18n/locales/zh.ts` and
+// belongs to the theme, not to this feature — and would go red the day anyone
+// renames a theme's word for the human, for a reason that has nothing to do with
+// reply-to. So the test sets the nickname it is going to assert, which also
+// exercises the other half of T-4e95 (the cockpit calls the owner by the name he
+// set, not by the theme's default) in the same string.
+const OWNER_NICK = uniqueName('Owner');
+
 test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
+  // The nickname is server state on a station every spec in this suite shares.
+  // Put it back the way it was found — an untouched studio has no owner_name,
+  // and a later spec that renders the owner must not inherit this one's fixture.
+  // Unconditional and in an `afterEach`, so a spec that fails half-way still
+  // cleans up.
+  test.afterEach(async ({ request }) => {
+    const token = await ownerToken(request);
+    await request.patch(`${BASE}/api/settings`, {
+      headers: authHeaders(token),
+      data: { owner_name: '' },
+    });
+  });
+
   test('reply to a message: the banner names the sender, the send carries the link, the reply shows a quote row, and it opens the original in full', async ({
     page,
   }) => {
@@ -60,6 +85,18 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     const token = await ownerToken(request);
     const M = await hireMember(request, token, NAME_M);
     const tokM = await mintMemberToken(request, token, M.id, 1);
+    // Set BEFORE the SPA boots: <App> resolves the nickname once on mount and
+    // hands it down, so a value written after the boot would not be the one the
+    // banner is drawn with.
+    const nickRes = await request.patch(`${BASE}/api/settings`, {
+      headers: authHeaders(token),
+      data: { owner_name: OWNER_NICK },
+    });
+    expect(nickRes.status(), await nickRes.text()).toBe(200);
+    expect(
+      (await nickRes.json()).owner_name,
+      'the server must have stored the nickname this test is about to assert',
+    ).toBe(OWNER_NICK);
 
     // The message that will be replied TO comes from the member, so the banner
     // has a name to print that is NOT the owner's — a banner that printed the
@@ -89,11 +126,18 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     await target.hover();
     await target.getByRole('button', { name: '回覆這則' }).click();
 
-    // ── 橫幅 names the real sender, not a coin flip between the two people.
+    // ── 橫幅 names the real sender, not a coin flip between the two people —
+    // AND says who he said it to. Both halves, one equality: 「寄件者 →
+    // 收件者」 is the shape T-4e95 settled on and a partial match (toContainText)
+    // would pass on a banner that had lost the arrow, lost the addressee, or put
+    // the two people the wrong way round. Every character on the right-hand side
+    // is built from this test's own fixtures — the member's unique name and the
+    // nickname it wrote into `/api/settings` above — so nothing here is a copy
+    // of a product string.
     const banner = page.getByTestId('chat-reply-banner');
     await expect(banner).toBeVisible();
     await expect(banner.locator('.chat__reply-banner__who')).toHaveText(
-      `正在回覆 ${NAME_M}`,
+      `正在回覆 ${NAME_M} → ${OWNER_NICK}`,
     );
     await expect(banner.locator('.chat__reply-banner__body')).toContainText(
       TARGET.slice(0, 12),
@@ -359,16 +403,21 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     test.setTimeout(120000);
     const request = page.request;
     const token = await ownerToken(request);
-    // 🔴 A SHORT DISPLAY NAME, ON PURPOSE, AND IT IS NOT A CONVENIENCE. The quote
-    // row's shrink order gives the excerpt away 10000× more eagerly than the
-    // sender's name (office.css, and `chat-reply-to.ct.spec.tsx` pins that
-    // ordering deliberately: the name says WHO is being answered). So a LONG
-    // name starves the excerpt to zero on its own, at pane widths where the jump
-    // label has nothing to do with it — measured here with the harness's usual
-    // `uniqueName('Reply Wide')` (20 chars): 0 visible characters at vw=721 even
-    // with the label correctly collapsed. That is a different question about a
-    // different declaration, and letting it ride in this test would make the
-    // test red for a reason it does not name.
+    // 🔴 A SHORT DISPLAY NAME, ON PURPOSE, AND IT IS NOT A CONVENIENCE. It kept
+    // the ONE variable this test is about (the jump label's width) from being
+    // drowned by another one.
+    //
+    // ⚠️ THE MECHANISM BEHIND THAT SENTENCE CHANGED ON 2026-08-22 AND THE
+    // FIXTURE IS KEPT ANYWAY. It used to read: the quote row's shrink order
+    // gives the excerpt away 10000× more eagerly than the sender's name, so a
+    // LONG name starves the excerpt to zero on its own — measured with the
+    // harness's usual `uniqueName('Reply Wide')` (20 chars), 0 visible
+    // characters at vw=721 even with the label correctly collapsed. That order
+    // no longer exists: the row is two lines and the sentence has one to itself,
+    // so no name can take a pixel from it (see `.chat__msg-quote` in office.css).
+    // The name is still built short here because it is still not what this test
+    // is asking about, and because keeping the fixture stable keeps the numbers
+    // in the table below comparable across the change.
     //
     // What this test is about is the BREAKPOINT'S AXIS, so the name is kept SHORT
     // (5 chars) and the jump label's width is the only variable left. Still
@@ -445,6 +494,26 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     //   880   506   collapsed      215               0
     //  1280   666   whole          205             205
     //
+    // ⚠️ THAT TABLE PREDATES TWO LATER CHANGES AND IS KEPT ONLY FOR THE SHAPE IT
+    // ARGUES. It was taken when the row carried the SENDER ALONE on ONE line.
+    // T-4e95 then added 「→ 收件者」 to the same line, and this spec measured the
+    // consequence on the CI runner: 0 of 61 characters at vw=721 — the very
+    // failure the table's right-hand column describes, arriving through a
+    // different door. On this machine the same build measured 3 of 61 (excerpt
+    // 18px of a 255px row) — green by three characters, which is why the
+    // ownership assertion in the loop exists alongside the count.
+    // Owner's ruling was to split the row in two. Re-measured here after the
+    // split, same fixtures, English:
+    //
+    //   vw   pane   excerpt px   chars
+    //   720   628      323       61/61
+    //   721   347      151       29/61
+    //   800   426      213       40/61
+    //   880   506      275       53/61
+    //  1280   666      323       61/61
+    //
+    // Read these as a shape too. Nothing asserts against them.
+    //
     // 720 and 1280 are the controls on either side — they were never broken, so
     // a change that "fixes" the band by wrecking everything else still fails
     // here. 560 is the far side of the old viewport breakpoint.
@@ -453,6 +522,16 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
     // (`@media (max-width: 560px)`) and this test goes red at vw=721 with 0 of
     // 61 characters, then again at 800 and 880. Nothing else in the repo moves —
     // that is what "the CT harness has no app shell" means in practice.
+    //
+    // MUTANT (run 2026-08-22, the two-line split): revert `.chat__msg-quote` to
+    // a single row (`__head` to `display: contents`, `__body` back to
+    // `flex: 1 10000 auto`) and the OWNERSHIP assertion goes red on the loop's
+    // FIRST width, vw=720: 225px of excerpt in a 497px row. (The loop stops
+    // there; at vw=721 the same mutant leaves 18px of a 255px row.) The
+    // CHARACTER COUNT does not go red on this machine (3 of 61); it did on the
+    // CI runner (0 of 61). Both numbers are in this file on purpose: the count
+    // is what the owner's complaint looks like, the ownership is what a guard
+    // can stand on.
     for (const width of [720, 721, 800, 880, 1280]) {
       await page.setViewportSize({ width, height: 900 });
       // 🔴 WAIT FOR THE SHELL, NOT FOR A TIMEOUT, AND THIS IS NOT FLAKE-PADDING.
@@ -493,7 +572,13 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
               if (r.width > 0 && r.right <= clip.right + 0.5) chars++;
             }
           }
-          return { chars, paneW: pane ? pane.clientWidth : -1 };
+          const row = el.closest('.chat__msg-quote');
+          return {
+            chars,
+            paneW: pane ? pane.clientWidth : -1,
+            bodyW: Math.round(el.clientWidth),
+            rowW: Math.round(row.clientWidth),
+          };
         });
       // 🔴 COUNT CHARACTERS, NOT PIXELS OF BOX. The element keeps its box while
       // showing nothing: `overflow: hidden` is PAINT, so `clientWidth` can be a
@@ -505,6 +590,27 @@ test.describe('T-4e95 · reply-to — banner, wire, quote row, jump', () => {
           `squeezed to nothing — this is the band where a viewport-based ` +
           `breakpoint showed 0 of 61 characters while the window got WIDER`,
       ).toBeGreaterThan(0);
+      // 🔴 ADDED 2026-08-22, AND IT IS A STRENGTHENING — the line above keeps
+      // its width, its threshold and every width in the loop. Here is why it
+      // needed company.
+      //
+      // The count above is the SYMPTOM and it is a knife edge: when T-4e95 put
+      // the recipient on this row and the row was still ONE line, this machine
+      // measured 3 of 61 characters here (excerpt 18px) and the CI runner
+      // measured 0 — same defect, same pixels, different fonts, and only one of
+      // the two turned the build red. A guard whose discrimination is three
+      // characters wide is a guard that finds the bug on someone else's machine.
+      //
+      // So assert the MECHANISM as well: since the row was split in two (owner
+      // ruling 2026-08-22) the sentence has a line to itself and there is
+      // nothing beside it to lose width to — at any pane width, in any font.
+      // Measured here after the split: 151px of a 151px row at pane 347;
+      // before it, 18px of a 255px row.
+      expect(
+        seen.bodyW,
+        `vw=${width} (pane ${seen.paneW}px): the quoted sentence must own the ` +
+          `whole quote row — anything sharing its line takes characters off it`,
+      ).toBe(seen.rowW);
     }
   });
 });

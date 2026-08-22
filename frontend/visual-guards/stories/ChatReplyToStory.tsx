@@ -86,6 +86,14 @@ export function ChatReplyToStory({
   // characters. Too short to trip the corner-collision guard (measured: that
   // one needs 33), and exactly the length a percentage cap silently trimmed.
   const rawIdSender = "ow-8808ccf51794";
+  // 🔴 THE E2E SPEC'S OWN FIXTURE, so the CT row below measures the arrangement
+  // production measured. `17_chat_reply_to.spec.js` builds a 5-character sender
+  // ('A' + 4 base-36 characters), the addressee resolves to the owner's English
+  // default display name, and the quoted sentence is 61 characters of English.
+  const shellSender = "A1b2c";
+  const ownerDefaultName = "CEO (You)";
+  const shellQuote =
+    "a sentence long enough that the quote row has to give something up";
   return (
     <div className="chat">
       <div className="chat__body">
@@ -153,33 +161,11 @@ export function ChatReplyToStory({
                     </button>
                   </div>
                   <div className="chat__msg-quote" data-testid="quote-row">
-                    <svg
-                      className="chat__msg-quote__icon"
-                      width="11"
-                      height="11"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <polyline points="9 17 4 12 9 7" />
-                    </svg>
-                    <span className="chat__msg-quote__who">
-                      {`${unresolvedSender} → ${quotedRecipient}`}
-                    </span>
-                    <span className="chat__msg-quote__body">{longQuote}</span>
-                    <button
-                      type="button"
-                      className="chat__msg-quote__jump"
-                      data-testid="quote-jump"
-                    >
-                      <span className="chat__msg-quote__jump-label">{jumpLabel}</span>
+                    <div className="chat__msg-quote__head">
                       <svg
-                        className="chat__msg-quote__jump-chevron"
-                        width="12"
-                        height="12"
+                        className="chat__msg-quote__icon"
+                        width="11"
+                        height="11"
                         viewBox="0 0 24 24"
                         fill="none"
                         stroke="currentColor"
@@ -187,9 +173,33 @@ export function ChatReplyToStory({
                         strokeLinecap="round"
                         strokeLinejoin="round"
                       >
-                        <path d="m9 18 6-6-6-6" />
+                        <polyline points="9 17 4 12 9 7" />
                       </svg>
-                    </button>
+                      <span className="chat__msg-quote__who">
+                        {`${unresolvedSender} → ${quotedRecipient}`}
+                      </span>
+                      <button
+                        type="button"
+                        className="chat__msg-quote__jump"
+                        data-testid="quote-jump"
+                      >
+                        <span className="chat__msg-quote__jump-label">{jumpLabel}</span>
+                        <svg
+                          className="chat__msg-quote__jump-chevron"
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="m9 18 6-6-6-6" />
+                        </svg>
+                      </button>
+                    </div>
+                    <span className="chat__msg-quote__body">{longQuote}</span>
                   </div>
                   <div className="chat__msg-text doc-md">好，我照這個做</div>
                 </div>
@@ -226,35 +236,11 @@ export function ChatReplyToStory({
                     </button>
                   </div>
                   <div className="chat__msg-quote" data-testid="quote-row-short">
-                    <svg
-                      className="chat__msg-quote__icon"
-                      width="11"
-                      height="11"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <polyline points="9 17 4 12 9 7" />
-                    </svg>
-                    <span className="chat__msg-quote__who" data-testid="quote-who-short">
-                      {`Mira → ${quotedRecipient}`}
-                    </span>
-                    <span className="chat__msg-quote__body" data-testid="quote-body-short">
-                      {veryLongQuote}
-                    </span>
-                    <button
-                      type="button"
-                      className="chat__msg-quote__jump"
-                      data-testid="quote-jump-short"
-                    >
-                      <span className="chat__msg-quote__jump-label">{jumpLabel}</span>
+                    <div className="chat__msg-quote__head">
                       <svg
-                        className="chat__msg-quote__jump-chevron"
-                        width="12"
-                        height="12"
+                        className="chat__msg-quote__icon"
+                        width="11"
+                        height="11"
                         viewBox="0 0 24 24"
                         fill="none"
                         stroke="currentColor"
@@ -262,9 +248,35 @@ export function ChatReplyToStory({
                         strokeLinecap="round"
                         strokeLinejoin="round"
                       >
-                        <path d="m9 18 6-6-6-6" />
+                        <polyline points="9 17 4 12 9 7" />
                       </svg>
-                    </button>
+                      <span className="chat__msg-quote__who" data-testid="quote-who-short">
+                        {`Mira → ${quotedRecipient}`}
+                      </span>
+                      <button
+                        type="button"
+                        className="chat__msg-quote__jump"
+                        data-testid="quote-jump-short"
+                      >
+                        <span className="chat__msg-quote__jump-label">{jumpLabel}</span>
+                        <svg
+                          className="chat__msg-quote__jump-chevron"
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="m9 18 6-6-6-6" />
+                        </svg>
+                      </button>
+                    </div>
+                    <span className="chat__msg-quote__body" data-testid="quote-body-short">
+                      {veryLongQuote}
+                    </span>
                   </div>
                   <div className="chat__msg-text doc-md">好，我照這個做</div>
                 </div>
@@ -303,35 +315,11 @@ export function ChatReplyToStory({
                     </button>
                   </div>
                   <div className="chat__msg-quote" data-testid="quote-row-tight">
-                    <svg
-                      className="chat__msg-quote__icon"
-                      width="11"
-                      height="11"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <polyline points="9 17 4 12 9 7" />
-                    </svg>
-                    <span className="chat__msg-quote__who" data-testid="quote-who-tight">
-                      {`${rawIdSender} → ${quotedRecipient}`}
-                    </span>
-                    <span className="chat__msg-quote__body" data-testid="quote-body-tight">
-                      好
-                    </span>
-                    <button
-                      type="button"
-                      className="chat__msg-quote__jump"
-                      data-testid="quote-jump-tight"
-                    >
-                      <span className="chat__msg-quote__jump-label">{jumpLabel}</span>
+                    <div className="chat__msg-quote__head">
                       <svg
-                        className="chat__msg-quote__jump-chevron"
-                        width="12"
-                        height="12"
+                        className="chat__msg-quote__icon"
+                        width="11"
+                        height="11"
                         viewBox="0 0 24 24"
                         fill="none"
                         stroke="currentColor"
@@ -339,9 +327,35 @@ export function ChatReplyToStory({
                         strokeLinecap="round"
                         strokeLinejoin="round"
                       >
-                        <path d="m9 18 6-6-6-6" />
+                        <polyline points="9 17 4 12 9 7" />
                       </svg>
-                    </button>
+                      <span className="chat__msg-quote__who" data-testid="quote-who-tight">
+                        {`${rawIdSender} → ${quotedRecipient}`}
+                      </span>
+                      <button
+                        type="button"
+                        className="chat__msg-quote__jump"
+                        data-testid="quote-jump-tight"
+                      >
+                        <span className="chat__msg-quote__jump-label">{jumpLabel}</span>
+                        <svg
+                          className="chat__msg-quote__jump-chevron"
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="m9 18 6-6-6-6" />
+                        </svg>
+                      </button>
+                    </div>
+                    <span className="chat__msg-quote__body" data-testid="quote-body-tight">
+                      好
+                    </span>
                   </div>
                   <div className="chat__msg-text doc-md">好</div>
                 </div>
@@ -391,35 +405,11 @@ export function ChatReplyToStory({
                     </button>
                   </div>
                   <div className="chat__msg-quote" data-testid="quote-row-incoming">
-                    <svg
-                      className="chat__msg-quote__icon"
-                      width="11"
-                      height="11"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <polyline points="9 17 4 12 9 7" />
-                    </svg>
-                    <span className="chat__msg-quote__who" data-testid="quote-who-incoming">
-                      {`CEO → ${quotedRecipient}`}
-                    </span>
-                    <span className="chat__msg-quote__body" data-testid="quote-body-incoming">
-                      好
-                    </span>
-                    <button
-                      type="button"
-                      className="chat__msg-quote__jump"
-                      data-testid="quote-jump-incoming"
-                    >
-                      <span className="chat__msg-quote__jump-label">{jumpLabel}</span>
+                    <div className="chat__msg-quote__head">
                       <svg
-                        className="chat__msg-quote__jump-chevron"
-                        width="12"
-                        height="12"
+                        className="chat__msg-quote__icon"
+                        width="11"
+                        height="11"
                         viewBox="0 0 24 24"
                         fill="none"
                         stroke="currentColor"
@@ -427,15 +417,124 @@ export function ChatReplyToStory({
                         strokeLinecap="round"
                         strokeLinejoin="round"
                       >
-                        <path d="m9 18 6-6-6-6" />
+                        <polyline points="9 17 4 12 9 7" />
                       </svg>
-                    </button>
+                      <span className="chat__msg-quote__who" data-testid="quote-who-incoming">
+                        {`CEO → ${quotedRecipient}`}
+                      </span>
+                      <button
+                        type="button"
+                        className="chat__msg-quote__jump"
+                        data-testid="quote-jump-incoming"
+                      >
+                        <span className="chat__msg-quote__jump-label">{jumpLabel}</span>
+                        <svg
+                          className="chat__msg-quote__jump-chevron"
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="m9 18 6-6-6-6" />
+                        </svg>
+                      </button>
+                    </div>
+                    <span className="chat__msg-quote__body" data-testid="quote-body-incoming">
+                      好
+                    </span>
                   </div>
                   <div className="chat__msg-text doc-md">好，我照這個做</div>
                 </div>
               </div>
               <div className="chat__msg-sidemeta">
                 <span className="chat__msg-time">10:06</span>
+              </div>
+            </div>
+          </div>
+
+          {/* 🔴 THE PRODUCTION FIXTURE, COPIED FIELD FOR FIELD — this row exists
+            * so the CT harness can finally see the regression that only
+            * `e2e_test/tests/17_chat_reply_to.spec.js` could see before. Every
+            * value here is the one that spec builds: a 5-character sender name
+            * (deliberately short there, so the NAME is not what starves the
+            * excerpt), the owner's English default display name as the
+            * addressee, and that spec's own English 61-character sentence.
+            *
+            * Under the ONE-LINE row this pair measured `who` 101px and
+            * `body` 18px at pane 347px in the running app — 3 of 61 characters,
+            * 0 on the CI runner. The CT test that mounts this row drives the
+            * pane to 347px (viewport 395 in this harness) and counts the
+            * characters that survive, which is the assertion the whole
+            * two-line split exists to keep true. */}
+          <div className="chat__msg chat__msg--me" data-msg-id="c-6" data-testid="row-mine-pane347">
+            <div className="chat__msg-line">
+              <div className="chat__msg-sidemeta">
+                <span className="chat__msg-time">10:07</span>
+              </div>
+              <div className="chat__msg-content">
+                <div className="chat__msg-bubble chat__msg-bubble--acts1">
+                  <div className="chat__msg-actions">
+                    <button
+                      type="button"
+                      className="chat__msg-reply"
+                      aria-label="回覆這則"
+                      data-testid="reply-entry-mine-pane347"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="9 17 4 12 9 7" />
+                        <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="chat__msg-quote" data-testid="quote-row-pane347">
+                    <div className="chat__msg-quote__head">
+                      <svg
+                        className="chat__msg-quote__icon"
+                        width="11"
+                        height="11"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <polyline points="9 17 4 12 9 7" />
+                      </svg>
+                      <span className="chat__msg-quote__who" data-testid="quote-who-pane347">
+                        {`${shellSender} \u2192 ${ownerDefaultName}`}
+                      </span>
+                      <button
+                        type="button"
+                        className="chat__msg-quote__jump"
+                        data-testid="quote-jump-pane347"
+                      >
+                        <span className="chat__msg-quote__jump-label">{jumpLabel}</span>
+                        <svg
+                          className="chat__msg-quote__jump-chevron"
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="m9 18 6-6-6-6" />
+                        </svg>
+                      </button>
+                    </div>
+                    <span className="chat__msg-quote__body" data-testid="quote-body-pane347">
+                      {shellQuote}
+                    </span>
+                  </div>
+                  <div className="chat__msg-text doc-md">answering it</div>
+                </div>
               </div>
             </div>
           </div>

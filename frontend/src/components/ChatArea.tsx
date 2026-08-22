@@ -63,8 +63,10 @@ const OWNER_ID = "owner";
 // comment said the reason was that "a multi-line excerpt would push the composer
 // around as the owner re-aims". That failure could not happen: office.css puts
 // `white-space: nowrap` on `.chat__reply-banner__text`, which the body inherits,
-// so the browser already collapses every newline to a space and lays the whole
-// thing out on one line. Measured in a real Chromium at 390px — banner height
+// so the browser already collapses every newline to a space and lays the body
+// out on one line. (The banner became TWO lines on 2026-08-22 — who on one, the
+// excerpt on the next — which changes nothing here: each half is still one line
+// box and `nowrap` is still what makes the body's newlines collapse.) Measured in a real Chromium at 390px — banner height
 // 34px with a collapsed body and 34px with a deliberately un-collapsed one
 // carrying two blank lines and a run of spaces. Mutating the function's body to
 // `return body;` left all 2284 frontend tests green: it was the only surviving
@@ -1225,118 +1227,134 @@ export function ChatArea({
          * quote through its aria-label, so an unnamed <img> node in the tree
          * beside it is pure noise. Only this one is hidden — the rest of the
          * app's icons are a separate, pre-existing question. */}
-        <ReplyIcon
-          size={11}
-          className="chat__msg-quote__icon"
-          aria-hidden="true"
-        />
-        {quoteWho && <span className="chat__msg-quote__who">{quoteWho}</span>}
+        {/* 🔴 LINE 1 — WHO SAID IT TO WHOM, and the control. Owner ruling
+         * 2026-08-22 (「換成兩行？ 一行是誰跟誰說話 一行是內容？」): the row is
+         * two lines, so 「→ 收件者」 and the quoted sentence stop competing for
+         * the same horizontal space. Before that ruling they shared one line and
+         * the recipient half was pure loss for the excerpt: measured in the
+         * running app at vw=721 (pane 347px), English, a 5-character sender —
+         * `.chat__msg-quote__who` 101px, `.chat__msg-quote__body` 18px, 3 of 61
+         * characters left, and 0 on the CI runner's fonts. The addressee is not
+         * optional (it is what the field exists for), so the line is what gave. */}
+        <div className="chat__msg-quote__head">
+          <ReplyIcon
+            size={11}
+            className="chat__msg-quote__icon"
+            aria-hidden="true"
+          />
+          {quoteWho && <span className="chat__msg-quote__who">{quoteWho}</span>}
+          {/* The control is its own element, the way 查看任務詳情 is on a
+           * task-derived ask (ReplyCardTaskRef) — owner 2026-08-20.
+           *
+           * 🔴 IT IS OFFERED FOR EVERY REPLY, UNCONDITIONALLY (owner ruling
+           * 2026-08-21: 「全部統一就撈那一則顯示出來就好」). It used to appear only
+           * when the quoted row was already in the loaded window, on the argument
+           * that an affordance which scrolls nowhere is worse than none — true of
+           * a control that SCROLLS. This one does not scroll: it reads that one
+           * message back from the server and opens it in the full-view overlay,
+           * so it works identically for a quote from ten seconds ago and one from
+           * ten thousand messages ago. The window-membership question is gone, and
+           * with it the row's only piece of local, disagreeable state.
+           *
+           * The row still shows the SERVER's 60-rune excerpt; the overlay shows
+           * the whole body. Nothing here re-cuts anything.
+           *
+           * ⚠️ ONE CONDITION SURVIVES, AND IT IS NOT THE WINDOW ONE. `quoted` —
+           * the server's snapshot — must be present. When it is absent this row is
+           * printing 「這則訊息已不存在」, which is the server's own answer from
+           * THIS read: the original is gone. Offering a control there would be
+           * offering to open a message we have just told the reader does not
+           * exist, and pressing it could only ever produce 「拿不到這則訊息」 one
+           * line below. That is not the window check coming back through a side
+           * door — the window is never consulted — it is the row declining to
+           * contradict itself.
+           *
+           * 🔴 THE LABEL IS ITS OWN ELEMENT so it can be the thing that
+           * DISAPPEARS. It is not trimmed and it never was made trimmable in the
+           * end: nothing in office.css can ellipsise it — the button is
+           * `flex: none` with `white-space: nowrap`, and the label's ONLY rule is
+           * `display: none` inside `@container chat-pane (max-width: 520px)`. So
+           * on a narrow pane the whole label goes and the arrow is what is left;
+           * on a wide one the label renders whole. Whole or absent, never cut.
+           *
+           * The control used to keep its intrinsic width on the reasoning that a
+           * cut 跳到原訊息 helps nobody — true of the Chinese control, which was
+           * 69px. The English one at the time was "Go to the original message" at
+           * 154px (both figures are the WHOLE BUTTON: label + 2px gap + 12px
+           * chevron). Today the labels read 「看原訊息」 / "View the original
+           * message" — `d7752781` renamed them with the behaviour — and the
+           * English control measures ~151px, so the pressure is unchanged. A
+           * control that cannot give way does not stay politely inside the
+           * bubble: it
+           * runs past the edge and under the corner buttons, which are absolutely
+           * positioned and therefore painted on top of it. Measured against the
+           * running app: it fails at the narrow end in BOTH languages, and again
+           * just past the two-column breakpoint on an INCOMING bubble WITH A BODY
+           * (`!mine && m.body` → `--acts2`) — that one reserves 56px of corner
+           * where your own reserves 32. Two conditions, not one: `!mine &&
+           * m.body` is what widens the corner, and `m.replyTo` is what puts a
+           * quote row there to overflow. The worst case is both together. Two earlier versions of this note quoted exact ranges;
+           * both were wrong, because the range moves with the bubble kind, the
+           * language and the display name. The guard holds the numbers.
+           * Dropping the whole label and keeping its arrow beats a control hidden
+           * under another control. */}
+          {m.replyTo && quoted && (
+            <button
+              type="button"
+              className="chat__msg-quote__jump"
+              data-testid="msg-quote-jump"
+              /* 🔴 THE NAME CANNOT RIDE ON THE VISIBLE LABEL. That label is the
+               * first thing this row gives up when the PANE runs short (see the
+               * note above), and it does not shrink on the way out — below 520px
+               * of pane it is `display: none` outright. A name riding on it would
+               * not degrade, it would VANISH, leaving a button whose only content
+               * is a decorative chevron and whose accessible name is the empty
+               * string. Naming the control explicitly is what keeps it named in
+               * the half of the width range where the label is not rendered at
+               * all. */
+              aria-label={t.chat.replyQuoteJump}
+              title={t.chat.replyQuoteJump}
+              onClick={() => openQuotedMessage(m.replyTo as string)}
+            >
+              <span className="chat__msg-quote__jump-label">
+                {t.chat.replyQuoteJump}
+              </span>
+              <ChevronRightIcon
+                size={12}
+                className="chat__msg-quote__jump-chevron"
+              />
+            </button>
+          )}
+          {/* 🔴 THE FAILURE IS SAID HERE, NOT IN THE QUOTE LINE. The line above
+           * either carries the server's excerpt or carries 「這則訊息已不存在」,
+           * and that sentence is a claim about whether the original EXISTS. A read
+           * that failed says nothing about that, so overwriting the line with it
+           * would turn a network fault into a false statement about the
+           * conversation — the exact confusion the whole redesign removed.
+           *
+           * It is also the end of the story: no retry, no second attempt on the
+           * next event, and it does not survive the next click on another row
+           * (one piece of state, last click wins). `role="status"` so a screen
+           * reader hears the outcome of the button it just pressed — the button
+           * itself keeps its own name. */}
+          {quoteOpenFailedId === m.replyTo && (
+            <span
+              className="chat__msg-quote__error"
+              data-testid="msg-quote-error"
+              role="status"
+            >
+              {t.chat.replyQuoteOpenFailed}
+            </span>
+          )}
+        </div>
+        {/* 🔴 LINE 2 — THE SENTENCE, WITH THE WHOLE ROW TO ITSELF. This is the
+         * only thing on the row that says WHAT is being answered, and since the
+         * two-line split nothing above it can take its width: it starts at the
+         * row's left edge and runs to the right edge, still clipped to one line
+         * (a quotation is not this message's to grow). */}
         <span className="chat__msg-quote__body" title={quoteText}>
           {quoteText}
         </span>
-        {/* The control is its own element, the way 查看任務詳情 is on a
-         * task-derived ask (ReplyCardTaskRef) — owner 2026-08-20.
-         *
-         * 🔴 IT IS OFFERED FOR EVERY REPLY, UNCONDITIONALLY (owner ruling
-         * 2026-08-21: 「全部統一就撈那一則顯示出來就好」). It used to appear only
-         * when the quoted row was already in the loaded window, on the argument
-         * that an affordance which scrolls nowhere is worse than none — true of
-         * a control that SCROLLS. This one does not scroll: it reads that one
-         * message back from the server and opens it in the full-view overlay,
-         * so it works identically for a quote from ten seconds ago and one from
-         * ten thousand messages ago. The window-membership question is gone, and
-         * with it the row's only piece of local, disagreeable state.
-         *
-         * The row still shows the SERVER's 60-rune excerpt; the overlay shows
-         * the whole body. Nothing here re-cuts anything.
-         *
-         * ⚠️ ONE CONDITION SURVIVES, AND IT IS NOT THE WINDOW ONE. `quoted` —
-         * the server's snapshot — must be present. When it is absent this row is
-         * printing 「這則訊息已不存在」, which is the server's own answer from
-         * THIS read: the original is gone. Offering a control there would be
-         * offering to open a message we have just told the reader does not
-         * exist, and pressing it could only ever produce 「拿不到這則訊息」 one
-         * line below. That is not the window check coming back through a side
-         * door — the window is never consulted — it is the row declining to
-         * contradict itself.
-         *
-         * 🔴 THE LABEL IS ITS OWN ELEMENT so it can be the thing that
-         * DISAPPEARS. It is not trimmed and it never was made trimmable in the
-         * end: nothing in office.css can ellipsise it — the button is
-         * `flex: none` with `white-space: nowrap`, and the label's ONLY rule is
-         * `display: none` inside `@container chat-pane (max-width: 520px)`. So
-         * on a narrow pane the whole label goes and the arrow is what is left;
-         * on a wide one the label renders whole. Whole or absent, never cut.
-         *
-         * The control used to keep its intrinsic width on the reasoning that a
-         * cut 跳到原訊息 helps nobody — true of the Chinese control, which was
-         * 69px. The English one at the time was "Go to the original message" at
-         * 154px (both figures are the WHOLE BUTTON: label + 2px gap + 12px
-         * chevron). Today the labels read 「看原訊息」 / "View the original
-         * message" — `d7752781` renamed them with the behaviour — and the
-         * English control measures ~151px, so the pressure is unchanged. A
-         * control that cannot give way does not stay politely inside the
-         * bubble: it
-         * runs past the edge and under the corner buttons, which are absolutely
-         * positioned and therefore painted on top of it. Measured against the
-         * running app: it fails at the narrow end in BOTH languages, and again
-         * just past the two-column breakpoint on an INCOMING bubble WITH A BODY
-         * (`!mine && m.body` → `--acts2`) — that one reserves 56px of corner
-         * where your own reserves 32. Two conditions, not one: `!mine &&
-         * m.body` is what widens the corner, and `m.replyTo` is what puts a
-         * quote row there to overflow. The worst case is both together. Two earlier versions of this note quoted exact ranges;
-         * both were wrong, because the range moves with the bubble kind, the
-         * language and the display name. The guard holds the numbers.
-         * Dropping the whole label and keeping its arrow beats a control hidden
-         * under another control. */}
-        {m.replyTo && quoted && (
-          <button
-            type="button"
-            className="chat__msg-quote__jump"
-            data-testid="msg-quote-jump"
-            /* 🔴 THE NAME CANNOT RIDE ON THE VISIBLE LABEL. That label is the
-             * first thing this row gives up when the PANE runs short (see the
-             * note above), and it does not shrink on the way out — below 520px
-             * of pane it is `display: none` outright. A name riding on it would
-             * not degrade, it would VANISH, leaving a button whose only content
-             * is a decorative chevron and whose accessible name is the empty
-             * string. Naming the control explicitly is what keeps it named in
-             * the half of the width range where the label is not rendered at
-             * all. */
-            aria-label={t.chat.replyQuoteJump}
-            title={t.chat.replyQuoteJump}
-            onClick={() => openQuotedMessage(m.replyTo as string)}
-          >
-            <span className="chat__msg-quote__jump-label">
-              {t.chat.replyQuoteJump}
-            </span>
-            <ChevronRightIcon
-              size={12}
-              className="chat__msg-quote__jump-chevron"
-            />
-          </button>
-        )}
-        {/* 🔴 THE FAILURE IS SAID HERE, NOT IN THE QUOTE LINE. The line above
-         * either carries the server's excerpt or carries 「這則訊息已不存在」,
-         * and that sentence is a claim about whether the original EXISTS. A read
-         * that failed says nothing about that, so overwriting the line with it
-         * would turn a network fault into a false statement about the
-         * conversation — the exact confusion the whole redesign removed.
-         *
-         * It is also the end of the story: no retry, no second attempt on the
-         * next event, and it does not survive the next click on another row
-         * (one piece of state, last click wins). `role="status"` so a screen
-         * reader hears the outcome of the button it just pressed — the button
-         * itself keeps its own name. */}
-        {quoteOpenFailedId === m.replyTo && (
-          <span
-            className="chat__msg-quote__error"
-            data-testid="msg-quote-error"
-            role="status"
-          >
-            {t.chat.replyQuoteOpenFailed}
-          </span>
-        )}
       </div>
     );
 
