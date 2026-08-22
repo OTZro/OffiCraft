@@ -279,6 +279,122 @@ func TestTaskNoticeText_SendsNoUnfilledVariableAndRefusesRatherThanShippingOne(t
 	}
 }
 
+// ── the overlay reaches the agent ────────────────────────────────────────────
+
+// 🔴 THIS IS THE TICKET'S OWN CLAIM, AND NOTHING ELSE ASSERTED IT. Everything
+// above proves the send site ships THE DOCUMENT; none of it proves the send site
+// ships the document THE OWNER EDITED. Those differ by exactly one thing — the
+// overlay — and every case above reads the seed, so all of them stay green on a
+// server that folds nothing and serves the shipped bytes forever. That server
+// would answer 200 to every edit, record a revision for each one, and send
+// agents the factory text: the precise failure docs/design/boot-documents.md
+// warns about, with no surface saying a word.
+//
+// The edit goes through the REAL write face (replaceBootDoc — the same call the
+// cockpit's PUT lands on, head gate, cap and all), never by writing the overlay
+// row directly, because a test that installed the row itself would also pass on
+// a server whose write face refuses every edit.
+//
+// The body written in is deliberately NOT the seed's: the whole assertion is
+// vacuous if the two happen to agree, so the divergence is checked rather than
+// assumed.
+func TestEventNoticeText_SendsTheBodyTheOwnerEditedAndNotTheShippedSeed(t *testing.T) {
+	const where = "context 59% (your limits: 55% / 65%)"
+	const epoch = 1755870180 // 2026-08-22T14:03:00Z
+	for _, tc := range []struct {
+		kind    string
+		trimmed bool
+		send    func(s *apiServer) string
+	}{
+		{docKindOffboard, false, func(s *apiServer) string {
+			return s.winddownNoticeText(offboardKindSoft, where, 0)
+		}},
+		{docKindAcceleratedStop, false, func(s *apiServer) string {
+			return s.winddownNoticeText(offboardKindFinal, where, epoch)
+		}},
+		{docKindTaskReassignPredecessor, true, func(s *apiServer) string {
+			return s.taskNoticeText(docKindTaskReassignPredecessor, map[string]string{
+				"task_no": "T-7e91", "new_executor_label": "Rei",
+			})
+		}},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			s := newEventProcServer(t)
+			spec, head, seedBody := splitSeed(t, s, tc.kind)
+
+			ownerBody := "這一段是 owner 自己改的，出廠文字裡沒有這句。\n"
+			if ownerBody == seedBody {
+				t.Fatal("the fixture body equals the shipped one, so this case cannot " +
+					"tell an overlay-aware send site from one that ignores overlays")
+			}
+			w := httptest.NewRecorder()
+			s.replaceBootDoc(w, ownerPost("/x"), spec, DocJoinHeadBody(head, ownerBody), false)
+			if w.Code != http.StatusOK {
+				t.Fatalf("the write face refused the edit: %d (%s)", w.Code, w.Body.String())
+			}
+
+			values := map[string]string{"where": where}
+			if tc.kind == docKindAcceleratedStop {
+				values["deadline"] = time.Unix(epoch, 0).UTC().Format(time.RFC3339)
+			}
+			if tc.kind == docKindTaskReassignPredecessor {
+				values = map[string]string{"task_no": "T-7e91", "new_executor_label": "Rei"}
+			}
+			want := mustRender(t, spec, head, values) + spec.Join + ownerBody
+			if tc.trimmed {
+				want = strings.TrimSpace(want)
+			}
+			got := tc.send(s)
+			if got != want {
+				t.Fatalf("the send site did not carry the owner's edit:\n got %q\nwant %q", got, want)
+			}
+			// Named separately from the equality above so a failure says WHICH
+			// way it went wrong: still shipping the factory body is the specific
+			// regression this case exists to catch.
+			if strings.Contains(got, strings.TrimSpace(seedBody)) {
+				t.Fatalf("the shipped body is still in what was sent — the send site "+
+					"is reading the seed, not the fold:\n%s", got)
+			}
+		})
+	}
+}
+
+// 🔴 WHY THE OTHER WIRED DOCUMENT HAS NO CASE ABOVE, asserted rather than left
+// as a note in a report: 〈解除阻擋〉 is READ-ONLY, so no write face can put an
+// overlay under it and "the owner's edit reaches the agent" is not a path that
+// exists for it today. The read-only gate itself is pinned per face elsewhere;
+// what is pinned HERE is the consequence at the send site, which no other case
+// reaches — a refused edit must leave the notice byte-for-byte the shipped one,
+// not merely leave the stored document alone.
+//
+// The day the owner rules that this document may be edited, this case goes red
+// on its first assertion and the row belongs in the table above.
+func TestTaskUnblockedDoc_NoWriteFaceCanPutAnOverlayUnderTheSendSite(t *testing.T) {
+	s := newEventProcServer(t)
+	spec, head, body := splitSeed(t, s, docKindTaskUnblocked)
+	values := map[string]string{
+		"blocked_task_no": "T-0002", "blocker_task_no": "T-0001",
+		"blocker_title": "把票搬進文件", "blocker_status": "done",
+	}
+	before := s.taskNoticeText(docKindTaskUnblocked, values)
+
+	w := httptest.NewRecorder()
+	s.replaceBootDoc(w, ownerPost("/x"), spec,
+		DocJoinHeadBody(head, "我改了本體。\n"), false)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("the replace face accepted an edit to a read-only document: %d (%s) "+
+			"— it now HAS an owner-edit path and owes the overlay case above a row",
+			w.Code, w.Body.String())
+	}
+	after := s.taskNoticeText(docKindTaskUnblocked, values)
+	if after != before {
+		t.Fatalf("a refused edit moved the notice:\n before %q\n after %q", before, after)
+	}
+	if after != mustRender(t, spec, head, values)+spec.Join+strings.TrimSuffix(body, "\n") {
+		t.Fatalf("the notice is not the shipped document:\n%s", after)
+	}
+}
+
 // The three documents that cannot be split, and why — asserted so the reason is
 // checkable rather than only written down. A later package that finds a way to
 // split one of them (or gets the owner's ruling to move the bytes) deletes its
