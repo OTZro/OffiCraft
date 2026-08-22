@@ -808,6 +808,36 @@ def _boot_doc_reset(path: str):
     return check
 
 
+def _boot_doc_listing(_ctx: HCtx, r: httpx.Response) -> None:
+    """The listing names every editable block and carries NO text.
+
+    Black-box, so it cannot assert HOW MANY blocks exist — a number here would
+    be a second copy of the registry, and one that ages silently. What it can
+    state is the shape every row must have, that the two documents the rest of
+    this file addresses by name are both in it, and that read_only is answered
+    for every row (a cockpit renders an editor off that field, so an absent one
+    would offer an editor whose save is a 405).
+    """
+    rows = r.json()["documents"]
+    assert rows, "the listing is empty — no editable boot-context document exists"
+    seen = set()
+    for row in rows:
+        assert row["kind"] and row["key"], row
+        assert row["doc_name"], row
+        assert isinstance(row["read_only"], bool), row
+        assert isinstance(row["is_default"], bool), row
+        assert row["has_seed"] is True, row
+        assert row["cap_chars"] >= row["size_chars"] > 0, row
+        assert "text" not in row, ("the listing carries document text", row)
+        seen.add((row["kind"], row["key"]))
+    for addr in (("system_interaction", "global"), ("boot_sequence", "claude"),
+                 ("boot_sequence", "codex"), ("offboard", "global")):
+        assert addr in seen, (addr, sorted(seen))
+    assert any(row["read_only"] for row in rows), (
+        "no row reports read_only — the refusal the cockpit reads this for is unreachable"
+    )
+
+
 def _boot_doc_read(kind: str, key: str):
     def check(_ctx: HCtx, r: httpx.Response) -> None:
         d = r.json()
@@ -1357,6 +1387,25 @@ HAPPY: dict[str, Happy] = {
         body=_boot_doc_body("/api/offboard"), check=_boot_doc_written
     ),
     "POST /api/offboard/reset": Happy(check=_boot_doc_reset("/api/offboard")),
+    # ── the GENERIC face of all of the above, plus the six event procedures
+    # that never got named routes (T-3201) ───────────────────────────────────
+    # The write rows aim at accelerated_stop because it is EDITABLE: two of the
+    # ten documents refuse every caller with 405, and a happy row is the wrong
+    # place to assert a refusal.
+    "GET /api/boot-docs": Happy(check=_boot_doc_listing),
+    "GET /api/boot-docs/{kind}/{key}": Happy(
+        path="/api/boot-docs/task_closeout/global",
+        check=lambda _c, r: _boot_doc_read("task_closeout", "global")(_c, r),
+    ),
+    "POST /api/boot-docs/{kind}/{key}": Happy(
+        path="/api/boot-docs/accelerated_stop/global",
+        body=_boot_doc_body("/api/boot-docs/accelerated_stop/global"),
+        check=_boot_doc_written,
+    ),
+    "POST /api/boot-docs/{kind}/{key}/reset": Happy(
+        path="/api/boot-docs/accelerated_stop/global/reset",
+        check=_boot_doc_reset("/api/boot-docs/accelerated_stop/global"),
+    ),
     "GET /api/roles": Happy(check=_nonempty_list),
     "GET /api/doc-sizes": Happy(
         # Size-only overview: every capped document reports its own size and

@@ -357,6 +357,7 @@ func (s *apiServer) foldBootDocDTO(spec bootDocSpec) (*bootDocDTO, error) {
 		SchemaVersion: wireSchemaVersion,
 		IsDefault:     isDefault,
 		HasSeed:       hasSeed,
+		ReadOnly:      spec.ReadOnly,
 	}, nil
 }
 
@@ -759,4 +760,121 @@ func bootDocReadOnlyRefusal(spec bootDocSpec) string {
 	return "the " + spec.DocName + " is a read-only document — it is shown so you can " +
 		"see what agents are told, but no caller may edit it and there is no version " +
 		"of it other than the shipped one; nothing was written"
+}
+
+// bootDocSummaries renders the whole registry as the listing GET /api/boot-docs
+// answers. It is the ONE thing on the wire that says which of these documents
+// exist: every description that used to carry a list of kinds had gone stale
+// before anybody noticed, and nothing turns red when prose ages. Rendering it
+// from bootDocRegistry means a document that ships is in this listing the same
+// day, and one that never shipped can never appear in it.
+//
+// NO TEXT. The reply's size is a function of how many documents exist and of
+// nothing else — the same property GET /api/doc-sizes exists for, and the
+// reason the cockpit can open its settings list without paying for ten
+// documents it is not showing yet.
+//
+// 🔴 CAPS ARE READ PER ROW, NOT ONCE FOR THE LISTING, and that is a deliberate
+// difference from HandlePeekDocSizesApiDocSizesGet. There the five segments have
+// five accessors that function holds in five locals; here the accessor is
+// per-kind and lives in the registry row, so "read every cap once" would mean a
+// second table mapping kinds to caps — the exact second list this registry was
+// built to remove. What that costs is bounded and visible: two rows sharing one
+// setting (the two stop procedures do, the four task events do) can quote
+// different numbers if a PATCH /api/settings lands mid-listing. Each number was
+// in force when its row was read, and the cockpit re-reads on the same SSE topic
+// the write publishes.
+func (s *apiServer) bootDocSummaries() ([]bootDocSummaryDTO, error) {
+	out := []bootDocSummaryDTO{}
+	for _, reg := range bootDocRegistry {
+		for _, key := range reg.Keys {
+			spec, ok := s.bootDocSpecFor(reg.Kind, key)
+			if !ok {
+				// Unreachable: the pair came out of the registry this resolver
+				// reads. Fail closed rather than serve a row with no cap and no
+				// name, which would look like a document nobody may edit.
+				return nil, errors.New("boot document " + reg.Kind + "/" + key +
+					" is in bootDocRegistry but did not resolve")
+			}
+			dto, err := s.foldBootDocDTO(spec)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, bootDocSummaryDTO{
+				Kind:      dto.Kind,
+				Key:       dto.Key,
+				DocName:   spec.DocName,
+				ReadOnly:  spec.ReadOnly,
+				SizeChars: dto.SizeChars,
+				CapChars:  dto.CapChars,
+				IsDefault: dto.IsDefault,
+				HasSeed:   dto.HasSeed,
+			})
+		}
+	}
+	return out, nil
+}
+
+// GET /api/boot-docs — which editable boot-context documents this server serves.
+func (s *apiServer) HandleListBootDocsApiBootDocsGet(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.bootDocSummaries()
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, bootDocListDTO{Documents: rows})
+}
+
+// genericBootDocSpec resolves the {kind}/{key} pair the three generic faces take,
+// answering the SAME refusal all three times: a kind nobody registered says so,
+// and a key that kind does not serve is told which keys it does.
+//
+// 404 rather than 400 on purpose, and it is the one place these routes differ
+// from their document-history siblings: there the pair addresses a version
+// series and a bad kind is a malformed request; here it addresses A DOCUMENT,
+// and a document this server does not have is not found — the same answer
+// writeUnknownBootSequence has given the named boot-sequence routes since T-791e.
+func (s *apiServer) genericBootDocSpec(w http.ResponseWriter, kind, key string) (bootDocSpec, bool) {
+	spec, ok := s.bootDocSpecFor(kind, key)
+	if !ok {
+		writeError(w, http.StatusNotFound, unknownBootDocKeyMsg(kind, key))
+		return bootDocSpec{}, false
+	}
+	return spec, true
+}
+
+// GET /api/boot-docs/{kind}/{key} — the folded document, marker line and all.
+func (s *apiServer) HandleGetBootDocApiBootDocsKindKeyGet(w http.ResponseWriter, r *http.Request, kind, key string) {
+	spec, ok := s.genericBootDocSpec(w, kind, key)
+	if !ok {
+		return
+	}
+	dto, err := s.foldBootDocDTO(spec)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dto)
+}
+
+// POST /api/boot-docs/{kind}/{key} — whole-document replace ({text}).
+func (s *apiServer) HandleReplaceBootDocApiBootDocsKindKeyPost(w http.ResponseWriter, r *http.Request, kind, key string) {
+	spec, ok := s.genericBootDocSpec(w, kind, key)
+	if !ok {
+		return
+	}
+	var body BootDocumentReplaceDTO
+	if !decodeJSONBodyStrict(w, r, &body, "text") {
+		return
+	}
+	s.replaceBootDoc(w, r, spec, body.Text, body.AllowShrink != nil && *body.AllowShrink)
+}
+
+// POST /api/boot-docs/{kind}/{key}/reset — back to the shipped seed.
+func (s *apiServer) HandleResetBootDocApiBootDocsKindKeyResetPost(w http.ResponseWriter, r *http.Request, kind, key string) {
+	spec, ok := s.genericBootDocSpec(w, kind, key)
+	if !ok {
+		return
+	}
+	s.resetBootDoc(w, r, spec)
 }

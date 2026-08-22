@@ -980,6 +980,33 @@ MATRIX: dict[str, Route] = {
         body=_boot_doc_body("/api/offboard", "conformance offboard block"),
     ),
     "POST /api/offboard/reset": Route(requires="admin_agent"),
+    # ── the GENERIC face of every one of those documents (T-3201) ───────────
+    # Six more of these shipped with the task-event procedures and they are
+    # reached by ONE route family instead of eighteen named ones. The floors are
+    # the named routes' floors verbatim, which is the whole reason the generic
+    # shape was allowed: read at machine, write at admin_agent, no per-document
+    # exception anywhere in the registry.
+    #
+    # THE PATHS AIM AT AN EDITABLE DOCUMENT ON PURPOSE. Two of the ten are
+    # read-only and refuse every caller with 405 — a floor table cannot express
+    # "nobody", and pointing a positive face at one would assert a semantic
+    # refusal in a row that exists to measure authz. The 405 is pinned where it
+    # belongs, in the Go tests for the write faces.
+    "GET /api/boot-docs": Route(requires="machine"),
+    "GET /api/boot-docs/{kind}/{key}": Route(
+        requires="machine",
+        path="/api/boot-docs/accelerated_stop/global",
+    ),
+    "POST /api/boot-docs/{kind}/{key}": Route(
+        requires="admin_agent",
+        path="/api/boot-docs/accelerated_stop/global",
+        body=_boot_doc_body("/api/boot-docs/accelerated_stop/global",
+                            "conformance accelerated stop block"),
+    ),
+    "POST /api/boot-docs/{kind}/{key}/reset": Route(
+        requires="admin_agent",
+        path="/api/boot-docs/accelerated_stop/global/reset",
+    ),
     "GET /api/roles": Route(requires="machine"),
     "GET /api/doc-sizes": Route(requires="machine"),
     "POST /api/roles": Route(

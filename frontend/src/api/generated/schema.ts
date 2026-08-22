@@ -199,6 +199,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/boot-docs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List every editable block of the boot context: address (kind/key), the name a refusal calls it, whether it is read-only, and its size against its own cap. No document text — fetch that with get_boot_doc. This is the non-stale answer to "which boot-context documents exist": it is rendered from the registry that serves them, so it cannot be wrong about a block that exists.
+         * @description List EVERY editable block of the boot context this server serves — the documents the owner (or the admin assistant) edits to change what every agent reads at boot, and what an agent is told when a lifecycle event happens to it.
+         *
+         *     THIS ROUTE EXISTS SO NO DESCRIPTION HAS TO CARRY THE LIST. Which blocks exist changes when one ships, and a list written into prose goes stale silently; this one is rendered from the registry that also serves and validates every one of them.
+         *
+         *     NO TEXT COMES BACK. Each row is address + name + read_only + size against its own cap, so the reply's size depends on how many blocks exist and on nothing else. Read the one you mean with ``get_boot_doc``.
+         */
+        get: operations["handle_list_boot_docs_api_boot_docs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/boot-docs/{kind}/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one block of the boot context by kind/key, folded (the owner's edit ⊕ the shipped seed). Carries size_chars/cap_chars so an edit can be sized before it is made, is_default/has_seed to tell an edited block from the shipped one, and read_only for the blocks that are shown but may never be edited. An unknown kind or key is a 404 that names the keys that exist.
+         * @description Read ONE block of the boot context, folded: the owner's edit when one exists, otherwise the factory seed compiled into this build. ``is_default`` says which of the two you are holding, ``has_seed`` whether a factory version exists to reset to, and ``read_only`` whether the write faces will refuse it at all.
+         *
+         *     WHAT COMES BACK IS THE WHOLE STORED DOCUMENT, including the read-only head some blocks carry above the body marker — the head is what the owner edits around, so the editing face has to show it. It is NOT what an agent is sent: the boot fold and the notice senders render the document first, and the marker never reaches an agent's eyes.
+         *
+         *     ADDRESSING: ``kind`` and ``key`` are the pair ``list_boot_docs`` hands you, and the same pair the document-history routes file this block's retained versions under — one address, three faces, so they cannot silently disagree. A ``kind`` this server does not serve, or a ``key`` that kind does not serve, is refused with 404 naming the keys that DO exist for it; neither is something to guess at.
+         */
+        get: operations["handle_get_boot_doc_api_boot_docs__kind___key__get"];
+        put?: never;
+        /**
+         * Replace the WHOLE text of one boot-context block ({kind, key, text}) — text every agent reads at boot, or is sent when a lifecycle event happens to it. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. Judged against that block's own cap. A read-only block refuses with 405 for every caller, and a block that carries a read-only head requires that head back unchanged. Owner or admin assistant only.
+         * @description Replace the WHOLE text of one boot-context block ``{text}``. ``text`` is REQUIRED and unknown keys are rejected; emptying a block that had content needs ``allow_shrink=true``.
+         *
+         *     THIS TEXT LANDS IN AGENTS. Some of these blocks are read at every boot and others are what an agent is told when it is being collected, reassigned or handed a ticket — a broken one is read by everybody and reported by nobody, which is why the floor is owner-or-admin-assistant and why the reset route exists with no cap on it.
+         *
+         *     THREE REFUSALS HERE ARE NOT AUTHZ, AND SAY SO. A read-only block is refused with 405 no matter who asks. A block that carries a read-only head must be sent back with that head byte for byte, and its body must declare no variables. A write over this block's own cap is refused with what you wrote, the cap, and what is already stored.
+         *
+         *     The shipped seed is never overwritten, so ``reset_boot_doc`` always reaches factory text; the version this write replaces is retained in the document history (a save that changes nothing retains nothing).
+         *
+         *     ADDRESSING: ``kind`` and ``key`` are the pair ``list_boot_docs`` hands you, and the same pair the document-history routes file this block's retained versions under — one address, three faces, so they cannot silently disagree. A ``kind`` this server does not serve, or a ``key`` that kind does not serve, is refused with 404 naming the keys that DO exist for it; neither is something to guess at.
+         */
+        post: operations["handle_replace_boot_doc_api_boot_docs__kind___key__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/boot-docs/{kind}/{key}/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore one boot-context block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap applies on this path — the way back to factory text is never blocked by a setting, which is what makes it the recovery route after an edit that stopped agents from booting. The discarded overlay is retained in the document history. Owner or admin assistant only.
+         * @description Restore ONE boot-context block to the FACTORY text shipped with this build (idempotent tombstone of the overlay).
+         *
+         *     NO LENGTH CAP IS APPLIED ON THIS PATH. The factory text is part of the product, so no setting can block the way back to it — that is what makes this the recovery route when a bad edit has stopped agents from booting, and why it has to work from the cockpit alone with no live agent anywhere in the path.
+         *
+         *     A block with no shipped default (``has_seed=false``) is a 404: there is nothing to go back to. A read-only block is a 405, like on every other write face. The overlay being discarded is retained in the document history, so the reset is itself recoverable.
+         *
+         *     ADDRESSING: ``kind`` and ``key`` are the pair ``list_boot_docs`` hands you, and the same pair the document-history routes file this block's retained versions under — one address, three faces, so they cannot silently disagree. A ``kind`` this server does not serve, or a ``key`` that kind does not serve, is refused with 404 naming the keys that DO exist for it; neither is something to guess at.
+         */
+        post: operations["handle_reset_boot_doc_api_boot_docs__kind___key__reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/boot-sequence/{runtime_key}": {
         parameters: {
             query?: never;
@@ -4289,8 +4375,75 @@ export interface components {
             token: string;
         };
         /**
+         * BootDocListDTO
+         * @description Every editable block of the boot context this server serves, in the order the cockpit shows them. This is the answer to "which documents are there" — the question no description is allowed to answer in prose, because a written list goes stale the moment a block ships and nothing turns red when it does.
+         */
+        BootDocListDTO: {
+            /**
+             * Documents
+             * @default []
+             */
+            documents: components["schemas"]["BootDocSummaryDTO"][];
+        };
+        /**
+         * BootDocSummaryDTO
+         * @description ONE row of the editable-boot-context listing: how to address the block, what to call it, whether it can be edited, and how big it is against its own cap. It carries NO text, and that is the property rather than an omission — the size of the listing depends on how many blocks exist and on nothing else, so a station whose documents grow does not make it more expensive. Fetch the one you mean with ``get_boot_doc``.
+         */
+        BootDocSummaryDTO: {
+            /**
+             * Cap Chars
+             * @description The size cap now in force on THIS block, in CHARACTERS — the same number get_boot_doc reports for it.
+             * @default 0
+             */
+            cap_chars: number;
+            /**
+             * Doc Name
+             * @description What a refusal calls this block. It is the server's own name for the document, so a caller reading a rejection and a caller reading this listing are looking at the same words.
+             * @default
+             */
+            doc_name: string;
+            /**
+             * Has Seed
+             * @description True when a FACTORY version of this block ships in this binary, i.e. there is something for the reset route to restore.
+             * @default false
+             */
+            has_seed: boolean;
+            /**
+             * Is Default
+             * @description True while nobody has edited this block. False means somebody's edit is what agents are reading.
+             * @default true
+             */
+            is_default: boolean;
+            /**
+             * Key
+             * @description The second half of the address — pass it back verbatim.
+             * @default
+             */
+            key: string;
+            /**
+             * Kind
+             * @description The first half of the address, and the document-history kind of this block's retained versions.
+             * @default
+             */
+            kind: string;
+            /**
+             * Read Only
+             * @description True when this block is shown but no caller may edit it — the write faces answer 405 for it. Render it; do not offer an editor for it.
+             * @default false
+             */
+            read_only: boolean;
+            /**
+             * Size Chars
+             * @description Size of the folded text in CHARACTERS (Unicode code points) — the same unit as cap_chars.
+             * @default 0
+             */
+            size_chars: number;
+        };
+        /**
          * BootDocumentDTO
-         * @description ONE editable block of the boot context (T-791e): the 系統互動 handbook (``kind="system_interaction"``, ``key="global"``) or one runtime's 啟動程序 checklist (``kind="boot_sequence"``, ``key="claude"``/``"codex"``).
+         * @description ONE editable block of the boot context, addressed by ``kind``/``key``.
+         *
+         *     WHICH BLOCKS EXIST IS DELIBERATELY NOT LISTED HERE. This description named two kinds, and had already gone stale on a third before T-3201 added six more — nothing turns red when a list like that ages. ``list_boot_docs`` answers the question, from the same registry that serves and validates every one of them.
          *
          *     The served text is FOLDED: the owner's overlay when one exists, otherwise the seed compiled into this binary. Editing writes only the overlay — the seed is never modified, which is what lets the reset route reach factory text without depending on anything the editor could have corrupted.
          *
@@ -4299,7 +4452,7 @@ export interface components {
         BootDocumentDTO: {
             /**
              * Cap Chars
-             * @description The size cap now in force on THIS document, in CHARACTERS (the doc.cap_chars.system_interaction or doc.cap_chars.boot_sequence setting). Served on the read face so an edit can be sized BEFORE it is written — the settings surface holding the cap is admin-only, so otherwise being refused is the only way to learn it.
+             * @description The size cap now in force on THIS document, in CHARACTERS. Blocks may share a cap with a sibling; this is the number that will judge THIS write. Served on the read face so an edit can be sized BEFORE it is written — the settings surface holding the cap is admin-only, so otherwise being refused is the only way to learn it.
              * @default 0
              */
             cap_chars: number;
@@ -4317,13 +4470,13 @@ export interface components {
             is_default: boolean;
             /**
              * Key
-             * @description Which document within the kind: "global" for system_interaction; the RUNTIME ("claude" or "codex") for boot_sequence. The two boot sequences are separate documents because step 3 of each says the opposite of the other.
+             * @description The second half of the address, as ``list_boot_docs`` spells it. Most kinds serve exactly one key; a kind that serves more does so because the documents genuinely differ, so the key is never a formality — an unknown one is a 404 that names the keys that exist.
              * @default
              */
             key: string;
             /**
              * Kind
-             * @description "system_interaction" or "boot_sequence" — also the document-history kind of this document's retained versions.
+             * @description The first half of the address, as ``list_boot_docs`` spells it — also the document-history kind this block's retained versions are filed under. Copy it from that listing rather than typing it: which blocks exist changes when one ships, and no description here is allowed to carry the list.
              * @default
              */
             kind: string;
@@ -4332,6 +4485,12 @@ export interface components {
              * @default
              */
             owner_id: string;
+            /**
+             * Read Only
+             * @description True when this block is SHOWN but may never be edited — it exists as a document so the owner can see the words an agent is sent, and every write face refuses it with 405 no matter who is asking. It is NOT an authz signal: no principal can edit it, so there is no role to grant.
+             * @default false
+             */
+            read_only: boolean;
             /**
              * Schema Version
              * @default 0
@@ -9671,6 +9830,207 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BackupHealthDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_list_boot_docs_api_boot_docs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootDocListDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_get_boot_doc_api_boot_docs__kind___key__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootDocumentDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_replace_boot_doc_api_boot_docs__kind___key__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BootDocumentReplaceDTO"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootDocumentDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_reset_boot_doc_api_boot_docs__kind___key__reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootDocumentDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

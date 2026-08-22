@@ -1112,6 +1112,62 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Restore the 下線程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.",
 			MCPTool:  "reset_offboard",
 		},
+		// ── The GENERIC face of the same documents (T-3201) ─────────────────
+		// Six more of these documents shipped with the task-event procedures,
+		// and three named routes each would have been eighteen more rows here
+		// and eighteen more tools in EVERY agent's tool list — a permanent 15%
+		// growth of a surface most agents never touch. The owner chose the
+		// generic route (rc-88e4ab40fe1d) once the argument against it turned
+		// out to rest on a premise nobody had checked: the floors were said to
+		// be per-document, and they are the same sentence copied for each one.
+		//
+		// FLOORS, therefore, are the named routes' floors verbatim: read at the
+		// machine floor (an agent already reads these documents — the boot fold
+		// hands them over), WRITE at admin_agent because this text lands in
+		// every agent's boot context or in the notice an agent is collected
+		// with, and a broken one is read by everybody and reported by nobody.
+		//
+		// 🔴 WHAT IS NOT EXPRESSED HERE: read-only documents. Two of the ten may
+		// never be edited by anyone, and that refusal is NOT an authz floor — no
+		// principal can pass it, so declaring it here would name a rank nobody
+		// holds. It lives on the write path (bootDocReadOnlyRefusal, 405) where
+		// it can say what the document IS rather than what the caller lacks.
+		{
+			Method:   "GET",
+			Path:     "/api/boot-docs",
+			Handler:  w.HandleListBootDocsApiBootDocsGet,
+			Auth:     authGated,
+			Requires: principalMachine,
+			Summary:  "List every editable block of the boot context: address (kind/key), the name a refusal calls it, whether it is read-only, and its size against its own cap. No document text — fetch that with get_boot_doc. This is the non-stale answer to \"which boot-context documents exist\": it is rendered from the registry that serves them, so it cannot be wrong about a block that exists.",
+			MCPTool:  "list_boot_docs",
+		},
+		{
+			Method:   "GET",
+			Path:     "/api/boot-docs/{kind}/{key}",
+			Handler:  w.HandleGetBootDocApiBootDocsKindKeyGet,
+			Auth:     authGated,
+			Requires: principalMachine,
+			Summary:  "Read one block of the boot context by kind/key, folded (the owner's edit ⊕ the shipped seed). Carries size_chars/cap_chars so an edit can be sized before it is made, is_default/has_seed to tell an edited block from the shipped one, and read_only for the blocks that are shown but may never be edited. An unknown kind or key is a 404 that names the keys that exist.",
+			MCPTool:  "get_boot_doc",
+		},
+		{
+			Method:   "POST",
+			Path:     "/api/boot-docs/{kind}/{key}",
+			Handler:  w.HandleReplaceBootDocApiBootDocsKindKeyPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Replace the WHOLE text of one boot-context block ({kind, key, text}) — text every agent reads at boot, or is sent when a lifecycle event happens to it. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. Judged against that block's own cap. A read-only block refuses with 405 for every caller, and a block that carries a read-only head requires that head back unchanged. Owner or admin assistant only.",
+			MCPTool:  "replace_boot_doc",
+		},
+		{
+			Method:   "POST",
+			Path:     "/api/boot-docs/{kind}/{key}/reset",
+			Handler:  w.HandleResetBootDocApiBootDocsKindKeyResetPost,
+			Auth:     authGated,
+			Requires: principalAdminAgent,
+			Summary:  "Restore one boot-context block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap applies on this path — the way back to factory text is never blocked by a setting, which is what makes it the recovery route after an edit that stopped agents from booting. The discarded overlay is retained in the document history. Owner or admin assistant only.",
+			MCPTool:  "reset_boot_doc",
+		},
 		{
 			Method:   "GET",
 			Path:     "/api/roles",

@@ -786,6 +786,34 @@ type bootDocDTO struct {
 	SchemaVersion int    `json:"schema_version"`
 	IsDefault     bool   `json:"is_default"`
 	HasSeed       bool   `json:"has_seed"`
+	// ReadOnly is what a cockpit needs BEFORE it renders an editor: this
+	// document is shown so the owner can read what an agent is sent, and every
+	// write face refuses it. Without it the only way to learn that is to type
+	// an edit and be told 405 on save, which is where the effort has already
+	// been spent. Not omitempty — false is the answer for every editable
+	// document, and a reader that cannot tell "editable" from "this build is
+	// too old to know" would offer the editor either way.
+	ReadOnly bool `json:"read_only"`
+}
+
+// bootDocSummaryDTO / bootDocListDTO are the text-free listing behind
+// GET /api/boot-docs. The rows carry the same field names their per-document
+// sibling above carries, so a reader that has one shape does not need a second
+// one — plus doc_name, which is the server's own name for the document and the
+// word a refusal will use when it names it.
+type bootDocSummaryDTO struct {
+	Kind      string `json:"kind"`
+	Key       string `json:"key"`
+	DocName   string `json:"doc_name"`
+	ReadOnly  bool   `json:"read_only"`
+	SizeChars int    `json:"size_chars"`
+	CapChars  int    `json:"cap_chars"`
+	IsDefault bool   `json:"is_default"`
+	HasSeed   bool   `json:"has_seed"`
+}
+
+type bootDocListDTO struct {
+	Documents []bootDocSummaryDTO `json:"documents"`
 }
 
 type roleDefDTO struct {

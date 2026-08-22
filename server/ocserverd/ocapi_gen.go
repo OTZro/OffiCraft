@@ -429,13 +429,47 @@ type BootCommandResultDTO struct {
 	Token          string `json:"token"`
 }
 
-// BootDocumentDTO ONE editable block of the boot context (T-791e): the 系統互動 handbook (“kind="system_interaction"“, “key="global"“) or one runtime's 啟動程序 checklist (“kind="boot_sequence"“, “key="claude"“/“"codex"“).
+// BootDocListDTO Every editable block of the boot context this server serves, in the order the cockpit shows them. This is the answer to "which documents are there" — the question no description is allowed to answer in prose, because a written list goes stale the moment a block ships and nothing turns red when it does.
+type BootDocListDTO struct {
+	Documents *[]BootDocSummaryDTO `json:"documents,omitempty"`
+}
+
+// BootDocSummaryDTO ONE row of the editable-boot-context listing: how to address the block, what to call it, whether it can be edited, and how big it is against its own cap. It carries NO text, and that is the property rather than an omission — the size of the listing depends on how many blocks exist and on nothing else, so a station whose documents grow does not make it more expensive. Fetch the one you mean with “get_boot_doc“.
+type BootDocSummaryDTO struct {
+	// CapChars The size cap now in force on THIS block, in CHARACTERS — the same number get_boot_doc reports for it.
+	CapChars *int `json:"cap_chars,omitempty"`
+
+	// DocName What a refusal calls this block. It is the server's own name for the document, so a caller reading a rejection and a caller reading this listing are looking at the same words.
+	DocName *string `json:"doc_name,omitempty"`
+
+	// HasSeed True when a FACTORY version of this block ships in this binary, i.e. there is something for the reset route to restore.
+	HasSeed *bool `json:"has_seed,omitempty"`
+
+	// IsDefault True while nobody has edited this block. False means somebody's edit is what agents are reading.
+	IsDefault *bool `json:"is_default,omitempty"`
+
+	// Key The second half of the address — pass it back verbatim.
+	Key *string `json:"key,omitempty"`
+
+	// Kind The first half of the address, and the document-history kind of this block's retained versions.
+	Kind *string `json:"kind,omitempty"`
+
+	// ReadOnly True when this block is shown but no caller may edit it — the write faces answer 405 for it. Render it; do not offer an editor for it.
+	ReadOnly *bool `json:"read_only,omitempty"`
+
+	// SizeChars Size of the folded text in CHARACTERS (Unicode code points) — the same unit as cap_chars.
+	SizeChars *int `json:"size_chars,omitempty"`
+}
+
+// BootDocumentDTO ONE editable block of the boot context, addressed by “kind“/“key“.
+//
+// WHICH BLOCKS EXIST IS DELIBERATELY NOT LISTED HERE. This description named two kinds, and had already gone stale on a third before T-3201 added six more — nothing turns red when a list like that ages. “list_boot_docs“ answers the question, from the same registry that serves and validates every one of them.
 //
 // The served text is FOLDED: the owner's overlay when one exists, otherwise the seed compiled into this binary. Editing writes only the overlay — the seed is never modified, which is what lets the reset route reach factory text without depending on anything the editor could have corrupted.
 //
 // “is_default“ and “has_seed“ answer DIFFERENT questions: the first is "has anybody edited this block", the second is "does a factory version exist to go back TO" (the reset's precondition — that route 404s when it is false).
 type BootDocumentDTO struct {
-	// CapChars The size cap now in force on THIS document, in CHARACTERS (the doc.cap_chars.system_interaction or doc.cap_chars.boot_sequence setting). Served on the read face so an edit can be sized BEFORE it is written — the settings surface holding the cap is admin-only, so otherwise being refused is the only way to learn it.
+	// CapChars The size cap now in force on THIS document, in CHARACTERS. Blocks may share a cap with a sibling; this is the number that will judge THIS write. Served on the read face so an edit can be sized BEFORE it is written — the settings surface holding the cap is admin-only, so otherwise being refused is the only way to learn it.
 	CapChars *int `json:"cap_chars,omitempty"`
 
 	// HasSeed True when a FACTORY version of this block ships in this binary, i.e. there is something for the reset route to restore. It says nothing about whether what you are holding IS that factory text — is_default answers that. True in every shipped build; served rather than assumed so a build whose seeds were not staged cannot be offered a 還原 button that 404s.
@@ -444,13 +478,16 @@ type BootDocumentDTO struct {
 	// IsDefault True while nobody has edited this block (or it has been reset), i.e. the text you are reading is the shipped seed. False means you are reading somebody's edit.
 	IsDefault *bool `json:"is_default,omitempty"`
 
-	// Key Which document within the kind: "global" for system_interaction; the RUNTIME ("claude" or "codex") for boot_sequence. The two boot sequences are separate documents because step 3 of each says the opposite of the other.
+	// Key The second half of the address, as ``list_boot_docs`` spells it. Most kinds serve exactly one key; a kind that serves more does so because the documents genuinely differ, so the key is never a formality — an unknown one is a 404 that names the keys that exist.
 	Key *string `json:"key,omitempty"`
 
-	// Kind "system_interaction" or "boot_sequence" — also the document-history kind of this document's retained versions.
-	Kind          *string `json:"kind,omitempty"`
-	OwnerId       *string `json:"owner_id,omitempty"`
-	SchemaVersion *int    `json:"schema_version,omitempty"`
+	// Kind The first half of the address, as ``list_boot_docs`` spells it — also the document-history kind this block's retained versions are filed under. Copy it from that listing rather than typing it: which blocks exist changes when one ships, and no description here is allowed to carry the list.
+	Kind    *string `json:"kind,omitempty"`
+	OwnerId *string `json:"owner_id,omitempty"`
+
+	// ReadOnly True when this block is SHOWN but may never be edited — it exists as a document so the owner can see the words an agent is sent, and every write face refuses it with 405 no matter who is asking. It is NOT an authz signal: no principal can edit it, so there is no role to grant.
+	ReadOnly      *bool `json:"read_only,omitempty"`
+	SchemaVersion *int  `json:"schema_version,omitempty"`
 
 	// SizeChars Size of `text` in CHARACTERS (Unicode code points) — the same unit as cap_chars.
 	SizeChars *int `json:"size_chars,omitempty"`
@@ -3357,6 +3394,9 @@ type HandleChangePasswordApiAuthChangePasswordPostJSONRequestBody = ChangePasswo
 // HandleSetPasswordApiAuthSetPasswordPostJSONRequestBody defines body for HandleSetPasswordApiAuthSetPasswordPost for application/json ContentType.
 type HandleSetPasswordApiAuthSetPasswordPostJSONRequestBody = SetPasswordDTO
 
+// HandleReplaceBootDocApiBootDocsKindKeyPostJSONRequestBody defines body for HandleReplaceBootDocApiBootDocsKindKeyPost for application/json ContentType.
+type HandleReplaceBootDocApiBootDocsKindKeyPostJSONRequestBody = BootDocumentReplaceDTO
+
 // HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPostJSONRequestBody defines body for HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPost for application/json ContentType.
 type HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPostJSONRequestBody = BootDocumentReplaceDTO
 
@@ -3619,6 +3659,18 @@ type ServerInterface interface {
 	// Backup health: is the scheduled backup still producing retreat points?
 	// (GET /api/backup-health)
 	HandleGetBackupHealthApiBackupHealthGet(w http.ResponseWriter, r *http.Request)
+	// List every editable block of the boot context: address (kind/key), the name a refusal calls it, whether it is read-only, and its size against its own cap. No document text — fetch that with get_boot_doc. This is the non-stale answer to "which boot-context documents exist": it is rendered from the registry that serves them, so it cannot be wrong about a block that exists.
+	// (GET /api/boot-docs)
+	HandleListBootDocsApiBootDocsGet(w http.ResponseWriter, r *http.Request)
+	// Read one block of the boot context by kind/key, folded (the owner's edit ⊕ the shipped seed). Carries size_chars/cap_chars so an edit can be sized before it is made, is_default/has_seed to tell an edited block from the shipped one, and read_only for the blocks that are shown but may never be edited. An unknown kind or key is a 404 that names the keys that exist.
+	// (GET /api/boot-docs/{kind}/{key})
+	HandleGetBootDocApiBootDocsKindKeyGet(w http.ResponseWriter, r *http.Request, kind string, key string)
+	// Replace the WHOLE text of one boot-context block ({kind, key, text}) — text every agent reads at boot, or is sent when a lifecycle event happens to it. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. Judged against that block's own cap. A read-only block refuses with 405 for every caller, and a block that carries a read-only head requires that head back unchanged. Owner or admin assistant only.
+	// (POST /api/boot-docs/{kind}/{key})
+	HandleReplaceBootDocApiBootDocsKindKeyPost(w http.ResponseWriter, r *http.Request, kind string, key string)
+	// Restore one boot-context block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap applies on this path — the way back to factory text is never blocked by a setting, which is what makes it the recovery route after an edit that stopped agents from booting. The discarded overlay is retained in the document history. Owner or admin assistant only.
+	// (POST /api/boot-docs/{kind}/{key}/reset)
+	HandleResetBootDocApiBootDocsKindKeyResetPost(w http.ResponseWriter, r *http.Request, kind string, key string)
 	// Read one runtime's 啟動程序 block — the boot checklist that ends that runtime's boot context. runtime_key is 'claude' or 'codex'; they are separate documents because step 3 of the two says opposite things (claude mounts its own `ocagent listen`, codex must not — the sidecar owns it), so any other value is a 404 rather than a silent fallback to claude. Folded: the owner's edit when one exists, otherwise the shipped factory seed. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.
 	// (GET /api/boot-sequence/{runtime_key})
 	HandleGetBootSequenceApiBootSequenceRuntimeKeyGet(w http.ResponseWriter, r *http.Request, runtimeKey string)
@@ -4212,6 +4264,125 @@ func (siw *ServerInterfaceWrapper) HandleGetBackupHealthApiBackupHealthGet(w htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.HandleGetBackupHealthApiBackupHealthGet(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleListBootDocsApiBootDocsGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleListBootDocsApiBootDocsGet(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleListBootDocsApiBootDocsGet(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleGetBootDocApiBootDocsKindKeyGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleGetBootDocApiBootDocsKindKeyGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "kind" -------------
+	var kind string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "kind", r.PathValue("kind"), &kind, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "kind", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "key" -------------
+	var key string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", r.PathValue("key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleGetBootDocApiBootDocsKindKeyGet(w, r, kind, key)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleReplaceBootDocApiBootDocsKindKeyPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleReplaceBootDocApiBootDocsKindKeyPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "kind" -------------
+	var kind string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "kind", r.PathValue("kind"), &kind, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "kind", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "key" -------------
+	var key string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", r.PathValue("key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleReplaceBootDocApiBootDocsKindKeyPost(w, r, kind, key)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleResetBootDocApiBootDocsKindKeyResetPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleResetBootDocApiBootDocsKindKeyResetPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "kind" -------------
+	var kind string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "kind", r.PathValue("kind"), &kind, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "kind", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "key" -------------
+	var key string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", r.PathValue("key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleResetBootDocApiBootDocsKindKeyResetPost(w, r, kind, key)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -8163,6 +8334,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/set-password", wrapper.HandleSetPasswordApiAuthSetPasswordPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/auth/status", wrapper.HandleAuthStatusApiAuthStatusGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/backup-health", wrapper.HandleGetBackupHealthApiBackupHealthGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/boot-docs", wrapper.HandleListBootDocsApiBootDocsGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/boot-docs/{kind}/{key}", wrapper.HandleGetBootDocApiBootDocsKindKeyGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/boot-docs/{kind}/{key}", wrapper.HandleReplaceBootDocApiBootDocsKindKeyPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/boot-docs/{kind}/{key}/reset", wrapper.HandleResetBootDocApiBootDocsKindKeyResetPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/boot-sequence/{runtime_key}", wrapper.HandleGetBootSequenceApiBootSequenceRuntimeKeyGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/boot-sequence/{runtime_key}", wrapper.HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/boot-sequence/{runtime_key}/reset", wrapper.HandleResetBootSequenceApiBootSequenceRuntimeKeyResetPost)

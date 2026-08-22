@@ -17,10 +17,12 @@ import (
 	"testing"
 )
 
-// ── fixture: an apiServer over a real DB, for the two write faces that have no
-// route of their own yet (replaceBootDoc / resetBootDoc are reached through the
-// per-document handlers, and the six new kinds have none until the endpoint
-// shape is settled). ─────────────────────────────────────────────────────────
+// ── fixture: an apiServer over a real DB. The cases here call the domain
+// helpers (replaceBootDoc / resetBootDoc / foldBootDocDTO) DIRECTLY, one kind at
+// a time; the route that carries them — the generic {kind}/{key} family — is
+// addressed in api_bootdocs_generic_t3201_test.go. Keeping the split means a
+// guard on the document's own rules cannot be satisfied by a routing change, or
+// lost to one. ───────────────────────────────────────────────────────────────
 
 func newEventProcServer(t *testing.T) *apiServer {
 	t.Helper()
