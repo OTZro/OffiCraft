@@ -28,6 +28,7 @@ package main
 // token whose sub is on nobody's roster).
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -53,6 +54,11 @@ type bootDocSpec struct {
 	// before T-3201 do — see doc_vars.go); a non-nil empty slice means the
 	// document is validated and allows none.
 	Vars []string
+	// Split says this document carries a read-only head above docBodyMarker.
+	// Join is what the two halves are joined with when it is rendered — see
+	// DocRendered on why it is per document.
+	Split bool
+	Join  string
 	// ReadOnly marks a document the owner may READ but never edit. The owner's
 	// ruling, verbatim: 「以前 global context 是固定內容我們也是會顯示 只是不給改」
 	// — so these still have a seed, still fold, still reach the cockpit, and
@@ -78,10 +84,18 @@ type bootDocReg struct {
 	// field because boot_sequence's two keys have two different seeds, and the
 	// two contradict each other in step 3 — serving the wrong one is a silent
 	// failure to boot (see bootSequenceSeedName).
-	SeedFor  func(key string) string
-	DocName  func(key string) string
-	Cap      func(s *apiServer) int
-	Vars     []string
+	SeedFor func(key string) string
+	DocName func(key string) string
+	Cap     func(s *apiServer) int
+	// Vars are the {name} variables this kind may use. On a Split kind they
+	// are the HEAD's variables: the body declares none, always. nil still
+	// means "not validated at all" (doc_vars.go) and is independent of Split —
+	// system_interaction's body carries JSON braces this syntax cannot tell
+	// from a variable, while its head is immutable all the same.
+	Vars []string
+	// Split / Join — see bootDocSpec and DocRendered.
+	Split    bool
+	Join     string
 	ReadOnly bool
 }
 
@@ -95,6 +109,14 @@ var bootDocRegistry = []bootDocReg{{
 	SeedFor: func(string) string { return systemInteractionSeedMD },
 	DocName: func(string) string { return "system interaction block" },
 	Cap:     func(s *apiServer) int { return s.systemInteractionCap() },
+	// The head is the document's OWN title line, promoted (T-3201). Nothing
+	// was written to make it: buildBootContext adds not one character to this
+	// block, so the line that already sat at the top is the only honest head,
+	// and promoting it costs no wording. Vars stays nil — the body quotes JSON
+	// (`{"id": "<attachment id>"}`) that the {name} syntax cannot tell from a
+	// variable — so this kind is split but not variable-validated.
+	Split: true,
+	Join:  "\n\n",
 }, {
 	Kind: docKindBootSequence,
 	Keys: []string{bootSequenceKeyClaude, bootSequenceKeyCodex},
@@ -104,6 +126,11 @@ var bootDocRegistry = []bootDocReg{{
 	SeedFor: bootSequenceSeedName,
 	DocName: func(key string) string { return "boot sequence (" + key + ")" },
 	Cap:     func(s *apiServer) int { return s.bootSequenceCap() },
+	// Same promotion as system_interaction, and BOTH runtime seeds carry their
+	// own head: the two titles differ (執行環境 differs per runtime) and a
+	// shared one would be the third place the runtime is decided.
+	Split: true,
+	Join:  "\n\n",
 }, {
 	// 下線程序 (T-c9c0). A SINGLETON: being collected is the same procedure for
 	// every agent and every runtime, so there is deliberately no runtime axis
@@ -113,6 +140,21 @@ var bootDocRegistry = []bootDocReg{{
 	SeedFor: func(string) string { return offboardSeedMD },
 	DocName: func(string) string { return "offboard sequence" },
 	Cap:     func(s *apiServer) int { return s.offboardCap() },
+	// The head is offboardNotice's own opener sentence, moved into the document
+	// (T-3201) so the owner can read the words an agent is actually sent — the
+	// complaint that opened this ticket was that he could not.
+	//
+	// 🔴 {closer} IS GONE AND report_stopped IS SPELLED OUT. owner, verbatim
+	// (c-5b3d8f192a0b): 「我預期是 report_stopped，因為是 server 控制他上下線」,
+	// and again (rc-5d044f0c1266): 「下線程序為什麼要看到 restart_self，這個已經
+	// 不在下線程序要被呼叫了」. restart_self is a REQUEST an agent makes when it
+	// was told to restart itself after finishing something, not a close-out
+	// verb; it now lives in 系統互動's tool notes. See the divergence pinned in
+	// api_bootdocs_split_t3201_test.go: today's code still says restart_self on
+	// the refocus arm, and that arm is what changes.
+	Split: true,
+	Join:  "\n",
+	Vars:  []string{"where"},
 }, {
 	// 加速停止 (T-3201). Shares the offboard cap on purpose, the same way the
 	// two boot sequences share one: it is the same procedure under a shorter
@@ -123,45 +165,71 @@ var bootDocRegistry = []bootDocReg{{
 	SeedFor: func(string) string { return acceleratedStopSeedMD },
 	DocName: func(string) string { return "accelerated stop sequence" },
 	Cap:     func(s *apiServer) int { return s.offboardCap() },
-	Vars:    []string{"where", "closer", "deadline"},
+	Split:   true,
+	Join:    "\n",
+	Vars:    []string{"where", "deadline"},
 }, {
 	Kind:    docKindTaskCloseout,
 	Keys:    []string{taskCloseoutDocKey},
 	SeedFor: func(string) string { return taskCloseoutSeedMD },
 	DocName: func(string) string { return "task close-out procedure" },
 	Cap:     func(s *apiServer) int { return s.taskEventCap() },
-	Vars:    []string{"task_no", "status", "type_key", "manual_label"},
+	// 🔴 NOT SPLIT, AND THIS IS A FINDING RATHER THAN AN OVERSIGHT. Two of its
+	// variables sit in the middle of the INSTRUCTIONS — 「再用 patch_task_learnings
+	// （type_key=`{type_key}`）只把改動的那一段送回「{manual_label}」的任務手冊」 —
+	// so "head is a prefix" and "the body has no variables" cannot both hold
+	// without either moving those bytes or rewording the sentence around them.
+	// Both are content changes, and this package is allowed exactly two (the
+	// frozen caveat and the dependency-released branches), each ruled by the
+	// owner by name. Left whole, validated as one text, awaiting his ruling.
+	Vars: []string{"task_no", "status", "type_key", "manual_label"},
 }, {
 	Kind:    docKindTaskReassignPredecessor,
 	Keys:    []string{taskReassignPredecessorDocKey},
 	SeedFor: func(string) string { return taskReassignPredecessorSeedMD },
 	DocName: func(string) string { return "task reassign procedure (predecessor)" },
 	Cap:     func(s *apiServer) int { return s.taskEventCap() },
-	Vars:    []string{"task_no", "new_executor_label"},
+	// The cleanest cut of the ten: one sentence of fact, then three of
+	// instruction, in that order, inside one paragraph — hence Join "".
+	Split: true,
+	Join:  "",
+	Vars:  []string{"task_no", "new_executor_label"},
 }, {
 	Kind:    docKindTaskTakeoverWithPredecessor,
 	Keys:    []string{taskTakeoverWithPredecessorDocKey},
 	SeedFor: func(string) string { return taskTakeoverWithPredecessorSeedMD },
 	DocName: func(string) string { return "task takeover procedure (with predecessor)" },
 	Cap:     func(s *apiServer) int { return s.taskEventCap() },
-	Vars:    []string{"task_no", "title", "predecessor_label", "old_executor_id", "note"},
+	// 🔴 NOT SPLIT — the same finding as task_closeout, in the other shape:
+	// 「交接備註：{note}」 is appended AFTER the instructions, so the facts are not
+	// a prefix. Awaiting the owner's ruling; see doc_split.go's header.
+	Vars: []string{"task_no", "title", "predecessor_label", "old_executor_id", "note"},
 }, {
 	// 🔴 READ-ONLY. Owner's ruling, verbatim: 「以前 global context 是固定內容
 	// 我們也是會顯示 只是不給改」. It is a document rather than a string literal
 	// so the owner can SEE what an agent is told; the write faces refuse.
-	Kind:     docKindTaskTakeoverFresh,
-	Keys:     []string{taskTakeoverFreshDocKey},
-	SeedFor:  func(string) string { return taskTakeoverFreshSeedMD },
-	DocName:  func(string) string { return "task takeover procedure (new assignment)" },
-	Cap:      func(s *apiServer) int { return s.taskEventCap() },
+	Kind:    docKindTaskTakeoverFresh,
+	Keys:    []string{taskTakeoverFreshDocKey},
+	SeedFor: func(string) string { return taskTakeoverFreshSeedMD },
+	DocName: func(string) string { return "task takeover procedure (new assignment)" },
+	Cap:     func(s *apiServer) int { return s.taskEventCap() },
+	// 🔴 NOT SPLIT — same trailing 「交接備註：{note}」 as its sibling above.
 	Vars:     []string{"task_no", "title", "note"},
 	ReadOnly: true,
 }, {
-	Kind:     docKindTaskUnblocked,
-	Keys:     []string{taskUnblockedDocKey},
-	SeedFor:  func(string) string { return taskUnblockedSeedMD },
-	DocName:  func(string) string { return "dependency-released notice" },
-	Cap:      func(s *apiServer) int { return s.taskEventCap() },
+	Kind:    docKindTaskUnblocked,
+	Keys:    []string{taskUnblockedDocKey},
+	SeedFor: func(string) string { return taskUnblockedSeedMD },
+	DocName: func(string) string { return "dependency-released notice" },
+	Cap:     func(s *apiServer) int { return s.taskEventCap() },
+	Split:   true,
+	// A blank line, not "", because the body is a bullet list — the one
+	// document of the ten whose body is not today's sentence. owner approved
+	// the rewrite on 2026-08-22 (rc-8c0045ef7c38): the old single sentence
+	// 「請 get_task 讀內容、submit_plan 規劃步驟後開始執行」 hardcodes the
+	// assumption that a blocked ticket has not started, and there is live
+	// evidence of it saying so to a ticket already in progress.
+	Join:     "\n\n",
 	Vars:     []string{"blocked_task_no", "blocker_task_no", "blocker_title", "blocker_status"},
 	ReadOnly: true,
 }}
@@ -230,6 +298,8 @@ func (s *apiServer) bootDocSpecFor(kind, key string) (bootDocSpec, bool) {
 		Cap:      reg.Cap(s),
 		DocName:  reg.DocName(key),
 		Vars:     reg.Vars,
+		Split:    reg.Split,
+		Join:     reg.Join,
 		ReadOnly: reg.ReadOnly,
 	}, true
 }
@@ -299,12 +369,19 @@ func (s *apiServer) foldBootDocDTO(spec bootDocSpec) (*bootDocDTO, error) {
 // The runtime→document choice goes through bootSequenceDocKey, which reads the
 // answer of bootSequenceSeedName instead of testing the runtime again — one
 // decision point for staff and outsource alike.
+// 🔴 THE READ SITES TAKE THE RENDERED TEXT, THE COCKPIT TAKES THE STORED ONE
+// (T-3201). foldBootDocDTO still answers the whole document — marker line and
+// all — because the owner has to SEE the half he cannot edit. A reader must not
+// see the marker, so every boot fold goes through DocRendered with this kind's
+// own join. An installation whose seed carries no marker renders byte for byte
+// what it rendered before.
 func (s *apiServer) systemInteractionText() (string, error) {
-	dto, err := s.foldBootDocDTO(s.systemInteractionSpec())
+	spec := s.systemInteractionSpec()
+	dto, err := s.foldBootDocDTO(spec)
 	if err != nil {
 		return "", err
 	}
-	return dto.Text, nil
+	return DocRendered(dto.Text, spec.Join), nil
 }
 
 // offboardText is what the SERVER carries into the offboard notice itself
@@ -312,12 +389,17 @@ func (s *apiServer) systemInteractionText() (string, error) {
 // pushes, not be fetched back by the agent — 「改回真的推播」. It answers "" on
 // any fault, and every caller degrades to the sentence alone rather than going
 // silent: losing the checklist is survivable, losing the notice is not.
+// 🔴 THE BODY ALONE, not the rendered document (T-3201). This document's head
+// is the notice's own opening sentence, and offboardNotice already builds that
+// sentence from the live facts before stapling this under it — handing it the
+// rendered text would print the head twice, once with variables filled and once
+// with the braces still in it.
 func (s *apiServer) offboardText() string {
 	dto, err := s.foldBootDocDTO(s.offboardSpec())
 	if err != nil || dto == nil {
 		return ""
 	}
-	return dto.Text
+	return DocBody(dto.Text)
 }
 
 func (s *apiServer) bootSequenceText(runtime string) (string, error) {
@@ -332,7 +414,7 @@ func (s *apiServer) bootSequenceText(runtime string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return dto.Text, nil
+	return DocRendered(dto.Text, spec.Join), nil
 }
 
 // bootDocSnapshotIn is what SaveWithDocumentHistory calls from INSIDE the write
@@ -434,12 +516,12 @@ func (s *apiServer) replaceBootDoc(w http.ResponseWriter, r *http.Request, spec 
 		writeError(w, http.StatusBadRequest, docCapRefusal(spec.Cap, spec.DocName, current.Text, text))
 		return
 	}
-	// Variable validation (T-3201). Last of the three because it is the only
-	// one that judges the CONTENT rather than the size: a caller whose write is
-	// both oversized and misspelt learns about the size first, which is the one
-	// it can act on without re-reading the document.
-	if bad := DocVarsUndeclared(text, spec.Vars); len(bad) > 0 {
-		writeError(w, http.StatusBadRequest, docVarWriteRefusal(spec.DocName, bad, spec.Vars))
+	// Content validation (T-3201): the read-only head must come back unchanged
+	// and the editable body must name no variables. Last of the gates because
+	// it is the only one that judges the CONTENT rather than the size — a
+	// caller whose write is both oversized and malformed learns about the size
+	// first, which is the one it can act on without re-reading the document.
+	if !s.bootDocContentOK(w, spec, text) {
 		return
 	}
 	if _, err := s.writeBootDoc(r, spec, current,
@@ -453,6 +535,68 @@ func (s *apiServer) replaceBootDoc(w http.ResponseWriter, r *http.Request, spec 
 		return
 	}
 	writeJSON(w, http.StatusOK, dto)
+}
+
+// bootDocContentOK is the write face's content gate: the head half is
+// immutable, the body half has no variables, and an unsplit document is judged
+// as one text the way it was before this split existed.
+//
+// 🔴 THE HEAD IS COMPARED AGAINST THE SHIPPED SEED, not against what is stored
+// now. Comparing against the stored text would make the wall movable: one write
+// that slipped a changed head past a bug would become the new baseline, and
+// every write after it would agree with the wrong head. The seed is the one
+// copy no write path can reach (see resetBootDoc), so it is the only honest
+// thing to measure against.
+//
+// It answers false having already written the refusal, so callers read as a
+// guard clause rather than a second error shape to unpack.
+func (s *apiServer) bootDocContentOK(w http.ResponseWriter, spec bootDocSpec, text string) bool {
+	if !spec.Split {
+		if bad := DocVarsUndeclared(text, spec.Vars); len(bad) > 0 {
+			writeError(w, http.StatusBadRequest, docVarWriteRefusal(spec.DocName, bad, spec.Vars))
+			return false
+		}
+		return true
+	}
+	// 🔴 A WIPE IS NOT JUDGED HERE. An empty write is the "erase this document"
+	// gesture, and the wipe guard above has ALREADY ruled on it — refusing it,
+	// or letting it through because the caller passed allow_shrink, which the
+	// owner ruled on 2026-08-22 stays open. Judging it a second time here would
+	// close that bypass by accident, on a face nobody would think to look at,
+	// and the way back is one reset away.
+	if strings.TrimSpace(text) == "" {
+		return true
+	}
+	seedMD, hasSeed, err := s.root.seedBlockMD(spec.SeedFile)
+	if err != nil {
+		internalError(w, err)
+		return false
+	}
+	seedHead, _, seedSplit := DocSplitHeadBody(seedMD)
+	if !hasSeed || !seedSplit {
+		// A split kind whose seed lost its marker cannot say what its head IS,
+		// and accepting the write would silently retire the read-only half for
+		// good. 500 rather than a refusal: nothing the caller typed caused it.
+		internalError(w, errors.New("boot document "+spec.Kind+"/"+spec.Key+
+			" is declared split but its seed carries no "+docBodyMarker+" line"))
+		return false
+	}
+	head, body, split := DocSplitHeadBody(text)
+	if !split || head != seedHead {
+		writeError(w, http.StatusBadRequest, docHeadEditRefusal(spec.DocName))
+		return false
+	}
+	// nil Vars opts the kind out of variable validation entirely (doc_vars.go)
+	// — system_interaction quotes JSON in its body — and that opt-out is about
+	// the SYNTAX, so it has to cover the body rule too.
+	if spec.Vars == nil {
+		return true
+	}
+	if bad := DocVarsIn(body); len(bad) > 0 {
+		writeError(w, http.StatusBadRequest, docBodyVarRefusal(spec.DocName, bad))
+		return false
+	}
+	return true
 }
 
 // resetBootDoc tombstones the overlay so the folded read falls back to the

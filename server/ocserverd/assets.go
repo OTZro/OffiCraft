@@ -521,7 +521,7 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 	parts := []string{strings.TrimSpace(sysSeed)}
 	if strings.TrimSpace(userCtx.Text) != "" {
 		parts = append(parts,
-			"# 使用者自訂（Owner Additions）\n\n"+strings.TrimSpace(userCtx.Text))
+			userAdditionsTitle+"\n\n"+strings.TrimSpace(userCtx.Text))
 	}
 	parts = append(parts,
 		"# Role: "+roleTitle+"\n\n"+strings.TrimSpace(roleDTO.DefinitionMD))
@@ -677,6 +677,17 @@ func materializeBinary(dir, name string, data []byte) (string, error) {
 // uses. Named rather than repeated so a caller addressing "the one document of
 // this kind" says so, instead of spelling a magic "global" that reads like the
 // 全域脈絡 document it is not.
+// userAdditionsTitle is the ONE title the 使用者自訂 block is served under.
+//
+// 🔴 IT WAS TWO COPIES, AND THAT IS THE WHOLE REASON IT IS A CONSTANT (T-3201).
+// The same literal sat in buildBootContext (staff) and workerSharedHead
+// (outsource), so the day someone corrected one of them, staff and contractors
+// would have booted under two different headings and nothing would have said
+// so. It is also the only line the program ADDS to any of the three boot
+// documents — the read-only head of 使用者自訂, in the vocabulary T-3201 gives
+// the other nine — which is why it is named here rather than inlined twice.
+const userAdditionsTitle = "# 使用者自訂（Owner Additions）"
+
 const bootDocSingletonKey = "global"
 
 const (

@@ -252,7 +252,18 @@ func TestReplaceBootDoc_PreT3201KindsAreNotVariableValidated(t *testing.T) {
 		t.Fatalf("system_interaction must opt out of variable validation, declares %v", spec.Vars)
 	}
 	w := httptest.NewRecorder()
-	s.replaceBootDoc(w, ownerPost("/x"), spec, `回傳 {"id": "<attachment id>"} 這種東西`, false)
+	// Under the document's own read-only head (T-3201): the head is required
+	// back verbatim on every write, and this case is about the BRACES.
+	seed, _, err := s.root.seedBlockMD(spec.SeedFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, _, split := DocSplitHeadBody(seed)
+	if !split {
+		t.Fatal("system_interaction's seed lost its read-only head")
+	}
+	s.replaceBootDoc(w, ownerPost("/x"), spec,
+		DocJoinHeadBody(head, `回傳 {"id": "<attachment id>"} 這種東西`), false)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
 	}

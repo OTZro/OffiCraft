@@ -408,6 +408,23 @@ def _matrix_reassigning_task(ctx: Ctx) -> str:
     return task_id
 
 
+# T-3201 — a boot document keeps a read-only head above one marker line, and a
+# write has to return that head verbatim. These rows are about the AUTHZ FLOOR,
+# so the body reads the document first and re-sends its head under a new body:
+# a 400 for malformed content would say nothing about who may write.
+_DOC_BODY_SEP = "\n\n<!-- ↑唯讀區（程式產生，改不動）｜↓本體（可編輯，零變數） -->\n\n"
+
+
+def _boot_doc_body(path: str, text: str):
+    def build(ctx: "Ctx", identity: str) -> dict:
+        g = ctx.client.get(path, headers=_headers(ctx, "owner"))
+        assert g.status_code == 200, f"{g.status_code} {g.text}"
+        head, sep, _ = g.json()["text"].partition(_DOC_BODY_SEP)
+        return {"text": head + _DOC_BODY_SEP + text if sep else text}
+
+    return build
+
+
 MATRIX: dict[str, Route] = {
     # ── infra seams ──────────────────────────────────────────────────────────
     "GET /api/events": Route(
@@ -939,7 +956,7 @@ MATRIX: dict[str, Route] = {
     "GET /api/system-interaction": Route(requires="machine"),
     "POST /api/system-interaction": Route(
         requires="admin_agent",
-        body={"text": "conformance system-interaction block"},
+        body=_boot_doc_body("/api/system-interaction", "conformance system-interaction block"),
     ),
     "POST /api/system-interaction/reset": Route(requires="admin_agent"),
     "GET /api/boot-sequence/{runtime_key}": Route(
@@ -949,7 +966,7 @@ MATRIX: dict[str, Route] = {
     "POST /api/boot-sequence/{runtime_key}": Route(
         requires="admin_agent",
         path="/api/boot-sequence/codex",
-        body={"text": "conformance boot sequence"},
+        body=_boot_doc_body("/api/boot-sequence/codex", "conformance boot sequence"),
     ),
     "POST /api/boot-sequence/{runtime_key}/reset": Route(
         requires="admin_agent",
@@ -960,7 +977,7 @@ MATRIX: dict[str, Route] = {
     "GET /api/offboard": Route(requires="machine"),
     "POST /api/offboard": Route(
         requires="admin_agent",
-        body={"text": "conformance offboard block"},
+        body=_boot_doc_body("/api/offboard", "conformance offboard block"),
     ),
     "POST /api/offboard/reset": Route(requires="admin_agent"),
     "GET /api/roles": Route(requires="machine"),
@@ -1588,6 +1605,10 @@ DEGRADED: dict[str, str] = {
 # ── plumbing ─────────────────────────────────────────────────────────────────
 
 
+# T-3201 — a boot document keeps a read-only head above one marker line; a write
+# has to return that head verbatim. These rows are about the AUTHZ FLOOR, so the
+# body reads the current document and re-sends its head with a new body: a 400
+# for malformed content would say nothing about who may write.
 def _resolve(value, ctx: Ctx, identity: str):
     return value(ctx, identity) if callable(value) else value
 

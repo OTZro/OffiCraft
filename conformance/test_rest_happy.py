@@ -747,11 +747,38 @@ def _check_reset_insight(ctx: HCtx, r: httpx.Response) -> None:
 
 _BOOT_DOC_EDIT = "# conformance edit — 系統互動 / 啟動程序\n\nnot the factory text\n"
 
+# T-3201 — a boot document stores a read-only head, one marker line, then the
+# owner-editable body. A write must return the head verbatim; only the body may
+# change. Spelled here rather than imported: this suite is black-box and states
+# the wire in its own words.
+_DOC_BODY_MARKER = "<!-- ↑唯讀區（程式產生，改不動）｜↓本體（可編輯，零變數） -->"
+_DOC_BODY_SEP = "\n\n" + _DOC_BODY_MARKER + "\n\n"
+
+
+def _boot_doc_body(path: str):
+    """Body factory: read the document, keep its head, replace its body."""
+
+    def build(ctx: HCtx) -> dict:
+        g = ctx.client.get(path, headers={"Authorization": f"Bearer {ctx.owner_token}"})
+        assert g.status_code == 200, f"{g.status_code} {g.text}"
+        head, sep, _ = g.json()["text"].partition(_DOC_BODY_SEP)
+        if not sep:
+            return {"text": _BOOT_DOC_EDIT}
+        return {"text": head + _DOC_BODY_SEP + _BOOT_DOC_EDIT}
+
+    return build
+
+
 
 def _boot_doc_written(ctx: HCtx, r: httpx.Response) -> None:
-    """The edit came back verbatim and the block stopped reading as default."""
+    """The edit came back verbatim and the block stopped reading as default.
+
+    The EDITABLE half is compared, not the whole document: the read-only head
+    rides along on every write and is not what this row is exercising.
+    """
     d = r.json()
-    assert d["text"] == _BOOT_DOC_EDIT, d
+    _, sep, body = d["text"].partition(_DOC_BODY_SEP)
+    assert (body if sep else d["text"]) == _BOOT_DOC_EDIT, d
     assert d["is_default"] is False, d
     assert d["size_chars"] == len(d["text"]), d
     assert d["cap_chars"] >= d["size_chars"], d
@@ -1302,7 +1329,7 @@ HAPPY: dict[str, Happy] = {
         check=lambda _c, r: _boot_doc_read("system_interaction", "global")(_c, r)
     ),
     "POST /api/system-interaction": Happy(
-        body={"text": _BOOT_DOC_EDIT}, check=_boot_doc_written
+        body=_boot_doc_body("/api/system-interaction"), check=_boot_doc_written
     ),
     "POST /api/system-interaction/reset": Happy(
         check=_boot_doc_reset("/api/system-interaction")
@@ -1313,7 +1340,7 @@ HAPPY: dict[str, Happy] = {
     ),
     "POST /api/boot-sequence/{runtime_key}": Happy(
         path="/api/boot-sequence/codex",
-        body={"text": _BOOT_DOC_EDIT},
+        body=_boot_doc_body("/api/boot-sequence/codex"),
         check=_boot_doc_written,
     ),
     "POST /api/boot-sequence/{runtime_key}/reset": Happy(
@@ -1326,7 +1353,9 @@ HAPPY: dict[str, Happy] = {
     "GET /api/offboard": Happy(
         check=lambda _c, r: _boot_doc_read("offboard", "global")(_c, r)
     ),
-    "POST /api/offboard": Happy(body={"text": _BOOT_DOC_EDIT}, check=_boot_doc_written),
+    "POST /api/offboard": Happy(
+        body=_boot_doc_body("/api/offboard"), check=_boot_doc_written
+    ),
     "POST /api/offboard/reset": Happy(check=_boot_doc_reset("/api/offboard")),
     "GET /api/roles": Happy(check=_nonempty_list),
     "GET /api/doc-sizes": Happy(
