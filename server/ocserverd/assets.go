@@ -670,9 +670,12 @@ func materializeBinary(dir, name string, data []byte) (string, error) {
 // (sse_bands.go's offboard sentence builder and decideTaskCloseNudge,
 // api_tasks.go's reassign notices, api_tasks_handoff.go's dependency-released
 // notice); the interpolation points are the ONLY thing that changed shape,
-// becoming the {name} variables this kind declares. The two stop procedures are
-// wired to their send sites and the builder is deleted; the four task documents
-// are not sent by anything yet.
+// becoming the {name} variables this kind declares. Four are wired to their send
+// sites and the Go text they replaced is deleted: the two stop procedures, plus
+// 轉派程序（前任） and 解除阻擋. The remaining three (任務收尾 and the two
+// 接手程序) are still only documents — their send sites read Go string literals,
+// because a variable sits outside the opening run of facts in each and where to
+// cut them is the owner's ruling (see their registry rows).
 // bootDocSingletonKey is the document key every non-boot_sequence boot document
 // uses. Named rather than repeated so a caller addressing "the one document of
 // this kind" says so, instead of spelling a magic "global" that reads like the
