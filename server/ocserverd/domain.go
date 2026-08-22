@@ -1150,6 +1150,29 @@ func docCapRefusal(cap int, docName, before, after string) string {
 		utf8.RuneCountInString(before))
 }
 
+// docWipeRefusal is the ONE refusal text behind the wipe guard
+// (WholeDocWipeBlocked), the same way docCapRefusal is the one text behind the
+// cap. It names the document and the ONE way forward, because being refused is
+// otherwise the only way to learn that allow_shrink exists at all.
+//
+// wayOut is the seam-specific escape the caller also has — the way back to the
+// factory text, which is NOT the same sentence everywhere: replace_global_context
+// names a tool (reset_global_context), the boot documents name a gesture ("reset
+// it to the shipped default"), and the lessons / insight seams have no second
+// way out and pass "". It is a parameter rather than a fifth hardcoded sentence
+// so folding these four together changed no byte any caller reads.
+//
+// 🔴 FOUR SEAMS, NOT FIVE. api_taskmanuals.go's replace_task_manual_learnings
+// says "…the existing learnings with an empty DOC" — a different skeleton, not
+// just a different name — so it is deliberately NOT folded in here. Bending it
+// to fit would mean editing the sentence an agent reads, which is a text change
+// wearing a refactor's clothes. Leave it where it is until someone decides, on
+// purpose, to reword it.
+func docWipeRefusal(docName, wayOut string) string {
+	return "this would replace the existing " + docName + " with an empty one — pass allow_shrink=true " +
+		"if that is intended" + wayOut + "; nothing was written"
+}
+
 // ── user_context: the ADDITIVE user-custom block fold ────────────────────────
 
 // FoldUserContext folds the owner's user-custom ADDITIVE boot-context block.

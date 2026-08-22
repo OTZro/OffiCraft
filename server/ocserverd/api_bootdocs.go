@@ -307,8 +307,7 @@ func (s *apiServer) replaceBootDoc(w http.ResponseWriter, r *http.Request, spec 
 	// document, it is an agent with no instructions.
 	if !allowShrink && WholeDocWipeBlocked(current.Text, text) {
 		writeError(w, http.StatusBadRequest,
-			"this would replace the existing "+spec.DocName+" with an empty one — pass allow_shrink=true "+
-				"if that is intended, or reset it to the shipped default; nothing was written")
+			docWipeRefusal(spec.DocName, ", or reset it to the shipped default"))
 		return
 	}
 	// Hard cap, checked UNCONDITIONALLY: allow_shrink governs the opposite
