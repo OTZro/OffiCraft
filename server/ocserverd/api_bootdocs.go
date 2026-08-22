@@ -36,6 +36,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -265,6 +266,10 @@ func (s *apiServer) offboardSpec() bootDocSpec {
 	return s.mustBootDocSpec(docKindOffboard, offboardDocKey)
 }
 
+func (s *apiServer) acceleratedStopSpec() bootDocSpec {
+	return s.mustBootDocSpec(docKindAcceleratedStop, acceleratedStopDocKey)
+}
+
 // mustBootDocSpec resolves a pair this binary is built with. It panics rather
 // than returning ok=false because every caller passes a constant pair from the
 // registry itself: a false here would mean the binary shipped with a kind whose
@@ -389,22 +394,53 @@ func (s *apiServer) systemInteractionText() (string, error) {
 	return DocRendered(dto.Text, spec.Join), nil
 }
 
-// offboardText is what the SERVER carries into the offboard notice itself
-// (T-a9d6): the owner ruled that the steps must ride the notice the server
-// pushes, not be fetched back by the agent — 「改回真的推播」. It answers "" on
-// any fault, and every caller degrades to the sentence alone rather than going
-// silent: losing the checklist is survivable, losing the notice is not.
-// 🔴 THE BODY ALONE, not the rendered document (T-3201). This document's head
-// is the notice's own opening sentence, and offboardNotice already builds that
-// sentence from the live facts before stapling this under it — handing it the
-// rendered text would print the head twice, once with variables filled and once
-// with the braces still in it.
-func (s *apiServer) offboardText() string {
-	dto, err := s.foldBootDocDTO(s.offboardSpec())
+// winddownNoticeText is the WHOLE notice a member being wound down receives:
+// the document for this kind, its {variables} filled from the live facts, and
+// its two halves joined the way this kind joins them (T-3201). It replaces the
+// Go string concatenation that used to build the first line beside a document
+// that already carried it — the complaint that opened this ticket was that the
+// owner went looking for the words an agent is sent and could not find them.
+//
+// 🔴 WHICH DOCUMENT IS THE WHOLE OF THE SOFT/HARD DISTINCTION. A soft wind-down
+// reads 下線程序; the final call reads 加速停止, and that is the only document
+// whose head carries a {deadline} slot. Handing the hard arm the soft document
+// would send an agent under a running clock a sentence that quotes no instant —
+// and 下線程序 §1 tells it to treat a notice with no instant as soft, so it
+// would let its sub-agents finish inside a window that is already closing.
+//
+// It answers "" on ANY fault — an unreadable document, an undeclared name, a
+// declared name nothing filled — and every caller omits the notice rather than
+// sending it. That is the one direction RenderDocVars exists to enforce: a
+// sentence reaching an agent with `{deadline}` still in it is worse than no
+// sentence, because it reads as a real instant that cannot be parsed.
+func (s *apiServer) winddownNoticeText(kind, where string, deadline float64) string {
+	spec := s.offboardSpec()
+	values := map[string]string{"where": where}
+	if kind == offboardKindFinal {
+		// Unreachable: offboardKindOf answers final only on a clocked arm, and
+		// winddownDeadlineOf is positive on exactly those arms
+		// (TestWindDownKind_TheClockAndTheSentenceCannotDisagree pins the online
+		// arm, TestOffboardKindOf_AFinalCallAlwaysHasAClock the offline one).
+		// Refusing rather than formatting epoch 0 keeps a 1970 deadline out of
+		// the one sentence an agent acts on if they ever come apart.
+		if deadline <= 0 {
+			return ""
+		}
+		spec = s.acceleratedStopSpec()
+		// .UTC() is not cosmetic: the reader is an AGENT that need not run on
+		// this host, and the client de-dupes on the whole sentence verbatim, so
+		// one epoch has to render to one constant string.
+		values["deadline"] = time.Unix(int64(deadline), 0).UTC().Format(time.RFC3339)
+	}
+	dto, err := s.foldBootDocDTO(spec)
 	if err != nil || dto == nil {
 		return ""
 	}
-	return DocBody(dto.Text)
+	text, err := RenderDocVars(dto.Text, spec.Vars, values)
+	if err != nil {
+		return ""
+	}
+	return DocRendered(text, spec.Join)
 }
 
 func (s *apiServer) bootSequenceText(runtime string) (string, error) {

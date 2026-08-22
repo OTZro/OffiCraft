@@ -70,17 +70,6 @@ func DocRendered(text, join string) string {
 	return head + join + body
 }
 
-// DocBody is the owner-editable half alone. The offboard read site wants this
-// one rather than DocRendered: offboardNotice already builds the head sentence
-// in Go, so handing it the whole document would staple the head under itself.
-func DocBody(text string) string {
-	_, body, split := DocSplitHeadBody(text)
-	if !split {
-		return text
-	}
-	return body
-}
-
 // docHeadEditRefusal answers a write whose read-only half does not match the
 // shipped one — including a write that dropped the marker entirely, which is
 // the same offence spelled differently (a document with no boundary has no

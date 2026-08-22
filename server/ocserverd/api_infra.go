@@ -212,11 +212,15 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 	lastTokenExpiryReminder := int64(0)
 	nextTokenExpiryCheck := int64(0)
 
-	// The TEXT source of the handover notice, built once per connection rather
-	// than once per tick. Building it is free; RUNNING it is not — it is a fold
-	// over a durable document — which is why handoverNoticeTick decides whether
-	// this tick can emit BEFORE it calls it.
-	noticeOffboardText := s.offboardText
+	// The notice source, bound once per connection rather than once per tick.
+	// Binding it is free; RUNNING it is not — it is a fold over a durable
+	// document — which is why handoverNoticeTick decides whether this tick can
+	// emit BEFORE it calls it. SOFT, always: the first context threshold is an
+	// advance warning and nothing collects it at a named instant, so it reads
+	// 下線程序 and quotes no deadline (see decideHandoverNotice).
+	noticeText := func(where string) string {
+		return s.winddownNoticeText(offboardKindSoft, where, 0)
+	}
 
 	write := func(frame []byte) bool {
 		armWriteDeadline()
@@ -253,7 +257,7 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 		// agent cannot read its own context %, so the server pushes it).
 		if memberID != "" {
 			if frame, ok := s.handoverNoticeTick(
-				memberID, connRuntime, noticeOffboardText); ok {
+				memberID, connRuntime, noticeText); ok {
 				if !write(frame) {
 					return
 				}
@@ -898,7 +902,7 @@ func (s *apiServer) HandleMcpApiMcpPost(w http.ResponseWriter, r *http.Request) 
 // at all. TestHandoverNoticeTick_ClosureIsNotRunAfterTheClaim counts the
 // closure calls and fails if this order is reversed.
 func (s *apiServer) handoverNoticeTick(
-	memberID, connRuntime string, offboard func() string,
+	memberID, connRuntime string, notice func(where string) string,
 ) ([]byte, bool) {
 	record := s.gauge.Get(memberID)
 	if s.handoverNoticeSettled(memberID, record) {
@@ -907,7 +911,7 @@ func (s *apiServer) handoverNoticeTick(
 	signal := decideHandoverNotice(
 		memberID, connRuntime, record,
 		s.ctxHighConfig(), s.codexNoticeRoundSetting(), s.codexCompactionThreshold,
-		offboard)
+		notice)
 	if signal == nil {
 		return nil, false
 	}

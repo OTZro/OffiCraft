@@ -13,8 +13,8 @@ package main
 // paragraphs side by side and be sure; a byte comparison can.
 //
 // The expected values below are hand-written literals, never the constants
-// under test. Quoting offboardOpener here would make the test agree with
-// whatever that function says, including the day someone edits it.
+// under test. Quoting a constant the server also reads would make the test
+// agree with whatever that constant says, including the day someone edits it.
 
 import (
 	"net/http"
@@ -51,14 +51,19 @@ func mustRender(t *testing.T, spec bootDocSpec, head string, values map[string]s
 
 // ── the verbatim proof ───────────────────────────────────────────────────────
 
-// The offboard document's head is offboardNotice's own opening sentence.
+// The offboard document's head IS the soft notice's opening sentence — no
+// longer merely equal to what a Go string builder produced beside it, but the
+// only place that sentence exists (T-3201, wiring package).
 //
-// 🔴 ONE DELIBERATE DIVERGENCE, AND IT IS THE OWNER'S. Today's code interpolates
-// offboardCloserFor(m), which answers restart_self for a member still wanted
-// online. The document says report_stopped unconditionally — owner, verbatim
-// (c-5b3d8f192a0b): 「我預期是 report_stopped，因為是 server 控制他上下線」.
-// The comparison below therefore feeds the collected arm's closer, and the
-// refocus arm's change is pinned separately by
+// 🔴 THE DIVERGENCE IS GONE, AND THAT IS THE CHANGE. This test used to record
+// one: the document said report_stopped unconditionally while the code
+// interpolated offboardCloserFor(m), which answered restart_self for a member
+// still wanted online. The owner ruled the document right — verbatim
+// (c-5b3d8f192a0b): 「我預期是 report_stopped，因為是 server 控制他上下線」 and
+// again (rc-5d044f0c1266): 「下線程序為什麼要看到 restart_self」 — so the builder
+// and its two closer constants are deleted and the live producer below now
+// answers the document's own bytes on BOTH arms. The refocus arm's behaviour
+// under the changed verb is pinned by
 // TestSelfDrivenOffboard_StoppedReportAfterARestartSelfStampRespawns.
 func TestOffboardDoc_HeadPlusBodyIsTodaysSoftNotice(t *testing.T) {
 	s := newEventProcServer(t)
@@ -75,8 +80,8 @@ func TestOffboardDoc_HeadPlusBodyIsTodaysSoftNotice(t *testing.T) {
 	// …and the same bytes the live producer builds, which is what makes the
 	// hand-written literal above a statement about the SERVER and not about
 	// this file.
-	if live := offboardNotice(where, "report_stopped", false, 0, body); got != live {
-		t.Fatalf("offboardNotice built something else:\n got %q\nlive %q", got, live)
+	if live := s.winddownNoticeText(offboardKindSoft, where, 0); got != live {
+		t.Fatalf("the live producer sent something else:\n got %q\nlive %q", got, live)
 	}
 }
 
@@ -95,8 +100,46 @@ func TestAcceleratedStopDoc_HeadPlusBodyIsTodaysFinalNotice(t *testing.T) {
 	if got != want {
 		t.Fatalf("the folded document is not today's final offboard notice:\n got %q\nwant %q", got, want)
 	}
-	if live := offboardNotice(where, "report_stopped", true, epoch, body); got != live {
-		t.Fatalf("offboardNotice built something else:\n got %q\nlive %q", got, live)
+	if live := s.winddownNoticeText(offboardKindFinal, where, epoch); got != live {
+		t.Fatalf("the live producer sent something else:\n got %q\nlive %q", got, live)
+	}
+}
+
+// 🔴 THE OTHER HALF OF THE VARIABLE MECHANISM, at the send site rather than at
+// the write face: a document reaches an agent with NO {name} slot left in it,
+// or it does not reach the agent at all.
+//
+// Both halves are asserted, and the second one is why the first is not enough.
+// "No braces in what was sent" is satisfied trivially by a server that sends
+// nothing, and "something was sent" is satisfied by a server that ships the
+// template — so a notice that cannot be rendered must come back EMPTY (the send
+// site omits the key and the agent's client falls back), never as the head with
+// its braces still in it. The reachable instance of the second case is a final
+// call with no clock: {deadline} is declared, nothing can fill it, and the
+// answer must be "".
+func TestWindDownNoticeText_SendsNoUnfilledVariableAndRefusesRatherThanShippingOne(t *testing.T) {
+	s := newEventProcServer(t)
+	for _, c := range []struct {
+		name, kind string
+		deadline   float64
+	}{
+		{"soft", offboardKindSoft, 0},
+		{"final", offboardKindFinal, 1755870180},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := s.winddownNoticeText(c.kind, "context 59% (your limits: 55% / 65%)", c.deadline)
+			if got == "" {
+				t.Fatal("nothing was sent at all — every assertion here would pass vacuously")
+			}
+			if bad := DocVarsIn(got); len(bad) > 0 {
+				t.Fatalf("the notice reached the agent with %v still in it: %q", bad, got)
+			}
+		})
+	}
+	// A declared name nothing can fill: refused, not shipped as a template.
+	if got := s.winddownNoticeText(offboardKindFinal, "close-out", 0); got != "" {
+		t.Fatalf("a notice whose {deadline} cannot be filled must not be sent at "+
+			"all — it went out as:\n%s", got)
 	}
 }
 

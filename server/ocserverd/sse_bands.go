@@ -39,7 +39,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"time"
 )
 
 // ── context-high band (service/sse/context_high.py) ─────────────────────────
@@ -242,7 +241,7 @@ type contextHighSignal struct {
 // learning / lesson 寫回去」. A notice that only says "you are running out"
 // tells the agent nothing it can act on.
 //
-// ⚠️ `offboard` is a closure so a tick that decides to stay QUIET never pays
+// ⚠️ `notice` is a closure so a tick that decides to stay QUIET never pays
 // for it — and that is ALL the closure buys. It does NOT make it
 // once-per-session: this function keeps no state, so once an agent is past its
 // notice point it returns non-nil on EVERY tick and runs the closure on every
@@ -256,7 +255,7 @@ type contextHighSignal struct {
 func decideHandoverNotice(
 	agentID, runtime string, record map[string]any,
 	cfg SseContextHighConfig, codexNoticeRound, codexThreshold int,
-	offboard func() string,
+	notice func(where string) string,
 ) *contextHighSignal {
 	pct := actionableContextPct(record, cfg.StaleGuard)
 	var where string
@@ -285,151 +284,30 @@ func decideHandoverNotice(
 	// notice point / wrong compaction round) pays nothing. It is NOT read once
 	// per session: every tick from here to the end of the session reaches this
 	// line, which is why the caller short-circuits before entering at all.
-	var text string
-	if offboard != nil {
-		text = offboard()
+	//
+	// 🔴 THE SOFT DOCUMENT, and this is the whole of the choice: the FIRST
+	// context threshold is an advance warning with no clock behind it — nothing
+	// collects this session at a named instant — so it reads 下線程序 rather
+	// than 加速停止. The second threshold is the one that carries a deadline,
+	// and it arrives through the member delta, not through this band.
+	//
+	// A notice that could not be rendered means this tick stays QUIET. Sending
+	// the frame with an empty reason would spend the session's one notice on a
+	// message that says nothing.
+	var reason string
+	if notice != nil {
+		reason = notice(where)
+	}
+	if reason == "" {
+		return nil
 	}
 	return &contextHighSignal{
-		Topic: contextHighTopic,
-		To:    agentID,
-		Level: levelWarn,
-		Pct:   jsonFloat(*pct),
-		// A context-pressure notice always goes to a member that is still wanted
-		// online, so its sequence ends in a re-start.
-		// A context-pressure notice is never the final call, so it quotes no
-		// deadline (T-d6a7); 0 is passed rather than a value nobody reads.
-		Reason: offboardNotice(where, offboardCloserRestartSelf, false, 0, text),
+		Topic:  contextHighTopic,
+		To:     agentID,
+		Level:  levelWarn,
+		Pct:    jsonFloat(*pct),
+		Reason: reason,
 	}
-}
-
-// offboardNotice composes EVERY offboard notice this server sends, in the one
-// sentence the owner approved (2026-08-16, card rc-ec5859a4c384):
-//
-//	<where> — <opener>: work the sequence below, then call <closer> yourself.[ Your deadline is <RFC3339 UTC>.]
-//	<the 下線程序 document, verbatim>
-//
-// <opener> is "offboard now" on the final call and "start your close-out" on
-// the soft arm — see offboardOpener for the ruling that split them.
-//
-// Three things about it are deliberate and must survive edits:
-//
-//   - ONE SECOND HALF for every situation, and the owner's original design was
-//     one sentence for every situation: he cut four differently-worded notices
-//     down to this: 「不需要太多不同描述吧, 就請他按照步驟做好下線, 頂多告訴他
-//     剩下 120 秒」. What tells the situations apart is still mostly the FIELDS
-//     — the numbers in `where`, and whether the deadline clause is there.
-//     ⚠️ The OPENER is the one exception, and it is his own later narrowing
-//     (card rc-e9b655cd8e1a): the soft arm stopped saying "now" because the
-//     document stapled below it says a soft close-out may let its sub-agents
-//     finish. Two clauses, one sentence, one ruling each — do not read this
-//     bullet as licence to differentiate anything else by tone.
-//     ⚠️ That clause names an INSTANT, never a span. It was "You have 120
-//     seconds left." until T-d6a7; the deadline runs from the first stamp and
-//     this notice is REPLAYED on every write to the row, so a duration told a
-//     later replay it had the full window when most of it was gone — and a
-//     LIVE duration would be worse still, since the client de-dupes on the
-//     whole sentence verbatim.
-//   - "work the sequence below, THEN call <closer> yourself" blocks both
-//     failure directions at once. Without the second half an agent idles until
-//     the server cuts it off (dead time the owner explicitly does not want);
-//     without the first, it stops mid-work — a predecessor read the old wording
-//     as "you are done" and announced its own end of life at 40%.
-//   - 🔴 <closer> is the tool that ACTUALLY works for this member, and the two
-//     arms differ. A handover (desired online) ends in restart_self. A 下線
-//     does NOT: restart_self refuses a member that is no longer wanted online,
-//     by design — it is a RE-start. Naming it there told the agent to do
-//     something that could only answer 409, and on that arm nothing collects it
-//     on a clock, so it would sit refused until the owner pressed force-stop.
-//     Its sequence ends at report_stopped, which is also step 6 of the document
-//     it is being shown.
-//   - The steps are the DOCUMENT's, carried verbatim, never a summary written
-//     here. A summary in code is a second source of truth that the owner cannot
-//     edit and nothing keeps in step (T-c382 shipped exactly that mistake).
-//
-// An empty document degrades to the sentence alone: losing the checklist is
-// survivable, losing the notice is not.
-// The two tools a session can end its own sequence with. Which one is TRUE for
-// a given member is decided by offboardCloserFor — naming the wrong one asks it
-// to make a call that can only be refused.
-const (
-	offboardCloserRestartSelf   = "restart_self"
-	offboardCloserReportStopped = "report_stopped"
-)
-
-// offboardOpener is the ONE clause that now differs between the two arms, and
-// it is the owner's ruling of 2026-08-20 (card rc-e9b655cd8e1a, option 0:
-// 「軟性那則的第一行改成不催」) narrowing his own 2026-08-16 one-sentence-for-
-// everything design.
-//
-// 🔴 WHY HE NARROWED IT. The soft arm said "offboard now" while the document
-// stapled below it says a soft close-out may let its sub-agents finish. Two
-// forces pushed the reader the same way — the (then broken) soft/hard rule said
-// "hard", and the first line said "now" — and the first line is the one read
-// first. A generation of this developer was collected under exactly that pair
-// with four unanswered cards and two unreported delegations still open.
-//
-// ⚠️ The SECOND half is deliberately identical on both arms. "work the sequence
-// below, then call <closer> yourself" blocks both failure directions at once,
-// and neither the ruling nor this change touches it: without the second clause
-// an agent idles until the server cuts it off; without the first, it stops
-// mid-work.
-//
-// ⚠️ KNOWN RISK IN THE SOFT WORDING, raised by independent review and left in
-// deliberately: the document stapled below numbers its sections 「2. 開始下線」…
-// 「4. 收尾」, and "close-out" reads closest to §4 — the LAST section — while
-// the sentence means "start at the top". The second half ("work the sequence
-// below") is what pulls the reader back, and the alternative openers all either
-// re-catch the "now" the owner removed or restate §1's rule in a second place.
-// Recorded rather than silently accepted: if a reader is ever seen starting at
-// §4, this is the first thing to change.
-func offboardOpener(finalCall bool) string {
-	if finalCall {
-		return " — offboard now: work the sequence below, then call "
-	}
-	return " — start your close-out: work the sequence below, then call "
-}
-
-func offboardNotice(where, closer string, finalCall bool, deadline float64, offboardText string) string {
-	reason := where + offboardOpener(finalCall) + closer + " yourself."
-	// T-d6a7 — the final call quotes an ABSOLUTE deadline, not a duration.
-	//
-	// It used to say a hardcoded "You have 120 seconds left." while the deadline
-	// runs from the FIRST stamp, and this notice is REPLAYED whenever the row is
-	// rewritten (the context pct is part of `where`, so a pct change re-sends
-	// it). Measured on a live station: two notices 46 s apart, both claiming
-	// 120 s — the second one telling an agent it had 120 s when it had ~74.
-	//
-	// 🔴 The intuitive fix — printing the seconds REMAINING — is the one thing
-	// this must not do. The client de-dupes notices by comparing the whole
-	// sentence verbatim (cli/ocagent listen_hooks), so a countdown makes every
-	// replay a different string, the de-dupe never matches again, and an agent
-	// working its close-out is woken and re-fed the whole document on every
-	// write to its row. An absolute deadline is CONSTANT within the epoch, so
-	// the sentence is stable and the number cannot go stale.
-	//
-	// The value comes from refocusDeadlineOf — the SAME expression that fills
-	// the cockpit's refocus_deadline — so there is no second source of truth to
-	// drift. deadline <= 0 means nothing collects this epoch on a clock, and
-	// then no time is quoted at all: offboardKindOf only returns "final" for a
-	// clocked arm, and since T-ed79 that condition is `refocus_op ==
-	// context_high` — NOT the old "refocus_since > 0 and refocus_op != refocus",
-	// which was the pre-inversion shape (everything clocked, 重新聚焦 carved
-	// out). The conclusion is unchanged, only the reason: a final call with no
-	// deadline is a contradiction, and printing epoch 0 formatted as 1970 would
-	// be worse than saying nothing.
-	if finalCall && deadline > 0 {
-		// .UTC() is not cosmetic. The reader is an AGENT, which need not be
-		// running on this host, and the whole point of the sentence is that the
-		// same epoch renders to the same characters on every replay — an
-		// implicit local zone makes the literal depend on the server process's
-		// TZ. Every other machine-read RFC3339 in this tree is explicit.
-		reason += " Your deadline is " +
-			time.Unix(int64(deadline), 0).UTC().Format(time.RFC3339) + "."
-	}
-	if offboardText != "" {
-		reason += "\n" + offboardText
-	}
-	return reason
 }
 
 // formatPct renders the pct for the human reason line (45 not 45.0 for whole

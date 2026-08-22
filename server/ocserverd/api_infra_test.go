@@ -259,8 +259,8 @@ func TestEventsHandlerStampsTheBuildApiVersionReportsAsGitSHA(t *testing.T) {
 // 🔴 WHAT WAS ACTUALLY WRONG. decideHandoverNotice has no memory: once an agent
 // is past its notice point it returns a signal on EVERY quiet tick, and the
 // once-per-session gate (claimHandoverNotice) is asked AFTER that signal has
-// been composed. So the offboard-text closure — a fold over a durable document
-// — ran every 250ms for the rest of the session, and every run after the first
+// been composed. So the notice closure — a fold over a durable document, its
+// variables rendered — ran every 250ms for the rest of the session, and every run after the first
 // was thrown away. Two comments in sse_bands.go asserted the exact opposite; a
 // comment cannot be run, so this counts instead.
 //
@@ -274,9 +274,12 @@ func TestHandoverNoticeTick_ClosureIsNotRunAfterTheClaim(t *testing.T) {
 	s.gauge.Set(seedMiraID, map[string]any{"context_pct": 56.0, "boot_ts": 1000.0})
 
 	runs := 0
-	offboard := func() string { runs++; return s.offboardText() }
+	notice := func(where string) string {
+		runs++
+		return s.winddownNoticeText(offboardKindSoft, where, 0)
+	}
 
-	frame, ok := s.handoverNoticeTick(seedMiraID, RuntimeClaude, offboard)
+	frame, ok := s.handoverNoticeTick(seedMiraID, RuntimeClaude, notice)
 	if !ok || len(frame) == 0 {
 		t.Fatal("the first tick past the notice point must send the session's one notice")
 	}
@@ -289,7 +292,7 @@ func TestHandoverNoticeTick_ClosureIsNotRunAfterTheClaim(t *testing.T) {
 	// makes them silent, and the point of this test is that they must be silent
 	// WITHOUT paying for the text first.
 	for i := 0; i < 200; i++ {
-		if _, ok := s.handoverNoticeTick(seedMiraID, RuntimeClaude, offboard); ok {
+		if _, ok := s.handoverNoticeTick(seedMiraID, RuntimeClaude, notice); ok {
 			t.Fatalf("tick %d re-sent the once-per-session notice", i)
 		}
 	}
@@ -312,17 +315,19 @@ func TestHandoverNoticeTick_ANewSessionStillPaysAndStillSends(t *testing.T) {
 	s.gauge.Set(seedMiraID, map[string]any{"context_pct": 56.0, "boot_ts": 1000.0})
 
 	runs := 0
-	offboard := func() string { runs++; return "" }
-	if _, ok := s.handoverNoticeTick(seedMiraID, RuntimeClaude, offboard); !ok {
+	// A non-empty answer, because an unrenderable notice now keeps the tick
+	// SILENT — returning "" here would make this test measure that instead.
+	notice := func(where string) string { runs++; return where + " — 下線程序" }
+	if _, ok := s.handoverNoticeTick(seedMiraID, RuntimeClaude, notice); !ok {
 		t.Fatal("first session must be told")
 	}
-	if _, ok := s.handoverNoticeTick(seedMiraID, RuntimeClaude, offboard); ok {
+	if _, ok := s.handoverNoticeTick(seedMiraID, RuntimeClaude, notice); ok {
 		t.Fatal("second tick of the SAME session must stay quiet")
 	}
 
 	// New session: the agent restarted, its gauge carries a new anchor.
 	s.gauge.Set(seedMiraID, map[string]any{"context_pct": 56.0, "boot_ts": 2000.0})
-	if _, ok := s.handoverNoticeTick(seedMiraID, RuntimeClaude, offboard); !ok {
+	if _, ok := s.handoverNoticeTick(seedMiraID, RuntimeClaude, notice); !ok {
 		t.Fatal("a NEW session must still get its own notice — a cost guard that " +
 			"silences the feature has removed the feature")
 	}

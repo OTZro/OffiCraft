@@ -165,7 +165,7 @@ func TestRefocusNoticeNeverStartsACountdown_ButAContextLimitStillDoes(t *testing
 	const (
 		finalEpoch = 1_769_904_000 // 2026-02-01T00:00:00Z
 		wantFinal  = "close-out (your limits: 40% / 50%)" +
-			" — offboard now: work the sequence below, then call restart_self" +
+			" — offboard now: work the sequence below, then call report_stopped" +
 			" yourself. Your deadline is 2026-02-01T00:02:00Z."
 	)
 	m := testAgent("m-notice-final")

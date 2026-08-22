@@ -243,19 +243,6 @@ func forcedEpochLive(m Member) bool {
 		m.ForcedStopAt >= m.StoppingSince
 }
 
-// offboardCloserFor names the tool that ACTUALLY ends this member's sequence.
-// A member still wanted online is being handed over and re-starts itself; one
-// the owner has taken down is not coming back, and restart_self refuses it by
-// design (it is a RE-start). Telling it otherwise would be an instruction that
-// can only answer 409 — on an arm where nothing collects it on a clock, so it
-// would sit there refused until someone pressed force-stop.
-func offboardCloserFor(m Member) string {
-	if m.DesiredState == DesiredStateOffline {
-		return offboardCloserReportStopped
-	}
-	return offboardCloserRestartSelf
-}
-
 // offboardNoticeFor composes the sentence for a member that is being wound
 // down: the ONE approved sentence, plus the deadline clause when this is the
 // final call (the deadline is winddownDeadlineOf, i.e. the anchor plus
@@ -331,9 +318,13 @@ func (s *apiServer) offboardNoticeFor(m Member, kind string) string {
 	// The deadline quoted in the sentence and the deadline the cockpit shows come
 	// from ONE expression (T-d6a7). offboardKindOf only answers "final" for a
 	// clocked arm, so this is positive exactly when the sentence needs it.
-	notice := offboardNotice(where, offboardCloserFor(m), kind == offboardKindFinal,
-		winddownDeadlineOf(m, s.reconcileConfigLive()),
-		s.offboardText())
+	notice := s.winddownNoticeText(kind, where, winddownDeadlineOf(m, s.reconcileConfigLive()))
+	// A notice that could not be rendered is not sent at all — the caller omits
+	// the key, and the agent's client falls back. Appending the write-back
+	// clause to "" would send that clause on its own, with no sequence under it.
+	if notice == "" {
+		return ""
+	}
 	if clause := s.offboardManualWriteBackFor(m); clause != "" {
 		notice += "\n\n" + clause
 	}
