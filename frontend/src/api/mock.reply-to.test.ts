@@ -132,6 +132,50 @@ describe("mock 回覆這則 — server parity", () => {
     }
   });
 
+  it("carries the quote on the WAKE SNAPSHOT too, and it is the read that fills its names", async () => {
+    // 🔴 THE SNAPSHOT IS A THIRD READ DOOR, and it is not the same as the two
+    // above. `getMemberResumeSummary` mirrors the server's own snapshot
+    // assembly, which joins the quote through the same helper but hands it the
+    // ROSTER — so `from_name`/`to_name` are filled there and empty on every
+    // browser read (api_chat.go resumeChatMessageDTO vs servedChatMessageDTO).
+    // The snapshot is also the read whose chat budget BILLS those characters,
+    // so a mock that dropped the quote here would preview a card cheaper and
+    // emptier than the live one — which is the exact defect T-9871 fixed on the
+    // rendering side.
+    const quoted = await mockApi.postChat({ to: "mira", body: "被引用的那句" });
+    const reply = await mockApi.postChat({
+      to: "mira",
+      body: "答案",
+      replyTo: quoted.id,
+    });
+
+    const snap = await mockApi.getMemberResumeSummary("mira");
+    const row = snap.chat.find((m) => m.id === reply.id)!;
+    expect(row, "the snapshot must carry the reply at all").toBeTruthy();
+    // Whole-object equality: the name halves are the difference between this
+    // door and the other two, so asserting only `content` would pass on the
+    // shape this test exists to distinguish. "" for the owner is honest — the
+    // mock roster resolves member ids, and `owner` is not a roster row.
+    expect(row.replyToChat).toEqual({
+      id: quoted.id,
+      from: "owner",
+      fromName: "",
+      to: "mira",
+      toName: "Mira",
+      content: "被引用的那句",
+    });
+    // …and the browser read of the SAME message leaves those name halves empty,
+    // which is what makes the line above a statement about this door.
+    const listed = (await mockApi.listChat("mira")).find(
+      (m) => m.id === reply.id,
+    )!;
+    expect(listed.replyToChat?.toName).toBe("");
+    // A message that replies to nothing claims no quote here either.
+    expect(
+      snap.chat.find((m) => m.id === quoted.id)?.replyToChat ?? null,
+    ).toBeNull();
+  });
+
   it("shortens and flattens the quote content the way the server does", async () => {
     // The length is the SERVER's (chatReplyQuoteMaxChars = 60) and the mock
     // holds the only other copy of it. Asserted by rune count, not by a literal,

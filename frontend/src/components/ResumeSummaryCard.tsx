@@ -184,6 +184,22 @@ export function ChatRow({
 }) {
   const r = t.mp.resumeSummary;
   const card = m.card ?? null;
+  // T-9871 — the QUOTE this message replies to. The snapshot has always PAID
+  // for it: `resumeChatMessageChars` bills the quote's from_name + to_name +
+  // content against the same chat budget that decides how many messages fit, so
+  // the characters were already evicting other messages while this card drew
+  // none of them. Drawing them costs the budget nothing; NOT drawing them was
+  // the only state with a price and no goods.
+  //
+  // 🔴 TWO STATES, NO THIRD — the same rule the chat pane's row follows, and it
+  // holds here for the same reason: `reply_to_chat` is rebuilt by the server on
+  // THIS read, so there is nothing in flight and nothing to retry. `replyTo` is
+  // what says this message IS a reply (it never disappears); `replyToChat` is
+  // what says WHAT it replied to (null when the original is gone). An empty
+  // `content` is a legitimate quote of an attachment-only message and must NOT
+  // be folded into the gone sentence.
+  const quoted = m.replyToChat ?? null;
+  const isReply = (m.replyTo ?? "") !== "";
   return (
     <div className="mp-resume__chatrow" data-testid="mp-resume-chat-row">
       <div className="mp-resume__chatmeta">
@@ -221,6 +237,79 @@ export function ChatRow({
           )}
         </div>
       </div>
+      {/* 🔴 NOT A COPY OF THE CHAT PANE'S ROW — deliberately. That row carries a
+        * 「看原訊息」 control backed by ChatArea's `openQuotedMessage` →
+        * `api.getChatMessage` → full-view overlay, and this component is a pure
+        * renderer of one payload (its only read is the snapshot itself). Copying
+        * the control would drag that whole machine in here; copying its markup
+        * WITHOUT the machine would put a dead affordance on screen. The row is
+        * also styled for a chat bubble: a `border-bottom` separator (this card
+        * already HAS a frame, so that would be a second line inside one box) and
+        * a label that collapses under `@container chat-pane` — a container this
+        * card is not inside, so that rule can never fire here and the label
+        * would stay full width in the NARROWER surface. What is copied is the
+        * CONTENT and the two-state rule; the geometry is this card's own, and
+        * it is measured by visual-guards/resume-chat-quote.ct.spec.tsx at both
+        * ends of the width range because none of it is visible to jsdom.
+        *
+        * Names come from the payload, not from a roster lookup: the snapshot
+        * read is the one read that fills `from_name`/`to_name`, and `Party`
+        * applies rule 1 in the file header to them — "" renders as the id
+        * alone, never as an id dressed up as a name. */}
+      {isReply && (
+        <div
+          className="mp-resume__chatquote"
+          data-testid="mp-resume-chat-quote"
+          role="blockquote"
+          aria-label={
+            quoted
+              ? t.chat.replyQuoteRoleWho(
+                  `${quoted.fromName !== "" ? quoted.fromName : quoted.from} → ${
+                    quoted.toName !== "" ? quoted.toName : quoted.to
+                  }`,
+                )
+              : t.chat.replyQuoteRole
+          }
+        >
+          {quoted ? (
+            <>
+              <div className="mp-resume__chatquoteparties">
+                <Party
+                  name={quoted.fromName}
+                  id={quoted.from}
+                  testid="mp-resume-chat-quote-from"
+                />
+                <span className="mp-resume__arrow" aria-hidden="true">
+                  →
+                </span>
+                <Party
+                  name={quoted.toName}
+                  id={quoted.to}
+                  testid="mp-resume-chat-quote-to"
+                />
+              </div>
+              {/* PLAIN TEXT, and shortened by nobody here: the server cut it to
+                * its own rune cap before it went on the wire, and this line is
+                * the excerpt the agent read. Not `Markdown` — a 60-rune slice
+                * can end mid-construct, and half a fence rendered as markup
+                * would show the reader something the agent never saw. */}
+              <div
+                className="mp-resume__chatquotebody"
+                data-testid="mp-resume-chat-quote-body"
+              >
+                {quoted.content}
+              </div>
+            </>
+          ) : (
+            <div
+              className="mp-resume__chatquotegone"
+              data-testid="mp-resume-chat-quote-gone"
+            >
+              {t.chat.replyQuoteGone}
+            </div>
+          )}
+        </div>
+      )}
       <Markdown
         source={m.body}
         breaks

@@ -1807,6 +1807,50 @@
   align-self: stretch;
   overflow-wrap: anywhere;
 }
+/* T-9871 引用列 — the message this one replies to. The snapshot already BILLS
+   the quote's names and excerpt against the chat budget, so these characters
+   were evicting other messages while nothing drew them.
+
+   WHAT KEEPS THIS INSIDE THE FRAME IS `overflow-wrap: anywhere` BELOW, not the
+   `align-self` here. The row is `flex-direction: column` with
+   `align-items: flex-start`, so this child would otherwise take fit-content
+   with min-content as its floor (T-4aa0) — but with the excerpt breakable that
+   floor is one character, so it cannot push the card out either way. Measured:
+   deleting `align-self: stretch` leaves resume-chat-quote.ct.spec.tsx GREEN at
+   both widths, deleting `overflow-wrap: anywhere` reddens it by 105px at 320px.
+   Stretch is here so the left rule spans the card rather than stopping at the
+   end of a short excerpt, and NOTHING GUARDS THAT — it is a look, not a rule.
+
+   🔴 A LEFT RULE, NOT A BOTTOM ONE. The chat pane separates its quote with
+   `border-bottom` because it sits inside a bubble with no frame of its own;
+   `.mp-resume__chatrow` is already a bordered card, so a bottom rule would draw
+   a second line inside one box. The left rule says "quoted" the way a
+   blockquote does and adds no horizontal line at all. */
+.mp-resume__chatquote {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 2px;
+  padding-left: 6px;
+  border-left: 2px solid color-mix(in srgb, var(--color-overlay) 16%, transparent);
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+/* Wraps rather than truncating: this card lives in a side panel that is
+   NARROWER than the chat pane, and the pane's own answer to a long parties line
+   (drop the jump label at `@container chat-pane`) cannot fire here — this card
+   is not inside that container. Wrapping needs no container to be right. */
+.mp-resume__chatquoteparties {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+}
+.mp-resume__chatquotebody,
+.mp-resume__chatquotegone {
+  overflow-wrap: anywhere;
+}
 .mp-resume__taskrow {
   display: flex;
   align-items: center;
