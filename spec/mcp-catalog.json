@@ -197,7 +197,7 @@
                 "type": "null"
               }
             ],
-            "description": "The FIRST offboard point (T-a9d6): the SOFT notice, where the agent is asked to work the offboard sequence and then call restart_self itself. 1..89, and strictly below handover_pct.",
+            "description": "The FIRST offboard point (T-a9d6): the SOFT notice, where the agent is asked to work the offboard sequence and then call report_stopped itself. 1..89, and strictly below handover_pct.",
             "title": "Notice Pct"
           },
           "codex_notice_round": {

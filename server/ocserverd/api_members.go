@@ -168,8 +168,17 @@ func offboardKindOf(m Member, now float64) (kind string, carries bool) {
 		// stopping_since before it publishes, so on the sentence above alone the
 		// member it just killed receives a full SOFT notice on its own stream —
 		// telling a session that is about to be cut off to work the sequence and
-		// call report_stopped. Independent e2e verification observed exactly that
-		// frame; the owner's ruling is that force-stop sends no message at all.
+		// call the close-out verb. Independent e2e verification observed exactly
+		// that frame; the owner's ruling is that force-stop sends no message at
+		// all.
+		//
+		// ⚠️ The VERB is deliberately not named in the sentence above. What the
+		// e2e run saw on the wire was 「then call restart_self yourself」, because
+		// that is what the notice said on the day it was observed; the seed now
+		// closes on report_stopped. Naming today's verb here would put a word the
+		// run never saw inside a claim about what the run observed — and the
+		// observation being reported is the ARRIVAL of a soft notice at a member
+		// being force-stopped, which is true under either wording.
 		//
 		// 🔴 RECONFIRMED 2026-08-18, and written down because it was nearly
 		// reversed that day: the owner first said a force-stop should tell the

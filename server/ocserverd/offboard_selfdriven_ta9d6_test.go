@@ -199,12 +199,23 @@ func TestOffboardDeltaPayload_下線NeverCarriesACountdown(t *testing.T) {
 	}
 }
 
-// The sequence the notice tells the agent to work must actually be workable.
-// Step 1 is report_stopping, and the notice ends 「then call restart_self
-// yourself」 — so an agent that has declared its close-out must still be able
-// to make that call. It could not: report_stopping makes PresenceState project
-// `stopping`, the endpoint gated on `online`, and once close-out anchors
-// stopped being swept every tick the refusal lasted the whole soft window.
+// An agent that has declared its close-out must still be able to self-restart.
+// It could not: report_stopping makes PresenceState project `stopping`, the
+// endpoint gated on `online`, and once close-out anchors stopped being swept
+// every tick the refusal lasted the whole soft window.
+//
+// WHY THIS IS STILL PINNED NOW THAT THE NOTICE SAYS SOMETHING ELSE. This bug
+// was found because the soft notice used to end 「then call restart_self
+// yourself」, so working the sequence walked straight into the refusal. That
+// sentence is GONE — TestOffboardDeltaPayload_下線NeverCarriesACountdown, in
+// this file, asserts the notice now closes on report_stopped and that
+// restart_self appears nowhere in it. What survives is the
+// gate, not the wording: restart_self is the agent's own recycle door and
+// nothing has narrowed who may knock on it, so an agent that declared its
+// close-out and then chose a fresh session over a full stop would still be
+// turned away by `online`. The assertion below is the only thing standing
+// between that door and a silent 409, and it does not depend on any notice
+// text — which is precisely why rewriting the notice must not take it with it.
 func TestRestartSelf_WorksWhileTheAgentIsClosingOut(t *testing.T) {
 	s := newReconcileTestServer(t)
 	putWarden(t, s, "mach-a")
@@ -651,6 +662,12 @@ func TestDeactivate_DoesNotDowngradeAForcedStop(t *testing.T) {
 // SOFT notice on its own stream, telling it to work the sequence and call
 // restart_self. Independent e2e verification caught the frame on the wire; the
 // server suite was green throughout, because nothing asserted the promise.
+//
+// ⚠️ 「restart_self」 above is HISTORY, not today's wording — it is what that
+// e2e run actually read off the wire. The seed now closes on report_stopped,
+// and this sentence is deliberately left as observed rather than rewritten
+// forward: the defect being recorded is that a soft notice ARRIVED AT ALL on a
+// force-stopped member, which no change of verb touches.
 func TestForceStop_SendsNoNotice(t *testing.T) {
 	s := newReconcileTestServer(t)
 	putWarden(t, s, "mach-a")

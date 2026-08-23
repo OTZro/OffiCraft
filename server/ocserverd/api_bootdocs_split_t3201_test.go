@@ -396,6 +396,19 @@ func TestEventNoticeText_ASplitKindStoredWithNoMarkerIsNotSentAtAll(t *testing.T
 				"task_no": "T-7e91", "new_executor_label": "Rei",
 			})
 		}},
+		// The FOURTH Split notice. The gate it walks into is kind-agnostic
+		// (`spec.Split && !split`), so leaving this row out changed no
+		// behaviour — but the table above reads as an exhaustive list of the
+		// Split kinds, and a list that says "all of them" while missing one is
+		// the shape this whole ticket is about.
+		{docKindTaskUnblocked, func(s *apiServer) string {
+			return s.taskNoticeText(docKindTaskUnblocked, map[string]string{
+				"blocked_task_no": "T-7e91",
+				"blocker_task_no": "T-3201",
+				"blocker_title":   "擋著你的那張",
+				"blocker_status":  "done",
+			})
+		}},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			s := newEventProcServer(t)
@@ -409,12 +422,23 @@ func TestEventNoticeText_ASplitKindStoredWithNoMarkerIsNotSentAtAll(t *testing.T
 
 			// The write face cannot make this row — which is why seeding it
 			// directly is the only way to test the shape an old release left.
+			//
+			// TWO refusals, not one, and which one you get is the document's
+			// own ReadOnly flag: an editable document is refused for the marker
+			// (400), a read-only one never reaches that check because no caller
+			// may write it at all (405). Asserting a flat 400 for every kind
+			// would have made this row unaddable and hidden the fourth Split
+			// kind — the check has to name which door it expects to be shut.
+			wantRefusal := http.StatusBadRequest
+			if spec.ReadOnly {
+				wantRefusal = http.StatusMethodNotAllowed
+			}
 			w := httptest.NewRecorder()
 			s.replaceBootDoc(w, ownerPost("/x"), spec, body, false)
-			if w.Code != http.StatusBadRequest {
-				t.Fatalf("the write face accepted a marker-less document: %d (%s) — if "+
+			if w.Code != wantRefusal {
+				t.Fatalf("the write face accepted a marker-less document: %d (%s), want %d — if "+
 					"that is now allowed, this shape is reachable from the cockpit too",
-					w.Code, w.Body.String())
+					w.Code, w.Body.String(), wantRefusal)
 			}
 
 			if err := s.dal.PutBootDocument(BootDocument{
