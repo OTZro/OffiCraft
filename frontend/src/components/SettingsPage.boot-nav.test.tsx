@@ -73,7 +73,11 @@ describe("SettingsPage · 啟動程序 index", () => {
 
     fireEvent.click(getByTestId("boot-entry-claude"));
     await findByTestId("doc-card-edit");
-    expect(container.querySelectorAll(".doc-md").length).toBe(1);
+    // ONE body. The read-only head renders a second `.doc-md` of its own since
+    // T-3201, so the child selector is what keeps this "one document".
+    expect(
+      container.querySelectorAll(".doc-card__body > .doc-md").length
+    ).toBe(1);
     // Twice on purpose: the terminal breadcrumb and the page title. getByText
     // would throw on the second one, and that throw would read as "the page is
     // wrong" rather than "it names itself in both places".
@@ -155,7 +159,9 @@ describe("SettingsPage · 啟動程序 index", () => {
     fireEvent.click(utils.getByText(s.systemName));
 
     await utils.findByTestId("doc-card-edit");
-    expect(utils.container.querySelectorAll(".doc-md").length).toBe(1);
+    expect(
+      utils.container.querySelectorAll(".doc-card__body > .doc-md").length
+    ).toBe(1);
     expect(
       utils.container.querySelectorAll('[data-testid="doc-card-collapse"]')
         .length

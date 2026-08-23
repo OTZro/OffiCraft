@@ -199,30 +199,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/boot-docs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List every editable block of the boot context: address (kind/key), the name a refusal calls it, whether it is read-only, and its size against its own cap. No document text — fetch that with get_boot_doc. This is the non-stale answer to "which boot-context documents exist": it is rendered from the registry that serves them, so it cannot be wrong about a block that exists.
-         * @description List EVERY editable block of the boot context this server serves — the documents the owner (or the admin assistant) edits to change what every agent reads at boot, and what an agent is told when a lifecycle event happens to it.
-         *
-         *     THIS ROUTE EXISTS SO NO DESCRIPTION HAS TO CARRY THE LIST. Which blocks exist changes when one ships, and a list written into prose goes stale silently; this one is rendered from the registry that also serves and validates every one of them.
-         *
-         *     NO TEXT COMES BACK. Each row is address + name + read_only + size against its own cap, so the reply's size depends on how many blocks exist and on nothing else. Read the one you mean with ``get_boot_doc``.
-         */
-        get: operations["handle_list_boot_docs_api_boot_docs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/boot-docs/{kind}/{key}": {
         parameters: {
             query?: never;
@@ -234,23 +210,25 @@ export interface paths {
          * Read one block of the boot context by kind/key, folded (the owner's edit ⊕ the shipped seed). Carries size_chars/cap_chars so an edit can be sized before it is made, is_default/has_seed to tell an edited block from the shipped one, and read_only for the blocks that are shown but may never be edited. An unknown kind or key is a 404 that names the keys that exist.
          * @description Read ONE block of the boot context, folded: the owner's edit when one exists, otherwise the factory seed compiled into this build. ``is_default`` says which of the two you are holding, ``has_seed`` whether a factory version exists to reset to, and ``read_only`` whether the write faces will refuse it at all.
          *
-         *     WHAT COMES BACK IS THE WHOLE STORED DOCUMENT, including the read-only head some blocks carry above the body marker — the head is what the owner edits around, so the editing face has to show it. It is NOT what an agent is sent: the boot fold and the notice senders render the document first, and the marker never reaches an agent's eyes.
+         *     WHAT COMES BACK IS THE DOCUMENT IN THREE VIEWS: ``text`` is the whole stored document, marker line and all; ``read_only_head`` is the half the server fills in and will not take back; ``body`` is the half you may edit and is byte for byte what ``replace_boot_doc`` takes. None of the three is what an AGENT is sent — the boot fold and the notice senders render the document first, and the marker never reaches an agent's eyes.
          *
-         *     ADDRESSING: ``kind`` and ``key`` are the pair ``list_boot_docs`` hands you, and the same pair the document-history routes file this block's retained versions under — one address, three faces, so they cannot silently disagree. A ``kind`` this server does not serve, or a ``key`` that kind does not serve, is refused with 404 naming the keys that DO exist for it; neither is something to guess at.
+         *     ADDRESSING: ``kind`` is one of the values its enum lists and ``key`` is the second half of the address; they are the same pair the document-history routes file this block's retained versions under — one address, three faces, so they cannot silently disagree. A ``kind`` this server does not serve, or a ``key`` that kind does not serve, is refused with 404 naming the keys that DO exist for it; neither is something to guess at.
          */
         get: operations["handle_get_boot_doc_api_boot_docs__kind___key__get"];
         put?: never;
         /**
-         * Replace the WHOLE text of one boot-context block ({kind, key, text}) — text every agent reads at boot, or is sent when a lifecycle event happens to it. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. Judged against that block's own cap. A read-only block refuses with 405 for every caller, and a block that carries a read-only head requires that head back unchanged. Owner or admin assistant only.
-         * @description Replace the WHOLE text of one boot-context block ``{text}``. ``text`` is REQUIRED and unknown keys are rejected; emptying a block that had content needs ``allow_shrink=true``.
+         * Replace the EDITABLE HALF of one boot-context block ({kind, key, body}) — text every agent reads at boot, or is sent when a lifecycle event happens to it. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. The stored result is judged against that block's own cap. A read-only block refuses with 405 for every caller. The read-only head is NOT sent and cannot be: the server joins the shipped head back on, so no caller has any way to write it. Owner or admin assistant only.
+         * @description Replace the EDITABLE HALF of one boot-context block ``{body}``. ``body`` is REQUIRED and unknown keys are rejected; emptying a body that had content needs ``allow_shrink=true``.
          *
          *     THIS TEXT LANDS IN AGENTS. Some of these blocks are read at every boot and others are what an agent is told when it is being collected, reassigned or handed a ticket — a broken one is read by everybody and reported by nobody, which is why the floor is owner-or-admin-assistant and why the reset route exists with no cap on it.
          *
-         *     THREE REFUSALS HERE ARE NOT AUTHZ, AND SAY SO. A read-only block is refused with 405 no matter who asks. A block that carries a read-only head must be sent back with that head byte for byte, and its body must declare no variables. A write over this block's own cap is refused with what you wrote, the cap, and what is already stored.
+         *     THE READ-ONLY HEAD IS NOT REFUSED HERE, IT IS UNSENDABLE. There is no field for it: the server joins the SHIPPED head back on before storing, so an edit to it is not a mistake this route reports, it is a sentence the wire cannot say. Get the ``body`` from ``get_boot_doc``, change it, send it.
+         *
+         *     TWO REFUSALS REMAIN AND NEITHER IS AUTHZ. A read-only block is refused with 405 no matter who asks. A body that names a ``{variable}`` is refused, because nothing fills a name below the line and it would reach an agent with the braces still in it. A write whose STORED result is over this block's own cap is refused with what you wrote, the cap, and what is already stored.
          *
          *     The shipped seed is never overwritten, so ``reset_boot_doc`` always reaches factory text; the version this write replaces is retained in the document history (a save that changes nothing retains nothing).
          *
-         *     ADDRESSING: ``kind`` and ``key`` are the pair ``list_boot_docs`` hands you, and the same pair the document-history routes file this block's retained versions under — one address, three faces, so they cannot silently disagree. A ``kind`` this server does not serve, or a ``key`` that kind does not serve, is refused with 404 naming the keys that DO exist for it; neither is something to guess at.
+         *     ADDRESSING: ``kind`` is one of the values its enum lists and ``key`` is the second half of the address; they are the same pair the document-history routes file this block's retained versions under — one address, three faces, so they cannot silently disagree. A ``kind`` this server does not serve, or a ``key`` that kind does not serve, is refused with 404 naming the keys that DO exist for it; neither is something to guess at.
          */
         post: operations["handle_replace_boot_doc_api_boot_docs__kind___key__post"];
         delete?: never;
@@ -276,7 +254,7 @@ export interface paths {
          *
          *     A block with no shipped default (``has_seed=false``) is a 404: there is nothing to go back to. A read-only block is a 405, like on every other write face. The overlay being discarded is retained in the document history, so the reset is itself recoverable.
          *
-         *     ADDRESSING: ``kind`` and ``key`` are the pair ``list_boot_docs`` hands you, and the same pair the document-history routes file this block's retained versions under — one address, three faces, so they cannot silently disagree. A ``kind`` this server does not serve, or a ``key`` that kind does not serve, is refused with 404 naming the keys that DO exist for it; neither is something to guess at.
+         *     ADDRESSING: ``kind`` is one of the values its enum lists and ``key`` is the second half of the address; they are the same pair the document-history routes file this block's retained versions under — one address, three faces, so they cannot silently disagree. A ``kind`` this server does not serve, or a ``key`` that kind does not serve, is refused with 404 naming the keys that DO exist for it; neither is something to guess at.
          */
         post: operations["handle_reset_boot_doc_api_boot_docs__kind___key__reset_post"];
         delete?: never;
@@ -303,12 +281,12 @@ export interface paths {
         get: operations["handle_get_boot_sequence_api_boot_sequence__runtime_key__get"];
         put?: never;
         /**
-         * Replace the WHOLE 啟動程序 block of ONE runtime ({runtime_key, text}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. Judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.
-         * @description Whole-document replace of ONE runtime's 啟動程序 block: ``{text}`` (T-791e).
+         * Replace the EDITABLE HALF of the 啟動程序 block of ONE runtime ({runtime_key, body}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. The read-only head is not sent and cannot be: the server joins the shipped one back on. The stored result is judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.
+         * @description Replace the EDITABLE HALF of ONE runtime's 啟動程序 block: ``{body}`` (T-791e; body-only since T-3201).
          *
          *     runtime_key is 'claude' or 'codex' and they are SEPARATE documents on purpose: step 3 of the two sequences says opposite things (claude mounts its own `ocagent listen`; codex must NOT, because the App Server sidecar owns it), so serving one where the other belongs leaves the agent unable to come online. Any other value is a 404 rather than a silent fallback.
          *
-         *     Writes an OVERLAY — the shipped seed is never modified, so the reset route can always reach the factory text. ``text`` is REQUIRED; ``allow_shrink`` (default false) is needed to empty a block that had content (an empty boot sequence is not a small document — it is an agent with no instructions). The ``doc.cap_chars.boot_sequence`` cap is checked UNCONDITIONALLY and is ONE knob shared by both runtimes, each document measured on its own text.
+         *     Writes an OVERLAY — the shipped seed is never modified, so the reset route can always reach the factory text. ``body`` is REQUIRED; ``allow_shrink`` (default false) is needed to empty a body that had content (an empty boot sequence is not a small document — it is an agent with no instructions). The read-only head is not part of the request and cannot be: the server joins the shipped one back on. The ``doc.cap_chars.boot_sequence`` cap is checked UNCONDITIONALLY against the STORED result and is ONE knob shared by both runtimes, each document measured on its own text.
          *
          *     A save whose result is identical to what is stored writes nothing and retains no version.
          *
@@ -2184,10 +2162,10 @@ export interface paths {
         get: operations["handle_get_offboard_api_offboard_get"];
         put?: never;
         /**
-         * Replace the WHOLE 下線程序 block ({text}) — the wrap-up checklist an agent is handed when its session is being collected. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. The write is judged against the doc.cap_chars.offboard cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_offboard always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.
-         * @description Whole-document replace of the 下線程序 block: ``{text}`` (T-c9c0).
+         * Replace the EDITABLE HALF of the 下線程序 block ({body}) — the wrap-up checklist an agent is handed when its session is being collected. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. The read-only head is not sent and cannot be: the server joins the shipped one back on. The stored result is judged against the doc.cap_chars.offboard cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_offboard always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.
+         * @description Replace the EDITABLE HALF of the 下線程序 block: ``{body}`` (T-c9c0; body-only since T-3201).
          *
-         *     Writes an OVERLAY — the shipped seed is never modified, so ``/api/offboard/reset`` can always reach the factory text. ``text`` is REQUIRED (a whole-document replace must never infer "empty" from a missing key); ``allow_shrink`` (default false) must be set explicitly to replace existing content with an empty document. The ``doc.cap_chars.offboard`` cap is checked UNCONDITIONALLY — ``allow_shrink`` governs the opposite direction and is not a bypass.
+         *     Writes an OVERLAY — the shipped seed is never modified, so ``/api/offboard/reset`` can always reach the factory text. ``body`` is REQUIRED (a replace must never infer "empty" from a missing key); ``allow_shrink`` (default false) must be set explicitly to replace an existing body with an empty one. The read-only head is not part of the request and cannot be: the server joins the shipped one back on. The ``doc.cap_chars.offboard`` cap is checked UNCONDITIONALLY against the STORED result — ``allow_shrink`` governs the opposite direction and is not a bypass.
          *
          *     A save whose folded result is IDENTICAL to what is stored writes nothing and retains NO version.
          *
@@ -3050,10 +3028,10 @@ export interface paths {
         get: operations["handle_get_system_interaction_api_system_interaction_get"];
         put?: never;
         /**
-         * Replace the WHOLE 系統互動 block of the boot context ({text}) — the handbook every agent reads at boot. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. The write is judged against the doc.cap_chars.system_interaction cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_system_interaction always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.
-         * @description Whole-document replace of the 系統互動 block: ``{text}`` (T-791e).
+         * Replace the EDITABLE HALF of the 系統互動 block of the boot context ({body}) — the handbook every agent reads at boot. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. The read-only head is not sent and cannot be: the server joins the shipped one back on. The stored result is judged against the doc.cap_chars.system_interaction cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_system_interaction always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.
+         * @description Replace the EDITABLE HALF of the 系統互動 block: ``{body}`` (T-791e; body-only since T-3201).
          *
-         *     Writes an OVERLAY — the shipped seed is never modified, so ``/api/system-interaction/reset`` can always reach the factory text. ``text`` is REQUIRED (a whole-document replace must never infer "empty" from a missing key); ``allow_shrink`` (default false) must be set explicitly to replace existing content with an empty document. The ``doc.cap_chars.system_interaction`` cap is checked UNCONDITIONALLY — ``allow_shrink`` governs the opposite direction and is not a bypass.
+         *     Writes an OVERLAY — the shipped seed is never modified, so ``/api/system-interaction/reset`` can always reach the factory text. ``body`` is REQUIRED (a replace must never infer "empty" from a missing key); ``allow_shrink`` (default false) must be set explicitly to replace an existing body with an empty one. The read-only head is not part of the request and cannot be: the server joins the shipped one back on, so no caller has any way to write it. The ``doc.cap_chars.system_interaction`` cap is checked UNCONDITIONALLY against the STORED result — ``allow_shrink`` governs the opposite direction and is not a bypass.
          *
          *     A save whose folded result is IDENTICAL to what is stored writes nothing and retains NO version: these blocks are edited from a text box, and idle saves would otherwise push the version worth going back to off the end of the retained list.
          *
@@ -4233,6 +4211,14 @@ export interface components {
             warden_shape?: unknown;
         };
         /**
+         * BootDocKind
+         * @description WHICH boot-context / lifecycle documents this server serves, as a CLOSED SET. It is the FIRST half of every boot-document address and the document-history kind the same block's retained versions are filed under.
+         *
+         *     IT IS AN ENUM SO THAT ADDING ONE COSTS A VISIBLE EDIT EVERYWHERE IT IS SHOWN (owner's ruling, 2026-08-23: 「加上 enum 並且前端自己寫死，我接受新增 enum 的人要去改前端的 code 找到他對應顯示的位置」). This list replaced a listing endpoint that answered the same question at runtime: the endpoint could not go stale, but it also could not make a cockpit that had never heard of a new document fail — it just showed nothing. A closed set does: the cockpit indexes its own row table BY this enum, so a value added here without a place to show it does not compile.
+         * @enum {string}
+         */
+        BootDocKind: "system_interaction" | "boot_sequence" | "offboard" | "accelerated_stop" | "task_closeout" | "task_reassign_predecessor" | "task_takeover_with_predecessor" | "task_takeover_fresh" | "task_unblocked";
+        /**
          * AgentRuntime
          * @description AI CLI runtime selected per member or outsource worker. Existing rows and omitted inputs default to ``claude`` for backward compatibility.
          * @enum {string}
@@ -4374,75 +4360,12 @@ export interface components {
             token: string;
         };
         /**
-         * BootDocListDTO
-         * @description Every editable block of the boot context this server serves, in the order the cockpit shows them. This is the answer to "which documents are there" — the question no description is allowed to answer in prose, because a written list goes stale the moment a block ships and nothing turns red when it does.
-         */
-        BootDocListDTO: {
-            /**
-             * Documents
-             * @default []
-             */
-            documents: components["schemas"]["BootDocSummaryDTO"][];
-        };
-        /**
-         * BootDocSummaryDTO
-         * @description ONE row of the editable-boot-context listing: how to address the block, what to call it, whether it can be edited, and how big it is against its own cap. It carries NO text, and that is the property rather than an omission — the size of the listing depends on how many blocks exist and on nothing else, so a station whose documents grow does not make it more expensive. Fetch the one you mean with ``get_boot_doc``.
-         */
-        BootDocSummaryDTO: {
-            /**
-             * Cap Chars
-             * @description The size cap now in force on THIS block, in CHARACTERS — the same number get_boot_doc reports for it.
-             * @default 0
-             */
-            cap_chars: number;
-            /**
-             * Doc Name
-             * @description What a refusal calls this block. It is the server's own name for the document, so a caller reading a rejection and a caller reading this listing are looking at the same words.
-             * @default
-             */
-            doc_name: string;
-            /**
-             * Has Seed
-             * @description True when a FACTORY version of this block ships in this binary, i.e. there is something for the reset route to restore.
-             * @default false
-             */
-            has_seed: boolean;
-            /**
-             * Is Default
-             * @description True while nobody has edited this block. False means somebody's edit is what agents are reading.
-             * @default true
-             */
-            is_default: boolean;
-            /**
-             * Key
-             * @description The second half of the address — pass it back verbatim.
-             * @default
-             */
-            key: string;
-            /**
-             * Kind
-             * @description The first half of the address, and the document-history kind of this block's retained versions.
-             * @default
-             */
-            kind: string;
-            /**
-             * Read Only
-             * @description True when this block is shown but no caller may edit it — the write faces answer 405 for it. Render it; do not offer an editor for it.
-             * @default false
-             */
-            read_only: boolean;
-            /**
-             * Size Chars
-             * @description Size of the folded text in CHARACTERS (Unicode code points) — the same unit as cap_chars.
-             * @default 0
-             */
-            size_chars: number;
-        };
-        /**
          * BootDocumentDTO
          * @description ONE editable block of the boot context, addressed by ``kind``/``key``.
          *
-         *     WHICH BLOCKS EXIST IS DELIBERATELY NOT LISTED HERE. This description named two kinds, and had already gone stale on a third before T-3201 added six more — nothing turns red when a list like that ages. ``list_boot_docs`` answers the question, from the same registry that serves and validates every one of them.
+         *     WHICH BLOCKS EXIST IS THE ``kind`` ENUM AND NOTHING ELSE. This description used to name two kinds in prose and had already gone stale on a third, so the list was moved OUT of prose entirely — first into a listing endpoint, and since T-3201 into the enum itself, which every reader of this schema already has to hold.
+         *
+         *     THE WRITE FACE DOES NOT TAKE THIS SHAPE BACK. Reading gives you three views of one document — ``text`` (the whole of it), ``read_only_head`` (the half the server fills in) and ``body`` (the half you may edit) — while ``BootDocumentReplaceDTO`` takes ``body`` alone. That asymmetry is the ruling, verbatim: 「唯讀區應該無法回寫，讀取有這個 key，回寫沒有這個 key，沒有人有任何方式可以回寫」.
          *
          *     The served text is FOLDED: the owner's overlay when one exists, otherwise the seed compiled into this binary. Editing writes only the overlay — the seed is never modified, which is what lets the reset route reach factory text without depending on anything the editor could have corrupted.
          *
@@ -4469,16 +4392,15 @@ export interface components {
             is_default: boolean;
             /**
              * Key
-             * @description The second half of the address, as ``list_boot_docs`` spells it. Most kinds serve exactly one key; a kind that serves more does so because the documents genuinely differ, so the key is never a formality — an unknown one is a 404 that names the keys that exist.
+             * @description The second half of the address. Most kinds serve exactly one key; a kind that serves more does so because the documents genuinely differ, so the key is never a formality — an unknown one is a 404 that names the keys that exist.
              * @default
              */
             key: string;
             /**
              * Kind
-             * @description The first half of the address, as ``list_boot_docs`` spells it — also the document-history kind this block's retained versions are filed under. Copy it from that listing rather than typing it: which blocks exist changes when one ships, and no description here is allowed to carry the list.
-             * @default
+             * @description The first half of the address, and one of the values this ENUM lists — also the document-history kind this block's retained versions are filed under. The enum IS the list: a kind outside it is not served, and a kind that ships is added to it in the same change, so there is nothing to look up and nothing to go stale.
              */
-            kind: string;
+            kind: components["schemas"]["BootDocKind"];
             /**
              * Owner Id
              * @default
@@ -4503,14 +4425,34 @@ export interface components {
             size_chars: number;
             /**
              * Text
-             * @description The folded document: the overlay when one exists, otherwise the shipped seed.
+             * @description The WHOLE folded document: the overlay when one exists, otherwise the shipped seed, marker line and all. It is what the version history retains and diffs against, and what ``size_chars`` counts against ``cap_chars`` — NOT what you send back. Splitting it yourself is never necessary and never correct: ``body`` below already is the half a write takes.
              * @default
              */
             text: string;
+            /**
+             * Read Only Head
+             * @description The READ-ONLY HALF of the document — the part the server fills in, shows you, and will not take back. Empty string on a document that carries none.
+             *
+             *     It is served so the surface that edits the body can still SHOW the half it may not touch: the owner's standing rule for these documents is 「以前 global context 是固定內容 我們也是會顯示 只是不給改」. There is no write face that accepts it and no error for getting it wrong, because there is no way to send it.
+             * @default
+             */
+            read_only_head: string;
+            /**
+             * Body
+             * @description The EDITABLE HALF — and byte for byte what ``replace_boot_doc`` takes back. Read it, change it, send it: the server joins the shipped head on again itself, so a caller never has to know that a marker exists, where the halves divide, or how they are joined.
+             *
+             *     On a document with no read-only half this is the whole document. Sending the ``body`` you were handed, unchanged, writes the document back unchanged.
+             * @default
+             */
+            body: string;
         };
         /**
          * BootDocumentReplaceDTO
-         * @description Whole-document replace of one boot-context block: ``{text}``. ``text`` is REQUIRED — a whole-document replace must never infer "empty" from a missing key. ``allow_shrink`` (default false) must be set explicitly to replace existing content with an empty document, the same wipe-guard posture ``replace_global_context`` carries.
+         * @description Replace the EDITABLE HALF of one boot-context block: ``{body}``.
+         *
+         *     🔴 THERE IS NO FIELD FOR THE READ-ONLY HEAD, AND THAT IS THE WHOLE POINT (owner's ruling, 2026-08-23: 「唯讀區應該無法回寫，讀取有這個 key，回寫沒有這個 key，沒有人有任何方式可以回寫」). This schema used to take ``text`` — the whole document — and refuse the write when the head came back changed. Being refused for sending the wrong head and having no way to send a head at all are not the same guarantee: the server now joins the SHIPPED head back on before storing, so the head is not a rule a caller can break.
+         *
+         *     ``body`` is REQUIRED — a replace must never infer "empty" from a missing key. ``allow_shrink`` (default false) must be set explicitly to replace an existing body with an empty one, the same wipe-guard posture ``replace_global_context`` carries; it judges the BODY, because the head survives every write and a guard measured on the stored document could never see an emptying again.
          */
         BootDocumentReplaceDTO: {
             /**
@@ -4519,10 +4461,10 @@ export interface components {
              */
             allow_shrink: boolean;
             /**
-             * Text
+             * Body
              * @default
              */
-            text: string;
+            body: string;
         };
         /**
          * BootstrapDTO
@@ -9789,59 +9731,12 @@ export interface operations {
             };
         };
     };
-    handle_list_boot_docs_api_boot_docs_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BootDocListDTO"];
-                };
-            };
-            /** @description Validation error (unified error envelope). */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
-                };
-            };
-            /** @description Client error (unified error envelope). */
-            "4XX": {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
-                };
-            };
-            /** @description Server error (unified error envelope). */
-            "5XX": {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
-                };
-            };
-        };
-    };
     handle_get_boot_doc_api_boot_docs__kind___key__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                kind: string;
+                kind: components["schemas"]["BootDocKind"];
                 key: string;
             };
             cookie?: never;
@@ -9891,7 +9786,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                kind: string;
+                kind: components["schemas"]["BootDocKind"];
                 key: string;
             };
             cookie?: never;
@@ -9945,7 +9840,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                kind: string;
+                kind: components["schemas"]["BootDocKind"];
                 key: string;
             };
             cookie?: never;

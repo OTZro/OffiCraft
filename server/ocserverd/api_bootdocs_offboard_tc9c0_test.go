@@ -20,25 +20,25 @@ import (
 func TestRestoringTheOffboardDocFansAGlobalContextDelta(t *testing.T) {
 	f := newHistoryFixture(t)
 
-	// The offboard document carries a read-only head (T-3201) that every write
-	// must return verbatim; this test is about the RESTORE fanning a delta, so
-	// the head rides along rather than being spelled at each call.
+	// The offboard document carries a read-only head (T-3201). Nothing here
+	// spells it: the write face takes the BODY and the server joins the shipped
+	// head on, so a test about the RESTORE fanning a delta has no reason to
+	// know the head exists. The precondition is kept — a seed that lost its
+	// marker would make every write below store something else entirely.
 	offboardSeed, _, err := f.api.root.seedBlockMD(offboardSeedMD)
 	if err != nil {
 		t.Fatal(err)
 	}
-	offboardHead, _, split := DocSplitHeadBody(offboardSeed)
-	if !split {
+	if _, _, split := DocSplitHeadBody(offboardSeed); !split {
 		t.Fatal("the offboard seed lost its read-only head")
 	}
 	writeOffboard := func(body string) {
 		t.Helper()
-		text := DocJoinHeadBody(offboardHead, body)
 		rec := httptest.NewRecorder()
 		f.api.HandleReplaceOffboardApiOffboardPost(rec,
-			f.req(http.MethodPost, "/api/offboard", map[string]any{"text": text}))
+			f.req(http.MethodPost, "/api/offboard", map[string]any{"body": body}))
 		if rec.Code != http.StatusOK {
-			t.Fatalf("replace offboard %q: status=%d body=%s", text, rec.Code, rec.Body.String())
+			t.Fatalf("replace offboard %q: status=%d body=%s", body, rec.Code, rec.Body.String())
 		}
 	}
 	writeOffboard("# 下線程序\n\nfirst\n")

@@ -706,12 +706,18 @@ export type DocumentKind =
  * adapter's boot-doc methods take THIS, so no caller can address `lessons`
  * through them.
  *
- * 🔴 THIS UNION IS ONE HALF OF A PAIR. The other half is the settings list's
- * `BOOT_DOC_ROWS` (components/SettingsPage.tsx), a `Record<BootDocKind, …>`:
- * adding a kind here without a row there is a compile error, and a kind the
- * SERVER serves that is missing from BOTH is caught by the registry-parity test
- * (api/mock.boot-doc-registry.test.ts). A document that ships but that the
- * cockpit never shows is the failure that pair exists to make loud. */
+ * 🔴 THIS UNION IS ONE HALF OF A PAIR, AND THE WIRE HOLDS THE OTHER HALF. It
+ * must stay identical to the frozen spec's `BootDocKind` enum: `toBootDoc`
+ * assigns the generated wire type straight into this one, so a value added to
+ * the enum and not added here does not compile (T-3201, owner's ruling 「加上
+ * enum 並且前端自己寫死，我接受新增 enum 的人要去改前端的 code 找到他對應顯示的
+ * 位置」).
+ *
+ * Adding it here is then not enough either: the settings list's `BOOT_DOC_ROWS`
+ * (components/SettingsPage.tsx) is a `Record<BootDocKind, …>`, so the new kind
+ * has no place to be shown until somebody gives it one, and that is a compile
+ * error too. Two links, one chain — a document that ships and that the cockpit
+ * never shows is the failure it exists to make loud. */
 export type BootDocKind =
   | "system_interaction"
   | "boot_sequence"
@@ -737,8 +743,22 @@ export type BootDocKind =
 export interface BootDocView {
   kind: BootDocKind;
   key: string;
+  /** The WHOLE stored document, marker line and all. What the version-history
+   * modal diffs against; NEVER what a save sends. */
   text: string;
-  /** Size of `text` in CHARACTERS (Unicode code points) — capChars' unit. */
+  /** The half the server fills in and refuses to take back (T-3201). `""` on a
+   * document that carries none. Shown, never edited — the owner's standing rule
+   * for these documents is 「以前 global context 是固定內容 我們也是會顯示 只是不
+   * 給改」 — and since the write face has no field for it, showing it is the only
+   * thing the cockpit can do with it. */
+  readOnlyHead: string;
+  /** The EDITABLE half, and byte for byte what `saveBootDoc` takes back. The
+   * editor holds this, not `text`: the cockpit never composes the two halves,
+   * never learns the marker, and cannot express an edit to the head. */
+  body: string;
+  /** Size of `text` — the WHOLE document — in CHARACTERS (Unicode code points),
+   * capChars' unit. It counts the head the owner cannot edit, because the cap
+   * is enforced on the document that gets stored. */
   sizeChars: number;
   /** The cap the SERVER enforces for this kind, in the same unit. The cockpit
    * blocks over-cap saves against this number rather than a local constant, so
@@ -751,24 +771,6 @@ export interface BootDocView {
    * its own list of which documents are read-only, because that list would go
    * stale silently the day one changes. */
   readOnly: boolean;
-}
-
-/**
- * ONE ROW of the boot-document listing (`GET /api/boot-docs`, T-3201) — how to
- * address a document, what the server calls it, and how big it is, with NO
- * text. It is the server's own answer to "which of these documents exist", and
- * the only thing the cockpit is allowed to check its own settings list against.
- */
-export interface BootDocSummaryView {
-  kind: BootDocKind;
-  key: string;
-  /** The server's own name for the document — the same words its refusals use. */
-  docName: string;
-  readOnly: boolean;
-  sizeChars: number;
-  capChars: number;
-  isDefault: boolean;
-  hasSeed: boolean;
 }
 
 /**

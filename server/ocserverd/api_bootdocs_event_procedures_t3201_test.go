@@ -216,13 +216,11 @@ func TestReplaceBootDoc_UndeclaredVariableIsRefusedAndNothingIsWritten(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	head, _, split := DocSplitHeadBody(seedOf(t, s, spec))
-	if !split {
+	if _, _, split := DocSplitHeadBody(seedOf(t, s, spec)); !split {
 		t.Fatal("task_closeout's seed lost its read-only head")
 	}
 	w := httptest.NewRecorder()
-	s.replaceBootDoc(w, ownerPost("/x"), spec,
-		DocJoinHeadBody(head, "任務 {task_nu} 已結束。"), false)
+	s.replaceBootDoc(w, ownerPost("/x"), spec, "任務 {task_nu} 已結束。", false)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
 	}
@@ -245,12 +243,14 @@ func TestReplaceBootDoc_DeclaredVariableIsAccepted(t *testing.T) {
 	if !split {
 		t.Fatal("task_closeout's seed lost its read-only head")
 	}
-	// Since T-3201 split this document the accepted write is its head back
-	// verbatim under variable-free body text — and the declared names ride in
-	// that head, which is where they now all live.
-	want := DocJoinHeadBody(head, "收尾就照這裡寫的做。")
+	// Since T-3201 the write face takes the BODY alone, and the declared names
+	// ride in the head, which is where they now all live and which no caller can
+	// send. So the accepted write is variable-free body text, and what gets
+	// STORED is the shipped head joined back on by the server.
+	const body = "收尾就照這裡寫的做。"
+	want := DocJoinHeadBody(head, body)
 	w := httptest.NewRecorder()
-	s.replaceBootDoc(w, ownerPost("/x"), spec, want, false)
+	s.replaceBootDoc(w, ownerPost("/x"), spec, body, false)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
 	}
@@ -276,18 +276,17 @@ func TestReplaceBootDoc_PreT3201KindsAreNotVariableValidated(t *testing.T) {
 		t.Fatalf("system_interaction must opt out of variable validation, declares %v", spec.Vars)
 	}
 	w := httptest.NewRecorder()
-	// Under the document's own read-only head (T-3201): the head is required
-	// back verbatim on every write, and this case is about the BRACES.
+	// The BODY alone (T-3201): the head is the server's to join back on, and
+	// this case is about the BRACES.
 	seed, _, err := s.root.seedBlockMD(spec.SeedFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	head, _, split := DocSplitHeadBody(seed)
-	if !split {
+	if _, _, split := DocSplitHeadBody(seed); !split {
 		t.Fatal("system_interaction's seed lost its read-only head")
 	}
 	s.replaceBootDoc(w, ownerPost("/x"), spec,
-		DocJoinHeadBody(head, `回傳 {"id": "<attachment id>"} 這種東西`), false)
+		`回傳 {"id": "<attachment id>"} 這種東西`, false)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
 	}

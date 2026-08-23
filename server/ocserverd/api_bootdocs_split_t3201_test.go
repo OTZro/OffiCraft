@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // splitSeed reads one seed and cuts it, failing the test if the kind was
@@ -328,7 +329,7 @@ func TestEventNoticeText_SendsTheBodyTheOwnerEditedAndNotTheShippedSeed(t *testi
 					"tell an overlay-aware send site from one that ignores overlays")
 			}
 			w := httptest.NewRecorder()
-			s.replaceBootDoc(w, ownerPost("/x"), spec, DocJoinHeadBody(head, ownerBody), false)
+			s.replaceBootDoc(w, ownerPost("/x"), spec, ownerBody, false)
 			if w.Code != http.StatusOK {
 				t.Fatalf("the write face refused the edit: %d (%s)", w.Code, w.Body.String())
 			}
@@ -423,22 +424,35 @@ func TestEventNoticeText_ASplitKindStoredWithNoMarkerIsNotSentAtAll(t *testing.T
 			// The write face cannot make this row — which is why seeding it
 			// directly is the only way to test the shape an old release left.
 			//
-			// TWO refusals, not one, and which one you get is the document's
-			// own ReadOnly flag: an editable document is refused for the marker
-			// (400), a read-only one never reaches that check because no caller
-			// may write it at all (405). Asserting a flat 400 for every kind
-			// would have made this row unaddable and hidden the fourth Split
-			// kind — the check has to name which door it expects to be shut.
-			wantRefusal := http.StatusBadRequest
-			if spec.ReadOnly {
-				wantRefusal = http.StatusMethodNotAllowed
-			}
+			// 🔴 HOW IT CANNOT CHANGED, AND THE CHECK CHANGED WITH IT (T-3201).
+			// It used to REFUSE the marker-less document: 400 for an editable
+			// kind, 405 for a read-only one, because no caller may write those
+			// at all. The wire no longer carries a whole document, so there is
+			// no refusal left to assert for the editable kinds — what is
+			// asserted instead is that the very same text, sent the only way it
+			// CAN be sent, still comes out of the store WITH a head on it. That
+			// is the stronger claim: not "this shape is rejected" but "this
+			// shape cannot be expressed". A read-only kind is still 405, and
+			// asserting a flat outcome for every kind would have made the
+			// fourth Split kind unaddable here.
 			w := httptest.NewRecorder()
 			s.replaceBootDoc(w, ownerPost("/x"), spec, body, false)
-			if w.Code != wantRefusal {
-				t.Fatalf("the write face accepted a marker-less document: %d (%s), want %d — if "+
-					"that is now allowed, this shape is reachable from the cockpit too",
-					w.Code, w.Body.String(), wantRefusal)
+			if spec.ReadOnly {
+				if w.Code != http.StatusMethodNotAllowed {
+					t.Fatalf("a read-only document accepted a write: %d (%s)", w.Code, w.Body.String())
+				}
+			} else {
+				if w.Code != http.StatusOK {
+					t.Fatalf("the write face refused a variable-free body: %d (%s)", w.Code, w.Body.String())
+				}
+				written, err := s.foldBootDocDTO(spec)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, split := DocSplitHeadBody(written.Text); !split {
+					t.Fatalf("a write produced a marker-less document — this shape is "+
+						"reachable from the cockpit again:\n%q", written.Text)
+				}
 			}
 
 			if err := s.dal.PutBootDocument(BootDocument{
@@ -511,8 +525,7 @@ func TestTaskUnblockedDoc_NoWriteFaceCanPutAnOverlayUnderTheSendSite(t *testing.
 	before := s.taskNoticeText(docKindTaskUnblocked, values)
 
 	w := httptest.NewRecorder()
-	s.replaceBootDoc(w, ownerPost("/x"), spec,
-		DocJoinHeadBody(head, "我改了本體。\n"), false)
+	s.replaceBootDoc(w, ownerPost("/x"), spec, "我改了本體。\n", false)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("the replace face accepted an edit to a read-only document: %d (%s) "+
 			"— it now HAS an owner-edit path and owes the overlay case above a row",
@@ -814,63 +827,213 @@ func TestBootContextDocs_RenderWithoutTheMarkerAndKeepTheirTitleLine(t *testing.
 	}
 }
 
-// ── the write face: the head is immutable, the body has no variables ─────────
+// ── the write face: the head is UNSENDABLE, the body has no variables ────────
 
+// 🔴 THIS USED TO ASSERT A REFUSAL AND NOW ASSERTS THAT THERE IS NOTHING TO
+// REFUSE (T-3201, owner's ruling 「沒有人有任何方式可以回寫」). Three probes stood
+// here — head edited, head replaced, marker removed — each a whole document
+// sent back with the read-only half tampered with, each answered 400. The wire
+// no longer has a field that can carry a head, so none of the three is a
+// request anybody can make: what is left to measure is that whatever a caller
+// puts in the body, the STORED document still carries the shipped head above
+// the line.
+//
+// The probes are therefore the same three strings, sent as BODY text — the
+// exact payloads a caller who still believed he was sending a whole document
+// would produce. Every one of them is accepted (it is just text) and every one
+// of them lands under the shipped head, which is the thing worth pinning: the
+// old protocol's payload can no longer reach the head even by accident.
+//
 // 接手程序（有前任） rides along as a second kind: it is the one of the three
 // documents split by T-3201's last package that an owner may actually edit, so
-// it is the one whose head gate is newly load-bearing — and the gate reads
+// it is the one where this is newly load-bearing — and the join reads
 // spec.Split, which a build that undeclared the split would walk straight past.
-func TestReplaceBootDoc_ChangingTheReadOnlyHeadIsRefusedAndNothingIsWritten(t *testing.T) {
+func TestReplaceBootDoc_NoWriteCanChangeTheReadOnlyHead(t *testing.T) {
 	for _, kind := range []string{docKindOffboard, docKindTaskTakeoverWithPredecessor} {
 		t.Run(kind, func(t *testing.T) {
-			replaceBootDocHeadGateCase(t, kind)
+			replaceBootDocHeadIsUnsendableCase(t, kind)
 		})
 	}
 }
 
-func replaceBootDocHeadGateCase(t *testing.T, kind string) {
+func replaceBootDocHeadIsUnsendableCase(t *testing.T, kind string) {
 	t.Helper()
 	s := newEventProcServer(t)
 	spec, head, body := splitSeed(t, s, kind)
-	before, err := s.foldBootDocDTO(spec)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// ⚠️ THE PROBES DO NOT CARRY THE REAL HEAD, and that is a fact about a
+	// DIFFERENT gate rather than a weaker test. These heads name {variables} —
+	// that is what a head is for — and a variable anywhere in the body is
+	// refused by the body rule, which would answer 400 for a reason that has
+	// nothing to do with the head. So each probe is a head-SHAPED string with
+	// no braces in it: the payload of the old whole-document protocol, in the
+	// only form that gets far enough to prove the point.
 	for _, probe := range []struct{ name, text string }{
-		{"head edited", DocJoinHeadBody(head+" 我加了一句", body)},
-		{"head replaced", DocJoinHeadBody("我自己的開頭", body)},
-		// Dropping the line is the same offence spelled differently: a
-		// document with no boundary has no read-only half left.
-		{"marker removed", head + "\n\n" + body},
+		{"an edited head sent as body", DocJoinHeadBody("我自己的開頭 我加了一句", body)},
+		{"someone else's head sent as body", DocJoinHeadBody("我自己的開頭", body)},
+		{"a whole document with no marker", "我自己的開頭\n\n" + body},
 	} {
 		t.Run(probe.name, func(t *testing.T) {
+			s := newEventProcServer(t)
 			w := httptest.NewRecorder()
 			s.replaceBootDoc(w, ownerPost("/x"), spec, probe.text, false)
-			if w.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 — body text is body text (%s)", w.Code, w.Body.String())
 			}
 			after, err := s.foldBootDocDTO(spec)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if after.Text != before.Text || !after.IsDefault {
-				t.Errorf("the refused write moved the document: is_default %v→%v, %d→%d chars",
-					before.IsDefault, after.IsDefault, before.SizeChars, after.SizeChars)
+			if after.ReadOnlyHead != head {
+				t.Fatalf("the stored read-only head is not the shipped one:\n got %q\nwant %q",
+					after.ReadOnlyHead, head)
+			}
+			if after.Body != probe.text {
+				t.Fatalf("the body stored is not what was sent:\n got %q\nsent %q", after.Body, probe.text)
+			}
+			if after.Text != DocJoinHeadBody(head, probe.text) {
+				t.Fatalf("the stored document is not head ⊕ body:\n%q", after.Text)
 			}
 		})
 	}
-	// Positive control: the SAME body under the SAME head is accepted, so the
-	// refusals above are the head gate and not a face that refuses everything.
+	// Control: an ordinary body edit is accepted and lands the same way, so the
+	// assertions above are not a face that stores the head no matter what
+	// because it refuses to store anything.
+	s2 := newEventProcServer(t)
 	w := httptest.NewRecorder()
-	s.replaceBootDoc(w, ownerPost("/x"), spec, DocJoinHeadBody(head, body+"\n多寫一行\n"), false)
+	s2.replaceBootDoc(w, ownerPost("/x"), spec, body+"\n多寫一行\n", false)
 	if w.Code != http.StatusOK {
 		t.Fatalf("editing only the body: status = %d, want 200 (%s)", w.Code, w.Body.String())
 	}
+	after, err := s2.foldBootDocDTO(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ReadOnlyHead != head || after.Body != body+"\n多寫一行\n" {
+		t.Fatalf("an ordinary edit did not land as head ⊕ body:\n%q", after.Text)
+	}
+}
+
+// 🔴 THE TWO GATES CHANGED UNITS AND THE CHANGE IS INVISIBLE WITHOUT THIS TEST.
+// Both used to compare whole document against whole document, because that was
+// the only thing a caller could send. The body-only wire split the question, and
+// each gate now measures the one thing its own question is about:
+//
+//   - the WIPE guard asks whether this write emptied the document of everything
+//     the caller can put in it, so it judges the BODY. Judged on the joined text
+//     it would answer "nothing was emptied" for a caller who just erased the
+//     whole of his own half — the head survives every write, so no write can
+//     produce an empty document again and the guard would be retired by
+//     accident, on a face nobody would think to look at.
+//
+//   - the CAP asks whether the document that gets STORED fits its ceiling, so it
+//     judges the joined text. That is the number size_chars reports, the number
+//     the cockpit shows against cap_chars and the number docCapRefusal quotes;
+//     measured on the body, all three would say different things about one
+//     document and the owner would be refused at a length his screen called fine.
+//
+// Both halves are asserted with their opposites, because either gate reading the
+// other's unit passes the loose half of this test on its own.
+func TestReplaceBootDoc_TheWipeGuardJudgesTheBodyAndTheCapJudgesTheStoredDocument(t *testing.T) {
+	t.Run("the wipe guard judges the body", func(t *testing.T) {
+		s := newEventProcServer(t)
+		spec, head, _ := splitSeed(t, s, docKindOffboard)
+
+		w := httptest.NewRecorder()
+		s.replaceBootDoc(w, ownerPost("/x"), spec, "", false)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("emptying the body must be refused without allow_shrink; got %d (%s)",
+				w.Code, w.Body.String())
+		}
+		// The control that makes the refusal above mean "the BODY was judged":
+		// what would have been stored is NOT empty — it is the head and the
+		// separator — so a guard reading the stored document would have let it
+		// through with nothing to say.
+		stored, err := s.bootDocStoredText(spec, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(stored) == "" {
+			t.Fatal("fixture: an emptied body still stores the head, or this control proves nothing")
+		}
+		if !strings.HasPrefix(stored, head) {
+			t.Fatalf("an emptied body did not keep the shipped head:\n%q", stored)
+		}
+
+		// …and allow_shrink is still the way through, on the same unit.
+		rec := httptest.NewRecorder()
+		s.replaceBootDoc(rec, ownerPost("/x"), spec, "", true)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("allow_shrink must let the wipe through; got %d (%s)", rec.Code, rec.Body.String())
+		}
+		after, err := s.foldBootDocDTO(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.Body != "" || after.ReadOnlyHead != head {
+			t.Fatalf("an allowed wipe should empty the body and keep the head; body=%q head kept=%v",
+				after.Body, after.ReadOnlyHead == head)
+		}
+	})
+
+	t.Run("the cap judges the stored document", func(t *testing.T) {
+		s := newEventProcServer(t)
+		spec, head, _ := splitSeed(t, s, docKindOffboard)
+		before, err := s.foldBootDocDTO(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		overhead := utf8.RuneCountInString(DocJoinHeadBody(head, ""))
+		if overhead <= 0 {
+			t.Fatal("fixture: this document has no read-only half, so the two units coincide")
+		}
+		// A body that fits the cap on its own and does NOT fit once the head is
+		// joined on. This is the exact window a body-measuring cap would let
+		// through, and it is why the window has to be non-empty for the test to
+		// mean anything.
+		body := strings.Repeat("字", spec.Cap-overhead+1)
+		if utf8.RuneCountInString(body) > spec.Cap {
+			t.Fatalf("fixture: the probe (%d runes) is over the %d cap on its own",
+				utf8.RuneCountInString(body), spec.Cap)
+		}
+		if utf8.RuneCountInString(DocJoinHeadBody(head, body)) <= spec.Cap {
+			t.Fatal("fixture: the probe fits even once stored, so nothing is being measured")
+		}
+		w := httptest.NewRecorder()
+		s.replaceBootDoc(w, ownerPost("/x"), spec, body, false)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("a body that only fits WITHOUT the head must be refused; got %d (%s)",
+				w.Code, w.Body.String())
+		}
+		after, err := s.foldBootDocDTO(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.Text != before.Text || !after.IsDefault {
+			t.Errorf("the refused write moved the document: is_default %v→%v", before.IsDefault, after.IsDefault)
+		}
+		// The control: one rune shorter fits once stored, and is accepted. Without
+		// it a cap that refused everything would pass the half above.
+		shorter := strings.Repeat("字", spec.Cap-overhead)
+		rec := httptest.NewRecorder()
+		s.replaceBootDoc(rec, ownerPost("/x"), spec, shorter, false)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("a body that fits exactly once stored must be accepted; got %d (%s)",
+				rec.Code, rec.Body.String())
+		}
+		wrote, err := s.foldBootDocDTO(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wrote.SizeChars != spec.Cap {
+			t.Fatalf("the accepted document is %d runes, want exactly the %d cap — the "+
+				"boundary this pair measures is the STORED size", wrote.SizeChars, spec.Cap)
+		}
+	})
 }
 
 func TestReplaceBootDoc_AVariableInTheEditableBodyIsRefused(t *testing.T) {
 	s := newEventProcServer(t)
-	spec, head, body := splitSeed(t, s, docKindOffboard)
+	spec, _, body := splitSeed(t, s, docKindOffboard)
 	before, err := s.foldBootDocDTO(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -879,8 +1042,7 @@ func TestReplaceBootDoc_AVariableInTheEditableBodyIsRefused(t *testing.T) {
 	// below the line, because nothing fills a variable there. A test that used
 	// an undeclared name would pass on a server that only checked the spelling.
 	w := httptest.NewRecorder()
-	s.replaceBootDoc(w, ownerPost("/x"), spec,
-		DocJoinHeadBody(head, body+"\n你現在的狀況是 {where}。\n"), false)
+	s.replaceBootDoc(w, ownerPost("/x"), spec, body+"\n你現在的狀況是 {where}。\n", false)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
 	}

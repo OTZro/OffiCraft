@@ -27,6 +27,22 @@ import {
   SEED_BOOT_SEQUENCE_CODEX_MD,
 } from "./seeds";
 import { documentRevisions } from "../test/documentHistory";
+import { docJoinHeadBody, docSplitHeadBody } from "./docSplit";
+
+/** What the mock STORES when `body` is saved into a document whose seed carries
+ * a read-only head (T-3201): the shipped head, then the body. The wire carries
+ * only the body — the head is the server's to put back — so every expectation
+ * about stored text or a retained revision has to say so out loud. */
+function storedFor(seed: string, body: string): string {
+  const { head, split } = docSplitHeadBody(seed.trim());
+  return split ? docJoinHeadBody(head, body) : body;
+}
+
+/** The editable half of a seed — what a caller would send back unchanged. */
+function bodyOf(seed: string): string {
+  const { body, split } = docSplitHeadBody(seed.trim());
+  return split ? body : seed.trim();
+}
 
 beforeEach(() => {
   __resetMock();
@@ -179,7 +195,9 @@ describe("mockApi · boot-context blocks", () => {
     // The discarded content survives as a revision — a destructive write with
     // no way back would be the one write the history does not cover.
     const kept = await documentRevisions(mockApi, "boot_sequence", "claude");
-    expect(kept[0].content.text).toBe("壞掉的內容");
+    expect(kept[0].content.text).toBe(
+      storedFor(SEED_BOOT_SEQUENCE_MD, "壞掉的內容")
+    );
   });
 
   it("refuses an over-cap save that is not getting shorter, and allows one that is", async () => {
@@ -240,7 +258,7 @@ describe("mockApi · boot-context blocks", () => {
     await mockApi.saveBootDoc(
       "boot_sequence",
       "codex",
-      SEED_BOOT_SEQUENCE_CODEX_MD.trim()
+      bodyOf(SEED_BOOT_SEQUENCE_CODEX_MD)
     );
     expect(await mockApi.getBootDoc("boot_sequence", "codex")).toMatchObject({
       isDefault: true,
@@ -267,7 +285,8 @@ describe("mockApi · boot-context blocks", () => {
     const [older] = await documentRevisions(mockApi, "boot_sequence", "claude");
     await mockApi.restoreDocumentHistory("boot_sequence", "claude", older.id);
     expect(await mockApi.getBootDoc("boot_sequence", "claude")).toMatchObject({
-      text: "第一版",
+      text: storedFor(SEED_BOOT_SEQUENCE_MD, "第一版"),
+      body: "第一版",
       isDefault: false,
     });
 

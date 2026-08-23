@@ -6,8 +6,13 @@ package main
 // 🔴 THE MECHANISM IS SPECIFIED IN docs/design/boot-documents.md — fold, cap,
 // the read-only head, the variable rules, what each write face refuses and why
 // reset carries no cap. That document deliberately does NOT list which
-// documents exist; bootDocRegistry below is the only list, and list_boot_docs
-// is how a caller asks.
+// documents exist. bootDocRegistry below is the server's list, and the wire's
+// list is the BootDocKind enum in spec/openapi.json — the two are pinned to each
+// other by TestBootDocRegistry_MatchesTheBootDocKindEnumInTheFrozenSpec. There
+// used to be a listing ENDPOINT instead; the owner replaced it with the enum on
+// 2026-08-23, because a listing cannot go stale but also cannot make anything
+// fail, and a cockpit that had never heard of a new document just showed
+// nothing.
 //
 // WHY THIS EXISTS (owner, 2026-08-13, verbatim): 「我們可以把系統互動改成可以修改
 // 嗎 跟銀月的 insight 一樣是有 history / restore to default」「不用每次都改 code」
@@ -375,12 +380,32 @@ func (s *apiServer) foldBootDocDTO(spec bootDocSpec) (*bootDocDTO, error) {
 		return nil, err
 	}
 	text, isDefault := FoldBootDocument(overlay, seedMD, hasSeed)
+	// 🔴 THE READ SPLITS WHAT THE WRITE CANNOT JOIN. Owner's ruling: 「讀取有
+	// 這個 key，回寫沒有這個 key」 — so the read face names the read-only half
+	// out loud (read_only_head) and hands back the editable half under the SAME
+	// name the write face takes (body). A caller that POSTs the `body` it just
+	// GET-ed writes the document back unchanged, which is the property
+	// TestBootDoc_TheBodyItReadsBackIsTheBodyItTakes pins; there is no
+	// separator, no marker and no join rule for a client to know about.
+	//
+	// `text` stays, and stays the WHOLE stored document: it is what the version
+	// history stores and diffs against (bootDocHistorySnapshot), and what
+	// size_chars counts against cap_chars. Three keys describing one document is
+	// redundancy the READ side is allowed — the ruling is about the write.
+	head := ""
+	if spec.Split {
+		if h, _, split := DocSplitHeadBody(text); split {
+			head = h
+		}
+	}
 	return &bootDocDTO{
 		SizeChars:     utf8.RuneCountInString(text),
 		CapChars:      spec.Cap,
 		Kind:          spec.Kind,
 		Key:           spec.Key,
 		Text:          text,
+		ReadOnlyHead:  head,
+		Body:          bootDocBodyOf(spec, text),
 		OwnerID:       wireOwnerID,
 		SchemaVersion: wireSchemaVersion,
 		IsDefault:     isDefault,
@@ -513,10 +538,21 @@ func (s *apiServer) taskNoticeText(kind string, values map[string]string) string
 // 🔴 THE REACHABLE WAY IN IS AN OVERLAY WRITTEN BEFORE THE MARKER EXISTED.
 // docBodyMarker arrived with the split and NO migration rewrote the rows that
 // were already there, so any installation that had edited one of these documents
-// before that release is holding exactly this shape. The write face refuses to
-// CREATE one (bootDocContentOK demands the head back verbatim), which is why
-// nothing else in the tree notices — it guards writes from here on, not rows
-// already stored.
+// before that release is holding exactly this shape. Nothing can PRODUCE one any
+// more: the write face has no field for a head at all and joins the shipped one
+// on itself (replaceBootDoc), so a headless document is not something a caller
+// is refused, it is something a caller cannot express.
+//
+// ⚠️ THAT SENTENCE USED TO STOP AT THE WRITE FACE AND WAS WRONG BY OMISSION —
+// it read as "nobody can put one back", and one door could. RESTORE IS NOT A
+// GENERATOR, IT IS A RE-ARMER: it never invents this shape, but until T-3201 it
+// could take a pre-marker version out of the version history, put it straight
+// back on the live row without passing any content gate, and write that as a new
+// revision — arming a hazard nothing else in the tree could still create. It now
+// goes through the same join as every other write (restoreDocumentHistory), so
+// what it re-arms comes back WITH the shipped head on it. What is left is only
+// the rows already stored, which no write path visits until something writes
+// them.
 func (s *apiServer) eventNoticeText(spec bootDocSpec, values map[string]string) string {
 	dto, err := s.foldBootDocDTO(spec)
 	if err != nil || dto == nil {
@@ -618,8 +654,23 @@ func (s *apiServer) writeBootDoc(r *http.Request, spec bootDocSpec, current *boo
 	return true, nil
 }
 
-// replaceBootDoc is the whole-document replace shared by both blocks.
-func (s *apiServer) replaceBootDoc(w http.ResponseWriter, r *http.Request, spec bootDocSpec, text string, allowShrink bool) {
+// replaceBootDoc is the whole-BODY replace shared by every write face.
+//
+// 🔴 IT TAKES THE BODY, NOT THE DOCUMENT (owner's ruling, 2026-08-23:
+// 「唯讀區應該無法回寫，讀取有這個 key，回寫沒有這個 key，沒有人有任何方式可以
+// 回寫」). The head is not something a caller may send WRONG — it is something a
+// caller cannot send AT ALL, because the wire has no field for it. The server
+// puts the shipped head back on here, so "the head came back unchanged" stopped
+// being a rule to check and became a property of the only way a document can be
+// written. That is the difference between 送錯被擋 and 送不出來, and it is why
+// docHeadEditRefusal is gone rather than merely unreachable.
+//
+// A SIDE EFFECT WORTH KNOWING: this REPAIRS a pre-marker row. An overlay stored
+// before docBodyMarker existed has no head; its whole text reads as the body
+// (bootDocBodyOf, the same lenient reading DocRendered takes), so the first
+// write through this face joins the shipped head back on and the row stops
+// being the shape eventNoticeText refuses.
+func (s *apiServer) replaceBootDoc(w http.ResponseWriter, r *http.Request, spec bootDocSpec, body string, allowShrink bool) {
 	if spec.ReadOnly {
 		writeError(w, http.StatusMethodNotAllowed, bootDocReadOnlyRefusal(spec))
 		return
@@ -629,11 +680,32 @@ func (s *apiServer) replaceBootDoc(w http.ResponseWriter, r *http.Request, spec 
 		internalError(w, err)
 		return
 	}
-	// Wipe guard, the posture replace_global_context / replace_insight carry:
-	// emptying a document that had content has to be said out loud. It matters
-	// more here than anywhere else — an empty boot sequence is not a small
-	// document, it is an agent with no instructions.
-	if !allowShrink && WholeDocWipeBlocked(current.Text, text) {
+	next, err := s.bootDocStoredText(spec, body)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	// 🔴 THE TWO GATES MEASURE TWO DIFFERENT THINGS, AND EACH MEASURES THE ONLY
+	// THING ITS QUESTION IS ABOUT. Before the body-only wire they both compared
+	// whole document against whole document, because that was the only unit a
+	// caller could send; splitting the wire split the question:
+	//
+	//   WIPE asks "did this write empty the document of everything the caller
+	//   can put in it?" — so it judges the BODY. Judging the joined text would
+	//   retire the guard by accident: the head survives every write, so no write
+	//   can ever produce an empty document again and the gate would answer
+	//   "nothing was emptied" for a caller who just erased the whole of his own
+	//   half.
+	//
+	//   THE CAP asks "does the document that gets STORED fit its ceiling?" — so
+	//   it judges the joined text. That is the number size_chars reports, the
+	//   number the cockpit shows against cap_chars, and the number docCapRefusal
+	//   quotes; measuring the body here would make all three say different
+	//   things about one document, and the owner would be refused at a length
+	//   the surface told him was fine.
+	//
+	// Pinned by TestReplaceBootDoc_TheWipeGuardJudgesTheBodyAndTheCapJudgesTheStoredDocument.
+	if !allowShrink && WholeDocWipeBlocked(bootDocBodyOf(spec, current.Text), body) {
 		writeError(w, http.StatusBadRequest,
 			docWipeRefusal(spec.DocName, ", or reset it to the shipped default"))
 		return
@@ -642,20 +714,20 @@ func (s *apiServer) replaceBootDoc(w http.ResponseWriter, r *http.Request, spec 
 	// direction and is not a bypass. The refusal names three numbers (what you
 	// wrote, the cap, what is stored) because being refused is otherwise the
 	// only way to learn any of them.
-	if DocCapBlocked(spec.Cap, current.Text, text) {
-		writeError(w, http.StatusBadRequest, docCapRefusal(spec.Cap, spec.DocName, current.Text, text))
+	if DocCapBlocked(spec.Cap, current.Text, next) {
+		writeError(w, http.StatusBadRequest, docCapRefusal(spec.Cap, spec.DocName, current.Text, next))
 		return
 	}
-	// Content validation (T-3201): the read-only head must come back unchanged
-	// and the editable body must name no variables. Last of the gates because
-	// it is the only one that judges the CONTENT rather than the size — a
-	// caller whose write is both oversized and malformed learns about the size
-	// first, which is the one it can act on without re-reading the document.
-	if !s.bootDocContentOK(w, spec, text) {
+	// Content validation, last of the gates because it is the only one that
+	// judges the CONTENT rather than the size — a caller whose write is both
+	// oversized and malformed learns about the size first, which is the one it
+	// can act on without re-reading the document.
+	if msg := bootDocBodyRefusal(spec, body); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	if _, err := s.writeBootDoc(r, spec, current,
-		BootDocument{Kind: spec.Kind, Key: spec.Key, Text: text, Tombstoned: false}, text); err != nil {
+		BootDocument{Kind: spec.Kind, Key: spec.Key, Text: next, Tombstoned: false}, next); err != nil {
 		internalError(w, err)
 		return
 	}
@@ -667,66 +739,91 @@ func (s *apiServer) replaceBootDoc(w http.ResponseWriter, r *http.Request, spec 
 	writeJSON(w, http.StatusOK, dto)
 }
 
-// bootDocContentOK is the write face's content gate: the head half is
-// immutable, the body half has no variables, and an unsplit document is judged
-// as one text the way it was before this split existed.
+// bootDocStoredText turns a caller's BODY into the bytes that get stored, by
+// joining the SHIPPED head back on.
 //
-// 🔴 THE HEAD IS COMPARED AGAINST THE SHIPPED SEED, not against what is stored
-// now. Comparing against the stored text would make the wall movable: one write
-// that slipped a changed head past a bug would become the new baseline, and
-// every write after it would agree with the wrong head. The seed is the one
-// copy no write path can reach (see resetBootDoc), so it is the only honest
-// thing to measure against.
+// 🔴 THE HEAD COMES FROM THE SEED, not from what is stored now, and that is the
+// same argument the old head COMPARISON was built on: reading the head off the
+// stored row would make the wall movable — one row that ever acquired a wrong
+// head would hand that head to every write after it. The seed is the one copy
+// no write path can reach (see resetBootDoc), so it is the only honest source.
+// What changed is that the seed's head is now APPLIED rather than demanded, so
+// there is no wall for a caller to be on the wrong side of.
 //
-// It answers false having already written the refusal, so callers read as a
-// guard clause rather than a second error shape to unpack.
-func (s *apiServer) bootDocContentOK(w http.ResponseWriter, spec bootDocSpec, text string) bool {
+// A kind that does not declare Split has no read-only half, so its body IS its
+// document and this is the identity. Every kind in bootDocRegistry declares
+// Split today; the branch is what keeps that a declaration rather than an
+// assumption.
+func (s *apiServer) bootDocStoredText(spec bootDocSpec, body string) (string, error) {
 	if !spec.Split {
-		if bad := DocVarsUndeclared(text, spec.Vars); len(bad) > 0 {
-			writeError(w, http.StatusBadRequest, docVarWriteRefusal(spec.DocName, bad, spec.Vars))
-			return false
-		}
-		return true
-	}
-	// 🔴 A WIPE IS NOT JUDGED HERE. An empty write is the "erase this document"
-	// gesture, and the wipe guard above has ALREADY ruled on it — refusing it,
-	// or letting it through because the caller passed allow_shrink, which the
-	// owner ruled on 2026-08-22 stays open. Judging it a second time here would
-	// close that bypass by accident, on a face nobody would think to look at,
-	// and the way back is one reset away.
-	if strings.TrimSpace(text) == "" {
-		return true
+		return body, nil
 	}
 	seedMD, hasSeed, err := s.root.seedBlockMD(spec.SeedFile)
 	if err != nil {
-		internalError(w, err)
-		return false
+		return "", err
 	}
 	seedHead, _, seedSplit := DocSplitHeadBody(seedMD)
 	if !hasSeed || !seedSplit {
-		// A split kind whose seed lost its marker cannot say what its head IS,
-		// and accepting the write would silently retire the read-only half for
-		// good. 500 rather than a refusal: nothing the caller typed caused it.
-		internalError(w, errors.New("boot document "+spec.Kind+"/"+spec.Key+
-			" is declared split but its seed carries no "+docBodyMarker+" line"))
-		return false
+		// A split kind whose seed lost its marker cannot say what its head IS.
+		// 500 rather than a refusal: nothing the caller typed caused it, and
+		// writing the body alone would silently retire the read-only half.
+		return "", errors.New("boot document " + spec.Kind + "/" + spec.Key +
+			" is declared split but its seed carries no " + docBodyMarker + " line")
 	}
-	head, body, split := DocSplitHeadBody(text)
-	if !split || head != seedHead {
-		writeError(w, http.StatusBadRequest, docHeadEditRefusal(spec.DocName))
-		return false
+	return DocJoinHeadBody(seedHead, body), nil
+}
+
+// bootDocBodyOf reads the EDITABLE half out of a stored document.
+//
+// The no-marker reading is DELIBERATELY LENIENT and matches DocRendered's: a
+// row stored before the marker existed is all body as far as anything that
+// wants to know what the owner typed is concerned. The strict reading lives in
+// eventNoticeText, which holds the spec and refuses to SEND such a row — see
+// the asymmetry argued there and in DocRendered.
+func bootDocBodyOf(spec bootDocSpec, text string) string {
+	if !spec.Split {
+		return text
 	}
-	// nil Vars opts the kind out of variable validation entirely (doc_vars.go)
-	// — system_interaction quotes JSON in its body — and that opt-out is about
-	// the SYNTAX, so it has to cover the body rule too.
+	_, body, split := DocSplitHeadBody(text)
+	if !split {
+		return text
+	}
+	return body
+}
+
+// bootDocBodyRefusal is the ONE content rule left on the write face: the
+// editable half names no variables. It answers "" when the body is acceptable.
+//
+// 🔴 THE HEAD RULE IS NOT HERE BECAUSE IT NO LONGER EXISTS AS A RULE. It used
+// to be half of this function (the head had to come back byte for byte); the
+// body-only wire made it structural — see replaceBootDoc — so the refusal that
+// went with it was deleted rather than left as a branch nothing can reach.
+//
+// It returns the sentence rather than writing it, because BOTH write faces need
+// it: the REST/MCP replace, which turns it into a 400, and the history restore,
+// which has no response body to write into and wraps it in an error instead.
+// One gate, two callers — the alternative was the restore path judging content
+// by a different rule, which is exactly what it did until T-3201.
+//
+// nil Vars opts the kind out of variable validation entirely (doc_vars.go) —
+// system_interaction quotes JSON in its body — and that opt-out is about the
+// SYNTAX, so it has to cover the body rule too.
+func bootDocBodyRefusal(spec bootDocSpec, body string) string {
+	if !spec.Split {
+		// An unsplit kind is judged as ONE text the way it was before the split
+		// existed: its declared variables are legal anywhere in it.
+		if bad := DocVarsUndeclared(body, spec.Vars); len(bad) > 0 {
+			return docVarWriteRefusal(spec.DocName, bad, spec.Vars)
+		}
+		return ""
+	}
 	if spec.Vars == nil {
-		return true
+		return ""
 	}
 	if bad := DocVarsIn(body); len(bad) > 0 {
-		writeError(w, http.StatusBadRequest, docBodyVarRefusal(spec.DocName, bad))
-		return false
+		return docBodyVarRefusal(spec.DocName, bad)
 	}
-	return true
+	return ""
 }
 
 // resetBootDoc tombstones the overlay so the folded read falls back to the
@@ -792,14 +889,14 @@ func (s *apiServer) HandleGetSystemInteractionApiSystemInteractionGet(w http.Res
 	writeJSON(w, http.StatusOK, dto)
 }
 
-// POST /api/system-interaction — whole-document replace ({text}).
+// POST /api/system-interaction — replace the editable BODY ({body}).
 func (s *apiServer) HandleReplaceSystemInteractionApiSystemInteractionPost(w http.ResponseWriter, r *http.Request) {
-	var body BootDocumentReplaceDTO
-	if !decodeJSONBodyStrict(w, r, &body, "text") {
+	var in BootDocumentReplaceDTO
+	if !decodeJSONBodyStrict(w, r, &in, "body") {
 		return
 	}
-	s.replaceBootDoc(w, r, s.systemInteractionSpec(), body.Text,
-		body.AllowShrink != nil && *body.AllowShrink)
+	s.replaceBootDoc(w, r, s.systemInteractionSpec(), in.Body,
+		in.AllowShrink != nil && *in.AllowShrink)
 }
 
 // POST /api/system-interaction/reset — back to the shipped seed.
@@ -817,14 +914,14 @@ func (s *apiServer) HandleGetOffboardApiOffboardGet(w http.ResponseWriter, r *ht
 	writeJSON(w, http.StatusOK, dto)
 }
 
-// POST /api/offboard — whole-document replace ({text}).
+// POST /api/offboard — replace the editable BODY ({body}).
 func (s *apiServer) HandleReplaceOffboardApiOffboardPost(w http.ResponseWriter, r *http.Request) {
-	var body BootDocumentReplaceDTO
-	if !decodeJSONBodyStrict(w, r, &body, "text") {
+	var in BootDocumentReplaceDTO
+	if !decodeJSONBodyStrict(w, r, &in, "body") {
 		return
 	}
-	s.replaceBootDoc(w, r, s.offboardSpec(), body.Text,
-		body.AllowShrink != nil && *body.AllowShrink)
+	s.replaceBootDoc(w, r, s.offboardSpec(), in.Body,
+		in.AllowShrink != nil && *in.AllowShrink)
 }
 
 // POST /api/offboard/reset — back to the shipped seed.
@@ -847,18 +944,18 @@ func (s *apiServer) HandleGetBootSequenceApiBootSequenceRuntimeKeyGet(w http.Res
 	writeJSON(w, http.StatusOK, dto)
 }
 
-// POST /api/boot-sequence/{runtime_key} — whole-document replace ({text}).
+// POST /api/boot-sequence/{runtime_key} — replace the editable BODY ({body}).
 func (s *apiServer) HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPost(w http.ResponseWriter, r *http.Request, runtimeKey string) {
 	spec, ok := s.bootSequenceSpecFor(runtimeKey)
 	if !ok {
 		writeUnknownBootSequence(w, runtimeKey)
 		return
 	}
-	var body BootDocumentReplaceDTO
-	if !decodeJSONBodyStrict(w, r, &body, "text") {
+	var in BootDocumentReplaceDTO
+	if !decodeJSONBodyStrict(w, r, &in, "body") {
 		return
 	}
-	s.replaceBootDoc(w, r, spec, body.Text, body.AllowShrink != nil && *body.AllowShrink)
+	s.replaceBootDoc(w, r, spec, in.Body, in.AllowShrink != nil && *in.AllowShrink)
 }
 
 // POST /api/boot-sequence/{runtime_key}/reset — back to that runtime's shipped seed.
@@ -891,69 +988,6 @@ func bootDocReadOnlyRefusal(spec bootDocSpec) string {
 		"of it other than the shipped one; nothing was written"
 }
 
-// bootDocSummaries renders the whole registry as the listing GET /api/boot-docs
-// answers. It is the ONE thing on the wire that says which of these documents
-// exist: every description that used to carry a list of kinds had gone stale
-// before anybody noticed, and nothing turns red when prose ages. Rendering it
-// from bootDocRegistry means a document that ships is in this listing the same
-// day, and one that never shipped can never appear in it.
-//
-// NO TEXT. The reply's size is a function of how many documents exist and of
-// nothing else — the same property GET /api/doc-sizes exists for, and the
-// reason the cockpit can open its settings list without paying for ten
-// documents it is not showing yet.
-//
-// 🔴 CAPS ARE READ PER ROW, NOT ONCE FOR THE LISTING, and that is a deliberate
-// difference from HandlePeekDocSizesApiDocSizesGet. There the five segments have
-// five accessors that function holds in five locals; here the accessor is
-// per-kind and lives in the registry row, so "read every cap once" would mean a
-// second table mapping kinds to caps — the exact second list this registry was
-// built to remove. What that costs is bounded and visible: two rows sharing one
-// setting (the two stop procedures do, the four task events do) can quote
-// different numbers if a PATCH /api/settings lands mid-listing. Each number was
-// in force when its row was read, and the cockpit re-reads on the same SSE topic
-// the write publishes.
-func (s *apiServer) bootDocSummaries() ([]bootDocSummaryDTO, error) {
-	out := []bootDocSummaryDTO{}
-	for _, reg := range bootDocRegistry {
-		for _, key := range reg.Keys {
-			spec, ok := s.bootDocSpecFor(reg.Kind, key)
-			if !ok {
-				// Unreachable: the pair came out of the registry this resolver
-				// reads. Fail closed rather than serve a row with no cap and no
-				// name, which would look like a document nobody may edit.
-				return nil, errors.New("boot document " + reg.Kind + "/" + key +
-					" is in bootDocRegistry but did not resolve")
-			}
-			dto, err := s.foldBootDocDTO(spec)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, bootDocSummaryDTO{
-				Kind:      dto.Kind,
-				Key:       dto.Key,
-				DocName:   spec.DocName,
-				ReadOnly:  spec.ReadOnly,
-				SizeChars: dto.SizeChars,
-				CapChars:  dto.CapChars,
-				IsDefault: dto.IsDefault,
-				HasSeed:   dto.HasSeed,
-			})
-		}
-	}
-	return out, nil
-}
-
-// GET /api/boot-docs — which editable boot-context documents this server serves.
-func (s *apiServer) HandleListBootDocsApiBootDocsGet(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.bootDocSummaries()
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, bootDocListDTO{Documents: rows})
-}
-
 // genericBootDocSpec resolves the {kind}/{key} pair the three generic faces take,
 // answering the SAME refusal all three times: a kind nobody registered says so,
 // and a key that kind does not serve is told which keys it does.
@@ -973,8 +1007,8 @@ func (s *apiServer) genericBootDocSpec(w http.ResponseWriter, kind, key string) 
 }
 
 // GET /api/boot-docs/{kind}/{key} — the folded document, marker line and all.
-func (s *apiServer) HandleGetBootDocApiBootDocsKindKeyGet(w http.ResponseWriter, r *http.Request, kind, key string) {
-	spec, ok := s.genericBootDocSpec(w, kind, key)
+func (s *apiServer) HandleGetBootDocApiBootDocsKindKeyGet(w http.ResponseWriter, r *http.Request, kind BootDocKind, key string) {
+	spec, ok := s.genericBootDocSpec(w, string(kind), key)
 	if !ok {
 		return
 	}
@@ -986,22 +1020,22 @@ func (s *apiServer) HandleGetBootDocApiBootDocsKindKeyGet(w http.ResponseWriter,
 	writeJSON(w, http.StatusOK, dto)
 }
 
-// POST /api/boot-docs/{kind}/{key} — whole-document replace ({text}).
-func (s *apiServer) HandleReplaceBootDocApiBootDocsKindKeyPost(w http.ResponseWriter, r *http.Request, kind, key string) {
-	spec, ok := s.genericBootDocSpec(w, kind, key)
+// POST /api/boot-docs/{kind}/{key} — replace the editable BODY ({body}).
+func (s *apiServer) HandleReplaceBootDocApiBootDocsKindKeyPost(w http.ResponseWriter, r *http.Request, kind BootDocKind, key string) {
+	spec, ok := s.genericBootDocSpec(w, string(kind), key)
 	if !ok {
 		return
 	}
-	var body BootDocumentReplaceDTO
-	if !decodeJSONBodyStrict(w, r, &body, "text") {
+	var in BootDocumentReplaceDTO
+	if !decodeJSONBodyStrict(w, r, &in, "body") {
 		return
 	}
-	s.replaceBootDoc(w, r, spec, body.Text, body.AllowShrink != nil && *body.AllowShrink)
+	s.replaceBootDoc(w, r, spec, in.Body, in.AllowShrink != nil && *in.AllowShrink)
 }
 
 // POST /api/boot-docs/{kind}/{key}/reset — back to the shipped seed.
-func (s *apiServer) HandleResetBootDocApiBootDocsKindKeyResetPost(w http.ResponseWriter, r *http.Request, kind, key string) {
-	spec, ok := s.genericBootDocSpec(w, kind, key)
+func (s *apiServer) HandleResetBootDocApiBootDocsKindKeyResetPost(w http.ResponseWriter, r *http.Request, kind BootDocKind, key string) {
+	spec, ok := s.genericBootDocSpec(w, string(kind), key)
 	if !ok {
 		return
 	}

@@ -33,7 +33,6 @@ import type {
   GlobalContextView,
   BootDocKind,
   BootDocView,
-  BootDocSummaryView,
   DocumentKind,
   DocumentHistoryEntryView,
   DocumentHistoryView,
@@ -110,7 +109,6 @@ import {
   toBackupHealth,
   toGlobalContext,
   toBootDoc,
-  toBootDocSummary,
   toDocumentHistory,
   toDocumentHistoryEntry,
   toDocumentRevision,
@@ -1985,13 +1983,6 @@ export const httpApi: Api = {
   // /api/offboard) still exist on the server for MCP callers; the cockpit no
   // longer uses them, so there is exactly one frontend path to test.
 
-  async listBootDocs(): Promise<BootDocSummaryView[]> {
-    // GET /api/boot-docs -> BootDocListDTO. NO TEXT — the reply's size is a
-    // function of how many documents exist and of nothing else.
-    const wire = unwrap(await client.GET("/api/boot-docs"));
-    return wire.documents.map(toBootDocSummary);
-  },
-
   async getBootDoc(kind: BootDocKind, key: string): Promise<BootDocView> {
     // 404 (not 400) for an unknown kind/key: the pair addresses A DOCUMENT, and
     // a document this server does not have is not found.
@@ -2007,10 +1998,15 @@ export const httpApi: Api = {
   async saveBootDoc(
     kind: BootDocKind,
     key: string,
-    text: string,
+    body: string,
   ): Promise<BootDocView> {
-    // Whole-document replace, POST — same verb contract as
+    // Replace the EDITABLE HALF, POST — same verb contract as
     // /api/global-context: NOT a PUT and NOT a DELETE-then-write.
+    //
+    // 🔴 `body`, NOT `text` (T-3201). The wire has no field for the read-only
+    // head at all: the server joins the shipped one back on, so the cockpit
+    // never composes the two halves and cannot express an edit to the one it
+    // may not touch. Send back the `body` the read handed over.
     //
     // allow_shrink stays FALSE here, the opposite of saveGlobalContext. There
     // the owner clearing a textarea of their own additions is explicit intent
@@ -2025,7 +2021,7 @@ export const httpApi: Api = {
       unwrap(
         await client.POST("/api/boot-docs/{kind}/{key}", {
           params: { path: { kind, key } },
-          body: { text, allow_shrink: false },
+          body: { body, allow_shrink: false },
         }),
       ),
     );

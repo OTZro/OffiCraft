@@ -32,6 +32,45 @@ func (e AgentRuntime) Valid() bool {
 	}
 }
 
+// Defines values for BootDocKind.
+const (
+	AcceleratedStop             BootDocKind = "accelerated_stop"
+	BootSequence                BootDocKind = "boot_sequence"
+	Offboard                    BootDocKind = "offboard"
+	SystemInteraction           BootDocKind = "system_interaction"
+	TaskCloseout                BootDocKind = "task_closeout"
+	TaskReassignPredecessor     BootDocKind = "task_reassign_predecessor"
+	TaskTakeoverFresh           BootDocKind = "task_takeover_fresh"
+	TaskTakeoverWithPredecessor BootDocKind = "task_takeover_with_predecessor"
+	TaskUnblocked               BootDocKind = "task_unblocked"
+)
+
+// Valid indicates whether the value is a known member of the BootDocKind enum.
+func (e BootDocKind) Valid() bool {
+	switch e {
+	case AcceleratedStop:
+		return true
+	case BootSequence:
+		return true
+	case Offboard:
+		return true
+	case SystemInteraction:
+		return true
+	case TaskCloseout:
+		return true
+	case TaskReassignPredecessor:
+		return true
+	case TaskTakeoverFresh:
+		return true
+	case TaskTakeoverWithPredecessor:
+		return true
+	case TaskUnblocked:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MonitoringSessionDTORuntime.
 const (
 	MonitoringSessionDTORuntimeClaude MonitoringSessionDTORuntime = "claude"
@@ -429,46 +468,26 @@ type BootCommandResultDTO struct {
 	Token          string `json:"token"`
 }
 
-// BootDocListDTO Every editable block of the boot context this server serves, in the order the cockpit shows them. This is the answer to "which documents are there" — the question no description is allowed to answer in prose, because a written list goes stale the moment a block ships and nothing turns red when it does.
-type BootDocListDTO struct {
-	Documents *[]BootDocSummaryDTO `json:"documents,omitempty"`
-}
-
-// BootDocSummaryDTO ONE row of the editable-boot-context listing: how to address the block, what to call it, whether it can be edited, and how big it is against its own cap. It carries NO text, and that is the property rather than an omission — the size of the listing depends on how many blocks exist and on nothing else, so a station whose documents grow does not make it more expensive. Fetch the one you mean with “get_boot_doc“.
-type BootDocSummaryDTO struct {
-	// CapChars The size cap now in force on THIS block, in CHARACTERS — the same number get_boot_doc reports for it.
-	CapChars *int `json:"cap_chars,omitempty"`
-
-	// DocName What a refusal calls this block. It is the server's own name for the document, so a caller reading a rejection and a caller reading this listing are looking at the same words.
-	DocName *string `json:"doc_name,omitempty"`
-
-	// HasSeed True when a FACTORY version of this block ships in this binary, i.e. there is something for the reset route to restore.
-	HasSeed *bool `json:"has_seed,omitempty"`
-
-	// IsDefault True while nobody has edited this block. False means somebody's edit is what agents are reading.
-	IsDefault *bool `json:"is_default,omitempty"`
-
-	// Key The second half of the address — pass it back verbatim.
-	Key *string `json:"key,omitempty"`
-
-	// Kind The first half of the address, and the document-history kind of this block's retained versions.
-	Kind *string `json:"kind,omitempty"`
-
-	// ReadOnly True when this block is shown but no caller may edit it — the write faces answer 405 for it. Render it; do not offer an editor for it.
-	ReadOnly *bool `json:"read_only,omitempty"`
-
-	// SizeChars Size of the folded text in CHARACTERS (Unicode code points) — the same unit as cap_chars.
-	SizeChars *int `json:"size_chars,omitempty"`
-}
+// BootDocKind WHICH boot-context / lifecycle documents this server serves, as a CLOSED SET. It is the FIRST half of every boot-document address and the document-history kind the same block's retained versions are filed under.
+//
+// IT IS AN ENUM SO THAT ADDING ONE COSTS A VISIBLE EDIT EVERYWHERE IT IS SHOWN (owner's ruling, 2026-08-23: 「加上 enum 並且前端自己寫死，我接受新增 enum 的人要去改前端的 code 找到他對應顯示的位置」). This list replaced a listing endpoint that answered the same question at runtime: the endpoint could not go stale, but it also could not make a cockpit that had never heard of a new document fail — it just showed nothing. A closed set does: the cockpit indexes its own row table BY this enum, so a value added here without a place to show it does not compile.
+type BootDocKind string
 
 // BootDocumentDTO ONE editable block of the boot context, addressed by “kind“/“key“.
 //
-// WHICH BLOCKS EXIST IS DELIBERATELY NOT LISTED HERE. This description named two kinds, and had already gone stale on a third before T-3201 added six more — nothing turns red when a list like that ages. “list_boot_docs“ answers the question, from the same registry that serves and validates every one of them.
+// WHICH BLOCKS EXIST IS THE “kind“ ENUM AND NOTHING ELSE. This description used to name two kinds in prose and had already gone stale on a third, so the list was moved OUT of prose entirely — first into a listing endpoint, and since T-3201 into the enum itself, which every reader of this schema already has to hold.
+//
+// THE WRITE FACE DOES NOT TAKE THIS SHAPE BACK. Reading gives you three views of one document — “text“ (the whole of it), “read_only_head“ (the half the server fills in) and “body“ (the half you may edit) — while “BootDocumentReplaceDTO“ takes “body“ alone. That asymmetry is the ruling, verbatim: 「唯讀區應該無法回寫，讀取有這個 key，回寫沒有這個 key，沒有人有任何方式可以回寫」.
 //
 // The served text is FOLDED: the owner's overlay when one exists, otherwise the seed compiled into this binary. Editing writes only the overlay — the seed is never modified, which is what lets the reset route reach factory text without depending on anything the editor could have corrupted.
 //
 // “is_default“ and “has_seed“ answer DIFFERENT questions: the first is "has anybody edited this block", the second is "does a factory version exist to go back TO" (the reset's precondition — that route 404s when it is false).
 type BootDocumentDTO struct {
+	// Body The EDITABLE HALF — and byte for byte what ``replace_boot_doc`` takes back. Read it, change it, send it: the server joins the shipped head on again itself, so a caller never has to know that a marker exists, where the halves divide, or how they are joined.
+	//
+	// On a document with no read-only half this is the whole document. Sending the ``body`` you were handed, unchanged, writes the document back unchanged.
+	Body *string `json:"body,omitempty"`
+
 	// CapChars The size cap now in force on THIS document, in CHARACTERS. Blocks may share a cap with a sibling; this is the number that will judge THIS write. Served on the read face so an edit can be sized BEFORE it is written — the settings surface holding the cap is admin-only, so otherwise being refused is the only way to learn it.
 	CapChars *int `json:"cap_chars,omitempty"`
 
@@ -478,28 +497,37 @@ type BootDocumentDTO struct {
 	// IsDefault True while nobody has edited this block (or it has been reset), i.e. the text you are reading is the shipped seed. False means you are reading somebody's edit.
 	IsDefault *bool `json:"is_default,omitempty"`
 
-	// Key The second half of the address, as ``list_boot_docs`` spells it. Most kinds serve exactly one key; a kind that serves more does so because the documents genuinely differ, so the key is never a formality — an unknown one is a 404 that names the keys that exist.
+	// Key The second half of the address. Most kinds serve exactly one key; a kind that serves more does so because the documents genuinely differ, so the key is never a formality — an unknown one is a 404 that names the keys that exist.
 	Key *string `json:"key,omitempty"`
 
-	// Kind The first half of the address, as ``list_boot_docs`` spells it — also the document-history kind this block's retained versions are filed under. Copy it from that listing rather than typing it: which blocks exist changes when one ships, and no description here is allowed to carry the list.
-	Kind    *string `json:"kind,omitempty"`
-	OwnerId *string `json:"owner_id,omitempty"`
+	// Kind The first half of the address, and one of the values this ENUM lists — also the document-history kind this block's retained versions are filed under. The enum IS the list: a kind outside it is not served, and a kind that ships is added to it in the same change, so there is nothing to look up and nothing to go stale.
+	Kind    BootDocKind `json:"kind"`
+	OwnerId *string     `json:"owner_id,omitempty"`
 
 	// ReadOnly True when this block is SHOWN but may never be edited — it exists as a document so the owner can see the words an agent is sent, and every write face refuses it with 405 no matter who is asking. It is NOT an authz signal: no principal can edit it, so there is no role to grant.
-	ReadOnly      *bool `json:"read_only,omitempty"`
-	SchemaVersion *int  `json:"schema_version,omitempty"`
+	ReadOnly *bool `json:"read_only,omitempty"`
+
+	// ReadOnlyHead The READ-ONLY HALF of the document — the part the server fills in, shows you, and will not take back. Empty string on a document that carries none.
+	//
+	// It is served so the surface that edits the body can still SHOW the half it may not touch: the owner's standing rule for these documents is 「以前 global context 是固定內容 我們也是會顯示 只是不給改」. There is no write face that accepts it and no error for getting it wrong, because there is no way to send it.
+	ReadOnlyHead  *string `json:"read_only_head,omitempty"`
+	SchemaVersion *int    `json:"schema_version,omitempty"`
 
 	// SizeChars Size of `text` in CHARACTERS (Unicode code points) — the same unit as cap_chars.
 	SizeChars *int `json:"size_chars,omitempty"`
 
-	// Text The folded document: the overlay when one exists, otherwise the shipped seed.
+	// Text The WHOLE folded document: the overlay when one exists, otherwise the shipped seed, marker line and all. It is what the version history retains and diffs against, and what ``size_chars`` counts against ``cap_chars`` — NOT what you send back. Splitting it yourself is never necessary and never correct: ``body`` below already is the half a write takes.
 	Text *string `json:"text,omitempty"`
 }
 
-// BootDocumentReplaceDTO Whole-document replace of one boot-context block: “{text}“. “text“ is REQUIRED — a whole-document replace must never infer "empty" from a missing key. “allow_shrink“ (default false) must be set explicitly to replace existing content with an empty document, the same wipe-guard posture “replace_global_context“ carries.
+// BootDocumentReplaceDTO Replace the EDITABLE HALF of one boot-context block: “{body}“.
+//
+// 🔴 THERE IS NO FIELD FOR THE READ-ONLY HEAD, AND THAT IS THE WHOLE POINT (owner's ruling, 2026-08-23: 「唯讀區應該無法回寫，讀取有這個 key，回寫沒有這個 key，沒有人有任何方式可以回寫」). This schema used to take “text“ — the whole document — and refuse the write when the head came back changed. Being refused for sending the wrong head and having no way to send a head at all are not the same guarantee: the server now joins the SHIPPED head back on before storing, so the head is not a rule a caller can break.
+//
+// “body“ is REQUIRED — a replace must never infer "empty" from a missing key. “allow_shrink“ (default false) must be set explicitly to replace an existing body with an empty one, the same wipe-guard posture “replace_global_context“ carries; it judges the BODY, because the head survives every write and a guard measured on the stored document could never see an emptying again.
 type BootDocumentReplaceDTO struct {
 	AllowShrink *bool  `json:"allow_shrink,omitempty"`
-	Text        string `json:"text"`
+	Body        string `json:"body"`
 }
 
 // BootstrapDTO The agent boot package (§3.4 #29, §2.4). “context“ is the assembled agent
@@ -3605,22 +3633,19 @@ type ServerInterface interface {
 	// Backup health: is the scheduled backup still producing retreat points?
 	// (GET /api/backup-health)
 	HandleGetBackupHealthApiBackupHealthGet(w http.ResponseWriter, r *http.Request)
-	// List every editable block of the boot context: address (kind/key), the name a refusal calls it, whether it is read-only, and its size against its own cap. No document text — fetch that with get_boot_doc. This is the non-stale answer to "which boot-context documents exist": it is rendered from the registry that serves them, so it cannot be wrong about a block that exists.
-	// (GET /api/boot-docs)
-	HandleListBootDocsApiBootDocsGet(w http.ResponseWriter, r *http.Request)
 	// Read one block of the boot context by kind/key, folded (the owner's edit ⊕ the shipped seed). Carries size_chars/cap_chars so an edit can be sized before it is made, is_default/has_seed to tell an edited block from the shipped one, and read_only for the blocks that are shown but may never be edited. An unknown kind or key is a 404 that names the keys that exist.
 	// (GET /api/boot-docs/{kind}/{key})
-	HandleGetBootDocApiBootDocsKindKeyGet(w http.ResponseWriter, r *http.Request, kind string, key string)
-	// Replace the WHOLE text of one boot-context block ({kind, key, text}) — text every agent reads at boot, or is sent when a lifecycle event happens to it. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. Judged against that block's own cap. A read-only block refuses with 405 for every caller, and a block that carries a read-only head requires that head back unchanged. Owner or admin assistant only.
+	HandleGetBootDocApiBootDocsKindKeyGet(w http.ResponseWriter, r *http.Request, kind BootDocKind, key string)
+	// Replace the EDITABLE HALF of one boot-context block ({kind, key, body}) — text every agent reads at boot, or is sent when a lifecycle event happens to it. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. The stored result is judged against that block's own cap. A read-only block refuses with 405 for every caller. The read-only head is NOT sent and cannot be: the server joins the shipped head back on, so no caller has any way to write it. Owner or admin assistant only.
 	// (POST /api/boot-docs/{kind}/{key})
-	HandleReplaceBootDocApiBootDocsKindKeyPost(w http.ResponseWriter, r *http.Request, kind string, key string)
+	HandleReplaceBootDocApiBootDocsKindKeyPost(w http.ResponseWriter, r *http.Request, kind BootDocKind, key string)
 	// Restore one boot-context block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap applies on this path — the way back to factory text is never blocked by a setting, which is what makes it the recovery route after an edit that stopped agents from booting. The discarded overlay is retained in the document history. Owner or admin assistant only.
 	// (POST /api/boot-docs/{kind}/{key}/reset)
-	HandleResetBootDocApiBootDocsKindKeyResetPost(w http.ResponseWriter, r *http.Request, kind string, key string)
+	HandleResetBootDocApiBootDocsKindKeyResetPost(w http.ResponseWriter, r *http.Request, kind BootDocKind, key string)
 	// Read one runtime's 啟動程序 block — the boot checklist that ends that runtime's boot context. runtime_key is 'claude' or 'codex'; they are separate documents because step 3 of the two says opposite things (claude mounts its own `ocagent listen`, codex must not — the sidecar owns it), so any other value is a 404 rather than a silent fallback to claude. Folded: the owner's edit when one exists, otherwise the shipped factory seed. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.
 	// (GET /api/boot-sequence/{runtime_key})
 	HandleGetBootSequenceApiBootSequenceRuntimeKeyGet(w http.ResponseWriter, r *http.Request, runtimeKey string)
-	// Replace the WHOLE 啟動程序 block of ONE runtime ({runtime_key, text}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. Judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.
+	// Replace the EDITABLE HALF of the 啟動程序 block of ONE runtime ({runtime_key, body}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. The read-only head is not sent and cannot be: the server joins the shipped one back on. The stored result is judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.
 	// (POST /api/boot-sequence/{runtime_key})
 	HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPost(w http.ResponseWriter, r *http.Request, runtimeKey string)
 	// Restore ONE runtime's 啟動程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). runtime_key is 'claude' or 'codex'; anything else is a 404. No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it, which is what makes this the recovery route when a bad edit has stopped agents from booting. The overlay being discarded is retained in the document history. Owner or admin assistant only.
@@ -3852,7 +3877,7 @@ type ServerInterface interface {
 	// Read the 下線程序 block — the wrap-up checklist the server hands an agent at the moment it is about to collect that session. It is a SINGLETON: one document for every agent and every runtime, keyed `global` like the 系統互動 block. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.
 	// (GET /api/offboard)
 	HandleGetOffboardApiOffboardGet(w http.ResponseWriter, r *http.Request)
-	// Replace the WHOLE 下線程序 block ({text}) — the wrap-up checklist an agent is handed when its session is being collected. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. The write is judged against the doc.cap_chars.offboard cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_offboard always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.
+	// Replace the EDITABLE HALF of the 下線程序 block ({body}) — the wrap-up checklist an agent is handed when its session is being collected. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. The read-only head is not sent and cannot be: the server joins the shipped one back on. The stored result is judged against the doc.cap_chars.offboard cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_offboard always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.
 	// (POST /api/offboard)
 	HandleReplaceOffboardApiOffboardPost(w http.ResponseWriter, r *http.Request)
 	// Restore the 下線程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.
@@ -3966,7 +3991,7 @@ type ServerInterface interface {
 	// Read the 系統互動 block of the boot context — the shared studio handbook every agent reads at boot. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.
 	// (GET /api/system-interaction)
 	HandleGetSystemInteractionApiSystemInteractionGet(w http.ResponseWriter, r *http.Request)
-	// Replace the WHOLE 系統互動 block of the boot context ({text}) — the handbook every agent reads at boot. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. The write is judged against the doc.cap_chars.system_interaction cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_system_interaction always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.
+	// Replace the EDITABLE HALF of the 系統互動 block of the boot context ({body}) — the handbook every agent reads at boot. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. The read-only head is not sent and cannot be: the server joins the shipped one back on. The stored result is judged against the doc.cap_chars.system_interaction cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_system_interaction always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.
 	// (POST /api/system-interaction)
 	HandleReplaceSystemInteractionApiSystemInteractionPost(w http.ResponseWriter, r *http.Request)
 	// Restore the 系統互動 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.
@@ -4219,20 +4244,6 @@ func (siw *ServerInterfaceWrapper) HandleGetBackupHealthApiBackupHealthGet(w htt
 	handler.ServeHTTP(w, r)
 }
 
-// HandleListBootDocsApiBootDocsGet operation middleware
-func (siw *ServerInterfaceWrapper) HandleListBootDocsApiBootDocsGet(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.HandleListBootDocsApiBootDocsGet(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
 // HandleGetBootDocApiBootDocsKindKeyGet operation middleware
 func (siw *ServerInterfaceWrapper) HandleGetBootDocApiBootDocsKindKeyGet(w http.ResponseWriter, r *http.Request) {
 
@@ -4240,7 +4251,7 @@ func (siw *ServerInterfaceWrapper) HandleGetBootDocApiBootDocsKindKeyGet(w http.
 	_ = err
 
 	// ------------- Path parameter "kind" -------------
-	var kind string
+	var kind BootDocKind
 
 	err = runtime.BindStyledParameterWithOptions("simple", "kind", r.PathValue("kind"), &kind, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
@@ -4275,7 +4286,7 @@ func (siw *ServerInterfaceWrapper) HandleReplaceBootDocApiBootDocsKindKeyPost(w 
 	_ = err
 
 	// ------------- Path parameter "kind" -------------
-	var kind string
+	var kind BootDocKind
 
 	err = runtime.BindStyledParameterWithOptions("simple", "kind", r.PathValue("kind"), &kind, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
@@ -4310,7 +4321,7 @@ func (siw *ServerInterfaceWrapper) HandleResetBootDocApiBootDocsKindKeyResetPost
 	_ = err
 
 	// ------------- Path parameter "kind" -------------
-	var kind string
+	var kind BootDocKind
 
 	err = runtime.BindStyledParameterWithOptions("simple", "kind", r.PathValue("kind"), &kind, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
@@ -8280,7 +8291,6 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/set-password", wrapper.HandleSetPasswordApiAuthSetPasswordPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/auth/status", wrapper.HandleAuthStatusApiAuthStatusGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/backup-health", wrapper.HandleGetBackupHealthApiBackupHealthGet)
-	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/boot-docs", wrapper.HandleListBootDocsApiBootDocsGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/boot-docs/{kind}/{key}", wrapper.HandleGetBootDocApiBootDocsKindKeyGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/boot-docs/{kind}/{key}", wrapper.HandleReplaceBootDocApiBootDocsKindKeyPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/boot-docs/{kind}/{key}/reset", wrapper.HandleResetBootDocApiBootDocsKindKeyResetPost)

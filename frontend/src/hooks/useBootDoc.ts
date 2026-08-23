@@ -28,7 +28,9 @@ interface UseBootDoc {
    * and keep offering the factory restore either way. */
   error: boolean;
   refetch: () => Promise<void>;
-  save: (text: string) => Promise<void>;
+  /** Sends the EDITABLE HALF (T-3201). The read-only head has no field on the
+   * wire, so there is nothing here that could carry an edit to it. */
+  save: (body: string) => Promise<void>;
   reset: () => Promise<void>;
 }
 
@@ -48,9 +50,9 @@ export function useBootDoc(kind: BootDocKind, key: string): UseBootDoc {
     setError(false);
   }, []);
 
-  const save = useCallback(async (text: string) => {
+  const save = useCallback(async (body: string) => {
     const { kind: k, key: docKey } = target.current;
-    setDoc(await api.saveBootDoc(k, docKey, text));
+    setDoc(await api.saveBootDoc(k, docKey, body));
     setError(false);
   }, []);
 

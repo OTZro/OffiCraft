@@ -25,8 +25,6 @@ import type {
   BackupHealthCode,
   GlobalContextView,
   BootDocView,
-  BootDocKind,
-  BootDocSummaryView,
   DocumentHistoryEntryView,
   DocumentHistoryView,
   DocumentRevisionView,
@@ -61,7 +59,6 @@ import type {
   WireBackupHealth,
   WireGlobalContext,
   WireBootDoc,
-  WireBootDocSummary,
   WireDocumentHistory,
   WireDocumentHistoryVersion,
   WireDocumentHistoryRestore,
@@ -1223,64 +1220,27 @@ export function toGlobalContext(w: WireGlobalContext): GlobalContextView {
 /**
  * Map one folded boot-context block → the view model (T-791e).
  *
- * `kind` is narrowed rather than passed through: the wire field is a bare
- * string (see WireBootDoc's note on the frozen spec), and every cockpit surface
- * that reads it branches on the closed pair. An unrecognised value would sail
- * into a `switch` with no arm for it and render as a boot_sequence page for a
- * document that is not one, so it is refused at the seam instead — the same
- * "narrow at the mapper, never downstream" rule toPresence follows.
+ * 🔴 `kind` IS PASSED STRAIGHT THROUGH, AND THAT ASSIGNMENT IS A GUARD (T-3201).
+ * The wire field used to be a bare string, so this mapper carried a hand-written
+ * copy of the closed set to narrow it against — a second list of the same fact,
+ * and the kind of copy that goes stale silently. The spec now declares the enum,
+ * so the wire type IS the closed set and this line only compiles while
+ * `types.ts :: BootDocKind` still spells the same one. A kind added to the spec
+ * and nowhere else reddens HERE, at the seam, before anything downstream can be
+ * handed a value its `switch` has no arm for.
  */
 export function toBootDoc(w: WireBootDoc): BootDocView {
   return {
-    kind: narrowBootDocKind(w.kind),
+    kind: w.kind,
     key: w.key,
     text: w.text,
+    readOnlyHead: w.read_only_head,
+    body: w.body,
     sizeChars: w.size_chars,
     capChars: w.cap_chars,
     isDefault: w.is_default,
     hasSeed: w.has_seed,
     readOnly: w.read_only,
-  };
-}
-
-/** The closed set `BootDocKind` spells, as a value — the ONE place the wire's
- * bare string is checked. Kept beside the mapper rather than in types.ts
- * because it is a seam concern: nothing downstream of here ever sees a kind
- * that is not in this set. */
-const BOOT_DOC_KINDS: readonly BootDocKind[] = [
-  "system_interaction",
-  "boot_sequence",
-  "offboard",
-  "accelerated_stop",
-  "task_closeout",
-  "task_reassign_predecessor",
-  "task_takeover_with_predecessor",
-  "task_takeover_fresh",
-  "task_unblocked",
-];
-
-function narrowBootDocKind(kind: string): BootDocKind {
-  const known = BOOT_DOC_KINDS.find((k) => k === kind);
-  if (known === undefined) {
-    throw new Error(
-      `toBootDoc: unknown boot document kind ${JSON.stringify(kind)}`
-    );
-  }
-  return known;
-}
-
-/** Map ONE row of the boot-document listing → the view model (T-3201). Narrows
- * `kind` at the same seam and for the same reason `toBootDoc` does. */
-export function toBootDocSummary(w: WireBootDocSummary): BootDocSummaryView {
-  return {
-    kind: narrowBootDocKind(w.kind),
-    key: w.key,
-    docName: w.doc_name,
-    readOnly: w.read_only,
-    sizeChars: w.size_chars,
-    capChars: w.cap_chars,
-    isDefault: w.is_default,
-    hasSeed: w.has_seed,
   };
 }
 

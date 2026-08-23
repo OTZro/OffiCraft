@@ -105,32 +105,29 @@ func (f bootDocFixture) read(t *testing.T, path string) bootDocDTO {
 	return dto
 }
 
-// replace posts a whole-document write, prepending the read-only head the
-// document carries (T-3201) so each case below states only the EDITABLE half.
+// replace posts a write. `text` is the EDITABLE HALF and nothing else — that
+// is the whole wire now (T-3201), so the fixture has nothing left to compose.
 //
-// 🔴 IT IS THE FIXTURE THAT COPIES THE HEAD, NOT THE SERVER. The write face
-// really does demand the head back verbatim — bootDocContentOK refuses a write
-// that changed or dropped it, and api_bootdocs_split_t3201_test.go is where
-// that refusal is asserted. Every test in THIS file is about something else
-// (cap, wipe, history, authz), and spelling the head at fourteen call sites
-// would only prove the fixture can copy a string.
-//
-// A BLANK text is passed through untouched: that is the wipe gesture, and the
-// wipe guard — plus the owner's ruling not to close its allow_shrink bypass —
-// is what judges it. Prepending a head there would quietly turn "erase this
-// document" into "erase half of it" and retire the pinned bypass by accident.
+// 🔴 IT USED TO PREPEND THE HEAD, and deleting that is the change worth
+// noticing. The write face demanded the head back verbatim, so a fixture that
+// did not copy it was refused; the head is now joined on by the SERVER and the
+// request has no field that could carry one. A helper here that still built a
+// whole document would be sending a shape no client can send.
 func (f bootDocFixture) replace(t *testing.T, path, token, text string) (int, string) {
 	t.Helper()
-	return f.do(t, http.MethodPost, path, token,
-		map[string]any{"text": f.underHead(t, path, text)})
+	return f.do(t, http.MethodPost, path, token, map[string]any{"body": text})
 }
 
-// underHead puts text below the read-only head of the document at path.
+// underHead answers what the server STORES for a body written at path: the
+// shipped read-only head, the separator, then the body.
+//
+// A BLANK body is joined too, and that is not an oversight — it is the shape
+// the wipe gesture now produces. Emptying the editable half leaves the head
+// standing, because the head was never the caller's to erase; what judges the
+// gesture is the wipe guard, on the body, plus the owner's ruling not to close
+// its allow_shrink bypass.
 func (f bootDocFixture) underHead(t *testing.T, path, text string) string {
 	t.Helper()
-	if strings.TrimSpace(text) == "" {
-		return text
-	}
 	head, ok := f.headOf(t, path)
 	if !ok {
 		return text
@@ -370,7 +367,7 @@ func TestBootDoc_OverCapIsRefusedWithAllThreeNumbers(t *testing.T) {
 
 // The wipe guard (WholeDocWipeBlocked) had NO test on any of its five write
 // seams: deleting the three lines in replaceBootDoc left the whole build green,
-// so a boot sequence could be erased to nothing by a well-formed {"text": ""}
+// so a boot sequence could be erased to nothing by a well-formed {"body": ""}
 // and nothing would say so. An agent whose boot sequence is empty is an agent
 // with no instructions, and it fails silently — nothing that never boots is
 // around to report it.
@@ -413,13 +410,23 @@ func TestBootDoc_WipingADocWithContentIsRefusedUnlessAllowShrink(t *testing.T) {
 			// is today's behaviour and is pinned so the guard above cannot be
 			// "fixed" into a wall with no way through.
 			status, body := f.do(t, http.MethodPost, c.path, f.owner,
-				map[string]any{"text": "", "allow_shrink": true})
+				map[string]any{"body": "", "allow_shrink": true})
 			if status != http.StatusOK {
 				t.Fatalf("allow_shrink=true must let the wipe through; got %d %s", status, body)
 			}
-			if after := f.read(t, c.path); after.Text != "" || after.IsDefault {
-				t.Fatalf("after an allowed wipe the document should read empty and not-default; "+
-					"got is_default=%v, %d chars", after.IsDefault, utf8.RuneCountInString(after.Text))
+			// 🔴 WHAT AN ALLOWED WIPE EMPTIES IS THE OWNER'S HALF (T-3201). It
+			// used to leave the document at zero characters; the read-only head
+			// was never his to erase, and the wire has no field that could ask
+			// for it, so what survives is head + separator with nothing under
+			// it. The way back to a whole document is still one reset away.
+			after := f.read(t, c.path)
+			if after.Body != "" || after.IsDefault {
+				t.Fatalf("after an allowed wipe the body should be empty and the document not-default; "+
+					"got is_default=%v, %d body chars", after.IsDefault, utf8.RuneCountInString(after.Body))
+			}
+			if after.ReadOnlyHead != stored.ReadOnlyHead {
+				t.Fatalf("the wipe took the read-only head with it:\n before=%q\n after =%q",
+					stored.ReadOnlyHead, after.ReadOnlyHead)
 			}
 		})
 	}
@@ -438,7 +445,7 @@ func TestBootDoc_PlainAgentIsRefusedEveryWriteButStillReads(t *testing.T) {
 				t.Fatalf("a plain agent must still READ this block; got %d %s", status, body)
 			}
 			for _, target := range []string{c.path, c.path + "/reset"} {
-				status, body := f.do(t, http.MethodPost, target, f.plain, map[string]any{"text": "sneaky"})
+				status, body := f.do(t, http.MethodPost, target, f.plain, map[string]any{"body": "sneaky"})
 				if status != http.StatusForbidden {
 					t.Fatalf("POST %s as a plain agent: want 403, got %d %s", target, status, body)
 				}

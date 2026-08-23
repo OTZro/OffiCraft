@@ -9,8 +9,15 @@ package main
 // all, because the whole reason this ticket exists is that he went looking for
 // `restart_self` in 〈下線程序〉 and could not find it: the word lived in the Go
 // line that wrapped the document, not in the document. A marker line inside the
-// stored text puts both halves in the one textarea he already reads, and costs
-// the wire contract nothing.
+// stored text puts both halves in the one textarea he already reads.
+//
+// ⚠️ THIS PARAGRAPH USED TO END 「and costs the wire contract nothing」, and that
+// clause is now FALSE by ruling, not by drift. The owner's 2026-08-23 ruling —
+// 「唯讀區應該無法回寫，讀取有這個 key，回寫沒有這個 key，沒有人有任何方式可以
+// 回寫」— is precisely the decision to PAY that cost: the write face takes the
+// body alone, the read face names the head, and the server joins them. The
+// marker survives all of it because it is still the only thing that says where
+// the head ENDS — in the seed, which is where the head now comes from.
 //
 // The split answers the owner's own criterion for where to cut, verbatim:
 // 「有變數的部分通常就是說明發生什麼了，我們會需要修改的通常是接下來他應該採取
@@ -88,22 +95,6 @@ func DocRendered(text, join string) string {
 		return text
 	}
 	return head + join + body
-}
-
-// docHeadEditRefusal answers a write whose read-only half does not match the
-// shipped one — including a write that dropped the marker entirely, which is
-// the same offence spelled differently (a document with no boundary has no
-// read-only half left).
-//
-// It says what the two halves ARE rather than pointing at a permission, for the
-// reason bootDocReadOnlyRefusal does: no principal can edit the head, so
-// sending the reader to look for a role to grant wastes the only sentence they
-// get. And it says outright that nothing was written — the owner has a textarea
-// full of work and needs to know whether to retype it.
-func docHeadEditRefusal(docName string) string {
-	return "the " + docName + " has a read-only head above the line `" + docBodyMarker +
-		"` — it is the part the server fills in and shows you, and no caller may " +
-		"change it or remove the line; edit only the text below it. Nothing was written."
 }
 
 // docBodyVarRefusal answers a write whose BODY names a variable.

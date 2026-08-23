@@ -1041,7 +1041,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleReplaceSystemInteractionApiSystemInteractionPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Replace the WHOLE 系統互動 block of the boot context ({text}) — the handbook every agent reads at boot. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. The write is judged against the doc.cap_chars.system_interaction cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_system_interaction always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.",
+			Summary:  "Replace the EDITABLE HALF of the 系統互動 block of the boot context ({body}) — the handbook every agent reads at boot. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. The read-only head is not sent and cannot be: the server joins the shipped one back on. The stored result is judged against the doc.cap_chars.system_interaction cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_system_interaction always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.",
 			MCPTool:  "replace_system_interaction",
 		},
 		{
@@ -1068,7 +1068,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Replace the WHOLE 啟動程序 block of ONE runtime ({runtime_key, text}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. Judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.",
+			Summary:  "Replace the EDITABLE HALF of the 啟動程序 block of ONE runtime ({runtime_key, body}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. The read-only head is not sent and cannot be: the server joins the shipped one back on. The stored result is judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.",
 			MCPTool:  "replace_boot_sequence",
 		},
 		{
@@ -1100,7 +1100,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleReplaceOffboardApiOffboardPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Replace the WHOLE 下線程序 block ({text}) — the wrap-up checklist an agent is handed when its session is being collected. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. The write is judged against the doc.cap_chars.offboard cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_offboard always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.",
+			Summary:  "Replace the EDITABLE HALF of the 下線程序 block ({body}) — the wrap-up checklist an agent is handed when its session is being collected. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. The read-only head is not sent and cannot be: the server joins the shipped one back on. The stored result is judged against the doc.cap_chars.offboard cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_offboard always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.",
 			MCPTool:  "replace_offboard",
 		},
 		{
@@ -1134,15 +1134,6 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		// it can say what the document IS rather than what the caller lacks.
 		{
 			Method:   "GET",
-			Path:     "/api/boot-docs",
-			Handler:  w.HandleListBootDocsApiBootDocsGet,
-			Auth:     authGated,
-			Requires: principalMachine,
-			Summary:  "List every editable block of the boot context: address (kind/key), the name a refusal calls it, whether it is read-only, and its size against its own cap. No document text — fetch that with get_boot_doc. This is the non-stale answer to \"which boot-context documents exist\": it is rendered from the registry that serves them, so it cannot be wrong about a block that exists.",
-			MCPTool:  "list_boot_docs",
-		},
-		{
-			Method:   "GET",
 			Path:     "/api/boot-docs/{kind}/{key}",
 			Handler:  w.HandleGetBootDocApiBootDocsKindKeyGet,
 			Auth:     authGated,
@@ -1156,7 +1147,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleReplaceBootDocApiBootDocsKindKeyPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Replace the WHOLE text of one boot-context block ({kind, key, text}) — text every agent reads at boot, or is sent when a lifecycle event happens to it. text is REQUIRED and unknown keys are rejected; emptying a block that had content needs allow_shrink=true. Judged against that block's own cap. A read-only block refuses with 405 for every caller, and a block that carries a read-only head requires that head back unchanged. Owner or admin assistant only.",
+			Summary:  "Replace the EDITABLE HALF of one boot-context block ({kind, key, body}) — text every agent reads at boot, or is sent when a lifecycle event happens to it. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. The stored result is judged against that block's own cap. A read-only block refuses with 405 for every caller. The read-only head is NOT sent and cannot be: the server joins the shipped head back on, so no caller has any way to write it. Owner or admin assistant only.",
 			MCPTool:  "replace_boot_doc",
 		},
 		{

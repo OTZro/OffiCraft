@@ -1512,7 +1512,8 @@ export const en: Dict = {
     reset: "Reset",
     editorPlaceholder: "Write in Markdown…",
     docReplaceNote:
-      "Saving REPLACES this whole document with what is in the editor — there is no per-section merge, so anything not pasted back is gone.",
+      "Saving REPLACES the editable half of this document with what is in the editor — there is no per-section merge, so anything not pasted back is gone. The read-only part above is untouched, and there is no way to send an edit to it.",
+    docReadOnlyHead: "Read-only (written by the program, not editable)",
     docActionFailed: "That did not go through — try again.",
     docOverCapLead: "Now ",
     docOverCapMid: " characters, over the limit of ",

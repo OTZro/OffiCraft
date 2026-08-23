@@ -205,7 +205,6 @@ describe("httpApi path strings", () => {
     // unreachable with nothing red to say so.
     const used = new Set(pathLiterals(httpSource));
     for (const route of [
-      "/api/boot-docs",
       "/api/boot-docs/{kind}/{key}",
       "/api/boot-docs/{kind}/{key}/reset",
       "/api/document-history/{kind}/{key}",

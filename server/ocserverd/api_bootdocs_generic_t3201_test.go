@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -29,7 +31,7 @@ func jsonPost(body string) *http.Request {
 func getBootDocHTTP(t *testing.T, s *apiServer, kind, key string) (int, bootDocDTO) {
 	t.Helper()
 	w := httptest.NewRecorder()
-	s.HandleGetBootDocApiBootDocsKindKeyGet(w, httptest.NewRequest(http.MethodGet, "/x", nil), kind, key)
+	s.HandleGetBootDocApiBootDocsKindKeyGet(w, httptest.NewRequest(http.MethodGet, "/x", nil), BootDocKind(kind), key)
 	var dto bootDocDTO
 	if w.Code == http.StatusOK {
 		if err := json.Unmarshal(w.Body.Bytes(), &dto); err != nil {
@@ -39,93 +41,89 @@ func getBootDocHTTP(t *testing.T, s *apiServer, kind, key string) (int, bootDocD
 	return w.Code, dto
 }
 
-// ── the listing is the wire's only answer to "which documents exist" ─────────
+// ── the enum is the wire's only answer to "which documents exist" ───────────
 
-// 🔴 THE COUNT IS DERIVED FROM THE REGISTRY, NOT WRITTEN DOWN. A number here
-// would have to be edited by the same commit that adds a document, and a test
-// that is edited alongside the thing it guards is not a guard. What this pins
-// is that the listing walks EVERY key of EVERY row — the defect it replaces is
-// a listing built from a second hand-maintained list, which is how a document
-// ships and never appears in the cockpit.
-func TestListBootDocs_CoversEveryRegistryKeyAndCarriesNoText(t *testing.T) {
-	s := newEventProcServer(t)
-	w := httptest.NewRecorder()
-	s.HandleListBootDocsApiBootDocsGet(w, httptest.NewRequest(http.MethodGet, "/api/boot-docs", nil))
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
-	}
-
-	want := map[string]bool{}
-	for _, reg := range bootDocRegistry {
-		for _, key := range reg.Keys {
-			want[reg.Kind+"/"+key] = true
-		}
-	}
-	var body bootDocListDTO
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+// 🔴 THE SET IS READ OUT OF THE FROZEN SPEC, NOT WRITTEN DOWN HERE. A list in
+// this file would have to be edited by the same commit that adds a document,
+// and a list that is edited alongside the thing it guards is not a guard.
+//
+// This is the server half of the pair that replaced GET /api/boot-docs
+// (T-3201, owner's ruling 「加上 enum 並且前端自己寫死」). The listing could not
+// go stale, but it also could not make anything FAIL: a cockpit that had never
+// heard of a new document simply showed nothing. The enum can — the cockpit
+// indexes its row table by it and does not compile without a place to show a
+// new value — and this test is what keeps the enum honest about the registry
+// that actually serves these documents. Either side drifting reddens here.
+func TestBootDocRegistry_MatchesTheBootDocKindEnumInTheFrozenSpec(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "spec", "openapi.json"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]bool{}
-	for _, row := range body.Documents {
-		got[row.Kind+"/"+row.Key] = true
-		if row.DocName == "" {
-			t.Errorf("%s/%s has no doc_name — a refusal will name it and this row will not",
-				row.Kind, row.Key)
-		}
-		if row.CapChars <= 0 {
-			t.Errorf("%s/%s reports cap %d", row.Kind, row.Key, row.CapChars)
+	var spec struct {
+		Components struct {
+			Schemas struct {
+				BootDocKind struct {
+					Enum []string `json:"enum"`
+				} `json:"BootDocKind"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		t.Fatal(err)
+	}
+	inSpec := map[string]bool{}
+	for _, kind := range spec.Components.Schemas.BootDocKind.Enum {
+		inSpec[kind] = true
+		if !BootDocKind(kind).Valid() {
+			t.Errorf("spec/openapi.json lists %q but the generated enum does not know it — regenerate ocapi_gen.go", kind)
 		}
 	}
-	for addr := range want {
-		if !got[addr] {
-			t.Errorf("%s is in bootDocRegistry but not in the listing", addr)
+	if len(inSpec) == 0 {
+		t.Fatal("spec/openapi.json carries no BootDocKind enum — the address vocabulary has no source")
+	}
+	inRegistry := map[string]bool{}
+	for _, reg := range bootDocRegistry {
+		inRegistry[reg.Kind] = true
+		if !inSpec[reg.Kind] {
+			t.Errorf("%s is served by bootDocRegistry but is not in the BootDocKind enum — no caller can address it and no cockpit can show it", reg.Kind)
 		}
 	}
-	for addr := range got {
-		if !want[addr] {
-			t.Errorf("the listing serves %s, which is in no registry row", addr)
+	for kind := range inSpec {
+		if !inRegistry[kind] {
+			t.Errorf("the BootDocKind enum lists %s, which no registry row serves — every address it appears in is a 404", kind)
 		}
-	}
-
-	// No text, and the assertion is on the RAW BYTES rather than the decoded
-	// struct: a `text` field added to the row type would decode into a field
-	// this test never reads, and the listing would silently start carrying
-	// every document on a route the cockpit calls to draw a menu.
-	if strings.Contains(w.Body.String(), `"text"`) {
-		t.Errorf("the listing carries document text:\n%s", w.Body.String())
 	}
 }
 
 // read_only is what tells a cockpit whether to render an editor at all. It has
-// to be true for exactly the documents whose write faces refuse — a listing
-// that got this wrong would offer an editor whose save is a 405, after the
-// owner has already typed the edit.
-func TestListBootDocs_ReadOnlyMatchesTheWriteFacesRefusal(t *testing.T) {
+// to be true for exactly the documents whose write faces refuse — a document
+// served as editable whose save is a 405 costs the owner the edit he typed.
+//
+// The listing used to answer this in one row per document; the per-document
+// read answers it now, so the sweep walks the registry instead.
+func TestGetBootDoc_ReadOnlyMatchesTheWriteFacesRefusal(t *testing.T) {
 	s := newEventProcServer(t)
-	w := httptest.NewRecorder()
-	s.HandleListBootDocsApiBootDocsGet(w, httptest.NewRequest(http.MethodGet, "/api/boot-docs", nil))
-	var body bootDocListDTO
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if len(body.Documents) == 0 {
-		t.Fatal("empty listing")
-	}
 	sawReadOnly := false
-	for _, row := range body.Documents {
-		rec := httptest.NewRecorder()
-		s.HandleResetBootDocApiBootDocsKindKeyResetPost(rec, ownerPost("/x"), row.Kind, row.Key)
-		refused := rec.Code == http.StatusMethodNotAllowed
-		if refused != row.ReadOnly {
-			t.Errorf("%s/%s: listing says read_only=%v, the reset face answers %d",
-				row.Kind, row.Key, row.ReadOnly, rec.Code)
+	for _, reg := range bootDocRegistry {
+		for _, key := range reg.Keys {
+			code, dto := getBootDocHTTP(t, s, reg.Kind, key)
+			if code != http.StatusOK {
+				t.Fatalf("%s/%s: status = %d", reg.Kind, key, code)
+			}
+			rec := httptest.NewRecorder()
+			s.HandleResetBootDocApiBootDocsKindKeyResetPost(rec, ownerPost("/x"), BootDocKind(reg.Kind), key)
+			refused := rec.Code == http.StatusMethodNotAllowed
+			if refused != dto.ReadOnly {
+				t.Errorf("%s/%s: the read says read_only=%v, the reset face answers %d",
+					reg.Kind, key, dto.ReadOnly, rec.Code)
+			}
+			sawReadOnly = sawReadOnly || dto.ReadOnly
 		}
-		sawReadOnly = sawReadOnly || row.ReadOnly
 	}
-	// Positive control: without it every row answering read_only=false would
-	// pass this test on a build where the refusal had been removed entirely.
+	// Positive control: without it every document answering read_only=false
+	// would pass on a build where the refusal had been removed entirely.
 	if !sawReadOnly {
-		t.Error("no row reports read_only — the refusal this test measures is not reachable")
+		t.Error("no document reports read_only — the refusal this test measures is not reachable")
 	}
 }
 
@@ -211,15 +209,14 @@ func TestReplaceBootDocRoute_WritesThroughTheAddressAndReadsBack(t *testing.T) {
 	const kind = docKindAcceleratedStop
 
 	_, before := getBootDocHTTP(t, s, kind, bootDocSingletonKey)
-	head, _, found := strings.Cut(before.Text, docBodyMarker)
-	if !found {
-		t.Fatalf("%s has no body marker — this test's fixture assumption is stale", kind)
+	if before.ReadOnlyHead == "" {
+		t.Fatalf("%s serves no read-only head — this test's fixture assumption is stale", kind)
 	}
-	next := head + docBodyMarker + "\n\n照這份走。"
+	const body = "照這份走。"
 
 	w := httptest.NewRecorder()
 	s.HandleReplaceBootDocApiBootDocsKindKeyPost(w,
-		jsonPost(`{"text":`+mustJSONString(next)+`}`), kind, bootDocSingletonKey)
+		jsonPost(`{"body":`+mustJSONString(body)+`}`), BootDocKind(kind), bootDocSingletonKey)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 	}
@@ -228,8 +225,18 @@ func TestReplaceBootDocRoute_WritesThroughTheAddressAndReadsBack(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("read back: %d", code)
 	}
-	if after.Text != next {
-		t.Errorf("read back %q, wrote %q", after.Text, next)
+	// 🔴 THE READ-BACK IS NOT BYTE-IDENTICAL TO WHAT WAS SENT ANY MORE, and that
+	// is the ruling rather than a regression: the wire carries the body, the
+	// server stores the SHIPPED head above it. What must be byte-identical is
+	// the BODY — the field the write face takes and the read face answers with.
+	if after.Body != body {
+		t.Errorf("read back body %q, wrote %q", after.Body, body)
+	}
+	if after.ReadOnlyHead != before.ReadOnlyHead {
+		t.Errorf("the read-only head moved:\n before=%q\n after =%q", before.ReadOnlyHead, after.ReadOnlyHead)
+	}
+	if after.Text != DocJoinHeadBody(before.ReadOnlyHead, body) {
+		t.Errorf("stored text is not head ⊕ body:\n%q", after.Text)
 	}
 	if after.IsDefault {
 		t.Error("is_default is still true after a write")
@@ -248,7 +255,7 @@ func TestReplaceBootDocRoute_WritesThroughTheAddressAndReadsBack(t *testing.T) {
 
 	// reset through the same address puts the shipped text back.
 	rec := httptest.NewRecorder()
-	s.HandleResetBootDocApiBootDocsKindKeyResetPost(rec, ownerPost("/x"), kind, bootDocSingletonKey)
+	s.HandleResetBootDocApiBootDocsKindKeyResetPost(rec, ownerPost("/x"), BootDocKind(kind), bootDocSingletonKey)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reset: %d %s", rec.Code, rec.Body.String())
 	}
@@ -264,12 +271,12 @@ func TestReplaceBootDocRoute_ReadOnlyKindRefusesThroughTheGenericAddress(t *test
 		t.Run(kind, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			s.HandleReplaceBootDocApiBootDocsKindKeyPost(w,
-				jsonPost(`{"text":"換掉"}`), kind, bootDocSingletonKey)
+				jsonPost(`{"body":"換掉"}`), BootDocKind(kind), bootDocSingletonKey)
 			if w.Code != http.StatusMethodNotAllowed {
 				t.Errorf("replace: status = %d, want 405 (%s)", w.Code, w.Body.String())
 			}
 			rec := httptest.NewRecorder()
-			s.HandleResetBootDocApiBootDocsKindKeyResetPost(rec, ownerPost("/x"), kind, bootDocSingletonKey)
+			s.HandleResetBootDocApiBootDocsKindKeyResetPost(rec, ownerPost("/x"), BootDocKind(kind), bootDocSingletonKey)
 			if rec.Code != http.StatusMethodNotAllowed {
 				t.Errorf("reset: status = %d, want 405 (%s)", rec.Code, rec.Body.String())
 			}

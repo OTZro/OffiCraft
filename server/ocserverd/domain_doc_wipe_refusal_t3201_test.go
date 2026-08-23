@@ -118,7 +118,7 @@ func writeSystemInteractionOn(t *testing.T, api *apiServer, text string) *httpte
 	t.Helper()
 	rec := httptest.NewRecorder()
 	api.HandleReplaceSystemInteractionApiSystemInteractionPost(rec,
-		ownerReq(t, http.MethodPost, "/api/system-interaction", map[string]any{"text": text}))
+		ownerReq(t, http.MethodPost, "/api/system-interaction", map[string]any{"body": text}))
 	return rec
 }
 
@@ -126,6 +126,6 @@ func writeBootSequenceOn(t *testing.T, api *apiServer, runtimeKey, text string) 
 	t.Helper()
 	rec := httptest.NewRecorder()
 	api.HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPost(rec,
-		ownerReq(t, http.MethodPost, "/api/boot-sequence/"+runtimeKey, map[string]any{"text": text}), runtimeKey)
+		ownerReq(t, http.MethodPost, "/api/boot-sequence/"+runtimeKey, map[string]any{"body": text}), runtimeKey)
 	return rec
 }

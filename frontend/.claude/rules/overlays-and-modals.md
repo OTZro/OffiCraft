@@ -44,7 +44,9 @@ overlay portal 到 document.body，避免宿主 stacking context 困住它；需
 
 DocCard 是設定頁可編輯長文件的共用外殼：標題、字數、版本入口、超上限阻擋、儲存確認與錯誤列；body 由 renderBody 提供。BootDocPage 使用它但保持唯讀，不能長回自己的 editor。新能力一律 optional，不傳就保留既有 caller 行為；不要加回已退場的 above、factoryReset、boot-doc.css 或 reset 分支。還原只在編輯模式的版本紀錄初始版本列提供。
 
-文件是整份取代；編輯中字數讀 draft，超上限在送出前擋下，server 失敗顯示原話。沒有 usage 的文件不受 cap 影響。樣式由 settings.css 擁有；Insight、Lessons 與任務手冊尚未遷移，不要順手改。
+`doc.readOnlyHead` 是文件本身帶的唯讀上半，由 DocCard 畫在編輯框上方（編輯中也留著），不經 renderBody —— BootDocPage 不准提到那個 prop，它的測試會 grep 原始碼。沒有 readOnlyHead 的文件行為完全不變。
+
+編輯框裝的是**可以編輯的那一半**，送出的也是它；boot document 的唯讀上半在 wire 上沒有欄位，前端沒有辦法送。字數與 cap 判的是**存下來的整份**：DocCard 由 `usage.size - runeLength(text)` 推出草稿沒有涵蓋的那一段再加回去，所以編輯框只裝半份時螢幕上的數字仍然是 server 會拿去判的那個。編輯中字數讀 draft，超上限在送出前擋下，server 失敗顯示原話。沒有 usage 的文件不受 cap 影響。樣式由 settings.css 擁有；Insight、Lessons 與任務手冊尚未遷移，不要順手改。
 
 ## 差異呈現
 

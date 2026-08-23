@@ -20,7 +20,6 @@ import type {
   GlobalContextView,
   BootDocKind,
   BootDocView,
-  BootDocSummaryView,
   DocumentKind,
   DocumentHistoryEntryView,
   DocumentHistoryView,
@@ -2167,19 +2166,6 @@ export interface Api {
   /** Reset the global context to seed (idempotent tombstone → `isDefault` true). */
   resetGlobalContext(): Promise<GlobalContextView>;
   /**
-   * WHICH boot/lifecycle documents this server serves (T-3201) — the text-free
-   * listing behind `GET /api/boot-docs`, in the order the server declares them.
-   *
-   * 🔴 IT IS THE ONLY HONEST ANSWER TO "WHICH DOCUMENTS EXIST". Every prose
-   * list of these kinds that has ever been written went stale the day one
-   * shipped, and nothing turned red. The cockpit does not RENDER from it — the
-   * settings list is a `Record<BootDocKind, …>` so a missing row is a compile
-   * error — it reads this listing to prove that record and the server agree
-   * (api/mock.boot-doc-registry.test.ts). A document that ships without a row
-   * would otherwise be invisible in the cockpit, silently.
-   */
-  listBootDocs(): Promise<BootDocSummaryView[]>;
-  /**
    * The folded boot-context / lifecycle document (T-791e, widened by T-3201),
    * addressed by (kind, key). Every kind serves exactly one key, "global",
    * except `boot_sequence`, which serves "claude" and "codex".
@@ -2195,15 +2181,22 @@ export interface Api {
    * cockpit keeps no list of which ones those are.
    */
   getBootDoc(kind: BootDocKind, key: string): Promise<BootDocView>;
-  /** Whole-document replace of ONE boot-context block → the folded doc
-   * (`isDefault` flips false). Rejects with a 400 ApiError when `text` is over
-   * that kind's `cap_chars` and not getting shorter — the cockpit blocks first,
-   * this is the server's own floor — and with a 405 for a read-only document.
-   * Requires admin or above. */
+  /** Replace the EDITABLE HALF of ONE boot-context block → the folded doc
+   * (`isDefault` flips false).
+   *
+   * 🔴 IT TAKES `body`, NOT THE DOCUMENT (T-3201). The read-only head is not
+   * something this call can get wrong — there is no field for it, and the
+   * server joins the shipped one back on. Send back the `body` the read gave
+   * you, changed; never `text`.
+   *
+   * Rejects with a 400 ApiError when the STORED result is over that kind's
+   * `cap_chars` and not getting shorter — the cockpit blocks first, this is the
+   * server's own floor — and with a 405 for a read-only document. Requires
+   * admin or above. */
   saveBootDoc(
     kind: BootDocKind,
     key: string,
-    text: string
+    body: string
   ): Promise<BootDocView>;
   /**
    * Restore ONE boot-context block to its FACTORY version → the folded doc

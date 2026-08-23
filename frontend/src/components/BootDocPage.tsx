@@ -45,13 +45,19 @@
 // history list's 初始版本 row, exactly like every other editable document.
 // Do not "restore" it here; that decision was made with the trade-off in view.
 //
-// 🔴 SAVING REPLACES THE WHOLE DOCUMENT, and this page says so on screen
+// 🔴 SAVING REPLACES THE WHOLE EDITABLE HALF, and this page says so on screen
 // (`replaceNote`). The editor here used to be per-section — paste one block,
 // apply it, leave the rest alone — and the wire was a whole-document replace
-// underneath it either way. With one editor over the whole text, the thing that
-// was implicit in the section rows has to be stated, because the failure it
-// prevents (pasting one proposed block over a long document and
-// saving the rest away) is silent and unrecoverable except through history.
+// underneath it either way. With one editor over the body, the thing that was
+// implicit in the section rows has to be stated, because the failure it
+// prevents (pasting one proposed block over a long document and saving the rest
+// away) is silent and unrecoverable except through history.
+//
+// 🔴 THE READ-ONLY HEAD IS SHOWN AND CANNOT BE SAVED (T-3201). It is passed to
+// DocCard as DATA (`doc.readOnlyHead`) rather than rendered here: this file
+// still holds no editor and still may not name the body-replacement prop — its
+// own test greps this source for it — and the wire has no field that could
+// carry an edit to the head anyway, so there is nothing for this page to guard.
 //
 // 🔴 The claude and codex boot sequences are TWO DIFFERENT DOCUMENTS — their
 // third step means opposite things (one attaches `ocagent listen` itself, the
@@ -65,7 +71,7 @@ import type { BootDocKind } from "../types";
 import { useBootDoc } from "../hooks/useBootDoc";
 import { DocCard } from "./DocCard";
 import { type Crumb } from "./Breadcrumbs";
-import { BOOT_DOC_HISTORY_KEPT, runeLength } from "../api/docCap";
+import { BOOT_DOC_HISTORY_KEPT } from "../api/docCap";
 import "./settings.css";
 
 export function BootDocPage({
@@ -115,17 +121,33 @@ export function BootDocPage({
       title={title}
       crumbs={crumbs}
       collapsible={collapsible}
-      doc={doc}
+      // 🔴 THE EDITOR HOLDS THE BODY, THE HEAD IS SHOWN BESIDE IT (T-3201).
+      // `text` here is the EDITABLE half — the wire's `body`, which is byte for
+      // byte what `save` takes back — and the read-only half rides along as
+      // `readOnlyHead` for DocCard to render above it. The cockpit never joins
+      // them, never learns what separates them, and therefore has no way to
+      // express an edit to the half the owner may not change.
+      doc={
+        doc
+          ? {
+              text: doc.body,
+              readOnlyHead: doc.readOnlyHead,
+              isDefault: doc.isDefault,
+            }
+          : null
+      }
       readOnly={readOnly}
       // A read-only document has no editor, no factory restore and no versions
       // — passing the handlers anyway would leave DocCard holding gestures it
       // must never offer for it.
       onSave={readOnly ? undefined : save}
       onReset={readOnly ? undefined : reset}
-      // The STORED size; DocCard follows the draft once the editor is open.
+      // The STORED size — the WHOLE document, head included, because that is
+      // what the server measures against the cap. DocCard follows the draft
+      // once the editor is open and adds back the part the draft does not hold.
       // `doc === null` passes none rather than "0 / 0", which would read as a
       // real budget of zero.
-      usage={doc ? { size: runeLength(doc.text), cap: doc.capChars } : undefined}
+      usage={doc ? { size: doc.sizeChars, cap: doc.capChars } : undefined}
       // 「儲存＝整份取代」 is a fact about SAVING, so a document nobody may save
       // does not owe it; what it owes instead is why it has no editor.
       replaceNote={readOnly ? undefined : t.settings.docReplaceNote}

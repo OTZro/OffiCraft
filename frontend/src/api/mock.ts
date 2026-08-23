@@ -14,7 +14,6 @@ import type {
   GlobalContextView,
   BootDocKind,
   BootDocView,
-  BootDocSummaryView,
   DocumentKind,
   InsightView,
   DocumentHistoryEntryView,
@@ -111,7 +110,6 @@ import {
   toBackupHealth,
   toGlobalContext,
   toBootDoc,
-  toBootDocSummary,
   toDocumentHistory,
   toDocumentHistoryEntry,
   toDocumentSeed,
@@ -135,6 +133,7 @@ import {
   docCapBlocked,
   wholeDocWipeBlocked,
 } from "./docCap";
+import { docJoinHeadBody, docSplitHeadBody } from "./docSplit";
 import {
   CHAT_BUDGET_CHARS_DEFAULT,
   CHAT_BUDGET_CHARS_MAX,
@@ -583,10 +582,17 @@ function foldBootDoc(kind: BootDocKind, key: string): WireBootDoc {
   }
   const overlay = bootDocOverlays.get(`${kind}/${key}`);
   const text = overlay ?? seed;
+  // The two halves the READ face names (T-3201). The mock splits because it is
+  // standing in for the server here; the cockpit never does — it is handed
+  // these. A stored text with no marker is all body, the same lenient reading
+  // the server's bootDocBodyOf takes.
+  const { head, body, split } = docSplitHeadBody(text);
   return {
     kind,
     key,
     text,
+    read_only_head: split ? head : "",
+    body: split ? body : text,
     owner_id: MOCK_OWNER_ID,
     schema_version: 3,
     size_chars: [...text].length,
@@ -627,9 +633,6 @@ function bootDocCap(kind: BootDocKind): number {
   }
 }
 
-/** The (kind, key) pairs this mock serves, in the listing's own order — parsed
- * back out of BOOT_DOC_SEEDS rather than restated, so the mock cannot answer a
- * listing that disagrees with the documents it will actually serve. */
 /** The 405 both write faces answer for a read-only document. `suffix` is the
  * route tail so the thrown message names the call that was refused. */
 function refuseReadOnlyBootDoc(
@@ -647,7 +650,17 @@ function refuseReadOnlyBootDoc(
   );
 }
 
-function bootDocAddresses(): { kind: BootDocKind; key: string }[] {
+/** The (kind, key) pairs this mock serves — parsed back out of BOOT_DOC_SEEDS
+ * rather than restated, so it cannot name a document it would then 404.
+ *
+ * 🔴 EXPORTED FOR ONE TEST, not for the cockpit (T-3201). `GET /api/boot-docs`
+ * is gone: which documents exist is the frozen spec's `BootDocKind` enum, and
+ * the cockpit's row table is indexed by it, so a missing row is a compile error
+ * rather than a listing to compare against. What still needs measuring is that
+ * this MOCK serves the same set — it stands in for the server in every other
+ * frontend test, and a document missing here makes those tests pass on a fleet
+ * that does not exist. api/mock.boot-doc-registry.test.ts is the only caller. */
+export function __mockBootDocAddresses(): { kind: BootDocKind; key: string }[] {
   return Object.keys(BOOT_DOC_SEEDS).map((slot) => {
     const cut = slot.lastIndexOf("/");
     return {
@@ -5015,25 +5028,6 @@ export const mockApi: Api = {
     return toGlobalContext(foldGlobalContext());
   },
 
-  async listBootDocs(): Promise<BootDocSummaryView[]> {
-    // Rendered from the SAME map the reads are served from, so this listing can
-    // never name a document the mock would then 404 — the property the server's
-    // own bootDocSummaries has by being rendered from bootDocRegistry.
-    return bootDocAddresses().map(({ kind, key }) => {
-      const doc = foldBootDoc(kind, key);
-      return toBootDocSummary({
-        kind: doc.kind,
-        key: doc.key,
-        doc_name: BOOT_DOC_NAMES[`${kind}/${key}`] ?? `${kind}/${key}`,
-        read_only: doc.read_only,
-        size_chars: doc.size_chars,
-        cap_chars: doc.cap_chars,
-        is_default: doc.is_default,
-        has_seed: doc.has_seed,
-      });
-    });
-  },
-
   async getBootDoc(kind: BootDocKind, key: string): Promise<BootDocView> {
     return toBootDoc(foldBootDoc(kind, key));
   },
@@ -5041,7 +5035,7 @@ export const mockApi: Api = {
   async saveBootDoc(
     kind: BootDocKind,
     key: string,
-    text: string
+    body: string
   ): Promise<BootDocView> {
     // 404 BEFORE anything is written: foldBootDoc is the one place that knows
     // whether (kind, key) names a document, and a save that created a fourth
@@ -5052,20 +5046,27 @@ export const mockApi: Api = {
     // authz would send an owner looking for a role to grant. The message is the
     // server's own bootDocReadOnlyRefusal, shortened to the same claim.
     refuseReadOnlyBootDoc(kind, key, "");
-    // The wipe guard the server has carried since T-2d99. An empty boot
-    // document is not a small document, it is an agent with no instructions,
-    // and the cockpit sends no allow_shrink, so there is no legal way to reach
-    // it from here at all.
-    if (wholeDocWipeBlocked(before.text, text)) {
+    // 🔴 THE HEAD IS PUT BACK HERE, exactly as replaceBootDoc does it. The mock
+    // takes a BODY because the wire does; storing the body alone would make the
+    // demo mode the one place a headless document can still be created — the
+    // hazard the body-only wire exists to remove.
+    const text = before.read_only_head
+      ? docJoinHeadBody(before.read_only_head, body)
+      : body;
+    // The wipe guard the server has carried since T-2d99, on the unit the
+    // server judges it on: the BODY. The head survives every write, so a guard
+    // measured on the stored document would never see an emptying again.
+    if (wholeDocWipeBlocked(before.body, body)) {
       throw mockApiError(
         `http 400 for POST /api/boot-docs/${kind}/${key}`,
         400,
         "this would replace the existing document with an empty one"
       );
     }
-    // The server's floor, mirrored: over cap AND not getting shorter is
-    // refused. The cockpit blocks first (it has the number on screen), so
-    // reaching this is either a stale page or a non-cockpit caller.
+    // The server's floor, mirrored — and on the STORED document, which is what
+    // size_chars/cap_chars describe. The cockpit blocks first (it has the
+    // numbers on screen), so reaching this is a stale page or a non-cockpit
+    // caller.
     if (docCapBlocked(before.cap_chars, before.text, text)) {
       throw mockApiError(
         `http 400 for POST /api/boot-docs/${kind}/${key}`,

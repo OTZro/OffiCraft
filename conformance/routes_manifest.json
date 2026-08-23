@@ -1086,13 +1086,6 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": "list_boot_docs",
-    "method": "GET",
-    "path": "/api/boot-docs",
-    "requires": "machine"
-  },
-  {
-    "auth": "gated",
     "mcp_tool": "get_boot_doc",
     "method": "GET",
     "path": "/api/boot-docs/{kind}/{key}",

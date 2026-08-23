@@ -8,10 +8,14 @@
 // the kind any more.
 //
 // The contract, as the backend serves it:
-//   GET  /api/boot-docs                     — which documents exist (NO text)
 //   GET  /api/boot-docs/{kind}/{key}        — read one, folded
-//   POST /api/boot-docs/{kind}/{key}        — whole-document replace {text}
+//   POST /api/boot-docs/{kind}/{key}        — replace the editable half {body}
 //   POST /api/boot-docs/{kind}/{key}/reset  — restore the factory version
+//
+// ⚠️ THERE IS NO LISTING ROUTE ANY MORE (T-3201). `GET /api/boot-docs` and its
+// adapter method went with the ruling that made `kind` an enum: which documents
+// exist is the frozen spec's closed set, and the cockpit indexes its row table
+// by it, so a missing row is a compile error instead of a listing to diff.
 //
 // 🔴 WHY THE OLD ASSERTIONS ARE GONE RATHER THAN LOOSENED. This file used to
 // pin TWO route families with different shapes — a keyless singleton and a
@@ -29,7 +33,9 @@ import { codeForStatus } from "./errorCodes";
 const WIRE_DOC = {
   kind: "boot_sequence",
   key: "claude",
-  text: "# 啟動程序",
+  text: "唯讀開頭\n\n<!-- marker -->\n\n# 啟動程序",
+  read_only_head: "唯讀開頭",
+  body: "# 啟動程序",
   owner_id: "owner",
   schema_version: 3,
   size_chars: 6,
@@ -74,53 +80,7 @@ async function lastCall(): Promise<{
   };
 }
 
-/** Reply with a listing rather than a document, for the one method that reads
- * one. Two rows, one of them read-only, so the mapper is exercised on both. */
-function replyWithListing(): void {
-  fetchMock.mockResolvedValueOnce(
-    new Response(
-      JSON.stringify({
-        documents: [
-          {
-            kind: "offboard",
-            key: "global",
-            doc_name: "offboard sequence",
-            read_only: false,
-            size_chars: 120,
-            cap_chars: 15000,
-            is_default: true,
-            has_seed: true,
-          },
-          {
-            kind: "task_unblocked",
-            key: "global",
-            doc_name: "dependency-released notice",
-            read_only: true,
-            size_chars: 80,
-            cap_chars: 15000,
-            is_default: true,
-            has_seed: true,
-          },
-        ],
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
-    )
-  );
-}
-
 describe("httpApi · boot-document wire methods", () => {
-  it("listBootDocs GETs the listing and carries read_only through", async () => {
-    replyWithListing();
-    const rows = await httpApi.listBootDocs();
-    const { url, method, body } = await lastCall();
-    expect(url).toBe("/api/boot-docs");
-    expect(method).toBe("GET");
-    expect(body).toBeUndefined();
-    expect(rows.map((r) => r.kind)).toEqual(["offboard", "task_unblocked"]);
-    expect(rows.map((r) => r.readOnly)).toEqual([false, true]);
-    expect(rows[0].docName).toBe("offboard sequence");
-  });
-
   it("getBootDoc GETs the document's own kind/key path", async () => {
     const view = await httpApi.getBootDoc("boot_sequence", "claude");
     const { url, method, body } = await lastCall();
@@ -151,16 +111,21 @@ describe("httpApi · boot-document wire methods", () => {
     }
   });
 
-  it("saveBootDoc POSTs {text, allow_shrink} to the document's own path (NOT PUT)", async () => {
+  it("saveBootDoc POSTs {body, allow_shrink} to the document's own path (NOT PUT)", async () => {
     await httpApi.saveBootDoc("boot_sequence", "codex", "新的內容");
     const { url, method, body } = await lastCall();
     expect(url).toBe("/api/boot-docs/boot_sequence/codex");
     expect(method).toBe("POST");
+    // 🔴 `body`, and NOTHING that could carry the read-only head (T-3201). The
+    // key was `text` and carried the whole document, head included; the server
+    // joins the shipped head on now, so a request that named one would be a
+    // request no server accepts.
+    //
     // allow_shrink is FALSE here, the opposite of saveGlobalContext: emptying a
     // boot sequence ships agents with no instructions, and the way back to a
-    // small document is the factory reset, not a whole-document wipe.
+    // small document is the factory reset, not a wipe.
     expect(JSON.parse(String(body))).toEqual({
-      text: "新的內容",
+      body: "新的內容",
       allow_shrink: false,
     });
 

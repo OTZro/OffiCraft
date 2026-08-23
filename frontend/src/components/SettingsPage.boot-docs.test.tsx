@@ -97,7 +97,16 @@ describe("SettingsPage · boot / lifecycle documents", () => {
     // The BODY is there — the whole reason it is a document rather than a
     // string literal is that the owner can read what an agent is told.
     await utils.findByTestId("doc-card-note");
-    expect(utils.container.querySelectorAll(".doc-md").length).toBe(1);
+    // ⚠️ ONE BODY, and the selector says so: a boot-context document renders a
+    // SECOND `.doc-md` for its read-only head (T-3201), so counting every one
+    // on the page would count two and the assertion would have to be relaxed
+    // to a number that no longer means "one document".
+    expect(
+      utils.container.querySelectorAll(".doc-card__body > .doc-md").length
+    ).toBe(1);
+    expect(
+      utils.container.querySelectorAll(".doc-card__readonly-head .doc-md").length
+    ).toBe(1);
     expect(utils.getByText(s.bootDocReadOnlyNote)).toBeTruthy();
 
     // …and nothing that could change it: no editor entry, and therefore no

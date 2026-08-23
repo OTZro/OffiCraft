@@ -777,11 +777,27 @@ type globalContextDTO struct {
 // not staged answers false, and a cockpit that offered 還原 anyway would hand the
 // owner a button that 404s at the one moment it matters.
 type bootDocDTO struct {
-	SizeChars     int    `json:"size_chars"`
-	CapChars      int    `json:"cap_chars"`
-	Kind          string `json:"kind"`
-	Key           string `json:"key"`
-	Text          string `json:"text"`
+	SizeChars int    `json:"size_chars"`
+	CapChars  int    `json:"cap_chars"`
+	Kind      string `json:"kind"`
+	Key       string `json:"key"`
+	// Text is the WHOLE stored document, marker line and all. It is what the
+	// version history retains and diffs against, and what SizeChars counts.
+	Text string `json:"text"`
+	// ReadOnlyHead / Body are the two halves, named on the READ face only
+	// (owner's ruling 2026-08-23: 「讀取有這個 key，回寫沒有這個 key」).
+	//
+	// 🔴 Body IS THE WRITE FACE'S FIELD, BYTE FOR BYTE. BootDocumentReplaceDTO
+	// takes exactly this value back, so a caller edits what it was handed and
+	// sends it — it never has to know that a marker exists, what separates the
+	// halves, or how they are joined. ReadOnlyHead is the half it may look at
+	// and can no longer send: "" on a document that carries none.
+	//
+	// Not omitempty. An empty head is the honest answer for a document with no
+	// read-only half, and a reader that could not tell that apart from "this
+	// build is too old to say" would have to guess which.
+	ReadOnlyHead  string `json:"read_only_head"`
+	Body          string `json:"body"`
 	OwnerID       string `json:"owner_id"`
 	SchemaVersion int    `json:"schema_version"`
 	IsDefault     bool   `json:"is_default"`
@@ -794,26 +810,6 @@ type bootDocDTO struct {
 	// document, and a reader that cannot tell "editable" from "this build is
 	// too old to know" would offer the editor either way.
 	ReadOnly bool `json:"read_only"`
-}
-
-// bootDocSummaryDTO / bootDocListDTO are the text-free listing behind
-// GET /api/boot-docs. The rows carry the same field names their per-document
-// sibling above carries, so a reader that has one shape does not need a second
-// one — plus doc_name, which is the server's own name for the document and the
-// word a refusal will use when it names it.
-type bootDocSummaryDTO struct {
-	Kind      string `json:"kind"`
-	Key       string `json:"key"`
-	DocName   string `json:"doc_name"`
-	ReadOnly  bool   `json:"read_only"`
-	SizeChars int    `json:"size_chars"`
-	CapChars  int    `json:"cap_chars"`
-	IsDefault bool   `json:"is_default"`
-	HasSeed   bool   `json:"has_seed"`
-}
-
-type bootDocListDTO struct {
-	Documents []bootDocSummaryDTO `json:"documents"`
 }
 
 type roleDefDTO struct {

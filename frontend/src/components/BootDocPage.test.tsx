@@ -181,14 +181,14 @@ describe("BootDocPage", () => {
     }
   });
 
-  it("edits the whole document in ONE box — no per-section surface survives", async () => {
+  it("edits the whole editable half in ONE box — no per-section surface survives", async () => {
     // 🔴 T-c33e's acceptance condition, asserted on the rendered page: these
     // three blocks have no editor implementation of their own. One textarea,
     // covering the whole document, reached the same way 角色定義 is — and none
     // of the per-section affordances (paste / apply / discard / preview /
     // pending badge) exist any more.
     const utils = renderSystem();
-    const stored = (await api.getBootDoc("system_interaction", "global")).text;
+    const doc = await api.getBootDoc("system_interaction", "global");
 
     // Nothing to edit per section, before or after the editor opens.
     expect(utils.queryAllByTestId(/^boot-doc-sec/)).toEqual([]);
@@ -197,12 +197,23 @@ describe("BootDocPage", () => {
 
     const boxes = utils.container.querySelectorAll("textarea");
     expect(boxes.length).toBe(1);
-    // …and that box was seeded with the WHOLE document, not a slice of it.
+    // …and that box was seeded with the WHOLE editable half, not a slice of it
+    // — and NOT with the read-only head, which is shown beside it and which the
+    // wire has no field for (T-3201).
     fireEvent.click(utils.getByText(s.cancel));
     fireEvent.click(utils.getByTestId("doc-card-edit"));
     expect((utils.getByTestId("doc-card-editor") as HTMLTextAreaElement).value).toBe(
-      stored
+      doc.body
     );
+    expect(doc.readOnlyHead).not.toBe("");
+    expect(
+      (utils.getByTestId("doc-card-editor") as HTMLTextAreaElement).value
+    ).not.toContain(doc.readOnlyHead);
+    // The half he may not type into is on screen all the same — the owner's
+    // rule is that he SEES it, not that it disappears.
+    expect(
+      utils.getByTestId("doc-card-readonly-head").textContent
+    ).toContain(doc.readOnlyHead.split("\n")[0].replace(/^#+ /, ""));
   });
 
   it("holds no editor state of its own — the shell is the shared component", async () => {
@@ -349,6 +360,14 @@ describe("BootDocPage", () => {
     const cap = BOOT_DOC_CAP_CHARS_DEFAULTS.boot_sequence;
     const utils = renderClaude();
 
+    const doc = await api.getBootDoc("boot_sequence", "claude");
+    // What the draft does NOT hold and the cap still counts: the read-only head
+    // and whatever separates it from the body. The server enforces the cap on
+    // the document it STORES, so the readout has to add it back — a cockpit
+    // measuring the body alone would promise room that does not exist.
+    const overhead = doc.sizeChars - runeLength(doc.body);
+    expect(overhead).toBeGreaterThan(0);
+
     await typeWholeDoc(utils, "超".repeat(cap + 50));
 
     const notice = await utils.findByTestId("doc-card-over-cap");
@@ -357,7 +376,7 @@ describe("BootDocPage", () => {
     // the agent would boot from a document the owner never wrote.
     expect(notice.textContent).toContain(String(cap));
     const shown = Number(/\d{4,}/.exec(notice.textContent ?? "")?.[0]);
-    expect(shown).toBe(cap + 50);
+    expect(shown).toBe(cap + 50 + overhead);
     expect(shown).toBeGreaterThan(cap);
     expect(shown).toBeGreaterThan([...SEED_BOOT_SEQUENCE_MD.trim()].length);
 
@@ -409,7 +428,11 @@ describe("BootDocPage", () => {
     );
     // The DIRECTORY row is what the marking reads since T-1170 — the list
     // never sees this text, only how much of it there is.
-    expect(target.sizes.text).toBe(runeLength(overCap));
+    // The retained revision is the STORED document — the body that was written
+    // plus the read-only head the server joined on (T-3201).
+    const stored = await api.getBootDoc("system_interaction", "global");
+    const overhead = stored.sizeChars - runeLength(stored.body);
+    expect(target.sizes.text).toBe(runeLength(overCap) + overhead);
 
     const row = await utils.findByTestId(`doc-history-item-${target.id}`);
     expect(within(row).getByText(s.historyBlockedBadge)).toBeTruthy();
@@ -437,12 +460,18 @@ describe("BootDocPage", () => {
     const utils = renderSystem();
     await utils.findAllByText("這是 owner 現在的版本");
     expect(utils.container.textContent).toContain("只有 API 知道這一段。");
-    // The seed's own opening heading is nowhere on the page.
-    const seedHeading = SEED_SYSTEM_INTERACTION_MD.split("\n")[0].replace(
-      /^#+ /,
-      ""
+    // The seed's own BODY is nowhere on the page. ⚠️ Not its opening heading:
+    // that heading is the document's READ-ONLY HEAD, which the page now shows
+    // beside the editor and which is the same bytes whether the owner has
+    // edited the document or not (T-3201) — asserting on it would be asserting
+    // that the half nobody may change had changed.
+    const seedBody = SEED_SYSTEM_INTERACTION_MD.trim()
+      .split("\n")
+      .find((line) => line.trim().startsWith("## "));
+    expect(seedBody).toBeTruthy();
+    expect(utils.container.textContent).not.toContain(
+      String(seedBody).replace(/^#+ /, "")
     );
-    expect(utils.container.textContent).not.toContain(seedHeading);
     // …and it is not the default any more, which is the same claim said in the
     // cockpit's own vocabulary.
     expect(utils.queryByText(s.defaultBadge)).toBeNull();

@@ -747,6 +747,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "settings.docOverCapLead",
   "settings.docOverCapMid",
   "settings.docOverCapTail",
+  "settings.docReadOnlyHead",
   "settings.docReplaceNote",
   "settings.docUsage",
   "settings.doneEdit",
