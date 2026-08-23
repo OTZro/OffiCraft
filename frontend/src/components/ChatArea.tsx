@@ -14,7 +14,6 @@ import type {
 } from "../api/adapter";
 import { autosizeTextarea } from "../lib/autosize";
 import { getChatDraft, saveChatDraft } from "../lib/chatDraftStore";
-import { api } from "../api";
 import { useChat } from "../hooks/useChat";
 import { useWorkerCodenames } from "../hooks/useWorkerCodenames";
 import { useOwnerDisplayName } from "../hooks/useOwnerName";
@@ -34,6 +33,7 @@ import { ChatReplyCard } from "./ChatReplyCard";
 import { ComposerAttachmentPreview } from "./ComposerAttachmentPreview";
 import { Markdown } from "./Markdown";
 import { MarkdownPreviewOverlay } from "./MarkdownPreviewOverlay";
+import { useQuotedMessageOverlay } from "../hooks/useQuotedMessageOverlay";
 import { PresenceBadge } from "./PresenceBadge";
 import { CurrentTaskTitle } from "./CurrentTaskTitle";
 import {
@@ -180,10 +180,20 @@ export function ChatArea({
   // no lifecycle change is coming to clear it. A caller returning void keeps the
   // old silent behaviour, so the wire-up returns the adapter's result verbatim.
   onWake?: () => void | Promise<MemberActivateResult | void>;
-  // B3 跳到原訊息: locate + highlight this message once the thread loads (the
-  // 等我回覆 page routes here via #office/chat/<id>/msg/<msgId>). One-shot per
-  // id — later SSE refetches never re-scroll. A message outside the loaded
-  // recent window falls back to the normal entry positioning (honest miss).
+  // Locate + highlight this message once the thread loads. One-shot per id —
+  // later SSE refetches never re-scroll.
+  //
+  // ⚠️ NO CONTROL IN THE COCKPIT ROUTES HERE ANY MORE (T-0b78). The 請示 page
+  // and the inline task card used to write #office/chat/<id>/msg/<msgId>; both
+  // now open the message itself in the shared overlay instead, because THIS
+  // path can only find a row the thread has already painted — and when it
+  // cannot, it lands the reader on the newest message and says nothing. What
+  // still reaches it is a URL somebody kept: a bookmark, a pasted link, a
+  // restored tab.
+  //
+  // The "honest miss" below is therefore still HONEST — it never fabricates a
+  // location — but it is no longer an acceptable answer for a BUTTON, which is
+  // exactly why the buttons left. Do not wire a new control to it.
   jumpToMsgId?: string;
   // T-e987 compose seed: a one-shot draft prefix (e.g. "[T-7d40] ") the 任務卡
   // 負責人/建立者 label routes here to (#office/chat/<id>/compose/<taskNo>) so
@@ -343,6 +353,10 @@ export function ChatArea({
   // the SAME join, so a reader never meets two ways of saying who-to-whom.
   const directionLabel = (from: string, to: string): string =>
     `${nameOf(from)} → ${nameOf(to)}`;
+  // The shared 看原訊息 exit. Declared here rather than at the top of the
+  // component because it is handed `nameOf`, and `nameOf` needs the roster
+  // hooks above it. It is still an unconditional top-level hook call.
+  const quotedMessage = useQuotedMessageOverlay(nameOf);
   // Is the owner ACTUALLY looking (window focused + tab visible)? Read side
   // effects (mark-read below) are gated on this: a backgrounded window must
   // never consume unread state (the roster badge has to survive until the
@@ -397,76 +411,13 @@ export function ChatArea({
     | { kind: "staged-image"; title: string; imageSrc: string }
     | null
   >(null);
-  // T-4e95 「看原訊息」 — the quoted message whose LAST open attempt failed, or
-  // null. ONE value, and it is the whole memory this feature keeps.
-  //
-  // 🔴 THERE IS NO "LOADING" STATE HERE, AND THAT IS A DECISION, NOT AN
-  // OMISSION. One was written first — `{ id, state: "loading" | "error" }` —
-  // and it drove a `disabled` attribute on the button while the read was in
-  // flight. Measured in a real Chromium: disabling the focused button BLURS it,
-  // so `document.activeElement` was already <body> by the time the overlay
-  // mounted, the overlay captured <body> as the element to return focus to, and
-  // closing the overlay dropped a keyboard user at the top of the page. A
-  // spinner state that breaks focus to prevent a double-click the ref below
-  // already prevents is a bad trade. The read is one point query; there is
-  // nothing worth drawing for its duration.
-  //
-  // 🔴 ONE CLICK, ONE REQUEST, AND NOTHING THAT OUTLIVES IT. This is a click
-  // handler, not an effect: React does not re-run it, StrictMode does not
-  // double it, and no dependency array can make it fire again on a repaint. On
-  // success this stays null and the message opens in the shared overlay; on
-  // failure it holds exactly one id and stops. No retry, no queue, no id set,
-  // no repair on the next SSE event.
-  //
-  // That last paragraph is a promise about a machine that USED to exist here
-  // (useQuotedMessages, deleted 2026-08-21: background refetch, remembered debt,
-  // retries, self-healing) and whose three states drew identical pixels whether
-  // they were right or wrong. `ChatArea.quote-no-fetch.test.tsx` holds the line.
-  const [quoteOpenFailedId, setQuoteOpenFailedId] = useState<string | null>(
-    null,
-  );
-  // The in-flight latch. A `useState` flag cannot do this job: two clicks
-  // landing in the same tick both read the PRE-UPDATE state and both would
-  // fire. A ref is written synchronously inside the handler, so the second
-  // click sees it.
-  const quoteBusyRef = useRef(false);
-
-  /** Open the message a reply is answering, IN FULL, in the shared full-view
-   * overlay — the same surface 放大閱讀 uses.
-   *
-   * Owner ruling 2026-08-21: 「全部統一就撈那一則顯示出來就好」. There is no
-   * scrolling and no "is it in the loaded window" question any more, so the
-   * control is offered for EVERY reply and behaves the same way every time.
-   * The quote row keeps showing the server's 60-char excerpt; this shows the
-   * whole body.
-   *
-   * A failure is said HERE, once, and is not written into the quote line — that
-   * line's sentence is a claim about whether the original EXISTS, and a read
-   * that failed says nothing about that.
-   *
-   * FOCUS IS NOT HANDLED HERE. MarkdownPreviewOverlay focuses itself on mount
-   * and hands focus back to whatever had it on unmount — which is this button,
-   * because a click is what got us here. Doing it a second time from this side
-   * would be two owners for one behaviour. */
-  async function openQuotedMessage(replyTo: string) {
-    if (quoteBusyRef.current) return;
-    quoteBusyRef.current = true;
-    setQuoteOpenFailedId(null);
-    try {
-      const original = await api.getChatMessage(replyTo);
-      setMdPreview({
-        kind: "message",
-        title: nameOf(original.from),
-        source: original.body,
-      });
-    } catch {
-      // Deliberately swallowed rather than logged-and-retried: the person who
-      // clicked is told on screen, and there is nothing else to do about it.
-      setQuoteOpenFailedId(replyTo);
-    } finally {
-      quoteBusyRef.current = false;
-    }
-  }
+  // 「看原訊息」 — reading that one message and showing it whole is NOT this
+  // component's business any more (T-0b78). It lives in
+  // hooks/useQuotedMessageOverlay, shared with the 請示 page and the inline task
+  // card, because those two used to answer the same intent by NAVIGATING here
+  // and hoping the row was in the DOM. The hook is called below, once `nameOf`
+  // exists — it titles the overlay with the roster-aware name this window
+  // already resolves.
   // M2-3 file & image gallery panel (header icon toggles it).
   const [galleryOpen, setGalleryOpen] = useState(false);
   // The attachment whose share link was just copied (transient 「已複製」
@@ -801,7 +752,7 @@ export function ChatArea({
   // 「跳到原訊息」 because it scrolled rather than opened. The same owner ruling
   // that deleted the resolution deleted that gate too: the control is offered on
   // every reply, is labelled 「看原訊息」, and reads its one message back on click
-  // (`openQuotedMessage`). The render condition is `m.replyTo && quoted`; it
+  // (`quotedMessage.open`, hooks/useQuotedMessageOverlay). The render condition is `m.replyTo && quoted`; it
   // does not consult `messages`.
   const messageById = useMemo(
     () => new Map(messages.map((m) => [m.id, m])),
@@ -819,24 +770,28 @@ export function ChatArea({
   // 🔴 THERE IS NO `locateMessage` ANY MORE, AND THE OTHER JUMP IS NOT IT.
   // The quote row used to scroll the thread to the quoted row when that row
   // happened to be loaded, and show no control when it was not. Owner ruling
-  // 2026-08-21 replaced that with 「撈那一則、跳 modal」 (openQuotedMessage
-  // above): one behaviour for every reply, no window-dependent affordance, and
+  // 2026-08-21 replaced that with 「撈那一則、跳 modal」
+  // (hooks/useQuotedMessageOverlay, shared with the 請示 page and the inline task
+  // card since T-0b78): one behaviour for every reply, no window-dependent affordance, and
   // no scroll — which also retired the "the jump moves the viewport but not the
   // FOCUS, so a keyboard user pressing it saw nothing happen" defect, because
   // there is nothing left to scroll.
   //
   // ⚠️ WHAT SURVIVES, AND MUST: the `jumpToMsgId` reactor below. That is the
-  // REPLY-CARD / hash-route jump (#office/chat/<id>/msg/<msgId>), a different
-  // entry point with a different job — it lands the thread on a named row on
-  // ENTRY — and it owns `highlightMsgId` and the `--located` flash. It never
-  // called locateMessage. Deleting one did not touch the other, and
+  // hash-route jump (#office/chat/<id>/msg/<msgId>), a different entry point
+  // with a different job — it lands the thread on a named row on ENTRY — and it
+  // owns `highlightMsgId` and the `--located` flash. It never called
+  // locateMessage. Deleting one did not touch the other, and
   // `ChatArea.unread-jump.test.tsx` plus the reply-card jump tests pin it.
 
-  // B3 跳到原訊息 — declared BEFORE the entry-positioning reactor below so the
-  // jump consumes entry positioning first (the divider/bottom scroll must not
-  // fight the located message). One-shot per target id; a target outside the
+  // The hash-route jump — declared BEFORE the entry-positioning reactor below so
+  // the jump consumes entry positioning first (the divider/bottom scroll must
+  // not fight the located message). One-shot per target id; a target outside the
   // loaded recent window falls back to the plain land-at-bottom (honest miss —
-  // the thread still opens).
+  // the thread still opens, and nothing pretends the target was found).
+  //
+  // ⚠️ Since T-0b78 nothing in the cockpit NAVIGATES here — see the prop's note.
+  // Its remaining callers are kept URLs.
   useEffect(() => {
     if (!jumpToMsgId) return;
     if (messagesPeer !== member.id || messages.length === 0) return;
@@ -1322,7 +1277,7 @@ export function ChatArea({
                * all. */
               aria-label={t.chat.replyQuoteJump}
               title={t.chat.replyQuoteJump}
-              onClick={() => openQuotedMessage(m.replyTo as string)}
+              onClick={() => void quotedMessage.open(m.replyTo as string)}
             >
               <span className="chat__msg-quote__jump-label">
                 {t.chat.replyQuoteJump}
@@ -1333,27 +1288,11 @@ export function ChatArea({
               />
             </button>
           )}
-          {/* 🔴 THE FAILURE IS SAID HERE, NOT IN THE QUOTE LINE. The line above
-           * either carries the server's excerpt or carries 「這則訊息已不存在」,
-           * and that sentence is a claim about whether the original EXISTS. A read
-           * that failed says nothing about that, so overwriting the line with it
-           * would turn a network fault into a false statement about the
-           * conversation — the exact confusion the whole redesign removed.
-           *
-           * It is also the end of the story: no retry, no second attempt on the
-           * next event, and it does not survive the next click on another row
-           * (one piece of state, last click wins). `role="status"` so a screen
-           * reader hears the outcome of the button it just pressed — the button
-           * itself keeps its own name. */}
-          {quoteOpenFailedId === m.replyTo && (
-            <span
-              className="chat__msg-quote__error"
-              data-testid="msg-quote-error"
-              role="status"
-            >
-              {t.chat.replyQuoteOpenFailed}
-            </span>
-          )}
+          {/* The failure sentence comes from the shared exit, so all three
+           * surfaces say it in the same words in the same place — beside the
+           * button that was pressed, and NEVER over the quote line, whose
+           * sentence is a claim about whether the original EXISTS. */}
+          {quotedMessage.failureNotice(m.replyTo as string)}
         </div>
         {/* 🔴 LINE 2 — THE SENTENCE, WITH THE WHOLE ROW TO ITSELF. This is the
          * only thing on the row that says WHAT is being answered, and since the
@@ -2041,6 +1980,9 @@ export function ChatArea({
             onClose={() => setMdPreview(null)}
           />
         ))}
+      {/* The 看原訊息 overlay is the shared exit's own — same surface, one
+       * owner for the read behind it (hooks/useQuotedMessageOverlay). */}
+      {quotedMessage.overlay}
     </div>
   );
 }

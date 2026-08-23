@@ -10,10 +10,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, waitFor, act } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
+import { zh } from "../i18n/locales/zh";
 import { TaskReplyCard } from "./TaskReplyCard";
-import type { ReplyCard } from "../api/adapter";
+import type { ChatMessage, ReplyCard } from "../api/adapter";
 import { api } from "../api";
-import { __resetMock, __injectMockReplyCard } from "../api/mock";
+import {
+  __resetMock,
+  __injectMockChat,
+  __injectMockReplyCard,
+} from "../api/mock";
 
 function mkCard(over: Partial<ReplyCard>): ReplyCard {
   return {
@@ -30,6 +35,19 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     chatMessageId: "msg-1",
     answer: null,
     ...over,
+  };
+}
+
+function mkChatMessage(id: string, body: string): ChatMessage {
+  return {
+    id,
+    from: "mira",
+    to: "owner",
+    body,
+    ts: Date.now() / 1000,
+    attachments: [],
+    replyCardId: null,
+    replyCardStatus: null,
   };
 }
 
@@ -56,6 +74,7 @@ function captureSseCallback(): () => void {
 beforeEach(() => {
   __resetMock();
   localStorage.clear();
+  window.location.hash = "";
 });
 
 afterEach(() => {
@@ -63,6 +82,43 @@ afterEach(() => {
 });
 
 describe("TaskReplyCard", () => {
+  // T-0b78. The header control used to write #office/chat/<id>/msg/<id> and
+  // walk the reader off the task board, leaving ChatArea to hunt the row in
+  // already-painted DOM (and land on the newest message when it was not there).
+  // It now takes the SAME exit the chat bubble's 看原訊息 takes: fetch that one
+  // message, show it whole, do not move the reader.
+  it("the header jump opens the ask in full and leaves the route where it was", async () => {
+    __injectMockChat(
+      mkChatMessage("msg-1", "整段原訊息，長到只有全文才看得完"),
+    );
+    __injectMockReplyCard(mkCard({}));
+    const { findByTestId, getByText } = renderCard();
+    await findByTestId("task-reply-card");
+
+    fireEvent.click(getByText("在聊天室回覆"));
+
+    await waitFor(() =>
+      expect(document.querySelector(".md-preview")?.textContent).toContain(
+        "只有全文才看得完",
+      ),
+    );
+    expect(window.location.hash).toBe("");
+  });
+
+  it("the header jump says on screen that the ask could not be read", async () => {
+    __injectMockReplyCard(mkCard({ chatMessageId: "msg-gone" }));
+    const { findByTestId, getByText } = renderCard();
+    await findByTestId("task-reply-card");
+
+    fireEvent.click(getByText("在聊天室回覆"));
+
+    expect((await findByTestId("msg-quote-error")).textContent).toBe(
+      zh.chat.replyQuoteOpenFailed,
+    );
+    expect(document.querySelector(".md-preview")).toBeNull();
+    expect(window.location.hash).toBe("");
+  });
+
   it("an ALREADY-answered card ignores an unrelated reply_card SSE delta (no refetch storm)", async () => {
     __injectMockReplyCard(
       mkCard({
