@@ -388,9 +388,20 @@ func TestDocumentHistoryList_UnknownKeyForANewKindIsRefused(t *testing.T) {
 	}
 }
 
-// Restore is the THIRD write face, and the one that reaches a document
-// sideways — it writes the overlay row itself, so a read-only gate that lived
-// only in replaceBootDoc would be a gate this path walks around.
+// Restore is the write face that reaches a document SIDEWAYS: not from an
+// editor, but by putting an old version back — and it writes the overlay row
+// itself. So the read-only refusal has to be spelled a SECOND time, on this
+// path (documentHistoryAllowed); a copy of it living only in replaceBootDoc
+// would be a gate this door never passes. That is still true after T-3201,
+// which moved the JOIN and the body rule into functions both faces call but
+// deliberately left this one where it is — it has to answer before the
+// capability check, which is a property of this door rather than of the
+// shared rules.
+//
+// ⚠️ NO ORDINAL HERE ON PURPOSE. This comment used to open "Restore is the
+// THIRD write face"; that number drifted twice while nothing turned red (see
+// docs/design/boot-documents.md §七, which now forbids writing one). To learn
+// how many write faces there are, count the callers of putBootDocumentOn.
 func TestDocumentHistoryRestore_ReadOnlyKindIsRefused(t *testing.T) {
 	f := newBootDocFixture(t)
 	for _, kind := range readOnlyEventProcKinds() {
