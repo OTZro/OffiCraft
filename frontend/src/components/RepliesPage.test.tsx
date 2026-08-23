@@ -434,7 +434,7 @@ describe("RepliesPage", () => {
     const { findAllByTestId, getByText } = renderPage();
     await findAllByTestId("waiting-card");
 
-    fireEvent.click(getByText("跳到原訊息"));
+    fireEvent.click(getByText("看原訊息"));
 
     await waitFor(() =>
       expect(document.querySelector(".md-preview")?.textContent).toContain(
@@ -450,7 +450,7 @@ describe("RepliesPage", () => {
     const { findAllByTestId, getByText, findByTestId } = renderPage();
     await findAllByTestId("waiting-card");
 
-    fireEvent.click(getByText("跳到原訊息"));
+    fireEvent.click(getByText("看原訊息"));
 
     expect((await findByTestId("msg-quote-error")).textContent).toBe(
       zh.chat.replyQuoteOpenFailed,

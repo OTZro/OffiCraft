@@ -343,7 +343,7 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
             className="reply-card__jump"
             onClick={() => showAsk(card)}
           >
-            {t.replies.jumpToChat}
+            {t.chat.replyQuoteJump}
           </button>
         )}
         {card.chatMessageId && quotedMessage.failureNotice(card.chatMessageId)}

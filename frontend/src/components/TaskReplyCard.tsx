@@ -254,7 +254,7 @@ export function TaskReplyCard({
             className="task-reply-card__jump"
             onClick={showAsk}
           >
-            {t.tasks.replyInChat}
+            {t.chat.replyQuoteJump}
             <ChevronRightIcon size={12} />
           </button>
         )}

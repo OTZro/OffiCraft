@@ -95,7 +95,7 @@ describe("TaskReplyCard", () => {
     const { findByTestId, getByText } = renderCard();
     await findByTestId("task-reply-card");
 
-    fireEvent.click(getByText("在聊天室回覆"));
+    fireEvent.click(getByText("看原訊息"));
 
     await waitFor(() =>
       expect(document.querySelector(".md-preview")?.textContent).toContain(
@@ -110,7 +110,7 @@ describe("TaskReplyCard", () => {
     const { findByTestId, getByText } = renderCard();
     await findByTestId("task-reply-card");
 
-    fireEvent.click(getByText("在聊天室回覆"));
+    fireEvent.click(getByText("看原訊息"));
 
     expect((await findByTestId("msg-quote-error")).textContent).toBe(
       zh.chat.replyQuoteOpenFailed,
