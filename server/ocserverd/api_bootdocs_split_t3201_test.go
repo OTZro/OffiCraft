@@ -642,11 +642,13 @@ func TestTaskTakeoverDocs_HeadPlusBodyIsTodaysChatNoticeWithoutTheHandoverNote(t
 // whole, because the sentence this document must NOT have lost is the one this
 // very ticket is a sample of — 「不要用 write_task_learnings 做整份取代」.
 //
-// 🔴 THIS DOCUMENT HAS NO SEND SITE YET. decideTaskCloseNudge is a pure
-// function with no server to fold an overlay through, so the sentence an agent
-// receives is still the Go literal in sse_bands.go and diverges from the
-// document from here on. Nothing below asserts a live producer for that reason
-// — pinning the seed is all this package can honestly claim.
+// 🔴 THE SEND SITE ARRIVED IN T-7870, AND THIS TEST DELIBERATELY STILL DOES NOT
+// ASSERT IT. What is pinned here is the SEED — the approved wording — which is a
+// different claim from "an agent receives it", and keeping the two apart is what
+// let the gap be seen at all: for the whole of T-3201 this file was green while
+// the sentence agents actually got came from a Go literal beside the send site.
+// The live claim is asserted where it can fail honestly, at the send site:
+// api_tasks_test.go TestTaskCloseNudgeTextComesFromTheDocument.
 func TestTaskCloseoutDoc_IsTheApprovedRewriteWithBothNamesMovedIntoTheHead(t *testing.T) {
 	s := newEventProcServer(t)
 	spec, head, body := splitSeed(t, s, docKindTaskCloseout)

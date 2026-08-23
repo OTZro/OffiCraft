@@ -2013,6 +2013,161 @@ func TestTaskCloseNudgeRidesTheExecutorsConnectionOnly(t *testing.T) {
 	}
 }
 
+// TestTaskCloseNudgeTextComesFromTheDocument is the LIVE-LAYER assertion this
+// ticket exists for (T-7870). Every other lifecycle document proves itself the
+// same way — edit the document, then read the bytes an agent actually receives
+// — and 〈任務收尾〉 was the one document that could not, because the sentence
+// came from a Go literal beside the send site instead of from the document.
+//
+// 🔴 A GREEN UNIT SUITE IS NOT EVIDENCE HERE, which is why this test is written
+// at the send site rather than beside decideTaskCloseNudge: the last time an
+// owner-approved rewrite of a lifecycle document failed to reach agents
+// (task_unblocked), every test in the tree stayed green, because they all
+// asserted the Go literal against itself.
+//
+// Two sides, so a pass cannot come from the assertion being vacuous:
+//   - a marker appended to the EDITABLE body reaches the executor, and
+//   - the read-only head the owner approved (rc-812aa13fb165) is what the
+//     nudge opens with — not the superseded Go sentence it replaced.
+func TestTaskCloseNudgeTextComesFromTheDocument(t *testing.T) {
+	// The shipped seeds have to be READABLE for this one: newTasksTestServer
+	// points the asset root at an empty temp dir (no task fixture needs a seed),
+	// and a server that cannot read the seed folds to "" — which would make this
+	// test fail for a reason that is not the one under test.
+	db, err := openSQLite(filepath.Join(t.TempDir(), "closeout-wiring.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("goose up: %v", err)
+	}
+	api := newAPIServer(NewDAL(db), NewHub(), []byte("tasks-test-secret"), 3600, "../..")
+	seedManualWithKey(t, api, "review-pr")
+	spec, head, body := splitSeed(t, api, docKindTaskCloseout)
+
+	// Store the overlay the way the WRITE FACE stores one: the editable body
+	// joined under the shipped read-only head. A body-only row is a shape the
+	// cockpit cannot produce, and eventNoticeText refuses it — using it here
+	// would make this test pass or fail for the wrong reason.
+	const marker = "OC-T7870-DOC-REACHES-THE-AGENT"
+	stored, err := api.bootDocStoredText(spec, body+marker+"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := api.dal.PutBootDocument(BootDocument{
+		Kind: spec.Kind, Key: spec.Key, Text: stored,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	created, code := createTypedTask(t, api, "review-pr", "123")
+	if code != http.StatusOK {
+		t.Fatalf("create: %d", code)
+	}
+	executor, connErr := api.hub.Connect("m-exec", "")
+	if connErr != nil {
+		t.Fatal(connErr)
+	}
+	driveTaskDone(t, api, created.Task.ID, "m-exec")
+
+	frames := popTaskCloseFrames(t, executor)
+	if len(frames) != 1 {
+		t.Fatalf("executor must get exactly one nudge, got %d: %v", len(frames), frames)
+	}
+	var envelope struct {
+		Topic string          `json:"topic"`
+		Data  taskCloseSignal `json:"data"`
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(frames[0], "data: "))
+	if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
+		t.Fatalf("decode task-close nudge: %v; frame=%q", err, frames[0])
+	}
+
+	if !strings.Contains(envelope.Data.Reason, marker) {
+		t.Fatalf("the executor did not receive the edited document — the send site is "+
+			"still composing its own sentence.\nreason=%q", envelope.Data.Reason)
+	}
+	wantHead := mustRender(t, spec, head, map[string]string{
+		"task_no":      TaskNo(created.Task.ID),
+		"status":       TaskStatusDone,
+		"type_key":     "review-pr",
+		"manual_label": manualDisplayLabel("", "review-pr"),
+	})
+	if !strings.HasPrefix(envelope.Data.Reason, wantHead) {
+		t.Fatalf("the nudge does not open with the approved read-only head.\n got %q\nwant prefix %q",
+			envelope.Data.Reason, wantHead)
+	}
+}
+
+// TestTaskCloseNudgeStaysSilentWhenTheDocumentCannotRender pins the HALF OF THE
+// CONTRACT A GREEN SUITE DOES NOT NOTICE (T-7870). Wiring the words to the
+// document buys a second obligation with them: when the document cannot be
+// rendered, the send site must post NOTHING rather than fall back to a sentence
+// of its own — a fallback would put back the second source of truth this ticket
+// removed, and would hide the unrenderable document behind text that reads fine.
+//
+// 🔴 THIS TEST EXISTS BECAUSE A MUTANT FOUND IT MISSING. Replacing the
+// `sig.Reason != ""` guard with `if true` left every test in the package green,
+// so the rule was documented in a comment and enforced by nobody; an agent would
+// then receive a nudge whose whole body is empty and no surface would say why.
+//
+// The fault is induced with the ONE shape eventNoticeText refuses and the write
+// face cannot produce — a split document stored without its read-only head,
+// which is what rows written before the marker existed still look like.
+func TestTaskCloseNudgeStaysSilentWhenTheDocumentCannotRender(t *testing.T) {
+	db, err := openSQLite(filepath.Join(t.TempDir(), "closeout-fault.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("goose up: %v", err)
+	}
+	api := newAPIServer(NewDAL(db), NewHub(), []byte("tasks-test-secret"), 3600, "../..")
+	seedManualWithKey(t, api, "review-pr")
+	spec, _, body := splitSeed(t, api, docKindTaskCloseout)
+	if err := api.dal.PutBootDocument(BootDocument{
+		Kind: spec.Kind, Key: spec.Key, Text: body,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	created, code := createTypedTask(t, api, "review-pr", "123")
+	if code != http.StatusOK {
+		t.Fatalf("create: %d", code)
+	}
+	executor, connErr := api.hub.Connect("m-exec", "")
+	if connErr != nil {
+		t.Fatal(connErr)
+	}
+	driveTaskDone(t, api, created.Task.ID, "m-exec")
+
+	if frames := popTaskCloseFrames(t, executor); len(frames) != 0 {
+		t.Fatalf("an unrenderable 〈任務收尾〉 must send nothing, not an empty or "+
+			"substituted nudge; the executor received: %v", frames)
+	}
+	// Positive control: the very same fixture with an INTACT document does send —
+	// otherwise "no frame" would prove the harness broken rather than the rule kept.
+	stored, err := api.bootDocStoredText(spec, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := api.dal.PutBootDocument(BootDocument{
+		Kind: spec.Kind, Key: spec.Key, Text: stored,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	second, code := createTypedTask(t, api, "review-pr", "456")
+	if code != http.StatusOK {
+		t.Fatalf("create: %d", code)
+	}
+	driveTaskDone(t, api, second.Task.ID, "m-exec")
+	if frames := popTaskCloseFrames(t, executor); len(frames) != 1 {
+		t.Fatalf("positive control: an intact document must still nudge, got %d frames", len(frames))
+	}
+}
+
 func TestTaskCloseNudgeSkipsAdHocTasks(t *testing.T) {
 	api := newTasksTestServer(t)
 	task := createAdHocTask(t, api, "m-exec")

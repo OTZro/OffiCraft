@@ -366,7 +366,7 @@ func TestDecideTaskCloseNudge(t *testing.T) {
 	for _, status := range []string{TaskStatusDone, TaskStatusTerminated} {
 		task := base
 		task.Status = status
-		sig := decideTaskCloseNudge(task, "審查 PR（review-pr）")
+		sig := decideTaskCloseNudge(task)
 		if sig == nil {
 			t.Fatalf("%s must nudge", status)
 		}
@@ -375,42 +375,29 @@ func TestDecideTaskCloseNudge(t *testing.T) {
 			sig.Type != "review-pr" || sig.Status != status {
 			t.Fatalf("%s signal fields: %+v", status, sig)
 		}
-		wantReason := "任務 T-7d40 已結束（" + status + "）。請處理收尾事項：" +
-			"若這一趟有值得留下的經驗（踩坑、更好做法），先用 get_task_manual 讀現況，再用 patch_task_learnings" +
-			"（type_key=`review-pr`）只把改動的那一段送回「審查 PR（review-pr）」的任務手冊：改既有段落就用它的唯一錨點，第一次寫或要新增就用空錨點追加。不要用 write_task_learnings 做整份取代 —— 讀取後到寫入之間別人新增的內容會被無聲蓋掉；" +
-			"用 `ocagent clean <path>` 移除這個任務的暫存檔/資料夾、" +
-			"收掉臨時 branch/worktree 與跑著的臨時程序；" +
-			"最後用 report_task_closeout 回報後續已處理完。"
-		if sig.Reason != wantReason {
-			t.Fatalf("reason changed: got %q, want %q", sig.Reason, wantReason)
+		// 🔴 THE DECISION MUST NOT CARRY WORDS (T-7870). The sentence lives in
+		// the 〈任務收尾〉 document and is folded in at the send site; a default
+		// composed here would be a second source of truth for the same words —
+		// which is precisely how this document spent T-3201 editable, versioned,
+		// and unread. An empty Reason is the assertion, not an oversight.
+		if sig.Reason != "" {
+			t.Fatalf("%s: the decision composed a sentence (%q) — the words belong to "+
+				"the document, not to this function", status, sig.Reason)
 		}
-	}
-
-	// A blank label (manual deleted / lookup failed) falls back to the key.
-	fallback := base
-	fallback.Status = TaskStatusDone
-	wantFallbackReason := "任務 T-7d40 已結束（done）。請處理收尾事項：" +
-		"若這一趟有值得留下的經驗（踩坑、更好做法），先用 get_task_manual 讀現況，再用 patch_task_learnings" +
-		"（type_key=`review-pr`）只把改動的那一段送回「review-pr」的任務手冊：改既有段落就用它的唯一錨點，第一次寫或要新增就用空錨點追加。不要用 write_task_learnings 做整份取代 —— 讀取後到寫入之間別人新增的內容會被無聲蓋掉；" +
-		"用 `ocagent clean <path>` 移除這個任務的暫存檔/資料夾、" +
-		"收掉臨時 branch/worktree 與跑著的臨時程序；" +
-		"最後用 report_task_closeout 回報後續已處理完。"
-	if sig := decideTaskCloseNudge(fallback, ""); sig == nil || sig.Reason != wantFallbackReason {
-		t.Fatalf("blank label reason changed: got %+v, want %q", sig, wantFallbackReason)
 	}
 
 	// An ad-hoc task (no type) has no manual to write into — never nudges.
 	adhoc := base
 	adhoc.Status = TaskStatusDone
 	adhoc.TypeKey = ""
-	if decideTaskCloseNudge(adhoc, "") != nil {
+	if decideTaskCloseNudge(adhoc) != nil {
 		t.Fatal("ad-hoc close must stay quiet")
 	}
 
 	// A non-terminal status never nudges.
 	open := base
 	open.Status = TaskStatusInProgress
-	if decideTaskCloseNudge(open, "") != nil {
+	if decideTaskCloseNudge(open) != nil {
 		t.Fatal("non-terminal status must stay quiet")
 	}
 
@@ -418,7 +405,7 @@ func TestDecideTaskCloseNudge(t *testing.T) {
 	unassigned := base
 	unassigned.Status = TaskStatusTerminated
 	unassigned.ExecutorID = ""
-	if decideTaskCloseNudge(unassigned, "") != nil {
+	if decideTaskCloseNudge(unassigned) != nil {
 		t.Fatal("unassigned close must stay quiet")
 	}
 }
@@ -426,7 +413,7 @@ func TestDecideTaskCloseNudge(t *testing.T) {
 func TestTaskCloseFrameIsABareDirectedEvent(t *testing.T) {
 	task := Task{ID: "t-7d40aabbccdd", TypeKey: "review-pr",
 		ExecutorID: "m-exec", Status: TaskStatusDone}
-	frame, err := directedFrameText(taskCloseTopic, decideTaskCloseNudge(task, ""))
+	frame, err := directedFrameText(taskCloseTopic, decideTaskCloseNudge(task))
 	if err != nil {
 		t.Fatal(err)
 	}

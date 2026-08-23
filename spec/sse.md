@@ -547,6 +547,11 @@ data: {"topic":"task-close","data":{"topic":"task-close","to":"m-1a2b3c","task_i
   The inner payload duplicates `topic` and carries `{topic, to, task_id, task_no, type,
   status, reason}`. `reason` wording is not contract; the envelope shape, `to` (the
   executor id), `task_id`, `type` and `status` are.
+- `reason` is **rendered from the 〈任務收尾〉 boot document**, not composed in Go
+  (T-7870). Two consequences the wording rule does not cover: an owner edit to that
+  document changes what agents receive on the next close, and a document that cannot
+  be rendered sends **no frame at all** rather than one with an empty `reason` — the
+  same fault contract the wind-down notices carry.
 - Emission rules (all MUST hold):
   - the task just entered a **terminal** status — `done` AND `terminated` both nudge
     (a terminated run's lessons are worth folding back too);
