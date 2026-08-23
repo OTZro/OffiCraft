@@ -224,7 +224,9 @@ export interface paths {
          *
          *     THE READ-ONLY HEAD IS NOT REFUSED HERE, IT IS UNSENDABLE. There is no field for it: the server joins the SHIPPED head back on before storing, so an edit to it is not a mistake this route reports, it is a sentence the wire cannot say. Get the ``body`` from ``get_boot_doc``, change it, send it.
          *
-         *     TWO REFUSALS REMAIN AND NEITHER IS AUTHZ. A read-only block is refused with 405 no matter who asks. A body that names a ``{variable}`` is refused, because nothing fills a name below the line and it would reach an agent with the braces still in it. A write whose STORED result is over this block's own cap is refused with what you wrote, the cap, and what is already stored.
+         *     TWO REFUSALS REMAIN AND NEITHER IS AUTHZ. A read-only block is refused with 405 no matter who asks. A write whose STORED result is over this block's own cap is refused with what you wrote, the cap, and what is already stored.
+         *
+         *     AND ONE THAT APPLIES TO SOME BLOCKS ONLY — READ THE SCOPE. On a block that DECLARES variables, a body naming a ``{variable}`` is refused, because nothing fills a name below the line and it would reach an agent with the braces still in it. The blocks that declare NONE opt out of brace validation entirely (the 系統互動 block quotes JSON in its body, so the ``{name}`` syntax cannot be told from an example there) — on those, braces are stored as typed and reach every agent that reads the block. Nothing on the wire tells you which kind you are holding, so do not read this as a net.
          *
          *     The shipped seed is never overwritten, so ``reset_boot_doc`` always reaches factory text; the version this write replaces is retained in the document history (a save that changes nothing retains nothing).
          *

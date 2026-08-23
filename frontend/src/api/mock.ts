@@ -515,10 +515,12 @@ const BOOT_DOC_SEEDS: Record<string, string> = {
   // T-c9c0 — a singleton keyed "global", like system_interaction.
   "offboard/global": SEED_OFFBOARD_MD.trim(),
   // T-3201 — the six lifecycle procedures, every one a singleton keyed
-  // "global". The ORDER of this map is the order GET /api/boot-docs answers in,
-  // and it mirrors bootDocRegistry (server/ocserverd/api_bootdocs.go): the
-  // listing is what the cockpit's own row table is checked against, so a mock
-  // that invented an order of its own would be checking nothing.
+  // "global". The ORDER of this map mirrors bootDocRegistry
+  // (server/ocserverd/api_bootdocs.go), which is the order these documents are
+  // declared and listed in everywhere else; a mock that invented an order of
+  // its own would make every ordered comparison against it meaningless.
+  // (It used to be described as "the order GET /api/boot-docs answers in" —
+  // that endpoint is gone; see __mockBootDocAddresses below.)
   "accelerated_stop/global": SEED_ACCELERATED_STOP_MD.trim(),
   "task_closeout/global": SEED_TASK_CLOSEOUT_MD.trim(),
   "task_reassign_predecessor/global": SEED_TASK_REASSIGN_PREDECESSOR_MD.trim(),

@@ -142,10 +142,16 @@ interface BootDocRowIcon {
 /**
  * 🔴 THE ONE LIST OF THESE DOCUMENTS IN THE COCKPIT, and it is a
  * `Record<BootDocKind, …>` on purpose: a kind added to the union without a row
- * here does not compile. The other half of the guard runs the other way —
- * `api/mock.boot-doc-registry.test.ts` reads `GET /api/boot-docs` and fails if
- * the SERVER serves a document this table has no row for, or if this table
- * names one the server does not serve.
+ * here does not compile — and since T-3201 the union itself cannot drift from
+ * the wire either, because `toBootDoc` assigns the frozen spec's `BootDocKind`
+ * enum straight into it.
+ *
+ * The other half of the guard runs the other way and no longer goes through a
+ * listing ENDPOINT: `api/mock.boot-doc-registry.test.ts` pins this table AND the
+ * mock's served set to `bin/tests/fixtures/boot-doc-registry.tsv`, the shared
+ * table the server's own registry is pinned to by
+ * `boot_doc_registry_mirror_test.go`. (It used to read `GET /api/boot-docs`;
+ * that endpoint went with the ruling that added the enum.)
  *
  * Between them, "a document shipped and the cockpit never showed it" — the
  * silent failure every prose list of these kinds has produced at least once —

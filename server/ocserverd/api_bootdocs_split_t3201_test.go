@@ -17,6 +17,8 @@ package main
 // agree with whatever that constant says, including the day someone edits it.
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1087,4 +1089,236 @@ func TestBootDocRegistry_EverySplitSeedHasAVariableFreeBody(t *testing.T) {
 			})
 		}
 	}
+}
+
+// ── the round trip the wire promises, and the restore that shares its gates ──
+
+// 🔴 THE ONE SENTENCE THE BODY-ONLY WIRE IS SELLING: what the read hands you is
+// what the write takes, byte for byte. Nothing else about `body` matters if that
+// is not true — a client would be back to composing the document itself, which
+// is the thing this ticket removed.
+//
+// It is asserted on EVERY editable document rather than one, because the join is
+// per document (bootDocStoredText reads the kind's own seed) and a bug that
+// picked the wrong seed would round-trip perfectly on whichever kind a single
+// case happened to choose.
+//
+// ⚠️ is_default IS NOT ASSERTED, and that is not an oversight. Writing a
+// document's own bytes back is the documented gesture that ADOPTS them as an
+// edit (writeBootDoc's no-op rule compares the text AND the default flag), so a
+// faithful round trip still flips the badge. The claim here is about bytes.
+func TestBootDoc_TheBodyItReadsBackIsTheBodyItTakes(t *testing.T) {
+	for _, reg := range bootDocRegistry {
+		for _, key := range reg.Keys {
+			if reg.ReadOnly {
+				continue
+			}
+			t.Run(reg.Kind+"/"+key, func(t *testing.T) {
+				s := newEventProcServer(t)
+				spec := s.mustBootDocSpec(reg.Kind, key)
+				before, err := s.foldBootDocDTO(spec)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if before.Body == "" {
+					t.Fatal("the document reads back an empty body — every assertion below would be vacuous")
+				}
+				// The three keys describe ONE document: the whole is the head
+				// joined to the body, and a client that only ever touches `body`
+				// never has to know how.
+				if spec.Split {
+					if before.ReadOnlyHead == "" {
+						t.Fatal("a split kind served no read-only head")
+					}
+					if before.Text != DocJoinHeadBody(before.ReadOnlyHead, before.Body) {
+						t.Fatalf("text is not read_only_head ⊕ body:\n%q", before.Text)
+					}
+				}
+
+				// Send back exactly what was read.
+				w := httptest.NewRecorder()
+				s.replaceBootDoc(w, ownerPost("/x"), spec, before.Body, false)
+				if w.Code != http.StatusOK {
+					t.Fatalf("writing back the body it just served: %d (%s)", w.Code, w.Body.String())
+				}
+				after, err := s.foldBootDocDTO(spec)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if after.Body != before.Body {
+					t.Fatalf("the body did not survive the round trip:\n sent %q\n got  %q", before.Body, after.Body)
+				}
+				if after.Text != before.Text {
+					t.Fatalf("the STORED document moved on a round trip:\n before %q\n after  %q",
+						before.Text, after.Text)
+				}
+				if after.ReadOnlyHead != before.ReadOnlyHead {
+					t.Fatalf("the read-only head moved:\n before %q\n after  %q",
+						before.ReadOnlyHead, after.ReadOnlyHead)
+				}
+
+				// …and the same for a body the caller wrote, so this is not just
+				// a fixed point at the seed.
+				const mine = "我自己寫的本體。\n"
+				rec := httptest.NewRecorder()
+				s.replaceBootDoc(rec, ownerPost("/x"), spec, mine, false)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("writing a fresh body: %d (%s)", rec.Code, rec.Body.String())
+				}
+				mineBack, err := s.foldBootDocDTO(spec)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if mineBack.Body != mine {
+					t.Fatalf("read back %q, wrote %q", mineBack.Body, mine)
+				}
+				if mineBack.ReadOnlyHead != before.ReadOnlyHead {
+					t.Fatalf("a write moved the read-only head:\n%q", mineBack.ReadOnlyHead)
+				}
+			})
+		}
+	}
+}
+
+// 🔴 RESTORE WAS THE FIFTH WRITE PATH AND THE ONLY RE-ARMER, AND THIS IS THE
+// REGRESSION TEST THAT SAYS SO. It never INVENTED a headless document — nothing
+// can — but until T-3201 it could take a pre-marker revision out of the version
+// history, put it back on the live row without passing any content gate, and
+// write that as a new revision. One owner click re-armed a hazard nothing else
+// in the tree could still produce, and there was no test anywhere that a restore
+// even looked at the content it was restoring.
+//
+// Both halves of the fix are measured here because they are the same claim from
+// two sides: restore now runs the SAME join and the SAME body rule as
+// replaceBootDoc (bootDocStoredText / bootDocBodyRefusal), so what it puts back
+// carries the shipped head, and what it cannot put back it refuses by name.
+//
+// The revisions are built the way an old release would have left them: the bad
+// text is written STRAIGHT INTO the row, then a legitimate write through the
+// real face retains it. Constructing the history row by hand would prove nothing
+// about which shapes can actually be sitting in a version list.
+func TestRestoreDocumentHistory_ABootDocRevisionGoesThroughTheWriteFacesGates(t *testing.T) {
+	// 下線程序: editable, split, and it DECLARES variables — all three are
+	// needed, the last one because a kind that declares none opts out of the
+	// body rule entirely and the second half below would pass vacuously.
+	const kind, key = docKindOffboard, offboardDocKey
+
+	// retain installs `stored` as the live row, then writes a clean body through
+	// the real write face so that `stored` becomes the newest retained revision.
+	// It answers that revision's content.
+	retain := func(t *testing.T, s *apiServer, spec bootDocSpec, stored string) map[string]string {
+		t.Helper()
+		if err := s.dal.PutBootDocument(BootDocument{Kind: kind, Key: key, Text: stored}); err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		s.replaceBootDoc(w, ownerPost("/x"), spec, "乾淨的本體。\n", false)
+		if w.Code != http.StatusOK {
+			t.Fatalf("the write that should retain the bad version was refused: %d (%s)",
+				w.Code, w.Body.String())
+		}
+		rows, err := s.dal.ListDocumentHistory(kind, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) == 0 {
+			t.Fatal("nothing was retained — the restore below would have no target")
+		}
+		version, err := s.dal.GetDocumentHistory(kind, key, rows[0].ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if version == nil {
+			t.Fatal("the retained revision cannot be read back")
+		}
+		content := map[string]string{}
+		if err := json.Unmarshal([]byte(version.ContentJSON), &content); err != nil {
+			t.Fatal(err)
+		}
+		if content["text"] != stored {
+			t.Fatalf("the retained revision is not the version this test installed:\n got %q\nwant %q",
+				content["text"], stored)
+		}
+		return content
+	}
+
+	t.Run("a pre-marker revision comes back with the shipped head", func(t *testing.T) {
+		s := newEventProcServer(t)
+		spec, head, seedBody := splitSeed(t, s, kind)
+
+		// The shape an installation that edited this document before the marker
+		// shipped is holding: body only, no boundary, no read-only half.
+		const preMarker = "# 下線程序\n\n這是分割上線前就編輯過的舊覆蓋。\n"
+		if _, _, split := DocSplitHeadBody(preMarker); split {
+			t.Fatal("fixture: the pre-marker probe carries a marker, so it is not that shape")
+		}
+		if preMarker == seedBody {
+			t.Fatal("fixture: the probe equals the shipped body, so nothing distinguishes a restore")
+		}
+		content := retain(t, s, spec, preMarker)
+
+		if err := s.restoreDocumentHistory(ownerPost("/x"), kind, key, content); err != nil {
+			t.Fatalf("restoring a pre-marker revision: %v", err)
+		}
+		after, err := s.foldBootDocDTO(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The re-armer is disarmed: the old wording came back, WEARING the
+		// shipped head. Both halves are asserted — "the head is there" alone
+		// would pass on a restore that quietly dropped the revision.
+		if after.ReadOnlyHead != head {
+			t.Fatalf("the restored row has no shipped head:\n got %q\nwant %q", after.ReadOnlyHead, head)
+		}
+		if after.Body != preMarker {
+			t.Fatalf("the restore did not put the old wording back:\n got %q\nwant %q", after.Body, preMarker)
+		}
+		if after.Text != DocJoinHeadBody(head, preMarker) {
+			t.Fatalf("the restored document is not head ⊕ body:\n%q", after.Text)
+		}
+		// And the send site, which is what the whole hazard was about, will
+		// speak again: a headless row is refused there (eventNoticeText), so a
+		// non-empty answer says the shape is gone rather than merely tidied.
+		if got := s.winddownNoticeText(offboardKindSoft, "context 59%", 0); got == "" {
+			t.Fatal("the notice is still unsendable after the restore — the row is still headless")
+		}
+	})
+
+	t.Run("a revision whose body names a variable is refused, and nothing is written", func(t *testing.T) {
+		s := newEventProcServer(t)
+		spec, head, _ := splitSeed(t, s, kind)
+		if spec.Vars == nil {
+			t.Fatal("fixture: this kind opts out of the body rule, so the refusal below cannot fire")
+		}
+		// {where} is a name this document DOES declare — and it is still refused
+		// below the line, because nothing fills a variable there. A revision
+		// carrying an UNdeclared name would pass on a server that only checked
+		// the spelling.
+		bad := DocJoinHeadBody(head, "你現在的狀況是 {where}。\n")
+		content := retain(t, s, spec, bad)
+
+		before, err := s.foldBootDocDTO(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = s.restoreDocumentHistory(ownerPost("/x"), kind, key, content)
+		if !errors.Is(err, errDocumentHistoryContent) {
+			t.Fatalf("restoring a revision the write face would refuse: err = %v, want %v",
+				err, errDocumentHistoryContent)
+		}
+		// The refusal has to NAME the offending variable, for the reason the
+		// write face's does: the owner is looking at a version list and cannot
+		// otherwise tell which revision is stuck or why.
+		if !strings.Contains(err.Error(), "{where}") {
+			t.Errorf("the refusal does not name the variable: %v", err)
+		}
+		after, err2 := s.foldBootDocDTO(spec)
+		if err2 != nil {
+			t.Fatal(err2)
+		}
+		if after.Text != before.Text {
+			t.Fatalf("the refused restore moved the document:\n before %q\n after  %q",
+				before.Text, after.Text)
+		}
+	})
 }

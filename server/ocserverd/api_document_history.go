@@ -239,10 +239,16 @@ func (s *apiServer) documentHistoryAllowed(w http.ResponseWriter, r *http.Reques
 		}
 		// A read-only document is refused BEFORE the capability check, and on
 		// purpose: no principal may restore it, so answering 403 would send an
-		// owner hunting for a role to grant. Restore is the third write face
-		// (replace and reset are the other two) and the one that reaches a
-		// document sideways — it writes the overlay row directly, so a gate
-		// that lives only in replaceBootDoc is a gate this path walks around.
+		// owner hunting for a role to grant. Restore is the write face that
+		// reaches a document SIDEWAYS — not from an editor, but by putting an
+		// old version back — so a gate that lived only in replaceBootDoc would
+		// be a gate this path walked around. That WAS the shape of it until
+		// T-3201: since then the join and the body rule are shared functions
+		// both faces call (bootDocStoredText / bootDocBodyRefusal), and the one
+		// gate restore still does not run is the wipe guard, deliberately —
+		// see restoreDocumentHistory. This read-only check stays here because
+		// it has to answer before the capability check, which is a property of
+		// THIS door rather than of the shared rules.
 		if write {
 			if spec, ok := s.bootDocSpecFor(kind, key); ok && spec.ReadOnly {
 				writeError(w, http.StatusMethodNotAllowed, bootDocReadOnlyRefusal(spec))
