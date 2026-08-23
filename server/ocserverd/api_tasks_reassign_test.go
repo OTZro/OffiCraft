@@ -281,12 +281,29 @@ func TestReassignMemberToMemberHandsOver(t *testing.T) {
 	if toOld.Body != wantOld {
 		t.Fatalf("old-executor handover message wrong:\n got %q\nwant %q", toOld.Body, wantOld)
 	}
-	if toNew == nil || !strings.Contains(toNew.Body, "接手了任務") ||
-		!strings.Contains(toNew.Body, "claim_task") ||
-		strings.Contains(toNew.Body, "update_task_status") ||
-		!strings.Contains(toNew.Body, "你的前任是 Ken") ||
-		!strings.Contains(toNew.Body, "分支在 kyle-160e") {
-		t.Fatalf("new-executor handover message wrong (predecessor + note must ride): %+v", toNew)
+	// The successor's notice is the 接手程序（有前任） DOCUMENT now (T-3201),
+	// compared whole for the same reason the predecessor's is.
+	//
+	// 🔴 THE HANDOVER NOTE IS NOT IN IT, BY RULING (owner rc-0c36d8739b8f:
+	// 「拿掉 —— 交接備註只留在任務上」). It used to be stapled under this notice
+	// while the same reassign also wrote it onto the task, so the successor was
+	// handed two copies of one sentence — and the copy down here is what made
+	// this document unsplittable, a {note} slot after the instructions leaving
+	// no prefix of facts to cut at. The task-side copy is asserted below, so
+	// "the note is gone" cannot pass on a build that lost it altogether.
+	wantNew := "[" + TaskNo(task.ID) + "] 你接手了任務「unit task」。你的前任是 Ken（id `m-old`）。" +
+		"請先跟他確認交接完成（直接 post_chat 給他，問清楚目前進度與進行中的事項），" +
+		"確認後再由你自己呼叫 claim_task（認領）解除轉派鎖——只有你這個新負責人動得了；" +
+		"任務狀態一律照步驟推導，不必也不能自己報。"
+	if toNew == nil {
+		t.Fatalf("the successor received no handover message at all")
+	}
+	if toNew.Body != wantNew {
+		t.Fatalf("new-executor handover message wrong:\n got %q\nwant %q", toNew.Body, wantNew)
+	}
+	if noted, err := api.dal.GetTask(task.ID); err != nil || noted == nil ||
+		noted.HandoverNote != "分支在 kyle-160e" || noted.HandoverNoteTS <= 0 {
+		t.Fatalf("the handover note must still reach the successor through the task: %+v %v", noted, err)
 	}
 	if toNew.Meta["task_id"] != task.ID {
 		t.Fatalf("handover meta must carry the task linkage: %+v", toNew.Meta)

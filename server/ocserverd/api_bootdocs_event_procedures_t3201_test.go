@@ -41,6 +41,16 @@ func newEventProcServer(t *testing.T) *apiServer {
 	return newAPIServer(dal, NewHub(), []byte(interopSecret), 3600, "../..")
 }
 
+// seedOf reads a spec's shipped seed, failing the test if it is not there.
+func seedOf(t *testing.T, s *apiServer, spec bootDocSpec) string {
+	t.Helper()
+	seed, hasSeed, err := s.root.seedBlockMD(spec.SeedFile)
+	if err != nil || !hasSeed {
+		t.Fatalf("read seed %q: hasSeed=%v err=%v", spec.SeedFile, hasSeed, err)
+	}
+	return seed
+}
+
 func ownerPost(path string) *http.Request {
 	return httptest.NewRequest(http.MethodPost, path, nil)
 }
@@ -206,8 +216,13 @@ func TestReplaceBootDoc_UndeclaredVariableIsRefusedAndNothingIsWritten(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	head, _, split := DocSplitHeadBody(seedOf(t, s, spec))
+	if !split {
+		t.Fatal("task_closeout's seed lost its read-only head")
+	}
 	w := httptest.NewRecorder()
-	s.replaceBootDoc(w, ownerPost("/x"), spec, "任務 {task_nu} 已結束。", false)
+	s.replaceBootDoc(w, ownerPost("/x"), spec,
+		DocJoinHeadBody(head, "任務 {task_nu} 已結束。"), false)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
 	}
@@ -226,7 +241,14 @@ func TestReplaceBootDoc_UndeclaredVariableIsRefusedAndNothingIsWritten(t *testin
 func TestReplaceBootDoc_DeclaredVariableIsAccepted(t *testing.T) {
 	s := newEventProcServer(t)
 	spec := s.mustBootDocSpec(docKindTaskCloseout, bootDocSingletonKey)
-	want := "任務 {task_no} 已結束。"
+	head, _, split := DocSplitHeadBody(seedOf(t, s, spec))
+	if !split {
+		t.Fatal("task_closeout's seed lost its read-only head")
+	}
+	// Since T-3201 split this document the accepted write is its head back
+	// verbatim under variable-free body text — and the declared names ride in
+	// that head, which is where they now all live.
+	want := DocJoinHeadBody(head, "收尾就照這裡寫的做。")
 	w := httptest.NewRecorder()
 	s.replaceBootDoc(w, ownerPost("/x"), spec, want, false)
 	if w.Code != http.StatusOK {

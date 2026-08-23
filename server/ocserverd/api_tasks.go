@@ -1558,26 +1558,30 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 			s.postTaskChat(*t, wireSystemSender, oldExecutor, notice, trigger)
 		}
 	}
+	// 🔴 THE HANDOVER NOTE IS NO LONGER PASTED IN, AND THAT IS THE OWNER'S
+	// RULING (rc-0c36d8739b8f, verbatim: 「拿掉 —— 交接備註只留在任務上」). The
+	// note this same handler just wrote to HandoverNote/HandoverNoteTS/
+	// HandoverNoteBy rides the task DTO (wire.go), so the successor reads it
+	// with get_task; the copy stapled under the notice was a second one, and it
+	// was the copy that made these two documents unsplittable — a {note} slot
+	// AFTER the instructions leaves no prefix of facts to cut at.
 	if oldExecutor != "" && newExecutorID != "" {
-		predecessorLabel := s.executorLabel(oldKind, oldExecutor)
-		msg := "[" + no + "] 你接手了任務「" + t.Title + "」。你的前任是 " +
-			predecessorLabel + "（id `" + oldExecutor + "`）。請先跟他確認交接完成" +
-			"（直接 post_chat 給他，問清楚目前進度與進行中的事項），確認後再由你自己呼叫 claim_task" +
-			"（認領）解除轉派鎖——只有你這個新負責人動得了；任務狀態一律照步驟推導，不必也不能自己報。"
-		if note := trimmedOrEmpty(body.Note); note != "" {
-			msg += "\n\n交接備註：" + note
+		if notice := s.taskNoticeText(docKindTaskTakeoverWithPredecessor, map[string]string{
+			"task_no": no, "title": t.Title,
+			"predecessor_label": s.executorLabel(oldKind, oldExecutor),
+			"old_executor_id":   oldExecutor,
+		}); notice != "" {
+			s.postTaskChat(*t, wireSystemSender, newExecutorID, notice, trigger)
 		}
-		s.postTaskChat(*t, wireSystemSender, newExecutorID, msg, trigger)
 	} else if newMember != nil {
 		// A not_started task with no prior executor (no predecessor to hand over
 		// with) — the plain "you are now the executor" notice, member side only
 		// (a fresh worker learns it through the boot context).
-		msg := "[" + no + "] 你接手了任務「" + t.Title +
-			"」。請先讀任務內容，準備好後由你自己呼叫 claim_task（認領）解除轉派鎖再開始執行；任務狀態一律照步驟推導，不必也不能自己報。"
-		if note := trimmedOrEmpty(body.Note); note != "" {
-			msg += "\n\n交接備註：" + note
+		if notice := s.taskNoticeText(docKindTaskTakeoverFresh, map[string]string{
+			"task_no": no, "title": t.Title,
+		}); notice != "" {
+			s.postTaskChat(*t, wireSystemSender, newMember.ID, notice, trigger)
 		}
-		s.postTaskChat(*t, wireSystemSender, newMember.ID, msg, trigger)
 	}
 
 	// 6. Fan the task delta: publishTask reaches the NEW executor + owner (the

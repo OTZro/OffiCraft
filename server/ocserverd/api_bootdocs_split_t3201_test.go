@@ -527,11 +527,15 @@ func TestTaskUnblockedDoc_NoWriteFaceCanPutAnOverlayUnderTheSendSite(t *testing.
 	}
 }
 
-// The three documents that cannot be split, and why — asserted so the reason is
-// checkable rather than only written down. A later package that finds a way to
-// split one of them (or gets the owner's ruling to move the bytes) deletes its
-// line here.
-func TestBootDocRegistry_TheThreeUnsplittableKindsAreStillUnsplit(t *testing.T) {
+// The three documents that could not be split are split now, each on its own
+// owner ruling — so what is pinned here is the RULING, not the flag: a build
+// that dropped Split on any of them would go on rendering identical bytes
+// (DocRendered cuts at the marker whether or not the kind declared one), and
+// the two things that would quietly stop are the send-site refusal in
+// eventNoticeText and the head gate on the write face. Both are behavioural
+// cases below and in TestReplaceBootDoc_ChangingTheReadOnlyHeadIsRefusedAndNothingIsWritten;
+// this one names the declaration they all rest on.
+func TestBootDocRegistry_TheThreeFormerlyUnsplittableKindsAreSplitByRuling(t *testing.T) {
 	s := newEventProcServer(t)
 	for _, kind := range []string{
 		docKindTaskCloseout,
@@ -540,24 +544,233 @@ func TestBootDocRegistry_TheThreeUnsplittableKindsAreStillUnsplit(t *testing.T) 
 	} {
 		t.Run(kind, func(t *testing.T) {
 			spec := s.mustBootDocSpec(kind, bootDocSingletonKey)
-			if spec.Split {
-				t.Fatal("this kind is now declared split — if the owner ruled that its " +
-					"bytes may move, say so here; if not, a prefix split reorders what " +
-					"an agent reads")
+			if !spec.Split {
+				t.Fatal("this kind is declared unsplit again — the owner ruled it split " +
+					"(rc-0c36d8739b8f for the two 接手程序, rc-812aa13fb165 for 任務收尾); " +
+					"undeclaring it silently disarms the send-site refusal and the head gate")
 			}
 			seed, _, err := s.root.seedBlockMD(spec.SeedFile)
 			if err != nil {
 				t.Fatal(err)
 			}
-			// The premise of the finding: a variable really does sit outside a
-			// leading run of facts, so no prefix cut leaves the body clean.
-			head, _, _ := strings.Cut(seed, "。")
-			if len(DocVarsIn(strings.TrimPrefix(seed, head))) == 0 {
-				t.Fatal("no variable survives past the opening sentence any more — this " +
-					"kind may now be splittable, and leaving it whole is no longer the " +
-					"conservative choice")
+			_, body, ok := DocSplitHeadBody(seed)
+			if !ok {
+				t.Fatal("declared split, but the seed carries no marker line")
+			}
+			// The premise of every one of the three rulings: what stopped them
+			// being split was a variable outside the leading run of facts, and
+			// none survives below the line now.
+			if bad := DocVarsIn(body); len(bad) > 0 {
+				t.Fatalf("the editable body still names %v — nothing fills a variable there", bad)
 			}
 		})
+	}
+}
+
+// 🔴 THE {note} SLOT IS GONE FROM BOTH 接手程序, AND THE HANDOVER NOTE IS NOT.
+// owner, rc-0c36d8739b8f, verbatim: 「拿掉 —— 交接備註只留在任務上」. The reassign
+// writes HandoverNote/HandoverNoteTS/HandoverNoteBy onto the task and wire.go
+// puts it in the DTO, so the successor still reads it with get_task; what was
+// removed is the SECOND copy, which is also what made these two documents
+// unsplittable. The task-side copy is asserted at the send site by
+// TestReassignMemberToMemberHandsOver, so "the note is gone" cannot be
+// satisfied here by a build that lost it everywhere.
+func TestTaskTakeoverDocs_HeadPlusBodyIsTodaysChatNoticeWithoutTheHandoverNote(t *testing.T) {
+	for _, tc := range []struct {
+		kind, want string
+		values     map[string]string
+	}{{
+		kind:   docKindTaskTakeoverFresh,
+		values: map[string]string{"task_no": "T-7e91", "title": "把票搬進文件"},
+		want: "[T-7e91] 你接手了任務「把票搬進文件」。請先讀任務內容，準備好後由你自己呼叫 " +
+			"claim_task（認領）解除轉派鎖再開始執行；任務狀態一律照步驟推導，不必也不能自己報。\n",
+	}, {
+		kind: docKindTaskTakeoverWithPredecessor,
+		values: map[string]string{
+			"task_no": "T-7e91", "title": "把票搬進文件",
+			"predecessor_label": "Ken", "old_executor_id": "m-old",
+		},
+		want: "[T-7e91] 你接手了任務「把票搬進文件」。你的前任是 Ken（id `m-old`）。" +
+			"請先跟他確認交接完成（直接 post_chat 給他，問清楚目前進度與進行中的事項），" +
+			"確認後再由你自己呼叫 claim_task（認領）解除轉派鎖——只有你這個新負責人動得了；" +
+			"任務狀態一律照步驟推導，不必也不能自己報。\n",
+	}} {
+		t.Run(tc.kind, func(t *testing.T) {
+			s := newEventProcServer(t)
+			spec, head, body := splitSeed(t, s, tc.kind)
+
+			// The literal api_tasks.go used to concatenate, minus the 交接備註
+			// paragraph, plus the seed FILE's trailing newline.
+			if got := mustRender(t, spec, head, tc.values) + spec.Join + body; got != tc.want {
+				t.Fatalf("the folded document is not today's takeover notice minus the note:"+
+					"\n got %q\nwant %q", got, tc.want)
+			}
+			if strings.Contains(body, "交接備註") {
+				t.Fatal("the 交接備註 paragraph is still in the body — the owner ruled it out " +
+					"of the notice, and while it is here the document has a variable after " +
+					"its instructions and cannot be split at all")
+			}
+			// …and the same bytes the live producer builds, which is what makes
+			// the hand-written literal above a statement about the SERVER.
+			if live := s.taskNoticeText(tc.kind, tc.values); live != strings.TrimSpace(tc.want) {
+				t.Fatalf("the live producer sent something else:\n got %q\nlive %q",
+					strings.TrimSpace(tc.want), live)
+			}
+		})
+	}
+}
+
+// 〈任務收尾〉 is the one of the three the owner allowed to be REWRITTEN
+// (rc-812aa13fb165: 「允許改寫，但逐句先給我看」), because both {type_key} and
+// {manual_label} sat in the middle of its instructions. The two names moved up
+// into the head and the clauses that quoted them now point at it. Compared
+// whole, because the sentence this document must NOT have lost is the one this
+// very ticket is a sample of — 「不要用 write_task_learnings 做整份取代」.
+//
+// 🔴 THIS DOCUMENT HAS NO SEND SITE YET. decideTaskCloseNudge is a pure
+// function with no server to fold an overlay through, so the sentence an agent
+// receives is still the Go literal in sse_bands.go and diverges from the
+// document from here on. Nothing below asserts a live producer for that reason
+// — pinning the seed is all this package can honestly claim.
+func TestTaskCloseoutDoc_IsTheApprovedRewriteWithBothNamesMovedIntoTheHead(t *testing.T) {
+	s := newEventProcServer(t)
+	spec, head, body := splitSeed(t, s, docKindTaskCloseout)
+
+	gotHead := mustRender(t, spec, head, map[string]string{
+		"task_no": "T-7d40", "status": "done",
+		"type_key": "review-pr", "manual_label": "審查 PR（review-pr）",
+	})
+	wantHead := "任務 T-7d40 已結束（done）。這一趟的學習經驗要回到「審查 PR（review-pr）」" +
+		"這本任務手冊，它的 type_key 是 `review-pr`。"
+	if gotHead != wantHead {
+		t.Fatalf("the read-only head is not the approved sentence:\n got %q\nwant %q", gotHead, wantHead)
+	}
+
+	wantBody := "請處理收尾事項：若這一趟有值得留下的經驗（踩坑、更好做法），先用 get_task_manual 讀現況，" +
+		"再用 patch_task_learnings（type_key 就用上面那一行給的值）只把改動的那一段送回" +
+		"**上面指名的那本**任務手冊：改既有段落就用它的唯一錨點，第一次寫或要新增就用空錨點追加。" +
+		"不要用 write_task_learnings 做整份取代 —— 讀取後到寫入之間別人新增的內容會被無聲蓋掉；" +
+		"用 `ocagent clean <path>` 移除這個任務的暫存檔/資料夾、收掉臨時 branch/worktree 與跑著的臨時程序；" +
+		"最後用 report_task_closeout 回報後續已處理完。\n"
+	if body != wantBody {
+		t.Fatalf("the body is not the approved rewrite:\n got %q\nwant %q", body, wantBody)
+	}
+	// Join is "\n" so the head really is 「上面那一行」 the body tells the agent
+	// to read back — with "" the two would render as one line and the
+	// instruction would point at nothing.
+	if spec.Join != "\n" {
+		t.Fatalf("join = %q — the body says 「type_key 就用上面那一行給的值」, which is only "+
+			"true while the head renders as its own line", spec.Join)
+	}
+}
+
+// 🔴 THE COST OF A NAME NOTHING FILLS IS THE WHOLE NOTICE, NOT A BLANK — and
+// nobody is told. RenderDocVars refuses a declared name with no value (a value
+// that is present but EMPTY renders empty, which is a different thing);
+// eventNoticeText turns that refusal into ""; and every send site posts nothing
+// rather than posting "". So the most natural-looking fix at a send site —
+// "this branch has nothing for {x}, just leave it out" — does not produce a
+// notice with a gap in it. It produces no notice at all, no error, and no
+// surface anywhere that says a message was owed.
+//
+// Both halves are asserted because neither is worth much alone: the empty
+// answer is meaningless without a positive control that the same call sends
+// something when every value is supplied, and "the notice is empty" says
+// nothing about whether the send site would post it anyway.
+func TestTaskTakeoverNotice_AValueNothingSuppliesEmptiesTheNoticeAndTheSuccessorIsSentNothing(t *testing.T) {
+	s := newEventProcServer(t)
+	for kind, values := range map[string]map[string]string{
+		docKindTaskTakeoverFresh: {"task_no": "T-7e91", "title": "把票搬進文件"},
+		docKindTaskTakeoverWithPredecessor: {
+			"task_no": "T-7e91", "title": "把票搬進文件",
+			"predecessor_label": "Ken", "old_executor_id": "m-old",
+		},
+	} {
+		t.Run(kind, func(t *testing.T) {
+			if s.taskNoticeText(kind, values) == "" {
+				t.Fatal("nothing was sent even with every value supplied — every assertion " +
+					"below would pass vacuously")
+			}
+			for missing := range values {
+				short := map[string]string{}
+				for k, v := range values {
+					if k != missing {
+						short[k] = v
+					}
+				}
+				if out := s.taskNoticeText(kind, short); out != "" {
+					t.Errorf("with no value for {%s} the notice must be empty — a blank "+
+						"substitution reads as a real fact and names the wrong thing. "+
+						"It came back as:\n%s", missing, out)
+				}
+				// A value that IS supplied and empty is a different case and is
+				// NOT refused — so the case above is about the missing KEY, not
+				// about the empty string, and a send site cannot dodge the
+				// refusal by discovering that distinction by accident.
+				blank := map[string]string{}
+				for k, v := range values {
+					blank[k] = v
+				}
+				blank[missing] = ""
+				if out := s.taskNoticeText(kind, blank); out == "" {
+					t.Errorf("an empty VALUE for {%s} must still render — only an absent "+
+						"key is a fault", missing)
+				}
+			}
+		})
+	}
+
+	// …and the consequence at the real send site: the reassign posts the
+	// successor NOTHING when its notice cannot be rendered. The document is put
+	// into the one unrenderable shape a live installation can actually hold (an
+	// overlay written before docBodyMarker existed — the write face refuses to
+	// create it, which is why it is seeded directly), because the missing-value
+	// arm above is unreachable from today's call site by construction: every
+	// declared name is supplied there, and the day one is not, this is what the
+	// successor gets.
+	api := newTasksTestServer(t)
+	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
+	putActiveMember(t, api, "m-new", "Rei", KindAssistant)
+	spec := api.mustBootDocSpec(docKindTaskTakeoverWithPredecessor, bootDocSingletonKey)
+	seed, _, err := api.root.seedBlockMD(spec.SeedFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, body, ok := DocSplitHeadBody(seed)
+	if !ok {
+		t.Fatal("the seed carries no marker line")
+	}
+	if err := api.dal.PutBootDocument(BootDocument{
+		Kind: spec.Kind, Key: spec.Key, Text: body,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	task := createAdHocTask(t, api, "m-old")
+	if rec := reassign(t, api, task.ID, memberTarget("m-new"), wireOwnerID, "owner"); rec.Code != http.StatusOK {
+		t.Fatalf("reassign: %d %s", rec.Code, rec.Body.String())
+	}
+	msgs, err := api.dal.ListChat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var toOld, toNew *ChatMessage
+	for i := range msgs {
+		switch msgs[i].Recipient {
+		case "m-old":
+			toOld = &msgs[i]
+		case "m-new":
+			toNew = &msgs[i]
+		}
+	}
+	// The predecessor's own notice is a different document and must still have
+	// gone out — otherwise "nothing was posted" would be a broken handler
+	// rather than the refusal under test.
+	if toOld == nil {
+		t.Fatal("the predecessor's notice went missing too — this is not the refusal under test")
+	}
+	if toNew != nil {
+		t.Fatalf("a notice that could not be rendered must not be posted at all; the "+
+			"successor received:\n%s", toNew.Body)
 	}
 }
 
@@ -603,9 +816,22 @@ func TestBootContextDocs_RenderWithoutTheMarkerAndKeepTheirTitleLine(t *testing.
 
 // ── the write face: the head is immutable, the body has no variables ─────────
 
+// 接手程序（有前任） rides along as a second kind: it is the one of the three
+// documents split by T-3201's last package that an owner may actually edit, so
+// it is the one whose head gate is newly load-bearing — and the gate reads
+// spec.Split, which a build that undeclared the split would walk straight past.
 func TestReplaceBootDoc_ChangingTheReadOnlyHeadIsRefusedAndNothingIsWritten(t *testing.T) {
+	for _, kind := range []string{docKindOffboard, docKindTaskTakeoverWithPredecessor} {
+		t.Run(kind, func(t *testing.T) {
+			replaceBootDocHeadGateCase(t, kind)
+		})
+	}
+}
+
+func replaceBootDocHeadGateCase(t *testing.T, kind string) {
+	t.Helper()
 	s := newEventProcServer(t)
-	spec, head, body := splitSeed(t, s, docKindOffboard)
+	spec, head, body := splitSeed(t, s, kind)
 	before, err := s.foldBootDocDTO(spec)
 	if err != nil {
 		t.Fatal(err)

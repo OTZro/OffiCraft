@@ -17,13 +17,16 @@ package main
 // 什麼步驟」. Head = what happened, program-generated, may carry {variables}.
 // Body = what to do next, owner-editable, zero variables.
 //
-// 🔴 "通常" IS NOT "ALWAYS", AND THREE DOCUMENTS PROVE IT. task_closeout names
-// {type_key} and {manual_label} in the MIDDLE of its instructions, and both
-// takeover documents append 「交接備註：{note}」 AFTER theirs. Splitting those at
-// a prefix would move bytes, and moving bytes is a content change this package
-// is not allowed to make. They are therefore left unsplit (Split=false) and the
-// conflict is the owner's to rule on — see the registry comments on those three
-// kinds. Guessing here would have been the one failure mode nobody could see
+// 🔴 "通常" IS NOT "ALWAYS", AND THREE DOCUMENTS PROVED IT — EACH ONE COST A
+// RULING. task_closeout named {type_key} and {manual_label} in the MIDDLE of
+// its instructions, and both takeover documents appended 「交接備註：{note}」
+// AFTER theirs, so on all three no prefix cut left a variable-free body. None
+// of them was split by guessing: the takeover pair lost the {note} slot because
+// the owner ruled the handover note belongs on the task alone
+// (rc-0c36d8739b8f — the reassign already writes HandoverNote and the successor
+// reads it with get_task), and task_closeout was reworded sentence by sentence
+// under his approval (rc-812aa13fb165), moving both names up into the head.
+// Guessing instead would have been the one failure mode nobody could see
 // afterwards: a document that reads fine and no longer says what it said.
 
 import "strings"

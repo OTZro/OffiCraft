@@ -180,15 +180,22 @@ var bootDocRegistry = []bootDocReg{{
 	SeedFor: func(string) string { return taskCloseoutSeedMD },
 	DocName: func(string) string { return "task close-out procedure" },
 	Cap:     func(s *apiServer) int { return s.taskEventCap() },
-	// 🔴 NOT SPLIT, AND THIS IS A FINDING RATHER THAN AN OVERSIGHT. Two of its
-	// variables sit in the middle of the INSTRUCTIONS — 「再用 patch_task_learnings
-	// （type_key=`{type_key}`）只把改動的那一段送回「{manual_label}」的任務手冊」 —
-	// so "head is a prefix" and "the body has no variables" cannot both hold
-	// without either moving those bytes or rewording the sentence around them.
-	// Both are content changes, and this package is allowed exactly two (the
-	// frozen caveat and the dependency-released branches), each ruled by the
-	// owner by name. Left whole, validated as one text, awaiting his ruling.
-	Vars: []string{"task_no", "status", "type_key", "manual_label"},
+	// 🔴 SPLIT BY REWRITE, RULED SENTENCE BY SENTENCE (owner, rc-812aa13fb165:
+	// 「允許改寫，但逐句先給我看」). {type_key} and {manual_label} used to sit in
+	// the MIDDLE of the instructions, so no prefix cut left a variable-free
+	// body. Both names moved UP into the head — which now says which manual and
+	// which type_key this run writes back to — and the two instruction clauses
+	// that quoted them point at that line instead (「type_key 就用上面那一行給的
+	// 值」、「送回**上面指名的那本**任務手冊」). Nothing else in the body moved.
+	//
+	// Join is "\n": the head is one line of facts and the body is stapled under
+	// it, the same shape the two stop procedures take — and here it also has to
+	// be true, because the body tells the agent to read 「上面那一行」.
+	//
+	// All four names stay declared: they are all in the head now.
+	Split: true,
+	Join:  "\n",
+	Vars:  []string{"task_no", "status", "type_key", "manual_label"},
 }, {
 	Kind:    docKindTaskReassignPredecessor,
 	Keys:    []string{taskReassignPredecessorDocKey},
@@ -206,10 +213,18 @@ var bootDocRegistry = []bootDocReg{{
 	SeedFor: func(string) string { return taskTakeoverWithPredecessorSeedMD },
 	DocName: func(string) string { return "task takeover procedure (with predecessor)" },
 	Cap:     func(s *apiServer) int { return s.taskEventCap() },
-	// 🔴 NOT SPLIT — the same finding as task_closeout, in the other shape:
-	// 「交接備註：{note}」 is appended AFTER the instructions, so the facts are not
-	// a prefix. Awaiting the owner's ruling; see doc_split.go's header.
-	Vars: []string{"task_no", "title", "predecessor_label", "old_executor_id", "note"},
+	// 🔴 SPLIT ONCE {note} WAS DROPPED (owner, rc-0c36d8739b8f: 「拿掉 —— 交接備註
+	// 只留在任務上」). 「交接備註：{note}」 was appended AFTER the instructions, so
+	// the facts were not a prefix — and the note it carried was a SECOND COPY:
+	// the reassign writes HandoverNote/TS/By onto the task itself and wire.go
+	// puts it in the DTO, so the successor reads it with get_task. Dropping the
+	// copy leaves one sentence of fact and one of instruction, in that order.
+	//
+	// Join "" — the two halves run together inside ONE paragraph, exactly like
+	// 轉派程序（前任）: today's notice reads 「…（id `x`）。請先跟他確認交接完成…」.
+	Split: true,
+	Join:  "",
+	Vars:  []string{"task_no", "title", "predecessor_label", "old_executor_id"},
 }, {
 	// 🔴 READ-ONLY. Owner's ruling, verbatim: 「以前 global context 是固定內容
 	// 我們也是會顯示 只是不給改」. It is a document rather than a string literal
@@ -219,8 +234,11 @@ var bootDocRegistry = []bootDocReg{{
 	SeedFor: func(string) string { return taskTakeoverFreshSeedMD },
 	DocName: func(string) string { return "task takeover procedure (new assignment)" },
 	Cap:     func(s *apiServer) int { return s.taskEventCap() },
-	// 🔴 NOT SPLIT — same trailing 「交接備註：{note}」 as its sibling above.
-	Vars:     []string{"task_no", "title", "note"},
+	// Split on the same ruling as its sibling above, and joined the same way:
+	// one sentence of fact, then the instructions, inside one paragraph.
+	Split:    true,
+	Join:     "",
+	Vars:     []string{"task_no", "title"},
 	ReadOnly: true,
 }, {
 	Kind:    docKindTaskUnblocked,
