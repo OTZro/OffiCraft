@@ -2753,14 +2753,32 @@ export const mockApi: Api = {
     // `toName` resolve through the roster; an id that resolves to nothing keeps
     // the HONEST "" (the panel then shows the id alone rather than a name it
     // invented).
-    const chat = chatWindow.map((m) => ({
-      ...m,
-      fromName: resumeDisplayNameOf(m.from),
-      toName: resumeDisplayNameOf(m.to),
-      tsDisplay: mockTsDisplay(m.ts),
-      bodyOmittedChars: m.bodyOmittedChars ?? 0,
-      card: m.card ?? null,
-    }));
+    //
+    // The QUOTE rides along too, and it is the ONE read that carries display
+    // names inside it. The server's snapshot path joins `reply_to_chat` through
+    // the same helper every other read uses but hands it the roster, so the wake
+    // payload's quote says 「名字 → 名字」 where a browser read says 「"" → ""」
+    // (api_chat.go resumeChatMessageDTO). The snapshot is ALSO the read that
+    // BILLS those characters against the chat budget, so a mock that dropped the
+    // quote here would preview a card cheaper and emptier than the real one.
+    const chat = chatWindow.map((m) => {
+      const quote = mockReplyToChatOf(m.replyTo);
+      return {
+        ...m,
+        fromName: resumeDisplayNameOf(m.from),
+        toName: resumeDisplayNameOf(m.to),
+        tsDisplay: mockTsDisplay(m.ts),
+        bodyOmittedChars: m.bodyOmittedChars ?? 0,
+        card: m.card ?? null,
+        replyToChat: quote
+          ? {
+              ...quote,
+              fromName: resumeDisplayNameOf(quote.from),
+              toName: resumeDisplayNameOf(quote.to),
+            }
+          : null,
+      };
+    });
 
     // EXECUTOR MATCH IS BY ID ALONE — no executorKind gate. That mirrors the
     // server exactly: `resumeTasksFor` → `ListOpenTasksByExecutor` filters on

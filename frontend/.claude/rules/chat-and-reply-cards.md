@@ -23,6 +23,19 @@ paths:
   - "src/api/mappers.ts"
   - "src/api/mock.ts"
   - "src/api/adapter.ts"
+  # 🔴 THE WAKE SNAPSHOT IS A RENDERING SURFACE FOR THE QUOTE TOO, and it was
+  # not listed either — which is exactly why it shipped for months billing the
+  # quote's characters to the chat budget and drawing none of them (T-9871).
+  # Whoever edits this card is one of the people the quote rules below are
+  # written for.
+  - "src/components/ResumeSummaryCard*"
+  - "src/components/member-detail.css"
+  - "visual-guards/resume-chat-quote*"
+  # The guard's fixture and the mock's own witness are edited by the same people
+  # and are just as easy to get wrong; a rule nobody sees while editing them is
+  # the failure this whole block is about.
+  - "visual-guards/stories/ResumeChatQuoteStory*"
+  - "src/api/mock.reply-to.test.ts"
   - "visual-guards/scheduled-message-*"
 ---
 
@@ -73,10 +86,27 @@ composer 上方的橫幅走同一個形狀（它從已載入視窗解析，是�
 把 pane 砍到 347px）時名字那半 101px、句子那半只剩 18px —— 本機 3/61 字、CI runner
 0/61 字。**兩行是把競爭拿掉，不是去仲裁它**：句子獨占一整行之後，任何長度的名字都
 拿不走它的寬度。代價是垂直空間（引用列 20.8px→36.7px，橫幅 34px→42.4px）。
-兩個渲染面**要一起改**——它們是兩條獨立碼路（訊息列讀 `replyToChat`，橫幅讀
-`messageById`），只改一邊會讓同一句引文在兩個地方長得不一樣。
 名字那半在極窄 pane 仍然只是 `text-overflow: ellipsis` 截短（同一個 span、同一個
 箭頭、同一個順序），**不是第三種畫法**。
+
+**引文有不只一個渲染面，改動要先把它們找齊**——它們是各自獨立的碼路（訊息列與
+喚醒快照卡各自讀 `replyToChat`，composer 橫幅讀 `messageById`），只改其中一面
+會讓同一句引文在不同地方長得不一樣，或在某一面乾脆不出現。
+**不要記數量，也不要照抄清單**：這一行原本寫死「兩個渲染面」，而當時已經有第三
+個（`ResumeSummaryCard` 的快照卡）——那張卡的預算**一直在為引文的字計費**，畫面
+上卻一個字都沒有，而規則的 `paths:` 也沒有涵蓋它，所以改引文的人看不到這條規則，
+被漏掉的那一面也不會有任何東西變紅（T-9871）。
+**找齊的方法是從資料查回來，而不是相信這裡的列舉**：以 view model 的欄位為起點
+`grep -rn "replyToChat\|messageById" frontend/src`，命中的每一個 component 都是
+一個面；新增一個面時，把它加進本檔的 `paths:`，否則下一個人同樣看不到。
+
+**但「一起改」不等於「長一樣」。** 快照卡不在 `chat-pane` 這個 container 裡，所以
+聊天面靠 `@container chat-pane` 收掉 jump label 的那條規則在它身上**永遠不會觸發**；
+它也沒有 `openQuotedMessage` 那套 overlay 與再撈，而它本身已經是一張有邊框的卡。
+所以那一面是**沒有控制項、靠換行與 `overflow-wrap` 自己撐住**的另一種畫法，幾何由
+`visual-guards/resume-chat-quote.ct.spec.tsx` 在寬窄兩端量著。要對齊的是**內容與兩
+態規則**（有快照就畫、沒有就畫固定的 `chat.replyQuoteGone`；`content` 為空是合法的
+第一態，不可折進第二態），不是版面。
 
 **這一段取代了原本的「只帶 id，前端自己撈」設計，理由要記住：** 舊設計裡撈得到
 ／撈不到／還沒撈到是三個狀態，而它們在畫面上長得一模一樣，所以出錯時沒有人看得
