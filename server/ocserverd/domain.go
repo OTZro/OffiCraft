@@ -111,7 +111,7 @@ const StoppingTimeoutSecs = 120.0
 
 // SoftOffboardGraceSecs: how long a close-out may say NOTHING before its
 // anchor is treated as residue (T-7723 — silence, not the anchor's age).
-// The soft notice says "work the sequence, then call restart_self yourself" and
+// The soft notice says "work the sequence, then call report_stopped yourself" and
 // carries no countdown, and since 2026-08-19 NEITHER soft arm has one running
 // behind it: 下線 (rc-27d1710174dd 「不要兜底：只有你按強制下線才收它」) and
 // 重新聚焦 (rc-c540367065ad 「連時鐘一起拿掉」) are collected by the agent's own

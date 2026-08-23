@@ -102,8 +102,12 @@ func (s *apiServer) offboardDeltaPayload(m Member) map[string]any {
 //   - SOFT (停止) — 下線 (desired offline + a stopping anchor, the graceful
 //     arm) and EVERY refocus cause except the one below: 重新聚焦, 改機器,
 //     model/runtime, restart_self, and the FIRST context threshold. It says
-//     work the sequence, then call restart_self yourself; no countdown clause,
+//     work the sequence, then call report_stopped yourself; no countdown clause,
 //     because on these arms there is no clock AT ALL — not now, and not later.
+//     (restart_self stays in the list above because it is a refocus CAUSE — an
+//     agent asking for its own recycle. It stopped being the verb the notice
+//     ends with: owner c-5b3d8f192a0b / rc-5d044f0c1266, and since T-3201 that
+//     sentence is the read-only head of 〈下線程序〉, not a Go literal.)
 //   - FINAL (加速停止) — the two 加速停止 causes, and only those: the SECOND
 //     context threshold (context_high) and the owner's own press
 //     (accelerated_stop). The collection is already under way and the recycle
@@ -164,7 +168,7 @@ func offboardKindOf(m Member, now float64) (kind string, carries bool) {
 		// stopping_since before it publishes, so on the sentence above alone the
 		// member it just killed receives a full SOFT notice on its own stream —
 		// telling a session that is about to be cut off to work the sequence and
-		// call restart_self. Independent e2e verification observed exactly that
+		// call report_stopped. Independent e2e verification observed exactly that
 		// frame; the owner's ruling is that force-stop sends no message at all.
 		//
 		// 🔴 RECONFIRMED 2026-08-18, and written down because it was nearly
@@ -1450,13 +1454,14 @@ func (s *apiServer) HandleReportStoppedApiSelfStoppedPost(w http.ResponseWriter,
 //     session to recycle. 🔴 The test is the SSE connection, not the presence
 //     projection. Those differ for exactly the caller this endpoint exists for:
 //     the offboard notice says 「work the sequence below, then call
-//     restart_self yourself」, step 1 of that sequence is report_stopping, and
-//     that stamps the anchor which makes PresenceState project `stopping`. So
-//     an agent doing precisely what it was told was refused — and once a
-//     close-out's anchor stopped being swept away every tick (T-2123) the
-//     refusal lasted the whole soft window instead of clearing on the next
-//     tick. A session holding an open stream has something to recycle; that is
-//     the whole question here.
+//     report_stopped yourself」, step 1 of that sequence is report_stopping, and
+//     that stamps the anchor which makes PresenceState project `stopping`. So a
+//     session that has merely STARTED its close-out already reads as stopping,
+//     and a presence test here would refuse the caller this endpoint exists for
+//     — and once a close-out's anchor stopped being swept away every tick
+//     (T-2123) that refusal lasted the whole soft window instead of clearing on
+//     the next tick. A session holding an open stream has something to
+//     recycle; that is the whole question here.
 //   - MINIMUM-LIVENESS (429): a call within minSelfRestartSecs of this session
 //     connecting is refused — the server-authoritative boot_ts (stamped on the
 //     SSE first-connect edge, onFirstConnect) is the anchor; reusing the
