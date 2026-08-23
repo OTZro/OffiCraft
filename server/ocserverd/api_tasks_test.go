@@ -750,6 +750,24 @@ func seedManualWithKey(t *testing.T, api *apiServer, typeKey string) {
 	}
 }
 
+// seedManualWithLabel is seedManualWithKey with a DISPLAY NAME that differs from
+// the key. The difference is load-bearing for the close-out nudge: its read-only
+// head shows the HUMAN label while the MCP addressing string in the same sentence
+// must stay the raw type_key (T-fa76). With the plain helper the two are equal, so
+// an assertion that swaps one for the other passes — which is exactly what an
+// independent review's mutant found.
+func seedManualWithLabel(t *testing.T, api *apiServer, typeKey, displayName string) {
+	t.Helper()
+	if err := api.dal.PutTaskManual(TaskManual{
+		TypeKey:     typeKey,
+		DisplayName: displayName,
+		Fields:      `[{"name":"pr","required":true,"is_key":true}]`,
+		Assignee:    `{"kind":"member","member_id":"m-exec"}`,
+	}); err != nil {
+		t.Fatalf("seed manual: %v", err)
+	}
+}
+
 func createTypedTask(t *testing.T, api *apiServer, typeKey, pr string) (taskCreateResultDTO, int) {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -2010,6 +2028,203 @@ func TestTaskCloseNudgeRidesTheExecutorsConnectionOnly(t *testing.T) {
 				t.Fatalf("the owner fan-out must never carry the nudge: %v", got)
 			}
 		})
+	}
+}
+
+// TestTaskCloseNudgeTextComesFromTheDocument is the LIVE-LAYER assertion this
+// ticket exists for (T-7870). Every other lifecycle document proves itself the
+// same way — edit the document, then read the bytes an agent actually receives
+// — and 〈任務收尾〉 was the one document that could not, because the sentence
+// came from a Go literal beside the send site instead of from the document.
+//
+// 🔴 A GREEN UNIT SUITE IS NOT EVIDENCE HERE, which is why this test is written
+// at the send site rather than beside decideTaskCloseNudge: the last time an
+// owner-approved rewrite of a lifecycle document failed to reach agents
+// (task_unblocked), every test in the tree stayed green, because they all
+// asserted the Go literal against itself.
+//
+// Two sides, so a pass cannot come from the assertion being vacuous:
+//   - a marker appended to the EDITABLE body reaches the executor, and
+//   - the read-only head the owner approved (rc-812aa13fb165) is what the
+//     nudge opens with — not the superseded Go sentence it replaced.
+func TestTaskCloseNudgeTextComesFromTheDocument(t *testing.T) {
+	api := newTasksTestServer(t)
+	seedManualWithLabel(t, api, "review-pr", "審查 PR")
+	spec, head, body := splitSeed(t, api, docKindTaskCloseout)
+
+	// Store the overlay the way the WRITE FACE stores one: the editable body
+	// joined under the shipped read-only head. A body-only row is a shape the
+	// cockpit cannot produce, and eventNoticeText refuses it — using it here
+	// would make this test pass or fail for the wrong reason.
+	const marker = "OC-T7870-DOC-REACHES-THE-AGENT"
+	stored, err := api.bootDocStoredText(spec, body+marker+"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := api.dal.PutBootDocument(BootDocument{
+		Kind: spec.Kind, Key: spec.Key, Text: stored,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	created, code := createTypedTask(t, api, "review-pr", "123")
+	if code != http.StatusOK {
+		t.Fatalf("create: %d", code)
+	}
+	executor, connErr := api.hub.Connect("m-exec", "")
+	if connErr != nil {
+		t.Fatal(connErr)
+	}
+	driveTaskDone(t, api, created.Task.ID, "m-exec")
+
+	frames := popTaskCloseFrames(t, executor)
+	if len(frames) != 1 {
+		t.Fatalf("executor must get exactly one nudge, got %d: %v", len(frames), frames)
+	}
+	var envelope struct {
+		Topic string          `json:"topic"`
+		Data  taskCloseSignal `json:"data"`
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(frames[0], "data: "))
+	if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
+		t.Fatalf("decode task-close nudge: %v; frame=%q", err, frames[0])
+	}
+
+	if !strings.Contains(envelope.Data.Reason, marker) {
+		t.Fatalf("the executor did not receive the edited document — the send site is "+
+			"still composing its own sentence.\nreason=%q", envelope.Data.Reason)
+	}
+	// 🔴 manual_label MUST be the human label and type_key MUST stay the raw key —
+	// they are different strings here on purpose. A fixture where the two are equal
+	// lets a send site swap one for the other and every test still passes.
+	wantHead := mustRender(t, spec, head, map[string]string{
+		"task_no":      TaskNo(created.Task.ID),
+		"status":       TaskStatusDone,
+		"type_key":     "review-pr",
+		"manual_label": manualDisplayLabel("審查 PR", "review-pr"),
+	})
+	if !strings.HasPrefix(envelope.Data.Reason, wantHead) {
+		t.Fatalf("the nudge does not open with the approved read-only head.\n got %q\nwant prefix %q",
+			envelope.Data.Reason, wantHead)
+	}
+}
+
+// TestTaskCloseNudgeStaysSilentWhenTheDocumentCannotRender pins the HALF OF THE
+// CONTRACT A GREEN SUITE DOES NOT NOTICE (T-7870). Wiring the words to the
+// document buys a second obligation with them: when the document cannot be
+// rendered, the send site must post NOTHING rather than fall back to a sentence
+// of its own — a fallback would put back the second source of truth this ticket
+// removed, and would hide the unrenderable document behind text that reads fine.
+//
+// 🔴 THIS TEST EXISTS BECAUSE A MUTANT FOUND IT MISSING. Replacing the
+// `sig.Reason != ""` guard with `if true` left every test in the package green,
+// so the rule was documented in a comment and enforced by nobody; an agent would
+// then receive a nudge whose whole body is empty and no surface would say why.
+//
+// The fault is induced with the ONE shape eventNoticeText refuses and the write
+// face cannot produce — a split document stored without its read-only head,
+// which is what rows written before the marker existed still look like.
+// TestTaskCloseNudgeFallsBackToTheRawKeyWhenTheManualIsGone keeps the ONE branch
+// that moved out of decideTaskCloseNudge when the words left it (T-7870): a task
+// whose manual row is gone has no display label, and the head must then name the
+// raw type_key rather than render 「回到「」這本任務手冊」 — a sentence that reads
+// like a manual with no name and tells the agent nothing.
+//
+// 🔴 THIS TEST EXISTS BECAUSE THE WIRING COMMIT DELETED ITS ONLY GUARD. The
+// fallback used to be asserted beside decideTaskCloseNudge; rewriting that unit
+// test for the new signature dropped the assertion without replacing it, and an
+// independent review's mutant (delete the two-line fallback) stayed green across
+// the whole package. Moving a branch is not the same as keeping it covered.
+func TestTaskCloseNudgeFallsBackToTheRawKeyWhenTheManualIsGone(t *testing.T) {
+	api := newTasksTestServer(t)
+	seedManualWithLabel(t, api, "review-pr", "審查 PR")
+	created, code := createTypedTask(t, api, "review-pr", "123")
+	if code != http.StatusOK {
+		t.Fatalf("create: %d", code)
+	}
+	// The manual is deleted AFTER the task exists — the shape a task outlives its
+	// type in. The task keeps its type_key, so the nudge is still owed.
+	if _, err := api.dal.DeleteTaskManual("review-pr"); err != nil {
+		t.Fatal(err)
+	}
+	executor, connErr := api.hub.Connect("m-exec", "")
+	if connErr != nil {
+		t.Fatal(connErr)
+	}
+	driveTaskDone(t, api, created.Task.ID, "m-exec")
+
+	frames := popTaskCloseFrames(t, executor)
+	if len(frames) != 1 {
+		t.Fatalf("a task whose manual is gone is still owed a nudge, got %d frames", len(frames))
+	}
+	var envelope struct {
+		Data taskCloseSignal `json:"data"`
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(frames[0], "data: "))
+	if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	spec, head, _ := splitSeed(t, api, docKindTaskCloseout)
+	wantHead := mustRender(t, spec, head, map[string]string{
+		"task_no":      TaskNo(created.Task.ID),
+		"status":       TaskStatusDone,
+		"type_key":     "review-pr",
+		"manual_label": "review-pr",
+	})
+	if !strings.HasPrefix(envelope.Data.Reason, wantHead) {
+		t.Fatalf("a deleted manual must fall back to the raw key.\n got %q\nwant prefix %q",
+			envelope.Data.Reason, wantHead)
+	}
+	// Negative control: the label must not have rendered EMPTY — the failure this
+	// branch exists to prevent produces 「回到「」這本任務手冊」, which still has the
+	// approved shape and would slip past a prefix check written any looser.
+	if strings.Contains(envelope.Data.Reason, "「」") {
+		t.Fatalf("the manual label rendered empty: %q", envelope.Data.Reason)
+	}
+}
+
+func TestTaskCloseNudgeStaysSilentWhenTheDocumentCannotRender(t *testing.T) {
+	api := newTasksTestServer(t)
+	seedManualWithKey(t, api, "review-pr")
+	spec, _, body := splitSeed(t, api, docKindTaskCloseout)
+	if err := api.dal.PutBootDocument(BootDocument{
+		Kind: spec.Kind, Key: spec.Key, Text: body,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	created, code := createTypedTask(t, api, "review-pr", "123")
+	if code != http.StatusOK {
+		t.Fatalf("create: %d", code)
+	}
+	executor, connErr := api.hub.Connect("m-exec", "")
+	if connErr != nil {
+		t.Fatal(connErr)
+	}
+	driveTaskDone(t, api, created.Task.ID, "m-exec")
+
+	if frames := popTaskCloseFrames(t, executor); len(frames) != 0 {
+		t.Fatalf("an unrenderable 〈任務收尾〉 must send nothing, not an empty or "+
+			"substituted nudge; the executor received: %v", frames)
+	}
+	// Positive control: the very same fixture with an INTACT document does send —
+	// otherwise "no frame" would prove the harness broken rather than the rule kept.
+	stored, err := api.bootDocStoredText(spec, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := api.dal.PutBootDocument(BootDocument{
+		Kind: spec.Kind, Key: spec.Key, Text: stored,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	second, code := createTypedTask(t, api, "review-pr", "456")
+	if code != http.StatusOK {
+		t.Fatalf("create: %d", code)
+	}
+	driveTaskDone(t, api, second.Task.ID, "m-exec")
+	if frames := popTaskCloseFrames(t, executor); len(frames) != 1 {
+		t.Fatalf("positive control: an intact document must still nudge, got %d frames", len(frames))
 	}
 }
 

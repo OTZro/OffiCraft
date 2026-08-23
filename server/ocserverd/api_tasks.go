@@ -529,19 +529,43 @@ func (s *apiServer) closeTask(t *Task, status string, now float64, trigger strin
 	// SSE connection to fold this run's learnings back into the type's manual.
 	// Typed tasks only (ad-hoc has no manual); done AND terminated both nudge.
 	// Best-effort — a fan failure must never fail the close it follows.
-	// The nudge sentence carries the manual's DISPLAY label (best-effort
-	// lookup — a deleted manual honestly falls back to the raw key inside
-	// decideTaskCloseNudge); the MCP addressing string in the same sentence
-	// stays the raw type_key (T-fa76).
+	// The nudge sentence carries the manual's DISPLAY label (best-effort lookup
+	// — a deleted manual honestly falls back to the raw key); the MCP addressing
+	// string in the same sentence stays the raw type_key (T-fa76).
 	manualLabel := ""
 	if t.TypeKey != "" {
 		if m, err := s.dal.GetTaskManual(t.TypeKey); err == nil && m != nil {
 			manualLabel = manualDisplayLabel(m.DisplayName, t.TypeKey)
 		}
+		if manualLabel == "" {
+			manualLabel = t.TypeKey
+		}
 	}
-	if sig := decideTaskCloseNudge(*t, manualLabel); sig != nil {
-		if frame, err := directedFrameText(taskCloseTopic, sig); err == nil {
-			s.hub.PushDirected(t.ExecutorID, frame)
+	// T-7870 — THE WORDS COME FROM THE DOCUMENT, and this is the only place they
+	// come from. 〈任務收尾〉 was the last of the ten lifecycle documents whose
+	// text an owner could edit, save, and version without any agent ever
+	// receiving the edit: the sentence was a Go literal in decideTaskCloseNudge,
+	// so the document and the delivered bytes drifted from the day they split.
+	//
+	// 🔴 A FAULT SENDS NOTHING RATHER THAN A SUBSTITUTE. taskNoticeText answers
+	// "" on any fault (missing seed, a declared name with no value, an emptied
+	// overlay), and every other send site treats that as "omit the notice" —
+	// keeping a Go fallback here would restore the second source of truth this
+	// ticket removes, and would hide an unrenderable document behind text that
+	// looks right. The cost is named, not discovered later: an unrenderable
+	// 〈任務收尾〉 means the executor gets NO close-out reminder, on the same
+	// terms the other nine documents already carry.
+	if sig := decideTaskCloseNudge(*t); sig != nil {
+		sig.Reason = s.taskNoticeText(docKindTaskCloseout, map[string]string{
+			"task_no":      sig.TaskNo,
+			"status":       sig.Status,
+			"type_key":     sig.Type,
+			"manual_label": manualLabel,
+		})
+		if sig.Reason != "" {
+			if frame, err := directedFrameText(taskCloseTopic, sig); err == nil {
+				s.hub.PushDirected(t.ExecutorID, frame)
+			}
 		}
 	}
 	return nil

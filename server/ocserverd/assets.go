@@ -673,10 +673,11 @@ func materializeBinary(dir, name string, data []byte) (string, error) {
 // becoming the {name} variables this kind declares. Six are wired to their send
 // sites and the Go text they replaced is deleted: the two stop procedures, plus
 // 轉派程序（前任）, 解除阻擋 and — once the owner ruled the duplicated 交接備註
-// away (rc-0c36d8739b8f) — the two 接手程序. The remaining one (任務收尾) is
-// still only a document: it is split now, but decideTaskCloseNudge is a pure
-// function with no server to fold an overlay through, so the sentence an agent
-// actually receives is still the Go literal in sse_bands.go.
+// away (rc-0c36d8739b8f) — the two 接手程序. 任務收尾 was the last one left, and
+// T-7870 wired it: the pure decideTaskCloseNudge now decides only WHETHER a
+// nudge is owed, and closeTask — which is a method, and was already reading the
+// manual two lines above the call — fetches the words. All seven carry their
+// text from the document now, and no Go literal of any of them survives.
 // bootDocSingletonKey is the document key every non-boot_sequence boot document
 // uses. Named rather than repeated so a caller addressing "the one document of
 // this kind" says so, instead of spelling a magic "global" that reads like the
