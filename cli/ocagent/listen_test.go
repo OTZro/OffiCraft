@@ -1114,7 +1114,9 @@ func TestWindDown_OfflineWakesTheSessionAndDoesNotStopIt(t *testing.T) {
 			"payload": map[string]any{"offboard_notice": notice},
 		}}
 	}
-	// The soft arm's opener since rc-e9b655cd8e1a; the final call keeps
+	// A FROZEN COPY of the soft arm's opener as of rc-e9b655cd8e1a — not a
+	// claim about what the server sends today (the close-out verb has since
+	// changed); the final call keeps
 	// "offboard now". This fixture is a hand copy of what the server sends, so
 	// it goes stale silently — what it is actually testing is the de-dupe, and
 	// that only needs the two strings to DIFFER.

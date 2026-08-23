@@ -1,24 +1,30 @@
-// Pins the boot-context block WIRE contract of the real-backend adapter
-// (T-791e).
+// Pins the boot-document WIRE contract of the real-backend adapter (T-791e,
+// rewritten for the generic route family in T-3201).
 //
-// The three routes are in the frozen spec now, so these methods ride the
-// schema-typed openapi-fetch client like every other method in http.ts and a
-// BE verb/path rename is a tsc error before anything runs. What is asserted
-// here is the half tsc cannot see: WHICH of the two route families a given
-// kind lands on, and which key rides the path.
+// The routes are in the frozen spec, so these methods ride the schema-typed
+// openapi-fetch client and a BE verb/path rename is a tsc error before anything
+// runs. What is asserted here is the half tsc cannot see: which URL a given
+// (kind, key) lands on, which body rides the POST, and that nothing branches on
+// the kind any more.
 //
-// The contract, as the backend actually serves it:
-//   GET  /api/system-interaction               — read (a singleton; NO key segment)
-//   POST /api/system-interaction               — whole-document replace {text}
-//   POST /api/system-interaction/reset         — restore the factory version
-//   GET  /api/boot-sequence/{runtime_key}      — read one runtime's document
-//   POST /api/boot-sequence/{runtime_key}      — whole-document replace {text}
-//   POST /api/boot-sequence/{runtime_key}/reset— restore the factory version
+// The contract, as the backend serves it:
+//   GET  /api/boot-docs/{kind}/{key}        — read one, folded
+//   POST /api/boot-docs/{kind}/{key}        — replace the editable half {body}
+//   POST /api/boot-docs/{kind}/{key}/reset  — restore the factory version
 //
-// 🔴 The two families are NOT the same shape, and an earlier version of this
-// adapter composed one template string for both — giving system_interaction a
-// `/global` segment the server has no route for. Every call below therefore
-// asserts the full path, not a prefix.
+// ⚠️ THERE IS NO LISTING ROUTE ANY MORE (T-3201). `GET /api/boot-docs` and its
+// adapter method went with the ruling that made `kind` an enum: which documents
+// exist is the frozen spec's closed set, and the cockpit indexes its row table
+// by it, so a missing row is a compile error instead of a listing to diff.
+//
+// 🔴 WHY THE OLD ASSERTIONS ARE GONE RATHER THAN LOOSENED. This file used to
+// pin TWO route families with different shapes — a keyless singleton and a
+// keyed one — because composing one template string for both had shipped
+// system_interaction a `/global` segment the server has no route for. T-3201
+// removed the shapes rather than the risk: one family, one path template, every
+// document addressed the same way. The full path is still asserted on every
+// call, so a composed-wrong URL is still caught; there is simply no second
+// shape left for it to be wrong about.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { httpApi } from "./http";
@@ -27,13 +33,16 @@ import { codeForStatus } from "./errorCodes";
 const WIRE_DOC = {
   kind: "boot_sequence",
   key: "claude",
-  text: "# 啟動程序",
+  text: "唯讀開頭\n\n<!-- marker -->\n\n# 啟動程序",
+  read_only_head: "唯讀開頭",
+  body: "# 啟動程序",
   owner_id: "owner",
   schema_version: 3,
   size_chars: 6,
   cap_chars: 15000,
   is_default: false,
   has_seed: true,
+  read_only: false,
 };
 
 const fetchMock = vi.fn(
@@ -71,54 +80,71 @@ async function lastCall(): Promise<{
   };
 }
 
-describe("httpApi · boot-context block wire methods", () => {
-  it("getBootDoc GETs the runtime's own boot-sequence route", async () => {
+describe("httpApi · boot-document wire methods", () => {
+  it("getBootDoc GETs the document's own kind/key path", async () => {
     const view = await httpApi.getBootDoc("boot_sequence", "claude");
     const { url, method, body } = await lastCall();
-    expect(url).toBe("/api/boot-sequence/claude");
+    expect(url).toBe("/api/boot-docs/boot_sequence/claude");
     expect(method).toBe("GET");
     expect(body).toBeUndefined();
     expect(view.text).toBe(WIRE_DOC.text);
     expect(view.capChars).toBe(15000);
     expect(view.hasSeed).toBe(true);
+    expect(view.readOnly).toBe(false);
   });
 
-  it("reads system_interaction as a singleton, with no key segment in the path", async () => {
-    // The key ("global") is implied by the kind — the server serves ONE
-    // system-interaction document and its route carries no parameter. Sending
-    // /api/system-interaction/global is a 404, and it is a 404 no test that
-    // runs against a mock can see.
-    await httpApi.getBootDoc("system_interaction", "global");
-    expect((await lastCall()).url).toBe("/api/system-interaction");
+  it("addresses every kind through the SAME path template", async () => {
+    // The property that replaced "which of two families does this kind land
+    // on": there is one family, so a kind that ships tomorrow needs no code.
+    for (const kind of [
+      "system_interaction",
+      "offboard",
+      "accelerated_stop",
+      "task_closeout",
+      "task_reassign_predecessor",
+      "task_takeover_with_predecessor",
+      "task_takeover_fresh",
+      "task_unblocked",
+    ] as const) {
+      await httpApi.getBootDoc(kind, "global");
+      expect((await lastCall()).url).toBe(`/api/boot-docs/${kind}/global`);
+    }
   });
 
-  it("saveBootDoc POSTs {text, allow_shrink} to the document's own path (NOT PUT)", async () => {
+  it("saveBootDoc POSTs {body, allow_shrink} to the document's own path (NOT PUT)", async () => {
     await httpApi.saveBootDoc("boot_sequence", "codex", "新的內容");
     const { url, method, body } = await lastCall();
-    expect(url).toBe("/api/boot-sequence/codex");
+    expect(url).toBe("/api/boot-docs/boot_sequence/codex");
     expect(method).toBe("POST");
+    // 🔴 `body`, and NOTHING that could carry the read-only head (T-3201). The
+    // key was `text` and carried the whole document, head included; the server
+    // joins the shipped head on now, so a request that named one would be a
+    // request no server accepts.
+    //
     // allow_shrink is FALSE here, the opposite of saveGlobalContext: emptying a
     // boot sequence ships agents with no instructions, and the way back to a
-    // small document is the factory reset, not a whole-document wipe.
+    // small document is the factory reset, not a wipe.
     expect(JSON.parse(String(body))).toEqual({
-      text: "新的內容",
+      body: "新的內容",
       allow_shrink: false,
     });
 
     await httpApi.saveBootDoc("system_interaction", "global", "新的內容");
-    expect((await lastCall()).url).toBe("/api/system-interaction");
+    expect((await lastCall()).url).toBe(
+      "/api/boot-docs/system_interaction/global"
+    );
   });
 
   it("resetBootDoc POSTs …/reset with no body (NOT DELETE on the doc path)", async () => {
     await httpApi.resetBootDoc("boot_sequence", "claude");
     const claude = await lastCall();
-    expect(claude.url).toBe("/api/boot-sequence/claude/reset");
+    expect(claude.url).toBe("/api/boot-docs/boot_sequence/claude/reset");
     expect(claude.method).toBe("POST");
     expect(claude.body).toBeUndefined();
 
     await httpApi.resetBootDoc("system_interaction", "global");
     const sys = await lastCall();
-    expect(sys.url).toBe("/api/system-interaction/reset");
+    expect(sys.url).toBe("/api/boot-docs/system_interaction/global/reset");
     expect(sys.method).toBe("POST");
   });
 
@@ -129,13 +155,15 @@ describe("httpApi · boot-context block wire methods", () => {
     for (const key of ["claude", "codex"] as const) {
       const other = key === "claude" ? "codex" : "claude";
       await httpApi.getBootDoc("boot_sequence", key);
-      expect((await lastCall()).url).toBe(`/api/boot-sequence/${key}`);
+      expect((await lastCall()).url).toBe(`/api/boot-docs/boot_sequence/${key}`);
       expect((await lastCall()).url).not.toContain(other);
       await httpApi.saveBootDoc("boot_sequence", key, "x");
-      expect((await lastCall()).url).toBe(`/api/boot-sequence/${key}`);
+      expect((await lastCall()).url).toBe(`/api/boot-docs/boot_sequence/${key}`);
       expect((await lastCall()).url).not.toContain(other);
       await httpApi.resetBootDoc("boot_sequence", key);
-      expect((await lastCall()).url).toBe(`/api/boot-sequence/${key}/reset`);
+      expect((await lastCall()).url).toBe(
+        `/api/boot-docs/boot_sequence/${key}/reset`
+      );
       expect((await lastCall()).url).not.toContain(other);
     }
   });
@@ -156,6 +184,27 @@ describe("httpApi · boot-context block wire methods", () => {
       status: 400,
       code: codeForStatus(400),
       serverMessage: "over the character limit",
+    });
+  });
+
+  it("surfaces a read-only document's 405 as an ApiError carrying the server's words", async () => {
+    // The refusal says what the document IS, not that the caller lacks a
+    // permission — no principal may edit it, so pointing at authz would send an
+    // owner looking for a role to grant. The cockpit quotes it verbatim.
+    const refusal =
+      "the dependency-released notice is a read-only document — nothing was written";
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { code: codeForStatus(405), message: refusal } }),
+        { status: 405, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    await expect(
+      httpApi.saveBootDoc("task_unblocked", "global", "x")
+    ).rejects.toMatchObject({
+      status: 405,
+      code: codeForStatus(405),
+      serverMessage: refusal,
     });
   });
 });

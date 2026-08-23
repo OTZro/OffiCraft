@@ -45,20 +45,20 @@ package main
 //	the "?" placeholder restored in the notice        → RED
 //	the deadline clause appended UNCONDITIONALLY      → RED
 //
-// ⚠️ THE THIRD ONE IS NARROWER THAN IT FIRST READ, and the narrower statement
-// is the honest one: an independent review measured the mutant that actually
-// resembles a mistake — dropping the `finalCall` half of `finalCall && deadline
-// > 0`, keeping `deadline > 0` — and the whole package stayed GREEN, because
-// nothing in the tree called offboardNotice with `finalCall=false` alongside a
-// deadline. The production caller CAN: offboardNoticeFor passes
-// refocusDeadlineOf(...) on both arms and lets the kind decide. That call is
-// the one TestOffboardNotice_ASoftNoticeIgnoresADeadlineItWasHanded now makes,
-// so the guard covers the mutation instead of only its cruder cousin.
+// ⚠️ THE THIRD ONE CHANGED SHAPE IN T-3201 and got stronger for it. The clause
+// used to be a Go `if finalCall && deadline > 0`, and the mutant that actually
+// resembles a mistake — dropping the `finalCall` half — left the whole package
+// green, because nothing called the builder with finalCall=false alongside a
+// deadline. There is no builder and no flag any more: the clause lives in the
+// 加速停止 document's head and NOTHING ELSE HAS ONE, so "appended
+// unconditionally" is now spelled "the soft arm was sent the hard document" —
+// which is the mutant TestOffboardNotice_ASoftNoticeIgnoresADeadlineItWasHanded
+// and TestOffboardDiscriminator_AppliedToTheNoticesThemselves both catch.
 //
 // 🔴 AND ONE MORE THING THIS FILE DOES NOT GUARD, found by independent review:
 // it reads §1 from the SEED (assetRoot("").readSeedFile), while what actually
-// gets stapled to a notice is s.offboardText() — the boot DOCUMENT in the
-// database, which the owner can rewrite through replace_offboard. The two agree
+// reaches an agent is the folded boot DOCUMENT in the database, which the owner
+// can rewrite through replace_offboard. The two agree
 // only while nobody has overridden it, and this station's override has been
 // cleared and reinstated more than once. So a green here is evidence about the
 // factory text, NOT about the sentence a live agent receives; checking the live
@@ -120,8 +120,17 @@ func TestOffboardDiscriminator_AppliedToTheNoticesThemselves(t *testing.T) {
 	const where = "context 62% (your limits: 60% / 75%)"
 	const deadline = 1_787_000_000.0 // 2026-08-17T20:53:20Z
 
-	soft := offboardNotice(where, offboardCloserRestartSelf, false, 0, doc)
-	hard := offboardNotice(where, offboardCloserRestartSelf, true, deadline, doc)
+	// The LIVE producer on both arms, which is what makes "soft reads as soft"
+	// a statement about the server rather than about arguments this file chose:
+	// the soft arm is sent 下線程序, the final call 加速停止, and only the second
+	// of the two documents carries the clause.
+	s := newReconcileTestServer(t)
+	soft := s.winddownNoticeText(offboardKindSoft, where, 0)
+	hard := s.winddownNoticeText(offboardKindFinal, where, deadline)
+	if soft == "" || hard == "" {
+		t.Fatal("the fixture must render both notices — an empty one would pass " +
+			"every assertion below vacuously")
+	}
 
 	// ── the two that matter ──────────────────────────────────────────────────
 	if discriminator.MatchString(soft) {
@@ -186,13 +195,13 @@ func TestOffboardNotice_NoQuestionMarkForAMissingPercentage(t *testing.T) {
 			name:    "claude omits the percentage it does not have",
 			runtime: RuntimeClaude,
 			want: "close-out (your limits: 40% / 50%) — start your close-out: " +
-				"work the sequence below, then call restart_self yourself.",
+				"work the sequence below, then call report_stopped yourself.",
 		},
 		{
 			name:    "codex omits the round it does not have",
 			runtime: RuntimeCodex,
 			want: "close-out (your limits: round 3 / round 4) — start your close-out: " +
-				"work the sequence below, then call restart_self yourself.",
+				"work the sequence below, then call report_stopped yourself.",
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -215,10 +224,11 @@ func TestOffboardNotice_NoQuestionMarkForAMissingPercentage(t *testing.T) {
 			// not an edge case: that arm is not triggered by a percentage or a
 			// round count, so there has never been one to report.
 			//
-			// The offboard document is appended verbatim by offboardNotice and
-			// is not what this test guards, so it is taken from the server
-			// rather than restated — the assertion is about the SENTENCE.
-			want := c.want + "\n" + s.offboardText()
+			// The document's BODY is not what this test guards, so it is taken
+			// from the server rather than restated — the assertion is about the
+			// SENTENCE, which is the document's read-only head.
+			_, body, _ := DocSplitHeadBody(mustFoldText(t, s, s.offboardSpec()))
+			want := c.want + "\n" + body
 			if got := s.offboardNoticeFor(m, offboardKindSoft); got != want {
 				t.Fatalf("a missing position must be OMITTED, not printed as a "+
 					"placeholder:\n got %q\nwant %q", got, want)
@@ -232,11 +242,12 @@ func TestOffboardNotice_NoQuestionMarkForAMissingPercentage(t *testing.T) {
 // merely go without one because no caller supplies it.
 //
 // 🔴 WHY THIS CANNOT BE LEFT TO THE CALLER. offboardNoticeFor hands
-// refocusDeadlineOf(...) to BOTH arms and lets `kind` decide, so a soft arm
-// whose member happens to carry a live refocus epoch reaches this function with
-// a positive deadline. If the guard degraded to `deadline > 0`, that member —
-// the one the owner ruled has NO clock on it — would be told an instant it is
-// not being collected at.
+// winddownDeadlineOf(...) to BOTH arms and lets `kind` decide, so a soft arm
+// whose member happens to carry a live refocus epoch reaches the renderer with
+// a positive deadline. Since T-3201 the clause is not a Go condition at all —
+// it is a slot the 下線程序 head does not have — and this test is what pins
+// that a deadline handed to the soft arm changes NOTHING it sends. The failure
+// it refuses is the send site picking the document by anything but `kind`.
 //
 // ⚠️ IT COMPARES THE WHOLE STRING, NOT A KEYWORD. Owner ruling 2026-08-20
 // (c-cdcaabeaf159 / c-2502de439aaa): 「你如果要比對 context 就是比對一整份要
@@ -251,21 +262,36 @@ func TestOffboardNotice_ASoftNoticeIgnoresADeadlineItWasHanded(t *testing.T) {
 		where    = "context 30% (your limits: 55% / 65%)"
 		doc      = "§1 …"
 	)
-	got := offboardNotice(where, offboardCloserRestartSelf, false, deadline, doc)
+	s := newReconcileTestServer(t)
+	_, body, _ := DocSplitHeadBody(mustFoldText(t, s, s.offboardSpec()))
+
+	got := s.winddownNoticeText(offboardKindSoft, where, deadline)
 	want := where + " — start your close-out: work the sequence below, " +
-		"then call " + offboardCloserRestartSelf + " yourself.\n" + doc
+		"then call report_stopped yourself.\n" + body
 	if got != want {
 		t.Fatalf("soft notice handed a deadline:\n got %q\nwant %q", got, want)
 	}
-	// Positive control on the same arguments: the clause is not simply
-	// unreachable — flip `finalCall` and the whole sentence becomes the other
-	// one, deadline and all.
-	gotFinal := offboardNotice(where, offboardCloserRestartSelf, true, deadline, doc)
+	// Positive control on the same deadline: the clause is not simply
+	// unreachable — ask for the final call and the whole sentence becomes the
+	// other document, deadline and all.
+	_, finalBody, _ := DocSplitHeadBody(mustFoldText(t, s, s.acceleratedStopSpec()))
+	gotFinal := s.winddownNoticeText(offboardKindFinal, where, deadline)
 	wantFinal := where + " — offboard now: work the sequence below, " +
-		"then call " + offboardCloserRestartSelf + " yourself." +
+		"then call report_stopped yourself." +
 		" Your deadline is " + time.Unix(int64(deadline), 0).UTC().Format(time.RFC3339) +
-		".\n" + doc
+		".\n" + finalBody
 	if gotFinal != wantFinal {
 		t.Fatalf("final call:\n got %q\nwant %q", gotFinal, wantFinal)
 	}
+}
+
+// mustFoldText folds one document the way the send site does, so a test that
+// needs only the owner-editable half reads the SAME bytes an agent is sent.
+func mustFoldText(t *testing.T, s *apiServer, spec bootDocSpec) string {
+	t.Helper()
+	dto, err := s.foldBootDocDTO(spec)
+	if err != nil || dto == nil {
+		t.Fatalf("fold %s: %v", spec.Kind, err)
+	}
+	return dto.Text
 }

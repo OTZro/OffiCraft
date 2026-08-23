@@ -102,8 +102,12 @@ func (s *apiServer) offboardDeltaPayload(m Member) map[string]any {
 //   - SOFT (停止) — 下線 (desired offline + a stopping anchor, the graceful
 //     arm) and EVERY refocus cause except the one below: 重新聚焦, 改機器,
 //     model/runtime, restart_self, and the FIRST context threshold. It says
-//     work the sequence, then call restart_self yourself; no countdown clause,
+//     work the sequence, then call report_stopped yourself; no countdown clause,
 //     because on these arms there is no clock AT ALL — not now, and not later.
+//     (restart_self stays in the list above because it is a refocus CAUSE — an
+//     agent asking for its own recycle. It stopped being the verb the notice
+//     ends with: owner c-5b3d8f192a0b / rc-5d044f0c1266, and since T-3201 that
+//     sentence is the read-only head of 〈下線程序〉, not a Go literal.)
 //   - FINAL (加速停止) — the two 加速停止 causes, and only those: the SECOND
 //     context threshold (context_high) and the owner's own press
 //     (accelerated_stop). The collection is already under way and the recycle
@@ -164,8 +168,17 @@ func offboardKindOf(m Member, now float64) (kind string, carries bool) {
 		// stopping_since before it publishes, so on the sentence above alone the
 		// member it just killed receives a full SOFT notice on its own stream —
 		// telling a session that is about to be cut off to work the sequence and
-		// call restart_self. Independent e2e verification observed exactly that
-		// frame; the owner's ruling is that force-stop sends no message at all.
+		// call the close-out verb. Independent e2e verification observed exactly
+		// that frame; the owner's ruling is that force-stop sends no message at
+		// all.
+		//
+		// ⚠️ The VERB is deliberately not named in the sentence above. What the
+		// e2e run saw on the wire was 「then call restart_self yourself」, because
+		// that is what the notice said on the day it was observed; the seed now
+		// closes on report_stopped. Naming today's verb here would put a word the
+		// run never saw inside a claim about what the run observed — and the
+		// observation being reported is the ARRIVAL of a soft notice at a member
+		// being force-stopped, which is true under either wording.
 		//
 		// 🔴 RECONFIRMED 2026-08-18, and written down because it was nearly
 		// reversed that day: the owner first said a force-stop should tell the
@@ -243,25 +256,17 @@ func forcedEpochLive(m Member) bool {
 		m.ForcedStopAt >= m.StoppingSince
 }
 
-// offboardCloserFor names the tool that ACTUALLY ends this member's sequence.
-// A member still wanted online is being handed over and re-starts itself; one
-// the owner has taken down is not coming back, and restart_self refuses it by
-// design (it is a RE-start). Telling it otherwise would be an instruction that
-// can only answer 409 — on an arm where nothing collects it on a clock, so it
-// would sit there refused until someone pressed force-stop.
-func offboardCloserFor(m Member) string {
-	if m.DesiredState == DesiredStateOffline {
-		return offboardCloserReportStopped
-	}
-	return offboardCloserRestartSelf
-}
-
-// offboardNoticeFor composes the sentence for a member that is being wound
-// down: the ONE approved sentence, plus the deadline clause when this is the
-// final call (the deadline is winddownDeadlineOf, i.e. the anchor plus
-// stop.accelerated_grace_secs — owner-settable since T-ed79, not a constant). It reads the session's own gauge so the agent is told where it
-// actually is, not just that it is over the line — the owner's requirement that
-// the notice carry 「他現在 context / round 狀況，以及我們兩個系統數字是多少」.
+// offboardNoticeFor resolves the ONE fact a wind-down notice needs that the
+// document cannot carry — {where}, this session's own position — and hands it,
+// with the kind and the deadline, to winddownNoticeText, which owns everything
+// else about the sentence.
+//
+// It reads the session's own gauge so the agent is told where it actually is,
+// not just that it is over the line — the owner's requirement that the notice
+// carry 「他現在 context / round 狀況，以及我們兩個系統數字是多少」. The deadline
+// is winddownDeadlineOf, i.e. the anchor plus stop.accelerated_grace_secs
+// (owner-settable since T-ed79, not a constant), and it is the same expression
+// the cockpit's refocus_deadline reads.
 func (s *apiServer) offboardNoticeFor(m Member, kind string) string {
 	cfg := s.ctxHighConfig()
 	// The gauge is absent on a server assembled without one (and a session that
@@ -331,9 +336,13 @@ func (s *apiServer) offboardNoticeFor(m Member, kind string) string {
 	// The deadline quoted in the sentence and the deadline the cockpit shows come
 	// from ONE expression (T-d6a7). offboardKindOf only answers "final" for a
 	// clocked arm, so this is positive exactly when the sentence needs it.
-	notice := offboardNotice(where, offboardCloserFor(m), kind == offboardKindFinal,
-		winddownDeadlineOf(m, s.reconcileConfigLive()),
-		s.offboardText())
+	notice := s.winddownNoticeText(kind, where, winddownDeadlineOf(m, s.reconcileConfigLive()))
+	// A notice that could not be rendered is not sent at all — the caller omits
+	// the key, and the agent's client falls back. Appending the write-back
+	// clause to "" would send that clause on its own, with no sequence under it.
+	if notice == "" {
+		return ""
+	}
 	if clause := s.offboardManualWriteBackFor(m); clause != "" {
 		notice += "\n\n" + clause
 	}
@@ -1454,13 +1463,14 @@ func (s *apiServer) HandleReportStoppedApiSelfStoppedPost(w http.ResponseWriter,
 //     session to recycle. 🔴 The test is the SSE connection, not the presence
 //     projection. Those differ for exactly the caller this endpoint exists for:
 //     the offboard notice says 「work the sequence below, then call
-//     restart_self yourself」, step 1 of that sequence is report_stopping, and
-//     that stamps the anchor which makes PresenceState project `stopping`. So
-//     an agent doing precisely what it was told was refused — and once a
-//     close-out's anchor stopped being swept away every tick (T-2123) the
-//     refusal lasted the whole soft window instead of clearing on the next
-//     tick. A session holding an open stream has something to recycle; that is
-//     the whole question here.
+//     report_stopped yourself」, step 1 of that sequence is report_stopping, and
+//     that stamps the anchor which makes PresenceState project `stopping`. So a
+//     session that has merely STARTED its close-out already reads as stopping,
+//     and a presence test here would refuse the caller this endpoint exists for
+//     — and once a close-out's anchor stopped being swept away every tick
+//     (T-2123) that refusal lasted the whole soft window instead of clearing on
+//     the next tick. A session holding an open stream has something to
+//     recycle; that is the whole question here.
 //   - MINIMUM-LIVENESS (429): a call within minSelfRestartSecs of this session
 //     connecting is refused — the server-authoritative boot_ts (stamped on the
 //     SSE first-connect edge, onFirstConnect) is the anchor; reusing the

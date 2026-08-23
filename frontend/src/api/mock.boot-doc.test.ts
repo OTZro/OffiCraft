@@ -19,6 +19,7 @@ import {
   __injectMockOutsourceWorker,
 } from "./mock";
 import { ApiError } from "./errors";
+import type { BootDocKind } from "../types";
 import { BOOT_DOC_HISTORY_KEPT, BOOT_DOC_CAP_CHARS_DEFAULTS } from "./docCap";
 import {
   SEED_SYSTEM_INTERACTION_MD,
@@ -26,6 +27,22 @@ import {
   SEED_BOOT_SEQUENCE_CODEX_MD,
 } from "./seeds";
 import { documentRevisions } from "../test/documentHistory";
+import { docJoinHeadBody, docSplitHeadBody } from "./docSplit";
+
+/** What the mock STORES when `body` is saved into a document whose seed carries
+ * a read-only head (T-3201): the shipped head, then the body. The wire carries
+ * only the body — the head is the server's to put back — so every expectation
+ * about stored text or a retained revision has to say so out loud. */
+function storedFor(seed: string, body: string): string {
+  const { head, split } = docSplitHeadBody(seed.trim());
+  return split ? docJoinHeadBody(head, body) : body;
+}
+
+/** The editable half of a seed — what a caller would send back unchanged. */
+function bodyOf(seed: string): string {
+  const { body, split } = docSplitHeadBody(seed.trim());
+  return split ? body : seed.trim();
+}
 
 beforeEach(() => {
   __resetMock();
@@ -50,6 +67,60 @@ describe("mockApi · boot-context blocks", () => {
       });
       expect(doc.sizeChars).toBe([...seed.trim()].length);
     }
+  });
+
+  it("refuses every write to a read-only document with 405, and still serves its text", async () => {
+    // Owner's ruling: 「以前 global context 是固定內容 我們也是會顯示 只是不給改」.
+    // Reading works — that is the whole reason these two are documents rather
+    // than string literals — and BOTH write faces refuse. 405, not 403: no
+    // principal may edit them, so an authz answer would send an owner looking
+    // for a role to grant.
+    for (const kind of ["task_takeover_fresh", "task_unblocked"] as const) {
+      const doc = await mockApi.getBootDoc(kind, "global");
+      expect(doc.readOnly).toBe(true);
+      expect(doc.text).not.toBe("");
+
+      await expect(
+        mockApi.saveBootDoc(kind, "global", "owner 想改的內容")
+      ).rejects.toMatchObject({ status: 405 });
+      await expect(mockApi.resetBootDoc(kind, "global")).rejects.toMatchObject({
+        status: 405,
+      });
+
+      // …and the refusal wrote NOTHING: the document is still the shipped one.
+      expect(await mockApi.getBootDoc(kind, "global")).toMatchObject({
+        text: doc.text,
+        isDefault: true,
+      });
+    }
+  });
+
+  it("lets the editable documents through the same faces the read-only ones bounce off", async () => {
+    // The paired control: without it, a mock that refused EVERY write would
+    // pass the assertions above while making the whole surface read-only.
+    for (const kind of [
+      "accelerated_stop",
+      "task_closeout",
+      "task_reassign_predecessor",
+      "task_takeover_with_predecessor",
+    ] as const) {
+      expect((await mockApi.getBootDoc(kind, "global")).readOnly).toBe(false);
+      const saved = await mockApi.saveBootDoc(kind, "global", `${kind} 改過
+`);
+      expect(saved).toMatchObject({ isDefault: false });
+      expect(saved.text).toContain("改過");
+      expect(await mockApi.resetBootDoc(kind, "global")).toMatchObject({
+        isDefault: true,
+      });
+    }
+  });
+
+  it("404s a kind nobody registered, the same way an unknown key is a 404", async () => {
+    // Not a 400: the pair addresses A DOCUMENT, and a document this server does
+    // not have is not found.
+    await expect(
+      mockApi.getBootDoc("task_started" as BootDocKind, "global")
+    ).rejects.toMatchObject({ status: 404 });
   });
 
   it("404s a key that names no document instead of inventing a fourth stream", async () => {
@@ -124,7 +195,9 @@ describe("mockApi · boot-context blocks", () => {
     // The discarded content survives as a revision — a destructive write with
     // no way back would be the one write the history does not cover.
     const kept = await documentRevisions(mockApi, "boot_sequence", "claude");
-    expect(kept[0].content.text).toBe("壞掉的內容");
+    expect(kept[0].content.text).toBe(
+      storedFor(SEED_BOOT_SEQUENCE_MD, "壞掉的內容")
+    );
   });
 
   it("refuses an over-cap save that is not getting shorter, and allows one that is", async () => {
@@ -149,6 +222,24 @@ describe("mockApi · boot-context blocks", () => {
     // to reproduce here.)
   });
 
+  it("refuses a save that empties a document, and retains no version for it", async () => {
+    // The real server has refused this since T-2d99; the mock did not, so demo
+    // mode would blank a boot document the server would have kept. An empty
+    // boot sequence is not a small document, it is an agent with no
+    // instructions.
+    const before = await mockApi.getBootDoc("boot_sequence", "claude");
+    for (const wipe of ["", "   ", "\n\t "]) {
+      await expect(
+        mockApi.saveBootDoc("boot_sequence", "claude", wipe)
+      ).rejects.toMatchObject({ status: 400 });
+    }
+    expect(await mockApi.getBootDoc("boot_sequence", "claude")).toMatchObject({
+      text: before.text,
+      isDefault: true,
+    });
+    expect(await documentRevisions(mockApi, "boot_sequence", "claude")).toHaveLength(0);
+  });
+
   it("retains no version when a save changes nothing", async () => {
     // Ten slots stop meaning much if a no-op save spends one. Owner ruling, and
     // it matters precisely on the surface where someone pastes, looks, and
@@ -167,7 +258,7 @@ describe("mockApi · boot-context blocks", () => {
     await mockApi.saveBootDoc(
       "boot_sequence",
       "codex",
-      SEED_BOOT_SEQUENCE_CODEX_MD.trim()
+      bodyOf(SEED_BOOT_SEQUENCE_CODEX_MD)
     );
     expect(await mockApi.getBootDoc("boot_sequence", "codex")).toMatchObject({
       isDefault: true,
@@ -194,7 +285,8 @@ describe("mockApi · boot-context blocks", () => {
     const [older] = await documentRevisions(mockApi, "boot_sequence", "claude");
     await mockApi.restoreDocumentHistory("boot_sequence", "claude", older.id);
     expect(await mockApi.getBootDoc("boot_sequence", "claude")).toMatchObject({
-      text: "第一版",
+      text: storedFor(SEED_BOOT_SEQUENCE_MD, "第一版"),
+      body: "第一版",
       isDefault: false,
     });
 

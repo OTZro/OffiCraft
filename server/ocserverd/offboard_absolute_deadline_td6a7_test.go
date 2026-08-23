@@ -54,8 +54,8 @@ import (
 // English quantity phrasing is not ("a couple of", "half an", "a few more"), so
 // a partial numeral whitelist would rebuild the
 // same false confidence the literal whitelist had, one layer down. The sentence
-// is composed from one fixed template in offboardNotice, so a spelled-out
-// duration can only get there by someone typing one on purpose.
+// is the read-only head of one document, so a spelled-out duration can only get
+// there by someone typing one on purpose.
 //
 // ⚠️ The unit is what the pattern turns on, never the digit, because a real
 // notice is full of legitimate numbers: "context 35% (your limits: 40% / 50%)",
@@ -94,9 +94,9 @@ var (
 	deadlineWords = regexp.MustCompile(`(?i)deadline|截止|死線|死线`)
 )
 
-// composedSentence is the half of a notice the SERVER writes. offboardNotice
-// folds the 下線程序 document in after a newline, and everything below that
-// line is the owner's prose, which these guards do not police.
+// composedSentence is the half of a notice the SERVER writes: the document's
+// read-only head, which is its first line. Everything below that line is the
+// owner-editable body, which these guards do not police.
 func composedSentence(notice string) string {
 	if i := strings.Index(notice, "\n"); i >= 0 {
 		return notice[:i]
@@ -157,8 +157,12 @@ const (
 	// The whole sentence the server composes for that epoch on a member with no
 	// gauge reading, under the shipped 40%/50% limits. Asserted verbatim rather
 	// than by substring — see the call sites.
+	// 🔴 report_stopped, not restart_self (T-3201). The sentence is now the
+	// 加速停止 document's own head, and the owner ruled that verb by name
+	// (c-5b3d8f192a0b): the server controls this member's lifecycle, so what it
+	// owes is a report.
 	deadlineEpochSentence = "close-out (your limits: 40% / 50%)" +
-		" — offboard now: work the sequence below, then call restart_self" +
+		" — offboard now: work the sequence below, then call report_stopped" +
 		" yourself. Your deadline is " + deadlineEpochWant + "."
 )
 
@@ -257,10 +261,12 @@ func TestDeadlineIsRenderedInUTCWhateverTheServerProcessTimezone(t *testing.T) {
 			time.Local = loc
 			defer func() { time.Local = saved }()
 
-			notice := offboardNotice("context 50% (your limits: 40% / 50%)",
-				offboardCloserRestartSelf, true, deadlineEpochSince+deadlineEpochGrace, "")
+			s := newReconcileTestServer(t)
+			notice := composedSentence(s.winddownNoticeText(offboardKindFinal,
+				"context 50% (your limits: 40% / 50%)",
+				deadlineEpochSince+deadlineEpochGrace))
 			want := "context 50% (your limits: 40% / 50%)" +
-				" — offboard now: work the sequence below, then call restart_self" +
+				" — offboard now: work the sequence below, then call report_stopped" +
 				" yourself. Your deadline is " + deadlineEpochWant + "."
 			if notice != want {
 				t.Fatalf("a server running in %s composed:\n got: %q\nwant: %q",
@@ -301,19 +307,18 @@ func TestTimeShapeGuardReadsRealNoticesCorrectly(t *testing.T) {
 	notices["下線"] = notice
 	// The codex arm's `where` counts ROUNDS, not seconds — the one place a bare
 	// "round 5 / round 6" could be mistaken for a clock.
-	notices["codex rounds"] = offboardNotice(
-		"compaction round 5 (your limits: round 5 / round 6)",
-		offboardCloserRestartSelf, false, 0, s.offboardText())
+	notices["codex rounds"] = s.winddownNoticeText(offboardKindSoft,
+		"compaction round 5 (your limits: round 5 / round 6)", 0)
 	// 🔴 The owner's prose, and the reason the guard is aimed at the sentence
 	// alone. This is the exact line a review appended to seeds/offboard.md, and
 	// it turned five tests red on a notice the server composed correctly. The
 	// document describes the STEPS; how long anything takes there is a human
 	// telling a human to hurry, not the server quoting a clock. Appended here
-	// rather than left to the staged copy so this stays covered even on a tree
-	// where the embed is empty and offboardText answers "".
-	notices["下線程序 prose under the sentence"] = offboardNotice(
-		"context 50% (your limits: 40% / 50%)", offboardCloserReportStopped, false, 0,
-		s.offboardText()+"\n⚠️ 第 5 步收拾暫存最多花 5 分鐘，別在這裡耗掉交接時間。")
+	// rather than left to the staged copy so this stays covered wherever the
+	// owner's own copy of the document happens to sit.
+	notices["下線程序 prose under the sentence"] = s.winddownNoticeText(offboardKindSoft,
+		"context 50% (your limits: 40% / 50%)", 0) +
+		"\n⚠️ 第 5 步收拾暫存最多花 5 分鐘，別在這裡耗掉交接時間。"
 
 	for name, n := range notices {
 		if frag, yes := quotesTimeOfAnyShape(n); yes {
@@ -344,9 +349,9 @@ func TestTimeShapeGuardReadsRealNoticesCorrectly(t *testing.T) {
 		"You have 1m14s left.",
 		"You have 1h30m0s left.",
 	} {
-		planted := offboardNotice("context 50% (your limits: 40% / 50%) "+countdown,
-			offboardCloserReportStopped, true, deadlineEpochSince+deadlineEpochGrace,
-			s.offboardText())
+		planted := s.winddownNoticeText(offboardKindFinal,
+			"context 50% (your limits: 40% / 50%) "+countdown,
+			deadlineEpochSince+deadlineEpochGrace)
 		if _, yes := quotesTimeOfAnyShape(planted); !yes {
 			t.Fatalf("the shape guard misses a countdown written as %q:\n%s",
 				countdown, planted)

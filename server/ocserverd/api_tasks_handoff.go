@@ -341,12 +341,26 @@ func (s *apiServer) releaseDependentsOnClose(t Task, now float64, trigger string
 		// dependent that is still FROZEN is told it can start (the release
 		// removed only one of its two reasons to wait), and a worker that has
 		// already left is still addressed. Both were true before T-e77f too.
+		//
+		// 🔴 THE NOTICE IS THE 〈解除阻擋〉 DOCUMENT NOW (T-3201), and that is
+		// what puts the owner's approved rewrite on the wire. He approved
+		// replacing the old single sentence 「這張任務現在可以開始:請 get_task
+		// 讀內容、submit_plan 規劃步驟後開始執行。」 with three branches
+		// (rc-8c0045ef7c38) — it assumed a released ticket had not started, and
+		// there is live evidence of it saying so to one already in progress. The
+		// rewrite landed in the seed and this line kept sending the old sentence,
+		// so the approval was on disk and not on the wire until the document
+		// became the notice. "" means it could not be rendered — post nothing
+		// rather than a sentence with {blocker_title} still in it.
 		if d.ExecutorID != "" {
-			s.postTaskChat(d, wireSystemSender, d.ExecutorID,
-				"["+TaskNo(d.ID)+"] 擋住這張任務的前置任務 "+TaskNo(t.ID)+
-					"「"+t.Title+"」已經"+t.Status+"了,它不再擋著你。"+
-					"這張任務現在可以開始:請 get_task 讀內容、submit_plan 規劃步驟後開始執行。",
-				trigger)
+			if notice := s.taskNoticeText(docKindTaskUnblocked, map[string]string{
+				"blocked_task_no": TaskNo(d.ID),
+				"blocker_task_no": TaskNo(t.ID),
+				"blocker_title":   t.Title,
+				"blocker_status":  t.Status,
+			}); notice != "" {
+				s.postTaskChat(d, wireSystemSender, d.ExecutorID, notice, trigger)
+			}
 		}
 		s.publishTask(d, trigger)
 		if d.ExecutorKind == TaskExecutorOutsource && d.ExecutorID == "" {

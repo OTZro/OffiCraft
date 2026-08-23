@@ -1970,27 +1970,26 @@ export const httpApi: Api = {
     return toGlobalContext(wire);
   },
 
-  // ── boot-context blocks (T-791e) ────────────────────────────────────────
-  // The two kinds have DIFFERENT route shapes, and collapsing them into one
-  // composed path string is what produced the 404 these three methods used to
-  // ship with. `system_interaction` is a singleton — one document, so its key
-  // ("global") is implied by the kind and appears nowhere in the URL;
-  // `boot_sequence` is two documents, so its key IS the `{runtime_key}` path
-  // parameter. Both now ride the schema-typed client: a BE path or verb rename
-  // is a tsc error here, the same protection every other method in this file
-  // gets.
+  // ── boot-context / lifecycle documents (T-791e, T-3201) ─────────────────
+  // ONE ROUTE FAMILY, and that is the point. These methods used to branch on
+  // `kind` because the named routes had two different shapes (a singleton with
+  // no key segment, and a keyed one) — composing one template string for both
+  // is what produced the 404 they shipped with. T-3201 added the generic
+  // `/api/boot-docs/{kind}/{key}` family, so the branch is gone: every
+  // document, editable or read-only, is addressed the same way, and a tenth
+  // document needs no code here at all.
+  //
+  // The named routes (/api/system-interaction, /api/boot-sequence/{runtime_key},
+  // /api/offboard) still exist on the server for MCP callers; the cockpit no
+  // longer uses them, so there is exactly one frontend path to test.
 
   async getBootDoc(kind: BootDocKind, key: string): Promise<BootDocView> {
-    if (kind === "system_interaction") {
-      return toBootDoc(unwrap(await client.GET("/api/system-interaction")));
-    }
-    if (kind === "offboard") {
-      return toBootDoc(unwrap(await client.GET("/api/offboard")));
-    }
+    // 404 (not 400) for an unknown kind/key: the pair addresses A DOCUMENT, and
+    // a document this server does not have is not found.
     return toBootDoc(
       unwrap(
-        await client.GET("/api/boot-sequence/{runtime_key}", {
-          params: { path: { runtime_key: key } },
+        await client.GET("/api/boot-docs/{kind}/{key}", {
+          params: { path: { kind, key } },
         }),
       ),
     );
@@ -1999,10 +1998,15 @@ export const httpApi: Api = {
   async saveBootDoc(
     kind: BootDocKind,
     key: string,
-    text: string,
+    body: string,
   ): Promise<BootDocView> {
-    // Whole-document replace, POST — same verb contract as
+    // Replace the EDITABLE HALF, POST — same verb contract as
     // /api/global-context: NOT a PUT and NOT a DELETE-then-write.
+    //
+    // 🔴 `body`, NOT `text` (T-3201). The wire has no field for the read-only
+    // head at all: the server joins the shipped one back on, so the cockpit
+    // never composes the two halves and cannot express an edit to the one it
+    // may not touch. Send back the `body` the read handed over.
     //
     // allow_shrink stays FALSE here, the opposite of saveGlobalContext. There
     // the owner clearing a textarea of their own additions is explicit intent
@@ -2010,47 +2014,24 @@ export const httpApi: Api = {
     // no instructions, and the server's refusal names the recovery path (reset
     // to the shipped default) instead. Emptying is not what this surface is
     // for — the 還原出廠版 button is.
-    if (kind === "system_interaction") {
-      return toBootDoc(
-        unwrap(
-          await client.POST("/api/system-interaction", {
-            body: { text, allow_shrink: false },
-          }),
-        ),
-      );
-    }
-    if (kind === "offboard") {
-      return toBootDoc(
-        unwrap(
-          await client.POST("/api/offboard", {
-            body: { text, allow_shrink: false },
-          }),
-        ),
-      );
-    }
+    //
+    // A read-only document refuses this with 405, and the refusal says what the
+    // document IS rather than that the caller lacks a permission.
     return toBootDoc(
       unwrap(
-        await client.POST("/api/boot-sequence/{runtime_key}", {
-          params: { path: { runtime_key: key } },
-          body: { text, allow_shrink: false },
+        await client.POST("/api/boot-docs/{kind}/{key}", {
+          params: { path: { kind, key } },
+          body: { body, allow_shrink: false },
         }),
       ),
     );
   },
 
   async resetBootDoc(kind: BootDocKind, key: string): Promise<BootDocView> {
-    if (kind === "system_interaction") {
-      return toBootDoc(
-        unwrap(await client.POST("/api/system-interaction/reset")),
-      );
-    }
-    if (kind === "offboard") {
-      return toBootDoc(unwrap(await client.POST("/api/offboard/reset")));
-    }
     return toBootDoc(
       unwrap(
-        await client.POST("/api/boot-sequence/{runtime_key}/reset", {
-          params: { path: { runtime_key: key } },
+        await client.POST("/api/boot-docs/{kind}/{key}/reset", {
+          params: { path: { kind, key } },
         }),
       ),
     );

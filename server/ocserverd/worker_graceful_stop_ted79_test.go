@@ -364,7 +364,8 @@ func TestWorkerStop_AdHocTaskIsNotAskedToWriteBackToAManual(t *testing.T) {
 
 // ── the 加速停止 deadline has to reach the worker, not just the row ──────────
 
-// deadlineClause is the literal offboardNotice appends for a final call. The
+// deadlineClause is the literal the 加速停止 document's head carries, and only
+// that document carries it — it is the whole of the soft/hard difference. The
 // tests below match on the CLAUSE, not on a formatted time, because the point
 // is whether the sentence declares a deadline at all.
 const deadlineClause = "Your deadline is "

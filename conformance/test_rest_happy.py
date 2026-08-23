@@ -747,11 +747,35 @@ def _check_reset_insight(ctx: HCtx, r: httpx.Response) -> None:
 
 _BOOT_DOC_EDIT = "# conformance edit — 系統互動 / 啟動程序\n\nnot the factory text\n"
 
+# T-3201 — a boot document has TWO halves on the read face (``read_only_head``
+# and ``body``) and ONE on the write face (``body``). The marker that divides
+# them on disk used to be spelled out here, because the protocol was "send the
+# whole document back with its head verbatim" and a black-box client had to be
+# able to build one. It is gone from this suite along with that protocol: the
+# server hands over the half a write takes and joins the other one back on
+# itself, so a client that knows what a marker is knows something the wire no
+# longer asks it to know.
+
+
+def _boot_doc_body(ctx: HCtx) -> dict:
+    """Body factory: the write face takes the editable half and nothing else."""
+    return {"body": _BOOT_DOC_EDIT}
+
 
 def _boot_doc_written(ctx: HCtx, r: httpx.Response) -> None:
-    """The edit came back verbatim and the block stopped reading as default."""
+    """The edit came back verbatim and the block stopped reading as default.
+
+    ``body`` is compared BYTE FOR BYTE against what was sent — that is the whole
+    contract now, and it is a stronger statement than the old one: what a client
+    sends is what a client reads back, with no half of the document it has to
+    carry along and no rule about carrying it correctly. ``text`` is the whole
+    stored document and is checked only for the two properties the halves must
+    have inside it.
+    """
     d = r.json()
-    assert d["text"] == _BOOT_DOC_EDIT, d
+    assert d["body"] == _BOOT_DOC_EDIT, d
+    assert d["text"].endswith(_BOOT_DOC_EDIT), d
+    assert d["read_only_head"] and d["read_only_head"] in d["text"], d
     assert d["is_default"] is False, d
     assert d["size_chars"] == len(d["text"]), d
     assert d["cap_chars"] >= d["size_chars"], d
@@ -786,6 +810,12 @@ def _boot_doc_read(kind: str, key: str):
         d = r.json()
         assert d["kind"] == kind and d["key"] == key, d
         assert d["text"].strip(), "the block is empty — the shipped seed was not folded in"
+        # T-3201 — the read face names both halves, and the pair has to describe
+        # the document it came with: the half a write takes back is IN the
+        # stored text and ends it, and the half nobody may write is in it too.
+        # A client that gets this pair never has to know a marker exists.
+        assert d["body"] and d["text"].endswith(d["body"]), d
+        assert d["read_only_head"] and d["read_only_head"] in d["text"], d
         assert d["size_chars"] == len(d["text"]), d
         assert d["cap_chars"] >= d["size_chars"], d
         assert isinstance(d["is_default"], bool), d
@@ -1302,7 +1332,7 @@ HAPPY: dict[str, Happy] = {
         check=lambda _c, r: _boot_doc_read("system_interaction", "global")(_c, r)
     ),
     "POST /api/system-interaction": Happy(
-        body={"text": _BOOT_DOC_EDIT}, check=_boot_doc_written
+        body=_boot_doc_body, check=_boot_doc_written
     ),
     "POST /api/system-interaction/reset": Happy(
         check=_boot_doc_reset("/api/system-interaction")
@@ -1313,7 +1343,7 @@ HAPPY: dict[str, Happy] = {
     ),
     "POST /api/boot-sequence/{runtime_key}": Happy(
         path="/api/boot-sequence/codex",
-        body={"text": _BOOT_DOC_EDIT},
+        body=_boot_doc_body,
         check=_boot_doc_written,
     ),
     "POST /api/boot-sequence/{runtime_key}/reset": Happy(
@@ -1326,8 +1356,28 @@ HAPPY: dict[str, Happy] = {
     "GET /api/offboard": Happy(
         check=lambda _c, r: _boot_doc_read("offboard", "global")(_c, r)
     ),
-    "POST /api/offboard": Happy(body={"text": _BOOT_DOC_EDIT}, check=_boot_doc_written),
+    "POST /api/offboard": Happy(
+        body=_boot_doc_body, check=_boot_doc_written
+    ),
     "POST /api/offboard/reset": Happy(check=_boot_doc_reset("/api/offboard")),
+    # ── the GENERIC face of all of the above, plus the six event procedures
+    # that never got named routes (T-3201) ───────────────────────────────────
+    # The write rows aim at accelerated_stop because it is EDITABLE: two of the
+    # ten documents refuse every caller with 405, and a happy row is the wrong
+    # place to assert a refusal.
+    "GET /api/boot-docs/{kind}/{key}": Happy(
+        path="/api/boot-docs/task_closeout/global",
+        check=lambda _c, r: _boot_doc_read("task_closeout", "global")(_c, r),
+    ),
+    "POST /api/boot-docs/{kind}/{key}": Happy(
+        path="/api/boot-docs/accelerated_stop/global",
+        body=_boot_doc_body,
+        check=_boot_doc_written,
+    ),
+    "POST /api/boot-docs/{kind}/{key}/reset": Happy(
+        path="/api/boot-docs/accelerated_stop/global/reset",
+        check=_boot_doc_reset("/api/boot-docs/accelerated_stop/global"),
+    ),
     "GET /api/roles": Happy(check=_nonempty_list),
     "GET /api/doc-sizes": Happy(
         # Size-only overview: every capped document reports its own size and

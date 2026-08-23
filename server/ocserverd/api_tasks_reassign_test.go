@@ -265,16 +265,45 @@ func TestReassignMemberToMemberHandsOver(t *testing.T) {
 			toNew = &msgs[i]
 		}
 	}
-	if toOld == nil || !strings.Contains(toOld.Body, "已轉派給 Rei") ||
-		!strings.Contains(toOld.Body, "交接") {
-		t.Fatalf("old-executor handover message wrong: %+v", toOld)
+	// 🔴 THE WHOLE TEXT, not a keyword — the predecessor notice is the 轉派程序
+	// DOCUMENT now (T-3201), and the failure a keyword probe cannot see is the
+	// send site naming another event's kind: every one of these documents opens
+	// with a [T-xxxx] number and reads as a coherent notice, so "mentions the
+	// successor and the word 交接" would pass on a document about something else
+	// entirely. Hand-written rather than re-rendered from the registry, so this
+	// stays a statement about what an agent receives.
+	wantOld := "[" + TaskNo(task.ID) + "] 此任務已轉派給 Rei。請停止推進，改為去跟接手人做交接：" +
+		"對方接手後會主動 post_chat 找你，他問目前進度、進行中的事項、有哪些雷要注意，" +
+		"你都要答得出來，直到他確認交接完成。交接完成後這張任務就不再是你的了。"
+	if toOld == nil {
+		t.Fatalf("the predecessor received no handover message at all")
 	}
-	if toNew == nil || !strings.Contains(toNew.Body, "接手了任務") ||
-		!strings.Contains(toNew.Body, "claim_task") ||
-		strings.Contains(toNew.Body, "update_task_status") ||
-		!strings.Contains(toNew.Body, "你的前任是 Ken") ||
-		!strings.Contains(toNew.Body, "分支在 kyle-160e") {
-		t.Fatalf("new-executor handover message wrong (predecessor + note must ride): %+v", toNew)
+	if toOld.Body != wantOld {
+		t.Fatalf("old-executor handover message wrong:\n got %q\nwant %q", toOld.Body, wantOld)
+	}
+	// The successor's notice is the 接手程序（有前任） DOCUMENT now (T-3201),
+	// compared whole for the same reason the predecessor's is.
+	//
+	// 🔴 THE HANDOVER NOTE IS NOT IN IT, BY RULING (owner rc-0c36d8739b8f:
+	// 「拿掉 —— 交接備註只留在任務上」). It used to be stapled under this notice
+	// while the same reassign also wrote it onto the task, so the successor was
+	// handed two copies of one sentence — and the copy down here is what made
+	// this document unsplittable, a {note} slot after the instructions leaving
+	// no prefix of facts to cut at. The task-side copy is asserted below, so
+	// "the note is gone" cannot pass on a build that lost it altogether.
+	wantNew := "[" + TaskNo(task.ID) + "] 你接手了任務「unit task」。你的前任是 Ken（id `m-old`）。" +
+		"請先跟他確認交接完成（直接 post_chat 給他，問清楚目前進度與進行中的事項），" +
+		"確認後再由你自己呼叫 claim_task（認領）解除轉派鎖——只有你這個新負責人動得了；" +
+		"任務狀態一律照步驟推導，不必也不能自己報。"
+	if toNew == nil {
+		t.Fatalf("the successor received no handover message at all")
+	}
+	if toNew.Body != wantNew {
+		t.Fatalf("new-executor handover message wrong:\n got %q\nwant %q", toNew.Body, wantNew)
+	}
+	if noted, err := api.dal.GetTask(task.ID); err != nil || noted == nil ||
+		noted.HandoverNote != "分支在 kyle-160e" || noted.HandoverNoteTS <= 0 {
+		t.Fatalf("the handover note must still reach the successor through the task: %+v %v", noted, err)
 	}
 	if toNew.Meta["task_id"] != task.ID {
 		t.Fatalf("handover meta must carry the task linkage: %+v", toNew.Meta)

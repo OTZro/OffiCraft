@@ -129,8 +129,14 @@ func TestDecideHandoverNotice(t *testing.T) {
 	// The owner's pair, verbatim: 「65% / 75% 表示第一次通知會是 65% 第二次通知
 	// 會是 75%」.
 	cfg.NoticePct, cfg.HandoverPct = 65, 75
-	const steps = "# 下線程序\n1. report_stopping()\n2. post_chat 交接"
-	doc := func() string { return steps }
+	// The REAL producer, so which document this band reads is under test rather
+	// than assumed. A closure returning a made-up sentence would go on passing
+	// on a server that sent the final call's document to this soft arm.
+	srv := newReconcileTestServer(t)
+	_, steps, _ := DocSplitHeadBody(mustFoldText(t, srv, srv.offboardSpec()))
+	doc := func(where string) string {
+		return srv.winddownNoticeText(offboardKindSoft, where, 0)
+	}
 	rec := func(pct float64, extra map[string]any) map[string]any {
 		r := map[string]any{"context_pct": pct, "context_pct_ts": 20.0, "boot_ts": 10.0}
 		for k, v := range extra {
@@ -139,7 +145,7 @@ func TestDecideHandoverNotice(t *testing.T) {
 		return r
 	}
 	notice := func(runtime string, record map[string]any, c SseContextHighConfig) *contextHighSignal {
-		return decideHandoverNotice("m-1", runtime, record, c, 5, 6, doc, nil)
+		return decideHandoverNotice("m-1", runtime, record, c, 5, 6, doc)
 	}
 
 	t.Run("claude fires at the owner's first number, not before", func(t *testing.T) {
@@ -190,7 +196,7 @@ func TestDecideHandoverNotice(t *testing.T) {
 		if !strings.Contains(sig.Reason, "work the sequence below") {
 			t.Fatalf("the notice must point at the steps: %q", sig.Reason)
 		}
-		if !strings.Contains(sig.Reason, "then call restart_self yourself") {
+		if !strings.Contains(sig.Reason, "then call report_stopped yourself") {
 			t.Fatalf("the notice must tell the agent to leave under its own power: %q", sig.Reason)
 		}
 		// The steps are the DOCUMENT's, verbatim — not a summary written in Go.
@@ -205,23 +211,22 @@ func TestDecideHandoverNotice(t *testing.T) {
 		assertQuotesNoTime(t, "a context-pressure notice", sig.Reason)
 	})
 
-	t.Run("the notice survives a document that cannot be read", func(t *testing.T) {
-		sig := decideHandoverNotice("m-1", RuntimeClaude, rec(65, nil), cfg, 5, 6,
-			func() string { return "" }, nil)
-		if sig == nil {
-			t.Fatal("losing the checklist must not lose the notice")
+	// 🔴 THIS DIRECTION REVERSED IN T-3201, and the reversal is the point. The
+	// sentence used to be built in Go beside the document, so an unreadable
+	// document cost the checklist and kept the notice. The sentence IS the
+	// document's read-only head now, so there is nothing left to send: the tick
+	// stays QUIET rather than spending the session's one notice on an empty
+	// reason, and the agent's client falls back on the key being absent.
+	t.Run("a document that cannot be rendered keeps the tick quiet", func(t *testing.T) {
+		if sig := decideHandoverNotice("m-1", RuntimeClaude, rec(65, nil), cfg, 5, 6,
+			func(string) string { return "" }); sig != nil {
+			t.Fatalf("an empty notice must not be sent at all: %+v", sig)
 		}
-		// WHOLE STRING, not a keyword (owner ruling 2026-08-20, c-2502de439aaa:
-		// 「你如果要比對 context 就是比對一整份要一模一樣」). With the document
-		// unreadable the notice IS exactly this sentence and nothing else, so
-		// there is a complete expected value to compare against — and it pins
-		// both halves of the instruction plus the absence of the deadline
-		// clause in one assertion, which three separate Contains could not.
-		want := "context 65% (your limits: 65% / 75%) — start your close-out: " +
-			"work the sequence below, then call restart_self yourself."
-		if sig.Reason != want {
-			t.Fatalf("the sentence must still be there:\n got %q\nwant %q",
-				sig.Reason, want)
+		// …and the same for no closure at all, which is the other way the
+		// reason can come back empty.
+		if sig := decideHandoverNotice("m-1", RuntimeClaude, rec(65, nil), cfg, 5, 6,
+			nil); sig != nil {
+			t.Fatalf("no notice source must not send a blank frame: %+v", sig)
 		}
 	})
 

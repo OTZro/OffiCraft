@@ -250,6 +250,13 @@ export type WireGlobalContext = components["schemas"]["GlobalContextDTO"];
  */
 export type WireBootDoc = components["schemas"]["BootDocumentDTO"];
 
+/** Mirrors the frozen spec's `BootDocKind` enum — WHICH boot/lifecycle
+ * documents exist, as a closed set (T-3201). It replaced `GET /api/boot-docs`:
+ * a listing could not go stale but could not make anything fail either, and a
+ * closed set can. `types.ts :: BootDocKind` must stay identical to it; the
+ * assignment in `toBootDoc` is what enforces that. */
+export type WireBootDocKind = components["schemas"]["BootDocKind"];
+
 /** Mirrors `DocumentHistoryDTO` — ONE retained revision of an editable
  * long-form document as a CATALOGUE ROW (`GET /api/document-history/{kind}/{key}`).
  * Since T-1170 it carries NO text: identity, actor, time, the `tombstoned`

@@ -107,7 +107,10 @@ for (const width of [320, 390, 402, 1040]) {
 
     // (3) The index carries NO document body. Not collapsed — absent. Without
     // this, "both rows fit" would only be true of this fixture's length.
-    expect(await page.locator(".doc-md").count(), "open documents").toBe(0);
+    expect(
+      await page.locator(".doc-card__body > .doc-md").count(),
+      "open documents"
+    ).toBe(0);
 
     // (4) Nothing spills sideways. The row titles carry the longest words on
     // the page (「啟動程序（Claude Code）」) next to a fixed-size icon and a
@@ -138,7 +141,9 @@ test("a row opens THAT runtime's page, and the other is not on it", async ({
   await openBootIndex(page);
 
   await page.getByTestId("boot-entry-claude").click();
-  await expect(page.locator(".doc-md")).toHaveCount(1);
+  // ONE document body. The read-only head renders a `.doc-md` of its own since
+  // T-3201, so the child selector is what keeps this "one document open".
+  await expect(page.locator(".doc-card__body > .doc-md")).toHaveCount(1);
   // ABSENT, not merely closed: the two runtimes' third step means opposite
   // things (claude attaches `ocagent listen` itself; codex must NOT — the
   // sidecar does), so a page showing both invites copying one over the other,

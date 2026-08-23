@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +11,12 @@ import (
 )
 
 var errDocumentHistoryCap = errors.New("restoring this version would violate the existing document size limit")
+
+// errDocumentHistoryContent is the restore's answer when the revision's CONTENT
+// is refused by the same rule the write face applies (T-3201). Separate from
+// the cap error because the two say different things to the reader, and both
+// are the caller's fault rather than the server's — they share the 400.
+var errDocumentHistoryContent = errors.New("this version is refused by the document's own content rule")
 
 // Naming both replacements is the whole point of refusing loudly: a caller who
 // still says "task_manual" learns which of the two series it wanted.
@@ -214,7 +221,9 @@ func (s *apiServer) documentHistoryAllowed(w http.ResponseWriter, r *http.Reques
 		return false
 	}
 	switch kind {
-	case docKindSystemInteraction, docKindBootSequence, docKindOffboard:
+	case docKindSystemInteraction, docKindBootSequence, docKindOffboard,
+		docKindAcceleratedStop, docKindTaskCloseout, docKindTaskReassignPredecessor,
+		docKindTaskTakeoverWithPredecessor, docKindTaskTakeoverFresh, docKindTaskUnblocked:
 		// T-791e. Same class gate as global_context below — restoring one of
 		// these puts text into every agent's boot context, so it is a governance
 		// write (owner or the admin 助理), exactly as the edit route is. Reading
@@ -227,6 +236,24 @@ func (s *apiServer) documentHistoryAllowed(w http.ResponseWriter, r *http.Reques
 		if !bootDocHistoryKeyKnown(kind, key) {
 			writeError(w, http.StatusBadRequest, unknownBootDocKeyMsg(kind, key))
 			return false
+		}
+		// A read-only document is refused BEFORE the capability check, and on
+		// purpose: no principal may restore it, so answering 403 would send an
+		// owner hunting for a role to grant. Restore is the write face that
+		// reaches a document SIDEWAYS — not from an editor, but by putting an
+		// old version back — so a gate that lived only in replaceBootDoc would
+		// be a gate this path walked around. That WAS the shape of it until
+		// T-3201: since then the join and the body rule are shared functions
+		// both faces call (bootDocStoredText / bootDocBodyRefusal), and the one
+		// gate restore still does not run is the wipe guard, deliberately —
+		// see restoreDocumentHistory. This read-only check stays here because
+		// it has to answer before the capability check, which is a property of
+		// THIS door rather than of the shared rules.
+		if write {
+			if spec, ok := s.bootDocSpecFor(kind, key); ok && spec.ReadOnly {
+				writeError(w, http.StatusMethodNotAllowed, bootDocReadOnlyRefusal(spec))
+				return false
+			}
 		}
 		if write && !principalAtLeast(s.principalOfRequest(r), principalAdminAgent) {
 			writeError(w, http.StatusForbidden, "restoring this document requires admin capability")
@@ -375,7 +402,9 @@ func (s *apiServer) documentSeedContent(kind, key string) (map[string]string, bo
 			return nil, false, nil
 		}
 		return map[string]string{"definition_md": seedMD, "tombstoned": "true"}, true, nil
-	case docKindSystemInteraction, docKindBootSequence, docKindOffboard:
+	case docKindSystemInteraction, docKindBootSequence, docKindOffboard,
+		docKindAcceleratedStop, docKindTaskCloseout, docKindTaskReassignPredecessor,
+		docKindTaskTakeoverWithPredecessor, docKindTaskTakeoverFresh, docKindTaskUnblocked:
 		// T-791e. The seed content comes from readSeedFile through the same
 		// resolver the reset uses (bootDocSpecFor → seedBlockMD), so "what the
 		// compare view shows" and "what 還原 would write" cannot be two different
@@ -461,7 +490,7 @@ func (s *apiServer) HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdResto
 		return
 	}
 	if err := s.restoreDocumentHistory(r, kind, key, content); err != nil {
-		if errors.Is(err, errDocumentHistoryCap) {
+		if errors.Is(err, errDocumentHistoryCap) || errors.Is(err, errDocumentHistoryContent) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -497,7 +526,9 @@ func (s *apiServer) publishDocumentHistoryRestore(r *http.Request, kind, key str
 		// once (see the case above). api_document_history_insight_publish_test.go
 		// exists solely because nothing else in the build would go red here.
 		s.hub.Publish("insight", "patch", "insight", wireOwnerID+"::"+key, nil, audienceOwnerOnly(), requestTrigger(r))
-	case docKindSystemInteraction, docKindBootSequence, docKindOffboard:
+	case docKindSystemInteraction, docKindBootSequence, docKindOffboard,
+		docKindAcceleratedStop, docKindTaskCloseout, docKindTaskReassignPredecessor,
+		docKindTaskTakeoverWithPredecessor, docKindTaskTakeoverFresh, docKindTaskUnblocked:
 		// T-791e — the same frame the edit routes fan (see publishBootDoc).
 		// Forgetting to be in THIS switch is the silent failure the insight case
 		// above documents: 200, DB changed, nothing on any screen.
@@ -662,13 +693,30 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		return s.dal.SaveWithDocumentHistory(kind, key, actor, insightSnapshotIn(key), func(ex sqlExecer) error {
 			return putInsightOn(ex, Insight{RoleKey: key, Text: content["text"], Tombstoned: historyTombstoned(content)})
 		})
-	case docKindSystemInteraction, docKindBootSequence, docKindOffboard:
+	case docKindSystemInteraction, docKindBootSequence, docKindOffboard,
+		docKindAcceleratedStop, docKindTaskCloseout, docKindTaskReassignPredecessor,
+		docKindTaskTakeoverWithPredecessor, docKindTaskTakeoverFresh, docKindTaskUnblocked:
 		// T-791e. The cap applies to a restore, exactly as it does for lessons
 		// and insight above: an older, larger revision is still a write, and
 		// letting history walk a document back over the ceiling would make the
 		// ceiling a suggestion. (The RESET path is the deliberate opposite — see
 		// resetBootDoc: the factory text is the product, not something a caller
 		// wrote.)
+		//
+		// 🔴 THIS IS A WRITE FACE AND IT TAKES THE SAME ROAD AS THE OTHERS
+		// (T-3201). It used to hand content["text"] to putBootDocumentOn
+		// verbatim, passing no content gate at all — so restore was a FIFTH
+		// write path, and the only one that could still put a pre-marker,
+		// headless version back on a live row. It did not INVENT that shape
+		// (nothing does any more); it RE-ARMED one out of the version history,
+		// silently, with one owner click. Now the revision's editable half is
+		// taken (bootDocBodyOf) and put through bootDocStoredText and
+		// bootDocBodyRefusal — the same join and the same rule replaceBootDoc
+		// uses — so a restore lands the old body under the SHIPPED head.
+		//
+		// The wipe guard is deliberately NOT here: it asks about an intent
+		// (「清空」) that a restore does not have, and a restore of an empty
+		// revision is the owner reaching for a version he can see in a list.
 		spec, ok := s.bootDocSpecFor(kind, key)
 		if !ok {
 			return errNotFound
@@ -677,13 +725,21 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 		if err != nil {
 			return err
 		}
-		if DocCapBlocked(spec.Cap, current.Text, content["text"]) {
+		body := bootDocBodyOf(spec, content["text"])
+		restored, err := s.bootDocStoredText(spec, body)
+		if err != nil {
+			return err
+		}
+		if DocCapBlocked(spec.Cap, current.Text, restored) {
 			return errDocumentHistoryCap
+		}
+		if msg := bootDocBodyRefusal(spec, body); msg != "" {
+			return fmt.Errorf("%w: %s", errDocumentHistoryContent, msg)
 		}
 		return s.dal.SaveWithDocumentHistory(kind, key, actor, bootDocSnapshotIn(kind, key), func(ex sqlExecer) error {
 			return putBootDocumentOn(ex, BootDocument{
 				Kind: kind, Key: key,
-				Text:       content["text"],
+				Text:       restored,
 				Tombstoned: historyTombstoned(content),
 			})
 		})

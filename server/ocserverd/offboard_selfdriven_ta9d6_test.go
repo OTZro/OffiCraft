@@ -14,38 +14,43 @@ import (
 // the two clauses below is load-bearing in a way that is invisible from the
 // code:
 //
-//   - "then call restart_self yourself" blocks BOTH failure directions at once.
-//     Without the second half an agent idles until the server cuts it off (dead
-//     time the owner explicitly does not want); without the first, it stops
-//     mid-work — a predecessor read the old wording as "you are done" and
+//   - "then call report_stopped yourself" blocks BOTH failure directions at
+//     once. Without the second half an agent idles until the server cuts it off
+//     (dead time the owner explicitly does not want); without the first, it
+//     stops mid-work — a predecessor read the old wording as "you are done" and
 //     announced its own end of life at 40%.
-//   - "You have 120 seconds left." is the ONLY difference between a notice that
-//     means "there is room" and one that means "you are out of time".
+//   - the deadline clause is the ONLY difference between a notice that means
+//     "there is room" and one that means "you are out of time".
 //
 // 🔴 Both were measured to be UNGUARDED before this test existed: deleting
 // either clause left the entire ocserverd suite green (228s and 186s, whole
 // suite, no cache). A sentence nothing asserts is a sentence the next edit
 // silently rewrites.
-func TestOffboardNotice_TheApprovedSentence(t *testing.T) {
+//
+// 🔴 IT NOW READS THE LIVE SEND SITE, not a string builder (T-3201). The
+// sentence is the read-only head of a DOCUMENT, so which document the send site
+// picks IS the soft/hard decision — and a test that composed its own two
+// sentences would go on passing on a server that sent the wrong one of them.
+func TestWindDownNoticeText_TheApprovedSentence(t *testing.T) {
 	const where = "context 62% (your limits: 60% / 75%)"
-	doc := "1. 報開始收尾\n2. 給自己留交接"
+	s := newReconcileTestServer(t)
+	_, softBody, _ := DocSplitHeadBody(mustFoldText(t, s, s.offboardSpec()))
+	_, finalBody, _ := DocSplitHeadBody(mustFoldText(t, s, s.acceleratedStopSpec()))
 
-	// 🔴 THE OPENER NOW DIFFERS BY ARM (owner 2026-08-20, card rc-e9b655cd8e1a,
+	// 🔴 THE OPENER DIFFERS BY ARM (owner 2026-08-20, card rc-e9b655cd8e1a,
 	// option 0: 「軟性那則的第一行改成不催」). He narrowed his own 2026-08-16
 	// one-sentence design after a soft close-out that said "offboard now" while
 	// the document below it said a soft arm may let its sub-agents finish —
 	// the first line being the one read first. Everything AFTER the opener is
 	// still identical on both arms and still asserted verbatim below.
 	// WHOLE STRING (owner ruling 2026-08-20, c-2502de439aaa: 「你如果要比對
-	// context 就是比對一整份要一模一樣」). offboardNotice is deterministic and
-	// every input here is a literal, so the complete expected value exists —
-	// and comparing it pins ALL of what three separate keyword assertions used
-	// to pin, plus everything they never looked at: the opener, the second
-	// half, the absence of "offboard now", the absence of any deadline clause,
-	// the newline, and the document carried verbatim.
-	soft := offboardNotice(where, offboardCloserRestartSelf, false, 0, doc)
+	// context 就是比對一整份要一模一樣」) — which pins ALL of what three separate
+	// keyword assertions used to pin, plus everything they never looked at: the
+	// opener, the second half, the absence of "offboard now", the absence of any
+	// deadline clause, the newline, and the body carried verbatim.
+	soft := s.winddownNoticeText(offboardKindSoft, where, 0)
 	wantSoft := where + " — start your close-out: work the sequence below, " +
-		"then call restart_self yourself.\n" + doc
+		"then call report_stopped yourself.\n" + softBody
 	if soft != wantSoft {
 		t.Fatalf("the soft notice must open WITHOUT urging and carry the rest of "+
 			"the approved sentence verbatim:\n got %q\nwant %q", soft, wantSoft)
@@ -64,9 +69,9 @@ func TestOffboardNotice_TheApprovedSentence(t *testing.T) {
 	// nobody has written yet.
 	assertQuotesNoTime(t, "the soft notice", soft)
 
-	// T-d6a7: the final call now names WHEN the deadline is, not how long is
-	// left. A duration went stale on every replay of the same epoch (and broke
-	// the client's verbatim de-dupe); an absolute instant is constant.
+	// T-d6a7: the final call names WHEN the deadline is, not how long is left.
+	// A duration went stale on every replay of the same epoch (and broke the
+	// client's verbatim de-dupe); an absolute instant is constant.
 	//
 	// ⚠️ The expected instant is a LITERAL, deliberately. It used to be computed
 	// with the same `time.Unix(...).Format(time.RFC3339)` the production code
@@ -74,29 +79,23 @@ func TestOffboardNotice_TheApprovedSentence(t *testing.T) {
 	// implicit LOCAL one it actually used. The rendering is UTC and is asserted
 	// as such.
 	const deadline = 1_787_000_000.0 // 2026-08-17T20:53:20Z
-	final := offboardNotice(where, offboardCloserRestartSelf, true, deadline, doc)
+	final := s.winddownNoticeText(offboardKindFinal, where, deadline)
 	wantFinal := where + " — offboard now: work the sequence below, " +
-		"then call restart_self yourself. Your deadline is 2026-08-17T20:53:20Z.\n" + doc
+		"then call report_stopped yourself. Your deadline is 2026-08-17T20:53:20Z.\n" +
+		finalBody
 	if final != wantFinal {
 		t.Fatalf("the final call must name the deadline, right after the same "+
 			"sentence:\n got %q\nwant %q", final, wantFinal)
 	}
 
 	// A final call with NO clock is a contradiction (offboardKindOf only answers
-	// "final" for a clocked arm), and if it ever happens the sentence says
-	// nothing about time rather than formatting epoch 0 as 1970.
-	if noClock := offboardNotice(where, offboardCloserRestartSelf, true, 0, doc); strings.Contains(noClock, "deadline") {
-		t.Fatalf("a final call with no clock must quote no time at all:\n%s", noClock)
-	}
-
-	// An empty document degrades to the sentence alone: losing the checklist is
-	// survivable, losing the notice is not.
-	bare := offboardNotice(where, offboardCloserRestartSelf, false, 0, "")
-	wantBare := where + " — start your close-out: work the sequence below, " +
-		"then call restart_self yourself."
-	if bare != wantBare {
-		t.Fatalf("an empty document must leave the sentence intact and alone "+
-			"(no trailing newline):\n got %q\nwant %q", bare, wantBare)
+	// "final" for a clocked arm — TestOffboardKindOf_AFinalCallAlwaysHasAClock
+	// pins the offline arm, TestWindDownKind_TheClockAndTheSentenceCannotDisagree
+	// the online one). If it ever happens NOTHING is sent, rather than a
+	// document whose head still reads `{deadline}` or an epoch 0 formatted as
+	// 1970 — the send site omits the key and the agent's client falls back.
+	if noClock := s.winddownNoticeText(offboardKindFinal, where, 0); noClock != "" {
+		t.Fatalf("a final call with no clock must send nothing at all:\n%s", noClock)
 	}
 }
 
@@ -200,12 +199,23 @@ func TestOffboardDeltaPayload_下線NeverCarriesACountdown(t *testing.T) {
 	}
 }
 
-// The sequence the notice tells the agent to work must actually be workable.
-// Step 1 is report_stopping, and the notice ends 「then call restart_self
-// yourself」 — so an agent that has declared its close-out must still be able
-// to make that call. It could not: report_stopping makes PresenceState project
-// `stopping`, the endpoint gated on `online`, and once close-out anchors
-// stopped being swept every tick the refusal lasted the whole soft window.
+// An agent that has declared its close-out must still be able to self-restart.
+// It could not: report_stopping makes PresenceState project `stopping`, the
+// endpoint gated on `online`, and once close-out anchors stopped being swept
+// every tick the refusal lasted the whole soft window.
+//
+// WHY THIS IS STILL PINNED NOW THAT THE NOTICE SAYS SOMETHING ELSE. This bug
+// was found because the soft notice used to end 「then call restart_self
+// yourself」, so working the sequence walked straight into the refusal. That
+// sentence is GONE — TestOffboardDeltaPayload_下線NeverCarriesACountdown, in
+// this file, asserts the notice now closes on report_stopped and that
+// restart_self appears nowhere in it. What survives is the
+// gate, not the wording: restart_self is the agent's own recycle door and
+// nothing has narrowed who may knock on it, so an agent that declared its
+// close-out and then chose a fresh session over a full stop would still be
+// turned away by `online`. The assertion below is the only thing standing
+// between that door and a silent 409, and it does not depend on any notice
+// text — which is precisely why rewriting the notice must not take it with it.
 func TestRestartSelf_WorksWhileTheAgentIsClosingOut(t *testing.T) {
 	s := newReconcileTestServer(t)
 	putWarden(t, s, "mach-a")
@@ -259,7 +269,10 @@ func TestOffboardNoticeFor_CodexReportsWhereItActuallyIs(t *testing.T) {
 	m := testAgent("m-codex")
 	m.Runtime = RuntimeCodex
 	m.RefocusSince = nowSecs()
-	m.RefocusOp = refocusOpRefocus
+	// A CLOCKED cause, because this test asks for the final call directly: a
+	// final call with no clock sends nothing at all, and the codex `where`
+	// under test would then have nothing to appear in.
+	m.RefocusOp = refocusOpContextHigh
 	putTestMember(t, s, m)
 	s.gauge.Set("m-codex", map[string]any{"compaction_count": 3.0})
 
@@ -649,6 +662,12 @@ func TestDeactivate_DoesNotDowngradeAForcedStop(t *testing.T) {
 // SOFT notice on its own stream, telling it to work the sequence and call
 // restart_self. Independent e2e verification caught the frame on the wire; the
 // server suite was green throughout, because nothing asserted the promise.
+//
+// ⚠️ 「restart_self」 above is HISTORY, not today's wording — it is what that
+// e2e run actually read off the wire. The seed now closes on report_stopped,
+// and this sentence is deliberately left as observed rather than rewritten
+// forward: the defect being recorded is that a soft notice ARRIVED AT ALL on a
+// force-stopped member, which no change of verb touches.
 func TestForceStop_SendsNoNotice(t *testing.T) {
 	s := newReconcileTestServer(t)
 	putWarden(t, s, "mach-a")
@@ -738,5 +757,82 @@ func TestPutMemberCarriesForcedStopAtForwardOnly(t *testing.T) {
 	got, _ = s.dal.GetMember("m-upsert")
 	if got.ForcedStopAt != 5000.0 {
 		t.Fatalf("forced_stop_at must only move forward: %v", got.ForcedStopAt)
+	}
+}
+
+// 🔴 THE ARM T-3201 CHANGES, AND THE ONLY ONE THAT HAD NO TEST.
+//
+// The offboard document now names ONE close-out verb, report_stopped, on both
+// arms — owner, verbatim (c-5b3d8f192a0b): 「我預期是 report_stopped，因為是
+// server 控制他上下線，他只是要回報執行狀態。restart_self 真正的用途應該是我在
+// 對話中跟他說你做完這件事情自己重啟」. The code that interpolated
+// offboardCloserFor — which said restart_self whenever a member was still
+// wanted online — is deleted, so the arm the document changed is exactly this
+// one: an agent that asked for its own restart, was given the wind-down, and
+// now ends the sequence with report_stopped instead.
+//
+// Everything in the tree that says this is safe is READ from the code. The two
+// arms above cover no-epoch-online (respawns) and no-epoch-offline (stays
+// down); NEITHER has a refocus epoch in flight, and a refocus epoch is what
+// restart_self stamps. This test is that missing third arm: with the stamp on,
+// report_stopped must still collect AND respawn — not park the member down for
+// good, which is what "the document tells them the wrong verb" would cost.
+//
+// End-to-end (a real agent, a real warden) is the shipping check; this is the
+// handler-level half.
+func TestSelfDrivenOffboard_StoppedReportAfterARestartSelfStampRespawns(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-a")
+
+	m := testAgent("m-restart")
+	m.DesiredMachineID = "mach-a"
+	putTestMember(t, s, m)
+	connectOnline(t, s, "mach-a")
+	session := connectOnlineMachine(t, s, "m-restart", "mach-a")
+	// Past the respawn-storm floor: that guard is asserted elsewhere and must
+	// not be what this test measures.
+	s.gauge.Set("m-restart", map[string]any{"boot_ts": nowSecs() - 10*minSelfRestartSecs})
+
+	// t1 — the agent was told 「做完某事自己重啟」 and asks for its own restart.
+	rec := httptest.NewRecorder()
+	s.HandleRestartSelfApiSelfRefocusPost(rec,
+		taskReq(t, "POST", "/api/self/refocus", map[string]any{}, "m-restart", "agent"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("restart_self: %d %s", rec.Code, rec.Body.String())
+	}
+	stamped, _ := s.dal.GetMember("m-restart")
+	if stamped == nil || stamped.RefocusSince <= 0 || stamped.RefocusOp != refocusOpRestartSelf {
+		t.Fatalf("premise: restart_self must leave a refocus stamp, or this test is "+
+			"the no-epoch arm again: %+v", stamped)
+	}
+	if f := drainFrames(t, s, "mach-a"); len(f) != 0 {
+		t.Fatalf("restart_self must collect nobody by itself: %+v", f)
+	}
+
+	// t4 — the agent works the document and ends it the way the document says.
+	rec = httptest.NewRecorder()
+	s.HandleReportStoppedApiSelfStoppedPost(rec,
+		taskReq(t, "POST", "/api/self/stopped", map[string]any{}, "m-restart", "agent"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
+	}
+	stops := drainFrames(t, s, "mach-a")
+	if len(stops) != 1 || stops[0].RPC != "stop" {
+		t.Fatalf("the close-out must be collected on the stopped report: %+v", stops)
+	}
+
+	// t5 — and a new generation takes its place. This is the assertion the
+	// whole verb change rests on: RESPAWN, not a member parked down holding a
+	// stamp nobody will act on.
+	s.hub.Disconnect(session)
+	s.reconcileMemberNow("m-restart")
+	starts := drainFrames(t, s, "mach-a")
+	if len(starts) != 1 || starts[0].RPC != "start" {
+		t.Fatalf("report_stopped under a restart_self stamp must RESPAWN, not stop "+
+			"for good: %+v", starts)
+	}
+	back, _ := s.dal.GetMember("m-restart")
+	if back == nil || back.DesiredState != DesiredStateOnline {
+		t.Fatalf("the member must still be wanted online after the recycle: %+v", back)
 	}
 }

@@ -244,8 +244,10 @@ func TestContextThresholds_PromotionDeltaCarriesTheFinalSentence(t *testing.T) {
 	// comment used to say 65%, which matched neither the fixture nor the want),
 	// and the deadline is the promoted stamp plus the grace —
 	// 2026-02-01T00:17:00Z (noticeAt + 900 + 120).
+	// report_stopped, not restart_self: the sentence is the 加速停止 document's
+	// own head since T-3201, and the owner ruled that verb by name.
 	want := "context 50% (your limits: 40% / 50%)" +
-		" — offboard now: work the sequence below, then call restart_self" +
+		" — offboard now: work the sequence below, then call report_stopped" +
 		" yourself. Your deadline is 2026-02-01T00:17:00Z."
 	if cfg.NoticePct != 40 || cfg.HandoverPct != 50 {
 		t.Fatalf("stale fixture: the sentence names 40%%/50%%, server is %d%%/%d%%",

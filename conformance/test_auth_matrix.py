@@ -408,6 +408,19 @@ def _matrix_reassigning_task(ctx: Ctx) -> str:
     return task_id
 
 
+# T-3201 — a boot document's write face takes the EDITABLE HALF and nothing
+# else; the server joins the read-only head back on. These rows are about the
+# AUTHZ FLOOR, and the body used to read the document first and re-send its head
+# under a new body so that a 400 for malformed content could not be mistaken for
+# a refusal about who may write. That whole dance is gone with the protocol it
+# served: there is no head to carry, so there is no way to carry it wrongly.
+def _boot_doc_body(text: str):
+    def build(ctx: "Ctx", identity: str) -> dict:
+        return {"body": text}
+
+    return build
+
+
 MATRIX: dict[str, Route] = {
     # ── infra seams ──────────────────────────────────────────────────────────
     "GET /api/events": Route(
@@ -939,7 +952,7 @@ MATRIX: dict[str, Route] = {
     "GET /api/system-interaction": Route(requires="machine"),
     "POST /api/system-interaction": Route(
         requires="admin_agent",
-        body={"text": "conformance system-interaction block"},
+        body=_boot_doc_body("conformance system-interaction block"),
     ),
     "POST /api/system-interaction/reset": Route(requires="admin_agent"),
     "GET /api/boot-sequence/{runtime_key}": Route(
@@ -949,7 +962,7 @@ MATRIX: dict[str, Route] = {
     "POST /api/boot-sequence/{runtime_key}": Route(
         requires="admin_agent",
         path="/api/boot-sequence/codex",
-        body={"text": "conformance boot sequence"},
+        body=_boot_doc_body("conformance boot sequence"),
     ),
     "POST /api/boot-sequence/{runtime_key}/reset": Route(
         requires="admin_agent",
@@ -960,9 +973,34 @@ MATRIX: dict[str, Route] = {
     "GET /api/offboard": Route(requires="machine"),
     "POST /api/offboard": Route(
         requires="admin_agent",
-        body={"text": "conformance offboard block"},
+        body=_boot_doc_body("conformance offboard block"),
     ),
     "POST /api/offboard/reset": Route(requires="admin_agent"),
+    # ── the GENERIC face of every one of those documents (T-3201) ───────────
+    # Six more of these shipped with the task-event procedures and they are
+    # reached by ONE route family instead of eighteen named ones. The floors are
+    # the named routes' floors verbatim, which is the whole reason the generic
+    # shape was allowed: read at machine, write at admin_agent, no per-document
+    # exception anywhere in the registry.
+    #
+    # THE PATHS AIM AT AN EDITABLE DOCUMENT ON PURPOSE. Two of the ten are
+    # read-only and refuse every caller with 405 — a floor table cannot express
+    # "nobody", and pointing a positive face at one would assert a semantic
+    # refusal in a row that exists to measure authz. The 405 is pinned where it
+    # belongs, in the Go tests for the write faces.
+    "GET /api/boot-docs/{kind}/{key}": Route(
+        requires="machine",
+        path="/api/boot-docs/accelerated_stop/global",
+    ),
+    "POST /api/boot-docs/{kind}/{key}": Route(
+        requires="admin_agent",
+        path="/api/boot-docs/accelerated_stop/global",
+        body=_boot_doc_body("conformance accelerated stop block"),
+    ),
+    "POST /api/boot-docs/{kind}/{key}/reset": Route(
+        requires="admin_agent",
+        path="/api/boot-docs/accelerated_stop/global/reset",
+    ),
     "GET /api/roles": Route(requires="machine"),
     "GET /api/doc-sizes": Route(requires="machine"),
     "POST /api/roles": Route(
@@ -1588,6 +1626,10 @@ DEGRADED: dict[str, str] = {
 # ── plumbing ─────────────────────────────────────────────────────────────────
 
 
+# T-3201 — a boot document keeps a read-only head above one marker line; a write
+# has to return that head verbatim. These rows are about the AUTHZ FLOOR, so the
+# body reads the current document and re-sends its head with a new body: a 400
+# for malformed content would say nothing about who may write.
 def _resolve(value, ctx: Ctx, identity: str):
     return value(ctx, identity) if callable(value) else value
 

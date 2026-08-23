@@ -186,3 +186,81 @@ func TestWindDownKind_TheClosedSetIsActuallyClosed(t *testing.T) {
 		}
 	}
 }
+
+// TestOffboardKindOf_AFinalCallAlwaysHasAClock is the same invariant on the
+// OFFLINE arm, and it did not exist until the documents were wired to the send
+// site (T-3201).
+//
+// 🔴 WHY THE OFFLINE ARM NEEDS ITS OWN. The test above walks 換手: it reads
+// offboardKindOf's refocus branch and refocusDeadlineOf, and neither of those
+// is what a 停止 goes through. 下線 anchors on stopping_since, so the pair that
+// has to agree there is offboardKindOf's `DesiredState == offline` branch —
+// StoppingSince > 0 && !forcedEpochLive(m), then winddownKindFor — against
+// winddownDeadlineOf's own three zero conditions: !clocked, StoppingSince <= 0,
+// forcedEpochLive. Two hand-written spellings of one judgement, in two files,
+// which is the exact shape T-ed79 removed from the online arm. Until now the
+// offline arm had only happy-path cases (加速停止 pressed, notice arrives), and
+// an independent review measured the gap: nothing anywhere asserted that the
+// two spellings must keep coinciding.
+//
+// 🔴 AND THE COST OF THEM COMING APART CHANGED. Before the wiring, a final call
+// whose deadline was 0 merely lost a clause — the Go builder wrote the sentence
+// and skipped the deadline half. The sentence is now the 加速停止 document's
+// read-only head, and that head has a {deadline} slot with nothing else able to
+// fill it: the send site either refuses (the agent gets NO notice while a clock
+// runs on it) or, if someone ever "fixes" the refusal by substituting a blank,
+// the agent reads `Your deadline is .` and 下線程序 §1 tells it to treat that as
+// hard. Either way the split is no longer a missing sentence, it is a broken
+// one.
+func TestOffboardKindOf_AFinalCallAlwaysHasAClock(t *testing.T) {
+	cfg := defaultReconcileConfig()
+	const t0 = 1_000_000.0
+
+	finals := 0
+	for _, op := range everyWindDownCause {
+		for _, stopping := range []float64{0, t0} {
+			// forced_stop_at straddles stopping_since on both sides AND lands
+			// exactly on it: force-stop stamps the two from two nowSecs() calls
+			// with no I/O between them, so equality is the NORMAL path there
+			// (forcedEpochLive's >= is load-bearing for that reason), and a
+			// past-epoch stamp is what activate leaves behind.
+			for _, forced := range []float64{0, t0 - 1, t0, t0 + 1} {
+				m := testAgent("m-3201-offline")
+				m.DesiredState = DesiredStateOffline
+				m.RefocusOp = op
+				m.StoppingSince = stopping
+				m.ForcedStopAt = forced
+
+				kind, carries := offboardKindOf(m, t0+1)
+				deadline := winddownDeadlineOf(m, cfg)
+				if kind == offboardKindFinal {
+					finals++
+				}
+				if !carries {
+					// Nothing is sent, so there is no sentence to disagree
+					// with — but a clock must not be running either.
+					if deadline > 0 {
+						t.Fatalf("op=%s stopping=%v forced=%v: no notice is sent and "+
+							"yet the tick collects at %v — the session is cut off "+
+							"with no warning at all", op, stopping, forced, deadline)
+					}
+					continue
+				}
+				if (kind == offboardKindFinal) != (deadline > 0) {
+					t.Fatalf("op=%s stopping=%v forced=%v: the sentence says kind=%q "+
+						"and the clock says deadline=%v — one of them is lying to "+
+						"the agent, and the final call's document cannot render "+
+						"without the instant", op, stopping, forced, kind, deadline)
+				}
+			}
+		}
+	}
+	// DENOMINATOR. Every assertion above is satisfied by a server that never
+	// answers "final" on this arm at all, and 加速停止 on a 停止 is exactly what
+	// T-ed79 added — so prove the case under test is reachable before reading
+	// anything into the green.
+	if finals == 0 {
+		t.Fatal("no combination above produced a final call, so the invariant was " +
+			"never once evaluated on the arm it is about")
+	}
+}

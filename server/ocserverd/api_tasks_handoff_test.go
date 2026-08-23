@@ -534,7 +534,11 @@ func TestBlockerCloseReleasesAndTellsTheDependentExecutor(t *testing.T) {
 	api := newTasksTestServer(t)
 	seedActiveMember(t, api, "m-creator")
 	blocker := seedHandoffTask(t, api, "t-cccc00000001", "m-creator", "m-exec", "design")
-	dependent := seedHandoffTask(t, api, "t-cccc00000002", "m-creator", "m-next")
+	// Distinct task NUMBERS, not merely distinct ids: TaskNo keeps four hex
+	// digits, so the sibling ids the rest of this file uses would render both
+	// slots of the notice as the same T-cccc and a send site that swapped
+	// {blocked_task_no} for {blocker_task_no} would read as correct.
+	dependent := seedHandoffTask(t, api, "t-dddd00000002", "m-creator", "m-next")
 	if err := api.dal.AddTaskDep(dependent.ID, blocker.ID); err != nil {
 		t.Fatalf("add dep: %v", err)
 	}
@@ -545,6 +549,56 @@ func TestBlockerCloseReleasesAndTellsTheDependentExecutor(t *testing.T) {
 	}
 	// The DURABLE half — an SSE frame alone is what failed in T-8a1e.
 	assertHandoverChat(t, api, "m-next", TaskNo(blocker.ID))
+
+	// 🔴 AND THE WHOLE TEXT OF IT, because since T-3201 this notice is the
+	// 〈解除阻擋〉 DOCUMENT rather than a Go string — which is what finally puts
+	// the owner's approved three-branch body (rc-8c0045ef7c38) on the wire
+	// instead of the pre-rewrite single sentence that told a ticket already in
+	// progress to go and plan itself. Two failures need the whole text: the send
+	// site naming another event's kind (every one of these documents opens with
+	// a [T-xxxx] number, so a keyword probe passes on the wrong one), and the
+	// body silently reverting to that sentence.
+	body := releaseNoticeTo(t, api, "m-next")
+	want := "[" + TaskNo(dependent.ID) + "] 擋住這張任務的前置任務 " + TaskNo(blocker.ID) +
+		"「handoff fixture」已經" + mustTask(t, api, blocker.ID).Status + "了,它不再擋著你。\n\n" +
+		"- **還沒開始**：請 get_task 讀內容、submit_plan 規劃步驟後開始執行。\n" +
+		"- **已經在進行中**：接著推進，不必重新規劃。\n" +
+		"- **優先權是凍結**：先問清楚為什麼被凍結，等能解凍的人解開再動。"
+	if body != want {
+		t.Fatalf("the release notice is not the 〈解除阻擋〉 document:\n got %q\nwant %q", body, want)
+	}
+	// A name nothing filled must never ride out with the braces still on it —
+	// the send site drops the notice instead. Asserted beside a notice that DID
+	// arrive, so "no braces" cannot be satisfied by a server that sent nothing.
+	if bad := DocVarsIn(body); len(bad) > 0 {
+		t.Fatalf("the notice reached the executor with %v still in it: %q", bad, body)
+	}
+}
+
+// releaseNoticeTo returns the ONE server-authored notice this recipient got,
+// failing when there is not exactly one.
+//
+// 🔴 IT SELECTS BY RECIPIENT, NEVER BY WHAT THE TEXT SAYS. Selecting on a
+// phrase from the expected document would turn "the send site posted a
+// different document" into "no notice found", which reads as a delivery failure
+// and hides the text that actually went out — the one thing the caller needs to
+// see.
+func releaseNoticeTo(t *testing.T, api *apiServer, recipient string) string {
+	t.Helper()
+	msgs, err := api.dal.ListChatInvolving(recipient, 50)
+	if err != nil {
+		t.Fatalf("list chat: %v", err)
+	}
+	var found []string
+	for _, m := range msgs {
+		if m.Recipient == recipient && m.Sender == wireSystemSender {
+			found = append(found, m.Body)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("want exactly one system notice to %s, got %d: %q", recipient, len(found), found)
+	}
+	return found[0]
 }
 
 func TestASecondLiveBlockerHoldsTheReleaseBack(t *testing.T) {

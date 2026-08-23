@@ -71,7 +71,10 @@ for (const width of [320, 375, 390, 1040]) {
     // document through the adapter, so the first paint is empty, and waiting on
     // the last thing in the document says the WHOLE of it arrived rather than a
     // prefix. A count alone cannot say that.
-    await expect(cmp.locator(".doc-md")).toContainText(
+    // ⚠️ `.doc-card__body > .doc-md`, not `.doc-md` — a boot-context document
+    // renders a SECOND one above the editor for its read-only head (T-3201).
+    // The head is measured too, one level down.
+    await expect(cmp.locator(".doc-card__body > .doc-md")).toContainText(
       await cmp.getByTestId("story-last-heading").innerText()
     );
     const m = await page.evaluate(() => {
@@ -87,7 +90,12 @@ for (const width of [320, 375, 390, 1040]) {
         // reported as a distinct, failing value rather than as an absence.
         named.push({ where, over: el ? over(el) : 9999 });
       };
-      push("rendered document", ".doc-md");
+      push("rendered document", ".doc-card__body > .doc-md");
+      // The read-only half is inside the same card and is markdown too, so it
+      // can pan the chain exactly as the body can (T-3201). It is a NAMED level
+      // rather than left to the subtree sweep: a level that disappears has to
+      // fail loudly, and the sweep reports absence as nothing at all.
+      push("read-only head", ".doc-card__readonly-head");
       push("doc card head", ".doc-card__head");
       push("doc card note", ".doc-card__note");
       push("doc card body", ".doc-card__body");

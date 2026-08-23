@@ -1434,7 +1434,7 @@ export const en: Dict = {
     updateAvailable: "A newer version is available",
     upgrade: "Update to latest",
     catalogHash: "MCP catalog hash",
-    globalSection: "GLOBAL CONTEXT",
+    globalSection: "BOOT",
     systemName: "System interaction",
     systemSub: "How the system works, injected into every agent · editable",
     customName: "User additions",
@@ -1451,6 +1451,33 @@ export const en: Dict = {
     offboardName: "Offboard sequence",
     offboardSub:
       "Wrap-up instructions handed to an agent when the server is about to collect its session · editable",
+    stopSection: "STOP",
+    taskEventSection: "TASK EVENTS",
+    readOnlySection: "SHOWN, NEVER EDITED",
+    acceleratedStopName: "Accelerated stop",
+    acceleratedStopSub:
+      "What an agent is told when it is asked to wrap up early · carries a deadline · editable",
+    taskCloseoutName: "Task close-out",
+    taskCloseoutSub:
+      "What an agent is told when one of its tasks is judged finished · editable",
+    taskReassignPredecessorName: "Reassigned away",
+    taskReassignPredecessorSub:
+      "What an agent is told when a task it held is handed to somebody else · editable",
+    taskTakeoverWithPredecessorName: "Takeover · with predecessor",
+    taskTakeoverWithPredecessorSub:
+      "What an agent is told when it picks up a task somebody else worked on · editable",
+    taskTakeoverFreshName: "Takeover · new assignment",
+    taskTakeoverFreshSub:
+      "What an agent is told the first time a task is assigned to it · shown, never edited",
+    taskUnblockedName: "Blocker released",
+    taskUnblockedSub:
+      "What an agent is told when the task blocking it is released · shown, never edited",
+    bootDocReadOnlyNote:
+      "This document is shown so you can see exactly what agents are told. Nobody may edit it, and it has no version other than the shipped one.",
+    bootDocSaveConfirmAcceleratedStop:
+      "Save this accelerated-stop procedure? Every agent asked to wrap up early reads this content, and reads it with only a short window left — it has to be finishable in that time.",
+    bootDocSaveConfirmTaskEvent:
+      "Save this task-event procedure? Every agent notified of this event from now on reads this content.",
     bootDocNoteHistoryLead: "Version history keeps the last ",
     bootDocNoteHistoryTail:
       " versions, counted in SAVES rather than in time — a run of small saves pushes the older ones out. Restoring the factory version is never affected and is always available.",
@@ -1470,6 +1497,14 @@ export const en: Dict = {
     historyBootClaudeTitle: "Boot sequence (Claude Code) · version history",
     historyBootCodexTitle: "Boot sequence (Codex CLI) · version history",
     historyBootOffboardTitle: "Offboard sequence · version history",
+    historyAcceleratedStopTitle: "Accelerated stop · version history",
+    historyTaskCloseoutTitle: "Task close-out · version history",
+    historyTaskReassignPredecessorTitle: "Reassigned away · version history",
+    historyTaskTakeoverWithPredecessorTitle:
+      "Takeover (with predecessor) · version history",
+    historyTaskTakeoverFreshTitle:
+      "Takeover (new assignment) · version history",
+    historyTaskUnblockedTitle: "Blocker released · version history",
     defaultBadge: "Default",
     edit: "Edit",
     doneEdit: "Done",
@@ -1477,7 +1512,8 @@ export const en: Dict = {
     reset: "Reset",
     editorPlaceholder: "Write in Markdown…",
     docReplaceNote:
-      "Saving REPLACES this whole document with what is in the editor — there is no per-section merge, so anything not pasted back is gone.",
+      "Saving REPLACES the editable half of this document with what is in the editor — there is no per-section merge, so anything not pasted back is gone. The read-only part above is untouched, and there is no way to send an edit to it.",
+    docReadOnlyHead: "Read-only (written by the program, not editable)",
     docActionFailed: "That did not go through — try again.",
     docOverCapLead: "Now ",
     docOverCapMid: " characters, over the limit of ",
