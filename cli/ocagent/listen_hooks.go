@@ -178,7 +178,7 @@ func (h *windDownHook) maybeWindDown(frame map[string]any) bool {
 // it is not.
 func (h *windDownHook) wake(notice string) {
 	if strings.TrimSpace(notice) == "" {
-		h.say(offboardFallback)
+		h.say("offboard: " + offboardFallback)
 		return
 	}
 	for _, line := range strings.Split(notice, "\n") {
@@ -229,7 +229,24 @@ func (h *recycleHook) say(msg string) { fmt.Fprintf(h.out, "[ocagent] %s\n", msg
 // a server too old to push one looks exactly like a notice that said nothing, and
 // neither case is worth telling apart from here — both mean the checklist did not
 // arrive. Losing the checklist is survivable; losing the notice is not.
-const offboardFallback = "recycle: server 要收你了，但這則通知沒有帶到下線程序 —— " +
+//
+// 🔴 IT CARRIES NO PREFIX, AND IT USED TO (T-6f44). The words 「recycle: 」 were
+// welded into this constant while BOTH hooks share it — so the wind-down hook,
+// which prefixes every line of a real notice with 「offboard: 」, announced its
+// fallback under the OTHER hook's name. Each hook now stamps its own, the same
+// way it already stamps the notice it did receive.
+//
+// Why that was worth fixing rather than tidying: the owner's rule is 「下線 →
+// 加速 → 強制。後者一旦發出我們就不該發出前者」, and 重新聚焦 is the FIRST stage.
+// A force-stopped agent — the LAST stage, where the server deliberately sends
+// nothing — was the case that reached this line most reliably, and what it saw
+// was a sentence badged as stage one. 「什麼都不送」 was true of the server and
+// false in front of the agent.
+//
+// ⚠️ AND IT WAS NEVER ONLY FORCE-STOP. Any wind-down delta that loses its
+// notice lands here, so every one of them was mis-badged; force-stop is simply
+// the arm that always loses it.
+const offboardFallback = "server 要收你了，但這則通知沒有帶到下線程序 —— " +
 	"請立刻用 MCP get_offboard 拿完整收尾清單並照做，別空手停下。"
 
 // offboardNoticeIn digs the server-composed notice out of a member delta:
@@ -262,7 +279,7 @@ func offboardNoticeIn(frame map[string]any) string {
 // collected without knowing it is not.
 func (h *recycleHook) wakeForRecycle(notice string) {
 	if strings.TrimSpace(notice) == "" {
-		h.say(offboardFallback)
+		h.say("recycle: " + offboardFallback)
 		return
 	}
 	for _, line := range strings.Split(notice, "\n") {

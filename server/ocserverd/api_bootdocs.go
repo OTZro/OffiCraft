@@ -242,15 +242,28 @@ var bootDocRegistry = []bootDocReg{{
 	Cap:     func(s *apiServer) int { return s.taskEventCap() },
 	// The cleanest cut of the ten: one sentence of fact, then three of
 	// instruction, in that order, inside one paragraph — hence Join "".
-	// 🔴 ONE SLOT CARRIES BOTH THE NAME AND THE ID (T-6f44, owner's decision 1:
-	// 「名字跟 id 不能都給嗎」— yes). The number of VARIABLES is not the number of
-	// FACTS: the successor slot is a string the code composes, so it is filled
-	// with 「銀月（mira）」 rather than split into two slots. A bare id reads as a
-	// serial number to a human; a bare name cannot be addressed with post_chat.
-	// Renamed from new_executor_label because it is no longer just a label.
+	// 🔴 THE SUCCESSOR IS NOT NAMED — ONE VARIABLE, NOT TWO (owner, 2026-08-24,
+	// verbatim: 「如果完全不提到接手人是誰呢」「讓他自己去查」「不管是不是
+	// outsource」). This SUPERSEDES decision 1 of the same day for THIS document
+	// (decision 1 stands for its sibling 〈給接手人〉, which still carries the
+	// predecessor's name and id).
+	//
+	// The criterion is the one he applied across this whole pass: does the
+	// READER need the fact to do what the body asks? 〈擋著你手上任務的票解開了〉
+	// dropped the blocker's identity on it; 〈任務結案〉 kept only the ticket. Here
+	// the body tells the predecessor to write its handover ONTO THE TASK and to
+	// treat talking to the successor as nice-to-have — it never asks it to dial
+	// anyone, so an id it would not dial is a fact it does not need.
+	//
+	// 🔴 AND NAMING THE SUCCESSOR WAS WORSE THAN UNNECESSARY: it was the source
+	// of a FABRICATED name. An outsource successor is minted LATER by the
+	// scheduler, so at reassign time there was nobody to name, and the slot was
+	// filled with a hardcoded Chinese status label ("外包（待排程指派）") sitting in
+	// the grammatical position of a person. With the name gone the placeholder
+	// has nothing left to fill, and the whole branch goes with it.
 	Split: true,
 	Join:  "",
-	Vars:  []string{"task_no", "new_executor"},
+	Vars:  []string{"task_no"},
 }, {
 	Kind:    docKindTaskTakeoverWithPredecessor,
 	Keys:    []string{taskTakeoverWithPredecessorDocKey},

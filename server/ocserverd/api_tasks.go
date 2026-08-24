@@ -580,8 +580,12 @@ func (s *apiServer) closeTask(t *Task, status string, now float64, trigger strin
 // number. The number of variables is not the number of facts — a slot is a
 // string this code composes.
 //
-// Used by BOTH 轉派 arms on purpose. Spelling this rule twice is how the two
-// spellings drift apart, which is the defect class this ticket removes.
+// 🔴 ONE CALLER NOW, AND THAT IS THE POINT OF THE OTHER HALF OF THIS TICKET.
+// It used to serve both 轉派 arms; the predecessor notice stopped naming the
+// successor at all (owner: 「讓他自己去查」「不管是不是 outsource」), so only
+// 〈給接手人〉 still composes a party — and only because its body tells the reader
+// to post_chat that party. Where the body does not dial anyone, the name is not
+// carried.
 //
 // When the label already IS the id (a party with no name) the parenthesis would
 // repeat it, so it is omitted — 「mira（mira）」 reads like a bug to the agent
@@ -1577,34 +1581,16 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	// scheduler mints it later under the cap), so there is no worker id to DM
 	// yet; its boot context folds the same takeover instruction, so the successor
 	// chat notice is a member-only step below.
-	newExecutorLabel, newExecutorID := "", ""
+	// 🔴 THE PREDECESSOR NOTICE NAMES NOBODY ANY MORE (owner, 2026-08-24), so
+	// there is no successor LABEL to compose — only the id, and only for the
+	// arm that actually sends the successor a message. The composer that used
+	// to build 「名字（id）」 for this notice is gone with the slot, and so is the
+	// branch that had nothing to put in it: an outsource successor is minted
+	// later by the scheduler, and that branch used to fill the slot with a
+	// hardcoded status label standing in for a person who did not exist yet.
+	newExecutorID := ""
 	if newMember != nil {
 		newExecutorID = newMember.ID
-		// 🔴 NAME AND ID IN ONE SLOT (T-6f44, owner's decision 1). The document
-		// declares ONE variable and this string carries BOTH facts — 「銀月
-		// （mira）」 — because a slot is a string the code composes, not a fact.
-		// A bare id reads as a serial number; a bare name cannot be addressed.
-		// Same composer as the predecessor slot below, deliberately: 「名字（id）」
-		// is ONE rule, and writing it twice is how the two spellings drift —
-		// which is the defect class this whole ticket exists to remove, at the
-		// scale of two lines. It also inherits the label==id case for free.
-		newExecutorLabel = nameWithIDSlot(newMember.Name, newMember.ID)
-	} else {
-		// 🔴 A STATE, WRITTEN SO IT DOES NOT READ AS A NAME (T-6f44, owner's
-		// decision on 轉派 · 給前任). The successor is an outsource worker the
-		// scheduler has not minted yet, so there is no name and no id to give.
-		// This slot used to read 「外包（待排程指派）」, which the sentence then
-		// rendered as 「此任務已轉派給 外包（待排程指派）。」 — a status label sitting
-		// in the grammatical position of a person.
-		//
-		// ⚠️ The owner offered two fixes: take the words from the document, or
-		// 「至少讓句子讀起來不像在講一個人」. This is the second. The first would
-		// need a slot the document does not have, and adding one would break the
-		// ≤2-variables-per-document rule he set in the same pass — so the two
-		// instructions cannot both be satisfied, and this is the one that does
-		// not overrule the other. The string is still Go-side and still not
-		// owner-editable; that half is NOT fixed.
-		newExecutorLabel = "一位尚未指派的外包成員"
 	}
 	// 🔴 THE FROZEN CAVEAT USED TO BE APPENDED HERE, AND THE OWNER REMOVED IT
 	// (2026-08-22, T-3201). It said 「這張任務現在是「凍結」…認領之後不要開始推進」
@@ -1621,7 +1607,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	// "" means it could not be rendered — post nothing rather than a template.
 	if oldExecutor != "" {
 		if notice := s.taskNoticeText(docKindTaskReassignPredecessor, map[string]string{
-			"task_no": no, "new_executor": newExecutorLabel,
+			"task_no": no,
 		}); notice != "" {
 			s.postTaskChat(*t, wireSystemSender, oldExecutor, notice, trigger)
 		}

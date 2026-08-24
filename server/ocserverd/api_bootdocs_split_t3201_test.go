@@ -225,21 +225,20 @@ func TestTaskReassignPredecessorDoc_HeadPlusBodyIsTodaysChatNotice(t *testing.T)
 	s := newEventProcServer(t)
 	spec, head, body := splitSeed(t, s, docKindTaskReassignPredecessor)
 
-	// 🔴 ONE SLOT, BOTH FACTS (T-6f44, decision 1): the successor arrives as
-	// 「名字（id）」. Renamed from new_executor_label because it stopped being just
-	// a label — api_tasks.go composes it, so the count of variables did not have
-	// to grow for the count of facts to.
+	// 🔴 THE SUCCESSOR IS NOT NAMED (T-6f44, owner 2026-08-24: 「讓他自己去查」
+	// 「不管是不是 outsource」). ONE variable. The body never asks the predecessor
+	// to dial anyone, so an identity it would not dial is a fact it does not
+	// carry — and naming it was what forced a fabricated placeholder whenever
+	// the successor was an outsource worker the scheduler had not minted yet.
 	got := mustRender(t, spec, head, map[string]string{
-		"task_no": "T-7e91", "new_executor": "銀月（mira）",
+		"task_no": "T-7e91",
 	}) + spec.Join + body
 
 	// The literal api_tasks.go used to concatenate, plus the seed FILE's
 	// trailing newline — a document is a file and ends with one, a chat row is
 	// one message, so the send site trims what it posts the way buildBootContext
 	// trims every block it staples.
-	want := "[T-7e91] 此任務已轉派給 銀月（mira）。請停止推進，改為去跟接手人做交接：" +
-		"對方接手後會主動 post_chat 找你，他問目前進度、進行中的事項、有哪些雷要注意，" +
-		"你都要答得出來，直到他確認交接完成。交接完成後這張任務就不再是你的了。\n"
+	want := "[T-7e91] 此任務已轉派給新的接手人。" + "請停止推進，先把交接資訊寫到這張任務上：目前進度、進行中的事項、有哪些雷要注意。**這一步不能省，它是接手人唯一保證讀得到的東西** —— 接手人可能還沒被建出來，也可能你已經下線了才輪到他。\n\n寫完就算交出去了。如果接手人剛好在線上來找你，就順便當面補齊；沒有的話不用等，也不用去找他。" + "\n"
 	if got != want {
 		t.Fatalf("the folded document is not today's reassign notice:\n got %q\nwant %q", got, want)
 	}
@@ -247,7 +246,7 @@ func TestTaskReassignPredecessorDoc_HeadPlusBodyIsTodaysChatNotice(t *testing.T)
 	// hand-written literal above a statement about the SERVER and not about
 	// this file.
 	if live := s.taskNoticeText(docKindTaskReassignPredecessor, map[string]string{
-		"task_no": "T-7e91", "new_executor": "銀月（mira）",
+		"task_no": "T-7e91",
 	}); live != strings.TrimSpace(want) {
 		t.Fatalf("the live producer sent something else:\n got %q\nlive %q",
 			strings.TrimSpace(want), live)

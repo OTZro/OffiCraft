@@ -272,17 +272,24 @@ func TestReassignMemberToMemberHandsOver(t *testing.T) {
 	// successor and the word 交接" would pass on a document about something else
 	// entirely. Hand-written rather than re-rendered from the registry, so this
 	// stays a statement about what an agent receives.
-	// 🔴 「名字（id）」 SINCE T-6f44 (decision 1). One slot, two facts: a bare id
-	// reads as a serial number to the predecessor, and a bare name cannot be
-	// addressed with post_chat. The document still declares two variables.
-	wantOld := "[" + TaskNo(task.ID) + "] 此任務已轉派給 Rei（m-new）。請停止推進，改為去跟接手人做交接：" +
-		"對方接手後會主動 post_chat 找你，他問目前進度、進行中的事項、有哪些雷要注意，" +
-		"你都要答得出來，直到他確認交接完成。交接完成後這張任務就不再是你的了。"
+	// 🔴 THE SUCCESSOR IS NOT NAMED SINCE T-6f44 (owner 2026-08-24). The whole
+	// body is asserted, so the identity cannot creep back in anywhere in it.
+	wantOld := "[" + TaskNo(task.ID) + "] 此任務已轉派給新的接手人。" + "請停止推進，先把交接資訊寫到這張任務上：目前進度、進行中的事項、有哪些雷要注意。**這一步不能省，它是接手人唯一保證讀得到的東西** —— 接手人可能還沒被建出來，也可能你已經下線了才輪到他。\n\n寫完就算交出去了。如果接手人剛好在線上來找你，就順便當面補齊；沒有的話不用等，也不用去找他。"
 	if toOld == nil {
 		t.Fatalf("the predecessor received no handover message at all")
 	}
 	if toOld.Body != wantOld {
 		t.Fatalf("old-executor handover message wrong:\n got %q\nwant %q", toOld.Body, wantOld)
+	}
+	// 🔴 NAMED SEPARATELY, because the whole-body compare above would also fail
+	// for a stray space and this is the rule that must not be quietly undone:
+	// the predecessor is told THAT the task moved, never to whom.
+	for _, leak := range []string{"Rei", "m-new"} {
+		if strings.Contains(toOld.Body, leak) {
+			t.Errorf("the predecessor notice names the successor (%q) — it must "+
+				"say only that the task moved; identity is looked up on the "+
+				"ticket:\n%s", leak, toOld.Body)
+		}
 	}
 	// The successor's notice is the 接手程序（有前任） DOCUMENT now (T-3201),
 	// compared whole for the same reason the predecessor's is.
