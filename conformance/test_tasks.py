@@ -2018,7 +2018,15 @@ def test_reassign_hands_over_to_a_member_and_only_they_take_over(
     # action — never the removed task-status report (T-8449).
     msgs = client.get(f"/api/chat?with={new_id}&limit=-1",
                       headers=_auth(owner_token)).json()
-    handover = [m for m in msgs if "你接手了任務" in m["body"]]
+    # 🔴 SELECTED STRUCTURALLY, NOT BY ITS WORDING (T-6f44). This used to look
+    # for the Chinese substring 「你接手了任務」, which made a suite about BEHAVIOUR
+    # fail the day the owner edited the sentence — the notice was posted, the
+    # filter simply stopped matching, and the failure said nothing about that.
+    # The three facts that are actually contractual are the sender, the
+    # recipient (the query already pins it) and the task the row is about; all
+    # three ride the row itself and none of them is prose an owner may reword.
+    handover = [m for m in msgs
+                if m["from"] == "system" and m["meta"].get("task_id") == task["id"]]
     assert handover, "reassign must post a handover chat message to the new executor"
     for m in handover:
         assert "claim_task" in m["body"], m["body"]

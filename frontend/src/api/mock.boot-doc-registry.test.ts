@@ -46,6 +46,7 @@ interface TableRow {
   kind: BootDocKind;
   key: string;
   readOnly: boolean;
+  hasHead: boolean;
 }
 
 /** Parse the shared table. An unreadable, malformed or EMPTY fixture THROWS —
@@ -56,14 +57,21 @@ function loadTable(): TableRow[] {
   readFileSync(TABLE_PATH, "utf8").split("\n").forEach((line, i) => {
     if (line.startsWith("#") || line.trim() === "") return;
     const cols = line.split("\t");
-    if (cols.length !== 3) {
-      throw new Error(`${TABLE_PATH}:${i + 1}: want 3 tab-separated columns, got ${cols.length}`);
+    if (cols.length !== 4) {
+      throw new Error(`${TABLE_PATH}:${i + 1}: want 4 tab-separated columns, got ${cols.length}`);
     }
     if (cols[0] === "kind") return; // the header row
-    if (cols[2] !== "true" && cols[2] !== "false") {
-      throw new Error(`${TABLE_PATH}:${i + 1}: read_only is "${cols[2]}", want true or false`);
-    }
-    rows.push({ kind: cols[0] as BootDocKind, key: cols[1], readOnly: cols[2] === "true" });
+    (["read_only", "has_head"] as const).forEach((name, n) => {
+      if (cols[2 + n] !== "true" && cols[2 + n] !== "false") {
+        throw new Error(`${TABLE_PATH}:${i + 1}: ${name} is "${cols[2 + n]}", want true or false`);
+      }
+    });
+    rows.push({
+      kind: cols[0] as BootDocKind,
+      key: cols[1],
+      readOnly: cols[2] === "true",
+      hasHead: cols[3] === "true",
+    });
   });
   if (rows.length === 0) throw new Error(`${TABLE_PATH} parsed to zero rows`);
   return rows;
@@ -93,6 +101,15 @@ describe("boot-document registry ⇄ settings rows", () => {
     for (const row of TABLE) {
       const doc = await mockApi.getBootDoc(row.kind, row.key);
       expect(doc.readOnly).toBe(row.readOnly);
+      // 🔴 THE HEAD, BOTH WAYS (T-6f44). The mock stands in for the server in
+      // every other frontend test, so a stand-in whose documents have a
+      // read-only head where the shipped ones no longer do makes those tests
+      // green against a fleet that does not exist — which is precisely how the
+      // four documents that lost their head this ticket went unnoticed in a
+      // suite nobody ran. Empty vs non-empty is all the table claims; the exact
+      // text is per-document and stays out of it.
+      expect({ addr: `${row.kind}/${row.key}`, hasHead: doc.readOnlyHead !== "" })
+        .toEqual({ addr: `${row.kind}/${row.key}`, hasHead: row.hasHead });
     }
   });
 
