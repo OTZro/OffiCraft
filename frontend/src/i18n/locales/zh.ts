@@ -1546,13 +1546,13 @@ export const zh = {
     bootDocNoteHistoryTail:
       " 版，而且是以「存檔次數」計、不是以時間計——連按幾次小修就會把較舊的版本沖掉。「還原出廠版」不受影響，永遠在。",
     bootDocSaveConfirmBoot:
-      "要儲存這份啟動程序嗎？啟動程序改壞會讓之後開機的 agent 掛不上 SSE、因此永遠不會上線，而且不會有任何錯誤訊息——到時候也沒有人在線上可以救。存檔前請確認你看過預覽；真的出事就按「還原出廠版」。",
+      "要儲存這份啟動步驟嗎？啟動步驟改壞會讓之後開機的 agent 掛不上 SSE、因此永遠不會上線，而且不會有任何錯誤訊息——到時候也沒有人在線上可以救。存檔前請確認你看過預覽；真的出事就按「還原出廠版」。",
     bootDocSaveConfirmSystem:
       "要儲存這份系統互動說明嗎？之後開機的每一個 agent 都會讀到這份內容。",
     bootDocSaveConfirmOffboard:
       "要儲存這份〈停止〉嗎？之後每一個被收掉的 session 都會讀到這份內容，而且讀到的時候沒有人在線上可以問——換手那條還有幾分鐘的窗，下線那條則是一直等你，兩種都寫得完才算數。",
     bootDocSaveConfirmAction: "確認儲存",
-    // 堆疊呈現的文件，點標題才展開（T-6278）。兩份啟動程序都預設收疊，讓一個
+    // 堆疊呈現的文件，點標題才展開（T-6278）。兩份啟動步驟都預設收疊，讓一個
     // 畫面看得到兩份；標籤寫的是「按下去會怎樣」，不是目前狀態。
     docExpand: "展開這份文件",
     docCollapse: "收合這份文件",
@@ -1710,11 +1710,11 @@ export const zh = {
     ttl7d: "7 天",
     ttl30d: "30 天",
     notice: "Claude 第一次通知",
-    noticeSub: "記憶用到這個比例，就把下線程序送給它，請它收乾淨後自己換手（要比下面的最後通牒小）",
+    noticeSub: "記憶用到這個比例，就把〈停止〉送給它，請它收乾淨後自己換手（要比下面的最後通牒小）",
     handover: "Claude 最後通牒",
     handoverSub: "到這個比例送最後通牒並自動換手，之後依「加速停止秒數」強制回收（40–90%）",
     codexNotice: "Codex 第一次通知",
-    codexNoticeSub: "第幾輪 context compaction 後把下線程序送給它（要比下面的回合數小）",
+    codexNoticeSub: "第幾輪 context compaction 後把〈停止〉送給它（要比下面的回合數小）",
     codexHandover: "Codex 最後通牒回合",
     codexHandoverSub: "完成這麼多次 context compaction 後自動重新聚焦；不依 context 百分比判斷",
     monitoringRefresh: "監控刷新間隔",

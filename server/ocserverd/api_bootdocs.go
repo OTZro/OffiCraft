@@ -144,7 +144,7 @@ var bootDocRegistry = []bootDocReg{{
 	// place in the tree that decides which runtime gets which sequence, and it
 	// holds that title only as long as nobody writes a second one beside it.
 	SeedFor: bootSequenceSeedName,
-	DocName: func(key string) string { return "boot sequence (" + key + ")" },
+	DocName: func(key string) string { return "boot steps (" + key + ")" },
 	Cap:     func(s *apiServer) int { return s.bootSequenceCap() },
 	// Same as system_interaction (T-6f44): the promoted title line went back
 	// into the body on BOTH runtime seeds, and the read-only head is gone. The
@@ -157,7 +157,7 @@ var bootDocRegistry = []bootDocReg{{
 	Kind:    docKindOffboard,
 	Keys:    []string{offboardDocKey},
 	SeedFor: func(string) string { return offboardSeedMD },
-	DocName: func(string) string { return "offboard sequence" },
+	DocName: func(string) string { return "Stop document" },
 	Cap:     func(s *apiServer) int { return s.offboardCap() },
 	// EMPTY, NOT nil. nil means "not validated at all" (doc_vars.go); this kind
 	// declared variables before T-6f44 and must keep being validated — it just
@@ -238,7 +238,7 @@ var bootDocRegistry = []bootDocReg{{
 	Kind:    docKindTaskReassignPredecessor,
 	Keys:    []string{taskReassignPredecessorDocKey},
 	SeedFor: func(string) string { return taskReassignPredecessorSeedMD },
-	DocName: func(string) string { return "task reassign procedure (predecessor)" },
+	DocName: func(string) string { return "task reassignment document (to the predecessor)" },
 	Cap:     func(s *apiServer) int { return s.taskEventCap() },
 	// The cleanest cut of the ten: one sentence of fact, then three of
 	// instruction, in that order, inside one paragraph — hence Join "".
@@ -268,7 +268,7 @@ var bootDocRegistry = []bootDocReg{{
 	Kind:    docKindTaskTakeoverWithPredecessor,
 	Keys:    []string{taskTakeoverWithPredecessorDocKey},
 	SeedFor: func(string) string { return taskTakeoverWithPredecessorSeedMD },
-	DocName: func(string) string { return "task takeover procedure (with predecessor)" },
+	DocName: func(string) string { return "task reassignment document (to the successor)" },
 	Cap:     func(s *apiServer) int { return s.taskEventCap() },
 	// 🔴 SPLIT ONCE {note} WAS DROPPED (owner, rc-0c36d8739b8f: 「拿掉 —— 交接備註
 	// 只留在任務上」). 「交接備註：{note}」 was appended AFTER the instructions, so
@@ -302,7 +302,7 @@ var bootDocRegistry = []bootDocReg{{
 	Kind:    docKindTaskTakeoverFresh,
 	Keys:    []string{taskTakeoverFreshDocKey},
 	SeedFor: func(string) string { return taskTakeoverFreshSeedMD },
-	DocName: func(string) string { return "task takeover procedure (new assignment)" },
+	DocName: func(string) string { return "new task document" },
 	Cap:     func(s *apiServer) int { return s.taskEventCap() },
 	// Split on the same ruling as its sibling above, and joined the same way:
 	// one sentence of fact, then the instructions, inside one paragraph.
@@ -444,6 +444,20 @@ func unknownBootDocKeyMsg(kind, key string) string {
 	return "document history key '" + key + "' does not name a " + kind +
 		" document — the key is " + strings.Join(quoted, " or ")
 }
+
+// 🔴 DocName IS USER-FACING PROSE, NOT AN IDENTIFIER (T-6f44). It is what a
+// REFUSAL calls the document — 「the Stop document exceeds…」 — so when the owner
+// renamed these on 2026-08-24 this set had to move with the cockpit's, or the
+// error would name a document the settings page no longer has. The five that
+// were renamed here follow the cockpit's own names (i18n `*Name`); the four that
+// keep their wording (system interaction, accelerated stop, task close-out,
+// dependency-released notice) do so because the owner did not rename them.
+//
+// ⚠️ Two other copies of this mapping exist and are NOT identifiers either:
+// frontend/src/api/mock.ts (the cockpit's stand-in server) and the OpenAPI
+// descriptions. The mock is kept in step in the same commit; the spec text is
+// the wider question the owner is deciding separately. Nothing enforces any of
+// this — the wire identity is `kind`/`key`, which this ticket does not touch.
 
 // foldBootDocDTO folds one block: overlay ⊕ the embedded seed.
 func (s *apiServer) foldBootDocDTO(spec bootDocSpec) (*bootDocDTO, error) {

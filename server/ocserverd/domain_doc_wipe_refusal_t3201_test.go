@@ -75,7 +75,12 @@ func TestWipeRefusalsAreByteIdenticalToWhatEachSeamSaidBefore(t *testing.T) {
 				writeBootSequenceOn(t, api, "claude", "some boot sequence")
 				return writeBootSequenceOn(t, api, "claude", "")
 			},
-			want: "this would replace the existing boot sequence (claude) with an empty one — pass allow_shrink=true " +
+			// 🔴 「boot steps」, not 「boot sequence」 (T-6f44). The owner renamed
+			// this document on 2026-08-24 (啟動程序 → 啟動步驟) and DocName is the
+			// prose a refusal uses, so the sentence moved with the name. This
+			// expectation is UPDATED rather than loosened: the whole point of a
+			// byte-identical pin is that a rename has to be typed here too.
+			want: "this would replace the existing boot steps (claude) with an empty one — pass allow_shrink=true " +
 				"if that is intended, or reset it to the shipped default; nothing was written",
 		},
 		{

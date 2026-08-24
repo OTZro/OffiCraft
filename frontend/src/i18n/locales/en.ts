@@ -1481,7 +1481,7 @@ export const en: Dict = {
     bootDocNoteHistoryTail:
       " versions, counted in SAVES rather than in time — a run of small saves pushes the older ones out. Restoring the factory version is never affected and is always available.",
     bootDocSaveConfirmBoot:
-      "Save this boot sequence? A broken boot sequence stops agents booting after it from attaching to SSE, so they never come online — silently, with no error anywhere, and with nobody online to fix it. Check the preview first; if it does go wrong, press Restore factory version.",
+      "Save these boot steps? Broken boot steps stop agents booting after it from attaching to SSE, so they never come online — silently, with no error anywhere, and with nobody online to fix it. Check the preview first; if it does go wrong, press Restore factory version.",
     bootDocSaveConfirmSystem:
       "Save this system-interaction document? Every agent that boots after the save reads this content.",
     bootDocSaveConfirmOffboard:
@@ -1612,13 +1612,13 @@ export const en: Dict = {
     ttl30d: "30 days",
     notice: "Claude first notice",
     noticeSub:
-      "At this level the offboard sequence is sent, and the agent is asked to close out and hand over under its own power (must be below the final call)",
+      "At this level the Stop document is sent, and the agent is asked to close out and hand over under its own power (must be below the final call)",
     handover: "Claude final call",
     handoverSub:
       "At this level the final notice goes out and the handover fires; the session is collected once stop.accelerated_grace_secs elapses (40–90%)",
     codexNotice: "Codex first notice",
     codexNoticeSub:
-      "The compaction round at which the offboard sequence is sent (must be below the final round)",
+      "The compaction round at which the Stop document is sent (must be below the final round)",
     codexHandover: "Codex final round",
     codexHandoverSub:
       "Automatically refocus after this many completed context compactions; context percentage is not used.",

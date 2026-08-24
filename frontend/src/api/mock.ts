@@ -569,15 +569,16 @@ export function __setBootDocReadOnly(keys: readonly string[]): void {
  * rejection and a caller reading the listing see the same words. */
 const BOOT_DOC_NAMES: Record<string, string> = {
   "system_interaction/global": "system interaction block",
-  "boot_sequence/claude": "boot sequence (claude)",
-  "boot_sequence/codex": "boot sequence (codex)",
-  "offboard/global": "offboard sequence",
+  "boot_sequence/claude": "boot steps (claude)",
+  "boot_sequence/codex": "boot steps (codex)",
+  "offboard/global": "Stop document",
   "accelerated_stop/global": "accelerated stop sequence",
   "task_closeout/global": "task close-out procedure",
-  "task_reassign_predecessor/global": "task reassign procedure (predecessor)",
+  "task_reassign_predecessor/global":
+    "task reassignment document (to the predecessor)",
   "task_takeover_with_predecessor/global":
-    "task takeover procedure (with predecessor)",
-  "task_takeover_fresh/global": "task takeover procedure (new assignment)",
+    "task reassignment document (to the successor)",
+  "task_takeover_fresh/global": "new task document",
   "task_unblocked/global": "dependency-released notice",
 };
 const bootDocOverlays = new Map<string, string>();
