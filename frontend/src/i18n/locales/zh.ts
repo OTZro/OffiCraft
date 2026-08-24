@@ -1530,9 +1530,9 @@ export const zh = {
     taskTakeoverWithPredecessorName: "任務轉派 · 給接手人",
     taskTakeoverWithPredecessorSub: "接手別人做過的任務時給 agent 的指示 · 可編輯",
     taskTakeoverFreshName: "新任務",
-    taskTakeoverFreshSub: "第一次被指派這個任務時給 agent 的指示",
+    taskTakeoverFreshSub: "第一次被指派這個任務時給 agent 的指示 · 可編輯",
     taskUnblockedName: "擋著你手上任務的票解開了",
-    taskUnblockedSub: "依賴的任務放行時給 agent 的通知",
+    taskUnblockedSub: "依賴的任務放行時給 agent 的通知 · 可編輯",
     // 唯讀文件的說明：說「這份是什麼」，不說「你沒有權限」——沒有任何人可以改，
     // 講權限會讓人去找一個根本不存在的角色來授權。
     bootDocReadOnlyNote:
@@ -1550,24 +1550,25 @@ export const zh = {
     bootDocSaveConfirmSystem:
       "要儲存這份系統互動說明嗎？之後開機的每一個 agent 都會讀到這份內容。",
     bootDocSaveConfirmOffboard:
-      "要儲存這份下線程序嗎？之後每一個被收掉的 session 都會讀到這份內容，而且讀到的時候沒有人在線上可以問——換手那條還有幾分鐘的窗，下線那條則是一直等你，兩種都寫得完才算數。",
+      "要儲存這份〈停止〉嗎？之後每一個被收掉的 session 都會讀到這份內容，而且讀到的時候沒有人在線上可以問——換手那條還有幾分鐘的窗，下線那條則是一直等你，兩種都寫得完才算數。",
     bootDocSaveConfirmAction: "確認儲存",
     // 堆疊呈現的文件，點標題才展開（T-6278）。兩份啟動程序都預設收疊，讓一個
     // 畫面看得到兩份；標籤寫的是「按下去會怎樣」，不是目前狀態。
     docExpand: "展開這份文件",
     docCollapse: "收合這份文件",
     historyBootSystemTitle: "系統互動的版本紀錄",
-    historyBootClaudeTitle: "啟動程序（Claude Code）的版本紀錄",
-    historyBootCodexTitle: "啟動程序（Codex CLI）的版本紀錄",
-    historyBootOffboardTitle: "下線程序的版本紀錄",
+    historyBootClaudeTitle: "啟動步驟（Claude Code）的版本紀錄",
+    historyBootCodexTitle: "啟動步驟（Codex CLI）的版本紀錄",
+    historyBootOffboardTitle: "停止的版本紀錄",
     historyAcceleratedStopTitle: "加速停止的版本紀錄",
     historyTaskCloseoutTitle: "任務結案的版本紀錄",
-    historyTaskReassignPredecessorTitle: "轉派給前任的版本紀錄",
-    historyTaskTakeoverWithPredecessorTitle: "接手·有前任的版本紀錄",
-    // 這兩份是唯讀的，永遠不會有第二個版本；標題留著是因為那張表對每一列都要
-    // 一個，而不是因為畫面上會出現版本紀錄入口。
-    historyTaskTakeoverFreshTitle: "接手·新指派的版本紀錄",
-    historyTaskUnblockedTitle: "擋著你的票解開了的版本紀錄",
+    historyTaskReassignPredecessorTitle: "任務轉派 · 給前任的版本紀錄",
+    historyTaskTakeoverWithPredecessorTitle: "任務轉派 · 給接手人的版本紀錄",
+    // T-6f44：這兩份**不再是唯讀的**（owner 的決定 2），所以它們跟其他八份
+    // 一樣真的會有版本紀錄。上一版這裡寫著「唯讀、永遠不會有第二個版本」，
+    // 那句話跟著決定 2 一起過期了。
+    historyTaskTakeoverFreshTitle: "新任務的版本紀錄",
+    historyTaskUnblockedTitle: "擋著你手上任務的票解開了的版本紀錄",
     // seed vs owner-edited
     defaultBadge: "預設",
     // ── detail: view / edit ──

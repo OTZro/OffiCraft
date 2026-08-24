@@ -1467,10 +1467,10 @@ export const en: Dict = {
       "What an agent is told when it picks up a task somebody else worked on · editable",
     taskTakeoverFreshName: "New task",
     taskTakeoverFreshSub:
-      "What an agent is told the first time a task is assigned to it",
+      "What an agent is told the first time a task is assigned to it · editable",
     taskUnblockedName: "The ticket blocking your task is released",
     taskUnblockedSub:
-      "What an agent is told when the task blocking it is released",
+      "What an agent is told when the task blocking it is released · editable",
     bootDocReadOnlyNote:
       "This document is shown so you can see exactly what agents are told. Nobody may edit it, and it has no version other than the shipped one.",
     bootDocSaveConfirmAcceleratedStop:
@@ -1485,7 +1485,7 @@ export const en: Dict = {
     bootDocSaveConfirmSystem:
       "Save this system-interaction document? Every agent that boots after the save reads this content.",
     bootDocSaveConfirmOffboard:
-      "Save this offboard sequence? Every session collected after the save reads this content, with nobody online to ask — a recycle leaves it a few minutes, an offboard waits on you indefinitely. It has to be finishable under both.",
+      "Save this Stop document? Every session collected after the save reads this content, with nobody online to ask — a recycle leaves it a few minutes, an offboard waits on you indefinitely. It has to be finishable under both.",
     bootDocSaveConfirmAction: "Save",
     // The click-to-open heading of a stacked document (T-6278). Both boot
     // sequences start closed so the page shows both at once; the label is on
@@ -1493,17 +1493,18 @@ export const en: Dict = {
     docExpand: "Expand this document",
     docCollapse: "Collapse this document",
     historyBootSystemTitle: "System interaction · version history",
-    historyBootClaudeTitle: "Boot sequence (Claude Code) · version history",
-    historyBootCodexTitle: "Boot sequence (Codex CLI) · version history",
-    historyBootOffboardTitle: "Offboard sequence · version history",
+    historyBootClaudeTitle: "Boot steps (Claude Code) · version history",
+    historyBootCodexTitle: "Boot steps (Codex CLI) · version history",
+    historyBootOffboardTitle: "Stop · version history",
     historyAcceleratedStopTitle: "Accelerated stop · version history",
     historyTaskCloseoutTitle: "Task close-out · version history",
-    historyTaskReassignPredecessorTitle: "Reassigned away · version history",
+    historyTaskReassignPredecessorTitle:
+      "Task reassignment · to the predecessor · version history",
     historyTaskTakeoverWithPredecessorTitle:
-      "Takeover (with predecessor) · version history",
-    historyTaskTakeoverFreshTitle:
-      "Takeover (new assignment) · version history",
-    historyTaskUnblockedTitle: "Blocker released · version history",
+      "Task reassignment · to the successor · version history",
+    historyTaskTakeoverFreshTitle: "New task · version history",
+    historyTaskUnblockedTitle:
+      "The ticket blocking your task is released · version history",
     defaultBadge: "Default",
     edit: "Edit",
     doneEdit: "Done",

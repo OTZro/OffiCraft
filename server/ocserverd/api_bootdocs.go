@@ -522,11 +522,19 @@ func (s *apiServer) systemInteractionText() (string, error) {
 // owner went looking for the words an agent is sent and could not find them.
 //
 // 🔴 WHICH DOCUMENT IS THE WHOLE OF THE SOFT/HARD DISTINCTION. A soft wind-down
-// reads 下線程序; the final call reads 加速停止, and that is the only document
-// whose head carries a {deadline} slot. Handing the hard arm the soft document
-// would send an agent under a running clock a sentence that quotes no instant —
-// and 下線程序 §1 tells it to treat a notice with no instant as soft, so it
-// would let its sub-agents finish inside a window that is already closing.
+// reads 〈停止〉; the final call reads 〈加速停止〉, and that is the only document
+// whose head carries a {deadline} slot.
+//
+// ⚠️ WHY THIS ARGUMENT WAS REWRITTEN (T-6f44). It used to run: the soft document
+// quotes no instant, and 下線程序 §1 told an agent to read "no instant" as soft.
+// That inference is GONE — decision 5 deleted the sniffing rule, and each
+// document now says outright which one it is. The cost of handing the hard arm
+// the soft document is therefore no longer a missing hint, it is a FLAT LIE:
+// 〈停止〉 §1 reads 「你讀到的是這一份，就代表**沒有人在對你倒數**：收尾照自己的
+// 節奏做完」 — an agent under a running clock would be told, in words, that
+// nobody is counting, and would let its sub-agents finish inside a window that
+// is already closing. The document is more explicit than it was, so sending the
+// wrong one is worse than it was.
 //
 // It answers "" on ANY fault — an unreadable document, an undeclared name, a
 // declared name nothing filled — and every caller omits the notice rather than
@@ -644,11 +652,18 @@ func (s *apiServer) taskNoticeText(kind string, values map[string]string) string
 // says 「請停止推進，改為去跟接手人做交接」 while WHICH task lives only in the
 // head, so a predecessor holding several would not know which one to stop.
 //
-// The 加速停止 arm is where that costs the most and it is not hypothetical: the
-// head is the only place the deadline appears, so a headless notice quotes no
-// instant while winddownDeadlineOf is positive and reconcile is already counting
-// — and 下線程序 §1 tells an agent to read "no instant" as a soft wind-down. It
-// would let its sub-agents finish inside a window that is closing.
+// The 〈加速停止〉 arm is where that costs the most and it is not hypothetical:
+// the head is the only place the deadline appears, so a headless notice quotes
+// no instant while winddownDeadlineOf is positive and reconcile is already
+// counting.
+//
+// ⚠️ REWRITTEN WITH THE DOCUMENT (T-6f44). The old reason was that 下線程序 §1
+// told an agent to read "no instant" as soft — that rule is gone (decision 5).
+// What replaced it is WORSE for a headless notice, not better: 〈加速停止〉 §1 now
+// reads 「你讀到的是這一份，就代表**你在倒數中**：上面那一行的結束時刻就是死線」,
+// and 上面那一行 IS the head. Strip it and the body points at a line that is not
+// there — the agent is told it is counting down and then told to look at a
+// deadline nothing shows it.
 //
 // 🔴 THE REACHABLE WAY IN IS AN OVERLAY WRITTEN BEFORE THE MARKER EXISTED.
 // docBodyMarker arrived with the split and NO migration rewrote the rows that
