@@ -187,7 +187,7 @@ server 的處理方式是**每一輪重新推導**——還活著就再送一次
   `TestWorkerStop_ReportStoppedCollectsTheStopEpoch`。
 - **refocus epoch 還是被清掉，但理由換了**。原本的註解說「明示的停止壓過換手」——停止
   把收尾丟掉然後殺。現在停止**本身就是**一種收尾，沒有東西被壓過：worker 繼續走同一份
-  下線程序，只是後面不再接一個新 session。清掉的理由變成機械的：
+  〈停止〉，只是後面不再接一個新 session。清掉的理由變成機械的：
   `autoHandoverWorker` 的 in-flight 臂是用 kill+**respawn** 收口的，留著它會把 owner 剛
   壓下去的 worker 又叫起來。
 - **`desired_state` 一開始就翻成 offline，這是刻意的**，而且它不會讓別的東西提早收掉
