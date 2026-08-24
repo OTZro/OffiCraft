@@ -1,4 +1,4 @@
-[{task_no}] 此任務已轉派給 {new_executor_label}。
+[{task_no}] 此任務已轉派給 {new_executor}。
 
 <!-- ↑唯讀區（程式產生，改不動）｜↓本體（可編輯，零變數） -->
 

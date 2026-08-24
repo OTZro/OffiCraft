@@ -255,30 +255,29 @@ type contextHighSignal struct {
 func decideHandoverNotice(
 	agentID, runtime string, record map[string]any,
 	cfg SseContextHighConfig, codexNoticeRound, codexThreshold int,
-	notice func(where string) string,
+	notice func() string,
 ) *contextHighSignal {
 	pct := actionableContextPct(record, cfg.StaleGuard)
-	var where string
+	// 🔴 THE TWO ARMS DECIDE WHETHER TO SPEAK — THEY NO LONGER COMPOSE ANYTHING
+	// (T-6f44, owner's decision 4). Each used to build a position clause
+	// (「compaction round 3 (your limits: round 3 / round 4)」,「context 55%
+	// (your limits: 55% / 65%)」) and hand it to the notice closure to be pasted
+	// into the sentence. That clause is gone from both documents, so composing
+	// it here was work whose only remaining consumer discarded it.
+	//
+	// The GATES are untouched and are the whole reason this switch survives:
+	// which axis a runtime is judged on — compaction rounds for codex, context
+	// pct for everything else — is a real difference and still decides silence.
 	switch {
 	case NormalizeRuntime(runtime) == RuntimeCodex:
 		if !codexNoticeDue(record, pct, codexNoticeRound, codexThreshold) {
 			return nil
 		}
-		if codexThreshold < 1 {
-			codexThreshold = defaultCodexCompactionThreshold
-		}
-		if codexNoticeRound < 1 {
-			codexNoticeRound = codexThreshold - 1
-		}
-		where = fmt.Sprintf("compaction round %d (your limits: round %d / round %d)",
-			codexNoticeRound, codexNoticeRound, codexThreshold)
 	default:
 		if cfg.HandoverPct <= 0 || cfg.NoticePct <= 0 ||
 			pct == nil || *pct < float64(cfg.NoticePct) {
 			return nil
 		}
-		where = fmt.Sprintf("context %v%% (your limits: %d%% / %d%%)",
-			formatPct(*pct), cfg.NoticePct, cfg.HandoverPct)
 	}
 	// Read only once THIS tick has decided to speak — a quiet tick (below the
 	// notice point / wrong compaction round) pays nothing. It is NOT read once
@@ -296,7 +295,7 @@ func decideHandoverNotice(
 	// message that says nothing.
 	var reason string
 	if notice != nil {
-		reason = notice(where)
+		reason = notice()
 	}
 	if reason == "" {
 		return nil
@@ -479,40 +478,6 @@ func decideTaskCloseNudge(t Task) *taskCloseSignal {
 		Type:   t.TypeKey,
 		Status: t.Status,
 	}
-}
-
-// offboardManualWriteBack is the 記憶回寫 clause an OUTSOURCE worker's 下線預告
-// carries (T-ed79). The owner's ruling: a worker that is going offline writes
-// this run's memory back into ITS 任務手冊 — ad-hoc excepted.
-//
-// 🔴 THE AD-HOC EXCEPTION IS NOT A NEW JUDGEMENT. It is the SAME criterion
-// decideTaskCloseNudge above already stays silent on — 「an AD-HOC task (no
-// type) has no manual to write learnings into」 — spelled `typeKey == ""`,
-// because a task with no type has no manual to address. Inventing a second
-// criterion here (an unbound executor, a terminal status, a missing manual row)
-// would give the tree two answers to "does this run have a 手冊", and the day
-// they disagree is the day a worker is sent to patch a manual that is not there.
-//
-// The addressing string is the raw type_key and the human face is the display
-// label — the same split decideTaskCloseNudge makes, and for the same reason
-// (T-fa76: the agent calls get_task_manual / patch_task_learnings BY KEY).
-//
-// 🔴 It must stay CONSTANT within an epoch. The client de-dupes offboard
-// notices by comparing the whole sentence verbatim (cli/ocagent listen_hooks),
-// so anything time- or progress-varying in here would re-wake a worker that is
-// already working its close-out on every write to its row — the exact trap
-// documented on winddownNoticeText's deadline value.
-func offboardManualWriteBack(typeKey, manualLabel string) string {
-	if typeKey == "" {
-		return ""
-	}
-	if manualLabel == "" {
-		manualLabel = typeKey
-	}
-	return "這一趟的學習經驗要回到「" + manualLabel + "」的任務手冊：先用 get_task_manual 讀現況，" +
-		"再用 patch_task_learnings（type_key=`" + typeKey + "`）只把改動的那一段送回去 —— " +
-		"改既有段落就用它的唯一錨點，第一次寫或要新增就用空錨點追加。" +
-		"不要用 write_task_learnings 做整份取代 —— 讀取後到寫入之間別人新增的內容會被無聲蓋掉。"
 }
 
 // ── warden-command band: frame + the event-driven START producer (§7) ───────

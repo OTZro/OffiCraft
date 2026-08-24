@@ -274,9 +274,9 @@ func TestHandoverNoticeTick_ClosureIsNotRunAfterTheClaim(t *testing.T) {
 	s.gauge.Set(seedMiraID, map[string]any{"context_pct": 56.0, "boot_ts": 1000.0})
 
 	runs := 0
-	notice := func(where string) string {
+	notice := func() string {
 		runs++
-		return s.winddownNoticeText(offboardKindSoft, where, 0)
+		return s.winddownNoticeText(offboardKindSoft, 0)
 	}
 
 	frame, ok := s.handoverNoticeTick(seedMiraID, RuntimeClaude, notice)
@@ -317,7 +317,7 @@ func TestHandoverNoticeTick_ANewSessionStillPaysAndStillSends(t *testing.T) {
 	runs := 0
 	// A non-empty answer, because an unrenderable notice now keeps the tick
 	// SILENT — returning "" here would make this test measure that instead.
-	notice := func(where string) string { runs++; return where + " — 下線程序" }
+	notice := func() string { runs++; return "下線程序" }
 	if _, ok := s.handoverNoticeTick(seedMiraID, RuntimeClaude, notice); !ok {
 		t.Fatal("first session must be told")
 	}

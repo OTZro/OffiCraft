@@ -101,11 +101,20 @@ func TestDependencyReleaseNotifiesAnOutsourceExecutorLikeAMember(t *testing.T) {
 			before, len(got))
 	}
 	body := got[len(got)-1].Body
-	for _, want := range []string{TaskNo(task.ID), TaskNo(blocker.ID), "不再擋著你"} {
+	// ⚠️ THE BLOCKER'S NUMBER IS NO LONGER IN THE SENTENCE (T-6f44): the notice
+	// names only the ticket the agent must act on — its OWN — because which
+	// ticket was blocking changes nothing about what to do next and is on the
+	// ticket for anyone who wants it. This test's claim is delivery ("an
+	// outsource executor is notified like a member"), and it survives on the
+	// blocked ticket's number alone.
+	for _, want := range []string{TaskNo(task.ID), "不再擋著你"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("the release notice must name both tasks and what changed, "+
+			t.Fatalf("the release notice must name the released task and what changed, "+
 				"missing %q in:\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, TaskNo(blocker.ID)) {
+		t.Fatalf("the blocker's number is back in the release notice:\n%s", body)
 	}
 	// And it must be the shared notice, not the withdrawn kickoff wording coming
 	// back under a different call site.

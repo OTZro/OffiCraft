@@ -120,10 +120,18 @@ func TestGetBootDoc_ReadOnlyMatchesTheWriteFacesRefusal(t *testing.T) {
 			sawReadOnly = sawReadOnly || dto.ReadOnly
 		}
 	}
-	// Positive control: without it every document answering read_only=false
-	// would pass on a build where the refusal had been removed entirely.
-	if !sawReadOnly {
-		t.Error("no document reports read_only — the refusal this test measures is not reachable")
+	// ⚠️ THE POSITIVE CONTROL IS GONE AND IT WAS LOAD-BEARING. It read: 「no
+	// document reports read_only — the refusal this test measures is not
+	// reachable」, and since T-6f44's decision 2 that is the SHIPPED state, so
+	// keeping it would fail on a correct build. What is left is the CORRESPONDENCE
+	// — the read face and the reset face agree, document by document — which is
+	// the defect this test was written for (a document shown as editable whose
+	// save is a 405 costs the owner the edit he typed). It now runs entirely on
+	// the false side, so a build that lost the refusal ENTIRELY passes here; the
+	// 405 branch is exercised instead by the handler-level readOnlyProbeSpec
+	// tests in api_bootdocs_event_procedures_t3201_test.go.
+	if sawReadOnly {
+		t.Error("a document reports read_only=true — decision 2 made all ten editable")
 	}
 }
 
@@ -265,25 +273,37 @@ func TestReplaceBootDocRoute_WritesThroughTheAddressAndReadsBack(t *testing.T) {
 	}
 }
 
-func TestReplaceBootDocRoute_ReadOnlyKindRefusesThroughTheGenericAddress(t *testing.T) {
+// ⚠️ INVERTED BY T-6f44 — same trade, and the same loss, as
+// TestDocumentHistoryRestore_NoRegisteredKindIsRefusedAsReadOnly. There is no
+// read-only document left for the generic address to be refused on, and the
+// route resolves a REGISTRY kind so no synthetic spec can reach it. What it
+// pins now is decision 2 end to end: through the generic address, every one of
+// the ten answers a write and a reset, and reports read_only=false.
+//
+// The 405 gate itself is still exercised — at handler level, on a spec with
+// ReadOnly flipped on (readOnlyProbeSpec).
+func TestReplaceBootDocRoute_NoKindIsReadOnlyThroughTheGenericAddress(t *testing.T) {
 	s := newEventProcServer(t)
-	for _, kind := range readOnlyEventProcKinds() {
-		t.Run(kind, func(t *testing.T) {
-			w := httptest.NewRecorder()
-			s.HandleReplaceBootDocApiBootDocsKindKeyPost(w,
-				jsonPost(`{"body":"換掉"}`), BootDocKind(kind), bootDocSingletonKey)
-			if w.Code != http.StatusMethodNotAllowed {
-				t.Errorf("replace: status = %d, want 405 (%s)", w.Code, w.Body.String())
-			}
-			rec := httptest.NewRecorder()
-			s.HandleResetBootDocApiBootDocsKindKeyResetPost(rec, ownerPost("/x"), BootDocKind(kind), bootDocSingletonKey)
-			if rec.Code != http.StatusMethodNotAllowed {
-				t.Errorf("reset: status = %d, want 405 (%s)", rec.Code, rec.Body.String())
-			}
-			_, dto := getBootDocHTTP(t, s, kind, bootDocSingletonKey)
-			if !dto.IsDefault || !dto.ReadOnly {
-				t.Errorf("after two refusals: is_default=%v read_only=%v", dto.IsDefault, dto.ReadOnly)
-			}
-		})
+	for _, reg := range bootDocRegistry {
+		for _, key := range reg.Keys {
+			t.Run(reg.Kind+"/"+key, func(t *testing.T) {
+				w := httptest.NewRecorder()
+				s.HandleReplaceBootDocApiBootDocsKindKeyPost(w,
+					jsonPost(`{"body":"換掉"}`), BootDocKind(reg.Kind), key)
+				if w.Code != http.StatusOK {
+					t.Errorf("replace: status = %d, want 200 (%s)", w.Code, w.Body.String())
+				}
+				rec := httptest.NewRecorder()
+				s.HandleResetBootDocApiBootDocsKindKeyResetPost(rec, ownerPost("/x"), BootDocKind(reg.Kind), key)
+				if rec.Code != http.StatusOK {
+					t.Errorf("reset: status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+				}
+				_, dto := getBootDocHTTP(t, s, reg.Kind, key)
+				if !dto.IsDefault || dto.ReadOnly {
+					t.Errorf("after a write and a reset: is_default=%v read_only=%v",
+						dto.IsDefault, dto.ReadOnly)
+				}
+			})
+		}
 	}
 }

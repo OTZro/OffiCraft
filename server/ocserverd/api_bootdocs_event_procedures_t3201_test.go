@@ -65,8 +65,49 @@ func eventProcKinds() []string {
 	}
 }
 
+// 🔴 THERE ARE NO READ-ONLY DOCUMENTS ANY MORE (T-6f44, owner's decision 2).
+// This used to return 〈新任務〉 and 〈擋著你手上任務的票解開了〉. It reads the
+// REGISTRY now rather than a literal list, so it answers empty because the
+// registry says so — and every test below that consumes it says out loud what it
+// does when the answer is empty, instead of passing vacuously.
 func readOnlyEventProcKinds() []string {
-	return []string{docKindTaskTakeoverFresh, docKindTaskUnblocked}
+	var kinds []string
+	for _, reg := range bootDocRegistry {
+		if reg.ReadOnly {
+			kinds = append(kinds, reg.Kind)
+		}
+	}
+	return kinds
+}
+
+// readOnlyProbeSpec is a spec the registry does not contain: one real document's
+// spec with ReadOnly flipped on. It exists because decision 2 left the ReadOnly
+// MECHANISM with no user, and a refusal nothing exercises is a refusal that gets
+// deleted by the next person who greps for callers. Every handler-level test
+// below drives this instead of a registry kind, so what is measured is the gate
+// itself; TestBootDocRegistry_NoDocumentIsReadOnly measures the separate claim
+// that no shipped document is behind it.
+func readOnlyProbeSpec(t *testing.T, s *apiServer) bootDocSpec {
+	t.Helper()
+	spec := s.mustBootDocSpec(docKindTaskTakeoverFresh, bootDocSingletonKey)
+	spec.ReadOnly = true
+	return spec
+}
+
+// 🔴 THE OWNER'S DECISION 2, PINNED AS ITSELF. 「〈新任務〉與〈擋著你手上任務的票
+// 解開了〉改成跟其他八份一樣可編輯」— the reason the two were locked was recorded
+// as precedent (「以前 global context 是固定內容 我們也是會顯示 只是不給改」),
+// not as anything about their text, and 〈新任務〉 and 〈給接手人〉 are two halves
+// of one event that the owner could edit one of. Ten documents, no exception to
+// remember. The half that stays locked on all of them is the read-only HEAD.
+//
+// This is also the assertion that makes the empty readOnlyEventProcKinds() above
+// a statement rather than a hole.
+func TestBootDocRegistry_NoDocumentIsReadOnly(t *testing.T) {
+	if kinds := readOnlyEventProcKinds(); len(kinds) > 0 {
+		t.Errorf("these kinds are still read-only: %v — decision 2 made all ten editable, "+
+			"and bin/tests/fixtures/boot-doc-registry.tsv has to agree in the same commit", kinds)
+	}
 }
 
 // ── the registry answers for every kind on every face ────────────────────────
@@ -150,27 +191,23 @@ func TestBootDocRegistry_EverySeedDeclaresExactlyTheVariablesItUses(t *testing.T
 
 func TestReplaceBootDoc_ReadOnlyKindRefusesAndWritesNothing(t *testing.T) {
 	s := newEventProcServer(t)
-	for _, kind := range readOnlyEventProcKinds() {
-		t.Run(kind, func(t *testing.T) {
-			spec := s.mustBootDocSpec(kind, bootDocSingletonKey)
-			before, err := s.foldBootDocDTO(spec)
-			if err != nil {
-				t.Fatal(err)
-			}
-			w := httptest.NewRecorder()
-			s.replaceBootDoc(w, ownerPost("/x"), spec, "換掉的內容", false)
-			if w.Code != http.StatusMethodNotAllowed {
-				t.Errorf("status = %d, want %d", w.Code, http.StatusMethodNotAllowed)
-			}
-			after, err := s.foldBootDocDTO(spec)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if after.Text != before.Text || !after.IsDefault {
-				t.Errorf("the document moved: is_default %v→%v, %d→%d chars",
-					before.IsDefault, after.IsDefault, before.SizeChars, after.SizeChars)
-			}
-		})
+	spec := readOnlyProbeSpec(t, s)
+	before, err := s.foldBootDocDTO(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	s.replaceBootDoc(w, ownerPost("/x"), spec, "換掉的內容", false)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+	after, err := s.foldBootDocDTO(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Text != before.Text || !after.IsDefault {
+		t.Errorf("the document moved: is_default %v→%v, %d→%d chars",
+			before.IsDefault, after.IsDefault, before.SizeChars, after.SizeChars)
 	}
 }
 
@@ -178,7 +215,7 @@ func TestReplaceBootDoc_ReadOnlyKindRefusesAndWritesNothing(t *testing.T) {
 // hands it to agents. It must not be a way past this one.
 func TestReplaceBootDoc_ReadOnlyKindRefusesEvenWithAllowShrink(t *testing.T) {
 	s := newEventProcServer(t)
-	spec := s.mustBootDocSpec(docKindTaskUnblocked, bootDocSingletonKey)
+	spec := readOnlyProbeSpec(t, s)
 	w := httptest.NewRecorder()
 	s.replaceBootDoc(w, ownerPost("/x"), spec, "", true)
 	if w.Code != http.StatusMethodNotAllowed {
@@ -195,15 +232,10 @@ func TestReplaceBootDoc_ReadOnlyKindRefusesEvenWithAllowShrink(t *testing.T) {
 
 func TestResetBootDoc_ReadOnlyKindRefuses(t *testing.T) {
 	s := newEventProcServer(t)
-	for _, kind := range readOnlyEventProcKinds() {
-		t.Run(kind, func(t *testing.T) {
-			spec := s.mustBootDocSpec(kind, bootDocSingletonKey)
-			w := httptest.NewRecorder()
-			s.resetBootDoc(w, ownerPost("/x"), spec)
-			if w.Code != http.StatusMethodNotAllowed {
-				t.Errorf("status = %d, want %d", w.Code, http.StatusMethodNotAllowed)
-			}
-		})
+	w := httptest.NewRecorder()
+	s.resetBootDoc(w, ownerPost("/x"), readOnlyProbeSpec(t, s))
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusMethodNotAllowed)
 	}
 }
 
@@ -282,8 +314,12 @@ func TestReplaceBootDoc_PreT3201KindsAreNotVariableValidated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, split := DocSplitHeadBody(seed); !split {
-		t.Fatal("system_interaction's seed lost its read-only head")
+	// 🔴 NO read-only head here since T-6f44: 系統互動's head was only its own
+	// title line, and it went back into the body. What this case is about is the
+	// BRACES, and the assertion that matters is that the whole seed — title line
+	// included — is now the editable body.
+	if _, _, split := DocSplitHeadBody(seed); split {
+		t.Fatal("system_interaction is declared unsplit but its seed still carries the marker")
 	}
 	s.replaceBootDoc(w, ownerPost("/x"), spec,
 		`回傳 {"id": "<attachment id>"} 這種東西`, false)
@@ -294,9 +330,14 @@ func TestReplaceBootDoc_PreT3201KindsAreNotVariableValidated(t *testing.T) {
 
 // ── the read faces stay open ─────────────────────────────────────────────────
 
+// 🔴 WIDENED FROM THE TWO READ-ONLY KINDS TO ALL TEN (T-6f44). It used to sweep
+// readOnlyEventProcKinds(), which is now empty — leaving it there would have been
+// a test that asserts nothing while still reporting PASS. The claim it was making
+// (a document with no overlay serves its SHIPPED text, marked is_default) is true
+// of every kind and worth keeping on every kind.
 func TestFoldBootDocDTO_ReadOnlyKindServesItsSeed(t *testing.T) {
 	s := newEventProcServer(t)
-	for _, kind := range readOnlyEventProcKinds() {
+	for _, kind := range eventProcKinds() {
 		t.Run(kind, func(t *testing.T) {
 			spec := s.mustBootDocSpec(kind, bootDocSingletonKey)
 			seed, hasSeed, err := s.root.seedBlockMD(spec.SeedFile)
@@ -326,15 +367,16 @@ func TestFoldBootDocDTO_ReadOnlyKindServesItsSeed(t *testing.T) {
 // went with it rather than being weakened: keeping an assertion whose subject no
 // longer exists is how a suite starts describing a build nobody ships.
 
+// 🔴 ALL SIX NOW, NOT FOUR (T-6f44). The two exceptions here were the two
+// read-only kinds, and the reason recorded for their depth of three was 「nothing
+// can write them, so a depth for them would be a number about a list that is
+// always empty」. Decision 2 made them writable from the same text box as the
+// other eight, so that reason expired with the lock — and a two-of-ten retention
+// depth nobody chose is exactly the kind of leftover this comment exists to stop.
 func TestDocumentHistoryKeepFor_EditableEventProceduresKeepTen(t *testing.T) {
 	for _, kind := range eventProcKinds() {
-		readOnly := kind == docKindTaskTakeoverFresh || kind == docKindTaskUnblocked
-		want := 10
-		if readOnly {
-			want = documentHistoryKeepDefault
-		}
-		if got := documentHistoryKeepFor(kind); got != want {
-			t.Errorf("documentHistoryKeepFor(%q) = %d, want %d", kind, got, want)
+		if got := documentHistoryKeepFor(kind); got != 10 {
+			t.Errorf("documentHistoryKeepFor(%q) = %d, want 10", kind, got)
 		}
 	}
 }
@@ -402,15 +444,27 @@ func TestDocumentHistoryList_UnknownKeyForANewKindIsRefused(t *testing.T) {
 // THIRD write face"; that number drifted twice while nothing turned red (see
 // docs/design/boot-documents.md §七, which now forbids writing one). To learn
 // how many write faces there are, count the callers of putBootDocumentOn.
-func TestDocumentHistoryRestore_ReadOnlyKindIsRefused(t *testing.T) {
+// ⚠️ INVERTED BY T-6f44, AND THIS IS A REAL LOSS OF COVERAGE — stated rather
+// than hidden. This asserted that restore answers 405 for a read-only kind. With
+// decision 2 there is no read-only kind left, and restore is reached through the
+// ROUTE, so it cannot be driven with the synthetic spec the handler-level tests
+// use. What is asserted instead is the claim that actually matters now: restore
+// does NOT answer 405 for any shipped document, i.e. every one of the ten really
+// is restorable. The 405 branch on this door (documentHistoryAllowed) is
+// therefore reachable by no test in this tree — if a read-only document is ever
+// added back, this test must go back to the refusal form.
+func TestDocumentHistoryRestore_NoRegisteredKindIsRefusedAsReadOnly(t *testing.T) {
 	f := newBootDocFixture(t)
-	for _, kind := range readOnlyEventProcKinds() {
-		t.Run(kind, func(t *testing.T) {
-			status, body := f.do(t, http.MethodPost,
-				"/api/document-history/"+kind+"/"+bootDocSingletonKey+"/1/restore", f.admin, nil)
-			if status != http.StatusMethodNotAllowed {
-				t.Errorf("status = %d, want %d (%s)", status, http.StatusMethodNotAllowed, body)
-			}
-		})
+	for _, reg := range bootDocRegistry {
+		for _, key := range reg.Keys {
+			t.Run(reg.Kind+"/"+key, func(t *testing.T) {
+				status, body := f.do(t, http.MethodPost,
+					"/api/document-history/"+reg.Kind+"/"+key+"/1/restore", f.admin, nil)
+				if status == http.StatusMethodNotAllowed {
+					t.Errorf("restore answered 405 read-only (%s) — every document is "+
+						"editable since decision 2", body)
+				}
+			})
+		}
 	}
 }

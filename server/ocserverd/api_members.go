@@ -256,87 +256,23 @@ func forcedEpochLive(m Member) bool {
 		m.ForcedStopAt >= m.StoppingSince
 }
 
-// offboardNoticeFor resolves the ONE fact a wind-down notice needs that the
-// document cannot carry — {where}, this session's own position — and hands it,
-// with the kind and the deadline, to winddownNoticeText, which owns everything
-// else about the sentence.
+// offboardNoticeFor is the WHOLE wind-down sentence for this member: the
+// document its arm reads, plus the manual write-back clause when the member has
+// one.
 //
-// It reads the session's own gauge so the agent is told where it actually is,
-// not just that it is over the line — the owner's requirement that the notice
-// carry 「他現在 context / round 狀況，以及我們兩個系統數字是多少」. The deadline
-// is winddownDeadlineOf, i.e. the anchor plus stop.accelerated_grace_secs
-// (owner-settable since T-ed79, not a constant), and it is the same expression
-// the cockpit's refocus_deadline reads.
+// 🔴 IT USED TO RESOLVE {where} TOO — this session's own position — and that is
+// gone (T-6f44, owner's decision 4). What it composed was a clause like
+// 「context 55% (your limits: 55% / 65%)」, and the finding that removed it is
+// first-hand rather than argued: an agent received exactly that, read it, and
+// closed out no differently for it. Being told where you are is not being told
+// what to do, and this sentence is the one an agent acts on.
+//
+// The gauge read and the two arms of English formatting went with it. Keeping
+// them behind a discarded argument would have left a live-looking computation
+// nothing could observe — including its own regression tests, which would have
+// gone on passing while the value never reached anybody.
 func (s *apiServer) offboardNoticeFor(m Member, kind string) string {
-	cfg := s.ctxHighConfig()
-	// The gauge is absent on a server assembled without one (and a session that
-	// never reported has no entry either). Both arms below then OMIT the
-	// position rather than dropping the notice or printing a placeholder:
-	// WHERE the session is is useful, being told it is being collected is
-	// essential, and a literal "?" is neither.
-	var record map[string]any
-	if s.gauge != nil {
-		record = s.gauge.Get(m.ID)
-	}
-	var where string
-	if NormalizeRuntime(m.Runtime) == RuntimeCodex {
-		final := s.codexCompactionThresholdSetting()
-		notice := s.codexNoticeRoundSetting()
-		if notice < 1 {
-			notice = final - 1
-		}
-		// SAME RULE AS THE CLAUDE ARM BELOW, and it has to be stated twice
-		// because the two arms read different keys. This used to print a
-		// literal "?" ("compaction round ? (your limits: round 3 / round 4)")
-		// whenever the gauge held no compaction_count — which is every
-		// refocus-triggered close-out, because that arm is not fired by a
-		// round count at all. Two spellings of "no value" in one output is
-		// the next reader's trap; this one omits the position too, and the
-		// limits still name the band.
-		round := ""
-		if record != nil {
-			if v, ok := asNumber(record["compaction_count"]); ok {
-				round = fmt.Sprintf("%d", int(v))
-			}
-		}
-		if kind == offboardKindFinal {
-			round = fmt.Sprintf("%d", final)
-		}
-		if round == "" {
-			where = fmt.Sprintf("close-out (your limits: round %d / round %d)",
-				notice, final)
-		} else {
-			where = fmt.Sprintf("compaction round %s (your limits: round %d / round %d)",
-				round, notice, final)
-		}
-	} else {
-		// NO VALUE -> SAY THE LIMITS, NOT A QUESTION MARK (T-0974 shipping
-		// verification, 2026-08-20). This used to print a LITERAL "?" into the
-		// sentence ("context ?% (your limits: 55% / 65%)") whenever the gauge
-		// held no context_pct - which is EVERY refocus-triggered close-out,
-		// because that arm is not fired by a pct at all. What the reader sees
-		// is a broken field, and it disagrees with how this same file treats a
-		// missing value elsewhere (the "[station ...]" clause omits itself
-		// rather than printing a placeholder; the codex arm above now omits
-		// too — it did NOT until this same ticket). Two spellings of "no
-		// value" in one output is the next reader's trap, so this one omits
-		// too: the limits are still named, because they are what tells the
-		// reader which band it is in.
-		if record != nil {
-			if v, ok := asNumber(record["context_pct"]); ok {
-				where = fmt.Sprintf("context %v%% (your limits: %d%% / %d%%)",
-					formatPct(v), cfg.NoticePct, cfg.HandoverPct)
-			}
-		}
-		if where == "" {
-			where = fmt.Sprintf("close-out (your limits: %d%% / %d%%)",
-				cfg.NoticePct, cfg.HandoverPct)
-		}
-	}
-	// The deadline quoted in the sentence and the deadline the cockpit shows come
-	// from ONE expression (T-d6a7). offboardKindOf only answers "final" for a
-	// clocked arm, so this is positive exactly when the sentence needs it.
-	notice := s.winddownNoticeText(kind, where, winddownDeadlineOf(m, s.reconcileConfigLive()))
+	notice := s.winddownNoticeText(kind, winddownDeadlineOf(m, s.reconcileConfigLive()))
 	// A notice that could not be rendered is not sent at all — the caller omits
 	// the key, and the agent's client falls back. Appending the write-back
 	// clause to "" would send that clause on its own, with no sequence under it.
@@ -372,13 +308,36 @@ func (s *apiServer) offboardManualWriteBackFor(m Member) string {
 	if err != nil || t == nil {
 		return ""
 	}
-	label := ""
-	if t.TypeKey != "" {
-		if manual, err := s.dal.GetTaskManual(t.TypeKey); err == nil && manual != nil {
-			label = manualDisplayLabel(manual.DisplayName, t.TypeKey)
-		}
+	// 🔴 AN AD-HOC TASK HAS NO MANUAL, SO IT IS ASKED FOR NOTHING. This gate is
+	// NOT a policy of T-6f44 — it is the criterion the tree already carried
+	// (decideTaskCloseNudge stays silent on an empty type for the same reason),
+	// and it survived the rewrite below on purpose. Sending the close-out text
+	// anyway would point a worker at a 任務手冊 that does not exist, on the one
+	// path where it has no way to answer back.
+	//
+	// It reads type_key here even though the DOCUMENT no longer interpolates it:
+	// the question this gate asks ("is there a manual at all?") is not the
+	// question the document asks ("which manual, agent — go read the ticket").
+	if t.TypeKey == "" {
+		return ""
 	}
-	return offboardManualWriteBack(t.TypeKey, label)
+	// 🔴 THE DOCUMENT, NOT A SECOND COPY OF IT (T-6f44, owner's decision 6).
+	// This used to be a Go string that said almost exactly what 〈任務結案〉 says
+	// — hardcoded, unversioned, and the one text of the pair the owner could not
+	// edit. Two texts for one rule is how one of them silently loses a clause,
+	// and the one in code is always the one that loses it unnoticed.
+	//
+	// It needs no variable beyond the ticket number any more: the document now
+	// tells the agent to read the task and take type_key off it, which is
+	// exactly the lookup this function used to perform on the agent's behalf.
+	// So the manual read is gone with the string — nothing here has to know
+	// which manual it is for the agent to be told.
+	// The BODY only — see taskEventBodyText. This worker is being wound down;
+	// its ticket has NOT necessarily ended, so the document's opening sentence
+	// (「任務 {task_no} 已結束。」) is a claim this path cannot make. The body says
+	// what to do and names no task, and the worker has exactly one, so 「這張票」
+	// is unambiguous to the only reader that gets this.
+	return s.taskEventBodyText(docKindTaskCloseout)
 }
 
 // resolveAvatarMember admits active staff and outsource rows but rejects
@@ -1259,7 +1218,18 @@ func (s *apiServer) HandleRefocusMemberApiMembersMemberIdRefocusPost(w http.Resp
 				"online (§3.4 #14)")
 		return
 	}
-	armRefocusEpoch(m, refocusOpRefocus, nowSecs())
+	// 🔴 The ladder only goes forward (owner, 2026-08-24). 重新聚焦 is 停止 —
+	// stage 1 — so pressing it on a member already in 加速停止 used to push the
+	// stage BACK and clear the deadline with it, leaving an agent that had been
+	// told it was counting down no longer counting. Refused here rather than
+	// silently downgraded: the owner pressed a button, so he gets an answer.
+	if !armRefocusEpoch(m, refocusOpRefocus, nowSecs()) {
+		writeError(w, http.StatusConflict,
+			"refocus is 停止 and this member is already further along the "+
+				"wind-down ladder (下線 → 加速 → 強制); a later stage is never "+
+				"replaced by an earlier one")
+		return
+	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
@@ -1519,7 +1489,16 @@ func (s *apiServer) HandleRestartSelfApiSelfRefocusPost(w http.ResponseWriter, r
 		s.writeMemberDTO(w, *fresh)
 		return
 	}
-	armRefocusEpoch(m, refocusOpRestartSelf, now)
+	// Same ladder rule as the owner's refocus above. restart_self is 停止, so an
+	// agent that is already in 加速停止 cannot talk its way back to the slower
+	// procedure — which would also hand it back the deadline it was counting to.
+	if !armRefocusEpoch(m, refocusOpRestartSelf, now) {
+		writeError(w, http.StatusConflict,
+			"restart_self is 停止 and you are already further along the "+
+				"wind-down ladder (下線 → 加速 → 強制); finish the close-out you "+
+				"were given instead")
+		return
+	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return

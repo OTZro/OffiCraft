@@ -209,9 +209,15 @@ func TestWindDownKind_TheClosedSetIsActuallyClosed(t *testing.T) {
 // read-only head, and that head has a {deadline} slot with nothing else able to
 // fill it: the send site either refuses (the agent gets NO notice while a clock
 // runs on it) or, if someone ever "fixes" the refusal by substituting a blank,
-// the agent reads `Your deadline is .` and 下線程序 §1 tells it to treat that as
-// hard. Either way the split is no longer a missing sentence, it is a broken
-// one.
+// the agent reads 「你的結束時刻是 。」 — a sentence that names no instant while a
+// clock is running. Either way the split is no longer a missing sentence, it is
+// a broken one.
+//
+// ⚠️ WHAT NO LONGER FOLLOWS FROM IT (T-6f44). This used to add 「and 下線程序 §1
+// tells it to treat that as hard」 — the sniffed-marker rule, which decision 5
+// deleted. §1 no longer reads the notice at all: each document states which kind
+// it is, and the server picks the document by `kind`. A blank instant is now a
+// document that contradicts itself rather than one that is misclassified.
 func TestOffboardKindOf_AFinalCallAlwaysHasAClock(t *testing.T) {
 	cfg := defaultReconcileConfig()
 	const t0 = 1_000_000.0

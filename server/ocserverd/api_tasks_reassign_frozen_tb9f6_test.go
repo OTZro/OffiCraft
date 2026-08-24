@@ -219,7 +219,9 @@ func TestReassignFrozenTask_SuccessorNoticeCarriesNoFrozenCaveat(t *testing.T) {
 			// Positive control FIRST: the successor really did get the takeover
 			// notice. Without it, "the caveat is absent" would also be satisfied
 			// by a run where no message was sent at all.
-			if toNew == nil || !strings.Contains(toNew.Body, "你接手了任務") {
+			// 「你接手了這張任務」 since T-6f44: {title} left the sentence (the number
+			// names the ticket), so the wording moved with it.
+			if toNew == nil || !strings.Contains(toNew.Body, "你接手了這張任務") {
 				t.Fatalf("successor never got the takeover notice: %+v", toNew)
 			}
 			got := strings.Contains(toNew.Body, "認領之後不要開始推進")

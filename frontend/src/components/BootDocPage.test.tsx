@@ -81,6 +81,26 @@ function renderCodex() {
   );
 }
 
+// 🔴 A DOCUMENT THAT STILL CARRIES A READ-ONLY HEAD. Since T-6f44 four of the
+// ten (系統互動, 啟動步驟 ×2, 停止) have NONE — their head was one title line,
+// which moved into the body — so assertions ABOUT the head can no longer be
+// written against them. 加速停止 keeps a head (its one deadline line) and is
+// the smallest document that does, which makes it the honest subject for them.
+function renderAcceleratedStop() {
+  return render(
+    <I18nProvider>
+      <BootDocPage
+        kind="accelerated_stop"
+        docKey="global"
+        title={s.acceleratedStopName}
+        historyTitle={s.historyAcceleratedStopTitle}
+        confirmSaveBody={s.bootDocSaveConfirmAcceleratedStop}
+        crumbs={[{ label: s.title }]}
+      />
+    </I18nProvider>
+  );
+}
+
 function renderSystem() {
   return render(
     <I18nProvider>
@@ -205,15 +225,38 @@ describe("BootDocPage", () => {
     expect((utils.getByTestId("doc-card-editor") as HTMLTextAreaElement).value).toBe(
       doc.body
     );
+    // 🔴 系統互動 HAS NO READ-ONLY HEAD ANY MORE (T-6f44): its head was its own
+    // title line, and that line moved into the body, so the whole document is
+    // the editable half. Asserted rather than skipped — this is the first
+    // document ever to ship without one, and the failure it replaces is silent
+    // (a head left declared with no marker in the seed makes every write 500).
+    expect(doc.readOnlyHead).toBe("");
+    // …and with no head there is no head panel either. A page that still
+    // printed an empty one would be showing the owner a divider under a
+    // heading that is no longer there.
+    expect(utils.queryByTestId("doc-card-readonly-head")).toBeNull();
+  });
+
+  // 🔴 THE PAIRED CONTROL for the assertion above, on a document that DOES
+  // still carry a head. Without it, a page that had stopped rendering the
+  // read-only half for EVERY document would pass — the owner's rule is that he
+  // sees the half he may not type into, and the four documents that lost their
+  // head must not take that rule down with them.
+  it("shows the read-only head beside the editor on a document that still has one", async () => {
+    const utils = renderAcceleratedStop();
+    const doc = await api.getBootDoc("accelerated_stop", "global");
+
     expect(doc.readOnlyHead).not.toBe("");
+    fireEvent.click(await utils.findByTestId("doc-card-edit"));
+    // On screen…
+    expect(utils.getByTestId("doc-card-readonly-head").textContent).toContain(
+      doc.readOnlyHead.split("\n")[0].replace(/^#+ /, "")
+    );
+    // …and NOT in the box, because the wire has no field for it and typing
+    // into it would be typing into a value the server composes.
     expect(
       (utils.getByTestId("doc-card-editor") as HTMLTextAreaElement).value
     ).not.toContain(doc.readOnlyHead);
-    // The half he may not type into is on screen all the same — the owner's
-    // rule is that he SEES it, not that it disappears.
-    expect(
-      utils.getByTestId("doc-card-readonly-head").textContent
-    ).toContain(doc.readOnlyHead.split("\n")[0].replace(/^#+ /, ""));
   });
 
   it("holds no editor state of its own — the shell is the shared component", async () => {
@@ -361,12 +404,22 @@ describe("BootDocPage", () => {
     const utils = renderClaude();
 
     const doc = await api.getBootDoc("boot_sequence", "claude");
-    // What the draft does NOT hold and the cap still counts: the read-only head
-    // and whatever separates it from the body. The server enforces the cap on
-    // the document it STORES, so the readout has to add it back — a cockpit
-    // measuring the body alone would promise room that does not exist.
-    const overhead = doc.sizeChars - runeLength(doc.body);
-    expect(overhead).toBeGreaterThan(0);
+    // The server enforces the cap on the document it STORES, so the readout has
+    // to add back whatever the draft does not hold — the read-only head and its
+    // separator. A cockpit measuring the body alone would promise room that does
+    // not exist.
+    //
+    // 🔴 ON THIS DOCUMENT THE OVERHEAD IS NOW ZERO, and that is correct rather
+    // than a broken fixture: 啟動步驟 lost its read-only head in T-6f44, so the
+    // stored document IS the body. Asserted as an identity so a future head
+    // sneaking back in — which would silently shrink the room the owner is
+    // promised — fails here.
+    expect(doc.sizeChars).toBe(runeLength(doc.body));
+    // …and the addition itself is still exercised, on a document that DOES
+    // carry a head. Without this the readout could have stopped adding the
+    // overhead altogether and every remaining assertion would still pass.
+    const withHead = await api.getBootDoc("accelerated_stop", "global");
+    expect(withHead.sizeChars - runeLength(withHead.body)).toBeGreaterThan(0);
 
     await typeWholeDoc(utils, "超".repeat(cap + 50));
 
@@ -376,7 +429,8 @@ describe("BootDocPage", () => {
     // the agent would boot from a document the owner never wrote.
     expect(notice.textContent).toContain(String(cap));
     const shown = Number(/\d{4,}/.exec(notice.textContent ?? "")?.[0]);
-    expect(shown).toBe(cap + 50 + overhead);
+    // No head on this document, so what is stored is exactly what was typed.
+    expect(shown).toBe(cap + 50);
     expect(shown).toBeGreaterThan(cap);
     expect(shown).toBeGreaterThan([...SEED_BOOT_SEQUENCE_MD.trim()].length);
 

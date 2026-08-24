@@ -530,15 +530,39 @@ const BOOT_DOC_SEEDS: Record<string, string> = {
   "task_unblocked/global": SEED_TASK_UNBLOCKED_MD.trim(),
 };
 
-/** The documents the server SHOWS but refuses every write to (T-3201). Owner's
- * ruling, verbatim: 「以前 global context 是固定內容 我們也是會顯示 只是不給改」.
- * Mirrored here because a mock that let the cockpit edit them would validate a
- * screen the real server answers 405 to — the demo mode agreeing with a server
- * that does not exist. */
-const BOOT_DOC_READ_ONLY: ReadonlySet<string> = new Set([
-  "task_takeover_fresh/global",
-  "task_unblocked/global",
-]);
+/** The documents the server SHOWS but refuses every write to.
+ *
+ * 🔴 EMPTY SINCE T-6f44, AND KEPT RATHER THAN DELETED. The owner ruled on
+ * 2026-08-24 that 〈新任務〉 and 〈擋著你手上任務的票解開了〉 — the two that used to
+ * be in here — become editable like the other eight. His earlier ruling
+ * (「以前 global context 是固定內容 我們也是會顯示 只是不給改」) was 照舊, a
+ * carry-over from when the boot context was fixed text, NOT a statement about
+ * these two documents' content; and 〈新任務〉 is one half of the same event as
+ * 〈任務轉派 · 給接手人〉, which he could always edit.
+ *
+ * The set stays because the 405 machinery it drives is still real and still
+ * reachable: a future document may ship read-only, and an empty set is how the
+ * mock says "none today" without the cockpit's refusal path becoming code that
+ * cannot be exercised at all. bootDocRegistry (server) is the truth source;
+ * this mirrors it so demo mode cannot validate a screen the real server
+ * refuses. */
+let BOOT_DOC_READ_ONLY: ReadonlySet<string> = new Set<string>();
+
+/** TEST-ONLY: make a document read-only for one test.
+ *
+ * 🔴 WHY THIS SEAM EXISTS. Since T-6f44 no SHIPPED document is read-only, so
+ * every assertion about how a read-only document renders — the body without an
+ * editor, the note, the absent version list — lost the only subject it could
+ * be written against. Deleting those assertions would have retired a live
+ * refusal path into code nothing exercises: the machinery is still reachable
+ * the day a document ships read-only again, and that is precisely the day
+ * nobody would notice it had rotted.
+ *
+ * Reset to empty by __resetMock, so a test that forgets to clean up cannot
+ * leak a read-only document into the next one. */
+export function __setBootDocReadOnly(keys: readonly string[]): void {
+  BOOT_DOC_READ_ONLY = new Set(keys);
+}
 
 /** The server's own name for a document, as its refusals spell it
  * (bootDocRegistry's DocName). The listing carries it, so a caller reading a
@@ -5626,6 +5650,7 @@ export function __resetMock(): void {
   mockBinStatus.clear();
   mockBinStatus.set("warden-mbp5", "stale");
   globalContextOverlay = null;
+  BOOT_DOC_READ_ONLY = new Set<string>();
   bootDocOverlays.clear();
   roleOverlays.clear();
   customRoles.clear();

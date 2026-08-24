@@ -1,9 +1,12 @@
-// 設定 › 角色誌 lists all ten boot/lifecycle documents (T-3201), and the two the
-// server refuses every write to are SHOWN without an editor.
+// 設定 › 角色誌 lists all ten boot/lifecycle documents (T-3201) under THREE
+// group headings (定稿 2026-08-24), and the ones the server refuses every write
+// to are SHOWN without an editor.
 //
 // The claim underneath every assertion here: a document that ships must be
 // reachable, and whether it may be edited is the SERVER's answer, read off the
-// document itself. The cockpit keeps no list of which ones are read-only — the
+// document itself. The cockpit keeps no list of which ones are read-only — that
+// is exactly why the fourth group (「只顯示、不給改」) is gone and its two
+// documents sit with the other task events, where their SUBJECT puts them. The
 // registry-parity gate (api/mock.boot-doc-registry.test.ts) covers the other
 // half, that no document is missing from the list at all.
 
@@ -12,7 +15,7 @@ import { render, fireEvent } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { zh } from "../i18n/locales/zh";
 import { SettingsPage } from "./SettingsPage";
-import { __resetMock } from "../api/mock";
+import { __resetMock, __setBootDocReadOnly } from "../api/mock";
 
 const s = zh.settings;
 
@@ -35,14 +38,12 @@ describe("SettingsPage · boot / lifecycle documents", () => {
   it("lists every document under its own group heading", async () => {
     const { getByText, getByTestId } = await openRolesLog();
 
-    for (const label of [
-      s.globalSection,
-      s.stopSection,
-      s.taskEventSection,
-      s.readOnlySection,
-    ]) {
+    // THREE headings — and the fourth is gone rather than merely unused, so
+    // the dictionary entry that named it cannot come back unnoticed.
+    for (const label of [s.globalSection, s.stopSection, s.taskEventSection]) {
       expect(getByText(label)).toBeTruthy();
     }
+    expect(Object.keys(s)).not.toContain("readOnlySection");
 
     for (const kind of [
       "system_interaction",
@@ -63,6 +64,30 @@ describe("SettingsPage · boot / lifecycle documents", () => {
     expect(getByTestId("boot-doc-entry-custom")).toBeTruthy();
   });
 
+  it("prints the two ex-唯讀 documents inside the task-event group", async () => {
+    // The MOVE itself, not just the vanished heading: 新任務 and 擋著你手上任務的
+    // 票解開了 are task events by subject, and the group they sit in says nothing
+    // about whether the server lets them be written — that answer is read off
+    // each document (the read-only case is asserted further down, unchanged).
+    const { container } = await openRolesLog();
+    const heading = [...container.querySelectorAll(".set-group-label")].find(
+      (el) => el.textContent === s.taskEventSection
+    );
+    expect(heading).toBeTruthy();
+    const group = heading!.parentElement!;
+    for (const kind of [
+      "task_closeout",
+      "task_reassign_predecessor",
+      "task_takeover_with_predecessor",
+      "task_takeover_fresh",
+      "task_unblocked",
+    ]) {
+      expect(
+        group.querySelector(`[data-testid="boot-doc-entry-${kind}"]`)
+      ).toBeTruthy();
+    }
+  });
+
   it("opens an editable event procedure and saves through it", async () => {
     const utils = await openRolesLog();
     fireEvent.click(utils.getByTestId("boot-doc-entry-task_closeout"));
@@ -76,7 +101,7 @@ describe("SettingsPage · boot / lifecycle documents", () => {
     await utils.findByText("結案時要做的事");
   });
 
-  it("opens 加速停止 through its own row, not 下線程序's", async () => {
+  it("opens 加速停止 through its own row, not 停止's", async () => {
     // The two share a cap and sit in the same group; opening one must not land
     // on the other. The page TITLE is what says which one is on screen — the
     // 加速停止 body legitimately contains 「下線程序」 (it is the same procedure
@@ -90,7 +115,13 @@ describe("SettingsPage · boot / lifecycle documents", () => {
     ).toBe(s.acceleratedStopName);
   });
 
+  // 🔴 NO SHIPPED DOCUMENT IS READ-ONLY ANY MORE (定稿 決定 2, 2026-08-24), so
+  // this drives the refusal path with a SYNTHETIC one. The alternative was to
+  // delete these assertions, which would have retired a live path into code
+  // nothing exercises — reachable again the day a document ships read-only,
+  // which is exactly the day nobody would notice it had rotted.
   it("renders a read-only document and offers no way to change it", async () => {
+    __setBootDocReadOnly(["task_unblocked/global"]);
     const utils = await openRolesLog();
     fireEvent.click(utils.getByTestId("boot-doc-entry-task_unblocked"));
 
@@ -117,6 +148,20 @@ describe("SettingsPage · boot / lifecycle documents", () => {
     // 「儲存＝整份取代」 is a fact about saving, so a document nobody may save
     // does not carry it.
     expect(utils.queryByTestId("doc-card-replace-note")).toBeNull();
+  });
+
+  // 決定 2 itself, on the UI side: the two documents that used to be refused
+  // are editable now. Without this, the mock could quietly go back to calling
+  // them read-only and only the synthetic test above would still pass — it
+  // supplies its own read-only list, so it cannot notice.
+  it("offers the editor on the two documents that used to be read-only", async () => {
+    for (const kind of ["task_takeover_fresh", "task_unblocked"]) {
+      const utils = await openRolesLog();
+      fireEvent.click(utils.getByTestId(`boot-doc-entry-${kind}`));
+      expect(await utils.findByTestId("doc-card-edit")).toBeTruthy();
+      utils.unmount();
+      __resetMock();
+    }
   });
 
   it("keeps the editor for the documents the server does allow", async () => {

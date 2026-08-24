@@ -2094,14 +2094,13 @@ func TestTaskCloseNudgeTextComesFromTheDocument(t *testing.T) {
 		t.Fatalf("the executor did not receive the edited document — the send site is "+
 			"still composing its own sentence.\nreason=%q", envelope.Data.Reason)
 	}
-	// 🔴 manual_label MUST be the human label and type_key MUST stay the raw key —
-	// they are different strings here on purpose. A fixture where the two are equal
-	// lets a send site swap one for the other and every test still passes.
+	// 🔴 THE HEAD IS THE TICKET NUMBER ALONE SINCE T-6f44 (owner's decision 3:
+	// 「最低限度就是 task id」). {status}, {type_key} and {manual_label} were all
+	// facts the agent can read off the ticket; the number is the one it cannot,
+	// and it is what tells two simultaneous close-outs apart. The body now opens
+	// by telling the agent to get_task and read type_key from there.
 	wantHead := mustRender(t, spec, head, map[string]string{
-		"task_no":      TaskNo(created.Task.ID),
-		"status":       TaskStatusDone,
-		"type_key":     "review-pr",
-		"manual_label": manualDisplayLabel("審查 PR", "review-pr"),
+		"task_no": TaskNo(created.Task.ID),
 	})
 	if !strings.HasPrefix(envelope.Data.Reason, wantHead) {
 		t.Fatalf("the nudge does not open with the approved read-only head.\n got %q\nwant prefix %q",
@@ -2124,17 +2123,18 @@ func TestTaskCloseNudgeTextComesFromTheDocument(t *testing.T) {
 // The fault is induced with the ONE shape eventNoticeText refuses and the write
 // face cannot produce — a split document stored without its read-only head,
 // which is what rows written before the marker existed still look like.
-// TestTaskCloseNudgeFallsBackToTheRawKeyWhenTheManualIsGone keeps the ONE branch
-// that moved out of decideTaskCloseNudge when the words left it (T-7870): a task
-// whose manual row is gone has no display label, and the head must then name the
-// raw type_key rather than render 「回到「」這本任務手冊」 — a sentence that reads
-// like a manual with no name and tells the agent nothing.
+// ⚠️ THIS TEST LOST ITS SUBJECT IN T-6f44 AND IS KEPT AS A WEAKER CLAIM, said
+// out loud rather than left to be discovered. It guarded the manual-label
+// fallback: a task whose manual row is gone has no display label, so the head had
+// to name the raw type_key instead of rendering 「回到「」這本任務手冊」. Decision 3
+// took {manual_label} — and {type_key}, and {status} — out of the head entirely,
+// so the fallback no longer reaches any document and NOTHING here can observe it.
+// The label is still computed in api_tasks.go, and is now dead text.
 //
-// 🔴 THIS TEST EXISTS BECAUSE THE WIRING COMMIT DELETED ITS ONLY GUARD. The
-// fallback used to be asserted beside decideTaskCloseNudge; rewriting that unit
-// test for the new signature dropped the assertion without replacing it, and an
-// independent review's mutant (delete the two-line fallback) stayed green across
-// the whole package. Moving a branch is not the same as keeping it covered.
+// What is still worth asserting, and is all that is: a task whose manual is gone
+// is STILL OWED a nudge, and that nudge still opens with its ticket number. The
+// mutant this file was written against (delete the two-line fallback) is green
+// again — by construction, because the branch it deletes feeds nothing.
 func TestTaskCloseNudgeFallsBackToTheRawKeyWhenTheManualIsGone(t *testing.T) {
 	api := newTasksTestServer(t)
 	seedManualWithLabel(t, api, "review-pr", "審查 PR")
@@ -2166,20 +2166,19 @@ func TestTaskCloseNudgeFallsBackToTheRawKeyWhenTheManualIsGone(t *testing.T) {
 	}
 	spec, head, _ := splitSeed(t, api, docKindTaskCloseout)
 	wantHead := mustRender(t, spec, head, map[string]string{
-		"task_no":      TaskNo(created.Task.ID),
-		"status":       TaskStatusDone,
-		"type_key":     "review-pr",
-		"manual_label": "review-pr",
+		"task_no": TaskNo(created.Task.ID),
 	})
 	if !strings.HasPrefix(envelope.Data.Reason, wantHead) {
-		t.Fatalf("a deleted manual must fall back to the raw key.\n got %q\nwant prefix %q",
-			envelope.Data.Reason, wantHead)
+		t.Fatalf("a task whose manual is gone is still owed the nudge, opening with "+
+			"its ticket number.\n got %q\nwant prefix %q", envelope.Data.Reason, wantHead)
 	}
-	// Negative control: the label must not have rendered EMPTY — the failure this
-	// branch exists to prevent produces 「回到「」這本任務手冊」, which still has the
-	// approved shape and would slip past a prefix check written any looser.
-	if strings.Contains(envelope.Data.Reason, "「」") {
-		t.Fatalf("the manual label rendered empty: %q", envelope.Data.Reason)
+	// The head names nothing it cannot fill: no empty 「」 pair, and no leftover
+	// manual/type_key clause that would now have nothing behind it.
+	for _, gone := range []string{"「」", "任務手冊", "type_key"} {
+		if strings.Contains(wantHead, gone) {
+			t.Fatalf("the head still carries %q, which decision 3 moved to the body: %q",
+				gone, wantHead)
+		}
 	}
 }
 

@@ -1,4 +1,4 @@
-[{task_no}] 你接手了任務「{title}」。你的前任是 {predecessor_label}（id `{old_executor_id}`）。
+[{task_no}] 你接手了這張任務，你的前任是 {predecessor}。
 
 <!-- ↑唯讀區（程式產生，改不動）｜↓本體（可編輯，零變數） -->
 

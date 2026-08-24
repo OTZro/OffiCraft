@@ -134,8 +134,8 @@ func TestDecideHandoverNotice(t *testing.T) {
 	// on a server that sent the final call's document to this soft arm.
 	srv := newReconcileTestServer(t)
 	_, steps, _ := DocSplitHeadBody(mustFoldText(t, srv, srv.offboardSpec()))
-	doc := func(where string) string {
-		return srv.winddownNoticeText(offboardKindSoft, where, 0)
+	doc := func() string {
+		return srv.winddownNoticeText(offboardKindSoft, 0)
 	}
 	rec := func(pct float64, extra map[string]any) map[string]any {
 		r := map[string]any{"context_pct": pct, "context_pct_ts": 20.0, "boot_ts": 10.0}
@@ -185,18 +185,27 @@ func TestDecideHandoverNotice(t *testing.T) {
 		if sig == nil {
 			t.Fatal("expected a notice")
 		}
-		// Both of the owner's numbers, and where this session is right now: an
-		// agent cannot read its own context %, so a notice without them leaves
-		// it unable to pace itself.
-		if !strings.Contains(sig.Reason, "context 65% (your limits: 65% / 75%)") {
-			t.Fatalf("the notice must carry the pct and both limits: %q", sig.Reason)
+		// ⚠️ THE PCT AND THE LIMITS ARE GONE FROM THE NOTICE (T-6f44, decision 4:
+		// 「{where} 不中文化，直接砍掉」). This block used to require them, on the
+		// argument that an agent cannot read its own context %. The owner's
+		// ruling is that knowing 「你在 59%」 has nothing to do with how to close
+		// out — the notice's job is to say the close-out has started, and the
+		// band it fired in is not an instruction. So the assertion is inverted:
+		// nothing the tick composes may reach the agent.
+		for _, leak := range []string{"context 65%", "your limits:", "compaction round"} {
+			if strings.Contains(sig.Reason, leak) {
+				t.Fatalf("the notice carries %q — the position clause was deleted: %q",
+					leak, sig.Reason)
+			}
 		}
 		// The instruction, asserted on BOTH halves: dropping either one is a
 		// different bug (idle until cut off / stop mid-work) and both are red.
-		if !strings.Contains(sig.Reason, "work the sequence below") {
+		// They are the DOCUMENT's own words now — the English opener that used
+		// to carry them was the read-only head, and it went with {where}.
+		if !strings.Contains(sig.Reason, "## 2. 開始下線") {
 			t.Fatalf("the notice must point at the steps: %q", sig.Reason)
 		}
-		if !strings.Contains(sig.Reason, "then call report_stopped yourself") {
+		if !strings.Contains(sig.Reason, "report_stopped") {
 			t.Fatalf("the notice must tell the agent to leave under its own power: %q", sig.Reason)
 		}
 		// The steps are the DOCUMENT's, verbatim — not a summary written in Go.
@@ -219,7 +228,7 @@ func TestDecideHandoverNotice(t *testing.T) {
 	// reason, and the agent's client falls back on the key being absent.
 	t.Run("a document that cannot be rendered keeps the tick quiet", func(t *testing.T) {
 		if sig := decideHandoverNotice("m-1", RuntimeClaude, rec(65, nil), cfg, 5, 6,
-			func(string) string { return "" }); sig != nil {
+			func() string { return "" }); sig != nil {
 			t.Fatalf("an empty notice must not be sent at all: %+v", sig)
 		}
 		// …and the same for no closure at all, which is the other way the
@@ -242,8 +251,19 @@ func TestDecideHandoverNotice(t *testing.T) {
 		if sig == nil {
 			t.Fatal("codex round 5 of the 5/6 pair at 60% must notify")
 		}
-		if !strings.Contains(sig.Reason, "compaction round 5 (your limits: round 5 / round 6)") {
-			t.Fatalf("a codex notice must name ITS axis (rounds), not a pct: %q", sig.Reason)
+		// ⚠️ THE AXIS IS NO LONGER IN THE SENTENCE (T-6f44, decision 4). What this
+		// sub-test actually guards — that codex is JUDGED on rounds and never on
+		// the claude percentage — is asserted above by the two decideHandoverNotice
+		// calls: 65% stays quiet, round 5 of 5/6 fires. That is the whole rule.
+		// What is gone is only the notice REPEATING the axis back, and with it the
+		// ability to tell a codex notice from a claude one by reading it: both
+		// arms send the same document now, which is correct — 下線程序 is the same
+		// procedure whatever put the session over its line.
+		for _, leak := range []string{"compaction round", "your limits:", "%"} {
+			if strings.Contains(sig.Reason, leak) {
+				t.Fatalf("a codex notice carries %q — the position clause was deleted: %q",
+					leak, sig.Reason)
+			}
 		}
 	})
 

@@ -860,7 +860,6 @@ var messageKeys = map[string]bool{
 	"settings.params":                                  true,
 	"settings.paramsLoadError":                         true,
 	"settings.paramsSaveError":                         true,
-	"settings.readOnlySection":                         true,
 	"settings.receiveBeta":                             true,
 	"settings.receiveBetaSub":                          true,
 	"settings.renameRole":                              true,

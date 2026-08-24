@@ -547,8 +547,11 @@ func TestBlockerCloseReleasesAndTellsTheDependentExecutor(t *testing.T) {
 		// The dep itself auto-satisfies the gate, so this must pass.
 		t.Fatalf("close: %d %s", rec.Code, rec.Body.String())
 	}
-	// The DURABLE half — an SSE frame alone is what failed in T-8a1e.
-	assertHandoverChat(t, api, "m-next", TaskNo(blocker.ID))
+	// The DURABLE half — an SSE frame alone is what failed in T-8a1e. It probes
+	// the DEPENDENT's number since T-6f44: the blocker's number left the sentence
+	// (see below), so a probe on it would now fail as a stale fixture rather than
+	// as the delivery failure this line is about.
+	assertHandoverChat(t, api, "m-next", TaskNo(dependent.ID))
 
 	// 🔴 AND THE WHOLE TEXT OF IT, because since T-3201 this notice is the
 	// 〈解除阻擋〉 DOCUMENT rather than a Go string — which is what finally puts
@@ -558,14 +561,38 @@ func TestBlockerCloseReleasesAndTellsTheDependentExecutor(t *testing.T) {
 	// site naming another event's kind (every one of these documents opens with
 	// a [T-xxxx] number, so a keyword probe passes on the wrong one), and the
 	// body silently reverting to that sentence.
+	// ⚠️ THE BLOCKER'S NUMBER, TITLE AND STATUS LEFT THE SENTENCE (T-6f44,
+	// decision 3 applied to this document). What the agent has to act on is the
+	// ticket that was RELEASED — its own — and which ticket was blocking, what it
+	// was called and how it ended change nothing about what to do next; the
+	// dependency is on the ticket for anyone who wants it. Two defects went with
+	// them: {blocker_status} rendered an untranslated wire code into Chinese
+	// prose (「已經done了」), and the sentence carried the only halfwidth comma of
+	// the ten.
+	//
+	// ⚠️ WHAT THAT COSTS THIS FILE, said plainly: the fixture's two distinct task
+	// NUMBERS (see above) no longer discriminate a send site that swapped
+	// {blocked_task_no} for {blocker_task_no} — there is only one slot left, so
+	// the swap is not expressible. The assertion below is still the whole text,
+	// which is what catches the send site posting another event's document.
 	body := releaseNoticeTo(t, api, "m-next")
-	want := "[" + TaskNo(dependent.ID) + "] 擋住這張任務的前置任務 " + TaskNo(blocker.ID) +
-		"「handoff fixture」已經" + mustTask(t, api, blocker.ID).Status + "了,它不再擋著你。\n\n" +
+	want := "[" + TaskNo(dependent.ID) + "] 擋著這張任務的前置任務已經結束，它不再擋著你。\n\n" +
 		"- **還沒開始**：請 get_task 讀內容、submit_plan 規劃步驟後開始執行。\n" +
 		"- **已經在進行中**：接著推進，不必重新規劃。\n" +
 		"- **優先權是凍結**：先問清楚為什麼被凍結，等能解凍的人解開再動。"
 	if body != want {
 		t.Fatalf("the release notice is not the 〈解除阻擋〉 document:\n got %q\nwant %q", body, want)
+	}
+	// The two defects, asserted gone by name — a rewrite that reintroduced either
+	// would still satisfy "the whole text matches" on the day someone updates the
+	// literal above without noticing what they were updating it to.
+	if strings.Contains(body, ",") {
+		t.Errorf("the halfwidth comma is back in the release notice: %q", body)
+	}
+	for _, code := range []string{"done", "terminated"} {
+		if strings.Contains(body, code) {
+			t.Errorf("the untranslated wire code %q is back in the release notice: %q", code, body)
+		}
 	}
 	// A name nothing filled must never ride out with the braces still on it —
 	// the send site drops the notice instead. Asserted beside a notice that DID

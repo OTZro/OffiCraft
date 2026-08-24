@@ -1440,38 +1440,37 @@ export const en: Dict = {
     customName: "User additions",
     customSub: "Custom content appended to every agent's boot context · editable",
     roleDefsSection: "Role definitions",
-    bootName: "Boot sequence",
+    bootName: "Boot steps",
     bootSub: "What an AI follows while starting up · one per runtime · editable",
     bootRuntimeClaude: "Standard",
     bootRuntimeCodex: "Codex",
-    bootClaudeName: "Boot sequence (Claude Code)",
+    bootClaudeName: "Boot steps (Claude Code)",
     bootClaudeSub: "Boot SOP for the Claude Code runtime · editable",
-    bootCodexName: "Boot sequence (Codex CLI)",
+    bootCodexName: "Boot steps (Codex CLI)",
     bootCodexSub: "Boot SOP for the Codex App Server runtime · editable",
-    offboardName: "Offboard sequence",
+    offboardName: "Stop",
     offboardSub:
       "Wrap-up instructions handed to an agent when the server is about to collect its session · editable",
     stopSection: "STOP",
     taskEventSection: "TASK EVENTS",
-    readOnlySection: "SHOWN, NEVER EDITED",
     acceleratedStopName: "Accelerated stop",
     acceleratedStopSub:
       "What an agent is told when it is asked to wrap up early · carries a deadline · editable",
     taskCloseoutName: "Task close-out",
     taskCloseoutSub:
       "What an agent is told when one of its tasks is judged finished · editable",
-    taskReassignPredecessorName: "Reassigned away",
+    taskReassignPredecessorName: "Task reassignment · to the predecessor",
     taskReassignPredecessorSub:
       "What an agent is told when a task it held is handed to somebody else · editable",
-    taskTakeoverWithPredecessorName: "Takeover · with predecessor",
+    taskTakeoverWithPredecessorName: "Task reassignment · to the successor",
     taskTakeoverWithPredecessorSub:
       "What an agent is told when it picks up a task somebody else worked on · editable",
-    taskTakeoverFreshName: "Takeover · new assignment",
+    taskTakeoverFreshName: "New task",
     taskTakeoverFreshSub:
-      "What an agent is told the first time a task is assigned to it · shown, never edited",
-    taskUnblockedName: "Blocker released",
+      "What an agent is told the first time a task is assigned to it",
+    taskUnblockedName: "The ticket blocking your task is released",
     taskUnblockedSub:
-      "What an agent is told when the task blocking it is released · shown, never edited",
+      "What an agent is told when the task blocking it is released",
     bootDocReadOnlyNote:
       "This document is shown so you can see exactly what agents are told. Nobody may edit it, and it has no version other than the shipped one.",
     bootDocSaveConfirmAcceleratedStop:

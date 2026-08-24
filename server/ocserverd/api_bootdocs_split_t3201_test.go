@@ -43,6 +43,26 @@ func splitSeed(t *testing.T, s *apiServer, kind string) (spec bootDocSpec, head,
 	return spec, head, body
 }
 
+// unsplitSeed is splitSeed's twin for a kind that carries NO read-only head
+// (T-6f44). It fails if the kind is still declared split or if the seed still
+// carries a marker, so a case written for a headless document cannot quietly
+// start passing against a document that grew a head back.
+func unsplitSeed(t *testing.T, s *apiServer, kind string) (spec bootDocSpec, text string) {
+	t.Helper()
+	spec = s.mustBootDocSpec(kind, bootDocSingletonKey)
+	if spec.Split {
+		t.Fatalf("%s is declared split — this case is written for a document with no read-only head", kind)
+	}
+	seed, hasSeed, err := s.root.seedBlockMD(spec.SeedFile)
+	if err != nil || !hasSeed {
+		t.Fatalf("%s: read seed %q: hasSeed=%v err=%v", kind, spec.SeedFile, hasSeed, err)
+	}
+	if strings.Contains(seed, docBodyMarker) {
+		t.Fatalf("%s: the kind declares no Split but the seed still carries the marker line", kind)
+	}
+	return spec, seed
+}
+
 func mustRender(t *testing.T, spec bootDocSpec, head string, values map[string]string) string {
 	t.Helper()
 	out, err := RenderDocVars(head, spec.Vars, values)
@@ -68,22 +88,37 @@ func mustRender(t *testing.T, spec bootDocSpec, head string, values map[string]s
 // answers the document's own bytes on BOTH arms. The refocus arm's behaviour
 // under the changed verb is pinned by
 // TestSelfDrivenOffboard_StoppedReportAfterARestartSelfStampRespawns.
-func TestOffboardDoc_HeadPlusBodyIsTodaysSoftNotice(t *testing.T) {
+// 🔴 THE HEAD IS GONE AND THE NOTICE IS THE WHOLE DOCUMENT (T-6f44). This used
+// to assert head ⊕ body against the English sentence the server once built in
+// Go. Decision 4 deleted {where} — a usage percentage that says nothing about
+// how to close out — and what was left of the head said nothing the body did not
+// already say, so 〈停止〉 became the first of the ten with NO read-only half:
+// every byte of it is the owner's.
+//
+// What is still asserted, and is the point: the live producer sends exactly the
+// document, with nothing composed around it.
+func TestOffboardDoc_TheWholeDocumentIsTodaysSoftNotice(t *testing.T) {
 	s := newEventProcServer(t)
-	spec, head, body := splitSeed(t, s, docKindOffboard)
+	_, doc := unsplitSeed(t, s, docKindOffboard)
 
 	const where = "context 59% (your limits: 55% / 65%)"
-	got := mustRender(t, spec, head, map[string]string{"where": where}) + spec.Join + body
-
-	want := "context 59% (your limits: 55% / 65%) — start your close-out: " +
-		"work the sequence below, then call report_stopped yourself.\n" + body
+	got := doc
+	want := doc
 	if got != want {
 		t.Fatalf("the folded document is not today's soft offboard notice:\n got %q\nwant %q", got, want)
+	}
+	// Nothing the server knows leaks into it any more — no percentage, no
+	// English preamble, no interpolation at all.
+	if bad := DocVarsIn(doc); len(bad) > 0 {
+		t.Fatalf("〈停止〉 declares no variables but its seed names %v", bad)
+	}
+	if strings.Contains(doc, "start your close-out") {
+		t.Fatal("the English head sentence is still in the document")
 	}
 	// …and the same bytes the live producer builds, which is what makes the
 	// hand-written literal above a statement about the SERVER and not about
 	// this file.
-	if live := s.winddownNoticeText(offboardKindSoft, where, 0); got != live {
+	if live := s.winddownNoticeText(offboardKindSoft, 0); got != live {
 		t.Fatalf("the live producer sent something else:\n got %q\nlive %q", got, live)
 	}
 }
@@ -96,14 +131,18 @@ func TestAcceleratedStopDoc_HeadPlusBodyIsTodaysFinalNotice(t *testing.T) {
 	const epoch = 1755870180 // 2026-08-22T14:03:00Z
 	deadline := time.Unix(epoch, 0).UTC().Format(time.RFC3339)
 	got := mustRender(t, spec, head,
-		map[string]string{"where": where, "deadline": deadline}) + spec.Join + body
+		map[string]string{"deadline": deadline}) + spec.Join + body
 
-	want := "close-out (your limits: 55% / 65%) — offboard now: work the sequence " +
-		"below, then call report_stopped yourself. Your deadline is " + deadline + ".\n" + body
+	// 🔴 ONE SENTENCE, IN CHINESE, AND NO `Your deadline is` (T-6f44). {where}
+	// went the way of 〈停止〉's; the English wrapper went with it. The deadline
+	// stays because it is the one fact the body cannot state — and the body no
+	// longer SNIFFS this line to decide hard-vs-soft, which is the change that
+	// had to land before this sentence could be touched at all.
+	want := "你的結束時刻是 " + deadline + "。\n" + body
 	if got != want {
 		t.Fatalf("the folded document is not today's final offboard notice:\n got %q\nwant %q", got, want)
 	}
-	if live := s.winddownNoticeText(offboardKindFinal, where, epoch); got != live {
+	if live := s.winddownNoticeText(offboardKindFinal, epoch); got != live {
 		t.Fatalf("the live producer sent something else:\n got %q\nlive %q", got, live)
 	}
 }
@@ -130,7 +169,7 @@ func TestWindDownNoticeText_SendsNoUnfilledVariableAndRefusesRatherThanShippingO
 		{"final", offboardKindFinal, 1755870180},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := s.winddownNoticeText(c.kind, "context 59% (your limits: 55% / 65%)", c.deadline)
+			got := s.winddownNoticeText(c.kind, c.deadline)
 			if got == "" {
 				t.Fatal("nothing was sent at all — every assertion here would pass vacuously")
 			}
@@ -140,7 +179,7 @@ func TestWindDownNoticeText_SendsNoUnfilledVariableAndRefusesRatherThanShippingO
 		})
 	}
 	// A declared name nothing can fill: refused, not shipped as a template.
-	if got := s.winddownNoticeText(offboardKindFinal, "close-out", 0); got != "" {
+	if got := s.winddownNoticeText(offboardKindFinal, 0); got != "" {
 		t.Fatalf("a notice whose {deadline} cannot be filled must not be sent at "+
 			"all — it went out as:\n%s", got)
 	}
@@ -152,11 +191,33 @@ func TestWindDownNoticeText_SendsNoUnfilledVariableAndRefusesRatherThanShippingO
 // is because someone meant to.
 func TestAcceleratedStopDoc_ShipsTheSameBodyAsTheOffboardDoc(t *testing.T) {
 	s := newEventProcServer(t)
-	_, _, offboardBody := splitSeed(t, s, docKindOffboard)
+	_, offboardBody := unsplitSeed(t, s, docKindOffboard)
 	_, _, acceleratedBody := splitSeed(t, s, docKindAcceleratedStop)
-	if offboardBody != acceleratedBody {
-		t.Fatalf("the two stop procedures ship different factory bodies:\n 停止 %q\n加速停止 %q",
-			offboardBody, acceleratedBody)
+	if offboardBody == acceleratedBody {
+		t.Fatal("the two stop procedures still ship the SAME body — T-6f44 made each " +
+			"one state which kind of notice it is, so they must differ")
+	}
+	// 🔴 THE PIN INVERTED, AND THE 定稿 CALLED IT: 「兩份本體從此不同 → 沒人守著
+	// 就會漂移」. They used to be byte-identical and this asserted so. Decision 5
+	// replaced the string-sniffing §1 (「看到 `Your deadline is` 就是硬性」— a match
+	// against ANOTHER document's editable first line) with each document saying
+	// outright which one it is, so identical bodies are now the BUG. Each is
+	// therefore pinned to its own sentence, here, in one place.
+	for _, probe := range []struct{ body, want, reject string }{
+		{offboardBody, "沒有人在對你倒數", "你在倒數中"},
+		{acceleratedBody, "你在倒數中", "沒有人在對你倒數"},
+	} {
+		if !strings.Contains(probe.body, probe.want) {
+			t.Errorf("this body no longer says which notice it is (%q missing):\n%s", probe.want, probe.body)
+		}
+		if strings.Contains(probe.body, probe.reject) {
+			t.Errorf("this body claims to be the other one (%q):\n%s", probe.reject, probe.body)
+		}
+		// The sniffed literal is gone from BOTH — leaving it in either one keeps
+		// a second, contradicting rule in the text an agent reads.
+		if strings.Contains(probe.body, "Your deadline is") {
+			t.Errorf("the string-sniffing rule survives in this body:\n%s", probe.body)
+		}
 	}
 }
 
@@ -164,15 +225,19 @@ func TestTaskReassignPredecessorDoc_HeadPlusBodyIsTodaysChatNotice(t *testing.T)
 	s := newEventProcServer(t)
 	spec, head, body := splitSeed(t, s, docKindTaskReassignPredecessor)
 
+	// 🔴 ONE SLOT, BOTH FACTS (T-6f44, decision 1): the successor arrives as
+	// 「名字（id）」. Renamed from new_executor_label because it stopped being just
+	// a label — api_tasks.go composes it, so the count of variables did not have
+	// to grow for the count of facts to.
 	got := mustRender(t, spec, head, map[string]string{
-		"task_no": "T-7e91", "new_executor_label": "Rei",
+		"task_no": "T-7e91", "new_executor": "銀月（mira）",
 	}) + spec.Join + body
 
 	// The literal api_tasks.go used to concatenate, plus the seed FILE's
 	// trailing newline — a document is a file and ends with one, a chat row is
 	// one message, so the send site trims what it posts the way buildBootContext
 	// trims every block it staples.
-	want := "[T-7e91] 此任務已轉派給 Rei。請停止推進，改為去跟接手人做交接：" +
+	want := "[T-7e91] 此任務已轉派給 銀月（mira）。請停止推進，改為去跟接手人做交接：" +
 		"對方接手後會主動 post_chat 找你，他問目前進度、進行中的事項、有哪些雷要注意，" +
 		"你都要答得出來，直到他確認交接完成。交接完成後這張任務就不再是你的了。\n"
 	if got != want {
@@ -182,7 +247,7 @@ func TestTaskReassignPredecessorDoc_HeadPlusBodyIsTodaysChatNotice(t *testing.T)
 	// hand-written literal above a statement about the SERVER and not about
 	// this file.
 	if live := s.taskNoticeText(docKindTaskReassignPredecessor, map[string]string{
-		"task_no": "T-7e91", "new_executor_label": "Rei",
+		"task_no": "T-7e91", "new_executor": "銀月（mira）",
 	}); live != strings.TrimSpace(want) {
 		t.Fatalf("the live producer sent something else:\n got %q\nlive %q",
 			strings.TrimSpace(want), live)
@@ -197,21 +262,31 @@ func TestTaskReassignPredecessorDoc_HeadPlusBodyIsTodaysChatNotice(t *testing.T)
 // started, and there is live evidence of it saying exactly that to a ticket
 // already in progress.
 //
-// The HEAD is still today's bytes, half-width comma and raw English status and
-// all — those three were ruled to stay verbatim in the same breath. So this
-// test asserts both halves of the ruling: the head unchanged, the body changed.
-func TestTaskUnblockedDoc_HeadIsVerbatimAndTheBodyIsTheApprovedRewrite(t *testing.T) {
+// 🔴 THE HEAD IS NO LONGER VERBATIM EITHER (T-6f44). It used to be pinned to
+// today's bytes 「半形逗號 and raw English status and all」, and this test said
+// those three were ruled to stay. That ruling was superseded: the head is down to
+// the ONE ticket number the agent has to act on — its OWN — and the two defects
+// the old sentence carried died with the variables that produced them.
+// {blocker_status} interpolated an untranslated wire code into Chinese prose
+// (「已經done了」), and the sentence used the only halfwidth comma in the ten.
+// Both are asserted gone below, because "the rewrite landed" is otherwise
+// satisfied by a document that reintroduces either.
+func TestTaskUnblockedDoc_HeadIsTheBlockedTicketAloneAndTheBodyIsTheApprovedRewrite(t *testing.T) {
 	s := newEventProcServer(t)
 	spec, head, body := splitSeed(t, s, docKindTaskUnblocked)
 
-	gotHead := mustRender(t, spec, head, map[string]string{
-		"blocked_task_no": "T-0002", "blocker_task_no": "T-0001",
-		"blocker_title": "把票搬進文件", "blocker_status": "done",
-	})
-	// Verbatim from api_tasks_handoff.go, half-width "," included.
-	wantHead := "[T-0002] 擋住這張任務的前置任務 T-0001「把票搬進文件」已經done了,它不再擋著你。"
+	gotHead := mustRender(t, spec, head, map[string]string{"blocked_task_no": "T-0002"})
+	wantHead := "[T-0002] 擋著這張任務的前置任務已經結束，它不再擋著你。"
 	if gotHead != wantHead {
-		t.Fatalf("the read-only head is not today's sentence:\n got %q\nwant %q", gotHead, wantHead)
+		t.Fatalf("the read-only head is not the approved sentence:\n got %q\nwant %q", gotHead, wantHead)
+	}
+	if strings.Contains(head, ",") {
+		t.Error("the halfwidth comma is back — this was the only one in the ten")
+	}
+	for _, code := range []string{"done", "terminated", "{blocker_status}"} {
+		if strings.Contains(gotHead, code) {
+			t.Errorf("the untranslated wire code %q is back in the sentence: %q", code, gotHead)
+		}
 	}
 
 	wantBody := "- **還沒開始**：請 get_task 讀內容、submit_plan 規劃步驟後開始執行。\n" +
@@ -231,8 +306,7 @@ func TestTaskUnblockedDoc_HeadIsVerbatimAndTheBodyIsTheApprovedRewrite(t *testin
 	// the wire kept the old one — a divergence every test here passed over
 	// because none of them asked the server what it sends.
 	if live := s.taskNoticeText(docKindTaskUnblocked, map[string]string{
-		"blocked_task_no": "T-0002", "blocker_task_no": "T-0001",
-		"blocker_title": "把票搬進文件", "blocker_status": "done",
+		"blocked_task_no": "T-0002",
 	}); live != gotHead+spec.Join+strings.TrimSuffix(body, "\n") {
 		t.Fatalf("the live producer sent something else:\n got %q\nlive %q",
 			gotHead+spec.Join+strings.TrimSuffix(body, "\n"), live)
@@ -251,11 +325,8 @@ func TestTaskUnblockedDoc_HeadIsVerbatimAndTheBodyIsTheApprovedRewrite(t *testin
 func TestTaskNoticeText_SendsNoUnfilledVariableAndRefusesRatherThanShippingOne(t *testing.T) {
 	s := newEventProcServer(t)
 	full := map[string]map[string]string{
-		docKindTaskReassignPredecessor: {"task_no": "T-7e91", "new_executor_label": "Rei"},
-		docKindTaskUnblocked: {
-			"blocked_task_no": "T-0002", "blocker_task_no": "T-0001",
-			"blocker_title": "把票搬進文件", "blocker_status": "done",
-		},
+		docKindTaskReassignPredecessor: {"task_no": "T-7e91", "new_executor": "銀月（mira）"},
+		docKindTaskUnblocked:           {"blocked_task_no": "T-0002"},
 	}
 	for kind, values := range full {
 		t.Run(kind, func(t *testing.T) {
@@ -309,15 +380,16 @@ func TestEventNoticeText_SendsTheBodyTheOwnerEditedAndNotTheShippedSeed(t *testi
 		trimmed bool
 		send    func(s *apiServer) string
 	}{
-		{docKindOffboard, false, func(s *apiServer) string {
-			return s.winddownNoticeText(offboardKindSoft, where, 0)
-		}},
+		// 🔴 〈停止〉 IS NO LONGER IN THIS TABLE and cannot be: it has no head to
+		// join, so "the overlay reached the agent" is asserted for it by
+		// TestOffboardDoc_AnUnsplitKindsWholeOverlayIsWhatIsSent below, which is
+		// the same claim in the shape a headless document takes.
 		{docKindAcceleratedStop, false, func(s *apiServer) string {
-			return s.winddownNoticeText(offboardKindFinal, where, epoch)
+			return s.winddownNoticeText(offboardKindFinal, epoch)
 		}},
 		{docKindTaskReassignPredecessor, true, func(s *apiServer) string {
 			return s.taskNoticeText(docKindTaskReassignPredecessor, map[string]string{
-				"task_no": "T-7e91", "new_executor_label": "Rei",
+				"task_no": "T-7e91", "new_executor": "銀月（mira）",
 			})
 		}},
 	} {
@@ -336,13 +408,14 @@ func TestEventNoticeText_SendsTheBodyTheOwnerEditedAndNotTheShippedSeed(t *testi
 				t.Fatalf("the write face refused the edit: %d (%s)", w.Code, w.Body.String())
 			}
 
-			values := map[string]string{"where": where}
+			values := map[string]string{}
 			if tc.kind == docKindAcceleratedStop {
 				values["deadline"] = time.Unix(epoch, 0).UTC().Format(time.RFC3339)
 			}
 			if tc.kind == docKindTaskReassignPredecessor {
-				values = map[string]string{"task_no": "T-7e91", "new_executor_label": "Rei"}
+				values = map[string]string{"task_no": "T-7e91", "new_executor": "銀月（mira）"}
 			}
+			_ = where
 			want := mustRender(t, spec, head, values) + spec.Join + ownerBody
 			if tc.trimmed {
 				want = strings.TrimSpace(want)
@@ -388,15 +461,15 @@ func TestEventNoticeText_ASplitKindStoredWithNoMarkerIsNotSentAtAll(t *testing.T
 		kind string
 		send func(s *apiServer) string
 	}{
-		{docKindOffboard, func(s *apiServer) string {
-			return s.winddownNoticeText(offboardKindSoft, where, 0)
-		}},
+		// 〈停止〉 is not here since T-6f44: it declares no Split, so this gate
+		// (`spec.Split && !split`) does not apply to it AT ALL — a marker-less
+		// stored row IS its normal shape now.
 		{docKindAcceleratedStop, func(s *apiServer) string {
-			return s.winddownNoticeText(offboardKindFinal, where, epoch)
+			return s.winddownNoticeText(offboardKindFinal, epoch)
 		}},
 		{docKindTaskReassignPredecessor, func(s *apiServer) string {
 			return s.taskNoticeText(docKindTaskReassignPredecessor, map[string]string{
-				"task_no": "T-7e91", "new_executor_label": "Rei",
+				"task_no": "T-7e91", "new_executor": "銀月（mira）",
 			})
 		}},
 		// The FOURTH Split notice. The gate it walks into is kind-agnostic
@@ -407,9 +480,6 @@ func TestEventNoticeText_ASplitKindStoredWithNoMarkerIsNotSentAtAll(t *testing.T
 		{docKindTaskUnblocked, func(s *apiServer) string {
 			return s.taskNoticeText(docKindTaskUnblocked, map[string]string{
 				"blocked_task_no": "T-7e91",
-				"blocker_task_no": "T-3201",
-				"blocker_title":   "擋著你的那張",
-				"blocker_status":  "done",
 			})
 		}},
 	} {
@@ -482,12 +552,19 @@ func TestEventNoticeText_ASplitKindStoredWithNoMarkerIsNotSentAtAll(t *testing.T
 }
 
 // 🔴 AND THE BOOT FOLDS KEEP THE LENIENT BRANCH, deliberately. The refusal above
-// belongs to notices, where the head IS the sentence; a boot document's head is
-// its title line, and a reader that gets the body without it still boots. Making
-// the fold refuse would turn one stale overlay into agents that cannot start —
-// far worse than the hole it closes. This case is the fence around that
+// belongs to notices, where the head IS the sentence; a boot document's head was
+// only its title line, and a reader that gets the body without it still boots.
+// Making the fold refuse would turn one stale overlay into agents that cannot
+// start — far worse than the hole it closes. This case is the fence around that
 // asymmetry, so tightening the notice path later cannot quietly take the boot
 // path with it.
+//
+// ⚠️ SINCE T-6f44 THIS IS NO LONGER A "STALE" SHAPE FOR THIS KIND — it is the
+// only shape. 系統互動 declares no Split at all now (its title line went back
+// into the body), so every stored row is marker-less and the lenient branch is
+// what serves the document on the ordinary path rather than on a legacy one.
+// The case is kept because the claim is unchanged and is now load-bearing on
+// every boot, not just on an old install.
 func TestSystemInteractionText_AMarkerLessOverlayStillBoots(t *testing.T) {
 	s := newEventProcServer(t)
 	spec := s.systemInteractionSpec()
@@ -507,38 +584,37 @@ func TestSystemInteractionText_AMarkerLessOverlayStillBoots(t *testing.T) {
 	}
 }
 
-// 🔴 WHY THE OTHER WIRED DOCUMENT HAS NO CASE ABOVE, asserted rather than left
-// as a note in a report: 〈解除阻擋〉 is READ-ONLY, so no write face can put an
-// overlay under it and "the owner's edit reaches the agent" is not a path that
-// exists for it today. The read-only gate itself is pinned per face elsewhere;
-// what is pinned HERE is the consequence at the send site, which no other case
-// reaches — a refused edit must leave the notice byte-for-byte the shipped one,
-// not merely leave the stored document alone.
-//
-// The day the owner rules that this document may be edited, this case goes red
-// on its first assertion and the row belongs in the table above.
-func TestTaskUnblockedDoc_NoWriteFaceCanPutAnOverlayUnderTheSendSite(t *testing.T) {
+// 🔴 THAT DAY CAME (T-6f44, decision 2). This case used to assert the OPPOSITE:
+// 〈解除阻擋〉 was read-only, so no write face could put an overlay under it, and
+// a refused edit had to leave the notice byte-for-byte the shipped one. Its own
+// comment said 「The day the owner rules that this document may be edited, this
+// case goes red on its first assertion and the row belongs in the table above」 —
+// so it is inverted here rather than deleted: the owner's edit must now REACH
+// the agent, which is the same claim the overlay table above makes for the
+// others, on the one document where it was newly won.
+func TestTaskUnblockedDoc_TheOwnersEditReachesTheSendSite(t *testing.T) {
 	s := newEventProcServer(t)
 	spec, head, body := splitSeed(t, s, docKindTaskUnblocked)
-	values := map[string]string{
-		"blocked_task_no": "T-0002", "blocker_task_no": "T-0001",
-		"blocker_title": "把票搬進文件", "blocker_status": "done",
-	}
+	values := map[string]string{"blocked_task_no": "T-0002"}
 	before := s.taskNoticeText(docKindTaskUnblocked, values)
 
 	w := httptest.NewRecorder()
 	s.replaceBootDoc(w, ownerPost("/x"), spec, "我改了本體。\n", false)
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("the replace face accepted an edit to a read-only document: %d (%s) "+
-			"— it now HAS an owner-edit path and owes the overlay case above a row",
-			w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("the replace face refused an edit: %d (%s) — decision 2 made this "+
+			"document editable", w.Code, w.Body.String())
+	}
+	// The shipped notice was really the seed's before the edit — otherwise the
+	// change below would be measuring nothing.
+	if before != mustRender(t, spec, head, values)+spec.Join+strings.TrimSuffix(body, "\n") {
+		t.Fatalf("the pre-edit notice is not the shipped document:\n%s", before)
 	}
 	after := s.taskNoticeText(docKindTaskUnblocked, values)
-	if after != before {
-		t.Fatalf("a refused edit moved the notice:\n before %q\n after %q", before, after)
+	if after == before {
+		t.Fatalf("the edit did not reach the send site — it is still sending the seed:\n%s", after)
 	}
-	if after != mustRender(t, spec, head, values)+spec.Join+strings.TrimSuffix(body, "\n") {
-		t.Fatalf("the notice is not the shipped document:\n%s", after)
+	if want := mustRender(t, spec, head, values) + spec.Join + "我改了本體。"; after != want {
+		t.Fatalf("the send site did not carry the owner's edit:\n got %q\nwant %q", after, want)
 	}
 }
 
@@ -595,17 +671,21 @@ func TestTaskTakeoverDocs_HeadPlusBodyIsTodaysChatNoticeWithoutTheHandoverNote(t
 		kind, want string
 		values     map[string]string
 	}{{
+		// {title} is gone from both (T-6f44): the number names the ticket, and
+		// 〈新任務〉's body opens 「請先讀任務內容」 — it is going to read the title.
 		kind:   docKindTaskTakeoverFresh,
-		values: map[string]string{"task_no": "T-7e91", "title": "把票搬進文件"},
-		want: "[T-7e91] 你接手了任務「把票搬進文件」。請先讀任務內容，準備好後由你自己呼叫 " +
+		values: map[string]string{"task_no": "T-7e91"},
+		want: "[T-7e91] 你接手了這張任務。請先讀任務內容，準備好後由你自己呼叫 " +
 			"claim_task（認領）解除轉派鎖再開始執行；任務狀態一律照步驟推導，不必也不能自己報。\n",
 	}, {
+		// {predecessor_label} + {old_executor_id} merged into ONE slot filled
+		// 「名字（id）」. The id could not be dropped — the body's first
+		// instruction is to post_chat this person — and neither could the name.
 		kind: docKindTaskTakeoverWithPredecessor,
 		values: map[string]string{
-			"task_no": "T-7e91", "title": "把票搬進文件",
-			"predecessor_label": "Ken", "old_executor_id": "m-old",
+			"task_no": "T-7e91", "predecessor": "銀月（mira）",
 		},
-		want: "[T-7e91] 你接手了任務「把票搬進文件」。你的前任是 Ken（id `m-old`）。" +
+		want: "[T-7e91] 你接手了這張任務，你的前任是 銀月（mira）。" +
 			"請先跟他確認交接完成（直接 post_chat 給他，問清楚目前進度與進行中的事項），" +
 			"確認後再由你自己呼叫 claim_task（認領）解除轉派鎖——只有你這個新負責人動得了；" +
 			"任務狀態一律照步驟推導，不必也不能自己報。\n",
@@ -653,31 +733,38 @@ func TestTaskCloseoutDoc_IsTheApprovedRewriteWithBothNamesMovedIntoTheHead(t *te
 	s := newEventProcServer(t)
 	spec, head, body := splitSeed(t, s, docKindTaskCloseout)
 
-	gotHead := mustRender(t, spec, head, map[string]string{
-		"task_no": "T-7d40", "status": "done",
-		"type_key": "review-pr", "manual_label": "審查 PR（review-pr）",
-	})
-	wantHead := "任務 T-7d40 已結束（done）。這一趟的學習經驗要回到「審查 PR（review-pr）」" +
-		"這本任務手冊，它的 type_key 是 `review-pr`。"
+	gotHead := mustRender(t, spec, head, map[string]string{"task_no": "T-7d40"})
+	wantHead := "任務 T-7d40 已結束。"
 	if gotHead != wantHead {
 		t.Fatalf("the read-only head is not the approved sentence:\n got %q\nwant %q", gotHead, wantHead)
 	}
 
-	wantBody := "請處理收尾事項：若這一趟有值得留下的經驗（踩坑、更好做法），先用 get_task_manual 讀現況，" +
-		"再用 patch_task_learnings（type_key 就用上面那一行給的值）只把改動的那一段送回" +
-		"**上面指名的那本**任務手冊：改既有段落就用它的唯一錨點，第一次寫或要新增就用空錨點追加。" +
+	wantBody := "先 get_task 讀這張票，看它屬於哪一本任務手冊（欄位 type_key）。\n\n" +
+		"若這一趟有值得留下的經驗（踩坑、更好做法），先用 get_task_manual 讀現況，" +
+		"再用 patch_task_learnings（type_key 用上一步讀到的值）只把改動的那一段送回" +
+		"**那本**任務手冊：改既有段落就用它的唯一錨點，第一次寫或要新增就用空錨點追加。" +
 		"不要用 write_task_learnings 做整份取代 —— 讀取後到寫入之間別人新增的內容會被無聲蓋掉；" +
 		"用 `ocagent clean <path>` 移除這個任務的暫存檔/資料夾、收掉臨時 branch/worktree 與跑著的臨時程序；" +
 		"最後用 report_task_closeout 回報後續已處理完。\n"
 	if body != wantBody {
 		t.Fatalf("the body is not the approved rewrite:\n got %q\nwant %q", body, wantBody)
 	}
-	// Join is "\n" so the head really is 「上面那一行」 the body tells the agent
-	// to read back — with "" the two would render as one line and the
-	// instruction would point at nothing.
-	if spec.Join != "\n" {
-		t.Fatalf("join = %q — the body says 「type_key 就用上面那一行給的值」, which is only "+
-			"true while the head renders as its own line", spec.Join)
+	// 🔴 THE DANGLING POINTER THE 定稿 NAMED AS A SILENT BREAK. The body used to
+	// say 「type_key 就用**上面那一行**給的值」 and 「送回**上面指名的那本**任務手冊」,
+	// and both {type_key} and {manual_label} left the head in this same commit.
+	// Cutting the variables without rewriting those two clauses leaves a document
+	// that reads perfectly and instructs the agent to look at a line that is not
+	// there — no test would have noticed, which is why it is one here.
+	for _, dangling := range []string{"上面那一行", "上面指名的那本", "{type_key}", "{manual_label}"} {
+		if strings.Contains(body, dangling) {
+			t.Errorf("the body still says %q, but the head no longer carries it", dangling)
+		}
+	}
+	// The body must instead tell the agent where to GET the type_key, since the
+	// notice no longer hands it over.
+	if !strings.Contains(body, "get_task") {
+		t.Error("the body never tells the agent to read the ticket, and the head no " +
+			"longer carries the manual or the type_key — nothing says where they come from")
 	}
 }
 
@@ -697,11 +784,8 @@ func TestTaskCloseoutDoc_IsTheApprovedRewriteWithBothNamesMovedIntoTheHead(t *te
 func TestTaskTakeoverNotice_AValueNothingSuppliesEmptiesTheNoticeAndTheSuccessorIsSentNothing(t *testing.T) {
 	s := newEventProcServer(t)
 	for kind, values := range map[string]map[string]string{
-		docKindTaskTakeoverFresh: {"task_no": "T-7e91", "title": "把票搬進文件"},
-		docKindTaskTakeoverWithPredecessor: {
-			"task_no": "T-7e91", "title": "把票搬進文件",
-			"predecessor_label": "Ken", "old_executor_id": "m-old",
-		},
+		docKindTaskTakeoverFresh:           {"task_no": "T-7e91"},
+		docKindTaskTakeoverWithPredecessor: {"task_no": "T-7e91", "predecessor": "銀月（mira）"},
 	} {
 		t.Run(kind, func(t *testing.T) {
 			if s.taskNoticeText(kind, values) == "" {
@@ -791,11 +875,18 @@ func TestTaskTakeoverNotice_AValueNothingSuppliesEmptiesTheNoticeAndTheSuccessor
 	}
 }
 
-// ── the two boot documents whose head is their own title line ────────────────
+// ── the three boot documents that gave their title line back ─────────────────
 
-// The promotion added no wording: the line that already sat at the top of the
-// file became the head. What a reader gets must therefore still open with that
-// exact line, and must never contain the marker.
+// 🔴 THE PROMOTION WAS UNDONE (T-6f44) AND THE BYTES DID NOT MOVE. T-3201 made
+// each of these documents' own TITLE line its read-only head — a head with zero
+// variables, that no code composed, that no body quoted. Decision: a line like
+// that is not the server's, it is the owner's, so the title went back down into
+// the body and the read-only half disappeared.
+//
+// What is pinned here is that the change was free: the old join was "\n\n",
+// which is exactly the blank line now sitting between the title and the rest of
+// the seed, so a READER gets the same bytes as before — the claim this test used
+// to make about head ⊕ body, made about one flat document.
 func TestBootContextDocs_RenderWithoutTheMarkerAndKeepTheirTitleLine(t *testing.T) {
 	s := newEventProcServer(t)
 	for _, tc := range []struct {
@@ -808,24 +899,30 @@ func TestBootContextDocs_RenderWithoutTheMarkerAndKeepTheirTitleLine(t *testing.
 	} {
 		t.Run(tc.kind+"/"+tc.key, func(t *testing.T) {
 			spec := s.mustBootDocSpec(tc.kind, tc.key)
+			if spec.Split {
+				t.Fatal("this kind declares a read-only head again — its head was only " +
+					"its own title line, and T-6f44 gave that line back to the owner")
+			}
 			seed, _, err := s.root.seedBlockMD(spec.SeedFile)
 			if err != nil {
 				t.Fatal(err)
 			}
-			head, body, ok := DocSplitHeadBody(seed)
-			if !ok {
-				t.Fatalf("the seed carries no %s line", docBodyMarker)
+			if strings.Contains(seed, docBodyMarker) {
+				t.Fatal("the seed still carries the marker line while the kind declares " +
+					"no Split — the whole text is served as the editable body, so the " +
+					"marker and everything above it just became the owner's to overwrite")
 			}
-			if head != tc.wantHead {
-				t.Fatalf("head = %q, want %q — promoting the title was supposed to add "+
-					"no wording at all", head, tc.wantHead)
+			// The title is still the first line, and still exactly itself.
+			title, rest, cut := strings.Cut(seed, "\n\n")
+			if !cut || title != tc.wantHead {
+				t.Fatalf("first line = %q, want %q — giving the title back was supposed "+
+					"to change no wording at all", title, tc.wantHead)
 			}
+			// And a READER gets the same bytes it got when this was head ⊕ body
+			// joined with "\n\n".
 			rendered := DocRendered(seed, spec.Join)
-			if strings.Contains(rendered, docBodyMarker) {
-				t.Fatal("the marker line survived into what a reader gets")
-			}
-			if rendered != tc.wantHead+"\n\n"+body {
-				t.Fatalf("the rendered document is not the title, a blank line and the body:\n%q", rendered)
+			if rendered != seed || rendered != tc.wantHead+"\n\n"+rest {
+				t.Fatalf("the rendered document is not the title, a blank line and the rest:\n%q", rendered)
 			}
 		})
 	}
@@ -852,8 +949,12 @@ func TestBootContextDocs_RenderWithoutTheMarkerAndKeepTheirTitleLine(t *testing.
 // documents split by T-3201's last package that an owner may actually edit, so
 // it is the one where this is newly load-bearing — and the join reads
 // spec.Split, which a build that undeclared the split would walk straight past.
+// ⚠️ 〈停止〉 LEFT THIS LIST IN T-6f44 and its slot was taken by 〈加速停止〉, which
+// is the stop procedure that still HAS a head. Leaving 下線程序 here would have
+// been a case asserting that a document with no read-only head keeps its
+// read-only head.
 func TestReplaceBootDoc_NoWriteCanChangeTheReadOnlyHead(t *testing.T) {
-	for _, kind := range []string{docKindOffboard, docKindTaskTakeoverWithPredecessor} {
+	for _, kind := range []string{docKindAcceleratedStop, docKindTaskTakeoverWithPredecessor} {
 		t.Run(kind, func(t *testing.T) {
 			replaceBootDocHeadIsUnsendableCase(t, kind)
 		})
@@ -940,7 +1041,10 @@ func replaceBootDocHeadIsUnsendableCase(t *testing.T, kind string) {
 func TestReplaceBootDoc_TheWipeGuardJudgesTheBodyAndTheCapJudgesTheStoredDocument(t *testing.T) {
 	t.Run("the wipe guard judges the body", func(t *testing.T) {
 		s := newEventProcServer(t)
-		spec, head, _ := splitSeed(t, s, docKindOffboard)
+		// 〈加速停止〉 rather than 〈停止〉 since T-6f44: the stop procedure that
+		// still HAS a read-only head is the one where "the head survives the
+		// write" is a distinction at all. Same cap (offboardCap), same shape.
+		spec, head, _ := splitSeed(t, s, docKindAcceleratedStop)
 
 		w := httptest.NewRecorder()
 		s.replaceBootDoc(w, ownerPost("/x"), spec, "", false)
@@ -981,7 +1085,7 @@ func TestReplaceBootDoc_TheWipeGuardJudgesTheBodyAndTheCapJudgesTheStoredDocumen
 
 	t.Run("the cap judges the stored document", func(t *testing.T) {
 		s := newEventProcServer(t)
-		spec, head, _ := splitSeed(t, s, docKindOffboard)
+		spec, head, _ := splitSeed(t, s, docKindAcceleratedStop)
 		before, err := s.foldBootDocDTO(spec)
 		if err != nil {
 			t.Fatal(err)
@@ -1037,16 +1141,19 @@ func TestReplaceBootDoc_TheWipeGuardJudgesTheBodyAndTheCapJudgesTheStoredDocumen
 
 func TestReplaceBootDoc_AVariableInTheEditableBodyIsRefused(t *testing.T) {
 	s := newEventProcServer(t)
-	spec, _, body := splitSeed(t, s, docKindOffboard)
+	spec, _, body := splitSeed(t, s, docKindAcceleratedStop)
 	before, err := s.foldBootDocDTO(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// {where} is a name this document DOES declare — and it is still refused
+	// {deadline} is a name this document DOES declare — and it is still refused
 	// below the line, because nothing fills a variable there. A test that used
 	// an undeclared name would pass on a server that only checked the spelling.
+	// (It was {where} on 〈停止〉 until T-6f44 deleted both the variable and that
+	// document's read-only half; 〈加速停止〉 is the stop procedure that still has
+	// a head and still declares a name.)
 	w := httptest.NewRecorder()
-	s.replaceBootDoc(w, ownerPost("/x"), spec, body+"\n你現在的狀況是 {where}。\n", false)
+	s.replaceBootDoc(w, ownerPost("/x"), spec, body+"\n你的死線是 {deadline}。\n", false)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
 	}
@@ -1059,15 +1166,36 @@ func TestReplaceBootDoc_AVariableInTheEditableBodyIsRefused(t *testing.T) {
 	}
 }
 
-// Every split kind that is variable-validated must ship a body with no
-// variables at all — the factory text has to satisfy the rule the write face
-// enforces, or the first owner edit is refused for something he did not write.
-func TestBootDocRegistry_EverySplitSeedHasAVariableFreeBody(t *testing.T) {
+// 🔴 THIS USED TO BE ONE-DIRECTIONAL AND T-6f44 MADE IT A BICONDITIONAL, which
+// is the whole of what kept "四份唯讀區整個消失" from silently un-locking them.
+//
+// It read: a kind that DECLARES Split must have a marker in its seed. That is
+// half the rule. The other half had no test anywhere, because until T-6f44 every
+// kind in the registry declared Split, so the case could not arise:
+//
+//	a kind that does NOT declare Split must have NO marker in its seed.
+//
+// Miss that half and dropping Split alone — leaving the marker in the seed —
+// is ACCEPTED by every gate in the tree and is exactly backwards. bootDocBodyOf
+// returns the WHOLE text as the body for an unsplit kind, so the marker line and
+// the head above it become part of the half the owner may rewrite; the write
+// face joins no shipped head back on (bootDocStoredText's identity branch), so
+// the first save replaces them for good. The half nobody may edit becomes the
+// half anybody may, with a 200 and a green suite.
+//
+// The other direction is the failure the assertion was written for and still
+// catches: a seed that loses its marker while the kind declares Split makes
+// every write a 500 (bootDocStoredText) and every notice "" (eventNoticeText).
+//
+// So a document only stops carrying a read-only head when its seed and its
+// registry row change in the SAME commit, in either direction. The other two
+// clauses (a variable-free body, a head that declares what it uses) are
+// unchanged and still only meaningful for a split kind.
+func TestBootDocRegistry_ASeedCarriesAMarkerExactlyWhenItsKindIsSplit(t *testing.T) {
 	s := newEventProcServer(t)
+	sawUnsplit := false
 	for _, reg := range bootDocRegistry {
-		if !reg.Split {
-			continue
-		}
+		sawUnsplit = sawUnsplit || !reg.Split
 		for _, key := range reg.Keys {
 			t.Run(reg.Kind+"/"+key, func(t *testing.T) {
 				spec := s.mustBootDocSpec(reg.Kind, key)
@@ -1076,6 +1204,19 @@ func TestBootDocRegistry_EverySplitSeedHasAVariableFreeBody(t *testing.T) {
 					t.Fatal(err)
 				}
 				head, body, ok := DocSplitHeadBody(seed)
+				if !spec.Split {
+					if ok {
+						t.Fatalf("this kind declares no Split, but its seed still carries the "+
+							"%s line — an unsplit kind serves its WHOLE text as the editable "+
+							"body, so the marker and the head above it just became the owner's "+
+							"to overwrite. Drop the marker from the seed in this same commit, "+
+							"or put Split back", docBodyMarker)
+					}
+					if bad := DocVarsUndeclared(seed, spec.Vars); len(bad) > 0 {
+						t.Errorf("the seed uses %v, which the kind does not declare", bad)
+					}
+					return
+				}
 				if !ok {
 					t.Fatalf("declared split, but the seed carries no %s line", docBodyMarker)
 				}
@@ -1090,6 +1231,13 @@ func TestBootDocRegistry_EverySplitSeedHasAVariableFreeBody(t *testing.T) {
 				}
 			})
 		}
+	}
+	// Positive control: the unsplit half of the biconditional is the new one, and
+	// on a registry where every kind is split again it would pass vacuously — the
+	// state this test was rewritten out of.
+	if !sawUnsplit {
+		t.Error("no kind in the registry is unsplit, so the half of this rule that " +
+			"T-6f44 added is not being measured by anything")
 	}
 }
 
@@ -1200,10 +1348,11 @@ func TestBootDoc_TheBodyItReadsBackIsTheBodyItTakes(t *testing.T) {
 // real face retains it. Constructing the history row by hand would prove nothing
 // about which shapes can actually be sitting in a version list.
 func TestRestoreDocumentHistory_ABootDocRevisionGoesThroughTheWriteFacesGates(t *testing.T) {
-	// 下線程序: editable, split, and it DECLARES variables — all three are
+	// 加速停止: editable, split, and it DECLARES variables — all three are
 	// needed, the last one because a kind that declares none opts out of the
 	// body rule entirely and the second half below would pass vacuously.
-	const kind, key = docKindOffboard, offboardDocKey
+	// (下線程序 held this slot until T-6f44 took its read-only half away.)
+	const kind, key = docKindAcceleratedStop, acceleratedStopDocKey
 
 	// retain installs `stored` as the live row, then writes a clean body through
 	// the real write face so that `stored` becomes the newest retained revision.
@@ -1281,7 +1430,7 @@ func TestRestoreDocumentHistory_ABootDocRevisionGoesThroughTheWriteFacesGates(t 
 		// And the send site, which is what the whole hazard was about, will
 		// speak again: a headless row is refused there (eventNoticeText), so a
 		// non-empty answer says the shape is gone rather than merely tidied.
-		if got := s.winddownNoticeText(offboardKindSoft, "context 59%", 0); got == "" {
+		if got := s.winddownNoticeText(offboardKindSoft, 0); got == "" {
 			t.Fatal("the notice is still unsendable after the restore — the row is still headless")
 		}
 	})

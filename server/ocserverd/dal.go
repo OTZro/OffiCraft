@@ -752,14 +752,18 @@ var documentHistoryKeepByKind = map[string]int{
 	docKindSystemInteraction: 10,
 	docKindBootSequence:      10,
 	docKindOffboard:          10,
-	// The four editable event procedures (T-3201) are retyped from the same
-	// text box and churn the same way, so they get the same depth. The two
-	// read-only kinds are deliberately absent: nothing can write them, so a
-	// depth for them would be a number about a list that is always empty.
+	// ALL SIX event procedures (T-3201, widened T-6f44) are retyped from the same
+	// text box and churn the same way, so they get the same depth. Two of them
+	// used to be absent on the argument 「nothing can write them, so a depth for
+	// them would be a number about a list that is always empty」 — true while they
+	// were read-only, expired the moment decision 2 made them editable. Leaving
+	// them out would have given two of the ten a three-deep history nobody chose.
 	docKindAcceleratedStop:             10,
 	docKindTaskCloseout:                10,
 	docKindTaskReassignPredecessor:     10,
 	docKindTaskTakeoverWithPredecessor: 10,
+	docKindTaskTakeoverFresh:           10,
+	docKindTaskUnblocked:               10,
 }
 
 // documentHistoryKeepFor answers the depth for one kind: the table above, else

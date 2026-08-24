@@ -315,13 +315,34 @@ func TestWorkerStop_TypedTaskIsAskedToWriteBackToItsManual(t *testing.T) {
 			api.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
 	})
 
-	for _, want := range []string{"review-pr", "patch_task_learnings", "get_task_manual"} {
+	// 🔴 THE TYPE KEY IS NO LONGER SPELLED OUT, AND THAT IS THE DECISION, NOT A
+	// REGRESSION (T-6f44, owner's decision 3: 〈任務結案〉 keeps the ticket number
+	// and nothing else). The instruction now tells the worker to READ THE TICKET
+	// and take type_key off it — one lookup it can do — instead of the notice
+	// carrying a name that has to be kept in step in a second place.
+	//
+	// So this asserts what still has to arrive: the VERBS, and the pointer to
+	// where the type comes from.
+	for _, want := range []string{
+		"patch_task_learnings", "get_task_manual", "get_task", "type_key",
+	} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("the 下線預告 a typed worker received never mentions %q — the "+
 				"owner's ruling is that an outsource worker going offline writes its "+
-				"memory back into ITS 任務手冊, and a sentence that does not name the "+
-				"type or the verb is not that instruction:\n%s", want, notice)
+				"memory back into ITS 任務手冊, and a sentence that names neither the "+
+				"verb nor where to look up the manual is not that instruction:\n%s",
+				want, notice)
 		}
+	}
+	// 🔴 AND IT MUST NOT CLAIM THE TASK ENDED. This worker is being wound down;
+	// its ticket is still open. The close-out document's read-only head says
+	// 「任務 … 已結束。」, which is why this path appends the BODY only — a
+	// reminder to write learnings back must not arrive wrapped in a false
+	// statement about the ticket the worker is still holding.
+	if strings.Contains(notice, "已結束") {
+		t.Errorf("the 下線預告 tells a worker its task has ended while the ticket is "+
+			"still open — the close-out document's head was appended, not just its "+
+			"instructions:\n%s", notice)
 	}
 }
 
@@ -368,7 +389,7 @@ func TestWorkerStop_AdHocTaskIsNotAskedToWriteBackToAManual(t *testing.T) {
 // that document carries it — it is the whole of the soft/hard difference. The
 // tests below match on the CLAUSE, not on a formatted time, because the point
 // is whether the sentence declares a deadline at all.
-const deadlineClause = "Your deadline is "
+const deadlineClause = "你的結束時刻是 "
 
 // 🔴 THE HARM THIS WHOLE TICKET EXISTS TO PREVENT, on the outsource half.
 //
@@ -426,7 +447,8 @@ func TestWorkerAcceleratedStop_TellsTheWorkerAboutTheClockItStarted(t *testing.T
 		t.Fatal("加速停止 must put the stop epoch on a clock")
 	}
 	want := time.Unix(int64(w.StoppingSince+grace), 0).UTC().Format(time.RFC3339)
-	if !strings.Contains(notice, deadlineClause+want+".") {
+	// 。 not "." since T-6f44 — the clause is one Chinese sentence now.
+	if !strings.Contains(notice, deadlineClause+want+"。") {
 		t.Fatalf("the 預告 quotes a deadline that is not the one the collect uses "+
 			"(want %q, the anchor this press re-stamped plus the grace):\n%s",
 			want, notice)

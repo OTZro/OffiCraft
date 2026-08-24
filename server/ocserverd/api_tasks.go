@@ -571,6 +571,31 @@ func (s *apiServer) closeTask(t *Task, status string, now float64, trigger strin
 	return nil
 }
 
+// nameWithIDSlot composes the ONE slot that has to carry TWO facts: 「銀月（mira）」.
+//
+// 🔴 ONE VARIABLE, TWO FACTS (T-6f44, owner's decision 1, verbatim: 「名字跟 id
+// 不能都給嗎」). Both 轉派 documents declare a single name for the other party,
+// and both need both halves: the body tells the reader to post_chat that party,
+// which needs the id, while a sentence carrying only an id reads as a serial
+// number. The number of variables is not the number of facts — a slot is a
+// string this code composes.
+//
+// Used by BOTH 轉派 arms on purpose. Spelling this rule twice is how the two
+// spellings drift apart, which is the defect class this ticket removes.
+//
+// When the label already IS the id (a party with no name) the parenthesis would
+// repeat it, so it is omitted — 「mira（mira）」 reads like a bug to the agent
+// that receives it.
+func nameWithIDSlot(label, id string) string {
+	if label == "" {
+		return id
+	}
+	if label == id {
+		return label
+	}
+	return label + "（" + id + "）"
+}
+
 // deriveAndPersistTask is the DERIVATION SEAM (T-9ca5 "任務狀態全推導"): the single
 // call every step-mutation path funnels through to re-project the task's status
 // (and display waiting_reason) from its steps, persist it, and fan the delta. It
@@ -1555,12 +1580,31 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	newExecutorLabel, newExecutorID := "", ""
 	if newMember != nil {
 		newExecutorID = newMember.ID
-		newExecutorLabel = newMember.Name
-		if newExecutorLabel == "" {
-			newExecutorLabel = newMember.ID
-		}
+		// 🔴 NAME AND ID IN ONE SLOT (T-6f44, owner's decision 1). The document
+		// declares ONE variable and this string carries BOTH facts — 「銀月
+		// （mira）」 — because a slot is a string the code composes, not a fact.
+		// A bare id reads as a serial number; a bare name cannot be addressed.
+		// Same composer as the predecessor slot below, deliberately: 「名字（id）」
+		// is ONE rule, and writing it twice is how the two spellings drift —
+		// which is the defect class this whole ticket exists to remove, at the
+		// scale of two lines. It also inherits the label==id case for free.
+		newExecutorLabel = nameWithIDSlot(newMember.Name, newMember.ID)
 	} else {
-		newExecutorLabel = "外包（待排程指派）"
+		// 🔴 A STATE, WRITTEN SO IT DOES NOT READ AS A NAME (T-6f44, owner's
+		// decision on 轉派 · 給前任). The successor is an outsource worker the
+		// scheduler has not minted yet, so there is no name and no id to give.
+		// This slot used to read 「外包（待排程指派）」, which the sentence then
+		// rendered as 「此任務已轉派給 外包（待排程指派）。」 — a status label sitting
+		// in the grammatical position of a person.
+		//
+		// ⚠️ The owner offered two fixes: take the words from the document, or
+		// 「至少讓句子讀起來不像在講一個人」. This is the second. The first would
+		// need a slot the document does not have, and adding one would break the
+		// ≤2-variables-per-document rule he set in the same pass — so the two
+		// instructions cannot both be satisfied, and this is the one that does
+		// not overrule the other. The string is still Go-side and still not
+		// owner-editable; that half is NOT fixed.
+		newExecutorLabel = "一位尚未指派的外包成員"
 	}
 	// 🔴 THE FROZEN CAVEAT USED TO BE APPENDED HERE, AND THE OWNER REMOVED IT
 	// (2026-08-22, T-3201). It said 「這張任務現在是「凍結」…認領之後不要開始推進」
@@ -1577,7 +1621,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	// "" means it could not be rendered — post nothing rather than a template.
 	if oldExecutor != "" {
 		if notice := s.taskNoticeText(docKindTaskReassignPredecessor, map[string]string{
-			"task_no": no, "new_executor_label": newExecutorLabel,
+			"task_no": no, "new_executor": newExecutorLabel,
 		}); notice != "" {
 			s.postTaskChat(*t, wireSystemSender, oldExecutor, notice, trigger)
 		}
@@ -1591,9 +1635,11 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	// AFTER the instructions leaves no prefix of facts to cut at.
 	if oldExecutor != "" && newExecutorID != "" {
 		if notice := s.taskNoticeText(docKindTaskTakeoverWithPredecessor, map[string]string{
-			"task_no": no, "title": t.Title,
-			"predecessor_label": s.executorLabel(oldKind, oldExecutor),
-			"old_executor_id":   oldExecutor,
+			"task_no": no,
+			// One slot, both facts — see newExecutorLabel above. The id is not
+			// optional here: the body's first instruction is to post_chat this
+			// person, and 「一串 id」 alone does not say who that is.
+			"predecessor": nameWithIDSlot(s.executorLabel(oldKind, oldExecutor), oldExecutor),
 		}); notice != "" {
 			s.postTaskChat(*t, wireSystemSender, newExecutorID, notice, trigger)
 		}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,7 +33,9 @@ import (
 func TestWindDownNoticeText_TheApprovedSentence(t *testing.T) {
 	const where = "context 62% (your limits: 60% / 75%)"
 	s := newReconcileTestServer(t)
-	_, softBody, _ := DocSplitHeadBody(mustFoldText(t, s, s.offboardSpec()))
+	// 🔴 下線程序 HAS NO READ-ONLY HEAD SINCE T-6f44, so its notice IS the whole
+	// document; 加速停止 still has one (its deadline), so its body is still cut.
+	softDoc := mustFoldText(t, s, s.offboardSpec())
 	_, finalBody, _ := DocSplitHeadBody(mustFoldText(t, s, s.acceleratedStopSpec()))
 
 	// 🔴 THE OPENER DIFFERS BY ARM (owner 2026-08-20, card rc-e9b655cd8e1a,
@@ -48,12 +49,20 @@ func TestWindDownNoticeText_TheApprovedSentence(t *testing.T) {
 	// keyword assertions used to pin, plus everything they never looked at: the
 	// opener, the second half, the absence of "offboard now", the absence of any
 	// deadline clause, the newline, and the body carried verbatim.
-	soft := s.winddownNoticeText(offboardKindSoft, where, 0)
-	wantSoft := where + " — start your close-out: work the sequence below, " +
-		"then call report_stopped yourself.\n" + softBody
-	if soft != wantSoft {
-		t.Fatalf("the soft notice must open WITHOUT urging and carry the rest of "+
-			"the approved sentence verbatim:\n got %q\nwant %q", soft, wantSoft)
+	// ⚠️ THE OPENER IS GONE ENTIRELY (T-6f44, decision 4). The clause this
+	// paragraph argues about — 「{where} — start your close-out: …」 — was the
+	// read-only head, and it went with {where}: a usage percentage stapled to an
+	// instruction the document already gives. The property it was protecting
+	// survives and is asserted below by assertQuotesNoTime plus the §1 sentence
+	// pinned in offboard_discriminator_t0974_test.go: the soft notice must not
+	// urge, and must quote no clock.
+	soft := s.winddownNoticeText(offboardKindSoft, 0)
+	if soft != softDoc {
+		t.Fatalf("the soft notice must be the document and nothing else:\n got %q\nwant %q",
+			soft, softDoc)
+	}
+	if strings.Contains(soft, where) {
+		t.Fatalf("the position clause reached the agent — decision 4 deleted it:\n%s", soft)
 	}
 	// Kept as a SHAPE assertion on top of the equality above, because it is not
 	// a keyword test: it refuses a time in any of the shapes it knows, which is
@@ -79,10 +88,8 @@ func TestWindDownNoticeText_TheApprovedSentence(t *testing.T) {
 	// implicit LOCAL one it actually used. The rendering is UTC and is asserted
 	// as such.
 	const deadline = 1_787_000_000.0 // 2026-08-17T20:53:20Z
-	final := s.winddownNoticeText(offboardKindFinal, where, deadline)
-	wantFinal := where + " — offboard now: work the sequence below, " +
-		"then call report_stopped yourself. Your deadline is 2026-08-17T20:53:20Z.\n" +
-		finalBody
+	final := s.winddownNoticeText(offboardKindFinal, deadline)
+	wantFinal := "你的結束時刻是 2026-08-17T20:53:20Z。\n" + finalBody
 	if final != wantFinal {
 		t.Fatalf("the final call must name the deadline, right after the same "+
 			"sentence:\n got %q\nwant %q", final, wantFinal)
@@ -94,7 +101,7 @@ func TestWindDownNoticeText_TheApprovedSentence(t *testing.T) {
 	// the online one). If it ever happens NOTHING is sent, rather than a
 	// document whose head still reads `{deadline}` or an epoch 0 formatted as
 	// 1970 — the send site omits the key and the agent's client falls back.
-	if noClock := s.winddownNoticeText(offboardKindFinal, where, 0); noClock != "" {
+	if noClock := s.winddownNoticeText(offboardKindFinal, 0); noClock != "" {
 		t.Fatalf("a final call with no clock must send nothing at all:\n%s", noClock)
 	}
 }
@@ -189,13 +196,21 @@ func TestOffboardDeltaPayload_下線NeverCarriesACountdown(t *testing.T) {
 	// It pins in one assertion what two keyword checks used to: the closer is
 	// report_stopped, restart_self appears nowhere in the sentence, and the
 	// rest of the approved wording is intact.
-	sentence, _, _ := strings.Cut(notice, "\n")
-	wantSentence := "close-out (your limits: 40% / 50%) — start your close-out: " +
-		"work the sequence below, then call report_stopped yourself."
-	if sentence != wantSentence {
-		t.Fatalf("下線 must be named the tool that works on this arm, and must "+
-			"not be told to re-start itself:\n got %q\nwant %q",
-			sentence, wantSentence)
+	// ⚠️ THE FIRST LINE IS NO LONGER SOMETHING THIS SERVER COMPOSES (T-6f44):
+	// 下線程序 has no read-only head, so every byte of the notice is the
+	// document. The claim is therefore made about the WHOLE notice, which is
+	// strictly more than the first line used to cover — and the part that
+	// mattered (report_stopped is the closer, restart_self is not named here) is
+	// asserted where it now lives, in the document's §4.
+	if notice != mustFoldText(t, s, s.offboardSpec()) {
+		t.Fatalf("the soft notice is not the document alone:\n%s", notice)
+	}
+	if !strings.Contains(notice, "report_stopped") {
+		t.Fatal("下線程序 no longer names report_stopped — it is the closer on this arm")
+	}
+	if strings.Contains(notice, "restart_self") {
+		t.Fatal("下線程序 names restart_self; the owner ruled it out of the close-out " +
+			"(rc-5d044f0c1266) and it lives in 系統互動's tool notes")
 	}
 }
 
@@ -257,40 +272,59 @@ func TestRestartSelf_WorksWhileTheAgentIsClosingOut(t *testing.T) {
 	}
 }
 
-// codex is judged in ROUNDS, and the notice has to say WHERE IT IS, not just
-// where the limits are. The final call substitutes the threshold round because
-// that is where the session has arrived; the soft notice must report the round
-// the gauge actually shows.
+// ⚠️ INVERTED, AND THIS ONE IS A STRAIGHT LOSS OF COVERAGE — recorded, not
+// hidden. It used to assert that a codex notice reports WHERE THE SESSION IS
+// (「compaction round 3 (your limits: round 3 / round 4)」) and not merely where
+// the limits are, on both arms. Its own note said the mutant — deleting the
+// round substitution — left the whole suite green before it existed.
 //
-// 🔴 Measured: deleting that substitution left the whole ocserverd suite green
-// (259s) — the codex arm of the composer had no test at all.
-func TestOffboardNoticeFor_CodexReportsWhereItActuallyIs(t *testing.T) {
+// T-6f44 decision 4 deleted {where} from both stop documents: 「你在 59%」 has
+// nothing to do with how to close out. offboardNoticeFor STILL COMPOSES that
+// string (api_members.go) and winddownNoticeText now discards it, so the codex
+// round logic is dead text — and its mutant is green again, necessarily, because
+// nothing downstream reads what it computes. The 定稿 calls for deleting that
+// composer; that deletion is in the wind-down files and is not part of this
+// change.
+//
+// What is asserted instead is the property that replaced it, on BOTH runtimes
+// and BOTH arms: no position clause reaches an agent at all. That is what makes
+// the dead composer harmless in the meantime.
+func TestOffboardNoticeFor_NoPositionClauseReachesTheAgent(t *testing.T) {
 	s := newReconcileTestServer(t)
-	m := testAgent("m-codex")
-	m.Runtime = RuntimeCodex
-	m.RefocusSince = nowSecs()
-	// A CLOCKED cause, because this test asks for the final call directly: a
-	// final call with no clock sends nothing at all, and the codex `where`
-	// under test would then have nothing to appear in.
-	m.RefocusOp = refocusOpContextHigh
-	putTestMember(t, s, m)
-	s.gauge.Set("m-codex", map[string]any{"compaction_count": 3.0})
+	for _, runtime := range []string{RuntimeCodex, RuntimeClaude} {
+		t.Run(runtime, func(t *testing.T) {
+			m := testAgent("m-" + runtime)
+			m.Runtime = runtime
+			m.RefocusSince = nowSecs()
+			// A CLOCKED cause: a final call with no clock sends nothing at all,
+			// and the arm below would then be measuring an empty string.
+			m.RefocusOp = refocusOpContextHigh
+			putTestMember(t, s, m)
+			s.gauge.Set(m.ID, map[string]any{"compaction_count": 3.0, "context_pct": 62.0})
 
-	final := s.codexCompactionThresholdSetting()
-	soft := s.offboardNoticeFor(m, offboardKindSoft)
-	if !strings.Contains(soft, "compaction round 3 ") {
-		t.Fatalf("the soft notice must report the round the session is ON:\n%s", soft)
-	}
-	hard := s.offboardNoticeFor(m, offboardKindFinal)
-	if !strings.Contains(hard, fmt.Sprintf("compaction round %d ", final)) {
-		t.Fatalf("the final call must report the round it has ARRIVED at (%d):\n%s",
-			final, hard)
-	}
-	// Both must still carry the limits, which is how the agent tells the two apart.
-	for _, n := range []string{soft, hard} {
-		if !strings.Contains(n, fmt.Sprintf("round %d)", final)) {
-			t.Fatalf("every codex notice must carry its limits:\n%s", n)
-		}
+			soft := s.offboardNoticeFor(m, offboardKindSoft)
+			hard := s.offboardNoticeFor(m, offboardKindFinal)
+			if soft == "" || hard == "" {
+				t.Fatal("both arms must send something — every assertion below would be vacuous")
+			}
+			for _, n := range []struct{ arm, text string }{{"soft", soft}, {"final", hard}} {
+				for _, leak := range []string{
+					"your limits:", "compaction round", "context 62", "(your limits",
+				} {
+					if strings.Contains(n.text, leak) {
+						t.Errorf("the %s notice carries %q — decision 4 deleted the "+
+							"position clause from both documents, so nothing "+
+							"offboardNoticeFor composes should reach an agent:\n%s",
+							n.arm, leak, n.text)
+					}
+				}
+			}
+			// The one thing the final call must still carry, so this is not
+			// satisfied by a server that sends an empty document.
+			if !strings.Contains(hard, "你的結束時刻是 ") {
+				t.Errorf("the final call lost its deadline sentence:\n%s", hard)
+			}
+		})
 	}
 }
 

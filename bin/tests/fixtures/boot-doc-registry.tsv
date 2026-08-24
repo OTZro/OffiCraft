@@ -42,5 +42,5 @@ accelerated_stop	global	false
 task_closeout	global	false
 task_reassign_predecessor	global	false
 task_takeover_with_predecessor	global	false
-task_takeover_fresh	global	true
-task_unblocked	global	true
+task_takeover_fresh	global	false
+task_unblocked	global	false

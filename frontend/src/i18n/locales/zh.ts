@@ -1488,9 +1488,11 @@ export const zh = {
     upgrade: "升級到最新版",
     catalogHash: "MCP 目錄雜湊",
     // ── 角色誌 ──
-    // 十份文件依 owner 的讀法分四組（2026-08-22）：上線 → 下線 → 任務事件 →
-    // 只顯示不給改。上線這組依 boot context 的組裝順序排：系統互動 → 使用者自訂
-    // → 啟動程序（啟動程序那一列開的是 claude / codex 兩份文件的索引）。
+    // 十份文件依 owner 的讀法分三組（定稿 2026-08-24）：上線 → 下線 → 任務事件。
+    // 「只顯示不給改」那一組不見了——分組是版面上的分群，不是「能不能改」的
+    // 真相來源（那是 server 的答案）。上線這組依 boot context 的組裝順序排：
+    // 系統互動 → 使用者自訂 → 啟動步驟（啟動步驟那一列開的是 claude / codex
+    // 兩份文件的索引）。
     // UI 不露檔名。
     globalSection: "上線（BOOT）",
     systemName: "系統互動",
@@ -1503,35 +1505,34 @@ export const zh = {
     // The ONE list row. The runtime-specific names below still title the PAGE
     // and its history list — the row no longer names a runtime because you
     // pick one after you are inside.
-    bootName: "啟動程序",
+    bootName: "啟動步驟",
     bootSub: "AI 開機時照著做的步驟 · 兩種執行環境各一份 · 可編輯",
     bootRuntimeClaude: "一般",
     bootRuntimeCodex: "Codex",
-    bootClaudeName: "啟動程序（Claude Code）",
+    bootClaudeName: "啟動步驟（Claude Code）",
     bootClaudeSub: "Claude Code 執行環境的開機 SOP · 可編輯",
-    bootCodexName: "啟動程序（Codex CLI）",
+    bootCodexName: "啟動步驟（Codex CLI）",
     bootCodexSub: "Codex App Server 執行環境的開機 SOP · 可編輯",
-    // 下線程序（T-c9c0）——不進開機情境，是 server 要收掉這個 session 時
-    // 夾帶給 agent 的收尾指示，所以在清單上自成一列，排在啟動程序之後。
-    offboardName: "下線程序",
+    // 〈停止〉（T-c9c0）——不進開機情境，是 server 要收掉這個 session 時
+    // 夾帶給 agent 的收尾指示，所以在清單上自成一列，排在啟動步驟之後。
+    offboardName: "停止",
     offboardSub: "server 要收掉這個 session 時夾帶給 agent 的收尾指示 · 可編輯",
     // ── T-3201：其餘六份生命週期文件 ──
-    // 分組標題。上線那組沿用既有的 globalSection；下線、任務、唯讀是新的三組。
+    // 分組標題。上線那組沿用既有的 globalSection；下線、任務是另外兩組。
     stopSection: "下線（STOP）",
     taskEventSection: "任務事件（TASK）",
-    readOnlySection: "只顯示、不給改（READ-ONLY）",
     acceleratedStopName: "加速停止",
     acceleratedStopSub: "被要求提前收工時給 agent 的指示 · 有截止時間 · 可編輯",
     taskCloseoutName: "任務結案",
     taskCloseoutSub: "任務被判定結束時給 agent 的收尾指示 · 可編輯",
-    taskReassignPredecessorName: "轉派給前任",
+    taskReassignPredecessorName: "任務轉派 · 給前任",
     taskReassignPredecessorSub: "手上的任務被轉給別人時給 agent 的交接指示 · 可編輯",
-    taskTakeoverWithPredecessorName: "接手·有前任",
+    taskTakeoverWithPredecessorName: "任務轉派 · 給接手人",
     taskTakeoverWithPredecessorSub: "接手別人做過的任務時給 agent 的指示 · 可編輯",
-    taskTakeoverFreshName: "接手·新指派",
-    taskTakeoverFreshSub: "第一次被指派這個任務時給 agent 的指示 · 只顯示、不給改",
-    taskUnblockedName: "擋著你的票解開了",
-    taskUnblockedSub: "依賴的任務放行時給 agent 的通知 · 只顯示、不給改",
+    taskTakeoverFreshName: "新任務",
+    taskTakeoverFreshSub: "第一次被指派這個任務時給 agent 的指示",
+    taskUnblockedName: "擋著你手上任務的票解開了",
+    taskUnblockedSub: "依賴的任務放行時給 agent 的通知",
     // 唯讀文件的說明：說「這份是什麼」，不說「你沒有權限」——沒有任何人可以改，
     // 講權限會讓人去找一個根本不存在的角色來授權。
     bootDocReadOnlyNote:

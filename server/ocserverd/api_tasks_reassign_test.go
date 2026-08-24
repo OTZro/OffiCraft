@@ -272,7 +272,10 @@ func TestReassignMemberToMemberHandsOver(t *testing.T) {
 	// successor and the word 交接" would pass on a document about something else
 	// entirely. Hand-written rather than re-rendered from the registry, so this
 	// stays a statement about what an agent receives.
-	wantOld := "[" + TaskNo(task.ID) + "] 此任務已轉派給 Rei。請停止推進，改為去跟接手人做交接：" +
+	// 🔴 「名字（id）」 SINCE T-6f44 (decision 1). One slot, two facts: a bare id
+	// reads as a serial number to the predecessor, and a bare name cannot be
+	// addressed with post_chat. The document still declares two variables.
+	wantOld := "[" + TaskNo(task.ID) + "] 此任務已轉派給 Rei（m-new）。請停止推進，改為去跟接手人做交接：" +
 		"對方接手後會主動 post_chat 找你，他問目前進度、進行中的事項、有哪些雷要注意，" +
 		"你都要答得出來，直到他確認交接完成。交接完成後這張任務就不再是你的了。"
 	if toOld == nil {
@@ -291,7 +294,9 @@ func TestReassignMemberToMemberHandsOver(t *testing.T) {
 	// this document unsplittable, a {note} slot after the instructions leaving
 	// no prefix of facts to cut at. The task-side copy is asserted below, so
 	// "the note is gone" cannot pass on a build that lost it altogether.
-	wantNew := "[" + TaskNo(task.ID) + "] 你接手了任務「unit task」。你的前任是 Ken（id `m-old`）。" +
+	// {title} dropped and the predecessor's two slots merged into one, same
+	// ruling: 「銀月（mira）」 rather than 「Ken（id `m-old`）」.
+	wantNew := "[" + TaskNo(task.ID) + "] 你接手了這張任務，你的前任是 Ken（m-old）。" +
 		"請先跟他確認交接完成（直接 post_chat 給他，問清楚目前進度與進行中的事項），" +
 		"確認後再由你自己呼叫 claim_task（認領）解除轉派鎖——只有你這個新負責人動得了；" +
 		"任務狀態一律照步驟推導，不必也不能自己報。"
