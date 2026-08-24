@@ -529,18 +529,6 @@ func (s *apiServer) closeTask(t *Task, status string, now float64, trigger strin
 	// SSE connection to fold this run's learnings back into the type's manual.
 	// Typed tasks only (ad-hoc has no manual); done AND terminated both nudge.
 	// Best-effort — a fan failure must never fail the close it follows.
-	// The nudge sentence carries the manual's DISPLAY label (best-effort lookup
-	// — a deleted manual honestly falls back to the raw key); the MCP addressing
-	// string in the same sentence stays the raw type_key (T-fa76).
-	manualLabel := ""
-	if t.TypeKey != "" {
-		if m, err := s.dal.GetTaskManual(t.TypeKey); err == nil && m != nil {
-			manualLabel = manualDisplayLabel(m.DisplayName, t.TypeKey)
-		}
-		if manualLabel == "" {
-			manualLabel = t.TypeKey
-		}
-	}
 	// T-7870 — THE WORDS COME FROM THE DOCUMENT, and this is the only place they
 	// come from. 〈任務收尾〉 was the last of the ten lifecycle documents whose
 	// text an owner could edit, save, and version without any agent ever
@@ -557,10 +545,7 @@ func (s *apiServer) closeTask(t *Task, status string, now float64, trigger strin
 	// terms the other nine documents already carry.
 	if sig := decideTaskCloseNudge(*t); sig != nil {
 		sig.Reason = s.taskNoticeText(docKindTaskCloseout, map[string]string{
-			"task_no":      sig.TaskNo,
-			"status":       sig.Status,
-			"type_key":     sig.Type,
-			"manual_label": manualLabel,
+			"task_no": sig.TaskNo,
 		})
 		if sig.Reason != "" {
 			if frame, err := directedFrameText(taskCloseTopic, sig); err == nil {
@@ -1634,7 +1619,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		// with) — the plain "you are now the executor" notice, member side only
 		// (a fresh worker learns it through the boot context).
 		if notice := s.taskNoticeText(docKindTaskTakeoverFresh, map[string]string{
-			"task_no": no, "title": t.Title,
+			"task_no": no,
 		}); notice != "" {
 			s.postTaskChat(*t, wireSystemSender, newMember.ID, notice, trigger)
 		}

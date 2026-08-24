@@ -355,9 +355,6 @@ func (s *apiServer) releaseDependentsOnClose(t Task, now float64, trigger string
 		if d.ExecutorID != "" {
 			if notice := s.taskNoticeText(docKindTaskUnblocked, map[string]string{
 				"blocked_task_no": TaskNo(d.ID),
-				"blocker_task_no": TaskNo(t.ID),
-				"blocker_title":   t.Title,
-				"blocker_status":  t.Status,
 			}); notice != "" {
 				s.postTaskChat(d, wireSystemSender, d.ExecutorID, notice, trigger)
 			}
