@@ -324,7 +324,13 @@ func TestTaskUnblockedDoc_HeadIsTheBlockedTicketAloneAndTheBodyIsTheApprovedRewr
 func TestTaskNoticeText_SendsNoUnfilledVariableAndRefusesRatherThanShippingOne(t *testing.T) {
 	s := newEventProcServer(t)
 	full := map[string]map[string]string{
-		docKindTaskReassignPredecessor: {"task_no": "T-7e91", "new_executor": "銀月（mira）"},
+		// 🔴 ONE VARIABLE SINCE T-6f44 — the successor is not named (owner:
+		// 「讓他自己去查」). Listing a name this document no longer declares
+		// would make the omission loop below drop a key nothing reads, so the
+		// refusal it is meant to prove would never be exercised: the notice
+		// would render fine and the assertion would report the pass as a
+		// failure. The map must be exactly what the kind declares.
+		docKindTaskReassignPredecessor: {"task_no": "T-7e91"},
 		docKindTaskUnblocked:           {"blocked_task_no": "T-0002"},
 	}
 	for kind, values := range full {
