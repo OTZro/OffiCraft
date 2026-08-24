@@ -2,8 +2,14 @@ package main
 
 // api_bootdocs_event_procedures_t3201_test.go — the six event-procedure
 // documents T-3201 adds, and the two gates they brought with them: the
-// read-only pair no write face may touch, and the variable validation on the
+// read-only flag no write face may pass, and the variable validation on the
 // write face.
+//
+// ⚠️ T-6f44 (owner's decision 2): this header used to say "the read-only PAIR".
+// There is no pair any more — no shipped document is read-only. The flag and
+// its 405 stay for the day one ships locked again; what pins the fact is
+// TestBootDocRegistry_NoDocumentIsReadOnly, and what pins the door actually
+// opening is TestReplaceBootDoc_EveryShippedKindAcceptsAnEditThroughTheRoute.
 //
 // The registry-driven cases below deliberately iterate bootDocRegistry rather
 // than a second hand-written list. Adding a boot document used to mean editing
@@ -14,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -427,6 +434,50 @@ func TestDocumentHistoryList_UnknownKeyForANewKindIsRefused(t *testing.T) {
 		"/api/document-history/"+docKindTaskCloseout+"/claude", f.owner, nil)
 	if status != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+}
+
+// 🔴 DECISION 2 IS A BEHAVIOUR CHANGE, AND THIS IS THE FACE IT CHANGED. Two
+// documents went from "every write face answers 405" to "an admin may edit
+// them", and until this test nothing in the tree drove that write THROUGH THE
+// ROUTE for the two kinds it moved — the read-only flag was pinned
+// (TestBootDocRegistry_NoDocumentIsReadOnly), restore was pinned as non-405
+// (below), but the edit itself was asserted nowhere. A flag that says "editable"
+// and a door that actually opens are two claims, and this ticket exists because
+// one of those gaps shipped once already.
+//
+// Registry-wide on purpose rather than aimed at the two: the claim worth
+// keeping is "every shipped document is editable", and a test naming the two
+// would go green the day an eleventh ships locked by accident.
+func TestReplaceBootDoc_EveryShippedKindAcceptsAnEditThroughTheRoute(t *testing.T) {
+	f := newBootDocFixture(t)
+	for _, reg := range bootDocRegistry {
+		for _, key := range reg.Keys {
+			t.Run(reg.Kind+"/"+key, func(t *testing.T) {
+				// No variable slots: a split kind refuses ANY {name} in the body
+				// (the head is where the slots live), so a probe carrying one
+				// would fail for a reason that has nothing to do with the door.
+				const probe = "T-6f44 probe: this document is editable."
+				status, body := f.do(t, http.MethodPost,
+					"/api/boot-docs/"+reg.Kind+"/"+key, f.admin,
+					map[string]string{"body": probe})
+				if status != http.StatusOK {
+					t.Fatalf("replace answered %d (%s) — every document is editable "+
+						"since decision 2", status, body)
+				}
+				// The write has to be READ BACK, not just accepted: a 200 that
+				// stored nothing is exactly what the two locked documents used
+				// to look like from the cockpit's side.
+				status, body = f.do(t, http.MethodGet,
+					"/api/boot-docs/"+reg.Kind+"/"+key, f.admin, nil)
+				if status != http.StatusOK {
+					t.Fatalf("read back answered %d (%s)", status, body)
+				}
+				if !strings.Contains(body, probe) {
+					t.Errorf("the edit was accepted but is not in the document: %s", body)
+				}
+			})
+		}
 	}
 }
 

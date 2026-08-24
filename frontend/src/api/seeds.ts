@@ -73,10 +73,12 @@ export const SEED_OFFBOARD_MD = foldOwnerId(SEED_OFFBOARD_RAW);
  * documents. They are NOT part of the boot fold either: each is the text the
  * server hands an agent at the moment the event it names happens.
  *
- * The last two ship as READ-ONLY documents — they exist so the owner can SEE
- * what an agent is told, and every write face refuses them. The mock carries
- * that refusal too (see BOOT_DOC_READ_ONLY in mock.ts); a mock that let the
- * cockpit edit them would validate a screen the server answers 405 to. */
+ * ⚠️ T-6f44 (owner's decision 2): ALL OF THEM ARE EDITABLE. This used to say
+ * "the last two ship as READ-ONLY documents"; the owner ruled on 2026-08-24
+ * that 〈新任務〉 and 〈擋著你手上任務的票解開了〉 become editable like the other
+ * eight, and BOOT_DOC_READ_ONLY in mock.ts — which this note points at — has
+ * been the EMPTY set since. The refusal machinery is kept there rather than
+ * deleted, for the day a document ships read-only again. */
 export const SEED_ACCELERATED_STOP_MD = foldOwnerId(SEED_ACCELERATED_STOP_RAW);
 export const SEED_TASK_CLOSEOUT_MD = foldOwnerId(SEED_TASK_CLOSEOUT_RAW);
 export const SEED_TASK_REASSIGN_PREDECESSOR_MD = foldOwnerId(

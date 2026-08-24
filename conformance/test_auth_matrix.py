@@ -983,11 +983,17 @@ MATRIX: dict[str, Route] = {
     # shape was allowed: read at machine, write at admin_agent, no per-document
     # exception anywhere in the registry.
     #
-    # THE PATHS AIM AT AN EDITABLE DOCUMENT ON PURPOSE. Two of the ten are
-    # read-only and refuse every caller with 405 — a floor table cannot express
-    # "nobody", and pointing a positive face at one would assert a semantic
-    # refusal in a row that exists to measure authz. The 405 is pinned where it
-    # belongs, in the Go tests for the write faces.
+    # THE PATHS AIM AT AN EDITABLE DOCUMENT ON PURPOSE. A read-only document
+    # refuses every caller with 405 — a floor table cannot express "nobody", and
+    # pointing a positive face at one would assert a semantic refusal in a row
+    # that exists to measure authz. The 405 is pinned where it belongs, in the
+    # Go tests for the write faces.
+    #
+    # ⚠️ T-6f44 (owner's decision 2): this used to open "Two of the ten are
+    # read-only". None are, today — so the choice of an editable path is no
+    # longer a dodge, it is the only kind there is. Kept as written because the
+    # rule survives the fact: the day a document ships read-only again, this
+    # table must still not point at it.
     "GET /api/boot-docs/{kind}/{key}": Route(
         requires="machine",
         path="/api/boot-docs/accelerated_stop/global",
