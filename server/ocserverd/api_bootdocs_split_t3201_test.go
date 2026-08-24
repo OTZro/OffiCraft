@@ -19,6 +19,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -744,7 +745,15 @@ func TestTaskCloseoutDoc_IsTheApprovedRewriteWithBothNamesMovedIntoTheHead(t *te
 		t.Fatalf("the read-only head is not the approved sentence:\n got %q\nwant %q", gotHead, wantHead)
 	}
 
-	wantBody := "先 get_task 讀這張票，看它屬於哪一本任務手冊（欄位 type_key）。\n\n" +
+	// 🔴 THE FIRST SENTENCE NAMES list_tasks, AND THAT IS A BUG FIX, NOT A STYLE
+	// CHOICE. The rewrite that dropped {type_key} put 「先 get_task 讀這張票」 here,
+	// and an agent CANNOT do that: the only identifier it is handed is the display
+	// number (T-xxxx, the id's first hex quartet), while get_task keys on the full
+	// id — measured against the live station, 「get_task("T-6f44")」 answers 404.
+	// So the document was telling every agent to start with a call that fails.
+	// list_tasks is the way across: each row carries task_no AND id.
+	wantBody := "先用 `list_tasks` 找到這張票（每一列都同時有票號與 id），拿它的 `id` 呼叫 `get_task`，" +
+		"看它屬於哪一本任務手冊（欄位 `type_key`）。⚠️ `get_task` 只吃 `id`，餵上面那個票號會 404。\n\n" +
 		"若這一趟有值得留下的經驗（踩坑、更好做法），先用 get_task_manual 讀現況，" +
 		"再用 patch_task_learnings（type_key 用上一步讀到的值）只把改動的那一段送回" +
 		"**那本**任務手冊：改既有段落就用它的唯一錨點，第一次寫或要新增就用空錨點追加。" +
@@ -1477,4 +1486,85 @@ func TestRestoreDocumentHistory_ABootDocRevisionGoesThroughTheWriteFacesGates(t 
 				before.Text, after.Text)
 		}
 	})
+}
+
+// TestTheTwoStopProceduresDifferInEXACTLYTheThreeLinesTheyAreMeantTo is the
+// guard the ticket asked for and the one its predecessor only half-built.
+//
+// 🔴 WHY 「they must differ」 WAS NOT ENOUGH. Before T-6f44 these two documents
+// were byte-identical, and the ticket's own acceptance line says that splitting
+// them without pinning each one trades 「解決重複」 for 「開始漂移」. What landed
+// first was TestAcceleratedStopDoc_ShipsTheSameBodyAsTheOffboardDoc, which
+// asserts only that the two bodies are NOT equal — an extremely weak inequality:
+// as long as the §1 sentence still differs, EVERY other paragraph may drift one
+// way and nothing goes red. An independent review proved it by rewriting 〈停止〉's
+// §3 into 〈加速停止〉's wording and watching the whole suite stay green.
+//
+// The two documents are 95% the same text ON PURPOSE — the wind-down steps do
+// not depend on whether a clock is running. So the honest statement is not
+// 「different」 and not 「identical」, it is: they differ in EXACTLY these three
+// lines, and nowhere else. That pins both directions at once:
+//   - a shared paragraph edited on one side only  → a 4th differing line → RED
+//   - one of the three deliberate differences erased → only 2 differ → RED
+//
+// ⚠️ IF YOU ARE HERE BECAUSE THIS TEST WENT RED: do not "fix" it by loosening
+// the count. Either you edited one document and meant to edit both, or you
+// introduced a 4th deliberate difference — in which case add it to the table
+// below and say why it must differ.
+func TestTheTwoStopProceduresDifferInEXACTLYTheThreeLinesTheyAreMeantTo(t *testing.T) {
+	s := newEventProcServer(t)
+	_, soft := unsplitSeed(t, s, docKindOffboard)
+	_, _, hard := splitSeed(t, s, docKindAcceleratedStop)
+
+	softLines := strings.Split(soft, "\n")
+	hardLines := strings.Split(hard, "\n")
+	if len(softLines) != len(hardLines) {
+		t.Fatalf("the two stop procedures no longer have the same shape: 〈停止〉 has %d lines, "+
+			"〈加速停止〉 has %d. Either a shared section was added to one side only, or the pair "+
+			"was deliberately restructured — if the latter, rewrite this test to say what the new "+
+			"relationship is instead of deleting it", len(softLines), len(hardLines))
+	}
+
+	// Each deliberate difference, and the reason it has to be one.
+	wantDiffs := []struct {
+		why        string
+		softNeedle string
+		hardNeedle string
+	}{
+		{"the title names which document you are holding", "# 停止", "# 加速停止"},
+		{"§1 states outright which kind of notice this is — the ruling that replaced " +
+			"sniffing another document's first line for `Your deadline is`",
+			"沒有人在對你倒數", "你在倒數中"},
+		{"§3: with a clock running you cannot wait for sub-agents to finish on their own",
+			"等 sub agent 自己完成", "請 sub agent 立刻"},
+	}
+
+	var differing []int
+	for i := range softLines {
+		if softLines[i] != hardLines[i] {
+			differing = append(differing, i)
+		}
+	}
+	if len(differing) != len(wantDiffs) {
+		var lines []string
+		for _, i := range differing {
+			lines = append(lines, fmt.Sprintf("  line %d:\n    soft: %s\n    hard: %s", i+1, softLines[i], hardLines[i]))
+		}
+		t.Fatalf("the two stop procedures differ in %d lines, want exactly %d.\n%s\n"+
+			"A shared paragraph edited on ONE side is the failure this test exists for: those "+
+			"sections are copies on purpose, and nothing else keeps them in step",
+			len(differing), len(wantDiffs), strings.Join(lines, "\n"))
+	}
+
+	for n, want := range wantDiffs {
+		i := differing[n]
+		if !strings.Contains(softLines[i], want.softNeedle) {
+			t.Errorf("difference %d (%s): 〈停止〉 line %d no longer says %q:\n  %s",
+				n+1, want.why, i+1, want.softNeedle, softLines[i])
+		}
+		if !strings.Contains(hardLines[i], want.hardNeedle) {
+			t.Errorf("difference %d (%s): 〈加速停止〉 line %d no longer says %q:\n  %s",
+				n+1, want.why, i+1, want.hardNeedle, hardLines[i])
+		}
+	}
 }
