@@ -277,9 +277,11 @@ func TestRetiredTaskNoSentencesDoNotLiveAnywhereInTheTree(t *testing.T) {
 				"for that root", root)
 		}
 	}
-	// 2. A floor on the total. Measured at ~600 files when this was written; the
-	//    floor is deliberately far below so ordinary deletions do not trip it,
-	//    but a broken walk (0, or a handful) does.
+	// 2. A floor on the total. The actual count is not written down here — it
+	//    drifts with every added file and a stale number is exactly the kind of
+	//    second, contradictory account this whole file exists to stop. The floor
+	//    is deliberately far below the real figure so ordinary deletions do not
+	//    trip it, while a broken walk (0, or a handful) does.
 	if scanned < 200 {
 		t.Fatalf("only %d files scanned — expected at least 200; the walk is "+
 			"broken and this guard is measuring almost nothing", scanned)
