@@ -1652,7 +1652,9 @@ HAPPY: dict[str, Happy] = {
             lambda d: d["deduped"] is False
             and d["task"]["status"] == "not_started"
             and d["task"]["executor_id"] == ctx.agent.member_id
-            # task_no IS the id (T-5291) — was a "T-" prefixed projection.
+            # task_no IS the id (T-5291) — before that it was a separately
+            # derived display value (same wording as test_tasks.py; the old
+            # shape is deliberately not named there either).
             and d["task"]["task_no"] == d["task"]["id"],
         ),
     ),

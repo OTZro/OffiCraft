@@ -204,8 +204,20 @@ func TestSpecDoesNotReacquireTheRetiredTaskNoSentences(t *testing.T) {
 //	                         tool caches and the per-copy CI mutex.
 //	scratchpad trash         agent scratch / quarantine (both in .gitignore).
 //	dist frontend/dist frontend/dist-paint-guard frontend/test-results
-//	frontend/recon-out e2e_test/seven_gate/runs
+//	e2e_test/seven_gate/runs
 //	                         build, screenshot and run OUTPUT.
+//	frontend/recon-out       NOT output, despite the name: 3 tracked files, all
+//	                         AGENT-AUTHORED recon / independent-review notes
+//	                         kept for provenance, beside the .png captures they
+//	                         describe. They are therefore NOT scanned, which is
+//	                         a real hole in the denominator — measured today
+//	                         (round 5) as an EMPTY one: all six blocklist
+//	                         phrases score 0 in them, and the words `task_no`,
+//	                         `taskno` and 任務編號 do not appear at all. If
+//	                         recon notes ever start discussing the field, this
+//	                         line is the one to delete. The same shape applies
+//	                         to dist/officraft/BUILD.md (tracked, hand-written,
+//	                         hidden behind the `dist` rule; also measured at 0).
 //	server/ocserverd/{docsdist,seedsdist,webdist,bindist}
 //	                         staging COPIES made by bin/build-*dist. Their
 //	                         sources — docs/guide/, seeds/, frontend/ — are

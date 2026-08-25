@@ -149,10 +149,14 @@ def test_full_task_loop(client, owner_token, executor):
     task = created["task"]
     assert task["status"] == "not_started"
     assert task["executor_kind"] == "member"
-    # task_no IS the id (T-5291, owner 2026-08-25) — it used to be a truncated
-    # short code. Asserting equality rather than a prefix: the shape a client
-    # can rely on is "the number names the task", and a prefix check would pass
-    # for any projection that merely kept the first two characters.
+    # task_no IS the id (T-5291, owner 2026-08-25) — before that it was a
+    # SEPARATELY DERIVED display value, not the id. The old shape is
+    # deliberately not named: it changed more than once across this ticket's
+    # rounds, and test_rest_happy.py named a different one, which is two
+    # accounts of the same history in one directory.
+    # Asserting equality rather than a prefix: the shape a client can rely on
+    # is "the number names the task", and a prefix check would pass for
+    # anything that merely kept the first two characters.
     assert task["task_no"] == task["id"]
     before = _open_count(client, owner_token)
 

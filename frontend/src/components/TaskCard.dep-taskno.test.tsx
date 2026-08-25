@@ -42,8 +42,19 @@ import { deriveTaskNo } from "../lib/taskNo";
 import type { TaskView } from "../api/adapter";
 
 /** A real-shaped task id — 12 hex after the prefix, as the server mints them.
- * The fallback rows are fed THIS, and the point of the ticket is that they
- * print the DISPLAY number for it, never the raw id. */
+ * The fallback rows are fed THIS, and the point of the ticket is that the
+ * number they print IS this id, unchanged — the fallback still sources it
+ * from the server's task_no where there is one (see T-c21e ② below).
+ *
+ * 🔴 The line this replaces said the rows "print the DISPLAY number for it,
+ * never the raw id". That was FALSE against the code — the fallback is
+ * `dep?.taskNo ?? deriveTaskNo(id)` and `deriveTaskNo` is `return taskId`, so
+ * the raw id is exactly what it prints — and it re-created the very split
+ * (display number vs raw id) that T-5291 abolished, two lines above a comment
+ * saying they are equal. The provenance point it was reaching for is real, so
+ * it is kept, but stated as provenance ("where it is sourced from") instead of
+ * as a value claim ("what it prints"), because on VALUE the two are now the
+ * same thing. */
 const LONG_ID = "t-1d8292a2f8db";
 
 /** What the number for LONG_ID must be, written out. It is deliberately NOT
