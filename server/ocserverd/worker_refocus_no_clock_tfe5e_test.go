@@ -50,9 +50,7 @@ func TestWorkerRefocusIsCollectedByNoClock_ButEveryOtherCauseStillIs(t *testing.
 		for _, elapsed := range []float64{
 			StoppingTimeoutSecs + 1, 10 * StoppingTimeoutSecs, 100 * StoppingTimeoutSecs,
 		} {
-			api.outsourceMu.Lock()
-			api.autoHandoverWorker(*w, w.RefocusSince+elapsed)
-			api.outsourceMu.Unlock()
+			workerTickPass(t, api, w.ID, w.RefocusSince+elapsed)
 			if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
 				t.Fatalf("+%.0fs after 重新聚焦: nothing may be dispatched, got %d frames",
 					elapsed, got)
@@ -85,9 +83,7 @@ func TestWorkerRefocusIsCollectedByNoClock_ButEveryOtherCauseStillIs(t *testing.
 		for _, elapsed := range []float64{
 			StoppingTimeoutSecs + 1, 10 * StoppingTimeoutSecs, 100 * StoppingTimeoutSecs,
 		} {
-			api.outsourceMu.Lock()
-			api.autoHandoverWorker(*w, w.RefocusSince+elapsed)
-			api.outsourceMu.Unlock()
+			workerTickPass(t, api, w.ID, w.RefocusSince+elapsed)
 			if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
 				t.Fatalf("+%.0fs after 換 model: nothing may be dispatched, got %d frames",
 					elapsed, got)
@@ -118,16 +114,12 @@ func TestWorkerRefocusIsCollectedByNoClock_ButEveryOtherCauseStillIs(t *testing.
 			t.Fatalf("put worker: %v", err)
 		}
 
-		api.outsourceMu.Lock()
-		api.autoHandoverWorker(*w, w.RefocusSince+StoppingTimeoutSecs-1)
-		api.outsourceMu.Unlock()
+		workerTickPass(t, api, w.ID, w.RefocusSince+StoppingTimeoutSecs-1)
 		if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
 			t.Fatalf("inside the grace window nothing may be dispatched, got %d frames", got)
 		}
 
-		api.outsourceMu.Lock()
-		api.autoHandoverWorker(*w, w.RefocusSince+StoppingTimeoutSecs+1)
-		api.outsourceMu.Unlock()
+		workerTickPass(t, api, w.ID, w.RefocusSince+StoppingTimeoutSecs+1)
 		if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 2 {
 			t.Fatalf("the deadline must still collect (stop+start), got %d frames", got)
 		}

@@ -201,6 +201,9 @@ func TestWorkerReportStopped_CollectsHandover(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("worker report_stopped: %d %s", rec.Code, rec.Body.String())
 	}
+	// T-72dd: the stopped-report LATCHES; the collect is the shared FSM's, one
+	// tick later. One decider, one kill — see workerReportStopped's own note.
+	workerTickPass(t, api, workerID, nowSecs())
 	frames := api.hub.DrainWardenCommands(ServerSelfHost)
 	if len(frames) != 2 {
 		t.Fatalf("the first stopped-report must collect (stop+start), got %d frames", len(frames))
@@ -216,6 +219,13 @@ func TestWorkerReportStopped_CollectsHandover(t *testing.T) {
 	}
 	if w.RefocusSince <= 0 {
 		t.Fatal("refocus_since must stay set until the fresh boot's loop-break")
+	}
+	// T-72dd: and once-only is asserted DIRECTLY too — the next tick, with the
+	// epoch still open and the latch still set, must not collect again. That is
+	// the property the respawn's clobbering of the FSM stop anchor used to break.
+	workerTickPass(t, api, workerID, nowSecs())
+	if got := countStops(t, api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
+		t.Fatalf("the collect must be once-only, got %d further stop(s)", got)
 	}
 }
 
@@ -384,6 +394,8 @@ func TestRefocusWorker_BanksCostAcrossRespawn(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s report_stopped: %d %s", label, rec.Code, rec.Body.String())
 		}
+		// T-72dd: the report latches; the FSM collects (and banks) next tick.
+		workerTickPass(t, api, workerID, nowSecs())
 	}
 
 	handover("1st")
@@ -665,6 +677,9 @@ func TestSetWorkerModel_ActiveWindsDownThenRespawns(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
 	}
+	// T-72dd: the stopped-report LATCHES; the collect is the shared FSM's, one
+	// tick later. One decider, one kill — see workerReportStopped's own note.
+	workerTickPass(t, api, workerID, nowSecs())
 	frames := api.hub.DrainWardenCommands(ServerSelfHost)
 	if len(frames) != 2 {
 		t.Fatalf("the stopped-report must collect (stop+start), got %d frames", len(frames))
@@ -729,19 +744,32 @@ func TestAutoHandoverWorker_FixtureSpace(t *testing.T) {
 	}
 	handover := float64(newTasksTestServer(t).ctxHighConfig().HandoverPct) // 50
 
-	triggered := func(t *testing.T, api *apiServer, workerID string) bool {
+	notice := float64(newTasksTestServer(t).ctxHighConfig().NoticePct)
+
+	// openedOp reports WHICH wind-down this tick opened ("" = none). It used to
+	// be a bool, because the worker path had exactly ONE threshold. It has two
+	// now (T-72dd: workers go through the staff pass), and the distinction is the
+	// whole point — the first opens a clockless 停止, the second the 加速停止.
+	openedOp := func(t *testing.T, api *apiServer, workerID string) string {
 		w, _ := api.dal.GetOutsourceWorker(workerID)
 		api.hub.DrainWardenCommands(ServerSelfHost)
-		api.autoHandoverWorker(*w, now)
+		workerTickPass(t, api, w.ID, now)
 		fresh, _ := api.dal.GetOutsourceWorker(workerID)
-		return fresh.RefocusSince == now
+		if fresh.RefocusSince != now {
+			return ""
+		}
+		return fresh.RefocusOp
+	}
+	triggered := func(t *testing.T, api *apiServer, workerID string) bool {
+		return openedOp(t, api, workerID) != ""
 	}
 
 	t.Run("pct at handover line triggers (positive control)", func(t *testing.T) {
 		api, id := setup(t)
 		api.gauge.Set(id, handoverGauge(now, handover))
-		if !triggered(t, api, id) {
-			t.Fatal("pct == HandoverPct must auto-refocus (stamp + grace open)")
+		if op := openedOp(t, api, id); op != refocusOpContextHigh {
+			t.Fatalf("pct == HandoverPct must open the SECOND threshold "+
+				"(context_high — the 加速停止), got %q", op)
 		}
 		// T-ea82 graceful flush: the auto-stamp opens the grace window — it
 		// must NOT kill/respawn synchronously any more.
@@ -749,11 +777,34 @@ func TestAutoHandoverWorker_FixtureSpace(t *testing.T) {
 			t.Fatalf("the auto-stamp must dispatch nothing (grace open), got %d frames", got)
 		}
 	})
-	t.Run("pct just below handover does not", func(t *testing.T) {
+	// 🔴 THIS CASE INVERTED, and the inversion is the parity fix (T-72dd).
+	// "Below the handover line ⇒ nothing happens" was true only while the worker
+	// path had ONE threshold. Staff have had two since T-ed79, and a worker now
+	// goes through the same pass: below handover_pct but at or above notice_pct
+	// opens the FIRST threshold — a clockless 停止 (context_notice), which is the
+	// half the worker copy never had. It is not a kill and not a countdown; it is
+	// the agent being ASKED to wind down while there is still room.
+	t.Run("pct just below handover opens the FIRST threshold, not nothing", func(t *testing.T) {
 		api, id := setup(t)
 		api.gauge.Set(id, handoverGauge(now, handover-1))
-		if triggered(t, api, id) {
-			t.Fatal("pct below the handover line must not auto-refocus")
+		op := openedOp(t, api, id)
+		if op != refocusOpContextNotice {
+			t.Fatalf("between the two thresholds must open context_notice, got %q", op)
+		}
+		if _, clocked := winddownKindFor(op); clocked {
+			t.Fatal("the first threshold must run NO clock")
+		}
+		if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
+			t.Fatalf("the soft threshold must dispatch nothing, got %d frames", got)
+		}
+	})
+	// …and BELOW the first threshold still nothing happens at all — without this
+	// the case above would pass for a pass that stamps everything.
+	t.Run("pct below the first threshold does nothing", func(t *testing.T) {
+		api, id := setup(t)
+		api.gauge.Set(id, handoverGauge(now, notice-1))
+		if op := openedOp(t, api, id); op != "" {
+			t.Fatalf("below notice_pct nothing may be opened, got %q", op)
 		}
 	})
 	t.Run("nil gauge does not", func(t *testing.T) {
@@ -827,26 +878,48 @@ func TestCollectWorkerHandover_NoKillTarget_RollsBackEpochForFSMRescue(t *testin
 
 	api.outsourceMu.Lock()
 	delete(api.workerSpawnTarget, workerID) // server re-exec forgot the dispatch
+	api.outsourceMu.Unlock()
 	w, _ = api.dal.GetOutsourceWorker(workerID)
 	// Two ticks: the first only ARMS the continuous-offline anchor (T-ed79 #13 —
 	// one offline sample no longer collects anything), the second is past the
 	// confirm window and is the one this test is about.
-	api.autoHandoverWorker(*w, now)
+	workerTickPass(t, api, w.ID, now)
 	w, _ = api.dal.GetOutsourceWorker(workerID)
-	api.autoHandoverWorker(*w, now+workerOfflineConfirmGraceSecs)
-	api.outsourceMu.Unlock()
+	workerTickPass(t, api, w.ID, now+workerOfflineConfirmGraceSecs)
 
-	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
-		t.Fatalf("a deferred collect must dispatch nothing, got %d frames", got)
+	// Drained ONCE — both assertions below read this same batch (draining twice
+	// would let the first read swallow the evidence for the second).
+	dispatched := api.hub.DrainWardenCommands(ServerSelfHost)
+	if got := countStops(t, dispatched); got != 0 {
+		t.Fatalf("there is no live session to kill — got %d stop(s)", got)
 	}
 	fresh, _ := api.dal.GetOutsourceWorker(workerID)
 	if fresh.StoppedSince != 0 {
-		t.Fatal("a deferred collect must roll the stopped_since latch back (else the " +
-			"next tick spawns without a kill)")
+		t.Fatalf("nothing was collected, so no close-out may be latched (got %v)",
+			fresh.StoppedSince)
 	}
-	if fresh.RefocusSince != 0 {
-		t.Fatalf("a dead-session defer must clear refocus_since (B1: a kept stamp masks "+
-			"the FSM rescue forever), got %v", fresh.RefocusSince)
+	// 🔴 THE B1 LIVELOCK CANNOT HAPPEN ANY MORE, so this test no longer demands
+	// the epoch be torn down to avoid it (T-72dd).
+	//
+	// B1 was: the collect waits for a kill target, the target waits for a
+	// respawn, and the respawn is masked by `RefocusSince == 0` — so a kept stamp
+	// froze the worker forever, and rolling the epoch back was the escape. That
+	// mask is GONE: the tick now runs the FSM for an ACTIVE worker whatever its
+	// epoch says, so the rescue is reachable with the stamp still in place. The
+	// epoch ends the ordinary way instead — the respawn boots and the loop-break
+	// clears it.
+	//
+	// What must still be true is the thing B1 was really about: the worker is
+	// NOT stuck. Assert that directly.
+	sawStart := false
+	for _, f := range dispatched {
+		if rpc, _ := decodeWardenFrame(t, f.Frame); rpc == reconcileCmdStart {
+			sawStart = true
+		}
+	}
+	if !sawStart {
+		t.Fatal("the FSM rescue must be REACHABLE with the epoch still stamped — " +
+			"that reachability is what retired the B1 rollback")
 	}
 }
 
@@ -901,7 +974,7 @@ func TestAutoHandoverWorker_LoopBreak(t *testing.T) {
 	// (a) still the OLD session (boot_ts before the stamp) → marker stays set.
 	api.gauge.Set(workerID, map[string]any{"boot_ts": now - 200})
 	w, _ = api.dal.GetOutsourceWorker(workerID)
-	api.autoHandoverWorker(*w, now)
+	workerTickPass(t, api, w.ID, now)
 	if fresh, _ := api.dal.GetOutsourceWorker(workerID); fresh.RefocusSince == 0 {
 		t.Fatal("marker must stay set while only the OLD session's boot_ts is present")
 	}
@@ -915,7 +988,7 @@ func TestAutoHandoverWorker_LoopBreak(t *testing.T) {
 	_ = api.dal.PutOutsourceWorker(*w)
 	api.gauge.Set(workerID, map[string]any{"boot_ts": now - 50})
 	w, _ = api.dal.GetOutsourceWorker(workerID)
-	api.autoHandoverWorker(*w, now)
+	workerTickPass(t, api, w.ID, now)
 	fresh, _ := api.dal.GetOutsourceWorker(workerID)
 	if fresh.RefocusSince != 0 {
 		t.Fatal("a session booted after the stamp must clear refocus_since (loop-break)")
@@ -965,7 +1038,7 @@ func TestAutoHandoverWorker_GraceTimeout_ForceCollects(t *testing.T) {
 
 	// Inside the window: wait, dispatch nothing, latch nothing.
 	w, _ := api.dal.GetOutsourceWorker(workerID)
-	api.autoHandoverWorker(*w, now+StoppingTimeoutSecs-1)
+	workerTickPass(t, api, w.ID, now+StoppingTimeoutSecs-1)
 	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
 		t.Fatalf("inside the grace window the tick must wait, got %d frames", got)
 	}
@@ -975,7 +1048,7 @@ func TestAutoHandoverWorker_GraceTimeout_ForceCollects(t *testing.T) {
 
 	// At the deadline: force-collect (stop+start) + latch.
 	w, _ = api.dal.GetOutsourceWorker(workerID)
-	api.autoHandoverWorker(*w, now+StoppingTimeoutSecs)
+	workerTickPass(t, api, w.ID, now+StoppingTimeoutSecs)
 	frames := api.hub.DrainWardenCommands(ServerSelfHost)
 	if len(frames) != 2 {
 		t.Fatalf("the grace deadline must force-collect (stop+start), got %d frames", len(frames))
@@ -987,6 +1060,11 @@ func TestAutoHandoverWorker_GraceTimeout_ForceCollects(t *testing.T) {
 	}
 	if fresh, _ := api.dal.GetOutsourceWorker(workerID); fresh.StoppedSince <= 0 {
 		t.Fatal("the force-collect must latch stopped_since")
+	}
+	// T-72dd: once-only asserted directly — the next tick must not re-collect.
+	workerTickPass(t, api, workerID, now+StoppingTimeoutSecs+1)
+	if got := countStops(t, api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
+		t.Fatalf("the collect must not repeat on the next tick, got %d stop(s)", got)
 	}
 }
 
@@ -1011,16 +1089,31 @@ func TestAutoHandoverWorker_GraceOffline_CollectsOnceConfirmed(t *testing.T) {
 	api.hub.DrainWardenCommands(ServerSelfHost)
 
 	w, _ := api.dal.GetOutsourceWorker(workerID)
-	api.autoHandoverWorker(*w, now) // arms the continuous-offline anchor
+	workerTickPass(t, api, w.ID, now) // arms the continuous-offline anchor
 	w, _ = api.dal.GetOutsourceWorker(workerID)
-	api.autoHandoverWorker(*w, now+workerOfflineConfirmGraceSecs)
+	workerTickPass(t, api, w.ID, now+workerOfflineConfirmGraceSecs)
+	// 🔴 WHAT A GONE SESSION GETS IS A RESPAWN, NOT A KILL (T-72dd). The collect
+	// is the shared FSM's now, and decideUp's recycle arm requires an ONLINE
+	// session — correctly, because there is nothing to kill here: the session is
+	// gone. So the FSM re-STARTs the worker and nothing is "collected" at all.
+	// Waiting out the deadline is still avoided (the D6 point this test was
+	// written for), and no close-out is fabricated for a session that never
+	// reported one.
 	frames := api.hub.DrainWardenCommands(ServerSelfHost)
-	if len(frames) != 2 {
-		t.Fatalf("a confirmed-gone mid-grace worker must collect (stop+start), got %d frames",
+	if got := countStops(t, frames); got != 0 {
+		t.Fatalf("there is no live session to kill — a gone worker must only be "+
+			"respawned, got %d stop(s)", got)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("a confirmed-gone mid-grace worker must be re-STARTed, got %d frames",
 			len(frames))
 	}
-	if fresh, _ := api.dal.GetOutsourceWorker(workerID); fresh.StoppedSince <= 0 {
-		t.Fatal("the offline collect must latch stopped_since")
+	if rpc, _ := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStart {
+		t.Fatalf("frame = %s, want start", rpc)
+	}
+	if fresh, _ := api.dal.GetOutsourceWorker(workerID); fresh.StoppedSince > 0 {
+		t.Fatalf("nothing was collected, so no close-out may be latched (got %v)",
+			fresh.StoppedSince)
 	}
 }
 
@@ -1068,19 +1161,39 @@ func TestWorkerHandoverCollect_OnceOnly(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
 		}
+		// T-72dd: the report latches; the FSM collects on the next tick.
+		workerTickPass(t, api, workerID, nowSecs())
 		if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 2 {
 			t.Fatalf("the stopped-report must collect once (stop+start), got %d frames", got)
 		}
 
-		// The grace deadline fires right after — it must see the latch and stand
-		// down: no second KILL may fan (a paced re-dispatch heal of the START is
-		// legitimate phase-B behavior, a stop is the double-collect signature).
+		// The next tick, INSIDE stop_retry, must stand down: the collect already
+		// went out and this is the same epoch, so a second kill here would be the
+		// double-collect signature.
 		w, _ := api.dal.GetOutsourceWorker(workerID)
-		api.autoHandoverWorker(*w, since+StoppingTimeoutSecs+1)
-		for _, frame := range api.hub.DrainWardenCommands(ServerSelfHost) {
-			if rpc, _ := decodeWardenFrame(t, frame.Frame); rpc == reconcileCmdStop {
-				t.Fatalf("a collected handover must not re-collect on timeout (second stop): %s", frame)
-			}
+		workerTickPass(t, api, w.ID, nowSecs())
+		if got := countStops(t, api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
+			t.Fatalf("a collected handover must not re-collect inside stop_retry, "+
+				"got %d stop(s)", got)
+		}
+
+		// 🔴 PAST stop_retry, WITH THE SESSION STILL ONLINE, a second STOP is
+		// CORRECT and this test no longer forbids it (T-72dd). The collect is the
+		// shared FSM's now, and that arm is at-least-once by design: a worker that
+		// is still online long past the retry window is one whose STOP did not
+		// land, and re-sending it is the heal. The old assertion could forbid this
+		// because the old collector never retried a lost kill at all — it switched
+		// to re-dispatching the START and left a live session on a closed-out
+		// worker forever, which is the wedge T-ed79 kept finding.
+		//
+		// (The fixture keeps the worker "online" because nothing here simulates
+		// the warden actually killing it; in production the session drops and the
+		// recycle arm is not reached at all.)
+		w, _ = api.dal.GetOutsourceWorker(workerID)
+		workerTickPass(t, api, w.ID, nowSecs()+StoppingTimeoutSecs+1)
+		if got := countStops(t, api.hub.DrainWardenCommands(ServerSelfHost)); got != 1 {
+			t.Fatalf("a STOP that never landed must be re-dispatched past stop_retry, "+
+				"got %d stop(s)", got)
 		}
 	})
 
@@ -1093,7 +1206,7 @@ func TestWorkerHandoverCollect_OnceOnly(t *testing.T) {
 		api.hub.DrainWardenCommands(ServerSelfHost)
 
 		w, _ := api.dal.GetOutsourceWorker(workerID)
-		api.autoHandoverWorker(*w, nowSecs())
+		workerTickPass(t, api, w.ID, nowSecs())
 		if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 2 {
 			t.Fatalf("the deadline must force-collect (stop+start), got %d frames", got)
 		}

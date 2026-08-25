@@ -120,6 +120,24 @@ const (
 // (cli/ocwarden/spawn.go start clobber-guard) folded onto member.last_op_reason
 // when a START bounced off a live-but-presence-deaf local session. decideUp
 // reads it to reap that zombie instead of respawning into it forever.
+// The FSM's STOP flavours (T-72dd) — see reconcileDecision.StopKind.
+const (
+	// stopKindRecycle: a wind-down epoch is being collected (refocus / 換手 /
+	// the context thresholds). The session dies and is EXPECTED to come back on
+	// the same machine — nothing about it says the machine is bad.
+	stopKindRecycle = "recycle"
+	// stopKindZombieTakeover: a START bounced off the warden clobber-guard, so a
+	// presence-deaf session squats the slot. THIS is the one that justifies
+	// benching the machine: the slot there is known-wedged.
+	stopKindZombieTakeover = "zombie_takeover"
+	// stopKindRelocate: the session must die because it is on the WRONG machine.
+	stopKindRelocate = "relocate"
+	// stopKindWinddown: desired_state=offline — the graceful 下線 / 加速停止 kill.
+	stopKindWinddown = "winddown"
+	// stopKindRobustResend: the out-of-band STOP that never landed, re-sent.
+	stopKindRobustResend = "robust_resend"
+)
+
 const spawnClobberReasonPrefix = "session_already_exists"
 
 // The observability phase projection (machine.py Phase).
@@ -274,6 +292,19 @@ type reconcileDecision struct {
 	// tick turns this flag into a durable last_op receipt so the two are
 	// distinguishable in the UI.
 	StartTimedOut bool
+	// StopKind names WHICH of the FSM's STOPs this is (T-72dd). "" on every
+	// decision that is not a STOP.
+	//
+	// 🔴 It exists because a caller CANNOT tell them apart from the outside
+	// without re-deriving the decider's own branch conditions — and the moment a
+	// caller re-derives them, there are two copies of one ruling and they drift.
+	// reconcileWorkerLiveness had exactly that problem: its STOP arm was written
+	// for the zombie takeover and BENCHED the target machine, which is right for
+	// a ghost-squatted slot and wrong for a recycle — a 換手 is supposed to come
+	// back up on the SAME machine, so benching it means the worker is killed and
+	// then cannot return until the cooldown lapses. The distinction is made HERE,
+	// where the branch is chosen, and read verbatim by the caller.
+	StopKind string
 	// ReasonCode (T-ed79 #14) is the STRUCTURED half of Reason: one of the
 	// spawnReason* / placementReason* codes when this decision is a STALL the
 	// owner is owed an explanation for, "" when it is not.
@@ -374,6 +405,7 @@ func reconcileDecide(
 			st.LastCommandAt = now
 			return reconcileDecision{
 				Command: reconcileCmdStop, MemberID: obs.MemberID,
+				StopKind: stopKindRobustResend,
 				Reason: "robust stop: re-dispatch (out-of-band STOP unlanded — " +
 					"still online past stop_retry)",
 				State: st,
@@ -469,7 +501,8 @@ func decideUp(
 				st.LastCommandAt = now
 				return reconcileDecision{
 					Command: reconcileCmdStop, MemberID: obs.MemberID,
-					Reason: reason, State: st,
+					StopKind: stopKindRecycle,
+					Reason:   reason, State: st,
 					// Kill where the session ACTUALLY is, not where it is wanted.
 					// For a plain 重新聚焦 these are the same machine, so nothing
 					// changes; T-b6d9 made them differ, because a 改機器 now stamps
@@ -523,7 +556,8 @@ func decideUp(
 				st.LastCommandAt = now
 				return reconcileDecision{
 					Command: reconcileCmdStop, MemberID: obs.MemberID,
-					Reason: reason, State: st, DispatchWarden: obs.RunningMachine,
+					StopKind: stopKindRelocate,
+					Reason:   reason, State: st, DispatchWarden: obs.RunningMachine,
 				}
 			}
 			st.Phase = reconcilePhaseStopping
@@ -584,6 +618,7 @@ func decideUp(
 			st.LastCommandAt = now
 			return reconcileDecision{
 				Command: reconcileCmdStop, MemberID: obs.MemberID,
+				StopKind: stopKindZombieTakeover,
 				Reason: "zombie takeover: START clobbered a live presence-deaf " +
 					"session — robust stop to reap it before respawn",
 				State: st,
@@ -723,7 +758,8 @@ func decideDown(
 		st.LastCommandAt = now
 		return reconcileDecision{
 			Command: reconcileCmdStop, MemberID: obs.MemberID,
-			Reason: reason, State: st,
+			StopKind: stopKindWinddown,
+			Reason:   reason, State: st,
 		}
 	}
 	st.Phase = reconcilePhaseStopping

@@ -420,7 +420,8 @@ func (s *apiServer) writeWorkerProjectionWith(w http.ResponseWriter, r *http.Req
 // T-ea82: stamp refocus_since + fan the SOP 預告 at the worker's own session
 // (openWorkerHandoverGrace) and RETURN — the kill+respawn is owned by the 收口
 // drivers, which for THIS handler are exactly TWO: the worker's report_stopped,
-// or the offline fallback inside the grace open. 🔴 There is NO grace deadline
+// (T-72dd: the offline fallback that used to be named here is gone — an offline
+// worker has no session to collect). 🔴 There is NO grace deadline
 // on this path — it stamps refocusOpRefocus below, and 重新聚焦 runs no clock
 // (winddownKindFor). This used to name "the 120s grace deadline" as a third
 // driver: a driver that does not exist here, and precisely the one an owner

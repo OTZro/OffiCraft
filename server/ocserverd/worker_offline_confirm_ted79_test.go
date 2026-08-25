@@ -38,8 +38,47 @@ func tickHandover(t *testing.T, api *apiServer, workerID string, now float64) in
 	if err != nil || w == nil {
 		t.Fatalf("re-read worker: %v", err)
 	}
-	api.autoHandoverWorker(*w, now)
+	_ = w
+	workerTickPass(t, api, workerID, now)
 	return len(api.hub.DrainWardenCommands(ServerSelfHost))
+}
+
+// workerTickPass runs ONE tick's worth of the ACTIVE-worker branch for ONE
+// worker — which is now TWO passes, and both of them matter (T-72dd):
+// autoHandoverWorker (the loop-break and the 停止 arm) and then the SHARED FSM,
+// which is where every handover 收口 decision moved. A test that drives only
+// the first half is driving a function that no longer decides anything about a
+// handover, and will read "nothing happened" as a behaviour claim when it is
+// really just the wrong call site.
+//
+// The re-read between the two mirrors outsource_sched.go exactly: the first
+// pass may have cleared the epoch, and the FSM must never act on the stale row.
+func workerTickPass(t *testing.T, api *apiServer, workerID string, now float64) {
+	t.Helper()
+	w, err := api.dal.GetOutsourceWorker(workerID)
+	if err != nil || w == nil {
+		t.Fatalf("re-read worker: %v", err)
+	}
+	api.outsourceMu.Lock()
+	defer api.outsourceMu.Unlock()
+	// The context-threshold pass runs FIRST in the real tick, and it is the pass
+	// that OPENS a wind-down now (it replaced autoHandoverWorker's own threshold
+	// arm), so a helper that skipped it would make every threshold fixture look
+	// like "nothing fires".
+	if w.Status == WorkerStatusActive && w.DesiredState != DesiredStateOffline {
+		proj := []Member{memberFromWorker(*w)}
+		api.stampContextHighRecycle(proj, now)
+	}
+	if reread, rerr := api.dal.GetOutsourceWorker(workerID); rerr == nil && reread != nil {
+		w = reread
+	}
+	api.autoHandoverWorker(*w, now)
+	fresh, ferr := api.dal.GetOutsourceWorker(workerID)
+	if ferr != nil || fresh == nil || fresh.Status == WorkerStatusReleased ||
+		fresh.DesiredState == DesiredStateOffline {
+		return
+	}
+	api.reconcileWorkerLiveness(*fresh, now)
 }
 
 // dropWorkerSession removes every listener the worker holds — the server-side
@@ -57,9 +96,29 @@ func dropWorkerSession(t *testing.T, api *apiServer, workerID string) {
 	}
 }
 
-// ── face 1: inside the window nothing is collected ──────────────────────────
+// ── the handover arm after T-72dd ───────────────────────────────────────────
+//
+// 🔴 THE CONTRACT ON THIS ARM CHANGED, and it is not a relaxation — the three
+// faces below used to describe autoHandoverWorker's OWN offline collect, which
+// no longer exists. The handover 收口 is the shared FSM's, and the FSM's recycle
+// arm requires an ONLINE session (decideUp: `obs.Online && obs.RefocusSince>0`).
+// So "offline mid-handover" is no longer a collect question at all: there is
+// nothing alive to kill, and the FSM simply re-STARTs the worker.
+//
+// What the 90s window protected — 「不要因為一次取樣就砍掉還活著的 worker」 — is
+// NOT lost. It moved, and to a LONGER window: the only kill an offline worker
+// can now attract is the zombie takeover, gated by ZombieConfirmGrace = 180s
+// (2 × WakingTTLSecs), twice this window. A blip therefore costs at most one
+// refused START (the warden's clobber-guard answers session_already_exists) —
+// never a kill. That is the property the tests below assert, because it is the
+// property the owner's ruling was about.
+//
+// workerOfflineConfirmGraceSecs itself is NOT dead: it still governs the 停止
+// arm (autoHandoverWorker arm 0), which this ticket did not touch and which is
+// pinned unchanged by TestWorkerStop_OfflineIsConfirmedBeforeTheCloseOutIsCollected
+// below.
 
-func TestWorkerHandover_OfflineInsideTheConfirmWindowIsNotCollected(t *testing.T) {
+func TestWorkerHandover_OfflineMidHandoverIsRespawnedNeverKilled_T72dd(t *testing.T) {
 	const now = 100_000.0
 	api := newTasksTestServer(t)
 	api.noOutsource = true
@@ -68,75 +127,66 @@ func TestWorkerHandover_OfflineInsideTheConfirmWindowIsNotCollected(t *testing.T
 	api.hub.DrainWardenCommands(ServerSelfHost)
 	dropWorkerSession(t, api, workerID)
 
-	// The tick that FIRST sees it offline only arms the anchor.
-	if got := tickHandover(t, api, workerID, now); got != 0 {
-		t.Fatalf("the first offline observation must only arm the confirm window, "+
-			"got %d warden frames", got)
+	// Straight away, and again well past the OLD 90s window: the answer is the
+	// same both times, because offline is no longer a collect trigger.
+	for _, at := range []float64{now, now + 30, now + workerOfflineConfirmGraceSecs + 1} {
+		api.hub.DrainWardenCommands(ServerSelfHost)
+		tickHandover(t, api, workerID, at)
+		frames := api.hub.DrainWardenCommands(ServerSelfHost)
+		stops := countStops(t, frames)
+		t.Logf("at %+.0fs offline: %d frame(s), %d stop(s)", at-now, len(frames), stops)
+		if stops != 0 {
+			t.Fatalf("an offline mid-handover worker must NEVER be killed — there is "+
+				"no live session to collect; got %d stop(s) at %+.0fs", stops, at-now)
+		}
 	}
-	// One cadence tick later, still well inside 90s.
-	if got := tickHandover(t, api, workerID, now+30); got != 0 {
-		t.Fatalf("30s of continuous offline is inside the confirm window — a worker "+
-			"reconnecting from an ordinary backoff is still alive; got %d warden frames",
-			got)
-	}
-	if got := tickHandover(t, api, workerID, now+workerOfflineConfirmGraceSecs-1); got != 0 {
-		t.Fatalf("one second SHORT of the window must still not collect, got %d frames", got)
-	}
+	// …and no close-out was collected, because none happened: the session
+	// vanished, it did not report anything.
 	if fresh, _ := api.dal.GetOutsourceWorker(workerID); fresh.StoppedSince != 0 {
-		t.Fatal("nothing inside the confirm window may latch stopped_since")
+		t.Fatalf("nothing was collected, so nothing may latch stopped_since (got %v)",
+			fresh.StoppedSince)
 	}
 }
 
-// ── face 2: the window lapsing still collects (it is a delay, never a veto) ──
-
-func TestWorkerHandover_OfflineForTheWholeConfirmWindowCollects(t *testing.T) {
+// A reconnect mid-handover leaves the worker alone: it is online, its epoch is
+// still open, and it has not reported done — so the recycle arm waits, exactly
+// as it does for staff.
+func TestWorkerHandover_ReconnectMidHandoverIsNotKilled_T72dd(t *testing.T) {
 	const now = 100_000.0
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	workerID := newActiveOnlineWorker(t, api)
 	stampWorkerRefocus(t, api, workerID, now-10)
+	// 🔴 A CLOCKLESS cause on purpose. stampWorkerRefocus stamps context_high,
+	// which IS on a clock — a worker on that cause is collected at its deadline
+	// whether it reconnected or not, and that is the 加速停止 contract, not a bug.
+	// The claim here is about the arm with NO clock: 重新聚焦 is collected by the
+	// agent's own report and by nothing else, so a reconnect must leave it alone
+	// no matter how long the tick waits.
+	w, _ := api.dal.GetOutsourceWorker(workerID)
+	w.RefocusOp = refocusOpRefocus
+	if err := api.dal.PutOutsourceWorker(*w); err != nil {
+		t.Fatalf("re-stamp op: %v", err)
+	}
 	api.hub.DrainWardenCommands(ServerSelfHost)
 	dropWorkerSession(t, api, workerID)
-
-	tickHandover(t, api, workerID, now) // arms
-	if got := tickHandover(t, api, workerID, now+workerOfflineConfirmGraceSecs); got != 2 {
-		t.Fatalf("a worker offline for the WHOLE window is genuinely gone and must be "+
-			"collected (stop+start), got %d warden frames — the window is a "+
-			"confirmation, not a reprieve", got)
-	}
-	if fresh, _ := api.dal.GetOutsourceWorker(workerID); fresh.StoppedSince <= 0 {
-		t.Fatal("the confirmed-offline collect must latch stopped_since")
-	}
-}
-
-// ── face 3: a reconnect inside the window CANCELS it ────────────────────────
-
-func TestWorkerHandover_ReconnectInsideTheConfirmWindowCancelsTheCollect(t *testing.T) {
-	const now = 100_000.0
-	api := newTasksTestServer(t)
-	api.noOutsource = true
-	workerID := newActiveOnlineWorker(t, api)
-	stampWorkerRefocus(t, api, workerID, now-10)
-	api.hub.DrainWardenCommands(ServerSelfHost)
-	dropWorkerSession(t, api, workerID)
-
-	tickHandover(t, api, workerID, now) // arms the anchor
+	tickHandover(t, api, workerID, now)
 	if _, err := api.hub.Connect(workerID, ""); err != nil {
 		t.Fatalf("reconnect: %v", err)
 	}
-	if got := tickHandover(t, api, workerID, now+30); got != 0 {
-		t.Fatalf("a reconnected worker must not be collected at all, got %d frames", got)
+	api.hub.DrainWardenCommands(ServerSelfHost)
+
+	// Long past the old window, and long past ZombieConfirmGrace too — the
+	// reconnect is what makes both irrelevant.
+	tickHandover(t, api, workerID, now+30)
+	tickHandover(t, api, workerID, now+30+2*workerOfflineConfirmGraceSecs)
+	frames := api.hub.DrainWardenCommands(ServerSelfHost)
+	if got := countStops(t, frames); got != 0 {
+		t.Fatalf("a reconnected worker that has NOT reported done must not be "+
+			"collected — the recycle arm waits for the dump; got %d stop(s)", got)
 	}
-	// …and the blip must not be REMEMBERED: dropping the session again starts a
-	// fresh window rather than resuming the old one. Without the reset, this tick
-	// is already past now+90 and would collect on the spot.
-	dropWorkerSession(t, api, workerID)
-	if got := tickHandover(t, api, workerID, now+31); got != 0 {
-		t.Fatalf("the window must restart from the NEW disconnect, not from the one a "+
-			"reconnect already answered; got %d frames", got)
-	}
-	if got := tickHandover(t, api, workerID, now+31+workerOfflineConfirmGraceSecs); got != 2 {
-		t.Fatalf("the restarted window must still collect when it lapses, got %d frames", got)
+	if fresh, _ := api.dal.GetOutsourceWorker(workerID); fresh.StoppedSince != 0 {
+		t.Fatal("a live worker mid-handover must not have its close-out latched for it")
 	}
 }
 

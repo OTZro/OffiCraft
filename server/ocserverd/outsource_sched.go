@@ -381,6 +381,51 @@ func (s *apiServer) runOutsourceTick(now float64) {
 	//     report arrived) is force-reclaimed after workerReclaimGraceSecs —
 	//     the grace exists so a released worker can finish its §6.3 close-out
 	//     duties before the session is taken.
+	// ── the context thresholds, from the SAME pass staff use (T-72dd) ────────
+	//
+	// 🔴 THIS REPLACES autoHandoverWorker's own threshold arm, and replacing it
+	// is the whole point of the ticket: the ruling about WHEN a session is wound
+	// down for context pressure was written TWICE — once in
+	// stampContextHighRecycle for staff, once in autoHandoverWorker for workers
+	// — and T-ed79 only updated the staff copy. Staff got two thresholds
+	// (notice_pct → a clockless 停止, handover_pct → 加速停止) plus the promotion
+	// between them; the worker copy still had one threshold and no promotion.
+	// Feeding the worker projection into the staff pass deletes the second copy
+	// rather than teaching it the same lesson again.
+	//
+	// The projection is legitimate because the row IS a member row
+	// (memberFromWorker), and step 1 of this ticket measured the write half:
+	// putMember(memberFromWorker(w)) lands on the row that GetOutsourceWorker
+	// reads back. stampContextHighRecycle mutates in-slice so the SAME tick sees
+	// the marker, so the four epoch fields are folded straight back onto the
+	// worker rows below — otherwise this tick's FSM pass would still be reading
+	// the pre-stamp row and the collect would always be one tick late.
+	//
+	// Only ACTIVE, not-held-down workers are offered: an assigned worker has no
+	// session to wind down yet, and a desired-offline one is the owner's 停止,
+	// which autoHandoverWorker arm (0) still owns.
+	ctxProjections := make([]Member, 0, len(workers))
+	ctxIndex := make([]int, 0, len(workers))
+	for i := range workers {
+		if workers[i].Status != WorkerStatusActive ||
+			workers[i].DesiredState == DesiredStateOffline {
+			continue
+		}
+		ctxProjections = append(ctxProjections, memberFromWorker(workers[i]))
+		ctxIndex = append(ctxIndex, i)
+	}
+	s.stampContextHighRecycle(ctxProjections, now)
+	for j, i := range ctxIndex {
+		// Only the four wind-down fields are folded back, never the whole
+		// projection: workerFromMember re-derives Status from activated_ts, and
+		// round-tripping a row through it here would let an unrelated derivation
+		// change ride in on a context stamp.
+		workers[i].RefocusSince = ctxProjections[j].RefocusSince
+		workers[i].RefocusOp = ctxProjections[j].RefocusOp
+		workers[i].StoppingSince = ctxProjections[j].StoppingSince
+		workers[i].StoppedSince = ctxProjections[j].StoppedSince
+	}
+
 	for _, w := range workers {
 		// A refused live-worker kill (owner 停止/relocate toward a warden that
 		// dropped offline) is parked, never lost — re-fire it FIRST, before any
@@ -410,14 +455,41 @@ func (s *apiServer) runOutsourceTick(now float64) {
 			// here too — no separate guard needed (that would only mask the
 			// internal one).
 			s.autoHandoverWorker(w, now)
-			// A案 P6: an ACTIVE worker whose session DIED (claimed once, SSE gone
-			// — the old spawn_state=stuck latch) is rescued by the same FSM:
-			// respawn with backoff, zombie-takeover on a clobbered START. Masked
-			// while a handover is in flight (refocus owns the respawn there) and
-			// while owner-stopped (held down).
-			if w.DesiredState != DesiredStateOffline && w.RefocusSince == 0.0 &&
-				!s.hub.IsOnline(w.ID) {
-				s.reconcileWorkerLiveness(w, now)
+			// A案 P6: the shared member FSM owns this worker's whole liveness
+			// story — respawn with backoff, zombie-takeover on a clobbered
+			// START, and (T-72dd) the RECYCLE 收口 of a wind-down epoch.
+			//
+			// 🔴 TWO GUARDS WERE REMOVED HERE, and they were the blindfold's
+			// last two straps:
+			//
+			//   * `RefocusSince == 0` masked the FSM for exactly the state the
+			//     收口 lives in. It was correct while autoHandoverWorker owned
+			//     the collect ("refocus owns the respawn there"); now that the
+			//     FSM is the ONLY collector, keeping it would mean nothing
+			//     collects an ACTIVE worker's handover at all.
+			//   * `!hub.IsOnline` masked every ONLINE worker, and decideUp's
+			//     recycle arm requires obs.Online — so the collect was
+			//     unreachable through this call site twice over.
+			//
+			// A healthy online worker with no epoch is not endangered by
+			// running: decideUp answers "online: converged" and dispatches
+			// nothing (measured cell-by-cell in
+			// worker_obs_unblind_t72dd_test.go).
+			//
+			// 🔴 RE-READ FIRST. autoHandoverWorker's loop-break may have just
+			// cleared this row's epoch (respawn landed), and `w` is a snapshot
+			// taken before that write. Handing the stale copy to the FSM would
+			// show it refocus_since > 0 ∧ stopped_since > 0 on a worker whose
+			// handover is ALREADY finished — decideUp's recycle arm would then
+			// robust-STOP the session that just came up. Re-reading is what keeps
+			// "the epoch is over" and "collect the epoch" from being decided off
+			// two different versions of one row.
+			fresh, ferr := s.dal.GetOutsourceWorker(w.ID)
+			if ferr != nil || fresh == nil || fresh.Status == WorkerStatusReleased {
+				continue
+			}
+			if fresh.DesiredState != DesiredStateOffline {
+				s.reconcileWorkerLiveness(*fresh, now)
 			}
 		case WorkerStatusReleased:
 			if w.ReleasedTS > 0 && now-w.ReleasedTS >= workerReclaimGraceSecs &&

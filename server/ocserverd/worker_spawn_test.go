@@ -1337,6 +1337,14 @@ func fsmWorkerFixture(t *testing.T, s *apiServer, id string, status string, crea
 		ID: id, Codename: "O-1", Model: "opus", Effort: "high",
 		TaskID: "t-" + id, Status: status, CreatedTS: createdTS,
 		DesiredMachineID: ServerSelfHost, // explicit placement (owner ruling 2026-07-25)
+		// T-72dd: see the note in TestTick_AssignedWorker_RedispatchesSpawn. This
+		// fixture used to leave desired_state UNSET and relied on
+		// reconcileWorkerLiveness hard-wiring the FSM's Desired to online. Now
+		// that the FSM reads the row, a "" here would route every one of these
+		// cases to decideDown and test the wrong branch entirely. The sole
+		// production creation path writes online explicitly, so this is what a
+		// real worker row carries.
+		DesiredState: DesiredStateOnline,
 	})
 }
 
@@ -2145,6 +2153,23 @@ func TestTick_AssignedWorker_RedispatchesSpawn(t *testing.T) {
 		ID: "ow-a", Codename: "O-10", Model: "opus", Effort: "high",
 		TaskID: task.ID, Status: WorkerStatusAssigned,
 		DesiredMachineID: ServerSelfHost, // explicit placement (owner ruling 2026-07-25)
+		// T-72dd: this fixture used to leave desired_state UNSET, and passed only
+		// because reconcileWorkerLiveness hard-wired the FSM's Desired to online
+		// and never read the row. Now that it reads the row, "" would route to
+		// decideDown and this worker would never be spawned at all.
+		//
+		// "" is a FIXTURE state, not a production one: the sole creation path
+		// (outsource_sched.go's assignment pass) writes DesiredStateOnline
+		// explicitly, so setting it here is what a real assigned worker looks
+		// like — not a workaround for the change.
+		//
+		// 🔴 It is worth knowing that "" SURVIVES a write: the member column's
+		// DEFAULT 'online' does not rescue an explicit empty value (measured,
+		// T-72dd). Nothing validates desired_state either (ValidateMember does
+		// not check it), so a row that acquires "" some other way would silently
+		// stop being spawned rather than fail loudly. No guard is added here —
+		// that is an owner ruling, not an implementation detail.
+		DesiredState: DesiredStateOnline,
 	})
 
 	s.runOutsourceTick(nowSecs())
