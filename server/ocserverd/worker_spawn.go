@@ -797,21 +797,41 @@ func (s *apiServer) reconcileWorkerLiveness(w OutsourceWorker, now float64) {
 		}
 		s.workerReconcileStates[w.ID] = decision.State
 		s.stopWorkerSessionOrPark(target, w.ID, now)
-		// This target kept a ghost the clobber-guard refused to overwrite — bench
-		// it for this worker so no respawn lands on it while the reap is still in
-		// flight. STALE-COMMENT FIX (T-98f4): this used to claim the respawn
-		// "rotates to a different warden". It does not, and has not since the
-		// 2026-07-25 no-automatic-placement ruling deleted every rotation arm —
-		// benching now simply makes the next resolve answer machine_unavailable
-		// and the worker STANDS STILL until workerSpawnCooldownSecs expires (the
-		// constant's own comment already says so). Behaviour unchanged here; only
-		// the sentence that mis-described it. Worth knowing while reading the
-		// sticky placement above: stickiness makes the standstill more likely to
-		// recur on the SAME machine, which is the accepted cost of staying put.
-		s.benchWorkerMachine(w.ID, target, now)
 		delete(s.workerSpawnAt, w.ID) // the respawn must not be throttled
-		outsourceLog("rescue %s (%s): %s — robust stop → %s, %s benched",
-			w.ID, w.Codename, decision.Reason, target, target)
+		// 🔴 ONLY A ZOMBIE TAKEOVER BENCHES THE MACHINE (T-72dd).
+		//
+		// This arm used to bench unconditionally, because the only STOP the
+		// blinded observation could ever reach WAS the takeover. Un-blinding the
+		// observation made the RECYCLE stop reachable here too, and benching that
+		// one is actively harmful: a 換手 is supposed to come straight back up on
+		// the same machine, so cooling the machine means the worker is collected
+		// and then CANNOT RETURN until workerSpawnCooldownSecs lapses — the next
+		// resolve answers machine_unavailable and it stands still. "Killed, then
+		// stranded" is a worse outcome than the stalled handover this ticket set
+		// out to fix.
+		//
+		// The two are told apart by the DECIDER (decision.StopKind), never by
+		// re-deriving its branch conditions here — that re-derivation is how the
+		// two copies of one ruling that this whole ticket exists to delete got
+		// there in the first place.
+		//
+		// Why the takeover still benches: that target kept a ghost the
+		// clobber-guard refused to overwrite, so the slot there is known-wedged
+		// and a respawn onto it would bounce off the same ghost. Benching makes
+		// the next resolve answer machine_unavailable and the worker STANDS STILL
+		// until the cooldown expires (T-98f4: it does NOT rotate to another
+		// warden — the 2026-07-25 no-automatic-placement ruling deleted every
+		// rotation arm). That standstill is the accepted cost of not spinning
+		// against a wedged slot; it is NOT an acceptable cost for a healthy
+		// handover.
+		if decision.StopKind == stopKindZombieTakeover {
+			s.benchWorkerMachine(w.ID, target, now)
+			outsourceLog("rescue %s (%s): %s — robust stop → %s, %s benched",
+				w.ID, w.Codename, decision.Reason, target, target)
+		} else {
+			outsourceLog("collect %s (%s): %s — robust stop → %s (machine NOT benched: %s)",
+				w.ID, w.Codename, decision.Reason, target, decision.StopKind)
+		}
 	default:
 		s.workerReconcileStates[w.ID] = decision.State
 	}
