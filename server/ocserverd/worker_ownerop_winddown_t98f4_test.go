@@ -166,6 +166,10 @@ func TestOwnerOp_RelocateWindsDownInsteadOfKilling(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
 	}
+	// T-72dd: the stopped-report LATCHES; the shared FSM does the collect on the
+	// next tick. The move itself is unchanged — respawnWorkerNow still starts on
+	// whatever machine the row is pinned to when the collect runs.
+	workerTickPass(t, api, workerID, nowSecs())
 	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 1 {
 		t.Fatalf("the collect must kill the OLD session (1 stop), got %d frames", got)
 	}
@@ -208,9 +212,7 @@ func TestOwnerOp_WindDownRunsNoClock_AndEndsOnTheWorkersOwnReport(t *testing.T) 
 	for _, elapsed := range []float64{
 		StoppingTimeoutSecs - 1, StoppingTimeoutSecs + 1, 100 * StoppingTimeoutSecs,
 	} {
-		api.outsourceMu.Lock()
-		api.autoHandoverWorker(*w, w.RefocusSince+elapsed)
-		api.outsourceMu.Unlock()
+		workerTickPass(t, api, w.ID, w.RefocusSince+elapsed)
 		if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
 			t.Fatalf("+%.0fs after 換 model: nothing may be dispatched (this op runs "+
 				"no clock), got %d frames", elapsed, got)
@@ -224,6 +226,10 @@ func TestOwnerOp_WindDownRunsNoClock_AndEndsOnTheWorkersOwnReport(t *testing.T) 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
 	}
+	// T-72dd: the stopped-report LATCHES; the shared FSM does the collect on the
+	// next tick. The move itself is unchanged — respawnWorkerNow still starts on
+	// whatever machine the row is pinned to when the collect runs.
+	workerTickPass(t, api, workerID, nowSecs())
 	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 2 {
 		t.Fatalf("the worker's own stopped report must collect it (stop+start), "+
 			"got %d frames", got)
@@ -423,6 +429,10 @@ func TestOwnerOp_VerbAfterTheCollectIsNotSwallowed(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
 	}
+	// T-72dd: the stopped-report LATCHES; the shared FSM does the collect on the
+	// next tick. The move itself is unchanged — respawnWorkerNow still starts on
+	// whatever machine the row is pinned to when the collect runs.
+	workerTickPass(t, api, workerID, nowSecs())
 	if w, _ := api.dal.GetOutsourceWorker(workerID); w.StoppedSince <= 0 {
 		t.Fatal("fixture: the collect must have latched stopped_since")
 	}
@@ -498,6 +508,10 @@ func TestOwnerOp_OrdinaryStopRestartStillWindsDownLater(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
 	}
+	// T-72dd: the stopped-report LATCHES; the shared FSM does the collect on the
+	// next tick. The move itself is unchanged — respawnWorkerNow still starts on
+	// whatever machine the row is pinned to when the collect runs.
+	workerTickPass(t, api, workerID, nowSecs())
 	api.hub.DrainWardenCommands(ServerSelfHost)
 	w, _ := api.dal.GetOutsourceWorker(workerID)
 	if w.RefocusSince != 0 || w.StoppedSince <= 0 {
@@ -590,6 +604,10 @@ func TestOwnerOp_SecondVerbDuringAnOpenWindowReStampsAndStillCollects(t *testing
 	if rec.Code != http.StatusOK {
 		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
 	}
+	// T-72dd: the stopped-report LATCHES; the shared FSM does the collect on the
+	// next tick. The move itself is unchanged — respawnWorkerNow still starts on
+	// whatever machine the row is pinned to when the collect runs.
+	workerTickPass(t, api, workerID, nowSecs())
 	if got := len(api.hub.DrainWardenCommands("m-elsewhere")); got != 0 {
 		t.Fatalf("the superseded destination must receive nothing, got %d frames", got)
 	}

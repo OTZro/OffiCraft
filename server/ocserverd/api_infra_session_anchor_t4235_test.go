@@ -204,9 +204,7 @@ func TestWorkerAutoHandoverIsNotSuppressedAfterAReExec(t *testing.T) {
 			"memberFromWorker rebuilds a Member from scratch, so a forgotten column "+
 			"is zeroed by the next outsource write", w.SessionBootTS)
 	}
-	api.outsourceMu.Lock()
-	api.autoHandoverWorker(*w, now)
-	api.outsourceMu.Unlock()
+	workerTickPass(t, api, w.ID, now)
 
 	back, err := dal.GetOutsourceWorker("ow-sa")
 	if err != nil || back == nil {

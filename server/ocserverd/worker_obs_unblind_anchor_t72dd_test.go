@@ -37,19 +37,17 @@ func TestReconcileWorkerLiveness_RecycleReachesTheSharedCollector_T72dd(t *testi
 		rpc, args := decodeWardenFrame(t, f.Frame)
 		t.Logf("  frame[%d]: %s %v", i, rpc, args)
 	}
-	if len(frames) != 1 {
+	if got := countStops(t, frames); got != 1 {
 		t.Fatalf("the agent filed its dump-done on a refocus epoch — the shared "+
-			"收口 must robust-stop it so the respawn can land; got %d frames", len(frames))
+			"收口 must robust-stop it exactly once so the respawn can land; "+
+			"got %d stop(s) in %d frame(s)", got, len(frames))
 	}
-	rpc, args := decodeWardenFrame(t, frames[0].Frame)
-	if rpc != reconcileCmdStop || args["member_id"] != "ow-rc" {
-		t.Fatalf("frame = %s %v, want stop ow-rc", rpc, args)
+	// The hazard this test measured in step 2 (the recycle STOP benching its
+	// machine, stranding the worker it just collected) is FIXED in step 3 and
+	// pinned in both directions by
+	// TestWorkerStopArm_OnlyZombieTakeoverBenchesTheMachine_T72dd. Kept as an
+	// assertion here too because this is the end-to-end path.
+	if benched {
+		t.Fatal("a recycle collect must not bench its machine")
 	}
-	// 🔴 RECORDED, NOT ASSERTED AS DESIRABLE: reconcileWorkerLiveness's STOP arm
-	// is written for the ZOMBIE TAKEOVER and benches the target machine. A
-	// recycle STOP is not a ghost reap and must not bench anything — the respawn
-	// is supposed to land on the SAME machine. Owner ruling required (T-72dd
-	// step 3); this line measures it so the follow-up cannot lose it.
-	t.Logf("HAZARD (measured, not fixed here): the recycle STOP went through the "+
-		"zombie-takeover arm — machine benched=%v", benched)
 }

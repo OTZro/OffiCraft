@@ -33,11 +33,9 @@ func TestWorkerStopArm_OnlyZombieTakeoverBenchesTheMachine_T72dd(t *testing.T) {
 		s.outsourceMu.Unlock()
 
 		frames := s.hub.DrainWardenCommands(ServerSelfHost)
-		if len(frames) != 1 {
-			t.Fatalf("fixture: the recycle collect must dispatch its stop, got %d frames", len(frames))
-		}
-		if rpc, _ := decodeWardenFrame(t, frames[0].Frame); rpc != reconcileCmdStop {
-			t.Fatalf("fixture: expected a stop, got %s", rpc)
+		if got := countStops(t, frames); got != 1 {
+			t.Fatalf("fixture: the recycle collect must dispatch exactly one stop, "+
+				"got %d in %d frame(s)", got, len(frames))
 		}
 		if benched {
 			t.Fatal("a 換手 collect must NOT bench its machine — the respawn is " +
@@ -68,8 +66,8 @@ func TestWorkerStopArm_OnlyZombieTakeoverBenchesTheMachine_T72dd(t *testing.T) {
 		s.outsourceMu.Unlock()
 
 		frames := s.hub.DrainWardenCommands(ServerSelfHost)
-		if len(frames) != 1 {
-			t.Fatalf("fixture: the takeover must dispatch its stop, got %d frames", len(frames))
+		if got := countStops(t, frames); got != 1 {
+			t.Fatalf("fixture: the takeover must dispatch exactly one stop, got %d", got)
 		}
 		if !benched {
 			t.Fatal("the zombie takeover MUST still bench: that slot holds a ghost " +
