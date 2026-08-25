@@ -110,6 +110,14 @@ describe("T-a241 · 全域情境 as its own settings section", () => {
     for (const label of [s.globalSection, s.stopSection, s.taskEventSection]) {
       expect(utils.queryByText(label)).toBeNull();
     }
+    // 🔴 使用者自訂 by NAME, not by testid. The two checks above are both
+    // shape-bound (a testid prefix, a group heading), so a copy of that row
+    // left behind in ANOTHER shape — a plain entry with neither — passed them
+    // both: an independent review seeded exactly that mutant and every test in
+    // src/components stayed green. The row is the one entry here that is not a
+    // boot document (its own API, its own history kind), which is precisely why
+    // the boot-doc-shaped guards cannot see it.
+    expect(utils.queryByText(s.customName)).toBeNull();
   });
 
   it("a boot document's breadcrumb middle segment is 全域情境, and jumps there", async () => {

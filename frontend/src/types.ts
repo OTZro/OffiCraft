@@ -634,7 +634,7 @@ export interface ReleaseCheckView {
 }
 
 /**
- * The folded global-context doc (Settings › 角色誌 › 全域情境). `isDefault` true
+ * The folded global-context doc (Settings › 全域情境 › 使用者自訂). `isDefault` true
  * → the text IS the file seed (label "預設"); false → owner-edited.
  */
 export interface GlobalContextView {
