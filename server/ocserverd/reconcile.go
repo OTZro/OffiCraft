@@ -1583,6 +1583,14 @@ func shouldNoticeRefocus(
 // bury the very line it exists to surface. Five minutes is the owner's number.
 const ctxGateDiagThrottleSecs = 300.0
 
+// ctxGateDiagState is one actor's throttle cell: WHEN the diagnostic last spoke
+// for it, and WHICH gate it named. The gate is half the key on purpose — see
+// noteContextGateSkip for why a change of gate is not made to wait.
+type ctxGateDiagState struct {
+	ts   float64
+	gate string
+}
+
 // noteContextGateSkip emits the ONE line that tells 「這一輪跑了，這個 actor 被
 // 某道 gate 擋掉」 apart from 「這個 actor 根本沒被看過」.
 //
@@ -1598,23 +1606,59 @@ const ctxGateDiagThrottleSecs = 300.0
 // between two closed gates would otherwise double its own budget — which is the
 // flooding the throttle exists to stop.
 //
+// 🔴 THREE OF THIS PASS'S SEVEN QUIET PATHS ARE STILL SILENT, and the reason
+// originally given for that here was WRONG. It said their state "is readable on
+// the wire anyway". An independent review checked each one, and it is not:
+//
+//   - aRefocusStampWouldReachTheAgent — reads DesiredState. On the wire. ✅
+//   - canPromoteToAcceleratedStop — reads RefocusOp (on the wire) and
+//     StoppedSince (NOT on the wire). Half. ⚠️
+//   - the stale stopped_since latch — reads StoppedSince and the gauge's
+//     boot_ts. NEITHER is on the wire. ❌
+//
+// Checked, not assumed: no Go struct tag exports stopped_since (the only two
+// mentions of the name in spec/openapi.json are prose inside the report_stopped
+// / report_waking descriptions, not schema properties), and the gauge's boot_ts
+// has no wire exit in wire.go or api_monitoring.go. And the latch guard's own
+// comment (a few lines below) says a wrong verdict there excludes the member
+// "from BOTH thresholds for the rest of its life" — a PERMANENT silent no-op,
+// the exact class this ticket chased, on two inputs an operator cannot see.
+// It is left uninstrumented only because the ticket scoped this to three gates,
+// and it is a known gap, not a justified omission. A seventh path — the
+// armRefocusEpoch refusal — already logs itself, so four of the seven are
+// observable today.
+//
+// 🔴 A CHANGE OF GATE IS NOT THROTTLED. The window is per actor, but the cell
+// also remembers WHICH gate it last named, and a different gate speaks
+// immediately. An actor crossing from "no-actionable-pct" to "offline" does so
+// once in its life and that instant is the most informative one the line will
+// ever carry; making it wait out the remaining 290 s of somebody else's window
+// would drop exactly the transition a reader is looking for. Steady-state cost
+// is unchanged — a settled actor keeps taking the SAME gate every tick, so it
+// still emits once per window — which is why this is cheaper than keying the
+// window on actor+gate (that would triple the budget of every quiet actor).
+//
 // ⚠️ PURELY OBSERVATIONAL. It reads the gauge, asks the hub, and writes stderr.
 // It must never alter what the pass decides, and it is called only on paths that
 // have ALREADY decided to skip.
 //
-// Known bound: the throttle map is keyed by actor id and never pruned, so it
-// holds one float per actor the server has ever gated — the same shape (and the
-// same order of magnitude) as the reconcile store's own per-member bookkeeping.
+// Bound: one cell per actor, pruned on the session boundary
+// (clearSessionBootTS) — the same treatment handoverNoticed gets one line over,
+// and for the reason written there: not "one record per agent id alive for the
+// process's lifetime". The prune doubles as the right behaviour, since a fresh
+// session deserves to be described again rather than inheriting its
+// predecessor's window.
 func (s *apiServer) noteContextGateSkip(id, gate string, record map[string]any, now float64) {
 	s.ctxGateDiagMu.Lock()
-	if last, seen := s.ctxGateDiagAt[id]; seen && now-last < ctxGateDiagThrottleSecs {
+	if last, seen := s.ctxGateDiagAt[id]; seen && last.gate == gate &&
+		now-last.ts < ctxGateDiagThrottleSecs {
 		s.ctxGateDiagMu.Unlock()
 		return
 	}
 	if s.ctxGateDiagAt == nil {
-		s.ctxGateDiagAt = map[string]float64{}
+		s.ctxGateDiagAt = map[string]ctxGateDiagState{}
 	}
-	s.ctxGateDiagAt[id] = now
+	s.ctxGateDiagAt[id] = ctxGateDiagState{ts: now, gate: gate}
 	s.ctxGateDiagMu.Unlock()
 	reconcileLog("recycle: gate skip %s gate=%s pct=%s pct_ts=%s boot_ts=%s "+
 		"boot_secs=%s online=%t", id, gate,

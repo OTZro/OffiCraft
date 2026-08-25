@@ -646,6 +646,20 @@ func (s *apiServer) clearSessionBootTS(id string) {
 	s.handoverNoticedMu.Lock()
 	delete(s.handoverNoticed, id)
 	s.handoverNoticedMu.Unlock()
+	// The context-gate diagnostic's throttle window (T-72dd) is session-scoped
+	// for BOTH of the reasons the claim above is, and it is dropped here rather
+	// than left to accumulate for exactly the reason written one comment up:
+	// "rather than leaving one record per agent id alive for the process's
+	// lifetime". A worker id is minted per task, so an un-pruned cell per actor
+	// is a slow leak with no upper bound but the process.
+	//
+	// It is also the behaviour we want. The window exists to stop one actor
+	// repeating itself WITHIN a session; a NEW session is a new set of numbers,
+	// and making it serve out its predecessor's window would suppress the first
+	// — most interesting — description of it.
+	s.ctxGateDiagMu.Lock()
+	delete(s.ctxGateDiagAt, id)
+	s.ctxGateDiagMu.Unlock()
 	// Write-on-change: the clear runs on every session boundary, and an
 	// unconditional UPDATE would cost a row write per boundary for nothing.
 	m, err := s.dal.GetMember(id)

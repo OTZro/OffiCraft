@@ -146,9 +146,11 @@ type apiServer struct {
 	// on a database round-trip. This lock protects one map and nothing else.
 	handoverNoticedMu sync.Mutex
 	// ctxGateDiagAt records, per actor id, WHEN stampContextHighRecycle last
-	// emitted its gate diagnostic for that actor — the throttle behind
-	// noteContextGateSkip (T-72dd 補觀測). Guarded by ctxGateDiagMu below.
-	ctxGateDiagAt map[string]float64
+	// emitted its gate diagnostic for that actor AND WHICH gate it named — the
+	// throttle behind noteContextGateSkip (T-72dd 補觀測). Guarded by
+	// ctxGateDiagMu below; pruned on the session boundary by clearSessionBootTS,
+	// the same place handoverNoticed is pruned and for the same reason.
+	ctxGateDiagAt map[string]ctxGateDiagState
 	// ctxGateDiagMu guards the map above, and it is its OWN mutex for the same
 	// reason handoverNoticedMu is: it protects one map on the reconcile tick's
 	// hot path and must never make an unrelated reader wait.
