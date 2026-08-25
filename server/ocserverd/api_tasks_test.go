@@ -3099,10 +3099,29 @@ func TestReconcileTaskStatusesOnBoot(t *testing.T) {
 // sentence stays wrong in perfect three-way agreement. This is the one place
 // that reads the sentences.
 //
-// It is deliberately phrase-based rather than an exact-text pin: the point is
-// the CLAIM, not the wording, so a future rewrite that keeps the meaning stays
-// green and one that reintroduces the projection story goes red.
-func TestSpecNeverDescribesTaskNoAsADerivedNonLookupValue(t *testing.T) {
+// 🔴 WHAT THIS CATCHES, STATED HONESTLY — an earlier version of this comment
+// claimed it was "phrase-based rather than an exact-text pin: the point is the
+// CLAIM, not the wording". That was an over-claim, and review measured it: with
+// TaskDTO reworded to
+//
+//	``task_no`` is a short human-facing code computed from the task id;
+//	it must not be used to look a task up.
+//
+// this test is GREEN. Same claim, different words, straight past the scan.
+//
+// So what it really is: a BLOCKLIST OF THREE RETIRED SENTENCES. It stops the
+// exact prose T-5291 deleted from coming back — by a bad merge, a revert, a
+// copy-paste from an old branch, which is how this repo actually reacquires a
+// deleted sentence — and it stops nothing else. A reviewer reading a NEW
+// description still has to judge the meaning themselves; no test does that for
+// them.
+//
+// Deliberately NOT upgraded to semantic judgement. Deciding whether an
+// arbitrary English sentence contradicts a ruling is a mechanism, and a fuzzy
+// one: it would fire on honest history-explaining prose ("it used to be derived
+// from the id") and still miss a paraphrase it had not been taught. A guard
+// nobody can predict gets disabled. This one is small, exact, and says so.
+func TestSpecDoesNotReacquireTheRetiredTaskNoSentences(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "spec", "openapi.json"))
 	if err != nil {
 		t.Fatalf("read spec: %v", err)
@@ -3111,9 +3130,11 @@ func TestSpecNeverDescribesTaskNoAsADerivedNonLookupValue(t *testing.T) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatalf("parse spec: %v", err)
 	}
-	// The claims that are now FALSE. Each is checked only on a description that
-	// actually talks about task_no, so unrelated prose elsewhere is untouched.
-	banned := []string{
+	// The three sentences T-5291 deleted, verbatim. NOT a definition of "wrong"
+	// — a paraphrase of any of them passes (see the header). Each is checked
+	// only on a description that actually talks about task_no, so unrelated
+	// prose elsewhere is untouched.
+	retired := []string{
 		"derived from the id",
 		"never a lookup key",
 		"display number (T-xxxx)",
@@ -3127,13 +3148,14 @@ func TestSpecNeverDescribesTaskNoAsADerivedNonLookupValue(t *testing.T) {
 				if k == "description" {
 					if s, ok := child.(string); ok && strings.Contains(s, "task_no") {
 						seen++
-						for _, bad := range banned {
+						for _, bad := range retired {
 							if strings.Contains(s, bad) {
-								t.Errorf("%s.description talks about task_no and still "+
-									"claims %q — TaskNo returns the id unchanged "+
-									"(TestTaskNoIsTheIDItself), so this is a second, "+
-									"contradictory account of the same field, and it is "+
-									"the one MCP clients read.\nfull text: %s",
+								t.Errorf("%s.description talks about task_no and has "+
+									"reacquired the retired sentence %q — TaskNo returns "+
+									"the id unchanged (TestTaskNoIsTheIDItself), so this "+
+									"is a second, contradictory account of the same "+
+									"field, and it is the one MCP clients read.\n"+
+									"full text: %s",
 									path, bad, s)
 							}
 						}
