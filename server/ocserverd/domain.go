@@ -1474,15 +1474,16 @@ func CanAgentStepTransition(from, to string) bool {
 
 // ── tasks: display projections ────────────────────────────────────────────────
 
-// TaskNo derives the display number ("T-XXXX") from a task id ("t-<hex12>"):
-// the first four hex chars after the prefix (kyle ruling H3 — display-only,
-// collisions possible, never a lookup key).
+// TaskNo derives the display number ("T-<hex>") from a task id ("t-<hex12>"):
+// the WHOLE hex after the prefix, merely re-cased into the "T-" display form.
+//
+// Owner ruling 2026-08-25 SUPERSEDES kyle ruling H3, which cut the number to
+// the first four hex chars and accepted collisions because it was display-only.
+// The number is now as long as the id is: a number that someone reads off the
+// UI names exactly one task, so it can be pasted straight back into a lookup
+// instead of needing a short-code translation layer on the way in.
 func TaskNo(taskID string) string {
-	hex := strings.TrimPrefix(taskID, "t-")
-	if len(hex) > 4 {
-		hex = hex[:4]
-	}
-	return "T-" + hex
+	return "T-" + strings.TrimPrefix(taskID, "t-")
 }
 
 // TaskProgress counts the flattened leaf progress (SPEC §3.1: every step row

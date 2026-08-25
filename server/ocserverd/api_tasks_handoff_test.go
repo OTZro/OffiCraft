@@ -534,10 +534,11 @@ func TestBlockerCloseReleasesAndTellsTheDependentExecutor(t *testing.T) {
 	api := newTasksTestServer(t)
 	seedActiveMember(t, api, "m-creator")
 	blocker := seedHandoffTask(t, api, "t-cccc00000001", "m-creator", "m-exec", "design")
-	// Distinct task NUMBERS, not merely distinct ids: TaskNo keeps four hex
-	// digits, so the sibling ids the rest of this file uses would render both
-	// slots of the notice as the same T-cccc and a send site that swapped
-	// {blocked_task_no} for {blocker_task_no} would read as correct.
+	// Distinct task NUMBERS, not merely distinct ids. TaskNo now keeps the
+	// WHOLE id (owner ruling 2026-08-25), so sibling ids no longer collide on
+	// their own; these two stay visibly different anyway so that a send site
+	// swapping {blocked_task_no} for {blocker_task_no} is legible at a glance
+	// rather than a diff of the last hex digits.
 	dependent := seedHandoffTask(t, api, "t-dddd00000002", "m-creator", "m-next")
 	if err := api.dal.AddTaskDep(dependent.ID, blocker.ID); err != nil {
 		t.Fatalf("add dep: %v", err)
@@ -655,7 +656,10 @@ func TestASecondLiveBlockerHoldsTheReleaseBack(t *testing.T) {
 	if rec := closeReport(t, api, second.ID, second.ID+"-sa", "m-exec2", nil); rec.Code != http.StatusOK {
 		t.Fatalf("close second: %d %s", rec.Code, rec.Body.String())
 	}
-	assertHandoverChat(t, api, "m-next", TaskNo(second.ID))
+	// The notice names the BLOCKED task ({blocked_task_no}), not the blocker
+	// that was just closed. Under the four-hex number every id in this test
+	// rendered as "T-cccc", so naming the wrong one here passed by collision.
+	assertHandoverChat(t, api, "m-next", TaskNo(dependent.ID))
 }
 
 func TestTaskHasLiveBlocker(t *testing.T) {
@@ -1278,8 +1282,10 @@ func TestReplanClosesWhenASuccessorAlreadyDependsOnTheTask(t *testing.T) {
 			"too: status=%q handoff=%q task_id=%q",
 			closed.Status, closed.Handoff, closed.HandoffTaskID)
 	}
-	// half B must still fire from a replan-driven close.
-	assertHandoverChat(t, api, "m-next", TaskNo(task.ID))
+	// half B must still fire from a replan-driven close. The notice names the
+	// BLOCKED successor, not the task that closed — the two ids used to share
+	// the number "T-iiii", so this once passed either way.
+	assertHandoverChat(t, api, "m-next", TaskNo(successor.ID))
 }
 
 // mark_duplicate must stay a zero-friction call for the population the gate does

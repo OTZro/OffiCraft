@@ -25,11 +25,20 @@ import (
 // ── pure domain derivations ──────────────────────────────────────────────────
 
 func TestTaskNoDerivesFromTheIDPrefix(t *testing.T) {
-	if got := TaskNo("t-7d40aabbccdd"); got != "T-7d40" {
-		t.Fatalf("TaskNo: want T-7d40, got %q", got)
+	if got := TaskNo("t-7d40aabbccdd"); got != "T-7d40aabbccdd" {
+		t.Fatalf("TaskNo: want T-7d40aabbccdd, got %q", got)
 	}
 	if got := TaskNo("t-ab"); got != "T-ab" {
 		t.Fatalf("TaskNo short id: want T-ab, got %q", got)
+	}
+}
+
+// The number carries the WHOLE id, not a four-hex prefix of it (owner ruling
+// 2026-08-25, superseding kyle ruling H3): a displayed number that drops the
+// rest of the id cannot be pasted back to name the task it came from.
+func TestTaskNoKeepsTheWholeID(t *testing.T) {
+	if got := TaskNo("t-72dd79b666d0"); got != "T-72dd79b666d0" {
+		t.Fatalf("TaskNo must keep the whole id: want T-72dd79b666d0, got %q", got)
 	}
 }
 

@@ -1043,7 +1043,7 @@ const TERMINAL_TASK_STATUSES = new Set(["done", "terminated", "duplicated"]);
 // it for a dep whose task row is absent, exactly where the server derives it
 // rather than leaving the number blank (T-a3e4).
 function deriveMockTaskNo(taskId: string): string {
-  return `T-${taskId.slice(2, 6)}`;
+  return `T-${taskId.slice(2)}`;
 }
 
 // withWorkerTaskJoin fills the bound-task fields the SERVER now folds into the

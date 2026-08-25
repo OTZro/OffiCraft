@@ -2,7 +2,7 @@
 // server/ocserverd/domain.go.
 //
 // The first two cases are COPIED VERBATIM from the server's own pin
-// (server/ocserverd/api_tasks_test.go:25-32). That is deliberate: the two
+// (server/ocserverd/api_tasks_test.go, TestTaskNo*). That is deliberate: the two
 // sides derive the same number from the same id with no shared code, so the
 // only thing keeping them honest is that both are nailed to the SAME FACTS.
 // If the rule ever changes on the server, the two test files disagree loudly
@@ -19,35 +19,34 @@ import { deriveTaskNo } from "./taskNo";
 describe("deriveTaskNo", () => {
   // ── shared with the server pin ─────────────────────────────────────────────
 
-  it("takes the first four hex chars after the prefix", () => {
-    expect(deriveTaskNo("t-7d40aabbccdd")).toBe("T-7d40");
+  it("keeps the whole hex body after the prefix", () => {
+    expect(deriveTaskNo("t-7d40aabbccdd")).toBe("T-7d40aabbccdd");
   });
 
-  it("does NOT truncate an id shorter than four hex chars", () => {
-    // Go guards with `len(hex) > 4` before slicing; anything that unwraps to
-    // a fixed-width take (e.g. a /^t-(.{4})/ match) diverges right here.
+  it("keeps a short id intact too — nothing is padded or cut", () => {
     expect(deriveTaskNo("t-ab")).toBe("T-ab");
+  });
+
+  it("keeps the whole id (owner ruling 2026-08-25)", () => {
+    // The number is the id, re-cased: read it off the UI, paste it back, and
+    // it names exactly one task. Any four-char take answers "T-72dd" here.
+    expect(deriveTaskNo("t-72dd79b666d0")).toBe("T-72dd79b666d0");
   });
 
   // ── real-world shape ──────────────────────────────────────────────────────
 
-  it("shortens a real t-<hex12> id to the number shown on the card", () => {
-    // The bug this helper exists for: the dep fallback used to print the left
-    // side of this expectation instead of the right.
-    expect(deriveTaskNo("t-1d8292a2f8db")).toBe("T-1d82");
+  it("prints a real t-<hex12> id as the number shown on the card", () => {
+    // The bug this helper exists for: the dep fallback used to print the raw
+    // id form (lowercase "t-") instead of the "T-" display form.
+    expect(deriveTaskNo("t-1d8292a2f8db")).toBe("T-1d8292a2f8db");
   });
-
-  // (No pin for an id of exactly four hex chars: `slice` clamps, so no
-  // plausible wrong implementation can answer anything but "T-abcd" there.
-  // A pin nothing can break is not protection — the truncation boundary is
-  // covered from both sides by the two cases above and below instead.)
 
   // ── malformed / boundary ids ──────────────────────────────────────────────
 
   it("trims the prefix rather than dropping two chars unconditionally", () => {
     // strings.TrimPrefix returns the string UNCHANGED when the prefix is
-    // absent. A hand-rolled slice(2, 6) would answer "T-c123" here.
-    expect(deriveTaskNo("abc123")).toBe("T-abc1");
+    // absent. A hand-rolled slice(2) would answer "T-c123" here.
+    expect(deriveTaskNo("abc123")).toBe("T-abc123");
   });
 
   it("keeps a prefixless id shorter than the prefix itself intact", () => {
@@ -65,7 +64,7 @@ describe("deriveTaskNo", () => {
     expect(deriveTaskNo("t-")).toBe("T-");
   });
 
-  it("truncates an over-long id to four chars like any other", () => {
-    expect(deriveTaskNo("t-" + "f".repeat(64))).toBe("T-ffff");
+  it("does not truncate even an implausibly long id", () => {
+    expect(deriveTaskNo("t-" + "f".repeat(64))).toBe("T-" + "f".repeat(64));
   });
 });

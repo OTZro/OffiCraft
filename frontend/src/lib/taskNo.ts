@@ -1,14 +1,14 @@
-// Task display number ("T-XXXX") derived on the frontend — a MIRROR of
-// `TaskNo` in server/ocserverd/domain.go (kyle ruling H3: display-only, the
-// first four hex chars after the "t-" prefix; collisions are possible and it
-// is never a lookup key).
+// Task display number ("T-<hex>") derived on the frontend — a MIRROR of
+// `TaskNo` in server/ocserverd/domain.go (owner ruling 2026-08-25: the number
+// carries the WHOLE id, so it names exactly one task and can be pasted back
+// into a lookup; this SUPERSEDES kyle ruling H3, under which the number was
+// only the first four hex chars and collisions were accepted).
 //
 // WHY a mirror exists at all: the dep row on a task card normally prints the
 // server-supplied `dep.task_no`. When a dep cannot be resolved against the
 // frontend's task list, the fallback branches had no `task_no` to print and
-// fell back to the RAW id (`t-1d8292a2f8db`) — visibly longer than the short
-// number on the card itself. Deriving the number here makes the fallback
-// print the same `T-1d82` as every other surface.
+// fell back to the RAW id (`t-1d8292a2f8db`). Deriving the number here makes
+// the fallback print the same `T-1d8292a2f8db` as every other surface.
 //
 // WHY the comment matters: this is a rule COPIED ACROSS the wire boundary.
 // If someone changes TaskNo on the server, nothing notifies this file — this
@@ -23,21 +23,13 @@
 // delete it rather than treating it as permanent design to build on.
 
 /**
- * Derive the display number ("T-XXXX") from a task id ("t-<hex12>").
+ * Derive the display number ("T-<hex>") from a task id ("t-<hex12>").
  *
- * Mirrors the Go original's two easy-to-miss edges: the prefix is TRIMMED (an
- * id without "t-" is passed through whole, not blindly sliced by two), and a
- * short id is NOT truncated. Go needs an explicit `len(hex) > 4` guard before
- * `hex[:4]` because Go slicing panics past the end; JS `slice` clamps
- * instead, so the guard is inherent here — same behavior, one less branch.
- *
- * Equivalence is claimed for the ids the server actually mints ("t-" + hex),
- * not for arbitrary strings: Go's `hex[:4]` counts BYTES, this counts UTF-16
- * code units, so a non-ASCII id would diverge. Ids are hex, so the two never
- * meet that case — but "line for line", which an earlier draft of this
- * comment claimed, was stronger than what was checked.
+ * Mirrors the Go original's one easy-to-miss edge: the prefix is TRIMMED (an
+ * id without "t-" is passed through whole, not blindly sliced by two). Nothing
+ * is truncated on either side — the number is the id, re-cased.
  */
 export function deriveTaskNo(taskId: string): string {
   const hex = taskId.startsWith("t-") ? taskId.slice(2) : taskId;
-  return "T-" + hex.slice(0, 4);
+  return "T-" + hex;
 }
