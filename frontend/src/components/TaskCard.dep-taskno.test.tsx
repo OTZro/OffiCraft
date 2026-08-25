@@ -1,6 +1,10 @@
 // T-c21e ② — owner 2026-07-20, on the T-1d82 驗收 card:
 //   「另外那些 ID 應該要跟任務卡上面顯示的一樣,任務卡上的 ID 似乎沒這麼長」
 //
+// (The card's number is no longer short at all — owner ruled 2026-08-25 that
+// it carries the whole id. What survives of the complaint is the part that
+// still binds: the dep row and the card must show the SAME number.)
+//
 // The complaint is about a MISMATCH between two surfaces, so every assertion
 // below compares the dep row against the CARD, rather than against a literal
 // typed out by hand. A test that only pinned "the row says T-1d82" would stay
@@ -29,12 +33,19 @@ import { I18nProvider } from "../i18n";
 import { TasksPage } from "./TasksPage";
 import { TaskCard } from "./TaskCard";
 import { __resetMock, __injectMockTask } from "../api/mock";
+import { deriveTaskNo } from "../lib/taskNo";
 import type { TaskView } from "../api/adapter";
 
 /** A real-shaped task id — 12 hex after the prefix, as the server mints them.
  * The fallback rows are fed THIS, and the point of the ticket is that they
- * must not print it whole. */
+ * print the DISPLAY number for it, never the raw id. */
 const LONG_ID = "t-1d8292a2f8db";
+
+/** What the number for LONG_ID must be, written out. It is deliberately NOT
+ * `deriveTaskNo(LONG_ID)`: the fixture below calls that function, so pinning
+ * the expectation to it too would move both sides together and the test could
+ * never fail. Owner ruling 2026-08-25 — the number carries the WHOLE id. */
+const LONG_NO = "T-1d8292a2f8db";
 
 let seq = 0;
 
@@ -96,7 +107,10 @@ function withDepJoin(
       const dep = allTasks.find((x) => x.id === id);
       return {
         id,
-        taskNo: dep?.taskNo ?? `T-${id.slice(2, 6)}`,
+        // The server's own projection, called — NOT a third hand-rolled copy
+        // of it. A local `T-${id.slice(2, 6)}` used to live here and drifted
+        // the moment TaskNo stopped truncating, while still reading green.
+        taskNo: dep?.taskNo ?? deriveTaskNo(id),
         title: dep?.title ?? "",
         status: dep?.status ?? "",
       };
@@ -140,26 +154,29 @@ describe("T-c21e ② 兩條 fallback 都不再吐原始長 id", () => {
   // `unresolved` — the population is still the open-only fast path, so the row
   // cannot name the dep yet. It can still NUMBER it: the short form is a pure
   // projection of the id, available without resolving anything.
-  it("unresolved 列顯示短編號,且畫面上找不到原始長 id", () => {
+  it("unresolved 列顯示完整編號,且畫面上找不到原始長 id", () => {
     const blocked = mkTask({ title: "被擋住的", deps: [LONG_ID] });
     const { container } = renderCard(blocked, [blocked], false);
 
     const [row] = depRows(container);
     expect(row.getAttribute("data-dep-state")).toBe("unresolved");
-    expect(row.textContent).toContain("T-1d82");
-    // The regression itself, stated as the thing that must be absent.
+    expect(row.textContent).toContain(LONG_NO);
+    // The regression itself, stated as the thing that must be absent. ⚠️ Since
+    // the number now carries the whole id, this and the line above differ only
+    // in the case of the prefix — a narrower guard than it was when the number
+    // was four chars, but still the one that catches a row printing `t-…`.
     expect(row.textContent).not.toContain(LONG_ID);
   });
 
   // `missing` — the full population IS in hand and the dep is genuinely not in
   // it. Different sentence, same numbering rule; the predecessor fixed neither.
-  it("missing 列顯示短編號,且畫面上找不到原始長 id", () => {
+  it("missing 列顯示完整編號,且畫面上找不到原始長 id", () => {
     const blocked = mkTask({ title: "被擋住的", deps: [LONG_ID] });
     const { container } = renderCard(blocked, [blocked], true);
 
     const [row] = depRows(container);
     expect(row.getAttribute("data-dep-state")).toBe("missing");
-    expect(row.textContent).toContain("T-1d82");
+    expect(row.textContent).toContain(LONG_NO);
     expect(row.textContent).not.toContain(LONG_ID);
   });
 
@@ -192,7 +209,7 @@ describe("T-c21e ② 解析得到的 dep 仍以 server 的 task_no 為準", () =
   // mutant this catches is "now that we have a helper, use it everywhere".
   it("非終態 dep 列印的是 dep.taskNo,不是從 id 派生的值", async () => {
     // taskNo and id are deliberately INCONSISTENT: derivation would yield
-    // T-9999, the server's value is T-abcd. Only one of them can be on screen,
+    // T-9999ffffffff, the server's value is T-abcd. Only one can be on screen,
     // so this distinguishes the two sources — which identical values could not.
     const dep = mkTask({
       id: "t-9999ffffffff",
@@ -206,7 +223,7 @@ describe("T-c21e ② 解析得到的 dep 仍以 server 的 task_no 為準", () =
     const [row] = depRows(container);
     expect(row.getAttribute("data-dep-state")).toBe("open");
     expect(row.textContent).toContain("T-abcd");
-    expect(row.textContent).not.toContain("T-9999");
+    expect(row.textContent).not.toContain("T-9999ffffffff");
   });
 });
 
