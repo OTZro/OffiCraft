@@ -18,10 +18,10 @@ function mkWorker(over: Partial<OutsourceWorkerView>): OutsourceWorkerView {
     model: "Opus 4.6",
     effort: "high",
     status: "active",
-    taskId: "t-1",
+    taskId: "t-3ed85291a010",
     taskTitle: "聊天寄件者標籤顯示外包代號",
     taskStatus: "in_progress",
-    taskNo: "T-3ed8",
+    taskNo: "t-3ed85291a010",
     taskTypeName: "OC 開發",
     presence: "online",
     ...over,
@@ -30,7 +30,7 @@ function mkWorker(over: Partial<OutsourceWorkerView>): OutsourceWorkerView {
 
 const workers: OutsourceWorkerView[] = [
   mkWorker({ id: "ow-1", codename: "O-30" }),
-  mkWorker({ id: "ow-2", codename: "H-12", taskNo: "T-9c21", taskTypeName: "review-pr" }),
+  mkWorker({ id: "ow-2", codename: "H-12", taskNo: "t-9c215291a014", taskTypeName: "review-pr" }),
 ];
 
 export function OutsourceRowLabelStory() {

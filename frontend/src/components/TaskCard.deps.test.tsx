@@ -372,14 +372,11 @@ describe("T-1d82 ③ 壞 id: 明說查無, 不可點, 不炸版", () => {
     // A handle on whatever this was STAYS — it just no longer masquerades as a
     // resolved dep. T-c21e narrowed WHICH handle: owner 2026-07-20 asked for
     // the id here to match the card's, so it is now the short number rather
-    // than the raw id this line used to pin. The tradeoff is deliberate and
-    // worth naming: the short form is display-only and can collide, so it is a
-    // weaker handle than the full id for anyone debugging from a screenshot.
-    // Consistency with every other surface won. The full id survives in the
-    // row's `title` — but only where a hover exists, i.e. NOT on the phone,
-    // which is where the cockpit is mostly read. State the limit rather than
-    // let the `title` read as if nothing were lost.
-    expect(dep.textContent).toContain("T-dead");
+    // T-5291 (owner 2026-08-25) settled the tradeoff this comment used to
+    // agonise over: the number IS the id now, so nothing is lost to a
+    // screenshot and the short-form-collides caveat is void. The `title`
+    // below still carries the id, which is simply the same string.
+    expect(dep.textContent).toContain("t-deadbeefdead");
     expect(dep.textContent).toContain("查無此任務");
   });
 
@@ -428,11 +425,11 @@ describe("T-1d82 ③ 壞 id: 明說查無, 不可點, 不炸版", () => {
     );
     const dep = container.querySelector('[data-testid="task-dep"]')!;
     expect(dep.getAttribute("data-dep-state")).toBe("unresolved");
-    // It says only what it knows: waiting on this dep, cannot name it yet.
-    // T-c21e: the number shown is the short form (owner: match the card), and
-    // the exact id moved to `title` so an unresolvable dep stays debuggable.
-    expect(dep.textContent).toContain("T-not-");
-    expect(dep.textContent).not.toContain("t-not-loaded-yet");
+    // It says only what it knows: waiting on this dep, cannot name it yet —
+    // but it can NAME it. T-5291: the number is the id, so the row and the
+    // `title` now carry the same string (the old `not.toContain` here asserted
+    // the opposite and is deleted, not relaxed — it can no longer be true).
+    expect(dep.textContent).toContain("t-not-loaded-yet");
     expect(dep.getAttribute("title")).toBe("t-not-loaded-yet");
     expect(dep.textContent).not.toContain("查無此任務");
     // And it does not wear the 壞 id styling either — that class IS the claim.

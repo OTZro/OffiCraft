@@ -6494,7 +6494,7 @@ export interface components {
             task_id: string;
             /**
              * Task No
-             * @description The bound task's display number (T-xxxx) — the panel row's third line, previously joined client-side from ``GET /api/tasks`` (T-a3e4). "" when the task cannot be resolved. additive-optional.
+             * @description The bound task's display number, which IS its id (T-5291) — the panel row's third line, previously joined client-side from ``GET /api/tasks`` (T-a3e4). "" when the task cannot be resolved. additive-optional.
              * @default
              */
             task_no: string;
@@ -8089,7 +8089,7 @@ export interface components {
         };
         /**
          * TaskDTO
-         * @description One task (M3 任務卡): a workflow with a Definition of Done, executed by a roster member or an anonymous outsource worker. ``task_no`` is the display number derived from the id (never a lookup key). ``status`` is DERIVED from the steps (not agent-reported): the work states not_started/in_progress/waiting_owner/waiting_external plus the terminals done/terminated/duplicated. ``reassigning`` is NO LONGER a status — it is the orthogonal ``lock`` field (the owner/admin handover hold, cleared by the claim action; see ``POST /api/tasks/{task_id}/reassign``); ``priority`` includes ``frozen`` (pause-pushing — a priority, not a status). ``executor_kind='outsource'`` with an empty ``executor_id`` is the transient unassigned state. ``closed_ts`` is null while open. ``deps`` are the blocking task ids (display markers, never a status change); ``progress_done``/``progress_total`` count step leaves (``superseded`` replan history counts toward neither side). ``closeout_reported`` flips true once the executor reports the close-out follow-ups done (``report_task_closeout``; terminal tasks only). ``creator_id`` is the verified token sub of the task's creator (a member id, an outsource worker id, or the literal "owner"); "" on rows created before the column existed. ``duplicate_of`` is the id of the ORIGINAL task this one duplicates — non-empty ONLY while ``status='duplicated'`` (MCP ``mark_duplicate``); the graph is depth-1 by construction so the cockpit link always resolves in one hop.
+         * @description One task (M3 任務卡): a workflow with a Definition of Done, executed by a roster member or an anonymous outsource worker. ``task_no`` IS the id itself, unchanged (T-5291) — there is no projection any more, so the number shown in the UI is byte-for-byte the ``task_id`` you look the task up with. ``status`` is DERIVED from the steps (not agent-reported): the work states not_started/in_progress/waiting_owner/waiting_external plus the terminals done/terminated/duplicated. ``reassigning`` is NO LONGER a status — it is the orthogonal ``lock`` field (the owner/admin handover hold, cleared by the claim action; see ``POST /api/tasks/{task_id}/reassign``); ``priority`` includes ``frozen`` (pause-pushing — a priority, not a status). ``executor_kind='outsource'`` with an empty ``executor_id`` is the transient unassigned state. ``closed_ts`` is null while open. ``deps`` are the blocking task ids (display markers, never a status change); ``progress_done``/``progress_total`` count step leaves (``superseded`` replan history counts toward neither side). ``closeout_reported`` flips true once the executor reports the close-out follow-ups done (``report_task_closeout``; terminal tasks only). ``creator_id`` is the verified token sub of the task's creator (a member id, an outsource worker id, or the literal "owner"); "" on rows created before the column existed. ``duplicate_of`` is the id of the ORIGINAL task this one duplicates — non-empty ONLY while ``status='duplicated'`` (MCP ``mark_duplicate``); the graph is depth-1 by construction so the cockpit link always resolves in one hop.
          */
         TaskDTO: {
             /** Artifacts */
@@ -8334,7 +8334,7 @@ export interface components {
         };
         /**
          * TaskDepRefDTO
-         * @description One dependency of a task, resolved to the facts the 「等 T-xxxx」 row shows (T-a3e4): the dep's own ``task_no``, ``title`` and ``status``. ``id`` is the dep id as stored on the depending task, so the client can pair an entry with ``deps`` positionally OR by id. ``task_no`` is the same pure projection of the id every other surface prints, so it is filled even for a dep whose task row is GONE; ``title``/``status`` are "" in exactly that case — an unresolvable dep, never a fabricated 尚未執行.
+         * @description One dependency of a task, resolved to the facts the 「等 <task_no>」 row shows (T-a3e4): the dep's own ``task_no``, ``title`` and ``status``. ``id`` is the dep id as stored on the depending task, so the client can pair an entry with ``deps`` positionally OR by id. ``task_no`` is the id itself (T-5291 — no projection any more), so it is filled even for a dep whose task row is GONE; ``title``/``status`` are "" in exactly that case — an unresolvable dep, never a fabricated 尚未執行.
          */
         TaskDepRefDTO: {
             /** Id */
@@ -8383,7 +8383,7 @@ export interface components {
             deps: string[];
             /**
              * Dep Tasks
-             * @description The DISPLAY facts for each id in ``deps``, resolved server-side against the WHOLE task table — one entry per dep, in the same order (T-a3e4). The client renders the 「等 T-xxxx <標題>」 row straight from this: no follow-up fetch, and no need to download the closed population just so an already-finished dep can be named. A dep whose task no longer exists is still listed, with ``status``/``title`` empty — that is the honest 查無此任務 row. The field being ABSENT is a third, different thing (an older server that cannot resolve deps at all), so a client must not read absence as non-existence. additive-optional.
+             * @description The DISPLAY facts for each id in ``deps``, resolved server-side against the WHOLE task table — one entry per dep, in the same order (T-a3e4). The client renders the 「等 <task_no> <標題>」 row straight from this: no follow-up fetch, and no need to download the closed population just so an already-finished dep can be named. A dep whose task no longer exists is still listed, with ``status``/``title`` empty — that is the honest 查無此任務 row. The field being ABSENT is a third, different thing (an older server that cannot resolve deps at all), so a client must not read absence as non-existence. additive-optional.
              */
             dep_tasks?: components["schemas"]["TaskDepRefDTO"][];
             /**

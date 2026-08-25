@@ -117,7 +117,7 @@ describe("per-item DTO gaps are what the adapter really does (T-8115 follow-up)"
     );
     expect(listRow).toBeDefined();
     // The light list resolves every dep server-side (T-a3e4) — that join is what
-    // the card renders 「等 T-xxxx <標題>」 from.
+    // the card renders 「等 <task id> <標題>」 from.
     expect(listRow!.depTasks).toBeDefined();
     expect(listRow!.depTasks?.[0]?.title).toBe("the blocker");
 

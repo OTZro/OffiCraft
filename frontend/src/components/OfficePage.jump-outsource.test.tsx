@@ -154,7 +154,7 @@ describe("OfficePage — 跳到原訊息 to an outsource sender", () => {
     const { findByTestId, container } = renderOffice();
 
     // The LIVE worker chat renders its task-line subtitle (the rail row's
-    // [T-xxxx chip → type], owner 2026-07-16), not the released placeholder
+    // [task-id chip → type], owner 2026-07-16), not the released placeholder
     // and not a member presence.
     await findByTestId("outsource-chat-sub");
     expect(

@@ -1,6 +1,6 @@
 // Mock adapter parity for the task-card message box (owner → executor, POST
 // /api/tasks/{id}/message). The server stores the TRIMMED body prefixed with
-// the task's display number ([T-xxxx]); the mock must produce the identical
+// the task's number ([<task id>]); the mock must produce the identical
 // string so FE dev/tests reflect real behavior. This pins the trim + prefix
 // against a body that carries leading/trailing whitespace.
 

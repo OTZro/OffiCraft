@@ -2157,7 +2157,7 @@ button.chat__msg-file {
   .office {
     /* T-959d: `1fr` is `minmax(auto, 1fr)`, and that `auto` floor is the grid
      * item's MIN-CONTENT — so anything in the rail that refuses to shrink (the
-     * nowrap task-type label, the `flex: none` T-xxxx chip, a member name with
+     * nowrap task-type label, the `flex: none` task-id chip, a member name with
      * an unbreakable latin run) widens the TRACK, and the whole page drags
      * sideways with the unread pill pushed off the right edge. `minmax(0, 1fr)`
      * lets the track shrink to the viewport; the contents that would then
@@ -2225,7 +2225,7 @@ button.chat__msg-file {
 
 /* ---- 外包 worker list (M3 SPEC §4; T-66a8: list-only — the head/toggle/gear
  * moved out to the tab switcher + recruit button). Row line = 代號 / [綠點 +
- * T-xxxx chip + task type] — NO model name (the codename implies it), NO
+ * task-id chip + task type] — NO model name (the codename implies it), NO
  * 識別鍵 / task id. ---- */
 .outsource-panel {
   min-height: 0;
@@ -2370,7 +2370,7 @@ button.chat__msg-file {
   color: var(--color-text-strong);
 }
 /* line 2's type half — the bound task's TYPE where the member card's role
- * sits (owner 2026-07-14; since 2026-07-16 it sits AFTER the T-xxxx chip on
+ * sits (owner 2026-07-14; since 2026-07-16 it sits AFTER the task-id chip on
  * the same line, and the presence 點 moved out to the LINE START — a direct
  * task-line child, member-row parity). */
 .outsource-row__type {
@@ -2425,7 +2425,7 @@ button.chat__msg-file {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* The T-xxxx chip is a BUTTON (jump to the task card), not a plain label —
+/* The task-id chip is a BUTTON (jump to the task card), not a plain label —
  * the amber accent it inherits from the old link chip signals "clickable". */
 .outsource-row__chip--task {
   color: var(--color-dot-waking);
@@ -2439,7 +2439,7 @@ button.chat__msg-file {
 }
 
 /* Outsource chat header subtitle — the SAME task line as the rail row
- * ([T-xxxx chip → type], shared OutsourceTaskLine; owner 2026-07-16:
+ * ([task-id chip → type], shared OutsourceTaskLine; owner 2026-07-16:
  * 兩邊顯示一樣的東西), minus the dot. REPLACES the member PresenceBadge —
  * a worker has no presence to project (and the released-peer subtitle still
  * renders plain text here). */

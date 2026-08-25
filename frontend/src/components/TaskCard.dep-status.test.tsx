@@ -28,6 +28,7 @@ import { TasksPage } from "./TasksPage";
 import { TaskCard } from "./TaskCard";
 import { __resetMock, __injectMockTask } from "../api/mock";
 import type { TaskView } from "../api/adapter";
+import { deriveTaskNo } from "../lib/taskNo";
 
 let seq = 0;
 
@@ -110,7 +111,14 @@ function withDepJoin(
       const dep = allTasks.find((x) => x.id === id);
       return {
         id,
-        taskNo: dep?.taskNo ?? `T-${id.slice(2, 6)}`,
+        // ⚠️ DEAD BRANCH in this file — every dep below is present in
+        // allTasks, so `dep.taskNo` always wins (verified by making this side
+        // throw: all 9 tests still passed). It used to hold a hand-rolled
+        // `T-${id.slice(2, 6)}` copy of the server's projection, which drifted
+        // silently when the projection changed because nothing ever ran it.
+        // It now calls the one seam instead of restating anything. The LIVE
+        // coverage of this fallback is in TaskCard.dep-taskno.test.tsx.
+        taskNo: dep?.taskNo ?? deriveTaskNo(id),
         title: dep?.title ?? "",
         status: dep?.status ?? "",
       };

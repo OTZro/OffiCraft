@@ -10,12 +10,20 @@
 // The first layer wider than the window is `.office` and its
 // `grid-template-columns: 1fr` under the 720px media query: `1fr` is
 // `minmax(auto, 1fr)`, and that `auto` floor is the grid item's MIN-CONTENT.
-// Content that refuses to shrink (the `T-xxxx` chip is `flex: none`, the type
+// Content that refuses to shrink (the task-number chip is `flex: none`, the type
 // label is `nowrap`, `.member-card__name` declared no wrapping at all) pushes
 // that floor past the viewport, the whole row widens with the track, and the
 // unread pill — `flex: none` at the row's flex end — is what gets pushed out.
 // Rows WITHOUT a pill widen exactly the same; they just have nothing at the
 // right edge, which is why the screenshot made the pill look guilty.
+//
+// ⚠️ THE FLOOR IS WIDER NOW THAN WHEN THIS WAS MEASURED. T-5291 made the task
+// number the FULL task id, so this story's chips carry ids like
+// `t-959d5291a011` where the 2026-08-15 recon measured a four-hex `T-959d`.
+// That is a deliberately harsher fixture, not a stale one, and it is the shape
+// production ships. The assertions below re-measure at run time and are
+// unconditional (`.office` overflow ≤ 1px), so the widened chip is exercised,
+// not assumed away — it stayed green when the fixture was widened.
 //
 // The fix is therefore at the track (`minmax(0, 1fr)` lets it shrink) PLUS the
 // two contents that could then overflow the shrunk track instead: the rail

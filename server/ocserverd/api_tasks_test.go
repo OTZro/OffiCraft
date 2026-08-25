@@ -24,12 +24,30 @@ import (
 
 // ── pure domain derivations ──────────────────────────────────────────────────
 
-func TestTaskNoDerivesFromTheIDPrefix(t *testing.T) {
-	if got := TaskNo("t-7d40aabbccdd"); got != "T-7d40" {
-		t.Fatalf("TaskNo: want T-7d40, got %q", got)
+// TaskNo IS the id — no prefix swap, no case change, no truncation.
+//
+// The "T-" display form was tried first and did not survive review: the number
+// on screen read "T-72dd79b666d0" while the id was "t-72dd79b666d0", and task
+// lookup is `SELECT … WHERE id = ?` against `id TEXT PRIMARY KEY` with no
+// COLLATE NOCASE, so pasting the displayed number back still 404s. A projection
+// that differs from the id by even one character buys nothing and costs a
+// mapping nobody can see. Owner 2026-08-25: 「Make it simple, no need
+// complicated mechanism unless my approval」.
+func TestTaskNoIsTheIDItself(t *testing.T) {
+	for _, id := range []string{"t-72dd79b666d0", "t-7d40aabbccdd", "t-ab", ""} {
+		if got := TaskNo(id); got != id {
+			t.Fatalf("TaskNo(%q) must be the id itself, got %q", id, got)
+		}
 	}
-	if got := TaskNo("t-ab"); got != "T-ab" {
-		t.Fatalf("TaskNo short id: want T-ab, got %q", got)
+}
+
+// The case of the prefix is the whole point of the case above, so it gets its
+// own failure message: this is the exact character that made the displayed
+// number un-pasteable.
+func TestTaskNoDoesNotRecaseThePrefix(t *testing.T) {
+	if got := TaskNo("t-72dd79b666d0"); strings.HasPrefix(got, "T-") {
+		t.Fatalf("TaskNo must not upper-case the prefix — lookup is "+
+			"case-sensitive, so %q cannot be pasted back", got)
 	}
 }
 

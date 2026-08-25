@@ -79,8 +79,10 @@ async function assertNoOverflow(page: any, width: number) {
 
   // (3) T-c21e — the dep row's NON-VACUITY sentinels. The row is flex-NOWRAP
   // and only `.task-card__dep-title` may give way (min-width: 0); the new 狀態
-  // badge, ⏱/✓, 「等 T-xxxx」 and ↗ are all `flex: none; nowrap` and form a
-  // hard floor. Adding the badge raised that floor days after 1ea673e stopped
+  // badge, ⏱/✓, 「等 <編號>」 and ↗ are all `flex: none; nowrap` and form a
+  // hard floor. T-5291 made 編號 the full task id rather than a four-hex short
+  // code, so that floor is ~56px wider than when this guard was written; the
+  // story's fixtures carry full-length ids so the number below is production's. Adding the badge raised that floor days after 1ea673e stopped
   // the phone scrolling sideways, so the row belongs under this guard.
   //
   // A per-row `scrollWidth - clientWidth` check IS asserted below, and the

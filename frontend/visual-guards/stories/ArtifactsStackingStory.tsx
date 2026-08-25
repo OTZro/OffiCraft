@@ -24,8 +24,8 @@ const DATA_URL = "data:text/markdown;charset=utf-8," + encodeURIComponent(MD);
 // both, so a card built from it would let the stacking probe walk right past
 // half of what was reported.
 const TASK = mkTask({
-  id: "t-76cd",
-  taskNo: "T-76cd",
+  id: "t-76cd5291a007",
+  taskNo: "t-76cd5291a007",
   title: "stacking",
   reassignedFrom: "m-prev",
   dedupeKey: "t-76cd-stacking",

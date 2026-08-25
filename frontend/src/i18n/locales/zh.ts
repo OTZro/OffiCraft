@@ -89,7 +89,7 @@ export const zh = {
     outsource: "外包",
     unassigned: "未指派",
     adhoc: "自由代辦",
-    // 卡頭 label column(T-705e):欄名等寬對齊,值以 chip 呈現。☑ #T-xxxx
+    // 卡頭 label column(T-705e):欄名等寬對齊,值以 chip 呈現。☑ #任務編號
     // 徽章移居徽章列(v2),不再帶欄名。
     typeLabel: "任務類型",
     assigneeLabel: "負責人",
@@ -99,7 +99,7 @@ export const zh = {
     creatorUnknown: "—",
     // 任務類型列(齒輪)點了跳該類型的設定頁
     typeSettingsLink: "開啟任務類型設定",
-    // 負責人／建立者列點了開對應聊天視窗、輸入框帶 [T-xxxx] 前綴
+    // 負責人／建立者列點了開對應聊天視窗、輸入框帶 [任務編號] 前綴
     messageAssignee: "傳訊息給負責人",
     messageCreator: "傳訊息給建立者",
     // 前任列(T-ba04 轉派交接)：轉派後任務卡顯示「前任」給接手人交接對話
@@ -185,7 +185,7 @@ export const zh = {
     // 收起時的字面留著「備註」兩字是刻意的 —— 有備註的步驟與沒備註的步驟,
     // 在收起狀態下就靠這顆按鈕在不在分辨。
     stepNoteExpand: "展開備註",
-    // deps:「等 T-xxxx」chip 可多筆(mockup 樣式,owner 2026-07-13)
+    // deps:「等 <任務編號>」chip 可多筆(mockup 樣式,owner 2026-07-13)
     blockedByLabel: "等",
     // T-1d82:dep 指向的任務查不到(已刪 / 壞 id)。保留原始 id(那是僅剩的線索),
     // 但明說「查無此任務」,免得這列被讀成「連結壞了」。

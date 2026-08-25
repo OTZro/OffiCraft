@@ -1608,7 +1608,7 @@ function SessionRow({
 
 /** One outsource-worker session row. Shares the SessionRow td shape so the two
  * kinds read as a single list. The member cell shows the anonymous codename
- * (O-xx) over its task context (title → type → T-xxxx) so the reader can tell
+ * (O-xx) over its task context (title → type → 任務編號) so the reader can tell
  * WHAT the worker is doing; every runtime column falls back to an honest dash
  * when the worker never reported it.
  *
@@ -1641,7 +1641,8 @@ function OutsourceSessionRow({
   const { t, msg } = useI18n();
 
   // Task context for the sub-line: the bound task's title first, then its type
-  // name, then the T-xxxx number — honest dash when none resolved.
+  // name, then the task number (the full id since T-5291, not a four-hex short
+  // form) — honest dash when none resolved.
   const context =
     worker.taskTitle || worker.taskTypeName || worker.taskNo || dash;
 

@@ -42,8 +42,8 @@ const LONG_NOTE = (n: number) =>
 // to feed the reader a long body. Nothing in the guard varies it any more.
 const makeTask = (noteRepeat: number) =>
   mkTask({
-    id: "t-4e39",
-    taskNo: "T-4e39",
+    id: "t-4e395291a003",
+    taskNo: "t-4e395291a003",
     title: "步驟備註展開後畫面要停在你點開的那一則",
     status: "in_progress",
     description: "九個步驟,每一步都有一則夠長的備註。",

@@ -74,8 +74,8 @@ const DESC = [
 ].join("\n");
 
 const QUOTE_TASK = mkTask({
-  id: "t-4aa0f",
-  taskNo: "T-4aa0",
+  id: "t-4aa05291a004",
+  taskNo: "t-4aa05291a004",
   title: "前端開發規範要拆成有結構、隨需載入",
   status: "waiting_owner",
   description: DESC,
@@ -112,8 +112,8 @@ const TABLE_ONLY = [
 ].join("\n");
 
 const TABLE_TASK = mkTask({
-  id: "t-4aa0t",
-  taskNo: "T-4aa1",
+  id: "t-4aa15291a005",
+  taskNo: "t-4aa15291a005",
   title: "只有寬表格、沒有程式碼區塊",
   status: "in_progress",
   description: TABLE_ONLY,

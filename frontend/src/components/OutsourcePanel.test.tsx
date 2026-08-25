@@ -2,7 +2,7 @@
 //   1. Rows render the two-line shape (owner 2026-07-16, folding the
 //      2026-07-14 report's lines 2+3 into one; second ruling the same day
 //      puts the dot at the line start): 代號 / [presence 點 at 行首, THEN the
-//      clickable T-xxxx chip, THEN task type — one line] — NO model name
+//      clickable task-id chip, THEN task type — one line] — NO model name
 //      (the codename implies it), NO task title, NO 識別鍵, NO status word.
 //   2. Ordering 依任務建立時間新→舊 (the bound TASK's created_ts, not the
 //      worker's own mint stamp).
@@ -12,9 +12,9 @@
 //   4. Clicking a row opens a CHAT CHANNEL with that worker: the worker id
 //      rides the SAME chatId hash slot (#office/chat/<ow-id>) and the chat
 //      header shows 「外包 · 代號」 (the member ChatArea, reused) over the
-//      SAME task line as the rail row ([T-xxxx chip → type], shared
+//      SAME task line as the rail row ([task-id chip → type], shared
 //      OutsourceTaskLine, no dot — owner 2026-07-16: 兩邊顯示一樣的東西);
-//      a T-xxxx chip (row or header) instead jumps to the task card
+//      a task-id chip (row or header) instead jumps to the task card
 //      (#tasks/<taskId>).
 //   5. The 招攬新成員 button (sidebar bottom) opens the cap popover on the
 //      外包 tab (PATCH /api/settings); 0 annotates 已暫停指派. (No gear on the
@@ -111,7 +111,7 @@ beforeEach(() => {
 });
 
 describe("OutsourcePanel", () => {
-  it("renders 代號 / [T-xxxx chip → task type + presence 點] one line + the task TITLE line (T-3451) — NO model·識別鍵·狀態字", async () => {
+  it("renders 代號 / [task-id chip → task type + presence 點] one line + the task TITLE line (T-3451) — NO model·識別鍵·狀態字", async () => {
     const now = Date.now() / 1000;
     const task = mkTask({
       id: "t-a",
@@ -141,7 +141,7 @@ describe("OutsourcePanel", () => {
     expect(row.textContent).toContain("外包 · O-7");
     // line 2 — ONE line (owner 2026-07-16, second ruling): the PRESENCE dot at
     // the LINE START (member-row parity — the shared LifecycleDot; this worker
-    // really is online, so it is the green one), THEN the T-xxxx chip, THEN the
+    // really is online, so it is the green one), THEN the task-id chip, THEN the
     // bound task's TYPE.
     const taskLine = await findByTestId("outsource-task-line-ow-a");
     const chip = within(taskLine).getByTestId("outsource-task-ow-a");
@@ -305,7 +305,7 @@ describe("OutsourcePanel", () => {
     expect(taskLine.querySelector("button[title*='設定']")).toBeNull();
   });
 
-  it("clicking the T-xxxx chip jumps to the task page — not the chat", async () => {
+  it("clicking the task-id chip jumps to the task page — not the chat", async () => {
     __injectMockTask(
       mkTask({ id: "t-jump", taskNo: "T-950f", typeKey: "review-pr", createdTs: 70 })
     );
@@ -560,7 +560,7 @@ describe("OutsourcePanel", () => {
     // The worker id rides the SAME chatId hash slot as a member chat.
     expect(window.location.hash).toBe("#office/chat/ow-1");
     // ChatArea header: 「外包 · 代號」 + the SAME task line the rail row shows
-    // (owner 2026-07-16: 兩邊顯示一樣的東西 — [T-xxxx chip → type]), NOT the
+    // (owner 2026-07-16: 兩邊顯示一樣的東西 — [task-id chip → type]), NOT the
     // old 狀態 · 標題 pair, and NO dot (presence lives only in the rail row).
     await findByText("外包 · H-3");
     const sub = await findByTestId("outsource-chat-sub");
@@ -594,7 +594,7 @@ describe("OutsourcePanel", () => {
     expect(row.className).toContain("outsource-row--selected");
   });
 
-  it("the header's T-xxxx chip jumps to the task page — not the worker detail", async () => {
+  it("the header's task-id chip jumps to the task page — not the worker detail", async () => {
     __injectMockTask(
       mkTask({ id: "t-hdr", taskNo: "T-77aa", typeKey: "review-pr", createdTs: 80 })
     );

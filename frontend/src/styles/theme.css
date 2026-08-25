@@ -95,7 +95,7 @@
   /* 任務狀態 / badge 長尾 */
   --color-wait-external: #a08bd6;      /* 等待外部 status/step badge 紫 */
   --color-wait-external-text: #c8b8ec; /* 等待外部框內文字 */
-  --color-dep: #8fb6d9;                /* 凍結優先權 + 依賴列「等 T-xxxx」天藍 */
+  --color-dep: #8fb6d9;                /* 凍結優先權 + 依賴列「等 <任務編號>」天藍 */
   --color-dep-text: #bcd7ee;           /* 依賴框文字 */
   --color-dep-title: #a9c2d8;          /* 依賴標題(較暗藍) */
   --color-lock-reassigning: #38c6d9;   /* 轉派中 lock overlay 青 */

@@ -21,8 +21,8 @@ import { mkTask, MIRA, NOOP, WORKERS } from "./taskFixtures";
 // The owner's actual card: a link artifact whose label is a long, barely
 // breakable branch name.
 const OWNER_LINK = mkTask({
-  id: "t-23cf",
-  taskNo: "T-23cf",
+  id: "t-23cf5291a001",
+  taskNo: "t-23cf5291a001",
   title: "drop delegation whitelist",
   artifactCount: 1,
   artifacts: [

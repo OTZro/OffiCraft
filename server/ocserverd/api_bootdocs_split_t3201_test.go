@@ -748,10 +748,24 @@ func TestTaskCloseoutDoc_IsTheApprovedRewriteWithBothNamesMovedIntoTheHead(t *te
 	// 🔴 THE FIRST SENTENCE NAMES list_tasks, AND THAT IS A BUG FIX, NOT A STYLE
 	// CHOICE. The rewrite that dropped {type_key} put 「先 get_task 讀這張票」 here,
 	// and an agent CANNOT do that: the only identifier it is handed is the display
-	// number (T-xxxx, the id's first hex quartet), while get_task keys on the full
-	// id — measured against the live station, 「get_task("T-6f44")」 answers 404.
-	// So the document was telling every agent to start with a call that fails.
-	// list_tasks is the way across: each row carries task_no AND id.
+	// number, which AT THE TIME was the id's first hex quartet, while get_task
+	// keys on the full id — measured against the live station of that era,
+	// 「get_task("T-6f44")」 answered 404. So the document was telling every agent
+	// to start with a call that fails. list_tasks is the way across: each row
+	// carries task_no AND id.
+	//
+	// ⚠️ THAT PREMISE IS HISTORY AS OF T-5291, AND THE DOCUMENT BELOW HAS NOT
+	// CAUGHT UP. `TaskNo(id)` now returns the id unchanged (domain.go), so 票號
+	// and id are the SAME STRING and feeding 票號 to get_task cannot 404 any
+	// more. The approved body this test pins still carries
+	// 「⚠️ `get_task` 只吃 `id`，餵票號會 404」 — a live agent-facing sentence that
+	// is now false. It is left standing DELIBERATELY and reported rather than
+	// quietly edited: this is owner-approved seed prose that changes what every
+	// agent does, so rewriting it is a seed change with its own ruling, not a
+	// comment fix inside T-5291's blast radius. Do not "fix" it here; take it to
+	// the owner. (taskno_prose_guard_test.go DOES scan seeds/, but only for the
+	// retired ENGLISH sentences; this one is Chinese and a paraphrase besides,
+	// so no blocklist catches it — this comment is the record.)
 	wantBody := "先用 `list_tasks` 找到這張票（每一列都同時有票號與 id），拿它的 `id` 呼叫 `get_task`，" +
 		"看它屬於哪一本任務手冊（欄位 `type_key`）。⚠️ `get_task` 只吃 `id`，餵票號會 404。\n\n" +
 		"若這一趟有值得留下的經驗（踩坑、更好做法），先用 get_task_manual 讀現況，" +

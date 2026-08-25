@@ -391,9 +391,9 @@ export interface TaskStepView {
  */
 /** One entry of {@link TaskView.depTasks} — a blocking task resolved to what the
  * dep row shows (wire `TaskDepRefDTO`, T-a3e4). `taskNo` is filled even for a
- * dep whose task is gone (it is a pure projection of the id); `title`/`status`
- * are "" in exactly that case, and the row then says 查無此任務 rather than
- * inventing a status. */
+ * dep whose task is gone — it IS the id (T-5291), so naming the dep never
+ * needed the dep's row to exist; `title`/`status` are "" in exactly that case,
+ * and the row then says 查無此任務 rather than inventing a status. */
 export interface TaskDepRefView {
   id: string;
   taskNo: string;
@@ -410,7 +410,12 @@ export interface TaskCountView {
 
 export interface TaskView {
   id: string;
-  /** Display number (e.g. "T-7d40") — presentation only, never a lookup key. */
+  /** The task NUMBER, which IS `id` (T-5291): the wire sends it and the card
+   * shows it verbatim, so what a human copies off the screen is exactly what
+   * `#tasks/<id>` and MCP `get_task(task_id)` accept. It used to be a four-hex
+   * projection ("T-7d40") that was display-only and could never be pasted
+   * back; that projection is gone. Kept as its own field because it is what
+   * the SERVER sends (`task_no`) — not because it differs from `id`. */
   taskNo: string;
   title: string;
   /** The task type / playbook key; "" ⇒ 自由代辦 (ad-hoc). */
@@ -446,11 +451,12 @@ export interface TaskView {
   /** The manual-derived identity key value (dedupe key); "" for ad-hoc. When
    * the value is a URL the badge renders an external link (spec 識別鍵). */
   dedupeKey: string;
-  /** Blocking task IDS (被 T-xxx 擋住, 可多筆) — resolved to task_no for display. */
+  /** Blocking task IDS (被依賴擋住, 可多筆). The card prints each id as-is —
+   * task_no IS the id (T-5291), so there is no display conversion. */
   deps: string[];
   /** The SERVER's resolution of every id in {@link deps} (wire `dep_tasks`,
-   * T-a3e4): one entry per dep, same order, carrying what the 「等 T-xxxx
-   * <標題>」 row prints. The card renders straight from this — it no longer
+   * T-a3e4): one entry per dep, same order, carrying what the 「等 <task id> <標題>」
+   * row prints. The card renders straight from this — it no longer
    * looks deps up in the loaded task list, which is why the page no longer has
    * to download the closed population just so a finished blocker can be named.
    *
@@ -466,7 +472,7 @@ export interface TaskView {
   /** One-line reason while status is waiting_external; "" otherwise. */
   waitingReason: string;
   /** The ORIGINAL task's id this one duplicates; "" unless status is
-   * "duplicated". The card renders "重複於 T-xxxx" as a link that jumps to it —
+   * "duplicated". The card renders "重複於 <task id>" as a link that jumps to it —
    * depth-1 by construction, so the link always resolves in one hop. */
   duplicateOf: string;
   createdTs: number;
@@ -546,9 +552,11 @@ export interface OutsourceWorkerView {
   /** Worker mint epoch (wire created_ts; 0 when absent) — the panel's
    * fallback sort key when the bound task cannot be resolved. */
   createdTs?: number;
-  /** The bound task's display number (T-xxxx) and type — the panel row is 名稱 /
-   * task type + presence 點 / 可點的 T-xxxx (owner report 2026-07-14, aligned
-   * with the member card's three-line shape). WIRE FIELDS since T-a3e4
+  /** The bound task's number and type — the panel row is 名稱 / task type +
+   * presence 點 / 可點的任務編號 (owner report 2026-07-14, aligned with the
+   * member card's three-line shape). The number IS the task id since T-5291
+   * (it used to be a four-hex short form), so the row's chip is the string a
+   * human can paste straight back into `#tasks/<id>`. WIRE FIELDS since T-a3e4
    * (`task_no` / `task_type_key`): they used to be a CLIENT-side join against
    * the unfiltered `GET /api/tasks`, i.e. the whole task history downloaded on
    * every worker/chat delta to label a handful of rows. Honest "" when the

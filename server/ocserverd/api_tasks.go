@@ -2274,7 +2274,7 @@ func (s *apiServer) HandleSubmitTaskPlanApiTasksTaskIdPlanPost(w http.ResponseWr
 // outsource workers) but it does NOT nudge the learnings write-back — a
 // duplicate has no lessons (decideTaskCloseNudge excludes it). The executor
 // guard applies (owner/admin may act on any task). Validation keeps the
-// duplicate graph DEPTH-1 so the cockpit "重複於 T-xxxx" link resolves in one hop:
+// duplicate graph DEPTH-1 so the cockpit "重複於 <task id>" link resolves in one hop:
 //   - the task must be non-terminal (else 409 — already closed);
 //   - duplicate_of is required (422) and must be an EXISTING task (404);
 //   - it may not point at itself (409);
