@@ -1039,11 +1039,13 @@ function mockServedChatMessage(m: ChatMessage): ChatMessage {
  * count / terminate / priority guards (mirrors the server's closed-set rule). */
 const TERMINAL_TASK_STATUSES = new Set(["done", "terminated", "duplicated"]);
 
-// The server's task_no projection of an id (domain.go TaskNo) — the mock needs
-// it for a dep whose task row is absent, exactly where the server derives it
-// rather than leaving the number blank (T-a3e4).
+// The server's task_no for an id (domain.go TaskNo) — the mock needs it for a
+// dep whose task row is absent, exactly where the server fills the number
+// rather than leaving it blank (T-a3e4). The number IS the id (T-5291), so
+// there is nothing to derive; the old `slice(2, 6)` here was a THIRD copy of a
+// projection that no longer exists.
 function deriveMockTaskNo(taskId: string): string {
-  return `T-${taskId.slice(2)}`;
+  return taskId;
 }
 
 // withWorkerTaskJoin fills the bound-task fields the SERVER now folds into the

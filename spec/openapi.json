@@ -3601,7 +3601,7 @@
           },
           "task_no": {
             "default": "",
-            "description": "The bound task's display number (T-xxxx) — the panel row's third line, previously joined client-side from ``GET /api/tasks`` (T-a3e4). \"\" when the task cannot be resolved. additive-optional.",
+            "description": "The bound task's display number, which IS its id (T-5291) — the panel row's third line, previously joined client-side from ``GET /api/tasks`` (T-a3e4). \"\" when the task cannot be resolved. additive-optional.",
             "title": "Task No",
             "type": "string"
           },
@@ -6599,7 +6599,7 @@
         "type": "object"
       },
       "TaskDepRefDTO": {
-        "description": "One dependency of a task, resolved to the facts the 「等 T-xxxx」 row shows (T-a3e4): the dep's own ``task_no``, ``title`` and ``status``. ``id`` is the dep id as stored on the depending task, so the client can pair an entry with ``deps`` positionally OR by id. ``task_no`` is the same pure projection of the id every other surface prints, so it is filled even for a dep whose task row is GONE; ``title``/``status`` are \"\" in exactly that case — an unresolvable dep, never a fabricated 尚未執行.",
+        "description": "One dependency of a task, resolved to the facts the 「等 <task_no>」 row shows (T-a3e4): the dep's own ``task_no``, ``title`` and ``status``. ``id`` is the dep id as stored on the depending task, so the client can pair an entry with ``deps`` positionally OR by id. ``task_no`` is the id itself (T-5291 — no projection any more), so it is filled even for a dep whose task row is GONE; ``title``/``status`` are \"\" in exactly that case — an unresolvable dep, never a fabricated 尚未執行.",
         "properties": {
           "id": {
             "title": "Id",
@@ -6670,7 +6670,7 @@
             "type": "array"
           },
           "dep_tasks": {
-            "description": "The DISPLAY facts for each id in ``deps``, resolved server-side against the WHOLE task table — one entry per dep, in the same order (T-a3e4). The client renders the 「等 T-xxxx <標題>」 row straight from this: no follow-up fetch, and no need to download the closed population just so an already-finished dep can be named. A dep whose task no longer exists is still listed, with ``status``/``title`` empty — that is the honest 查無此任務 row. The field being ABSENT is a third, different thing (an older server that cannot resolve deps at all), so a client must not read absence as non-existence. additive-optional.",
+            "description": "The DISPLAY facts for each id in ``deps``, resolved server-side against the WHOLE task table — one entry per dep, in the same order (T-a3e4). The client renders the 「等 <task_no> <標題>」 row straight from this: no follow-up fetch, and no need to download the closed population just so an already-finished dep can be named. A dep whose task no longer exists is still listed, with ``status``/``title`` empty — that is the honest 查無此任務 row. The field being ABSENT is a third, different thing (an older server that cannot resolve deps at all), so a client must not read absence as non-existence. additive-optional.",
             "items": {
               "$ref": "#/components/schemas/TaskDepRefDTO"
             },

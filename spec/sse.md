@@ -541,7 +541,7 @@ never receive it.
   stream; same family as §6/§7):
 
 ```
-data: {"topic":"task-close","data":{"topic":"task-close","to":"m-1a2b3c","task_id":"t-7d40aabbccdd","task_no":"T-7d40aabbccdd","type":"review-pr","status":"done","reason":"任務 T-7d40aabbccdd 已結束（done）。…patch_task_learnings…report_task_closeout…"}}
+data: {"topic":"task-close","data":{"topic":"task-close","to":"m-1a2b3c","task_id":"t-7d40aabbccdd","task_no":"t-7d40aabbccdd","type":"review-pr","status":"done","reason":"任務 t-7d40aabbccdd 已結束（done）。…patch_task_learnings…report_task_closeout…"}}
 ```
 
   The inner payload duplicates `topic` and carries `{topic, to, task_id, task_no, type,

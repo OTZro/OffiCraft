@@ -1,9 +1,14 @@
 // T-c21e ② — owner 2026-07-20, on the T-1d82 驗收 card:
 //   「另外那些 ID 應該要跟任務卡上面顯示的一樣,任務卡上的 ID 似乎沒這麼長」
 //
-// (The card's number is no longer short at all — owner ruled 2026-08-25 that
-// it carries the whole id. What survives of the complaint is the part that
-// still binds: the dep row and the card must show the SAME number.)
+// 🔴 THAT PREMISE IS DEAD (T-5291, owner 2026-08-25). The number IS the id
+// now, so «the row must not print the raw long id» has become «the row must
+// print exactly the raw long id» — the two surfaces the complaint compared can
+// no longer differ in LENGTH at all. What survives, and all this file still
+// claims, is the part that still binds: the dep row and the dep's own card
+// must show the SAME string. The old assertions are kept in that form rather
+// than deleted, because the wiring they cover (the fallback rows reach for a
+// number at all, and a resolved row prefers the SERVER's value) is still real.
 //
 // The complaint is about a MISMATCH between two surfaces, so every assertion
 // below compares the dep row against the CARD, rather than against a literal
@@ -12,20 +17,20 @@
 // would disagree again with the suite still green, which is exactly the bug
 // owner reported.
 //
-// The regression had TWO mouths, not one. When a dep could not be resolved
-// against the frontend's task list, both fallback branches printed the raw id
-// (`t-1d8292a2f8db`) because there was no server-supplied task_no to print.
-// The predecessor ticket named only the `missing` one; `unresolved` is on the
-// screen far more often (it is every frame before the closed-inclusive fetch
-// lands). Both are pinned here.
+// The original regression had TWO mouths, not one: when a dep could not be
+// resolved, both fallback branches printed the raw id because there was no
+// server-supplied task_no. The predecessor ticket named only the `missing`
+// one; `unresolved` is on screen far more often (every frame before the
+// closed-inclusive fetch lands). Both are still exercised here — they are the
+// only LIVE coverage of the `?? deriveTaskNo(id)` fallback in the suite (the
+// sibling dep-status file never reaches it) — but what they now pin is that
+// each row NAMES the dep, not that it names it shortly.
 //
 // ── WHAT THIS FILE DELIBERATELY DOES NOT DO ───────────────────────────────
-// It does not re-test deriveTaskNo's projection rules — the id→number edges
-// (prefix trimming, short ids) live in lib/taskNo.test.ts, pinned against the
-// SAME cases as the server's own Go test. Duplicating them here would create
-// a second place to update and a chance for the two to disagree. What this
-// file owns is the WIRING: that the dep row reaches for the derived number at
-// all, and that a resolved row still prefers the server's value.
+// It does not re-test deriveTaskNo itself — that lives in lib/taskNo.test.ts,
+// pinned against the SAME cases as the server's Go test. Duplicating them here
+// would create a second place to update and a chance for the two to disagree.
+// What this file owns is the WIRING.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, waitFor } from "@testing-library/react";
@@ -44,8 +49,10 @@ const LONG_ID = "t-1d8292a2f8db";
 /** What the number for LONG_ID must be, written out. It is deliberately NOT
  * `deriveTaskNo(LONG_ID)`: the fixture below calls that function, so pinning
  * the expectation to it too would move both sides together and the test could
- * never fail. Owner ruling 2026-08-25 — the number carries the WHOLE id. */
-const LONG_NO = "T-1d8292a2f8db";
+ * never fail. It is equal to LONG_ID by the T-5291 ruling — written as its own
+ * constant so that a future projection would have to change this line, loudly,
+ * instead of quietly following the implementation. */
+const LONG_NO = "t-1d8292a2f8db";
 
 let seq = 0;
 
@@ -150,34 +157,33 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-describe("T-c21e ② 兩條 fallback 都不再吐原始長 id", () => {
+describe("T-c21e ② 兩條 fallback 都叫得出 dep 的識別值", () => {
   // `unresolved` — the population is still the open-only fast path, so the row
   // cannot name the dep yet. It can still NUMBER it: the short form is a pure
   // projection of the id, available without resolving anything.
-  it("unresolved 列顯示完整編號,且畫面上找不到原始長 id", () => {
+  it("unresolved 列顯示完整識別值", () => {
     const blocked = mkTask({ title: "被擋住的", deps: [LONG_ID] });
     const { container } = renderCard(blocked, [blocked], false);
 
     const [row] = depRows(container);
     expect(row.getAttribute("data-dep-state")).toBe("unresolved");
     expect(row.textContent).toContain(LONG_NO);
-    // The regression itself, stated as the thing that must be absent. ⚠️ Since
-    // the number now carries the whole id, this and the line above differ only
-    // in the case of the prefix — a narrower guard than it was when the number
-    // was four chars, but still the one that catches a row printing `t-…`.
-    expect(row.textContent).not.toContain(LONG_ID);
+    // ⚠️ The old companion assertion `not.toContain(LONG_ID)` is GONE, not
+    // relaxed: LONG_NO === LONG_ID now, so it directly contradicts the line
+    // above. Keeping a guard that can only pass when the row is empty would be
+    // theatre. What the row must not do — print NOTHING for a dep it cannot
+    // resolve — is what the assertion above already covers.
   });
 
   // `missing` — the full population IS in hand and the dep is genuinely not in
   // it. Different sentence, same numbering rule; the predecessor fixed neither.
-  it("missing 列顯示完整編號,且畫面上找不到原始長 id", () => {
+  it("missing 列顯示完整識別值", () => {
     const blocked = mkTask({ title: "被擋住的", deps: [LONG_ID] });
     const { container } = renderCard(blocked, [blocked], true);
 
     const [row] = depRows(container);
     expect(row.getAttribute("data-dep-state")).toBe("missing");
     expect(row.textContent).toContain(LONG_NO);
-    expect(row.textContent).not.toContain(LONG_ID);
   });
 
   // Both shapes at once, phrased the way owner would check it: scan the rows,
@@ -189,13 +195,19 @@ describe("T-c21e ② 兩條 fallback 都不再吐原始長 id", () => {
   // TaskCard.duplicate-link.test.tsx. Stating it here because an earlier draft
   // of this comment called the third branch "future" — it was already present
   // while the sentence claimed otherwise.
-  it("兩種 fallback 形態的 dep 列,沒有一條吐出原始長 id", () => {
+  it("兩種 fallback 形態的 dep 列,每一條都叫得出那張 dep 的識別值", () => {
+    // Was 「沒有一條吐出原始長 id」. Inverted by T-5291: the identifier is the
+    // number, so the sweep now asserts every row NAMES the dep rather than
+    // that none of them does. A fallback branch added later that prints
+    // nothing — the failure this sweep exists to catch — still fails here.
     const blocked = mkTask({ title: "被擋住的", deps: [LONG_ID] });
 
     for (const resolvable of [false, true]) {
       const { container, unmount } = renderCard(blocked, [blocked], resolvable);
-      for (const row of depRows(container)) {
-        expect(row.textContent).not.toContain(LONG_ID);
+      const rows = depRows(container);
+      expect(rows).toHaveLength(1);
+      for (const row of rows) {
+        expect(row.textContent).toContain(LONG_NO);
       }
       unmount();
     }
@@ -209,7 +221,7 @@ describe("T-c21e ② 解析得到的 dep 仍以 server 的 task_no 為準", () =
   // mutant this catches is "now that we have a helper, use it everywhere".
   it("非終態 dep 列印的是 dep.taskNo,不是從 id 派生的值", async () => {
     // taskNo and id are deliberately INCONSISTENT: derivation would yield
-    // T-9999ffffffff, the server's value is T-abcd. Only one can be on screen,
+    // t-9999ffffffff, the server's value is T-abcd. Only one can be on screen,
     // so this distinguishes the two sources — which identical values could not.
     const dep = mkTask({
       id: "t-9999ffffffff",
@@ -223,7 +235,7 @@ describe("T-c21e ② 解析得到的 dep 仍以 server 的 task_no 為準", () =
     const [row] = depRows(container);
     expect(row.getAttribute("data-dep-state")).toBe("open");
     expect(row.textContent).toContain("T-abcd");
-    expect(row.textContent).not.toContain("T-9999ffffffff");
+    expect(row.textContent).not.toContain("t-9999ffffffff");
   });
 });
 

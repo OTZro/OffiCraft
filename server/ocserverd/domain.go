@@ -1474,16 +1474,28 @@ func CanAgentStepTransition(from, to string) bool {
 
 // ── tasks: display projections ────────────────────────────────────────────────
 
-// TaskNo derives the display number ("T-<hex>") from a task id ("t-<hex12>"):
-// the WHOLE hex after the prefix, merely re-cased into the "T-" display form.
+// TaskNo is the task id, unchanged. There is no display projection any more.
 //
-// Owner ruling 2026-08-25 SUPERSEDES kyle ruling H3, which cut the number to
-// the first four hex chars and accepted collisions because it was display-only.
-// The number is now as long as the id is: a number that someone reads off the
-// UI names exactly one task, so it can be pasted straight back into a lookup
-// instead of needing a short-code translation layer on the way in.
+// It SUPERSEDES kyle ruling H3, which cut the number to the first four hex
+// chars ("t-72dd79b666d0" → "T-72dd") and accepted collisions because it was
+// display-only. Owner 2026-08-25: 「UI 也不用特意把 task_no 縮短,該是多長就
+// 該多長」「不用讓他吃短碼,讓我們顯示長碼」and 「Make it simple, no need
+// complicated mechanism unless my approval」.
+//
+// 🔴 WHY IT IS NOT EVEN "T-" + the hex — the intermediate version this replaced.
+// Lookup is `SELECT … WHERE id = ?` against `id TEXT PRIMARY KEY` with no
+// COLLATE NOCASE (migrations/00004_tasks.sql), i.e. byte-exact. A number shown
+// as "T-72dd79b666d0" against an id of "t-72dd79b666d0" therefore still 404s
+// when pasted back — one character of re-casing was enough to buy nothing.
+// Making the lookup case-insensitive would be a mechanism, which is what the
+// ruling above forbids. Returning the id costs no mechanism at all, and the
+// number that someone reads off the UI is then usable BECAUSE IT IS THE ID,
+// not because anything maps it back.
+//
+// The function survives as the ONE seam every display site already calls, so
+// this stays a single decision rather than 12 call sites each deciding again.
 func TaskNo(taskID string) string {
-	return "T-" + strings.TrimPrefix(taskID, "t-")
+	return taskID
 }
 
 // TaskProgress counts the flattened leaf progress (SPEC §3.1: every step row

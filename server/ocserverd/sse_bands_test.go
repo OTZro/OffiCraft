@@ -391,7 +391,7 @@ func TestDecideTaskCloseNudge(t *testing.T) {
 			t.Fatalf("%s must nudge", status)
 		}
 		if sig.Topic != taskCloseTopic || sig.To != "m-exec" ||
-			sig.TaskID != task.ID || sig.TaskNo != "T-7d40aabbccdd" ||
+			sig.TaskID != task.ID || sig.TaskNo != "t-7d40aabbccdd" ||
 			sig.Type != "review-pr" || sig.Status != status {
 			t.Fatalf("%s signal fields: %+v", status, sig)
 		}

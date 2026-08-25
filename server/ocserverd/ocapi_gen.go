@@ -1645,7 +1645,7 @@ type OutsourceWorkerDTO struct {
 	TaskCreatedTs *float64 `json:"task_created_ts,omitempty"`
 	TaskId        string   `json:"task_id"`
 
-	// TaskNo The bound task's display number (T-xxxx) — the panel row's third line, previously joined client-side from ``GET /api/tasks`` (T-a3e4). "" when the task cannot be resolved. additive-optional.
+	// TaskNo The bound task's display number, which IS its id (T-5291) — the panel row's third line, previously joined client-side from ``GET /api/tasks`` (T-a3e4). "" when the task cannot be resolved. additive-optional.
 	TaskNo     *string `json:"task_no,omitempty"`
 	TaskStatus *string `json:"task_status,omitempty"`
 	TaskTitle  *string `json:"task_title,omitempty"`
@@ -2679,7 +2679,7 @@ type TaskDTO struct {
 	WaitingReason      *string       `json:"waiting_reason,omitempty"`
 }
 
-// TaskDepRefDTO One dependency of a task, resolved to the facts the 「等 T-xxxx」 row shows (T-a3e4): the dep's own “task_no“, “title“ and “status“. “id“ is the dep id as stored on the depending task, so the client can pair an entry with “deps“ positionally OR by id. “task_no“ is the same pure projection of the id every other surface prints, so it is filled even for a dep whose task row is GONE; “title“/“status“ are "" in exactly that case — an unresolvable dep, never a fabricated 尚未執行.
+// TaskDepRefDTO One dependency of a task, resolved to the facts the 「等 <task_no>」 row shows (T-a3e4): the dep's own “task_no“, “title“ and “status“. “id“ is the dep id as stored on the depending task, so the client can pair an entry with “deps“ positionally OR by id. “task_no“ is the id itself (T-5291 — no projection any more), so it is filled even for a dep whose task row is GONE; “title“/“status“ are "" in exactly that case — an unresolvable dep, never a fabricated 尚未執行.
 type TaskDepRefDTO struct {
 	Id     string  `json:"id"`
 	Status *string `json:"status,omitempty"`
@@ -2736,7 +2736,7 @@ type TaskListItemDTO struct {
 	CreatorId     *string  `json:"creator_id,omitempty"`
 	DedupeKey     *string  `json:"dedupe_key,omitempty"`
 
-	// DepTasks The DISPLAY facts for each id in ``deps``, resolved server-side against the WHOLE task table — one entry per dep, in the same order (T-a3e4). The client renders the 「等 T-xxxx <標題>」 row straight from this: no follow-up fetch, and no need to download the closed population just so an already-finished dep can be named. A dep whose task no longer exists is still listed, with ``status``/``title`` empty — that is the honest 查無此任務 row. The field being ABSENT is a third, different thing (an older server that cannot resolve deps at all), so a client must not read absence as non-existence. additive-optional.
+	// DepTasks The DISPLAY facts for each id in ``deps``, resolved server-side against the WHOLE task table — one entry per dep, in the same order (T-a3e4). The client renders the 「等 <task_no> <標題>」 row straight from this: no follow-up fetch, and no need to download the closed population just so an already-finished dep can be named. A dep whose task no longer exists is still listed, with ``status``/``title`` empty — that is the honest 查無此任務 row. The field being ABSENT is a third, different thing (an older server that cannot resolve deps at all), so a client must not read absence as non-existence. additive-optional.
 	DepTasks      *[]TaskDepRefDTO `json:"dep_tasks,omitempty"`
 	Deps          []string         `json:"deps"`
 	DuplicateOf   *string          `json:"duplicate_of,omitempty"`

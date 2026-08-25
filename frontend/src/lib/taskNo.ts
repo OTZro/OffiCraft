@@ -1,35 +1,27 @@
-// Task display number ("T-<hex>") derived on the frontend — a MIRROR of
-// `TaskNo` in server/ocserverd/domain.go (owner ruling 2026-08-25: the number
-// carries the WHOLE id, so it names exactly one task and can be pasted back
-// into a lookup; this SUPERSEDES kyle ruling H3, under which the number was
-// only the first four hex chars and collisions were accepted).
+// The task "number" shown in the UI IS the task id — there is no projection
+// left to mirror. This helper survives only as the ONE named place the rule is
+// stated on the frontend, matching `TaskNo` in server/ocserverd/domain.go.
 //
-// WHY a mirror exists at all: the dep row on a task card normally prints the
-// server-supplied `dep.task_no`. When a dep cannot be resolved against the
-// frontend's task list, the fallback branches had no `task_no` to print and
-// fell back to the RAW id (`t-1d8292a2f8db`). Deriving the number here makes
-// the fallback print the same `T-1d8292a2f8db` as every other surface.
+// HISTORY, because the shape of this file only makes sense with it: the number
+// used to be the first four hex chars after the "t-" prefix (kyle ruling H3 —
+// display-only, collisions accepted). Owner ruled on 2026-08-25 that the UI
+// should show the long identifier instead 「不用讓他吃短碼,讓我們顯示長碼」,
+// and 「Make it simple, no need complicated mechanism unless my approval」.
 //
-// WHY the comment matters: this is a rule COPIED ACROSS the wire boundary.
-// If someone changes TaskNo on the server, nothing notifies this file — this
-// comment and the shared test cases (see taskNo.test.ts) are the only trail
-// back to the original.
+// An intermediate version returned "T-" + the whole hex. It did not survive
+// review: task lookup is byte-exact (`WHERE id = ?`, no COLLATE NOCASE), so a
+// number displayed as "T-72dd79b666d0" against an id of "t-72dd79b666d0" still
+// 404s when pasted back. Re-casing one character bought nothing, so nothing is
+// re-cased now.
 //
-// This is a SYMPTOM-level fix. `task_no` is a pure projection of the id and
-// needs no lookup, so the server has no real reason to omit it when a dep
-// fails to resolve — returning it unconditionally is the actual cure. That
-// touches the wire spec, so it is out of scope here; Kyle has recorded it and
-// will handle it separately. When that lands, this helper can RETIRE — please
-// delete it rather than treating it as permanent design to build on.
+// WHY the fallback that made this file necessary still needs it: when a dep
+// cannot be resolved, the row has no server-supplied `task_no`. It prints the
+// id — which is now exactly what every resolved row prints too, so the two
+// surfaces agree by construction rather than by two implementations staying
+// in step. `task_no` remains a field the server sends; this is the client-side
+// stand-in for the one case where it is absent.
 
-/**
- * Derive the display number ("T-<hex>") from a task id ("t-<hex12>").
- *
- * Mirrors the Go original's one easy-to-miss edge: the prefix is TRIMMED (an
- * id without "t-" is passed through whole, not blindly sliced by two). Nothing
- * is truncated on either side — the number is the id, re-cased.
- */
+/** The display number for a task id: the id, unchanged. */
 export function deriveTaskNo(taskId: string): string {
-  const hex = taskId.startsWith("t-") ? taskId.slice(2) : taskId;
-  return "T-" + hex;
+  return taskId;
 }

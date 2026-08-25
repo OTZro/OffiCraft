@@ -1657,20 +1657,19 @@ export function TaskCard({
                       390px guard). Absence of a badge on a row that otherwise
                       always has one IS the signal. */}
                   <ClockIcon size={13} />
-                  {/* The NUMBER is derived, not the raw id (T-c21e, owner
-                      2026-07-20: 「那些 ID 應該要跟任務卡上面顯示的一樣,任務
-                      卡上的 ID 似乎沒這麼長」). Both of these branches used to
-                      print `depId` whole — `t-1d8292a2f8db` where every other
-                      surface says `T-1d82` — because with no `dep` in hand
-                      there was no server-supplied task_no to print. There
-                      never needed to be one: task_no is a pure projection of
-                      the id (deriveTaskNo mirrors the server's), so the short
-                      form is computable right here.
-                      Resolved rows below still print `dep.taskNo` — same
-                      value, but from the source. Deriving is the fallback,
-                      not the default: if the server ever changes the
-                      projection, the surface that matters most keeps agreeing
-                      with it for free. */}
+                  {/* Both branches print the dep's NUMBER, which since T-5291
+                      (owner 2026-08-25) simply IS its id — no shortening, no
+                      re-casing. The predecessor comment here claimed «every
+                      other surface says `T-1d82`» and that the short form was
+                      «computable right here»; both sentences died with the
+                      projection and are removed rather than left standing.
+                      Why deriveTaskNo is still called instead of printing
+                      `depId`: with no `dep` in hand there is no server-supplied
+                      task_no, and this keeps the one seam that states the rule.
+                      Resolved rows below still print `dep.taskNo` — the same
+                      value, but from the SOURCE, so if the number ever stops
+                      being the id the surface that matters most follows the
+                      server for free. */}
                   <span>
                     {unknown
                       ? msg.taskBlockedBy(deriveTaskNo(depId))
