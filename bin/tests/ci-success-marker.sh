@@ -38,11 +38,20 @@
 #  6. DOUBLE MUTATION. This guard and bin/tests/run.sh guard each other's
 #     enforcement line, so removing EITHER alone reddens — removing BOTH in one
 #     change does not.
-#  8. THE CONSUMER EXCLUSION IS SELF-GUARDED ONLY BY ITSELF (T-b65e). bin/release
-#     is skipped by the lane scan and held to the stricter shape rule below
-#     instead. Delete that rule AND leave the exclusion in place, and nothing
-#     reddens — same double-mutation shape as 6. The rule is cheap to re-derive
-#     from this note, which is why it is recorded rather than guarded again.
+#  8. THE CONSUMER EXCLUSION IS SELF-GUARDED ONLY BY ITSELF (T-b65e). One file —
+#     bin/local-ci.sh — is skipped by the lane scan and held to the stricter shape
+#     rule below instead. Delete that rule AND leave the exclusion in place, and
+#     nothing reddens — same double-mutation shape as 6. The rule is cheap to
+#     re-derive from this note, which is why it is recorded rather than guarded
+#     again.
+#     ⚠️ bin/release USED to be the second such consumer and is NOT any more
+#     (T-7e6c): its release gate stopped reading a local bin/ci.sh log and now
+#     reads the GitHub Actions round's job conclusions, so it no longer needs to
+#     name the marker at all. It was therefore moved OUT of the exclusion list and
+#     INTO the ordinary lane scan, which holds it to ZERO occurrences — strictly
+#     stronger than the shape rule it used to be under. A roll-call assertion
+#     below pins that it really is inside the scan set, so putting the exclusion
+#     back without putting the shape rule back reddens.
 #  7. THE CONSUMER. Nothing mechanically forces a human or an agent reading a CI
 #     log to apply the rule. accepts_run() below is the rule's executable
 #     definition; a consumer who still runs a loose grep is simply wrong, and no
@@ -104,28 +113,33 @@ validate_source() {
 lane_clean() { [[ "$(marker_occurrences "$1")" == "0" ]]; }
 
 # The scan set: tracked shell scripts (by extension or by sh/bash shebang) minus
-# the FOUR files that legitimately carry the literal — bin/ci.sh (the authority
-# itself), THIS guard (its fixtures are made of the literal), and the two
-# CONSUMERS: bin/release (T-b65e: its pre-build CI gate has to know what the
-# verdict looks like in order to refuse anything else) and bin/local-ci.sh
-# (T-4d88: the wider pre-GA round runs bin/ci.sh as its first phase and applies
-# the same two-part rule to it).
+# the THREE files that legitimately carry the literal — bin/ci.sh (the authority
+# itself), THIS guard (its fixtures are made of the literal), and the one
+# remaining CONSUMER, bin/local-ci.sh (T-4d88: the wider pre-GA round runs
+# bin/ci.sh as its first phase and applies the same two-part rule to it).
 #
-# Neither consumer is waved through: skipping them here only moves them to a
-# TIGHTER rule below (see "the consumer's shape"), which requires each one's
-# single occurrence to be a comparison and nothing else. The distinction that
-# matters to a false green is emit vs compare, and a file that only compares
-# cannot forge anything. Note also that neither is a dispatched lane — their
-# stdout never becomes a CI log — so even a forged marker there could not be
-# mistaken for a verdict; the rule below exists so that stays true by
-# construction rather than by luck.
+# ⚠️ bin/release WAS the second consumer and is deliberately NOT excluded any
+# more (T-7e6c). Its release gate no longer runs bin/ci.sh and no longer reads a
+# CI log, so it has no reason to name the marker; it reads the GitHub Actions
+# round's per-job conclusions instead. Falling into the ordinary scan holds it to
+# ZERO occurrences, which is stronger than the shape rule it used to get, so the
+# property that motivated the exclusion ("bin/release must never be ABLE to print
+# the CI authority") is kept and tightened rather than dropped.
+#
+# The remaining consumer is not waved through: skipping it here only moves it to a
+# TIGHTER rule below (see "the consumer's shape"), which requires its single
+# occurrence to be a comparison and nothing else. The distinction that matters to
+# a false green is emit vs compare, and a file that only compares cannot forge
+# anything. Note also that it is not a dispatched lane — its stdout never becomes
+# a CI log — so even a forged marker there could not be mistaken for a verdict;
+# the rule below exists so that stays true by construction rather than by luck.
 shell_sources() {
   local f shebang
   ( cd "$ROOT" && git ls-files 2>/dev/null || find . -type f | sed 's|^\./||' ) \
   | while IFS= read -r f; do
       [[ -f "$ROOT/$f" ]] || continue
       case "$f" in
-        bin/ci.sh|bin/tests/ci-success-marker.sh|bin/release|bin/local-ci.sh) continue ;;
+        bin/ci.sh|bin/tests/ci-success-marker.sh|bin/local-ci.sh) continue ;;
         *.sh) printf '%s\n' "$f"; continue ;;
       esac
       IFS= read -r shebang < "$ROOT/$f" 2>/dev/null || true
@@ -267,14 +281,16 @@ if [[ -z "$lane_offenders" ]]; then
 else
   bad "shell scripts other than bin/ci.sh can emit the CI authority: $(printf '%s ' $lane_offenders)"
 fi
-# ── the consumers' shape (T-b65e; second consumer added by T-4d88) ───────────
-# Two files are excluded from the scan above because they must state the verdict
-# they REQUIRE: bin/release (its pre-build CI gate) and bin/local-ci.sh (the
-# wider pre-GA round, whose first phase is bin/ci.sh). An exclusion with no
-# replacement rule is just a hole, so the replacement is stricter than the scan:
-# EXACTLY ONE occurrence each, and it must sit in a comparison. An `echo`/
-# `printf` of the marker appearing in there — or a second occurrence quietly
-# accumulating — reddens here.
+# ── the consumer's shape (T-b65e; T-4d88; narrowed to one file by T-7e6c) ────
+# One file is excluded from the scan above because it must state the verdict it
+# REQUIRES: bin/local-ci.sh (the wider pre-GA round, whose first phase is
+# bin/ci.sh). An exclusion with no replacement rule is just a hole, so the
+# replacement is stricter than the scan: EXACTLY ONE occurrence, and it must sit
+# in a comparison. An `echo`/`printf` of the marker appearing in there — or a
+# second occurrence quietly accumulating — reddens here.
+#
+# bin/release was the other entry until T-7e6c; it is now held to zero by the
+# lane scan instead (see the note on the scan set, and the roll-call below).
 #
 # The shape test binds the MARKER to the comparison, and rejects emission
 # constructs outright. An earlier version only asked whether a `[[ … == … ]]`
@@ -285,7 +301,7 @@ fi
 #
 # The list is written out rather than derived: the ONLY way to add a third
 # consumer is to edit this line, and that edit is the review it should get.
-for consumer in bin/release bin/local-ci.sh; do
+for consumer in bin/local-ci.sh; do
   if [[ ! -f "$ROOT/$consumer" ]]; then
     bad "consumer $consumer is missing — its exclusion from the lane scan is then a hole with no replacement rule"
     continue
@@ -310,7 +326,12 @@ done
 # A scan is only worth what it actually looks at: pin that the real dispatched
 # lanes are inside the set (a silently-empty enumeration would otherwise pass
 # the assertion above forever).
-for lane in e2e_test/tests_guard/run.sh bin/tests/run.sh conformance/run.sh bin/build-bindist; do
+# bin/release is on this roll-call for a reason of its own: it is the file that
+# was moved OUT of the exclusion list by T-7e6c. The lane-scan assertion above
+# would stay green if somebody quietly re-excluded it, because "no offenders" is
+# also true of a set that no longer contains it. This line is what makes putting
+# the exclusion back — without putting the shape rule back — go red.
+for lane in e2e_test/tests_guard/run.sh bin/tests/run.sh conformance/run.sh bin/build-bindist bin/release; do
   if printf '%s\n' "$SCAN_SET" | grep -qFx "$lane"; then
     ok "lane scan covers $lane"
   else

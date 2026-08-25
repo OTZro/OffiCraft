@@ -1208,6 +1208,36 @@ else
     "missing=- extra=-" "$(printf '%s\n' "$ROLES_OUT" | sed -n 's/^NEEDSDIFF://p')"
 fi
 
+# ── W1b: bin/release's required-job list equals the declared gate set ───────
+# T-7e6c moved the release gate off "run bin/ci.sh again on the runner" and onto
+# "read the conclusions of THIS commit's GitHub Actions round". That gives
+# bin/release a list of job names it requires, and a list of names is exactly the
+# kind of thing that rots: rename a job, add a gate, drop macos-e2e from `needs`,
+# and the release command goes on demanding — or silently stops demanding — a set
+# that no longer matches the workflow. Nothing else in the tree compares the two.
+#
+# THIS IS A DRIFT CHECK, NOT THE GATE'S BEHAVIOURAL COVER. What the release
+# command DOES with that list (refuse an absent job, refuse a non-"success"
+# conclusion, refuse a round bound to another commit) is asserted by driving the
+# real command in bin/tests/release-guard.sh section G. This case only pins that
+# the two declarations still name the same eleven jobs, in both directions.
+#
+# Read out of bin/release as text on purpose: it is a shell here-string of names,
+# and sourcing bin/release to read the variable would drag the whole script's
+# `set -euo pipefail` and dispatch guard into this guard for one string.
+REQ_JOBS="$(sed -n '/^REQUIRED_CI_JOBS="/,/"$/p' "$ROOT/bin/release" \
+  | sed -e 's/^REQUIRED_CI_JOBS="//' -e 's/"$//' | grep -c . || true)"
+RELEASE_JOBS="$(sed -n '/^REQUIRED_CI_JOBS="/,/"$/p' "$ROOT/bin/release" \
+  | sed -e 's/^REQUIRED_CI_JOBS="//' -e 's/"$//' | grep . | LC_ALL=C sort | tr '\n' ',' | sed 's/,$//')"
+if [[ -n "$ROLE_PROBLEMS" ]]; then
+  bad "W1b bin/release's REQUIRED_CI_JOBS equals the declared gate set — NOT CHECKED, because the job roles could not be established (see W1r). This is not a pass."
+elif [[ "$REQ_JOBS" == "0" ]]; then
+  bad "W1b could not read REQUIRED_CI_JOBS out of bin/release at all — the release gate's required-job list is then unpinned, and a rename or a dropped job would go unnoticed."
+else
+  check "W1b bin/release's REQUIRED_CI_JOBS is EXACTLY the declared gate set (drop macos-e2e from either side and this reddens)" \
+    "$(printf '%s\n' "$ROLES_OUT" | sed -n 's/^GATES://p')" "$RELEASE_JOBS"
+fi
+
 # ── W2: the trigger condition is EXACTLY the canonical one ─────────────────
 # Not "both halves are mentioned somewhere in it" — see the note in the `if-raw`
 # query for the mutant that walked through that. One authority, exact comparison,

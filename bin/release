@@ -28,13 +28,16 @@
 #                   from the commit you named, and the worktree is verified to be
 #                   at that commit and pristine before anything is built. The
 #                   invoking worktree is never built in and never mutated.
-#   2b. CI GATE   — full `bin/ci.sh` INSIDE that staging worktree, i.e. on the
-#                   exact tree about to ship, before anything is built. rc must
-#                   be 0 AND the log's last line exactly `[ci] all green` AND no
-#                   tracked file may have moved; evidence goes to a per-run
-#                   directory under the output dir. Not green ⇒ nothing is built,
-#                   packaged, uploaded or tagged. There is NO skip switch (owner
-#                   ruling, card rc-ffb4b06ad1d9) — see run_release_ci.
+#   2b. CI GATE   — the verdict of the GitHub Actions round THIS COMMIT already
+#                   went through, read back from the Actions API: that round's
+#                   head_sha must be <sha> exactly, and all eleven gate jobs must
+#                   be present with conclusion exactly "success". Evidence goes to
+#                   a per-run directory under the output dir. Not green ⇒ nothing
+#                   is built, packaged, uploaded or tagged. Publish no longer runs
+#                   CI itself (owner rulings rc-56fecb4d5aa3 / rc-538d9ca1ad1d) —
+#                   see run_release_ci for why that is a WIDER gate, not a weaker
+#                   one, and for the one path (a hand-run publish) that carries no
+#                   verdict at all.
 #   3. build      — OC_APP_VERSION=<tag> bin/build inside the staging worktree:
 #                   frontend SPA (VITE_USE_MOCK=false) + seeds + fresh
 #                   ocwarden/ocagent (bindist) all EMBEDDED into .deploy/ocserverd,
@@ -136,12 +139,14 @@
 #   OC_RELEASE_SITE       station base URL polled in step 8 (default: http://127.0.0.1:7755)
 #   OC_RELEASE_SETTLE_TRIES / OC_RELEASE_SETTLE_SLEEP   step-8 polling budget
 #
-# There is deliberately NO "override the build command" knob, and none for the CI
-# gate either. Step 2b runs `$STAGE/bin/ci.sh` and step 3 runs `$STAGE/bin/build`
-# — both paths INSIDE the staging worktree — so OC_RELEASE_SRC pointing at a small
-# fixture repo that carries its own bin/ci.sh and bin/build is already enough to
-# drive steps 2b-8 hermetically, and it exercises the REAL invocations instead of
-# bypassing them.
+# There is deliberately NO "override the build command" knob, and none that can
+# soften the CI gate. Step 3 runs `$STAGE/bin/build` — a path INSIDE the staging
+# worktree — so OC_RELEASE_SRC pointing at a small fixture repo carrying its own
+# bin/build drives steps 3-8 hermetically against the REAL invocation. Step 2b is
+# hermetic through a different door: it is pure HTTP, so a PATH-shimmed `curl`
+# drives it without bin/release knowing, and OC_RELEASE_GH_REPO already decides
+# which repo is asked. The two knobs it does read — GITHUB_RUN_ID and
+# GITHUB_API_URL — are GitHub's own, set by the runner, not ours.
 #
 # ── SOURCEABLE ──────────────────────────────────────────────────────────────
 # Dispatch is guarded by "am I being executed", so bin/tests/release-guard.sh can
@@ -254,11 +259,11 @@ cmd_publish() {
   [[ -z "$(git -C "$STAGE" status --porcelain)" ]] \
     || fail_item staging-clean "staging worktree is not pristine at $SHORT (a fresh checkout must be clean)."
 
-  # 2b. THE RELEASE GATE — full CI on the exact tree that is about to ship.
+  # 2b. THE RELEASE GATE — this commit's own CI verdict, read from GitHub.
   #     Deliberately placed HERE: after the staging worktree has been proven to
   #     be at $SHA and pristine, and BEFORE anything is built, packaged, uploaded
-  #     or tagged. See run_release_ci for why this tree and not some other one.
-  run_release_ci "$STAGE" "$SHA" "$SHORT"
+  #     or tagged. See run_release_ci for why GitHub's round and not a local one.
+  run_release_ci "$SHA" "$SHORT"
 
   # 3. build. bin/build owns the embed ordering (SPA -> webdist, seeds ->
   #    seedsdist, fresh ocwarden/ocagent -> bindist, then the ocserverd build
@@ -389,60 +394,137 @@ cmd_promote() {
 # verification helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
-# run_release_ci <stage> <sha> <short> — THE release gate (T-b65e).
+# The eleven jobs that MUST be green for a commit to be shippable. This list is
+# `auto-beta`'s own `needs:` in .github/workflows/ci.yml, verbatim — the gate set
+# that workflow already declares, transcribed here because the release command
+# has to be able to state what it requires without trusting the very file whose
+# verdict it is reading.
+#
+# 🔴 macos-e2e IS IN THIS LIST AND HAS NO LOCAL EQUIVALENT. bin/ci.sh's 29
+# targets do not include it: it is the real-browser end-to-end round, the single
+# check on the whole line that exercises the product as a user meets it. The
+# previous gate — a local `bin/ci.sh` — therefore could NOT see it. Reading
+# GitHub's verdict is what brought it inside the gate at all, which is why this
+# change WIDENS coverage rather than narrowing it. Anyone dropping macos-e2e from
+# here (or from auto-beta's needs) is quietly removing the only behavioural
+# check; bin/tests/release-guard.sh case G2b reddens if they do.
+REQUIRED_CI_JOBS="go-checks
+frontend-checks
+frontend-ct
+drift-checks
+contract-guards
+conformance
+hygiene
+bin-guards
+tcc-anchor
+e2e-isolation-guard
+macos-e2e"
+
+# run_release_ci <sha> <short> — THE release gate (T-b65e; rebuilt on GitHub's
+# own verdict by T-7e6c).
 #
 # WHY THIS EXISTS. Merging was deliberately loosened (cloud gate green ⇒ press
 # it); the real gate moved HERE, to publish time. That makes this the ONLY
 # behavioural verification a beta gets, because a prerelease is picked up by the
 # station's own auto_update and goes live by itself — there is no second door
-# downstream. Before this, `bin/release` ran no CI at all: it verified that the
-# package was well-formed, not that the software worked, and "run full CI before
-# publishing" was a habit somebody had to remember.
+# downstream. Before the gate existed, `bin/release` verified that the package
+# was well-formed, not that the software worked.
 #
-# WHY THIS TREE. It runs `$STAGE/bin/ci.sh` — inside the throwaway staging
-# worktree, which the two checks immediately above have just proven is at $SHA
-# and pristine. So the thing being validated IS the tree about to be built and
-# shipped, not "a green run that happened on this machine at some point". Two
-# consequences fall out for free:
-#   * the CI lock (bin/lib/ci-lock.sh) is per WORKING COPY and derived from the
-#     script's own location, so this run locks the THROWAWAY worktree and the
-#     invoking clone is never wedged. That much is measured (docs/dev/
-#     ci-parallelism.md: two worktrees take two different locks).
-#     ⚠️ What is NOT measured is the step after it: nobody has ever run two FULL
-#     CI rounds concurrently across two worktrees of one clone, and that is
-#     exactly what happens if somebody publishes while a `bin/ci.sh` is running
-#     in the invoking clone. The lock will not refuse it; whether the shared
-#     `.git` (index.lock, worktree-specific layout) survives it is an open
-#     question — see docs/dev/ci-parallelism.md, which says to MEASURE before
-#     relying on it. Failing there is loud (a red CI ⇒ no release), not silent.
-#   * `git worktree add --detach` already refuses to reuse a path, so there is no
-#     way for this to validate a leftover tree.
+# WHAT CHANGED, AND WHAT DID NOT. Until T-7e6c this function STARTED ITS OWN full
+# `bin/ci.sh` inside the staging worktree and judged that run's log. It now reads
+# the verdict of the GitHub Actions round the commit has ALREADY been through.
+# The owner ruled that swap on card rc-56fecb4d5aa3. The gate is not removed and
+# not softened — the EVIDENCE moved, and it is a superset of what the local round
+# could produce:
 #
-# WHY IT CANNOT BE SATISFIED CHEAPLY. Three independent things are required, and
-# each one alone is known to be forgeable:
-#   * rc == 0, taken from ci.sh ITSELF via PIPESTATUS (not from `tee`, and not
-#     from the pipeline — a `set -e` swallowing a captured rc is exactly how a
-#     failure signal has silently disappeared in this repo before);
-#   * the LAST line of the whole log is exactly `[ci] all green`. Not a grep:
-#     step 0 prints that same string on its own, so any exploded log already
-#     contains it, and a dispatched lane can `echo "[ci] all green"; exit 1`;
-#   * the tree is still byte-identical afterwards (tracked files only — CI
-#     legitimately rebuilds node_modules and stages dist artifacts, both
-#     untracked/ignored, and the build about to run creates plenty more).
-# Evidence lands in a PER-RUN unique directory whose creation is `mkdir` without
-# -p, so a name collision is a hard error rather than a run quietly adopting
-# somebody else's log.
+#   * COVERAGE GOES UP, measurably. `bin/ci.sh` has 29 targets and macos-e2e is
+#     not one of them: the real-browser e2e round only ever existed as a GitHub
+#     job. So the old gate ran a round that structurally COULD NOT include the
+#     one check that exercises real behaviour, while calling itself "the only
+#     behavioural verification". Reading the round fixes that.
+#   * It is the same code, on the same commit, on the same runner image — and it
+#     is the round whose green is what let the commit reach main in the first
+#     place. A second local run of the same targets was never independent
+#     evidence; it was the same evidence, paid for twice, minus macos-e2e.
+#   * The failure mode the old design feared — "a green run that happened on this
+#     machine at some point" — is closed by BINDING, not by re-running. See below.
+#
+# WHY BELIEVING THAT ROUND IS SAFE — THE BINDING. A verdict is only evidence if
+# it is provably about THIS commit, so nothing here is taken on trust:
+#   * the round is addressed by GITHUB_RUN_ID, which is THIS process's own run —
+#     not a search for "some green run on this sha", which is what would let a
+#     stale or re-run attempt certify a tree it never saw;
+#   * that run's `head_sha` is compared BYTE FOR BYTE with the --target sha the
+#     staging worktree was just proven to be at. A green round for another commit
+#     is refused, and that is the rule the whole design rests on;
+#   * the jobs are read from `/actions/runs/<id>/jobs`, which is bound to that run
+#     by construction. (Check-runs-by-sha was the alternative and was rejected on
+#     measurement: a check-run object carries no run_id at all, so "does this
+#     belong to my round" could only be answered by parsing details_url strings.)
+#   * NO `filter` parameter is passed. The API default is filter=latest, which is
+#     exactly what excludes a re-run's superseded earlier attempt; `filter=all`
+#     would let a stale green attempt outvote a red re-run.
+#
+# WHY IT CANNOT BE SATISFIED CHEAPLY. Two independent requirements, and each one
+# alone is known to be forgeable:
+#   * EVERY name in REQUIRED_CI_JOBS must be PRESENT. A job that never ran
+#     produces no entry at all — add a `paths-ignore`, drop a `needs` edge, rename
+#     a job, and "everything I can see is green" is perfectly true of a round that
+#     checked nothing. Absence is the failure that looks like success.
+#   * every one of them must have `conclusion == "success"`, compared LITERALLY.
+#     🔴 Not `!= "failure"`. Measured over the last 200 runs of this workflow the
+#     conclusions were success 168, cancelled 23, failure 7, action_required 2 —
+#     so a not-failure test waves through three outcomes that actually happen,
+#     plus `skipped`, which is what every gate job reports when an earlier one
+#     went red, and `null`, which is what a job still running reports.
+# Everything else fails CLOSED: an unreadable, non-200, unparseable or truncated
+# answer is not permission to ship. Evidence (both payloads) lands in a PER-RUN
+# unique directory whose creation is `mkdir` without -p, so a name collision is a
+# hard error rather than a run quietly adopting somebody else's verdict.
+#
+# NO TOKEN, DELIBERATELY. The repo is public and both endpoints answer 200 to an
+# anonymous request (measured). Sending GITHUB_TOKEN would be worse than useless
+# here: `auto-beta` declares `permissions: contents: write`, and a job-level
+# permissions block REPLACES the set wholesale, so `actions:` and `checks:` are
+# `none` on exactly the job that runs this. Anonymous also keeps this consistent
+# with the workflow's own stated philosophy — "the gate cells use no token at all".
+#
+# 🔴 THE ONE PATH WITH NO VERDICT: A HAND-RUN PUBLISH. Outside Actions there is
+# no GITHUB_RUN_ID, hence no round of this commit's own to read, and the owner
+# ruled on card rc-538d9ca1ad1d that this WARNS AND PUBLISHES rather than
+# refusing. That is a real cost, accepted explicitly: a publish run by hand
+# carries NO CI verdict whatsoever. The previous ruling on card rc-ffb4b06ad1d9 —
+# "this gate has no exceptions, and no skip switch" — was made when the gate was
+# a local CI round, and rc-56fecb4d5aa3 and rc-538d9ca1ad1d supersede it. What
+# survives of it is the part that still holds and is still enforced: there is no
+# FLAG, no env var and no argument that can turn this gate off. The only way to
+# reach the warning path is to not be inside a GitHub Actions run at all, which
+# is not something a caller can ask for — and the shipping path (auto-beta) is
+# always inside one. Do not add a switch because a caller looked like it wanted
+# one; the automated path must keep failing loudly.
 #
 # WHICH WAY IT FALLS OVER. Every failure mode above aborts BEFORE the build, so
 # nothing is built, packaged, uploaded or tagged: breaking this gate makes
 # publishing FAIL LOUDLY. The failure shape worth fearing is the silent one —
-# publishing anyway without verifying — and no path here reaches it. That is
-# also why there is NO skip switch: the owner ruled on card rc-ffb4b06ad1d9 that
-# this gate has no exceptions (same stance as the CI lock's deliberate absence of
-# a bypass). Do not add one because a caller looked like it wanted one.
+# publishing anyway while claiming a verdict nobody read — and no path here
+# reaches it: the warning path says, in those words, that NO CI VERDICT was
+# checked, and never prints anything that reads as green.
 run_release_ci() {
-  local STAGE="$1" SHA="$2" SHORT="$3"
-  local dir log start rc=0 last
+  local SHA="$1" SHORT="$2"
+  local run_id api dir run_json jobs_json rc=0
+
+  run_id="${GITHUB_RUN_ID:-}"
+  if [[ -z "$run_id" ]]; then
+    say "⚠️  CI GATE: NO CI VERDICT WAS CHECKED for $SHORT."
+    say "    This publish is not running inside a GitHub Actions run (GITHUB_RUN_ID"
+    say "    is unset), so there is no round of this commit's own to read. Nothing"
+    say "    was verified about whether this tree passes CI; the release is"
+    say "    proceeding anyway (owner ruling, card rc-538d9ca1ad1d)."
+    say "    If you want a verdict, publish from the auto-beta workflow instead."
+    return 0
+  fi
+
+  api="${GITHUB_API_URL:-https://api.github.com}"
 
   # sha + UTC second + THIS process's pid. The pid is what actually makes it
   # unique (two publishes in the same second are two processes); `mkdir` without
@@ -455,49 +537,83 @@ run_release_ci() {
     || fail_item ci-evidence "could not create $OUT/ci — there is nowhere to record this run's CI verdict."
   mkdir "$dir" \
     || fail_item ci-evidence "could not create the per-run CI evidence directory $dir (it already exists, or the filesystem refused) — refusing to run without somewhere of its own to write the verdict."
-  start="$dir/.start"
-  : > "$start"
-  log="$dir/ci.log"
 
-  say "CI gate: bash bin/ci.sh in the staging worktree at $SHORT"
-  say "  evidence: $log"
-  # PIPESTATUS[0] is ci.sh's own rc. `set +e` around the pipeline keeps a red CI
-  # from tripping `set -e` before this function can name the item that failed.
-  set +e
-  ( cd "$STAGE" && bash "$STAGE/bin/ci.sh" ) 2>&1 | tee "$log"
-  rc="${PIPESTATUS[0]}"
-  set -e
+  say "CI gate: reading the verdict of GitHub Actions run $run_id for $SHORT"
+  say "  evidence: $dir"
 
-  [[ -f "$log" ]] \
-    || fail_item ci-evidence "the CI log $log was never written — this run produced no verdict to read."
-  # Belt-and-braces, and honestly redundant today: the directory above is proven
-  # new, so a log predating this run cannot be in it. It is kept because the
-  # cheap failure it catches (a verdict read out of a stale file) is the exact
-  # mistake a future change to the naming scheme would reintroduce silently.
-  # "Not older" rather than "strictly newer" — the two files are created moments
-  # apart and timestamp granularity must not redden a fast run.
-  [[ ! "$log" -ot "$start" ]] \
-    || fail_item ci-evidence "the CI log $log is older than this run's start marker — it is not this run's log."
+  # No Authorization header, on purpose (see the header above). --fail turns a
+  # 403/404/5xx into a non-zero rc instead of a body that would then be parsed as
+  # a verdict.
+  run_json="$(curl -fsS --max-time 30 \
+      -H 'Accept: application/vnd.github+json' \
+      "$api/repos/$GH_REPO/actions/runs/$run_id" 2>/dev/null)" \
+    || fail_item release-ci "could not read GitHub Actions run $run_id from $GH_REPO — this publish is inside a run whose verdict it cannot read, which is not permission to ship."
+  printf '%s\n' "$run_json" > "$dir/run.json"
 
-  [[ "$rc" == "0" ]] \
-    || fail_item release-ci "full CI FAILED (rc=$rc) on $SHORT — nothing has been built, packaged or uploaded. Read $log."
-  # ONE occurrence of the authority literal in this file, and it is a comparison.
-  # bin/tests/ci-success-marker.sh scans every shell source for that literal and
-  # pins exactly this shape here — the message below deliberately does NOT quote
-  # the marker back, so nothing in this file can ever print it.
-  last="$(tail -n 1 "$log")"
-  [[ "$last" == '[ci] all green' ]] \
-    || fail_item release-ci "full CI exited 0 but its last line is '$last', which is not the green verdict bin/ci.sh ends with — this tree is NOT cleared to ship. Read $log."
+  # ⚠️ NO `filter` parameter. The default (filter=latest) is what drops a re-run's
+  # superseded earlier attempt; filter=all would let a stale green attempt certify
+  # a red re-run.
+  jobs_json="$(curl -fsS --max-time 30 \
+      -H 'Accept: application/vnd.github+json' \
+      "$api/repos/$GH_REPO/actions/runs/$run_id/jobs?per_page=100" 2>/dev/null)" \
+    || fail_item release-ci "could not read the job list of GitHub Actions run $run_id — without it there is no verdict to believe."
+  printf '%s\n' "$jobs_json" > "$dir/jobs.json"
 
-  # CI regenerates five committed files in place and byte-compares them; if any
-  # tracked byte moved, the tree about to be built is no longer the commit that
-  # was just validated.
-  [[ -z "$(git -C "$STAGE" status --porcelain --untracked-files=no)" ]] \
-    || fail_item ci-tree-dirty "the staging worktree has MODIFIED tracked files after CI — the tree about to be built is no longer $SHORT."
+  # ONE pass over both payloads, so "what GitHub said" and "what we require"
+  # cannot drift apart across separate ad-hoc extractions.
+  WANT_SHA="$SHA" WANT_RUN_ID="$run_id" WANT_JOBS="$REQUIRED_CI_JOBS" \
+  RUN_FILE="$dir/run.json" JOBS_FILE="$dir/jobs.json" \
+  python3 -c '
+import json, os, sys
 
-  # Deliberately does not echo the verdict line back: this file must never be
-  # ABLE to print the CI authority (bin/tests/ci-success-marker.sh pins that).
-  say "  CI green on $SHORT (rc=0, verdict line matched, tree unchanged)"
+def fail(item, msg):
+    sys.stderr.write("[release] VERIFY-FAILED [%s]: %s\n" % (item, msg))
+    raise SystemExit(6)
+
+def load(path, what):
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except Exception as exc:
+        fail("release-ci", "GitHub'"'"'s %s payload is not readable JSON (%s) - an answer that cannot be parsed is not a green verdict." % (what, exc))
+
+run = load(os.environ["RUN_FILE"], "run")
+jobs_doc = load(os.environ["JOBS_FILE"], "jobs")
+
+want_run = os.environ["WANT_RUN_ID"]
+got_run = str(run.get("id", ""))
+if got_run != want_run:
+    fail("ci-run-binding", "asked GitHub about run %s and it answered about run %r - a verdict for a run nobody asked about is not this commit\x27s verdict." % (want_run, got_run))
+
+want_sha = os.environ["WANT_SHA"]
+head = run.get("head_sha") or ""
+if head != want_sha:
+    fail("ci-run-binding", "GitHub Actions run %s was for commit %s, but this publish is shipping %s. A green round for ANOTHER commit says nothing about the tree about to be built." % (want_run, head or "<none>", want_sha))
+
+jobs = jobs_doc.get("jobs")
+if not isinstance(jobs, list):
+    fail("release-ci", "the jobs payload for run %s carries no job list - there is nothing to read a verdict from." % want_run)
+total = jobs_doc.get("total_count")
+if isinstance(total, int) and total > len(jobs):
+    fail("release-ci", "run %s reports total_count=%d but this page returned %d jobs - a truncated roll-call cannot tell a missing PAGE from a missing JOB." % (want_run, total, len(jobs)))
+
+by_name = {}
+for j in jobs:
+    by_name[j.get("name")] = j
+want = [n for n in os.environ["WANT_JOBS"].splitlines() if n.strip()]
+missing = [n for n in want if n not in by_name]
+if missing:
+    fail("release-ci", "run %s has NO ENTRY for required gate job(s): %s. A job that never ran produces no entry at all, so \"everything visible is green\" is also true of a round that never checked it. Saw: %s." % (want_run, ", ".join(missing), ", ".join(sorted(str(k) for k in by_name)) or "nothing"))
+notgreen = [(n, by_name[n].get("conclusion")) for n in want if by_name[n].get("conclusion") != "success"]
+if notgreen:
+    fail("release-ci", "run %s did not go green on: %s. The required conclusion is exactly \"success\" - skipped, cancelled, action_required, timed_out, neutral and a still-running null are all NOT a pass." % (want_run, ", ".join("%s=%r" % (n, c) for n, c in notgreen)))
+
+print("[release]   %d/%d required gate jobs succeeded on run %s (head_sha %s)"
+      % (len(want), len(want), want_run, head), file=sys.stderr)
+' || rc=$?
+  [[ "$rc" == "0" ]] || exit "$rc"
+
+  say "  CI verdict accepted for $SHORT (GitHub run $run_id, head_sha bound to --target, all required jobs success)"
 }
 
 # verify_artifacts <tag> <sha> <short> <name> — everything checkable locally,
