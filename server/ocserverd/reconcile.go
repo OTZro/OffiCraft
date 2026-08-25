@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -1570,6 +1571,179 @@ func shouldNoticeRefocus(
 	return cfg.NoticePct > 0 && pct != nil && *pct >= float64(cfg.NoticePct)
 }
 
+// ── the context-gate diagnostic (T-72dd 補觀測) ───────────────────────────────
+
+// ctxGateDiagThrottleSecs bounds the gate diagnostic to ONE line per ACTOR per
+// five minutes.
+//
+// 🔴 THE THROTTLE IS NOT POLISH, IT IS THE FEATURE. The pass runs on the 30 s
+// reconcile/outsource cadence and every live actor takes one of these gates on
+// almost every tick, so an unthrottled line is not observability — it is the
+// 1.26-million-line serve.log this ticket was diagnosed inside, and it would
+// bury the very line it exists to surface. Five minutes is the owner's number.
+const ctxGateDiagThrottleSecs = 300.0
+
+// ctxGateDiagState is one actor's throttle cell: WHEN the diagnostic last spoke
+// for it, and WHICH gate it named. The gate is half the key on purpose — see
+// noteContextGateSkip for why a change of gate is not made to wait.
+type ctxGateDiagState struct {
+	ts   float64
+	gate string
+}
+
+// noteContextGateSkip emits the ONE line that tells 「這一輪跑了，這個 actor 被
+// 某道 gate 擋掉」 apart from 「這個 actor 根本沒被看過」.
+//
+// 🔴 THIS IS THE WHOLE POINT OF THE TICKET'S LAST STEP. Every quiet path out of
+// stampContextHighRecycle was a bare `continue`, so "the pass ran and decided
+// nothing" and "the pass never reached this actor at all" produced byte-identical
+// logs — nothing. That ambiguity is why the original symptom took as long as it
+// did to localise, and no amount of reading the code afterwards replaces a line
+// that says which gate was closed and on what numbers.
+//
+// WHAT IS ACTUALLY KEYED, precisely — the two halves are different and both
+// matter. The MAP is keyed on the ACTOR: one cell, holding ONE timestamp and
+// the ONE gate that timestamp belongs to. That is the memory bound, and the
+// reason the prune in clearSessionBootTS is per actor. But the SILENCING test
+// compares the remembered gate for EQUALITY, so what decides whether a line is
+// suppressed is the actor+gate PAIR: same actor on the same gate is throttled,
+// same actor on a different gate speaks immediately (the rule set out under A
+// CHANGE OF GATE IS NOT THROTTLED below). The line answers "what is this
+// actor's gate state right now", and a change of gate IS a change of that
+// answer.
+//
+// That is NOT the same design as the one rejected further down. There, "keying
+// the window on actor+gate" means one INDEPENDENT window per pair, each with
+// its own timestamp, several alive at once — which really would multiply a
+// quiet actor's budget. Here there is only ever ONE window, and a change of
+// gate does not open a second one, it TAKES OVER the only one.
+//
+// 🔴 THIS PARAGRAPH USED TO SAY THE OPPOSITE, AND MEASUREMENT KILLED IT. It
+// claimed the key was "the ACTOR, not the actor+gate pair", and that keying it
+// that way was what stopped an actor drifting between two closed gates from
+// doubling its own budget — "the flooding the throttle exists to stop". Neither
+// half of that survives. The suppression test reads the pair, not the actor
+// alone; and a drifting actor is not held to double its budget, it is held to
+// NO budget — it speaks on every tick. The claim was not merely imprecise, it
+// named this design as the defence against exactly the case the design does not
+// defend against. The flapping bound below is the measurement that settles it,
+// and it and this paragraph are ONE statement, not two competing ones.
+//
+// 🔴 THREE OF THIS PASS'S SEVEN QUIET PATHS ARE STILL SILENT, and the reason
+// originally given for that here was WRONG. It said their state "is readable on
+// the wire anyway". An independent review checked each one, and it is not:
+//
+//   - aRefocusStampWouldReachTheAgent — reads DesiredState. On the wire. ✅
+//   - canPromoteToAcceleratedStop — reads RefocusOp (on the wire) and
+//     StoppedSince (NOT on the wire). Half. ⚠️
+//   - the stale stopped_since latch — reads StoppedSince and the gauge's
+//     boot_ts. NEITHER is on the wire. ❌
+//
+// Checked, not assumed: no Go struct tag exports stopped_since (the only two
+// mentions of the name in spec/openapi.json are prose inside the report_stopped
+// / report_waking descriptions, not schema properties), and the gauge's boot_ts
+// has no wire exit in wire.go or api_monitoring.go. And the latch guard's own
+// comment (a few lines below) says a wrong verdict there excludes the member
+// "from BOTH thresholds for the rest of its life" — a PERMANENT silent no-op,
+// the exact class this ticket chased, on two inputs an operator cannot see.
+// It is left uninstrumented only because the ticket scoped this to three gates,
+// and it is a known gap, not a justified omission. A seventh path — the
+// armRefocusEpoch refusal — already logs itself, so four of the seven are
+// observable today.
+//
+// 🔴 A CHANGE OF GATE IS NOT THROTTLED. The window is per actor, but the cell
+// also remembers WHICH gate it last named, and a different gate speaks
+// immediately. An actor crossing from "no-actionable-pct" to "offline" does so
+// once in its life and that instant is the most informative one the line will
+// ever carry; making it wait out the remaining 290 s of somebody else's window
+// would drop exactly the transition a reader is looking for. Steady-state cost
+// is unchanged — a settled actor keeps taking the SAME gate every tick, so it
+// still emits once per window — which is why this is cheaper than keying the
+// window on actor+gate (that would triple the budget of every quiet actor).
+//
+// ⚠️ "STEADY-STATE" THERE MEANS A SETTLED ACTOR, AND ONLY A SETTLED ACTOR. The
+// remembered gate is compared for EQUALITY, so an actor that FLAPS between two
+// closed gates — a pct oscillating across the handover threshold while the
+// boot-storm guard is still armed is the ordinary way to produce that — names a
+// different gate on every tick and therefore speaks on every tick: for as long
+// as the flap lasts the throttle is not reduced, it is GONE. The upper bound is
+// consequently ONE LINE PER TICK PER ACTOR, i.e. the reconcile/outsource cadence
+// itself (~2 lines per minute per actor at the 30 s tick), against a budget of
+// one line per five minutes.
+//
+// Measured, not reasoned: an online actor driven across the threshold on every
+// tick emitted a line on every one of them, sustained for as long as both gates
+// stayed shut. Under stock settings the flap ends itself when the boot-storm
+// window closes and the high pct starts being ACTED on instead of skipped, which
+// held that same actor to one line per tick only until then.
+//
+// This is the ACCEPTED PRICE of the rule above, not an oversight. The transition
+// is the most informative instant this line will ever carry, so it is
+// deliberately not made to serve out a window; the cost of that choice lands
+// exactly on the actor that keeps transitioning. It stays acceptable because a
+// flap is self-limiting (the pct that keeps crossing either settles or the pass
+// finally acts on it). If it ever stops being self-limiting, damp the flap or
+// widen the key to remember MORE history — do not make the transition wait,
+// because that gives back the one line the diagnostic exists to print.
+//
+// ⚠️ PURELY OBSERVATIONAL. It reads the gauge, asks the hub, and writes stderr.
+// It must never alter what the pass decides, and it is called only on paths that
+// have ALREADY decided to skip.
+//
+// Bound: one cell per actor, pruned on the session boundary
+// (clearSessionBootTS) — the same treatment handoverNoticed gets one line over,
+// and for the reason written there: not "one record per agent id alive for the
+// process's lifetime". The prune doubles as the right behaviour, since a fresh
+// session deserves to be described again rather than inheriting its
+// predecessor's window.
+func (s *apiServer) noteContextGateSkip(id, gate string, record map[string]any, now float64) {
+	s.ctxGateDiagMu.Lock()
+	if last, seen := s.ctxGateDiagAt[id]; seen && last.gate == gate &&
+		now-last.ts < ctxGateDiagThrottleSecs {
+		s.ctxGateDiagMu.Unlock()
+		return
+	}
+	if s.ctxGateDiagAt == nil {
+		s.ctxGateDiagAt = map[string]ctxGateDiagState{}
+	}
+	s.ctxGateDiagAt[id] = ctxGateDiagState{ts: now, gate: gate}
+	s.ctxGateDiagMu.Unlock()
+	reconcileLog("recycle: gate skip %s gate=%s pct=%s pct_ts=%s boot_ts=%s "+
+		"boot_secs=%s online=%t", id, gate,
+		gaugeNumForDiag(record, "context_pct"),
+		gaugeNumForDiag(record, "context_pct_ts"),
+		gaugeNumForDiag(record, "boot_ts"),
+		secsSinceBootForDiag(record, now),
+		s.hub.IsOnline(id))
+}
+
+// gaugeNumForDiag renders one numeric gauge key for the diagnostic line, or the
+// literal "-" when the key is absent / non-numeric / the gauge entry is nil.
+// "-" is not decoration: WHICH of the five inputs is missing is most of what
+// the line is for (a missing context_pct_ts and a stale one fail the same gate
+// but mean completely different things).
+func gaugeNumForDiag(record map[string]any, key string) string {
+	if record == nil {
+		return "-"
+	}
+	v, ok := asNumber(record[key])
+	if !ok {
+		return "-"
+	}
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// secsSinceBootForDiag renders the boot-storm loop-guard's own input, through
+// gaugeSecsSinceBoot so the number on the line is the number the guard saw —
+// "-" when there is no usable boot_ts (the guard's fail-open case).
+func secsSinceBootForDiag(record map[string]any, now float64) string {
+	secs := gaugeSecsSinceBoot(record, now)
+	if secs == nil {
+		return "-"
+	}
+	return strconv.FormatFloat(*secs, 'f', 1, 64)
+}
+
 // stampContextHighRecycle auto-stamps refocus_since on any candidate whose
 // runtime-specific handover signal is actionable — the
 // automatic counterpart of the manual refocus button, reusing the SSE band's
@@ -1603,6 +1777,11 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 		case shouldNoticeRefocus(m.Runtime, record, ctxhigh, codexNoticeRound, s.codexCompactionThreshold):
 			op = refocusOpContextNotice
 		default:
+			// GATE 1/3 (T-72dd 補觀測): no actionable signal. This is the gate
+			// that swallows a STALE pct — actionableContextPct returns nil when
+			// context_pct_ts <= boot_ts — which is exactly the case the cockpit
+			// still renders a number for (foldActorRuntime reads the raw key).
+			s.noteContextGateSkip(m.ID, "no-actionable-pct", record, now)
 			continue
 		}
 		// 🔴 AN AGENT THAT HAS ALREADY SAID 「我收完了」 IS NOT ASKED AGAIN.
@@ -1652,10 +1831,16 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 			promoting = true
 		}
 		if bootStormTripped(gaugeSecsSinceBoot(record, now), ctxhigh.MinBootSecs) {
-			continue // fresh boot already over the line → suppress (loop-guard)
+			// GATE 2/3 (T-72dd 補觀測) — fresh boot already over the line →
+			// suppress (loop-guard).
+			s.noteContextGateSkip(m.ID, "boot-storm", record, now)
+			continue
 		}
 		if !s.hub.IsOnline(m.ID) {
-			continue // only-online (symmetric with the manual refocus gate)
+			// GATE 3/3 (T-72dd 補觀測) — only-online (symmetric with the manual
+			// refocus gate).
+			s.noteContextGateSkip(m.ID, "offline", record, now)
+			continue
 		}
 		// …and only when the server still WANTS it online (T-ccc7). hub.IsOnline
 		// is a live-socket fact, not an intent: a member deactivated seconds ago

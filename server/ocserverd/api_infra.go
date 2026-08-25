@@ -615,6 +615,56 @@ func (s *apiServer) clearSessionBootTS(id string) {
 		// it over a refocus would immediately recycle the fresh replacement
 		// session.
 		delete(entry, "compaction_count")
+		// …and the session's CONTEXT REPORT, both halves (T-72dd).
+		//
+		// 🔴 WHY, AND ONLY WHY. This is NOT known to be the cause of the
+		// silent no-op this ticket chased — that question is neither confirmed
+		// nor excluded. The reason it changes is narrower and stands on its
+		// own: TWO READERS OF THIS KEY DISAGREE. actionableContextPct (the
+		// gate/threshold reader) refuses a pct whose context_pct_ts is not
+		// strictly newer than boot_ts, and boot_ts is what the line above just
+		// deleted; foldActorRuntime (the cockpit / get_monitoring reader, in
+		// wire.go) takes context_pct RAW with no such test. Leaving the pair
+		// standing across a boundary therefore leaves the panel showing a
+		// number that no threshold in the server will ever act on — the
+		// displayed percentage and the judged percentage are two different
+		// numbers, which is wrong whatever else is or is not broken.
+		//
+		// Dropping BOTH halves is what makes them agree: the gate reader
+		// already answers "no number", and now the cockpit's honest dash says
+		// the same thing until the fresh session files its first report. It is
+		// the same rule compaction_count is deleted under one line up — this is
+		// the OLD session's reading, and it does not describe the new one.
+		//
+		// 🔴 AND THESE TWO DELETES ARE NOT "PURELY OBSERVATIONAL". That ⚠️
+		// beside noteContextGateSkip describes the DIAGNOSTIC LINE and nothing
+		// else; it does not cover this pair, and reading it as a claim about
+		// the whole ticket is wrong. Whether these deletes move a threshold is
+		// decided by the ctx stale-guard setting, which actionableContextPct
+		// takes as a parameter:
+		//
+		//   - guard ON (the code default): boot_ts was dropped one line up, so
+		//     the guard already refuses the pct for want of an anchor. Removing
+		//     the pair changes nothing any threshold sees. Observational.
+		//   - guard OFF: that function returns the raw pct WITHOUT ever reading
+		//     boot_ts. So before this change a dead session's leftover pct
+		//     stayed actionable across the boundary and could still drive the
+		//     auto-refocus and advance-notice predicates in reconcile.go and
+		//     the SSE context band. After it, that reading is simply absent.
+		//     That is a BEHAVIOUR CHANGE — it suppresses auto-refocus fired on
+		//     a dead session's residue — and a deliberate one: a fresh session's
+		//     first window must not be judged on its predecessor's number, and
+		//     the new session restores a real one the moment it reports.
+		//
+		// The guard-OFF branch is REACHABLE, not theoretical: the value is
+		// settings-driven and read from the DB at startup, so the default is a
+		// default and not a guarantee. (A developer spot-check of one live
+		// deployment's settings at the time of writing found no row for the
+		// key, i.e. that site was running the default — one site at one moment,
+		// which is not evidence that nobody ever turns it off, and says nothing
+		// about any other deployment.)
+		delete(entry, "context_pct")
+		delete(entry, "context_pct_ts")
 		s.gauge.Set(id, entry)
 	}
 	// The advance-notice claim (T-c382) is keyed on the anchor being dropped
@@ -624,6 +674,20 @@ func (s *apiServer) clearSessionBootTS(id string) {
 	s.handoverNoticedMu.Lock()
 	delete(s.handoverNoticed, id)
 	s.handoverNoticedMu.Unlock()
+	// The context-gate diagnostic's throttle window (T-72dd) is session-scoped
+	// for BOTH of the reasons the claim above is, and it is dropped here rather
+	// than left to accumulate for exactly the reason written one comment up:
+	// "rather than leaving one record per agent id alive for the process's
+	// lifetime". A worker id is minted per task, so an un-pruned cell per actor
+	// is a slow leak with no upper bound but the process.
+	//
+	// It is also the behaviour we want. The window exists to stop one actor
+	// repeating itself WITHIN a session; a NEW session is a new set of numbers,
+	// and making it serve out its predecessor's window would suppress the first
+	// — most interesting — description of it.
+	s.ctxGateDiagMu.Lock()
+	delete(s.ctxGateDiagAt, id)
+	s.ctxGateDiagMu.Unlock()
 	// Write-on-change: the clear runs on every session boundary, and an
 	// unconditional UPDATE would cost a row write per boundary for nothing.
 	m, err := s.dal.GetMember(id)
