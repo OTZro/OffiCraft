@@ -1638,6 +1638,31 @@ type ctxGateDiagState struct {
 // still emits once per window — which is why this is cheaper than keying the
 // window on actor+gate (that would triple the budget of every quiet actor).
 //
+// ⚠️ "STEADY-STATE" THERE MEANS A SETTLED ACTOR, AND ONLY A SETTLED ACTOR. The
+// remembered gate is compared for EQUALITY, so an actor that FLAPS between two
+// closed gates — a pct oscillating across the handover threshold while the
+// boot-storm guard is still armed is the ordinary way to produce that — names a
+// different gate on every tick and therefore speaks on every tick: for as long
+// as the flap lasts the throttle is not reduced, it is GONE. The upper bound is
+// consequently ONE LINE PER TICK PER ACTOR, i.e. the reconcile/outsource cadence
+// itself (~2 lines per minute per actor at the 30 s tick), against a budget of
+// one line per five minutes.
+//
+// Measured, not reasoned: an online actor driven across the threshold on every
+// tick emitted a line on every one of them, sustained for as long as both gates
+// stayed shut. Under stock settings the flap ends itself when the boot-storm
+// window closes and the high pct starts being ACTED on instead of skipped, which
+// held that same actor to one line per tick only until then.
+//
+// This is the ACCEPTED PRICE of the rule above, not an oversight. The transition
+// is the most informative instant this line will ever carry, so it is
+// deliberately not made to serve out a window; the cost of that choice lands
+// exactly on the actor that keeps transitioning. It stays acceptable because a
+// flap is self-limiting (the pct that keeps crossing either settles or the pass
+// finally acts on it). If it ever stops being self-limiting, damp the flap or
+// widen the key to remember MORE history — do not make the transition wait,
+// because that gives back the one line the diagnostic exists to print.
+//
 // ⚠️ PURELY OBSERVATIONAL. It reads the gauge, asks the hub, and writes stderr.
 // It must never alter what the pass decides, and it is called only on paths that
 // have ALREADY decided to skip.

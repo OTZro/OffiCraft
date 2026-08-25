@@ -635,6 +635,34 @@ func (s *apiServer) clearSessionBootTS(id string) {
 		// the same thing until the fresh session files its first report. It is
 		// the same rule compaction_count is deleted under one line up — this is
 		// the OLD session's reading, and it does not describe the new one.
+		//
+		// 🔴 AND THESE TWO DELETES ARE NOT "PURELY OBSERVATIONAL". That ⚠️
+		// beside noteContextGateSkip describes the DIAGNOSTIC LINE and nothing
+		// else; it does not cover this pair, and reading it as a claim about
+		// the whole ticket is wrong. Whether these deletes move a threshold is
+		// decided by the ctx stale-guard setting, which actionableContextPct
+		// takes as a parameter:
+		//
+		//   - guard ON (the code default): boot_ts was dropped one line up, so
+		//     the guard already refuses the pct for want of an anchor. Removing
+		//     the pair changes nothing any threshold sees. Observational.
+		//   - guard OFF: that function returns the raw pct WITHOUT ever reading
+		//     boot_ts. So before this change a dead session's leftover pct
+		//     stayed actionable across the boundary and could still drive the
+		//     auto-refocus and advance-notice predicates in reconcile.go and
+		//     the SSE context band. After it, that reading is simply absent.
+		//     That is a BEHAVIOUR CHANGE — it suppresses auto-refocus fired on
+		//     a dead session's residue — and a deliberate one: a fresh session's
+		//     first window must not be judged on its predecessor's number, and
+		//     the new session restores a real one the moment it reports.
+		//
+		// The guard-OFF branch is REACHABLE, not theoretical: the value is
+		// settings-driven and read from the DB at startup, so the default is a
+		// default and not a guarantee. (The owner spot-checked one live
+		// deployment's settings while this was written and found no row for the
+		// key, i.e. that site was running the default — one site at one moment,
+		// which is not evidence that nobody ever turns it off, and says nothing
+		// about any other deployment.)
 		delete(entry, "context_pct")
 		delete(entry, "context_pct_ts")
 		s.gauge.Set(id, entry)
