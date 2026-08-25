@@ -159,8 +159,8 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("T-c21e ② 兩條 fallback 都叫得出 dep 的識別值", () => {
   // `unresolved` — the population is still the open-only fast path, so the row
-  // cannot name the dep yet. It can still NUMBER it: the short form is a pure
-  // projection of the id, available without resolving anything.
+  // cannot TITLE the dep yet. It can still NUMBER it: the number IS the id
+  // (T-5291), which the row already holds, so no resolution is needed.
   it("unresolved 列顯示完整識別值", () => {
     const blocked = mkTask({ title: "被擋住的", deps: [LONG_ID] });
     const { container } = renderCard(blocked, [blocked], false);

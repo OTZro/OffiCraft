@@ -1641,7 +1641,8 @@ function OutsourceSessionRow({
   const { t, msg } = useI18n();
 
   // Task context for the sub-line: the bound task's title first, then its type
-  // name, then the T-xxxx number — honest dash when none resolved.
+  // name, then the task number (the full id since T-5291, not a four-hex short
+  // form) — honest dash when none resolved.
   const context =
     worker.taskTitle || worker.taskTypeName || worker.taskNo || dash;
 

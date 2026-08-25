@@ -1610,8 +1610,9 @@ type taskListItemDTO struct {
 }
 
 // taskDepRefDTO is one entry of taskListItemDTO.DepTasks: a dep id resolved to
-// what the row actually prints (T-a3e4). TaskNo is the pure projection of the
-// id, so it is filled even when the dep's task row is GONE — Status/Title are
+// what the row actually prints (T-a3e4). TaskNo IS the id (T-5291 — no
+// transform at all), so it is filled even when the dep's task row is GONE
+// (naming the dep never required loading it) — Status/Title are
 // "" in exactly that case, which is the client's honest 查無此任務 row. Nothing
 // is ever defaulted to a plausible-looking status: the absence of one IS the
 // signal.
@@ -2085,8 +2086,9 @@ func newTaskListItemDTO(
 }
 
 // newTaskDepRefDTOs resolves each dep id against an already-loaded task
-// population. Never nil. A dep missing from byID keeps its derived TaskNo and
-// leaves Title/Status "" — the client's 查無此任務 row; inventing a status here
+// population. Never nil. A dep missing from byID still carries its TaskNo (it
+// is the id, T-5291) and leaves Title/Status "" — the client's 查無此任務 row;
+// inventing a status here
 // would launder "this task is gone" into "this task has not started".
 func newTaskDepRefDTOs(deps []string, byID map[string]Task) []taskDepRefDTO {
 	out := make([]taskDepRefDTO, 0, len(deps))

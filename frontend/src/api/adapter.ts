@@ -391,9 +391,9 @@ export interface TaskStepView {
  */
 /** One entry of {@link TaskView.depTasks} — a blocking task resolved to what the
  * dep row shows (wire `TaskDepRefDTO`, T-a3e4). `taskNo` is filled even for a
- * dep whose task is gone (it is a pure projection of the id); `title`/`status`
- * are "" in exactly that case, and the row then says 查無此任務 rather than
- * inventing a status. */
+ * dep whose task is gone — it IS the id (T-5291), so naming the dep never
+ * needed the dep's row to exist; `title`/`status` are "" in exactly that case,
+ * and the row then says 查無此任務 rather than inventing a status. */
 export interface TaskDepRefView {
   id: string;
   taskNo: string;
@@ -551,9 +551,11 @@ export interface OutsourceWorkerView {
   /** Worker mint epoch (wire created_ts; 0 when absent) — the panel's
    * fallback sort key when the bound task cannot be resolved. */
   createdTs?: number;
-  /** The bound task's display number (T-xxxx) and type — the panel row is 名稱 /
-   * task type + presence 點 / 可點的 T-xxxx (owner report 2026-07-14, aligned
-   * with the member card's three-line shape). WIRE FIELDS since T-a3e4
+  /** The bound task's number and type — the panel row is 名稱 / task type +
+   * presence 點 / 可點的任務編號 (owner report 2026-07-14, aligned with the
+   * member card's three-line shape). The number IS the task id since T-5291
+   * (it used to be a four-hex short form), so the row's chip is the string a
+   * human can paste straight back into `#tasks/<id>`. WIRE FIELDS since T-a3e4
    * (`task_no` / `task_type_key`): they used to be a CLIENT-side join against
    * the unfiltered `GET /api/tasks`, i.e. the whole task history downloaded on
    * every worker/chat delta to label a handful of rows. Honest "" when the
