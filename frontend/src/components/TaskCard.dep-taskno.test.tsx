@@ -268,7 +268,7 @@ describe("T-c21e ② dep 列的編號與那張 dep 自己卡片上的編號一�
 
     // Read the number off the DEP's own card, the way owner does.
     const depCard = byTitle(await findAllByTestId("task-card"), "擋路的");
-    // The chip renders as 「#T-xxxx」 behind an icon; take what follows the #.
+    // The chip renders as 「#<task id>」 behind an icon; take what follows the #.
     const onCard = depCard
       .querySelector('[data-testid="task-no"]')
       ?.textContent?.split("#")

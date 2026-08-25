@@ -624,7 +624,7 @@ func (s *apiServer) taskEventBodyText(kind string) string {
 //
 // 🔴 THE KIND IS THE WHOLE OF WHICH WORDS GO OUT, so passing the wrong constant
 // sends an agent another event's instructions. It cannot be caught downstream:
-// both documents open with a [T-xxxx] number and read as a coherent notice, so
+// both documents open with a [任務編號] and read as a coherent notice, so
 // a predecessor told to hand over would simply be told instead that something
 // stopped blocking it. The send-site tests compare the posted body against the
 // whole expected text for that reason — a keyword probe passes on either.

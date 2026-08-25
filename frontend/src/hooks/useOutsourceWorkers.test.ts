@@ -5,7 +5,7 @@
 // chat line from re-downloading the whole task list + the manuals list by
 // splitting the refetch into "full join" vs "workers only". That split was a
 // workaround for a client-side JOIN which should never have been the client's:
-// the panel needed the bound task's created_ts (sort) and its T-xxxx / type
+// the panel needed the bound task's created_ts (sort) and its 任務編號 / type
 // labels, so it pulled the ENTIRE unfiltered task history on every
 // task/outsource_worker delta. T-a3e4 folded those fields into the worker DTO,
 // so the join — and the two-path refetch that existed to dodge it — are gone.

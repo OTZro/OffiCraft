@@ -535,7 +535,7 @@ export function OfficePage() {
               selectedId={workerPeer?.id ?? ""}
               onOpenChat={(id) => setSelectedId(id)}
               onOpenDetail={(id) => setWorkerDetailId(id)}
-              // The row's T-xxxx chip jumps to the bound task's card — the same
+              // The row's task-id chip jumps to the bound task's card — the same
               // #tasks/<id> locate-anchor route the reply cards use.
               onOpenTask={(taskId) => setRoute({ page: "tasks", taskId })}
             />
@@ -611,7 +611,7 @@ export function OfficePage() {
             // M3 §4.2 outsource chat: the SAME ChatArea as a member chat
             // (打字/附檔/看回覆), keyed on the worker id as the chat peer.
             // Header title = 「外包 · 代號」; the subtitle is the SAME task
-            // line the rail's outsource row shows — [clickable T-xxxx chip →
+            // line the rail's outsource row shows — [clickable task-id chip →
             // task type], the shared OutsourceTaskLine (owner 2026-07-16:
             // 兩邊顯示一樣的東西; replaces the old 狀態 · 標題 pair) — instead
             // of a member presence badge. NO dot here: outsource presence
@@ -627,7 +627,7 @@ export function OfficePage() {
               workers={outsource.workers}
               onOpenDetail={() => setWorkerDetailId(workerPeer.id)}
               draftSeed={seedFor(workerPeer.id)}
-              // T-3451: the bound task's FULL title under the T-xxxx·type sub —
+              // T-3451: the bound task's FULL title under the 任務編號·type sub —
               // owner: 外包側 header 同樣顯示完整 title. Rides the wire echo.
               headerTaskTitle={workerPeer.taskTitle ?? ""}
               headerSub={

@@ -1,8 +1,8 @@
 // TaskCard — 卡頭對齊 owner spec (T-705e, supersedes T-e987's layout). Locked:
 //   1. No standalone card avatar (the old large person/briefcase circle stays
 //      gone); stable member identity chips may carry the shared 18px Avatar.
-//   2. task id is a bordered mono badge "☑ #T-xxxx" (checkbox glyph + #no), not
-//      the old "[T-xxxx]" plain-text prefix.
+//   2. task id is a bordered mono badge "☑ #<task id>" (checkbox glyph + #no),
+//      not the old bracketed plain-text prefix.
 //   3. 負責人 / 建立者 chat-bubble icon rides INSIDE the value chip, after the
 //      name — never in front of the row label.
 //   4. the executor/creator/type/key VALUES are chips (pill), not flat text; a
@@ -103,12 +103,12 @@ describe("TaskCard 卡頭對齊 owner spec (T-705e)", () => {
     ).toBeTruthy();
   });
 
-  it("renders the task id as a #T-xxxx badge with the checkbox glyph, on the badge row", async () => {
+  it("renders the task id as a #<task id> badge with the checkbox glyph, on the badge row", async () => {
     const task = mkTask({ title: "識別碼徽章" });
     __injectMockTask(task);
     const { findByTestId } = renderPage();
     const badge = await findByTestId("task-no");
-    // #T-xxxx, never the old bracketed prefix.
+    // #<task id>, never the old bracketed prefix.
     expect(badge.textContent).toContain(`#${task.taskNo}`);
     expect(badge.textContent).not.toContain("[");
     expect(badge.classList.contains("task-card__id-badge")).toBe(true);
@@ -399,7 +399,7 @@ describe("TaskCard 卡頭對齊 owner spec (T-705e)", () => {
       assertBadgeRowLeadsTitle(card);
     });
 
-    it("the ☑ #T-xxxx badge — the row's leader — sits above the title, not under it", async () => {
+    it("the ☑ #<task id> badge — the row's leader — sits above the title, not under it", async () => {
       const task = mkTask({ title: "編號在標題上面" });
       __injectMockTask(task);
       const { findByTestId } = renderPage();

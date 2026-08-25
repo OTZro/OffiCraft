@@ -35,7 +35,7 @@ CREATE TABLE task_rebuild (
     -- the ORIGINAL task's id this one duplicates; '' unless status='duplicated'.
     -- Depth-1 by construction (the mark_duplicate handler rejects pointing at a
     -- task that is itself duplicated, and rejects marking a task already used as
-    -- an original) so the cockpit "重複於 T-xxxx" link resolves in one hop.
+    -- an original) so the cockpit "重複於 <task id>" link resolves in one hop.
     duplicate_of   TEXT NOT NULL DEFAULT ''
 );
 INSERT INTO task_rebuild (id, type_key, title, dedupe_key, inputs, description,

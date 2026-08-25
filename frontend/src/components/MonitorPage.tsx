@@ -1608,7 +1608,7 @@ function SessionRow({
 
 /** One outsource-worker session row. Shares the SessionRow td shape so the two
  * kinds read as a single list. The member cell shows the anonymous codename
- * (O-xx) over its task context (title → type → T-xxxx) so the reader can tell
+ * (O-xx) over its task context (title → type → 任務編號) so the reader can tell
  * WHAT the worker is doing; every runtime column falls back to an honest dash
  * when the worker never reported it.
  *

@@ -8,7 +8,8 @@
 -- pollutes the roster and never enters reconcile).
 
 -- task — one task card. No speculative columns (00003 spirit): the display
--- number (T-XXXX) derives from id, transient projections ("等待指派" /
+-- number IS the id (T-5291; it was a truncated short code before), transient
+-- projections ("等待指派" /
 -- "規劃中") derive from executor_id + step count, elapsed derives from
 -- created_ts.
 CREATE TABLE task (

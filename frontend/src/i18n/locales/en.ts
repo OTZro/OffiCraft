@@ -83,7 +83,7 @@ export const en: Dict = {
     unassigned: "Unassigned",
     adhoc: "Ad-hoc",
     // Card-head label column (T-705e): equal-width labels, chip values. The
-    // ☑ #T-xxxx id badge sits on the badge row (v2) — no field label.
+    // ☑ #<task id> badge sits on the badge row (v2) — no field label.
     typeLabel: "Task type",
     assigneeLabel: "Assignee",
     creatorLabel: "Creator",

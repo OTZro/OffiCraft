@@ -1594,7 +1594,7 @@ type taskListItemDTO struct {
 	Deps               []string `json:"deps"`
 	// DepTasks carries the DISPLAY facts of every id in Deps (T-a3e4), resolved
 	// against the whole task table by the ONE ListTasks read the handler already
-	// does — one entry per dep, same order. The card's 「等 T-xxxx <標題>」 row
+	// does — one entry per dep, same order. The card's 「等 <task id> <標題>」 row
 	// renders straight from this, so a dep that has already CLOSED no longer
 	// forces the client to download the closed population to name it. Never nil
 	// (an empty list is honest for a task with no deps); a dep whose task is
@@ -2043,7 +2043,7 @@ func newTaskArtifactDTO(a TaskArtifact, att *ChatAttachment) taskArtifactDTO {
 //
 // byID is the caller's map of the WHOLE task population (the handler builds it
 // from the single ListTasks read it already does) — it resolves each dep into
-// the display facts the card's 「等 T-xxxx」 row needs. Pass nil ONLY where the
+// the display facts the card's 「等 <task id>」 row needs. Pass nil ONLY where the
 // population is genuinely not in hand; deps then serve as unresolvable entries,
 // which the client reads as 查無此任務. There is deliberately no per-dep lookup
 // here: this endpoint is the payload/latency hot path, so dep resolution must

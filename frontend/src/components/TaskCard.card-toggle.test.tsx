@@ -10,7 +10,7 @@
 //      stopPropagation sprinkled per child). (The ⋮ owner menu was one of
 //      these until v5 deleted it; see TaskCard.status-menu.test.tsx.)
 //   3. An active text selection (drag ending on the card) is not a toggle.
-//   4. The ☑ #T-xxxx id badge LEADS the fixed badge row, label-free
+//   4. The ☑ #<task id> badge LEADS the fixed badge row, label-free
 //      (編號 · 優先權 · 狀態, v3), no longer on the title line or in the
 //      meta stack.
 //   5. The 等我回覆 jump (v5): the status badge drops a menu whose 查看等我回覆卡
@@ -289,7 +289,7 @@ describe("TaskCard whole-card toggle (mobile refactor)", () => {
     expect(card.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("the ☑ #T-xxxx id badge leads the badge row (編號 · 優先權 · 狀態), label-free, not on the title line", async () => {
+  it("the ☑ #<task id> badge leads the badge row (編號 · 優先權 · 狀態), label-free, not on the title line", async () => {
     const task = mkTask({ title: "編號居首" });
     __injectMockTask(task);
     const { findByTestId } = renderPage();

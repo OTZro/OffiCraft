@@ -268,7 +268,7 @@ func TestReassignMemberToMemberHandsOver(t *testing.T) {
 	// 🔴 THE WHOLE TEXT, not a keyword — the predecessor notice is the 轉派程序
 	// DOCUMENT now (T-3201), and the failure a keyword probe cannot see is the
 	// send site naming another event's kind: every one of these documents opens
-	// with a [T-xxxx] number and reads as a coherent notice, so "mentions the
+	// with a [任務編號] and reads as a coherent notice, so "mentions the
 	// successor and the word 交接" would pass on a document about something else
 	// entirely. Hand-written rather than re-rendered from the registry, so this
 	// stays a statement about what an agent receives.

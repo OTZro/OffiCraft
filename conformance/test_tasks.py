@@ -149,8 +149,8 @@ def test_full_task_loop(client, owner_token, executor):
     task = created["task"]
     assert task["status"] == "not_started"
     assert task["executor_kind"] == "member"
-    # task_no IS the id (T-5291, owner 2026-08-25) — it used to be a "T-xxxx"
-    # projection. Asserting equality rather than a prefix: the shape a client
+    # task_no IS the id (T-5291, owner 2026-08-25) — it used to be a truncated
+    # short code. Asserting equality rather than a prefix: the shape a client
     # can rely on is "the number names the task", and a prefix check would pass
     # for any projection that merely kept the first two characters.
     assert task["task_no"] == task["id"]

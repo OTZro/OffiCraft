@@ -560,7 +560,7 @@ func TestBlockerCloseReleasesAndTellsTheDependentExecutor(t *testing.T) {
 	// instead of the pre-rewrite single sentence that told a ticket already in
 	// progress to go and plan itself. Two failures need the whole text: the send
 	// site naming another event's kind (every one of these documents opens with
-	// a [T-xxxx] number, so a keyword probe passes on the wrong one), and the
+	// a [任務編號], so a keyword probe passes on the wrong one), and the
 	// body silently reverting to that sentence.
 	// ⚠️ THE BLOCKER'S NUMBER, TITLE AND STATUS LEFT THE SENTENCE (T-6f44,
 	// decision 3 applied to this document). What the agent has to act on is the

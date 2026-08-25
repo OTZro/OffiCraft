@@ -451,11 +451,12 @@ export interface TaskView {
   /** The manual-derived identity key value (dedupe key); "" for ad-hoc. When
    * the value is a URL the badge renders an external link (spec 識別鍵). */
   dedupeKey: string;
-  /** Blocking task IDS (被 T-xxx 擋住, 可多筆) — resolved to task_no for display. */
+  /** Blocking task IDS (被依賴擋住, 可多筆). The card prints each id as-is —
+   * task_no IS the id (T-5291), so there is no display conversion. */
   deps: string[];
   /** The SERVER's resolution of every id in {@link deps} (wire `dep_tasks`,
-   * T-a3e4): one entry per dep, same order, carrying what the 「等 T-xxxx
-   * <標題>」 row prints. The card renders straight from this — it no longer
+   * T-a3e4): one entry per dep, same order, carrying what the 「等 <task id> <標題>」
+   * row prints. The card renders straight from this — it no longer
    * looks deps up in the loaded task list, which is why the page no longer has
    * to download the closed population just so a finished blocker can be named.
    *
@@ -471,7 +472,7 @@ export interface TaskView {
   /** One-line reason while status is waiting_external; "" otherwise. */
   waitingReason: string;
   /** The ORIGINAL task's id this one duplicates; "" unless status is
-   * "duplicated". The card renders "重複於 T-xxxx" as a link that jumps to it —
+   * "duplicated". The card renders "重複於 <task id>" as a link that jumps to it —
    * depth-1 by construction, so the link always resolves in one hop. */
   duplicateOf: string;
   createdTs: number;

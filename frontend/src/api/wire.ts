@@ -161,8 +161,8 @@ export type WireTask = components["schemas"]["TaskDTO"];
 export type WireTaskListItem = components["schemas"]["TaskListItemDTO"];
 
 /** Mirrors `TaskDepRefDTO` (T-a3e4): one entry of `TaskListItemDTO.dep_tasks` —
- * a blocking task id resolved SERVER-SIDE to the `task_no`/`title`/`status` the
- * 「等 T-xxxx」 row prints, so a dep that has already closed can be named
+ * a blocking task id joined SERVER-SIDE to the `task_no`/`title`/`status` the
+ * 「等 <task id>」 row prints, so a dep that has already closed can be named
  * without the client loading the closed population. `title`/`status` are ''
  * when the dep's task no longer exists (查無此任務). */
 export type WireTaskDepRef = components["schemas"]["TaskDepRefDTO"];

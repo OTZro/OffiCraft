@@ -5,7 +5,7 @@
 // 2026-07-17, the chevron button is gone) expands the workflow timeline +
 // the embedded reply cards + the description. Top to bottom:
 //
-//   head      — row 1 is the fixed badge row (☑ #T-xxxx id badge · 優先權 chip
+//   head      — row 1 is the fixed badge row (☑ #<task id> badge · 優先權 chip
 //               (click → select-style dropdown, 高/中/低/凍結 incl. freeze) ·
 //               狀態 badge (click → owner-action dropdown, ALWAYS — 標記重複 /
 //               終止, greyed + unclickable once the task is closed, with the
@@ -26,7 +26,8 @@
 //               bar, and 已歷時 ticking from created_ts (closed tasks freeze
 //               at closed_ts — honest, the clock stops when the task does).
 //   waiting   — the one-line waiting_reason row while 等待外部.
-//   deps      — 被 T-xxxx 擋住 chips (task ids resolved to display task_no).
+//   deps      — 被 <task id> 擋住 chips (the chip prints the blocking task's
+//               id as-is — task_no IS the id since T-5291).
 //   message   — 傳訊息給 {executor}… box (POST /api/tasks/{id}/message;
 //               disabled while unassigned — the server would 409). Text
 //               and/or attachments: paste an image / pick files via the
@@ -1019,7 +1020,7 @@ export function TaskCard({
       onKeyDown={onCardToggleKeyDown}
     >
       {/* ── head (v4 layout — owner 2026-07-17「這兩排應該要對調」): the v2
-           order SWAPPED. Row 1 is the badge row (☑ #T-xxxx id badge · 優先權
+           order SWAPPED. Row 1 is the badge row (☑ #<task id> badge · 優先權
            chip (in-place editable) · 狀態 badge) and row 2 the title; the ▸/▾
            expand indicator holds the card's top-right corner, riding row 1
            alongside the badges — the corner is the anchor, not the title
@@ -1027,7 +1028,7 @@ export function TaskCard({
            deleted ⋮). No avatar; no chevron — the whole card toggles. ── */}
       <header className="task-card__head">
         <div className="task-card__head-top">
-          {/* Row 1 — the fixed badge row: #T-xxxx · 優先權 · 狀態 (v3 order —
+          {/* Row 1 — the fixed badge row: #<task id> · 優先權 · 狀態 (v3 order —
               the id leads). The priority chip edits in place (owner v2/v3):
               clicking it drops a vertical select-style menu (same visual
               vocabulary as the 狀態 dropdown popover); picking one calls
@@ -1519,7 +1520,7 @@ export function TaskCard({
         </div>
       </header>
 
-      {/* ── deps 「等 T-xxxx」 (被 T-xxxx 擋住) — v6 (owner 2026-07-17).
+      {/* ── deps 「等 <task id>」 (被 <task id> 擋住) — v6 (owner 2026-07-17).
            Was a bare .task-key--dep: a grey hairline box of mono text with no
            icon, wedged between the 建立者 row and the progress bar, reading as
            debug output rather than as "this task is waiting on something".
@@ -1548,7 +1549,7 @@ export function TaskCard({
              claim about THIS card. A dep badge there would read 「這張卡是
              等待中」, which is false for an in_progress-and-blocked card. That
              ban still holds — nothing below touches row 1.
-           · The new badge lives INSIDE the dep row, inboard of 「等 T-xxxx
+           · The new badge lives INSIDE the dep row, inboard of 「等 <task id>
              <標題>」. Its subject is unambiguous from position alone: it is
              the status OF THE DEP TASK named on the same line, exactly like
              the 編號 and 標題 beside it. It says nothing about this card.
