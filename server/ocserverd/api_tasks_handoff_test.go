@@ -1416,3 +1416,79 @@ func TestSubmitPlanCannotCloseAroundTheGateByFreezingASettledCardStep(t *testing
 			"like the closing step report: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// ── the 422 preamble says the task's identity ONCE ────────────────────────────
+//
+// T-5291 round 2. The preamble was written when TaskNo was a projection:
+// `task '<id>' (<TaskNo(id)>)` gave the caller the machine key AND the short
+// number a human would read off the card. Now that TaskNo returns the id
+// unchanged, that parenthetical prints the same string twice —
+//
+//	task 't-72dd79b666d0' (t-72dd79b666d0) was created by …
+//
+// — which is pure noise in the message this file's own comment calls "the whole
+// user-facing contract of the gate". A contract that repeats itself teaches the
+// reader to skim it.
+//
+// The pin is on the COUNT, not on the wording: any future preamble is free to
+// phrase the identity however it likes, but naming it twice reddens. Both doors
+// are checked because they share the preamble and only the tail differs — a
+// change that fixes one and not the other is exactly the drift this catches.
+func TestGate422NamesTheTaskExactlyOnce(t *testing.T) {
+	const taskID = "t-5291aabbccdd"
+
+	// door 1: the closing step_report.
+	api := newTasksTestServer(t)
+	seedActiveMember(t, api, "m-creator")
+	seedHandoffTask(t, api, taskID, "m-creator", "m-exec", "design")
+	rec := closeReport(t, api, taskID, taskID+"-sa", "m-exec", nil)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("step_report door must refuse: %d %s", rec.Code, rec.Body.String())
+	}
+	report := errorMessage(t, rec)
+
+	// door 2: the replan that would leave every step done.
+	api2 := newTasksTestServer(t)
+	seedActiveMember(t, api2, "m-creator")
+	task2 := seedHandoffTask(t, api2, taskID, "m-creator", "m-exec", "a", "b")
+	steps, err := api2.dal.ListTaskSteps(task2.ID)
+	if err != nil {
+		t.Fatalf("list steps: %v", err)
+	}
+	for _, st := range steps {
+		if st.Name == "a" {
+			st.Status = StepStatusDone
+			if err := api2.dal.PutTaskStep(st); err != nil {
+				t.Fatalf("put step: %v", err)
+			}
+		}
+	}
+	rec2 := httptest.NewRecorder()
+	api2.HandleSubmitTaskPlanApiTasksTaskIdPlanPost(rec2,
+		taskReq(t, "POST", "/api/tasks/"+taskID+"/plan",
+			map[string]any{"steps": []map[string]any{{"name": "a", "dod": "d"}}},
+			"m-exec", "agent"), taskID)
+	if rec2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("replan door must refuse: %d %s", rec2.Code, rec2.Body.String())
+	}
+	replan := errorMessage(t, rec2)
+
+	for _, tc := range []struct {
+		door string
+		msg  string
+	}{{"step_report", report}, {"replan", replan}} {
+		// Non-vacuity first: the id must be in there at all. Counting to 1 in a
+		// message that names the task ZERO times would "pass" while the caller
+		// has lost the one thing that tells them WHICH task refused.
+		n := strings.Count(tc.msg, taskID)
+		if n == 0 {
+			t.Fatalf("[%s] the 422 no longer names the task at all — the caller "+
+				"cannot tell which task refused: %s", tc.door, tc.msg)
+		}
+		if n != 1 {
+			t.Fatalf("[%s] the 422 prints the task identity %d times (want 1) — "+
+				"TaskNo is the id now, so `task '<id>' (<TaskNo>)` is the same "+
+				"string twice: %s", tc.door, n, tc.msg)
+		}
+	}
+}

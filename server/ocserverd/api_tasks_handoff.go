@@ -111,7 +111,12 @@ const (
 // user-facing contract of the gate, so it names the ways out VERBATIM — a
 // fail-closed guard that does not tell you how to pass is just an outage.
 func handoffGateReason(t Task, door string) string {
-	who := "task '" + t.ID + "' (" + TaskNo(t.ID) + ") was created by '" +
+	// The task is named ONCE. This used to read `task '<id>' (<TaskNo(id)>)`,
+	// which was two different strings while TaskNo was the four-hex projection
+	// — the machine key plus the number on the card. T-5291 made TaskNo the id
+	// itself, so the parenthetical became the same string a second time. Pinned
+	// by TestGate422NamesTheTaskExactlyOnce.
+	who := "task '" + t.ID + "' was created by '" +
 		t.CreatorID + "' but executed by '" + t.ExecutorID + "'"
 	if door == handoffDoorReplan {
 		// A replan carries no declaration field, so pointing the caller back at
