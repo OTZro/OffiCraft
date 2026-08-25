@@ -49,7 +49,7 @@ describe("SettingsPage · DocDetail load gate (T-2d99)", () => {
         <SettingsPage />
       </I18nProvider>
     );
-    fireEvent.click(utils.getByText(s.roles));
+    fireEvent.click(utils.getByText(s.globalContext));
     await utils.findByText(s.systemName);
     fireEvent.click(utils.getByText(s.customName));
 

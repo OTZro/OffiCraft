@@ -1,4 +1,5 @@
-// HOTSPOT — 設定 › 角色誌 › 啟動程序 on a phone (T-bac4, replacing T-6278).
+// HOTSPOT — 設定 › 全域情境 › 啟動程序 on a phone (T-bac4, replacing T-6278;
+// the middle segment became 全域情境 in T-a241).
 //
 // THE DEFECT UNDERNEATH ALL THREE SHAPES IS A GEOMETRY DEFECT, AND IT WAS
 // REPORTED FROM A PHONE. The page originally rendered both documents in full,
@@ -60,9 +61,9 @@ import { zh } from "../src/i18n/locales/zh";
 
 const s = zh.settings;
 
-/** Walk in the way a person does: 設定 landing → 角色誌 → 啟動程序. */
+/** Walk in the way a person does: 設定 landing → 全域情境 → 啟動程序. */
 async function openBootIndex(page: import("@playwright/test").Page) {
-  await page.getByText(s.roles).first().click();
+  await page.getByText(s.globalContext).first().click();
   await page.getByText(s.bootName).first().click();
   await expect(page.getByTestId("boot-entry-claude")).toBeVisible();
 }
@@ -151,7 +152,7 @@ test("a row opens THAT runtime's page, and the other is not on it", async ({
   await expect(page.getByText(s.bootCodexName)).toHaveCount(0);
 
   // And the trail leads back, so the other runtime is one press away rather
-  // than a trip out to 角色誌 and back in.
+  // than a trip out to 全域情境 and back in.
   await page.locator(".crumbs__link", { hasText: s.bootName }).click();
   await expect(page.getByTestId("boot-entry-codex")).toBeVisible();
 });

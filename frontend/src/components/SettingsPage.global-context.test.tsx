@@ -20,14 +20,15 @@ import { __resetMock } from "../api/mock";
 
 const s = zh.settings;
 
-/** Render Settings and navigate landing → 角色誌 (the roles/blocks list). */
+/** Render Settings and navigate landing → 全域情境 (the block list; T-a241
+ * moved it out of 角色誌 into its own section). */
 async function openRolesLog() {
   const utils = render(
     <I18nProvider>
       <SettingsPage />
     </I18nProvider>
   );
-  fireEvent.click(utils.getByText(s.roles));
+  fireEvent.click(utils.getByText(s.globalContext));
   // The three block entries render synchronously; the role list is async.
   await utils.findByText(s.systemName);
   return utils;

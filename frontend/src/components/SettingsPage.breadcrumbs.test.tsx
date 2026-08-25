@@ -71,7 +71,9 @@ describe("SettingsPage · unified breadcrumb header (T-8f6e)", () => {
   it("角色誌: 設定 › 角色誌 + title, no back button", async () => {
     const utils = renderSettings();
     fireEvent.click(utils.getByText(s.roles));
-    await utils.findByText(s.systemName);
+    // T-a241: 系統互動 is on 全域情境 now, so this page's own 角色定義 heading is
+    // what says the roles list has landed.
+    await utils.findByText(s.roleDefsSection);
     expectHeader(utils, [s.title, s.roles]);
     expect(utils.getByRole("heading", { name: s.roles })).toBeTruthy();
   });
@@ -79,22 +81,25 @@ describe("SettingsPage · unified breadcrumb header (T-8f6e)", () => {
   it("角色詳情: 設定 › 角色誌 › <role>, no back button", async () => {
     const utils = renderSettings();
     fireEvent.click(utils.getByText(s.roles));
-    await utils.findByText(s.systemName);
+    await utils.findByText(s.roleDefsSection);
     fireEvent.click(utils.getByText(zh.office.role.assistant));
     await utils.findAllByText(s.edit);
     expectHeader(utils, [s.title, s.roles, zh.office.role.assistant]);
   });
 
-  it("系統互動 / 使用者自訂 / 啟動程序: 設定 › 角色誌 › <doc>", async () => {
+  it("系統互動 / 使用者自訂 / 啟動程序: 設定 › 全域情境 › <doc>", async () => {
+    // T-a241 moved these documents out of 角色誌 into their own section, so the
+    // MIDDLE segment of every one of these trails is 全域情境 — and it has to
+    // be, because that is the page the document is listed on now.
     const utils = renderSettings();
-    fireEvent.click(utils.getByText(s.roles));
+    fireEvent.click(utils.getByText(s.globalContext));
     await utils.findByText(s.systemName);
 
     for (const name of [s.systemName, s.customName, s.bootName]) {
       fireEvent.click(utils.getByText(name));
-      expectHeader(utils, [s.title, s.roles, name]);
-      // Back up to the roles list via the 角色誌 crumb for the next doc.
-      fireEvent.click(utils.getByRole("button", { name: s.roles }));
+      expectHeader(utils, [s.title, s.globalContext, name]);
+      // Back up to the 全域情境 list via its crumb for the next doc.
+      fireEvent.click(utils.getByRole("button", { name: s.globalContext }));
       await utils.findByText(s.systemName);
     }
 
@@ -116,10 +121,15 @@ describe("SettingsPage · unified breadcrumb header (T-8f6e)", () => {
     // …and one level deeper. The runtime's own name is the TERMINAL segment on
     // purpose: Breadcrumbs renders the last one as plain text, so a trail
     // ending at 啟動程序 would leave a reader who opened one runtime unable to
-    // reach the other without going out to 角色誌 and back in.
+    // reach the other without going out to 全域情境 and back in.
     fireEvent.click(utils.getByTestId("boot-entry-claude"));
     await utils.findByTestId("doc-card-edit");
-    expectHeader(utils, [s.title, s.roles, s.bootName, s.bootClaudeName]);
+    expectHeader(utils, [
+      s.title,
+      s.globalContext,
+      s.bootName,
+      s.bootClaudeName,
+    ]);
   });
 
   it("任務手冊列表: 設定 › 任務手冊 + title; hub: 設定 › 任務手冊 › <type>", async () => {
@@ -191,12 +201,12 @@ describe("SettingsPage · crumb jumps write the hash (lib/hashRoute)", () => {
   it("角色誌 crumb: back to the roles list, hash → #settings/roles", async () => {
     const utils = renderSettings();
     fireEvent.click(utils.getByText(s.roles));
-    await utils.findByText(s.systemName);
+    await utils.findByText(s.roleDefsSection);
     fireEvent.click(utils.getByText(zh.office.role.assistant));
     await utils.findAllByText(s.edit);
 
     fireEvent.click(utils.getByRole("button", { name: s.roles }));
-    await utils.findByText(s.systemName); // the roles list is back
+    await utils.findByText(s.roleDefsSection); // the roles list is back
     expect(window.location.hash).toBe("#settings/roles");
   });
 });

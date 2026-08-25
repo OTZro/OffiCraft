@@ -84,7 +84,7 @@ export interface DocCardProps {
    * pencil InlineEdit in the heading; commits ride the role PATCH choke. */
   onRenameTitle?: (name: string) => Promise<void> | void;
   doc: DocCardDoc | null;
-  /** The unified settings breadcrumb (T-8f6e) — 設定 › 角色誌 › <this doc>. */
+  /** The unified settings breadcrumb (T-8f6e) — 設定 › 全域情境 › <this doc>. */
   crumbs: Crumb[];
   /** Save/reset are omitted for read-only docs. */
   onSave?: (text: string) => Promise<void> | void;
