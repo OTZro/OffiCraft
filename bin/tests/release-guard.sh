@@ -137,13 +137,32 @@ SH
 cat > "$SHIMDIR/curl" <<'SH'
 #!/usr/bin/env bash
 url="${!#}"
+# Did this request PRESENT an Authorization header? Both shapes are recognised —
+# a plain -H argument and a `--config` file carrying `header = "Authorization: …"`
+# — so the assertion is about the REQUEST, not about which plumbing bin/release
+# happens to use to build it. The token VALUE is never recorded; only yes/no.
+auth=no; prev=""
+for a in "$@"; do
+  case "$a" in Authorization:*|*" Authorization:"*) auth=yes ;; esac
+  if [[ "$prev" == "--config" || "$prev" == "-K" ]]; then
+    if [[ "$a" == "-" ]]; then
+      # curl reads the config from STDIN — the shape that keeps a credential out
+      # of both argv and the filesystem. Consume it here so the shim sees what
+      # the real curl would have seen.
+      grep -qiE '^[[:space:]]*header[[:space:]]*=.*Authorization:' && auth=yes
+    elif [[ -f "$a" ]]; then
+      grep -qiE '^[[:space:]]*header[[:space:]]*=.*Authorization:' "$a" && auth=yes
+    fi
+  fi
+  prev="$a"
+done
 case "$url" in
   */actions/runs/*/jobs*)
-    [[ -z "${API_WIRE:-}" ]]   || echo "$url" >> "$API_WIRE"
+    [[ -z "${API_WIRE:-}" ]]   || echo "auth=$auth $url" >> "$API_WIRE"
     [[ -z "${ORDER_WIRE:-}" ]] || echo "ci-verdict-jobs" >> "$ORDER_WIRE"
     printf '%s' "${GH_JOBS_JSON:-}"; exit "${GH_JOBS_RC:-0}" ;;
   */actions/runs/*)
-    [[ -z "${API_WIRE:-}" ]]   || echo "$url" >> "$API_WIRE"
+    [[ -z "${API_WIRE:-}" ]]   || echo "auth=$auth $url" >> "$API_WIRE"
     [[ -z "${ORDER_WIRE:-}" ]] || echo "ci-verdict-run" >> "$ORDER_WIRE"
     printf '%s' "${GH_RUN_JSON:-}"; exit "${GH_RUN_RC:-0}" ;;
   */api/version) printf '%s' "${STATION_VERSION_JSON:-}"; exit "${STATION_VERSION_RC:-0}" ;;
@@ -611,10 +630,12 @@ BUILD_WIRE="$WORK/.build-wire"
 # anything if it is consulted BEFORE the build, so the ORDER is asserted, not
 # just the presence of both.
 ORDER_WIRE="$WORK/.order-wire"
-# API_WIRE records every Actions URL the shimmed curl was asked for (the station
-# poll is deliberately NOT recorded — it is a different subsystem), so a case can
-# assert WHICH run was interrogated, not merely that "some HTTP happened", and
-# the manual case can assert that GitHub was not asked about a round at all.
+# API_WIRE records every Actions request the shimmed curl was asked for, as
+# `auth=yes|no <url>` (the station poll is deliberately NOT recorded — it is a
+# different subsystem). So a case can assert WHICH run was interrogated, not
+# merely that "some HTTP happened"; whether the request was AUTHENTICATED; and,
+# for the manual case, that GitHub was not asked about a round at all. The token
+# VALUE never reaches this wire — only the yes/no.
 API_WIRE="$WORK/.api-wire"
 
 # The GitHub Actions run this fixture publish pretends to be running inside.
@@ -683,6 +704,7 @@ e2e() { # e2e [extra publish args...] — env overrides come from the caller
     OC_RELEASE_SETTLE_TRIES=2 OC_RELEASE_SETTLE_SLEEP=0 \
     BUILD_WIRE="$BUILD_WIRE" ORDER_WIRE="$ORDER_WIRE" API_WIRE="$API_WIRE" GO_BIN="$GO" \
     GITHUB_RUN_ID="${OC_GUARD_RUN_ID:-}" \
+    GITHUB_TOKEN="${OC_GUARD_GH_TOKEN:-}" GH_TOKEN="${OC_GUARD_GH_TOKEN_ALT:-}" \
     bash "$RELEASE" publish --beta "$E_TAG" --target "$E_SHA" "$@" 2>&1)"
   RC=$?
 }
@@ -923,6 +945,89 @@ check "G7 a second publish gets its OWN directory (it cannot reuse or overwrite 
   "$(find "$EOUT/ci" -name jobs.json 2>/dev/null | wc -l | tr -d '[:space:]')"
 check "G7 …and every evidence file holds the run that was actually believed" "$E_RUN_ID" \
   "$(find "$EOUT/ci" -name run.json | while IFS= read -r f; do python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$f"; done | sort -u)"
+
+# ── G8: CREDENTIALS. Token when there is one, anonymous when there is not ───
+# WHY THIS EXISTS AT ALL. The gate started out unconditionally anonymous, on the
+# measurement that both endpoints answer 200 without a token to a public repo.
+# That measurement was taken on a developer machine, whose egress IP is ours
+# alone. GitHub's ANONYMOUS quota is 60 requests/hour PER IP, and a hosted runner
+# does not have an IP of its own in that sense — so "anonymous works" was never
+# actually established for the one environment that ships releases. A 403 there
+# fails closed (good: no silent false green) but it fails closed for EVERY
+# release, which is an outage of the shipping path.
+#
+# So: authenticate when a token is reachable, stay anonymous when it is not. The
+# VERDICT RULES ARE IDENTICAL on both paths — binding, roll-call, literal
+# "success" — and the cases below assert exactly that, so the credential can
+# never become a second, weaker gate.
+E_TOKEN="ghs_guardfixturetoken0000000000000000"
+
+# G8 — with a token reachable, BOTH requests carry an Authorization header, and
+# the publish still goes through on the same rules.
+gh_run_json; gh_jobs_json
+OC_GUARD_GH_TOKEN="$E_TOKEN" STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" STATION_HEALTH_RC=0 e2e
+check "G8 a green round still publishes when a token is present" "0" "$RC"
+check "G8 …and EVERY Actions request was authenticated (both of them)" "2" \
+  "$(grep -c '^auth=yes ' "$API_WIRE" || true)"
+check "G8 …and none of them went out anonymously" "0" \
+  "$(grep -c '^auth=no ' "$API_WIRE" || true)"
+# GH_TOKEN is the spelling the auto-beta workflow already sets on the publish
+# step; GITHUB_TOKEN is the one the runner exports. Both must work, or the wiring
+# silently depends on which of the two a caller happened to set.
+OC_GUARD_GH_TOKEN_ALT="$E_TOKEN" STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" STATION_HEALTH_RC=0 e2e
+check "G8 GH_TOKEN works as well as GITHUB_TOKEN (the workflow sets GH_TOKEN)" "2" \
+  "$(grep -c '^auth=yes ' "$API_WIRE" || true)"
+# The token must not leak into the log or into the evidence a publish leaves on
+# disk. A credential in dist/release/ci/ outlives the run that used it.
+case "$OUT" in
+  *"$E_TOKEN"*) bad "G8 …and the token VALUE never appears in the publish output" ;;
+  *) ok "G8 …and the token VALUE never appears in the publish output" ;;
+esac
+check "G8 …nor in any evidence file the run wrote" "0" \
+  "$(grep -rl "$E_TOKEN" "$EOUT" 2>/dev/null | wc -l | tr -d '"'"'[:space:]'"'"')"
+
+# G8b — NO token: the anonymous path must still work, unauthenticated, on the
+# same rules. This is the negative control for G8: without it, "we authenticate"
+# could be satisfied by an implementation that simply refuses without a token.
+gh_run_json; gh_jobs_json
+STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" STATION_HEALTH_RC=0 e2e
+check "G8b with NO token the gate still works (anonymous path intact)" "0" "$RC"
+check "G8b …and both requests really went out UNauthenticated" "2" \
+  "$(grep -c '^auth=no ' "$API_WIRE" || true)"
+# …and the anonymous path is held to the SAME rules, not a softer set. If the
+# credential ever became the thing that decides how strict the gate is, this is
+# the case that catches it.
+gh_jobs_json 'macos-e2e=skipped'
+STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" e2e
+named_failure "G8b2 the ANONYMOUS path applies the identical verdict rules (a skipped gate job still refuses)" \
+  release-ci "$RC" "$OUT"
+gh_jobs_json
+gh_run_json "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" e2e
+named_failure "G8b3 …including the binding (a round for another commit still refuses)" \
+  ci-run-binding "$RC" "$OUT"
+
+# G8c — TOKEN PRESENT BUT REJECTED (403/401): refuse, and do NOT quietly retry
+# anonymously.
+#
+# THE RULING, AND WHY. A token that cannot read the run is the gate's own
+# plumbing being broken — the workflow grants `actions: read` precisely so this
+# works — and the honest answer to "I thought I could verify this and I could
+# not" is to stop. An anonymous retry would make the verdict's PROVENANCE
+# non-deterministic (the same publish verified two different ways on two
+# different days, distinguishable only by reading the log closely), which is the
+# one property this whole gate is built to have. It would also be useless in the
+# case it looks like it protects: anonymous is the path we authenticated to get
+# AWAY from, so falling back to it is most likely to hit the very 403 that
+# started this. Failing closed costs a red auto-beta, fixable in minutes by
+# fixing `permissions:`; a silent downgrade costs a verdict nobody can name.
+gh_run_json; gh_jobs_json
+OC_GUARD_GH_TOKEN="$E_TOKEN" GH_RUN_RC=22 STATION_VERSION_JSON="{\"git_sha\":\"$E_SHORT\"}" e2e
+named_failure "G8c a REJECTED token fails closed (it is not permission to ship)" \
+  release-ci "$RC" "$OUT"
+check "G8c …and it did NOT silently retry anonymously" "0" \
+  "$(grep -c '^auth=no ' "$API_WIRE" || true)"
+check "G8c …and NOTHING was built" "" "$(cat "$BUILD_WIRE")"
 
 # restore the green world for the cases that follow
 gh_run_json; gh_jobs_json

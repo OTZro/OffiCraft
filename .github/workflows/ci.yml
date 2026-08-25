@@ -579,8 +579,19 @@ jobs:
     # The ONLY elevated permission in this workflow, and it lives on this job
     # alone — the workflow default stays read-only, so the gate cells cannot write
     # anything even by mistake. Built-in GITHUB_TOKEN only: no PAT, no secret.
+    #
+    # ⚠️ A JOB-LEVEL `permissions:` BLOCK REPLACES THE SET WHOLESALE — every key
+    # not listed here is `none` for this job, whatever the workflow default says.
+    # So both keys are load-bearing and neither may be dropped while "the other
+    # one is the important one":
+    #   • contents: write — creating the release.
+    #   • actions:  read  — bin/release's CI gate reads THIS run's own verdict
+    #     from /actions/runs/<id> and .../jobs. Without this key the token is
+    #     rejected, the gate fails closed, and NO beta can be published at all.
+    #     (It is read-only, and it is scoped to this job like the write is.)
     permissions:
       contents: write
+      actions: read
     steps:
       # BOTH inputs are load-bearing. fetch-depth: 0 is needed twice over —
       # bin/release cuts a staging worktree with `git worktree add --detach <sha>`,
@@ -653,8 +664,13 @@ jobs:
 
       # --target is the commit this run was triggered by, NOT whatever main points
       # at when the job finally starts. --no-settle is the owner's ruling 1. This
-      # command still runs the full CI gate inside the staging worktree and still
-      # reads back what GitHub stored; neither is skippable.
+      # command still applies the full CI gate and still reads back what GitHub
+      # stored; neither is skippable. The gate reads THIS run's own job
+      # conclusions from the Actions API, which is why `GH_TOKEN` below is
+      # load-bearing for more than `gh`: bin/release authenticates that read with
+      # it (and the job's `actions: read` is what makes the token acceptable).
+      # Anonymous still works for a hand-run publish, but a hosted runner shares
+      # its egress IP and the anonymous quota is 60/hour per IP.
       #
       # ⚠️ THE RELEASE IS CREATED BEFORE IT IS VERIFIED, AND NOTHING ROLLS IT BACK.
       # bin/release uploads and only then reads back what GitHub stored; there is

@@ -482,12 +482,48 @@ macos-e2e"
 # unique directory whose creation is `mkdir` without -p, so a name collision is a
 # hard error rather than a run quietly adopting somebody else's verdict.
 #
-# NO TOKEN, DELIBERATELY. The repo is public and both endpoints answer 200 to an
-# anonymous request (measured). Sending GITHUB_TOKEN would be worse than useless
-# here: `auto-beta` declares `permissions: contents: write`, and a job-level
-# permissions block REPLACES the set wholesale, so `actions:` and `checks:` are
-# `none` on exactly the job that runs this. Anonymous also keeps this consistent
-# with the workflow's own stated philosophy — "the gate cells use no token at all".
+# CREDENTIALS: TOKEN WHEN THERE IS ONE, ANONYMOUS WHEN THERE IS NOT.
+# This started out unconditionally anonymous, on the measurement that a public
+# repo answers 200 to an unauthenticated request on both endpoints. That
+# measurement was taken on a DEVELOPER MACHINE, whose egress IP is ours alone —
+# and GitHub's anonymous quota is 60 requests/hour PER IP. A GitHub-hosted runner
+# does not have an IP of its own in that sense, so "anonymous works" was never
+# established for the one environment that actually ships releases. The failure
+# there is loud (fail closed ⇒ no release) but it is loud for EVERY release: an
+# outage of the shipping path, not a false green.
+#
+# So the request authenticates whenever a token is reachable — GITHUB_TOKEN (the
+# runner exports it) or GH_TOKEN (what the auto-beta step already sets) — and
+# falls back to anonymous when neither is set, which is what keeps a hand-run
+# `bin/release` working on a laptop with no credentials. ⚠️ `auto-beta` must
+# therefore declare `actions: read` ALONGSIDE `contents: write`: a job-level
+# permissions block REPLACES the set wholesale, so without that key `actions` is
+# `none` and the token is worse than no token at all.
+#
+# THE VERDICT RULES ARE IDENTICAL ON BOTH PATHS — binding, roll-call, literal
+# "success". The credential decides how the request is made, never how strict the
+# answer has to be. bin/tests/release-guard.sh G8b2/G8b3 assert that directly.
+#
+# 🔴 A TOKEN THAT IS REJECTED (401/403) FAILS CLOSED. It does NOT retry
+# anonymously, and that is a decision, not an omission:
+#   * a token that cannot read the run means the gate's own plumbing is broken
+#     (the workflow grants `actions: read` precisely so it can), and the honest
+#     answer to "I thought I could verify this and I could not" is to stop;
+#   * an anonymous retry would make the verdict's PROVENANCE non-deterministic —
+#     the same publish verified two different ways on two different days,
+#     distinguishable only by reading the log closely — and provenance is the
+#     property this whole gate exists to have;
+#   * it would also be useless exactly where it looks protective: anonymous is
+#     the path the token exists to get AWAY from, so the fallback is most likely
+#     to meet the very 403 that started this.
+# Failing closed costs a red auto-beta, fixable in minutes by fixing
+# `permissions:`. A silent downgrade costs a verdict nobody can name.
+#
+# THE TOKEN NEVER TOUCHES argv OR THE FILESYSTEM. It is fed to curl through
+# `--config -` (a config read from stdin), so it is not visible in `ps` to other
+# users on a shared machine and it is not left behind in the per-run evidence
+# directory, which outlives the run. Nothing here ever prints the value; the log
+# says only which mode was used.
 #
 # 🔴 THE ONE PATH WITH NO VERDICT: A HAND-RUN PUBLISH. Outside Actions there is
 # no GITHUB_RUN_ID, hence no round of this commit's own to read, and the owner
@@ -509,9 +545,31 @@ macos-e2e"
 # publishing anyway while claiming a verdict nobody read — and no path here
 # reaches it: the warning path says, in those words, that NO CI VERDICT was
 # checked, and never prints anything that reads as green.
+# gh_api_get <url> — ONE GET against the Actions API, authenticated when
+# $OC_GH_AUTH_TOKEN is non-empty and anonymous when it is not.
+#
+# `--config -` reads curl's config from STDIN, which is what keeps the credential
+# out of the process's argv (visible via `ps` to every other user on the machine)
+# AND off disk. The anonymous branch redirects stdin from /dev/null rather than
+# leaving it inherited, so the two branches differ in the credential and in
+# nothing else.
+gh_api_get() {
+  if [[ -n "${OC_GH_AUTH_TOKEN:-}" ]]; then
+    printf 'header = "Authorization: Bearer %s"\n' "$OC_GH_AUTH_TOKEN" \
+      | curl -fsS --config - --max-time 30 \
+          -H 'Accept: application/vnd.github+json' "$1"
+  else
+    curl -fsS --max-time 30 \
+      -H 'Accept: application/vnd.github+json' "$1" </dev/null
+  fi
+}
+
 run_release_ci() {
   local SHA="$1" SHORT="$2"
   local run_id api dir run_json jobs_json rc=0
+  # `local` is dynamically scoped in bash, so gh_api_get below sees this without
+  # it being a global anybody else can set.
+  local OC_GH_AUTH_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 
   run_id="${GITHUB_RUN_ID:-}"
   if [[ -z "$run_id" ]]; then
@@ -540,23 +598,29 @@ run_release_ci() {
 
   say "CI gate: reading the verdict of GitHub Actions run $run_id for $SHORT"
   say "  evidence: $dir"
+  # Which MODE, never the value. A reader has to be able to tell an authenticated
+  # verdict from an anonymous one without guessing.
+  local authnote
+  if [[ -n "$OC_GH_AUTH_TOKEN" ]]; then
+    authnote="an authenticated request (GITHUB_TOKEN/GH_TOKEN present)"
+    say "  auth: bearer token"
+  else
+    authnote="an ANONYMOUS request (no GITHUB_TOKEN/GH_TOKEN in the environment; the anonymous quota is 60/hour per IP)"
+    say "  auth: none (anonymous)"
+  fi
 
-  # No Authorization header, on purpose (see the header above). --fail turns a
-  # 403/404/5xx into a non-zero rc instead of a body that would then be parsed as
-  # a verdict.
-  run_json="$(curl -fsS --max-time 30 \
-      -H 'Accept: application/vnd.github+json' \
-      "$api/repos/$GH_REPO/actions/runs/$run_id" 2>/dev/null)" \
-    || fail_item release-ci "could not read GitHub Actions run $run_id from $GH_REPO — this publish is inside a run whose verdict it cannot read, which is not permission to ship."
+  # --fail turns a 401/403/404/5xx into a non-zero rc instead of a body that
+  # would then be parsed as a verdict. A rejected token is NOT retried
+  # anonymously — see the ruling in the header above.
+  run_json="$(gh_api_get "$api/repos/$GH_REPO/actions/runs/$run_id" 2>/dev/null)" \
+    || fail_item release-ci "could not read GitHub Actions run $run_id from $GH_REPO using $authnote — this publish is inside a run whose verdict it cannot read, which is not permission to ship. If the token was rejected, check that auto-beta still declares \`actions: read\` next to \`contents: write\` (a job-level permissions block replaces the set wholesale)."
   printf '%s\n' "$run_json" > "$dir/run.json"
 
   # ⚠️ NO `filter` parameter. The default (filter=latest) is what drops a re-run's
   # superseded earlier attempt; filter=all would let a stale green attempt certify
   # a red re-run.
-  jobs_json="$(curl -fsS --max-time 30 \
-      -H 'Accept: application/vnd.github+json' \
-      "$api/repos/$GH_REPO/actions/runs/$run_id/jobs?per_page=100" 2>/dev/null)" \
-    || fail_item release-ci "could not read the job list of GitHub Actions run $run_id — without it there is no verdict to believe."
+  jobs_json="$(gh_api_get "$api/repos/$GH_REPO/actions/runs/$run_id/jobs?per_page=100" 2>/dev/null)" \
+    || fail_item release-ci "could not read the job list of GitHub Actions run $run_id using $authnote — without it there is no verdict to believe."
   printf '%s\n' "$jobs_json" > "$dir/jobs.json"
 
   # ONE pass over both payloads, so "what GitHub said" and "what we require"
