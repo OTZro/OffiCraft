@@ -859,7 +859,6 @@ export const MESSAGE_KEYS: readonly string[] = [
   "settings.params",
   "settings.paramsLoadError",
   "settings.paramsSaveError",
-  "settings.readOnlySection",
   "settings.receiveBeta",
   "settings.receiveBetaSub",
   "settings.renameRole",

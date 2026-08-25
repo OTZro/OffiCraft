@@ -691,9 +691,12 @@ export type DocumentKind =
   // runtime an agent runs, so there is deliberately no runtime axis here.
   | "offboard"
   // T-3201: the six lifecycle procedures that used to be Go string literals.
-  // All singletons keyed "global"; the last two are READ-ONLY on the wire (the
-  // write faces answer 405), which is a property of the DOCUMENT and arrives on
-  // its own read — never a list the cockpit keeps.
+  // All singletons keyed "global".
+  // ⚠️ T-6f44 (owner's decision 2): the last two are NO LONGER read-only. The
+  // reason they were locked was recorded as 「以前 global context 是固定內容 我們
+  // 也是會顯示 只是不給改」 — precedent, not a property of the text. Read-only is
+  // still a property of the DOCUMENT that arrives on its own read rather than a
+  // list the cockpit keeps; today no shipped document sets it.
   | "accelerated_stop"
   | "task_closeout"
   | "task_reassign_predecessor"

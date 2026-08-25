@@ -1,4 +1,4 @@
-[{blocked_task_no}] 擋住這張任務的前置任務 {blocker_task_no}「{blocker_title}」已經{blocker_status}了,它不再擋著你。
+[{blocked_task_no}] 擋著這張任務的前置任務已經結束，它不再擋著你。
 
 <!-- ↑唯讀區（程式產生，改不動）｜↓本體（可編輯，零變數） -->
 

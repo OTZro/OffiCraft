@@ -20,17 +20,21 @@ import (
 func TestRestoringTheOffboardDocFansAGlobalContextDelta(t *testing.T) {
 	f := newHistoryFixture(t)
 
-	// The offboard document carries a read-only head (T-3201). Nothing here
-	// spells it: the write face takes the BODY and the server joins the shipped
-	// head on, so a test about the RESTORE fanning a delta has no reason to
-	// know the head exists. The precondition is kept — a seed that lost its
-	// marker would make every write below store something else entirely.
+	// 🔴 THE PRECONDITION FLIPPED IN T-6f44 AND MUST STAY A PRECONDITION. The
+	// offboard document carried a read-only head until decision 4 deleted {where}
+	// and the head with it; 〈停止〉 is now the first of the ten with none, so its
+	// seed must carry NO marker. The check is kept rather than dropped because it
+	// is the same hazard in either direction: a seed and a registry row that
+	// disagree change what every write below stores. The registry side of the
+	// same rule is TestBootDocRegistry_ASeedCarriesAMarkerExactlyWhenItsKindIsSplit.
 	offboardSeed, _, err := f.api.root.seedBlockMD(offboardSeedMD)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, split := DocSplitHeadBody(offboardSeed); !split {
-		t.Fatal("the offboard seed lost its read-only head")
+	if _, _, split := DocSplitHeadBody(offboardSeed); split {
+		t.Fatal("the offboard seed carries a marker again, but its kind declares no " +
+			"Split — the whole text is served as the editable body, so the head " +
+			"above the marker just became the owner's to overwrite")
 	}
 	writeOffboard := func(body string) {
 		t.Helper()

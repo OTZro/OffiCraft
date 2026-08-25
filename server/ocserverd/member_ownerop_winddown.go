@@ -284,11 +284,74 @@ func winddownKindFor(op string) (kind string, clocked bool) {
 // auto-stamp); only the owner-verb funnel below cleared the anchors. Sharing
 // one function is what makes "a fresh epoch starts from a clean sheet" a
 // property of the operation rather than of whoever remembered it.
-func armRefocusEpoch(m *Member, op string, now float64) {
+func armRefocusEpoch(m *Member, op string, now float64) bool {
+	if !winddownStageMayAdvanceTo(*m, op) {
+		return false
+	}
 	m.RefocusSince = now
 	m.RefocusOp = op
 	m.StoppingSince = 0.0
 	m.StoppedSince = 0.0
+	return true
+}
+
+// winddownStageRankOf ranks ONE cause on the owner's three-step ladder
+// (2026-08-24, verbatim): 「下線 → 加速 → 強制。後者一旦發出我們就不該發出前者」.
+//
+// 🔴 THE RANK IS DERIVED, NOT LISTED. It reads winddownKindFor — already THE
+// judgement about a cause — rather than carrying a second table of causes
+// beside it. A second list would be a second truth source: adding a cause to
+// one and not the other produces a member whose stage the ladder and the clock
+// disagree about, and nothing would report it. The ladder therefore has exactly
+// as many causes as winddownKindFor does, forever, without anyone maintaining
+// that.
+//
+// Stage 3 (強制停止) is deliberately NOT a cause: force-stop sends nothing and
+// is a property of the MEMBER (forcedEpochLive), not of a refocus op — which is
+// why the member-level reading below is a separate function.
+func winddownStageRankOf(op string) int {
+	if kind, _ := winddownKindFor(op); kind == offboardKindFinal {
+		return winddownStageAccelerated
+	}
+	return winddownStageStop
+}
+
+const (
+	// winddownStageNone is "no wind-down is open on this member" — below every
+	// real stage, so the very first stamp of an epoch always advances.
+	winddownStageNone        = 0
+	winddownStageStop        = 1 // 停止
+	winddownStageAccelerated = 2 // 加速停止
+	winddownStageForced      = 3 // 強制停止
+)
+
+// winddownStageOf reads how far along the ladder this member ALREADY is.
+func winddownStageOf(m Member) int {
+	if forcedEpochLive(m) {
+		return winddownStageForced
+	}
+	if m.RefocusSince <= 0.0 {
+		return winddownStageNone
+	}
+	return winddownStageRankOf(m.RefocusOp)
+}
+
+// winddownStageMayAdvanceTo answers the owner's rule: a stamp that would move
+// this member BACKWARDS down the ladder is refused.
+//
+// 🔴 EQUAL RANK IS ALLOWED, and that is not an oversight. The rule he wrote is
+// about a LOWER stage arriving after a higher one; re-stamping the same stage
+// is a re-arm (a fresh epoch on a clean sheet), which several callers do on
+// purpose and which takes nothing away from the agent. Refusing it would turn
+// this guard into a behaviour change nobody asked for, on paths that are not
+// what he was describing.
+//
+// What this actually stops: 重新聚焦 / restart_self / 換機器 / 換 model landing
+// on a member that is already in 加速停止 — each of which used to succeed, push
+// the stage back to 停止, AND clear the deadline with it, so an agent counting
+// down silently stopped counting.
+func winddownStageMayAdvanceTo(m Member, op string) bool {
+	return winddownStageRankOf(op) >= winddownStageOf(m)
 }
 
 // armMemberOwnerOpHandover stamps a FRESH refocus epoch on the member when
@@ -303,7 +366,16 @@ func (s *apiServer) armMemberOwnerOpHandover(m *Member, op string) bool {
 	if !s.memberHasStateToFlush(*m) {
 		return false
 	}
-	armRefocusEpoch(m, op, nowSecs())
+	// The ladder rule applies to the owner-verb funnel too: 換機器 / 換 model are
+	// 停止, so neither may land on a member that is already in 加速停止 and hand
+	// it back the slower procedure. Reporting false here is what makes the
+	// caller fold nothing into its write — the owner's change still applies,
+	// the wind-down stage simply does not move backwards with it.
+	if !armRefocusEpoch(m, op, nowSecs()) {
+		reconcileLog("recycle: %s %s — wind-down NOT re-opened: member is already "+
+			"further along the ladder (下線 → 加速 → 強制)", op, m.ID)
+		return false
+	}
 	if grace, clocked := recycleGraceFor(op, s.reconcileConfigLive()); clocked {
 		reconcileLog("recycle: %s %s — wind-down opened (collect on stopped-report or +%.0fs)",
 			op, m.ID, grace)

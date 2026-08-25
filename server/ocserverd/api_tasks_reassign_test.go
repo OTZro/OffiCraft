@@ -272,14 +272,24 @@ func TestReassignMemberToMemberHandsOver(t *testing.T) {
 	// successor and the word 交接" would pass on a document about something else
 	// entirely. Hand-written rather than re-rendered from the registry, so this
 	// stays a statement about what an agent receives.
-	wantOld := "[" + TaskNo(task.ID) + "] 此任務已轉派給 Rei。請停止推進，改為去跟接手人做交接：" +
-		"對方接手後會主動 post_chat 找你，他問目前進度、進行中的事項、有哪些雷要注意，" +
-		"你都要答得出來，直到他確認交接完成。交接完成後這張任務就不再是你的了。"
+	// 🔴 THE SUCCESSOR IS NOT NAMED SINCE T-6f44 (owner 2026-08-24). The whole
+	// body is asserted, so the identity cannot creep back in anywhere in it.
+	wantOld := "[" + TaskNo(task.ID) + "] 此任務已轉派給新的接手人。" + "請停止推進，先把交接資訊寫到這張任務上：目前進度、進行中的事項、有哪些雷要注意。**這一步不能省，它是接手人唯一保證讀得到的東西** —— 接手人可能還沒被建出來，也可能你已經下線了才輪到他。\n\n寫完就算交出去了。如果接手人剛好在線上來找你，就順便當面補齊；沒有的話不用等，也不用去找他。"
 	if toOld == nil {
 		t.Fatalf("the predecessor received no handover message at all")
 	}
 	if toOld.Body != wantOld {
 		t.Fatalf("old-executor handover message wrong:\n got %q\nwant %q", toOld.Body, wantOld)
+	}
+	// 🔴 NAMED SEPARATELY, because the whole-body compare above would also fail
+	// for a stray space and this is the rule that must not be quietly undone:
+	// the predecessor is told THAT the task moved, never to whom.
+	for _, leak := range []string{"Rei", "m-new"} {
+		if strings.Contains(toOld.Body, leak) {
+			t.Errorf("the predecessor notice names the successor (%q) — it must "+
+				"say only that the task moved; identity is looked up on the "+
+				"ticket:\n%s", leak, toOld.Body)
+		}
 	}
 	// The successor's notice is the 接手程序（有前任） DOCUMENT now (T-3201),
 	// compared whole for the same reason the predecessor's is.
@@ -291,7 +301,9 @@ func TestReassignMemberToMemberHandsOver(t *testing.T) {
 	// this document unsplittable, a {note} slot after the instructions leaving
 	// no prefix of facts to cut at. The task-side copy is asserted below, so
 	// "the note is gone" cannot pass on a build that lost it altogether.
-	wantNew := "[" + TaskNo(task.ID) + "] 你接手了任務「unit task」。你的前任是 Ken（id `m-old`）。" +
+	// {title} dropped and the predecessor's two slots merged into one, same
+	// ruling: 「銀月（mira）」 rather than 「Ken（id `m-old`）」.
+	wantNew := "[" + TaskNo(task.ID) + "] 你接手了這張任務，你的前任是 Ken（m-old）。" +
 		"請先跟他確認交接完成（直接 post_chat 給他，問清楚目前進度與進行中的事項），" +
 		"確認後再由你自己呼叫 claim_task（認領）解除轉派鎖——只有你這個新負責人動得了；" +
 		"任務狀態一律照步驟推導，不必也不能自己報。"

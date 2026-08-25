@@ -529,18 +529,6 @@ func (s *apiServer) closeTask(t *Task, status string, now float64, trigger strin
 	// SSE connection to fold this run's learnings back into the type's manual.
 	// Typed tasks only (ad-hoc has no manual); done AND terminated both nudge.
 	// Best-effort — a fan failure must never fail the close it follows.
-	// The nudge sentence carries the manual's DISPLAY label (best-effort lookup
-	// — a deleted manual honestly falls back to the raw key); the MCP addressing
-	// string in the same sentence stays the raw type_key (T-fa76).
-	manualLabel := ""
-	if t.TypeKey != "" {
-		if m, err := s.dal.GetTaskManual(t.TypeKey); err == nil && m != nil {
-			manualLabel = manualDisplayLabel(m.DisplayName, t.TypeKey)
-		}
-		if manualLabel == "" {
-			manualLabel = t.TypeKey
-		}
-	}
 	// T-7870 — THE WORDS COME FROM THE DOCUMENT, and this is the only place they
 	// come from. 〈任務收尾〉 was the last of the ten lifecycle documents whose
 	// text an owner could edit, save, and version without any agent ever
@@ -557,10 +545,7 @@ func (s *apiServer) closeTask(t *Task, status string, now float64, trigger strin
 	// terms the other nine documents already carry.
 	if sig := decideTaskCloseNudge(*t); sig != nil {
 		sig.Reason = s.taskNoticeText(docKindTaskCloseout, map[string]string{
-			"task_no":      sig.TaskNo,
-			"status":       sig.Status,
-			"type_key":     sig.Type,
-			"manual_label": manualLabel,
+			"task_no": sig.TaskNo,
 		})
 		if sig.Reason != "" {
 			if frame, err := directedFrameText(taskCloseTopic, sig); err == nil {
@@ -569,6 +554,35 @@ func (s *apiServer) closeTask(t *Task, status string, now float64, trigger strin
 		}
 	}
 	return nil
+}
+
+// nameWithIDSlot composes the ONE slot that has to carry TWO facts: 「銀月（mira）」.
+//
+// 🔴 ONE VARIABLE, TWO FACTS (T-6f44, owner's decision 1, verbatim: 「名字跟 id
+// 不能都給嗎」). Both 轉派 documents declare a single name for the other party,
+// and both need both halves: the body tells the reader to post_chat that party,
+// which needs the id, while a sentence carrying only an id reads as a serial
+// number. The number of variables is not the number of facts — a slot is a
+// string this code composes.
+//
+// 🔴 ONE CALLER NOW, AND THAT IS THE POINT OF THE OTHER HALF OF THIS TICKET.
+// It used to serve both 轉派 arms; the predecessor notice stopped naming the
+// successor at all (owner: 「讓他自己去查」「不管是不是 outsource」), so only
+// 〈給接手人〉 still composes a party — and only because its body tells the reader
+// to post_chat that party. Where the body does not dial anyone, the name is not
+// carried.
+//
+// When the label already IS the id (a party with no name) the parenthesis would
+// repeat it, so it is omitted — 「mira（mira）」 reads like a bug to the agent
+// that receives it.
+func nameWithIDSlot(label, id string) string {
+	if label == "" {
+		return id
+	}
+	if label == id {
+		return label
+	}
+	return label + "（" + id + "）"
 }
 
 // deriveAndPersistTask is the DERIVATION SEAM (T-9ca5 "任務狀態全推導"): the single
@@ -1552,15 +1566,16 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	// scheduler mints it later under the cap), so there is no worker id to DM
 	// yet; its boot context folds the same takeover instruction, so the successor
 	// chat notice is a member-only step below.
-	newExecutorLabel, newExecutorID := "", ""
+	// 🔴 THE PREDECESSOR NOTICE NAMES NOBODY ANY MORE (owner, 2026-08-24), so
+	// there is no successor LABEL to compose — only the id, and only for the
+	// arm that actually sends the successor a message. The composer that used
+	// to build 「名字（id）」 for this notice is gone with the slot, and so is the
+	// branch that had nothing to put in it: an outsource successor is minted
+	// later by the scheduler, and that branch used to fill the slot with a
+	// hardcoded status label standing in for a person who did not exist yet.
+	newExecutorID := ""
 	if newMember != nil {
 		newExecutorID = newMember.ID
-		newExecutorLabel = newMember.Name
-		if newExecutorLabel == "" {
-			newExecutorLabel = newMember.ID
-		}
-	} else {
-		newExecutorLabel = "外包（待排程指派）"
 	}
 	// 🔴 THE FROZEN CAVEAT USED TO BE APPENDED HERE, AND THE OWNER REMOVED IT
 	// (2026-08-22, T-3201). It said 「這張任務現在是「凍結」…認領之後不要開始推進」
@@ -1577,7 +1592,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	// "" means it could not be rendered — post nothing rather than a template.
 	if oldExecutor != "" {
 		if notice := s.taskNoticeText(docKindTaskReassignPredecessor, map[string]string{
-			"task_no": no, "new_executor_label": newExecutorLabel,
+			"task_no": no,
 		}); notice != "" {
 			s.postTaskChat(*t, wireSystemSender, oldExecutor, notice, trigger)
 		}
@@ -1591,9 +1606,11 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	// AFTER the instructions leaves no prefix of facts to cut at.
 	if oldExecutor != "" && newExecutorID != "" {
 		if notice := s.taskNoticeText(docKindTaskTakeoverWithPredecessor, map[string]string{
-			"task_no": no, "title": t.Title,
-			"predecessor_label": s.executorLabel(oldKind, oldExecutor),
-			"old_executor_id":   oldExecutor,
+			"task_no": no,
+			// One slot, both facts — see newExecutorLabel above. The id is not
+			// optional here: the body's first instruction is to post_chat this
+			// person, and 「一串 id」 alone does not say who that is.
+			"predecessor": nameWithIDSlot(s.executorLabel(oldKind, oldExecutor), oldExecutor),
 		}); notice != "" {
 			s.postTaskChat(*t, wireSystemSender, newExecutorID, notice, trigger)
 		}
@@ -1602,7 +1619,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		// with) — the plain "you are now the executor" notice, member side only
 		// (a fresh worker learns it through the boot context).
 		if notice := s.taskNoticeText(docKindTaskTakeoverFresh, map[string]string{
-			"task_no": no, "title": t.Title,
+			"task_no": no,
 		}); notice != "" {
 			s.postTaskChat(*t, wireSystemSender, newMember.ID, notice, trigger)
 		}

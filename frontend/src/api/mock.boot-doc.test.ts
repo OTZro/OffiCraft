@@ -17,6 +17,7 @@ import {
   __resetMock,
   __injectMockTask,
   __injectMockOutsourceWorker,
+  __setBootDocReadOnly,
 } from "./mock";
 import { ApiError } from "./errors";
 import type { BootDocKind } from "../types";
@@ -70,11 +71,19 @@ describe("mockApi · boot-context blocks", () => {
   });
 
   it("refuses every write to a read-only document with 405, and still serves its text", async () => {
-    // Owner's ruling: 「以前 global context 是固定內容 我們也是會顯示 只是不給改」.
-    // Reading works — that is the whole reason these two are documents rather
-    // than string literals — and BOTH write faces refuse. 405, not 403: no
-    // principal may edit them, so an authz answer would send an owner looking
-    // for a role to grant.
+    // 🔴 NO SHIPPED DOCUMENT IS READ-ONLY ANY MORE (T-6f44, owner's decision 2:
+    // 〈新任務〉 and 〈擋著你手上任務的票解開了〉 became editable like the other
+    // eight), so this drives the refusal with a SYNTHETIC one. The rule it
+    // guards is unchanged and still reachable the day a document ships
+    // read-only: reading works — that is the whole reason these are documents
+    // rather than string literals — and BOTH write faces refuse. 405, not 403:
+    // no principal may edit them, so an authz answer would send an owner
+    // looking for a role to grant.
+    //
+    // That decision 2 actually took effect is pinned separately, by
+    // mock.boot-doc-registry.test.ts against the shared registry table — this
+    // test supplies its own list and so cannot notice.
+    __setBootDocReadOnly(["task_takeover_fresh/global", "task_unblocked/global"]);
     for (const kind of ["task_takeover_fresh", "task_unblocked"] as const) {
       const doc = await mockApi.getBootDoc(kind, "global");
       expect(doc.readOnly).toBe(true);

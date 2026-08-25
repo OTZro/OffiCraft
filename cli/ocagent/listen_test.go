@@ -1326,8 +1326,21 @@ func TestRecycle_MissingPushedNoticeStillTellsTheSessionItIsBeingCollected(t *te
 			if !h.maybeRecycle(frame) {
 				t.Fatal("a missing notice must NOT swallow the recycle — the agent still has to know")
 			}
-			if !strings.Contains(out.String(), "[ocagent] "+offboardFallback+"\n") {
+			// 🔴 BADGED BY THE HOOK THAT PRINTED IT (T-6f44). The prefix used to
+			// be welded into the constant, so the wind-down hook — which stamps
+			// every line of a REAL notice with 「offboard: 」 — announced its
+			// fallback as 「recycle: 」, the FIRST wind-down stage, to agents that
+			// were in the last one. The constant carries no prefix now; this is
+			// the recycle hook, so it stamps its own.
+			if !strings.Contains(out.String(), "[ocagent] recycle: "+offboardFallback+"\n") {
 				t.Fatalf("the fallback notice must be printed, not silence:\n%q", out.String())
+			}
+			if strings.Contains(offboardFallback, "recycle:") ||
+				strings.Contains(offboardFallback, "offboard:") {
+				t.Errorf("the shared fallback carries a hook's prefix in its own "+
+					"text (%q) — both hooks print it, so whichever one did not "+
+					"choose that word announces itself as the other",
+					offboardFallback)
 			}
 			// Still one wake per epoch — the empty frame spent this epoch.
 			out.Reset()
@@ -2544,5 +2557,37 @@ func TestConnectOnce_NoStationSHALeavesTheLineUnadornedAndNeverReusesTheLastOne(
 	if !strings.HasSuffix(unknown, " [station unknown]") {
 		t.Fatalf("a station that reports \"unknown\" must be quoted verbatim, not "+
 			"silently dropped; got:\n%s", unknown)
+	}
+}
+
+// 🔴 THE ARM THAT WAS ACTUALLY MIS-BADGED, AND IT HAD NO TEST (T-6f44).
+//
+// Both wind-down hooks share one fallback string, and the words 「recycle: 」
+// used to be welded INTO it. The recycle hook's own test above therefore passed
+// forever — it was asserting the prefix that hook wanted anyway. Nothing looked
+// at the OTHER caller, which stamps 「offboard: 」 on every line of a real notice
+// and then announced its fallback under the first hook's name.
+//
+// What that cost, in the owner's terms (2026-08-24): 「下線 → 加速 → 強制。後者
+// 一旦發出我們就不該發出前者」. 重新聚焦 is the FIRST stage. A force-stopped
+// agent — the LAST stage, the one where the server deliberately sends nothing —
+// is the case that reaches the fallback most reliably, and what it read was a
+// line badged as stage one.
+func TestWindDown_FallbackIsBadgedByTheHookThatPrintedIt(t *testing.T) {
+	var out bytes.Buffer
+	h := &windDownHook{out: &out}
+	h.wake("")
+
+	got := out.String()
+	if !strings.Contains(got, "[ocagent] offboard: "+offboardFallback+"\n") {
+		t.Fatalf("the wind-down fallback must be badged 「offboard: 」 by the hook "+
+			"that printed it:\n%q", got)
+	}
+	// The failure this replaces, named so a regression cannot pass as a typo:
+	// the same line arriving under the FIRST stage's name.
+	if strings.Contains(got, "recycle:") {
+		t.Errorf("the wind-down hook announced its fallback as 「recycle: 」 — that "+
+			"is the first wind-down stage's badge on a message the agent gets "+
+			"while being collected:\n%q", got)
 	}
 }

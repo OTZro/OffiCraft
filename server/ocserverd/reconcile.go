@@ -1650,8 +1650,16 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 			// tick was about to make.
 			m.RefocusSince = now
 			m.RefocusOp = refocusOpContextHigh
-		} else {
-			armRefocusEpoch(m, op, now)
+		} else if !armRefocusEpoch(m, op, now) {
+			// Unreachable as the loop stands (the guard above already skips a
+			// member with a live epoch unless this is the promotion). Handled
+			// anyway, and LOUDLY: the failure mode it replaces is a putMember
+			// that persists nothing and a log line claiming a stamp that never
+			// happened — which is the exact silent shape this whole ticket is
+			// about.
+			reconcileLog("recycle: auto-stamp for %s refused — %s would move the "+
+				"wind-down ladder backwards from %s", m.ID, op, m.RefocusOp)
+			continue
 		}
 		if err := s.putMember(*m, triggerServer); err != nil {
 			reconcileLog("recycle: auto-stamp persist failed for %s: %v", m.ID, err)
@@ -1774,7 +1782,15 @@ func (s *apiServer) stampTokenExpiryWinddown(members []Member, now float64) {
 		if !aRefocusStampWouldReachTheAgent(*m) {
 			continue
 		}
-		armRefocusEpoch(m, refocusOpTokenExpiry, now)
+		if !armRefocusEpoch(m, refocusOpTokenExpiry, now) {
+			// Same shape as the auto-stamp above: the `refocus_since > 0`
+			// continue earlier in this loop already covers it, and this arm
+			// exists so that a future edit loosening that check surfaces as a
+			// log line instead of a write that quietly stores nothing.
+			reconcileLog("recycle: token-expiry stamp for %s refused — would move "+
+				"the wind-down ladder backwards from %s", m.ID, m.RefocusOp)
+			continue
+		}
 		if err := s.putMember(*m, triggerServer); err != nil {
 			reconcileLog("recycle: token-expiry stamp persist failed for %s: %v", m.ID, err)
 			continue

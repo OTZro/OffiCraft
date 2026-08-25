@@ -218,8 +218,8 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 	// emit BEFORE it calls it. SOFT, always: the first context threshold is an
 	// advance warning and nothing collects it at a named instant, so it reads
 	// 下線程序 and quotes no deadline (see decideHandoverNotice).
-	noticeText := func(where string) string {
-		return s.winddownNoticeText(offboardKindSoft, where, 0)
+	noticeText := func() string {
+		return s.winddownNoticeText(offboardKindSoft, 0)
 	}
 
 	write := func(frame []byte) bool {
@@ -902,10 +902,39 @@ func (s *apiServer) HandleMcpApiMcpPost(w http.ResponseWriter, r *http.Request) 
 // at all. TestHandoverNoticeTick_ClosureIsNotRunAfterTheClaim counts the
 // closure calls and fails if this order is reversed.
 func (s *apiServer) handoverNoticeTick(
-	memberID, connRuntime string, notice func(where string) string,
+	memberID, connRuntime string, notice func() string,
 ) ([]byte, bool) {
 	record := s.gauge.Get(memberID)
 	if s.handoverNoticeSettled(memberID, record) {
+		return nil, false
+	}
+	// 🔴 ALREADY WINDING DOWN ⇒ SAY NOTHING (owner, 2026-08-24, verbatim:
+	// 「下線 → 加速 → 強制。後者一旦發出我們就不該發出前者」).
+	//
+	// This band is the ONE wind-down path that never read the member row at
+	// all: it decided purely from the gauge (how full the context is) and its
+	// own once-per-session claim. So an agent the owner had ALREADY put into
+	// 加速停止 — counting down to a deadline — would, the moment its usage
+	// crossed the FIRST threshold, be handed a 停止 notice telling it there is
+	// no hurry. Measured, not reasoned: with the member parked in
+	// accelerated_stop and the gauge over the notice point, this tick emitted
+	// the frame.
+	//
+	// 🔴 THE SISTER GUARD IS NOT THIS ONE. armRefocusEpoch's ladder governs who
+	// may overwrite refocus_op — a DB field's write order. This governs a push
+	// that never touches that field. Two paths, two writes, two dedup
+	// mechanisms: neither covers the other, which is why both exist.
+	//
+	// Placed AFTER the settled check on purpose, and the ordering comment above
+	// is the reason: settled is read-only and ~free, this costs a member read.
+	// Placed BEFORE decideHandoverNotice for the same reason — a row read is far
+	// cheaper than the document fold that composing the notice runs.
+	//
+	// NOT claimed when it goes quiet. Claiming would spend the session's single
+	// notice on a tick nobody was sent, so an agent whose wind-down is later
+	// cleared would never be told it is near the line at all.
+	if m, err := s.dal.GetMember(memberID); err == nil && m != nil &&
+		winddownStageOf(*m) != winddownStageNone {
 		return nil, false
 	}
 	signal := decideHandoverNotice(

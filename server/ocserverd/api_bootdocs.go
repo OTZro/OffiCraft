@@ -119,14 +119,24 @@ var bootDocRegistry = []bootDocReg{{
 	SeedFor: func(string) string { return systemInteractionSeedMD },
 	DocName: func(string) string { return "system interaction block" },
 	Cap:     func(s *apiServer) int { return s.systemInteractionCap() },
-	// The head is the document's OWN title line, promoted (T-3201). Nothing
-	// was written to make it: buildBootContext adds not one character to this
-	// block, so the line that already sat at the top is the only honest head,
-	// and promoting it costs no wording. Vars stays nil — the body quotes JSON
-	// (`{"id": "<attachment id>"}`) that the {name} syntax cannot tell from a
-	// variable — so this kind is split but not variable-validated.
-	Split: true,
-	Join:  "\n\n",
+	// 🔴 NO READ-ONLY HEAD AT ALL (T-6f44). The head used to be this document's
+	// OWN title line, promoted; the promotion bought nothing, because the title
+	// is a line the owner may as well own — nothing in the body quotes it, the
+	// server interpolates nothing into it, and it declared zero variables. The
+	// title line simply moved back down into the body, so the RENDERED bytes are
+	// byte-for-byte what they were (the old join was "\n\n", which is exactly the
+	// blank line that now sits between the title and the rest of the seed).
+	//
+	// 🔴 SPLIT AND THE SEED'S MARKER MUST GO TOGETHER, and the guard that says so
+	// is TestBootDocRegistry_ASeedCarriesAMarkerExactlyWhenItsKindIsSplit. Doing
+	// only one of the two is the silent failure: dropping the marker while the
+	// kind still declares Split makes every write a 500 and every notice ""; and
+	// dropping Split while the seed keeps its marker hands the owner an editable
+	// body that CONTAINS the marker and the head — i.e. it turns the half nobody
+	// may edit into a half anybody may.
+	//
+	// Vars stays nil — the body quotes JSON (`{"id": "<attachment id>"}`) that
+	// the {name} syntax cannot tell from a variable.
 }, {
 	Kind: docKindBootSequence,
 	Keys: []string{bootSequenceKeyClaude, bootSequenceKeyCodex},
@@ -134,13 +144,12 @@ var bootDocRegistry = []bootDocReg{{
 	// place in the tree that decides which runtime gets which sequence, and it
 	// holds that title only as long as nobody writes a second one beside it.
 	SeedFor: bootSequenceSeedName,
-	DocName: func(key string) string { return "boot sequence (" + key + ")" },
+	DocName: func(key string) string { return "boot steps (" + key + ")" },
 	Cap:     func(s *apiServer) int { return s.bootSequenceCap() },
-	// Same promotion as system_interaction, and BOTH runtime seeds carry their
-	// own head: the two titles differ (執行環境 differs per runtime) and a
-	// shared one would be the third place the runtime is decided.
-	Split: true,
-	Join:  "\n\n",
+	// Same as system_interaction (T-6f44): the promoted title line went back
+	// into the body on BOTH runtime seeds, and the read-only head is gone. The
+	// two titles still differ per runtime — they are just body text now, which
+	// is where a line no code composes belongs.
 }, {
 	// 下線程序 (T-c9c0). A SINGLETON: being collected is the same procedure for
 	// every agent and every runtime, so there is deliberately no runtime axis
@@ -148,12 +157,25 @@ var bootDocRegistry = []bootDocReg{{
 	Kind:    docKindOffboard,
 	Keys:    []string{offboardDocKey},
 	SeedFor: func(string) string { return offboardSeedMD },
-	DocName: func(string) string { return "offboard sequence" },
+	DocName: func(string) string { return "Stop document" },
 	Cap:     func(s *apiServer) int { return s.offboardCap() },
-	// The head is the opening sentence the server used to build in Go, moved
-	// into the document (T-3201) so the owner can read the words an agent is
-	// actually sent — the complaint that opened this ticket was that he could
-	// not. winddownNoticeText renders it; nothing else composes it any more.
+	// EMPTY, NOT nil. nil means "not validated at all" (doc_vars.go); this kind
+	// declared variables before T-6f44 and must keep being validated — it just
+	// allows none now. Letting it fall back to nil would silently retire the
+	// write-face refusal that stops the owner typing a slot nothing fills.
+	Vars: []string{},
+	// 🔴 THE READ-ONLY HEAD IS GONE, AND SO IS {where} (T-6f44, owner's
+	// decision 4: 「{where} 不中文化，直接砍掉」). What the head said was 「你在
+	// 59%」 — a usage percentage that has nothing to do with how to close out —
+	// stapled to an instruction the body already gives. Removing the variable
+	// left a head with nothing in it that the body could not say itself, so the
+	// head went too: this is the FIRST of the ten documents with no read-only
+	// half, and the whole document is now the owner's.
+	//
+	// Three things had to happen in one commit (see system_interaction's row):
+	// the seed lost the marker, this row lost Split, and the seed-vs-Split guard
+	// became a biconditional. Doing one of the three would have quietly made the
+	// read-only half editable.
 	//
 	// 🔴 {closer} IS GONE AND report_stopped IS SPELLED OUT. owner, verbatim
 	// (c-5b3d8f192a0b): 「我預期是 report_stopped，因為是 server 控制他上下線」,
@@ -163,9 +185,6 @@ var bootDocRegistry = []bootDocReg{{
 	// verb; it now lives in 系統互動's tool notes. The Go builder that used to
 	// interpolate a per-member closer beside this document is deleted — this
 	// head is the only place the sentence exists, on both arms.
-	Split: true,
-	Join:  "\n",
-	Vars:  []string{"where"},
 }, {
 	// 加速停止 (T-3201). Shares the offboard cap on purpose, the same way the
 	// two boot sequences share one: it is the same procedure under a shorter
@@ -176,47 +195,80 @@ var bootDocRegistry = []bootDocReg{{
 	SeedFor: func(string) string { return acceleratedStopSeedMD },
 	DocName: func(string) string { return "accelerated stop sequence" },
 	Cap:     func(s *apiServer) int { return s.offboardCap() },
-	Split:   true,
-	Join:    "\n",
-	Vars:    []string{"where", "deadline"},
+	// 🔴 THE ONLY DOCUMENT WHOSE HEAD SURVIVED IN FULL FORCE, DOWN TO ONE
+	// SENTENCE (T-6f44): 「你的結束時刻是 {deadline}。」. {where} went the way of
+	// 下線程序's, and the English 「…offboard now: … Your deadline is …」 went with
+	// it. The deadline itself cannot leave: it differs on every send, only the
+	// server knows it, and the whole body's behaviour is conditioned on it.
+	//
+	// 🔴 THE BODY NO LONGER SNIFFS THIS SENTENCE, AND THAT CHANGE LANDED FIRST
+	// (owner's decision 5). §1 of both stop procedures used to tell the agent to
+	// look for the literal `Your deadline is` and infer hard-vs-soft from it —
+	// a string match against ANOTHER document's first line, which the owner may
+	// edit. Each document now states outright which one it is. Rewriting this
+	// head before that would have disarmed the discrimination with every test
+	// still green.
+	Split: true,
+	Join:  "\n",
+	Vars:  []string{"deadline"},
 }, {
 	Kind:    docKindTaskCloseout,
 	Keys:    []string{taskCloseoutDocKey},
 	SeedFor: func(string) string { return taskCloseoutSeedMD },
 	DocName: func(string) string { return "task close-out procedure" },
 	Cap:     func(s *apiServer) int { return s.taskEventCap() },
-	// 🔴 SPLIT BY REWRITE, RULED SENTENCE BY SENTENCE (owner, rc-812aa13fb165:
-	// 「允許改寫，但逐句先給我看」). {type_key} and {manual_label} used to sit in
-	// the MIDDLE of the instructions, so no prefix cut left a variable-free
-	// body. Both names moved UP into the head — which now says which manual and
-	// which type_key this run writes back to — and the two instruction clauses
-	// that quoted them point at that line instead (「type_key 就用上面那一行給的
-	// 值」、「送回**上面指名的那本**任務手冊」). Nothing else in the body moved.
+	// 🔴 THE HEAD IS THE TICKET NUMBER AND NOTHING ELSE (T-6f44, owner's
+	// decision 3: 「最低限度就是 task id」). {status}, {type_key} and
+	// {manual_label} are all facts the agent can READ OFF THE TICKET, and the
+	// ticket number is the one fact it cannot: the notice arrives as a single
+	// sentence with no context, and an agent closing out two tickets at once has
+	// nothing else to tell them apart with.
 	//
-	// Join is "\n": the head is one line of facts and the body is stapled under
-	// it, the same shape the two stop procedures take — and here it also has to
-	// be true, because the body tells the agent to read 「上面那一行」.
-	//
-	// All four names stay declared: they are all in the head now.
+	// 🔴 THE BODY HAD TO CHANGE IN THE SAME COMMIT, and this is the silent break
+	// the ruling names explicitly. The body used to say 「type_key 就用上面那一行
+	// 給的值」 and 「送回**上面指名的那本**任務手冊」 — both point at a line that no
+	// longer exists once the names leave the head. They now say 「用上一步讀到的
+	// 值」 and 「**那本**」, and the body opens by telling the agent to get_task the
+	// ticket and read type_key off it. Cutting the variables alone would leave a
+	// document that reads perfectly and instructs the agent to look at nothing.
 	Split: true,
 	Join:  "\n",
-	Vars:  []string{"task_no", "status", "type_key", "manual_label"},
+	Vars:  []string{"task_no"},
 }, {
 	Kind:    docKindTaskReassignPredecessor,
 	Keys:    []string{taskReassignPredecessorDocKey},
 	SeedFor: func(string) string { return taskReassignPredecessorSeedMD },
-	DocName: func(string) string { return "task reassign procedure (predecessor)" },
+	DocName: func(string) string { return "task reassignment document (to the predecessor)" },
 	Cap:     func(s *apiServer) int { return s.taskEventCap() },
 	// The cleanest cut of the ten: one sentence of fact, then three of
 	// instruction, in that order, inside one paragraph — hence Join "".
+	// 🔴 THE SUCCESSOR IS NOT NAMED — ONE VARIABLE, NOT TWO (owner, 2026-08-24,
+	// verbatim: 「如果完全不提到接手人是誰呢」「讓他自己去查」「不管是不是
+	// outsource」). This SUPERSEDES decision 1 of the same day for THIS document
+	// (decision 1 stands for its sibling 〈給接手人〉, which still carries the
+	// predecessor's name and id).
+	//
+	// The criterion is the one he applied across this whole pass: does the
+	// READER need the fact to do what the body asks? 〈擋著你手上任務的票解開了〉
+	// dropped the blocker's identity on it; 〈任務結案〉 kept only the ticket. Here
+	// the body tells the predecessor to write its handover ONTO THE TASK and to
+	// treat talking to the successor as nice-to-have — it never asks it to dial
+	// anyone, so an id it would not dial is a fact it does not need.
+	//
+	// 🔴 AND NAMING THE SUCCESSOR WAS WORSE THAN UNNECESSARY: it was the source
+	// of a FABRICATED name. An outsource successor is minted LATER by the
+	// scheduler, so at reassign time there was nobody to name, and the slot was
+	// filled with a hardcoded Chinese status label ("外包（待排程指派）") sitting in
+	// the grammatical position of a person. With the name gone the placeholder
+	// has nothing left to fill, and the whole branch goes with it.
 	Split: true,
 	Join:  "",
-	Vars:  []string{"task_no", "new_executor_label"},
+	Vars:  []string{"task_no"},
 }, {
 	Kind:    docKindTaskTakeoverWithPredecessor,
 	Keys:    []string{taskTakeoverWithPredecessorDocKey},
 	SeedFor: func(string) string { return taskTakeoverWithPredecessorSeedMD },
-	DocName: func(string) string { return "task takeover procedure (with predecessor)" },
+	DocName: func(string) string { return "task reassignment document (to the successor)" },
 	Cap:     func(s *apiServer) int { return s.taskEventCap() },
 	// 🔴 SPLIT ONCE {note} WAS DROPPED (owner, rc-0c36d8739b8f: 「拿掉 —— 交接備註
 	// 只留在任務上」). 「交接備註：{note}」 was appended AFTER the instructions, so
@@ -227,24 +279,38 @@ var bootDocRegistry = []bootDocReg{{
 	//
 	// Join "" — the two halves run together inside ONE paragraph, exactly like
 	// 轉派程序（前任）: today's notice reads 「…（id `x`）。請先跟他確認交接完成…」.
+	// 🔴 FOUR NAMES DOWN TO TWO (T-6f44). {title} is on the ticket the number
+	// already names, so it goes; {predecessor_label} and {old_executor_id} merge
+	// into ONE slot filled 「銀月（mira）」 (owner's decision 1). Neither half of
+	// that pair could be dropped: the body's first instruction is to post_chat
+	// the predecessor, which needs the id, and a sentence carrying only an id
+	// does not tell a reader who it is talking about.
 	Split: true,
 	Join:  "",
-	Vars:  []string{"task_no", "title", "predecessor_label", "old_executor_id"},
+	Vars:  []string{"task_no", "predecessor"},
 }, {
-	// 🔴 READ-ONLY. Owner's ruling, verbatim: 「以前 global context 是固定內容
-	// 我們也是會顯示 只是不給改」. It is a document rather than a string literal
-	// so the owner can SEE what an agent is told; the write faces refuse.
+	// 🔴 NO LONGER READ-ONLY (T-6f44, owner's decision 2). The reason it was
+	// locked was recorded as 「以前 global context 是固定內容 我們也是會顯示 只是
+	// 不給改」 — precedent, not a property of this text. 〈新任務〉 and 〈給接手人〉
+	// are the two halves of one event, and the owner could edit one and not the
+	// other with nothing to say why. The half that SHOULD be locked already is:
+	// the read-only head, on all ten.
+	//
+	// ⚠️ read_only lives in bin/tests/fixtures/boot-doc-registry.tsv as well —
+	// the cockpit reads its own copy, and the mirror test on both sides is what
+	// makes a one-sided change red instead of invisible.
 	Kind:    docKindTaskTakeoverFresh,
 	Keys:    []string{taskTakeoverFreshDocKey},
 	SeedFor: func(string) string { return taskTakeoverFreshSeedMD },
-	DocName: func(string) string { return "task takeover procedure (new assignment)" },
+	DocName: func(string) string { return "new task document" },
 	Cap:     func(s *apiServer) int { return s.taskEventCap() },
 	// Split on the same ruling as its sibling above, and joined the same way:
 	// one sentence of fact, then the instructions, inside one paragraph.
-	Split:    true,
-	Join:     "",
-	Vars:     []string{"task_no", "title"},
-	ReadOnly: true,
+	Split: true,
+	Join:  "",
+	// {title} dropped: the number names the ticket, and the body's first
+	// instruction is 「請先讀任務內容」 — it is going to read the title anyway.
+	Vars: []string{"task_no"},
 }, {
 	Kind:    docKindTaskUnblocked,
 	Keys:    []string{taskUnblockedDocKey},
@@ -258,9 +324,19 @@ var bootDocRegistry = []bootDocReg{{
 	// 「請 get_task 讀內容、submit_plan 規劃步驟後開始執行」 hardcodes the
 	// assumption that a blocked ticket has not started, and there is live
 	// evidence of it saying so to a ticket already in progress.
-	Join:     "\n\n",
-	Vars:     []string{"blocked_task_no", "blocker_task_no", "blocker_title", "blocker_status"},
-	ReadOnly: true,
+	Join: "\n\n",
+	// 🔴 ONLY THE BLOCKED TICKET'S NUMBER SURVIVES (T-6f44). What the agent must
+	// act on is the ticket that was RELEASED — its own. Which ticket was
+	// blocking, what it was called and how it ended change nothing about what to
+	// do next, and the dependency is on the ticket for anyone who wants it.
+	//
+	// Two defects died with them, both visible in the old sentence: {blocker_
+	// status} rendered an UNTRANSLATED wire code into Chinese prose (「已經done
+	// 了」、「已經terminated了」), and the sentence used a HALFWIDTH comma — the
+	// only one in the ten.
+	//
+	// ⚠️ Not read-only any more — see 〈新任務〉's row above and the shared table.
+	Vars: []string{"blocked_task_no"},
 }}
 
 // bootDocRegFor finds the row for a kind.
@@ -369,6 +445,20 @@ func unknownBootDocKeyMsg(kind, key string) string {
 		" document — the key is " + strings.Join(quoted, " or ")
 }
 
+// 🔴 DocName IS USER-FACING PROSE, NOT AN IDENTIFIER (T-6f44). It is what a
+// REFUSAL calls the document — 「the Stop document exceeds…」 — so when the owner
+// renamed these on 2026-08-24 this set had to move with the cockpit's, or the
+// error would name a document the settings page no longer has. The five that
+// were renamed here follow the cockpit's own names (i18n `*Name`); the four that
+// keep their wording (system interaction, accelerated stop, task close-out,
+// dependency-released notice) do so because the owner did not rename them.
+//
+// ⚠️ Two other copies of this mapping exist and are NOT identifiers either:
+// frontend/src/api/mock.ts (the cockpit's stand-in server) and the OpenAPI
+// descriptions. The mock is kept in step in the same commit; the spec text is
+// the wider question the owner is deciding separately. Nothing enforces any of
+// this — the wire identity is `kind`/`key`, which this ticket does not touch.
+
 // foldBootDocDTO folds one block: overlay ⊕ the embedded seed.
 func (s *apiServer) foldBootDocDTO(spec bootDocSpec) (*bootDocDTO, error) {
 	overlay, err := s.dal.GetBootDocument(spec.Kind, spec.Key)
@@ -446,20 +536,39 @@ func (s *apiServer) systemInteractionText() (string, error) {
 // owner went looking for the words an agent is sent and could not find them.
 //
 // 🔴 WHICH DOCUMENT IS THE WHOLE OF THE SOFT/HARD DISTINCTION. A soft wind-down
-// reads 下線程序; the final call reads 加速停止, and that is the only document
-// whose head carries a {deadline} slot. Handing the hard arm the soft document
-// would send an agent under a running clock a sentence that quotes no instant —
-// and 下線程序 §1 tells it to treat a notice with no instant as soft, so it
-// would let its sub-agents finish inside a window that is already closing.
+// reads 〈停止〉; the final call reads 〈加速停止〉, and that is the only document
+// whose head carries a {deadline} slot.
+//
+// ⚠️ WHY THIS ARGUMENT WAS REWRITTEN (T-6f44). It used to run: the soft document
+// quotes no instant, and 下線程序 §1 told an agent to read "no instant" as soft.
+// That inference is GONE — decision 5 deleted the sniffing rule, and each
+// document now says outright which one it is. The cost of handing the hard arm
+// the soft document is therefore no longer a missing hint, it is a FLAT LIE:
+// 〈停止〉 §1 reads 「你讀到的是這一份，就代表**沒有人在對你倒數**：收尾照自己的
+// 節奏做完」 — an agent under a running clock would be told, in words, that
+// nobody is counting, and would let its sub-agents finish inside a window that
+// is already closing. The document is more explicit than it was, so sending the
+// wrong one is worse than it was.
 //
 // It answers "" on ANY fault — an unreadable document, an undeclared name, a
 // declared name nothing filled — and every caller omits the notice rather than
 // sending it. That is the one direction RenderDocVars exists to enforce: a
 // sentence reaching an agent with `{deadline}` still in it is worse than no
 // sentence, because it reads as a real instant that cannot be parsed.
-func (s *apiServer) winddownNoticeText(kind, where string, deadline float64) string {
+func (s *apiServer) winddownNoticeText(kind string, deadline float64) string {
 	spec := s.offboardSpec()
-	values := map[string]string{"where": where}
+	// 🔴 {where} IS GONE FROM BOTH DOCUMENTS AND FROM THIS SIGNATURE (T-6f44,
+	// owner's decision 4, verbatim: 「這個資訊跟 agent 要怎麼下線完全沒關係吧」).
+	// It was measured, not reasoned: an agent that received 「context 55% (your
+	// limits: 55% / 65%)」 read it and did nothing differently.
+	//
+	// The parameter went WITH the slot rather than lingering as an ignored
+	// argument, because the arguments were the last thing keeping the code that
+	// COMPOSED that clause alive — a gauge read and two branches of English
+	// formatting that nothing downstream could read. Left in place they would
+	// have kept passing their own tests while having no observable effect,
+	// which is the shape this ticket exists to remove.
+	values := map[string]string{}
 	if kind == offboardKindFinal {
 		// Unreachable: offboardKindOf answers final only on a clocked arm, and
 		// winddownDeadlineOf is positive on exactly those arms
@@ -477,6 +586,34 @@ func (s *apiServer) winddownNoticeText(kind, where string, deadline float64) str
 		values["deadline"] = time.Unix(int64(deadline), 0).UTC().Format(time.RFC3339)
 	}
 	return s.eventNoticeText(spec, values)
+}
+
+// taskEventBodyText is the EDITABLE HALF of a task-event document, with no
+// read-only head — for a caller that wants the document's INSTRUCTIONS without
+// its statement of fact.
+//
+// 🔴 IT EXISTS BECAUSE THE HEAD MAKES A CLAIM AND THE BODY DOES NOT. 〈任務結案〉
+// opens 「任務 {task_no} 已結束。」, which is true when a task closes and FALSE on
+// the other path that needs the same instructions: an outsource worker being
+// wound down mid-task, whose ticket is still open. Sending it the whole document
+// would tell it its task had ended in order to remind it to write its learnings
+// back — and the false half is the half it would act on.
+//
+// The body stands alone by construction: it opens by telling the agent to read
+// the ticket and take type_key off it, so it needs neither the head's sentence
+// nor any variable. This is deliberately NOT a second copy of those words
+// (which is the defect T-6f44 removed) — it is the SAME document, minus a claim
+// this caller cannot make.
+func (s *apiServer) taskEventBodyText(kind string) string {
+	spec := s.mustBootDocSpec(kind, bootDocSingletonKey)
+	dto, err := s.foldBootDocDTO(spec)
+	if err != nil || dto == nil {
+		return ""
+	}
+	if _, _, split := DocSplitHeadBody(dto.Text); spec.Split && !split {
+		return ""
+	}
+	return strings.TrimSpace(bootDocBodyOf(spec, dto.Text))
 }
 
 // taskNoticeText is the WHOLE chat notice one TASK event posts to the executor
@@ -529,11 +666,18 @@ func (s *apiServer) taskNoticeText(kind string, values map[string]string) string
 // says 「請停止推進，改為去跟接手人做交接」 while WHICH task lives only in the
 // head, so a predecessor holding several would not know which one to stop.
 //
-// The 加速停止 arm is where that costs the most and it is not hypothetical: the
-// head is the only place the deadline appears, so a headless notice quotes no
-// instant while winddownDeadlineOf is positive and reconcile is already counting
-// — and 下線程序 §1 tells an agent to read "no instant" as a soft wind-down. It
-// would let its sub-agents finish inside a window that is closing.
+// The 〈加速停止〉 arm is where that costs the most and it is not hypothetical:
+// the head is the only place the deadline appears, so a headless notice quotes
+// no instant while winddownDeadlineOf is positive and reconcile is already
+// counting.
+//
+// ⚠️ REWRITTEN WITH THE DOCUMENT (T-6f44). The old reason was that 下線程序 §1
+// told an agent to read "no instant" as soft — that rule is gone (decision 5).
+// What replaced it is WORSE for a headless notice, not better: 〈加速停止〉 §1 now
+// reads 「你讀到的是這一份，就代表**你在倒數中**：上面那一行的結束時刻就是死線」,
+// and 上面那一行 IS the head. Strip it and the body points at a line that is not
+// there — the agent is told it is counting down and then told to look at a
+// deadline nothing shows it.
 //
 // 🔴 THE REACHABLE WAY IN IS AN OVERLAY WRITTEN BEFORE THE MARKER EXISTED.
 // docBodyMarker arrived with the split and NO migration rewrote the rows that

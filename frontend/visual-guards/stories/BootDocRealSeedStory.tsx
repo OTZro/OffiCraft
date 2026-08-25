@@ -25,7 +25,10 @@
 //   .app > .app__main (max-width 1040 + 22px side padding) > .settings > card.
 import { I18nProvider } from "../../src/i18n";
 import { BootDocPage } from "../../src/components/BootDocPage";
-import { SEED_SYSTEM_INTERACTION_MD } from "../../src/api/seeds";
+import {
+  SEED_SYSTEM_INTERACTION_MD,
+  SEED_ACCELERATED_STOP_MD,
+} from "../../src/api/seeds";
 import { zh } from "../../src/i18n/locales/zh";
 
 /** Derive the last heading from the same bytes the mock serves, so the spec
@@ -58,6 +61,54 @@ export function BootDocRealSeedStory() {
             docKey="global"
             title={zh.settings.systemName}
             historyTitle={zh.settings.historyBootSystemTitle}
+            crumbs={[{ label: zh.settings.title }]}
+          />
+        </main>
+      </div>
+    </I18nProvider>
+  );
+}
+
+/** 🔴 A SECOND SUBJECT, AND IT EXISTS FOR ONE REASON: 系統互動 NO LONGER HAS A
+ * READ-ONLY HEAD (T-6f44 — its head was its own title line, which moved into
+ * the body). The guard beside this file measures the head as a NAMED level of
+ * the chain, because a head is markdown too and can pan the card exactly as the
+ * body can. With the only subject that carried one gone, that level would have
+ * been dropped from the guard altogether — a protection retired because its
+ * fixture changed rather than because the risk did.
+ *
+ * 加速停止 still carries a head (its one deadline line), so it keeps that level
+ * measured. Its BODY is the other half of why it is the right pick: it is
+ * byte-for-byte no longer 停止's twin, so this also renders a document nothing
+ * else in the visual suite covers.
+ */
+const ACCELERATED_HEADINGS = (() => {
+  let fenced = false;
+  const found: string[] = [];
+  for (const line of SEED_ACCELERATED_STOP_MD.trim().split("\n")) {
+    if (/^(?:```|~~~)/.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (!fenced && /^#{1,6} +\S/.test(line)) found.push(line.replace(/^#+ +/, "").trim());
+  }
+  return found;
+})();
+
+export const ACCELERATED_LAST_HEADING =
+  ACCELERATED_HEADINGS[ACCELERATED_HEADINGS.length - 1] ?? "";
+
+export function BootDocHeadSeedStory() {
+  return (
+    <I18nProvider>
+      <div className="app">
+        <main className="app__main">
+          <div data-testid="story-last-heading">{ACCELERATED_LAST_HEADING}</div>
+          <BootDocPage
+            kind="accelerated_stop"
+            docKey="global"
+            title={zh.settings.acceleratedStopName}
+            historyTitle={zh.settings.historyAcceleratedStopTitle}
             crumbs={[{ label: zh.settings.title }]}
           />
         </main>

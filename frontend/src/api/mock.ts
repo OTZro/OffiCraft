@@ -530,30 +530,55 @@ const BOOT_DOC_SEEDS: Record<string, string> = {
   "task_unblocked/global": SEED_TASK_UNBLOCKED_MD.trim(),
 };
 
-/** The documents the server SHOWS but refuses every write to (T-3201). Owner's
- * ruling, verbatim: 「以前 global context 是固定內容 我們也是會顯示 只是不給改」.
- * Mirrored here because a mock that let the cockpit edit them would validate a
- * screen the real server answers 405 to — the demo mode agreeing with a server
- * that does not exist. */
-const BOOT_DOC_READ_ONLY: ReadonlySet<string> = new Set([
-  "task_takeover_fresh/global",
-  "task_unblocked/global",
-]);
+/** The documents the server SHOWS but refuses every write to.
+ *
+ * 🔴 EMPTY SINCE T-6f44, AND KEPT RATHER THAN DELETED. The owner ruled on
+ * 2026-08-24 that 〈新任務〉 and 〈擋著你手上任務的票解開了〉 — the two that used to
+ * be in here — become editable like the other eight. His earlier ruling
+ * (「以前 global context 是固定內容 我們也是會顯示 只是不給改」) was 照舊, a
+ * carry-over from when the boot context was fixed text, NOT a statement about
+ * these two documents' content; and 〈新任務〉 is one half of the same event as
+ * 〈任務轉派 · 給接手人〉, which he could always edit.
+ *
+ * The set stays because the 405 machinery it drives is still real and still
+ * reachable: a future document may ship read-only, and an empty set is how the
+ * mock says "none today" without the cockpit's refusal path becoming code that
+ * cannot be exercised at all. bootDocRegistry (server) is the truth source;
+ * this mirrors it so demo mode cannot validate a screen the real server
+ * refuses. */
+let BOOT_DOC_READ_ONLY: ReadonlySet<string> = new Set<string>();
+
+/** TEST-ONLY: make a document read-only for one test.
+ *
+ * 🔴 WHY THIS SEAM EXISTS. Since T-6f44 no SHIPPED document is read-only, so
+ * every assertion about how a read-only document renders — the body without an
+ * editor, the note, the absent version list — lost the only subject it could
+ * be written against. Deleting those assertions would have retired a live
+ * refusal path into code nothing exercises: the machinery is still reachable
+ * the day a document ships read-only again, and that is precisely the day
+ * nobody would notice it had rotted.
+ *
+ * Reset to empty by __resetMock, so a test that forgets to clean up cannot
+ * leak a read-only document into the next one. */
+export function __setBootDocReadOnly(keys: readonly string[]): void {
+  BOOT_DOC_READ_ONLY = new Set(keys);
+}
 
 /** The server's own name for a document, as its refusals spell it
  * (bootDocRegistry's DocName). The listing carries it, so a caller reading a
  * rejection and a caller reading the listing see the same words. */
 const BOOT_DOC_NAMES: Record<string, string> = {
   "system_interaction/global": "system interaction block",
-  "boot_sequence/claude": "boot sequence (claude)",
-  "boot_sequence/codex": "boot sequence (codex)",
-  "offboard/global": "offboard sequence",
+  "boot_sequence/claude": "boot steps (claude)",
+  "boot_sequence/codex": "boot steps (codex)",
+  "offboard/global": "Stop document",
   "accelerated_stop/global": "accelerated stop sequence",
   "task_closeout/global": "task close-out procedure",
-  "task_reassign_predecessor/global": "task reassign procedure (predecessor)",
+  "task_reassign_predecessor/global":
+    "task reassignment document (to the predecessor)",
   "task_takeover_with_predecessor/global":
-    "task takeover procedure (with predecessor)",
-  "task_takeover_fresh/global": "task takeover procedure (new assignment)",
+    "task reassignment document (to the successor)",
+  "task_takeover_fresh/global": "new task document",
   "task_unblocked/global": "dependency-released notice",
 };
 const bootDocOverlays = new Map<string, string>();
@@ -3701,25 +3726,36 @@ export const mockApi: Api = {
     // predecessor notice fires for a member OR outsource predecessor (the
     // outsource one is now kept live), the successor notice for a member OR a
     // freshly-minted worker (whose boot context ALSO folds the same instruction).
-    const newExecutorLabel = newMember
-      ? newMember.name || newMember.id
-      : `外包 ${newWorker!.codename}`;
+    // 🔴 THE SUCCESSOR'S LABEL IS GONE (T-6f44). The predecessor notice no longer
+    // names who took the task, so there is nothing left to label — and that is
+    // what killed the fabricated 「外包（待排程指派）」 placeholder: an outsource
+    // successor is minted by the scheduler LATER, so at reassign time there was
+    // nobody to name and a hardcoded status string sat in a person's grammatical
+    // slot. Only the id survives, and only to address the message.
     const newExecutorId = newMember ? newMember.id : newWorker!.id;
     if (oldExecutor) {
       chatLog.push({
         id: `mock-reassign-old-${stamp}`,
         from: "system",
         to: oldExecutor,
+        // 🔴 T-6f44：逐字跟著 seeds/task_reassign_predecessor.md。owner 2026-08-24
+        // 拿掉了接手人的身分（「讓他自己去查」「不管是不是 outsource」），本體也
+        // 改成「先把交接寫到票上，對接是 nice-to-have」—— 因為外包接手人是排程器
+        // 之後才生的，那段對話可能永遠不會發生，唯一留得住的是寫在票上的字。
         body:
-          `[${t.taskNo}] 此任務已轉派給 ${newExecutorLabel}（id \`${newExecutorId}\`）。` +
-          `請停止推進，改為去跟他做交接：主動 post_chat 給他，回答他關於目前進度、在飛事項、要注意的坑的提問，` +
-          `直到他確認交接完成。交接完成後這張任務就不再是你的了。`,
+          `[${t.taskNo}] 此任務已轉派給新的接手人。` +
+          `請停止推進，先把交接資訊寫到這張任務上：目前進度、進行中的事項、有哪些雷要注意。` +
+          `**這一步不能省，它是接手人唯一保證讀得到的東西** —— 接手人可能還沒被建出來，也可能你已經下線了才輪到他。\n\n` +
+          `寫完就算交出去了。如果接手人剛好在線上來找你，就順便當面補齊；沒有的話不用等，也不用去找他。`,
         ts: stamp / 1000,
         attachments: [],
         replyCardId: null,
       });
     }
-    const note = input.note?.trim();
+    // `input.note` is deliberately NOT read here any more (T-6f44 / rc-0c36d8739b8f):
+    // the handover note lives on the TASK and rides its DTO; stapling a copy under
+    // the notice was the second one, and it was that copy which made these two
+    // documents unsplittable.
     if (oldExecutor) {
       const predecessorLabel =
         oldKind === "outsource"
@@ -3729,11 +3765,15 @@ export const mockApi: Api = {
         id: `mock-reassign-new-${stamp}`,
         from: "system",
         to: newExecutorId,
+        // 🔴 T-6f44：這段逐字跟著 seeds/task_takeover_with_predecessor.md 走。
+        // {title} 走了（票號已經指名那張票），前任的名字與 id 併成一個 slot，
+        // 而 {note} 早就不再附在通知裡（交接備註只留在任務上）。這裡是每個前端
+        // 測試看到的替身，它演的形狀跟出貨的不一樣，那些測試就是在一個不存在的
+        // 世界裡綠 —— 上一版正是這樣，舊句子在這裡活到了 T-6f44 的收官掃描。
         body:
-          `[${t.taskNo}] 你接手了任務「${t.title}」。你的前任是 ${predecessorLabel}（id \`${oldExecutor}\`）。` +
-          `請先跟他確認交接完成（直接 post_chat 給他，問清楚目前進度與在飛事項），` +
-          `確認後再由你自己呼叫 claim_task（認領）解除轉派鎖——只有你這個新負責人動得了；任務狀態一律照步驟推導，不必也不能自己報。` +
-          (note ? `\n\n交接備註：${note}` : ""),
+          `[${t.taskNo}] 你接手了這張任務，你的前任是 ${predecessorLabel}（${oldExecutor}）。` +
+          `請先跟他確認交接完成（直接 post_chat 給他，問清楚目前進度與進行中的事項），` +
+          `確認後再由你自己呼叫 claim_task（認領）解除轉派鎖——只有你這個新負責人動得了；任務狀態一律照步驟推導，不必也不能自己報。`,
         ts: stamp / 1000,
         attachments: [],
         replyCardId: null,
@@ -3743,10 +3783,10 @@ export const mockApi: Api = {
         id: `mock-reassign-new-${stamp}`,
         from: "system",
         to: newMember.id,
+        // Same ruling as its sibling above (T-6f44): no {title}, no {note}.
         body:
-          `[${t.taskNo}] 你接手了任務「${t.title}」。請先讀任務內容，` +
-          `準備好後由你自己呼叫 claim_task（認領）解除轉派鎖再開始執行；任務狀態一律照步驟推導，不必也不能自己報。` +
-          (note ? `\n\n交接備註：${note}` : ""),
+          `[${t.taskNo}] 你接手了這張任務。請先讀任務內容，` +
+          `準備好後由你自己呼叫 claim_task（認領）解除轉派鎖再開始執行；任務狀態一律照步驟推導，不必也不能自己報。`,
         ts: stamp / 1000,
         attachments: [],
         replyCardId: null,
@@ -5626,6 +5666,7 @@ export function __resetMock(): void {
   mockBinStatus.clear();
   mockBinStatus.set("warden-mbp5", "stale");
   globalContextOverlay = null;
+  BOOT_DOC_READ_ONLY = new Set<string>();
   bootDocOverlays.clear();
   roleOverlays.clear();
   customRoles.clear();

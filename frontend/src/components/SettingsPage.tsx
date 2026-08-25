@@ -104,28 +104,23 @@ import {
 } from "./icons";
 
 /** WHICH GROUP a boot document's list row sits in — the owner's own reading of
- * these ten documents (2026-08-22): an agent's life from the top (上線 → 下線),
- * then the four things that happen to a TASK, then the two the cockpit shows
- * but nobody may edit.
+ * these ten documents (定稿 2026-08-24): an agent's life from the top
+ * (上線 → 下線), then the SIX things that happen to a TASK.
  *
- * ⚠️ 唯讀 is a GROUPING, not the source of truth for whether a document may be
- * edited. That answer is the server's, arrives on the document's own read
- * (`readOnly`), and is what BootDocPage acts on. Putting a row in this group
- * only decides where it is printed. */
-type BootDocGroup = "launch" | "stop" | "task" | "readOnly";
+ * ⚠️ THREE GROUPS, not four. The old 唯讀 group is gone and its two documents
+ * (task_takeover_fresh / task_unblocked) are back with the other task events,
+ * where they always belonged by subject. A group was never the right place to
+ * say "you may not edit this": whether a document may be edited is the
+ * SERVER's answer, arrives on the document's own read (`readOnly`), and is what
+ * BootDocPage acts on. A row's group only decides where it is printed. */
+type BootDocGroup = "launch" | "stop" | "task";
 
-const BOOT_DOC_GROUP_ORDER: BootDocGroup[] = [
-  "launch",
-  "stop",
-  "task",
-  "readOnly",
-];
+const BOOT_DOC_GROUP_ORDER: BootDocGroup[] = ["launch", "stop", "task"];
 
 const BOOT_DOC_GROUP_LABEL: Record<BootDocGroup, SettingsTextKey> = {
   launch: "globalSection",
   stop: "stopSection",
   task: "taskEventSection",
-  readOnly: "readOnlySection",
 };
 
 /** The keys of the settings dictionary this table addresses. Typed rather than
@@ -250,7 +245,7 @@ export const BOOT_DOC_ROWS: Record<
     confirmKey: "bootDocSaveConfirmTaskEvent",
   },
   task_takeover_fresh: {
-    group: "readOnly",
+    group: "task",
     nameKey: "taskTakeoverFreshName",
     subKey: "taskTakeoverFreshSub",
     Icon: UserIcon,
@@ -260,7 +255,7 @@ export const BOOT_DOC_ROWS: Record<
     confirmKey: "bootDocSaveConfirmTaskEvent",
   },
   task_unblocked: {
-    group: "readOnly",
+    group: "task",
     nameKey: "taskUnblockedName",
     subKey: "taskUnblockedSub",
     Icon: BellIcon,
@@ -2110,7 +2105,7 @@ function RolesLog({
 
       {/* zone 1: the boot / lifecycle documents, printed from BOOT_DOC_ROWS —
        * the one table that says which of them the cockpit shows. Groups run in
-       * the owner's own reading order (2026-08-22): 上線 → 下線 → 任務 → 唯讀.
+       * the owner's own reading order (定稿 2026-08-24): 上線 → 下線 → 任務.
        * No filenames — these are content, not files. */}
       {BOOT_DOC_GROUP_ORDER.map((group) => (
         <div key={group}>

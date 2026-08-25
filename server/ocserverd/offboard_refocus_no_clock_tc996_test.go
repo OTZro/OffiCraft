@@ -147,9 +147,11 @@ func TestRefocusNoticeNeverStartsACountdown_ButAContextLimitStillDoes(t *testing
 	// The positive control: the ONE cause that really is on the clock must still
 	// say when it runs out, or an agent under context pressure would take its
 	// time and be cut off. Asserted as the WHOLE composed sentence against a
-	// literal — a substring match on "Your deadline is " would have passed just
-	// as happily on a sentence that had lost its instant, its opener, or its
-	// closer, and this file exists because of a wording that nothing caught.
+	// literal — a substring match on the deadline phrase would have passed just
+	// as happily on a sentence that had lost its instant, and this file exists
+	// because of a wording that nothing caught. Since T-6f44 the sentence is one
+	// Chinese clause: {where} and the English wrapper were deleted (decision 4),
+	// and the instant is all that is left because it is all the body cannot say.
 	//
 	// The literal is pinned to a fixed epoch and to the shipped thresholds, both
 	// re-checked below, so a settings change fails as a stale FIXTURE rather
@@ -164,9 +166,7 @@ func TestRefocusNoticeNeverStartsACountdown_ButAContextLimitStillDoes(t *testing
 	}
 	const (
 		finalEpoch = 1_769_904_000 // 2026-02-01T00:00:00Z
-		wantFinal  = "close-out (your limits: 40% / 50%)" +
-			" — offboard now: work the sequence below, then call report_stopped" +
-			" yourself. Your deadline is 2026-02-01T00:02:00Z."
+		wantFinal  = "你的結束時刻是 2026-02-01T00:02:00Z。"
 	)
 	m := testAgent("m-notice-final")
 	m.RefocusSince = finalEpoch

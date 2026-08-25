@@ -1127,11 +1127,20 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		// every agent's boot context or in the notice an agent is collected
 		// with, and a broken one is read by everybody and reported by nobody.
 		//
-		// 🔴 WHAT IS NOT EXPRESSED HERE: read-only documents. Two of the ten may
-		// never be edited by anyone, and that refusal is NOT an authz floor — no
-		// principal can pass it, so declaring it here would name a rank nobody
-		// holds. It lives on the write path (bootDocReadOnlyRefusal, 405) where
-		// it can say what the document IS rather than what the caller lacks.
+		// 🔴 WHAT IS NOT EXPRESSED HERE: read-only documents. A read-only
+		// document may never be edited by anyone, and that refusal is NOT an
+		// authz floor — no principal can pass it, so declaring it here would
+		// name a rank nobody holds. It lives on the write path
+		// (bootDocReadOnlyRefusal, 405) where it can say what the document IS
+		// rather than what the caller lacks.
+		//
+		// ⚠️ T-6f44 (owner's decision 2): NO SHIPPED DOCUMENT IS READ-ONLY TODAY.
+		// This used to open "Two of the ten may never be edited by anyone" and
+		// that sentence outlived the fact. The refusal is kept, not deleted —
+		// bootDocRegistry is the truth source and a future document may ship
+		// read-only — but nothing in the registry sets the flag right now, and
+		// TestBootDocRegistry_NoDocumentIsReadOnly is what keeps that a
+		// statement rather than a hole.
 		{
 			Method:   "GET",
 			Path:     "/api/boot-docs/{kind}/{key}",

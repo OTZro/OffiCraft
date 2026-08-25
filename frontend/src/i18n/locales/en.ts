@@ -1440,38 +1440,37 @@ export const en: Dict = {
     customName: "User additions",
     customSub: "Custom content appended to every agent's boot context · editable",
     roleDefsSection: "Role definitions",
-    bootName: "Boot sequence",
+    bootName: "Boot steps",
     bootSub: "What an AI follows while starting up · one per runtime · editable",
     bootRuntimeClaude: "Standard",
     bootRuntimeCodex: "Codex",
-    bootClaudeName: "Boot sequence (Claude Code)",
+    bootClaudeName: "Boot steps (Claude Code)",
     bootClaudeSub: "Boot SOP for the Claude Code runtime · editable",
-    bootCodexName: "Boot sequence (Codex CLI)",
+    bootCodexName: "Boot steps (Codex CLI)",
     bootCodexSub: "Boot SOP for the Codex App Server runtime · editable",
-    offboardName: "Offboard sequence",
+    offboardName: "Stop",
     offboardSub:
       "Wrap-up instructions handed to an agent when the server is about to collect its session · editable",
     stopSection: "STOP",
     taskEventSection: "TASK EVENTS",
-    readOnlySection: "SHOWN, NEVER EDITED",
     acceleratedStopName: "Accelerated stop",
     acceleratedStopSub:
       "What an agent is told when it is asked to wrap up early · carries a deadline · editable",
     taskCloseoutName: "Task close-out",
     taskCloseoutSub:
       "What an agent is told when one of its tasks is judged finished · editable",
-    taskReassignPredecessorName: "Reassigned away",
+    taskReassignPredecessorName: "Task reassignment · to the predecessor",
     taskReassignPredecessorSub:
       "What an agent is told when a task it held is handed to somebody else · editable",
-    taskTakeoverWithPredecessorName: "Takeover · with predecessor",
+    taskTakeoverWithPredecessorName: "Task reassignment · to the successor",
     taskTakeoverWithPredecessorSub:
       "What an agent is told when it picks up a task somebody else worked on · editable",
-    taskTakeoverFreshName: "Takeover · new assignment",
+    taskTakeoverFreshName: "New task",
     taskTakeoverFreshSub:
-      "What an agent is told the first time a task is assigned to it · shown, never edited",
-    taskUnblockedName: "Blocker released",
+      "What an agent is told the first time a task is assigned to it · editable",
+    taskUnblockedName: "The ticket blocking your task is released",
     taskUnblockedSub:
-      "What an agent is told when the task blocking it is released · shown, never edited",
+      "What an agent is told when the task blocking it is released · editable",
     bootDocReadOnlyNote:
       "This document is shown so you can see exactly what agents are told. Nobody may edit it, and it has no version other than the shipped one.",
     bootDocSaveConfirmAcceleratedStop:
@@ -1482,11 +1481,11 @@ export const en: Dict = {
     bootDocNoteHistoryTail:
       " versions, counted in SAVES rather than in time — a run of small saves pushes the older ones out. Restoring the factory version is never affected and is always available.",
     bootDocSaveConfirmBoot:
-      "Save this boot sequence? A broken boot sequence stops agents booting after it from attaching to SSE, so they never come online — silently, with no error anywhere, and with nobody online to fix it. Check the preview first; if it does go wrong, press Restore factory version.",
+      "Save these boot steps? Broken boot steps stop agents booting after it from attaching to SSE, so they never come online — silently, with no error anywhere, and with nobody online to fix it. Check the preview first; if it does go wrong, press Restore factory version.",
     bootDocSaveConfirmSystem:
       "Save this system-interaction document? Every agent that boots after the save reads this content.",
     bootDocSaveConfirmOffboard:
-      "Save this offboard sequence? Every session collected after the save reads this content, with nobody online to ask — a recycle leaves it a few minutes, an offboard waits on you indefinitely. It has to be finishable under both.",
+      "Save this Stop document? Every session collected after the save reads this content, with nobody online to ask — a recycle leaves it a few minutes, an offboard waits on you indefinitely. It has to be finishable under both.",
     bootDocSaveConfirmAction: "Save",
     // The click-to-open heading of a stacked document (T-6278). Both boot
     // sequences start closed so the page shows both at once; the label is on
@@ -1494,17 +1493,18 @@ export const en: Dict = {
     docExpand: "Expand this document",
     docCollapse: "Collapse this document",
     historyBootSystemTitle: "System interaction · version history",
-    historyBootClaudeTitle: "Boot sequence (Claude Code) · version history",
-    historyBootCodexTitle: "Boot sequence (Codex CLI) · version history",
-    historyBootOffboardTitle: "Offboard sequence · version history",
+    historyBootClaudeTitle: "Boot steps (Claude Code) · version history",
+    historyBootCodexTitle: "Boot steps (Codex CLI) · version history",
+    historyBootOffboardTitle: "Stop · version history",
     historyAcceleratedStopTitle: "Accelerated stop · version history",
     historyTaskCloseoutTitle: "Task close-out · version history",
-    historyTaskReassignPredecessorTitle: "Reassigned away · version history",
+    historyTaskReassignPredecessorTitle:
+      "Task reassignment · to the predecessor · version history",
     historyTaskTakeoverWithPredecessorTitle:
-      "Takeover (with predecessor) · version history",
-    historyTaskTakeoverFreshTitle:
-      "Takeover (new assignment) · version history",
-    historyTaskUnblockedTitle: "Blocker released · version history",
+      "Task reassignment · to the successor · version history",
+    historyTaskTakeoverFreshTitle: "New task · version history",
+    historyTaskUnblockedTitle:
+      "The ticket blocking your task is released · version history",
     defaultBadge: "Default",
     edit: "Edit",
     doneEdit: "Done",
@@ -1612,13 +1612,13 @@ export const en: Dict = {
     ttl30d: "30 days",
     notice: "Claude first notice",
     noticeSub:
-      "At this level the offboard sequence is sent, and the agent is asked to close out and hand over under its own power (must be below the final call)",
+      "At this level the Stop document is sent, and the agent is asked to close out and hand over under its own power (must be below the final call)",
     handover: "Claude final call",
     handoverSub:
       "At this level the final notice goes out and the handover fires; the session is collected once stop.accelerated_grace_secs elapses (40–90%)",
     codexNotice: "Codex first notice",
     codexNoticeSub:
-      "The compaction round at which the offboard sequence is sent (must be below the final round)",
+      "The compaction round at which the Stop document is sent (must be below the final round)",
     codexHandover: "Codex final round",
     codexHandoverSub:
       "Automatically refocus after this many completed context compactions; context percentage is not used.",

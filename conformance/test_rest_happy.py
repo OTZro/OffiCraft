@@ -757,29 +757,101 @@ _BOOT_DOC_EDIT = "# conformance edit — 系統互動 / 啟動程序\n\nnot the 
 # longer asks it to know.
 
 
+# 🔴 WHICH DOCUMENTS CARRY A READ-ONLY HEAD IS READ FROM THE SHARED TABLE, NOT
+# ASSERTED AS A UNIVERSAL (T-6f44). Both checks below used to say
+# ``assert d["read_only_head"]`` — every boot document has a non-empty head —
+# and that was true right up until the owner ruled that four of them should not
+# have one. The rule was written down in FOUR places (the server's registry
+# mirror, the cockpit's, the seeds themselves, and here); three were updated and
+# this one, in Python, in a suite the person editing the seeds said out loud
+# they had not run, went red on documents that were entirely correct.
+#
+# bin/tests/fixtures/boot-doc-registry.tsv is the one copy the server's and the
+# cockpit's guards are already pinned to, so reading it here makes three sides
+# agree with ONE table instead of four sides agreeing with each other. Reading a
+# repo file is not a black-box violation — the iron rule is about importing
+# server IMPLEMENTATION modules, and this suite already reads spec/openapi.json
+# and spec/mcp-catalog.json the same way. The table is a spec, not an
+# implementation: it says which documents exist and what shape they ship in.
+_BOOT_DOC_TABLE_PATH = HERE.parent / "bin" / "tests" / "fixtures" / "boot-doc-registry.tsv"
+
+
+def _load_boot_doc_table() -> dict[tuple[str, str], bool]:
+    """address -> has_head. Missing, malformed or EMPTY is a hard failure at
+    import: a guard that goes green because it could not read its fixture is a
+    lie, and an empty table would go green by agreeing that nothing exists."""
+    out: dict[tuple[str, str], bool] = {}
+    text = _BOOT_DOC_TABLE_PATH.read_text(encoding="utf-8")
+    for i, line in enumerate(text.split("\n"), start=1):
+        if line.startswith("#") or line.strip() == "":
+            continue
+        cols = line.split("\t")
+        if len(cols) != 4:
+            raise AssertionError(
+                f"{_BOOT_DOC_TABLE_PATH}:{i}: want 4 tab-separated columns, got {len(cols)}"
+            )
+        if cols[0] == "kind":
+            continue  # the header row
+        if cols[3] not in ("true", "false"):
+            raise AssertionError(
+                f"{_BOOT_DOC_TABLE_PATH}:{i}: has_head is {cols[3]!r}, want true or false"
+            )
+        out[(cols[0], cols[1])] = cols[3] == "true"
+    if not out:
+        raise AssertionError(f"{_BOOT_DOC_TABLE_PATH} parsed to zero rows")
+    return out
+
+
+_BOOT_DOC_HAS_HEAD = _load_boot_doc_table()
+
+
+def _check_head(d: dict, kind: str, key: str) -> None:
+    """Both directions. A head that vanished is what happened this time; a head
+    that APPEARS on a document the table says has none is the same silent drift
+    seen from the other side — an agent starts reading a machine-written
+    sentence nobody decided to send it."""
+    addr = (kind, key)
+    assert addr in _BOOT_DOC_HAS_HEAD, (
+        f"{kind}/{key} is served but {_BOOT_DOC_TABLE_PATH} does not list it"
+    )
+    want = _BOOT_DOC_HAS_HEAD[addr]
+    got = bool(d["read_only_head"])
+    assert got == want, (
+        f"{kind}/{key}: the shared table says has_head={want}, this server serves "
+        f"read_only_head={d['read_only_head']!r}"
+    )
+    if want:
+        assert d["read_only_head"] in d["text"], d
+
+
 def _boot_doc_body(ctx: HCtx) -> dict:
     """Body factory: the write face takes the editable half and nothing else."""
     return {"body": _BOOT_DOC_EDIT}
 
 
-def _boot_doc_written(ctx: HCtx, r: httpx.Response) -> None:
+def _boot_doc_written(kind: str, key: str):
     """The edit came back verbatim and the block stopped reading as default.
 
     ``body`` is compared BYTE FOR BYTE against what was sent — that is the whole
     contract now, and it is a stronger statement than the old one: what a client
     sends is what a client reads back, with no half of the document it has to
     carry along and no rule about carrying it correctly. ``text`` is the whole
-    stored document and is checked only for the two properties the halves must
-    have inside it.
+    stored document and is checked only for the properties the halves must have
+    inside it — including whether there is a head at all, which is now per
+    document and read from the shared table.
     """
-    d = r.json()
-    assert d["body"] == _BOOT_DOC_EDIT, d
-    assert d["text"].endswith(_BOOT_DOC_EDIT), d
-    assert d["read_only_head"] and d["read_only_head"] in d["text"], d
-    assert d["is_default"] is False, d
-    assert d["size_chars"] == len(d["text"]), d
-    assert d["cap_chars"] >= d["size_chars"], d
-    assert d["has_seed"] is True, d
+
+    def check(_ctx: HCtx, r: httpx.Response) -> None:
+        d = r.json()
+        assert d["body"] == _BOOT_DOC_EDIT, d
+        assert d["text"].endswith(_BOOT_DOC_EDIT), d
+        _check_head(d, kind, key)
+        assert d["is_default"] is False, d
+        assert d["size_chars"] == len(d["text"]), d
+        assert d["cap_chars"] >= d["size_chars"], d
+        assert d["has_seed"] is True, d
+
+    return check
 
 
 def _boot_doc_reset(path: str):
@@ -815,7 +887,7 @@ def _boot_doc_read(kind: str, key: str):
         # stored text and ends it, and the half nobody may write is in it too.
         # A client that gets this pair never has to know a marker exists.
         assert d["body"] and d["text"].endswith(d["body"]), d
-        assert d["read_only_head"] and d["read_only_head"] in d["text"], d
+        _check_head(d, kind, key)
         assert d["size_chars"] == len(d["text"]), d
         assert d["cap_chars"] >= d["size_chars"], d
         assert isinstance(d["is_default"], bool), d
@@ -1332,7 +1404,7 @@ HAPPY: dict[str, Happy] = {
         check=lambda _c, r: _boot_doc_read("system_interaction", "global")(_c, r)
     ),
     "POST /api/system-interaction": Happy(
-        body=_boot_doc_body, check=_boot_doc_written
+        body=_boot_doc_body, check=_boot_doc_written("system_interaction", "global")
     ),
     "POST /api/system-interaction/reset": Happy(
         check=_boot_doc_reset("/api/system-interaction")
@@ -1344,7 +1416,7 @@ HAPPY: dict[str, Happy] = {
     "POST /api/boot-sequence/{runtime_key}": Happy(
         path="/api/boot-sequence/codex",
         body=_boot_doc_body,
-        check=_boot_doc_written,
+        check=_boot_doc_written("boot_sequence", "codex"),
     ),
     "POST /api/boot-sequence/{runtime_key}/reset": Happy(
         path="/api/boot-sequence/codex/reset",
@@ -1357,14 +1429,17 @@ HAPPY: dict[str, Happy] = {
         check=lambda _c, r: _boot_doc_read("offboard", "global")(_c, r)
     ),
     "POST /api/offboard": Happy(
-        body=_boot_doc_body, check=_boot_doc_written
+        body=_boot_doc_body, check=_boot_doc_written("offboard", "global")
     ),
     "POST /api/offboard/reset": Happy(check=_boot_doc_reset("/api/offboard")),
     # ── the GENERIC face of all of the above, plus the six event procedures
     # that never got named routes (T-3201) ───────────────────────────────────
-    # The write rows aim at accelerated_stop because it is EDITABLE: two of the
-    # ten documents refuse every caller with 405, and a happy row is the wrong
-    # place to assert a refusal.
+    # The write rows aim at accelerated_stop because it is the STOP-side document
+    # with a read-only head, so one row exercises both halves of the split.
+    # ⚠️ This used to say "because it is EDITABLE: two of the ten refuse every
+    # caller with 405" — since T-6f44's decision 2 NONE of the ten is read-only,
+    # so that reason no longer picks anything out. The 405 branch still exists in
+    # the server, it just has no shipped document behind it any more.
     "GET /api/boot-docs/{kind}/{key}": Happy(
         path="/api/boot-docs/task_closeout/global",
         check=lambda _c, r: _boot_doc_read("task_closeout", "global")(_c, r),
@@ -1372,7 +1447,7 @@ HAPPY: dict[str, Happy] = {
     "POST /api/boot-docs/{kind}/{key}": Happy(
         path="/api/boot-docs/accelerated_stop/global",
         body=_boot_doc_body,
-        check=_boot_doc_written,
+        check=_boot_doc_written("accelerated_stop", "global"),
     ),
     "POST /api/boot-docs/{kind}/{key}/reset": Happy(
         path="/api/boot-docs/accelerated_stop/global/reset",

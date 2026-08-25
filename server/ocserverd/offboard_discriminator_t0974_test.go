@@ -83,6 +83,34 @@ package main
 // not by a test. If you are editing §1, the question to answer is not "do the
 // tests pass" — it is "would this sentence match ITSELF when it is stapled
 // inside the notice being judged?"
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔴 T-6f44 REMOVED THE RULE THIS FILE WAS BUILT AROUND, AND THAT IS THE FIX
+// THE COMMENT ABOVE SAID IT COULD NOT MAKE.
+//
+// Everything above is a description of one defect class: a rule stated as a
+// STRING TEST, inside the string it tests. The last paragraph names the residual
+// hole exactly — a revert of §1 to substring-shaped wording leaves every
+// assertion green — and calls it unfixable without a wording whitelist.
+//
+// The owner's decision 5 dissolved the premise instead: §1 no longer asks the
+// agent to look for `Your deadline is` in the notice. Each document now STATES
+// WHICH ONE IT IS (「你讀到的是這一份，就代表**沒有人在對你倒數**」/「**你在倒數
+// 中**」), and which document the server sends is decided by `kind` at the send
+// site. There is no marker to self-match, so the fourth mutant is gone rather
+// than tolerated — a §1 reverted to substring wording is now caught, because the
+// substring it would name is asserted absent from BOTH documents below.
+//
+// What is still worth pinning, and is pinned here, is the same PROPERTY under
+// the new mechanism: the soft notice must not read as hard, and the hard one
+// must not read as soft — evaluated against the notices the live producer
+// builds, never against a rule quoted from the prose.
+//
+// ⚠️ WHAT WENT WITH IT. The clause `Your deadline is <instant>` was the only
+// ENGLISH in either notice and it lived in 加速停止's read-only head next to
+// {where}. Decision 4 deleted {where}; the head is now one Chinese sentence
+// carrying the instant alone. So a regex over English is no longer the shape of
+// any assertion here.
 
 import (
 	"regexp"
@@ -91,14 +119,19 @@ import (
 	"time"
 )
 
-// discriminator is the rule from 下線程序 §1 expressed as something executable:
-// the marker FOLLOWED BY an RFC3339 UTC instant. Deliberately not "contains the
-// literal marker" — that is the defect — and deliberately not anchored to a
-// line position either: tying it to "the first line" would trade a self-match
-// bug for a layout dependency, and layout is the easier of the two to break by
-// accident.
+// discriminator is what a HARD notice must carry and a soft one must not: a
+// concrete instant. It is still expressed as an INSTANT rather than as words,
+// for the reason the header gives — matching the words is the defect — but it no
+// longer looks for an English marker, because there is none: 加速停止's head is
+// 「你的結束時刻是 <RFC3339>。」 and 下線程序's document has no head at all.
 var discriminator = regexp.MustCompile(
-	`Your deadline is \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z`)
+	`你的結束時刻是 \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z。`)
+
+// sniffedMarker is the string §1 used to tell agents to look for. It must appear
+// in NEITHER document: while it is in one of them, an agent reading that document
+// has two contradicting rules for the same question, and the string-matching one
+// is the one that silently stops working when the other document is edited.
+const sniffedMarker = "Your deadline is"
 
 // TestOffboardDiscriminator_AppliedToTheNoticesThemselves is the guard that was
 // missing. It runs the rule over BOTH notices AND over the document alone.
@@ -116,6 +149,13 @@ func TestOffboardDiscriminator_AppliedToTheNoticesThemselves(t *testing.T) {
 		t.Fatalf("the seed did not load — every assertion below would pass "+
 			"vacuously (%d bytes)", len(doc))
 	}
+	accelDoc, err := assetRoot("").readSeedFile(acceleratedStopSeedMD)
+	if err != nil {
+		t.Fatalf("read the 加速停止 seed: %v", err)
+	}
+	if len(accelDoc) < 200 || !strings.Contains(accelDoc, "## 1.") {
+		t.Fatalf("the 加速停止 seed did not load (%d bytes)", len(accelDoc))
+	}
 
 	const where = "context 62% (your limits: 60% / 75%)"
 	const deadline = 1_787_000_000.0 // 2026-08-17T20:53:20Z
@@ -125,8 +165,8 @@ func TestOffboardDiscriminator_AppliedToTheNoticesThemselves(t *testing.T) {
 	// the soft arm is sent 下線程序, the final call 加速停止, and only the second
 	// of the two documents carries the clause.
 	s := newReconcileTestServer(t)
-	soft := s.winddownNoticeText(offboardKindSoft, where, 0)
-	hard := s.winddownNoticeText(offboardKindFinal, where, deadline)
+	soft := s.winddownNoticeText(offboardKindSoft, 0)
+	hard := s.winddownNoticeText(offboardKindFinal, deadline)
 	if soft == "" || hard == "" {
 		t.Fatal("the fixture must render both notices — an empty one would pass " +
 			"every assertion below vacuously")
@@ -146,32 +186,68 @@ func TestOffboardDiscriminator_AppliedToTheNoticesThemselves(t *testing.T) {
 	}
 
 	// ── the regression itself, stated directly ───────────────────────────────
-	// The document travels inside both notices. If the rule matches the
-	// document ON ITS OWN, then it matches every notice that carries it, and
-	// the discriminator is worthless no matter what the two cases above say.
+	// The document travels inside its notice. If the rule matches a document ON
+	// ITS OWN, it matches every notice that carries it and the discriminator is
+	// worthless no matter what the two cases above say.
 	if discriminator.MatchString(doc) {
-		t.Errorf("the 下線程序 document must not match the rule it states — "+
-			"it rides inside EVERY notice, so a self-match makes every notice "+
-			"read as hard. Found %q", discriminator.FindString(doc))
+		t.Errorf("the 下線程序 document must not carry an instant — it rides "+
+			"inside every soft notice, so one here makes every soft notice read "+
+			"as hard. Found %q", discriminator.FindString(doc))
 	}
 
-	// The document must still SHOW the reader the marker; a rule the reader
-	// cannot recognise on sight is not a usable rule. This is what stops the
-	// fix from degenerating into "delete the marker from the prose", which
-	// would pass every assertion above and leave the reader with nothing.
-	if !strings.Contains(doc, "Your deadline is") {
-		t.Error("the document must still name the marker — otherwise the " +
-			"reader has an abstract rule and no way to apply it")
+	// 🔴 THE FOURTH MUTANT, NOW CAUGHT (T-6f44). The header above records it as
+	// permanently green: 「§1 reverted word-for-word to 通知帶有 `Your deadline
+	// is ...`：硬性」. It is caught now, and not by a wording whitelist — by the
+	// one string that rule cannot be written without. While that marker is in
+	// either document, an agent is carrying two rules for one question and the
+	// string one breaks silently the day the other document is edited.
+	for _, d := range []struct{ name, text string }{
+		{"下線程序", doc},
+		{"加速停止", accelDoc},
+	} {
+		if strings.Contains(d.text, sniffedMarker) {
+			t.Errorf("%s still tells the agent to look for %q. Decision 5 replaced "+
+				"that with each document saying which one it is — a string test "+
+				"against ANOTHER document's editable first line stops working the "+
+				"day that line is rewritten, and no test goes red", d.name, sniffedMarker)
+		}
+	}
+
+	// …and the replacement really is there, in both, and says opposite things.
+	// Without this the block above is satisfied by deleting §1 altogether, which
+	// would leave the reader with no rule at all — the exact degeneration the
+	// old version of this test guarded against from the other side.
+	if !strings.Contains(doc, "沒有人在對你倒數") {
+		t.Error("下線程序 no longer tells the agent it is NOT being counted down")
+	}
+	if !strings.Contains(accelDoc, "你在倒數中") {
+		t.Error("加速停止 no longer tells the agent it IS being counted down")
+	}
+	if strings.Contains(doc, "你在倒數中") || strings.Contains(accelDoc, "沒有人在對你倒數") {
+		t.Error("a stop procedure claims to be the other kind — the send site picks " +
+			"the document by kind, so the document must agree with why it was sent")
 	}
 }
 
-// TestOffboardNotice_NoQuestionMarkForAMissingPercentage pins the other half of
-// what the shipping verification found: the sentence used to carry a LITERAL
-// "?" ("context ?% (your limits: 55% / 65%)") whenever the gauge held no
-// context_pct — which is EVERY refocus-triggered close-out, because that arm is
-// not fired by a percentage at all. The same file omits a whole clause rather
-// than printing a placeholder everywhere else, and two spellings of "no value"
-// in one output is the next reader's trap.
+// 🔴 THE PLACEHOLDER CANNOT REACH AN AGENT ANY MORE, BECAUSE THE POSITION
+// CLAUSE CANNOT (T-6f44, decision 4: 「{where} 不中文化，直接砍掉」). This used to
+// pin that a missing gauge value was OMITTED rather than printed as a literal
+// "?" — 「context ?% (your limits: 55% / 65%)」 on every refocus-triggered
+// close-out, an arm that is not fired by a percentage at all.
+//
+// 下線程序 no longer has a read-only head, so the notice IS the document and
+// carries no position at all: 「你在 59%」 has nothing to do with how to close
+// out. The defect this test was written for is therefore structurally gone
+// rather than fixed — which is a stronger state, and worth pinning as itself.
+//
+// ⚠️ THE `where` STRING IS STILL COMPOSED UPSTREAM (offboardNoticeFor builds it
+// and hands it to winddownNoticeText, which now discards it). It is dead text —
+// the 定稿 calls for deleting the code that builds it — and that deletion lives
+// in the wind-down files, outside this change. Until then the assertion that
+// matters is the one below: whatever that string says, no agent sees it.
+//
+// BOTH RUNTIMES are still swept, because they read different gauge keys and the
+// claim is that NEITHER can leak a placeholder now.
 func TestOffboardNotice_NoQuestionMarkForAMissingPercentage(t *testing.T) {
 	// BOTH RUNTIMES, because they read DIFFERENT gauge keys and therefore need
 	// two separate fallbacks in the source. Running this on claude alone is how
@@ -189,20 +265,9 @@ func TestOffboardNotice_NoQuestionMarkForAMissingPercentage(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		runtime string
-		want    string
 	}{
-		{
-			name:    "claude omits the percentage it does not have",
-			runtime: RuntimeClaude,
-			want: "close-out (your limits: 40% / 50%) — start your close-out: " +
-				"work the sequence below, then call report_stopped yourself.",
-		},
-		{
-			name:    "codex omits the round it does not have",
-			runtime: RuntimeCodex,
-			want: "close-out (your limits: round 3 / round 4) — start your close-out: " +
-				"work the sequence below, then call report_stopped yourself.",
-		},
+		{name: "claude sends no position at all", runtime: RuntimeClaude},
+		{name: "codex sends no position at all", runtime: RuntimeCodex},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newReconcileTestServer(t)
@@ -224,14 +289,18 @@ func TestOffboardNotice_NoQuestionMarkForAMissingPercentage(t *testing.T) {
 			// not an edge case: that arm is not triggered by a percentage or a
 			// round count, so there has never been one to report.
 			//
-			// The document's BODY is not what this test guards, so it is taken
-			// from the server rather than restated — the assertion is about the
-			// SENTENCE, which is the document's read-only head.
-			_, body, _ := DocSplitHeadBody(mustFoldText(t, s, s.offboardSpec()))
-			want := c.want + "\n" + body
-			if got := s.offboardNoticeFor(m, offboardKindSoft); got != want {
-				t.Fatalf("a missing position must be OMITTED, not printed as a "+
-					"placeholder:\n got %q\nwant %q", got, want)
+			// ⚠️ WHOLE-STRING comparison still (owner ruling 2026-08-20,
+			// c-2502de439aaa). The expected value is now the DOCUMENT, with
+			// nothing composed around it — which is the whole claim.
+			want := mustFoldText(t, s, s.offboardSpec())
+			got := s.offboardNoticeFor(m, offboardKindSoft)
+			if got != want {
+				t.Fatalf("the soft notice is not the document alone:\n got %q\nwant %q", got, want)
+			}
+			// Named separately so a failure says WHICH way it went wrong: a
+			// placeholder, or a position clause of any kind, reaching an agent.
+			if strings.Contains(got, "?") || strings.Contains(got, "your limits:") {
+				t.Fatalf("a position clause reached the agent:\n%s", got)
 			}
 		})
 	}
@@ -263,11 +332,12 @@ func TestOffboardNotice_ASoftNoticeIgnoresADeadlineItWasHanded(t *testing.T) {
 		doc      = "§1 …"
 	)
 	s := newReconcileTestServer(t)
-	_, body, _ := DocSplitHeadBody(mustFoldText(t, s, s.offboardSpec()))
 
-	got := s.winddownNoticeText(offboardKindSoft, where, deadline)
-	want := where + " — start your close-out: work the sequence below, " +
-		"then call report_stopped yourself.\n" + body
+	got := s.winddownNoticeText(offboardKindSoft, deadline)
+	// 下線程序 has no read-only head since T-6f44, so the soft notice IS the
+	// document — which makes "a deadline handed to the soft arm changes nothing"
+	// structural rather than conditional: there is no slot for it to land in.
+	want := mustFoldText(t, s, s.offboardSpec())
 	if got != want {
 		t.Fatalf("soft notice handed a deadline:\n got %q\nwant %q", got, want)
 	}
@@ -275,11 +345,10 @@ func TestOffboardNotice_ASoftNoticeIgnoresADeadlineItWasHanded(t *testing.T) {
 	// unreachable — ask for the final call and the whole sentence becomes the
 	// other document, deadline and all.
 	_, finalBody, _ := DocSplitHeadBody(mustFoldText(t, s, s.acceleratedStopSpec()))
-	gotFinal := s.winddownNoticeText(offboardKindFinal, where, deadline)
-	wantFinal := where + " — offboard now: work the sequence below, " +
-		"then call report_stopped yourself." +
-		" Your deadline is " + time.Unix(int64(deadline), 0).UTC().Format(time.RFC3339) +
-		".\n" + finalBody
+	gotFinal := s.winddownNoticeText(offboardKindFinal, deadline)
+	wantFinal := "你的結束時刻是 " +
+		time.Unix(int64(deadline), 0).UTC().Format(time.RFC3339) +
+		"。\n" + finalBody
 	if gotFinal != wantFinal {
 		t.Fatalf("final call:\n got %q\nwant %q", gotFinal, wantFinal)
 	}
