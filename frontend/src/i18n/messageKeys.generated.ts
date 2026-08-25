@@ -753,6 +753,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "settings.doneEdit",
   "settings.edit",
   "settings.editorPlaceholder",
+  "settings.globalContext",
   "settings.globalSection",
   "settings.handover",
   "settings.handoverSub",

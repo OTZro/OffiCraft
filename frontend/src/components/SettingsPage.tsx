@@ -328,6 +328,11 @@ type View =
   | { kind: "landing" }
   | { kind: "software" }
   | { kind: "roles" }
+  // 全域情境 (T-a241) — the boot/lifecycle documents' OWN settings section.
+  // They were never role definitions; 角色誌 merely happened to exist first, so
+  // the list of them was printed there. This view is that list's own page, and
+  // 角色誌 is left with roles.
+  | { kind: "globalContext" }
   | { kind: "params" }
   | { kind: "theme" }
   | { kind: "custom" }
@@ -433,8 +438,20 @@ export function SettingsPage({
     setView({ kind: "roles" });
     navigateHash({ page: "settings", settingsRoles: true });
   };
+  // 全域情境 has no hash route of its own — none of the ten documents ever had
+  // one (lib/hashRoute knows only #settings, #settings/roles[…] and
+  // #settings/manuals/<key>), so this jump moves the internal view and writes
+  // nothing. Inventing a route here would put an address in the URL that a
+  // reload could not honour.
+  const goGlobalContext = () => setView({ kind: "globalContext" });
   const crumbRoot: Crumb = { label: t.settings.title, onClick: goLanding };
   const crumbRoles: Crumb = { label: t.settings.roles, onClick: goRoles };
+  /** The middle segment of every boot/lifecycle document's trail — 全域情境
+   * since T-a241, because that is the page those documents are listed on. */
+  const crumbGlobalContext: Crumb = {
+    label: t.settings.globalContext,
+    onClick: goGlobalContext,
+  };
 
   if (view.kind === "software") {
     return (
@@ -464,18 +481,31 @@ export function SettingsPage({
     return (
       <RolesLog
         roles={rolesH.roles}
-        // Honest: a failed role/global-context load must not read as "no roles".
-        error={rolesH.error || gc.error}
+        // Honest: a failed role load must not read as "no roles". The
+        // global-context load is not this page's concern any more (T-a241) —
+        // it is reported on 全域情境, where its documents are listed.
+        error={rolesH.error}
         crumbs={[crumbRoot, { label: t.settings.roles }]}
+        onOpenRole={(key) => setView({ kind: "role", key })}
+        onCreate={rolesH.create}
+        onDelete={rolesH.remove}
+        autoCreate={rolesCreatePending}
+      />
+    );
+  }
+
+  if (view.kind === "globalContext") {
+    return (
+      <GlobalContextSection
+        // A failed /api/global-context read is reported HERE now — it is the
+        // 使用者自訂 row's own document, and this is the page that prints it.
+        error={gc.error}
+        crumbs={[crumbRoot, { label: t.settings.globalContext }]}
         onOpenCustom={() => setView({ kind: "custom" })}
         onOpenBootIndex={() => setView({ kind: "boot" })}
         onOpenBootDoc={(docKind, docKey) =>
           setView({ kind: "bootDoc", docKind, docKey })
         }
-        onOpenRole={(key) => setView({ kind: "role", key })}
-        onCreate={rolesH.create}
-        onDelete={rolesH.remove}
-        autoCreate={rolesCreatePending}
       />
     );
   }
@@ -650,7 +680,7 @@ export function SettingsPage({
         confirmSaveBody={t.settings[row.confirmKey]}
         crumbs={[
           crumbRoot,
-          crumbRoles,
+          crumbGlobalContext,
           { label: t.settings[row.nameKey] },
         ]}
       />
@@ -665,7 +695,11 @@ export function SettingsPage({
       <DocCard
         title={t.settings.customName}
         doc={gc.ctx}
-        crumbs={[crumbRoot, crumbRoles, { label: t.settings.customName }]}
+        crumbs={[
+          crumbRoot,
+          crumbGlobalContext,
+          { label: t.settings.customName },
+        ]}
         onSave={gc.save}
         onReset={gc.reset}
         // 版本紀錄 (T-1f39): the entry sits in the EDIT toolbar, where 重置
@@ -720,7 +754,11 @@ export function SettingsPage({
     return (
       <div className="settings">
         <Breadcrumbs
-          items={[crumbRoot, crumbRoles, { label: t.settings.bootName }]}
+          items={[
+            crumbRoot,
+            crumbGlobalContext,
+            { label: t.settings.bootName },
+          ]}
         />
         <h1 className="settings__title">{t.settings.bootName}</h1>
         <div className="set-entries">
@@ -786,7 +824,7 @@ export function SettingsPage({
         // and back in.
         crumbs={[
           crumbRoot,
-          crumbRoles,
+          crumbGlobalContext,
           { label: t.settings.bootName, onClick: () => setView({ kind: "boot" }) },
           {
             label: claude
@@ -958,6 +996,23 @@ export function SettingsPage({
             <DownloadIcon size={18} />
           </span>
           <span className="set-entry__name">{t.settings.software}</span>
+          <ChevronRightIcon size={18} className="set-entry__chev" />
+        </button>
+        {/* 全域情境 (T-a241) — the boot / lifecycle documents, pulled OUT of
+         * 角色誌 into their own section. Position is the point: they describe
+         * what every agent is told, which is nearer to 系統更新與備份 than to a
+         * list of personas, so the row sits directly above 角色誌 rather than
+         * being appended at the end of the landing. */}
+        <button
+          type="button"
+          className="set-entry"
+          data-testid="settings-global-context-entry"
+          onClick={() => setView({ kind: "globalContext" })}
+        >
+          <span className="set-entry__icon set-entry__icon--violet">
+            <GlobeIcon size={18} />
+          </span>
+          <span className="set-entry__name">{t.settings.globalContext}</span>
           <ChevronRightIcon size={18} className="set-entry__chev" />
         </button>
         <button
@@ -1975,27 +2030,34 @@ function BackupHealthCard() {
   );
 }
 
-// ── 角色誌 (list) ───────────────────────────────────────────────────────────
-// `firstBodyLine` lived here — the roster row's one-line persona preview. It
-// went with T-1170: the roster answer no longer carries `definition_md`, so
-// there is no text to take a first line from, and the only way to keep the
-// preview would be one document fetch per row, which is the download the
-// directory exists to stop. Deleted rather than left dead: a helper with no
-// caller reads exactly like a live one.
-
-function RolesLog({
-  roles,
+// ── 全域情境 (T-a241) ───────────────────────────────────────────────────────
+/**
+ * 全域情境 — the boot / lifecycle documents, as their OWN 〈設定〉 section.
+ *
+ * WHAT MOVED, AND WHAT DID NOT. This page is the list that used to head 角色誌,
+ * carried across whole: the same BOOT_DOC_ROWS table, the same three group
+ * headings in the same order, the same rows opening the same documents. Not one
+ * document's content, kind, route or wire identifier changed — the ONLY thing
+ * T-a241 changed is which page prints the list, so a reader who knew where a
+ * document was finds the same document with the same name one level up.
+ *
+ * 🔴 使用者自訂 CAME ALONG, AND IT IS STILL NOT A BOOT DOCUMENT. It is the
+ * additive block behind /api/global-context — its own route, no cap, its own
+ * allow_shrink — and it is deliberately absent from BOOT_DOC_ROWS. It is
+ * printed here because the boot context ASSEMBLES it between 系統互動 and
+ * 啟動程序, which is the same reason it sat there before the move. Folding it
+ * into the table as an eleventh row would give it a cap and a document kind it
+ * does not have.
+ */
+function GlobalContextSection({
   error,
   crumbs,
   onOpenCustom,
   onOpenBootIndex,
   onOpenBootDoc,
-  onOpenRole,
-  onCreate,
-  onDelete,
-  autoCreate,
 }: {
-  roles: RoleSummaryView[];
+  /** A rejected /api/global-context read — reported honestly rather than
+   * rendered as an empty 使用者自訂. */
   error: boolean;
   crumbs: Crumb[];
   /** 使用者自訂 is NOT a boot document: it is the additive block behind
@@ -2008,6 +2070,93 @@ function RolesLog({
   onOpenBootIndex: () => void;
   /** Every other boot/lifecycle document, addressed rather than named. */
   onOpenBootDoc: (kind: BootDocKind, docKey: string) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="settings">
+      <Breadcrumbs items={crumbs} />
+      <h1 className="settings__title settings__title--doc">
+        {t.settings.globalContext}
+      </h1>
+
+      {error && <div className="set-error">{t.settings.loadError}</div>}
+
+      {/* The list itself: the boot / lifecycle documents, printed from
+       * BOOT_DOC_ROWS —
+       * the one table that says which of them the cockpit shows. Groups run in
+       * the owner's own reading order (定稿 2026-08-24): 上線 → 下線 → 任務.
+       * No filenames — these are content, not files. */}
+      {BOOT_DOC_GROUP_ORDER.map((group) => (
+        <div key={group}>
+          <div className="set-group-label">
+            {t.settings[BOOT_DOC_GROUP_LABEL[group]]}
+          </div>
+          <div className="set-entries">
+            {bootDocRowsIn(group).map(([kind, row]) => (
+              <Fragment key={kind}>
+                <BootDocEntry
+                  kind={kind}
+                  row={row}
+                  onOpen={() =>
+                    row.index
+                      ? onOpenBootIndex()
+                      : onOpenBootDoc(kind, row.docKey)
+                  }
+                />
+                {/* 使用者自訂 sits between 系統互動 and 啟動程序, where the boot
+                  * context assembles it. It is NOT a boot document — no cap, its
+                  * own allow_shrink, its own route — so it is deliberately absent
+                  * from BOOT_DOC_ROWS, and this is the one row the list prints
+                  * that the table does not own. */}
+                {kind === "system_interaction" && (
+                  <button
+                    type="button"
+                    className="set-entry"
+                    data-testid="boot-doc-entry-custom"
+                    onClick={onOpenCustom}
+                  >
+                    <span className="set-entry__icon set-entry__icon--violet">
+                      <PencilIcon size={18} />
+                    </span>
+                    <span className="set-entry__body">
+                      <span className="set-entry__name">
+                        {t.settings.customName}
+                      </span>
+                      <span className="set-entry__sub">
+                        {t.settings.customSub}
+                      </span>
+                    </span>
+                    <ChevronRightIcon size={18} className="set-entry__chev" />
+                  </button>
+                )}
+              </Fragment>
+            ))}
+          </div>
+        </div>
+      ))}    </div>
+  );
+}
+
+// ── 角色誌 (list) ───────────────────────────────────────────────────────────
+// `firstBodyLine` lived here — the roster row's one-line persona preview. It
+// went with T-1170: the roster answer no longer carries `definition_md`, so
+// there is no text to take a first line from, and the only way to keep the
+// preview would be one document fetch per row, which is the download the
+// directory exists to stop. Deleted rather than left dead: a helper with no
+// caller reads exactly like a live one.
+
+function RolesLog({
+  roles,
+  error,
+  crumbs,
+  onOpenRole,
+  onCreate,
+  onDelete,
+  autoCreate,
+}: {
+  roles: RoleSummaryView[];
+  error: boolean;
+  crumbs: Crumb[];
   onOpenRole: (key: string) => void;
   onCreate: (input: { name: string }) => Promise<unknown>;
   onDelete: (key: string) => Promise<void>;
@@ -2103,60 +2252,9 @@ function RolesLog({
        * bounced to login) never masquerades as an empty role journal. */}
       {error && <div className="set-error">{t.settings.loadError}</div>}
 
-      {/* zone 1: the boot / lifecycle documents, printed from BOOT_DOC_ROWS —
-       * the one table that says which of them the cockpit shows. Groups run in
-       * the owner's own reading order (定稿 2026-08-24): 上線 → 下線 → 任務.
-       * No filenames — these are content, not files. */}
-      {BOOT_DOC_GROUP_ORDER.map((group) => (
-        <div key={group}>
-          <div className="set-group-label">
-            {t.settings[BOOT_DOC_GROUP_LABEL[group]]}
-          </div>
-          <div className="set-entries">
-            {bootDocRowsIn(group).map(([kind, row]) => (
-              <Fragment key={kind}>
-                <BootDocEntry
-                  kind={kind}
-                  row={row}
-                  onOpen={() =>
-                    row.index
-                      ? onOpenBootIndex()
-                      : onOpenBootDoc(kind, row.docKey)
-                  }
-                />
-                {/* 使用者自訂 sits between 系統互動 and 啟動程序, where the boot
-                  * context assembles it. It is NOT a boot document — no cap, its
-                  * own allow_shrink, its own route — so it is deliberately absent
-                  * from BOOT_DOC_ROWS, and this is the one row the list prints
-                  * that the table does not own. */}
-                {kind === "system_interaction" && (
-                  <button
-                    type="button"
-                    className="set-entry"
-                    data-testid="boot-doc-entry-custom"
-                    onClick={onOpenCustom}
-                  >
-                    <span className="set-entry__icon set-entry__icon--violet">
-                      <PencilIcon size={18} />
-                    </span>
-                    <span className="set-entry__body">
-                      <span className="set-entry__name">
-                        {t.settings.customName}
-                      </span>
-                      <span className="set-entry__sub">
-                        {t.settings.customSub}
-                      </span>
-                    </span>
-                    <ChevronRightIcon size={18} className="set-entry__chev" />
-                  </button>
-                )}
-              </Fragment>
-            ))}
-          </div>
-        </div>
-      ))}
-
-      {/* zone 2: role definitions */}
+      {/* Role definitions — the whole page since T-a241. The boot / lifecycle
+        * documents that used to head it (and 使用者自訂 with them) are their own
+        * section now: see GlobalContextSection. */}
       <div className="set-group-label">{t.settings.roleDefsSection}</div>
       <div className="set-entries">
         {roles.map((r) => {

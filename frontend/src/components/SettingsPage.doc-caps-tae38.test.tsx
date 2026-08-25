@@ -149,7 +149,7 @@ describe("T-ae38 — the three journal blocks each show their OWN budget", () =>
         <SettingsPage />
       </I18nProvider>
     );
-    fireEvent.click(utils.getByText(s.roles));
+    fireEvent.click(utils.getByText(s.globalContext));
     fireEvent.click(await utils.findByText(s.customName));
     await utils.findAllByText(s.edit);
     expect(utils.queryByTestId("doc-card-usage")).toBeNull();

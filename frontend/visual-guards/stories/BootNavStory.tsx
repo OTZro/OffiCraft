@@ -1,4 +1,4 @@
-// CT story for 設定 › 角色誌 › 啟動程序 — the INDEX of two documents (T-bac4;
+// CT story for 設定 › 全域情境 › 啟動程序 — the INDEX of two documents (T-bac4;
 // it was the page that stacked both of them until the owner replaced that
 // shape).
 //
@@ -6,7 +6,7 @@
 // measurement is "both documents are reachable on one phone screen", and a
 // story that assembled its own rows would answer for itself rather than for
 // what SettingsPage renders. The route is walked the way a person walks it
-// (角色誌 → 啟動程序) so the ancestor chain and the breadcrumbs are the app's own.
+// (全域情境 → 啟動程序) so the ancestor chain and the breadcrumbs are the app's own.
 //
 // The documents are seeded THROUGH THE REAL ADAPTER at the length that used to
 // reproduce the defect (the first document is thousands of pixels tall).

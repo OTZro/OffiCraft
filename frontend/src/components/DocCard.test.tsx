@@ -68,10 +68,10 @@ async function openRoleDoc() {
   return utils;
 }
 
-/** Walk 設定 → 角色誌 → 使用者自訂 (the uncapped global-context block). */
+/** Walk 設定 → 全域情境 → 使用者自訂 (the uncapped global-context block). */
 async function openCustomDoc() {
   const utils = openSettings();
-  fireEvent.click(utils.getByText(s.roles));
+  fireEvent.click(utils.getByText(s.globalContext));
   fireEvent.click(await utils.findByText(s.customName));
   await utils.findAllByText(s.edit);
   return utils;

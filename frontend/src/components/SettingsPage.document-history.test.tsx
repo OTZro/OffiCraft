@@ -32,7 +32,7 @@ const s = zh.settings;
 
 type Utils = ReturnType<typeof render>;
 
-/** Render Settings and land on 角色誌 › 使用者自訂 — the global-context block,
+/** Render Settings and land on 全域情境 › 使用者自訂 — the global-context block,
  * the simplest of the documents that carry a history. */
 async function openUserCustomDoc() {
   const utils = render(
@@ -40,7 +40,7 @@ async function openUserCustomDoc() {
       <SettingsPage />
     </I18nProvider>
   );
-  fireEvent.click(utils.getByText(s.roles));
+  fireEvent.click(utils.getByText(s.globalContext));
   await utils.findByText(s.systemName);
   fireEvent.click(utils.getByText(s.customName));
   await utils.findByText(s.edit);
@@ -662,7 +662,7 @@ describe("SettingsPage · 版本紀錄", () => {
 
     // 使用者自訂 — the global block ships with a seed the reset restores.
     goSettingsRoot();
-    fireEvent.click(utils.getByText(s.roles));
+    fireEvent.click(utils.getByText(s.globalContext));
     fireEvent.click(await utils.findByText(s.customName));
     await utils.findByText(s.edit);
     await openHistory(utils, "global_context");

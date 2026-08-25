@@ -1346,6 +1346,9 @@ export const en: Dict = {
   settings: {
     title: "Settings",
     software: "System update & backup",
+    // Global context (T-a241): the boot / lifecycle documents are their own
+    // Settings section now, no longer inside the role journal.
+    globalContext: "Global context",
     roles: "Role journal",
     params: "Parameters",
     // ── theme management (T-16a1 P3b): moved here from the profile dropdown ──

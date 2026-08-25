@@ -1,4 +1,4 @@
-// 設定 › 角色誌 › 啟動程序 is an INDEX of two documents, one row each, and this
+// 設定 › 全域情境 › 啟動程序 is an INDEX of two documents, one row each, and this
 // pins the state half of that: the index carries NO document body, and pressing
 // a row lands on that runtime's page ALONE (T-bac4).
 //
@@ -33,7 +33,7 @@ async function openBootIndex() {
       <SettingsPage />
     </I18nProvider>
   );
-  fireEvent.click(utils.getByText(s.roles));
+  fireEvent.click(utils.getByText(s.globalContext));
   await utils.findByText(s.systemName);
   fireEvent.click(utils.getByText(s.bootName));
   await utils.findByTestId("boot-entry-claude");
@@ -111,9 +111,9 @@ describe("SettingsPage · 啟動程序 index", () => {
     fireEvent.click(getByTestId("boot-entry-codex"));
     await findByTestId("doc-card-edit");
 
-    // The crumb trail is 設定 › 角色誌 › 啟動程序; the last crumb returns to the
+    // The crumb trail is 設定 › 全域情境 › 啟動程序; the last crumb returns to the
     // index. Without it a reader who opened one runtime could only reach the
-    // other by going out to 角色誌 and back in.
+    // other by going out to 全域情境 and back in.
     const crumbs = getAllByText(s.bootName);
     fireEvent.click(crumbs[0]);
     await findByTestId("boot-entry-claude");
@@ -154,7 +154,7 @@ describe("SettingsPage · 啟動程序 index", () => {
         <SettingsPage />
       </I18nProvider>
     );
-    fireEvent.click(utils.getByText(s.roles));
+    fireEvent.click(utils.getByText(s.globalContext));
     await utils.findByText(s.systemName);
     fireEvent.click(utils.getByText(s.systemName));
 

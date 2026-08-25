@@ -1402,6 +1402,9 @@ export const zh = {
     title: "設定",
     // landing entries
     software: "系統更新與備份",
+    // 全域情境 (T-a241) — 事件程序文件那一區從「角色誌」抽出來，成為〈設定〉底下
+    // 自己一塊，排在「系統更新與備份」與「角色誌」之間。角色誌只剩角色定義。
+    globalContext: "全域情境",
     roles: "角色誌",
     params: "參數調整",
     // ── 主題管理 (T-16a1 P3b): moved here from the profile dropdown ──

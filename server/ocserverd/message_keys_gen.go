@@ -754,6 +754,7 @@ var messageKeys = map[string]bool{
 	"settings.doneEdit":                                true,
 	"settings.edit":                                    true,
 	"settings.editorPlaceholder":                       true,
+	"settings.globalContext":                           true,
 	"settings.globalSection":                           true,
 	"settings.handover":                                true,
 	"settings.handoverSub":                             true,

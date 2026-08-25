@@ -249,7 +249,7 @@ describe("版本紀錄 · the list is a picker, the reader fetches (T-1170)", ()
     const getRevision = vi.spyOn(mockApi, "getDocumentRevision");
 
     const utils = openSettings();
-    fireEvent.click(utils.getByText(s.roles));
+    fireEvent.click(utils.getByText(s.globalContext));
     await utils.findByText(s.systemName);
     fireEvent.click(utils.getByText(s.customName));
     fireEvent.click(await utils.findByTestId("doc-card-edit"));
@@ -303,7 +303,7 @@ describe("版本紀錄 · the list is a picker, the reader fetches (T-1170)", ()
     );
 
     const utils = openSettings();
-    fireEvent.click(utils.getByText(s.roles));
+    fireEvent.click(utils.getByText(s.globalContext));
     await utils.findByText(s.systemName);
     fireEvent.click(utils.getByText(s.customName));
     fireEvent.click(await utils.findByTestId("doc-card-edit"));

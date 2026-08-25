@@ -1,4 +1,4 @@
-// 設定 › 角色誌 lists all ten boot/lifecycle documents (T-3201) under THREE
+// 設定 › 全域情境 lists all ten boot/lifecycle documents (T-3201) under THREE
 // group headings (定稿 2026-08-24), and the ones the server refuses every write
 // to are SHOWN without an editor.
 //
@@ -25,7 +25,7 @@ async function openRolesLog() {
       <SettingsPage />
     </I18nProvider>
   );
-  fireEvent.click(utils.getByText(s.roles));
+  fireEvent.click(utils.getByText(s.globalContext));
   await utils.findByText(s.systemName);
   return utils;
 }
