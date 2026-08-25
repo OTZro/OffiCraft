@@ -545,6 +545,16 @@ elif what == "on-shape":
     else:
         print("ok")
 
+elif what == "job-permissions":
+    # The publishing job's OWN permissions block, whole and sorted. A job-level
+    # block REPLACES the set wholesale, so what matters is the complete map, not
+    # whether some key is present somewhere in it.
+    perms = ((jobs.get(os.environ["JOB"]) or {}).get("permissions")) or {}
+    if not isinstance(perms, dict):
+        print("not-a-mapping:%r" % (perms,))
+    else:
+        print(",".join("%s=%s" % (k, perms[k]) for k in sorted(perms)))
+
 elif what == "write-holders":
     # Every job whose own permissions grant contents: write, plus the workflow
     # default. The answer must be exactly this one job.
@@ -1208,6 +1218,36 @@ else
     "missing=- extra=-" "$(printf '%s\n' "$ROLES_OUT" | sed -n 's/^NEEDSDIFF://p')"
 fi
 
+# ── W1b: bin/release's required-job list equals the declared gate set ───────
+# T-7e6c moved the release gate off "run bin/ci.sh again on the runner" and onto
+# "read the conclusions of THIS commit's GitHub Actions round". That gives
+# bin/release a list of job names it requires, and a list of names is exactly the
+# kind of thing that rots: rename a job, add a gate, drop macos-e2e from `needs`,
+# and the release command goes on demanding — or silently stops demanding — a set
+# that no longer matches the workflow. Nothing else in the tree compares the two.
+#
+# THIS IS A DRIFT CHECK, NOT THE GATE'S BEHAVIOURAL COVER. What the release
+# command DOES with that list (refuse an absent job, refuse a non-"success"
+# conclusion, refuse a round bound to another commit) is asserted by driving the
+# real command in bin/tests/release-guard.sh section G. This case only pins that
+# the two declarations still name the same eleven jobs, in both directions.
+#
+# Read out of bin/release as text on purpose: it is a shell here-string of names,
+# and sourcing bin/release to read the variable would drag the whole script's
+# `set -euo pipefail` and dispatch guard into this guard for one string.
+REQ_JOBS="$(sed -n '/^REQUIRED_CI_JOBS="/,/"$/p' "$ROOT/bin/release" \
+  | sed -e 's/^REQUIRED_CI_JOBS="//' -e 's/"$//' | grep -c . || true)"
+RELEASE_JOBS="$(sed -n '/^REQUIRED_CI_JOBS="/,/"$/p' "$ROOT/bin/release" \
+  | sed -e 's/^REQUIRED_CI_JOBS="//' -e 's/"$//' | grep . | LC_ALL=C sort | tr '\n' ',' | sed 's/,$//')"
+if [[ -n "$ROLE_PROBLEMS" ]]; then
+  bad "W1b bin/release's REQUIRED_CI_JOBS equals the declared gate set — NOT CHECKED, because the job roles could not be established (see W1r). This is not a pass."
+elif [[ "$REQ_JOBS" == "0" ]]; then
+  bad "W1b could not read REQUIRED_CI_JOBS out of bin/release at all — the release gate's required-job list is then unpinned, and a rename or a dropped job would go unnoticed."
+else
+  check "W1b bin/release's REQUIRED_CI_JOBS is EXACTLY the declared gate set (drop macos-e2e from either side and this reddens)" \
+    "$(printf '%s\n' "$ROLES_OUT" | sed -n 's/^GATES://p')" "$RELEASE_JOBS"
+fi
+
 # ── W2: the trigger condition is EXACTLY the canonical one ─────────────────
 # Not "both halves are mentioned somewhere in it" — see the note in the `if-raw`
 # query for the mutant that walked through that. One authority, exact comparison,
@@ -1249,6 +1289,28 @@ check "W7 the workflow's pinned \`on:\` triggers are unchanged and no unlisted t
 # ── W3: the elevated permission is scoped to this job ──────────────────────
 check "W3 contents:write is held by $JOB ALONE and the workflow default stays read" \
   "jobs=$JOB default=read" "$(q write-holders)"
+
+# ── W3b: the publishing job's permission set is EXACTLY these two ──────────
+# A job-level `permissions:` block REPLACES the set wholesale — every key not
+# listed is `none` for that job, whatever the workflow default says. So this is
+# an exact comparison of the whole map, not a "contains" test, and BOTH keys are
+# load-bearing in different directions:
+#
+#   • contents: write — the release cannot be created without it. Its blast
+#     radius is why W3 above pins that no OTHER job holds it.
+#   • actions:  read  — bin/release's CI gate reads THIS run's own job
+#     conclusions from /actions/runs/<id> and .../jobs, and authenticates that
+#     read with the job's token. Drop this key and the token is rejected, the
+#     gate fails CLOSED, and NO beta can be published at all. That failure is
+#     loud but total, and nothing else in the tree would have said a word: W3
+#     only ever looked at `contents`, so `actions: read` could be deleted with
+#     the whole suite staying green. This line is what makes that deletion red.
+#
+# Exact, and written out rather than derived: adding a third permission to the
+# one job that can write to this repo is a decision, and editing this line is the
+# review it should get.
+check "W3b $JOB's permission block is EXACTLY \`actions: read\` + \`contents: write\` (a job-level block replaces the set wholesale; dropping actions:read fails the release gate closed and publishes nothing)" \
+  "actions=read,contents=write" "$(q job-permissions)"
 
 # ── W4: GA is never automated ──────────────────────────────────────────────
 # Scanned as TEXT over every workflow file, comments included, rather than
