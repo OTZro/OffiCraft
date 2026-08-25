@@ -1485,7 +1485,7 @@ export const en: Dict = {
     bootDocSaveConfirmSystem:
       "Save this system-interaction document? Every agent that boots after the save reads this content.",
     bootDocSaveConfirmOffboard:
-      "Save this Stop document? Every session collected after the save reads this content, with nobody online to ask — a recycle leaves it a few minutes, an offboard waits on you indefinitely. It has to be finishable under both.",
+      "Save this Stop document? Every session collected after the save reads this content, with nobody online to ask — and NOTHING on this path is counting: a plain stop, a refocus, a machine or model change, a token about to expire, the first context threshold all wait on the agent's own report. The one countdown lives in the Accelerated stop document, not this one. So this text has to be finishable with no clock on it.",
     bootDocSaveConfirmAction: "Save",
     // The click-to-open heading of a stacked document (T-6278). Both boot
     // sequences start closed so the page shows both at once; the label is on
