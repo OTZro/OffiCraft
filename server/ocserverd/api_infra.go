@@ -658,8 +658,8 @@ func (s *apiServer) clearSessionBootTS(id string) {
 		//
 		// The guard-OFF branch is REACHABLE, not theoretical: the value is
 		// settings-driven and read from the DB at startup, so the default is a
-		// default and not a guarantee. (The owner spot-checked one live
-		// deployment's settings while this was written and found no row for the
+		// default and not a guarantee. (A developer spot-check of one live
+		// deployment's settings at the time of writing found no row for the
 		// key, i.e. that site was running the default — one site at one moment,
 		// which is not evidence that nobody ever turns it off, and says nothing
 		// about any other deployment.)

@@ -1601,10 +1601,33 @@ type ctxGateDiagState struct {
 // did to localise, and no amount of reading the code afterwards replaces a line
 // that says which gate was closed and on what numbers.
 //
-// The throttle key is the ACTOR, not the actor+gate pair. The question the line
-// answers is "what is this actor's gate state right now", and one actor drifting
-// between two closed gates would otherwise double its own budget — which is the
-// flooding the throttle exists to stop.
+// WHAT IS ACTUALLY KEYED, precisely — the two halves are different and both
+// matter. The MAP is keyed on the ACTOR: one cell, holding ONE timestamp and
+// the ONE gate that timestamp belongs to. That is the memory bound, and the
+// reason the prune in clearSessionBootTS is per actor. But the SILENCING test
+// compares the remembered gate for EQUALITY, so what decides whether a line is
+// suppressed is the actor+gate PAIR: same actor on the same gate is throttled,
+// same actor on a different gate speaks immediately (the rule set out under A
+// CHANGE OF GATE IS NOT THROTTLED below). The line answers "what is this
+// actor's gate state right now", and a change of gate IS a change of that
+// answer.
+//
+// That is NOT the same design as the one rejected further down. There, "keying
+// the window on actor+gate" means one INDEPENDENT window per pair, each with
+// its own timestamp, several alive at once — which really would multiply a
+// quiet actor's budget. Here there is only ever ONE window, and a change of
+// gate does not open a second one, it TAKES OVER the only one.
+//
+// 🔴 THIS PARAGRAPH USED TO SAY THE OPPOSITE, AND MEASUREMENT KILLED IT. It
+// claimed the key was "the ACTOR, not the actor+gate pair", and that keying it
+// that way was what stopped an actor drifting between two closed gates from
+// doubling its own budget — "the flooding the throttle exists to stop". Neither
+// half of that survives. The suppression test reads the pair, not the actor
+// alone; and a drifting actor is not held to double its budget, it is held to
+// NO budget — it speaks on every tick. The claim was not merely imprecise, it
+// named this design as the defence against exactly the case the design does not
+// defend against. The flapping bound below is the measurement that settles it,
+// and it and this paragraph are ONE statement, not two competing ones.
 //
 // 🔴 THREE OF THIS PASS'S SEVEN QUIET PATHS ARE STILL SILENT, and the reason
 // originally given for that here was WRONG. It said their state "is readable on
