@@ -1652,7 +1652,8 @@ HAPPY: dict[str, Happy] = {
             lambda d: d["deduped"] is False
             and d["task"]["status"] == "not_started"
             and d["task"]["executor_id"] == ctx.agent.member_id
-            and d["task"]["task_no"].startswith("T-"),
+            # task_no IS the id (T-5291) — was a "T-" prefixed projection.
+            and d["task"]["task_no"] == d["task"]["id"],
         ),
     ),
     "GET /api/tasks/count": Happy(

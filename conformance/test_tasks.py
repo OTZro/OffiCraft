@@ -149,7 +149,11 @@ def test_full_task_loop(client, owner_token, executor):
     task = created["task"]
     assert task["status"] == "not_started"
     assert task["executor_kind"] == "member"
-    assert task["task_no"].startswith("T-")
+    # task_no IS the id (T-5291, owner 2026-08-25) — it used to be a "T-xxxx"
+    # projection. Asserting equality rather than a prefix: the shape a client
+    # can rely on is "the number names the task", and a prefix check would pass
+    # for any projection that merely kept the first two characters.
+    assert task["task_no"] == task["id"]
     before = _open_count(client, owner_token)
 
     # Plan: a plain step, a gate, a closing step. The task status is DERIVED —
@@ -821,7 +825,7 @@ def test_status_set_returns_exactly_those_states(client, owner_token, executor):
 def test_dep_tasks_names_a_blocker_the_status_filter_excluded(
         client, owner_token, executor):
     """Every light row carries dep_tasks: each dep resolved SERVER-SIDE to the
-    task_no/title/status the 「等 T-xxxx <標題>」 row prints. The point is the
+    task_no/title/status the 「等 <task_no> <標題>」 row prints. The point is the
     combination — the blocker is DONE and the request asked only for in_progress,
     so the blocker is not in the response, yet it is still named. Before this the
     client had to pull the whole closed population to name it (and did, on every
