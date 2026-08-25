@@ -234,3 +234,134 @@ func countStops(t *testing.T, frames []wardenCmd) int {
 	}
 	return n
 }
+
+// 🔴 THE RE-READ BETWEEN THE TWO TICK PASSES (T-72dd, outsource_sched.go).
+//
+// The ACTIVE branch runs autoHandoverWorker and then the shared FSM. The first
+// pass can CLOSE the epoch — that is the loop-break, which fires the moment a
+// respawn boots (boot_ts > refocus_since). The row handed to the FSM must
+// therefore be re-read, because the snapshot the tick loop is iterating still
+// says refocus_since > 0 ∧ stopped_since > 0 — and to decideUp's recycle arm
+// that reads as "a collected wind-down, still online, collect it". The session
+// that is online at that moment is the REPLACEMENT.
+//
+// So a stale read here is not a tidiness问题: it is a kill aimed at a healthy
+// agent that booted seconds ago. This test is the only thing standing on that
+// line — feeding the FSM the stale snapshot instead makes it go red.
+func TestTickReReadsRowBeforeFSM_SoTheLoopBreakIsNotOverruled_T72dd(t *testing.T) {
+	s := newWorkerTestServer(t)
+	connectWarden(t, s, ServerSelfHost)
+	now := nowSecs()
+
+	s.outsourceMu.Lock()
+	w := fsmWorkerFixture(t, s, "ow-rr", WorkerStatusActive, now-50_000)
+	w.DesiredState = DesiredStateOnline
+	// A wind-down that was already COLLECTED: the epoch is open and the agent's
+	// dump-done is latched. On its own that is precisely the recycle arm's
+	// collect condition.
+	w.RefocusSince = now - 500
+	w.RefocusOp = refocusOpRefocus
+	w.StoppedSince = now - 400
+	putWorkerFixture(t, s, w)
+	// …and the respawn HAS landed: a session booted AFTER the epoch was stamped.
+	// This is what makes the loop-break fire on the first pass.
+	s.gauge.Set("ow-rr", map[string]any{"boot_ts": now - 100})
+	s.workerSpawnTarget["ow-rr"] = ServerSelfHost
+	s.outsourceMu.Unlock()
+
+	// The replacement session is ONLINE — the thing a stale read would kill.
+	if _, err := s.hub.Connect("ow-rr", ""); err != nil {
+		t.Fatalf("connect the replacement session: %v", err)
+	}
+	s.hub.DrainWardenCommands(ServerSelfHost)
+
+	s.runOutsourceTick(now)
+
+	// THE HARM FIRST, so a regression names the danger rather than a symptom.
+	frames := s.hub.DrainWardenCommands(ServerSelfHost)
+	stops := countStops(t, frames)
+	got, err := s.dal.GetOutsourceWorker("ow-rr")
+	if err != nil || got == nil {
+		t.Fatalf("read back: %v", err)
+	}
+	t.Logf("after the tick: %d frame(s), %d stop(s); online=%v refocus_since=%v",
+		len(frames), stops, s.hub.IsOnline("ow-rr"), got.RefocusSince)
+	if stops != 0 {
+		t.Fatalf("the FSM was handed a STALE row and collected an epoch the "+
+			"loop-break had just closed — that kill lands on the REPLACEMENT "+
+			"session, which is alive and seconds old; got %d stop(s)", stops)
+	}
+	if !s.hub.IsOnline("ow-rr") {
+		t.Fatal("the replacement session must still be up")
+	}
+	// …and the second half of the same damage: collecting off the stale row
+	// writes that row back, so the epoch the loop-break just closed REAPPEARS and
+	// the worker is stuck winding down forever.
+	if got.RefocusSince != 0 {
+		t.Fatalf("the closed epoch must stay closed — a collect off the stale "+
+			"snapshot writes it back onto the row, got since=%v", got.RefocusSince)
+	}
+}
+
+// 🔴 THE STOP ANCHOR IS SCOPED TO ONE EPOCH, NOT TO THE WORKER (T-72dd).
+//
+// decideUp's recycle arm de-dupes on `st.LastCommand == stop` + StopRetry. That
+// is right WITHIN one wind-down (a STOP that did not land is re-sent, never
+// doubled) and wrong ACROSS two: a worker handed over twice inside the retry
+// window would have its SECOND collect swallowed by the FIRST one's anchor —
+// a genuinely different wind-down, with its own 預告 already fanned at the
+// agent, that nothing ever collects.
+//
+// This is asserted here by NAME because the only other test that covers it
+// (TestRefocusWorker_BanksCostAcrossRespawn) says nothing about epochs in its
+// title, so a future edit would read its failure as a cost-accounting problem.
+func TestSecondHandoverIsNotSwallowedByTheFirstsStopAnchor_T72dd(t *testing.T) {
+	s := newWorkerTestServer(t)
+	connectWarden(t, s, ServerSelfHost)
+	now := nowSecs()
+
+	collectOnce := func(label string, stampAt float64) int {
+		s.outsourceMu.Lock()
+		w, err := s.dal.GetOutsourceWorker("ow-2e")
+		if err != nil || w == nil {
+			t.Fatalf("%s: read worker: %v", label, err)
+		}
+		w.RefocusSince = stampAt
+		w.RefocusOp = refocusOpRefocus // clockless — collected by the dump alone
+		w.StoppedSince = stampAt + 1   // the agent reported done
+		if err := s.dal.PutOutsourceWorker(*w); err != nil {
+			t.Fatalf("%s: stamp: %v", label, err)
+		}
+		// boot_ts stays BEFORE the epoch so the loop-break cannot close it first.
+		s.gauge.Set("ow-2e", map[string]any{"boot_ts": now - 50_000})
+		s.workerSpawnTarget["ow-2e"] = ServerSelfHost
+		s.hub.DrainWardenCommands(ServerSelfHost)
+		fresh, _ := s.dal.GetOutsourceWorker("ow-2e")
+		s.reconcileWorkerLiveness(*fresh, stampAt+2)
+		s.outsourceMu.Unlock()
+		return countStops(t, s.hub.DrainWardenCommands(ServerSelfHost))
+	}
+
+	s.outsourceMu.Lock()
+	w := fsmWorkerFixture(t, s, "ow-2e", WorkerStatusActive, now-50_000)
+	w.DesiredState = DesiredStateOnline
+	putWorkerFixture(t, s, w)
+	s.outsourceMu.Unlock()
+	if _, err := s.hub.Connect("ow-2e", ""); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	if got := collectOnce("1st handover", now); got != 1 {
+		t.Fatalf("the first handover must be collected once, got %d stop(s)", got)
+	}
+	// A SECOND handover, stamped strictly AFTER the first collect's stop (as any
+	// real one is) but well inside StopRetry of it — the window in which the
+	// stale anchor would swallow it.
+	second := collectOnce("2nd handover", now+5)
+	t.Logf("second handover inside stop_retry: %d stop(s)", second)
+	if second != 1 {
+		t.Fatalf("the second handover is its OWN epoch and must be collected on "+
+			"its own — the first epoch's stop anchor must not swallow it; "+
+			"got %d stop(s)", second)
+	}
+}
