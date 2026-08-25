@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -1570,6 +1571,87 @@ func shouldNoticeRefocus(
 	return cfg.NoticePct > 0 && pct != nil && *pct >= float64(cfg.NoticePct)
 }
 
+// ── the context-gate diagnostic (T-72dd 補觀測) ───────────────────────────────
+
+// ctxGateDiagThrottleSecs bounds the gate diagnostic to ONE line per ACTOR per
+// five minutes.
+//
+// 🔴 THE THROTTLE IS NOT POLISH, IT IS THE FEATURE. The pass runs on the 30 s
+// reconcile/outsource cadence and every live actor takes one of these gates on
+// almost every tick, so an unthrottled line is not observability — it is the
+// 1.26-million-line serve.log this ticket was diagnosed inside, and it would
+// bury the very line it exists to surface. Five minutes is the owner's number.
+const ctxGateDiagThrottleSecs = 300.0
+
+// noteContextGateSkip emits the ONE line that tells 「這一輪跑了，這個 actor 被
+// 某道 gate 擋掉」 apart from 「這個 actor 根本沒被看過」.
+//
+// 🔴 THIS IS THE WHOLE POINT OF THE TICKET'S LAST STEP. Every quiet path out of
+// stampContextHighRecycle was a bare `continue`, so "the pass ran and decided
+// nothing" and "the pass never reached this actor at all" produced byte-identical
+// logs — nothing. That ambiguity is why the original symptom took as long as it
+// did to localise, and no amount of reading the code afterwards replaces a line
+// that says which gate was closed and on what numbers.
+//
+// The throttle key is the ACTOR, not the actor+gate pair. The question the line
+// answers is "what is this actor's gate state right now", and one actor drifting
+// between two closed gates would otherwise double its own budget — which is the
+// flooding the throttle exists to stop.
+//
+// ⚠️ PURELY OBSERVATIONAL. It reads the gauge, asks the hub, and writes stderr.
+// It must never alter what the pass decides, and it is called only on paths that
+// have ALREADY decided to skip.
+//
+// Known bound: the throttle map is keyed by actor id and never pruned, so it
+// holds one float per actor the server has ever gated — the same shape (and the
+// same order of magnitude) as the reconcile store's own per-member bookkeeping.
+func (s *apiServer) noteContextGateSkip(id, gate string, record map[string]any, now float64) {
+	s.ctxGateDiagMu.Lock()
+	if last, seen := s.ctxGateDiagAt[id]; seen && now-last < ctxGateDiagThrottleSecs {
+		s.ctxGateDiagMu.Unlock()
+		return
+	}
+	if s.ctxGateDiagAt == nil {
+		s.ctxGateDiagAt = map[string]float64{}
+	}
+	s.ctxGateDiagAt[id] = now
+	s.ctxGateDiagMu.Unlock()
+	reconcileLog("recycle: gate skip %s gate=%s pct=%s pct_ts=%s boot_ts=%s "+
+		"boot_secs=%s online=%t", id, gate,
+		gaugeNumForDiag(record, "context_pct"),
+		gaugeNumForDiag(record, "context_pct_ts"),
+		gaugeNumForDiag(record, "boot_ts"),
+		secsSinceBootForDiag(record, now),
+		s.hub.IsOnline(id))
+}
+
+// gaugeNumForDiag renders one numeric gauge key for the diagnostic line, or the
+// literal "-" when the key is absent / non-numeric / the gauge entry is nil.
+// "-" is not decoration: WHICH of the five inputs is missing is most of what
+// the line is for (a missing context_pct_ts and a stale one fail the same gate
+// but mean completely different things).
+func gaugeNumForDiag(record map[string]any, key string) string {
+	if record == nil {
+		return "-"
+	}
+	v, ok := asNumber(record[key])
+	if !ok {
+		return "-"
+	}
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// secsSinceBootForDiag renders the boot-storm loop-guard's own input, through
+// gaugeSecsSinceBoot so the number on the line is the number the guard saw —
+// "-" when there is no usable boot_ts (the guard's fail-open case).
+func secsSinceBootForDiag(record map[string]any, now float64) string {
+	secs := gaugeSecsSinceBoot(record, now)
+	if secs == nil {
+		return "-"
+	}
+	return strconv.FormatFloat(*secs, 'f', 1, 64)
+}
+
 // stampContextHighRecycle auto-stamps refocus_since on any candidate whose
 // runtime-specific handover signal is actionable — the
 // automatic counterpart of the manual refocus button, reusing the SSE band's
@@ -1603,6 +1685,11 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 		case shouldNoticeRefocus(m.Runtime, record, ctxhigh, codexNoticeRound, s.codexCompactionThreshold):
 			op = refocusOpContextNotice
 		default:
+			// GATE 1/3 (T-72dd 補觀測): no actionable signal. This is the gate
+			// that swallows a STALE pct — actionableContextPct returns nil when
+			// context_pct_ts <= boot_ts — which is exactly the case the cockpit
+			// still renders a number for (foldActorRuntime reads the raw key).
+			s.noteContextGateSkip(m.ID, "no-actionable-pct", record, now)
 			continue
 		}
 		// 🔴 AN AGENT THAT HAS ALREADY SAID 「我收完了」 IS NOT ASKED AGAIN.
@@ -1652,10 +1739,16 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 			promoting = true
 		}
 		if bootStormTripped(gaugeSecsSinceBoot(record, now), ctxhigh.MinBootSecs) {
-			continue // fresh boot already over the line → suppress (loop-guard)
+			// GATE 2/3 (T-72dd 補觀測) — fresh boot already over the line →
+			// suppress (loop-guard).
+			s.noteContextGateSkip(m.ID, "boot-storm", record, now)
+			continue
 		}
 		if !s.hub.IsOnline(m.ID) {
-			continue // only-online (symmetric with the manual refocus gate)
+			// GATE 3/3 (T-72dd 補觀測) — only-online (symmetric with the manual
+			// refocus gate).
+			s.noteContextGateSkip(m.ID, "offline", record, now)
+			continue
 		}
 		// …and only when the server still WANTS it online (T-ccc7). hub.IsOnline
 		// is a live-socket fact, not an intent: a member deactivated seconds ago

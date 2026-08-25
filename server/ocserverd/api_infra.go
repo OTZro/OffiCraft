@@ -615,6 +615,28 @@ func (s *apiServer) clearSessionBootTS(id string) {
 		// it over a refocus would immediately recycle the fresh replacement
 		// session.
 		delete(entry, "compaction_count")
+		// …and the session's CONTEXT REPORT, both halves (T-72dd).
+		//
+		// 🔴 WHY, AND ONLY WHY. This is NOT known to be the cause of the
+		// silent no-op this ticket chased — that question is neither confirmed
+		// nor excluded. The reason it changes is narrower and stands on its
+		// own: TWO READERS OF THIS KEY DISAGREE. actionableContextPct (the
+		// gate/threshold reader) refuses a pct whose context_pct_ts is not
+		// strictly newer than boot_ts, and boot_ts is what the line above just
+		// deleted; foldActorRuntime (the cockpit / get_monitoring reader, in
+		// wire.go) takes context_pct RAW with no such test. Leaving the pair
+		// standing across a boundary therefore leaves the panel showing a
+		// number that no threshold in the server will ever act on — the
+		// displayed percentage and the judged percentage are two different
+		// numbers, which is wrong whatever else is or is not broken.
+		//
+		// Dropping BOTH halves is what makes them agree: the gate reader
+		// already answers "no number", and now the cockpit's honest dash says
+		// the same thing until the fresh session files its first report. It is
+		// the same rule compaction_count is deleted under one line up — this is
+		// the OLD session's reading, and it does not describe the new one.
+		delete(entry, "context_pct")
+		delete(entry, "context_pct_ts")
 		s.gauge.Set(id, entry)
 	}
 	// The advance-notice claim (T-c382) is keyed on the anchor being dropped

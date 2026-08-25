@@ -144,7 +144,15 @@ type apiServer struct {
 	// gate now reads and writes SQLite on a cache miss, and holding the shared
 	// settings lock across that I/O would stall every unrelated settings reader
 	// on a database round-trip. This lock protects one map and nothing else.
-	handoverNoticedMu        sync.Mutex
+	handoverNoticedMu sync.Mutex
+	// ctxGateDiagAt records, per actor id, WHEN stampContextHighRecycle last
+	// emitted its gate diagnostic for that actor — the throttle behind
+	// noteContextGateSkip (T-72dd 補觀測). Guarded by ctxGateDiagMu below.
+	ctxGateDiagAt map[string]float64
+	// ctxGateDiagMu guards the map above, and it is its OWN mutex for the same
+	// reason handoverNoticedMu is: it protects one map on the reconcile tick's
+	// hot path and must never make an unrelated reader wait.
+	ctxGateDiagMu            sync.Mutex
 	monitoringRefreshSeconds int
 	// acceleratedGraceSecs is the live 加速停止 grace in seconds
 	// (stop.accelerated_grace_secs; T-ed79), guarded by settingsMu like every
