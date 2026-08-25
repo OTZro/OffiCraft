@@ -44,7 +44,7 @@ useTasks 把 statusFilter 轉成重複的 ?statuses=；執行者與類型篩選�
 
 useOutsourceWorkers 只讀 /api/outsource-workers 與 settings，並訂 outsource_worker、task、chat、chat_read；不可加回 tasks 或 task-manuals 全歷史 join。server DTO 已帶 task_no、created_ts、type key/name。
 
-外包列顯示 O- 代號、task type 加真實 presence 點、可點的 T- 任務代號與 unread badge；不顯模型、標題、識別鍵或狀態字。排序以 task created_ts 為準，終態 worker 從 live list 消失。聊天使用 ow- id；header 可用 synthetic member，但不要在 chat header 重複 rail presence。上限 -1 是無限、0 是暫停指派；settings 未載入時只顯目前數，不捏上限。
+外包列顯示 O- 代號、task type 加真實 presence 點、可點的任務編號與 unread badge；不顯模型、標題或狀態字。任務編號就是 task id 本身（T-5291 起不再截成 T-xxxx 短碼），所以「不顯識別鍵」那條**不適用於它**——那串就是要給人抄走貼回去用的。排序以 task created_ts 為準，終態 worker 從 live list 消失。聊天使用 ow- id；header 可用 synthetic member，但不要在 chat header 重複 rail presence。上限 -1 是無限、0 是暫停指派；settings 未載入時只顯目前數，不捏上限。
 
 ## 任務手冊
 
