@@ -770,13 +770,7 @@ func (s *apiServer) reconcileWorkerLiveness(w OutsourceWorker, now float64) {
 	if !ok {
 		st = newReconcileState()
 	}
-	obs := memberObservation{
-		MemberID:     w.ID,
-		Desired:      DesiredStateOnline,
-		Online:       s.hub.IsOnline(w.ID),
-		LastOpKind:   canonicalWorkerLastOp(w.LastOp),
-		LastOpReason: w.LastOpReason,
-	}
+	obs := workerObservation(w, s.hub.IsOnline(w.ID))
 	decision := reconcileDecide(obs, st, s.reconcileConfigLive(), now)
 	switch decision.Command {
 	case reconcileCmdStart:
@@ -941,6 +935,50 @@ func undeliveredWorkerStart(h *Hub, workerID string, spawnAt float64) bool {
 	}
 	note, lost := h.UndeliveredCommandSince(workerID, spawnAt)
 	return lost && note.Verb == reconcileCmdStart
+}
+
+// workerObservation projects an outsource worker row onto the SHARED member
+// reconcile input (memberObservation) — the whole of what reconcileWorkerLiveness
+// lets the staff FSM see about a worker.
+//
+// 🔴 IT USED TO LIE, and that lie is the bug T-72dd exists to remove. Desired was
+// hard-wired to online, and RefocusSince / RefocusOp / AgentStopped — the exact
+// three fields decideUp's RECYCLE arm reads — were never filled at all. So the
+// shared 收口 T-ed79 gave staff was structurally unreachable for a worker: the
+// FSM was asked the question with the answer deleted, and answered "online:
+// converged" for a worker whose agent had already filed its dump-done. The
+// handover then waited for a collector that could not exist.
+//
+// The four fields now come off the row, which is legitimate because the row IS a
+// member row (memberFromWorker) and carries every one of them durably.
+//
+// What is STILL deliberately masked, and why:
+//
+//   - TargetMachine / RunningMachine stay zero, so decideUp's RELOCATION arm
+//     stays out of reach. 改機器 for a worker is owned by relocateWorkerNow /
+//     the owner-op handover funnel, which stamps a refocus epoch and is collected
+//     by the arm ABOVE it. Feeding the machine pair too would give the same move
+//     two collectors racing each other.
+//   - StoppingSince stays zero: it is read by decideDown's 加速停止 arm only, and
+//     the worker 加速停止 verb is a separate ticket (T-72dd step 3). Feeding it
+//     here would open a KILL path in the same commit that opens the read path,
+//     which is precisely what this commit is scoped not to do.
+func workerObservation(w OutsourceWorker, online bool) memberObservation {
+	return memberObservation{
+		MemberID: w.ID,
+		// The row's real intent, not a wired-open constant. Both tick call sites
+		// already refuse to reconcile an offline-desired worker
+		// (outsource_sched.go), so this changes nothing they can reach today; it
+		// stops the FSM being TOLD something false, which is what makes every
+		// other field below safe to trust.
+		Desired:      w.DesiredState,
+		Online:       online,
+		RefocusSince: w.RefocusSince,
+		RefocusOp:    w.RefocusOp,
+		AgentStopped: w.StoppedSince > 0.0,
+		LastOpKind:   canonicalWorkerLastOp(w.LastOp),
+		LastOpReason: w.LastOpReason,
+	}
 }
 
 // canonicalWorkerLastOp folds a worker row's last_op verb onto the reconcile
