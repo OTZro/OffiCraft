@@ -1071,6 +1071,20 @@ func replanRefusalProblems(msg string) []string {
 // round-2 rework (commit 74faaca, api_tasks_handoff.go). It is the negative
 // sample: everything replanRefusalProblems claims to catch must be caught here,
 // or the checker is decoration.
+//
+// 🔴 DO NOT "UPDATE" IT WHEN THE LIVE MESSAGE CHANGES — including its `(T-x)`
+// preamble, which T-5291 removed from the live text and deliberately left here.
+// The reason is what the sentence above already says: this is a DATED VERBATIM
+// QUOTE. Edit it and it is no longer the thing it claims to be, and the test
+// below proves nothing about the rework it is named after.
+//
+// The reason is NOT "editing it would gut TestReplanRefusalCheckerRejectsThe-
+// PreReworkWording" — an earlier T-5291 note claimed that and it is false,
+// measured: replanRefusalProblems never reads the preamble at all (it checks
+// submit_plan / update_step_status / create_task / the three handoff constants /
+// their order / the 403 caveat). Changing `(T-x)` here would leave that test
+// green. It stays frozen because it is a quotation, not because anything would
+// break.
 const historicalReplanRefusal = "task 't-x' (T-x) was created by 'm-a' but " +
 	"executed by 'm-b': this plan leaves EVERY step done, which CLOSES the task, " +
 	"and a closed task can never be replanned. A plan carries no handoff " +
@@ -1417,7 +1431,7 @@ func TestSubmitPlanCannotCloseAroundTheGateByFreezingASettledCardStep(t *testing
 	}
 }
 
-// ── the 422 preamble says the task's identity ONCE ────────────────────────────
+// ── the 422 preamble carries the FULL task id exactly once ───────────────────
 //
 // T-5291 round 2. The preamble was written when TaskNo was a projection:
 // `task '<id>' (<TaskNo(id)>)` gave the caller the machine key AND the short
@@ -1430,10 +1444,24 @@ func TestSubmitPlanCannotCloseAroundTheGateByFreezingASettledCardStep(t *testing
 // user-facing contract of the gate". A contract that repeats itself teaches the
 // reader to skim it.
 //
-// The pin is on the COUNT, not on the wording: any future preamble is free to
-// phrase the identity however it likes, but naming it twice reddens. Both doors
-// are checked because they share the preamble and only the tail differs — a
-// change that fixes one and not the other is exactly the drift this catches.
+// The pin is on a COUNT, not on the wording — a future preamble may phrase the
+// identity however it likes. Both doors are checked because they share the
+// preamble and only the tail differs; a change that fixes one and not the other
+// is exactly the drift this catches.
+//
+// 🔴 THE LIMIT OF THIS PIN, measured rather than assumed. It counts occurrences
+// of the FULL id string. A preamble that names the task once in full and once in
+// some RE-DERIVED shorter form is NOT counted and stays green — review built the
+// case: `TaskNo(t.ID)[:6]` yields
+//
+//	task 't-5291aabbccdd' (t-5291) was created by …
+//
+// i.e. the machine-key-plus-short-code double naming this ticket removed, with
+// this test still passing. Left narrow deliberately: enumerating "every form the
+// identity could be re-derived into" would be a second copy of the display rule,
+// which is the failure mode T-5291 exists to end. So the honest statement of
+// what this buys is the function name — the full id appears exactly once — and
+// nothing broader. Judging a NEW preamble is a reviewer's job.
 func TestGate422NamesTheTaskExactlyOnce(t *testing.T) {
 	const taskID = "t-5291aabbccdd"
 

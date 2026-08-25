@@ -111,11 +111,25 @@ const (
 // user-facing contract of the gate, so it names the ways out VERBATIM — a
 // fail-closed guard that does not tell you how to pass is just an outage.
 func handoffGateReason(t Task, door string) string {
-	// The task is named ONCE. This used to read `task '<id>' (<TaskNo(id)>)`,
-	// which was two different strings while TaskNo was the four-hex projection
-	// — the machine key plus the number on the card. T-5291 made TaskNo the id
-	// itself, so the parenthetical became the same string a second time. Pinned
-	// by TestGate422NamesTheTaskExactlyOnce.
+	// This used to read `task '<id>' (<TaskNo(id)>)`, which was two different
+	// strings while TaskNo was the four-hex projection — the machine key plus
+	// the number on the card. T-5291 made TaskNo the id itself, so the
+	// parenthetical became the same string a second time, in the message this
+	// file calls the whole user-facing contract of the gate. Removed.
+	//
+	// 🔴 WHAT IS ACTUALLY PINNED, exactly: TestGate422NamesTheTaskExactlyOnce
+	// counts occurrences of the FULL id and requires exactly one. That is a
+	// deliberately narrow pin and it is narrower than "named once" — review
+	// measured the gap: a preamble rebuilt as `TaskNo(t.ID)[:6]` prints
+	// `task 't-5291aabbccdd' (t-5291) …`, which is the machine-key-plus-short-
+	// code double naming this ticket just removed, and the test stays GREEN
+	// because the short form is not an occurrence of the full id.
+	//
+	// The pin is left narrow on purpose. Counting "any re-derived form of the
+	// identity" means enumerating the forms, which is a second, drifting copy of
+	// the display rule — the exact failure mode T-5291 exists to end. Whether a
+	// NEW preamble says the same thing twice is a reviewer's judgement; the test
+	// only guarantees the full id is not simply pasted in twice.
 	who := "task '" + t.ID + "' was created by '" +
 		t.CreatorID + "' but executed by '" + t.ExecutorID + "'"
 	if door == handoffDoorReplan {
