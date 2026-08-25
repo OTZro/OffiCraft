@@ -210,14 +210,34 @@ func TestSpecDoesNotReacquireTheRetiredTaskNoSentences(t *testing.T) {
 //	                         AGENT-AUTHORED recon / independent-review notes
 //	                         kept for provenance, beside the .png captures they
 //	                         describe. They are therefore NOT scanned, which is
-//	                         a real hole in the denominator — measured today
-//	                         (round 5) as an EMPTY one: all six blocklist
-//	                         phrases score 0 in them, and the words `task_no`,
-//	                         `taskno` and 任務編號 do not appear at all. If
-//	                         recon notes ever start discussing the field, this
-//	                         line is the one to delete. The same shape applies
-//	                         to dist/officraft/BUILD.md (tracked, hand-written,
-//	                         hidden behind the `dist` rule; also measured at 0).
+//	                         a real hole in the denominator — measured in round 5
+//	                         as an EMPTY one: EVERY phrase in
+//	                         retiredTaskNoSentences scores 0 in them, and the
+//	                         words `task_no`, `taskno` and 任務編號 do not
+//	                         appear at all. `dist` hides the same shape: 4
+//	                         tracked files, of which BUILD.md is hand-written
+//	                         prose (the other three are a binary and two hash
+//	                         files); also measured at 0. If a recon note or
+//	                         BUILD.md ever starts discussing the field, these
+//	                         two rules are the ones to delete.
+//
+//	                         🔴 That measurement was RE-RUN by a third party —
+//	                         neither the author of this comment nor the reviewer
+//	                         who prescribed it — against this commit. That is
+//	                         all it establishes: two hidden directories were
+//	                         clean on one day. It is not a standing guarantee,
+//	                         which is why the deletion condition is written out
+//	                         above rather than left to judgement.
+//
+//	                         🔴 Note what is NOT written here: a COUNT of the
+//	                         blocklist. The first draft of this comment said
+//	                         "all six" when the list already held seven, and it
+//	                         was wrong the day it was committed — see the ruling
+//	                         at the top of TestSpecDoesNotReacquire… : a count
+//	                         written into prose only goes stale, and a stale one
+//	                         is a second, contradictory account of the list. The
+//	                         list itself is the only place that knows its
+//	                         length.
 //	server/ocserverd/{docsdist,seedsdist,webdist,bindist}
 //	                         staging COPIES made by bin/build-*dist. Their
 //	                         sources — docs/guide/, seeds/, frontend/ — are
