@@ -24,23 +24,31 @@ const TOKEN =
 // T-c21e: the dep row now LEADS with the dep task's 狀態 badge, so that row got
 // one nowrap pill wider on a card that 1ea673e had just finished stopping from
 // bursting its container at 390px. The row is flex-nowrap and only
-// `.task-card__dep-title` may shrink (min-width: 0) — so badge + ⏱ + 「等 T-」 +
-// ↗ form a hard floor, and this fixture is what proves that floor still fits a
-// phone. 等我回覆 is TIED for the widest of the seven status labels (measured
+// `.task-card__dep-title` may shrink (min-width: 0) — so badge + ⏱ + 「等 <編號>」
+// + ↗ form a hard floor, and this fixture is what proves that floor still fits
+// a phone.
+//
+// T-5291 WIDENED THAT FLOOR, and this fixture had to follow. The number used to
+// be a four-hex short code ("T-fbcf"); it is now the whole task id
+// ("t-fbcf5291a019"), ~56px wider at this font size. While the fixtures still
+// carried four-hex numbers, the guard was measuring a dep row NARROWER than the
+// one production renders — i.e. it kept claiming to prove a floor it was no
+// longer measuring. The ids below are therefore full-length and `taskNo === id`
+// exactly as the server now sends it (domain.go TaskNo). 等我回覆 is TIED for the widest of the seven status labels (measured
 // 42.3px, level with 尚未執行 and 等待外部 — an earlier version of this comment
 // called it "the widest", which was a superlative nobody had measured; any of
 // the three stresses the floor equally). The title carries the unbreakable
 // token so the shrinking half is stressed at the same time.
 const DEP_TASK = mkTask({
-  id: "t-dep1",
-  taskNo: "T-dep1",
+  id: "t-de915291a018",
+  taskNo: "t-de915291a018",
   title: `等 member ${TOKEN} 遷移完成才能動`,
   status: "waiting_owner",
 });
 
 const LONG_TASK = mkTask({
-  id: "t-fbcf",
-  taskNo: "T-fbcf",
+  id: "t-fbcf5291a019",
+  taskNo: "t-fbcf5291a019",
   title: "外包/worker 子系統收斂",
   status: "waiting_external",
   deps: [DEP_TASK.id],

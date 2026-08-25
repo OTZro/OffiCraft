@@ -28,8 +28,8 @@ export function mkStep(over: Partial<TaskStepView>): TaskStepView {
 
 export function mkTask(over: Partial<TaskView>): TaskView {
   return {
-    id: "t-ad21",
-    taskNo: "T-ad21",
+    id: "t-ad215291a016",
+    taskNo: "t-ad215291a016",
     title: "進度條任務",
     typeKey: "",
     description: "",
@@ -89,8 +89,8 @@ export const LOCKED_REASSIGNING: TaskView = mkTask({
 // there. Since T-c514 this is the ONLY fixture carrying that always-stack
 // argument (the task-level WAITING_SHORT was removed with its block).
 export const STEP_WAITING_EXTERNAL: TaskView = mkTask({
-  id: "t-swx1",
-  taskNo: "T-swx1",
+  id: "t-5b715291a017",
+  taskNo: "t-5b715291a017",
   title: "步驟等待外部任務",
   status: "waiting_external",
   waitingReason: "等外部",

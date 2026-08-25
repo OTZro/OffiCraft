@@ -35,8 +35,8 @@ const LONG_NOTE = (n: number) =>
 // that at both widths (~776/820px scrollports).
 const makeTask = (i: number) =>
   mkTask({
-    id: `t-c${i}`,
-    taskNo: `T-c${i}`,
+    id: `t-c${i}ab5291a01`,
+    taskNo: `t-c${i}ab5291a01`,
     title: `第 ${i} 張任務卡:收合後畫面要停在這張`,
     status: "in_progress",
     description: "九個步驟,每一步都有一則備註。",

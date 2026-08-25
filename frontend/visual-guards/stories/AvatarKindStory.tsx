@@ -95,10 +95,10 @@ const worker: OutsourceWorkerView = {
   model: "Opus 4.6",
   effort: "high",
   status: "active",
-  taskId: "t-1",
+  taskId: "t-37385291a006",
   taskTitle: "外包任務",
   taskStatus: "in_progress",
-  taskNo: "T-3738",
+  taskNo: "t-37385291a006",
   taskTypeName: "OC 開發",
   presence: "online",
 };

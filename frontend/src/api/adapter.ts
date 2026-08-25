@@ -410,7 +410,12 @@ export interface TaskCountView {
 
 export interface TaskView {
   id: string;
-  /** Display number (e.g. "T-7d40") — presentation only, never a lookup key. */
+  /** The task NUMBER, which IS `id` (T-5291): the wire sends it and the card
+   * shows it verbatim, so what a human copies off the screen is exactly what
+   * `#tasks/<id>` and MCP `get_task(task_id)` accept. It used to be a four-hex
+   * projection ("T-7d40") that was display-only and could never be pasted
+   * back; that projection is gone. Kept as its own field because it is what
+   * the SERVER sends (`task_no`) — not because it differs from `id`. */
   taskNo: string;
   title: string;
   /** The task type / playbook key; "" ⇒ 自由代辦 (ad-hoc). */

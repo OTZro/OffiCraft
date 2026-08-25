@@ -51,8 +51,8 @@ export const SIX_COL_TABLE_MD = [
 ].join("\n");
 
 const SIX_COL_TASK = mkTask({
-  id: "t-e4ae-six-col",
-  taskNo: "T-e4ae",
+  id: "t-e4ae5291a002",
+  taskNo: "t-e4ae5291a002",
   title: "手機寬表格六欄 recon",
   status: "in_progress",
   description: SIX_COL_TABLE_MD,

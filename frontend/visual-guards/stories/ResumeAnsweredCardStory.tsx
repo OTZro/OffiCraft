@@ -57,8 +57,8 @@ const RESUME: MemberResumeSummaryView = {
   chat: [],
   tasks: [
     {
-      id: "t-answered",
-      taskNo: "T-245",
+      id: "t-02455291a009",
+      taskNo: "t-02455291a009",
       title: "依 owner 回覆調整目前方案",
       typeKey: "tm-05f7c776d6ff",
       status: "in_progress",
