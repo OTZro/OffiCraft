@@ -1,7 +1,15 @@
 package main
 
-// doc_split.go — the read-only head / owner-editable body split every event
-// procedure carries (T-3201, second package).
+// doc_split.go — the read-only head / owner-editable body split SOME documents
+// carry (T-3201, second package).
+//
+// ⚠️ T-6f44: this used to say "every event procedure carries". It no longer
+// does, and the sentence outlived the fact: owner's decision 4 took the head
+// off 系統互動, both 啟動步驟 and 〈停止〉. Which documents split is declared per
+// kind in bootDocRegistry (`Split`) and mirrored in
+// bin/tests/fixtures/boot-doc-registry.tsv (`has_head`), which server, cockpit
+// and conformance all read — so there is one answer rather than a sentence
+// here that has to be kept true by hand.
 //
 // 🔴 WHY A LINE IN THE DOCUMENT AND NOT A SECOND FIELD. The owner's ruling is
 // that he must SEE the half he cannot edit — 「以前 global context 是固定內容我們

@@ -753,13 +753,15 @@ func TestTaskCloseoutDoc_IsTheApprovedRewriteWithBothNamesMovedIntoTheHead(t *te
 	// So the document was telling every agent to start with a call that fails.
 	// list_tasks is the way across: each row carries task_no AND id.
 	wantBody := "先用 `list_tasks` 找到這張票（每一列都同時有票號與 id），拿它的 `id` 呼叫 `get_task`，" +
-		"看它屬於哪一本任務手冊（欄位 `type_key`）。⚠️ `get_task` 只吃 `id`，餵上面那個票號會 404。\n\n" +
+		"看它屬於哪一本任務手冊（欄位 `type_key`）。⚠️ `get_task` 只吃 `id`，餵票號會 404。\n\n" +
 		"若這一趟有值得留下的經驗（踩坑、更好做法），先用 get_task_manual 讀現況，" +
 		"再用 patch_task_learnings（type_key 用上一步讀到的值）只把改動的那一段送回" +
 		"**那本**任務手冊：改既有段落就用它的唯一錨點，第一次寫或要新增就用空錨點追加。" +
 		"不要用 write_task_learnings 做整份取代 —— 讀取後到寫入之間別人新增的內容會被無聲蓋掉；" +
 		"用 `ocagent clean <path>` 移除這個任務的暫存檔/資料夾、收掉臨時 branch/worktree 與跑著的臨時程序；" +
-		"最後用 report_task_closeout 回報後續已處理完。\n"
+		"票已經結束的話，最後用 report_task_closeout 回報後續已處理完。" +
+		"⚠️ 你若是**被換手、而這張票還在跑**，這一支會回 409 —— 那一步就跳過，" +
+		"票沒結束就沒有結案可報，這一段的寫回與清理照做。\n"
 	if body != wantBody {
 		t.Fatalf("the body is not the approved rewrite:\n got %q\nwant %q", body, wantBody)
 	}
@@ -769,7 +771,13 @@ func TestTaskCloseoutDoc_IsTheApprovedRewriteWithBothNamesMovedIntoTheHead(t *te
 	// Cutting the variables without rewriting those two clauses leaves a document
 	// that reads perfectly and instructs the agent to look at a line that is not
 	// there — no test would have noticed, which is why it is one here.
-	for _, dangling := range []string{"上面那一行", "上面指名的那本", "{type_key}", "{manual_label}"} {
+	// ⚠️ T-a36c WIDENED THIS LIST, AND THE MISS IS THE POINT: the body also said
+	// 「餵**上面那個票號**會 404」 — a fourth pointer at the head, one word away
+	// from 「上面那一行」 and therefore invisible to a list of EXACT strings. The
+	// head-bearing path delivers that line fine; the WIND-DOWN path
+	// (taskEventBodyText — body only) does not, and there the sentence points at
+	// nothing. Matching the prefix 「上面」 is what the exact list could not do.
+	for _, dangling := range []string{"上面", "{type_key}", "{manual_label}"} {
 		if strings.Contains(body, dangling) {
 			t.Errorf("the body still says %q, but the head no longer carries it", dangling)
 		}
@@ -1566,5 +1574,37 @@ func TestTheTwoStopProceduresDifferInEXACTLYTheThreeLinesTheyAreMeantTo(t *testi
 			t.Errorf("difference %d (%s): 〈加速停止〉 line %d no longer says %q:\n  %s",
 				n+1, want.why, i+1, want.hardNeedle, hardLines[i])
 		}
+	}
+}
+
+// 🔴 THE BODY TRAVELS WITHOUT ITS HEAD, AND ON THAT TRIP THE TICKET IS NOT
+// NECESSARILY OVER. offboardManualWriteBackFor sends this document's BODY ALONE
+// to an outsource worker being wound down (api_members.go) — deliberately, so
+// the head's claim 「任務 {task_no} 已結束。」 is not made on a path that cannot
+// make it. But the body's LAST step used to be an unconditional
+// report_task_closeout, and that endpoint answers 409 for an open task
+// («close-out is reported after the task ends»). A worker handed over mid-task
+// therefore read an instruction that could not succeed — the same shape as the
+// 「餵票號給 get_task 會 404」 defect this document already carries a warning
+// about, and the same shape as every finding in T-a36c: a sentence that is true
+// on one path and false on the one it is actually delivered on.
+//
+// This pins the CAVEAT, not the wording around it: whoever rewrites the
+// close-out step must still say what happens when the ticket is open. Nothing
+// else in the tree would notice its removal — the seed would read perfectly.
+func TestTaskCloseoutDoc_TheCloseoutStepSaysWhatHappensWhenTheTicketIsStillOpen(t *testing.T) {
+	s := newEventProcServer(t)
+	_, _, body := splitSeed(t, s, docKindTaskCloseout)
+
+	if !strings.Contains(body, "report_task_closeout") {
+		t.Fatal("the body no longer names report_task_closeout — if that step really " +
+			"moved, delete this test deliberately rather than letting it pass vacuously")
+	}
+	// 409 is the endpoint's own answer for an open task; naming it is what makes
+	// the caveat checkable instead of a mood.
+	if !strings.Contains(body, "409") {
+		t.Error("the body tells the agent to call report_task_closeout but never says " +
+			"the call FAILS (409) while the ticket is still open — this body is " +
+			"delivered on the wind-down path, where the ticket often is still open")
 	}
 }
