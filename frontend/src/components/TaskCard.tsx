@@ -351,7 +351,9 @@ export function TaskCard({
   }, [located]);
 
   // 任務編號 chip 點擊複製(owner 2026-07-19 圈截圖):點 chip → 把顯示的任務
-  // 編號(task.taskNo，非內部 id)寫進剪貼簿,給一個短暫「已複製」回饋。chip 本身
+  // 編號(task.taskNo)寫進剪貼簿,給一個短暫「已複製」回饋。T-5291 之後那個編號
+  // 「就是」內部 id ——「非內部 id」這句原本寫在這裡,已是相反的事實,刪掉;複製
+  // 出去的字串等於 task id 這件事由 TaskCard.copy-taskno.test.tsx 釘住。chip 本身
   // 是個 <button>,所以 onCardToggleClick 的 closest("button,…") 濾網會自動放行
   // (點它不會展開卡片),Enter/Space 由 button 原生觸發、也不會冒泡去 toggle 卡。
   // 只有真的寫入成功才亮「已複製」—— copyText 失敗回 false,絕不假成功。
