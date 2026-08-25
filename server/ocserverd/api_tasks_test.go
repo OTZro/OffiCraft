@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -3081,5 +3082,78 @@ func TestReconcileTaskStatusesOnBoot(t *testing.T) {
 	term, _ := api.dal.GetTask("t-term")
 	if term.Status != TaskStatusTerminated {
 		t.Fatalf("boot reconcile must leave a terminal task untouched, got %q", term.Status)
+	}
+}
+
+// ── the spec must not carry a SECOND, contradictory account of task_no ────────
+//
+// T-5291 round 2. The ruling above ("the number IS the id") was written into
+// three of the four “task_no“ descriptions in spec/openapi.json and missed
+// the fourth — TaskDTO, the one an MCP client / agent actually reads. It still
+// said the number "is the display number derived from the id (never a lookup
+// key)", i.e. the exact opposite of what the code now does, and it propagated
+// verbatim into BOTH generated artifacts (ocapi_gen.go, schema.ts).
+//
+// A prose contradiction is invisible to every other check in this repo: the
+// drift targets only prove the generated copies MATCH the spec, so a wrong
+// sentence stays wrong in perfect three-way agreement. This is the one place
+// that reads the sentences.
+//
+// It is deliberately phrase-based rather than an exact-text pin: the point is
+// the CLAIM, not the wording, so a future rewrite that keeps the meaning stays
+// green and one that reintroduces the projection story goes red.
+func TestSpecNeverDescribesTaskNoAsADerivedNonLookupValue(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "spec", "openapi.json"))
+	if err != nil {
+		t.Fatalf("read spec: %v", err)
+	}
+	var doc any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse spec: %v", err)
+	}
+	// The claims that are now FALSE. Each is checked only on a description that
+	// actually talks about task_no, so unrelated prose elsewhere is untouched.
+	banned := []string{
+		"derived from the id",
+		"never a lookup key",
+		"display number (T-xxxx)",
+	}
+	seen := 0
+	var walk func(node any, path string)
+	walk = func(node any, path string) {
+		switch v := node.(type) {
+		case map[string]any:
+			for k, child := range v {
+				if k == "description" {
+					if s, ok := child.(string); ok && strings.Contains(s, "task_no") {
+						seen++
+						for _, bad := range banned {
+							if strings.Contains(s, bad) {
+								t.Errorf("%s.description talks about task_no and still "+
+									"claims %q — TaskNo returns the id unchanged "+
+									"(TestTaskNoIsTheIDItself), so this is a second, "+
+									"contradictory account of the same field, and it is "+
+									"the one MCP clients read.\nfull text: %s",
+									path, bad, s)
+							}
+						}
+					}
+				}
+				walk(child, path+"."+k)
+			}
+		case []any:
+			for i, child := range v {
+				walk(child, path+"["+strconv.Itoa(i)+"]")
+			}
+		}
+	}
+	walk(doc, "$")
+	// Non-vacuity: if the spec stops mentioning task_no in descriptions at all,
+	// this test would pass while measuring nothing. Four is what T-5291 found
+	// (OutsourceWorkerDTO, TaskDepRefDTO, TaskListItemDTO, TaskDTO); the floor
+	// is asserted, not the exact count, so adding a fifth is not a failure.
+	if seen < 4 {
+		t.Fatalf("only %d spec description(s) mention task_no — expected at least "+
+			"4 (this guard has gone vacuous)", seen)
 	}
 }
