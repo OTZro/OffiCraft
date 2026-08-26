@@ -1979,7 +1979,7 @@
       "name": "list_roles"
     },
     {
-      "description": "Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.",
+      "description": "Size-only overview of EVERY capped document on the station: each role's role definition / insight / lessons, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). Every capped document is covered: T-2 removed the lessons task_type axis, so a role has exactly ONE lessons document and it is the one reported here — there is no longer a bucket that spends the lessons cap off this listing. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -2237,109 +2237,93 @@
       "name": "reset_insight"
     },
     {
-      "description": "Read a per-role lessons doc (per role_key; overlay \u2295 seed).",
-      "inputSchema": {
-        "properties": {
-          "role_key": {
-            "description": "Names WHOSE lessons to read. Reads are unrestricted and the key is not checked against the roster at all, so a role_key no role carries is not an error: the call answers 200 carrying the factory seed text, which is what a real role that has never written its own lessons also answers. The response echoes the role_key you sent - that echo confirms your input, never that anyone answers to that name. Treat a seed-looking answer as ambiguous between 'this role has written nothing' and 'this role does not exist', and settle it against the roster rather than against this response.",
-            "type": "string"
+        "description": "Read a per-role lessons doc (per role_key; overlay \u2295 seed).",
+        "inputSchema": {
+          "properties": {
+            "role_key": {
+              "description": "Names WHOSE lessons to read. Reads are unrestricted and the key is not checked against the roster at all, so a role_key no role carries is not an error: the call answers 200 carrying the factory seed text, which is what a real role that has never written its own lessons also answers. The response echoes the role_key you sent - that echo confirms your input, never that anyone answers to that name. Treat a seed-looking answer as ambiguous between 'this role has written nothing' and 'this role does not exist', and settle it against the roster rather than against this response.\n\nTHERE IS NO task_type. A lessons doc is addressed by role_key ALONE. The task_type axis was removed in T-2 and sending the field is REFUSED with a 400 naming it - it is never accepted and never quietly dropped, because a silently-ignored bucket name is exactly the failure this removal exists to end: the caller believed it had written one classification and the write went somewhere else.",
+              "type": "string"
+            }
           },
-          "task_type": {
-            "type": "string",
-            "description": "Names WHICH lessons bucket to read, and a name no bucket carries is NOT an error: the call answers 200 carrying the 14-character factory shell, which is indistinguishable from a bucket that exists and has simply never been written. Measured 2026-08-14 against one role: an invented bucket name answered size_chars=14 / is_default=true, while that same role's real bucket answered size_chars=14897 / is_default=false. NEITHER DIRECTION OF is_default SETTLES IT - true does not mean 'this role never wrote one', and false does not mean 'there is content here' (a bucket holding only the 14-character shell reads false). So a short answer is not evidence the role is empty; it is equally evidence you named a bucket that does not exist. Know which bucket names are legal BEFORE you ask - the response cannot tell you afterwards."
-          }
+          "required": [
+            "role_key"
+          ],
+          "type": "object"
         },
-        "required": [
-          "role_key",
-          "task_type"
-        ],
-        "type": "object"
+        "name": "get_lessons"
       },
-      "name": "get_lessons"
-    },
     {
-      "description": "Replace the WHOLE per-role lessons document. text is REQUIRED and unknown keys are rejected; only that role's agent or an admin may write it; emptying or sharply shrinking it needs allow_shrink=true; and the result is still judged against the lessons cap.",
-      "inputSchema": {
-        "properties": {
-          "allow_shrink": {
-            "default": false,
-            "title": "Allow Shrink",
-            "type": "boolean"
-          },
-          "role_key": {
-            "description": "Names WHOSE lessons this replaces. Nothing checks the key against the roster - it goes straight into the storage key - so who catches a typo depends entirely on WHO YOU ARE. An ordinary member is saved by authorization: it may only write its own role, so a misspelling is refused with 403 and the mistake announces itself. An ADMIN OR THE OWNER may write any role, and for them a misspelling is not refused at all: it creates a lessons document under a role nobody answers to, answers 200, and fans a delta for it. The role you meant is untouched and unmentioned. The higher your privilege, the quieter this fails.",
-            "type": "string"
-          },
-          "task_type": {
-            "type": "string",
-            "description": "Names WHICH lessons bucket this whole-doc replace lands in, and NOTHING validates it: the value is used verbatim as half of the storage key (role_key::task_type), so a name no bucket carries does not fail - it CREATES a new document under the misspelled name and answers 200. The bucket you meant is left exactly as it was and is never mentioned; the response echoes the task_type you sent, which is the only signal you get. The wipe guard does not save you, and not for the reason it looks: a bucket nobody has written does not read as empty, it reads as the ONE shared seed file every role falls back to, so writing real content over that seed is not a wipe and the guard passes. OMITTING the field is safe over MCP and is not the same risk - a blank task_type is folded to the default 'general' bucket at the tool boundary. It is a typo, not an omission, that loses the write."
-          },
-          "text": {
-            "default": "",
-            "description": "The ENTIRE lessons doc, not an addition to it. Sending the paragraph you wanted to add answers 200 and permanently drops everything else, so read the doc first and send it back with your change folded in - or use patch_lessons, which edits by anchor. Two guards stand here and neither catches the ordinary version of this mistake: emptying a doc that had content is refused unless allow_shrink is set, and exceeding the character cap is refused. A replace that merely loses most of the text is neither empty nor over cap, so it passes without comment.",
-            "title": "Text",
-            "type": "string"
-          }
-        },
-        "required": [
-          "role_key",
-          "task_type",
-          "text"
-        ],
-        "additionalProperties": false,
-        "type": "object"
-      },
-      "name": "replace_lessons"
-    },
-    {
-      "description": "Patch a per-role lessons doc by unique anchors ({edits:[{old,new}]}).",
-      "inputSchema": {
-        "properties": {
-          "allow_shrink": {
-            "default": false,
-            "title": "Allow Shrink",
-            "type": "boolean"
-          },
-          "edits": {
-            "items": {
-              "properties": {
-                "new": {
-                  "default": "",
-                  "title": "New",
-                  "type": "string"
-                },
-                "old": {
-                  "default": "",
-                  "title": "Old",
-                  "type": "string"
-                }
-              },
-              "title": "LessonsEditDTO",
-              "type": "object",
-              "additionalProperties": false
+        "description": "Replace the WHOLE per-role lessons document. text is REQUIRED and unknown keys are rejected; only that role's agent or an admin may write it; emptying or sharply shrinking it needs allow_shrink=true; and the result is still judged against the lessons cap.",
+        "inputSchema": {
+          "properties": {
+            "allow_shrink": {
+              "default": false,
+              "title": "Allow Shrink",
+              "type": "boolean"
             },
-            "title": "Edits",
-            "type": "array"
+            "role_key": {
+              "description": "Names WHOSE lessons this replaces. Nothing checks the key against the roster - it goes straight into the storage key - so who catches a typo depends entirely on WHO YOU ARE. An ordinary member is saved by authorization: it may only write its own role, so a misspelling is refused with 403 and the mistake announces itself. An ADMIN OR THE OWNER may write any role, and for them a misspelling is not refused at all: it creates a lessons document under a role nobody answers to, answers 200, and fans a delta for it. The role you meant is untouched and unmentioned. The higher your privilege, the quieter this fails.\n\nTHERE IS NO task_type. A lessons doc is addressed by role_key ALONE. The task_type axis was removed in T-2 and sending the field is REFUSED with a 400 naming it - it is never accepted and never quietly dropped, because a silently-ignored bucket name is exactly the failure this removal exists to end: the caller believed it had written one classification and the write went somewhere else. That refusal closes a second, narrower door on this tool in particular: this write face has never validated a bucket name, so before T-2 one mistyped task_type answered 200 and left an extra classification behind with nothing going red.",
+              "type": "string"
+            },
+            "text": {
+              "default": "",
+              "title": "Text",
+              "type": "string"
+            }
           },
-          "role_key": {
-            "description": "Names WHOSE lessons to edit. Nothing checks the key against the roster, so who catches a typo depends on WHO YOU ARE: an ordinary member may only write its own role and is refused with 403, while an admin or the owner may write any role and gets no refusal at all. For them the edit form decides what happens next - an edit with a non-empty old cannot find its anchor in an empty document and fails with 400, but an edit with an EMPTY old (the append form) has no anchor to miss and CREATES a lessons document under a role nobody answers to, answering 200 while the role you meant stays untouched.",
-            "type": "string"
-          },
-          "task_type": {
-            "type": "string",
-            "description": "Names WHICH lessons bucket to edit, and NOTHING validates it: the value is used verbatim as half of the storage key (role_key::task_type). A name no bucket carries does not fail - and it does not read as an empty document either. What you get back is the ONE shared seed file every role falls back to (a single line of boilerplate), marked is_default: true on get_lessons; that flag is the only thing distinguishing a bucket nobody has written from one that has. What happens next depends on the edit form. A NON-EMPTY old is refused with 400 - whole batch, zero writes - because your anchor is not in that seed line. An EMPTY old (the append form) has no anchor to miss: it appends onto the seed, CREATING a document under the misspelled name, and answers 200 while the bucket you meant stays untouched and unmentioned. OMITTING the field is safe over MCP, but nothing in your client does that for you: it is the SERVER's /api/mcp handler that substitutes the default 'general' bucket for a blank task_type, after your call has arrived and before it re-enters the route. So what actually lands is an ordinary write to 'general' - it is a typo, not an omission, that loses the write."
-          }
+          "required": [
+            "role_key",
+            "text"
+          ],
+          "additionalProperties": false,
+          "type": "object"
         },
-        "required": [
-          "role_key",
-          "task_type",
-          "edits"
-        ],
-        "additionalProperties": false,
-        "type": "object"
+        "name": "replace_lessons"
       },
-      "name": "patch_lessons"
-    },
+    {
+        "description": "Patch a per-role lessons doc by unique anchors ({edits:[{old,new}]}).",
+        "inputSchema": {
+          "properties": {
+            "allow_shrink": {
+              "default": false,
+              "title": "Allow Shrink",
+              "type": "boolean"
+            },
+            "edits": {
+              "items": {
+                "properties": {
+                  "new": {
+                    "default": "",
+                    "title": "New",
+                    "type": "string"
+                  },
+                  "old": {
+                    "default": "",
+                    "title": "Old",
+                    "type": "string"
+                  }
+                },
+                "title": "LessonsEditDTO",
+                "type": "object",
+                "additionalProperties": false
+              },
+              "title": "Edits",
+              "type": "array"
+            },
+            "role_key": {
+              "description": "Names WHOSE lessons to edit. Nothing checks the key against the roster, so who catches a typo depends on WHO YOU ARE: an ordinary member may only write its own role and is refused with 403, while an admin or the owner may write any role and gets no refusal at all. For them the edit form decides what happens next - an edit with a non-empty old cannot find its anchor in an empty document and fails with 400, but an edit with an EMPTY old (the append form) has no anchor to miss and CREATES a lessons document under a role nobody answers to, answering 200 while the role you meant stays untouched.\n\nTHERE IS NO task_type. A lessons doc is addressed by role_key ALONE. The task_type axis was removed in T-2 and sending the field is REFUSED with a 400 naming it - it is never accepted and never quietly dropped, because a silently-ignored bucket name is exactly the failure this removal exists to end: the caller believed it had written one classification and the write went somewhere else.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "role_key",
+            "edits"
+          ],
+          "additionalProperties": false,
+          "type": "object"
+        },
+        "name": "patch_lessons"
+      },
     {
       "description": "Bounded LIGHT wake snapshot for the caller (identity-locked; recent chat + light open-task rows + size overview — peek sizes first, pull detail via get_task). CHAT is packed newest-first under a CHARACTER BUDGET, not a fixed message count, and stopping at the last message that still fits; each message carries from_name/to_name beside the ids and ts_display (full date + time + zone offset) beside the epoch ts, and folds in its reply card as `card` when it has one — read every ts_display against the top-level `generated_at`. TWO DIFFERENT things can be missing and they are marked DIFFERENTLY: `body_omitted_chars` > 0 means THAT message is here with that many characters COLLAPSED away (another agent's line — the owner's line and your own hand-off notes to yourself are carried in full), re-read it with get_chat; `chat_earlier_omitted` is the other kind and it is a MAYBE, not a fact: that line was cut at a read or budget limit and nothing looked past the cut, so whole messages may be missing from this payload entirely — it is raised even when there is in fact nothing older. Its hint tells you how to CHECK and fetch them. The two are asymmetric ON PURPOSE: the collapse marker is CERTAIN (that message IS here, shortened, exact count); this one is not, and only the fetch settles it. Also carries the STUDIO FLOOR you wake up onto: roster (every member and contractor, each with online/offline status, the machine it runs on, and its duty capped at 1000 chars with `…` marking a cut, the cap applied after the doc's own leading title line is removed — who to ask for help; no insight/learning by owner ruling. Contractors additionally carry their bound task's status, waiting_reason, and step progress (progress_done/progress_total) — members leave these at their zero value; a contractor's 0/0 is ambiguous (a task with no steps yet, or no task at all) and task_status is what tells them apart, non-empty vs empty) and machines (the machine list plus you_are_on, your server-recorded machine binding — never derive it from a hostname).",
       "inputSchema": {

@@ -44,7 +44,7 @@ func t3201NearCap(t *testing.T, s *apiServer, actor string) {
 	must(s.dal.PutRoleDef(RoleDef{RoleKey: m.RoleKey, Name: "Assistant",
 		DefinitionMD: fill(800)}))
 	must(s.dal.PutInsight(Insight{RoleKey: m.RoleKey, Text: fill(12500)}))
-	must(s.dal.PutLessons(Lessons{RoleKey: m.RoleKey, TaskType: seedLessonsTaskType,
+	must(s.dal.PutLessons(Lessons{RoleKey: m.RoleKey,
 		Text: fill(12500)}))
 	must(s.dal.PutBootDocument(BootDocument{Kind: docKindSystemInteraction,
 		Key: systemInteractionDocKey, Text: fill(55000)}))

@@ -333,7 +333,7 @@ func TestWritesAllLandThroughTheRealSplitPools(t *testing.T) {
 			return d.PutRoleDef(RoleDef{RoleKey: "assistant", Name: "A", DefinitionMD: "d"})
 		}},
 		{"PutLessons", func() error {
-			return d.PutLessons(Lessons{RoleKey: "assistant", TaskType: "t", Text: "l"})
+			return d.PutLessons(Lessons{RoleKey: "assistant", Text: "l"})
 		}},
 		// read-modify-write pair: the Exec goes to the write pool, the read-back
 		// to the read pool. It is here because a cross-pool read-your-own-write

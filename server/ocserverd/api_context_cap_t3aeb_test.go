@@ -76,7 +76,7 @@ func patchSettings(t *testing.T, srv, tok, body string) (int, map[string]any) {
 func TestDocCap_FollowsTheLiveSetting(t *testing.T) {
 	srv, dal, tok := capLessonsServer(t)
 	before := capDoc(t, contextDocMaxCharsDefault-10)
-	seedLessonsOverlay(t, dal, "assistant", "general", before)
+	seedLessonsOverlay(t, dal, "assistant", before)
 
 	// Over the DEFAULT cap, and not shorter than what is stored → refused.
 	overDefault := capDoc(t, contextDocMaxCharsDefault+500)
@@ -99,7 +99,7 @@ func TestDocCap_FollowsTheLiveSetting(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("phase 3: after raising the cap the same write must land, got %d: %v", status, data)
 	}
-	if got := getLessonsText(t, srv.URL, tok, "assistant", "general"); got != overDefault {
+	if got := getLessonsText(t, srv.URL, tok, "assistant"); got != overDefault {
 		t.Fatalf("phase 3: the raised cap must actually store the doc (%d runes stored)",
 			utf8.RuneCountInString(got))
 	}
@@ -121,7 +121,7 @@ func TestDocCap_FollowsTheLiveSetting(t *testing.T) {
 // agent shrinking toward a limit that no longer exists.
 func TestDocCap_RefusalQuotesTheLiveCapNotTheDefault(t *testing.T) {
 	srv, dal, tok := capLessonsServer(t)
-	seedLessonsOverlay(t, dal, "assistant", "general", capDoc(t, 30000))
+	seedLessonsOverlay(t, dal, "assistant", capDoc(t, 30000))
 
 	if status, data := patchSettings(t, srv.URL, tok, `{"doc_cap_chars_learning":25000}`); status != http.StatusOK {
 		t.Fatalf("raise the cap: %d %v", status, data)
@@ -146,15 +146,15 @@ func TestDocCap_RefusalQuotesTheLiveCapNotTheDefault(t *testing.T) {
 // answered `size: 22856` for a document nowhere near that many characters.
 func TestPatchLessonsReceiptSizeIsCharsNotBytes(t *testing.T) {
 	srv, dal, tok := capLessonsServer(t)
-	seedLessonsOverlay(t, dal, "assistant", "general", cjkDoc(t, 200))
+	seedLessonsOverlay(t, dal, "assistant", cjkDoc(t, 200))
 
-	status, data := patchLessons(t, srv.URL, tok, "assistant", "general",
+	status, data := patchLessons(t, srv.URL, tok, "assistant",
 		`{"edits":[{"old":"","new":"`+cjkDoc(t, 50)+`"}]}`)
 	if status != http.StatusOK {
 		t.Fatalf("append patch must land, got %d: %v", status, data)
 	}
 
-	stored := getLessonsText(t, srv.URL, tok, "assistant", "general")
+	stored := getLessonsText(t, srv.URL, tok, "assistant")
 	wantRunes := utf8.RuneCountInString(stored)
 	if len(stored) == wantRunes {
 		t.Fatalf("fixture is not multi-byte — this test cannot tell the units apart")
@@ -385,9 +385,9 @@ func TestLoadAuthSettingsRejectsAnOutOfRangeDocCap(t *testing.T) {
 func TestLessonsReadReportsSizeAndCap(t *testing.T) {
 	srv, dal, tok := capLessonsServer(t)
 	doc := cjkDoc(t, 300)
-	seedLessonsOverlay(t, dal, "assistant", "general", doc)
+	seedLessonsOverlay(t, dal, "assistant", doc)
 
-	status, data := doJSON(t, "GET", srv.URL+"/api/lessons/assistant/general", tok, "")
+	status, data := doJSON(t, "GET", srv.URL+"/api/lessons/assistant", tok, "")
 	if status != http.StatusOK {
 		t.Fatalf("GET lessons: %d %v", status, data)
 	}
@@ -405,7 +405,7 @@ func TestLessonsReadReportsSizeAndCap(t *testing.T) {
 	if status, data := patchSettings(t, srv.URL, tok, `{"doc_cap_chars_learning":33000}`); status != 200 {
 		t.Fatalf("raise the cap: %d %v", status, data)
 	}
-	_, data = doJSON(t, "GET", srv.URL+"/api/lessons/assistant/general", tok, "")
+	_, data = doJSON(t, "GET", srv.URL+"/api/lessons/assistant", tok, "")
 	if got, _ := data["cap_chars"].(float64); int(got) != 33000 {
 		t.Fatalf("cap_chars must track the setting, got %v", data["cap_chars"])
 	}
@@ -510,13 +510,13 @@ func TestRestoreFollowsTheLiveCap(t *testing.T) {
 
 	// An over-cap revision is retained (the cap never truncates what is stored),
 	// then the live doc shrinks — so restoring would push it back over.
-	if err := api.dal.PutLessons(Lessons{RoleKey: role, TaskType: taskType, Text: oversized}); err != nil {
+	if err := api.dal.PutLessons(Lessons{RoleKey: role, Text: oversized}); err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	api.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(rec, taskReq(t, http.MethodPost,
-		"/api/lessons/"+role+"/"+taskType, map[string]any{"text": "short again"}, "owner", "owner"),
-		role, taskType)
+	api.HandleReplaceLessonsApiLessonsRoleKeyPost(rec, taskReq(t, http.MethodPost,
+		"/api/lessons/"+role, map[string]any{"text": "short again"}, "owner", "owner"),
+		role)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("shrinking write: %d %s", rec.Code, rec.Body.String())
 	}
@@ -548,7 +548,7 @@ func TestRestoreFollowsTheLiveCap(t *testing.T) {
 	if code := restore(); code != http.StatusOK {
 		t.Fatalf("after raising the cap the restore must land, got %d", code)
 	}
-	current, err := api.foldLessonsDTO(role, taskType)
+	current, err := api.foldLessonsDTO(role)
 	if err != nil {
 		t.Fatal(err)
 	}

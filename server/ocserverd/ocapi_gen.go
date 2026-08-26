@@ -536,20 +536,22 @@ type BootDocumentReplaceDTO struct {
 // play", §7 leg 4). “token“ is the member JWT (“scope="agent"“) when a
 // “member_id“ was supplied; None for a UI preview.
 type BootstrapDTO struct {
-	Context  *string `json:"context,omitempty"`
-	Name     *string `json:"name,omitempty"`
-	Role     string  `json:"role"`
-	TaskType *string `json:"task_type,omitempty"`
-	Token    *string `json:"token,omitempty"`
+	Context *string `json:"context,omitempty"`
+	Name    *string `json:"name,omitempty"`
+	Role    string  `json:"role"`
+	Token   *string `json:"token,omitempty"`
 }
 
-// BootstrapRequestDTO Bootstrap request (§3.4 #29): “{role?, task_type?, member_id?}“. All
+// BootstrapRequestDTO Bootstrap request (§3.4 #29): “{role?, member_id?}“. All
 // optional — a UI preview omits “member_id“ (no token minted); a warden spawn
 // supplies it to mint the member's boot JWT.
+//
+// T-2 removed “task_type“: it existed only to choose which lessons bucket the
+// assembled persona folded in, and lessons no longer have buckets. Unknown keys
+// are refused (422), so a caller still sending it is told rather than ignored.
 type BootstrapRequestDTO struct {
 	MemberId *string `json:"member_id,omitempty"`
 	Role     *string `json:"role,omitempty"`
-	TaskType *string `json:"task_type,omitempty"`
 }
 
 // BootstrapResultDTO The result of installing a machine's warden ON THE SERVER HOST
@@ -829,14 +831,14 @@ type DocSizeDTO struct {
 
 // DocSizesDTO The station-wide capped-document size overview (“peek_doc_sizes“ MCP tool,
 // zero params; “GET /api/doc-sizes“): for EVERY role its role definition, its
-// insight and its DEFAULT lessons bucket, and for EVERY task manual its sop_md and
+// insight and its lessons, and for EVERY task manual its sop_md and
 // its learnings — each as its current size plus the cap in force for that segment,
 // and nothing else.
 //
-// Lessons is the one segment reported for the default bucket only. The write side
-// does not constrain the bucket name (the default merely fills in an absent
-// argument), so lessons written under any other bucket name draw on the same
-// lessons cap and are NOT counted here.
+// Every capped document is covered. Until T-2 lessons carried a “task_type“
+// axis and only the default bucket was reported, so a document under any other
+// bucket name drew on the same lessons cap while staying off this listing; the
+// axis is gone and a role has exactly one lessons document.
 //
 // It carries NO document content, so its size is a function of how many roles and
 // manuals exist, never of what they hold — which is the point. The two numbers no
@@ -1006,9 +1008,8 @@ type InsightReplaceDTO struct {
 	Text        string `json:"text"`
 }
 
-// LessonsDTO The folded per-role lessons doc (§3.4 #27). “role_key“ scopes the doc to a
-// role (per-role-learnings step1); “task_type“ is the single fixed key (§9.7).
-// “is_default“ = seed-vs-edited.
+// LessonsDTO The folded per-role lessons doc (§3.4 #27). A lessons doc is addressed by
+// “role_key“ ALONE (T-2). “is_default“ = seed-vs-edited.
 type LessonsDTO struct {
 	// CapChars The document size cap now in force, in CHARACTERS (the doc.cap_chars.learning setting). Served on the READ face so an agent can size an edit BEFORE writing it — the alternative is discovering the limit by being refused, and the settings surface is admin-only.
 	CapChars      *int    `json:"cap_chars,omitempty"`
@@ -1019,7 +1020,6 @@ type LessonsDTO struct {
 
 	// SizeChars Size of `text` in CHARACTERS (Unicode code points) — the same unit as cap_chars.
 	SizeChars *int    `json:"size_chars,omitempty"`
-	TaskType  *string `json:"task_type,omitempty"`
 	Text      *string `json:"text,omitempty"`
 }
 
@@ -1048,8 +1048,7 @@ type LessonsPatchResultDTO struct {
 	Sha256        *string `json:"sha256,omitempty"`
 
 	// SizeChars Size of the RESULTING document in CHARACTERS (Unicode code points) — the same unit as cap_chars. Named `size` until 2026-07-31, when the owner ruled a size field must carry its unit in its name.
-	SizeChars *int    `json:"size_chars,omitempty"`
-	TaskType  *string `json:"task_type,omitempty"`
+	SizeChars *int `json:"size_chars,omitempty"`
 }
 
 // LessonsReplaceDTO Whole-doc replace of a lessons doc (§3.4 #28): “{text}“. “text“ is REQUIRED — a whole-doc replace must never infer "empty" from a missing key (T-2d99). “allow_shrink“ (default false) must be set explicitly to replace existing content with an empty doc — the r-76 wipe-guard posture.
@@ -2146,10 +2145,9 @@ type RoleDeleteResultDTO struct {
 }
 
 // RoleDocSizesDTO The three capped documents of ONE role, by size only: “duty“ (the role
-// definition, get_role), “insight“ (get_insight) and “lessons“ (get_lessons on
-// the DEFAULT “general“ bucket — that bucket ONLY; nothing constrains the
-// task_type a write may name, and lessons under another bucket name draw on this
-// same cap without being sized here). “role_key“ is how to go read whichever one
+// definition, get_role), “insight“ (get_insight) and “lessons“ (get_lessons — a role has
+// exactly ONE lessons document since T-2 removed the “task_type“ axis, so this
+// is that document, whole). “role_key“ is how to go read whichever one
 // turns out to be nearly full. Sizes are measured on the FOLDED document — the
 // owner overlay ⊕ file seed a caller actually reads and edits — so they match what
 // the per-document GETs report. No text of any kind.
@@ -3392,11 +3390,11 @@ type HandleReplaceInsightApiInsightRoleKeyPostJSONRequestBody = InsightReplaceDT
 // HandlePatchInsightApiInsightRoleKeyPatchPostJSONRequestBody defines body for HandlePatchInsightApiInsightRoleKeyPatchPost for application/json ContentType.
 type HandlePatchInsightApiInsightRoleKeyPatchPostJSONRequestBody = InsightPatchDTO
 
-// HandleReplaceLessonsApiLessonsRoleKeyTaskTypePostJSONRequestBody defines body for HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost for application/json ContentType.
-type HandleReplaceLessonsApiLessonsRoleKeyTaskTypePostJSONRequestBody = LessonsReplaceDTO
+// HandleReplaceLessonsApiLessonsRoleKeyPostJSONRequestBody defines body for HandleReplaceLessonsApiLessonsRoleKeyPost for application/json ContentType.
+type HandleReplaceLessonsApiLessonsRoleKeyPostJSONRequestBody = LessonsReplaceDTO
 
-// HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPostJSONRequestBody defines body for HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost for application/json ContentType.
-type HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPostJSONRequestBody = LessonsPatchDTO
+// HandlePatchLessonsApiLessonsRoleKeyPatchPostJSONRequestBody defines body for HandlePatchLessonsApiLessonsRoleKeyPatchPost for application/json ContentType.
+type HandlePatchLessonsApiLessonsRoleKeyPatchPostJSONRequestBody = LessonsPatchDTO
 
 // HandleLoginApiLoginPostJSONRequestBody defines body for HandleLoginApiLoginPost for application/json ContentType.
 type HandleLoginApiLoginPostJSONRequestBody = LoginDTO
@@ -3681,7 +3679,7 @@ type ServerInterface interface {
 	// Total chat unread count (the office nav red dot).
 	// (GET /api/chat/unread-count)
 	HandleChatUnreadCountApiChatUnreadCountGet(w http.ResponseWriter, r *http.Request)
-	// Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.
+	// Size-only overview of EVERY capped document on the station: each role's role definition / insight / lessons, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). Every capped document is covered: T-2 removed the lessons task_type axis, so a role has exactly ONE lessons document and it is the one reported here — there is no longer a bucket that spends the lessons cap off this listing. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.
 	// (GET /api/doc-sizes)
 	HandlePeekDocSizesApiDocSizesGet(w http.ResponseWriter, r *http.Request)
 	// List the product-guide docs (slug + title).
@@ -3749,14 +3747,14 @@ type ServerInterface interface {
 	// (POST /api/insight/{role_key}/reset)
 	HandleResetInsightApiInsightRoleKeyResetPost(w http.ResponseWriter, r *http.Request, roleKey string)
 	// Read a per-role lessons doc (per role_key; overlay ⊕ seed).
-	// (GET /api/lessons/{role_key}/{task_type})
-	HandleGetLessonsApiLessonsRoleKeyTaskTypeGet(w http.ResponseWriter, r *http.Request, roleKey string, taskType string)
+	// (GET /api/lessons/{role_key})
+	HandleGetLessonsApiLessonsRoleKeyGet(w http.ResponseWriter, r *http.Request, roleKey string)
 	// Replace the WHOLE per-role lessons document. text is REQUIRED and unknown keys are rejected; only that role's agent or an admin may write it; emptying or sharply shrinking it needs allow_shrink=true; and the result is still judged against the lessons cap.
-	// (POST /api/lessons/{role_key}/{task_type})
-	HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.ResponseWriter, r *http.Request, roleKey string, taskType string)
+	// (POST /api/lessons/{role_key})
+	HandleReplaceLessonsApiLessonsRoleKeyPost(w http.ResponseWriter, r *http.Request, roleKey string)
 	// Patch a per-role lessons doc by unique anchors ({edits:[{old,new}]}).
-	// (POST /api/lessons/{role_key}/{task_type}/patch)
-	HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.ResponseWriter, r *http.Request, roleKey string, taskType string)
+	// (POST /api/lessons/{role_key}/patch)
+	HandlePatchLessonsApiLessonsRoleKeyPatchPost(w http.ResponseWriter, r *http.Request, roleKey string)
 	// Owner login: exchange the password for an owner-scoped JWT.
 	// (POST /api/login)
 	HandleLoginApiLoginPost(w http.ResponseWriter, r *http.Request)
@@ -5170,8 +5168,8 @@ func (siw *ServerInterfaceWrapper) HandleResetInsightApiInsightRoleKeyResetPost(
 	handler.ServeHTTP(w, r)
 }
 
-// HandleGetLessonsApiLessonsRoleKeyTaskTypeGet operation middleware
-func (siw *ServerInterfaceWrapper) HandleGetLessonsApiLessonsRoleKeyTaskTypeGet(w http.ResponseWriter, r *http.Request) {
+// HandleGetLessonsApiLessonsRoleKeyGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleGetLessonsApiLessonsRoleKeyGet(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
@@ -5185,17 +5183,8 @@ func (siw *ServerInterfaceWrapper) HandleGetLessonsApiLessonsRoleKeyTaskTypeGet(
 		return
 	}
 
-	// ------------- Path parameter "task_type" -------------
-	var taskType string
-
-	err = runtime.BindStyledParameterWithOptions("simple", "task_type", r.PathValue("task_type"), &taskType, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "task_type", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.HandleGetLessonsApiLessonsRoleKeyTaskTypeGet(w, r, roleKey, taskType)
+		siw.Handler.HandleGetLessonsApiLessonsRoleKeyGet(w, r, roleKey)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -5205,8 +5194,8 @@ func (siw *ServerInterfaceWrapper) HandleGetLessonsApiLessonsRoleKeyTaskTypeGet(
 	handler.ServeHTTP(w, r)
 }
 
-// HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost operation middleware
-func (siw *ServerInterfaceWrapper) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.ResponseWriter, r *http.Request) {
+// HandleReplaceLessonsApiLessonsRoleKeyPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleReplaceLessonsApiLessonsRoleKeyPost(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
@@ -5220,17 +5209,8 @@ func (siw *ServerInterfaceWrapper) HandleReplaceLessonsApiLessonsRoleKeyTaskType
 		return
 	}
 
-	// ------------- Path parameter "task_type" -------------
-	var taskType string
-
-	err = runtime.BindStyledParameterWithOptions("simple", "task_type", r.PathValue("task_type"), &taskType, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "task_type", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w, r, roleKey, taskType)
+		siw.Handler.HandleReplaceLessonsApiLessonsRoleKeyPost(w, r, roleKey)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -5240,8 +5220,8 @@ func (siw *ServerInterfaceWrapper) HandleReplaceLessonsApiLessonsRoleKeyTaskType
 	handler.ServeHTTP(w, r)
 }
 
-// HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost operation middleware
-func (siw *ServerInterfaceWrapper) HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.ResponseWriter, r *http.Request) {
+// HandlePatchLessonsApiLessonsRoleKeyPatchPost operation middleware
+func (siw *ServerInterfaceWrapper) HandlePatchLessonsApiLessonsRoleKeyPatchPost(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
@@ -5255,17 +5235,8 @@ func (siw *ServerInterfaceWrapper) HandlePatchLessonsApiLessonsRoleKeyTaskTypePa
 		return
 	}
 
-	// ------------- Path parameter "task_type" -------------
-	var taskType string
-
-	err = runtime.BindStyledParameterWithOptions("simple", "task_type", r.PathValue("task_type"), &taskType, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "task_type", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w, r, roleKey, taskType)
+		siw.Handler.HandlePatchLessonsApiLessonsRoleKeyPatchPost(w, r, roleKey)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -8324,9 +8295,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/insight/{role_key}", wrapper.HandleReplaceInsightApiInsightRoleKeyPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/insight/{role_key}/patch", wrapper.HandlePatchInsightApiInsightRoleKeyPatchPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/insight/{role_key}/reset", wrapper.HandleResetInsightApiInsightRoleKeyResetPost)
-	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/lessons/{role_key}/{task_type}", wrapper.HandleGetLessonsApiLessonsRoleKeyTaskTypeGet)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/lessons/{role_key}/{task_type}", wrapper.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/lessons/{role_key}/{task_type}/patch", wrapper.HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/lessons/{role_key}", wrapper.HandleGetLessonsApiLessonsRoleKeyGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/lessons/{role_key}", wrapper.HandleReplaceLessonsApiLessonsRoleKeyPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/lessons/{role_key}/patch", wrapper.HandlePatchLessonsApiLessonsRoleKeyPatchPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/login", wrapper.HandleLoginApiLoginPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/machines", wrapper.HandleListMachinesApiMachinesGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/machines", wrapper.HandleOnboardMachineApiMachinesPost)

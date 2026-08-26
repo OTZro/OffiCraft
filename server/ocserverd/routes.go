@@ -1187,7 +1187,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			// are all machine). It cannot leak more than those already do — it
 			// carries strictly less than any of them.
 			Requires: principalMachine,
-			Summary:  "Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.",
+			Summary:  "Size-only overview of EVERY capped document on the station: each role's role definition / insight / lessons, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). Every capped document is covered: T-2 removed the lessons task_type axis, so a role has exactly ONE lessons document and it is the one reported here — there is no longer a bucket that spends the lessons cap off this listing. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.",
 			MCPTool:  "peek_doc_sizes",
 		},
 		{
@@ -1293,8 +1293,8 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		},
 		{
 			Method:   "GET",
-			Path:     "/api/lessons/{role_key}/{task_type}",
-			Handler:  w.HandleGetLessonsApiLessonsRoleKeyTaskTypeGet,
+			Path:     "/api/lessons/{role_key}",
+			Handler:  w.HandleGetLessonsApiLessonsRoleKeyGet,
 			Auth:     authGated,
 			Requires: principalMachine,
 			Summary:  "Read a per-role lessons doc (per role_key; overlay ⊕ seed).",
@@ -1302,8 +1302,8 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		},
 		{
 			Method:  "POST",
-			Path:    "/api/lessons/{role_key}/{task_type}",
-			Handler: w.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost,
+			Path:    "/api/lessons/{role_key}",
+			Handler: w.HandleReplaceLessonsApiLessonsRoleKeyPost,
 			Auth:    authGated,
 			// T-5336: the two lessons WRITE rows sat on the machine FLOOR while
 			// 100% of their RBAC lived in the handler (buildHandler skips
@@ -1338,8 +1338,8 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		},
 		{
 			Method:  "POST",
-			Path:    "/api/lessons/{role_key}/{task_type}/patch",
-			Handler: w.HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost,
+			Path:    "/api/lessons/{role_key}/patch",
+			Handler: w.HandlePatchLessonsApiLessonsRoleKeyPatchPost,
 			Auth:    authGated,
 			// T-5336: same honest floor as the whole-doc replace above (the two
 			// share lessonsWriteAuthz). READ stays on the machine floor — any

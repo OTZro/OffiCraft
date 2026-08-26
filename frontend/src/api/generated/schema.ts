@@ -664,7 +664,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Size-only overview of EVERY capped document on the station: each role's role definition / insight / DEFAULT lessons bucket, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). LIMITATION: lessons is reported for the default bucket only; nothing stops a write from naming another bucket, and such a document spends the same lessons cap yet never appears here. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.
+         * Size-only overview of EVERY capped document on the station: each role's role definition / insight / lessons, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). Every capped document is covered: T-2 removed the lessons task_type axis, so a role has exactly ONE lessons document and it is the one reported here — there is no longer a bucket that spends the lessons cap off this listing. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.
          * @description The station-wide capped-document SIZE overview (``peek_doc_sizes`` MCP tool,
          *     zero params; ``GET /api/doc-sizes``).
          *
@@ -970,7 +970,7 @@ export interface paths {
          *     document's placement on a machine's disk means one could not be promised by
          *     this API alone even if the read face were closed.
          *
-         *     No ``task_type`` axis (that belongs to lessons) and no file seed: an untouched
+         *     No file seed: an untouched
          *     doc reads as genuinely EMPTY with ``is_default=true``, which is what makes
          *     "has this role moved anything over yet?" an answerable question.
          */
@@ -1056,7 +1056,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/lessons/{role_key}/{task_type}": {
+    "/api/lessons/{role_key}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1065,12 +1065,15 @@ export interface paths {
         };
         /**
          * Read a per-role lessons doc (per role_key; overlay ⊕ seed).
-         * @description Read the folded per-role lessons doc for ``(role_key, task_type)`` (§3.4 #27).
+         * @description Read the folded per-role lessons doc for ``role_key`` (§3.4 #27).
          *     READ is unrestricted: any authenticated identity may read ANY role's lessons.
-         *     M1 uses a single fixed task_type (§9.7); all roles fold against the one file seed
-         *     until a role's overlay diverges it.
+         *     All roles fold against the one file seed until a role's overlay diverges it.
+         *
+         *     T-2 removed the ``task_type`` axis: a lessons doc is addressed by ``role_key``
+         *     ALONE, and a request that still carries ``task_type`` is refused with a 400
+         *     naming the field rather than having it ignored.
          */
-        get: operations["handle_get_lessons_api_lessons__role_key___task_type__get"];
+        get: operations["handle_get_lessons_api_lessons__role_key__get"];
         put?: never;
         /**
          * Replace the WHOLE per-role lessons document. text is REQUIRED and unknown keys are rejected; only that role's agent or an admin may write it; emptying or sharply shrinking it needs allow_shrink=true; and the result is still judged against the lessons cap.
@@ -1089,15 +1092,21 @@ export interface paths {
          *     reading wrongly confined the office's admin to its own role.
          *
          *     Writes the owner overlay (``is_default`` → False) and fans a ``lessons`` delta.
+         *
+         *     T-2 removed the ``task_type`` axis. Before it, this write face validated the
+         *     bucket name NOWHERE - one mistyped ``task_type`` created a whole extra
+         *     classification and answered 200 - and the MCP tool listed the field as
+         *     REQUIRED, so every caller had to spell it. Removing the field is what closes
+         *     that door; a request that still carries it is refused with a 400 naming it.
          */
-        post: operations["handle_replace_lessons_api_lessons__role_key___task_type__post"];
+        post: operations["handle_replace_lessons_api_lessons__role_key__post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/lessons/{role_key}/{task_type}/patch": {
+    "/api/lessons/{role_key}/patch": {
         parameters: {
             query?: never;
             header?: never;
@@ -1115,8 +1124,10 @@ export interface paths {
          *     Per-role WRITE authz — identical to ``replace_lessons``: a caller below admin capability may patch ONLY its OWN member's ``role_key`` (read from the roster by the VERIFIED token sub, never a client field); a caller at or above the ``admin_agent`` principal class (owner, or an admin agent) patches any role.
          *
          *     Writes the owner overlay (``is_default`` → False) and fans a ``lessons`` delta. The receipt carries ``size``/``sha256`` verification anchors over the resulting doc.
+         *
+         *     T-2 removed the ``task_type`` axis: a lessons doc is addressed by ``role_key`` ALONE, and a request that still carries ``task_type`` is refused with a 400 naming the field rather than having it ignored.
          */
-        post: operations["handle_patch_lessons_api_lessons__role_key___task_type__patch_post"];
+        post: operations["handle_patch_lessons_api_lessons__role_key__patch_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4495,27 +4506,24 @@ export interface components {
             name: string;
             /** Role */
             role: string;
-            /**
-             * Task Type
-             * @default
-             */
-            task_type: string;
             /** Token */
             token?: string | null;
         };
         /**
          * BootstrapRequestDTO
-         * @description Bootstrap request (§3.4 #29): ``{role?, task_type?, member_id?}``. All
+         * @description Bootstrap request (§3.4 #29): ``{role?, member_id?}``. All
          *     optional — a UI preview omits ``member_id`` (no token minted); a warden spawn
          *     supplies it to mint the member's boot JWT.
+         *
+         *     T-2 removed ``task_type``: it existed only to choose which lessons bucket the
+         *     assembled persona folded in, and lessons no longer have buckets. Unknown keys
+         *     are refused (422), so a caller still sending it is told rather than ignored.
          */
         BootstrapRequestDTO: {
             /** Member Id */
             member_id?: string | null;
             /** Role */
             role?: string | null;
-            /** Task Type */
-            task_type?: string | null;
         };
         /**
          * BootstrapResultDTO
@@ -4965,10 +4973,9 @@ export interface components {
         /**
          * RoleDocSizesDTO
          * @description The three capped documents of ONE role, by size only: ``duty`` (the role
-         *     definition, get_role), ``insight`` (get_insight) and ``lessons`` (get_lessons on
-         *     the DEFAULT ``general`` bucket — that bucket ONLY; nothing constrains the
-         *     task_type a write may name, and lessons under another bucket name draw on this
-         *     same cap without being sized here). ``role_key`` is how to go read whichever one
+         *     definition, get_role), ``insight`` (get_insight) and ``lessons`` (get_lessons — a role has
+         *     exactly ONE lessons document since T-2 removed the ``task_type`` axis, so this
+         *     is that document, whole). ``role_key`` is how to go read whichever one
          *     turns out to be nearly full. Sizes are measured on the FOLDED document — the
          *     owner overlay ⊕ file seed a caller actually reads and edits — so they match what
          *     the per-document GETs report. No text of any kind.
@@ -4997,14 +5004,14 @@ export interface components {
          * DocSizesDTO
          * @description The station-wide capped-document size overview (``peek_doc_sizes`` MCP tool,
          *     zero params; ``GET /api/doc-sizes``): for EVERY role its role definition, its
-         *     insight and its DEFAULT lessons bucket, and for EVERY task manual its sop_md and
+         *     insight and its lessons, and for EVERY task manual its sop_md and
          *     its learnings — each as its current size plus the cap in force for that segment,
          *     and nothing else.
          *
-         *     Lessons is the one segment reported for the default bucket only. The write side
-         *     does not constrain the bucket name (the default merely fills in an absent
-         *     argument), so lessons written under any other bucket name draw on the same
-         *     lessons cap and are NOT counted here.
+         *     Every capped document is covered. Until T-2 lessons carried a ``task_type``
+         *     axis and only the default bucket was reported, so a document under any other
+         *     bucket name drew on the same lessons cap while staying off this listing; the
+         *     axis is gone and a role has exactly one lessons document.
          *
          *     It carries NO document content, so its size is a function of how many roles and
          *     manuals exist, never of what they hold — which is the point. The two numbers no
@@ -5276,9 +5283,8 @@ export interface components {
         };
         /**
          * LessonsDTO
-         * @description The folded per-role lessons doc (§3.4 #27). ``role_key`` scopes the doc to a
-         *     role (per-role-learnings step1); ``task_type`` is the single fixed key (§9.7).
-         *     ``is_default`` = seed-vs-edited.
+         * @description The folded per-role lessons doc (§3.4 #27). A lessons doc is addressed by
+         *     ``role_key`` ALONE (T-2). ``is_default`` = seed-vs-edited.
          */
         LessonsDTO: {
             /**
@@ -5313,11 +5319,6 @@ export interface components {
              * @default 3
              */
             schema_version: number;
-            /**
-             * Task Type
-             * @default
-             */
-            task_type: string;
             /**
              * Text
              * @default
@@ -5400,11 +5401,6 @@ export interface components {
              * @default 0
              */
             size_chars: number;
-            /**
-             * Task Type
-             * @default
-             */
-            task_type: string;
         };
         /**
          * LessonsReplaceDTO
@@ -11292,13 +11288,12 @@ export interface operations {
             };
         };
     };
-    handle_get_lessons_api_lessons__role_key___task_type__get: {
+    handle_get_lessons_api_lessons__role_key__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 role_key: string;
-                task_type: string;
             };
             cookie?: never;
         };
@@ -11342,13 +11337,12 @@ export interface operations {
             };
         };
     };
-    handle_replace_lessons_api_lessons__role_key___task_type__post: {
+    handle_replace_lessons_api_lessons__role_key__post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 role_key: string;
-                task_type: string;
             };
             cookie?: never;
         };
@@ -11396,13 +11390,12 @@ export interface operations {
             };
         };
     };
-    handle_patch_lessons_api_lessons__role_key___task_type__patch_post: {
+    handle_patch_lessons_api_lessons__role_key__patch_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 role_key: string;
-                task_type: string;
             };
             cookie?: never;
         };

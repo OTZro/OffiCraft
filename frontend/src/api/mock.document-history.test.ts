@@ -24,7 +24,7 @@ describe("mockApi · document history", () => {
     // here would show the cockpit a version the real server never kept.
     await mockApi.saveGlobalContext("first customization");
     await mockApi.saveRole("assistant", { definitionMd: "first rewrite" });
-    await mockApi.saveLessons("assistant", "general", "first learnings");
+    await mockApi.saveLessons("assistant", "first learnings");
 
     expect(
       await documentRevisions(mockApi, "global_context", "global")
@@ -33,7 +33,7 @@ describe("mockApi · document history", () => {
       await documentRevisions(mockApi, "role_definition", "assistant")
     ).toEqual([]);
     expect(
-      await documentRevisions(mockApi, "lessons", "assistant::general")
+      await documentRevisions(mockApi, "lessons", "assistant")
     ).toEqual([]);
   });
 
@@ -71,13 +71,13 @@ describe("mockApi · document history", () => {
   });
 
   it("scopes history per document, not per kind", async () => {
-    await mockApi.saveLessons("assistant", "general", "assistant learnings");
-    await mockApi.saveLessons("assistant", "general", "assistant learnings v2");
+    await mockApi.saveLessons("assistant", "assistant learnings");
+    await mockApi.saveLessons("assistant", "assistant learnings v2");
     expect(
-      await documentRevisions(mockApi, "lessons", "researcher::general")
+      await documentRevisions(mockApi, "lessons", "researcher")
     ).toEqual([]);
     expect(
-      await documentRevisions(mockApi, "lessons", "assistant::general")
+      await documentRevisions(mockApi, "lessons", "assistant")
     ).toHaveLength(1);
   });
 
@@ -242,18 +242,17 @@ describe("mockApi · document history", () => {
   // the mock is the cockpit's stand-in for the contract: one that still lists
   // history for a deleted document teaches the UI, and the next reader of this
   // file, a behaviour the server does not have.
-  it("deleting a role drops its own history and the history of ALL its lessons", async () => {
+  it("deleting a role drops its own history and its lessons history", async () => {
     const { role } = await mockApi.createRole({ name: "臨時角色" });
     await mockApi.saveRole(role.key, { definitionMd: "改寫" });
-    // TWO task types: the lessons history key is compound (`<role>::<type>`),
-    // so a delete that only matched one exact key would leave the other behind.
-    for (const taskType of ["general", "planning"]) {
-      await mockApi.saveLessons(role.key, taskType, "第一版");
-      await mockApi.saveLessons(role.key, taskType, "第二版");
-      expect(
-        await documentRevisions(mockApi, "lessons", `${role.key}::${taskType}`)
-      ).toHaveLength(1);
-    }
+    // The lessons history key is the BARE role_key since T-2 — one document per
+    // role, addressed exactly, so this is an equality rather than the prefix
+    // sweep the compound key used to need.
+    await mockApi.saveLessons(role.key, "第一版");
+    await mockApi.saveLessons(role.key, "第二版");
+    expect(
+      await documentRevisions(mockApi, "lessons", role.key)
+    ).toHaveLength(1);
     expect(
       await documentRevisions(mockApi, "role_definition", role.key)
     ).toHaveLength(1);
@@ -263,12 +262,7 @@ describe("mockApi · document history", () => {
     expect(
       await documentRevisions(mockApi, "role_definition", role.key)
     ).toEqual([]);
-    expect(
-      await documentRevisions(mockApi, "lessons", `${role.key}::general`)
-    ).toEqual([]);
-    expect(
-      await documentRevisions(mockApi, "lessons", `${role.key}::planning`)
-    ).toEqual([]);
+    expect(await documentRevisions(mockApi, "lessons", role.key)).toEqual([]);
   });
 
   it("deleting a task manual drops the history of BOTH its series", async () => {
@@ -373,7 +367,7 @@ describe("mockApi · document history", () => {
       ["role_definition", custom.key],
       ["task_manual_sop", manual.typeKey],
       ["task_manual_learnings", manual.typeKey],
-      ["lessons", `${custom.key}::general`],
+      ["lessons", custom.key],
     ] as const) {
       await expect(
         mockApi.getDocumentSeed(probe[0], probe[1])

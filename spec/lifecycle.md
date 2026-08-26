@@ -166,8 +166,8 @@ payload) — they MUST produce byte-identical context for the same inputs.
 
 `role_key := explicit role param → member.role_key → "assistant"`. The
 resolved role folds as: owner overlay (non-tombstoned) wins; else the file seed; neither →
-fail (HTTP 404 on the bootstrap endpoint; the reconcile producer fails closed with no START). `task_type` defaults to the seed lessons task type (`"general"`). Lessons
-fold per `(role_key, task_type)`: overlay wins, else the shared file seed.
+fail (HTTP 404 on the bootstrap endpoint; the reconcile producer fails closed with no START). Lessons
+fold per `role_key` alone (T-2 removed the `task_type` axis): overlay wins, else the shared file seed.
 The user-custom block folds from the owner's user-context row; absent/tombstoned → empty.
 
 ### 2.2 Assembly order — normative

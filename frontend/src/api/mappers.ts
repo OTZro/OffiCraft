@@ -1357,7 +1357,6 @@ export function toBootstrap(w: WireBootstrap): BootstrapView {
   return {
     role: w.role,
     name: w.name,
-    taskType: w.task_type,
     context: w.context,
   };
 }
@@ -1511,7 +1510,6 @@ export function toLessons(w: WireLessons): LessonsView {
     sizeChars: w.size_chars ?? 0,
     capChars: w.cap_chars ?? 0,
     roleKey: w.role_key,
-    taskType: w.task_type,
     text: w.text,
     isDefault: w.is_default,
   };

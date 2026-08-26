@@ -259,10 +259,10 @@ def _rendered(text: str, join: str = "\n\n") -> str:
     return head + join + body if sep else text
 
 
-def _expected_context(client, owner_token, role_key: str, task_type: str, user_text: str) -> str:
+def _expected_context(client, owner_token, role_key: str, user_text: str) -> str:
     role = client.get(f"/api/roles/{role_key}", headers=_auth(owner_token)).json()
     lessons = client.get(
-        f"/api/lessons/{role_key}/{task_type}", headers=_auth(owner_token)
+        f"/api/lessons/{role_key}", headers=_auth(owner_token)
     ).json()
     insight = client.get(
         f"/api/insight/{role_key}", headers=_auth(owner_token)
@@ -292,17 +292,24 @@ def _expected_context(client, owner_token, role_key: str, task_type: str, user_t
     if insight["text"].strip():
         parts.append(f"# Insight ({role_key})\n\n{insight['text'].strip()}")
     parts += [
-        f"# Lessons ({role_key} / {task_type})\n\n{lessons['text'].strip()}",
+        f"# Lessons ({role_key})\n\n{lessons['text'].strip()}",
         _rendered(_seed("boot_sequence.md")).strip(),
     ]
     return "\n\n".join(parts) + "\n"
 
 
-def _bootstrap_context(client, owner_token) -> tuple[str, str, str]:
+def _bootstrap_context(client, owner_token) -> tuple[str, str]:
     r = client.post("/api/bootstrap", json={}, headers=_auth(owner_token))
     assert r.status_code == 200, r.text
     data = r.json()
-    return data["context"], data["role"], data["task_type"]
+    # T-2 removed task_type from BootstrapDTO along with the lessons axis it
+    # named. Asserted rather than merely not-read: an echo that came back would
+    # mean the field survived somewhere.
+    assert "task_type" not in data, (
+        "the bootstrap receipt still carries task_type — T-2 removed the lessons "
+        f"classification axis this field named: {sorted(data)}"
+    )
+    return data["context"], data["role"]
 
 
 def test_boot_fold_bytes_with_owner_additions(client, owner_token) -> None:
@@ -314,8 +321,8 @@ def test_boot_fold_bytes_with_owner_additions(client, owner_token) -> None:
         "/api/global-context", json={"text": marker}, headers=_auth(owner_token)
     )
     assert r.status_code == 200, r.text
-    context, role_key, task_type = _bootstrap_context(client, owner_token)
-    expected = _expected_context(client, owner_token, role_key, task_type, marker)
+    context, role_key = _bootstrap_context(client, owner_token)
+    expected = _expected_context(client, owner_token, role_key, marker)
     assert context == expected, (
         "boot context does not reproduce the §2.2 assembly byte-for-byte "
         f"(len served={len(context)} vs expected={len(expected)})"
@@ -330,29 +337,29 @@ def test_boot_fold_bytes_blank_user_block_skipped(client, owner_token) -> None:
     header — and the fold is byte-identical to the form without it."""
     r = client.post("/api/global-context/reset", headers=_auth(owner_token))
     assert r.status_code == 200, r.text
-    context, role_key, task_type = _bootstrap_context(client, owner_token)
+    context, role_key = _bootstrap_context(client, owner_token)
     assert "# 使用者自訂（Owner Additions）" not in context, (
         "blank owner text must skip the user-custom header entirely"
     )
-    expected = _expected_context(client, owner_token, role_key, task_type, "")
+    expected = _expected_context(client, owner_token, role_key, "")
     assert context == expected
 
 
 def test_boot_fold_lessons_overlay_wins(client, owner_token) -> None:
     """§2.1: the lessons fold is overlay-wins — an API-written lessons doc for
-    (role, default task_type) must appear verbatim inside the boot context."""
-    _, role_key, task_type = _bootstrap_context(client, owner_token)
+    the role must appear verbatim inside the boot context."""
+    _, role_key = _bootstrap_context(client, owner_token)
     marker = f"conf lessons overlay {uuid.uuid4().hex[:8]}"
     r = client.post(
-        f"/api/lessons/{role_key}/{task_type}",
+        f"/api/lessons/{role_key}",
         json={"text": marker},
         headers=_auth(owner_token),
     )
     assert r.status_code == 200, r.text
-    context, role_key2, task_type2 = _bootstrap_context(client, owner_token)
-    assert (role_key2, task_type2) == (role_key, task_type)
-    assert f"# Lessons ({role_key} / {task_type})\n\n{marker}" in context
-    expected = _expected_context(client, owner_token, role_key, task_type, "")
+    context, role_key2 = _bootstrap_context(client, owner_token)
+    assert role_key2 == role_key
+    assert f"# Lessons ({role_key})\n\n{marker}" in context
+    expected = _expected_context(client, owner_token, role_key, "")
     assert context == expected
 
 

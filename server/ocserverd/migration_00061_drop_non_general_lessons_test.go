@@ -300,9 +300,14 @@ type sqlDBForMigration61 struct {
 	db *sql.DB
 }
 
+// 🔴 UpTo(61), NOT the whole ladder. 00062 drops the task_type COLUMN, so
+// running past this migration would leave every assertion in this file querying
+// a column that no longer exists — and the failure would read as a broken test
+// rather than as "you are asking 00061's question of a later world". This file
+// is about 00061 in isolation; 00062 has its own.
 func (w *sqlDBForMigration61) applyMigration() {
 	w.t.Helper()
-	if err := runMigrations(w.db); err != nil {
+	if err := goose.UpTo(w.db, "migrations", migration00061Version); err != nil {
 		w.t.Fatalf("goose up through %d: %v", migration00061Version, err)
 	}
 }

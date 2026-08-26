@@ -582,7 +582,7 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 	// slots on a snapshot of text nobody replaced (and bumps updated_ts for a
 	// change that did not happen), silently shortening the owner's undo path.
 	// Full reasoning at the patch_lessons twin (api_roles.go,
-	// HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost). This is the same
+	// HandlePatchLessonsApiLessonsRoleKeyPatchPost). This is the same
 	// "did the field actually change" gate update_task_manual already applies
 	// above via taskManualHistoryStreams; the receipt below stays outside the
 	// gate and unchanged.

@@ -527,7 +527,7 @@ func TestBootDoc_EditedBlocksReachTheAssembledBootContext(t *testing.T) {
 
 	// Baseline: the marks are NOT in the shipped seeds, so finding one later
 	// can only mean the edit was folded in.
-	base, err := api.buildBootContext("", &Member{ID: "m-x", Name: "X", RoleKey: seedRoleAssistant}, "")
+	base, err := api.buildBootContext("", &Member{ID: "m-x", Name: "X", RoleKey: seedRoleAssistant})
 	if err != nil || base == nil {
 		t.Fatalf("baseline boot context: %v", err)
 	}
@@ -548,7 +548,7 @@ func TestBootDoc_EditedBlocksReachTheAssembledBootContext(t *testing.T) {
 	write(docKindBootSequence, bootSequenceKeyCodex, "# 啟動程序\n\n"+codexMark+"\n")
 
 	// (a) staff, claude runtime.
-	claudeBoot, err := api.buildBootContext("", &Member{ID: "m-c", Name: "C", RoleKey: seedRoleAssistant, Runtime: RuntimeClaude}, "")
+	claudeBoot, err := api.buildBootContext("", &Member{ID: "m-c", Name: "C", RoleKey: seedRoleAssistant, Runtime: RuntimeClaude})
 	if err != nil || claudeBoot == nil {
 		t.Fatalf("claude boot context: %v", err)
 	}
@@ -564,7 +564,7 @@ func TestBootDoc_EditedBlocksReachTheAssembledBootContext(t *testing.T) {
 
 	// (b) staff, codex runtime — the opposite pairing, so a mapping that always
 	// answers "claude" cannot pass.
-	codexBoot, err := api.buildBootContext("", &Member{ID: "m-x2", Name: "X2", RoleKey: seedRoleAssistant, Runtime: RuntimeCodex}, "")
+	codexBoot, err := api.buildBootContext("", &Member{ID: "m-x2", Name: "X2", RoleKey: seedRoleAssistant, Runtime: RuntimeCodex})
 	if err != nil || codexBoot == nil {
 		t.Fatalf("codex boot context: %v", err)
 	}

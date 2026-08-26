@@ -145,10 +145,10 @@ func TestDocumentHistoryRestorePreservesOverlayTombstones(t *testing.T) {
 		t.Fatalf("restored role overlay = %+v, %v; want tombstone", roleOverlay, err)
 	}
 
-	if err := api.dal.PutLessons(Lessons{RoleKey: role, TaskType: seedLessonsTaskType, Tombstoned: true}); err != nil {
+	if err := api.dal.PutLessons(Lessons{RoleKey: role, Tombstoned: true}); err != nil {
 		t.Fatal(err)
 	}
-	lessonsSnapshot, err := lessonsHistorySnapshot(&Lessons{RoleKey: role, TaskType: seedLessonsTaskType, Tombstoned: true})
+	lessonsSnapshot, err := lessonsHistorySnapshot(&Lessons{RoleKey: role, Tombstoned: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,14 +176,14 @@ func agentList(t *testing.T, api *apiServer, kind, key string) []historyRow {
 	return hydrateHistory(t, api, kind, key, "m-agent", "agent", rows)
 }
 
-func replaceLessonsThrough(t *testing.T, api *apiServer, roleKey, taskType, text string) {
+func replaceLessonsThrough(t *testing.T, api *apiServer, roleKey, text string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	api.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(rec, taskReq(t, http.MethodPost,
-		"/api/lessons/"+roleKey+"/"+taskType, map[string]any{"text": text}, "owner", "owner"),
-		roleKey, taskType)
+	api.HandleReplaceLessonsApiLessonsRoleKeyPost(rec, taskReq(t, http.MethodPost,
+		"/api/lessons/"+roleKey, map[string]any{"text": text}, "owner", "owner"),
+		roleKey)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("replace lessons %s/%s: status=%d body=%s", roleKey, taskType, rec.Code, rec.Body.String())
+		t.Fatalf("replace lessons %s: status=%d body=%s", roleKey, rec.Code, rec.Body.String())
 	}
 }
 
@@ -198,7 +198,7 @@ func updateRoleThrough(t *testing.T, api *apiServer, role, definition string) {
 }
 
 // Deleting a role must take its retained versions with it — its own definition
-// history and the lessons history of every task type it owned. Left behind,
+// history and its lessons history. Left behind,
 // those versions stay readable by any authenticated caller, which is exactly
 // the "permanently removed" promise the guide makes.
 func TestDeletingARoleRemovesItsRetainedDocumentHistory(t *testing.T) {
@@ -210,13 +210,11 @@ func TestDeletingARoleRemovesItsRetainedDocumentHistory(t *testing.T) {
 		}
 		updateRoleThrough(t, api, key, "v1")
 		updateRoleThrough(t, api, key, "v2")
-		for _, taskType := range []string{seedLessonsTaskType, "tm-second"} {
-			replaceLessonsThrough(t, api, key, taskType, "lesson one")
-			replaceLessonsThrough(t, api, key, taskType, "lesson two")
-		}
+		replaceLessonsThrough(t, api, key, "lesson one")
+		replaceLessonsThrough(t, api, key, "lesson two")
 	}
 	if len(agentList(t, api, "role_definition", role)) == 0 ||
-		len(agentList(t, api, "lessons", role+"::"+seedLessonsTaskType)) == 0 {
+		len(agentList(t, api, "lessons", role)) == 0 {
 		t.Fatal("the fixture retained nothing — the deletion assertions below would prove nothing")
 	}
 
@@ -227,23 +225,23 @@ func TestDeletingARoleRemovesItsRetainedDocumentHistory(t *testing.T) {
 		t.Fatalf("delete role: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	result := decodeBody[map[string]any](t, rec)
-	if got := result["deleted_lessons"]; got != float64(2) {
-		t.Errorf("deleted_lessons = %v, want 2 — the cascade changed the handler's answer", got)
+	if got := result["deleted_lessons"]; got != float64(1) {
+		t.Errorf("deleted_lessons = %v, want 1 — a role owns exactly ONE lessons doc since T-2", got)
 	}
 
 	if history := agentList(t, api, "role_definition", role); len(history) != 0 {
 		t.Errorf("the deleted role still has %d readable definition versions: %+v", len(history), history)
 	}
-	for _, taskType := range []string{seedLessonsTaskType, "tm-second"} {
-		if history := agentList(t, api, "lessons", role+"::"+taskType); len(history) != 0 {
-			t.Errorf("the deleted role still has %d readable lessons versions under %q: %+v",
-				len(history), taskType, history)
-		}
+	if history := agentList(t, api, "lessons", role); len(history) != 0 {
+		t.Errorf("the deleted role still has %d readable lessons versions: %+v",
+			len(history), history)
 	}
-	// Only that role's documents: the prefix match includes the "::" separator,
-	// so a role whose key merely starts with the same characters keeps its own.
+	// Only that role's documents: the cascade matches the key EXACTLY, so a role
+	// whose key merely starts with the same characters keeps its own — the
+	// neighbour here is "r-cascadex" against "r-cascade" precisely to catch a
+	// prefix match sneaking back in.
 	if len(agentList(t, api, "role_definition", neighbour)) == 0 ||
-		len(agentList(t, api, "lessons", neighbour+"::"+seedLessonsTaskType)) == 0 {
+		len(agentList(t, api, "lessons", neighbour)) == 0 {
 		t.Error("deleting a role also erased the history of a role with a similar key")
 	}
 }
@@ -333,9 +331,9 @@ func TestEveryDocumentWriteFaceRetainsTheVersionItReplaced(t *testing.T) {
 				ownerReq(t, http.MethodPost, "/api/global-context", map[string]any{"text": text}))
 		})
 	}
-	writeLessons := func(t *testing.T, api *apiServer, role, taskType, text string) {
+	writeLessons := func(t *testing.T, api *apiServer, role, text string) {
 		t.Helper()
-		replaceLessonsThrough(t, api, role, taskType, text)
+		replaceLessonsThrough(t, api, role, text)
 	}
 	writeInsight := func(t *testing.T, api *apiServer, roleKey, text string) {
 		t.Helper()
@@ -465,23 +463,23 @@ func TestEveryDocumentWriteFaceRetainsTheVersionItReplaced(t *testing.T) {
 		{
 			name: "replace_lessons",
 			run: func(t *testing.T, api *apiServer) (string, string, string, string) {
-				writeLessons(t, api, role, taskType, "lesson one")
-				writeLessons(t, api, role, taskType, "lesson two")
-				return "lessons", role + "::" + taskType, "text", "lesson one"
+				writeLessons(t, api, role, "lesson one")
+				writeLessons(t, api, role, "lesson two")
+				return "lessons", role, "text", "lesson one"
 			},
 		},
 		{
 			name: "patch_lessons",
 			run: func(t *testing.T, api *apiServer) (string, string, string, string) {
-				writeLessons(t, api, role, taskType, "lesson one")
-				writeLessons(t, api, role, taskType, "lesson two")
+				writeLessons(t, api, role, "lesson one")
+				writeLessons(t, api, role, "lesson two")
 				call(t, "patch_lessons", func(rec *httptest.ResponseRecorder) {
-					api.HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(rec,
-						ownerReq(t, http.MethodPost, "/api/lessons/"+role+"/"+taskType+"/patch",
+					api.HandlePatchLessonsApiLessonsRoleKeyPatchPost(rec,
+						ownerReq(t, http.MethodPost, "/api/lessons/"+role+"/patch",
 							map[string]any{"edits": []map[string]any{{"old": "lesson two", "new": "lesson three"}}}),
-						role, taskType)
+						role)
 				})
-				return "lessons", role + "::" + taskType, "text", "lesson two"
+				return "lessons", role, "text", "lesson two"
 			},
 		},
 		{

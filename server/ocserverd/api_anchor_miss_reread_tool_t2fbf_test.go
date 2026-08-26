@@ -55,16 +55,16 @@ func assertNamesOnlyReadTool(t *testing.T, face, msg, want string) {
 func TestPatchLessonsAnchorMissNamesGetLessons(t *testing.T) {
 	srv, dal, secret := newLessonsTestServer(t)
 	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
-	seedLessonsOverlay(t, dal, "assistant", "general", "dup marker\nmiddle\ndup marker\n")
+	seedLessonsOverlay(t, dal, "assistant", "dup marker\nmiddle\ndup marker\n")
 
-	status, data := patchLessons(t, srv.URL, ownerTok, "assistant", "general",
+	status, data := patchLessons(t, srv.URL, ownerTok, "assistant",
 		`{"edits":[{"old":"an anchor that is simply not there","new":"x"}]}`)
 	if status != http.StatusBadRequest {
 		t.Fatalf("a missing anchor must be a flat 400, got %d: %v", status, data)
 	}
 	assertNamesOnlyReadTool(t, "patch_lessons/missing", errMessage(data), "get_lessons")
 
-	status, data = patchLessons(t, srv.URL, ownerTok, "assistant", "general",
+	status, data = patchLessons(t, srv.URL, ownerTok, "assistant",
 		`{"edits":[{"old":"dup marker","new":"resolved"}]}`)
 	if status != http.StatusBadRequest {
 		t.Fatalf("an ambiguous anchor must be a flat 400, got %d: %v", status, data)

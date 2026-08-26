@@ -50,7 +50,7 @@ export const SEED_SYSTEM_INTERACTION_MD = foldOwnerId(SEED_SYSTEM_INTERACTION_RA
 /** seeds/role_def_assistant.md — the REAL Mira persona. */
 export const SEED_ROLE_ASSISTANT_MD = foldOwnerId(SEED_ROLE_ASSISTANT_RAW);
 
-/** seeds/lessons.md — the REAL accumulated-lessons seed (task_type "general"),
+/** seeds/lessons.md — the REAL accumulated-lessons seed,
  * is_default=true → the folded GET returns exactly this (UI labels it "預設").
  * An owner edit later overlays it. */
 export const SEED_LESSONS_MD = foldOwnerId(SEED_LESSONS_RAW);

@@ -112,9 +112,6 @@ const (
 	seedRoleAssistant     = "assistant"
 	seedRoleAssistantName = "Assistant"
 
-	// The single fixed lessons task_type key.
-	seedLessonsTaskType = "general"
-
 	// The owner placeholder every seed file substitutes at read time.
 	ownerPlaceholder = "{OWNER_ID}"
 )
@@ -305,8 +302,8 @@ func (s *apiServer) foldRoleDefDTO(roleKey string) (*roleDefDTO, error) {
 
 // foldLessonsDTO folds a per-role lessons doc (owner overlay ⊕ the ONE shared
 // file seed).
-func (s *apiServer) foldLessonsDTO(roleKey, taskType string) (*lessonsDTO, error) {
-	overlay, err := s.dal.GetLessons(roleKey, taskType)
+func (s *apiServer) foldLessonsDTO(roleKey string) (*lessonsDTO, error) {
+	overlay, err := s.dal.GetLessons(roleKey)
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +316,6 @@ func (s *apiServer) foldLessonsDTO(roleKey, taskType string) (*lessonsDTO, error
 		SizeChars:     utf8.RuneCountInString(text),
 		CapChars:      s.learningCap(),
 		RoleKey:       roleKey,
-		TaskType:      taskType,
 		Text:          text,
 		OwnerID:       wireOwnerID,
 		SchemaVersion: wireSchemaVersion,
@@ -345,10 +341,9 @@ func (s *apiServer) foldUserContextDTO() (*globalContextDTO, error) {
 
 // bootContext is the folded boot package.
 type bootContext struct {
-	RoleKey  string
-	Name     string
-	TaskType string
-	Context  string
+	RoleKey string
+	Name    string
+	Context string
 }
 
 // bootSequenceSeedName picks the boot-sequence seed for a runtime. It is the
@@ -440,7 +435,7 @@ func bootSequenceSeedForKey(key string) (string, bool) {
 // user-custom block when non-blank, # Role, # Insight when non-blank, # Lessons,
 // boot-sequence seed — joined "\n\n" + one trailing "\n"). nil = unknown role
 // (caller maps to 404 / fail-closed).
-func (s *apiServer) buildBootContext(role string, member *Member, taskType string) (*bootContext, error) {
+func (s *apiServer) buildBootContext(role string, member *Member) (*bootContext, error) {
 	roleKey := resolveBootRoleKey(role, member)
 	roleDTO, err := s.foldRoleDefDTO(roleKey)
 	if err != nil {
@@ -449,14 +444,11 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 	if roleDTO == nil {
 		return nil, nil
 	}
-	if taskType == "" {
-		taskType = seedLessonsTaskType
-	}
 	userCtx, err := s.foldUserContextDTO()
 	if err != nil {
 		return nil, err
 	}
-	lessons, err := s.foldLessonsDTO(roleKey, taskType)
+	lessons, err := s.foldLessonsDTO(roleKey)
 	if err != nil {
 		return nil, err
 	}
@@ -495,14 +487,32 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 	// leading copies of the EXACT title line before prepending exactly one, so
 	// the boot context always carries a single title AND an already-poisoned
 	// doc self-heals in the assembled context.
-	lessonsTitle := "# Lessons (" + lessons.RoleKey + " / " + lessons.TaskType + ")"
+	//
+	// 🔴 TWO TITLES ARE STRIPPED, NOT ONE. Until T-2 this title carried the
+	// lessons bucket — "# Lessons (assistant / general)" — so a doc poisoned
+	// BEFORE that change carries the old wording, and stripping only the new
+	// one would leave it wedged at the top of the doc forever with no way for
+	// the self-heal to reach it. Both forms are removed; the legacy form's
+	// bucket half is 'general' because that is the only bucket 00061 left
+	// behind and the only one this title could ever have named after it.
+	lessonsTitle := "# Lessons (" + lessons.RoleKey + ")"
+	legacyLessonsTitle := "# Lessons (" + lessons.RoleKey + " / general)"
 	lessonsBody := strings.TrimSpace(lessons.Text)
-	for strings.HasPrefix(lessonsBody, lessonsTitle) {
-		rest := lessonsBody[len(lessonsTitle):]
-		if rest != "" && !strings.HasPrefix(rest, "\n") {
-			break // title is a prefix of a longer line, not a duplicate title line
+	for {
+		stripped := false
+		for _, title := range []string{lessonsTitle, legacyLessonsTitle} {
+			for strings.HasPrefix(lessonsBody, title) {
+				rest := lessonsBody[len(title):]
+				if rest != "" && !strings.HasPrefix(rest, "\n") {
+					break // title is a prefix of a longer line, not a duplicate title line
+				}
+				lessonsBody = strings.TrimSpace(rest)
+				stripped = true
+			}
 		}
-		lessonsBody = strings.TrimSpace(rest)
+		if !stripped {
+			break
+		}
 	}
 	// T-4595 — the user-custom block moved from below the persona to above it
 	// (it used to sit between the lessons and the boot sequence). Staff and
@@ -547,10 +557,9 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 		name = member.Name
 	}
 	return &bootContext{
-		RoleKey:  roleKey,
-		Name:     name,
-		TaskType: taskType,
-		Context:  strings.Join(parts, "\n\n") + "\n",
+		RoleKey: roleKey,
+		Name:    name,
+		Context: strings.Join(parts, "\n\n") + "\n",
 	}, nil
 }
 

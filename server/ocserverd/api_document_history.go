@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"unicode/utf8"
 )
 
@@ -23,17 +22,18 @@ var errDocumentHistoryContent = errors.New("this version is refused by the docum
 const legacyTaskManualKindMsg = "document history kind \"task_manual\" was retired: " +
 	"use \"task_manual_sop\" or \"task_manual_learnings\""
 
-func historyKeyParts(kind, key string) (string, string, bool) {
-	if kind != "lessons" {
-		return key, "", key != ""
-	}
-	parts := strings.SplitN(key, "::", 2)
-	return parts[0], func() string {
-		if len(parts) == 2 {
-			return parts[1]
-		}
-		return ""
-	}(), len(parts) == 2 && parts[0] != "" && parts[1] != ""
+// historyKeyParts splits a document-history key into its PRIMARY identity and
+// reports whether the key names a document at all.
+//
+// 🔴 THE SECOND RETURN IS GONE, and that is the shape of this whole change.
+// Until T-2 the lessons kind was the ONE key with a composite shape
+// ("<role_key>::<task_type>"), so this function existed to split it and every
+// caller had to carry the second half. With the axis removed a lessons key is
+// the bare role_key like every other kind's, so the split has nothing left to
+// do — but the function stays, because the "is this key non-empty" question it
+// also answers is what documentHistoryAllowed gates on.
+func historyKeyParts(kind, key string) (string, bool) {
+	return key, key != ""
 }
 
 func documentHistoryContent(h DocumentHistory) (map[string]string, error) {
@@ -155,9 +155,9 @@ func roleDefSnapshotIn(roleKey string) func(sqlQuerier) (string, error) {
 	}
 }
 
-func lessonsSnapshotIn(roleKey, taskType string) func(sqlQuerier) (string, error) {
+func lessonsSnapshotIn(roleKey string) func(sqlQuerier) (string, error) {
 	return func(q sqlQuerier) (string, error) {
-		current, err := getLessonsOn(q, roleKey, taskType)
+		current, err := getLessonsOn(q, roleKey)
 		if err != nil {
 			return "", err
 		}
@@ -215,7 +215,7 @@ func roleDefHistoryStreams(roleKey, actor string, definitionChanged bool) []docu
 }
 
 func (s *apiServer) documentHistoryAllowed(w http.ResponseWriter, r *http.Request, kind, key string, write bool) bool {
-	primary, _, valid := historyKeyParts(kind, key)
+	primary, valid := historyKeyParts(kind, key)
 	if !valid {
 		writeError(w, http.StatusBadRequest, "invalid document history key")
 		return false
@@ -605,16 +605,20 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 			return putRoleDefOn(ex, RoleDef{RoleKey: key, Name: name, DefinitionMD: content["definition_md"], Tombstoned: historyTombstoned(content)})
 		})
 	case "lessons":
-		roleKey, taskType, _ := historyKeyParts(kind, key)
-		current, err := s.foldLessonsDTO(roleKey, taskType)
+		// The key IS the role_key since T-2 — no split, and therefore no way
+		// for a restore to write a task_type the caller never chose. That path
+		// is what 00061 had to shut a door against in the migration itself;
+		// there is no longer a door.
+		roleKey := key
+		current, err := s.foldLessonsDTO(roleKey)
 		if err != nil {
 			return err
 		}
 		if DocCapBlocked(s.learningCap(), current.Text, content["text"]) {
 			return errDocumentHistoryCap
 		}
-		return s.dal.SaveWithDocumentHistory(kind, key, actor, lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
-			return putLessonsOn(ex, Lessons{RoleKey: roleKey, TaskType: taskType, Text: content["text"], Tombstoned: historyTombstoned(content)})
+		return s.dal.SaveWithDocumentHistory(kind, key, actor, lessonsSnapshotIn(roleKey), func(ex sqlExecer) error {
+			return putLessonsOn(ex, Lessons{RoleKey: roleKey, Text: content["text"], Tombstoned: historyTombstoned(content)})
 		})
 	case docKindTaskDescription:
 		// T-e271. No doc cap: the description has never had a length ceiling on

@@ -312,14 +312,11 @@ func TestValidateOverlayEntities(t *testing.T) {
 	if err := ValidateRoleDef(RoleDef{}); err == nil {
 		t.Fatal("blank role_key must be refused")
 	}
-	if err := ValidateLessons(Lessons{RoleKey: "assistant", TaskType: "default"}); err != nil {
+	if err := ValidateLessons(Lessons{RoleKey: "assistant"}); err != nil {
 		t.Fatalf("valid lessons refused: %v", err)
 	}
-	if err := ValidateLessons(Lessons{TaskType: "default"}); err == nil {
+	if err := ValidateLessons(Lessons{}); err == nil {
 		t.Fatal("blank role_key must be refused")
-	}
-	if err := ValidateLessons(Lessons{RoleKey: "assistant"}); err == nil {
-		t.Fatal("blank task_type must be refused")
 	}
 	if err := ValidateAccountAlias(AccountAlias{Account: "acct"}); err != nil {
 		t.Fatalf("valid account alias refused: %v", err)
@@ -472,11 +469,11 @@ func TestFoldLessons(t *testing.T) {
 	if text, isDefault := FoldLessons(nil, "seed lessons"); text != "seed lessons" || !isDefault {
 		t.Fatalf("no overlay must fold to the seed default, got (%q, %v)", text, isDefault)
 	}
-	dead := &Lessons{RoleKey: "assistant", TaskType: "default", Text: "old", Tombstoned: true}
+	dead := &Lessons{RoleKey: "assistant", Text: "old", Tombstoned: true}
 	if text, isDefault := FoldLessons(dead, "seed lessons"); text != "seed lessons" || !isDefault {
 		t.Fatalf("tombstoned overlay must fold to the seed default, got (%q, %v)", text, isDefault)
 	}
-	live := &Lessons{RoleKey: "assistant", TaskType: "default", Text: "learned"}
+	live := &Lessons{RoleKey: "assistant", Text: "learned"}
 	if text, isDefault := FoldLessons(live, "seed lessons"); text != "learned" || isDefault {
 		t.Fatalf("live overlay must win, got (%q, %v)", text, isDefault)
 	}

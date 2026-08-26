@@ -13,9 +13,12 @@
 // assertions are on values only the server's names can produce.
 //
 // The two things that can silently drift here are the METHOD (a restore is a
-// POST on its own sub-path, not a PUT on the revision) and how the composite
-// lessons key "<role_key>::<task_type>" is placed — it is ONE path segment, so
-// a naive split would address a route that does not exist.
+// POST on its own sub-path, not a PUT on the revision) and how a key
+// containing "::" is placed — it is ONE path segment, so a naive split would
+// address a route that does not exist. Lessons keys stopped carrying "::" in
+// T-2, which is exactly why the fixture below still uses one: the encoding
+// rule outlived the key shape that motivated it, and nothing else in this
+// suite would notice if it broke.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { httpApi } from "./http";

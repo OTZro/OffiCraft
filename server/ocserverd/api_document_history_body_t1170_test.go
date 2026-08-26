@@ -205,7 +205,10 @@ func TestGetDocumentVersionSharesTheListingsGateAndRefusals(t *testing.T) {
 	}{
 		{"unknown kind", "no_such_kind", "global"},
 		{"retired kind", docKindTaskManual, "tm-x"},
-		{"malformed lessons key", "lessons", "role-only"},
+		// T-2: a lessons key is the bare role_key, so the composite shapes are
+		// no longer malformed. What stays malformed for EVERY kind is a blank
+		// key, which is what this row now pins.
+		{"blank lessons key", "lessons", ""},
 	} {
 		wantSame := listStatus(refusal.kind, refusal.key, "owner", "owner")
 		if wantSame != http.StatusBadRequest {

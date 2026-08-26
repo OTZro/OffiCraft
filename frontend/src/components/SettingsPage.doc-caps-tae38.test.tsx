@@ -91,7 +91,7 @@ describe("T-ae38 — the three journal blocks each show their OWN budget", () =>
     await setCaps();
     // Multi-byte on purpose: the server counts RUNES, and `String.length` would
     // agree with a rune count on ASCII. "環境筆記" is 4 runes / 12 bytes.
-    await mockApi.saveLessons("assistant", "general", "環境筆記");
+    await mockApi.saveLessons("assistant", "環境筆記");
 
     const utils = await openRolePage(zh.office.role.assistant);
     const card = cardWithTitle(utils, mp.lessons);

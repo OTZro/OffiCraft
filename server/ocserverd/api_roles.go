@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -462,29 +463,56 @@ func (s *apiServer) HandleDeleteRoleApiRolesRoleDelete(w http.ResponseWriter, r 
 
 // ── lessons ──────────────────────────────────────────────────────────────────
 
-// fillLessonsIdentityArgs folds the identity-derivable defaults into a
-// get_lessons / replace_lessons / patch_lessons MCP call so an agent's lessons round-trip lands
-// on the SAME per-role doc the boot context injects into its persona (T-d483).
+// errLessonsTaskTypeRetired is the answer to an MCP lessons call that still
+// carries `task_type`.
 //
-// The two path params are REQUIRED by the route. For the MCP tool face, a blank
-// task_type folds to the general seed bucket, and a blank role_key folds to the
-// caller's own role for an agent. We do that before the shared path validation,
-// mirroring buildBootContext's own key derivation and keeping the learning loop
-// on one concrete route:
-//   - a blank task_type folds to the "general" seed bucket (seedLessonsTaskType);
-//   - a blank role_key folds to the caller's OWN role — the roster's role_key for
-//     the verified sub (resolveBootRoleKey, the same source the write authz reads).
+// 🔴 WHY THIS REFUSES INSTEAD OF IGNORING, stated where the decision lives.
+// T-2 removed the lessons classification axis. The three shapes a removal can
+// take are: keep accepting the field and ignore it, keep accepting it and
+// honour it, or refuse. Ignoring is the WORST of the three here and not by a
+// small margin — this endpoint's whole defect was that a task_type nobody
+// validated sent a write to a bucket the caller did not mean, answered 200,
+// and said nothing. A silently-dropped field reproduces that exact experience
+// (the caller believes it addressed a classification; the write went
+// elsewhere) while removing the last trace of evidence. So the field is
+// refused, by name, with the replacement stated.
+var errLessonsTaskTypeRetired = errors.New(
+	"task_type was removed from the lessons tools (T-2): a lessons doc is " +
+		"addressed by role_key ALONE. Drop the field and retry — it is " +
+		"refused rather than ignored so that a call which believes it named " +
+		"a classification cannot quietly land somewhere else")
+
+// isLessonsTool reports whether name is one of the three lessons MCP tools.
+// One predicate so the identity fold and the retired-argument refusal cannot
+// disagree about which tools they cover.
+func isLessonsTool(name string) bool {
+	return name == "get_lessons" || name == "replace_lessons" || name == "patch_lessons"
+}
+
+// fillLessonsIdentityArgs folds the identity-derivable default into a
+// get_lessons / replace_lessons / patch_lessons MCP call so an agent's lessons
+// round-trip lands on the SAME per-role doc the boot context injects into its
+// persona (T-d483), and refuses the retired task_type argument.
+//
+// The one path param is REQUIRED by the route. For the MCP tool face a blank
+// role_key folds to the caller's OWN role — the roster's role_key for the
+// verified sub (resolveBootRoleKey, the same source the write authz reads). We
+// do that before the shared path validation, mirroring buildBootContext's own
+// key derivation and keeping the learning loop on one concrete route.
 //
 // A non-agent caller (owner/machine) has no identity role, so a blank role_key is
-// left untouched and the shared path validation reports it as required. The REST
-// wire shape is unchanged — REST callers already pass both segments (conformance
-// happy path).
-func (s *apiServer) fillLessonsIdentityArgs(r *http.Request, name string, arguments map[string]any) {
-	if name != "get_lessons" && name != "replace_lessons" && name != "patch_lessons" {
-		return
+// left untouched and the shared path validation reports it as required.
+//
+// Returns a non-nil error when the call must be refused outright; the caller
+// renders it as a tool-level 400 rather than dispatching the route.
+func (s *apiServer) fillLessonsIdentityArgs(r *http.Request, name string, arguments map[string]any) error {
+	if !isLessonsTool(name) {
+		return nil
 	}
-	if blankArg(arguments["task_type"]) {
-		arguments["task_type"] = seedLessonsTaskType
+	// PRESENCE, not blankness: `task_type: ""` is still a caller that believes
+	// the axis exists, and telling it so is the entire point.
+	if _, present := arguments["task_type"]; present {
+		return errLessonsTaskTypeRetired
 	}
 	if blankArg(arguments["role_key"]) && currentScope(r) == "agent" {
 		member, err := s.dal.GetMember(currentActor(r))
@@ -492,6 +520,7 @@ func (s *apiServer) fillLessonsIdentityArgs(r *http.Request, name string, argume
 			arguments["role_key"] = resolveBootRoleKey("", member)
 		}
 	}
+	return nil
 }
 
 // blankArg shares emptyPathParam's unset predicate: absent, null, empty, or
@@ -552,10 +581,10 @@ func (s *apiServer) lessonsWriteAuthz(w http.ResponseWriter, r *http.Request, ro
 	return true
 }
 
-// GET /api/lessons/{role_key}/{task_type} — the folded per-role lessons doc.
+// GET /api/lessons/{role_key} — the folded per-role lessons doc.
 // READ is unrestricted for any authenticated identity.
-func (s *apiServer) HandleGetLessonsApiLessonsRoleKeyTaskTypeGet(w http.ResponseWriter, r *http.Request, roleKey string, taskType string) {
-	dto, err := s.foldLessonsDTO(roleKey, taskType)
+func (s *apiServer) HandleGetLessonsApiLessonsRoleKeyGet(w http.ResponseWriter, r *http.Request, roleKey string) {
+	dto, err := s.foldLessonsDTO(roleKey)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -563,12 +592,12 @@ func (s *apiServer) HandleGetLessonsApiLessonsRoleKeyTaskTypeGet(w http.Response
 	writeJSON(w, http.StatusOK, dto)
 }
 
-// POST /api/lessons/{role_key}/{task_type} — whole-doc replace. Per-role
+// POST /api/lessons/{role_key} — whole-doc replace. Per-role
 // WRITE authz (lessonsWriteAuthz): a caller at or above principalAdminAgent
 // (owner / admin agent) writes ANY role; everyone else writes ONLY its own
 // member's role_key (read from the roster by the verified sub, never a client
 // field).
-func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.ResponseWriter, r *http.Request, roleKey string, taskType string) {
+func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyPost(w http.ResponseWriter, r *http.Request, roleKey string) {
 	var body LessonsReplaceDTO
 	if !decodeJSONBodyStrict(w, r, &body, "text") {
 		return
@@ -577,7 +606,7 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.Res
 		return
 	}
 	text := body.Text
-	current, err := s.foldLessonsDTO(roleKey, taskType)
+	current, err := s.foldLessonsDTO(roleKey)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -599,10 +628,9 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.Res
 		writeError(w, http.StatusBadRequest, docCapRefusal(cap, "lessons doc", current.Text, text))
 		return
 	}
-	if err := s.dal.SaveWithDocumentHistory("lessons", roleKey+"::"+taskType, currentActor(r), lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
+	if err := s.dal.SaveWithDocumentHistory("lessons", roleKey, currentActor(r), lessonsSnapshotIn(roleKey), func(ex sqlExecer) error {
 		return putLessonsOn(ex, Lessons{
 			RoleKey:    roleKey,
-			TaskType:   taskType,
 			Text:       text,
 			Tombstoned: false,
 		})
@@ -610,12 +638,11 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.Res
 		internalError(w, err)
 		return
 	}
-	s.hub.Publish("lessons", "patch", "lessons", wireOwnerID+"::"+roleKey+"::"+taskType, nil, audienceOwnerOnly(), requestTrigger(r))
+	s.hub.Publish("lessons", "patch", "lessons", wireOwnerID+"::"+roleKey, nil, audienceOwnerOnly(), requestTrigger(r))
 	writeJSON(w, http.StatusOK, lessonsDTO{
 		SizeChars:     utf8.RuneCountInString(text),
 		CapChars:      cap,
 		RoleKey:       roleKey,
-		TaskType:      taskType,
 		Text:          text,
 		OwnerID:       wireOwnerID,
 		SchemaVersion: wireSchemaVersion,
@@ -623,7 +650,7 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.Res
 	})
 }
 
-// POST /api/lessons/{role_key}/{task_type}/patch — anchor-addressed patch
+// POST /api/lessons/{role_key}/patch — anchor-addressed patch
 // (T-8327). Write cost ∝ the CHANGE, not the doc: a whole-doc replace_lessons
 // stops fitting in one model output as the doc grows (76k chars observed), so
 // this is the primary write seam and replace stays the last resort.
@@ -635,7 +662,7 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(w http.Res
 // concurrency); an empty `old` appends. A patch that wipes the doc, or shrinks
 // a substantial doc to <10%, is refused without allow_shrink=true (the r-76
 // wipe-guard posture). Same per-role write authz as replace_lessons.
-func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.ResponseWriter, r *http.Request, roleKey string, taskType string) {
+func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyPatchPost(w http.ResponseWriter, r *http.Request, roleKey string) {
 	var body LessonsPatchDTO
 	if !decodeJSONBodyStrict(w, r, &body, "edits") {
 		return
@@ -648,7 +675,7 @@ func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.
 	if !s.lessonsWriteAuthz(w, r, roleKey) {
 		return
 	}
-	current, err := s.foldLessonsDTO(roleKey, taskType)
+	current, err := s.foldLessonsDTO(roleKey)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -724,10 +751,9 @@ func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.
 	// (roleDefHistoryStreams / taskManualHistoryStreams); the anchor-patch seams
 	// were the outliers.
 	if next != current.Text {
-		if err := s.dal.SaveWithDocumentHistory("lessons", roleKey+"::"+taskType, currentActor(r), lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
+		if err := s.dal.SaveWithDocumentHistory("lessons", roleKey, currentActor(r), lessonsSnapshotIn(roleKey), func(ex sqlExecer) error {
 			return putLessonsOn(ex, Lessons{
 				RoleKey:    roleKey,
-				TaskType:   taskType,
 				Text:       next,
 				Tombstoned: false,
 			})
@@ -735,12 +761,11 @@ func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(w http.
 			internalError(w, err)
 			return
 		}
-		s.hub.Publish("lessons", "patch", "lessons", wireOwnerID+"::"+roleKey+"::"+taskType, nil, audienceOwnerOnly(), requestTrigger(r))
+		s.hub.Publish("lessons", "patch", "lessons", wireOwnerID+"::"+roleKey, nil, audienceOwnerOnly(), requestTrigger(r))
 	}
 	sum := sha256.Sum256([]byte(next))
 	writeJSON(w, http.StatusOK, lessonsPatchResultDTO{
 		RoleKey:       roleKey,
-		TaskType:      taskType,
 		AppliedEdits:  applied,
 		SizeChars:     utf8.RuneCountInString(next),
 		CapChars:      cap,

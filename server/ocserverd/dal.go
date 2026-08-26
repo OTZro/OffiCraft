@@ -1467,29 +1467,29 @@ func (d *DAL) DeleteRoleDef(roleKey string) (bool, error) {
 	return deleted, nil
 }
 
-// ── lessons (per-role; composite (role_key, task_type) key) ──────────────────
+// ── lessons (per-role; role_key is the WHOLE key) ────────────────────────────
 
 // Lessons mirrors the lessons table: the per-role learnings overlay (agents
-// sharing a role share one doc). TaskType is currently a single fixed key.
+// sharing a role share one doc). RoleKey is the entire identity of the
+// document — the (role_key, task_type) composite was dropped in T-2
+// (00062_drop_lessons_task_type.sql).
 type Lessons struct {
 	RoleKey    string
-	TaskType   string
 	Text       string
 	Tombstoned bool
 }
 
-// GetLessons returns the overlay for (roleKey, taskType), or nil if never
-// edited.
-func (d *DAL) GetLessons(roleKey, taskType string) (*Lessons, error) {
-	return getLessonsOn(d.rdb, roleKey, taskType)
+// GetLessons returns the overlay for roleKey, or nil if never edited.
+func (d *DAL) GetLessons(roleKey string) (*Lessons, error) {
+	return getLessonsOn(d.rdb, roleKey)
 }
 
-func getLessonsOn(q sqlQuerier, roleKey, taskType string) (*Lessons, error) {
+func getLessonsOn(q sqlQuerier, roleKey string) (*Lessons, error) {
 	var l Lessons
 	err := q.QueryRow(`
-		SELECT role_key, task_type, text, tombstoned FROM lessons
-		WHERE role_key = ? AND task_type = ?`, roleKey, taskType,
-	).Scan(&l.RoleKey, &l.TaskType, &l.Text, &l.Tombstoned)
+		SELECT role_key, text, tombstoned FROM lessons
+		WHERE role_key = ?`, roleKey,
+	).Scan(&l.RoleKey, &l.Text, &l.Tombstoned)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -1506,17 +1506,17 @@ func (d *DAL) PutLessons(l Lessons) error {
 
 func putLessonsOn(ex sqlExecer, l Lessons) error {
 	_, err := ex.Exec(`
-		INSERT INTO lessons (role_key, task_type, text, tombstoned)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT (role_key, task_type) DO UPDATE SET
+		INSERT INTO lessons (role_key, text, tombstoned)
+		VALUES (?, ?, ?)
+		ON CONFLICT (role_key) DO UPDATE SET
 			text = excluded.text, tombstoned = excluded.tombstoned`,
-		l.RoleKey, l.TaskType, l.Text, l.Tombstoned)
+		l.RoleKey, l.Text, l.Tombstoned)
 	return err
 }
 
-// DeleteLessonsForRole HARD-deletes every overlay for roleKey (all task
-// types) — the custom-role cascade: per-role lessons have no meaning without
-// the role. Returns the deleted count.
+// DeleteLessonsForRole HARD-deletes roleKey's overlay — the custom-role
+// cascade: per-role lessons have no meaning without the role. Returns the
+// deleted count.
 func (d *DAL) DeleteLessonsForRole(roleKey string) (int, error) {
 	var deleted int
 	err := d.inTx(func(tx *sql.Tx) error {
@@ -1529,13 +1529,14 @@ func (d *DAL) DeleteLessonsForRole(roleKey string) (int, error) {
 			return err
 		}
 		deleted = int(n)
-		// Every "<role>::<task_type>" history key of this role, in the same
-		// transaction. Matched by an explicit prefix length rather than LIKE so
-		// a role key can never be read as a wildcard pattern.
-		prefix := roleKey + "::"
+		// This role's lessons history, in the same transaction. The key is
+		// now the BARE role_key (T-2 dropped the "::<task_type>" half), so
+		// this is an exact equality rather than the prefix match it used to
+		// be — the same shape DeleteInsightForRole right below has always
+		// used. An equality cannot over-reach onto a neighbouring role whose
+		// key merely starts with this one.
 		_, err = tx.Exec(`DELETE FROM document_history
-			WHERE document_kind = 'lessons' AND substr(document_key, 1, length(?)) = ?`,
-			prefix, prefix)
+			WHERE document_kind = 'lessons' AND document_key = ?`, roleKey)
 		return err
 	})
 	if err != nil {
@@ -1552,7 +1553,7 @@ func (d *DAL) DeleteLessonsForRole(roleKey string) (int, error) {
 // happened and what to do next time, insight records how this role weighs a
 // call. The owner's whole reason for asking was that the two were mixed.
 //
-// No TaskType axis (unlike Lessons) — hence a single-column primary key, and
+// A single-column primary key, the same shape Lessons has carried since T-2 —
 // hence a BARE role_key as the document_history key.
 type Insight struct {
 	RoleKey    string
@@ -1598,14 +1599,14 @@ func putInsightOn(ex sqlExecer, i Insight) error {
 // DeleteInsightForRole HARD-deletes the insight doc for roleKey — the
 // custom-role cascade twin of DeleteLessonsForRole. Returns the deleted count.
 //
-// 🔴 EXACT EQUALITY on the history key, NOT the prefix match DeleteLessonsForRole
-// uses. That difference is not stylistic. A lessons history key is composite
-// ("<role>::<task_type>"), so its prefix carries a "::" terminator and
-// "r-abc::" provably cannot match "r-abcdef::general". An insight history key is
-// the BARE role_key — no terminator — so a prefix match would delete r-abcdef's
-// retained versions while deleting r-abc. Exact equality is the only safe shape
-// for a single-key document, which is why this mirrors DeleteRoleDef rather
-// than the lessons cascade sitting right above it.
+// 🔴 EXACT EQUALITY on the history key. An insight history key is the BARE
+// role_key — no terminator — so a prefix match would delete r-abcdef's retained
+// versions while deleting r-abc. Exact equality is the only safe shape for a
+// single-key document. Until T-2 the lessons cascade above was the one
+// exception (its key was composite, "<role>::<task_type>", so its prefix
+// carried a "::" terminator); the axis is gone and both cascades are now the
+// same equality, which is why this reads as the house shape rather than as a
+// contrast.
 func (d *DAL) DeleteInsightForRole(roleKey string) (int, error) {
 	var deleted int
 	err := d.inTx(func(tx *sql.Tx) error {

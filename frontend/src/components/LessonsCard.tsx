@@ -1,7 +1,7 @@
 // components/LessonsCard.tsx — the ONE shared, owner-editable per-role lessons
 // card. Extracted from MemberDetailPanel so the persona (role-definition) page
 // and any future host render the SAME editor by construction (no copy-paste
-// drift). Per-role-learnings step1: the doc is scoped to `roleKey` + `taskType`.
+// drift). The doc is scoped to `roleKey` alone (T-2 removed `taskType`).
 //
 // Behaviour mirrors the role_def DocDetail card: Edit → textarea → Cancel/Save,
 // button-commit (so no IME composition guard is needed). Always a titled card
@@ -18,13 +18,11 @@ import { LayersIcon, PencilIcon } from "./icons";
 import "./member-detail.css";
 
 interface LessonsCardProps {
-  /** Role this lessons doc belongs to (per-role-learnings step1). */
+  /** Role this lessons doc belongs to — the WHOLE address of the doc. */
   roleKey: string;
-  /** The single fixed task_type key today is "general". */
-  taskType?: string;
 }
 
-export function LessonsCard({ roleKey, taskType = "general" }: LessonsCardProps) {
+export function LessonsCard({ roleKey }: LessonsCardProps) {
   const { t } = useI18n();
   const {
     lessons,
@@ -32,7 +30,7 @@ export function LessonsCard({ roleKey, taskType = "general" }: LessonsCardProps)
     error,
     refetch,
     save: saveLessons,
-  } = useLessons(roleKey, taskType);
+  } = useLessons(roleKey);
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -113,11 +111,10 @@ export function LessonsCard({ roleKey, taskType = "general" }: LessonsCardProps)
               * switch omits `lessons` too, so the /seed endpoint 404s here for
               * the same reason: no reset, nothing to preview.)
               *
-              * The doc's own key is the composite "<role_key>::<task_type>" the
-              * wire uses. */}
+              * The doc's own key is the bare role_key the wire uses. */}
             <DocumentHistoryEntry
               kind="lessons"
-              docKey={`${roleKey}::${taskType}`}
+              docKey={roleKey}
               title={t.settings.historyLessonsTitle}
               currentContent={lessons ? { text: lessons.text } : undefined}
               // A restore rewrote the doc under the editor — leaving the draft

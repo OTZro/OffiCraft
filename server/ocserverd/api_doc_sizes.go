@@ -69,17 +69,13 @@ func (s *apiServer) HandlePeekDocSizesApiDocSizesGet(w http.ResponseWriter, r *h
 			internalError(w, err)
 			return
 		}
-		// ONLY the DEFAULT lessons bucket (seedLessonsTaskType) is sized — the
-		// one the boot context injects and the one fillLessonsIdentityArgs folds
-		// a blank task_type to. The write side puts NO constraint on the bucket
-		// name (the default is a fill-in for an absent argument, not an
-		// enumeration), so a write that names another bucket produces a document
-		// that draws on this same lessons cap and never appears in this listing.
-		// The wire descriptions say "default bucket" for exactly this reason;
-		// covering every bucket needs a lessons enumeration the DAL does not
-		// have (GetLessons is keyed (role_key, task_type)) plus a per-role array
-		// on this response — a frozen-wire shape decision, not a defect fix.
-		lessons, err := s.foldLessonsDTO(roleKey, seedLessonsTaskType)
+		// The role's ONE lessons doc — whole. Until T-2 this line sized only
+		// the DEFAULT bucket and a write naming any other bucket produced a
+		// document that drew on the same lessons cap while staying off this
+		// listing entirely. The axis is gone, so a role's lessons and the row
+		// reported here are now the same document by construction rather than
+		// by convention.
+		lessons, err := s.foldLessonsDTO(roleKey)
 		if err != nil {
 			internalError(w, err)
 			return

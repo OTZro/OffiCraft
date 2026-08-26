@@ -1515,24 +1515,24 @@ HAPPY: dict[str, Happy] = {
     "DELETE /api/roles/{role}": Happy(
         path=lambda ctx: f"/api/roles/{ctx.fresh_role()}",
     ),
-    "GET /api/lessons/{role_key}/{task_type}": Happy(
-        path="/api/lessons/assistant/general",
+    "GET /api/lessons/{role_key}": Happy(
+        path="/api/lessons/assistant",
     ),
-    "POST /api/lessons/{role_key}/{task_type}": Happy(
-        path="/api/lessons/assistant/general",
+    "POST /api/lessons/{role_key}": Happy(
+        path="/api/lessons/assistant",
         body={"text": "conformance happy lessons doc"},
         check=lambda _c, r: _expect(
             r, lambda d: d["text"] == "conformance happy lessons doc"
         ),
     ),
-    "POST /api/lessons/{role_key}/{task_type}/patch": Happy(
+    "POST /api/lessons/{role_key}/patch": Happy(
         # Anchor-addressed patch (T-8327): an APPEND edit (empty old) always
         # lands regardless of the doc's current content; the receipt carries
         # size_chars/cap_chars/sha256 verification anchors instead of the full
         # text. T-3aeb renamed `size` -> `size_chars` (a size field must carry
         # its unit) and added the cap the write was judged against, so a caller
         # can compute its remaining budget without a second request.
-        path="/api/lessons/assistant/general/patch",
+        path="/api/lessons/assistant/patch",
         body={"edits": [{"old": "", "new": "conformance happy patch line"}]},
         check=lambda _c, r: _expect(
             r,
@@ -1545,9 +1545,8 @@ HAPPY: dict[str, Happy] = {
         ),
     ),
     # ── insight (T-3809) ─────────────────────────────────────────────────────
-    # The role journal's third block: the lessons trio with the task_type axis
-    # removed, so the key is the BARE role_key and the paths carry one segment
-    # rather than two.
+    # The role journal's third block. Its key is the BARE role_key — which
+    # since T-2 is also what the lessons trio above uses.
     "GET /api/insight/{role_key}": Happy(
         path="/api/insight/assistant",
         # ⚠️ This row deliberately does NOT assert the empty doc, and the reason

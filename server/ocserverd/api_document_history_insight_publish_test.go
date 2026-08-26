@@ -36,9 +36,9 @@ func TestRestoringAnInsightDocFansAnInsightDelta(t *testing.T) {
 	writeLessons := func(text string) {
 		t.Helper()
 		rec := httptest.NewRecorder()
-		f.api.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(rec,
-			f.req(http.MethodPost, "/api/lessons/"+role+"/general", map[string]any{"text": text}),
-			role, "general")
+		f.api.HandleReplaceLessonsApiLessonsRoleKeyPost(rec,
+			f.req(http.MethodPost, "/api/lessons/"+role, map[string]any{"text": text}),
+			role)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("replace lessons %q: status=%d body=%s", text, rec.Code, rec.Body.String())
 		}
@@ -59,11 +59,11 @@ func TestRestoringAnInsightDocFansAnInsightDelta(t *testing.T) {
 	// Positive control FIRST: lessons is a kind whose case has always been
 	// present, so if this does not fan, the fixture is broken and the insight
 	// assertion below would be measuring nothing.
-	lessonsHistory := f.list("lessons", role+"::general")
+	lessonsHistory := f.list("lessons", role)
 	if len(lessonsHistory) == 0 {
 		t.Fatal("lessons kept no revision to restore — the control cannot run")
 	}
-	f.restore("lessons", role+"::general", lessonsHistory[0].Id)
+	f.restore("lessons", role, lessonsHistory[0].Id)
 	raw := listener.pop()
 	if raw == nil {
 		t.Fatal("control: restoring lessons fanned NO frame — the listener or the publish seam is broken, " +

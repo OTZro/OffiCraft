@@ -2193,34 +2193,30 @@ export const httpApi: Api = {
     return toBootstrap(wire);
   },
 
-  async getLessons(roleKey: string, taskType: string): Promise<LessonsView> {
-    // GET /api/lessons/{role_key}/{task_type} -> LessonsDTO (folded overlay ⊕
-    // seed). PER-ROLE doc (per-role-learnings step1): scoped to role_key; the
-    // single fixed task_type key is "general".
+  async getLessons(roleKey: string): Promise<LessonsView> {
+    // GET /api/lessons/{role_key} -> LessonsDTO (folded overlay ⊕ seed).
+    // PER-ROLE doc, and role_key is the WHOLE address: T-2 removed the
+    // task_type axis.
     const wire = unwrap(
-      await client.GET("/api/lessons/{role_key}/{task_type}", {
-        params: { path: { role_key: roleKey, task_type: taskType } },
+      await client.GET("/api/lessons/{role_key}", {
+        params: { path: { role_key: roleKey } },
       }),
     );
     return toLessons(wire);
   },
 
-  async saveLessons(
-    roleKey: string,
-    taskType: string,
-    text: string,
-  ): Promise<LessonsView> {
-    // POST /api/lessons/{role_key}/{task_type} {text} -> LessonsDTO (folded,
+  async saveLessons(roleKey: string, text: string): Promise<LessonsView> {
+    // POST /api/lessons/{role_key} {text} -> LessonsDTO (folded,
     // isDefault=false). Whole-doc replace matching the backend
     // `handle_replace_lessons`. NOTE the POST verb — do NOT copy the
     // global-context save's PUT/DELETE, which mismatch this contract. PER-ROLE
-    // doc; "general" is the single fixed task_type key. WRITE authz is per-role
+    // doc addressed by role_key alone. WRITE authz is per-role
     // and keyed on the PRINCIPAL CLASS, not the token scope (T-5336): a caller
     // at or above admin_agent — the owner (this UI's scope) and the admin agent
     // — may write ANY role; every other agent may write only its own role.
     const wire = unwrap(
-      await client.POST("/api/lessons/{role_key}/{task_type}", {
-        params: { path: { role_key: roleKey, task_type: taskType } },
+      await client.POST("/api/lessons/{role_key}", {
+        params: { path: { role_key: roleKey } },
         // allow_shrink: the server's T-2d99 wipe guard refuses a non-empty →
         // empty whole-doc replace unless the caller says so explicitly. That
         // guard exists for BLIND agent write-backs; here a human is looking at
@@ -2233,7 +2229,7 @@ export const httpApi: Api = {
 
   async getInsight(roleKey: string): Promise<InsightView> {
     // GET /api/insight/{role_key} -> InsightDTO (T-3809). PER-ROLE doc keyed on
-    // the BARE role_key: no task_type axis (that belongs to lessons), but there
+    // the BARE role_key, and there
     // IS a PER-ROLE file seed (T-e1e3). An untouched doc for a role that ships
     // one — today only `assistant`, from seeds/insight_assistant.md — comes
     // back with the FACTORY text and is_default true; only a role with no seed

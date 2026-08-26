@@ -115,14 +115,14 @@ func TestNoOpPatchLessonsConsumesNoHistoryVersion(t *testing.T) {
 	const role, taskType = seedRoleAssistant, "general"
 	const original = "LESSON: widen the anchor until it is unique.\n"
 	const edited = "LESSON: widen the anchor until it is provably unique.\n"
-	if err := f.api.dal.PutLessons(Lessons{RoleKey: role, TaskType: taskType, Text: original}); err != nil {
+	if err := f.api.dal.PutLessons(Lessons{RoleKey: role, Text: original}); err != nil {
 		t.Fatalf("seed lessons: %v", err)
 	}
 	patch := func(body any) (int, map[string]any) {
 		t.Helper()
 		rec := httptest.NewRecorder()
-		f.api.HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(rec,
-			f.req(http.MethodPost, "/api/lessons/"+role+"/"+taskType+"/patch", body), role, taskType)
+		f.api.HandlePatchLessonsApiLessonsRoleKeyPatchPost(rec,
+			f.req(http.MethodPost, "/api/lessons/"+role+"/patch", body), role)
 		var data map[string]any
 		if rec.Body.Len() > 0 {
 			_ = json.Unmarshal(rec.Body.Bytes(), &data)
@@ -138,7 +138,7 @@ func TestNoOpPatchLessonsConsumesNoHistoryVersion(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("control edit must land, got %d: %v", status, data)
 	}
-	history := f.list("lessons", role+"::"+taskType)
+	history := f.list("lessons", role)
 	if len(history) != 1 || history[0].Content["text"] != original {
 		t.Fatalf("control: a real patch must retain the text it replaced, got %+v", history)
 	}
@@ -153,7 +153,7 @@ func TestNoOpPatchLessonsConsumesNoHistoryVersion(t *testing.T) {
 		assertNoOpReceipt(t, data, edited)
 	}
 
-	history = f.list("lessons", role+"::"+taskType)
+	history = f.list("lessons", role)
 	if len(history) != 1 {
 		t.Fatalf("no-op patches consumed %d history versions, want 0 — the owner's undo path "+
 			"was spent on writes that changed nothing", len(history)-1)
@@ -161,7 +161,7 @@ func TestNoOpPatchLessonsConsumesNoHistoryVersion(t *testing.T) {
 	if history[0].Content["text"] != original {
 		t.Fatalf("the retained version is no longer the text a restore would bring back: %+v", history[0].Content)
 	}
-	current, err := f.api.foldLessonsDTO(role, taskType)
+	current, err := f.api.foldLessonsDTO(role)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,14 +341,14 @@ func TestCancellingBatchPatchLessonsConsumesNoHistoryVersion(t *testing.T) {
 	const role, taskType = seedRoleAssistant, "general"
 	const original = "LESSON: widen the anchor until it is unique.\n"
 	const edited = "LESSON: widen the anchor until it is provably unique.\n"
-	if err := f.api.dal.PutLessons(Lessons{RoleKey: role, TaskType: taskType, Text: original}); err != nil {
+	if err := f.api.dal.PutLessons(Lessons{RoleKey: role, Text: original}); err != nil {
 		t.Fatalf("seed lessons: %v", err)
 	}
 	patch := func(body any) (int, map[string]any) {
 		t.Helper()
 		rec := httptest.NewRecorder()
-		f.api.HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(rec,
-			f.req(http.MethodPost, "/api/lessons/"+role+"/"+taskType+"/patch", body), role, taskType)
+		f.api.HandlePatchLessonsApiLessonsRoleKeyPatchPost(rec,
+			f.req(http.MethodPost, "/api/lessons/"+role+"/patch", body), role)
 		var data map[string]any
 		if rec.Body.Len() > 0 {
 			_ = json.Unmarshal(rec.Body.Bytes(), &data)
@@ -367,7 +367,7 @@ func TestCancellingBatchPatchLessonsConsumesNoHistoryVersion(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("control edit must land, got %d: %v", status, data)
 	}
-	history := f.list("lessons", role+"::"+taskType)
+	history := f.list("lessons", role)
 	if len(history) != 1 || history[0].Content["text"] != original {
 		t.Fatalf("control: a real patch must retain the text it replaced, got %+v", history)
 	}
@@ -384,7 +384,7 @@ func TestCancellingBatchPatchLessonsConsumesNoHistoryVersion(t *testing.T) {
 	// The premise, asserted before the retention claim: these batches really did
 	// leave the document where they found it. A doc that CHANGED has every right
 	// to consume a version, so without this the assertion below pins nothing.
-	current, err := f.api.foldLessonsDTO(role, taskType)
+	current, err := f.api.foldLessonsDTO(role)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +395,7 @@ func TestCancellingBatchPatchLessonsConsumesNoHistoryVersion(t *testing.T) {
 	// Errorf, not Fatalf: the version COUNT and WHICH version survived are two
 	// independent claims, and a reader who only ever sees the first one go red
 	// cannot tell whether the second still holds.
-	history = f.list("lessons", role+"::"+taskType)
+	history = f.list("lessons", role)
 	if len(history) != 1 {
 		t.Errorf("cancelling batches consumed %d history versions, want 0 — 'some edit changed "+
 			"the text it was handed' is not the same question as 'the document changed'", len(history)-1)

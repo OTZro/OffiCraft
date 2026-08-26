@@ -432,7 +432,7 @@ def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, ow
             "/api/roles", json={"name": f"Conf Topic Role {tag}"},
             headers=_auth(owner_token))),
         ("lessons", lambda: client.post(
-            "/api/lessons/assistant/general", json={"text": f"topic probe {tag}"},
+            "/api/lessons/assistant", json={"text": f"topic probe {tag}"},
             headers=_auth(owner_token))),
         # insight — the ORDINARY write face (replace_insight), not the restore
         # path. Pinned here because a doc write that reaches the DB but never
