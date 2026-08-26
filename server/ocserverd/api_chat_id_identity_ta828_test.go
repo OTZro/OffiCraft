@@ -248,7 +248,14 @@ func notificationIDField(t *testing.T) string {
 		if !ok || fn.Body == nil || !notificationPrinters[fn.Name.Name] {
 			continue
 		}
-		here := ""
+		// COLLECT, never overwrite: two `"#" + ident` in ONE printer is the same
+		// ambiguity as two printers, and it used to resolve to whichever came
+		// LAST in source order. A review demonstrated the pair — a real print of
+		// the wrong field beside a never-printed decoy reading the right one —
+		// flipping between red and green purely by swapping the two lines. A
+		// guard whose verdict depends on line order is not a guard.
+		var hits []string
+		opaque := 0
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
 			be, ok := n.(*ast.BinaryExpr)
 			if !ok || be.Op != token.ADD {
@@ -259,13 +266,35 @@ func notificationIDField(t *testing.T) string {
 				return true
 			}
 			if id, ok := be.Y.(*ast.Ident); ok {
-				here = id.Name
+				hits = append(hits, id.Name)
+				return true
 			}
+			// `"#" + <anything that is not a bare local>`: this derivation
+			// cannot follow it to a payload key. Counting it is what keeps the
+			// guard closed — a print of the wrong field written as an inline
+			// call is INVISIBLE here, so without this an unrelated bare-ident
+			// line elsewhere in the same printer becomes the thing we verify,
+			// and the guard passes green while the notification names the wrong
+			// message. That exact mutant survived the first attempt at this fix.
+			opaque++
 			return true
 		})
-		if here == "" {
+		if opaque > 0 {
+			t.Fatalf("%s builds `\"#\" + <expr>` in %s where <expr> is not a "+
+				"bare local (%d such), so the payload key it names cannot be "+
+				"derived — re-check it by hand", ocagentListenSource,
+				fn.Name.Name, opaque)
+		}
+		if len(hits) > 1 {
+			t.Fatalf("%s builds `\"#\" + <local>` %d times inside %s (%v) — "+
+				"which one names the notification tag cannot be derived; "+
+				"re-check it by hand", ocagentListenSource, len(hits),
+				fn.Name.Name, hits)
+		}
+		if len(hits) == 0 {
 			continue
 		}
+		here := hits[0]
 		if printed != "" {
 			t.Fatalf("%s prints `\"#\" + <local>` in more than one named printer "+
 				"(%s and %s) — which one names the notification tag can no "+

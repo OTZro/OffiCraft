@@ -322,7 +322,7 @@ func TestDrainChat_BacklogOverCap_TruncatesOldestAndSaysSo(t *testing.T) {
 	if lines != chatBacklogPrintCap {
 		t.Fatalf("printed %d chat lines, want the cap %d", lines, chatBacklogPrintCap)
 	}
-	if !strings.Contains(got, fmt.Sprintf("%d 則未讀，只補印最新 %d 則", total, chatBacklogPrintCap)) ||
+	if !strings.Contains(got, fmt.Sprintf("至少 %d 則未讀，只補印最新 %d 則", total, chatBacklogPrintCap)) ||
 		!strings.Contains(got, "get_chat") {
 		t.Fatalf("truncation notice missing or unhelpful; out = %q", got)
 	}

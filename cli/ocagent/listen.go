@@ -739,42 +739,6 @@ func fmtAgo(secs float64) string {
 	}
 }
 
-// drainChat refetches chat and prints the unread-for-me — ONE LINE per message so the
-// spawned session's Monitor reads exactly '誰、多久前、說了什麼':
-//
-//	[ocagent] chat from m-3417933c8632 (#c-ceb835093301, 2m ago): ...
-//
-// `from` is the STABLE member id (server-stamped, never a display name) — reply
-// straight to it with post_chat. The `#…` tag is the MESSAGE id: the handle to
-// name this exact message when calling get_chat for the full body/attachments.
-// Only the id goes in — filenames, attachment ids and mimes stay OUT, because
-// this line is a token cost every agent pays on every message; get_chat is where
-// that detail belongs. The relative age is computed client-side from the message
-// ts. Any tag slot is dropped when the wire carries no id / no reply_to / no ts,
-// and a message with none of them prints without the parenthesised tag at all.
-//
-// The middle slot is the REPLY marker (T-4e95): `↩#<id>` naming the message this
-// one is replying to, present only when the wire's `reply_to` is non-empty:
-//
-//	[ocagent] chat from boss (#c-reply, ↩#c-target, 2m ago): 這個再確認一下
-//
-// It is an EXISTENCE marker, exactly like the attachment badge: the quoted
-// sender and body are NOT printed. Since 2026-08-21 the wire DOES carry them
-// (`reply_to_chat`, built on every read), so this is a deliberate choice by this
-// line rather than a limit of the payload — one console line per inbound message
-// is a token cost every agent pays on every message, and a second sentence
-// inside it doubles that for a relation most messages do not have. The id is
-// enough to tell the woken agent a reply target EXISTS; get_chat is where the
-// text belongs, and it now comes back with the quote already attached.
-//
-// Advances the seen-id cursor and returns the unread count. `silent` (the boot
-// baseline) advances the cursor WITHOUT printing so connecting does not re-print
-// history — but see chatSeen: the cursor is PERSISTED, so `silent` is true when
-// the store came up UNPRIMED, which is a first listen on this machine OR a state
-// file that could not be read; a primed one backfills what it missed (capped by
-// chatBacklogPrintCap). A fetch fault prints nothing and leaves the persisted
-// cursor untouched, so the next drain retries the same window.
-// R7: reads ONLY the refetched authority, never a delta. Mirrors drain_chat.
 // attachmentSummary renders a message's attachments as a terse badge appended
 // after the body: "📎2圖" (2 images), "📎1檔" (1 non-image file), or the mixed
 // "📎1圖 2檔". Images are counted by the server-computed is_image flag. Returns
@@ -929,6 +893,42 @@ func (s *chatSeen) persist() {
 	}
 }
 
+// drainChat refetches chat and prints the unread-for-me — ONE LINE per message so the
+// spawned session's Monitor reads exactly '誰、多久前、說了什麼':
+//
+//	[ocagent] chat from m-3417933c8632 (#c-ceb835093301, 2m ago): ...
+//
+// `from` is the STABLE member id (server-stamped, never a display name) — reply
+// straight to it with post_chat. The `#…` tag is the MESSAGE id: the handle to
+// name this exact message when calling get_chat for the full body/attachments.
+// Only the id goes in — filenames, attachment ids and mimes stay OUT, because
+// this line is a token cost every agent pays on every message; get_chat is where
+// that detail belongs. The relative age is computed client-side from the message
+// ts. Any tag slot is dropped when the wire carries no id / no reply_to / no ts,
+// and a message with none of them prints without the parenthesised tag at all.
+//
+// The middle slot is the REPLY marker (T-4e95): `↩#<id>` naming the message this
+// one is replying to, present only when the wire's `reply_to` is non-empty:
+//
+//	[ocagent] chat from boss (#c-reply, ↩#c-target, 2m ago): 這個再確認一下
+//
+// It is an EXISTENCE marker, exactly like the attachment badge: the quoted
+// sender and body are NOT printed. Since 2026-08-21 the wire DOES carry them
+// (`reply_to_chat`, built on every read), so this is a deliberate choice by this
+// line rather than a limit of the payload — one console line per inbound message
+// is a token cost every agent pays on every message, and a second sentence
+// inside it doubles that for a relation most messages do not have. The id is
+// enough to tell the woken agent a reply target EXISTS; get_chat is where the
+// text belongs, and it now comes back with the quote already attached.
+//
+// Advances the seen-id cursor and returns the unread count. `silent` (the boot
+// baseline) advances the cursor WITHOUT printing so connecting does not re-print
+// history — but see chatSeen: the cursor is PERSISTED, so `silent` is true when
+// the store came up UNPRIMED, which is a first listen on this machine OR a state
+// file that could not be read; a primed one backfills what it missed (capped by
+// chatBacklogPrintCap). A fetch fault prints nothing and leaves the persisted
+// cursor untouched, so the next drain retries the same window.
+// R7: reads ONLY the refetched authority, never a delta. Mirrors drain_chat.
 func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, silent bool) int {
 	sid := strings.ToLower(strings.TrimSpace(cfg.ID))
 	now := float64(time.Now().Unix())
@@ -954,9 +954,16 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 		// get_chat rather than believing it read everything. The dropped ones are
 		// still recorded as seen below — a line this session was told about must
 		// not come back on the next drain.
+		//
+		// "至少": len(unread) is what THIS FETCH could see, and fetchChat sends no
+		// ?limit=, so the server answers with its own newest-N window. A long
+		// enough absence overruns that window too, and the ones past it are not
+		// in this count — they are not printed, not counted, and nothing else
+		// says so. Reporting len(unread) as "the" unread total would be a number
+		// this line cannot know; it is a floor, so it says floor.
 		show := unread
 		if len(show) > chatBacklogPrintCap {
-			fmt.Fprintf(out, "[ocagent] chat: %d 則未讀，只補印最新 %d 則（略過 %d 則較舊 — 用 get_chat 取回）\n",
+			fmt.Fprintf(out, "[ocagent] chat: 至少 %d 則未讀，只補印最新 %d 則（略過 %d 則較舊 — 用 get_chat 取回）\n",
 				len(show), chatBacklogPrintCap, len(show)-chatBacklogPrintCap)
 			show = show[len(show)-chatBacklogPrintCap:]
 		}
