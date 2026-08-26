@@ -379,7 +379,7 @@
     {
       "id": "ocagent-listen-3",
       "source": "cli/ocagent/listen.go",
-      "callsite": "for _, m := range fetchChat(client, cfg, cfg.ID) {",
+      "callsite": "msgs := fetchChat(client, cfg, cfg.ID)",
       "kind": "skip",
       "skip_reason": "GET: reads the chat page back through getJSON — no request body"
     },
@@ -451,7 +451,7 @@
     {
       "id": "ocagent-run-6",
       "source": "cli/ocagent/listen_run.go",
-      "callsite": "drainChat(l.api, l.cfg, l.seen, l.out, true)",
+      "callsite": "drainChat(l.api, l.cfg, l.seen, l.out, !l.seen.primed)",
       "kind": "seam",
       "seam_reason": "hop: drains the chat backlog through fetchChat — a GET. No POST below it. (It used to add 'the presence POST is reached from the wind-down hook' — that POST and that hook's sends are both gone since T-a9d6.)"
     },
