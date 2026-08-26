@@ -428,7 +428,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleRestartSelfApiSelfRefocusPost,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "restart_self(): self-triggered recycle (online-only 409; min-liveness 429).",
+			Summary:  "restart_self(): self-triggered recycle (online-only 409; min-liveness 429; wind-down-ladder 409).",
 			MCPTool:  "restart_self",
 		},
 		{

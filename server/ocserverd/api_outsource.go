@@ -750,11 +750,14 @@ func (s *apiServer) HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStop
 
 // POST /api/outsource-workers/{id}/restart — the cockpit's 重啟 (owner/admin agent since T-6020),
 // the inverse of stop: set desired_state back to "online" and re-dispatch (重啟 =
-// 再 dispatch — a fresh worker_start onto the pinned / preferred machine). 409 ONLY
-// when the worker is actually ALIVE (T-7526: not held down AND online — nothing to
-// restart, and refusing there is what stops a hidden double-spawn). A worker whose
-// session died on its own keeps desired_state=online and IS restartable; 404
-// unknown/released.
+// 再 dispatch — a fresh worker_start onto the pinned / preferred machine). It NEVER
+// 409s: the old "409 when the worker is actually ALIVE" over-spawn guard is GONE
+// (T-ed79 #10 — see the 🔴 note in the body below), and a live worker now gets a
+// session_alive RECEIPT and a 200 instead. There is also NO desired-offline gate,
+// so 重啟 on a worker that is mid-加速停止 answers 200 too. A worker whose session
+// died on its own keeps desired_state=online and IS restartable; 404
+// unknown/released is the only refusal this handler writes (a store failure still
+// answers 500).
 func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost(w http.ResponseWriter, r *http.Request, id string) {
 	s.outsourceMu.Lock()
 	worker, err := s.dal.GetOutsourceWorker(id)

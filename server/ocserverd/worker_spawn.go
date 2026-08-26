@@ -1428,13 +1428,16 @@ func (s *apiServer) relocateWorkerNow(w OutsourceWorker) ownerOpOutcome {
 // by construction, and the construction is ONE assignment: its handler sets
 // DesiredState = DesiredStateOnline on the row it then passes here BY VALUE
 // (HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost in api_outsource.go
-// — that assignment is the only thing between the liveness receipt and the sole
-// ownerOpRestart call site), so the field this function branches on is never
-// offline for 重啟. That is the point: the intent lives in the state, not in
-// per-verb copies.
+// — it is the ONLY assignment to DesiredState in that handler, and nothing
+// between it and the sole ownerOpRestart call site touches that field again; the
+// four wind-down anchors it zeroes next, and the PutOutsourceWorker + error branch
+// after them, all leave DesiredState alone), so the field this function branches
+// on is never offline for 重啟. That is the point: the intent lives in the state,
+// not in per-verb copies.
 //
 // ⚠️ It does NOT "409 otherwise". That over-spawn guard is GONE (T-ed79 #10, owner
-// 2026-08-21 「往正職靠：外包也不擋」 — the red note at the top of that handler).
+// 2026-08-21 「往正職靠：外包也不擋」 — the 🔴 note inside that handler's body, just
+// after its not-found checks).
 // 重啟 on a still-live worker is accepted and stamps a session_alive RECEIPT
 // instead. Nothing here depends on the 409; the assignment above is load-bearing
 // on its own.
