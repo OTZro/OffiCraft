@@ -3,17 +3,14 @@
 // page already shows) and Learning (LessonsCard).
 //
 // Built against LessonsCard rather than beside it, because the two are the same
-// editor over different documents. Three deliberate differences, each with a
+// editor over different documents. Two deliberate differences, each with a
 // reason that is not "tidier":
 //
-//  1. NO taskType prop. Insight has no task_type axis, so its document-history
-//     key is the BARE role_key — not the "<role_key>::<task_type>" composite.
-//     Passing the composite here would address a document that does not exist.
-//  2. The header carries {size_chars} / {cap_chars}. 🔴 This is the ONLY place
+//  1. The header carries {size_chars} / {cap_chars}. 🔴 This is the ONLY place
 //     in the cockpit an owner can see the live doc.cap_chars.insight value without
 //     being admin — the settings surface that otherwise shows it is admin-only,
 //     and the alternative way to learn the limit is to be refused by it.
-//  3. The empty state is a FIRST-CLASS reading, not a fallback — for a role
+//  2. The empty state is a FIRST-CLASS reading, not a fallback — for a role
 //     with NO file seed, "empty" is the honest answer to "has this role moved
 //     anything over yet?". It must never be confused with a failed load, which
 //     is why `error` renders separately.
@@ -124,8 +121,7 @@ export function InsightCard({ roleKey }: InsightCardProps) {
         </span>
         {editing ? (
           <div className="mp-lessons__actions">
-            {/* 版本紀錄 (T-1f39). docKey is the BARE role_key — insight has no
-              * task_type axis, so there is no composite to build.
+            {/* 版本紀錄 (T-1f39). docKey is the BARE role_key.
               *
               * 🔴 THE 初始版本 ROW IS GATED ON hasSeed, NEVER ON isDefault
               * (T-6501). DocumentHistoryEntry's own rule is that the row may

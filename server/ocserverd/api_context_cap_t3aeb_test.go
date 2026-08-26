@@ -505,7 +505,7 @@ func ptrTo[T any](v T) *T { return &v }
 // (which is tested) said the opposite.
 func TestRestoreFollowsTheLiveCap(t *testing.T) {
 	api := newTasksTestServer(t)
-	const role, taskType = seedRoleAssistant, "tm-cap-live"
+	const role = seedRoleAssistant
 	oversized := strings.Repeat("x", contextDocMaxCharsDefault+50)
 
 	// An over-cap revision is retained (the cap never truncates what is stored),
@@ -520,7 +520,7 @@ func TestRestoreFollowsTheLiveCap(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("shrinking write: %d %s", rec.Code, rec.Body.String())
 	}
-	stored, err := api.dal.ListDocumentHistory("lessons", role+"::"+taskType)
+	stored, err := api.dal.ListDocumentHistory("lessons", role)
 	if err != nil || len(stored) == 0 {
 		t.Fatalf("history = %+v, %v", stored, err)
 	}
@@ -528,9 +528,9 @@ func TestRestoreFollowsTheLiveCap(t *testing.T) {
 	restore := func() int {
 		rec := httptest.NewRecorder()
 		api.HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost(rec,
-			taskReq(t, http.MethodPost, "/api/document-history/lessons/"+role+"::"+taskType+"/"+
+			taskReq(t, http.MethodPost, "/api/document-history/lessons/"+role+"/"+
 				strconv.FormatInt(stored[0].ID, 10)+"/restore", nil, "owner", "owner"),
-			"lessons", role+"::"+taskType, stored[0].ID)
+			"lessons", role, stored[0].ID)
 		return rec.Code
 	}
 
