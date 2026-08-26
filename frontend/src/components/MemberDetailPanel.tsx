@@ -441,7 +441,10 @@ export function MemberDetailPanel({
     // A fresh attempt drops the previous verdict (independent review r3):
     // without this a relocate that FAILED and was then retried successfully
     // leaves its "nothing was dispatched" alert on screen — a stale notice about
-    // an attempt that is over.
+    // an attempt that is over. THE WAKE PATH DOES THIS TOO, deliberately: see
+    // setWakeUndispatched(false) in runActivate. The pair is the invariant, and
+    // this comment is the only place it is written down — drop either half and
+    // nothing goes red, because the symptom is a stale alert a human has to see.
     setRelocateUndispatched(false);
     try {
       // 🔴 D: the PATCH goes FIRST. This is one owner edit of one settings

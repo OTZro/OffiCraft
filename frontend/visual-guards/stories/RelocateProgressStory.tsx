@@ -4,7 +4,8 @@
 // new `.mp-relocate` column and its notice line now live in.
 //
 // Why the mock needs a nudge: MemberDetailPanel withholds the wake affordance
-// when NO machine is online (`onlineMachines.length === 0` → no `onSpawn`), and
+// while a wake is already pending OR when NO machine is online
+// (`wakePendingActive || onlineMachines.length === 0` → no `onSpawn`), and
 // the mock's seed warden is offline by design (it never fabricates a reachable
 // machine). `__setMockMemberOnline` is the repo's own
 // test/dev hook for exactly this; flipping the warden online gives the panels the
