@@ -194,7 +194,7 @@ func offboardKindOf(m Member, now float64) (kind string, carries bool) {
 		// worker and the arm that must stay silent was the one that could still
 		// speak. An outsource 停止 now stamps the same anchors (api_outsource.go)
 		// — it kills on the spot, so it IS this shape, whatever it is named.
-		if m.StoppingSince > 0 && !forcedEpochLive(m) {
+		if gracefulStopEpochOpen(m) {
 			// 🔴 …WITH ONE EXCEPTION, AND ONLY ONE: the owner pressed 加速停止 on
 			// this stop (T-ed79). The paragraphs above rule out a clock the
 			// SERVER starts; this is a clock the owner started, on the rung
@@ -254,6 +254,61 @@ const (
 func forcedEpochLive(m Member) bool {
 	return m.ForcedStopAt > 0.0 && m.StoppingSince > 0.0 &&
 		m.ForcedStopAt >= m.StoppingSince
+}
+
+// gracefulStopEpochOpen is the COMPOUND that wraps forcedEpochLive: this row is
+// under a 停止 that a session can still be working — an open stop epoch
+// (stopping_since > 0) that was NOT opened by 強制停止.
+//
+// forcedEpochLive itself was never the duplicated rule; it has always had one
+// definition, and the worker side calls that same definition through
+// memberFromWorker. What WAS written out by hand, once per site, is this
+// two-term question, and the sites that ask it are the three things a graceful
+// stop epoch entitles a session to:
+//
+//   - the SENTENCE — offboardKindOf's desired-offline arm sends a 下線 notice
+//     only for a stop the recipient can still act on (a forced session is cut
+//     off deliberately and is told nothing).
+//   - the CLOCK — winddownDeadlineOf answers 0 on the same two terms, so an
+//     announced deadline and a collected one cannot come apart.
+//   - the ESCALATION — 加速停止 (both faces) refuses unless there is such an
+//     epoch to escalate: nothing to accelerate on a member nobody asked to
+//     stop, and no reader for a deadline addressed to a session already cut off.
+//
+// Those three used to be three spellings of one judgement, and one of them was
+// the negation of the other two, which is how a reader checks them against each
+// other and gets it wrong. TestOffboardKindOf_AFinalCallAlwaysHasAClock asserts
+// the sentence and the clock coincide — it asserted the AGREEMENT of two copies
+// because that was all it could do; they are now one expression.
+//
+// It is NOT the same question as "may this 停止 re-stamp stopping_since"
+// (stopEpochAnchor): that one has no stopping_since>0 term at all, because
+// opening the FIRST stop epoch is exactly the case where there is none yet.
+func gracefulStopEpochOpen(m Member) bool {
+	return m.StoppingSince > 0.0 && !forcedEpochLive(m)
+}
+
+// stopEpochAnchor answers what stopping_since must hold after a 停止 lands on
+// this row: NOW for an ordinary stop, and the value it already carries when the
+// epoch under way is a live FORCED one.
+//
+// 🔴 RE-STAMPING A FORCED EPOCH WOULD MOVE IT TO THE GRACEFUL SIDE. forcedEpochLive
+// is scoped by `forced_stop_at >= stopping_since`, so pushing stopping_since to
+// now — with forced_stop_at left where it was — flips the row out of "cut off
+// deliberately" and into "working its close-out", and the arm that must stay
+// silent becomes the arm that speaks (the ruling in offboardKindOf above, and
+// T-c996 for why it binds both kinds).
+//
+// The two faces that stamp a stop epoch are the staff deactivate and the worker
+// /stop, and this is the whole of what they used to write out identically. It
+// takes and returns a VALUE rather than mutating, because the worker face holds
+// an OutsourceWorker and only projects a Member to ask the question — the
+// answer goes back onto the worker row, not onto the projection.
+func stopEpochAnchor(m Member, now float64) float64 {
+	if forcedEpochLive(m) {
+		return m.StoppingSince
+	}
+	return now
 }
 
 // offboardNoticeFor is the WHOLE wind-down sentence for this member: the
@@ -1043,9 +1098,7 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 	// — the 下線 arm returns decisionNone while the soft grace is on, and
 	// offboardKindOf answers soft for desired-offline without consulting the
 	// anchor's age.
-	if !forcedEpochLive(*m) {
-		m.StoppingSince = nowSecs()
-	}
+	m.StoppingSince = stopEpochAnchor(*m, nowSecs())
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
@@ -1169,7 +1222,7 @@ func (s *apiServer) HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStop
 	now := nowSecs()
 	switch {
 	case m.DesiredState == DesiredStateOffline:
-		if m.StoppingSince <= 0.0 || forcedEpochLive(*m) {
+		if !gracefulStopEpochOpen(*m) {
 			writeError(w, http.StatusConflict, acceleratedStopNeedsAnOpenWindDownMsg)
 			return
 		}

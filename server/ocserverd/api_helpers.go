@@ -400,6 +400,13 @@ func refocusDeadlineOf(refocusSince float64, cfg reconcileConfig, refocusOp stri
 //     was correct while that arm could never carry a clock, and stopped being
 //     correct the moment the owner got a 加速停止 button that works there.
 //
+// 🔴 AND WHETHER THERE IS AN EPOCH TO RUN A CLOCK ON is gracefulStopEpochOpen
+// (api_members.go), asked once, here. The 下線 arm's other two zero conditions
+// used to be written out — stopping_since <= 0 and forcedEpochLive — which made
+// them the NEGATION of the same pair offboardKindOf spells positively to decide
+// whether to send a sentence at all. TestOffboardKindOf_AFinalCallAlwaysHasAClock
+// exists because those two spellings could come apart; they are now one call.
+//
 // 🔴 The AUTHORITY on whether there is a clock is winddownKindFor in both arms,
 // asked once, here. A second test for the accelerated cause would be a second
 // copy of the ruling — the exact split T-ed79 removed — and the harm is
@@ -408,7 +415,7 @@ func refocusDeadlineOf(refocusSince float64, cfg reconcileConfig, refocusOp stri
 func winddownDeadlineOf(m Member, cfg reconcileConfig) float64 {
 	if m.DesiredState == DesiredStateOffline {
 		grace, clocked := recycleGraceFor(m.RefocusOp, cfg)
-		if !clocked || m.StoppingSince <= 0 || forcedEpochLive(m) {
+		if !clocked || !gracefulStopEpochOpen(m) {
 			return 0.0
 		}
 		return m.StoppingSince + grace
