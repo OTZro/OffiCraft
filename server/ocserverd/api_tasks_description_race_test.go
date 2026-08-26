@@ -170,23 +170,13 @@ func TestTaskDescriptionSurvivesConcurrentPriorityWrites(t *testing.T) {
 // removed quietly even by someone who never runs the counterfactual: PutTask
 // must not name the description column in its conflict clause.
 func TestTaskDescriptionRaceGuardHasTeeth(t *testing.T) {
-	raw, err := os.ReadFile("dal_tasks.go")
-	if err != nil {
-		t.Fatalf("read dal_tasks.go: %v", err)
-	}
-	// Anchored on the SYMBOL, never a line number: the enclosing text of
-	// PutTask, cut at the next top-level func.
-	const anchor = "func (d *DAL) PutTask(t Task) error {"
-	start := strings.Index(string(raw), anchor)
-	if start < 0 {
-		t.Fatal("PutTask not found in dal_tasks.go — this guard is anchored on " +
-			"the symbol, not a line number; re-point it if the function moved")
-	}
-	rest := string(raw)[start+len(anchor):]
-	if end := strings.Index(rest, "\nfunc "); end >= 0 {
-		rest = rest[:end]
-	}
-	body := rest
+	// Anchored on the SYMBOL, never a line number.
+	// T-52917b re-pointed this off PutTask: the 33-column statement now lives in
+	// putTaskOn so that the very same SQL can run inside CreateTaskMintingID's
+	// transaction, and the T-52917b REVIEW split the conflict clause out into its
+	// own const so a create can INSERT without it. The guard follows the SQL: it
+	// reads the conflict clause itself, cut at the closing backtick.
+	body := taskConflictClauseSource(t)
 	if strings.Contains(body, "description = excluded.description") {
 		t.Fatal("PutTask's ON CONFLICT list writes the description column again. " +
 			"That makes description a shared-write column, and every " +
@@ -201,4 +191,36 @@ func TestTaskDescriptionRaceGuardHasTeeth(t *testing.T) {
 		t.Fatal("source-reading control failed: PutTask's conflict list should " +
 			"still carry priority — the assertion above cannot be trusted")
 	}
+}
+
+// taskConflictClauseSource returns the SOURCE TEXT of putTaskOn's ON CONFLICT
+// clause, read out of dal_tasks.go at test time.
+//
+// Anchored on the const's NAME, never a line number and never "the text between
+// two funcs". Before the T-52917b review the clause was inline in putTaskOn and
+// these guards sliced the function body; the review split it into its own const
+// so CreateTaskMintingID can run the same INSERT WITHOUT the clause (a minted id
+// that already exists must ERROR, not silently overwrite). The clause is still
+// the one place that decides which task columns are shared-write, so that is
+// what the guards read.
+func taskConflictClauseSource(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile("dal_tasks.go")
+	if err != nil {
+		t.Fatalf("read dal_tasks.go: %v", err)
+	}
+	const anchor = "const taskUpsertConflictClause = `"
+	start := strings.Index(string(raw), anchor)
+	if start < 0 {
+		t.Fatal("taskUpsertConflictClause not found in dal_tasks.go — this guard " +
+			"is anchored on the const's name, not a line number; re-point it if " +
+			"the clause moved or was renamed")
+	}
+	body := string(raw)[start+len(anchor):]
+	end := strings.Index(body, "`")
+	if end < 0 {
+		t.Fatal("taskUpsertConflictClause's raw string is unterminated — the " +
+			"guards below would be reading the rest of the file")
+	}
+	return body[:end]
 }

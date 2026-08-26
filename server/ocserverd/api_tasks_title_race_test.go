@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -125,21 +124,10 @@ func TestTaskTitleSurvivesConcurrentPriorityWrites(t *testing.T) {
 // structurally, so the guard cannot be removed quietly by someone who never runs
 // the counterfactual.
 func TestTaskTitleRaceGuardHasTeeth(t *testing.T) {
-	raw, err := os.ReadFile("dal_tasks.go")
-	if err != nil {
-		t.Fatalf("read dal_tasks.go: %v", err)
-	}
-	// Anchored on the SYMBOL, never a line number.
-	const anchor = "func (d *DAL) PutTask(t Task) error {"
-	start := strings.Index(string(raw), anchor)
-	if start < 0 {
-		t.Fatal("PutTask not found in dal_tasks.go — this guard is anchored on " +
-			"the symbol, not a line number; re-point it if the function moved")
-	}
-	body := string(raw)[start+len(anchor):]
-	if end := strings.Index(body, "\nfunc "); end >= 0 {
-		body = body[:end]
-	}
+	// Anchored on the SYMBOL, never a line number — see the twin guard in
+	// api_tasks_description_race_test.go for why this reads the conflict clause
+	// const rather than a function body.
+	body := taskConflictClauseSource(t)
 	if strings.Contains(body, "title = excluded.title") {
 		t.Fatal("PutTask's ON CONFLICT list writes the title column again. That " +
 			"makes title a shared-write column, and every load-mutate-save " +

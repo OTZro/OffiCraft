@@ -315,7 +315,45 @@ func (d *DAL) CountTasksDuplicatingOriginal(originalID string) (int, error) {
 // (T-e271 node 3 explicitly did not widen into it) — PutTaskStep carries the
 // same carve-out for its `note` column one table over (T-e271 node 6), and its
 // remaining columns are still shared-write for exactly this reason.
-func (d *DAL) PutTask(t Task) error {
+func (d *DAL) PutTask(t Task) error { return putTaskOn(d.wdb, t, taskWriteUpsert) }
+
+// taskWriteMode selects the ONE thing that differs between the two callers of
+// putTaskOn: whether the INSERT carries its ON CONFLICT clause.
+//
+// 🔴 IT IS A MODE ON ONE STATEMENT, NOT TWO STATEMENTS. The column list, the
+// placeholder row and the 33 arguments are written ONCE; the mode appends a
+// suffix. A second copy of any of those three is the exact disease this whole
+// change set is fighting — a task column added to one list and not the other is
+// silently dropped on one path and nobody finds out until the data is wrong.
+type taskWriteMode int
+
+const (
+	// taskWriteUpsert is PutTask's long-standing load-mutate-save behaviour:
+	// writing an id that already exists UPDATES it (minus the description/title
+	// carve-outs above).
+	taskWriteUpsert taskWriteMode = iota
+
+	// taskWriteInsertOnly is what CreateTaskMintingID uses. A create is minting a
+	// BRAND NEW id off task_id_seq, so an existing row under that id is not
+	// something to merge into — it is proof the counter handed out a number
+	// twice, and the only safe answer is to fail LOUDLY.
+	//
+	// 🔴 THIS IS THE FIX FOR "撞號 = 靜默覆蓋 + 回 200" (T-52917b review). With the
+	// conflict clause in place a repeated mint did not error: it OVERWROTE the
+	// earlier task and the API still answered 200, so the damage was an invisible
+	// MISSING ROW. Measured on the previous head: a mint pinned to a fixed number
+	// left `task rows after that mint = 2` where 3 rows had been created, and the
+	// row it ate was a post-migration T-<n>. Without the clause the second INSERT
+	// trips the TEXT PRIMARY KEY, the transaction rolls back, no row is lost and
+	// the caller gets a 500 instead of a lie.
+	taskWriteInsertOnly
+)
+
+// putTaskOn is PutTask's body against either pool handle or an open
+// transaction (the sqlExecer convention, dal.go) — CreateTaskMintingID needs
+// the very same statement to run INSIDE its transaction, and a second copy of a
+// 33-column upsert would drift.
+func putTaskOn(ex sqlExecer, t Task, mode taskWriteMode) error {
 	inputs := t.Inputs
 	if inputs == nil {
 		inputs = map[string]any{}
@@ -328,9 +366,39 @@ func (d *DAL) PutTask(t Task) error {
 	if t.OutsourceDispatched {
 		dispatched = 1
 	}
-	_, err = d.wdb.Exec(`
-		INSERT INTO task (`+taskColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	// ONE column list, ONE placeholder row, ONE argument list — see taskWriteMode.
+	// The mode only decides whether the conflict SUFFIX is appended.
+	stmt := `
+		INSERT INTO task (` + taskColumns + `)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	if mode == taskWriteUpsert {
+		stmt += taskUpsertConflictClause
+	}
+	_, err = ex.Exec(stmt,
+		t.ID, t.TypeKey, t.Title, t.DedupeKey, string(blob), t.Description,
+		t.Status, t.Lock, t.Priority, t.ExecutorKind, t.ExecutorID, t.CreatorID,
+		t.WaitingReason,
+		t.CreatedTS, t.UpdatedTS, t.ClosedTS, t.CloseoutTS, t.DuplicateOf,
+		t.ReassignedFrom, t.ReassignedFromKind,
+		t.HandoverNote, t.HandoverNoteTS, t.HandoverNoteBy,
+		NormalizeRuntime(t.OutsourceRuntime),
+		t.OutsourceModel, t.OutsourceEffort, t.OutsourceMachine,
+		dispatched,
+		t.Handoff, t.HandoffNote, t.HandoffTaskID, t.FrozenBy,
+		t.KickoffNotifiedTo,
+	)
+	return err
+}
+
+// taskUpsertConflictClause is the suffix taskWriteUpsert appends to putTaskOn's
+// INSERT. It is deliberately parked immediately below putTaskOn and INSIDE no
+// other function so the two source-reading race guards
+// (TestTaskDescriptionRaceGuardHasTeeth / TestTaskTitleRaceGuardHasTeeth) can
+// keep reading the real text that decides which columns are shared-write.
+//
+// 🔴 `description` and `title` are ABSENT ON PURPOSE — see the long carve-out
+// comment on PutTask above. Do not add them back.
+const taskUpsertConflictClause = `
 		ON CONFLICT (id) DO UPDATE SET
 			type_key = excluded.type_key,
 			dedupe_key = excluded.dedupe_key, inputs = excluded.inputs,
@@ -358,21 +426,7 @@ func (d *DAL) PutTask(t Task) error {
 			handoff_note = excluded.handoff_note,
 			handoff_task_id = excluded.handoff_task_id,
 			frozen_by = excluded.frozen_by,
-			kickoff_notified_to = excluded.kickoff_notified_to`,
-		t.ID, t.TypeKey, t.Title, t.DedupeKey, string(blob), t.Description,
-		t.Status, t.Lock, t.Priority, t.ExecutorKind, t.ExecutorID, t.CreatorID,
-		t.WaitingReason,
-		t.CreatedTS, t.UpdatedTS, t.ClosedTS, t.CloseoutTS, t.DuplicateOf,
-		t.ReassignedFrom, t.ReassignedFromKind,
-		t.HandoverNote, t.HandoverNoteTS, t.HandoverNoteBy,
-		NormalizeRuntime(t.OutsourceRuntime),
-		t.OutsourceModel, t.OutsourceEffort, t.OutsourceMachine,
-		dispatched,
-		t.Handoff, t.HandoffNote, t.HandoffTaskID, t.FrozenBy,
-		t.KickoffNotifiedTo,
-	)
-	return err
-}
+			kickoff_notified_to = excluded.kickoff_notified_to`
 
 // ── task_dep ─────────────────────────────────────────────────────────────────
 
