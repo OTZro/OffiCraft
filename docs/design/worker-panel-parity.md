@@ -149,6 +149,9 @@
   importer**（僅剩自己的測試與 `MemberDetailPanel` 註解裡的 twin-implementation 交叉引用）。
   依 §9(a) 這是該清的 legacy，但刪掉一個 hook ＋ 它整份測試 ＋ 一個元件，範圍遠大於本票，
   **列為 follow-up 交 owner 裁定，本票不刪**。
+  <br>**後續（T-170e）**：該 follow-up 已執行 —— `useRelocateMachine.tsx`、它的 colocated 測試、
+  以及隨之變成孤兒的 `MachinePicker.tsx` 都已刪除。上面這段是 T-7526 當下的記錄，保留不改寫；
+  今天讀到這兩個檔名時，樹上已經沒有它們。
 
 **沒有任何一格因為我判斷「該移除」而被移除。** B1 / B3 兩項就地編輯鍵的移除，是派工單步驟 2
 DoD 第 1 條明文指定的改動，且**能力本身沒有消失**（改模型、改機器都改由 A8 的 dialog 承接）。
@@ -160,7 +163,11 @@ DoD 第 1 條明文指定的改動，且**能力本身沒有消失**（改模型
 1. `WorkerDetailPanel` 不再傳 `onSaveModelEffort`（B1）與 `machineAction`（B3）給共用面板。
 2. 身分卡動作列新增「更改」鍵（A8），開一份與正職同形狀的設定 dialog：
    `ModelEffortEditor`（執行環境／模型／投入度）＋ 機器 `<select>`（線上機器 ＋ 自己那台離線釘選，
-   照 `MachinePicker` 的規則標「離線」且 disabled），底部 取消／更改。
+   標「離線」且 disabled），底部 取消／更改。
+   <br>**這條規則今天仍然有效，但它的出處變了（T-170e）**：當年寫的是「照 `MachinePicker` 的規則」，
+   而那個元件已經刪除。今天兩支面板各自實作同一份 `pinnedOfflineMachine` ＋ `settingsMachineOptions`
+   （除了 `member.`／`worker.` 之外逐字相同），互為對照 —— 要 audit 這條規則請比對那兩段，不要去找 `MachinePicker`。
+   ⚠️ 那兩段只承接「留在清單裡 ＋ 標離線」；**`disabled` 那一半不在裡面**，它在各自的 `<option disabled={machine.offline}>`，要一起看。
 3. 確認送出：`launchChanged` → `api.setWorkerModel`；`machineChanged` → `api.relocateWorker`。
    PATCH 先於 relocate（正職 `saveSettings` 的同一條理由：relocate 會重生 session，
    設定必須先落地，否則新 session 用舊模型起來）。
