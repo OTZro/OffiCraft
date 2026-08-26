@@ -96,6 +96,84 @@ func TestWorkerWindDownLadder_AModelChangeMayNotUndoAnAcceleratedStop(t *testing
 	})
 }
 
+// …and the ladder binds EVERY stamp site, not just the owner-verb funnel.
+// respawnWorkerForOwnerOp has exactly three callers (restart / model / relocate)
+// — the 重新聚焦 handler is NOT one of them. It hand-wrote the same four fields
+// in api_outsource.go, which is the identical bug wearing a different button:
+// 停止 → 加速停止 → 重新聚焦 walked the stage back to 停止 and took the deadline
+// with it. Staff refuse this with a 409 (HandleRefocusMember), because the owner
+// pressed a button and is owed an answer rather than a silent downgrade.
+func TestWorkerWindDownLadder_重新聚焦MayNotUndoAnAcceleratedStopEither(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveOnlineWorker(t, api)
+
+	if rec := postWorker(t, api, workerID, "refocus", nil,
+		api.HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost); rec.Code != http.StatusOK {
+		t.Fatalf("refocus: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := postWorker(t, api, workerID, "accelerated-stop", nil,
+		api.HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost); rec.Code != http.StatusOK {
+		t.Fatalf("accelerated-stop: %d %s", rec.Code, rec.Body.String())
+	}
+	api.hub.DrainWardenCommands(ServerSelfHost)
+	before, _ := api.dal.GetOutsourceWorker(workerID)
+	if before.RefocusOp != refocusOpAcceleratedStop {
+		t.Fatalf("setup: refocus_op=%q, want %q — the arm under test is not reached",
+			before.RefocusOp, refocusOpAcceleratedStop)
+	}
+	cfg := api.reconcileConfigLive()
+	deadlineBefore := refocusDeadlineOf(before.RefocusSince, cfg, before.RefocusOp)
+	if deadlineBefore <= 0 {
+		t.Fatalf("setup: 加速停止 must carry a deadline, got %v", deadlineBefore)
+	}
+
+	rec := postWorker(t, api, workerID, "refocus", nil,
+		api.HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("重新聚焦 on a worker already in 加速停止 answered %d, want 409 — the "+
+			"owner pressed a button and is owed an answer, not a silent downgrade "+
+			"(body: %s)", rec.Code, rec.Body.String())
+	}
+
+	after, _ := api.dal.GetOutsourceWorker(workerID)
+	if after.RefocusOp != refocusOpAcceleratedStop {
+		t.Fatalf("the ladder ran BACKWARDS via 重新聚焦: refocus_op %q → %q. 重新聚焦 "+
+			"is 停止 and may not hand a worker already in 加速停止 back the slower "+
+			"procedure", before.RefocusOp, after.RefocusOp)
+	}
+	if got := refocusDeadlineOf(after.RefocusSince, cfg, after.RefocusOp); got != deadlineBefore {
+		t.Fatalf("the 加速停止 deadline MOVED (%v → %v) on a 重新聚焦 — the worker was "+
+			"counting down to a time that no longer exists", deadlineBefore, got)
+	}
+
+	// POSITIVE CONTROL: an EQUAL rung still re-arms. 重新聚焦 onto a worker whose
+	// open epoch is a plain 停止 must still answer 200 and stamp a fresh epoch, or
+	// this guard has frozen the button instead of ordering the stages.
+	t.Run("equal rung still re-arms", func(t *testing.T) {
+		api := newTasksTestServer(t)
+		api.noOutsource = true
+		id := newActiveOnlineWorker(t, api)
+		if rec := postWorker(t, api, id, "refocus", nil,
+			api.HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost); rec.Code != http.StatusOK {
+			t.Fatalf("first refocus: %d %s", rec.Code, rec.Body.String())
+		}
+		first, _ := api.dal.GetOutsourceWorker(id)
+		api.hub.DrainWardenCommands(ServerSelfHost)
+		if rec := postWorker(t, api, id, "refocus", nil,
+			api.HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost); rec.Code != http.StatusOK {
+			t.Fatalf("second refocus on an equal rung: %d %s — a re-arm takes nothing "+
+				"away from the agent and several callers do it on purpose",
+				rec.Code, rec.Body.String())
+		}
+		w, _ := api.dal.GetOutsourceWorker(id)
+		if w.RefocusOp != refocusOpRefocus || w.RefocusSince < first.RefocusSince {
+			t.Fatalf("refocus_op=%q refocus_since=%v (was %v) — a same-rung press must "+
+				"still open its own epoch", w.RefocusOp, w.RefocusSince, first.RefocusSince)
+		}
+	})
+}
+
 // ② TOKEN EXPIRY. A worker's session token is minted by the SAME mintAgentToken
 // with the SAME agent_token_ttl as a staff member's (worker_spawn.go), so it
 // dies exactly the same way — and every step of the close-out is an MCP call on

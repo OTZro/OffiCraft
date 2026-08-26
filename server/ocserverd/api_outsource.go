@@ -456,10 +456,34 @@ func (s *apiServer) HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost
 			"refocus requires the worker to be online (no live session to hand over)")
 		return
 	}
-	worker.RefocusSince = nowSecs()
-	worker.RefocusOp = refocusOpRefocus
-	worker.StoppingSince = 0.0 // a new handover epoch never inherits a stale latch
-	worker.StoppedSince = 0.0
+	// 🔴 The ladder only goes forward (owner, 2026-08-24), and this site is the
+	// reason the guard cannot live in the owner-verb funnel alone: 換手 does NOT
+	// go through respawnWorkerForOwnerOp — it is a FOURTH stamp site, and it used
+	// to hand-write the same four fields the funnel used to. 重新聚焦 is 停止 —
+	// stage 1 — so pressing it on a worker already in 加速停止 pushed the stage
+	// BACK and cleared the deadline with it, leaving a worker that had been told
+	// it was counting down no longer counting. Refused rather than silently
+	// downgraded, exactly as HandleRefocusMember refuses it for staff: the owner
+	// pressed a button, so he gets an answer.
+	//
+	// Stamped through the SHARED armRefocusEpoch on a memberFromWorker projection
+	// (a worker row IS a member row, and the projection carries all five fields
+	// this decision reads), with only the four it mutates folded back. A
+	// hand-written copy of a shared decision stays equal to it exactly until
+	// somebody edits the original — which is what happened here.
+	proj := memberFromWorker(*worker)
+	if !armRefocusEpoch(&proj, refocusOpRefocus, nowSecs()) {
+		s.outsourceMu.Unlock()
+		writeError(w, http.StatusConflict,
+			"refocus is 停止 and this worker is already further along the "+
+				"wind-down ladder (下線 → 加速 → 強制); a later stage is never "+
+				"replaced by an earlier one")
+		return
+	}
+	worker.RefocusSince = proj.RefocusSince
+	worker.RefocusOp = proj.RefocusOp
+	worker.StoppingSince = proj.StoppingSince // a new epoch never inherits a stale latch
+	worker.StoppedSince = proj.StoppedSince
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
 		internalError(w, err)
