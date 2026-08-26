@@ -604,6 +604,14 @@ ONE-SHOT, never a standing order):
   so does `activate` — but the non-destructive route to it is the chat's 就地喚醒
   row, NOT the detail panel's Spawn, which for a `stopping` member opens the
   settings dialog and never sends activate.
+- 🔴 **The 停止 → 加速停止 → 強制停止 ladder binds the WORKER owner verbs too.**
+  `openOwnerOpHandover` (`worker_spawn.go`) stamps through the shared
+  `armRefocusEpoch` rather than writing the four anchors by hand, so a 改機器 /
+  換 model / 重新聚焦 that would move a worker BACKWARDS from an open 加速停止 is
+  refused — the owner's change still lands on the row, and the open wind-down keeps
+  its own deadline. Before T-170e the hand-written copy carried no ladder check at
+  all: the stage fell back to 停止 and the deadline the worker had been quoted
+  silently ceased to exist.
 
 ### 4.6 Dispatch discipline
 
