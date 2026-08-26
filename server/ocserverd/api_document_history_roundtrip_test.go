@@ -119,21 +119,24 @@ func TestDocumentHistoryRoundTripsLessonsUnderItsRoleKey(t *testing.T) {
 		t.Fatalf("restored lessons = %q, want \"lesson two\"", current.Text)
 	}
 
-	// The BARE role_key is what addresses the document since T-2. The old
-	// composite still parses as a string, so it must be read as the key it
-	// literally is — a document nobody has written — rather than helpfully
-	// re-split back onto this role's series. A caller sending the pre-T-2 key
-	// gets an empty list, not this role's history under another name.
+	// The BARE role_key is what addresses the document since T-2, and the old
+	// composite is REFUSED rather than silently re-split back onto this role's
+	// series. Two properties in one answer: nothing re-derives the role from
+	// the composite (the axis is not back as a parsing rule), and the caller is
+	// told so instead of being handed an empty list it would read as "this role
+	// has no history". An earlier cut of T-2 answered 200-with-empty here; that
+	// also let the RESTORE face through, which materialised a lessons row under
+	// the composite key — see api_document_history_lessons_key_t2_test.go.
 	rec := httptest.NewRecorder()
 	legacy := role + "::general"
 	f.api.HandleListDocumentHistoryApiDocumentHistoryKindKeyGet(rec,
 		f.req(http.MethodGet, "/api/document-history/lessons/"+legacy, nil), "lessons", legacy)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("list lessons history under the legacy key: status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("list lessons history under the pre-T-2 composite key %q: status=%d body=%s, want 400",
+			legacy, rec.Code, rec.Body.String())
 	}
-	if got := decodeBody[[]DocumentHistoryDTO](t, rec); len(got) != 0 {
-		t.Fatalf("the pre-T-2 composite key %q still resolves to %d revision(s) — nothing may "+
-			"re-derive the role from it, or the removed axis is back as a parsing rule", legacy, len(got))
+	if current, err := f.api.foldLessonsDTO(role); err != nil || current.Text != "lesson two" {
+		t.Fatalf("the refused listing disturbed the role's live lessons: %+v, %v", current, err)
 	}
 
 	// A BLANK key still addresses nothing and is still a 400.

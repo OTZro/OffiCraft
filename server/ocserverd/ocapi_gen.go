@@ -835,10 +835,15 @@ type DocSizeDTO struct {
 // its learnings — each as its current size plus the cap in force for that segment,
 // and nothing else.
 //
-// Every capped document is covered. Until T-2 lessons carried a “task_type“
+// The listing is KEYED BY ROLE, and that is its limit. Until T-2 lessons carried a “task_type“
 // axis and only the default bucket was reported, so a document under any other
-// bucket name drew on the same lessons cap while staying off this listing; the
-// axis is gone and a role has exactly one lessons document.
+// bucket name drew on the same lessons cap while staying off this listing; that axis
+// is gone and a role has exactly one lessons document. What remains is a narrower
+// gap on the WRITE side rather than in this listing: nothing validates a role_key
+// against the roster, so an admin or the owner may write lessons or insight under a
+// role_key no role carries. Such a document spends the same cap and, having no role
+// to hang off, never appears here — “list_roles“ is the roster this page is derived
+// from.
 //
 // It carries NO document content, so its size is a function of how many roles and
 // manuals exist, never of what they hold — which is the point. The two numbers no
@@ -3679,7 +3684,7 @@ type ServerInterface interface {
 	// Total chat unread count (the office nav red dot).
 	// (GET /api/chat/unread-count)
 	HandleChatUnreadCountApiChatUnreadCountGet(w http.ResponseWriter, r *http.Request)
-	// Size-only overview of EVERY capped document on the station: each role's role definition / insight / lessons, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). Every capped document is covered: T-2 removed the lessons task_type axis, so a role has exactly ONE lessons document and it is the one reported here — there is no longer a bucket that spends the lessons cap off this listing. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.
+	// Size-only overview of the capped documents on the station: each role's role definition / insight / lessons, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). THE LISTING IS KEYED BY ROLE, AND THAT IS ITS LIMIT. T-2 removed the lessons task_type axis, so a role now has exactly ONE lessons document and it is the one reported here — the old 'default bucket only' gap is gone. What remains is narrower and belongs to the WRITE side, not to this listing: nothing validates a role_key against the roster, so an admin or the owner can write lessons (or insight) under a role_key no role carries; such a document spends the same cap and, having no role to hang off, never appears here. list_roles is the roster this listing is derived from — a document under a name that is not on it is not on this page either. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.
 	// (GET /api/doc-sizes)
 	HandlePeekDocSizesApiDocSizesGet(w http.ResponseWriter, r *http.Request)
 	// List the product-guide docs (slug + title).

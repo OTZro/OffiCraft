@@ -889,8 +889,18 @@ type docSizeDTO struct {
 // the FOLDED doc (overlay ⊕ seed) — the same text the per-document GETs report,
 // because the sizes come from the very same fold* helpers those handlers use.
 // Lessons is one row per role, whole: T-2 removed the task_type axis, so there
-// is no longer a second bucket a write could spend the same cap under while
+// is no longer a second BUCKET a write could spend the same cap under while
 // staying off this wire.
+//
+// 🔴 THAT IS NOT THE SAME AS "everything capped is on this wire", and the
+// distinction is worth a line because an earlier draft of peek_doc_sizes' tool
+// description collapsed the two into a promise a single call falsifies. This
+// DTO is keyed by ROLE: the handler walks listRoleKeys(). The lessons write
+// face never compares role_key against that roster (see replace_lessons, whose
+// own description says so), so an admin or the owner can create a lessons
+// document under a name no role carries — it spends the same cap and has no
+// role to hang off, so it never appears here. Measured in
+// TestPeekDocSizesDescriptionDoesNotPromiseCoverageItCannotGive.
 type roleDocSizesDTO struct {
 	RoleKey string     `json:"role_key"`
 	Duty    docSizeDTO `json:"duty"`

@@ -144,13 +144,17 @@ describe("httpApi · document-history wire methods", () => {
     });
   });
 
-  it("listDocumentHistory keeps a lessons composite key in one path segment", async () => {
-    await httpApi.listDocumentHistory("lessons", "assistant::general");
+  it("listDocumentHistory keeps a key containing '::' in one path segment", async () => {
+    await httpApi.listDocumentHistory("role_definition", "assistant::general");
     const { url } = await lastCall();
-    // "::" is not a path separator here — the server splits the key itself
-    // (historyKeyParts), so the cockpit must not split it into two segments.
+    // "::" is not a path separator here: a document key is ONE segment whatever
+    // it contains, and the cockpit must not split it into two. (The kind here is
+    // deliberately not lessons — T-2 removed the task_type axis, so a lessons key
+    // carrying "::" is refused by the server with a 400. This test is about URL
+    // construction, not about which keys are legal; api_document_history_lessons_key_t2_test.go
+    // owns that.)
     expect(decodeURIComponent(url)).toBe(
-      "/api/document-history/lessons/assistant::general"
+      "/api/document-history/role_definition/assistant::general"
     );
   });
 

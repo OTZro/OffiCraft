@@ -6,12 +6,40 @@
 -- 🔴 WHY DATA FIRST, NOT THE COLUMN FIRST. `lessons` is keyed
 -- (role_key, task_type) — see 00001_schema.sql, which states the shard reason.
 -- Remove the column while several task_types still exist for one role_key and
--- those rows collapse onto ONE surviving key. SQLite's ALTER TABLE ... DROP
--- COLUMN does not report that as a conflict; it is a lossy fold, and which row
--- wins is not something the caller gets to choose. Deleting first means the
--- later drop meets a table where role_key is already unique on its own, so the
--- fold is an identity. Owner ruling, 2026-08-26: 「應該先砍資料再砍欄位」
--- 「避免 duplicate」.
+-- those rows collapse onto ONE surviving key: a lossy fold, and which row wins
+-- is not something the caller gets to choose. Deleting first means the later
+-- drop meets a table where role_key is already unique on its own, so the fold
+-- is an identity. Owner ruling, 2026-08-26: 「應該先砍資料再砍欄位」「避免
+-- duplicate」.
+--
+-- 🔴 CORRECTION, 2026-08-27 — AN EARLIER VERSION OF THIS COMMENT WAS WRONG
+-- ABOUT THE MECHANISM, and the correction is recorded rather than quietly
+-- swapped because the wrong version travelled into a ticket. It said SQLite's
+-- `ALTER TABLE ... DROP COLUMN` "does not report that as a conflict; it is a
+-- lossy fold". MEASURED, sqlite3 3.51.0:
+--   sqlite> ALTER TABLE lessons DROP COLUMN task_type;
+--   Error: in prepare, cannot drop PRIMARY KEY column: "task_type"
+-- (positive control: dropping a NON-key column on the same table answers ok.)
+-- SQLite REFUSES outright. It never gets as far as folding anything.
+--
+-- THE ORDERING ABOVE IS STILL CORRECT; ONLY THE REASON MOVED. Because ALTER
+-- cannot do it at all, the column drop has to be a create/copy/drop/rename
+-- REBUILD — and the lossy fold lives in that rebuild's copy step, not in
+-- ALTER. 00062 does exactly that rebuild and disarms the fold by copying with
+-- a plain `INSERT` (not `OR REPLACE` / `OR IGNORE`), so a station where this
+-- DELETE never ran stops with a UNIQUE constraint instead of silently keeping
+-- whichever row happened to be last. Both directions are measured in
+-- TestMigration00062RefusesToFoldDuplicateRoleKeys and
+-- TestMigration00062SqliteRefusesToDropAPrimaryKeyColumn.
+--
+-- EDITING AN APPLIED MIGRATION'S COMMENT IS SAFE HERE, AND THAT WAS CHECKED
+-- RATHER THAN ASSUMED: goose v3.27.2 records only (version_id, is_applied,
+-- tstamp) — `PRAGMA table_info(goose_db_version)` on a live station returns
+-- exactly [id version_id is_applied tstamp], with nowhere to hold a digest —
+-- and the module carries no checksum/sha256/md5 code on any migration path
+-- (its one crc32 is an advisory-lock id). Measured end to end: migrate a temp
+-- DB to head, add a comment line to THIS file, migrate again — goose accepts
+-- it and re-runs nothing. The SQL below is byte-identical to what ran.
 --
 -- 🔴 THE PREDICATE IS "NOT general", NOT A LIST. A migration written against
 -- an enumerated snapshot of today's rows would silently spare anything written
@@ -62,10 +90,12 @@ DELETE FROM lessons
 --
 -- 🔴 THE PREDICATE MIRRORS THE PARSE, NOT THE CONSTRUCTION — and that
 -- distinction is the whole correctness argument. The key is BUILT as
--- roleKey || '::' || taskType, but it is READ back by historyKeyParts in
--- api_document_history.go with a SplitN(key, "::", 2): the task_type the
--- restore will actually write is everything after the FIRST "::", however many
--- separators the key contains. So this predicate splits at the first "::" too
+-- roleKey || '::' || taskType, but it was READ back by historyKeyParts in
+-- api_document_history.go with a SplitN(key, "::", 2). That parse is described
+-- in the past tense because T-2 removed it — see the 2026-08-27 note at the
+-- end of this comment block, which is where what replaced it is written down.
+-- Under that parse the task_type the restore would actually write is
+-- everything after the FIRST "::", however many separators the key contains. So this predicate splits at the first "::" too
 -- (instr + substr, never LIKE — no wildcard, no collation, no escaping
 -- question). A role_key that itself contains "::" is thereby handled the way
 -- the restore handles it rather than the way it was written: key
@@ -74,16 +104,30 @@ DELETE FROM lessons
 -- can reseed a non-general row" true rather than approximately true.
 --
 -- 🔴 WHAT IS DELIBERATELY SPARED, so it is not read as an oversight. The three
--- conditions below are exactly historyKeyParts' notion of a VALID lessons key
--- (both sides of the first "::" non-empty), plus "and the task_type is not
--- general". Rows whose key has no "::" at all, or an empty role_key side
--- ('::general'), or an empty task_type side ('assistant::') are NOT deleted:
--- documentHistoryAllowed refuses such a key with 400 before any restore runs,
--- so none of them can reseed anything, and this is an irreversible DELETE that
--- gets to remove only what it can show is dangerous. Live writers cannot
--- produce those shapes either — both writers (in api_roles.go) build the key
--- from two non-empty path segments. If a later change ever makes such a key
--- restorable, that change owns cleaning them up.
+-- conditions below were exactly historyKeyParts' notion of a VALID lessons key
+-- AT THE TIME THIS RAN (both sides of the first "::" non-empty), plus "and the
+-- task_type is not general". Rows whose key has no "::" at all, or an empty
+-- role_key side ('::general'), or an empty task_type side ('assistant::') are
+-- NOT deleted: documentHistoryAllowed refuses such a key with 400 before any
+-- restore runs, so none of them can reseed anything, and this is an
+-- irreversible DELETE that gets to remove only what it can show is dangerous.
+-- Live writers cannot produce those shapes either — both writers (in
+-- api_roles.go) build the key from two non-empty path segments. If a later
+-- change ever makes such a key restorable, that change owns cleaning them up.
+--
+-- 🔴 THAT LAST SENTENCE WAS NEARLY CASHED IN, 2026-08-27 — recorded because
+-- a load-bearing invariant is worth more than a tidy file. T-2 (00062) removed
+-- the task_type axis and, with it, the two-halves parse this paragraph leans
+-- on; a first cut reduced historyKeyParts to "the key is non-empty", which
+-- retired the 400 WITHOUT retiring these rows. `assistant::` briefly became a
+-- key you could list and RESTORE, and the restore materialised a `lessons` row
+-- under it — exactly the reseed this paragraph promises cannot happen. The
+-- refusal was put back before that shipped: since T-2 a lessons key carrying
+-- "::" names nothing, so historyKeyParts refuses it OUTRIGHT rather than by
+-- failing to split it. The 400 is therefore still true, and still stated
+-- forward rather than as a leftover — see historyKeyParts and
+-- api_document_history_lessons_key_t2_test.go. Anyone loosening that door
+-- again inherits the cleanup this paragraph deferred.
 --
 -- 🔴 EVERY OTHER document_kind IS UNTOUCHED — insight, global_context,
 -- role_definition, task_description, task_title, the boot-document kinds and

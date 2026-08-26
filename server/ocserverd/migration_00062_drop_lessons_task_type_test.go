@@ -378,3 +378,87 @@ func TestMigration00062DownRestoresThePreUpState(t *testing.T) {
 		}
 	}
 }
+
+// TestMigration00062DownRewritesEveryBareLessonsHistoryKey is the OTHER table
+// the Down touches, and the one its shipped round-trip test above never reads.
+//
+// 🔴 IT PINS AN ASYMMETRY, NOT A ROUND TRIP, and that is the finding. On
+// `lessons` the Down really is exact — the Up dropped a column whose every
+// surviving value was 'general', so putting the constant back is reconstruction.
+// On `document_history` it is not, and it cannot be made so by editing the Down
+// alone: the Up rewrote '<role>::general' → '<role>', and the Down's predicate
+// (`instr(document_key,'::') = 0`) can only ask "is this key bare NOW". A key
+// that was ALREADY bare before the Up — one of the three malformed shapes both
+// migrations deliberately spare — answers yes to exactly the same question, so
+// the Down gives it a '::general' suffix it never had. The information needed to
+// tell the two apart does not survive the Up, so a truthful Down would require
+// the Up to record what it changed; that is a bigger change than a rollback path
+// which only ever retreats the CODE deserves. The comment in 00062 was narrowed
+// to say this instead of claiming "byte for byte" on both tables, and this test
+// is what stops the narrowed claim from drifting back.
+func TestMigration00062DownRewritesEveryBareLessonsHistoryKey(t *testing.T) {
+	db := migration00062World(t)
+	if err := goose.UpTo(db, "migrations", migration00061Version); err != nil {
+		t.Fatalf("goose up through %d: %v", migration00061Version, err)
+	}
+	for _, r := range migration00062HistoryFixture() {
+		if _, err := db.Exec(
+			`INSERT INTO document_history (document_kind, document_key, content_json, created_ts, actor_id)
+			 VALUES (?, ?, ?, 1.0, 'owner')`,
+			r.kind, r.key, `{"text":"retained revision","tombstoned":"false"}`); err != nil {
+			t.Fatalf("seed history (%s, %q): %v", r.kind, r.key, err)
+		}
+	}
+	keyOf := func(id int64) (string, string) {
+		var kind, key string
+		if err := db.QueryRow(
+			`SELECT document_kind, document_key FROM document_history WHERE id = ?`, id,
+		).Scan(&kind, &key); err != nil {
+			t.Fatalf("read row %d: %v", id, err)
+		}
+		return kind, key
+	}
+	// Addressed BY ID rather than by key, because the whole point is that the
+	// key changes underneath: a lookup by key could not tell "this row moved"
+	// from "some other row landed here".
+	idOf := func(kind, key string) int64 {
+		var id int64
+		if err := db.QueryRow(
+			`SELECT id FROM document_history WHERE document_kind = ? AND document_key = ?`,
+			kind, key).Scan(&id); err != nil {
+			t.Fatalf("locate seeded row (%s, %q): %v", kind, key, err)
+		}
+		return id
+	}
+	composite := idOf("lessons", "assistant::general")
+	alreadyBare := idOf("lessons", "assistant")
+	otherKind := idOf("insight", "assistant")
+
+	if err := goose.UpTo(db, "migrations", migration00062Version); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	if err := goose.DownTo(db, "migrations", migration00062PriorVersion); err != nil {
+		t.Fatalf("down: %v", err)
+	}
+
+	// ① The row the Up was written for round-trips exactly.
+	if _, got := keyOf(composite); got != "assistant::general" {
+		t.Errorf("the CANONICAL lessons history key did not round-trip: got %q, want %q — "+
+			"this is the case the Down exists for, and it has to be exact",
+			got, "assistant::general")
+	}
+	// ② The already-bare malformed row does NOT round-trip, and the narrowed
+	// comment in 00062 says so. If this ever starts passing as "assistant", the
+	// Down learned to tell the two apart and that comment is owed an update.
+	if _, got := keyOf(alreadyBare); got != "assistant::general" {
+		t.Errorf("the ALREADY-BARE lessons history key came back as %q, want %q — "+
+			"00062's Down comment documents this exact asymmetry; a different answer "+
+			"means the mechanism changed and the comment is now wrong", got, "assistant::general")
+	}
+	// ③ Negative control: the Down's predicate names document_kind, so a bare
+	// key of another kind is untouched in BOTH directions.
+	if _, got := keyOf(otherKind); got != "assistant" {
+		t.Errorf("the Down touched an INSIGHT history key: got %q, want %q — "+
+			"the rewrite is scoped to document_kind = 'lessons'", got, "assistant")
+	}
+}

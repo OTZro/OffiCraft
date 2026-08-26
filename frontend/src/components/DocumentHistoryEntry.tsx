@@ -58,7 +58,9 @@ import "./settings.css";
 
 export interface DocumentHistoryEntryProps {
   kind: DocumentKind;
-  /** "global" | role key | "<role_key>::<task_type>" | type_key. */
+  /** "global" | role key | task id | type_key. Lessons is addressed by the BARE
+   * role key since T-2 removed the task_type axis; the old
+   * "<role_key>::<task_type>" shape is refused by the server. */
   docKey: string;
   /** Names the document the list belongs to, in the list's own header. */
   title: string;

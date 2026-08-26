@@ -61,6 +61,24 @@ ALTER TABLE lessons_rebuild RENAME TO lessons;
 -- the key from two non-empty path segments), 00061 states the same, and this
 -- is a rewrite rather than a delete precisely so that a row nobody can explain
 -- is not silently renamed into something that looks explicable.
+--
+-- 🔴 AND THE PREMISE THAT MAKES SPARING THEM SAFE IS NOT INHERITED — IT IS
+-- RE-ESTABLISHED HERE. 00061's argument for leaving them was "the list/restore
+-- door refuses such a key with 400 before any restore runs". That door was
+-- historyKeyParts' two-halves parse, and THIS ticket removes that parse. Simply
+-- copying 00061's sentence would have been copying a premise this very
+-- migration invalidates — and a first cut of T-2 did exactly that, reducing
+-- historyKeyParts to "the key is non-empty" and turning `assistant::` into a
+-- key that could be listed and RESTORED, with the restore materialising a
+-- `lessons` row under a name no role carries. So the refusal is stated FORWARD
+-- rather than inherited: since T-2 a lessons key is the bare role_key, one
+-- carrying "::" names nothing, and historyKeyParts refuses it outright. Two of
+-- the three shapes above are therefore still unreachable for that reason. The
+-- third — a key with no "::" at all — is now a well-FORMED key that simply
+-- names no role; it lists as empty and its restore lands under a role_key
+-- nobody answers to, which is the roster gap peek_doc_sizes' summary describes
+-- and which is not this migration's to close. Pinned in
+-- api_document_history_lessons_key_t2_test.go, positive case first.
 UPDATE document_history
    SET document_key = substr(document_key, 1, instr(document_key, '::') - 1)
  WHERE document_kind = 'lessons'
@@ -68,16 +86,37 @@ UPDATE document_history
    AND substr(document_key, instr(document_key, '::') + 2) = 'general';
 
 -- +goose Down
--- REVERSIBLE, and exactly — which is why a real Down is written here instead of
--- the `SELECT 1` no-op 00061 had to use. 00061 was irreversible because it
--- DELETED rows and kept no copy. This migration deletes nothing: after 00061
--- every surviving lessons row carried task_type = 'general' and every
--- restorable lessons history key ended in '::general', so putting the constant
--- back reconstructs the pre-Up state byte for byte rather than synthesising a
--- plausible-looking one. Rows written by the NEW code after this Up also
--- belong in the 'general' bucket under the old code — that is the only bucket
--- the old code's identity fold ever produced — so the rollback is correct for
--- them too.
+-- REVERSIBLE — a real Down is written here instead of the `SELECT 1` no-op
+-- 00061 had to use, because 00061 was irreversible for a reason this migration
+-- does not share: it DELETED rows and kept no copy. This migration deletes
+-- nothing. But "reversible" is exact on one table and approximate on the other,
+-- and the two are separated here rather than averaged into one claim.
+--
+-- 🔴 ON `lessons` IT IS EXACT. After 00061 every surviving row carried
+-- task_type = 'general', so putting the constant back reconstructs the pre-Up
+-- state rather than synthesising a plausible-looking one. Rows written by the
+-- NEW code after this Up also belong in the 'general' bucket under the old
+-- code — that is the only bucket the old code's identity fold ever produced —
+-- so the rollback is correct for them too.
+--
+-- 🔴 ON `document_history` IT IS NOT, AND THAT IS A PROPERTY OF THE UP, NOT
+-- A BUG IN THE DOWN. An earlier draft of this comment claimed "byte for byte"
+-- across both tables; measured, that is false, and the claim is corrected here
+-- rather than deleted because it is the kind of thing a reader would otherwise
+-- re-derive from scratch. The Up rewrote '<role>::general' → '<role>'. The Down
+-- can only ask "is this key bare NOW" (`instr(document_key,'::') = 0`), and a
+-- key that was ALREADY bare before the Up — one of the three malformed shapes
+-- both migrations spare — answers that question identically to one the Up just
+-- made bare. So the Down hands it a '::general' suffix it never carried:
+--   pre-Up   id=4 'assistant'          (spared, malformed)
+--   post-Up  id=4 'assistant'          (untouched)
+--   post-Down id=4 'assistant::general' (a name it never had)
+-- Telling the two apart would require the Up to RECORD what it changed, which
+-- is a larger change than a rollback path that only ever retreats the code
+-- deserves — and the row in question is one no reader can address anyway. The
+-- asymmetry is pinned, in both directions, by
+-- TestMigration00062DownRewritesEveryBareLessonsHistoryKey, so it stays a
+-- documented shape rather than a surprise.
 CREATE TABLE lessons_rebuild (
     role_key   TEXT NOT NULL,
     task_type  TEXT NOT NULL,
