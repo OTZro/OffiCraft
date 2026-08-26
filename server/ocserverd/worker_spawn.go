@@ -1425,8 +1425,19 @@ func (s *apiServer) relocateWorkerNow(w OutsourceWorker) ownerOpOutcome {
 // `continue`s on it; TestStoppedWorker_TickNeverRevives pins it). Placement and
 // model are recorded, nothing is started, and the row says exactly that instead of
 // letting one owner action quietly overturn another. Restart cannot reach that arm
-// by construction (it flips desired_state to online first, and 409s otherwise),
-// which is the point: the intent lives in the state, not in per-entry copies.
+// by construction, and the construction is ONE assignment: its handler sets
+// DesiredState = DesiredStateOnline on the row it then passes here BY VALUE
+// (HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost in api_outsource.go
+// — that assignment is the only thing between the liveness receipt and the sole
+// ownerOpRestart call site), so the field this function branches on is never
+// offline for 重啟. That is the point: the intent lives in the state, not in
+// per-verb copies.
+//
+// ⚠️ It does NOT "409 otherwise". That over-spawn guard is GONE (T-ed79 #10, owner
+// 2026-08-21 「往正職靠：外包也不擋」 — the red note at the top of that handler).
+// 重啟 on a still-live worker is accepted and stamps a session_alive RECEIPT
+// instead. Nothing here depends on the 409; the assignment above is load-bearing
+// on its own.
 //
 // Everything after the branch is shared: kill the old session and make sure a
 // start is genuinely ATTEMPTED, with a receipt on every refusal.
@@ -1491,15 +1502,32 @@ const (
 	ownerOpModel    = "runtime/model" // 換 model / runtime / effort
 )
 
-// ownerOpRevivesStoppedWorker distinguishes the ONE verb that acts on a worker
-// the owner has ALREADY stopped from the ones that act on a worker he wants to
-// keep running. 重啟 only reaches this code with desired_state just flipped
-// offline→online, i.e. the session it would displace is one 停止 already
-// dispatched a kill for: winding it down would mean fanning an SOP 預告 at a
-// session under a standing kill order and then waiting out the full deadline for
-// an answer that is never coming — the exact "owner waits for nothing" the rule
-// exists to prevent (the D6 argument openWorkerHandoverGrace already makes for
-// an offline worker; here the session is merely not dead YET).
+// ownerOpRevivesStoppedWorker names the ONE verb that is not itself a request for
+// a close-out. 重啟 is not a wind-down CAUSE — it is a kill+respawn. It does not
+// ask the current session to flush and hand over, it DISPLACES it
+// (respawnWorkerForOwnerOp → respawnWorkerForOwnerOpNow → respawnWorkerNow, which
+// kills the session on the resolved target BEFORE it re-dispatches). 改機器 /
+// 換 model are the opposite verb: they mean "the same session's work must survive
+// this change", which is exactly what T-98f4 rule 2 buys with the 預告 + window.
+//
+// 🔴 NOT because 重啟 can only arrive at a worker the owner has already stopped.
+// It can arrive at ANY live worker: its handler
+// (HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost, api_outsource.go)
+// has exactly two preconditions — the row exists, and it is not released — and NO
+// desired-offline gate. Pressed on a worker with desired_state="online" that is
+// mid-加速停止 it answers 200, and the refocus_since / refocus_op /
+// stopping_since / stopped_since it zeroes just before calling in here take that
+// epoch's deadline with them.
+//
+// That clear is correct, for the reason written at that call site (T-ed79 #11):
+// those four anchors DATE THE SESSION BEING REPLACED, and carrying them into the
+// successor is what makes the NEXT 改機器 / 換 model read them as "this epoch's
+// wind-down is already collected" (workerHasStateToFlush, below) and shoot itself
+// on the spot. So the skip is a clean sheet for a new session, not a way around
+// the ladder: once the session the ladder was counting for is gone there is no
+// step left to stand on, and fanning an SOP 預告 at a session that is about to be
+// killed regardless would only wait out a deadline for an answer that changes
+// nothing.
 //
 // Deliberately a DENY-list, not an allow-list: a verb added later gets the
 // wind-down by default, because 「所有換手都給收尾機會」 is the rule and skipping
