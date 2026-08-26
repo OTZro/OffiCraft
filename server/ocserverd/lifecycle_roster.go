@@ -254,61 +254,63 @@ func (s *apiServer) runLifecycleRosterPasses(roster []Member, now float64) {
 // row through it here would let an unrelated derivation change ride in on a
 // context stamp.
 //
-// 🔴 KNOWN GAP — FOLD-BACK-STOPPING-HALF-UNPROVEN-T170E. Only TWO of the four
-// folded fields are pinned by a test. Deleting the RefocusSince/RefocusOp lines
-// turns TestWorkerFoldBack_APromotionSurvivesTheLoopBreakInTheSameTick red
-// (measured). Deleting the StoppingSince/StoppedSince lines leaves the whole
-// wind-down suite GREEN (also measured) — and that is NOT a hole somebody
-// forgot to cover. It is structural, and it is written down here rather than
-// papered over with a test that would only be asserting on plumbing:
+// All four folded fields are pinned, one arm each.
+// TestWorkerFoldBack_APromotionSurvivesTheLoopBreakInTheSameTick drives a whole
+// tick and pins RefocusSince/RefocusOp;
+// TestWorkerFoldBack_AWindDownClearSurvivesTheLoopBreakInTheSameTick calls this
+// function at its own boundary — the door runs, and the test asserts it ADMITS
+// the row — and pins StoppingSince/StoppedSince on the caller's slice, which is
+// where their whole effect lives, since the fold-back is never persisted.
+// Deleting either pair was measured to turn exactly one of those two red, with
+// the other still green: neither mutant masks the other.
 //
-// 🔴 CORRECTION (T-170e stage 3, next pass — the four bullets that stood here
-// were themselves written as a correction, and two of them were false). They
-// read:
+// 🔴 CASE HISTORY — FOLD-BACK-STOPPING-HALF-UNPROVEN-T170E. Five successive
+// versions of this paragraph each asserted that something DID NOT EXIST — a
+// lock order, a pass that writes these fields, a reader, a constructible test —
+// and all five were false. Every one had the same cause: the claim was made
+// without ever building the set it would have to be counted against. The last
+// of them, verbatim:
 //
-//	"- StoppedSince is not written by ANY pass on the list, so folding it back
-//	   copies a value nothing changed.
-//	 - StoppingSince is written by exactly one pass, clearStaleStoppingOnOnline,
-//	   which skips every row whose DesiredState is not online."
+//	"no red test for these two lines is constructible today without a
+//	 behaviour change"
 //
-// Both are false, and the obvious narrower repair — "no pass THIS PRODUCER
-// runs writes them, since clearRecycleMarkersOnRespawn's AppliesTo excludes
-// outsource" — was measured here and is ALSO false, so it is not used. All
-// THREE passes that reach a worker row write these fields: clearStaleStopping-
-// OnOnline zeroes StoppingSince in its own body, and both stamp passes
-// (stampContextHighRecycle and stampTokenExpiryWinddown, each declaring
-// AppliesTo lifecycleEveryKind) zero StoppingSince AND StoppedSince through the
-// shared armRefocusEpoch. The reason the fold-back cannot be pinned is real,
-// but it is the ENTRY FILTER, not the pass list:
+// An adversarial pass refuted it by writing that test — zero production change,
+// and without bypassing the door — and it is the AWindDownClear test named
+// above. `git log -p` on this file is the rest of the record. This is a guard
+// rail, not an apology: if you are about to write a sixth "there is no X" here,
+// build the denominator first or do not write it.
 //
-//   - Every row any pass can write is ACTIVE and desired-ONLINE, because
-//     lifecyclePolicyFor's outsource arm is the only door and it admits nothing
-//     else. That is the whole load-bearing fact; the rest is consequence.
-//   - The snapshot's StoppingSince/StoppedSince have exactly two same-tick
-//     readers, and that door puts both out of reach. (a) autoHandoverWorker
-//     (worker_spawn.go) reads them only inside `if w.DesiredState ==
-//     DesiredStateOffline` — a row no pass was ever offered. (b) The Assigned
-//     arm of the worker loop is the one place a snapshot goes into the FSM
-//     UNRE-READ: it hands `w` to reconcileWorkerLiveness, whose workerObservation
-//     projects StoppedSince>0 into AgentStopped, which decideUp's recycle arm
-//     reads — but only for a worker with ActivatedTS zero, i.e. Assigned, which
-//     the same door excludes. The superseded third bullet named
-//     autoHandoverWorker as the ONLY such reader and missed (b); the fourth was
-//     right that the ACTIVE arm re-reads `fresh` from the DAL before deciding,
-//     and silently left the Assigned arm unaccounted for.
-//   - Decide-side, the only reader of obs.StoppingSince is decideDown, which
-//     reconcileDecide reaches on its default arm only — never for a
-//     desired-online row.
+// 🔴 AND THE OBSERVATION ALL FIVE REASONED FROM WAS ITSELF MISREAD. That
+// deleting these two lines left the whole wind-down suite green was taken to
+// mean nothing downstream reads the fields. The measured cause is narrower and
+// lives in the tests: the shared helper workerTickPass calls this function with
+// a fresh []OutsourceWorker literal and then re-reads the row from the DAL, so
+// the fold-back it just produced is discarded before anything looks at it. The
+// suite was green because it never observed the fold-back — so the observation
+// the earlier corrections argued from was misread from the start.
 //
-// Writers and readers therefore never meet on one row, but what keeps them
-// apart is that door and not any property of the two fields, so no red test for
-// these two lines is constructible today without a behaviour change. They are
-// kept because "fold back what the passes may have touched" is the invariant,
-// not "fold back the two we can currently prove" — widen lifecyclePolicyFor to
-// admit an Assigned or desired-offline worker and these lines become the only
-// thing standing between decideUp's recycle arm and a stale stopped_since. If
-// you make that change, this gap closes and a test becomes writable: come back
-// and write it.
+// 🔴 RANGE IS LEFT TO THE READER TO RE-COUNT, not enumerated here — same
+// shape as the RECEIPT-CORE-AUDIT recipe in reconcile.go. For same-tick readers
+// of a snapshot's wind-down fields, grep `StoppingSince\|StoppedSince` over
+// non-test .go: the FIELD names, and note that the recipe returns this
+// function's own two lines, so it does reach its subject. Then follow the values
+// that leave under a DIFFERENT name; two are known — the projection AgentStopped
+// (workerObservation, worker_spawn.go), and the POSITIONAL hand-off in
+// workerHasStateToFlush, which passes w.StoppedSince into
+// hasUncollectedOnlineOwnerOpState's `stoppedSince` parameter, in whose body the
+// field name does not appear at all. That positional one is the
+// third time this ticket has been burned by grepping a name the value no longer
+// travels under.
+//
+// 🔴 THE DOOR ADMITS MORE THAN THE WORKER VOCABULARY'S "ACTIVE" — written
+// down here because it is worth knowing before you widen it.
+// lifecyclePolicyFor asks workerStatusFromMember, and memberFromWorker
+// feeds it a stamped ActivatedTS = nowSecs() for a Status=="active" row whose
+// own ActivatedTS is 0, and leaves ActivatedTS>0 untouched for a Status string
+// its switch does not recognise — so the door answers ACTIVE for both, while the
+// tick's own `switch w.Status` does not. The adversarial pass read both as
+// reaching only arms where the folded values are not consulted; that reading is
+// static and carries no test.
 //
 // Callers hold s.outsourceMu.
 func (s *apiServer) runWorkerLifecyclePasses(workers []OutsourceWorker, now float64) {

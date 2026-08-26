@@ -323,3 +323,87 @@ func TestWorkerFoldBack_APromotionSurvivesTheLoopBreakInTheSameTick(t *testing.T
 			got.RefocusOp, got.RefocusSince, refocusOpContextHigh, now)
 	}
 }
+
+// ── the fold-back's other half ───────────────────────────────────────────────
+//
+// The sibling above pins RefocusSince/RefocusOp end-to-end, through
+// runOutsourceTick and a DAL re-read. This one pins the OTHER two folded
+// fields, StoppingSince/StoppedSince, at runWorkerLifecyclePasses' own function
+// boundary — because that is where their effect lives: nothing persists the
+// fold-back, so its whole job is what the caller's slice says for the rest of
+// the tick.
+//
+// It does NOT bypass the entry filter. It calls runWorkerLifecyclePasses, whose
+// lifecyclePolicyFor door runs and admits, and it asserts that admission itself
+// below — a row the door rejected would make the probe vacuous.
+//
+// The fixture is a stale wind-down latch on an ACTIVE desired-online worker
+// whose gauge is over HandoverPct: stampContextHighRecycle → armRefocusEpoch
+// sets RefocusSince=now and zeroes StoppingSince/StoppedSince on the ROSTER
+// row. The precondition is checked by re-reading the DAL (the pass persists its
+// own writes), so it holds under every fold-back mutant and the final assertion
+// stays specific to the two lines under test.
+//
+// Fixture notes, both learned the hard way: SessionBootTS must be well OLDER
+// than now or stampContextHighRecycle's boot-storm gate swallows the stamp, and
+// StoppedSince must be older than SessionBootTS or the stale latch reads as
+// already-collected and the row is skipped.
+func TestWorkerFoldBack_AWindDownClearSurvivesTheLoopBreakInTheSameTick(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveOnlineWorker(t, api)
+	now := nowSecs()
+	ctxhigh := api.ctxHighConfig()
+
+	w, err := api.dal.GetOutsourceWorker(workerID)
+	if err != nil || w == nil {
+		t.Fatalf("load worker: %v", err)
+	}
+	bootTS := now - 5000
+	w.RefocusSince = 0
+	w.RefocusOp = ""
+	w.StoppingSince = now - 6000 // stale latches the stamp pass must wipe
+	w.StoppedSince = now - 6000
+	w.SessionBootTS = bootTS
+	if err := api.dal.PutOutsourceWorker(*w); err != nil {
+		t.Fatalf("seed worker: %v", err)
+	}
+	api.gauge.Set(workerID, map[string]any{
+		"boot_ts":        bootTS,
+		"context_pct":    ctxhigh.HandoverPct + 1,
+		"context_pct_ts": now,
+	})
+	if w.StoppedSince >= bootTS {
+		t.Fatalf("fixture: stopped_since (%v) must be OLDER than boot_ts (%v) or "+
+			"the stale latch reads as already collected and the row is skipped",
+			w.StoppedSince, bootTS)
+	}
+	if !lifecyclePolicyFor(memberFromWorker(*w)).ShouldExist() {
+		t.Fatalf("fixture: the entry filter rejected this row, so nothing below " +
+			"exercises the fold-back — the probe would be vacuous")
+	}
+
+	ws := []OutsourceWorker{*w}
+	api.outsourceMu.Lock()
+	api.runWorkerLifecyclePasses(ws, now)
+	api.outsourceMu.Unlock()
+
+	row, rerr := api.dal.GetOutsourceWorker(workerID)
+	if rerr != nil || row == nil {
+		t.Fatalf("reload worker: %v", rerr)
+	}
+	if row.RefocusSince != now || row.StoppingSince != 0 || row.StoppedSince != 0 {
+		t.Fatalf("precondition: the stamp pass did not run or did not persist "+
+			"(refocus_since=%v stopping_since=%v stopped_since=%v); the assertion "+
+			"below would not be about the fold-back",
+			row.RefocusSince, row.StoppingSince, row.StoppedSince)
+	}
+	if ws[0].StoppingSince != 0 || ws[0].StoppedSince != 0 {
+		t.Fatalf("FOLD-BACK GAP: after the passes ran, the caller's snapshot still "+
+			"carries stopping_since=%v stopped_since=%v, want 0/0. armRefocusEpoch "+
+			"zeroed them on the roster row; the two fold-back lines in "+
+			"runWorkerLifecyclePasses are what put that on the worker row the rest "+
+			"of the tick reads.",
+			ws[0].StoppingSince, ws[0].StoppedSince)
+	}
+}
