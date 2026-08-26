@@ -623,14 +623,26 @@ ONE-SHOT, never a standing order):
   a stop it survived read 停止中 in the cockpit for the life of the session). **A
   wind-down rule that is not on this list does not apply to workers, however
   member-shaped its code looks.**
-- 🔴 **The 停止 → 加速停止 → 強制停止 ladder binds the WORKER owner verbs too.**
-  `openOwnerOpHandover` (`worker_spawn.go`) stamps through the shared
-  `armRefocusEpoch` rather than writing the four anchors by hand, so a 改機器 /
-  換 model / 重新聚焦 that would move a worker BACKWARDS from an open 加速停止 is
-  refused — the owner's change still lands on the row, and the open wind-down keeps
-  its own deadline. Before T-170e the hand-written copy carried no ladder check at
-  all: the stage fell back to 停止 and the deadline the worker had been quoted
-  silently ceased to exist.
+- 🔴 **The 停止 → 加速停止 → 強制停止 ladder binds the WORKER side too, and it binds
+  it at every stamp site — there are FOUR, not one.** `armRefocusEpoch` is the one
+  way an epoch is opened; before T-170e three worker sites hand-wrote the same four
+  anchors instead, so none of them carried the ladder check and each was the same
+  bug wearing a different button. All three now stamp through `armRefocusEpoch` on
+  a `memberFromWorker` projection, folding back only the four fields it mutates:
+  | site | verb | on a ladder refusal |
+  | --- | --- | --- |
+  | `openOwnerOpHandover` (`worker_spawn.go`) | 改機器 / 換 model | the change is SAVED, the stage does not move; the existing wind-down keeps its own deadline and owns the move |
+  | `HandleRefocusOutsourceWorker…` (`api_outsource.go`) | 重新聚焦 | **409** — the owner pressed a button, so he gets an answer (the staff twin `HandleRefocusMember` refuses identically) |
+  | `workerRestartSelf` (`worker_spawn.go`) | `restart_self` | **409** — same sentence the staff arm of that same handler writes; the two arms are one rule |
+  | `HandleAcceleratedStopOutsourceWorker…` | 加速停止 | n/a — it ADVANCES the ladder, and it deliberately does not zero the anchors (the twin of the staff 加速停止 arm) |
+  ⚠️ **`重啟` (restart) is a deliberate hole in this table, not a missing row.**
+  `ownerOpRevivesStoppedWorker(restart) == true`, so 重啟 never enters the wind-down
+  branch at all and the ladder never sees it. That is intended and predates T-170e:
+  重啟 only reaches this code with `desired_state` just flipped offline→online, i.e.
+  the session it would displace is one 停止 already dispatched a kill for. Winding it
+  down would fan an SOP 預告 at a session under a standing kill order and then wait
+  out a deadline for an answer that is never coming. A reader of the rows above would
+  otherwise reasonably assume 重啟 is covered; it is not, and it should not be.
 
 ### 4.6 Dispatch discipline
 
