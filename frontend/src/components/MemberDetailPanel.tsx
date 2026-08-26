@@ -443,12 +443,17 @@ export function MemberDetailPanel({
     // leaves its "nothing was dispatched" alert on screen — a stale notice about
     // an attempt that is over. THE WAKE PATH DOES THIS TOO, deliberately: see
     // setWakeUndispatched(false) in runActivate. The pair is the invariant, and
-    // BOTH halves are pinned — in MemberDetailPanel.dispatch-alert-hygiene
-    // .test.tsx, "a RETRY clears the previous verdict before the new one lands
-    // (mutant ME)" for wake and "drops the previous verdict when a fresh attempt
-    // is fired" for relocate. Both were reviewer mutants that came back GREEN
-    // once. Delete either line and that file reddens on purpose: if you landed
-    // here from a red test, it is not overfitted — this is it working.
+    // BOTH halves are pinned, in
+    // MemberDetailPanel.dispatch-alert-hygiene.test.tsx:
+    //   wake — "a RETRY clears the previous verdict before the new one lands
+    //     (mutant ME)". That one IS in that file's header registry: a reviewer
+    //     injected it and it came back GREEN.
+    //   relocate — "drops the previous verdict when a fresh attempt is fired".
+    //     This one has NO mutant id and is NOT in that registry, so do not go
+    //     looking for one. It is behaviour the hand-written twin had simply
+    //     dropped, caught by reading in independent review r3.
+    // Delete either line and that file reddens on purpose: if you landed here
+    // from a red test, it is not overfitted — this is it working.
     setRelocateUndispatched(false);
     try {
       // 🔴 D: the PATCH goes FIRST. This is one owner edit of one settings
