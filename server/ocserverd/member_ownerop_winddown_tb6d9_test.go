@@ -221,7 +221,8 @@ func TestMemberOwnerOp_WardenIsNeverWoundDown(t *testing.T) {
 // the kill+respawn went out carrying whatever the row held then, and the old
 // session merely has not been reaped. Opening a SECOND window here would
 // dispatch nothing while the in-flight respawn boots on the OLD value, and the
-// owner's change would reach no session at all. (The worker twin's round-1 HIGH.)
+// owner's change would reach no session at all. (The worker twin's 收口-window
+// HIGH.)
 func TestMemberOwnerOp_VerbAfterTheCollectIsNotSwallowed(t *testing.T) {
 	s := newReconcileTestServer(t)
 	putWarden(t, s, "mach-a")
@@ -255,7 +256,7 @@ func TestMemberOwnerOp_VerbAfterTheCollectIsNotSwallowed(t *testing.T) {
 // report_stopped too (deactivate → the agent says it finished), and nothing
 // clears it while the member sits offline. Read GLOBALLY it would claim "already
 // collected" for the rest of that member's life, so every later 換模型 / 改機器
-// would be shot on the spot with no warning — the worker twin's round-2 HIGH.
+// would be shot on the spot with no warning — the worker twin's STALE-LATCH HIGH.
 func TestMemberOwnerOp_OrdinaryStopRestartStillWindsDownLater(t *testing.T) {
 	s := newReconcileTestServer(t)
 	putWarden(t, s, "mach-a")

@@ -1600,8 +1600,8 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // guessing wrong here silently discards a round of learnings. Recorded honestly:
 // for the online case this is the 「照舊等滿但可提早結束」 fallback, not a
 // positive detection of unsaved work.
-// ⚠️ THE EPOCH GUARD ON THAT THIRD ARM (review round 3 — the hole round 2's
-// own fix opened). stopped_since is latched in TWO places and only one of them
+// ⚠️ THE EPOCH GUARD ON THAT THIRD ARM — the STALE-LATCH finding, which is the
+// hole the 收口-window finding's own fix opened. stopped_since is latched in TWO places and only one of them
 // is a handover: collectWorkerHandover latches it as the 收口 of a refocus
 // epoch, and workerReportStopped's ELSE arm latches it for a report arriving
 // outside any handover (an ordinary 停止 where the worker says it has finished).
@@ -1627,6 +1627,17 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // active/online/refocus/stopped with its expected verdict. Both HIGH defects in
 // this票 were mis-drawn boundaries of THIS function; a change here that the
 // table does not cover means the table is now wrong too.
+// 🔴 THE ANSWER IS SHARED WITH THE STAFF TWIN and the two shells are NOT.
+// hasUncollectedOnlineOwnerOpState (member_ownerop_winddown.go) is the whole of
+// what this function decides, and memberHasStateToFlush calls the same
+// expression. What that file's cell-by-cell table records is the part that must
+// stay apart: this predicate carries NO desired-offline arm, because
+// respawnWorkerForOwnerOp's first gate answers held_down and returns before this
+// is consulted — pinned by TestOwnerOp_StoppedWorkerStillOnlyGetsAReceipt, which
+// drives a desired-offline worker that is ONLINE (the state this predicate
+// answers YES for) and requires a receipt, no epoch and zero frames. Merging the
+// shells was measured: handing this function the staff shell closes the whole
+// worker wind-down window, because every caller is behind that gate.
 // Callers hold s.outsourceMu.
 func (s *apiServer) workerHasStateToFlush(w OutsourceWorker) bool {
 	return hasUncollectedOnlineOwnerOpState(
