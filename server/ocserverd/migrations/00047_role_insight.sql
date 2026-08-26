@@ -19,14 +19,26 @@
 -- call filed as an environment fact gets deleted at the next cap squeeze, and
 -- the agent that deletes it will not know what it cost.
 --
--- SINGLE KEY, unlike lessons. lessons is keyed (role_key, task_type) because it
--- carries a task_type axis; insight has no such axis, so its document_history
--- key is the BARE role_key. That difference is load-bearing at the cascade: the
--- lessons cascade matches history keys by the "<role>::" prefix (safe there —
--- the "::" terminator means r-abc:: can never hit r-abcdef::general), while a
--- single-key document has no terminator, so deleting a role's insight history
--- MUST use exact equality (document_key = ?) the way DeleteRoleDef does.
--- A prefix match here would take r-abcdef's history out with r-abc's.
+-- SINGLE KEY. Insight's document_history key is the BARE role_key, so deleting
+-- a role's insight history MUST use exact equality (document_key = ?) the way
+-- DeleteRoleDef does — a single-key document has no terminator, and a prefix
+-- match would take r-abcdef's history out with r-abc's.
+--
+-- 🔴 CORRECTION, T-2 (2026-08-27). WHEN THIS WAS WRITTEN the paragraph above
+-- read as a CONTRAST: "unlike lessons", which was then keyed
+-- (role_key, task_type) and whose cascade matched history keys by the
+-- "<role>::" prefix, the "::" terminator making r-abc:: safe against
+-- r-abcdef::general. T-2 removed the lessons task_type axis
+-- (00061 + 00062_drop_lessons_task_type.sql): lessons is keyed role_key ALONE,
+-- its history key is the bare role_key too, and DeleteLessonsForRole now
+-- matches by exact equality like everything else — see its own comment in
+-- dal.go, which says so in as many words. So the contrast is GONE and the rule
+-- stated here is simply the house shape, not insight's exception to one.
+-- The SQL below is unchanged and was never affected; only the reason was.
+-- (Editing an applied migration's COMMENT is safe here and that was measured,
+-- not assumed — the same check 00061 records: goose stores only
+-- (id, version_id, is_applied, tstamp) and carries no checksum on any
+-- migration path, so there is nothing for a comment to invalidate.)
 --
 -- NO SEED FILE, deliberately. lessons folds overlay ⊕ a shared file seed, so a
 -- role that never wrote still reads non-empty. If insight had a seed, text==""
