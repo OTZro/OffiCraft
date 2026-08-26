@@ -313,11 +313,11 @@ type MemberDetailPanelRelocate = (
 // member it belongs to, whether it can come back — is a property of the NOTICE,
 // not of the entry point. These ran under `describe.skip` for one round, and
 // that skip was hiding removed BEHAVIOUR, not a retired button: the member panel
-// dropped `useRelocateMachine` for a bare `useState`, and with it the self-heal,
-// the observability gate, the member-keyed reset and the in-flight subject
-// guard. The hook still holds them for the outsource panel; only this panel lost
-// them. Restored in the panel; each one is pinned by the test that goes red when
-// it is taken away again.
+// dropped the shared relocate hook for a bare `useState`, and with it the
+// self-heal, the observability gate, the member-keyed reset and the in-flight
+// subject guard. That hook has since been deleted, so this panel's own code is
+// the only place those four live. Restored in the panel; each one is pinned by
+// the test that goes red when it is taken away again.
 describe("relocate notice self-heals", () => {
   it("clears once the member's OBSERVED machine reaches the pinned one", async () => {
     // The copy promises "the server keeps retrying in the background". Before

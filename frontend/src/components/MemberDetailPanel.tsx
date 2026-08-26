@@ -46,11 +46,14 @@ import {
 } from "./icons";
 import { DispatchAlert } from "./DispatchAlert";
 // 🔴 This panel renders its settings dialog with the .machine-picker* classes,
-// so it must import their stylesheet ITSELF (T-7526). Both panels used to
-// free-ride on WorkerDetailPanel → useRelocateMachine → MachinePicker →
-// machine-picker.css; when the worker panel stopped driving that hook, the
-// last production importer went with it and BOTH dialogs rendered unstyled.
-// Style ownership follows the class names, not a transitive accident.
+// so it must import their stylesheet ITSELF (T-7526). Both panels used to reach
+// that sheet only through a chain of OTHER modules' imports; one link in the
+// chain stopped being driven, the last production importer went with it, and
+// BOTH dialogs rendered unstyled. Those chain modules have since been deleted
+// outright, so this direct import is now the only thing keeping the dialog
+// styled — deleting it breaks the dialog immediately, and no type error or
+// jsdom test will say so. Style ownership follows the class names, not a
+// transitive accident; pinned by styleOwnership.test.ts.
 import "./machine-picker.css";
 import "./member-detail.css";
 
@@ -196,8 +199,9 @@ export function MemberDetailPanel({
     // caller passes a `key`, so an open dialog survives the switch holding the
     // PREVIOUS member's runtime/model/effort/machine — one confirm and those
     // values are written to someone else. Closing it is the honest reset: the
-    // owner reopens against whoever is on screen now. (useRelocateMachine does
-    // the same for its picker; this hand-written twin had dropped that line.)
+    // owner reopens against whoever is on screen now. (The shared relocate hook
+    // this block replaced did the same for its picker; the first hand-written
+    // cut here had dropped that line.)
     setSettingsOpen(false);
     setSettingsError("");
   }, [member.id]);
@@ -233,9 +237,9 @@ export function MemberDetailPanel({
   const onlineMachines = machines.filter((m) => m.online);
   const firstOnlineMachineId = onlineMachines[0]?.machineId;
   // What the machine <select> may offer: every online machine, PLUS the member's
-  // own pin when that machine is not online right now — labelled 離線, exactly as
-  // MachinePicker does it. Without that entry the select's value would match no
-  // option (blank row, pin still submitted), and dropping the pin instead would
+  // own pin when that machine is not online right now — labelled 離線, the same
+  // rule WorkerDetailPanel follows. Without that entry the select's value would
+  // match no option (blank row, pin still submitted), and dropping the pin would
   // move a member the owner deliberately parked. Both are "displayed ≠
   // submitted"; this is the only shape that is neither.
   // Whether the 模型 row upstairs is currently showing a reported value at all
@@ -279,20 +283,18 @@ export function MemberDetailPanel({
   const [relocateUndispatched, setRelocateUndispatched] = useState(false);
 
   // ⚠️ NO LONGER A TWIN (T-7526). This block used to be the hand-written copy of
-  // `useRelocateMachine`'s notice hygiene, and the instruction here was "change
-  // both TOGETHER" — because the outsource panel still drove the hook. It does
-  // not any more: its relocate folded into the same 更改 dialog, so this is now
-  // the ONLY implementation and the hook has no production importer left.
-  // Do NOT go and edit `useRelocateMachine` to match a change made here — that
-  // file is dead code pending an owner ruling on deleting it (see
-  // docs/design/worker-panel-parity.md, 連帶後果). Kept because the reasoning
-  // below is load-bearing, not because a second copy exists.
+  // a shared relocate hook's notice hygiene, and the instruction here was
+  // "change both TOGETHER" — because the outsource panel still drove that hook.
+  // It does not any more: its relocate folded into the same 更改 dialog, and the
+  // hook has since been deleted. This is the ONLY implementation of the notice
+  // hygiene; there is no second copy to keep in sync. Kept because the reasoning
+  // below is load-bearing, not because a twin exists.
   //
-  // 🔴 The relocate verdict's SELF-HEAL, carried over from useRelocateMachine
-  // (which the member panel no longer drives). The notice promises "the server
-  // keeps retrying in the background", so it needs a path back: without this it
-  // was cleared only by ANOTHER relocate, and a move the cadence did land left
-  // the panel insisting forever that it had not.
+  // 🔴 The relocate verdict's SELF-HEAL, carried over from the shared relocate
+  // hook this panel replaced. The notice promises "the server keeps retrying in
+  // the background", so it needs a path back: without this it was cleared only
+  // by ANOTHER relocate, and a move the cadence did land left the panel
+  // insisting forever that it had not.
   //
   // `member.machine` is NOT a pure observation — the server's observedHost falls
   // back to desired_machine_id when nobody can see the member, which makes
@@ -335,8 +337,8 @@ export function MemberDetailPanel({
     // is merely asleep, so opening the dialog to edit a MODEL silently re-pinned
     // the member somewhere else. That is the same defect in the other direction,
     // and it lands hardest on "pin it to my sleeping laptop and save the model
-    // for later". MachinePicker's rule is the right one: keep the bound machine
-    // in the list, labelled offline, and never invent a different pin.
+    // for later". The rule is: keep the bound machine in the list, labelled
+    // offline, and never invent a different pin.
     setSettingsMachineId(
       member.desiredMachineId || onlineMachines[0]?.machineId || "",
     );
@@ -436,10 +438,10 @@ export function MemberDetailPanel({
     }
     setSettingsBusy(true);
     setSettingsError("");
-    // A fresh attempt drops the previous verdict (independent review r3): the
-    // wake path and useRelocateMachine both do this, and without it a relocate
-    // that FAILED and was then retried successfully leaves its "nothing was
-    // dispatched" alert on screen — a stale notice about an attempt that is over.
+    // A fresh attempt drops the previous verdict (independent review r3):
+    // without this a relocate that FAILED and was then retried successfully
+    // leaves its "nothing was dispatched" alert on screen — a stale notice about
+    // an attempt that is over.
     setRelocateUndispatched(false);
     try {
       // 🔴 D: the PATCH goes FIRST. This is one owner edit of one settings
@@ -1035,8 +1037,8 @@ export function MemberDetailPanel({
                   <option
                     key={machine.machineId}
                     value={machine.machineId}
-                    // MachinePicker's other half: the offline entry exists so the
-                    // owner's own pin stays visible and unchanged, NOT so a live
+                    // The offline entry's other half: it exists so the owner's
+                    // own pin stays visible and unchanged, NOT so a live
                     // member can be moved onto a machine whose warden is not
                     // there — that would wind the member down into nothing, and
                     // the deferred-move signal deliberately suppresses the alert.

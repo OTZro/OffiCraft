@@ -19,11 +19,14 @@ import { LifecycleDot, presenceVisual } from "./LifecycleDot";
 import { MemberActionButtons, stopLadderStageOf } from "./MemberActionButtons";
 import { ScheduledMessagesCard } from "./ScheduledMessagesCard";
 // 🔴 This panel renders its settings dialog with the .machine-picker* classes,
-// so it must import their stylesheet ITSELF (T-7526). Both panels used to
-// free-ride on WorkerDetailPanel → useRelocateMachine → MachinePicker →
-// machine-picker.css; when the worker panel stopped driving that hook, the
-// last production importer went with it and BOTH dialogs rendered unstyled.
-// Style ownership follows the class names, not a transitive accident.
+// so it must import their stylesheet ITSELF (T-7526). Both panels used to reach
+// that sheet only through a chain of OTHER modules' imports; one link in the
+// chain stopped being driven, the last production importer went with it, and
+// BOTH dialogs rendered unstyled. Those chain modules have since been deleted
+// outright, so this direct import is now the only thing keeping the dialog
+// styled — deleting it breaks the dialog immediately, and no type error or
+// jsdom test will say so. Style ownership follows the class names, not a
+// transitive accident; pinned by styleOwnership.test.ts.
 import "./machine-picker.css";
 import "./member-detail.css";
 
@@ -300,9 +303,9 @@ export function WorkerDetailPanel({
   // pin-only worker endpoint, i.e. a frozen-wire change (§13).
   const onlineMachines = machines.filter((m) => m.online);
   // The pinned machine stays in the list even when it is not online — labelled
-  // 離線 and disabled, MachinePicker's rule. Dropping it would silently move a
-  // worker the owner deliberately parked; leaving it selectable would wind the
-  // worker down onto a machine with no warden.
+  // 離線 and disabled — the same rule MemberDetailPanel follows. Dropping it
+  // would silently move a worker the owner deliberately parked; leaving it
+  // selectable would wind the worker down onto a machine with no warden.
   const pinnedOfflineMachine =
     worker.desiredMachineId &&
     !onlineMachines.some((m) => m.machineId === worker.desiredMachineId)
@@ -369,7 +372,8 @@ export function WorkerDetailPanel({
     // sleeping laptop and save the settings for later". The pinned-but-offline
     // machine stays in `settingsMachineOptions`, labelled 離線 and disabled, so a
     // disabled <option> can still render as the current value without being
-    // selectable — MachinePicker's rule, and the reason this seed is safe.
+    // selectable — the same rule MemberDetailPanel follows, and the reason this
+    // seed is safe.
     setSettingsMachineId(
       worker.desiredMachineId || onlineMachines[0]?.machineId || "",
     );

@@ -3,9 +3,10 @@
 // (`.mp-field__head`, flex + space-between) with the ACTUAL app CSS — the row the
 // new `.mp-relocate` column and its notice line now live in.
 //
-// Why the mock needs a nudge: `useRelocateMachine` disables the button when no
-// machine is ONLINE, and the mock's seed warden is offline by design (it never
-// fabricates a reachable machine). `__setMockMemberOnline` is the repo's own
+// Why the mock needs a nudge: MemberDetailPanel withholds the wake affordance
+// when NO machine is online (`onlineMachines.length === 0` → no `onSpawn`), and
+// the mock's seed warden is offline by design (it never fabricates a reachable
+// machine). `__setMockMemberOnline` is the repo's own
 // test/dev hook for exactly this; flipping the warden online gives the panels the
 // 1-online-machine path, i.e. a click relocates straight to it with no picker.
 import { useEffect, useState } from "react";

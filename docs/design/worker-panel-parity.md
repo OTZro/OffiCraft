@@ -149,6 +149,9 @@
   importer**（僅剩自己的測試與 `MemberDetailPanel` 註解裡的 twin-implementation 交叉引用）。
   依 §9(a) 這是該清的 legacy，但刪掉一個 hook ＋ 它整份測試 ＋ 一個元件，範圍遠大於本票，
   **列為 follow-up 交 owner 裁定，本票不刪**。
+  <br>**後續（T-170e）**：該 follow-up 已執行 —— `useRelocateMachine.tsx`、它的 colocated 測試、
+  以及隨之變成孤兒的 `MachinePicker.tsx` 都已刪除。上面這段是 T-7526 當下的記錄，保留不改寫；
+  今天讀到這兩個檔名時，樹上已經沒有它們。
 
 **沒有任何一格因為我判斷「該移除」而被移除。** B1 / B3 兩項就地編輯鍵的移除，是派工單步驟 2
 DoD 第 1 條明文指定的改動，且**能力本身沒有消失**（改模型、改機器都改由 A8 的 dialog 承接）。
