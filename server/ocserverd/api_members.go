@@ -263,11 +263,8 @@ func forcedEpochLive(m Member) bool {
 // forcedEpochLive itself was never the duplicated rule; it has always had one
 // definition, and the worker side calls that same definition through
 // memberFromWorker. What WAS written out by hand, once per site, is this
-// two-term question. SIX call sites ask it, and they are the four things a
-// graceful stop epoch entitles a session to. Grep `gracefulStopEpochOpen(` to
-// re-count before adding one — an earlier draft of this comment claimed three
-// and the fourth entitlement below (two sites, both worker-side) had been
-// missed, which is the failure this enumeration exists to make cheap to check:
+// two-term question. The call sites below are the FIVE things a graceful stop
+// epoch entitles a session to.
 //
 //   - the SENTENCE — offboardKindOf's desired-offline arm sends a 下線 notice
 //     only for a stop the recipient can still act on (a forced session is cut
@@ -289,9 +286,36 @@ func forcedEpochLive(m Member) bool {
 //     StoppingSince > 0 with no forced term). That asymmetry is real and is
 //     deliberately left alone here: closing it CHANGES BEHAVIOUR, which is
 //     outside a convergence-only change. See the T-170e stage 2 report.
+//   - the GATE — sseStopGateRefusal (api_infra.go) re-admits the SSE stream of a
+//     session that is still working its offboard sequence, and refuses one whose
+//     epoch was forced. Staff-only: the outsource kind returns before it. Its
+//     enclosing guard already establishes stopping_since > 0 on that branch, so
+//     it used to write only the forced term — which is why no grep for this
+//     function's name could ever have found it.
 //
-// Those three used to be three spellings of one judgement, and one of them was
-// the negation of the other two, which is how a reader checks them against each
+// 🔴 HOW TO RE-CHECK THAT LIST, AND WHY THE OBVIOUS WAY DOES NOT WORK. An
+// earlier draft of this comment said "grep `gracefulStopEpochOpen(` to re-count".
+// That grep can only ever find sites that ALREADY call this function, so it is
+// structurally incapable of finding the one thing the list can be wrong about: a
+// site that spells the two terms out by hand. It has now missed twice — the draft
+// before it claimed three sites while two worker-side ones were unfolded, and the
+// draft after it claimed six while the GATE above was unfolded, because that site
+// called forcedEpochLive and never named this function at all.
+//
+// The check that works is over the TERM, not over this function's name:
+//
+//	grep -rn 'forcedEpochLive(' --include='*.go' server/ | grep -v _test.go
+//
+// Every hit must be one of three things: forcedEpochLive's own declaration, this
+// function's own body, or a site carrying the grep anchor STOP-EPOCH-TERM-AUDIT
+// together with a written reason for asking the forced term WITHOUT the
+// stopping_since term. Today exactly two sites are anchored that way —
+// stopEpochAnchor below, and winddownStageOf in member_ownerop_winddown.go. Any
+// OTHER hit is a hand-written copy of this compound, and either belongs in this
+// function or owes the anchor and a reason.
+//
+// Those spellings used to be spellings of one judgement, and some of them were
+// the negation of the others, which is how a reader checks them against each
 // other and gets it wrong. TestOffboardKindOf_AFinalCallAlwaysHasAClock asserts
 // the sentence and the clock coincide — it asserted the AGREEMENT of two copies
 // because that was all it could do; they are now one expression.
@@ -313,6 +337,11 @@ func gracefulStopEpochOpen(m Member) bool {
 // deliberately" and into "working its close-out", and the arm that must stay
 // silent becomes the arm that speaks (the ruling in offboardKindOf above, and
 // T-c996 for why it binds both kinds).
+//
+// STOP-EPOCH-TERM-AUDIT: this asks forcedEpochLive WITHOUT a stopping_since > 0
+// term, and that is the point — opening the FIRST stop epoch is exactly the case
+// where there is no anchor yet, so it is not gracefulStopEpochOpen's compound
+// and must not be folded into it.
 //
 // The two faces that stamp a stop epoch are the staff deactivate and the worker
 // /stop, and this is the whole of what they used to write out identically. It

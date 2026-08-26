@@ -402,7 +402,7 @@ var spawnBlockedReasonCodes = []string{
 // actually decided. What is left here is which struct the columns come off.
 func stampWorkerOpReceipt(w *OutsourceWorker, reason string, now float64) {
 	stampOpReceipt(&w.LastOp, &w.LastOpOK, &w.LastOpLog, &w.LastOpReason, &w.LastOpAt,
-		reason, now)
+		reconcileCmdStart, reason, now)
 }
 
 // sessionAliveWakeNote is the plain-language half of the let-pass below, and
@@ -514,12 +514,8 @@ func (s *apiServer) stampWorkerPlacementBlocked(w *OutsourceWorker, reason strin
 	if fresh.LastOp == reconcileCmdStart && fresh.LastOpReason == reason {
 		return // already stamped with this exact cause — do not churn the row
 	}
-	ok := false
-	fresh.LastOp = reconcileCmdStart
-	fresh.LastOpOK = &ok
-	fresh.LastOpLog = ""
-	fresh.LastOpReason = reason
-	fresh.LastOpAt = now
+	stampOpReceipt(&fresh.LastOp, &fresh.LastOpOK, &fresh.LastOpLog, &fresh.LastOpReason,
+		&fresh.LastOpAt, reconcileCmdStart, reason, now)
 	if err := s.dal.PutOutsourceWorker(*fresh); err != nil {
 		outsourceLog("spawn %s: placement-blocked stamp persist failed: %v", w.ID, err)
 		return

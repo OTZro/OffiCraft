@@ -1258,6 +1258,77 @@ func (s *apiServer) reconcileTickMemberLocked(m Member, now float64) reconcileDe
 	return decision
 }
 
+// stampOpReceipt is THE five-column receipt a failed-or-deferred op leaves on a
+// row. A Member and an OutsourceWorker carry those five columns under the same
+// names, so every writer of them was the same five assignments written out by
+// hand; what is left at each site is which struct the columns come off, and the
+// guards around the write.
+//
+// 🔴 IT IS NOT "THE ONLY SPELLING OF THE RECEIPT" — an earlier draft of this
+// comment said that and it was false, which is the failure this paragraph exists
+// to stop repeating. RECEIPT-CORE-AUDIT is the grep anchor: every production
+// writer of the five columns either calls this function or carries that anchor
+// with a reason for standing apart. Today exactly one stands apart —
+// stampWakeObservability, below — and its anchor says why. To re-check, grep
+// `OpOK = &ok` and `OpOK: &ok` over non-test .go and confirm every hit is either
+// inside this function or under a RECEIPT-CORE-AUDIT note.
+//
+// 🔴 IT TAKES FIELD POINTERS, NOT A ROW, ON PURPOSE. The obvious tidier shape —
+// lift the five columns into an embedded struct both rows share — reaches the
+// DAL: scanMember/PutMember and their outsource twins list these columns
+// positionally, so the embedding would have to be threaded through every scan
+// and put site to remove five duplicated assignments. The pointer core buys the
+// single source at the cost of one long signature, and touches no persistence
+// code at all.
+//
+// The OP VERB is a parameter, not a constant: the reconcile-side writers all
+// stamp a START, and stampReceiptMissing (receipt_watch.go) stamps whichever RPC
+// the lapsed watch was waiting on. That was the whole of the difference between
+// those two families, and it is why folding the watch's two arms in was possible
+// at all — they were the same five lines twice inside ONE function, once for the
+// member row and once for the worker row.
+//
+// last_op_ok is three-valued on both rows (nil = nothing folded yet) and this
+// always leaves a non-nil FALSE: what this function stamps is a refusal or a
+// deferral — "the change was saved and nothing was started" — never a success.
+// last_op_log is cleared with it, because the log belongs to the op being
+// replaced and reading a fresh reason beside a stale log is worse than reading
+// neither. Sentinels: one per calling site, each pinned to ABSOLUTE values
+// rather than to another site's values, so a change here reddens all of them —
+// TestStampMemberOpReceipt_WritesTheFiveReceiptFields,
+// TestStampWorkerOpReceipt_WritesTheFiveReceiptFields, and the
+// receipt_core_sites_t170e_test.go family for the stamps that persist.
+func stampOpReceipt(lastOp *string, lastOpOK **bool, lastOpLog, lastOpReason *string,
+	lastOpAt *float64, op, reason string, now float64) {
+	ok := false
+	*lastOp = op
+	*lastOpOK = &ok
+	*lastOpLog = ""
+	*lastOpReason = reason
+	*lastOpAt = now
+}
+
+// stampMemberOpReceipt writes one op receipt onto an IN-MEMORY member the caller
+// is about to persist itself. It exists so an HTTP handler's explanation and the
+// change it explains are ONE row write and ONE delta — the same reason
+// armRefocusEpoch mutates instead of persisting. The receipt itself is
+// stampOpReceipt's; this is the staff shell.
+func stampMemberOpReceipt(m *Member, reason string, now float64) {
+	stampOpReceipt(&m.LastOp, &m.LastOpOK, &m.LastOpLog, &m.LastOpReason, &m.LastOpAt,
+		reconcileCmdStart, reason, now)
+}
+
+// isStopgapRetryReason reports whether a reason code is the retry loop
+// DESCRIBING ITS OWN WAIT rather than diagnosing anything — the only class the
+// single-slot precedence rule in stampMemberOpBlocked yields to. Both members
+// are produced by decideUp's pacing arms and both re-derive every 30s for as
+// long as the stall lasts, which is what makes them able to blank a diagnosis
+// they know nothing about.
+func isStopgapRetryReason(reason string) bool {
+	return strings.HasPrefix(reason, spawnReasonBackoff+":") ||
+		strings.HasPrefix(reason, spawnReasonCircuitOpen+":")
+}
+
 // stampMemberOpBlocked records WHY a staff member the owner wants running is not
 // running, on the row the cockpit already reads — the staff twin of
 // stampWorkerPlacementBlocked, and the production end of T-ed79 #14.
@@ -1279,58 +1350,6 @@ func (s *apiServer) reconcileTickMemberLocked(m Member, now float64) reconcileDe
 // unconditional write would re-stamp last_op_at and fan a delta on every tick).
 // Re-read before the whole-row write, for the reason every other stamp here does.
 // Best-effort: a persist failure is logged and changes no decision.
-// stampOpReceipt is THE receipt an owner verb leaves on a row it is about to
-// persist itself, and the only spelling of it. A Member and an OutsourceWorker
-// carry the same five receipt columns under the same names, so the two verbs
-// that stamp them were the same five assignments written twice; the shells
-// below are what is left of the difference.
-//
-// 🔴 IT TAKES FIELD POINTERS, NOT A ROW, ON PURPOSE. The obvious tidier shape —
-// lift the five columns into an embedded struct both rows share — reaches the
-// DAL: scanMember/PutMember and their outsource twins list these columns
-// positionally, so the embedding would have to be threaded through every scan
-// and put site to remove five duplicated assignments. The pointer core buys the
-// single source at the cost of one long signature, and touches no persistence
-// code at all.
-//
-// last_op_ok is three-valued on both rows (nil = nothing folded yet) and this
-// always leaves a non-nil FALSE: what this function stamps is a refusal or a
-// deferral — "the change was saved and nothing was started" — never a success.
-// last_op_log is cleared with it, because the log belongs to the op being
-// replaced and reading a fresh reason beside a stale log is worse than reading
-// neither. Sentinels: TestStampMemberOpReceipt_WritesTheFiveReceiptFields and
-// TestStampWorkerOpReceipt_WritesTheFiveReceiptFields — deliberately one per
-// side, both pinned to absolute values, so a change here reddens both.
-func stampOpReceipt(lastOp *string, lastOpOK **bool, lastOpLog, lastOpReason *string,
-	lastOpAt *float64, reason string, now float64) {
-	ok := false
-	*lastOp = reconcileCmdStart
-	*lastOpOK = &ok
-	*lastOpLog = ""
-	*lastOpReason = reason
-	*lastOpAt = now
-}
-
-// stampMemberOpReceipt writes one op receipt onto an IN-MEMORY member the caller
-// is about to persist itself. It exists so an HTTP handler's explanation and the
-// change it explains are ONE row write and ONE delta — the same reason
-// armRefocusEpoch mutates instead of persisting. The receipt itself is
-// stampOpReceipt's; this is the staff shell.
-func stampMemberOpReceipt(m *Member, reason string, now float64) {
-	stampOpReceipt(&m.LastOp, &m.LastOpOK, &m.LastOpLog, &m.LastOpReason, &m.LastOpAt,
-		reason, now)
-}
-
-// isStopgapRetryReason reports whether a reason code is the retry loop
-// DESCRIBING ITS OWN WAIT rather than diagnosing anything — the only class the
-// single-slot precedence rule in stampMemberOpBlocked yields to. Both members
-// are produced by decideUp's pacing arms and both re-derive every 30s for as
-// long as the stall lasts, which is what makes them able to blank a diagnosis
-// they know nothing about.
-func isStopgapRetryReason(reason string) bool {
-	return strings.HasPrefix(reason, spawnReasonBackoff+":") ||
-		strings.HasPrefix(reason, spawnReasonCircuitOpen+":")
-}
 
 func (s *apiServer) stampMemberOpBlocked(memberID, reason string, now float64) {
 	if reason == "" {
@@ -1363,12 +1382,8 @@ func (s *apiServer) stampMemberOpBlocked(memberID, reason string, now float64) {
 		strings.HasPrefix(fresh.LastOpReason, wakeTimeoutReasonCode+":") {
 		return
 	}
-	ok := false
-	fresh.LastOp = reconcileCmdStart
-	fresh.LastOpOK = &ok
-	fresh.LastOpLog = ""
-	fresh.LastOpReason = reason
-	fresh.LastOpAt = now
+	stampOpReceipt(&fresh.LastOp, &fresh.LastOpOK, &fresh.LastOpLog, &fresh.LastOpReason,
+		&fresh.LastOpAt, reconcileCmdStart, reason, now)
 	if err := s.putMember(*fresh, triggerServer); err != nil {
 		reconcileLog("%s: op-blocked stamp persist failed: %v", memberID, err)
 	}
@@ -1410,12 +1425,8 @@ func (s *apiServer) stampMemberPlacementBlocked(m *Member, now float64) {
 	if fresh.LastOp == reconcileCmdStart && fresh.LastOpReason == reason {
 		return
 	}
-	ok := false
-	fresh.LastOp = reconcileCmdStart
-	fresh.LastOpOK = &ok
-	fresh.LastOpLog = ""
-	fresh.LastOpReason = reason
-	fresh.LastOpAt = now
+	stampOpReceipt(&fresh.LastOp, &fresh.LastOpOK, &fresh.LastOpLog, &fresh.LastOpReason,
+		&fresh.LastOpAt, reconcileCmdStart, reason, now)
 	if err := s.putMember(*fresh, triggerServer); err != nil {
 		reconcileLog("%s: placement-blocked stamp persist failed: %v", m.ID, err)
 	}
@@ -1443,6 +1454,16 @@ func (s *apiServer) stampMemberPlacementBlocked(m *Member, now float64) {
 func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision, now float64) {
 	changed := false
 	if decision.StartTimedOut {
+		// RECEIPT-CORE-AUDIT: deliberately NOT stampOpReceipt, and this is not an
+		// oversight. This writer touches FOUR of the five receipt columns — it
+		// never clears last_op_log. Routing it through the core would add that
+		// clear, which is a BEHAVIOUR CHANGE (a wake that lapses would blank the
+		// previous op's log instead of leaving it standing) and therefore outside
+		// a convergence-only change. It also composes last_op_reason further down
+		// (the T-66a2 undelivered-frame rewrite) after the stamp, so the "one
+		// reason in, one reason out" shape the core assumes does not hold here.
+		// Whether the log SHOULD be cleared here is a real question and a
+		// behaviour decision — it belongs to a later stage, not to this one.
 		ok := false
 		m.LastOp = reconcileCmdStart
 		m.LastOpOK = &ok

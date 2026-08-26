@@ -527,7 +527,17 @@ func (s *apiServer) sseStopGateRefusal(memberID string) string {
 		// that has reported stopped is finished; a member the owner FORCE-
 		// stopped was cut off deliberately and must not come back on its own.
 		// Anything else with a stop anchor is a close-out in flight.
-		if m.StoppedSince <= 0.0 && !forcedEpochLive(*m) {
+		//
+		// The second half of that is gracefulStopEpochOpen (api_members.go), and
+		// this site used to write its two terms out by hand. Under
+		// stopped_since <= 0 the enclosing guard has ALREADY established
+		// stopping_since > 0 (its disjunction has no other arm left), so the
+		// hand-written forced term and the call below decide exactly the same
+		// rows — the call merely re-asks a term that is already true.
+		// This is the ENTITLEMENT of a graceful stop epoch, the same compound
+		// autoHandoverWorker's stop arm asks; it is staff-only because the
+		// outsource kind returns above.
+		if m.StoppedSince <= 0.0 && gracefulStopEpochOpen(*m) {
 			return ""
 		}
 		return "member '" + m.ID + "' has a stop in effect (desired_state=offline) — " +

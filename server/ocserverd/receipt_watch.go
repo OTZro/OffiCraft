@@ -192,6 +192,15 @@ func (s *apiServer) sweepLapsedReceipts(now float64) {
 }
 
 // stampReceiptMissing writes ONE lapsed watch onto its target row.
+//
+// The two arms below differ ONLY in which row they load, log and persist. The
+// receipt itself — the five last_op* columns — was written out by hand twice in
+// this one function, once per arm, and is now stampOpReceipt's (reconcile.go)
+// on both. The op verb is p.RPC rather than a START: a lapsed watch names the
+// call it was waiting on, which is why that core takes the verb as a parameter.
+// Sentinels: TestStampReceiptMissing_MemberArmWritesTheFiveReceiptFields and
+// TestStampReceiptMissing_WorkerArmWritesTheFiveReceiptFields, one per arm and
+// both pinned to absolute values.
 func (s *apiServer) stampReceiptMissing(targetID string, p pendingReceipt, now float64) {
 	reason := receiptMissingReason(p)
 	m, err := s.dal.GetMember(targetID)
@@ -203,12 +212,8 @@ func (s *apiServer) stampReceiptMissing(targetID string, p pendingReceipt, now f
 		if m.RosterStatus != RosterStatusActive {
 			return
 		}
-		ok := false
-		m.LastOp = p.RPC
-		m.LastOpOK = &ok
-		m.LastOpLog = ""
-		m.LastOpReason = reason
-		m.LastOpAt = now
+		stampOpReceipt(&m.LastOp, &m.LastOpOK, &m.LastOpLog, &m.LastOpReason,
+			&m.LastOpAt, p.RPC, reason, now)
 		reconcileLog("%s: %s", targetID, reason)
 		if err := s.putMember(*m, triggerServer); err != nil {
 			reconcileLog("%s: receipt-missing stamp persist failed: %v", targetID, err)
@@ -219,12 +224,8 @@ func (s *apiServer) stampReceiptMissing(targetID string, p pendingReceipt, now f
 	if err != nil || w == nil || w.Status == WorkerStatusReleased {
 		return
 	}
-	ok := false
-	w.LastOp = p.RPC
-	w.LastOpOK = &ok
-	w.LastOpLog = ""
-	w.LastOpReason = reason
-	w.LastOpAt = now
+	stampOpReceipt(&w.LastOp, &w.LastOpOK, &w.LastOpLog, &w.LastOpReason,
+		&w.LastOpAt, p.RPC, reason, now)
 	outsourceLog("%s: %s", targetID, reason)
 	if err := s.dal.PutOutsourceWorker(*w); err != nil {
 		outsourceLog("%s: receipt-missing stamp persist failed: %v", targetID, err)

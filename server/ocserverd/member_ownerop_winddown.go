@@ -356,6 +356,12 @@ const (
 )
 
 // winddownStageOf reads how far along the ladder this member ALREADY is.
+//
+// STOP-EPOCH-TERM-AUDIT: this asks forcedEpochLive WITHOUT a stopping_since > 0
+// term, deliberately. It is reading which RUNG the member is on, and "forced" is
+// the top rung; the graceful-epoch compound (gracefulStopEpochOpen) asks the
+// opposite question — whether a session still has an epoch it can work — and
+// negating this one would not answer it. Not a copy of that compound.
 func winddownStageOf(m Member) int {
 	if forcedEpochLive(m) {
 		return winddownStageForced
