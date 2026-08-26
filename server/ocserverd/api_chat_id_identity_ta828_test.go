@@ -241,8 +241,9 @@ var notificationPrinters = map[string]bool{
 // and it is worth knowing all three because the third one is the one that
 // surprises people: >1 bare local in one printer, ANY opaque form in one
 // printer, and a bare local in TWO named printers. So adding a SECOND
-// "#"-prefixed tag — a thread tag, a task tag — FATALs in every spelling there
-// is. That is not an oversight to be relaxed away: all three branches are the
+// "#"-prefixed tag INSIDE ONE OF THEM — a thread tag, a task tag — FATALs in
+// every spelling there is. That is not an oversight to be relaxed away: all
+// three branches are the
 // fix for a fail-open an independent review actually demonstrated (a real print
 // of the WRONG field passing green beside a never-printed decoy), and widening
 // any of them back puts that hole straight back.
@@ -253,10 +254,16 @@ var notificationPrinters = map[string]bool{
 //   - Teach this guard which of the tags is the message-id one. Solves the >1
 //     bare local branch only. It CANNOT be used to relax the opaque branch —
 //     that is where the demonstrated mutant lives.
-//   - Build the new tag outside the named printers and pass it in. "Outside"
-//     is literal: drainChat is ITSELF in the list, so composing the tag in
-//     drainChat and passing it to printChatLine trips the two-printers FATAL.
-//     A plain helper that is not in the list is the shape that passes.
+//   - Build the NEW tag outside the named printers and pass it in. "Outside"
+//     is literal twice over. drainChat is ITSELF in the list, so composing the
+//     tag in drainChat and passing it to printChatLine trips the two-printers
+//     FATAL. And the walk descends into function literals, so a closure inside
+//     the printer is not outside it either — it trips the >1 branch. What
+//     passes is a top-level helper func: a FuncDecl this list does not name.
+//     Note this is the way out for the NEW tag. Moving the MESSAGE-ID tag into
+//     a helper instead hits a fourth FATAL this paragraph is not about — no
+//     named printer prints a bare local at all — whose answer is to re-point
+//     notificationPrinters, not to widen anything.
 //
 // What is NOT a way through is loosening the match.
 func notificationIDField(t *testing.T) string {
