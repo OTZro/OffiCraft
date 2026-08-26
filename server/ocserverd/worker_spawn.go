@@ -1458,7 +1458,7 @@ func (s *apiServer) respawnWorkerForOwnerOp(w OutsourceWorker, op string) ownerO
 	// principled reason a 改機器 or a 換 model should throw away the session's
 	// in-flight state when a 換手 does not — from the worker's side all four are
 	// the same event (this session ends, a new one continues the task).
-	if !ownerOpRevivesStoppedWorker(op) && s.workerHasStateToFlush(w) {
+	if !ownerOpDisplacesTheSession(op) && s.workerHasStateToFlush(w) {
 		// A ladder refusal still answers WoundDown, and deliberately: a wind-down
 		// IS open on this worker — a HIGHER one — so nothing may be dispatched
 		// here either. Falling through to the immediate arm would kill the very
@@ -1505,7 +1505,7 @@ const (
 	ownerOpModel    = "runtime/model" // 換 model / runtime / effort
 )
 
-// ownerOpRevivesStoppedWorker names the ONE verb that is not itself a request for
+// ownerOpDisplacesTheSession names the ONE verb that is not itself a request for
 // a close-out. 重啟 is not a wind-down CAUSE — it is a kill+respawn. It does not
 // ask the current session to flush and hand over, it DISPLACES it
 // (respawnWorkerForOwnerOp → respawnWorkerForOwnerOpNow → respawnWorkerNow, which
@@ -1513,7 +1513,13 @@ const (
 // 換 model are the opposite verb: they mean "the same session's work must survive
 // this change", which is exactly what T-98f4 rule 2 buys with the 預告 + window.
 //
-// 🔴 NOT because 重啟 can only arrive at a worker the owner has already stopped.
+// 🔴 IT USED TO BE CALLED ownerOpRevivesStoppedWorker, and that name carried a
+// framework this comment has spent its whole life contradicting: that the verb
+// it names arrives at a worker the owner has ALREADY STOPPED, so what it does is
+// revive one. Measured, it does not — the name was the last place that claim
+// still lived, and it is renamed rather than annotated because a name is read by
+// people who never open the body (T-170e stage 2 ⑥).
+//
 // It can arrive at ANY live worker: its handler
 // (HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost, api_outsource.go)
 // has exactly two preconditions — the row exists, and it is not released — and NO
@@ -1535,7 +1541,7 @@ const (
 // Deliberately a DENY-list, not an allow-list: a verb added later gets the
 // wind-down by default, because 「所有換手都給收尾機會」 is the rule and skipping
 // it is the exception that has to be argued for.
-func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
+func ownerOpDisplacesTheSession(op string) bool { return op == ownerOpRestart }
 
 // workerHasStateToFlush answers the ONE question rule 2 turns on: is there
 // anything for this worker to wind down, or should the owner's verb take effect

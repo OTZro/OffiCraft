@@ -106,7 +106,7 @@ package main
 //	  arriving inside the collect window would open a SECOND wind-down that
 //	  dispatches nothing, while the in-flight respawn boots on the OLD value.
 //
-//	worker: ownerOpRevivesStoppedWorker deny-list (重啟 skips the wind-down)
+//	worker: ownerOpDisplacesTheSession deny-list (重啟 skips the wind-down)
 //	  staff: N/A — 重啟 is not in this funnel. refocus_member / restart_self ARE
 //	  the wind-down (they stamp and return), and activate is a wake, not a
 //	  displacement. The staff funnel carries only 改機器 and 換模型, and both act

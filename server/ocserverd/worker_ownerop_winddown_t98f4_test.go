@@ -11,7 +11,7 @@ package main
 //
 // The second half of the owner's ask is 「有東西要存才等,沒有就立刻走」, so this
 // file also pins the FAST paths. Which cases are fast is a stated criterion, not
-// a guess — see workerHasStateToFlush / ownerOpRevivesStoppedWorker.
+// a guess — see workerHasStateToFlush / ownerOpDisplacesTheSession.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // THE DECISION TABLE (written because BOTH HIGH defects in this票 were mis-drawn
@@ -45,7 +45,7 @@ package main
 //	                                 worker must already be stopped — its handler
 //	                                 has NO desired-offline gate and answers 200
 //	                                 on a live, mid-加速停止 worker
-//	                                 (ownerOpRevivesStoppedWorker, worker_spawn.go).
+//	                                 (ownerOpDisplacesTheSession, worker_spawn.go).
 //	                                 (deny-list, so a NEW verb gets the wind-down
 //	                                 by default.)
 //	                                 (TestOwnerOp_RestartNeverWindsDown)
