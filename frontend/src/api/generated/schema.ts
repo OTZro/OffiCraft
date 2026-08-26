@@ -668,16 +668,25 @@ export interface paths {
          * @description The station-wide capped-document SIZE overview (``peek_doc_sizes`` MCP tool,
          *     zero params; ``GET /api/doc-sizes``).
          *
-         *     One call reports EVERY role's role definition, insight and DEFAULT lessons
-         *     bucket, and EVERY task manual's sop_md and learnings, as ``size_chars`` plus the
-         *     ``cap_chars`` in force for THAT segment — the five segments have five separate
+         *     One call reports EVERY role's role definition, insight and lessons, and EVERY
+         *     task manual's sop_md and learnings, as ``size_chars`` plus the ``cap_chars`` in
+         *     force for THAT segment — the five segments have five separate
          *     ``doc.cap_chars.*`` settings, so each document is reported against its own ruler
          *     and never against a shared one.
          *
-         *     Lessons is reported for the DEFAULT bucket only. Nothing constrains the bucket
-         *     name on the write side (the default is a fill-in for an absent argument), so
-         *     lessons stored under any other bucket name spend the same lessons cap and do not
-         *     appear here.
+         *     THE LISTING IS KEYED BY ROLE, AND THAT IS ITS LIMIT. Until T-2 lessons carried a
+         *     ``task_type`` axis and only the DEFAULT bucket was reported here, so a document
+         *     under any other bucket name spent the same lessons cap while staying off this
+         *     listing. That axis is gone: a role has exactly ONE lessons document and it is
+         *     the one reported here.
+         *
+         *     What remains is narrower and lives on the WRITE side rather than in this
+         *     listing: nothing validates a ``role_key`` against the roster, so an admin or the
+         *     owner may write lessons (or insight) under a ``role_key`` no role carries. Such
+         *     a document is readable through ``get_lessons``, spends the same cap, and —
+         *     having no role to hang off — never appears here. ``list_roles`` is the roster
+         *     this page is derived from; a document under a name that is not on it is not on
+         *     this page either.
          *
          *     It carries NO document text. What it is FOR: a role's insight and lessons sizes
          *     are reported by no listing on this station at any price, so before this route
@@ -1070,8 +1079,15 @@ export interface paths {
          *     All roles fold against the one file seed until a role's overlay diverges it.
          *
          *     T-2 removed the ``task_type`` axis: a lessons doc is addressed by ``role_key``
-         *     ALONE, and a request that still carries ``task_type`` is refused with a 400
-         *     naming the field rather than having it ignored.
+         *     ALONE. WHICH FACE REFUSES THE RETIRED FIELD, MEASURED RATHER THAN INFERRED --
+         *     the two are NOT the same, and only one of them tells the caller anything. The
+         *     MCP tool face (``get_lessons``) refuses it by PRESENCE, ``task_type: ""``
+         *     included, with a 400 naming the field, before the call is dispatched to this
+         *     route (``fillLessonsIdentityArgs``). THIS HTTP ROUTE HAS NO SUCH DOOR: a GET
+         *     carries no body to reject unknown keys in, and a ``?task_type=`` query
+         *     parameter is read by nothing here and answers 200 -- that is, it IS silently
+         *     ignored, the exact experience T-2 exists to end. A caller reaching the lessons
+         *     docs over HTTP rather than over MCP does not get told.
          */
         get: operations["handle_get_lessons_api_lessons__role_key__get"];
         put?: never;
@@ -1097,7 +1113,13 @@ export interface paths {
          *     bucket name NOWHERE - one mistyped ``task_type`` created a whole extra
          *     classification and answered 200 - and the MCP tool listed the field as
          *     REQUIRED, so every caller had to spell it. Removing the field is what closes
-         *     that door; a request that still carries it is refused with a 400 naming it.
+         *     that door. WHICH FACE ANSWERS WHAT, MEASURED RATHER THAN INFERRED: the MCP tool
+         *     face (``replace_lessons``) refuses the argument by PRESENCE, ``task_type: ""``
+         *     included, with a 400 naming it, before dispatch (``fillLessonsIdentityArgs``).
+         *     This HTTP route refuses a ``task_type`` in the BODY as an unknown key -- a 422
+         *     ``validation_error`` whose message names it -- NOT a 400. A ``task_type`` QUERY
+         *     parameter on this route is read by nothing and answers 200, so that one IS
+         *     silently ignored.
          */
         post: operations["handle_replace_lessons_api_lessons__role_key__post"];
         delete?: never;
@@ -1125,7 +1147,7 @@ export interface paths {
          *
          *     Writes the owner overlay (``is_default`` → False) and fans a ``lessons`` delta. The receipt carries ``size``/``sha256`` verification anchors over the resulting doc.
          *
-         *     T-2 removed the ``task_type`` axis: a lessons doc is addressed by ``role_key`` ALONE, and a request that still carries ``task_type`` is refused with a 400 naming the field rather than having it ignored.
+         *     T-2 removed the ``task_type`` axis: a lessons doc is addressed by ``role_key`` ALONE. WHICH FACE ANSWERS WHAT, MEASURED RATHER THAN INFERRED: the MCP tool face (``patch_lessons``) refuses the argument by PRESENCE, ``task_type: ""`` included, with a 400 naming it, before dispatch (``fillLessonsIdentityArgs``). This HTTP route refuses a ``task_type`` in the BODY as an unknown key -- a 422 ``validation_error`` whose message names it -- NOT a 400. A ``task_type`` QUERY parameter on this route is read by nothing and answers 200, so that one IS silently ignored.
          */
         post: operations["handle_patch_lessons_api_lessons__role_key__patch_post"];
         delete?: never;

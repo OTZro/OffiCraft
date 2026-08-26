@@ -67,16 +67,29 @@ const (
 // hands DOWN these parameters; the warden only executes them.
 // ---------------------------------------------------------------------------
 
-// StartParams is the server-downpushed start(...) payload. token/role/task_type/
-// model/session_name are server-owned decisions; the warden never mints a token
+// StartParams is the server-downpushed start(...) payload. token/role/model/
+// session_name are server-owned decisions; the warden never mints a token
 // nor picks a placement (A4/T2.1). PersonaContext is the pre-composed persona the
 // server hands in as plain text (the warden does NO server I/O to fetch it).
+//
+// task_type used to be on that server-owned list. T-2 removed the lessons
+// classification axis it was sourced from, and the server's start-frame builder
+// no longer carries the field at all — see the `rpc: start` args table in
+// spec/sse.md, which now states that removal in as many words.
 type StartParams struct {
 	MemberID       string
 	PersonaContext string
 	MemberToken    string
 	Role           string
-	TaskType       string // colours the boot prompt upstream; carried for parity
+	// TaskType is INERT since T-2. It never coloured anything on this side —
+	// it was carried for parity with a server field that chose a lessons
+	// bucket — and the server stopped sending it when the axis was removed.
+	// The frame parse (startParamsFromArgs) still reads `task_type` when a
+	// frame carries one, and NOTHING in this binary reads the result: grep
+	// TaskType across cli/ and the only hits are that assignment, this
+	// declaration and one test fixture. Left in place rather than deleted
+	// because removing it is a wire-surface change, not a comment fix.
+	TaskType string
 	Runtime        string // claude (default) | codex
 	Model          string
 	// Effort is the member's owner-set reasoning-effort launch intent
