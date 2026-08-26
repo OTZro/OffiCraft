@@ -202,21 +202,18 @@ export interface MemberRelocateResult {
 export interface BootstrapView {
   role: string;
   name: string;
-  taskType: string;
   context: string;
 }
 
 /**
- * The folded PER-ROLE lessons doc for one `roleKey` + `task_type` (the single
- * fixed task_type key is "general"). Scoped to a role (per-role-learnings step1):
- * agents sharing a role share it, but a researcher's learnings no longer pollute
- * an assistant's. Kept minimal (like `BootstrapView` drops token): the UI needs
+ * The folded PER-ROLE lessons doc for one `roleKey` — the WHOLE address since
+ * T-2 removed the `task_type` axis. Agents sharing a role share it, but a
+ * researcher's learnings no longer pollute an assistant's. Kept minimal (like `BootstrapView` drops token): the UI needs
  * only the text + `isDefault`, so `owner_id` / `schema_version` are dropped BY
  * DESIGN. `isDefault` true → the text IS the file seed (dal/seeds/lessons.md).
  */
 export interface LessonsView {
   roleKey: string;
-  taskType: string;
   text: string;
   isDefault: boolean;
   /** Size of `text` in CHARACTERS (Unicode code points) — cap_chars' unit. */
@@ -233,7 +230,7 @@ export interface LessonsView {
 /**
  * The folded PER-ROLE insight doc for one `roleKey` (T-3809) — the role
  * journal's third block, beside Duty (the role definition) and Learning (the
- * lessons doc). No `task_type` axis: that belongs to lessons.
+ * lessons doc).
  *
  * ⚠️ UNLIKE `LessonsView` this DOES carry `sizeChars` / `capChars`, and that is
  * load-bearing rather than tidy. `capChars` is the live `doc.cap_chars.insight`
@@ -647,7 +644,8 @@ export interface GlobalContextView {
 /**
  * Which editable long-form document a retained revision belongs to. The
  * companion `key` is "global" for global_context, the role key for
- * role_definition, "<role_key>::<task_type>" for lessons, the type_key for
+ * role_definition, the role key for lessons too (T-2 dropped the
+ * "<role_key>::<task_type>" composite), the type_key for
  * every task_manual kind, and the TASK id for task_description / task_title.
  *
  * `task_description` (T-e271) is the odd one out in what it keys on: every
@@ -667,9 +665,8 @@ export type DocumentKind =
   | "global_context"
   | "role_definition"
   | "lessons"
-  // T-3809: the role journal's third block. Its key is the BARE role_key — no
-  // task_type axis, so it is NOT the "<role_key>::<task_type>" composite lessons
-  // uses, and anything deriving one key format from the other is wrong for it.
+  // T-3809: the role journal's third block. Its key is the BARE role_key —
+  // which since T-2 is also what lessons uses.
   | "insight"
   | "task_manual"
   | "task_manual_sop"

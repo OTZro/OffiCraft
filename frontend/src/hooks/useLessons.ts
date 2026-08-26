@@ -1,5 +1,5 @@
 // hooks/useLessons.ts — load + mutate the folded PER-ROLE lessons doc for one
-// role_key + task_type.
+// role_key (T-2 removed the task_type axis; role_key is the whole address).
 //
 // Mirrors useGlobalContext: mount-fetch + reconcile-by-refetch on the relevant
 // SSE topic ("lessons"). The save action calls the api and folds the returned
@@ -22,27 +22,27 @@ interface UseLessons {
   save: (text: string) => Promise<void>;
 }
 
-export function useLessons(roleKey: string, taskType: string): UseLessons {
+export function useLessons(roleKey: string): UseLessons {
   const [lessons, setLessons] = useState<LessonsView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
   const refetch = useCallback(async () => {
-    setLessons(await api.getLessons(roleKey, taskType));
-  }, [roleKey, taskType]);
+    setLessons(await api.getLessons(roleKey));
+  }, [roleKey]);
 
   const save = useCallback(
     async (text: string) => {
-      setLessons(await api.saveLessons(roleKey, taskType, text));
+      setLessons(await api.saveLessons(roleKey, text));
     },
-    [roleKey, taskType]
+    [roleKey]
   );
 
   useEffect(() => {
     let alive = true;
 
     api
-      .getLessons(roleKey, taskType)
+      .getLessons(roleKey)
       .then((next) => {
         if (alive) {
           setLessons(next);
@@ -60,7 +60,7 @@ export function useLessons(roleKey: string, taskType: string): UseLessons {
     const unsubscribe = api.subscribeEvents((topic) => {
       if (topic.includes("lessons")) {
         api
-          .getLessons(roleKey, taskType)
+          .getLessons(roleKey)
           .then((next) => {
             if (alive) {
               setLessons(next);
@@ -75,7 +75,7 @@ export function useLessons(roleKey: string, taskType: string): UseLessons {
       alive = false;
       unsubscribe();
     };
-  }, [roleKey, taskType]);
+  }, [roleKey]);
 
   return { lessons, loading, error, refetch, save };
 }

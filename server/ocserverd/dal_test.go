@@ -557,21 +557,21 @@ func TestRoleDefCRUDRoundTrip(t *testing.T) {
 func TestLessonsCompositeKeyAndRoleCascade(t *testing.T) {
 	d := newTestDAL(t)
 
-	if l, err := d.GetLessons("assistant", "default"); err != nil || l != nil {
+	if l, err := d.GetLessons("assistant"); err != nil || l != nil {
 		t.Fatalf("never-edited lessons must be (nil, nil), got (%v, %v)", l, err)
 	}
 
-	if err := d.PutLessons(Lessons{RoleKey: "assistant", TaskType: "default", Text: "v1"}); err != nil {
+	if err := d.PutLessons(Lessons{RoleKey: "assistant", Text: "v1"}); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	// Same (role, task) upserts in place — composite-PK uniqueness.
-	if err := d.PutLessons(Lessons{RoleKey: "assistant", TaskType: "default", Text: "v2"}); err != nil {
+	if err := d.PutLessons(Lessons{RoleKey: "assistant", Text: "v2"}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	if err := d.PutLessons(Lessons{RoleKey: "researcher", TaskType: "default", Text: "other"}); err != nil {
+	if err := d.PutLessons(Lessons{RoleKey: "researcher", Text: "other"}); err != nil {
 		t.Fatalf("put other role: %v", err)
 	}
-	got, err := d.GetLessons("assistant", "default")
+	got, err := d.GetLessons("assistant")
 	if err != nil || got == nil || got.Text != "v2" {
 		t.Fatalf("upsert must replace text, got %+v (%v)", got, err)
 	}
@@ -580,7 +580,7 @@ func TestLessonsCompositeKeyAndRoleCascade(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("role cascade: want 1 deleted, got %d (%v)", n, err)
 	}
-	if l, err := d.GetLessons("researcher", "default"); err != nil || l == nil {
+	if l, err := d.GetLessons("researcher"); err != nil || l == nil {
 		t.Fatalf("other role's lessons must survive, got (%v, %v)", l, err)
 	}
 }

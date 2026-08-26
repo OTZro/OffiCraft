@@ -1033,11 +1033,11 @@ MATRIX: dict[str, Route] = {
             f"/api/roles/{ctx.fresh_role() if i in _ADMIN_FACES else 'assistant'}"
         ),
     ),
-    "GET /api/lessons/{role_key}/{task_type}": Route(
+    "GET /api/lessons/{role_key}": Route(
         requires="machine",
-        path="/api/lessons/assistant/general",
+        path="/api/lessons/assistant",
     ),
-    "POST /api/lessons/{role_key}/{task_type}": Route(
+    "POST /api/lessons/{role_key}": Route(
         # Per-role write authz ABOVE the declared floor (handler-level,
         # lessonsWriteAuthz): admin capability (owner / admin_agent) writes ANY
         # role; anyone else writes ONLY its OWN member's role_key.
@@ -1056,13 +1056,13 @@ MATRIX: dict[str, Route] = {
         requires="agent",
         overrides={"agent_other": 403},
         path=lambda ctx, i: (
-            f"/api/lessons/{ctx.agent_a.role_key}/general"
+            f"/api/lessons/{ctx.agent_a.role_key}"
             if i in ("agent_self", "admin_agent")
-            else "/api/lessons/assistant/general"
+            else "/api/lessons/assistant"
         ),
         body={"text": "conformance lessons doc"},
     ),
-    "POST /api/lessons/{role_key}/{task_type}/patch": Route(
+    "POST /api/lessons/{role_key}/patch": Route(
         # anchor-addressed patch (T-8327): SAME per-role write authz seam as
         # the whole-doc replace above (T-5336 floor + admin cross-role cell
         # included). Positive faces use an always-valid APPEND edit (empty old)
@@ -1070,9 +1070,9 @@ MATRIX: dict[str, Route] = {
         requires="agent",
         overrides={"agent_other": 403},
         path=lambda ctx, i: (
-            f"/api/lessons/{ctx.agent_a.role_key}/general/patch"
+            f"/api/lessons/{ctx.agent_a.role_key}/patch"
             if i in ("agent_self", "admin_agent")
-            else "/api/lessons/assistant/general/patch"
+            else "/api/lessons/assistant/patch"
         ),
         body={"edits": [{"old": "", "new": "conformance patch probe"}]},
     ),

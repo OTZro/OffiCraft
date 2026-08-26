@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -10,10 +11,12 @@ import (
 
 // T-d483 regression: the lessons API answered not_found for an existing role,
 // breaking the learning loop. Root cause — an MCP get_lessons / replace_lessons
-// that omits (or blanks) task_type and/or role_key substitutes an empty path
-// segment, missing /api/lessons/{role_key}/{task_type}; the SPA fallback then
+// that blanks role_key substitutes an empty path
+// segment, missing /api/lessons/{role_key}; the SPA fallback then
 // answers not_found. The fix folds the boot context's own key derivation into the
-// tool boundary: blank task_type → "general", blank role_key → the caller's role.
+// tool boundary: blank role_key → the caller's role. T-2 removed task_type
+// entirely; a call that still sends it is refused by name (see
+// TestLessonsMCPRefusesTheRetiredTaskTypeArgument).
 //
 // These drive the SAME wired stack (MCP loopback + REST) an agent uses.
 
@@ -87,51 +90,35 @@ func TestLessonsMCPDefaultsCloseTheLearningLoop(t *testing.T) {
 	}
 	joeyTok, _ := mintJWT("joey", "agent", 300, secret, now, "")
 
-	// 1. Baseline happy path is unchanged: both segments explicit → serves.
+	// 1. Baseline happy path: the one remaining segment, explicit → serves.
 	if isErr, code, _ := lessonsCall(t, srv.URL, ownerTok,
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_lessons","arguments":{"role_key":"assistant","task_type":"general"}}}`); isErr {
-		t.Fatalf("explicit assistant/general must serve, got code=%q", code)
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_lessons","arguments":{"role_key":"assistant"}}}`); isErr {
+		t.Fatalf("explicit assistant must serve, got code=%q", code)
 	}
 
-	// 2. task_type OMITTED → defaults to "general", no longer not_found.
-	if isErr, code, _ := lessonsCall(t, srv.URL, ownerTok,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_lessons","arguments":{"role_key":"assistant"}}}`); isErr {
-		t.Fatalf("get_lessons with omitted task_type must serve, got code=%q", code)
-	}
-
-	// 3. task_type EMPTY string → same default.
-	if isErr, code, _ := lessonsCall(t, srv.URL, ownerTok,
-		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_lessons","arguments":{"role_key":"assistant","task_type":""}}}`); isErr {
-		t.Fatalf("get_lessons with empty task_type must serve, got code=%q", code)
-	}
-
-	// 3b. Whitespace-only path values use the same blank predicate as the
-	// shared MCP path guard, so identity defaults still apply before dispatch.
-	if isErr, code, _ := lessonsCall(t, srv.URL, ownerTok,
-		`{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"get_lessons","arguments":{"role_key":"assistant","task_type":"   "}}}`); isErr {
-		t.Fatalf("get_lessons with whitespace task_type must serve, got code=%q", code)
-	}
+	// 2. Whitespace-only role_key uses the same blank predicate as the shared
+	//    MCP path guard, so the identity default still applies before dispatch.
 	if isErr, code, _ := lessonsCall(t, srv.URL, joeyTok,
-		`{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"get_lessons","arguments":{"role_key":"   ","task_type":"general"}}}`); isErr {
+		`{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"get_lessons","arguments":{"role_key":"   "}}}`); isErr {
 		t.Fatalf("agent get_lessons with whitespace role_key must serve, got code=%q", code)
 	}
 
-	// 4. NO arguments as an AGENT ("無參數,identity 從 token") → role from the
-	//    roster + general → serves the custom role's doc, never not_found.
+	// 3. NO arguments as an AGENT ("無參數,identity 從 token") → role from the
+	//    roster → serves the custom role's doc, never not_found.
 	if isErr, code, _ := lessonsCall(t, srv.URL, joeyTok,
 		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_lessons","arguments":{}}}`); isErr {
 		t.Fatalf("agent get_lessons with no arguments must serve, got code=%q", code)
 	}
 
-	// 5. replace_lessons omitting task_type UPSERTS to (role, general); a
-	//    subsequent explicit read returns the same text — one source of truth.
+	// 4. replace_lessons UPSERTS to the role; a subsequent read returns the
+	//    same text — one source of truth.
 	marker := "T-d483 upsert marker"
 	if isErr, code, _ := lessonsCall(t, srv.URL, ownerTok,
 		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"replace_lessons","arguments":{"role_key":"`+customRole+`","text":"`+marker+`"}}}`); isErr {
-		t.Fatalf("replace_lessons with omitted task_type must upsert, got code=%q", code)
+		t.Fatalf("replace_lessons must upsert, got code=%q", code)
 	}
 	isErr, code, text := lessonsCall(t, srv.URL, ownerTok,
-		`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_lessons","arguments":{"role_key":"`+customRole+`","task_type":"general"}}}`)
+		`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_lessons","arguments":{"role_key":"`+customRole+`"}}}`)
 	if isErr {
 		t.Fatalf("readback after upsert must serve, got code=%q", code)
 	}
@@ -139,10 +126,80 @@ func TestLessonsMCPDefaultsCloseTheLearningLoop(t *testing.T) {
 		t.Fatalf("readback must carry the upserted text; got: %s", text)
 	}
 
-	// 6. The agent reads back its OWN just-written lessons with NO arguments —
+	// 5. The agent reads back its OWN just-written lessons with NO arguments —
 	//    the round-trip the learning loop depends on.
 	if _, _, agentText := lessonsCall(t, srv.URL, joeyTok,
 		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"get_lessons","arguments":{}}}`); !strings.Contains(agentText, marker) {
 		t.Fatalf("agent no-arg readback must see its own lessons; got: %s", agentText)
+	}
+}
+
+// TestLessonsMCPRefusesTheRetiredTaskTypeArgument is the BACKWARD-COMPATIBILITY
+// decision of T-2 step B, written down as an executable rule rather than a
+// paragraph.
+//
+// 🔴 THE THREE CHOICES, AND WHY THIS ONE. A caller that still sends `task_type`
+// could be (a) refused, (b) served with the field silently dropped, or (c)
+// served with the field honoured. (c) is impossible — there is nowhere left to
+// put it. (b) is the WORST of the three and not by a small margin: this
+// endpoint's original defect was that an unvalidated task_type sent a write to
+// a bucket the caller did not mean, answered 200, and said nothing. Dropping
+// the field silently reproduces that experience exactly — the caller believes
+// it addressed a classification, the write lands elsewhere — while deleting the
+// last evidence that anything happened. So: refuse, by name, with the
+// replacement stated.
+//
+// This is the named assertion a mutant that turns the refusal back into a
+// silent drop has to turn red.
+func TestLessonsMCPRefusesTheRetiredTaskTypeArgument(t *testing.T) {
+	srv, dal, secret := newLessonsTestServer(t)
+	now := time.Now().Unix()
+	ownerTok, _ := mintJWT("owner", "owner", 300, secret, now, "")
+	const role = "assistant"
+	const marker = "the doc nobody may overwrite by accident"
+	if err := dal.PutLessons(Lessons{RoleKey: role, Text: marker}); err != nil {
+		t.Fatalf("PutLessons: %v", err)
+	}
+
+	for _, tc := range []struct{ name, args string }{
+		{"get_lessons", `{"name":"get_lessons","arguments":{"role_key":"assistant","task_type":"general"}}`},
+		{"get_lessons_empty_value", `{"name":"get_lessons","arguments":{"role_key":"assistant","task_type":""}}`},
+		{"replace_lessons", `{"name":"replace_lessons","arguments":{"role_key":"assistant","task_type":"review-pr-seth","text":"poison"}}`},
+		{"patch_lessons", `{"name":"patch_lessons","arguments":{"role_key":"assistant","task_type":"review-pr-seth","edits":[{"old":"","new":"poison"}]}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isErr, code, text := lessonsCall(t, srv.URL, ownerTok,
+				`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":`+tc.args+`}`)
+			if !isErr {
+				t.Fatalf("a call carrying the RETIRED task_type argument was ACCEPTED "+
+					"(code=%q, body=%s). Silently ignoring it is the one behaviour this "+
+					"removal must not have: the caller is left believing it named a "+
+					"classification while the write went somewhere else — which is the "+
+					"exact failure T-2 removed the axis to end", code, text)
+			}
+			if code != errorCodeForStatus(http.StatusBadRequest) {
+				t.Errorf("refusal code = %q, want the 400 code — a retired ARGUMENT is the "+
+					"caller's input being wrong, not a transport fault", code)
+			}
+			if !strings.Contains(text, "task_type") {
+				t.Errorf("the refusal does not name the field it refused: %s. A caller that "+
+					"cannot see WHICH argument was rejected has to guess, and guessing is "+
+					"how the field gets sent again", text)
+			}
+			if !strings.Contains(text, "role_key") {
+				t.Errorf("the refusal does not name the replacement (role_key): %s", text)
+			}
+		})
+	}
+
+	// The refusal must be a refusal, not a partially-applied write: the doc is
+	// untouched after all four attempts.
+	overlay, err := dal.GetLessons(role)
+	if err != nil {
+		t.Fatalf("GetLessons: %v", err)
+	}
+	if overlay == nil || overlay.Text != marker {
+		t.Errorf("the lessons doc changed under a refused call: %+v — a refusal that still "+
+			"writes is worse than an acceptance, because nothing reports it", overlay)
 	}
 }

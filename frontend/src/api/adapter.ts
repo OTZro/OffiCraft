@@ -2256,28 +2256,24 @@ export interface Api {
    */
   getBootstrap(role: string): Promise<BootstrapView>;
   /**
-   * The folded PER-ROLE lessons doc for a `roleKey` + `task_type` (the single
-   * fixed task_type key is "general"). Per-role-learnings step1: scoped to a
-   * role_key — agents sharing a role share the accumulated lessons.
+   * The folded PER-ROLE lessons doc for a `roleKey`. `roleKey` is the WHOLE
+   * address — T-2 removed the `task_type` axis. Agents sharing a role share
+   * the accumulated lessons.
    */
-  getLessons(roleKey: string, taskType: string): Promise<LessonsView>;
+  getLessons(roleKey: string): Promise<LessonsView>;
   /**
-   * Whole-doc replace of the PER-ROLE lessons for a `roleKey` + `task_type` →
+   * Whole-doc replace of the PER-ROLE lessons for a `roleKey` →
    * returns the folded doc (`isDefault` flips false). Backend contract is POST
    * (NOT the PUT/DELETE the global-context save uses). WRITE authz is per-role
    * and keyed on the PRINCIPAL CLASS, not the token scope (T-5336): a caller at
    * or above admin_agent — the owner (this UI's scope) and the admin agent —
    * may write ANY role; every other agent may write only its own role.
    */
-  saveLessons(
-    roleKey: string,
-    taskType: string,
-    text: string,
-  ): Promise<LessonsView>;
+  saveLessons(roleKey: string, text: string): Promise<LessonsView>;
   /**
    * The folded PER-ROLE insight doc for a `roleKey` (T-3809) — the role
-   * journal's third block, beside Duty and Learning. No `task_type` axis and no
-   * file seed, so an untouched doc reads as genuinely empty.
+   * journal's third block, beside Duty and Learning. No file seed, so an
+   * untouched doc reads as genuinely empty.
    *
    * READ IS UNRESTRICTED and that is deliberate: any authenticated identity may
    * read ANY role's insight. Insight is SEPARATE, not private — this release

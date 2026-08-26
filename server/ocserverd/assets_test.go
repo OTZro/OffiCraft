@@ -80,7 +80,7 @@ func TestBuildBootContextSelectsRuntimeBootSequence(t *testing.T) {
 		{"codex", RuntimeCodex, "# Codex App Server 執行環境", "# Claude Code 執行環境"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			boot, err := s.buildBootContext("assistant", &Member{Runtime: tc.runtime}, "general")
+			boot, err := s.buildBootContext("assistant", &Member{Runtime: tc.runtime})
 			if err != nil {
 				t.Fatalf("buildBootContext: %v", err)
 			}

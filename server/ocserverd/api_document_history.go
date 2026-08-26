@@ -23,17 +23,64 @@ var errDocumentHistoryContent = errors.New("this version is refused by the docum
 const legacyTaskManualKindMsg = "document history kind \"task_manual\" was retired: " +
 	"use \"task_manual_sop\" or \"task_manual_learnings\""
 
-func historyKeyParts(kind, key string) (string, string, bool) {
-	if kind != "lessons" {
-		return key, "", key != ""
+// lessonsRetiredKeySeparator is the "::" that used to join a lessons history
+// key's two halves. Named rather than inlined so the one rule that still cares
+// about it is greppable from the migrations that talk about the same shapes
+// (00061 §2, 00062's "left alone" paragraph) — all three have to agree, and a
+// bare "::" in the source is not something you can search for.
+const lessonsRetiredKeySeparator = "::"
+
+// malformedLessonsKeyMsg names the retired axis rather than saying "invalid",
+// because the caller most likely to hit this is one that learned the OLD
+// `role_key::task_type` shape from a tool description and has no way to guess
+// that the shape itself is what changed.
+const malformedLessonsKeyMsg = "invalid lessons document history key: T-2 removed the task_type axis, " +
+	"so a lessons key is the bare role_key and one carrying \"::\" names nothing"
+
+// historyKeyParts reports a document-history key's PRIMARY identity and whether
+// the key names a document at all.
+//
+// 🔴 THE SPLIT IS GONE; THE REFUSAL IS NOT, and getting that distinction
+// wrong is what this comment is for. Until T-2 the lessons kind was the ONE key
+// with a composite shape ("<role_key>::<task_type>"), so this function existed
+// to split it and every caller had to carry the second half. With the axis
+// removed a lessons key is the bare role_key like every other kind's, so the
+// SPLIT has nothing left to do.
+//
+// 🔴 BUT DROPPING THE SPLIT MUST NOT DROP THE REFUSAL THAT CAME WITH IT.
+// The old parse returned valid=false for a lessons key that was not two
+// non-empty halves, and that refusal is the ENTIRE argument 00061 wrote down
+// for leaving three malformed lessons history rows in the table: "the
+// list/restore door refuses such a key with 400 before any restore runs, so
+// none of them can reseed anything". A first cut of T-2 reduced this function
+// to `key != ""` for every kind, which retired that refusal by accident and
+// made `assistant::` a key you could LIST and RESTORE. The restore answered
+// 200 and materialised a `lessons` row keyed `assistant::`: no role carries it,
+// get_lessons cannot see it, peek_doc_sizes does not list it,
+// DeleteLessonsForRole cannot reach it, it spends the lessons cap anyway, and
+// it grows a history of its own. That is the hidden drawer T-2 exists to
+// remove, rebuilt one door over. So the rule now reads FORWARD instead of
+// backward: since T-2 a lessons key that carries "::" names nothing, and this
+// door says so.
+//
+// The check is scoped to lessons on purpose. "::" is not special to any other
+// kind — task ids, boot-doc keys and role keys have never been parsed on it —
+// so widening the refusal would refuse keys that are merely unusual rather than
+// meaningless. Both directions are pinned in
+// api_document_history_lessons_key_t2_test.go, and the POSITIVE case there runs
+// first: a door shut too hard would make every negative assertion pass.
+//
+// This gate is about the KEY'S SHAPE, not about whether a role exists. Nothing
+// on the lessons write face compares a role_key against the roster (see
+// peek_doc_sizes' summary, which says so in as many words), so an admin or the
+// owner can still create a lessons document under a name no role carries. That
+// is a wider gap with its own owner decision to make; it is not this function's
+// to close.
+func historyKeyParts(kind, key string) (string, bool) {
+	if kind == "lessons" && strings.Contains(key, lessonsRetiredKeySeparator) {
+		return key, false
 	}
-	parts := strings.SplitN(key, "::", 2)
-	return parts[0], func() string {
-		if len(parts) == 2 {
-			return parts[1]
-		}
-		return ""
-	}(), len(parts) == 2 && parts[0] != "" && parts[1] != ""
+	return key, key != ""
 }
 
 func documentHistoryContent(h DocumentHistory) (map[string]string, error) {
@@ -155,9 +202,9 @@ func roleDefSnapshotIn(roleKey string) func(sqlQuerier) (string, error) {
 	}
 }
 
-func lessonsSnapshotIn(roleKey, taskType string) func(sqlQuerier) (string, error) {
+func lessonsSnapshotIn(roleKey string) func(sqlQuerier) (string, error) {
 	return func(q sqlQuerier) (string, error) {
-		current, err := getLessonsOn(q, roleKey, taskType)
+		current, err := getLessonsOn(q, roleKey)
 		if err != nil {
 			return "", err
 		}
@@ -215,8 +262,17 @@ func roleDefHistoryStreams(roleKey, actor string, definitionChanged bool) []docu
 }
 
 func (s *apiServer) documentHistoryAllowed(w http.ResponseWriter, r *http.Request, kind, key string, write bool) bool {
-	primary, _, valid := historyKeyParts(kind, key)
+	primary, valid := historyKeyParts(kind, key)
 	if !valid {
+		// Two different refusals share this branch, and the message has to
+		// separate them: an empty key is a caller that sent nothing, while a
+		// lessons key carrying "::" is a caller working from the pre-T-2 shape
+		// — a much more likely mistake, and one that "invalid document history
+		// key" would send hunting in the wrong direction.
+		if kind == "lessons" && strings.Contains(key, lessonsRetiredKeySeparator) {
+			writeError(w, http.StatusBadRequest, malformedLessonsKeyMsg)
+			return false
+		}
 		writeError(w, http.StatusBadRequest, "invalid document history key")
 		return false
 	}
@@ -605,16 +661,20 @@ func (s *apiServer) restoreDocumentHistory(r *http.Request, kind, key string, co
 			return putRoleDefOn(ex, RoleDef{RoleKey: key, Name: name, DefinitionMD: content["definition_md"], Tombstoned: historyTombstoned(content)})
 		})
 	case "lessons":
-		roleKey, taskType, _ := historyKeyParts(kind, key)
-		current, err := s.foldLessonsDTO(roleKey, taskType)
+		// The key IS the role_key since T-2 — no split, and therefore no way
+		// for a restore to write a task_type the caller never chose. That path
+		// is what 00061 had to shut a door against in the migration itself;
+		// there is no longer a door.
+		roleKey := key
+		current, err := s.foldLessonsDTO(roleKey)
 		if err != nil {
 			return err
 		}
 		if DocCapBlocked(s.learningCap(), current.Text, content["text"]) {
 			return errDocumentHistoryCap
 		}
-		return s.dal.SaveWithDocumentHistory(kind, key, actor, lessonsSnapshotIn(roleKey, taskType), func(ex sqlExecer) error {
-			return putLessonsOn(ex, Lessons{RoleKey: roleKey, TaskType: taskType, Text: content["text"], Tombstoned: historyTombstoned(content)})
+		return s.dal.SaveWithDocumentHistory(kind, key, actor, lessonsSnapshotIn(roleKey), func(ex sqlExecer) error {
+			return putLessonsOn(ex, Lessons{RoleKey: roleKey, Text: content["text"], Tombstoned: historyTombstoned(content)})
 		})
 	case docKindTaskDescription:
 		// T-e271. No doc cap: the description has never had a length ceiling on

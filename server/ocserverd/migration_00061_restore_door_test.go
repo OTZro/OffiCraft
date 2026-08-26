@@ -1,42 +1,44 @@
 package main
 
-// migration_00061_restore_door_test.go — T-2 step A, the SECOND door.
+// migration_00061_restore_door_test.go — T-2 step A's SECOND door, re-aimed by
+// step B.
 //
-// 00061 deleting every non-general `lessons` row only makes the table
-// non-general AT THAT INSTANT. document_history is a separate table and the
-// restore route writes straight back into `lessons` from it: given a retained
-// revision under the key "<role_key>::<task_type>", the lessons arm of
-// restoreDocumentHistory splits the key and hands the task_type it finds to
-// putLessonsOn VERBATIM — no arm of that path compares it to 'general'.
+// WHAT THIS FILE USED TO ASSERT, and why it cannot any more. 00061 deleted every
+// non-general `lessons` row, and the reviewer's measured escape was the restore
+// route: given a retained revision under the key "<role_key>::<task_type>", the
+// lessons arm of restoreDocumentHistory split the key and handed the task_type
+// it found to putLessonsOn VERBATIM, so a restore could put a non-general row
+// straight back. The old test reproduced that end to end through the real
+// handlers: write a non-general lessons doc, run the migration, restore, and
+// require that no non-general row came back.
 //
-// So a migration that deletes only the lessons rows leaves a live writer that
-// can put a non-general row back, and the whole reason 00061 exists is that no
-// such row may survive to the later column drop (where two task_types under one
-// role_key fold onto one key). This is the end-to-end proof that the door is
-// shut: write a non-general lessons doc through the real handler, run the
-// migration, then push the retained revision back through the real restore
-// handler, and require that `lessons` still holds no non-general row.
+// 🔴 THAT REPRODUCTION IS NO LONGER WRITABLE, and that is the point of step B
+// rather than a gap in it. There is no `task_type` — not on the write face
+// (HandleReplaceLessonsApiLessonsRoleKeyPost takes one path parameter), not in
+// the row (00062 dropped the column), and not in the history key. The first
+// line of the old fixture — "write a lessons doc under task_type
+// 'review-pr-seth'" — cannot be expressed, so a test that still tried would be
+// asserting over a scenario it could not construct.
 //
-// It is deliberately an END-TO-END test through the HTTP handlers rather than a
-// SQL-level one: the gap it guards is precisely that the SQL looked complete
-// while the handler above it did not.
+// What replaces it is the STRUCTURAL statement, which is stronger than the
+// behavioural one it retires: the door is not guarded, it is gone. Both halves
+// are checked here — the column is absent from the live schema, and a restore
+// through the real handler lands under the BARE role_key rather than under any
+// composite. TestMigration00062* holds the migration's own side.
 
 import (
 	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/pressly/goose/v3"
 )
 
 // migration00061RestoreWorld returns a fully migrated API server together with
-// the handle its DAL writes through, because this test has to drive goose over
-// the same database the handlers use.
+// the handle its DAL writes through, because these tests read the schema of the
+// same database the handlers use.
 func migration00061RestoreWorld(t *testing.T) (*apiServer, *sql.DB) {
 	t.Helper()
 	db, err := openSQLite(filepath.Join(t.TempDir(), "restore-door.db"))
@@ -52,98 +54,113 @@ func migration00061RestoreWorld(t *testing.T) (*apiServer, *sql.DB) {
 }
 
 // replaceLessonsThroughHandler drives the real write face, which is what
-// retains a document_history revision under "<role_key>::<task_type>".
-func replaceLessonsThroughHandler(t *testing.T, api *apiServer, role, taskType, text string) {
+// retains a document_history revision under the role_key.
+func replaceLessonsThroughHandler(t *testing.T, api *apiServer, role, text string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	api.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(rec, taskReq(t, http.MethodPost,
-		"/api/lessons/"+role+"/"+taskType, map[string]any{"text": text}, "owner", "owner"),
-		role, taskType)
+	api.HandleReplaceLessonsApiLessonsRoleKeyPost(rec, taskReq(t, http.MethodPost,
+		"/api/lessons/"+role, map[string]any{"text": text}, "owner", "owner"),
+		role)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("replace_lessons(%s, %s): %d %s", role, taskType, rec.Code, rec.Body.String())
+		t.Fatalf("replace_lessons(%s): %d %s", role, rec.Code, rec.Body.String())
 	}
 }
 
-// rerun00061 re-executes the migration's Up against a database that already has
-// it. goose refuses to re-run an applied version, so the cycle goes down to the
-// version below it (00061's Down is a declared no-op) and back up — which is
-// what actually re-executes the DELETEs.
-func rerun00061(t *testing.T, db *sql.DB) {
+// lessonsColumns reads the live column list of the `lessons` table.
+func lessonsColumns(t *testing.T, db *sql.DB) []string {
 	t.Helper()
-	if err := goose.DownTo(db, "migrations", migration00061PriorVersion); err != nil {
-		t.Fatalf("down to %d: %v", migration00061PriorVersion, err)
-	}
-	if err := runMigrations(db); err != nil {
-		t.Fatalf("goose up through %d: %v", migration00061Version, err)
-	}
-}
-
-// nonGeneralLessonsRows lists every surviving non-general row as "role/task_type".
-func nonGeneralLessonsRows(t *testing.T, db *sql.DB) []string {
-	t.Helper()
-	rows, err := db.Query(`SELECT role_key, task_type FROM lessons WHERE task_type <> 'general'`)
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('lessons')`)
 	if err != nil {
-		t.Fatalf("scan lessons: %v", err)
+		t.Fatalf("pragma_table_info(lessons): %v", err)
 	}
 	defer rows.Close()
 	var out []string
 	for rows.Next() {
-		var role, tt string
-		if err := rows.Scan(&role, &tt); err != nil {
+		var name string
+		if err := rows.Scan(&name); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		out = append(out, role+"/"+tt)
+		out = append(out, name)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows: %v", err)
 	}
-	sort.Strings(out)
 	return out
 }
 
-// TestMigration00061RestoreCannotPutANonGeneralLessonBack is the regression
-// this fix exists for. It reproduces the reviewer's measured scenario exactly:
-// two writes of a non-general lessons doc (the second is what retains the
-// first), the migration, then the restore.
-func TestMigration00061RestoreCannotPutANonGeneralLessonBack(t *testing.T) {
-	api, db := migration00061RestoreWorld(t)
-	const role, taskType = seedRoleAssistant, "review-pr-seth"
-	key := role + "::" + taskType
+// TestLessonsHasNoTaskTypeColumnAfterMigrations is the structural half. It is
+// the assertion a revert of 00062 has to turn red.
+func TestLessonsHasNoTaskTypeColumnAfterMigrations(t *testing.T) {
+	_, db := migration00061RestoreWorld(t)
+	cols := lessonsColumns(t, db)
+	// ANTI-VACUITY: a typo in the pragma, or a table that does not exist, would
+	// return an empty list and let the absence check below pass over nothing.
+	if len(cols) == 0 {
+		t.Fatalf("pragma_table_info returned no columns for `lessons` — the probe is " +
+			"broken, so the absence assertion below would prove nothing")
+	}
+	var haveRoleKey bool
+	for _, c := range cols {
+		if c == "task_type" {
+			t.Fatalf("THE LESSONS CLASSIFICATION AXIS IS BACK: `lessons` still carries a "+
+				"task_type column (%s). T-2 removed it so that no write face, and no "+
+				"restore, can choose a bucket the caller did not mean; a column here is "+
+				"the axis existing again no matter what the handlers accept",
+				strings.Join(cols, ", "))
+		}
+		if c == "role_key" {
+			haveRoleKey = true
+		}
+	}
+	if !haveRoleKey {
+		t.Fatalf("`lessons` has no role_key column (%s) — the table is not the one this "+
+			"test believes it is reading", strings.Join(cols, ", "))
+	}
+}
 
-	replaceLessonsThroughHandler(t, api, role, taskType, "v1 — the revision that gets retained")
-	replaceLessonsThroughHandler(t, api, role, taskType, "v2 — the write that retains v1")
+// TestLessonsRestoreLandsUnderTheBareRoleKey is the behavioural half: whatever
+// the restore writes, it is addressed by role_key alone. This is what used to
+// be "the restore cannot choose a non-general task_type" — the same property,
+// stated in the vocabulary that survives the removal.
+func TestLessonsRestoreLandsUnderTheBareRoleKey(t *testing.T) {
+	api, _ := migration00061RestoreWorld(t)
+	const role = seedRoleAssistant
 
-	stored, err := api.dal.ListDocumentHistory("lessons", key)
+	replaceLessonsThroughHandler(t, api, role, "v1 — the revision that gets retained")
+	replaceLessonsThroughHandler(t, api, role, "v2 — the write that retains v1")
+
+	stored, err := api.dal.ListDocumentHistory("lessons", role)
 	if err != nil {
 		t.Fatalf("list history: %v", err)
 	}
 	if len(stored) == 0 {
 		t.Fatalf("no retained revision under %q — the fixture did not land, so nothing "+
-			"below would be measuring anything", key)
-	}
-
-	rerun00061(t, db)
-
-	// Sanity: the migration did its stated job on the lessons table itself.
-	// Without this the assertion below could pass because nothing ever wrote.
-	if left := nonGeneralLessonsRows(t, db); len(left) != 0 {
-		t.Fatalf("00061 did not even clear the lessons table: %s", strings.Join(left, ", "))
+			"below would be measuring anything", role)
 	}
 
 	rec := httptest.NewRecorder()
 	api.HandleRestoreDocumentHistoryApiDocumentHistoryKindKeyIdRestorePost(rec,
-		taskReq(t, http.MethodPost, "/api/document-history/lessons/"+key+"/"+
+		taskReq(t, http.MethodPost, "/api/document-history/lessons/"+role+"/"+
 			strconv.FormatInt(stored[0].ID, 10)+"/restore", nil, "owner", "owner"),
-		"lessons", key, stored[0].ID)
+		"lessons", role, stored[0].ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("restore: %d %s", rec.Code, rec.Body.String())
+	}
 
-	if left := nonGeneralLessonsRows(t, db); len(left) != 0 {
-		t.Errorf("THE RESTORE DOOR IS OPEN: after 00061 the restore of retained revision %d "+
-			"under key %q answered %d and put %d non-general lessons row(s) back: %s. "+
-			"00061 exists so that no non-general row survives to the later task_type column "+
-			"drop, where two task_types under one role_key fold onto one key — a restore that "+
-			"can reseed one makes the whole migration a momentary state rather than a "+
-			"guarantee. The migration must delete the matching document_history rows in the "+
-			"SAME change, the way DeleteLessonsForRole already cascades onto them",
-			stored[0].ID, key, rec.Code, len(left), strings.Join(left, ", "))
+	overlay, err := api.dal.GetLessons(role)
+	if err != nil {
+		t.Fatalf("get lessons: %v", err)
+	}
+	if overlay == nil {
+		t.Fatal("the restore wrote no lessons overlay at all")
+	}
+	if overlay.RoleKey != role {
+		t.Errorf("the restore landed under role_key %q, want %q — a restore that writes "+
+			"anywhere but the key it was addressed by is the shape of the bug T-2 removed "+
+			"the classification axis to end", overlay.RoleKey, role)
+	}
+	if !strings.Contains(overlay.Text, "v1") {
+		t.Errorf("the restored text is %q, want the retained v1 — the restore put back "+
+			"something other than the revision it was handed", overlay.Text)
 	}
 }

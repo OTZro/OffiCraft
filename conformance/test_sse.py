@@ -432,7 +432,7 @@ def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, ow
             "/api/roles", json={"name": f"Conf Topic Role {tag}"},
             headers=_auth(owner_token))),
         ("lessons", lambda: client.post(
-            "/api/lessons/assistant/general", json={"text": f"topic probe {tag}"},
+            "/api/lessons/assistant", json={"text": f"topic probe {tag}"},
             headers=_auth(owner_token))),
         # insight — the ORDINARY write face (replace_insight), not the restore
         # path. Pinned here because a doc write that reaches the DB but never
@@ -1201,9 +1201,13 @@ def test_warden_command_band_start_frame(
         cmd = frame["data"]
         assert cmd["rpc"] == "start", cmd
         args = cmd["args"]
+        # EXACT set, not a subset: an extra key here is a field the warden was
+        # never told about. `task_type` was in this set until T-2 — it was
+        # sourced from the lessons bucket and carried for parity only — and its
+        # removal is what this equality now pins.
         assert set(args) == {
             "member_id", "persona_context", "member_token", "role",
-            "task_type", "runtime", "model", "effort", "session_name",
+            "runtime", "model", "effort", "session_name",
         }, args
         assert args["member_id"] == member_id, args
         assert args["runtime"] == "claude", args

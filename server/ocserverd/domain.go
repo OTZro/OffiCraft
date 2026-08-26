@@ -317,14 +317,12 @@ func ValidateRoleDef(rd RoleDef) error {
 	return nil
 }
 
-// ValidateLessons enforces the lessons-overlay invariants: the composite
-// (role_key, task_type) key must be fully populated.
+// ValidateLessons enforces the lessons-overlay invariant: role_key IS the key
+// (T-2 dropped the task_type half of the old composite), so it must be
+// populated.
 func ValidateLessons(l Lessons) error {
 	if l.RoleKey == "" {
 		return errors.New("lessons requires a non-empty role_key")
-	}
-	if l.TaskType == "" {
-		return errors.New("lessons requires a non-empty task_type")
 	}
 	return nil
 }

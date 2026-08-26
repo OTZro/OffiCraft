@@ -888,9 +888,19 @@ type docSizeDTO struct {
 // roleDocSizesDTO is one role's three capped documents, sizes only. Measured on
 // the FOLDED doc (overlay ⊕ seed) — the same text the per-document GETs report,
 // because the sizes come from the very same fold* helpers those handlers use.
-// Lessons is the DEFAULT bucket only: the write side does not constrain the
-// task_type, so lessons under another bucket name spend the same cap and are
-// not on this wire (see api_doc_sizes.go).
+// Lessons is one row per role, whole: T-2 removed the task_type axis, so there
+// is no longer a second BUCKET a write could spend the same cap under while
+// staying off this wire.
+//
+// 🔴 THAT IS NOT THE SAME AS "everything capped is on this wire", and the
+// distinction is worth a line because an earlier draft of peek_doc_sizes' tool
+// description collapsed the two into a promise a single call falsifies. This
+// DTO is keyed by ROLE: the handler walks listRoleKeys(). The lessons write
+// face never compares role_key against that roster (see replace_lessons, whose
+// own description says so), so an admin or the owner can create a lessons
+// document under a name no role carries — it spends the same cap and has no
+// role to hang off, so it never appears here. Measured in
+// TestPeekDocSizesDescriptionDoesNotPromiseCoverageItCannotGive.
 type roleDocSizesDTO struct {
 	RoleKey string     `json:"role_key"`
 	Duty    docSizeDTO `json:"duty"`
@@ -930,7 +940,6 @@ type lessonsDTO struct {
 	SizeChars     int    `json:"size_chars"`
 	CapChars      int    `json:"cap_chars"`
 	RoleKey       string `json:"role_key"`
-	TaskType      string `json:"task_type"`
 	Text          string `json:"text"`
 	OwnerID       string `json:"owner_id"`
 	SchemaVersion int    `json:"schema_version"`
@@ -949,8 +958,7 @@ type lessonsDTO struct {
 // insightDTO is the per-role INSIGHT doc on the wire (T-3809) — the third block
 // of the role journal, beside Duty (role_def) and Learning (lessons).
 //
-// Deliberately NOT lessonsDTO minus a field: there is no task_type (that axis
-// belongs to lessons alone), and the seed — added by T-e1e3 — is PER-ROLE
+// Deliberately NOT lessonsDTO minus a field: the seed — added by T-e1e3 — is PER-ROLE
 // (`seeds/insight_<roleKey>.md`), never lessons' one-shared-file.
 //
 // IsDefault means "this role has never written its own insight". 🔴 It no
@@ -996,7 +1004,7 @@ type insightDTO struct {
 }
 
 // insightPatchResultDTO is the patch_insight receipt — the insight twin of
-// lessonsPatchResultDTO, minus task_type. SizeChars is CHARACTERS (runes), the
+// lessonsPatchResultDTO. SizeChars is CHARACTERS (runes), the
 // cap's unit, per the owner's 2026-07-31 ruling that a size field must carry
 // its unit in its name.
 type insightPatchResultDTO struct {
@@ -1012,7 +1020,6 @@ type insightPatchResultDTO struct {
 
 type lessonsPatchResultDTO struct {
 	RoleKey       string `json:"role_key"`
-	TaskType      string `json:"task_type"`
 	AppliedEdits  int    `json:"applied_edits"`
 	SizeChars     int    `json:"size_chars"`
 	CapChars      int    `json:"cap_chars"`
@@ -1429,11 +1436,10 @@ type taskStepNoteReceiptDTO struct {
 }
 
 type bootstrapDTO struct {
-	Role     string  `json:"role"`
-	Name     string  `json:"name"`
-	TaskType string  `json:"task_type"`
-	Context  string  `json:"context"`
-	Token    *string `json:"token"`
+	Role    string  `json:"role"`
+	Name    string  `json:"name"`
+	Context string  `json:"context"`
+	Token   *string `json:"token"`
 }
 
 // ── tasks (M3) ───────────────────────────────────────────────────────────────

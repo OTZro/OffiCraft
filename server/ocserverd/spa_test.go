@@ -94,7 +94,7 @@ func TestPathMatchesTemplate(t *testing.T) {
 		{"/api/members/{member_id}", "/api/members/kyle", true},
 		{"/api/members/{member_id}", "/api/members/", false},
 		{"/api/members/{member_id}", "/api/members/kyle/activate", false},
-		{"/api/lessons/{role_key}/{task_type}", "/api/lessons/writer/build", true},
+		{"/api/document-history/{kind}/{key}", "/api/document-history/lessons/writer", true},
 		{"/api/machines/{machine_id}/boot-command", "/api/machines/mac1/boot-command", true},
 		{"/api/machines/{machine_id}/boot-command", "/api/machines/mac1/uninstall", false},
 	}

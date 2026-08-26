@@ -721,8 +721,7 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 	// P5b convergence: the SAME member `start` shape the reconcile producer
 	// dispatches (spec/sse.md §7) — member_id is the ow- id, the warden derives
 	// session member-<ow-id> and the agents/ workdir. Role is presentation only
-	// (a worker has no role doc); task_type stays "" (the worker's whole context
-	// is the server-assembled persona).
+	// (a worker has no role doc).
 	frame, err := directedFrameText(wardenCommandTopic, wardenCommandFrame{
 		RPC: reconcileCmdStart,
 		Args: wardenStartArgs{

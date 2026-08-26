@@ -30,7 +30,7 @@ owner 原話（2026-07-31，逐字）：
 | 保留 | `documentHistoryKeep = 3`，寫入時在同一交易內修剪 | `server/ocserverd/dal.go` |
 | 寫入 | 唯一入口 `DAL.SaveWithDocumentHistory(kind, key, actor, snapshot, write)`；`snapshot` 在交易內重讀「寫入前」的活文件 | 同上 |
 | 空文件 | 快照為空或 `{}` 時不留版 ⇒ 第一次寫入沒有歷史 | 同上 |
-| kind／key | `global_context`/`global`、`role_definition`/`<role_key>`、`lessons`/`<role_key>::<task_type>`、`task_manual`/`<type_key>` | `server/ocserverd/api_document_history.go` |
+| kind／key | `global_context`/`global`、`role_definition`/`<role_key>`、`lessons`/`<role_key>`、`task_manual`/`<type_key>` | `server/ocserverd/api_document_history.go` |
 | 手冊快照內容 | `{purpose, fields, sop_md, learnings}` **四欄同一包** | `server/ocserverd/api_taskmanuals.go` |
 | 角色誌快照內容 | `{text, tombstoned}` — **本來就只有自己一欄** | `server/ocserverd/api_roles.go` |
 | 讀取 | `GET /api/document-history/{kind}/{key}`（MCP `list_document_history`，floor=machine） | `server/ocserverd/routes.go` |

@@ -248,7 +248,7 @@ func TestWorkerBootContextIsTheStaffFoldMinusThePersona(t *testing.T) {
 		t.Fatalf("put user context: %v", err)
 	}
 
-	staff, err := s.buildBootContext("", nil, "")
+	staff, err := s.buildBootContext("", nil)
 	if err != nil || staff == nil {
 		t.Fatalf("buildBootContext: %v", err)
 	}

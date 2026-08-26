@@ -81,7 +81,7 @@ func replaceLessons(t *testing.T, srv *httptest.Server, tok, text string, allowS
 	if err != nil {
 		t.Fatal(err)
 	}
-	return doJSON(t, "POST", srv.URL+"/api/lessons/assistant/general", tok, string(blob))
+	return doJSON(t, "POST", srv.URL+"/api/lessons/assistant", tok, string(blob))
 }
 
 // capErrMessage pulls the refusal text out of the flat error envelope.
@@ -97,13 +97,13 @@ func TestContextDocCap_OverCapWriteIsRefused(t *testing.T) {
 	t.Run("replace_lessons", func(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
 		before := capDoc(t, contextDocMaxCharsDefault-10)
-		seedLessonsOverlay(t, dal, "assistant", "general", before)
+		seedLessonsOverlay(t, dal, "assistant", before)
 
 		status, data := replaceLessons(t, srv, tok, capDoc(t, contextDocMaxCharsDefault+1), false)
 		if status != http.StatusBadRequest {
 			t.Fatalf("over-cap replace must be refused, got %d: %v", status, data)
 		}
-		if got := getLessonsText(t, srv.URL, tok, "assistant", "general"); got != before {
+		if got := getLessonsText(t, srv.URL, tok, "assistant"); got != before {
 			t.Fatalf("refused write must leave the doc byte-identical (%d runes stored)",
 				utf8.RuneCountInString(got))
 		}
@@ -112,16 +112,16 @@ func TestContextDocCap_OverCapWriteIsRefused(t *testing.T) {
 	t.Run("patch_lessons", func(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
 		before := capDoc(t, contextDocMaxCharsDefault-10)
-		seedLessonsOverlay(t, dal, "assistant", "general", before)
+		seedLessonsOverlay(t, dal, "assistant", before)
 
 		// The patch itself is tiny; what it PRODUCES is over the cap. The gate
 		// must judge the result, not the edit.
-		status, data := patchLessons(t, srv.URL, tok, "assistant", "general",
+		status, data := patchLessons(t, srv.URL, tok, "assistant",
 			`{"edits":[{"old":"","new":"`+strings.Repeat("z", 100)+`"}]}`)
 		if status != http.StatusBadRequest {
 			t.Fatalf("patch whose RESULT is over-cap must be refused, got %d: %v", status, data)
 		}
-		if got := getLessonsText(t, srv.URL, tok, "assistant", "general"); got != before {
+		if got := getLessonsText(t, srv.URL, tok, "assistant"); got != before {
 			t.Fatalf("refused patch must write nothing")
 		}
 	})
@@ -201,7 +201,7 @@ func TestContextDocCap_OverCapWriteIsRefused(t *testing.T) {
 func TestContextDocCap_LegalWritesAreNotRefused(t *testing.T) {
 	t.Run("replace_lessons_at_the_cap_exactly", func(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
-		seedLessonsOverlay(t, dal, "assistant", "general", capDoc(t, 500))
+		seedLessonsOverlay(t, dal, "assistant", capDoc(t, 500))
 
 		want := capDoc(t, contextDocMaxCharsDefault) // exactly L — the ≤ boundary
 		status, data := replaceLessons(t, srv, tok, want, false)
@@ -209,21 +209,21 @@ func TestContextDocCap_LegalWritesAreNotRefused(t *testing.T) {
 			t.Fatalf("a doc of exactly %d chars must be admitted, got %d: %v",
 				contextDocMaxCharsDefault, status, data)
 		}
-		if got := getLessonsText(t, srv.URL, tok, "assistant", "general"); got != want {
+		if got := getLessonsText(t, srv.URL, tok, "assistant"); got != want {
 			t.Fatalf("admitted write did not land")
 		}
 	})
 
 	t.Run("patch_lessons_growing_within_the_cap", func(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
-		seedLessonsOverlay(t, dal, "assistant", "general", capDoc(t, 500))
+		seedLessonsOverlay(t, dal, "assistant", capDoc(t, 500))
 
-		status, data := patchLessons(t, srv.URL, tok, "assistant", "general",
+		status, data := patchLessons(t, srv.URL, tok, "assistant",
 			`{"edits":[{"old":"","new":"\nan ordinary lesson learned this session\n"}]}`)
 		if status != http.StatusOK {
 			t.Fatalf("ordinary append must land, got %d: %v", status, data)
 		}
-		if !strings.Contains(getLessonsText(t, srv.URL, tok, "assistant", "general"),
+		if !strings.Contains(getLessonsText(t, srv.URL, tok, "assistant"),
 			"an ordinary lesson learned this session") {
 			t.Fatalf("admitted append did not land")
 		}
@@ -280,7 +280,7 @@ func TestContextDocCap_LegalWritesAreNotRefused(t *testing.T) {
 	// nowhere near the number the owner signed off on.
 	t.Run("chinese_prose_is_measured_in_runes", func(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
-		seedLessonsOverlay(t, dal, "assistant", "general", "起點")
+		seedLessonsOverlay(t, dal, "assistant", "起點")
 
 		want := strings.Repeat("教訓", 4500) // 9,000 runes, 27,000 bytes
 		if utf8.RuneCountInString(want) > contextDocMaxCharsDefault || len(want) <= contextDocMaxCharsDefault {
@@ -292,7 +292,7 @@ func TestContextDocCap_LegalWritesAreNotRefused(t *testing.T) {
 			t.Fatalf("a 9,000-CHARACTER doc must be admitted (the cap counts runes), got %d: %v",
 				status, data)
 		}
-		if getLessonsText(t, srv.URL, tok, "assistant", "general") != want {
+		if getLessonsText(t, srv.URL, tok, "assistant") != want {
 			t.Fatalf("admitted write did not land")
 		}
 	})
@@ -310,14 +310,14 @@ func TestContextDocCap_LegalWritesAreNotRefused(t *testing.T) {
 func TestContextDocCap_OverCapDocMayStillShrink(t *testing.T) {
 	t.Run("replace_lessons", func(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
-		seedLessonsOverlay(t, dal, "assistant", "general", capDoc(t, contextDocMaxCharsDefault+33029))
+		seedLessonsOverlay(t, dal, "assistant", capDoc(t, contextDocMaxCharsDefault+33029))
 
 		want := capDoc(t, contextDocMaxCharsDefault+30000) // still far over the cap, but SHORTER
 		status, data := replaceLessons(t, srv, tok, want, false)
 		if status != http.StatusOK {
 			t.Fatalf("an over-cap doc must still be allowed to shrink, got %d: %v", status, data)
 		}
-		if getLessonsText(t, srv.URL, tok, "assistant", "general") != want {
+		if getLessonsText(t, srv.URL, tok, "assistant") != want {
 			t.Fatalf("the shrinking write did not land")
 		}
 	})
@@ -325,14 +325,14 @@ func TestContextDocCap_OverCapDocMayStillShrink(t *testing.T) {
 	t.Run("patch_lessons", func(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
 		before := capDoc(t, contextDocMaxCharsDefault+33029)
-		seedLessonsOverlay(t, dal, "assistant", "general", before)
+		seedLessonsOverlay(t, dal, "assistant", before)
 
-		status, data := patchLessons(t, srv.URL, tok, "assistant", "general",
+		status, data := patchLessons(t, srv.URL, tok, "assistant",
 			`{"edits":[{"old":"`+capDropAnchor+`","new":""}]}`)
 		if status != http.StatusOK {
 			t.Fatalf("an over-cap doc must still be patchable downward, got %d: %v", status, data)
 		}
-		got := getLessonsText(t, srv.URL, tok, "assistant", "general")
+		got := getLessonsText(t, srv.URL, tok, "assistant")
 		if utf8.RuneCountInString(got) >= utf8.RuneCountInString(before) {
 			t.Fatalf("the shrinking patch did not land: %d runes", utf8.RuneCountInString(got))
 		}
@@ -401,7 +401,7 @@ func TestContextDocCap_EqualLengthOverCapIsRefused(t *testing.T) {
 	t.Run("replace_lessons", func(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
 		before := capDoc(t, contextDocMaxCharsDefault+2132)
-		seedLessonsOverlay(t, dal, "assistant", "general", before)
+		seedLessonsOverlay(t, dal, "assistant", before)
 
 		// Same rune count, different content — a wholesale rewrite that makes
 		// no progress downward.
@@ -410,7 +410,7 @@ func TestContextDocCap_EqualLengthOverCapIsRefused(t *testing.T) {
 		if status != http.StatusBadRequest {
 			t.Fatalf("an equal-length over-cap rewrite must be refused, got %d: %v", status, data)
 		}
-		if getLessonsText(t, srv.URL, tok, "assistant", "general") != before {
+		if getLessonsText(t, srv.URL, tok, "assistant") != before {
 			t.Fatalf("refused write must leave the doc byte-identical")
 		}
 	})
@@ -418,15 +418,15 @@ func TestContextDocCap_EqualLengthOverCapIsRefused(t *testing.T) {
 	t.Run("patch_lessons", func(t *testing.T) {
 		srv, dal, tok := capLessonsServer(t)
 		before := capDoc(t, contextDocMaxCharsDefault+2132)
-		seedLessonsOverlay(t, dal, "assistant", "general", before)
+		seedLessonsOverlay(t, dal, "assistant", before)
 
 		// The two anchors have the same rune length by construction.
-		status, data := patchLessons(t, srv.URL, tok, "assistant", "general",
+		status, data := patchLessons(t, srv.URL, tok, "assistant",
 			`{"edits":[{"old":"`+capDropAnchor+`","new":"`+capKeepAnchor+`"}]}`)
 		if status != http.StatusBadRequest {
 			t.Fatalf("an equal-length over-cap patch must be refused, got %d: %v", status, data)
 		}
-		if getLessonsText(t, srv.URL, tok, "assistant", "general") != before {
+		if getLessonsText(t, srv.URL, tok, "assistant") != before {
 			t.Fatalf("refused patch must write nothing")
 		}
 	})
@@ -488,7 +488,7 @@ func TestContextDocCap_EqualLengthOverCapIsRefused(t *testing.T) {
 func TestContextDocCap_RefusalIsActionableAndAdvertisesNoBypass(t *testing.T) {
 	srv, dal, tok := capLessonsServer(t)
 	before := capDoc(t, contextDocMaxCharsDefault-10)
-	seedLessonsOverlay(t, dal, "assistant", "general", before)
+	seedLessonsOverlay(t, dal, "assistant", before)
 
 	attempt := capDoc(t, contextDocMaxCharsDefault+250)
 	status, data := replaceLessons(t, srv, tok, attempt, false)
@@ -522,13 +522,13 @@ func TestContextDocCap_RefusalIsActionableAndAdvertisesNoBypass(t *testing.T) {
 func TestContextDocCap_AllowShrinkIsNotABypass(t *testing.T) {
 	srv, dal, tok := capLessonsServer(t)
 	before := capDoc(t, contextDocMaxCharsDefault-10)
-	seedLessonsOverlay(t, dal, "assistant", "general", before)
+	seedLessonsOverlay(t, dal, "assistant", before)
 
 	status, data := replaceLessons(t, srv, tok, capDoc(t, contextDocMaxCharsDefault+1), true)
 	if status != http.StatusBadRequest {
 		t.Fatalf("allow_shrink must not admit an over-cap write, got %d: %v", status, data)
 	}
-	if getLessonsText(t, srv.URL, tok, "assistant", "general") != before {
+	if getLessonsText(t, srv.URL, tok, "assistant") != before {
 		t.Fatalf("refused write must leave the doc byte-identical")
 	}
 }
@@ -540,7 +540,7 @@ func TestContextDocCap_AllowShrinkIsNotABypass(t *testing.T) {
 // only ever converge in small steps.
 func TestContextDocCap_ShrinkGuardAndCapCompose(t *testing.T) {
 	srv, dal, tok := capLessonsServer(t)
-	seedLessonsOverlay(t, dal, "assistant", "general", capDoc(t, contextDocMaxCharsDefault+33029))
+	seedLessonsOverlay(t, dal, "assistant", capDoc(t, contextDocMaxCharsDefault+33029))
 
 	small := capDoc(t, 4000) // under the cap, but under a tenth of the doc
 	if status, data := replaceLessons(t, srv, tok, small, false); status != http.StatusOK {
@@ -554,19 +554,19 @@ func TestContextDocCap_ShrinkGuardAndCapCompose(t *testing.T) {
 	// deleting all of it leaves under a tenth behind: exactly the >90% shrink
 	// LessonsShrinkBlocked exists to catch.
 	before := capDoc(t, contextDocMaxCharsDefault+33029)
-	seedLessonsOverlay(t, dal, "assistant", "general", before)
+	seedLessonsOverlay(t, dal, "assistant", before)
 	head := strings.Repeat("a", strings.Index(before, capDropAnchor))
 	deepShrink := `{"edits":[{"old":"` + capDropAnchor + `","new":""},{"old":"` + head + `","new":""}]}`
-	status, _ := patchLessons(t, srv.URL, tok, "assistant", "general", deepShrink)
+	status, _ := patchLessons(t, srv.URL, tok, "assistant", deepShrink)
 	if status != http.StatusBadRequest {
 		t.Fatalf("a >90%% shrink must still need allow_shrink, got %d", status)
 	}
-	status, data := patchLessons(t, srv.URL, tok, "assistant", "general",
+	status, data := patchLessons(t, srv.URL, tok, "assistant",
 		`{"allow_shrink":true,`+deepShrink[1:])
 	if status != http.StatusOK {
 		t.Fatalf("allow_shrink must still admit a deep shrink to under the cap, got %d: %v", status, data)
 	}
-	if n := utf8.RuneCountInString(getLessonsText(t, srv.URL, tok, "assistant", "general")); n > contextDocMaxCharsDefault {
+	if n := utf8.RuneCountInString(getLessonsText(t, srv.URL, tok, "assistant")); n > contextDocMaxCharsDefault {
 		t.Fatalf("the deep shrink did not land: %d runes", n)
 	}
 }
@@ -582,7 +582,7 @@ func TestContextDocCap_SeedRoleFirstWriteIsCapped(t *testing.T) {
 	srv, _, tok := capLessonsServer(t)
 
 	// No overlay was seeded: this role folds to the shared seed.
-	if got := getLessonsText(t, srv.URL, tok, "r-fresh", "general"); utf8.RuneCountInString(got) > contextDocMaxCharsDefault {
+	if got := getLessonsText(t, srv.URL, tok, "r-fresh"); utf8.RuneCountInString(got) > contextDocMaxCharsDefault {
 		t.Fatalf("fixture assumption broken: the seed itself is over the cap (%d runes)",
 			utf8.RuneCountInString(got))
 	}
@@ -590,7 +590,7 @@ func TestContextDocCap_SeedRoleFirstWriteIsCapped(t *testing.T) {
 	if status != http.StatusBadRequest {
 		t.Fatalf("a first over-cap write on a seed role must be refused, got %d: %v", status, data)
 	}
-	status, data = patchLessons(t, srv.URL, tok, "r-fresh", "general",
+	status, data = patchLessons(t, srv.URL, tok, "r-fresh",
 		`{"edits":[{"old":"","new":"`+strings.Repeat("z", contextDocMaxCharsDefault+1)+`"}]}`)
 	if status != http.StatusBadRequest {
 		t.Fatalf("a first over-cap PATCH on a seed role must be refused, got %d: %v", status, data)
@@ -604,7 +604,7 @@ func replaceLessons2(t *testing.T, srv *httptest.Server, tok, roleKey, text stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	return doJSON(t, "POST", srv.URL+"/api/lessons/"+roleKey+"/general", tok, string(blob))
+	return doJSON(t, "POST", srv.URL+"/api/lessons/"+roleKey, tok, string(blob))
 }
 
 // ── task-manual helpers ──────────────────────────────────────────────────────

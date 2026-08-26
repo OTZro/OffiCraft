@@ -120,7 +120,7 @@ func (s *apiServer) HandleBootstrapApiBootstrapPost(w http.ResponseWriter, r *ht
 		}
 		member = m
 	}
-	boot, err := s.buildBootContext(strOrEmpty(body.Role), member, strOrEmpty(body.TaskType))
+	boot, err := s.buildBootContext(strOrEmpty(body.Role), member)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -140,10 +140,9 @@ func (s *apiServer) HandleBootstrapApiBootstrapPost(w http.ResponseWriter, r *ht
 		token = &minted
 	}
 	writeJSON(w, http.StatusOK, bootstrapDTO{
-		Role:     boot.RoleKey,
-		Name:     boot.Name,
-		TaskType: boot.TaskType,
-		Context:  boot.Context,
-		Token:    token,
+		Role:    boot.RoleKey,
+		Name:    boot.Name,
+		Context: boot.Context,
+		Token:   token,
 	})
 }

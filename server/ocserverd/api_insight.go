@@ -339,7 +339,7 @@ func (s *apiServer) HandlePatchInsightApiInsightRoleKeyPatchPost(w http.Response
 	// never changed. Writing anyway burns one of the THREE document history
 	// slots on a snapshot of text nobody replaced, silently shortening the
 	// owner's undo path. Full reasoning at the patch_lessons twin (api_roles.go,
-	// HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost). The receipt below
+	// HandlePatchLessonsApiLessonsRoleKeyPatchPost). The receipt below
 	// stays outside the gate and unchanged.
 	if next != current.Text {
 		if err := s.dal.SaveWithDocumentHistory("insight", roleKey, currentActor(r), insightSnapshotIn(roleKey), func(ex sqlExecer) error {

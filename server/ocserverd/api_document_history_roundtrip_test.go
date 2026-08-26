@@ -91,27 +91,27 @@ func TestDocumentHistoryRoundTripsARoleDefinition(t *testing.T) {
 	}
 }
 
-func TestDocumentHistoryRoundTripsLessonsUnderItsPairKey(t *testing.T) {
+func TestDocumentHistoryRoundTripsLessonsUnderItsRoleKey(t *testing.T) {
 	f := newHistoryFixture(t)
-	role, taskType := seedRoleAssistant, "tm-history"
+	role := seedRoleAssistant
 	for _, text := range []string{"lesson one", "lesson two", "lesson three"} {
 		rec := httptest.NewRecorder()
-		f.api.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(rec,
-			f.req(http.MethodPost, "/api/lessons/"+role+"/"+taskType, map[string]any{"text": text}),
-			role, taskType)
+		f.api.HandleReplaceLessonsApiLessonsRoleKeyPost(rec,
+			f.req(http.MethodPost, "/api/lessons/"+role, map[string]any{"text": text}),
+			role)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("replace lessons %q: status=%d body=%s", text, rec.Code, rec.Body.String())
 		}
 	}
 
-	key := role + "::" + taskType
+	key := role
 	history := f.list("lessons", key)
 	if len(history) == 0 || history[0].Content["text"] != "lesson two" {
 		t.Fatalf("retained lessons history = %+v, want the replaced \"lesson two\" newest", history)
 	}
 
 	f.restore("lessons", key, history[0].Id)
-	current, err := f.api.foldLessonsDTO(role, taskType)
+	current, err := f.api.foldLessonsDTO(role)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,13 +119,32 @@ func TestDocumentHistoryRoundTripsLessonsUnderItsPairKey(t *testing.T) {
 		t.Fatalf("restored lessons = %q, want \"lesson two\"", current.Text)
 	}
 
-	// The pair key is what addresses the document: a key that names no task
-	// type addresses nothing and must be refused rather than read as the role.
+	// The BARE role_key is what addresses the document since T-2, and the old
+	// composite is REFUSED rather than silently re-split back onto this role's
+	// series. Two properties in one answer: nothing re-derives the role from
+	// the composite (the axis is not back as a parsing rule), and the caller is
+	// told so instead of being handed an empty list it would read as "this role
+	// has no history". An earlier cut of T-2 answered 200-with-empty here; that
+	// also let the RESTORE face through, which materialised a lessons row under
+	// the composite key — see api_document_history_lessons_key_t2_test.go.
 	rec := httptest.NewRecorder()
+	legacy := role + "::general"
 	f.api.HandleListDocumentHistoryApiDocumentHistoryKindKeyGet(rec,
-		f.req(http.MethodGet, "/api/document-history/lessons/"+role, nil), "lessons", role)
+		f.req(http.MethodGet, "/api/document-history/lessons/"+legacy, nil), "lessons", legacy)
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("list lessons history without a task type: status=%d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("list lessons history under the pre-T-2 composite key %q: status=%d body=%s, want 400",
+			legacy, rec.Code, rec.Body.String())
+	}
+	if current, err := f.api.foldLessonsDTO(role); err != nil || current.Text != "lesson two" {
+		t.Fatalf("the refused listing disturbed the role's live lessons: %+v, %v", current, err)
+	}
+
+	// A BLANK key still addresses nothing and is still a 400.
+	rec = httptest.NewRecorder()
+	f.api.HandleListDocumentHistoryApiDocumentHistoryKindKeyGet(rec,
+		f.req(http.MethodGet, "/api/document-history/lessons/", nil), "lessons", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("list lessons history with a blank key: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -138,15 +157,15 @@ func TestDocumentHistoryRoundTripsLessonsUnderItsPairKey(t *testing.T) {
 // case bite: three writes cannot show a shared series, a full turnover can.
 func TestRoleDefinitionAndLessonsKeepSeparateVersionSeries(t *testing.T) {
 	f := newHistoryFixture(t)
-	role, taskType := seedRoleAssistant, "tm-independence"
-	lessonsKey := role + "::" + taskType
+	role := seedRoleAssistant
+	lessonsKey := role
 
 	writeLessons := func(text string) {
 		t.Helper()
 		rec := httptest.NewRecorder()
-		f.api.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(rec,
-			f.req(http.MethodPost, "/api/lessons/"+role+"/"+taskType, map[string]any{"text": text}),
-			role, taskType)
+		f.api.HandleReplaceLessonsApiLessonsRoleKeyPost(rec,
+			f.req(http.MethodPost, "/api/lessons/"+role, map[string]any{"text": text}),
+			role)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("replace lessons %q: status=%d body=%s", text, rec.Code, rec.Body.String())
 		}

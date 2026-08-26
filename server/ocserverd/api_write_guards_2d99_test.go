@@ -275,14 +275,14 @@ func TestPatchLessonsRejectsUnknownEditKeys(t *testing.T) {
 	srv, dal, secret := newLessonsTestServer(t)
 	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
 	const seeded = "line one\nline two\n"
-	seedLessonsOverlay(t, dal, "assistant", "general", seeded)
+	seedLessonsOverlay(t, dal, "assistant", seeded)
 
-	status, data := patchLessons(t, srv.URL, ownerTok, "assistant", "general",
+	status, data := patchLessons(t, srv.URL, ownerTok, "assistant",
 		`{"edits":[{"old_text":"line two","new_text":"line two changed"}]}`)
 	if status != http.StatusUnprocessableEntity {
 		t.Fatalf("unknown edit keys must be refused (422), got %d: %v", status, data)
 	}
-	if got := getLessonsText(t, srv.URL, ownerTok, "assistant", "general"); got != seeded {
+	if got := getLessonsText(t, srv.URL, ownerTok, "assistant"); got != seeded {
 		t.Fatalf("doc must be untouched:\n got: %q\nwant: %q", got, seeded)
 	}
 }
@@ -298,15 +298,15 @@ func TestPatchLessonsRejectsUnknownKeyAlongsideValidEdit(t *testing.T) {
 	srv, dal, secret := newLessonsTestServer(t)
 	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
 	const seeded = "line one\nline two\n"
-	seedLessonsOverlay(t, dal, "assistant", "general", seeded)
+	seedLessonsOverlay(t, dal, "assistant", seeded)
 
-	status, data := patchLessons(t, srv.URL, ownerTok, "assistant", "general",
+	status, data := patchLessons(t, srv.URL, ownerTok, "assistant",
 		`{"edits":[{"old":"line two","new":"line two changed","old_text":"stray"}]}`)
 	if status != http.StatusUnprocessableEntity {
 		t.Fatalf("a stray key on an otherwise valid edit must be refused (422), got %d: %v",
 			status, data)
 	}
-	if got := getLessonsText(t, srv.URL, ownerTok, "assistant", "general"); got != seeded {
+	if got := getLessonsText(t, srv.URL, ownerTok, "assistant"); got != seeded {
 		t.Fatalf("doc must be untouched:\n got: %q\nwant: %q", got, seeded)
 	}
 }
@@ -317,13 +317,13 @@ func TestPatchLessonsRejectsEmptyEdit(t *testing.T) {
 	srv, dal, secret := newLessonsTestServer(t)
 	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
 	const seeded = "line one\nline two\n"
-	seedLessonsOverlay(t, dal, "assistant", "general", seeded)
+	seedLessonsOverlay(t, dal, "assistant", seeded)
 
-	status, data := patchLessons(t, srv.URL, ownerTok, "assistant", "general", `{"edits":[{}]}`)
+	status, data := patchLessons(t, srv.URL, ownerTok, "assistant", `{"edits":[{}]}`)
 	if status != http.StatusUnprocessableEntity {
 		t.Fatalf("an edit with neither old nor new must be refused (422), got %d: %v", status, data)
 	}
-	if got := getLessonsText(t, srv.URL, ownerTok, "assistant", "general"); got != seeded {
+	if got := getLessonsText(t, srv.URL, ownerTok, "assistant"); got != seeded {
 		t.Fatalf("doc must be untouched:\n got: %q\nwant: %q", got, seeded)
 	}
 }
@@ -334,14 +334,14 @@ func TestPatchLessonsAnchorNotFoundIs400(t *testing.T) {
 	srv, dal, secret := newLessonsTestServer(t)
 	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
 	const seeded = "line one\nline two\n"
-	seedLessonsOverlay(t, dal, "assistant", "general", seeded)
+	seedLessonsOverlay(t, dal, "assistant", seeded)
 
-	status, data := patchLessons(t, srv.URL, ownerTok, "assistant", "general",
+	status, data := patchLessons(t, srv.URL, ownerTok, "assistant",
 		`{"edits":[{"old":"a line that is simply not there","new":"x"}]}`)
 	if status != http.StatusBadRequest {
 		t.Fatalf("a missing anchor must be a flat 400, got %d: %v", status, data)
 	}
-	if got := getLessonsText(t, srv.URL, ownerTok, "assistant", "general"); got != seeded {
+	if got := getLessonsText(t, srv.URL, ownerTok, "assistant"); got != seeded {
 		t.Fatalf("doc must be untouched:\n got: %q\nwant: %q", got, seeded)
 	}
 }
@@ -355,11 +355,11 @@ func TestPatchLessonsAppliedEditsCountsWhatLanded(t *testing.T) {
 	srv, dal, secret := newLessonsTestServer(t)
 	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
 	const seeded = "line one\nline two\n"
-	seedLessonsOverlay(t, dal, "assistant", "general", seeded)
+	seedLessonsOverlay(t, dal, "assistant", seeded)
 
 	// Two edits, only one of which changes anything: a real replace plus an
 	// append of the empty string (the exact no-op the old code counted as 1).
-	status, data := patchLessons(t, srv.URL, ownerTok, "assistant", "general",
+	status, data := patchLessons(t, srv.URL, ownerTok, "assistant",
 		`{"edits":[{"old":"line two","new":"line two changed"},{"old":"","new":""}]}`)
 	if status != http.StatusOK {
 		t.Fatalf("patch must land, got %d: %v", status, data)
@@ -369,7 +369,7 @@ func TestPatchLessonsAppliedEditsCountsWhatLanded(t *testing.T) {
 		t.Fatalf("applied_edits must count only the edit that changed the doc, got %v", data["applied_edits"])
 	}
 	want := "line one\nline two changed\n"
-	if got := getLessonsText(t, srv.URL, ownerTok, "assistant", "general"); got != want {
+	if got := getLessonsText(t, srv.URL, ownerTok, "assistant"); got != want {
 		t.Fatalf("patched doc mismatch:\n got: %q\nwant: %q", got, want)
 	}
 }
@@ -383,8 +383,8 @@ func TestReplaceLessonsGuards(t *testing.T) {
 	srv, dal, secret := newLessonsTestServer(t)
 	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
 	const seeded = "a lessons doc that took a long time to accumulate\n"
-	seedLessonsOverlay(t, dal, "assistant", "general", seeded)
-	path := srv.URL + "/api/lessons/assistant/general"
+	seedLessonsOverlay(t, dal, "assistant", seeded)
+	path := srv.URL + "/api/lessons/assistant"
 
 	for _, tc := range []struct {
 		name, body string
@@ -406,7 +406,7 @@ func TestReplaceLessonsGuards(t *testing.T) {
 			if status != tc.want {
 				t.Fatalf("want %d, got %d: %v", tc.want, status, data)
 			}
-			if got := getLessonsText(t, srv.URL, ownerTok, "assistant", "general"); got != seeded {
+			if got := getLessonsText(t, srv.URL, ownerTok, "assistant"); got != seeded {
 				t.Fatalf("doc must be untouched:\n got: %q\nwant: %q", got, seeded)
 			}
 		})
@@ -417,7 +417,7 @@ func TestReplaceLessonsGuards(t *testing.T) {
 	if status, data := doJSON(t, "POST", path, ownerTok, `{"text":"the rewritten doc\n"}`); status != 200 {
 		t.Fatalf("well-formed replace must land, got %d: %v", status, data)
 	}
-	if got := getLessonsText(t, srv.URL, ownerTok, "assistant", "general"); got != want {
+	if got := getLessonsText(t, srv.URL, ownerTok, "assistant"); got != want {
 		t.Fatalf("replace did not persist:\n got: %q\nwant: %q", got, want)
 	}
 }

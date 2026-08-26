@@ -41,7 +41,7 @@ func workerCtxOn(t *testing.T, s *apiServer) string {
 func memberCtx(t *testing.T) (*apiServer, *bootContext) {
 	t.Helper()
 	s := newWorkerTestServer(t)
-	bc, err := s.buildBootContext("", nil, "")
+	bc, err := s.buildBootContext("", nil)
 	if err != nil {
 		t.Fatalf("buildBootContext: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestBothBootContextsUseTheSameFourSlots(t *testing.T) {
 		if err := s.dal.PutUserContext(UserContext{Text: ownerMark}); err != nil {
 			t.Fatalf("put user context: %v", err)
 		}
-		bc, err := s.buildBootContext("", nil, "")
+		bc, err := s.buildBootContext("", nil)
 		if err != nil || bc == nil {
 			t.Fatalf("buildBootContext: %v", err)
 		}
@@ -188,7 +188,7 @@ func TestMemberBootContextByteIdenticalToSpecAssembly(t *testing.T) {
 	if err != nil || roleDTO == nil {
 		t.Fatalf("fold role: %v", err)
 	}
-	lessons, err := s.foldLessonsDTO(bc.RoleKey, bc.TaskType)
+	lessons, err := s.foldLessonsDTO(bc.RoleKey)
 	if err != nil {
 		t.Fatalf("fold lessons: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestMemberBootContextByteIdenticalToSpecAssembly(t *testing.T) {
 		parts = append(parts, "# Insight ("+bc.RoleKey+")\n\n"+body)
 	}
 	parts = append(parts,
-		"# Lessons ("+bc.RoleKey+" / "+bc.TaskType+")\n\n"+strings.TrimSpace(lessons.Text),
+		"# Lessons ("+bc.RoleKey+")\n\n"+strings.TrimSpace(lessons.Text),
 		strings.TrimSpace(DocRendered(bootSeed, "\n\n")))
 	want := strings.Join(parts, "\n\n") + "\n"
 	if bc.Context != want {

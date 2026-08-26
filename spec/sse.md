@@ -108,7 +108,7 @@ data: {"seq":42,"topic":"member","op":"patch","data":{"entity":"member","key":"o
   parse them): `{owner}::{id}` for member/chat/reply_card/task/outsource_worker/role_def,
   `{owner}::{type_key}` for task_manual,
   `{owner}::{reader}::{peer}` for chat_read,
-  `{owner}::{role_key}::{task_type}` for lessons, the bare owner id for global_context, the bare agent id for context/monitoring signals.
+  `{owner}::{role_key}` for lessons, the bare owner id for global_context, the bare agent id for context/monitoring signals.
 
 ### 2.3 `trigger` — actor attribution (and the client-side echo rule)
 
@@ -396,11 +396,13 @@ warden's outbound SSE.
 - Frame shape — bare `data:` event, no `id:` line:
 
 ```
-data: {"topic":"warden-command","data":{"rpc":"start","args":{"member_id":"m-1a2b3c","persona_context":"…","member_token":"<jwt>","role":"assistant","task_type":"default","runtime":"claude","model":"","effort":"","session_name":""}}}
+data: {"topic":"warden-command","data":{"rpc":"start","args":{"member_id":"m-1a2b3c","persona_context":"…","member_token":"<jwt>","role":"assistant","runtime":"claude","model":"","effort":"","session_name":""}}}
 ```
 
 - `rpc` vocabulary and `args` shapes:
-  - `start`: `{member_id, persona_context, member_token, role, task_type, runtime, model, effort, session_name}`.
+  - `start`: `{member_id, persona_context, member_token, role, runtime, model, effort, session_name}`.
+    `task_type` was carried here until T-2 as a parity-only field sourced from the lessons
+    bucket; lessons no longer have buckets, so the server no longer sends it.
     `runtime` is the closed vocabulary `claude | codex`; absent/blank means `claude` for
     compatibility with older servers. Blank `effort`/`model`/`session_name` mean the
     selected runtime's defaults; `session_name` is always `""` today — the warden derives

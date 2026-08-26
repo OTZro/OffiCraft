@@ -613,8 +613,8 @@ describe("SettingsPage · 版本紀錄", () => {
     await mockApi.saveRole("assistant", { definitionMd: "第一版定義" });
     await mockApi.saveRole(custom.key, { definitionMd: "第零版定義" });
     await mockApi.saveRole(custom.key, { definitionMd: "第一版定義" });
-    await mockApi.saveLessons(custom.key, "general", "第零版經驗");
-    await mockApi.saveLessons(custom.key, "general", "第一版經驗");
+    await mockApi.saveLessons(custom.key, "第零版經驗");
+    await mockApi.saveLessons(custom.key, "第一版經驗");
     await mockApi.saveInsight(custom.key, "第零版判準");
     await mockApi.saveInsight(custom.key, "第一版判準");
     await mockApi.updateTaskManual(manual.typeKey, {
@@ -758,9 +758,9 @@ describe("SettingsPage · 版本紀錄", () => {
     const overCap = "字".repeat(DOC_CAP_CHARS_DEFAULT + 1);
     // The doc's first write retains nothing, so the over-cap text has to be the
     // SECOND one for it to become a retained revision at all.
-    await mockApi.saveLessons("assistant", "general", "原始經驗");
-    await mockApi.saveLessons("assistant", "general", overCap);
-    await mockApi.saveLessons("assistant", "general", "短");
+    await mockApi.saveLessons("assistant", "原始經驗");
+    await mockApi.saveLessons("assistant", overCap);
+    await mockApi.saveLessons("assistant", "短");
 
     const utils = render(
       <I18nProvider>
@@ -782,7 +782,7 @@ describe("SettingsPage · 版本紀錄", () => {
 
     const [target] = await mockApi.listDocumentHistory(
       "lessons",
-      "assistant::general"
+      "assistant"
     );
     expect(target.sizes.text).toBe(runeLength(overCap));
 
@@ -817,9 +817,9 @@ describe("SettingsPage · 版本紀錄", () => {
     // that matters, because the cap can only ever be raised.
     const overDefault = "字".repeat(DOC_CAP_CHARS_DEFAULT + 100);
     await mockApi.patchServerSettings({ docCapCharsLearning: 50000 });
-    await mockApi.saveLessons("assistant", "general", "原始經驗");
-    await mockApi.saveLessons("assistant", "general", overDefault);
-    await mockApi.saveLessons("assistant", "general", "短");
+    await mockApi.saveLessons("assistant", "原始經驗");
+    await mockApi.saveLessons("assistant", overDefault);
+    await mockApi.saveLessons("assistant", "短");
 
     const utils = render(
       <I18nProvider>
@@ -839,7 +839,7 @@ describe("SettingsPage · 版本紀錄", () => {
 
     const [target] = await mockApi.listDocumentHistory(
       "lessons",
-      "assistant::general"
+      "assistant"
     );
     expect(target.sizes.text).toBe(runeLength(overDefault));
 
@@ -859,9 +859,9 @@ describe("SettingsPage · 版本紀錄", () => {
   });
 
   it("leaves an ordinary revision restorable — the mark is not blanket", async () => {
-    await mockApi.saveLessons("assistant", "general", "第零版經驗");
-    await mockApi.saveLessons("assistant", "general", "第一版經驗");
-    await mockApi.saveLessons("assistant", "general", "第二版經驗");
+    await mockApi.saveLessons("assistant", "第零版經驗");
+    await mockApi.saveLessons("assistant", "第一版經驗");
+    await mockApi.saveLessons("assistant", "第二版經驗");
 
     const utils = render(
       <I18nProvider>
@@ -881,7 +881,7 @@ describe("SettingsPage · 版本紀錄", () => {
 
     const [target] = await mockApi.listDocumentHistory(
       "lessons",
-      "assistant::general"
+      "assistant"
     );
     fireEvent.click(await utils.findByTestId(`doc-history-open-${target.id}`));
     const button = utils.getByTestId(

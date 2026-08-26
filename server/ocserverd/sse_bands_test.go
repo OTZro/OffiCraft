@@ -365,8 +365,13 @@ func TestDirectedFrameText(t *testing.T) {
 	if envelope.Topic != "warden-command" || envelope.Data.RPC != "start" {
 		t.Fatalf("envelope: %+v", envelope)
 	}
+	// The length check below makes this an EXACT set, not a subset: an extra key
+	// is a field the warden was never told about. `task_type` was in this list
+	// until T-2 — sourced from the lessons bucket, carried for parity only — and
+	// its removal is what this now pins. Its twin lives in
+	// conformance/test_sse.py (§7); both have to move together.
 	want := []string{"member_id", "persona_context", "member_token", "role",
-		"task_type", "runtime", "model", "effort", "session_name"}
+		"runtime", "model", "effort", "session_name"}
 	if len(envelope.Data.Args) != len(want) {
 		t.Fatalf("start args keys: %v", envelope.Data.Args)
 	}

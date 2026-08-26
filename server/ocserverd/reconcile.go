@@ -926,7 +926,7 @@ func (s *apiServer) buildStartFrame(m Member) ([]byte, bool) {
 	if len(s.secret) == 0 {
 		return nil, false
 	}
-	boot, err := s.buildBootContext("", &m, "")
+	boot, err := s.buildBootContext("", &m)
 	if err != nil || boot == nil {
 		if err != nil {
 			reconcileLog("START fold failed for %q: %v", m.ID, err)
@@ -945,7 +945,6 @@ func (s *apiServer) buildStartFrame(m Member) ([]byte, bool) {
 			PersonaContext: boot.Context,
 			MemberToken:    token,
 			Role:           boot.RoleKey,
-			TaskType:       boot.TaskType,
 			Runtime:        NormalizeRuntime(m.Runtime),
 			Model:          m.Model,
 			Effort:         m.Effort,

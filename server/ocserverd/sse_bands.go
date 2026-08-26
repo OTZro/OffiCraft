@@ -491,7 +491,6 @@ type wardenStartArgs struct {
 	PersonaContext string `json:"persona_context"`
 	MemberToken    string `json:"member_token"`
 	Role           string `json:"role"`
-	TaskType       string `json:"task_type"`
 	Runtime        string `json:"runtime"`
 	Model          string `json:"model"`
 	Effort         string `json:"effort"`

@@ -744,17 +744,15 @@ const CUSTOM_ROLE_TEMPLATE_MD = `# 角色定義
 （待填：這個角色的職責與工作方式——負責哪些事、怎麼做事、輸出長什麼樣、\
 與 owner 及其他成員怎麼協作、什麼事不歸你管。）
 `;
-// Lessons OVERLAY (owner overlay ⊕ seed), keyed by `${role_key}::${task_type}`. A
+// Lessons OVERLAY (owner overlay ⊕ seed), keyed by the BARE `role_key` (T-2
+// removed the `task_type` half of the old composite key). A
 // save stores the overlay so the folded read is now owner-edited
-// (is_default=false); absent → the folded read is the REAL seed. PER-ROLE doc
-// (per-role-learnings step1): agents sharing a role share the overlay.
+// (is_default=false); absent → the folded read is the REAL seed. PER-ROLE doc:
+// agents sharing a role share the overlay.
 const lessonsOverlays = new Map<string, WireLessons>();
-const lessonsKey = (roleKey: string, taskType: string) =>
-  `${roleKey}::${taskType}`;
 
-// Insight OVERLAY (T-3809), keyed by the BARE `role_key`. ⚠️ NOT the lessons
-// composite: insight has no task_type axis, so there is no "::" in this key and
-// nothing may derive one key format from the other. An absent entry folds
+// Insight OVERLAY (T-3809), keyed by the BARE `role_key` — the same shape
+// lessons uses since T-2. An absent entry folds
 // against INSIGHT_SEEDS below (T-e1e3).
 const insightOverlays = new Map<string, WireInsight>();
 
@@ -1299,35 +1297,29 @@ function dropDocumentHistory(kind: DocumentKind, key: string): void {
   documentRows.delete(historySlot(kind, key));
 }
 
-/** Every "<role>::<task_type>" lessons document of one role. Matched by an
- * explicit PREFIX, exactly like DeleteLessonsOfRole: the key is compound, so
- * dropping only `<role>::general` would leave every other task type's history
- * readable after the role is gone. */
+/** The lessons document of one role. EXACT match on the bare role_key, mirroring
+ * DeleteLessonsForRole on the server: T-2 collapsed the compound
+ * "<role>::<task_type>" key to the role_key alone, and a prefix match on a key
+ * with no terminator would reach a neighbouring role whose key merely starts
+ * with this one. */
 function dropRoleLessonsHistory(roleKey: string): void {
-  const prefix = `${roleKey}::`;
+  const target = historySlot("lessons", roleKey);
   for (const slot of [...documentHistories.keys()]) {
-    if (slot.startsWith(historySlot("lessons", prefix))) {
+    if (slot === target) {
       documentHistories.delete(slot);
     }
   }
   for (const slot of [...documentRows]) {
-    if (slot.startsWith(historySlot("lessons", prefix))) documentRows.delete(slot);
+    if (slot === target) documentRows.delete(slot);
   }
-  for (const key of [...lessonsOverlays.keys()]) {
-    if (key.startsWith(prefix)) lessonsOverlays.delete(key);
-  }
+  lessonsOverlays.delete(roleKey);
 }
 
-/** The one insight document of one role (T-3809). 🔴 EXACT EQUALITY, not the
- * prefix match its lessons twin above uses — and the difference is load-bearing
- * in BOTH directions:
- *
- *   * the lessons key is compound, so it needs the prefix or sibling task types
- *     survive the role's deletion;
- *   * the insight key is the bare role_key with no "::" terminator, so copying
- *     that prefix match here would delete r-abcdef's retained versions while
- *     deleting r-abc. The server's cascade makes exactly this distinction
- *     (dal.go, DeleteInsightOfRole) and this mock has to agree with it.
+/** The one insight document of one role (T-3809). EXACT EQUALITY, the same
+ * shape its lessons twin above now uses: the key is the bare role_key with no
+ * "::" terminator, so a prefix match would delete r-abcdef's retained versions
+ * while deleting r-abc. (Until T-2 the lessons key was compound and DID need a
+ * prefix match; that is why the two used to differ.)
  *
  * 🔴 WHY THIS FUNCTION EXISTS AT ALL rather than a line added above: adding
  * "insight" to DocumentKind produces NO error anywhere in this file — the type
@@ -1533,14 +1525,13 @@ function applyDocumentHistory(
       return;
     }
     case "lessons": {
-      const [roleKey, taskType] = key.split("::");
+      // The key IS the role_key since T-2 — nothing to split.
       if (tombstoned) {
         lessonsOverlays.delete(key);
       } else {
         lessonsOverlays.set(key, {
           ...docSizeFields(content.text ?? "", "learning"),
-          role_key: roleKey,
-          task_type: taskType,
+          role_key: key,
           text: content.text ?? "",
           owner_id: MOCK_OWNER_ID,
           schema_version: 2,
@@ -5361,7 +5352,7 @@ export const mockApi: Api = {
     //      the seed constant straight, so the one screen built to show what an
     //      agent will read was the one place the owner's edit was invisible;
     //   2. 使用者自訂 — the owner's ADDITIVE block, SKIPPED entirely when empty;
-    //   3. `# Role:` + `# Insight (role)` + `# Lessons (role / task_type)` —
+    //   3. `# Role:` + `# Insight (role)` + `# Lessons (role)` —
     //      the persona (Duty → Insight → Learning, the order the three blocks
     //      are defined in), and the ONLY slot an outsource worker has nothing
     //      in (see getWorkerBootContext below). The Insight section is SKIPPED
@@ -5382,10 +5373,8 @@ export const mockApi: Api = {
     // worker's boot context is this list minus slot 3, and with the owner block
     // wedged between the lessons and the boot sequence it could not be.
     // NO token (a UI preview mints none).
-    const taskType = "general"; // mirrors the server seed lessons task_type
     const roleDef = foldRole(role); // throws for an unknown role (≈ server 404)
-    const lessons =
-      lessonsOverlays.get(lessonsKey(role, taskType))?.text ?? SEED_LESSONS_MD;
+    const lessons = lessonsOverlays.get(role)?.text ?? SEED_LESSONS_MD;
     const userText = foldGlobalContext().text;
     const parts = [foldBootDoc("system_interaction", "global").text.trim()];
     if (userText.trim()) {
@@ -5405,14 +5394,26 @@ export const mockApi: Api = {
     // would then stack one title per generation. Strip any leading copies of
     // the EXACT title line first, so an already-poisoned document self-heals in
     // the assembled preview instead of showing the drift the server does not.
-    const lessonsTitle = `# Lessons (${role} / ${taskType})`;
+    // TWO titles are stripped, not one: a document poisoned BEFORE T-2 carries
+    // the old "# Lessons (role / general)" wording, and the server strips both
+    // (assets.go). Mirroring that here is what keeps this preview honest about
+    // what the agent will actually read.
+    const lessonsTitle = `# Lessons (${role})`;
+    const legacyLessonsTitle = `# Lessons (${role} / general)`;
     let lessonsBody = lessons.trim();
-    while (lessonsBody.startsWith(lessonsTitle)) {
-      const rest = lessonsBody.slice(lessonsTitle.length);
-      // A title that is merely the PREFIX of a longer line is not a duplicate
-      // title line — stop, or the next heading gets eaten.
-      if (rest !== "" && !rest.startsWith("\n")) break;
-      lessonsBody = rest.trim();
+    for (;;) {
+      let stripped = false;
+      for (const title of [lessonsTitle, legacyLessonsTitle]) {
+        while (lessonsBody.startsWith(title)) {
+          const rest = lessonsBody.slice(title.length);
+          // A title that is merely the PREFIX of a longer line is not a
+          // duplicate title line — stop, or the next heading gets eaten.
+          if (rest !== "" && !rest.startsWith("\n")) break;
+          lessonsBody = rest.trim();
+          stripped = true;
+        }
+      }
+      if (!stripped) break;
     }
     parts.push(
       `${lessonsTitle}\n\n${lessonsBody}`,
@@ -5421,24 +5422,22 @@ export const mockApi: Api = {
     const wire: WireBootstrap = {
       role,
       name: roleDef.name,
-      task_type: taskType,
       context: parts.join("\n\n") + "\n",
       token: null,
     };
     return toBootstrap(wire);
   },
 
-  async getLessons(roleKey: string, taskType: string): Promise<LessonsView> {
-    // The folded PER-ROLE lessons doc for `role_key` + `task_type`. When an
+  async getLessons(roleKey: string): Promise<LessonsView> {
+    // The folded PER-ROLE lessons doc for `role_key`. When an
     // overlay was saved (is_default=false) the folded read is that edit; otherwise
     // it IS the REAL seed (dal/seeds/lessons.md via SEED_LESSONS_MD) →
-    // is_default=true. Per-role-learnings step1: the seed is shared until a role
-    // diverges (each role_key gets its own overlay slot).
-    const overlay = lessonsOverlays.get(lessonsKey(roleKey, taskType));
+    // is_default=true. The seed is shared until a role diverges (each role_key
+    // gets its own overlay slot).
+    const overlay = lessonsOverlays.get(roleKey);
     const wire: WireLessons = overlay ?? {
       ...docSizeFields(SEED_LESSONS_MD, "learning"),
       role_key: roleKey,
-      task_type: taskType,
       text: SEED_LESSONS_MD,
       owner_id: MOCK_OWNER_ID,
       schema_version: 2,
@@ -5447,24 +5446,19 @@ export const mockApi: Api = {
     return toLessons(wire);
   },
 
-  async saveLessons(
-    roleKey: string,
-    taskType: string,
-    text: string
-  ): Promise<LessonsView> {
+  async saveLessons(roleKey: string, text: string): Promise<LessonsView> {
     // Whole-doc replace → store the per-role overlay; the folded read is now
     // owner-edited for THIS role_key only (a sibling role's doc is untouched).
-    recordDocumentHistory("lessons", lessonsKey(roleKey, taskType));
+    recordDocumentHistory("lessons", roleKey);
     const wire: WireLessons = {
       ...docSizeFields(text, "learning"),
       role_key: roleKey,
-      task_type: taskType,
       text,
       owner_id: MOCK_OWNER_ID,
       schema_version: 2,
       is_default: false,
     };
-    lessonsOverlays.set(lessonsKey(roleKey, taskType), wire);
+    lessonsOverlays.set(roleKey, wire);
     emitTopic("lessons");
     return toLessons(wire);
   },
