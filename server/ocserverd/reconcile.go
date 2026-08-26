@@ -1931,11 +1931,23 @@ const tokenExpiryLeadSecs = 3600.0
 //     need a durable per-session column, which this ticket deliberately did not
 //     add.
 //
-// ⚠️ Only staff sessions are derivable this way. A warden's credential is minted
-// by mintWardenToken with NO exp claim at all, so it never expires and this must
-// never be asked about one.
+// ⚠️ EXACTLY ONE KIND IS EXEMPT, and the reason is a property of its credential,
+// not of what it is: a WARDEN's token is minted by mintWardenToken →
+// mintJWTWithoutExpiry, with NO exp claim at all, so it never expires and asking
+// this question about one would invent a deadline that does not exist.
+//
+// 🔴 This gate used to read `Kind != KindAssistant`, which swept OUTSOURCE in
+// with warden while the comment explained only the warden half — the classic
+// shape of an exemption that is wider than its own justification. An outsource
+// worker's session token is minted by mintAgentToken with s.agentTokenTTLValue()
+// (worker_spawn.go), i.e. the SAME mint and the SAME TTL a staff member's boot
+// token gets, so it expires in exactly the same way; and every step of the
+// close-out — report_stopping, the lesson write, report_stopped — is an MCP call
+// carrying that token. Naming the one exempt kind, rather than allow-listing the
+// one included kind, is what keeps the next kind from inheriting an exemption
+// nobody decided to give it.
 func tokenExpiryOf(m Member, agentTokenTTL int64) float64 {
-	if m.Kind != KindAssistant || agentTokenTTL <= 0 || m.SessionBootTS <= 0 {
+	if m.Kind == KindWarden || agentTokenTTL <= 0 || m.SessionBootTS <= 0 {
 		return 0
 	}
 	return m.SessionBootTS + float64(agentTokenTTL)

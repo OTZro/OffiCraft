@@ -26,10 +26,19 @@ package main
 //	G1  desired_state == offline   → held_down receipt, NOTHING starts. An owner
 //	                                 停止 outranks every other owner verb.
 //	                                 (TestOwnerOp_StoppedWorkerStillOnlyGetsAReceipt)
-//	G2  op == restart              → immediate. The session it displaces is under
-//	                                 a standing kill order, so a 預告 waits for an
-//	                                 answer that is never coming (deny-list, so a
-//	                                 NEW verb gets the wind-down by default).
+//	G2  op == restart              → immediate. 重啟 is not a wind-down CAUSE at
+//	                                 all — it is a kill+respawn: it does not ask
+//	                                 the current session to flush and hand over,
+//	                                 it DISPLACES it (respawnWorkerForOwnerOpNow
+//	                                 → respawnWorkerNow kills the session on the
+//	                                 resolved target BEFORE it re-dispatches), so
+//	                                 there is nothing to 預告 to. NOT because the
+//	                                 worker must already be stopped — its handler
+//	                                 has NO desired-offline gate and answers 200
+//	                                 on a live, mid-加速停止 worker
+//	                                 (ownerOpRevivesStoppedWorker, worker_spawn.go).
+//	                                 (deny-list, so a NEW verb gets the wind-down
+//	                                 by default.)
 //	                                 (TestOwnerOp_RestartNeverWindsDown)
 //
 // Then the predicate itself, over its four inputs. `active` is Status ==
@@ -319,12 +328,24 @@ func TestOwnerOp_UnclaimedButOnlineStillWindsDown(t *testing.T) {
 	}
 }
 
-// TestOwnerOp_RestartNeverWindsDown: 重啟 acts on a worker the owner ALREADY
-// stopped — 停止 dispatched the kill, so the session it would displace is under
-// a standing kill order. Fanning an SOP 預告 at it and then waiting out the
-// deadline for an answer that is never coming is exactly the pointless wait the
-// rule exists to prevent. This is the ONE deny-listed verb; a new verb added
-// later gets the wind-down by default.
+// TestOwnerOp_RestartNeverWindsDown: 重啟 skips the wind-down because it is not a
+// wind-down CAUSE — it is a kill+respawn. It does not ask the current session to
+// flush and hand over; it DISPLACES it (respawnWorkerForOwnerOp →
+// respawnWorkerForOwnerOpNow → respawnWorkerNow kills the session on the resolved
+// target BEFORE it re-dispatches), so an SOP 預告 would be fanned at a session
+// that is going away regardless. 改機器 / 換 model are the opposite verb — "the
+// same session's work must survive this change" — which is what the 預告 + window
+// buys them. This is the ONE deny-listed verb; a new verb added later gets the
+// wind-down by default.
+//
+// 🔴 NOT because 重啟 can only arrive at a worker the owner has already stopped.
+// It can arrive at ANY live worker: its handler has exactly two preconditions —
+// the row exists and it is not released — and NO desired-offline gate, so pressed
+// on a worker with desired_state="online" that is mid-加速停止 it answers 200.
+// The fixture below presses 停止 first for a different reason: that is how it
+// manufactures the race where the session is dying but has NOT been reaped yet,
+// so a state-only criterion would still read it as online. The prior 停止 is the
+// test's setup, NOT the precondition the rule rests on.
 func TestOwnerOp_RestartNeverWindsDown(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true

@@ -515,8 +515,9 @@ ONE-SHOT, never a standing order):
 
 - **Token expiry opens a 停止 an hour before the token dies (T-ed79, owner
   2026-08-21).** `stampTokenExpiryWinddown` runs in the same tick, straight after
-  the context pass, and stamps `refocus_op = token_expiry` on a live staff session
-  whose agent token is inside its last `tokenExpiryLeadSecs`. It is a plain 停止:
+  the context pass, and stamps `refocus_op = token_expiry` on any live agent session
+  — staff **or outsource worker** — whose agent token is inside its last
+  `tokenExpiryLeadSecs`. It is a plain 停止:
   the owner's model for a token renewal is the same as for a refocus or a model
   change — 「就是呼叫軟下線，然後等他 report_stopped 以後再呼叫上線」 — so the
   collection is the agent's own stopped report or 強制停止, exactly as for every
@@ -533,6 +534,12 @@ ONE-SHOT, never a standing order):
   🔴 **WHY IT HAS TO EXIST**: every step of the offboard sequence is an MCP call on
   the session's own bearer token, so an expired token does not degrade the close-out
   — it makes the close-out impossible.
+  🔴 **The ONE exempt kind is `warden`, and the reason is its CREDENTIAL, not its
+  role**: `mintWardenToken` mints with no `exp` claim at all, so there is no expiry
+  to lead. `tokenExpiryOf` therefore excludes warden by name (T-170e). It used to
+  allow-list `assistant`, which swept outsource in with warden even though a
+  worker's token comes from the same `mintAgentToken` with the same
+  `auth.agent_token_ttl` — the exemption was wider than the reason written beside it.
   Ordering matters: the context pass runs FIRST, because both passes skip a member
   that already carries `refocus_since` and `canPromoteToAcceleratedStop` only
   promotes a `context_notice` epoch — a token stamp landing first would therefore
@@ -604,6 +611,63 @@ ONE-SHOT, never a standing order):
   so does `activate` — but the non-destructive route to it is the chat's 就地喚醒
   row, NOT the detail panel's Spawn, which for a `stopping` member opens the
   settings dialog and never sends activate.
+- 🔴 **These passes reach an OUTSOURCE WORKER through a projection, not through the
+  reconcile roster (T-170e).** The reconcile tick's roster read is `ListMembers`,
+  which is `kind != 'outsource'` by construction, so a worker is never offered to
+  any of them; `runOutsourceTick` projects its ACTIVE, not-held-down workers with
+  `memberFromWorker`, runs the context pass, the token-expiry pass and the
+  stale-stopping sweep over that slice in the reconcile tick's order, then folds the
+  four wind-down fields back onto the worker rows. Until T-170e only the context
+  pass was projected, so a worker had no token-expiry lead (its session simply died
+  mid-task with no close-out) and no survived-stop sweep (a `stopping_since` left by
+  a stop it survived read 停止中 in the cockpit for the life of the session). **A
+  wind-down rule that is not on this list does not apply to workers, however
+  member-shaped its code looks.**
+- 🔴 **The 停止 → 加速停止 → 強制停止 ladder binds the WORKER side too, and it binds
+  it at every stamp site — there are FIVE, not one.** `armRefocusEpoch` is the one
+  way an epoch is OPENED (the fifth row below only PROMOTES one that is already
+  open, which is why it survives that word); before T-170e three worker sites
+  hand-wrote the same four anchors instead, so none of them carried the ladder check
+  and each was the same bug wearing a different button. Those three now stamp through
+  `armRefocusEpoch` on a `memberFromWorker` projection, folding back only the four
+  fields it mutates. **Enumerate this table before adding a stamp site — the T-170e
+  bug WAS three sites nobody had enumerated:**
+  | site | verb | on a ladder refusal |
+  | --- | --- | --- |
+  | `openOwnerOpHandover` (`worker_spawn.go`) | 改機器 / 換 model | the change is SAVED, the stage does not move; the existing wind-down keeps its own deadline and owns the move |
+  | `HandleRefocusOutsourceWorker…` (`api_outsource.go`) | 重新聚焦 | **409** — the owner pressed a button, so he gets an answer (the staff twin `HandleRefocusMember` refuses on the same rule; the sentence differs in exactly one noun, `this worker` vs `this member`) |
+  | `workerRestartSelf` (`worker_spawn.go`) | `restart_self` | **409** — the refusal is written by `HandleRestartSelfApiSelfRefocusPost` itself, VERBATIM the sentence its own staff arm writes further down in the same function (`m.Kind == KindOutsource` arm vs the fall-through `armRefocusEpoch` arm); the two arms are one rule |
+  | `HandleAcceleratedStopOutsourceWorker…` | 加速停止 | n/a — it ADVANCES the ladder, and it deliberately does not zero the anchors (the twin of the staff 加速停止 arm) |
+  | `stampContextHighRecycle` promotion arm (`reconcile.go`, the `if promoting` branch) | none — the reconcile tick's own context pass, projected onto workers by the `stampContextHighRecycle(ctxProjections, now)` call in `outsource_sched.go` | n/a — it also ADVANCES, and only forwards: `canPromoteToAcceleratedStop` lets it move `context_notice` → `context_high` and nothing else. It hand-writes `refocus_since` / `refocus_op` INSTEAD of calling `armRefocusEpoch` on purpose — that helper zeroes the wind-down anchors, and here they belong to a close-out already in flight (see the `armRefocusEpoch is deliberately NOT used` note directly above that assignment) |
+  ⚠️ **`重啟` (restart) is a deliberate hole in this table, not a missing row.**
+  `ownerOpRevivesStoppedWorker(restart) == true` (`worker_spawn.go`), so the
+  `!ownerOpRevivesStoppedWorker(op) && s.workerHasStateToFlush(w)` arm in
+  `respawnWorkerForOwnerOp` (`worker_spawn.go`, the arm *after* the
+  `DesiredStateOffline` held-down one) is never taken for 重啟 and the ladder never
+  sees it. That is intended and predates T-170e — but **NOT because 重啟 can only arrive at a worker
+  the owner has already stopped.** It can arrive at any live worker:
+  `HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost`
+  (`api_outsource.go`) has exactly two preconditions — the row exists and it is
+  not `released` — and **no desired-offline gate at all**. Press 重啟 on a worker with
+  `desired_state="online"` that is mid-加速停止 and it answers **200**, zeroes
+  `refocus_since` / `refocus_op` / `stopping_since` / `stopped_since`, and the deadline
+  goes with them.
+  The reason that is right is that **重啟 is not a wind-down cause at all — it is a
+  kill+respawn.** It does not ask the current session for a close-out; it displaces
+  it (`respawnWorkerForOwnerOp` → `respawnWorkerForOwnerOpNow` → `respawnWorkerNow`,
+  which kills the session on the resolved target before it re-spawns), and the handler says so on the row itself: its `if s.hub.IsOnline(id)`
+  arm (`api_outsource.go`) stamps the `session_alive` receipt *"this worker was
+  still running — 重啟 is replacing that session, not starting a first one. If it
+  does not come back, its previous session was still holding the slot"*. The four
+  anchors it clears all DATE THE SESSION BEING REPLACED; carrying them into the
+  successor is what makes the next 改機器 / 換 model read them as "this epoch's
+  wind-down is already collected". So clearing them is a correct clean sheet for a new
+  session, **not a way around the ladder** — there is no ladder step left to be on once
+  the session the ladder was counting for is gone. (`forced_stop_at` is deliberately
+  KEPT, per the staff activate's rule.) Winding 重啟 down instead would fan an SOP 預告
+  at a session that is about to be killed regardless and then wait out a deadline for
+  an answer that changes nothing. A reader of the rows above would otherwise reasonably
+  assume 重啟 is covered; it is not, and it should not be.
 
 ### 4.6 Dispatch discipline
 

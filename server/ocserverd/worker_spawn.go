@@ -1425,8 +1425,22 @@ func (s *apiServer) relocateWorkerNow(w OutsourceWorker) ownerOpOutcome {
 // `continue`s on it; TestStoppedWorker_TickNeverRevives pins it). Placement and
 // model are recorded, nothing is started, and the row says exactly that instead of
 // letting one owner action quietly overturn another. Restart cannot reach that arm
-// by construction (it flips desired_state to online first, and 409s otherwise),
-// which is the point: the intent lives in the state, not in per-entry copies.
+// by construction, and the construction is ONE assignment: its handler sets
+// DesiredState = DesiredStateOnline on the row it then passes here BY VALUE
+// (HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost in api_outsource.go
+// — it is the ONLY assignment to DesiredState in that handler, and nothing
+// between it and the sole ownerOpRestart call site touches that field again; the
+// four wind-down anchors it zeroes next, and the PutOutsourceWorker + error branch
+// after them, all leave DesiredState alone), so the field this function branches
+// on is never offline for 重啟. That is the point: the intent lives in the state,
+// not in per-verb copies.
+//
+// ⚠️ It does NOT "409 otherwise". That over-spawn guard is GONE (T-ed79 #10, owner
+// 2026-08-21 「往正職靠：外包也不擋」 — the 🔴 note inside that handler's body, just
+// after its not-found checks).
+// 重啟 on a still-live worker is accepted and stamps a session_alive RECEIPT
+// instead. Nothing here depends on the 409; the assignment above is load-bearing
+// on its own.
 //
 // Everything after the branch is shared: kill the old session and make sure a
 // start is genuinely ATTEMPTED, with a receipt on every refusal.
@@ -1445,6 +1459,11 @@ func (s *apiServer) respawnWorkerForOwnerOp(w OutsourceWorker, op string) ownerO
 	// in-flight state when a 換手 does not — from the worker's side all four are
 	// the same event (this session ends, a new one continues the task).
 	if !ownerOpRevivesStoppedWorker(op) && s.workerHasStateToFlush(w) {
+		// A ladder refusal still answers WoundDown, and deliberately: a wind-down
+		// IS open on this worker — a HIGHER one — so nothing may be dispatched
+		// here either. Falling through to the immediate arm would kill the very
+		// session that is mid-way through the 加速停止 it was given a deadline for,
+		// which is a strictly worse outcome than the bug this guard closes.
 		s.openOwnerOpHandover(w, op)
 		return ownerOpOutcome{WoundDown: true}
 	}
@@ -1486,15 +1505,32 @@ const (
 	ownerOpModel    = "runtime/model" // 換 model / runtime / effort
 )
 
-// ownerOpRevivesStoppedWorker distinguishes the ONE verb that acts on a worker
-// the owner has ALREADY stopped from the ones that act on a worker he wants to
-// keep running. 重啟 only reaches this code with desired_state just flipped
-// offline→online, i.e. the session it would displace is one 停止 already
-// dispatched a kill for: winding it down would mean fanning an SOP 預告 at a
-// session under a standing kill order and then waiting out the full deadline for
-// an answer that is never coming — the exact "owner waits for nothing" the rule
-// exists to prevent (the D6 argument openWorkerHandoverGrace already makes for
-// an offline worker; here the session is merely not dead YET).
+// ownerOpRevivesStoppedWorker names the ONE verb that is not itself a request for
+// a close-out. 重啟 is not a wind-down CAUSE — it is a kill+respawn. It does not
+// ask the current session to flush and hand over, it DISPLACES it
+// (respawnWorkerForOwnerOp → respawnWorkerForOwnerOpNow → respawnWorkerNow, which
+// kills the session on the resolved target BEFORE it re-dispatches). 改機器 /
+// 換 model are the opposite verb: they mean "the same session's work must survive
+// this change", which is exactly what T-98f4 rule 2 buys with the 預告 + window.
+//
+// 🔴 NOT because 重啟 can only arrive at a worker the owner has already stopped.
+// It can arrive at ANY live worker: its handler
+// (HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost, api_outsource.go)
+// has exactly two preconditions — the row exists, and it is not released — and NO
+// desired-offline gate. Pressed on a worker with desired_state="online" that is
+// mid-加速停止 it answers 200, and the refocus_since / refocus_op /
+// stopping_since / stopped_since it zeroes just before calling in here take that
+// epoch's deadline with them.
+//
+// That clear is correct, for the reason written at that call site (T-ed79 #11):
+// those four anchors DATE THE SESSION BEING REPLACED, and carrying them into the
+// successor is what makes the NEXT 改機器 / 換 model read them as "this epoch's
+// wind-down is already collected" (workerHasStateToFlush, below) and shoot itself
+// on the spot. So the skip is a clean sheet for a new session, not a way around
+// the ladder: once the session the ladder was counting for is gone there is no
+// step left to stand on, and fanning an SOP 預告 at a session that is about to be
+// killed regardless would only wait out a deadline for an answer that changes
+// nothing.
 //
 // Deliberately a DENY-list, not an allow-list: a verb added later gets the
 // wind-down by default, because 「所有換手都給收尾機會」 is the rule and skipping
@@ -1610,16 +1646,44 @@ func (s *apiServer) workerHasStateToFlush(w OutsourceWorker) bool {
 // re-STARTed by the shared FSM. By then the caller's new pin / model is already on the row,
 // so the respawn picks it up. A persist fault falls back to the immediate path rather than dropping
 // the owner's verb on the floor. Callers hold s.outsourceMu.
-func (s *apiServer) openOwnerOpHandover(w OutsourceWorker, op string) {
-	w.RefocusSince = nowSecs()
-	w.RefocusOp = op
-	w.StoppingSince = 0.0
-	w.StoppedSince = 0.0
+//
+// 🔴 THE EPOCH IS STAMPED BY armRefocusEpoch, NOT BY HAND, and that is the whole
+// of T-170e stage 1 ①. These four fields used to be written here literally, and
+// a hand-written copy of a shared decision only stays equal to it for as long as
+// nobody edits the original. The original grew a ladder — 下線 → 加速 → 強制,
+// 「後者一旦發出我們就不該發出前者」 (winddownStageMayAdvanceTo) — and this copy
+// did not, so a 換 model landing on a worker already in 加速停止 pushed the stage
+// back to 停止 and took the DEADLINE with it: the worker had been told a time,
+// and that time silently stopped existing. Staff were guarded the whole while,
+// through armMemberOwnerOpHandover.
+//
+// The projection is the same one runOutsourceTick already feeds the context
+// thresholds: a worker row IS a member row (memberFromWorker carries all five
+// fields this decision reads — the four anchors plus forced_stop_at), so only
+// the four the arm mutates are folded back, never the whole Member.
+//
+// Returns false when the ladder REFUSES the move. That is not a failure and the
+// caller must not treat it as one: exactly as on the staff side, the owner's
+// change is already on the row, a wind-down is already open at a HIGHER stage,
+// and the only thing that does not happen is the stage moving backwards.
+func (s *apiServer) openOwnerOpHandover(w OutsourceWorker, op string) bool {
+	proj := memberFromWorker(w)
+	if !armRefocusEpoch(&proj, op, nowSecs()) {
+		outsourceLog("%s %s (%s): wind-down NOT re-opened — this worker is already "+
+			"further along the ladder (下線 → 加速 → 強制) at %s; the change is saved "+
+			"and the open wind-down keeps its own deadline",
+			op, w.ID, w.Codename, w.RefocusOp)
+		return false
+	}
+	w.RefocusSince = proj.RefocusSince
+	w.RefocusOp = proj.RefocusOp
+	w.StoppingSince = proj.StoppingSince
+	w.StoppedSince = proj.StoppedSince
 	if err := s.dal.PutOutsourceWorker(w); err != nil {
 		outsourceLog("%s %s (%s): refocus stamp failed (%v) — falling back to an "+
 			"immediate respawn so the owner's action is not lost", op, w.ID, w.Codename, err)
 		s.respawnWorkerForOwnerOpNow(w, op)
-		return
+		return true
 	}
 	s.publishOutsourceWorker(w, triggerServer)
 	s.openWorkerHandoverGrace(w, triggerServer)
@@ -1630,6 +1694,7 @@ func (s *apiServer) openOwnerOpHandover(w OutsourceWorker, op string) {
 		outsourceLog("%s %s (%s): wind-down opened — collect on stopped-report ONLY "+
 			"(this op runs no clock)", op, w.ID, w.Codename)
 	}
+	return true
 }
 
 // respawnWorkerForOwnerOpNow is the IMMEDIATE arm (nothing to wind down): the
@@ -2264,6 +2329,16 @@ func (s *apiServer) workerReportStopped(id, trigger string) (*Member, error) {
 // refocus epoch (stale wind-down latches cleared) and open the graceful window
 // — the exact effect of the owner's refocus button, minus the owner. The
 // caller's online/min-liveness gates have already passed. Takes s.outsourceMu.
+//
+// 🔴 THE LADDER GUARD LIVES HERE because the divergence it closes lives inside
+// ONE handler: HandleRestartSelfApiSelfRefocusPost dispatches an outsource
+// caller to this funnel and returns EARLY, seven lines above the armRefocusEpoch
+// check its staff arm falls through to. So restart_self was ladder-guarded for
+// staff and unguarded for workers, in the same function, and an agent already in
+// 加速停止 could talk its way back to 停止 — taking back the deadline it was
+// counting to — purely by being a worker. Stamping through the shared
+// armRefocusEpoch on a memberFromWorker projection is what makes "armRefocusEpoch
+// is the ONE way an epoch is opened" true of this site too.
 func (s *apiServer) workerRestartSelf(id string, now float64, trigger string) (*Member, error) {
 	s.outsourceMu.Lock()
 	defer s.outsourceMu.Unlock()
@@ -2271,10 +2346,14 @@ func (s *apiServer) workerRestartSelf(id string, now float64, trigger string) (*
 	if err != nil {
 		return nil, err
 	}
-	w.RefocusSince = now
-	w.RefocusOp = refocusOpRestartSelf
-	w.StoppingSince = 0.0
-	w.StoppedSince = 0.0
+	proj := memberFromWorker(*w)
+	if !armRefocusEpoch(&proj, refocusOpRestartSelf, now) {
+		return nil, errWindDownLadderBackwards
+	}
+	w.RefocusSince = proj.RefocusSince
+	w.RefocusOp = proj.RefocusOp
+	w.StoppingSince = proj.StoppingSince
+	w.StoppedSince = proj.StoppedSince
 	if err := s.dal.PutOutsourceWorker(*w); err != nil {
 		return nil, err
 	}

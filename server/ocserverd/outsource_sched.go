@@ -404,6 +404,21 @@ func (s *apiServer) runOutsourceTick(now float64) {
 	// Only ACTIVE, not-held-down workers are offered: an assigned worker has no
 	// session to wind down yet, and a desired-offline one is the owner's 停止,
 	// which autoHandoverWorker arm (0) still owns.
+	//
+	// 🔴 T-170e: THREE staff passes ride this projection now, not one, and the
+	// reason the other two were missing is structural rather than an oversight
+	// anybody could have spotted by reading them. Every shared wind-down pass is
+	// reached from runReconcileTick, whose roster read is ListMembers — and
+	// ListMembers is `WHERE kind != 'outsource'` by construction (dal.go), so a
+	// worker is NEVER offered to any of them. A pass that guards staff and a pass
+	// that does not exist look identical from the worker's side, which is exactly
+	// how a worker ended up with no token-expiry lead and no survived-stop sweep
+	// while the code implementing both sat in the same package.
+	//
+	// The ORDER is the reconcile tick's order, and it is load-bearing there for a
+	// reason that holds here identically: both stamp passes skip a row that
+	// already carries refocus_since, so whichever runs first owns the epoch —
+	// and only the context pair can escalate itself to 加速停止.
 	ctxProjections := make([]Member, 0, len(workers))
 	ctxIndex := make([]int, 0, len(workers))
 	for i := range workers {
@@ -415,6 +430,15 @@ func (s *apiServer) runOutsourceTick(now float64) {
 		ctxIndex = append(ctxIndex, i)
 	}
 	s.stampContextHighRecycle(ctxProjections, now)
+	// A worker's session token is minted by mintAgentToken with the same TTL a
+	// staff token gets (worker_spawn.go), so it dies the same way — and the whole
+	// close-out is MCP calls carrying it.
+	s.stampTokenExpiryWinddown(ctxProjections, now)
+	// The survived-stop auto-clear: a desired-online worker OBSERVED online while
+	// still carrying stopping_since is provably past that stop. Without it the
+	// anchor sat on the row for the life of the session and the cockpit read
+	// 停止中 for a worker that was plainly working — a phantom 停止中.
+	s.clearStaleStoppingOnOnline(ctxProjections, now)
 	for j, i := range ctxIndex {
 		// Only the four wind-down fields are folded back, never the whole
 		// projection: workerFromMember re-derives Status from activated_ts, and

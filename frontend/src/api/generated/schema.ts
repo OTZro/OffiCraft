@@ -2848,7 +2848,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * restart_self(): self-triggered recycle (online-only 409; min-liveness 429).
+         * restart_self(): self-triggered recycle (online-only 409; min-liveness 429; wind-down-ladder 409).
          * @description ``restart_self()`` — the agent's SELF-TRIGGERED recycle (identity from token, NO
          *     member_id). A self-op: by construction it can only ever restart the CALLER, so it
          *     is strictly WEAKER than ``refocus_member`` (which is admin-gated and targets any
@@ -2862,7 +2862,7 @@ export interface paths {
          *     respawns IN PLACE. Same already-tested machinery as an owner refocus, just
          *     self-triggered; the agent never mints a token or kills its own process.
          *
-         *     ABUSE GUARDS (two, both refuse LOUDLY so the agent can read them):
+         *     ABUSE GUARDS (three, all refuse LOUDLY so the agent can read them):
          *       * ONLINE-ONLY (409) — a self-restart is meaningless with no live session; the
          *         caller's DERIVED presence must be online, mirroring ``refocus_member``.
          *       * MINIMUM-LIVENESS (429) — a call within the first 10 minutes after the session
@@ -2870,6 +2870,12 @@ export interface paths {
          *         refused, so a freshly respawned agent cannot immediately self-restart again and
          *         spin a respawn storm. A missing boot_ts (server-restart amnesia) FAILS OPEN —
          *         never a false 429 on a long-lived session.
+         *       * WIND-DOWN LADDER (409) — restart_self IS 停止, the FIRST rung; a caller already
+         *         further along the ladder (下線 → 加速 → 強制) is refused rather than moved
+         *         BACKWARDS, which would also hand it back the deadline it was counting to.
+         *         Finish the close-out you were given instead — do NOT retry this call. The
+         *         outsource and staff arms of this handler are one rule and answer with the same
+         *         sentence.
          *
          *     ``reason`` (optional): a short human note for WHY — recorded on the recycle log
          *     line so an operator can distinguish a self-restart from an owner refocus.
@@ -6450,7 +6456,7 @@ export interface components {
             activation_pending?: boolean | null;
             /**
              * Relocation Deferred
-             * @description Set true on the worker relocate response when the move was DELIBERATELY deferred: the worker is live with uncollected state, so the server opened a graceful wind-down instead of dispatching now. The move lands when the worker answers report_stopped. This is the companion that disambiguates ``relocation_pending``, which is true for BOTH this case and a genuinely undispatched move: a consumer must NOT raise a "nothing was dispatched" alert while this field is true. Absent/null on every other worker read (T-ed79 parity #5).
+             * @description Set true on the worker relocate response when the move was DELIBERATELY deferred: the worker is live with uncollected state, so a graceful wind-down owns the move instead of it being dispatched now. TWO ways that happens, and the field does not distinguish them because the consumer's question is the same in both: (a) THIS relocate opened the wind-down, and the move lands when the worker answers report_stopped; (b) an EXISTING wind-down at a HIGHER rung of the 停止 → 加速停止 → 強制停止 ladder already owns the worker, so the pin was saved and the ladder refused to re-open a lower stage — the move lands at THAT wind-down's collect, on whatever deadline it already carries (T-170e). This is the companion that disambiguates ``relocation_pending``, which is true for BOTH these cases and a genuinely undispatched move: a consumer must NOT raise a "nothing was dispatched" alert while this field is true. Absent/null on every other worker read (T-ed79 parity #5).
              */
             relocation_deferred?: boolean | null;
             /**
@@ -6466,7 +6472,7 @@ export interface components {
             refocus_deadline: number;
             /**
              * Refocus Op
-             * @description Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. A SUBSET of ``MemberDTO.refocus_op``: ``relocate``, ``runtime/model``, ``refocus``, ``restart_self``, ``context_high`` and ``accelerated_stop``. ``context_notice`` and ``token_expiry`` do NOT appear on this DTO — an outsource worker has only the second context threshold, and the token-expiry pass is staff-only. Stamped and cleared in lockstep with ``refocus_since`` (T-7f28). Additive-optional.
+             * @description Which owner operation opened the in-flight handover stamped in ``refocus_since``, empty when none is in flight. A SUBSET of ``MemberDTO.refocus_op``: ``relocate``, ``runtime/model``, ``refocus``, ``restart_self``, ``context_high`` and ``accelerated_stop``. EVERY one of those causes can appear here. Two clauses that used to stand in this sentence are gone because both were false: ``context_notice`` has appeared on workers since T-72dd, when the worker projection was fed into the shared ``stampContextHighRecycle`` and inherited BOTH thresholds (pinned by worker_single_collector_t72dd_test.go), and ``token_expiry`` has appeared since T-170e, when the same projection was extended to the token-expiry pass — a worker's session token is minted by the same ``mintAgentToken`` with the same ``auth.agent_token_ttl`` a staff token is, so it expires identically. Stamped and cleared in lockstep with ``refocus_since`` (T-7f28). Additive-optional.
              * @default
              */
             refocus_op: string;

@@ -652,7 +652,7 @@
       "name": "report_stopped"
     },
     {
-      "description": "restart_self(): self-triggered recycle (online-only 409; min-liveness 429).",
+      "description": "restart_self(): self-triggered recycle (online-only 409; min-liveness 429; wind-down-ladder 409).",
       "inputSchema": {
         "properties": {
           "reason": {
