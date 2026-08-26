@@ -80,6 +80,33 @@ func currentMachineClaim(r *http.Request) string {
 //     A non-empty claim is therefore the marker for "not a warden", and we
 //     return "" rather than mistaking a member id for a machine id.
 //
+// 🔴 THAT IMPLICATION RUNS ONE WAY ONLY. "non-empty claim ⇒ not a warden" is
+// true; its converse — "claim-less ⇒ warden" — is FALSE, and the counter-
+// examples are live, not hypothetical:
+//
+//   - /api/mint hands out long-lived agent tokens with the claim deliberately
+//     blank (api_auth.go: mintJWT(m.ID, "agent", ttl, …, "") — lifecycle.md
+//     §1.3 mint table: /api/mint — machine_id "none").
+//   - an ordinary member with no placement pin boots claim-less, and the owner
+//     can put it in that state at will: activate/relocate take machine_id ""
+//     to CLEAR the pin (api_members.go — 「"" 仍清掉 pin」).
+//
+// api_monitoring.go already says this at the telemetry `machine` fallback
+// ("claim-less tokens (/api/mint long-lived tokens … a member without
+// desired_machine_id boots claim-less too)"); it is repeated here because this
+// is where the mistake is expensive. Such a token's sub is a MEMBER id, and
+// this function would hand it back as a MACHINE id — a name that matches no
+// machine, which every consumer then reads as "a DIFFERENT machine answered"
+// (the KNOWN-mismatch arm), not as UNKNOWN. That is not a harmless miss: the
+// receipt watch would refuse to disarm and stamp receipt_missing on a receipt
+// the server is holding in its hand. So the claim check above is load-bearing,
+// not defensive — see TestReceiptReporter_ClaimBearingTokenIsNotTheMachineItRunsOn,
+// which exists because deleting that one line left the whole suite green.
+//
+// Do NOT "improve" this by inferring wardenhood from a blank claim. If a caller
+// ever needs a hard "is this a warden", ask the roster (member.Kind ==
+// KindWarden); the claim can only ever answer the other direction.
+//
 // "" means UNKNOWN, never "nobody". Every caller must treat it as no evidence
 // and fall back to the behaviour it had before it could ask.
 func receiptReporterMachine(r *http.Request) string {

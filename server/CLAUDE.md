@@ -54,7 +54,10 @@
 - warden `command_result` receipt 是「op 真的執行」的唯一證據；POST receipt 是 best-effort。server 只在 frame enqueue 成功後 arm `receipt_watch`，90 秒門檻來自 warden budget 推導、不是端到端量測。
 - `receipt_missing` 由 server sweep 寫進既有 `last_op*`，語意是 `UNKNOWN` 而非 failed；解除條件是**它等的那台機器**的 receipt 抵達，必須在 `foldCommandResult` 的 early return 前 note。每次 dispatch 只 stamp 一次，且與其他 last-op reason 共用單槽；UNINSTALL 不掛這道死線。
 - receipt 的「是哪一台回的」一律取自**已驗證 token**（`receiptReporterMachine`）：warden 憑證的 `sub` 就是 machine id、且刻意不帶 `machine_id` claim。`CommandResult` 不得為此長出 warden/機器欄位。解析不出來時回 `""` = UNKNOWN（不是「沒有人」），所有讀它的地方都必須退回改動前的行為。
-- worker stop 重試判「刀砍下去了沒」不能只看 presence：**目標機器**回的 `no_such_session` receipt 就是收工證據（`noteWorkerStopNoSuchSession`）。只有 `no_such_session` 算數 —— 同一台回的 `stop incomplete` 是相反的證據，必須繼續重試；別台廣播回的一律忽略。
+- worker stop 重試判「刀砍下去了沒」不能只看 presence：**目標機器**回的 `no_such_session` receipt 就是收工證據（`noteWorkerStopNoSuchSession`）。別台廣播回的一律忽略。warden 一次 stop 只會回**三種** reason（`cli/ocwarden/command.go`，`rpc=stop` 與 legacy `rpc=worker_stop` 各自三種），今天只有中間那種收工：
+  - `ok=true reason="stopped"` —— 真的殺掉了，**目前不收工，重試會再送一刀**（已知邊界，這一輪不修）。它會自癒：既然真的殺掉了，重送的那一刀打在已死的 session 上，warden 下一輪回的就是 `no_such_session`，於是收工 —— 代價是**最多多一次重送**，不是無限重試，方向也在安全那一側（寧可多殺一次，不要留殘活 session）。要不要收窄是另一個決定。
+  - `ok=true reason="no_such_session: …"` —— 唯一收工的一種。
+  - `ok=false reason="stop incomplete (…)"` —— **相反**的證據（session 還在），必須繼續重試，絕不可折成收工。
 
 ## 7. SQLite 與 backup
 

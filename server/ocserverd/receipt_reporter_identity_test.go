@@ -31,7 +31,10 @@ package main
 // nails that premise down so a future re-mint cannot quietly break it.
 
 import (
+	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -292,4 +295,93 @@ func TestReceiptWatch_UnresolvedWardenStillDisarmsOnAnyReceipt(t *testing.T) {
 		t.Fatalf("a watch that never resolved a machine has nobody to compare against; "+
 			"it must stay permissive. last_op_reason = %q", got.LastOpReason)
 	}
+}
+
+// ── the guard nobody was pinning: claim-bearing ⇒ NOT the machine ────────────
+
+// 🔴 THE UNGUARDED GUARD (T-5b62 gap 1). receiptReporterMachine's whole body is
+// two lines, and the FIRST one —
+//
+//	if currentMachineClaim(r) != "" { return "" }
+//
+// — had no test at all: deleting it left the entire ocserverd suite green. It is
+// the line that says "a token carrying a placement claim is something running ON
+// a machine, not the machine itself", and without it the resolver hands back a
+// MEMBER id (an agent/worker id) to two consumers that will compare it against a
+// MACHINE id and act on the mismatch.
+//
+// This is the cheapest place to see the damage. The watch is waiting on m-dark.
+// An AGENT LIVING ON m-dark posts a receipt for the target: its sub is the
+// agent's own member id, its machine_id claim is m-dark. Resolved correctly the
+// reporter is "" — UNKNOWN, the permissive case — and the watch disarms, because
+// the receipt channel demonstrably worked. Drop the guard and the reporter
+// becomes the AGENT's member id, which is not m-dark, so the watch reads it as
+// "someone else's machine answered", keeps waiting, and stamps receipt_missing
+// on a member whose receipt is sitting in the server's own hands.
+//
+// Note the direction: the guard's failure mode is NOT "a stranger sneaks past".
+// It is the resolver confidently naming a machine that does not exist, and the
+// UNKNOWN fallback every consumer was built around never being reached.
+func TestReceiptReporter_ClaimBearingTokenIsNotTheMachineItRunsOn(t *testing.T) {
+	s := newWorkerTestServer(t)
+	putWardenFixture(t, s, "m-dark")
+	// The agent living ON m-dark: its own roster id, pinned to that machine.
+	putTestMember(t, s, Member{
+		ID: "m-onbox", Name: "Onbox", Kind: KindAssistant, Effort: "medium",
+		DesiredState: DesiredStateOffline, RosterStatus: RosterStatusActive,
+	})
+	putWorkerFixture(t, s, OutsourceWorker{
+		ID: "ow-owed", Codename: "O-owed", Runtime: "claude",
+		Status: WorkerStatusActive,
+	})
+
+	s.armReceiptWatch("ow-owed", reconcileCmdStop, "m-dark", nowSecs())
+
+	// sub = the agent's member id, machine_id claim = the machine it runs on.
+	// mintAgentToken's exact shape (api_auth.go) — the ONE token class the
+	// guard exists to reject as a machine name.
+	rec := doIngestTelemetry(s, "m-onbox", "m-dark",
+		stopNoopReceiptBody("worker_id", "ow-owed"))
+	if rec.Code != 200 {
+		t.Fatalf("receipt ingest from m-onbox: %d %s", rec.Code, rec.Body.String())
+	}
+
+	s.sweepLapsedReceipts(nowSecs() + receiptDeadlineSecs + 1)
+	got, err := s.dal.GetOutsourceWorker("ow-owed")
+	if err != nil || got == nil {
+		t.Fatalf("reload worker: %v", err)
+	}
+	if strings.Contains(got.LastOpReason, receiptMissingReasonCode) {
+		t.Fatalf("a token carrying a machine_id claim is something RUNNING ON a "+
+			"machine, not the machine — receiptReporterMachine must answer \"\" "+
+			"(UNKNOWN) for it, and UNKNOWN is the permissive case. Reading the "+
+			"claim-bearer's MEMBER id as a MACHINE id makes it look like a "+
+			"different machine answered, so the watch kept waiting and stamped "+
+			"%s on a receipt the server had already received and read. "+
+			"last_op_reason = %q", receiptMissingReasonCode, got.LastOpReason)
+	}
+
+	// And the resolver itself, stated once so the failure above cannot be
+	// mistaken for a receipt_watch bug: the claim-bearer resolves to UNKNOWN,
+	// never to its own sub.
+	if got := receiptReporterMachine(claimReq("m-onbox", "m-dark")); got != "" {
+		t.Fatalf("receiptReporterMachine with a machine_id claim must be \"\" "+
+			"(UNKNOWN — this is a thing running on a machine, not the machine), got %q", got)
+	}
+	// The complementary arm, so the fix cannot degenerate into "always UNKNOWN":
+	// a claim-less token (the warden shape) still names its sub as the machine.
+	if got := receiptReporterMachine(claimReq("m-dark", "")); got != "m-dark" {
+		t.Fatalf("a claim-less warden token's sub IS the machine id, got %q", got)
+	}
+}
+
+// claimReq builds a bare request carrying only the verified-claims context the
+// identity accessors read — no route, no body, nothing else in play.
+func claimReq(sub, machineClaim string) *http.Request {
+	claims := map[string]any{"sub": sub, "scope": "agent"}
+	if machineClaim != "" {
+		claims["machine_id"] = machineClaim
+	}
+	req := httptest.NewRequest("POST", "/api/monitoring/telemetry", nil)
+	return req.WithContext(context.WithValue(req.Context(), claimsContextKey, claims))
 }
