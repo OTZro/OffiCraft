@@ -114,7 +114,7 @@ func TestReceiptDeadline_ArrivedReceiptDisarmsTheStamp(t *testing.T) {
 		"ok":        true,
 		"reason":    "",
 		"log":       "spawned",
-	}, triggerServer)
+	}, triggerServer, "")
 
 	s.sweepLapsedReceipts(nowSecs() + receiptDeadlineSecs + 1)
 	if reason, _ := receiptDTOReason(t, s, "m-answers"); strings.Contains(reason, receiptMissingReasonCode) {
@@ -158,7 +158,7 @@ func TestReceiptDeadline_NoOpStopReceiptStillDisarmsTheDeadline(t *testing.T) {
 		"ok":        true,
 		"reason":    stopNoopReasonPrefix + ": stop was a no-op",
 		"log":       "session=member-m-noop",
-	}, triggerServer)
+	}, triggerServer, "")
 
 	s.sweepLapsedReceipts(nowSecs() + receiptDeadlineSecs + 1)
 	if reason, _ := receiptDTOReason(t, s, "m-noop"); strings.Contains(reason, receiptMissingReasonCode) {

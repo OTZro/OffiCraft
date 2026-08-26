@@ -62,6 +62,76 @@ func currentMachineClaim(r *http.Request) string {
 	return machineID
 }
 
+// receiptReporterMachine names the MACHINE that is speaking on this request —
+// the one question a warden command_result receipt has never been able to
+// answer on its own (CommandResult carries no warden id, and per
+// caller-identity-convention it must never grow one: caller identity is taken
+// from the verified token, never from a request parameter).
+//
+// The resolution is entirely inside the identity we already hold:
+//
+//   - a WARDEN's credential is minted by mintWardenToken with sub == the warden
+//     member's own id, and a warden member's id IS the machine id
+//     (api_machines.go onboard: "mint a NEW warden member whose own id IS the
+//     machine id"). It deliberately carries NO machine_id claim — "a warden
+//     carries NO self-binding" (authz.go). So sub is the machine.
+//   - an AGENT / WORKER boot token is something running ON a machine rather
+//     than the machine itself, and mintAgentToken stamps machine_id = its host.
+//     A non-empty claim is therefore the marker for "not a warden", and we
+//     return "" rather than mistaking a member id for a machine id.
+//
+// 🔴 THAT IMPLICATION RUNS ONE WAY ONLY. "non-empty claim ⇒ not a warden" is
+// true; its converse — "claim-less ⇒ warden" — is FALSE, and the counter-
+// examples are live, not hypothetical:
+//
+//   - /api/mint hands out long-lived agent tokens with the claim deliberately
+//     blank (api_auth.go: mintJWT(m.ID, "agent", ttl, …, "") — lifecycle.md
+//     §1.3 mint table: /api/mint — machine_id "none").
+//   - an ordinary member with no placement pin boots claim-less, and the owner
+//     can put it in that state at will: activate/relocate take machine_id ""
+//     to CLEAR the pin (api_members.go — 「"" 仍清掉 pin」).
+//
+// api_monitoring.go already says this at the telemetry `machine` fallback
+// ("claim-less tokens (/api/mint long-lived tokens … a member without
+// desired_machine_id boots claim-less too)"). It is repeated here because the
+// two directions do NOT have the same standing, and only one of them is
+// guarded — read this before assuming the counter-examples above are handled:
+//
+//   - CLAIM-BEARING is what the check above handles, and it is the reason that
+//     one line is load-bearing rather than defensive. Delete it and the token's
+//     sub — a MEMBER id — comes back as a MACHINE id, which consumers read as
+//     "a DIFFERENT machine answered" (the KNOWN-mismatch arm) instead of
+//     UNKNOWN: the receipt watch then refuses to disarm and stamps
+//     receipt_missing on a receipt the server is holding in its hand. Pinned by
+//     TestReceiptReporter_ClaimBearingTokenIsNotTheMachineItRunsOn, which exists
+//     because deleting that line left the whole suite green.
+//   - CLAIM-LESS non-warden tokens (the two counter-examples above) are NOT
+//     handled, today, in the present tense. The check cannot see them — on the
+//     wire they are shaped exactly like a warden — so this function still hands
+//     back their own member id. Member ids and machine ids live in ONE primary
+//     key space (a machine IS a member row with Kind == machineKind —
+//     resolveMachine below is just GetMember plus that kind test), so such an id
+//     can never collide with a real other machine: the comparison necessarily
+//     mismatches and every consumer takes its fail-closed arm (keep waiting /
+//     keep retrying). The cost is at most a spurious receipt_missing, which is
+//     UNKNOWN and not failed. KNOWN RESIDUE — nothing above prevents it, and
+//     nothing goes red for it. Measured on 9056a4e1: a claim-less agent's
+//     receipt left the worker at last_op_reason = "receipt_missing: the stop was
+//     handed to machine m-dark but no receipt came back within 90s…".
+//
+// Do NOT "improve" this by inferring wardenhood from a blank claim. If a caller
+// ever needs a hard "is this a warden", ask the roster (member.Kind ==
+// KindWarden); the claim can only ever answer the other direction.
+//
+// "" means UNKNOWN, never "nobody". Every caller must treat it as no evidence
+// and fall back to the behaviour it had before it could ask.
+func receiptReporterMachine(r *http.Request) string {
+	if currentMachineClaim(r) != "" {
+		return "" // something running on a machine, not the machine
+	}
+	return currentActor(r)
+}
+
 // principalOfRequest resolves the caller's principal class (the in-handler
 // twin of the route choke — handlers.principal_at_least call sites).
 func (s *apiServer) principalOfRequest(r *http.Request) string {

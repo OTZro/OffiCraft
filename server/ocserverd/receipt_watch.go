@@ -93,12 +93,39 @@ func memberIDRawOf(commandResult map[string]any) string {
 // what disarms the deadline is the receipt CHANNEL working, which those prove
 // just as well as a folded one. Tying it to a successful fold instead would
 // stamp receipt_missing on members whose receipt arrived and was read.
-func (s *apiServer) noteReceiptArrived(targetID string) {
+//
+// 🔴 reporter IS THE MACHINE THAT SPOKE (receiptReporterMachine), and comparing
+// it is the whole point. The watch has recorded which machine it is waiting on
+// since it was written — pendingReceipt.Warden, right there in the struct — and
+// then matched on the TARGET ID ALONE, which is the id of the thing being
+// stopped, not of the machine that owes the answer. An identity sweep
+// broadcasts a stop to every warden in the fleet and every one of them answers,
+// so ANY healthy machine's polite receipt cancelled the deadline that was
+// waiting on a specific, possibly dark, one. The deadline asks "did THAT
+// machine's report channel work"; a different machine's report is not an answer
+// to it.
+//
+// Both "" cases stay permissive, deliberately:
+//   - p.Warden == "": the dispatch could not resolve a machine, so there is
+//     nobody to compare against and the watch never claimed to wait on anyone.
+//   - reporter == "": UNKNOWN speaker (see receiptReporterMachine). No evidence
+//     either way ⇒ keep the pre-existing behaviour rather than invent a
+//     receipt_missing stamp out of an identity we failed to resolve.
+//
+// Only a KNOWN mismatch — both sides named, and different — declines to disarm.
+func (s *apiServer) noteReceiptArrived(targetID, reporter string) {
 	if targetID == "" {
 		return
 	}
 	s.receiptMu.Lock()
 	defer s.receiptMu.Unlock()
+	p, armed := s.receiptPending[targetID]
+	if !armed {
+		return
+	}
+	if p.Warden != "" && reporter != "" && p.Warden != reporter {
+		return // someone else's machine answered; the one we wait on still owes us
+	}
 	delete(s.receiptPending, targetID)
 }
 

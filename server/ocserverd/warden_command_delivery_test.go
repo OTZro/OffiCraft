@@ -493,7 +493,7 @@ func TestFoldCommandResult_CarriesSupersededDispatchClue(t *testing.T) {
 		"reason": "spawn_failed: tmux new-session exited 1",
 		"log":    "tmux: server exited unexpectedly",
 		"at":     2000.0,
-	}, triggerServer)
+	}, triggerServer, "")
 
 	got, err := dal.GetMember("m-1")
 	if err != nil || got == nil {
@@ -524,7 +524,7 @@ func TestFoldCommandResult_SupersededClueDoesNotChain(t *testing.T) {
 		api.foldCommandResult(map[string]any{
 			"member_id": "m-1", "rpc": "start", "ok": false,
 			"reason": "spawn_failed: again", "log": "boom", "at": 2000.0,
-		}, triggerServer)
+		}, triggerServer, "")
 	}
 	got, _ := dal.GetMember("m-1")
 	if n := strings.Count(got.LastOpLog, "superseded dispatch diagnosis"); n != 0 {
@@ -543,7 +543,7 @@ func TestFoldCommandResult_SupersededClueSurvivesTheLogClamp(t *testing.T) {
 		"reason": "spawn_failed: x",
 		"log":    strings.Repeat("z", 4*commandResultLogMax),
 		"at":     2000.0,
-	}, triggerServer)
+	}, triggerServer, "")
 
 	got, _ := dal.GetMember("m-1")
 	if len(got.LastOpLog) > commandResultLogMax {
@@ -568,7 +568,7 @@ func TestFoldCommandResult_OrdinaryReceiptUnchanged(t *testing.T) {
 	api.foldCommandResult(map[string]any{
 		"member_id": "m-1", "rpc": "start", "ok": true,
 		"reason": "", "log": "spawned", "at": 2000.0,
-	}, triggerServer)
+	}, triggerServer, "")
 
 	got, _ := dal.GetMember("m-1")
 	if got.LastOpLog != "spawned" {
