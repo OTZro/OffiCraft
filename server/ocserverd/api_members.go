@@ -263,17 +263,32 @@ func forcedEpochLive(m Member) bool {
 // forcedEpochLive itself was never the duplicated rule; it has always had one
 // definition, and the worker side calls that same definition through
 // memberFromWorker. What WAS written out by hand, once per site, is this
-// two-term question, and the sites that ask it are the three things a graceful
-// stop epoch entitles a session to:
+// two-term question. SIX call sites ask it, and they are the four things a
+// graceful stop epoch entitles a session to. Grep `gracefulStopEpochOpen(` to
+// re-count before adding one — an earlier draft of this comment claimed three
+// and the fourth entitlement below (two sites, both worker-side) had been
+// missed, which is the failure this enumeration exists to make cheap to check:
 //
 //   - the SENTENCE — offboardKindOf's desired-offline arm sends a 下線 notice
 //     only for a stop the recipient can still act on (a forced session is cut
 //     off deliberately and is told nothing).
 //   - the CLOCK — winddownDeadlineOf answers 0 on the same two terms, so an
 //     announced deadline and a collected one cannot come apart.
-//   - the ESCALATION — 加速停止 (both faces) refuses unless there is such an
+//   - the ESCALATION — 加速停止 (both faces: HandleAcceleratedStopMember… and
+//     HandleAcceleratedStopOutsourceWorker…) refuses unless there is such an
 //     epoch to escalate: nothing to accelerate on a member nobody asked to
 //     stop, and no reader for a deadline addressed to a session already cut off.
+//   - the COLLECT — the two worker-side arms that end a 停止 epoch without a
+//     report the server can wait for: autoHandoverWorker's stop arm (session
+//     confirmed gone, or the owner's accelerated deadline lapsed) and
+//     workerReportStopped's 停止 arm. A forced epoch's kill already went out,
+//     so there is nothing left for either to collect. Both used to write the
+//     two terms out by hand; they were the copies this comment did not count.
+//     ⚠️ The staff twin of the first of those — decideDown's `accelerated`
+//     arm in reconcile.go — does NOT ask this question (it tests
+//     StoppingSince > 0 with no forced term). That asymmetry is real and is
+//     deliberately left alone here: closing it CHANGES BEHAVIOUR, which is
+//     outside a convergence-only change. See the T-170e stage 2 report.
 //
 // Those three used to be three spellings of one judgement, and one of them was
 // the negation of the other two, which is how a reader checks them against each

@@ -1980,9 +1980,12 @@ func (s *apiServer) autoHandoverWorker(w OutsourceWorker, now float64) {
 	//     (rc-27d1710174dd) and not an oversight.
 	//
 	// A live FORCED epoch is excluded on both: its kill already went out.
+	// (gracefulStopEpochOpen, api_members.go, is the "open stop epoch that is not
+	// a forced one" half — the same call the sentence, the clock and the two
+	// 加速停止 faces ask. StoppedSince is this site's own extra term: a report
+	// already in hand means nothing here is waiting for one.)
 	if w.DesiredState == DesiredStateOffline {
-		if w.StoppingSince > 0.0 && w.StoppedSince <= 0.0 &&
-			!forcedEpochLive(memberFromWorker(w)) {
+		if w.StoppedSince <= 0.0 && gracefulStopEpochOpen(memberFromWorker(w)) {
 			if sessionGone {
 				s.collectWorkerStop(w, "stop-session-gone", triggerServer)
 			} else if grace, clocked := recycleGraceFor(
@@ -2321,11 +2324,14 @@ func (s *apiServer) workerReportStopped(id, trigger string) (*Member, error) {
 			}
 			m := memberFromWorker(*w)
 			return &m, nil
-		case w.DesiredState == DesiredStateOffline && w.StoppingSince > 0.0 &&
-			!forcedEpochLive(memberFromWorker(*w)):
-			// The 停止 arm: kill, never re-spawn. forcedEpochLive is excluded
+		case w.DesiredState == DesiredStateOffline &&
+			gracefulStopEpochOpen(memberFromWorker(*w)):
+			// The 停止 arm: kill, never re-spawn. The forced epoch is excluded
 			// because a force-stopped session was cut off rather than asked —
 			// its kill already went out and nothing is waiting for a report.
+			// That exclusion is not spelled out here: it is the second half of
+			// gracefulStopEpochOpen (api_members.go), the same call every other
+			// site asks.
 			s.collectWorkerStop(*w, "stopped-report", trigger)
 			if fresh, ferr := s.resolveLiveWorker(id); ferr == nil {
 				w = fresh
