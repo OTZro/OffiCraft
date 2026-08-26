@@ -2396,10 +2396,12 @@ func (s *apiServer) clearStaleStoppingOnOnline(members []Member, now float64) {
 
 // ── the cadence tick + the event-driven seams ─────────────────────────────────
 
-// runReconcileTick runs ONE producer tick over the roster snapshot: the three
-// pre-decide passes, then decide→dispatch per candidate. Candidates (§4.1):
-// every ACTIVE non-warden member, plus any ACTIVE warden whose desired_state
-// is uninstall. Serialized with the event-driven ticks via reconcileMu;
+// runReconcileTick runs ONE producer tick over the roster snapshot: THE entry
+// filter, THE shared pre-decide formalities (lifecycle_roster.go — the same
+// list the outsource producer runs), the receipt sweep, then decide→dispatch
+// per candidate. Candidates (§4.1): every ACTIVE non-warden member, plus any
+// ACTIVE warden whose desired_state is uninstall — which is what
+// lifecyclePolicyFor's staff arm says. Serialized with the event-driven ticks via reconcileMu;
 // best-effort — a fault is logged, never raised into the cadence loop.
 func (s *apiServer) runReconcileTick(now float64) {
 	defer func() {
@@ -2416,28 +2418,20 @@ func (s *apiServer) runReconcileTick(now float64) {
 	}
 	var members []Member
 	for _, m := range all {
-		if m.RosterStatus != RosterStatusActive {
+		// THE entry filter (lifecycle_roster.go). It used to be written out here
+		// by hand, and again in reconcileMemberNow, and a third time — in its
+		// outsource dialect — in runOutsourceTick. One question, one answer.
+		if !lifecyclePolicyFor(m).ShouldExist() {
 			continue
-		}
-		if m.Kind == KindWarden && parseDesired(m.DesiredState) != DesiredStateUninstall {
-			continue // no warden reconciles another warden's spawn/stop
 		}
 		members = append(members, m)
 	}
-	s.stampContextHighRecycle(members, now)
-	// AFTER the context pair, and the order is load-bearing. Both passes skip a
-	// member that already carries refocus_since, so whichever runs first owns the
-	// epoch for that member. Reversed, a session that is BOTH out of context and
-	// near token expiry would be stamped token_expiry — a soft, unclocked cause —
-	// and stampContextHighRecycle's one promotion arm would then decline it
-	// (canPromoteToAcceleratedStop only promotes a context_notice epoch), so the
-	// second context threshold would never open its 加速停止 on that member at all.
-	// This order lets the context pair keep its own escalation, and the token pass
-	// picks up everyone the context pair did not claim.
-	s.stampTokenExpiryWinddown(members, now)
-	s.clearRecycleMarkersOnRespawn(members)
-	s.clearStaleStoppingOnOnline(members, now)
-	s.consumeUninstallIntentOnOffline(members)
+	// THE pre-decide formalities, in THE order, from THE list
+	// (lifecycle_roster.go lifecycleRosterPasses). There is no second list: the
+	// outsource producer runs this same one through runWorkerLifecyclePasses, so
+	// a formality added here reaches a worker by construction and one that must
+	// not has to say so as its own AppliesTo.
+	s.runLifecycleRosterPasses(members, now)
 	// The receipt deadline (receipt_watch.go) — swept BEFORE the decide pass so
 	// a start/stop armed by THIS tick always gets a full window, never a same-
 	// tick sweep. Covers workers too: their start/stop rides the member verbs
@@ -2485,11 +2479,13 @@ func (s *apiServer) reconcileMemberNow(memberID string) reconcileDecision {
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
 	m, err := s.dal.GetMember(memberID)
-	if err != nil || m == nil || m.RosterStatus != RosterStatusActive {
+	if err != nil || m == nil {
 		return reconcileDecision{}
 	}
-	if m.Kind == KindWarden && parseDesired(m.DesiredState) != DesiredStateUninstall {
-		return reconcileDecision{} // a warden is never an agent-lifecycle spawn/stop candidate
+	// THE entry filter, the same one the cadence asks (lifecycle_roster.go).
+	// This used to be a hand-copy of the cadence's two conditions.
+	if !lifecyclePolicyFor(*m).ShouldExist() {
+		return reconcileDecision{}
 	}
 	reconcileLog("instant tick: member %s", memberID)
 	return s.reconcileTickMemberLocked(*m, nowSecs())
