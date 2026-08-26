@@ -1168,25 +1168,37 @@ func memberFromWorker(w OutsourceWorker) Member {
 	}
 	taskID := w.TaskID
 	return Member{
-		ID:                 w.ID,
-		Name:               w.Codename,
-		Kind:               KindOutsource,
-		RoleKey:            "",
-		Runtime:            NormalizeRuntime(w.Runtime),
-		Model:              w.Model,
-		ActualModel:        w.ActualModel,
-		ActualRuntime:      w.ActualRuntime,
-		ActualEffort:       w.ActualEffort,
-		Effort:             w.Effort,
-		DesiredState:       w.DesiredState,
-		DesiredMachineID:   w.DesiredMachineID,
-		LastMachineID:      w.LastMachineID,
-		SessionBootTS:      w.SessionBootTS,
-		RefocusSince:       w.RefocusSince,
-		RefocusOp:          w.RefocusOp,
-		StoppingSince:      w.StoppingSince,
-		StoppedSince:       w.StoppedSince,
-		ForcedStopAt:       w.ForcedStopAt,
+		ID:               w.ID,
+		Name:             w.Codename,
+		Kind:             KindOutsource,
+		RoleKey:          "",
+		Runtime:          NormalizeRuntime(w.Runtime),
+		Model:            w.Model,
+		ActualModel:      w.ActualModel,
+		ActualRuntime:    w.ActualRuntime,
+		ActualEffort:     w.ActualEffort,
+		Effort:           w.Effort,
+		DesiredState:     w.DesiredState,
+		DesiredMachineID: w.DesiredMachineID,
+		LastMachineID:    w.LastMachineID,
+		SessionBootTS:    w.SessionBootTS,
+		RefocusSince:     w.RefocusSince,
+		RefocusOp:        w.RefocusOp,
+		StoppingSince:    w.StoppingSince,
+		StoppedSince:     w.StoppedSince,
+		ForcedStopAt:     w.ForcedStopAt,
+		// 🔴 ZERO IS THE DEFINITION HERE, NOT AN OMISSION. The worker vocabulary
+		// has no `waking` concept at all — an OutsourceWorker carries no such
+		// column and nothing on the worker side ever reads one — so projecting 0
+		// is the honest answer rather than a field somebody forgot. Written
+		// EXPLICITLY because the omission and the decision look identical in a
+		// struct literal, and this one has teeth: PutMember's ON CONFLICT SET
+		// includes waking_since, so every write through this projection stores
+		// the zero. That is inert today (nothing reads a worker's waking_since)
+		// and it is NOT new — every putMember(memberFromWorker(w)) since T-72dd
+		// has done it. If the worker vocabulary ever grows the concept, this line
+		// is where it has to stop being a constant.
+		WakingSince:        0,
 		BankedCost:         w.BankedCost,
 		LastOp:             w.LastOp,
 		LastOpOK:           w.LastOpOK,
