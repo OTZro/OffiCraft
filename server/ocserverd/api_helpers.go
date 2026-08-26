@@ -93,15 +93,31 @@ func currentMachineClaim(r *http.Request) string {
 //
 // api_monitoring.go already says this at the telemetry `machine` fallback
 // ("claim-less tokens (/api/mint long-lived tokens … a member without
-// desired_machine_id boots claim-less too)"); it is repeated here because this
-// is where the mistake is expensive. Such a token's sub is a MEMBER id, and
-// this function would hand it back as a MACHINE id — a name that matches no
-// machine, which every consumer then reads as "a DIFFERENT machine answered"
-// (the KNOWN-mismatch arm), not as UNKNOWN. That is not a harmless miss: the
-// receipt watch would refuse to disarm and stamp receipt_missing on a receipt
-// the server is holding in its hand. So the claim check above is load-bearing,
-// not defensive — see TestReceiptReporter_ClaimBearingTokenIsNotTheMachineItRunsOn,
-// which exists because deleting that one line left the whole suite green.
+// desired_machine_id boots claim-less too)"). It is repeated here because the
+// two directions do NOT have the same standing, and only one of them is
+// guarded — read this before assuming the counter-examples above are handled:
+//
+//   - CLAIM-BEARING is what the check above handles, and it is the reason that
+//     one line is load-bearing rather than defensive. Delete it and the token's
+//     sub — a MEMBER id — comes back as a MACHINE id, which consumers read as
+//     "a DIFFERENT machine answered" (the KNOWN-mismatch arm) instead of
+//     UNKNOWN: the receipt watch then refuses to disarm and stamps
+//     receipt_missing on a receipt the server is holding in its hand. Pinned by
+//     TestReceiptReporter_ClaimBearingTokenIsNotTheMachineItRunsOn, which exists
+//     because deleting that line left the whole suite green.
+//   - CLAIM-LESS non-warden tokens (the two counter-examples above) are NOT
+//     handled, today, in the present tense. The check cannot see them — on the
+//     wire they are shaped exactly like a warden — so this function still hands
+//     back their own member id. Member ids and machine ids live in ONE primary
+//     key space (a machine IS a member row with Kind == machineKind —
+//     resolveMachine below is just GetMember plus that kind test), so such an id
+//     can never collide with a real other machine: the comparison necessarily
+//     mismatches and every consumer takes its fail-closed arm (keep waiting /
+//     keep retrying). The cost is at most a spurious receipt_missing, which is
+//     UNKNOWN and not failed. KNOWN RESIDUE — nothing above prevents it, and
+//     nothing goes red for it. Measured on 9056a4e1: a claim-less agent's
+//     receipt left the worker at last_op_reason = "receipt_missing: the stop was
+//     handed to machine m-dark but no receipt came back within 90s…".
 //
 // Do NOT "improve" this by inferring wardenhood from a blank claim. If a caller
 // ever needs a hard "is this a warden", ask the roster (member.Kind ==
