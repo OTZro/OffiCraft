@@ -760,7 +760,7 @@ type globalContextDTO struct {
 }
 
 // bootDocDTO is ONE editable boot-context block on the wire (T-791e): the
-// 系統互動 block, or one runtime's 啟動程序 block.
+// 系統互動 block, or one runtime's 啟動步驟 block.
 //
 // The four judgement fields are the pair the capped documents already carry
 // (SizeChars/CapChars — the settings surface holding the cap is admin-only, so

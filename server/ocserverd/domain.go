@@ -1050,7 +1050,7 @@ const dutyCapCharsDefault = 1000
 // measured on its own text. They are two renderings of the same short document;
 // a studio that needs more room for one needs it for the other.
 //
-// The 下線程序 cap (T-c9c0) is sized with the boot sequences rather than the
+// The 〈停止〉 cap (T-c9c0) is sized with the boot sequences rather than the
 // handbook, and for the same reason: it is a short ordered checklist an agent
 // has to work under time pressure (a recycle bounds it; an offboard does not,
 // but the owner is waiting), not a reference text.

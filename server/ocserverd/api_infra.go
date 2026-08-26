@@ -280,7 +280,7 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 	// document — which is why handoverNoticeTick decides whether this tick can
 	// emit BEFORE it calls it. SOFT, always: the first context threshold is an
 	// advance warning and nothing collects it at a named instant, so it reads
-	// 下線程序 and quotes no deadline (see decideHandoverNotice).
+	// 〈停止〉 and quotes no deadline (see decideHandoverNotice).
 	noticeText := func() string {
 		return s.winddownNoticeText(offboardKindSoft, 0)
 	}

@@ -2,7 +2,7 @@
 -- T-a9d6 — the record that a session was CUT OFF rather than collected.
 --
 -- Every other offboard path now ends with the agent having been shown the
--- 下線程序 and given room to work it: context pressure, the owner's 下線, the
+-- 〈停止〉 and given room to work it: context pressure, the owner's 下線, the
 -- owner's 重新聚焦. Force-stop is the one that deliberately does not — it sends
 -- no notice at all (owner 2026-08-16: 「強制還需要發訊息嗎」 → no, the recipient
 -- is about to stop existing, so a sentence written to change its behaviour has

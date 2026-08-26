@@ -385,7 +385,7 @@ const (
 	docKindBootSequence      = "boot_sequence"
 )
 
-// The 下線程序 document (T-c9c0). A SINGLETON like the system-interaction block —
+// The 〈停止〉 document (T-c9c0). A SINGLETON like the system-interaction block —
 // one document keyed "global" for every agent and every runtime — because unlike
 // the boot sequence, being collected is the same procedure whatever runtime you
 // are: report, write the in-flight work back, hand yourself over, stop. There is
@@ -522,7 +522,7 @@ func (s *apiServer) buildBootContext(role string, member *Member) (*bootContext,
 	//	2. 使用者自訂 (shared, skipped entirely when blank)
 	//	3. the persona — staff: 角色說明 → 判準（when non-blank）→ 長期筆記;
 	//	   outsource: NOTHING (no role)
-	//	4. 啟動程序 (shared seed, recency-authoritative tail)
+	//	4. 啟動步驟 (shared seed, recency-authoritative tail)
 	//
 	// Only slot 3 differs between the two, and that is the whole difference.
 	// Putting the owner's additions ABOVE the persona is what makes the two

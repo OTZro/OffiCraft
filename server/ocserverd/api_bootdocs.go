@@ -151,7 +151,7 @@ var bootDocRegistry = []bootDocReg{{
 	// two titles still differ per runtime — they are just body text now, which
 	// is where a line no code composes belongs.
 }, {
-	// 下線程序 (T-c9c0). A SINGLETON: being collected is the same procedure for
+	// 〈停止〉 (T-c9c0). A SINGLETON: being collected is the same procedure for
 	// every agent and every runtime, so there is deliberately no runtime axis
 	// here to get wrong.
 	Kind:    docKindOffboard,
@@ -197,7 +197,7 @@ var bootDocRegistry = []bootDocReg{{
 	Cap:     func(s *apiServer) int { return s.offboardCap() },
 	// 🔴 THE ONLY DOCUMENT WHOSE HEAD SURVIVED IN FULL FORCE, DOWN TO ONE
 	// SENTENCE (T-6f44): 「你的結束時刻是 {deadline}。」. {where} went the way of
-	// 下線程序's, and the English 「…offboard now: … Your deadline is …」 went with
+	// 〈停止〉's, and the English 「…offboard now: … Your deadline is …」 went with
 	// it. The deadline itself cannot leave: it differs on every send, only the
 	// server knows it, and the whole body's behaviour is conditioned on it.
 	//
@@ -540,7 +540,7 @@ func (s *apiServer) systemInteractionText() (string, error) {
 // whose head carries a {deadline} slot.
 //
 // ⚠️ WHY THIS ARGUMENT WAS REWRITTEN (T-6f44). It used to run: the soft document
-// quotes no instant, and 下線程序 §1 told an agent to read "no instant" as soft.
+// quotes no instant, and 〈停止〉 §1 told an agent to read "no instant" as soft.
 // That inference is GONE — decision 5 deleted the sniffing rule, and each
 // document now says outright which one it is. The cost of handing the hard arm
 // the soft document is therefore no longer a missing hint, it is a FLAT LIE:
@@ -671,7 +671,7 @@ func (s *apiServer) taskNoticeText(kind string, values map[string]string) string
 // no instant while winddownDeadlineOf is positive and reconcile is already
 // counting.
 //
-// ⚠️ REWRITTEN WITH THE DOCUMENT (T-6f44). The old reason was that 下線程序 §1
+// ⚠️ REWRITTEN WITH THE DOCUMENT (T-6f44). The old reason was that 〈停止〉 §1
 // told an agent to read "no instant" as soft — that rule is gone (decision 5).
 // What replaced it is WORSE for a headless notice, not better: 〈加速停止〉 §1 now
 // reads 「你讀到的是這一份，就代表**你在倒數中**：上面那一行的結束時刻就是死線」,
@@ -1048,7 +1048,7 @@ func (s *apiServer) HandleResetSystemInteractionApiSystemInteractionResetPost(w 
 	s.resetBootDoc(w, r, s.systemInteractionSpec())
 }
 
-// GET /api/offboard — the folded 下線程序 block.
+// GET /api/offboard — the folded 〈停止〉 block.
 func (s *apiServer) HandleGetOffboardApiOffboardGet(w http.ResponseWriter, r *http.Request) {
 	dto, err := s.foldBootDocDTO(s.offboardSpec())
 	if err != nil {
@@ -1073,7 +1073,7 @@ func (s *apiServer) HandleResetOffboardApiOffboardResetPost(w http.ResponseWrite
 	s.resetBootDoc(w, r, s.offboardSpec())
 }
 
-// GET /api/boot-sequence/{runtime_key} — the folded 啟動程序 block for ONE runtime.
+// GET /api/boot-sequence/{runtime_key} — the folded 啟動步驟 block for ONE runtime.
 func (s *apiServer) HandleGetBootSequenceApiBootSequenceRuntimeKeyGet(w http.ResponseWriter, r *http.Request, runtimeKey string) {
 	spec, ok := s.bootSequenceSpecFor(runtimeKey)
 	if !ok {

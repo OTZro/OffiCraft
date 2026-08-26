@@ -620,7 +620,7 @@ func (s *apiServer) HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcc
 //     worker). Written FIRST, and it is what makes everything below safe: the
 //     collect at the end of this close-out kills without re-spawning.
 //   - stopping_since — the stop epoch's anchor. It is what offboardKindOf's
-//     desired-offline arm reads to attach the SOFT 下線程序 notice to the delta,
+//     desired-offline arm reads to attach the SOFT 〈停止〉 notice to the delta,
 //     so this stamp is the whole reason the worker hears anything at all.
 //   - NO forced_stop_at. That anchor belongs to 強制停止 (below), and both of
 //     its reasons are false here: it exists to keep the notice SILENT (this verb
@@ -636,7 +636,7 @@ func (s *apiServer) HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcc
 // 🔴 THE CLEARED REFOCUS IS THE SAME LINE WITH A DIFFERENT MEANING. It used to
 // be "an explicit stop supersedes a handover" — the stop threw the close-out
 // away and killed. Since 停止 IS a close-out, nothing is superseded: the worker
-// keeps working the same 下線程序 it was already working, and all that changes
+// keeps working the same 〈停止〉 it was already working, and all that changes
 // is that no new session follows it. The epoch is still cleared, and now for a
 // mechanical reason instead of a semantic one: autoHandoverWorker's in-flight
 // arm collects a refocus epoch by kill+RESPAWN, which would revive a worker the

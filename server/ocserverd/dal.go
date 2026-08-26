@@ -1635,7 +1635,7 @@ func (d *DAL) DeleteInsightForRole(roleKey string) (int, error) {
 
 // BootDocument mirrors the boot_document table: the owner's overlay over ONE
 // shipped boot-context block (T-791e) — the 系統互動 seed, or one runtime's
-// 啟動程序 seed. Same three-state shape as Insight: no row / tombstoned row =
+// 啟動步驟 seed. Same three-state shape as Insight: no row / tombstoned row =
 // "serve the embedded seed", a live row = "serve this instead".
 //
 // The seed itself is never written here, which is what makes the reset route

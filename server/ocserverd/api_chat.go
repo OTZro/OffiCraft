@@ -763,7 +763,7 @@ func (s *apiServer) servedChatMessageDTO(m ChatMessage) (chatMessageDTO, error) 
 // that once replied to a row which later goes bad CANNOT BOOT — both of those
 // calls are in its boot sequence, and both 500.
 //
-// ⚠️ DO NOT READ "the boot sequence" AS SOMETHING THIS REPO PINS. 啟動程序 is a
+// ⚠️ DO NOT READ "the boot sequence" AS SOMETHING THIS REPO PINS. 啟動步驟 is a
 // per-studio, owner-EDITABLE document (replace_boot_sequence / reset_boot_sequence),
 // not a fixture in this tree, so no test here can hold it to any order and this
 // sentence cannot be verified for a running studio at all — to check a real one,

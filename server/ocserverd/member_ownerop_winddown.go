@@ -4,7 +4,7 @@ package main
 // outsource-worker rule that landed as T-98f4 rule 2 (server/CLAUDE.md, section
 // 「所有 owner 動詞都給收尾機會」).
 //
-// THE DISCRIMINATOR IS ONE FIELD. The 下線程序 wake an agent prints
+// THE DISCRIMINATOR IS ONE FIELD. The 〈停止〉 wake an agent prints
 // is fanned by cli/ocagent's recycleHook.maybeRecycle, and its gate is hard-
 // wired to `desired_state == online ∧ refocus_since > 0` on the member row.
 // A verb that does not stamp refocus_since is therefore INVISIBLE to the agent
@@ -132,7 +132,7 @@ package main
 // purpose rather than bounded by RecycleGrace.
 //
 // Agent-facing surface is unchanged (root CLAUDE.md §9c): same member-topic
-// delta, same refetch, same 下線程序 wake out of the same recycleHook. No new
+// delta, same refetch, same 〈停止〉 wake out of the same recycleHook. No new
 // tool, no new step ⇒ seeds/ needs no companion change.
 
 // The owner verbs that funnel through armMemberOwnerOpHandover, named so the
@@ -213,7 +213,7 @@ func (s *apiServer) memberHasStateToFlush(m Member) bool {
 }
 
 // aRefocusStampWouldReachTheAgent is the server half of a CROSS-LAYER contract
-// (root CLAUDE.md §9c; T-ccc7). The agent prints the 下線程序 wake
+// (root CLAUDE.md §9c; T-ccc7). The agent prints the 〈停止〉 wake
 // from cli/ocagent/listen_hooks.go maybeRecycle, whose FIRST condition is
 // `desired_state == online`. So stamping refocus_since on a member the server
 // has already decided should be offline is not a weaker signal — it is NO
