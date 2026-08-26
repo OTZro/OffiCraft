@@ -1,0 +1,51 @@
+-- +goose Up
+-- T-2 step A — 先砍資料. Every `lessons` overlay whose task_type is not
+-- 'general' is deleted here, and the column itself is left alone: dropping it
+-- is a SEPARATE, LATER change, and the order is the whole point.
+--
+-- 🔴 WHY DATA FIRST, NOT THE COLUMN FIRST. `lessons` is keyed
+-- (role_key, task_type) — see 00001_schema.sql, which states the shard reason.
+-- Remove the column while several task_types still exist for one role_key and
+-- those rows collapse onto ONE surviving key. SQLite's ALTER TABLE ... DROP
+-- COLUMN does not report that as a conflict; it is a lossy fold, and which row
+-- wins is not something the caller gets to choose. Deleting first means the
+-- later drop meets a table where role_key is already unique on its own, so the
+-- fold is an identity. Owner ruling, 2026-08-26: 「應該先砍資料再砍欄位」
+-- 「避免 duplicate」.
+--
+-- 🔴 THE PREDICATE IS "NOT general", NOT A LIST. A migration written against
+-- an enumerated snapshot of today's rows would silently spare anything written
+-- between the snapshot and the moment it runs — and this table is written by
+-- live agents, so that window is real on every station this ships to. The
+-- surviving set is defined by the value that stays, which cannot go stale.
+--
+-- 🔴 IDEMPOTENT BY SHAPE. A DELETE whose predicate is already unsatisfied
+-- affects nothing and does not error, so a re-run (goose down/up, a replayed
+-- upgrade) is a no-op rather than a second, different outcome.
+--
+-- 🔴 `general` ROWS ARE NOT TOUCHED — that is the one irreversible risk in this
+-- change, because a wrongly deleted lessons doc is not recoverable from
+-- anywhere this migration knows about. `<>` (not `LIKE`, not a prefix match) is
+-- what keeps the comparison byte-exact: no wildcard, no collation surprise, no
+-- neighbouring key ('general-something') mistaken for the one being spared.
+--
+-- 🔴 SCOPE, STATED SO IT IS NOT MISTAKEN FOR AN OVERSIGHT: this touches the
+-- `lessons` table and nothing else. The retained-version rows under
+-- document_history (document_kind = 'lessons', document_key
+-- "<role_key>::<task_type>" — the shape DeleteLessonsForRole in dal.go
+-- cascades on) are deliberately NOT deleted here, because the ruling this
+-- change carries out named the lessons rows. A consequence a later reader
+-- needs to know rather than deduce: while those history rows exist, the
+-- document-history restore path can put a non-general row back.
+DELETE FROM lessons
+ WHERE task_type <> 'general';
+
+-- +goose Down
+-- NOT REVERSIBLE. The Up deleted rows and this migration kept no copy of them
+-- anywhere — rolling back does not and cannot bring them back. Writing a Down
+-- that reinstated empty or synthesized rows would be a lie about what is
+-- recoverable, so the rollback is an explicit no-op: it retreats the CODE, not
+-- the data. (The original text of what was deleted was captured out-of-band
+-- before this landed; the task's artifact record, not this file, is where that
+-- lives.)
+SELECT 1;
