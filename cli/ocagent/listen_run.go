@@ -203,7 +203,7 @@ func (l *listener) dispatch(payload []byte) {
 		// Graceful self-stop (desired_state=offline) + recycle (desired_state=online ∧ refocus) are
 		// mutually exclusive, so both are safe to call on every member delta. Side-effect
 		// only: the listener keeps HOLDING the stream — BOTH hooks merely WAKE the
-		// session with the server-composed 下線程序 notice, and the server-
+		// session with the server-composed 〈停止〉 notice, and the server-
 		// dispatched warden kill is the real drop (see listen_hooks.go).
 		l.winddown.maybeWindDown(frame)
 		l.recycle.maybeRecycle(frame)

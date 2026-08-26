@@ -35,7 +35,7 @@ import (
 // authoritative /api/chat (the delta payload is NEVER trusted); a WORK delta
 // (action/task) logs a liveness wake; a `member` delta naming me nudges the graceful
 // self-stop hook (wakes the session with the offboard notice) and the recycle hook
-// (WAKE-ONLY: prints the server's 下線程序 document for the session — see listen_hooks.go).
+// (WAKE-ONLY: prints the server's 〈停止〉 document for the session — see listen_hooks.go).
 //
 // SELF-EXIT (the lifecycle tie — the agent's OWN death signal): the listener IS the
 // SSE holder, so a DEAD agent's orphaned listener would keep its SSE open forever,
