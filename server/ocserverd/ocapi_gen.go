@@ -3970,7 +3970,7 @@ type ServerInterface interface {
 	// Reset a role definition to seed (idempotent tombstone overlay).
 	// (POST /api/roles/{role}/reset)
 	HandleResetRoleApiRolesRoleResetPost(w http.ResponseWriter, r *http.Request, role string)
-	// restart_self(): self-triggered recycle (online-only 409; min-liveness 429).
+	// restart_self(): self-triggered recycle (online-only 409; min-liveness 429; wind-down-ladder 409).
 	// (POST /api/self/refocus)
 	HandleRestartSelfApiSelfRefocusPost(w http.ResponseWriter, r *http.Request)
 	// report_stopped(): anchor the caller's stopped; fire recycle kill.

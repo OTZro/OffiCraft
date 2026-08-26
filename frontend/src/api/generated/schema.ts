@@ -2848,7 +2848,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * restart_self(): self-triggered recycle (online-only 409; min-liveness 429).
+         * restart_self(): self-triggered recycle (online-only 409; min-liveness 429; wind-down-ladder 409).
          * @description ``restart_self()`` — the agent's SELF-TRIGGERED recycle (identity from token, NO
          *     member_id). A self-op: by construction it can only ever restart the CALLER, so it
          *     is strictly WEAKER than ``refocus_member`` (which is admin-gated and targets any
@@ -2862,7 +2862,7 @@ export interface paths {
          *     respawns IN PLACE. Same already-tested machinery as an owner refocus, just
          *     self-triggered; the agent never mints a token or kills its own process.
          *
-         *     ABUSE GUARDS (two, both refuse LOUDLY so the agent can read them):
+         *     ABUSE GUARDS (three, all refuse LOUDLY so the agent can read them):
          *       * ONLINE-ONLY (409) — a self-restart is meaningless with no live session; the
          *         caller's DERIVED presence must be online, mirroring ``refocus_member``.
          *       * MINIMUM-LIVENESS (429) — a call within the first 10 minutes after the session
@@ -2870,6 +2870,12 @@ export interface paths {
          *         refused, so a freshly respawned agent cannot immediately self-restart again and
          *         spin a respawn storm. A missing boot_ts (server-restart amnesia) FAILS OPEN —
          *         never a false 429 on a long-lived session.
+         *       * WIND-DOWN LADDER (409) — restart_self IS 停止, the FIRST rung; a caller already
+         *         further along the ladder (下線 → 加速 → 強制) is refused rather than moved
+         *         BACKWARDS, which would also hand it back the deadline it was counting to.
+         *         Finish the close-out you were given instead — do NOT retry this call. The
+         *         outsource and staff arms of this handler are one rule and answer with the same
+         *         sentence.
          *
          *     ``reason`` (optional): a short human note for WHY — recorded on the recycle log
          *     line so an operator can distinguish a self-restart from an owner refocus.
