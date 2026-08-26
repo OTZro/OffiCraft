@@ -1061,7 +1061,14 @@ func TestMigration00045DeletesOnlyTheRetiredTaskManualHistory(t *testing.T) {
 		}
 	}
 
-	if err := runMigrations(db); err != nil {
+	// 🔴 UP TO 00045 EXACTLY, not the whole chain. This test names ONE
+	// migration's blast radius, so it must run that migration and no later one:
+	// running everything meant its verdict silently included every subsequent
+	// DELETE, and 00061 (drop_non_general_lessons) is one — it legitimately
+	// removes the seeded lessons row 'r-assistant::review-pr', whose task_type
+	// is not 'general', which made this test report 00045 as taking a row it
+	// never touched. Scoping the run is what keeps the failure message true.
+	if err := goose.UpTo(db, "migrations", 45); err != nil {
 		t.Fatalf("delete up: %v", err)
 	}
 
