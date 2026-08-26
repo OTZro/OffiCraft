@@ -153,3 +153,53 @@ func TestTokenExpiry_TheOutsourceCadenceActuallyRunsIt(t *testing.T) {
 			got.RefocusOp, got.RefocusSince, refocusOpTokenExpiry, now)
 	}
 }
+
+// ③ THE PHANTOM 停止中. clearStaleStoppingOnOnline is the survived-stop
+// auto-clear: a desired-online member observed ONLINE while still carrying
+// stopping_since is provably past that stop. A worker had no equivalent and no
+// projection into this one, so the anchor sat on the row forever and the
+// cockpit read 停止中 for a worker that was plainly working.
+func TestStaleStopping_AnOnlineWorkerIsSweptToo(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveOnlineWorker(t, api)
+	now := nowSecs()
+
+	w, _ := api.dal.GetOutsourceWorker(workerID)
+	// Quiet for far longer than the close-out window: no gauge record at all, and
+	// the anchor itself is ancient.
+	w.StoppingSince = now - 10*SoftOffboardGraceSecs
+	if err := api.dal.PutOutsourceWorker(*w); err != nil {
+		t.Fatalf("put worker: %v", err)
+	}
+
+	api.runOutsourceTick(now)
+
+	got, _ := api.dal.GetOutsourceWorker(workerID)
+	if got.StoppingSince != 0.0 {
+		t.Fatalf("stopping_since=%v on a worker that is desired-online AND observed "+
+			"online AND silent for 10x the close-out window — the cockpit shows 停止中 "+
+			"forever for a worker that survived its stop", got.StoppingSince)
+	}
+
+	// POSITIVE CONTROL: a close-out that is genuinely in flight must NOT be
+	// swept. Same shape as staff — the anchor is fresh, so the owner keeps his
+	// only signal that the session has begun closing out.
+	t.Run("a fresh close-out is left alone", func(t *testing.T) {
+		api := newTasksTestServer(t)
+		api.noOutsource = true
+		id := newActiveOnlineWorker(t, api)
+		now := nowSecs()
+		w, _ := api.dal.GetOutsourceWorker(id)
+		w.StoppingSince = now - 1
+		if err := api.dal.PutOutsourceWorker(*w); err != nil {
+			t.Fatalf("put worker: %v", err)
+		}
+		api.runOutsourceTick(now)
+		got, _ := api.dal.GetOutsourceWorker(id)
+		if got.StoppingSince == 0.0 {
+			t.Fatal("a close-out that started one second ago was swept — that erases " +
+				"the owner's only signal that the session is winding down")
+		}
+	})
+}

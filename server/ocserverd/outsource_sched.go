@@ -405,7 +405,7 @@ func (s *apiServer) runOutsourceTick(now float64) {
 	// session to wind down yet, and a desired-offline one is the owner's 停止,
 	// which autoHandoverWorker arm (0) still owns.
 	//
-	// 🔴 T-170e: TWO staff passes ride this projection now, not one, and the
+	// 🔴 T-170e: THREE staff passes ride this projection now, not one, and the
 	// reason the other two were missing is structural rather than an oversight
 	// anybody could have spotted by reading them. Every shared wind-down pass is
 	// reached from runReconcileTick, whose roster read is ListMembers — and
@@ -434,6 +434,11 @@ func (s *apiServer) runOutsourceTick(now float64) {
 	// staff token gets (worker_spawn.go), so it dies the same way — and the whole
 	// close-out is MCP calls carrying it.
 	s.stampTokenExpiryWinddown(ctxProjections, now)
+	// The survived-stop auto-clear: a desired-online worker OBSERVED online while
+	// still carrying stopping_since is provably past that stop. Without it the
+	// anchor sat on the row for the life of the session and the cockpit read
+	// 停止中 for a worker that was plainly working — a phantom 停止中.
+	s.clearStaleStoppingOnOnline(ctxProjections, now)
 	for j, i := range ctxIndex {
 		// Only the four wind-down fields are folded back, never the whole
 		// projection: workerFromMember re-derives Status from activated_ts, and

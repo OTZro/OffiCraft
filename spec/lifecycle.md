@@ -611,6 +611,18 @@ ONE-SHOT, never a standing order):
   so does `activate` — but the non-destructive route to it is the chat's 就地喚醒
   row, NOT the detail panel's Spawn, which for a `stopping` member opens the
   settings dialog and never sends activate.
+- 🔴 **These passes reach an OUTSOURCE WORKER through a projection, not through the
+  reconcile roster (T-170e).** The reconcile tick's roster read is `ListMembers`,
+  which is `kind != 'outsource'` by construction, so a worker is never offered to
+  any of them; `runOutsourceTick` projects its ACTIVE, not-held-down workers with
+  `memberFromWorker`, runs the context pass, the token-expiry pass and the
+  stale-stopping sweep over that slice in the reconcile tick's order, then folds the
+  four wind-down fields back onto the worker rows. Until T-170e only the context
+  pass was projected, so a worker had no token-expiry lead (its session simply died
+  mid-task with no close-out) and no survived-stop sweep (a `stopping_since` left by
+  a stop it survived read 停止中 in the cockpit for the life of the session). **A
+  wind-down rule that is not on this list does not apply to workers, however
+  member-shaped its code looks.**
 - 🔴 **The 停止 → 加速停止 → 強制停止 ladder binds the WORKER owner verbs too.**
   `openOwnerOpHandover` (`worker_spawn.go`) stamps through the shared
   `armRefocusEpoch` rather than writing the four anchors by hand, so a 改機器 /
