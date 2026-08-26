@@ -21,7 +21,9 @@
 //	  - topic != "warden-command"  → SKIP (context-high / chat / keepalive / heartbeat
 //	    are NOT this reader's business): parseCommandFrame returns (nil, nil), no error.
 //	  - rpc=start → args carry the StartParams fields (member_id / persona_context /
-//	    member_token / role / task_type / model / effort / session_name).
+//	    member_token / role / runtime / model / effort / session_name). `task_type`
+//	    rode here until T-2 removed the lessons axis that sourced it; the server no
+//	    longer puts it in a start frame, and the parse below still tolerates one.
 //	  - rpc=stop  → args address the member to kill (member_id + session_name/session_id).
 //	  - correlation: NONE. The warden does not parse a command_id; the server reconciles
 //	    the outcome ASYNC via its own presence projection, never a synchronous reply.
@@ -543,11 +545,17 @@ func argString(args map[string]any, key string) (string, bool) {
 // auth). A start missing/blank any of these is REFUSED — a persona-less or token-less
 // agent is worse than none.
 //
-// The other five (role / task_type / model / effort / session_name) are OPTIONAL:
+// The others (role / runtime / model / effort / session_name) are OPTIONAL:
 // SpawnDeps.start already supplies its own defaults (role→"agent", session→member-<id>,
-// model→omitted from the launch flags, effort→"medium", task_type→parity-only). The dispatcher passes them through when
-// present and leaves them empty otherwise — it MUST NOT be stricter than the executor
-// and refuse a start the executor would happily default (e.g. a legitimate model:"").
+// runtime→"claude", model→omitted from the launch flags, effort→"medium"). The dispatcher passes them
+// through when present and leaves them empty otherwise — it MUST NOT be stricter than
+// the executor and refuse a start the executor would happily default (e.g. a
+// legitimate model:"").
+//
+// `task_type` is parsed alongside them and is INERT (see StartParams.TaskType):
+// T-2 removed the lessons axis it mirrored and the server stopped sending it, so
+// this read tolerates a field nothing downstream consumes. Its `optional` shape is
+// why an absent field is not a refusal — that part never depended on the axis.
 func startParamsFromArgs(args map[string]any) (StartParams, error) {
 	required := func(key string) (string, error) {
 		s, ok := argString(args, key)
