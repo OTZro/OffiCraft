@@ -1188,16 +1188,27 @@ func memberFromWorker(w OutsourceWorker) Member {
 		StoppedSince:     w.StoppedSince,
 		ForcedStopAt:     w.ForcedStopAt,
 		// 🔴 ZERO IS THE DEFINITION HERE, NOT AN OMISSION. The worker vocabulary
-		// has no `waking` concept at all — an OutsourceWorker carries no such
-		// column and nothing on the worker side ever reads one — so projecting 0
-		// is the honest answer rather than a field somebody forgot. Written
-		// EXPLICITLY because the omission and the decision look identical in a
-		// struct literal, and this one has teeth: PutMember's ON CONFLICT SET
-		// includes waking_since, so every write through this projection stores
-		// the zero. That is inert today (nothing reads a worker's waking_since)
-		// and it is NOT new — every putMember(memberFromWorker(w)) since T-72dd
-		// has done it. If the worker vocabulary ever grows the concept, this line
-		// is where it has to stop being a constant.
+		// has no `waking` concept: an OutsourceWorker carries no such column, and
+		// no worker path writes one — so projecting 0 is the honest answer rather
+		// than a field somebody forgot. Written EXPLICITLY because the omission
+		// and the decision look identical in a struct literal, and this one has
+		// teeth: PutMember's ON CONFLICT SET includes waking_since, so every write
+		// through this projection stores the zero. It is NOT new — every
+		// putMember(memberFromWorker(w)) since T-72dd has done it.
+		//
+		// 🔴 IT IS NOT UNREAD, AND THIS COMMENT USED TO SAY IT WAS (T-170e stage
+		// 2 ④). PresenceState reads waking_since, and it IS reached with an
+		// outsource row — the resume roster (api_chat.go) projects one for every
+		// kind, outsource branch included. What makes the zero safe is not that
+		// nobody looks: it is that `waking` needs waking_since > 0, so a worker
+		// can never project it, and the DTO face has its own workerPresence which
+		// anchors waking on the spawn dispatch instead. The distinction matters
+		// because "unread" would make this line free to change and it is not.
+		//
+		// This is therefore a DEAD CONSTANT, not a second implementation of a
+		// staff rule — there is nothing here to converge with the member side,
+		// and no mutant of it can be made to fail. If the worker vocabulary ever
+		// grows the concept, this line is where it has to stop being a constant.
 		WakingSince:        0,
 		BankedCost:         w.BankedCost,
 		LastOp:             w.LastOp,
