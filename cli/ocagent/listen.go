@@ -324,9 +324,9 @@ func defaultJitter() float64 { return 0.5 + rand.Float64()*0.5 }
 // ---------------------------------------------------------------------------
 
 // cursorPath is the agent's SSE cursor file: <home>/<id-lower-or-anon>/sse-cursor.
-// Local state is pure optimisation/dedup (this cursor + the reply-card seen file
-// beside it) — losing it costs a full refetch or one silent re-baseline, never
-// truth. Mirrors cursor_path.
+// Local state is pure optimisation/dedup (this cursor plus the two seen files
+// beside it — chat-seen and replycards-seen) — losing it costs a full refetch or
+// one silent re-baseline, never truth. Mirrors cursor_path.
 func cursorPath(cfg Config) string {
 	key := strings.ToLower(cfg.ID)
 	if key == "" {
