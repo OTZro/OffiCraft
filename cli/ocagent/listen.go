@@ -828,6 +828,13 @@ func attachmentSummary(m map[string]any) string {
 // becoming the session. It also sits comfortably above a short absence (a
 // restart, a redeploy), so the cap is expected to bite only on the long-offline
 // case it was written for. REVISIT with real volume data.
+//
+// WHAT ELSE ALREADY BOUNDS THIS: GET /api/chat returns the newest
+// chatListDefaultLimit (30) messages when the caller passes no limit, and this
+// drain passes none — so the *observed* backlog can never exceed 30 lines today
+// and this cap can only ever trim the oldest ~10 of them. That server default is
+// a default, not a contract (it takes a ?limit= and can be retuned), which is
+// exactly why the client keeps its own ceiling instead of inheriting one.
 const chatBacklogPrintCap = 20
 
 // ---------------------------------------------------------------------------
