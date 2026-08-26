@@ -769,10 +769,11 @@ func fmtAgo(secs float64) string {
 //
 // Advances the seen-id cursor and returns the unread count. `silent` (the boot
 // baseline) advances the cursor WITHOUT printing so connecting does not re-print
-// history — but see chatSeen: the cursor is PERSISTED, so `silent` is now true
-// only on a genuinely first listen, and a later process backfills what it missed
-// (capped by chatBacklogPrintCap). A fetch fault prints nothing and leaves the
-// persisted cursor untouched, so the next drain retries the same window.
+// history — but see chatSeen: the cursor is PERSISTED, so `silent` is true when
+// the store came up UNPRIMED, which is a first listen on this machine OR a state
+// file that could not be read; a primed one backfills what it missed (capped by
+// chatBacklogPrintCap). A fetch fault prints nothing and leaves the persisted
+// cursor untouched, so the next drain retries the same window.
 // R7: reads ONLY the refetched authority, never a delta. Mirrors drain_chat.
 // attachmentSummary renders a message's attachments as a terse badge appended
 // after the body: "📎2圖" (2 images), "📎1檔" (1 non-image file), or the mixed

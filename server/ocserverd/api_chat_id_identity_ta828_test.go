@@ -196,6 +196,15 @@ func TestChatIDs_TheSnapshotTheNotificationAndTheReReadNameTheSameMessage(t *tes
 	}
 }
 
+// notificationPrinters names the ocagent functions allowed to emit the "#" tag
+// on a chat notification line. Anything printing it from somewhere else is out
+// of contract; add it here deliberately, with a reason, rather than widening the
+// search to the whole file (see notificationIDField for why that is fail-open).
+var notificationPrinters = map[string]bool{
+	"drainChat":     true, // printed here until T-bb78
+	"printChatLine": true, // the helper drainChat calls per message since T-bb78
+}
+
 // notificationIDField derives, from the ocagent source itself, the chat-payload
 // field whose value is printed after the "#" on the notification line.
 //
@@ -210,12 +219,20 @@ func TestChatIDs_TheSnapshotTheNotificationAndTheReReadNameTheSameMessage(t *tes
 // is a FATAL — the shape of the line changed, and a human has to re-check this
 // contract rather than have the test quietly widen.
 //
-// It deliberately does NOT pin the enclosing function by name. It used to look
-// only inside drainChat, and T-bb78 moved the printing into a printChatLine
-// helper without changing one byte of what is printed — the guard went red for
-// a refactor, which teaches the next person that a red here means "re-point the
-// anchor" rather than "the contract broke". What this file is about is the
-// FIELD, so the field is what it locates.
+// The search is scoped to notificationPrinters, a NAMED list of the functions
+// that may emit that line. It used to say drainChat and nothing else, and T-bb78
+// moved the printing into a printChatLine helper without changing one byte of
+// what is printed — so a red here can mean "re-point this list" rather than "the
+// contract broke", and the list is where you re-point it.
+//
+// The list is not decoration. Searching the WHOLE FILE instead was tried and is
+// FAIL-OPEN: with the real print writing something other than a bare identifier
+// (say `"#"+strOrEmpty(m["reply_to"])`) and ANY unrelated `"#" + ident` left
+// elsewhere in the file, the guard finds the decoy, derives a field nobody
+// prints, and passes green while the notification names the wrong message. An
+// independent review demonstrated exactly that mutant. Scoped to named printers,
+// the same mutant resolves nothing and this FATALs instead — the shape changed,
+// so a human re-checks it.
 func notificationIDField(t *testing.T) string {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -223,12 +240,12 @@ func notificationIDField(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("parse %s: %v", ocagentListenSource, err)
 	}
-	// Which FUNCTION prints the tag, and which local holds the value after "#"?
+	// Which NAMED printer emits the tag, and which local holds the value after "#"?
 	var drain *ast.FuncDecl
 	printed := ""
 	for _, d := range file.Decls {
 		fn, ok := d.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
+		if !ok || fn.Body == nil || !notificationPrinters[fn.Name.Name] {
 			continue
 		}
 		here := ""
@@ -250,7 +267,7 @@ func notificationIDField(t *testing.T) string {
 			continue
 		}
 		if printed != "" {
-			t.Fatalf("%s prints `\"#\" + <local>` in more than one function "+
+			t.Fatalf("%s prints `\"#\" + <local>` in more than one named printer "+
 				"(%s and %s) — which one names the notification tag can no "+
 				"longer be derived; re-check it by hand",
 				ocagentListenSource, drain.Name.Name, fn.Name.Name)
@@ -258,9 +275,10 @@ func notificationIDField(t *testing.T) string {
 		drain, printed = fn, here
 	}
 	if printed == "" {
-		t.Fatalf("%s no longer prints `\"#\" + <local>` anywhere — the "+
-			"message-id tag changed shape, so which payload field it names can "+
-			"no longer be derived; re-check it by hand", ocagentListenSource)
+		t.Fatalf("none of the named notification printers in %s prints "+
+			"`\"#\" + <local>` — either the tag changed shape or the printing "+
+			"moved to a function not in notificationPrinters; re-check it by "+
+			"hand and re-point that list", ocagentListenSource)
 	}
 
 	// Where did that local come from, and which payload key did it read?
