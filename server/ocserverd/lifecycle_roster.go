@@ -33,6 +33,32 @@ package main
 //     formality to the list gives it to BOTH producers by construction; giving
 //     it to only one requires writing that restriction down as an AppliesTo,
 //     where lifecycle_roster_parity_t170e_test.go reads it back by name.
+//
+// 🔴 KNOWN GAP — LIFECYCLE-LIST-IS-OPT-IN-T170E. Say plainly what this list
+// does NOT buy, because the sentence above is easy to over-read.
+//
+// The parity test guards formalities that are ON the list: narrow one to staff
+// without declaring it and the test fails BY NAME. Measured — a pass added
+// with AppliesTo `m.Kind != KindOutsource` and no entry in
+// lifecyclePassContractedReach goes red and the failure quotes the pass name.
+//
+// It does NOT guard the next person NOT USING THE LIST AT ALL. A new
+// pre-decide roster loop written the old way — inline in runReconcileTick,
+// under the runLifecycleRosterPasses call, never entered here — is invisible to
+// every test in this package today (measured: green). And that is the shape
+// BOTH historical failures actually had (token-expiry lead, survived-stop
+// sweep): nobody narrowed a listed pass; the code simply never went through a
+// shared list, because there wasn't one.
+//
+// So this layer converts "somebody has to remember" into "somebody has to
+// write it down" — real progress, and strictly weaker than "it cannot be done
+// wrong". Closing it needs a guard this list cannot provide from inside
+// itself: an AST-level assertion that the two producers contain no pre-decide
+// roster loop other than their one call into here, with an explicit exclusion
+// list and a required stated reason for any kind-gated branch. That is
+// T-170e stage 5's scope, not this stage's — deliberately not attempted here,
+// and named rather than left as a nice-sounding claim. Grep this anchor to
+// find every place the gap is recorded.
 
 // ── the entry filter ─────────────────────────────────────────────────────────
 
@@ -227,6 +253,35 @@ func (s *apiServer) runLifecycleRosterPasses(roster []Member, now float64) {
 // workerFromMember re-derives Status from activated_ts, and round-tripping a
 // row through it here would let an unrelated derivation change ride in on a
 // context stamp.
+//
+// 🔴 KNOWN GAP — FOLD-BACK-STOPPING-HALF-UNPROVEN-T170E. Only TWO of the four
+// folded fields are pinned by a test. Deleting the RefocusSince/RefocusOp lines
+// turns TestWorkerFoldBack_APromotionSurvivesTheLoopBreakInTheSameTick red
+// (measured). Deleting the StoppingSince/StoppedSince lines leaves the whole
+// wind-down suite GREEN (also measured) — and that is NOT a hole somebody
+// forgot to cover. It is structural, and it is written down here rather than
+// papered over with a test that would only be asserting on plumbing:
+//
+//   - StoppedSince is not written by ANY pass on the list, so folding it back
+//     copies a value nothing changed.
+//   - StoppingSince is written by exactly one pass, clearStaleStoppingOnOnline,
+//     which skips every row whose DesiredState is not online.
+//   - The only same-tick reader of the SNAPSHOT's StoppingSince/StoppedSince is
+//     autoHandoverWorker's 停止 arm (0) (worker_spawn.go), which sits inside
+//     `if w.DesiredState == DesiredStateOffline`; and the only decide-side
+//     reader of obs.StoppingSince is decideDown, which reconcileDecide reaches
+//     only when desired_state is offline.
+//   - The Active FSM path does not read the snapshot at all — it re-reads the
+//     row from the DAL (`fresh`) before deciding, so it sees the pass's
+//     persisted clear either way.
+//
+// Writer and readers are on disjoint sides of desired_state, so no red test for
+// these two lines is constructible today without a behaviour change. They are
+// kept because "fold back what the passes may have touched" is the invariant,
+// not "fold back the two we can currently prove" — the day a pass stamps
+// stopping_since on a desired-offline row, these lines are what keeps the rest
+// of the tick from deciding off a stale snapshot. If you make that change, this
+// gap closes and a test becomes writable: come back and write it.
 //
 // Callers hold s.outsourceMu.
 func (s *apiServer) runWorkerLifecyclePasses(workers []OutsourceWorker, now float64) {

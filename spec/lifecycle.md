@@ -629,8 +629,19 @@ ONE-SHOT, never a standing order):
   reader — and `lifecycle_roster_parity_t170e_test.go` — sees it by name. Exactly
   one pass is restricted today: `recycle_loop_break` is staff-only, because a worker
   already has a loop-break in `autoHandoverWorker` asking a different question
-  (`boot_ts > refocus_since`). **A wind-down rule that is not on this list does not
-  apply to anybody, however member-shaped its code looks.**
+  (`boot_ts > refocus_since`). A wind-down rule that goes ON this list and is then
+  quietly narrowed to one side fails by name in that test.
+  - 🔴 **KNOWN GAP — `LIFECYCLE-LIST-IS-OPT-IN-T170E`.** An earlier draft of this
+    bullet claimed "a wind-down rule that is not on this list does not apply to
+    anybody, however member-shaped its code looks." That is a **claim, not a
+    mechanism**, and it is corrected here rather than deleted because it was the
+    stronger-sounding half. Measured: a new pre-decide roster loop written the old
+    way — inline in `runReconcileTick`, staff roster only, never entered into
+    `lifecycleRosterPasses` — is caught by **nothing**. The list guards narrowing a
+    listed formality; it does not force a formality onto the list. Both historical
+    failures (token-expiry lead, survived-stop sweep) had the second shape, not the
+    first. Closing it needs an AST-level guard over both producers plus an explicit
+    exclusion list — T-170e stage 5, deliberately out of stage 3's scope.
 - 🔴 **The ENTRY filter is one function too: `lifecyclePolicyFor(m).ShouldExist()`.**
   It is the only place the 正職/外包 difference may be spelled at the door — the
   owner's ruling that 「正職會不會有 instance 存活取決於 人物設定有沒有這個角色，外包則是取決於

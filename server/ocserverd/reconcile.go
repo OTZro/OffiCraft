@@ -2627,8 +2627,41 @@ func (s *apiServer) dispatchIdentitySweepNow(memberID, keepWarden string, now fl
 //     machine is reaped the moment the 正身 connects on the dispatched machine.
 //
 // Best-effort; a read fault or a warden sub is a clean no-op. Gated OFF by
-// --no-reconcile. Lock order: outsourceMu (worker target read) strictly BEFORE
-// reconcileMu — the one place both are held; nothing takes them reversed.
+// --no-reconcile.
+//
+// 🔴 CORRECTION (T-170e stage 3 — this comment used to say something false).
+// It read:
+//
+//	"Lock order: outsourceMu (worker target read) strictly BEFORE reconcileMu
+//	 — the one place both are held; nothing takes them reversed."
+//
+// The last clause was true; the middle one was not, and it is the half that
+// got quoted. THIS FUNCTION NEVER HOLDS BOTH LOCKS. The worker target read
+// goes through workerSpawnObs (worker_spawn.go), which takes s.outsourceMu and
+// releases it with `defer` inside its OWN body — so by the time control
+// returns here and s.reconcileMu.Lock() below runs, outsourceMu is already
+// gone. The neighbouring comments said so all along and contradicted this one:
+// workerSpawnObs's own doc ("…the identity-sweep 正身 check, which never hold
+// s.outsourceMu") and connectionIsTheGenuineArticle's ("Both callers reach
+// this WITHOUT holding s.outsourceMu").
+//
+// Re-measured over every non-test .go in the package (over-approximate call
+// graph: any identifier matching a declared name counts as an edge, so method
+// values passed without parens — `Run: s.stampContextHighRecycle` — count):
+// ZERO paths in either direction acquire one of {reconcileMu, outsourceMu}
+// while the other is held. There is therefore no ordering edge between them at
+// all, in either direction — not an order to obey, and not a deadlock to fear.
+//
+// The record is kept rather than the sentence silently swapped because the
+// false version was cited as a hard technical obstacle ("merging the two ticks
+// would invert a documented lock order") in T-170e stage 3's first write-up.
+// It was not one. If the two ticks are ever merged, the real constraint is a
+// different one and it is SELF-deadlock, not inversion: a merged tick holding
+// outsourceMu for its whole body must not call a helper that takes outsourceMu
+// again (Go mutexes are not reentrant) — workerSpawnObs, workerReportStopping,
+// dismissOutsourceWorkersForTask, dismissOutsourceWorkerByID,
+// noteWorkerStopNoSuchSession. runReconcileTick's call tree reaches none of
+// them today.
 func (s *apiServer) identitySweepOnConnect(memberID, machineClaim string) {
 	if s.noReconcile || memberID == "" || machineClaim == "" {
 		return
