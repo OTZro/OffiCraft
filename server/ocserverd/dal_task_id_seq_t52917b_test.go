@@ -2,11 +2,11 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 
 	"github.com/pressly/goose/v3"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"testing"
 )
 
@@ -72,40 +72,105 @@ func TestRowsAffectedIsExactOnThisDriver(t *testing.T) {
 // comments in migrate.go/dal.go assert it; SetMaxOpenConns(1) is the line that
 // is supposed to cause it; nothing until now watched it happen.
 //
-// The probe holds several transactions' worth of work in flight at once and
-// records the highest concurrent in-use count the pool ever reports.
+// 🔴 WHAT THIS TEST NO LONGER DOES, and why (T-52917b review, 建議 4). It used to
+// run the contention probe below while tracking the highest `db.Stats().InUse`
+// it ever saw, and assert `peak <= 1`. That assertion was NEAR-TAUTOLOGICAL:
+// `SetMaxOpenConns(1)` is the very thing that makes database/sql refuse to open
+// a second connection, so `InUse` is arithmetically incapable of exceeding 1
+// while the cap is in place — and if somebody REMOVED the cap, ① below has
+// already failed the test before the probe runs. It could not fail
+// independently of ①, so it was reporting confidence it had not earned. It is
+// gone; do not add it back.
+//
+// ① IS THE ASSERTION WITH TEETH ON THE CAP. ② is a different guard: sixteen
+// concurrent read-then-write transactions must ALL commit (errors are now
+// asserted, not swallowed as they were before) and must advance the counter by
+// EXACTLY sixteen.
+//
+// 🔴 MEASURED MUTANT MATRIX, so the next reader does not have to guess which
+// assertion covers what. Each row was run with ① temporarily disabled, so that
+// ② was answering on its own:
+//
+//	mutation                                       ①      ②
+//	SetMaxOpenConns(1) → (4), _txlock kept         RED    green
+//	_txlock=immediate dropped AND pool → (4)       RED    RED
+//
+// Read that honestly. ① is the ONLY thing that catches a widened cap: with
+// BEGIN IMMEDIATE still in the DSN, SQLite's own file lock serialises the four
+// connections and busy_timeout absorbs the wait, so ② sails through. ② earns
+// its place on the second row — it is the assertion that notices when the
+// transactions stop being IMMEDIATE, failing with `database is locked (517)`
+// (SQLITE_BUSY_SNAPSHOT) as a DEFERRED reader tries to upgrade. Neither
+// assertion subsumes the other, and NEITHER is the old peak probe.
 func TestWritePoolIsCappedAtOneConnection(t *testing.T) {
 	db := openTaskSeqTestDB(t)
+
+	// ① the toothed one.
 	if got := db.Stats().MaxOpenConnections; got != 1 {
-		t.Fatalf("write pool MaxOpenConnections = %d, want 1", got)
+		t.Fatalf("write pool MaxOpenConnections = %d, want 1 — the mint's critical "+
+			"section rests on database/sql serialising our own writers onto a "+
+			"single connection (openSQLite's SetMaxOpenConns(1))", got)
 	}
 
-	var peak int64
+	var before int
+	if err := db.QueryRow(`SELECT next FROM task_id_seq WHERE id = 1`).Scan(&before); err != nil {
+		t.Fatalf("read counter: %v", err)
+	}
+
+	// ② real contention: every transaction must succeed, and none may be lost.
+	const workers = 16
+	errs := make(chan error, workers*3)
 	var wg sync.WaitGroup
 	start := make(chan struct{})
-	for i := 0; i < 16; i++ {
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			<-start
 			tx, err := db.Begin()
 			if err != nil {
+				errs <- fmt.Errorf("Begin: %w", err)
 				return
 			}
-			if inUse := int64(db.Stats().InUse); inUse > atomic.LoadInt64(&peak) {
-				atomic.StoreInt64(&peak, inUse)
+			// 🔴 A READ *THEN* A WRITE, deliberately — the same shape as the mint
+			// (mintTaskNumber reads `next`, then claims it). A bare
+			// `SET next = next + 1` would be atomic INSIDE SQLite and could not
+			// lose an update no matter how the pool is configured, which would
+			// make ② tautological in its own way.
+			var cur int
+			if err := tx.QueryRow(
+				`SELECT next FROM task_id_seq WHERE id = 1`).Scan(&cur); err != nil {
+				errs <- fmt.Errorf("Query: %w", err)
+				_ = tx.Rollback()
+				return
 			}
-			_, _ = tx.Exec(`UPDATE task_id_seq SET next = next + 1 WHERE id = 1`)
-			_ = tx.Commit()
+			if _, err := tx.Exec(
+				`UPDATE task_id_seq SET next = ? WHERE id = 1`, cur+1); err != nil {
+				errs <- fmt.Errorf("Exec: %w", err)
+				_ = tx.Rollback()
+				return
+			}
+			if err := tx.Commit(); err != nil {
+				errs <- fmt.Errorf("Commit: %w", err)
+			}
 		}()
 	}
 	close(start)
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("a write-pool transaction failed under contention: %v — with "+
+			"MaxOpenConns(1) and BEGIN IMMEDIATE these must queue, not collide", err)
+	}
 
-	if peak > 1 {
-		t.Fatalf("the write pool had %d connections in use at once, want at most 1 "+
-			"— BEGIN IMMEDIATE serialising in Go is what the mint's critical "+
-			"section rests on", peak)
+	var after int
+	if err := db.QueryRow(`SELECT next FROM task_id_seq WHERE id = 1`).Scan(&after); err != nil {
+		t.Fatalf("read counter: %v", err)
+	}
+	if after-before != workers {
+		t.Fatalf("counter advanced by %d across %d concurrent transactions, want "+
+			"%d — an increment was LOST, so the write pool is not serialising the "+
+			"read-modify-write the mint depends on", after-before, workers, workers)
 	}
 }
 

@@ -6,24 +6,34 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 )
 
 // ── T-52917b:遞增票號 ─────────────────────────────────────────────────────────
 //
-// 🔴 THE ASSERTION THAT MATTERS IS THE ROW COUNT, NOT "ARE THERE DUPLICATES".
+// 🔴 A MINTING COLLISION IS NOW LOUD, AND THIS TEST CATCHES IT TWICE OVER.
 //
-// task.id is a TEXT PRIMARY KEY and PutTask is an `ON CONFLICT (id) DO UPDATE`
-// upsert. Put those two together and a minting collision can NEVER show up as
-// two rows sharing an id — the second create silently OVERWRITES the first and
-// the API still answers 200. The damage is a MISSING ROW, so the only assertion
-// that can see it counts rows. A test that scanned the returned ids for
-// duplicates would be evergreen: the id column physically cannot hold one.
+// HOW IT USED TO BE SILENT, and why the assertions below are shaped the way
+// they are. task.id is a TEXT PRIMARY KEY, so two rows can never share an id.
+// While the create path wrote through PutTask's `ON CONFLICT (id) DO UPDATE`
+// upsert, a repeated mint therefore did not error: the second create silently
+// OVERWROTE the first and the API still answered 200. The damage was an
+// invisible MISSING ROW, so counting rows was the ONLY assertion that could see
+// it — a test that scanned the returned ids for duplicates was evergreen.
 //
-// (Even on a driver where the second write ERRORED instead of overwriting, a
-// UNIQUE index is a damage DETECTOR, not a fallback — the row is still lost.
-// Either way: count the rows.)
+// WHAT CHANGED (T-52917b review, 建議 1). CreateTaskMintingID no longer uses the
+// conflict clause: it INSERTs (dal_tasks.go, taskWriteInsertOnly). A repeated
+// mint now trips the primary key, the whole create transaction rolls back, and
+// the request answers 500. So the collision surfaces FIRST at the status-code
+// loop below, before the row count is ever consulted.
+//
+// 🔴 THE ROW COUNT STAYS ANYWAY, and is still the load-bearing assertion. The
+// INSERT closes the "200 while a row vanishes" door only for THIS one statement.
+// The row count is the assertion that does not care HOW a row went missing — it
+// would still catch a future path that reintroduces an upsert, a swallowed
+// error, or a rollback nobody reported. A status-code check alone would not.
 //
 // The property under test is UNIQUENESS, not contiguity. A gap (a burned
 // number from a rolled-back transaction) is fine; two tasks called T-7 is not.
@@ -70,24 +80,32 @@ func TestConcurrentCreatesMintDistinctIncrementalIDs(t *testing.T) {
 	close(start)
 	wg.Wait()
 
+	// ⓪ Since 建議 1 this is where a minting collision announces itself: two
+	// creates that mint the same number make the SECOND INSERT trip the TEXT
+	// PRIMARY KEY, roll its transaction back and answer 500. Before that change
+	// this loop stayed all-200 while rows quietly disappeared.
 	for _, c := range codes {
 		if c != http.StatusOK {
-			t.Fatalf("a create returned %d, want 200 — every request must succeed "+
-				"before the row count means anything", c)
+			t.Fatalf("a create returned %d, want 200 — a non-200 here is a minting "+
+				"COLLISION: two creates claimed the same number and the second "+
+				"INSERT was refused by the id primary key. (Before T-52917b's "+
+				"review this same fault answered 200 and lost a row instead.)", c)
 		}
 	}
 
-	// ① 🔴 THE LOAD-BEARING ASSERTION. One create ⇒ one durable row. A minting
-	// collision cannot show as a duplicate id (upsert on a TEXT PRIMARY KEY), so
-	// it shows here and nowhere else.
+	// ① 🔴 THE LOAD-BEARING ASSERTION. One create ⇒ one durable row. It outlives
+	// ⓪ on purpose: ⓪ only sees a collision that this one INSERT refuses, while
+	// this counts what actually survived, however it went missing.
 	var rows int
 	if err := api.dal.rdb.QueryRow(`SELECT COUNT(*) FROM task`).Scan(&rows); err != nil {
 		t.Fatalf("count task rows: %v", err)
 	}
 	if rows != n {
 		t.Fatalf("ROW COUNT %d, want %d — %d create_task calls all answered 200 but "+
-			"%d task row(s) are missing: two creates minted the SAME id and the "+
-			"upsert overwrote the first one", rows, n, n, n-rows)
+			"%d task row(s) are missing. A create reported success and left no "+
+			"durable row: either the create INSERT grew a conflict clause again "+
+			"(taskWriteInsertOnly, dal_tasks.go) or an error on the write path is "+
+			"being swallowed", rows, n, n, n-rows)
 	}
 
 	// ② the ids the API HANDED BACK must also be n distinct values. If the API
@@ -204,4 +222,109 @@ func TestLegacyRandomHexTaskIDsStayUsable(t *testing.T) {
 	if err != nil || still == nil || still.Title != "legacy task" {
 		t.Fatalf("legacy task damaged by a new mint: %v %v", still, err)
 	}
+}
+
+// TestMintRetryExhaustionIs500WithNoOrphanRow pins the one branch of the mint
+// that had ZERO coverage: what a caller sees when mintTaskNumber's
+// compare-and-set loop runs out of attempts (T-52917b review, 建議 3).
+//
+// 🔴 HOW THE EXHAUSTION IS FORCED, and why it is not a fake. The loop exits
+// through this branch when the CAS reports RowsAffected=0 mintRetryLimit times
+// running. Under production settings that is unreachable — the write pool is one
+// connection and Begin is IMMEDIATE, so nothing can move the counter between
+// this transaction's read and its claim (see the long comment on mintRetryLimit;
+// an external writer does not even get past BEGIN). Rather than stub the loop
+// out, the test makes the DATABASE refuse the claim: a BEFORE UPDATE trigger on
+// task_id_seq that RAISE(IGNORE)s. The UPDATE is then skipped and sqlite3_changes
+// reports 0 — the exact signal the loop reads as "somebody moved it" — so the
+// REAL loop runs its REAL bound and exits through the REAL error path.
+//
+// What is pinned is the OUTCOME the ticket cares about, measured end to end
+// through the real create handler:
+//   - the request fails LOUDLY: HTTP 500, wire code "internal_error"
+//   - it leaves ZERO orphan rows, because mint and insert share one transaction
+func TestMintRetryExhaustionIs500WithNoOrphanRow(t *testing.T) {
+	api := newTasksTestServer(t)
+
+	// positive control FIRST: without the trigger this very request is a 200.
+	// Without it, a test that always 500s (a typo'd body, a missing member)
+	// would look exactly like a pass.
+	if rec := postCreateTask(t, api, "control"); rec.Code != http.StatusOK {
+		t.Fatalf("control create answered %d, want 200 — the 500 asserted below "+
+			"would not be evidence of anything", rec.Code)
+	}
+	var before int
+	if err := api.dal.rdb.QueryRow(`SELECT COUNT(*) FROM task`).Scan(&before); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if before != 1 {
+		t.Fatalf("control left %d rows, want 1", before)
+	}
+
+	// now make every CAS report 0 rows.
+	if _, err := api.dal.wdb.Exec(`
+		CREATE TRIGGER t52917b_refuse_claim BEFORE UPDATE ON task_id_seq
+		BEGIN SELECT RAISE(IGNORE); END`); err != nil {
+		t.Fatalf("install refusing trigger: %v", err)
+	}
+	// prove the trigger really does what the test needs, so a SQLite that stopped
+	// honouring RAISE(IGNORE) turns this test red instead of green-for-free.
+	res, err := api.dal.wdb.Exec(`UPDATE task_id_seq SET next = next + 1 WHERE id = 1`)
+	if err != nil {
+		t.Fatalf("probe update: %v", err)
+	}
+	if ra, err := res.RowsAffected(); err != nil || ra != 0 {
+		t.Fatalf("with the refusing trigger installed an UPDATE reported %d rows "+
+			"(err %v), want 0 — this test cannot exhaust the retry loop without "+
+			"it, and would be asserting nothing", ra, err)
+	}
+
+	rec := postCreateTask(t, api, "exhausted")
+
+	// ① loud, not silent.
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("a create whose mint cannot claim a number answered %d, want 500 "+
+			"— running out of retries must FAIL, never fall through to a task "+
+			"with an unclaimed id", rec.Code)
+	}
+	var envelope struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode error envelope: %v (body %q)", err, rec.Body.String())
+	}
+	if envelope.Error.Code != "internal_error" {
+		t.Fatalf("error code %q, want %q", envelope.Error.Code, "internal_error")
+	}
+	// the message must name the counter, or the on-call reading the 500 has
+	// nothing to go on.
+	if !strings.Contains(envelope.Error.Message, "task_id_seq") {
+		t.Fatalf("500 message %q does not mention task_id_seq — an exhausted mint "+
+			"must say what ran out", envelope.Error.Message)
+	}
+
+	// ② 🔴 ZERO ORPHANS. mint and insert share one transaction, so a failed mint
+	// rolls the whole create back. A row here would mean a task exists that the
+	// caller was told does not.
+	var after int
+	if err := api.dal.rdb.QueryRow(`SELECT COUNT(*) FROM task`).Scan(&after); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if after != before {
+		t.Fatalf("task rows went %d → %d across a create that answered 500 — a "+
+			"failed mint must leave NO orphan row", before, after)
+	}
+}
+
+// postCreateTask drives the REAL create handler once and hands back the recorder.
+func postCreateTask(t *testing.T, api *apiServer, title string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	api.HandleCreateTaskApiTasksPost(rec, taskReq(t, "POST", "/api/tasks",
+		map[string]any{"title": title, "executor_member_id": "m-exec"},
+		"m-exec", "agent"))
+	return rec
 }
