@@ -89,8 +89,11 @@ python jobs until the golang path is verified live, so a golang failure leaves z
    `launchctl bootstrap`s it, and **verifies the job is alive AND stable across a settle
    window** (a crash-loop under KeepAlive is caught, not false-greened). The command
    reader starts unconditionally once the warden has a real token/id (no toggle);
-   `var/log/ocwarden.err.log` shows `command reader:
-   enabled (SSE .../api/events)` and the server sees the warden SSE connection on
+   `var/log/ocwarden.out.log` shows `command reader:
+   enabled (SSE .../api/events)` — that stream is warden STDOUT (the plist's
+   StandardOutPath); `ocwarden.err.log` carries only the `[ocwarden spawn]` env
+   diagnostics and has never held a `command reader:` line — and the server sees
+   the warden SSE connection on
    sub=`m-1a079734d735` (the SOLE drainer — verified: no other connection holds
    /api/events on that sub).
 3. **Verify the golang path spawns for real** (this is the acceptance test, not

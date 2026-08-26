@@ -457,13 +457,19 @@ log "launchd $WARDEN_LABEL loaded"
 # verify the warden actually connected its SSE command reader (log line:
 # "[ocwarden] command reader: enabled (SSE …)"). bootstrap-here installs into the
 # server user's ~/.officraft/warden, so logs land under that warden root's
-# log/ dir. Poll the err/out log briefly (repo var/log kept as a legacy fallback).
+# log/ dir. Poll ocwarden.out.log ONLY (repo var/log kept as a legacy fallback):
+# every warden operational line goes through cli/ocwarden/main.go's logf, which
+# writes to the `out` writer main() passes as os.Stdout, and the plist maps
+# StandardOutPath -> ocwarden.out.log. err.log carries only the [ocwarden spawn]
+# env diagnostics. Handing grep BOTH files (as this did until 2026-08-26) makes
+# the probe pass on either, so it could not tell the two apart -- which left the
+# server's "check the warden log" receipts pointing at err.log unguarded.
 WARDEN_ROOT="$HOME_DIR/.officraft/warden"
 sse_ok=""
 for _ in $(seq 1 20); do
   if grep -qE 'command reader: enabled \(SSE' \
-       "$WARDEN_ROOT/log/ocwarden.err.log" "$WARDEN_ROOT/log/ocwarden.out.log" \
-       "$REPO_ROOT/var/log/ocwarden.err.log" "$REPO_ROOT/var/log/ocwarden.out.log" 2>/dev/null; then
+       "$WARDEN_ROOT/log/ocwarden.out.log" \
+       "$REPO_ROOT/var/log/ocwarden.out.log" 2>/dev/null; then
     sse_ok=1; break
   fi
   sleep 1
@@ -583,7 +589,7 @@ remote "launchctl print $GUI/$WARDEN_LABEL >/dev/null 2>&1" \
   || fail_stage "remote $WARDEN_LABEL not loaded on $SECOND_MACHINE"
 sse_ok=""
 for _ in $(seq 1 20); do
-  if remote 'grep -qE "command reader: enabled \(SSE" "$HOME/.officraft/warden/log/ocwarden.err.log" "$HOME/.officraft/warden/log/ocwarden.out.log" 2>/dev/null'; then
+  if remote 'grep -qE "command reader: enabled \(SSE" "$HOME/.officraft/warden/log/ocwarden.out.log" 2>/dev/null'; then
     sse_ok=1; break
   fi
   sleep 1

@@ -185,7 +185,7 @@ func TestOnboarding_WardenNeverConnectsReportsUnlanded(t *testing.T) {
 	if !ok || st.OK {
 		t.Fatalf("the wake step must be recorded as not-ok: %+v", report.Steps)
 	}
-	for _, want := range []string{"has not connected", "retrying", "ocwarden.err.log"} {
+	for _, want := range []string{"has not connected", "retrying", "ocwarden.out.log"} {
 		if !strings.Contains(st.Reason, want) {
 			t.Errorf("the reason must contain %q so the owner knows what to check, got %q", want, st.Reason)
 		}
