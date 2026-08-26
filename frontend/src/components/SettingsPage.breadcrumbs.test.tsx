@@ -3,7 +3,7 @@
 // the page title directly below, and the old ‹ 返回 back row is GONE.
 //
 //   1. Per-page header assertions: landing / 系統更新與備份 / 角色誌 / 角色詳情 /
-//      系統互動·使用者自訂·啟動程序 / 任務手冊 (list + hub) / 參數調整 all
+//      系統互動·使用者自訂·啟動步驟 / 任務手冊 (list + hub) / 參數調整 all
 //      render the breadcrumb and NO back button.
 //   2. Crumb jumps: a parent segment click lands on that page; jumps that have
 //      a hash route (#settings / #settings/roles) also write the hash through
@@ -87,7 +87,7 @@ describe("SettingsPage · unified breadcrumb header (T-8f6e)", () => {
     expectHeader(utils, [s.title, s.roles, zh.office.role.assistant]);
   });
 
-  it("系統互動 / 使用者自訂 / 啟動程序: 設定 › 全域情境 › <doc>", async () => {
+  it("系統互動 / 使用者自訂 / 啟動步驟: 設定 › 全域情境 › <doc>", async () => {
     // T-a241 moved these documents out of 角色誌 into their own section, so the
     // MIDDLE segment of every one of these trails is 全域情境 — and it has to
     // be, because that is the page the document is listed on now.
@@ -103,12 +103,12 @@ describe("SettingsPage · unified breadcrumb header (T-8f6e)", () => {
       await utils.findByText(s.systemName);
     }
 
-    // 啟動程序 is ONE entry listing TWO documents (T-bac4: an index of two nav
+    // 啟動步驟 is ONE entry listing TWO documents (T-bac4: an index of two nav
     // rows, replacing the stacked pair). It gets ONE trail — the second row
     // must not add a second one. Without this half the loop above is satisfied
     // by a page that dropped the codex document altogether.
     //
-    // ⚠️ This used to count the STRING 啟動程序 and require exactly one. That
+    // ⚠️ This used to count the STRING 啟動步驟 and require exactly one. That
     // stopped being the right probe when the index grew its own <h1> (every
     // other settings page has one), which makes the string appear twice on a
     // perfectly correct page. Counting the TRAIL is what the assertion always
@@ -120,7 +120,7 @@ describe("SettingsPage · unified breadcrumb header (T-8f6e)", () => {
 
     // …and one level deeper. The runtime's own name is the TERMINAL segment on
     // purpose: Breadcrumbs renders the last one as plain text, so a trail
-    // ending at 啟動程序 would leave a reader who opened one runtime unable to
+    // ending at 啟動步驟 would leave a reader who opened one runtime unable to
     // reach the other without going out to 全域情境 and back in.
     fireEvent.click(utils.getByTestId("boot-entry-claude"));
     await utils.findByTestId("doc-card-edit");

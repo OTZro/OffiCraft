@@ -50,7 +50,7 @@
  * however short the first was — measured then at y=860 on an 844-tall phone.
  * The wrapper made the PAGE the single scroller instead.
  *
- * 啟動程序 is now an index of two nav rows, each runtime on its own page, so
+ * 啟動步驟 is now an index of two nav rows, each runtime on its own page, so
  * nothing in this repo stacks two DocCards: the rule was removed rather than
  * left as dead CSS that reads like a live constraint. Re-stacking two DocCards
  * without restoring something like it puts the second one off screen again —
@@ -75,7 +75,7 @@
   text-align: left;
   color: inherit;
   font: inherit;
-  /* The names are long ("啟動程序（Claude Code）") and the phone is narrow —
+  /* The names are long ("啟動步驟（Claude Code）") and the phone is narrow —
    * this is the surface a phone met the bug on, so it wraps rather than
    * pushing the page sideways. */
   overflow-wrap: anywhere;

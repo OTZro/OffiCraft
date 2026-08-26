@@ -683,7 +683,7 @@ export type DocumentKind =
   // third step means opposite things, so nothing may copy one over the other.
   | "system_interaction"
   | "boot_sequence"
-  // T-c9c0: the 下線程序 document. A SINGLETON keyed "global" like
+  // T-c9c0: the 〈停止〉 document. A SINGLETON keyed "global" like
   // system_interaction — being collected is the same procedure whatever
   // runtime an agent runs, so there is deliberately no runtime axis here.
   | "offboard"

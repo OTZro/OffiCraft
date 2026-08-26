@@ -336,7 +336,7 @@ export function OfficePage() {
         }}
         // The escalation ladder, same three verbs and same order as 正職
         // (T-ed79). 停止 no longer kills: it asks the worker to work its
-        // 下線程序 and waits for its own report_stopped.
+        // 〈停止〉 and waits for its own report_stopped.
         onStop={async () => {
           await api.stopWorker(workerDetail.id);
         }}

@@ -887,7 +887,7 @@ export interface ServerSettingsView {
    * (docCap.ts); same floor-is-the-default, ceiling-100000 rule as above. */
   docCapCharsSystemInteraction: number;
   docCapCharsBootSequence: number;
-  /** T-c9c0: the 下線程序 document's cap, same surface and same rule. */
+  /** T-c9c0: the 〈停止〉 document's cap, same surface and same rule. */
   docCapCharsOffboard: number;
   /** T-c9b4: the wake snapshot's chat block budget, in the same rune unit.
    * NOT a document cap — it bounds a block the server repacks on every read, so
@@ -1983,7 +1983,7 @@ export interface Api {
    * FIRST rung of 停止 → 加速停止 → 強制停止 and, since T-ed79, a GRACEFUL
    * CLOSE-OUT rather than a kill (owner 2026-08-21 「往正職靠：外包那顆改成優雅
    * 停止」): it holds the worker down (desired offline, presence
-   * "stopping"/"stopped", no auto-revival), shows it the 下線程序 and WAITS for
+   * "stopping"/"stopped", no auto-revival), shows it the 〈停止〉 and WAITS for
    * its own report_stopped. No deadline unless the owner escalates. The bound
    * task stays put. Idempotent; unknown/released → 404. (T-f190, T-ed79) */
   stopWorker(id: string): Promise<OutsourceWorkerView>;
@@ -2246,12 +2246,12 @@ export interface Api {
 
   /**
    * Preview a member's initial boot prompt from /api/bootstrap — 系統互動 ⊕
-   * global context ⊕ role definition ⊕ insight ⊕ lessons ⊕ 啟動程序, every
+   * global context ⊕ role definition ⊕ insight ⊕ lessons ⊕ 啟動步驟, every
    * document FOLDED (the owner's edit wins, the seed is what an unedited
    * installation folds to). Pass the ROLE key (NOT a member_id) so the server
    * mints NO token: a UI preview must never receive an agent credential
    * (§3.4 #29 — member_id is the warden-spawn path). ⚠️ That same omission is
-   * why the reply carries the CLAUDE 啟動程序 whatever runtime the member on
+   * why the reply carries the CLAUDE 啟動步驟 whatever runtime the member on
    * screen runs: with no member the server has no runtime to resolve (T-30e4).
    */
   getBootstrap(role: string): Promise<BootstrapView>;

@@ -640,7 +640,7 @@ function foldBootDoc(kind: BootDocKind, key: string): WireBootDoc {
 
 /** Which cap judges this document — the LIVE setting where the server reads
  * one, and `taskEventCapCharsDefault` for the four task events, which is a
- * constant on the server too. 加速停止 shares 下線程序's setting, mirroring the
+ * constant on the server too. 加速停止 shares 〈停止〉's setting, mirroring the
  * registry row that calls `offboardCap()` for both. */
 function bootDocCap(kind: BootDocKind): number {
   switch (kind) {
@@ -3966,7 +3966,7 @@ export const mockApi: Api = {
   async stopWorker(id: string): Promise<OutsourceWorkerView> {
     // 停止 (T-f190; a GRACEFUL close-out since T-ed79). Held down: desired_state
     // offline (member parity) and the in-flight refocus cleared — but NO kill.
-    // The worker is shown its 下線程序 and keeps its session until it reports
+    // The worker is shown its 〈停止〉 and keeps its session until it reports
     // stopped, so a worker that was online projects "stopping" here, not
     // "stopped". unknown/released → 404. Idempotent.
     const w = outsourceWorkers.find((x) => x.id === id);
@@ -5359,7 +5359,7 @@ export const mockApi: Api = {
     //      ENTIRELY when the folded text is blank, exactly like the owner block
     //      — the gate is the TEXT, never is_default/has_seed (those answer
     //      different questions and would emit an orphan header);
-    //   4. 啟動程序 — FOLDED, LAST (recency-authoritative tail), and always the
+    //   4. 啟動步驟 — FOLDED, LAST (recency-authoritative tail), and always the
     //      CLAUDE document. 🔴 The missing runtime parameter is DELIBERATE, not
     //      the other half of the T-30e4 gap: the real request carries `{role}`
     //      and no member_id ON PURPOSE (http.ts getBootstrap — a UI preview must

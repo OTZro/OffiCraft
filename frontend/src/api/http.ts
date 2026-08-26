@@ -1377,7 +1377,7 @@ export const httpApi: Api = {
 
   async stopWorker(id: string): Promise<OutsourceWorkerView> {
     // POST /api/outsource-workers/{id}/stop -> OutsourceWorkerDTO (owner/admin-agent).
-    // Since T-ed79 this ASKS: it holds the worker down and shows it the 下線程序,
+    // Since T-ed79 this ASKS: it holds the worker down and shows it the 〈停止〉,
     // and the 收口 is the worker's own report_stopped. The kill moved to
     // forceStopWorker below.
     const wire = unwrap(

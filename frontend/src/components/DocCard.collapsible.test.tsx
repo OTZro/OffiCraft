@@ -1,6 +1,6 @@
 // DocCard's `collapsible` branch — pinned here BECAUSE NOTHING SHIPS IT (T-bac4).
 //
-// The page it was built for (啟動程序 stacking Claude + Codex) is gone; 啟動程序
+// The page it was built for (啟動步驟 stacking Claude + Codex) is gone; 啟動步驟
 // is an index of two rows now, one document per page. The prop survived that
 // removal on purpose — its two labels are theme WORDING CODES a customised
 // theme pack may already carry values for, and dropping codes makes those
@@ -36,9 +36,9 @@ const NOOP = async () => {};
 
 function renderCard(over: Partial<DocCardProps> = {}) {
   const props: DocCardProps = {
-    title: "啟動程序（Claude Code）",
+    title: "啟動步驟（Claude Code）",
     doc: DOC,
-    crumbs: [{ label: "設定" }, { label: "啟動程序（Claude Code）" }],
+    crumbs: [{ label: "設定" }, { label: "啟動步驟（Claude Code）" }],
     onSave: NOOP,
     ...over,
   };
@@ -83,12 +83,12 @@ describe("DocCard · collapsible", () => {
     // This is the defect an independent review found on T-6278 and it is the
     // reason to keep this branch under test at all: an aria-label once stood on
     // this button reading 展開這份文件, so EVERY collapsed card announced the
-    // same name and a screen reader could not tell 啟動程序（Claude Code）from
+    // same name and a screen reader could not tell 啟動步驟（Claude Code）from
     // （Codex CLI）— the very defect that page existed to fix, rebuilt in the
     // accessibility tree, plus WCAG 2.5.3 Label in Name.
     const utils = renderCard({ collapsible: true });
     expect(
-      utils.getByRole("button", { name: "啟動程序（Claude Code）" })
+      utils.getByRole("button", { name: "啟動步驟（Claude Code）" })
     ).toBeTruthy();
     expect(utils.getByTestId("doc-card-collapse").getAttribute("aria-label")).toBeNull();
   });

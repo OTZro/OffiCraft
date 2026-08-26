@@ -1,5 +1,5 @@
 // components/BootDocPage.tsx — the surface for ONE boot-context / lifecycle
-// document (T-791e, widened by T-3201): 系統互動, the two 啟動程序, 下線程序,
+// document (T-791e, widened by T-3201): 系統互動, the two 啟動步驟, 〈停止〉,
 // 加速停止 and the four task-event procedures.
 //
 // 🔴 IT DOES NOT KNOW WHICH DOCUMENT IT IS HOLDING, and that is deliberate.
@@ -99,7 +99,7 @@ export function BootDocPage({
   historyTitle: string;
   crumbs: Crumb[];
   /** Start closed behind the heading. 🔴 NO CALLER PASSES THIS (T-bac4): the
-   * page that stacked two of these is gone — 啟動程序 is an index of two rows
+   * page that stacked two of these is gone — 啟動步驟 is an index of two rows
    * now, one document per page. This line used to say it WAS passed by that
    * page, in the present tense. See DocCard's `collapsible` for why the prop
    * outlived its only caller and what has to happen together if it is retired. */

@@ -104,9 +104,11 @@ describe("SettingsPage · boot / lifecycle documents", () => {
   it("opens 加速停止 through its own row, not 停止's", async () => {
     // The two share a cap and sit in the same group; opening one must not land
     // on the other. The page TITLE is what says which one is on screen — the
-    // 加速停止 body legitimately contains 「下線程序」 (it is the same procedure
-    // under a shorter clock), so a body-text assertion would be measuring the
-    // seed rather than the routing.
+    // 名字本身就分不開：「加速停止」整個字串裡就包著「停止」，所以任何拿
+    // 「停止」去比對內文的斷言，在加速停止那一頁上也會過。
+    // ⚠️ 上一版這裡寫的是「加速停止 的內文本來就含有「下線程序」」——
+    // 那句話今天是假的：seeds/accelerated_stop.md 裡一次「下線程序」都沒有
+    // （T-6f44 改名之後就沒了）。理由還成立，但成立的原因換了一個。
     const utils = await openRolesLog();
     fireEvent.click(utils.getByTestId("boot-doc-entry-accelerated_stop"));
     await utils.findByTestId("doc-card-edit");

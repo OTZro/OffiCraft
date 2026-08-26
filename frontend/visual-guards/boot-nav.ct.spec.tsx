@@ -1,9 +1,9 @@
-// HOTSPOT — 設定 › 全域情境 › 啟動程序 on a phone (T-bac4, replacing T-6278;
+// HOTSPOT — 設定 › 全域情境 › 啟動步驟 on a phone (T-bac4, replacing T-6278;
 // the middle segment became 全域情境 in T-a241).
 //
 // THE DEFECT UNDERNEATH ALL THREE SHAPES IS A GEOMETRY DEFECT, AND IT WAS
 // REPORTED FROM A PHONE. The page originally rendered both documents in full,
-// stacked, so 啟動程序（Codex CLI）sat thousands of pixels below the fold; the
+// stacked, so 啟動步驟（Codex CLI）sat thousands of pixels below the fold; the
 // owner scrolled to the end of the first card, read the card's bottom edge as
 // the end of the page, and reported the second document as missing. Nothing was
 // broken in the DOM, which is exactly why jsdom cannot see it — the sibling
@@ -61,7 +61,7 @@ import { zh } from "../src/i18n/locales/zh";
 
 const s = zh.settings;
 
-/** Walk in the way a person does: 設定 landing → 全域情境 → 啟動程序. */
+/** Walk in the way a person does: 設定 landing → 全域情境 → 啟動步驟. */
 async function openBootIndex(page: import("@playwright/test").Page) {
   await page.getByText(s.globalContext).first().click();
   await page.getByText(s.bootName).first().click();
@@ -114,7 +114,7 @@ for (const width of [320, 390, 402, 1040]) {
     ).toBe(0);
 
     // (4) Nothing spills sideways. The row titles carry the longest words on
-    // the page (「啟動程序（Claude Code）」) next to a fixed-size icon and a
+    // the page (「啟動步驟（Claude Code）」) next to a fixed-size icon and a
     // chevron, which is the geometry most likely to overflow the narrowest
     // phone.
     const spill = await page.evaluate(() => {
