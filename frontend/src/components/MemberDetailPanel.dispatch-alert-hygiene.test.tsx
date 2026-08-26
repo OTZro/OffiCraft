@@ -505,7 +505,8 @@ describe("relocate notice self-heals", () => {
   });
 
   it("drops the previous verdict when a fresh attempt is fired", async () => {
-    // The wake half has this and so does the hook; the hand-written twin did not
+    // The wake half has this, and so did the shared relocate hook back when one
+    // existed (it has since been deleted); the hand-written twin did not
     // (independent review r3). Without it a relocate that failed and was then
     // retried SUCCESSFULLY keeps its "nothing was dispatched" alert on screen —
     // a notice about an attempt that is over, which is the exact lie this whole

@@ -167,6 +167,7 @@ DoD 第 1 條明文指定的改動，且**能力本身沒有消失**（改模型
    <br>**這條規則今天仍然有效，但它的出處變了（T-170e）**：當年寫的是「照 `MachinePicker` 的規則」，
    而那個元件已經刪除。今天兩支面板各自實作同一份 `pinnedOfflineMachine` ＋ `settingsMachineOptions`
    （除了 `member.`／`worker.` 之外逐字相同），互為對照 —— 要 audit 這條規則請比對那兩段，不要去找 `MachinePicker`。
+   ⚠️ 那兩段只承接「留在清單裡 ＋ 標離線」；**`disabled` 那一半不在裡面**，它在各自的 `<option disabled={machine.offline}>`，要一起看。
 3. 確認送出：`launchChanged` → `api.setWorkerModel`；`machineChanged` → `api.relocateWorker`。
    PATCH 先於 relocate（正職 `saveSettings` 的同一條理由：relocate 會重生 session，
    設定必須先落地，否則新 session 用舊模型起來）。

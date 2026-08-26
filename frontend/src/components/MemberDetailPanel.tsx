@@ -443,8 +443,12 @@ export function MemberDetailPanel({
     // leaves its "nothing was dispatched" alert on screen — a stale notice about
     // an attempt that is over. THE WAKE PATH DOES THIS TOO, deliberately: see
     // setWakeUndispatched(false) in runActivate. The pair is the invariant, and
-    // this comment is the only place it is written down — drop either half and
-    // nothing goes red, because the symptom is a stale alert a human has to see.
+    // BOTH halves are pinned — in MemberDetailPanel.dispatch-alert-hygiene
+    // .test.tsx, "a RETRY clears the previous verdict before the new one lands
+    // (mutant ME)" for wake and "drops the previous verdict when a fresh attempt
+    // is fired" for relocate. Both were reviewer mutants that came back GREEN
+    // once. Delete either line and that file reddens on purpose: if you landed
+    // here from a red test, it is not overfitted — this is it working.
     setRelocateUndispatched(false);
     try {
       // 🔴 D: the PATCH goes FIRST. This is one owner edit of one settings
