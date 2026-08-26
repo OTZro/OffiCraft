@@ -273,8 +273,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read one runtime's 啟動程序 block — the boot checklist that ends that runtime's boot context. runtime_key is 'claude' or 'codex'; they are separate documents because step 3 of the two says opposite things (claude mounts its own `ocagent listen`, codex must not — the sidecar owns it), so any other value is a 404 rather than a silent fallback to claude. Folded: the owner's edit when one exists, otherwise the shipped factory seed. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.
-         * @description Read ONE runtime's 啟動程序 block — the boot checklist appended last to that runtime's boot context (T-791e).
+         * Read one runtime's 啟動步驟 block — the boot checklist that ends that runtime's boot context. runtime_key is 'claude' or 'codex'; they are separate documents because step 3 of the two says opposite things (claude mounts its own `ocagent listen`, codex must not — the sidecar owns it), so any other value is a 404 rather than a silent fallback to claude. Folded: the owner's edit when one exists, otherwise the shipped factory seed. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.
+         * @description Read ONE runtime's 啟動步驟 block — the boot checklist appended last to that runtime's boot context (T-791e).
          *
          *     runtime_key is 'claude' or 'codex' and they are SEPARATE documents on purpose: step 3 of the two sequences says opposite things (claude mounts its own `ocagent listen`; codex must NOT, because the App Server sidecar owns it), so serving one where the other belongs leaves the agent unable to come online. Any other value is a 404 rather than a silent fallback.
          *
@@ -283,8 +283,8 @@ export interface paths {
         get: operations["handle_get_boot_sequence_api_boot_sequence__runtime_key__get"];
         put?: never;
         /**
-         * Replace the EDITABLE HALF of the 啟動程序 block of ONE runtime ({runtime_key, body}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. Neither runtime's document carries a read-only head today (T-6f44, owner's decision 4 removed it), so the body IS the whole document; the head machinery still exists for the kinds that do carry one, and there is no way to write a head on any face. The stored result is judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.
-         * @description Replace the EDITABLE HALF of ONE runtime's 啟動程序 block: ``{body}`` (T-791e; body-only since T-3201).
+         * Replace the EDITABLE HALF of the 啟動步驟 block of ONE runtime ({runtime_key, body}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. Neither runtime's document carries a read-only head today (T-6f44, owner's decision 4 removed it), so the body IS the whole document; the head machinery still exists for the kinds that do carry one, and there is no way to write a head on any face. The stored result is judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.
+         * @description Replace the EDITABLE HALF of ONE runtime's 啟動步驟 block: ``{body}`` (T-791e; body-only since T-3201).
          *
          *     runtime_key is 'claude' or 'codex' and they are SEPARATE documents on purpose: step 3 of the two sequences says opposite things (claude mounts its own `ocagent listen`; codex must NOT, because the App Server sidecar owns it), so serving one where the other belongs leaves the agent unable to come online. Any other value is a 404 rather than a silent fallback.
          *
@@ -311,8 +311,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Restore ONE runtime's 啟動程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). runtime_key is 'claude' or 'codex'; anything else is a 404. No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it, which is what makes this the recovery route when a bad edit has stopped agents from booting. The overlay being discarded is retained in the document history. Owner or admin assistant only.
-         * @description Reset ONE runtime's 啟動程序 block to the SHIPPED seed (T-791e): an idempotent tombstone of the overlay.
+         * Restore ONE runtime's 啟動步驟 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). runtime_key is 'claude' or 'codex'; anything else is a 404. No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it, which is what makes this the recovery route when a bad edit has stopped agents from booting. The overlay being discarded is retained in the document history. Owner or admin assistant only.
+         * @description Reset ONE runtime's 啟動步驟 block to the SHIPPED seed (T-791e): an idempotent tombstone of the overlay.
          *
          *     NO length cap is checked on this path, matching ``reset_role``/``reset_insight`` — the factory text is part of the product. This is the route that has to work when a bad edit has stopped agents booting: it needs no agent, no MCP client and no member identity, only the owner's token, because at that moment there is nobody online to ask.
          *
@@ -2186,8 +2186,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read the 下線程序 block — the wrap-up checklist the server hands an agent at the moment it is about to collect that session. It is a SINGLETON: one document for every agent and every runtime, keyed `global` like the 系統互動 block. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.
-         * @description Read the 下線程序 block — the wrap-up checklist the server hands an agent at the moment it is about to collect that session (T-c9c0).
+         * Read the 〈停止〉 block — the wrap-up checklist the server hands an agent at the moment it is about to collect that session. It is a SINGLETON: one document for every agent and every runtime, keyed `global` like the 系統互動 block. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.
+         * @description Read the 〈停止〉 block — the wrap-up checklist the server hands an agent at the moment it is about to collect that session (T-c9c0).
          *
          *     It is a SINGLETON, keyed `global` exactly like the 系統互動 block: one document for every agent and every runtime, because being collected works the same way whoever you are.
          *
@@ -2196,8 +2196,8 @@ export interface paths {
         get: operations["handle_get_offboard_api_offboard_get"];
         put?: never;
         /**
-         * Replace the EDITABLE HALF of the 下線程序 block ({body}) — the wrap-up checklist an agent is handed when its session is being collected. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. This document carries NO read-only head today (T-6f44, owner's decision 4 removed it), so the body IS the whole document; the head machinery still exists for the kinds that do carry one, and there is no way to write a head on any face. The stored result is judged against the doc.cap_chars.offboard cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_offboard always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.
-         * @description Replace the EDITABLE HALF of the 下線程序 block: ``{body}`` (T-c9c0; body-only since T-3201).
+         * Replace the EDITABLE HALF of the 〈停止〉 block ({body}) — the wrap-up checklist an agent is handed when its session is being collected. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. This document carries NO read-only head today (T-6f44, owner's decision 4 removed it), so the body IS the whole document; the head machinery still exists for the kinds that do carry one, and there is no way to write a head on any face. The stored result is judged against the doc.cap_chars.offboard cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_offboard always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.
+         * @description Replace the EDITABLE HALF of the 〈停止〉 block: ``{body}`` (T-c9c0; body-only since T-3201).
          *
          *     Writes an OVERLAY — the shipped seed is never modified, so ``/api/offboard/reset`` can always reach the factory text. ``body`` is REQUIRED (a replace must never infer "empty" from a missing key); ``allow_shrink`` (default false) must be set explicitly to replace an existing body with an empty one. The read-only head is not part of the request and cannot be: the server joins the shipped one back on. The ``doc.cap_chars.offboard`` cap is checked UNCONDITIONALLY against the STORED result — ``allow_shrink`` governs the opposite direction and is not a bypass.
          *
@@ -2222,8 +2222,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Restore the 下線程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.
-         * @description Reset the 下線程序 block to the SHIPPED seed (T-c9c0): an idempotent tombstone of the overlay, so the folded read falls back to `seeds/offboard.md` (``is_default`` → true).
+         * Restore the 〈停止〉 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.
+         * @description Reset the 〈停止〉 block to the SHIPPED seed (T-c9c0): an idempotent tombstone of the overlay, so the folded read falls back to `seeds/offboard.md` (``is_default`` → true).
          *
          *     NO length cap is checked on this path, matching ``reset_system_interaction``/``reset_boot_sequence``: the factory text is part of the product, so a cap the owner raised or set afterwards must never be able to block the way back to it.
          *
@@ -2438,8 +2438,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Stop (停止) an outsource worker: ask it to work its 下線程序 and wait for its own report_stopped -- no kill, no deadline (owner/admin agent).
-         * @description Stop (停止) an outsource worker — a GRACEFUL CLOSE-OUT since T-ed79 (owner 2026-08-21 「往正職靠：外包那顆改成優雅停止，強制殺移到第三顆按鈕」), the worker twin of a member deactivate. It sets desired_state='offline' (a direct mirror of member.desired_state — which makes every scheduler auto-revival path skip it: the shared reconcile-FSM rescue never revives an owner-held-down worker), stamps stopping_since, clears any in-flight refocus epoch, fans the 下線程序 notice at the worker's OWN session and RETURNS. It does NOT kill: the 收口 is the worker's own report_stopped, exactly as on the staff 下線 arm, and there is NO deadline unless the owner presses 加速停止 (rc-27d1710174dd 「不要兜底」). It does NOT stamp forced_stop_at — that anchor belongs to force-stop, and it is what keeps THAT verb silent. An OFFLINE worker (no session to hear the notice) takes the immediate kill instead. The worker projects presence 'stopping'/'stopped' (honest, never fake-green); the bound task stays in its own status. Idempotent. 404 unknown/released. Escalate with POST /api/outsource-workers/{id}/accelerated-stop, then POST /api/outsource-workers/{id}/force-stop. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. ⚠️ T-ed79 moved ONE of the T-6020 four off this floor — set_outsource_worker_model, owner 2026-08-21 — and this row was NOT part of that ruling. Exposed as an MCP tool since T-6020.
+         * Stop (停止) an outsource worker: ask it to work its 〈停止〉 document and wait for its own report_stopped -- no kill, no deadline (owner/admin agent).
+         * @description Stop (停止) an outsource worker — a GRACEFUL CLOSE-OUT since T-ed79 (owner 2026-08-21 「往正職靠：外包那顆改成優雅停止，強制殺移到第三顆按鈕」), the worker twin of a member deactivate. It sets desired_state='offline' (a direct mirror of member.desired_state — which makes every scheduler auto-revival path skip it: the shared reconcile-FSM rescue never revives an owner-held-down worker), stamps stopping_since, clears any in-flight refocus epoch, fans the 〈停止〉 notice at the worker's OWN session and RETURNS. It does NOT kill: the 收口 is the worker's own report_stopped, exactly as on the staff 下線 arm, and there is NO deadline unless the owner presses 加速停止 (rc-27d1710174dd 「不要兜底」). It does NOT stamp forced_stop_at — that anchor belongs to force-stop, and it is what keeps THAT verb silent. An OFFLINE worker (no session to hear the notice) takes the immediate kill instead. The worker projects presence 'stopping'/'stopped' (honest, never fake-green); the bound task stays in its own status. Idempotent. 404 unknown/released. Escalate with POST /api/outsource-workers/{id}/accelerated-stop, then POST /api/outsource-workers/{id}/force-stop. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. ⚠️ T-ed79 moved ONE of the T-6020 four off this floor — set_outsource_worker_model, owner 2026-08-21 — and this row was NOT part of that ruling. Exposed as an MCP tool since T-6020.
          */
         post: operations["handle_stop_outsource_worker_api_outsource_workers__id__stop_post"];
         delete?: never;
@@ -2889,7 +2889,7 @@ export interface paths {
          *     EFFECT: stamps the CALLER's ``refocus_since`` and fans a ``member`` delta, exactly
          *     like the owner's refocus. Nothing else is dispatched here — the STANDARD recycle
          *     orchestration (§4.5) then carries the handover: the delta reaches the agent's OWN
-         *     listen connection → the RecycleHook prints the 下線程序 document the SERVER PUSHED in that same delta (`offboard_notice`) → the agent
+         *     listen connection → the RecycleHook prints the 〈停止〉 document the SERVER PUSHED in that same delta (`offboard_notice`) → the agent
          *     runs it (report_stopping → baton → lessons → report_stopped) → the server kills →
          *     respawns IN PLACE. Same already-tested machinery as an owner refocus, just
          *     self-triggered; the agent never mints a token or kills its own process.
@@ -7646,7 +7646,7 @@ export interface components {
             chat_budget_chars: number;
             /**
              * Doc Cap Chars Boot Sequence
-             * @description The size cap on a 啟動程序 block of the boot context, in CHARACTERS (Unicode code points). ONE knob for BOTH runtimes (claude and codex), each document measured on its own text — they are two renderings of one short checklist, so a studio that needs more room for one needs it for the other. The floor of the adjustable range is this document's shipped default (the `default` field above), the ceiling is 100000.
+             * @description The size cap on a 啟動步驟 block of the boot context, in CHARACTERS (Unicode code points). ONE knob for BOTH runtimes (claude and codex), each document measured on its own text — they are two renderings of one short checklist, so a studio that needs more room for one needs it for the other. The floor of the adjustable range is this document's shipped default (the `default` field above), the ceiling is 100000.
              * @default 15000
              */
             doc_cap_chars_boot_sequence: number;
@@ -7682,7 +7682,7 @@ export interface components {
             doc_cap_chars_manual_sop: number;
             /**
              * Doc Cap Chars Offboard
-             * @description The size cap on the 下線程序 block, in CHARACTERS (Unicode code points). The floor of the adjustable range is this document's shipped default (the `default` field above), the ceiling is 100000. It is sized like the 啟動程序 blocks rather than the 系統互動 handbook: both are short ordered checklists an agent has to be able to finish under a deadline.
+             * @description The size cap on the 〈停止〉 block, in CHARACTERS (Unicode code points). The floor of the adjustable range is this document's shipped default (the `default` field above), the ceiling is 100000. It is sized like the 啟動步驟 blocks rather than the 系統互動 handbook: both are short ordered checklists an agent has to be able to finish under a deadline.
              * @default 15000
              */
             doc_cap_chars_offboard: number;
@@ -7831,12 +7831,12 @@ export interface components {
             chat_budget_chars?: number | null;
             /**
              * Doc Cap Chars Boot Sequence
-             * @description The size cap on a 啟動程序 block of the boot context, in CHARACTERS (Unicode code points). One knob for both runtimes, each measured on its own text. Must be at least this document's shipped default (see `SettingsDTO.doc_cap_chars_boot_sequence`, whose `default` is that floor) and at most 100000.
+             * @description The size cap on a 啟動步驟 block of the boot context, in CHARACTERS (Unicode code points). One knob for both runtimes, each measured on its own text. Must be at least this document's shipped default (see `SettingsDTO.doc_cap_chars_boot_sequence`, whose `default` is that floor) and at most 100000.
              */
             doc_cap_chars_boot_sequence?: number | null;
             /**
              * Doc Cap Chars Offboard
-             * @description The size cap on the 下線程序 block, in CHARACTERS (Unicode code points). Must be at least this document's shipped default (see `SettingsDTO.doc_cap_chars_offboard`, whose `default` is that floor) and at most 100000.
+             * @description The size cap on the 〈停止〉 block, in CHARACTERS (Unicode code points). Must be at least this document's shipped default (see `SettingsDTO.doc_cap_chars_offboard`, whose `default` is that floor) and at most 100000.
              */
             doc_cap_chars_offboard?: number | null;
             /**
