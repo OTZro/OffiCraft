@@ -95,3 +95,61 @@ func TestWorkerWindDownLadder_AModelChangeMayNotUndoAnAcceleratedStop(t *testing
 		}
 	})
 }
+
+// ② TOKEN EXPIRY. A worker's session token is minted by the SAME mintAgentToken
+// with the SAME agent_token_ttl as a staff member's (worker_spawn.go), so it
+// dies exactly the same way — and every step of the close-out is an MCP call on
+// that token. tokenExpiryOf refused to answer for anything that was not
+// KindAssistant, which silently swept outsource in with warden.
+func TestTokenExpiry_AnOutsourceSessionIsDerivableToo(t *testing.T) {
+	s := newReconcileTestServer(t)
+	ttl := s.agentTokenTTLValue()
+	const mintedAt = 1_769_904_000.0
+
+	worker := testAgent("ow-170e-derive")
+	worker.Kind = KindOutsource
+	worker.SessionBootTS = mintedAt
+	if got := tokenExpiryOf(worker, ttl); got != mintedAt+float64(ttl) {
+		t.Fatalf("tokenExpiryOf(outsource)=%v, want %v — an outsource worker's token "+
+			"is minted by mintAgentToken with the same TTL a staff token is, so it "+
+			"expires and its session must be given the same lead", got, mintedAt+float64(ttl))
+	}
+
+	// The one kind that really is exempt stays exempt: a warden's credential is
+	// minted by mintWardenToken with NO exp claim at all.
+	warden := testAgent("mach-170e")
+	warden.Kind = KindWarden
+	warden.SessionBootTS = mintedAt
+	if got := tokenExpiryOf(warden, ttl); got != 0 {
+		t.Fatalf("a warden got a derived token expiry of %v — its credential has no "+
+			"exp claim at all", got)
+	}
+}
+
+// …and the pass has to be WIRED on the worker side. The worker roster never
+// passes through runReconcileTick (ListMembers excludes it), so a correct
+// tokenExpiryOf with no projection in runOutsourceTick is indistinguishable
+// from the bug.
+func TestTokenExpiry_TheOutsourceCadenceActuallyRunsIt(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveOnlineWorker(t, api)
+	now := nowSecs()
+
+	w, _ := api.dal.GetOutsourceWorker(workerID)
+	// Anchored so the derived expiry is one second inside the lead.
+	w.SessionBootTS = now + tokenExpiryLeadSecs - 1 - float64(api.agentTokenTTLValue())
+	if err := api.dal.PutOutsourceWorker(*w); err != nil {
+		t.Fatalf("put worker: %v", err)
+	}
+
+	api.runOutsourceTick(now)
+
+	got, _ := api.dal.GetOutsourceWorker(workerID)
+	if got.RefocusOp != refocusOpTokenExpiry || got.RefocusSince != now {
+		t.Fatalf("after the outsource cadence: refocus_op=%q refocus_since=%v, want "+
+			"%q at %v — a worker whose token is about to die must be asked to close "+
+			"out while the calls that close it out still work",
+			got.RefocusOp, got.RefocusSince, refocusOpTokenExpiry, now)
+	}
+}

@@ -515,8 +515,9 @@ ONE-SHOT, never a standing order):
 
 - **Token expiry opens a 停止 an hour before the token dies (T-ed79, owner
   2026-08-21).** `stampTokenExpiryWinddown` runs in the same tick, straight after
-  the context pass, and stamps `refocus_op = token_expiry` on a live staff session
-  whose agent token is inside its last `tokenExpiryLeadSecs`. It is a plain 停止:
+  the context pass, and stamps `refocus_op = token_expiry` on any live agent session
+  — staff **or outsource worker** — whose agent token is inside its last
+  `tokenExpiryLeadSecs`. It is a plain 停止:
   the owner's model for a token renewal is the same as for a refocus or a model
   change — 「就是呼叫軟下線，然後等他 report_stopped 以後再呼叫上線」 — so the
   collection is the agent's own stopped report or 強制停止, exactly as for every
@@ -533,6 +534,12 @@ ONE-SHOT, never a standing order):
   🔴 **WHY IT HAS TO EXIST**: every step of the offboard sequence is an MCP call on
   the session's own bearer token, so an expired token does not degrade the close-out
   — it makes the close-out impossible.
+  🔴 **The ONE exempt kind is `warden`, and the reason is its CREDENTIAL, not its
+  role**: `mintWardenToken` mints with no `exp` claim at all, so there is no expiry
+  to lead. `tokenExpiryOf` therefore excludes warden by name (T-170e). It used to
+  allow-list `assistant`, which swept outsource in with warden even though a
+  worker's token comes from the same `mintAgentToken` with the same
+  `auth.agent_token_ttl` — the exemption was wider than the reason written beside it.
   Ordering matters: the context pass runs FIRST, because both passes skip a member
   that already carries `refocus_since` and `canPromoteToAcceleratedStop` only
   promotes a `context_notice` epoch — a token stamp landing first would therefore
