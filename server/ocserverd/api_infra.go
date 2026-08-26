@@ -36,6 +36,22 @@ const (
 	sseHeartbeat = 15 * time.Second
 	ssePoll      = 250 * time.Millisecond
 
+	// These values are part of the operator-facing detach log contract. Keep
+	// them exact and stable: the log is how an operator separates a normal
+	// peer drop from a takeover, a failed write, or the station itself closing.
+	// sseDetachReasonUnset is the PRE-DECISION state, and it must never equal
+	// any reason we can conclude. setDetachReason's "first concrete cause wins"
+	// rule is a comparison against this value: while the initial value doubled
+	// as a conclusion (peer-closed did, until T-3b4e review), a later call
+	// silently overwrote a real cause and nothing went red. The printed
+	// default lives in detachReasonForLog, so the operator-facing vocabulary
+	// is unchanged.
+	sseDetachReasonUnset           = ""
+	sseDetachReasonTakeover        = "takeover"
+	sseDetachReasonPeerClosed      = "peer-closed"
+	sseDetachReasonWriteFailed     = "write-failed"
+	sseDetachReasonStationShutdown = "station-shutdown"
+
 	// sseStationSHAHeader carries this station's build sha to the client when
 	// the stream opens (T-5b83), so ocagent's connection line can name the
 	// build it just attached to.
@@ -49,6 +65,41 @@ const (
 	// for the guard this still owes.
 	sseStationSHAHeader = "X-Officraft-Station-Sha"
 )
+
+// markStationShutdown records the process-level cause before the server
+// cancels request contexts or the upgrade re-execs. Without this ordering a
+// server shutdown is indistinguishable from a peer FIN/RST inside an SSE
+// handler.
+func (s *apiServer) markStationShutdown() {
+	s.stationShuttingDown.Store(true)
+}
+
+func (s *apiServer) clearStationShutdown() {
+	s.stationShuttingDown.Store(false)
+}
+
+func (s *apiServer) cancelStationContext() {
+	if s.stationCancel != nil {
+		s.stationCancel()
+	}
+}
+
+// detachReasonForLog keeps the operator vocabulary exactly as it was: an exit
+// that concluded nothing is still reported as peer-closed, which is what a
+// return with no recorded cause means. The sentinel never reaches the log.
+func detachReasonForLog(reason string) string {
+	if reason == sseDetachReasonUnset {
+		return sseDetachReasonPeerClosed
+	}
+	return reason
+}
+
+func (s *apiServer) sseContextDetachReason() string {
+	if s.stationShuttingDown.Load() {
+		return sseDetachReasonStationShutdown
+	}
+	return sseDetachReasonPeerClosed
+}
 
 // sseWriteTimeout bounds a single SSE write to the client socket (T-7e07,
 // BACKSTOP layer). The PRIMARY half-open reaper is TCP keepalive on the
@@ -130,6 +181,15 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 		// new session is live here → never a zero-live-session window.
 		s.identitySweepOnConnect(memberID, machineID)
 	}
+	detachReason := sseDetachReasonUnset
+	setDetachReason := func(reason string) {
+		// The first concrete cause wins. In particular, a write failure that
+		// happens while the station is closing is still useful socket evidence,
+		// not a retroactive peer/context guess.
+		if detachReason == sseDetachReasonUnset {
+			detachReason = reason
+		}
+	}
 	defer func() {
 		// last gates the §5.2 edge hooks: a kicked listener's Disconnect
 		// reports false (the takeover already removed it; the new listener
@@ -137,8 +197,8 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 		// online→offline edge — never mid-takeover.
 		last := s.hub.Disconnect(listener)
 		if memberID != "" {
-			fmt.Fprintf(os.Stderr, "[sse] detach member=%s gen=%d last=%t\n",
-				memberID, listener.Gen, last)
+			fmt.Fprintf(os.Stderr, "[sse] detach member=%s gen=%d last=%t reason=%s\n",
+				memberID, listener.Gen, last, detachReasonForLog(detachReason))
 		}
 		if memberID != "" && last {
 			// Last-disconnect edge (spec/sse.md §5.2): bank the live telemetry
@@ -174,7 +234,6 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 			_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
 		}
 	}
-
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -189,7 +248,11 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 	w.Header().Set(sseStationSHAHeader, s.processSHA)
 	w.WriteHeader(http.StatusOK)
 	armWriteDeadline()
-	_, _ = w.Write([]byte(": connected\n\n"))
+	if _, err := w.Write([]byte(": connected\n\n")); err != nil {
+		// Keep the pre-existing greeting behaviour (the handler continues into
+		// its normal loop) while retaining the concrete socket evidence.
+		setDetachReason(sseDetachReasonWriteFailed)
+	}
 	flusher.Flush()
 
 	// This connection's runtime, resolved ONCE (the notice rule differs per
@@ -225,6 +288,7 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 	write := func(frame []byte) bool {
 		armWriteDeadline()
 		if _, err := w.Write(frame); err != nil {
+			setDetachReason(sseDetachReasonWriteFailed)
 			return false
 		}
 		flusher.Flush()
@@ -234,7 +298,39 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 	ctx := r.Context()
 	lastBeat := time.Now()
 	for {
+		// Leaving here DISCONNECTS a live stream early — by up to
+		// upgradeRestartDelay (upgrade.go), the gap between the mark and the
+		// re-exec. Two things about that, and the second is not ours to keep
+		// true (T-3b4e review):
+		//   · No client reconnects inside that window today, so the early exit
+		//     causes no attach/detach churn: ocagent sleeps its backoff before
+		//     re-dialing and that backoff RESETS to listenBackoffStart (1s,
+		//     cli/ocagent/listen.go) on a healthy stream, and the cockpit uses
+		//     a bare EventSource with no `retry:` from us, so it takes the
+		//     browser default (seconds). BOTH FIGURES ARE READ FROM THE CODE,
+		//     NOT MEASURED against a real upgrade.
+		//   · That quiet therefore RESTS ON CLIENT BACKOFF, not on anything
+		//     this file guarantees. Drop a client's backoff to zero, or attach
+		//     one with none, and the churn appears — and NOTHING here goes red.
+		// Only the UPGRADE path reaches this shape at all: a signal shutdown
+		// runs httpServer.Shutdown (server.go), which stops accepting, so a new
+		// connection is refused at accept rather than admitted and bounced.
+		if s.stationShuttingDown.Load() {
+			setDetachReason(sseDetachReasonStationShutdown)
+			return
+		}
+		select {
+		case <-listener.kicked:
+			if s.stationShuttingDown.Load() {
+				setDetachReason(sseDetachReasonStationShutdown)
+			} else {
+				setDetachReason(sseDetachReasonTakeover)
+			}
+			return
+		default:
+		}
 		if ctx.Err() != nil {
+			setDetachReason(s.sseContextDetachReason())
 			return
 		}
 		select {
@@ -243,6 +339,11 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 			// holds the slot — return NOW (≤ssePoll after the kick) and let the
 			// defer clean up (Disconnect is a map no-op; last=false keeps the
 			// §5.2 edge hooks off while the member stays online).
+			if s.stationShuttingDown.Load() {
+				setDetachReason(sseDetachReasonStationShutdown)
+			} else {
+				setDetachReason(sseDetachReasonTakeover)
+			}
 			return
 		default:
 		}
@@ -331,8 +432,14 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 		}
 		select {
 		case <-ctx.Done():
+			setDetachReason(s.sseContextDetachReason())
 			return
 		case <-listener.kicked:
+			if s.stationShuttingDown.Load() {
+				setDetachReason(sseDetachReasonStationShutdown)
+			} else {
+				setDetachReason(sseDetachReasonTakeover)
+			}
 			return // taken over mid-quiet-wait — same cleanup path as above
 		case <-time.After(ssePoll):
 		}
