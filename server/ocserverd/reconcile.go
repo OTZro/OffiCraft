@@ -1279,17 +1279,46 @@ func (s *apiServer) reconcileTickMemberLocked(m Member, now float64) reconcileDe
 // unconditional write would re-stamp last_op_at and fan a delta on every tick).
 // Re-read before the whole-row write, for the reason every other stamp here does.
 // Best-effort: a persist failure is logged and changes no decision.
+// stampOpReceipt is THE receipt an owner verb leaves on a row it is about to
+// persist itself, and the only spelling of it. A Member and an OutsourceWorker
+// carry the same five receipt columns under the same names, so the two verbs
+// that stamp them were the same five assignments written twice; the shells
+// below are what is left of the difference.
+//
+// 🔴 IT TAKES FIELD POINTERS, NOT A ROW, ON PURPOSE. The obvious tidier shape —
+// lift the five columns into an embedded struct both rows share — reaches the
+// DAL: scanMember/PutMember and their outsource twins list these columns
+// positionally, so the embedding would have to be threaded through every scan
+// and put site to remove five duplicated assignments. The pointer core buys the
+// single source at the cost of one long signature, and touches no persistence
+// code at all.
+//
+// last_op_ok is three-valued on both rows (nil = nothing folded yet) and this
+// always leaves a non-nil FALSE: what this function stamps is a refusal or a
+// deferral — "the change was saved and nothing was started" — never a success.
+// last_op_log is cleared with it, because the log belongs to the op being
+// replaced and reading a fresh reason beside a stale log is worse than reading
+// neither. Sentinels: TestStampMemberOpReceipt_WritesTheFiveReceiptFields and
+// TestStampWorkerOpReceipt_WritesTheFiveReceiptFields — deliberately one per
+// side, both pinned to absolute values, so a change here reddens both.
+func stampOpReceipt(lastOp *string, lastOpOK **bool, lastOpLog, lastOpReason *string,
+	lastOpAt *float64, reason string, now float64) {
+	ok := false
+	*lastOp = reconcileCmdStart
+	*lastOpOK = &ok
+	*lastOpLog = ""
+	*lastOpReason = reason
+	*lastOpAt = now
+}
+
 // stampMemberOpReceipt writes one op receipt onto an IN-MEMORY member the caller
 // is about to persist itself. It exists so an HTTP handler's explanation and the
 // change it explains are ONE row write and ONE delta — the same reason
-// armRefocusEpoch mutates instead of persisting.
+// armRefocusEpoch mutates instead of persisting. The receipt itself is
+// stampOpReceipt's; this is the staff shell.
 func stampMemberOpReceipt(m *Member, reason string, now float64) {
-	ok := false
-	m.LastOp = reconcileCmdStart
-	m.LastOpOK = &ok
-	m.LastOpLog = ""
-	m.LastOpReason = reason
-	m.LastOpAt = now
+	stampOpReceipt(&m.LastOp, &m.LastOpOK, &m.LastOpLog, &m.LastOpReason, &m.LastOpAt,
+		reason, now)
 }
 
 // isStopgapRetryReason reports whether a reason code is the retry loop

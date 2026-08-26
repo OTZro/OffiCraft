@@ -396,13 +396,13 @@ var spawnBlockedReasonCodes = []string{
 // exists is the same: an owner verb's explanation and the change it explains
 // must be ONE row write and ONE delta. stampWorkerPlacementBlocked is the other
 // half of the pair, for callers (the tick) that own no write of their own.
+//
+// "Twin" is now literal rather than descriptive: both shells hand the same five
+// columns to stampOpReceipt (reconcile.go), which is where the receipt is
+// actually decided. What is left here is which struct the columns come off.
 func stampWorkerOpReceipt(w *OutsourceWorker, reason string, now float64) {
-	ok := false
-	w.LastOp = reconcileCmdStart
-	w.LastOpOK = &ok
-	w.LastOpLog = ""
-	w.LastOpReason = reason
-	w.LastOpAt = now
+	stampOpReceipt(&w.LastOp, &w.LastOpOK, &w.LastOpLog, &w.LastOpReason, &w.LastOpAt,
+		reason, now)
 }
 
 // sessionAliveWakeNote is the plain-language half of the let-pass below, and
