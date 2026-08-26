@@ -262,26 +262,53 @@ func (s *apiServer) runLifecycleRosterPasses(roster []Member, now float64) {
 // forgot to cover. It is structural, and it is written down here rather than
 // papered over with a test that would only be asserting on plumbing:
 //
-//   - StoppedSince is not written by ANY pass on the list, so folding it back
-//     copies a value nothing changed.
-//   - StoppingSince is written by exactly one pass, clearStaleStoppingOnOnline,
-//     which skips every row whose DesiredState is not online.
-//   - The only same-tick reader of the SNAPSHOT's StoppingSince/StoppedSince is
-//     autoHandoverWorker's 停止 arm (0) (worker_spawn.go), which sits inside
-//     `if w.DesiredState == DesiredStateOffline`; and the only decide-side
-//     reader of obs.StoppingSince is decideDown, which reconcileDecide reaches
-//     only when desired_state is offline.
-//   - The Active FSM path does not read the snapshot at all — it re-reads the
-//     row from the DAL (`fresh`) before deciding, so it sees the pass's
-//     persisted clear either way.
+// 🔴 CORRECTION (T-170e stage 3, next pass — the four bullets that stood here
+// were themselves written as a correction, and two of them were false). They
+// read:
 //
-// Writer and readers are on disjoint sides of desired_state, so no red test for
+//	"- StoppedSince is not written by ANY pass on the list, so folding it back
+//	   copies a value nothing changed.
+//	 - StoppingSince is written by exactly one pass, clearStaleStoppingOnOnline,
+//	   which skips every row whose DesiredState is not online."
+//
+// Both are false, and the obvious narrower repair — "no pass THIS PRODUCER
+// runs writes them, since clearRecycleMarkersOnRespawn's AppliesTo excludes
+// outsource" — was measured here and is ALSO false, so it is not used. All
+// THREE passes that reach a worker row write these fields: clearStaleStopping-
+// OnOnline zeroes StoppingSince in its own body, and both stamp passes
+// (stampContextHighRecycle and stampTokenExpiryWinddown, each declaring
+// AppliesTo lifecycleEveryKind) zero StoppingSince AND StoppedSince through the
+// shared armRefocusEpoch. The reason the fold-back cannot be pinned is real,
+// but it is the ENTRY FILTER, not the pass list:
+//
+//   - Every row any pass can write is ACTIVE and desired-ONLINE, because
+//     lifecyclePolicyFor's outsource arm is the only door and it admits nothing
+//     else. That is the whole load-bearing fact; the rest is consequence.
+//   - The snapshot's StoppingSince/StoppedSince have exactly two same-tick
+//     readers, and that door puts both out of reach. (a) autoHandoverWorker
+//     (worker_spawn.go) reads them only inside `if w.DesiredState ==
+//     DesiredStateOffline` — a row no pass was ever offered. (b) The Assigned
+//     arm of the worker loop is the one place a snapshot goes into the FSM
+//     UNRE-READ: it hands `w` to reconcileWorkerLiveness, whose workerObservation
+//     projects StoppedSince>0 into AgentStopped, which decideUp's recycle arm
+//     reads — but only for a worker with ActivatedTS zero, i.e. Assigned, which
+//     the same door excludes. The superseded third bullet named
+//     autoHandoverWorker as the ONLY such reader and missed (b); the fourth was
+//     right that the ACTIVE arm re-reads `fresh` from the DAL before deciding,
+//     and silently left the Assigned arm unaccounted for.
+//   - Decide-side, the only reader of obs.StoppingSince is decideDown, which
+//     reconcileDecide reaches on its default arm only — never for a
+//     desired-online row.
+//
+// Writers and readers therefore never meet on one row, but what keeps them
+// apart is that door and not any property of the two fields, so no red test for
 // these two lines is constructible today without a behaviour change. They are
 // kept because "fold back what the passes may have touched" is the invariant,
-// not "fold back the two we can currently prove" — the day a pass stamps
-// stopping_since on a desired-offline row, these lines are what keeps the rest
-// of the tick from deciding off a stale snapshot. If you make that change, this
-// gap closes and a test becomes writable: come back and write it.
+// not "fold back the two we can currently prove" — widen lifecyclePolicyFor to
+// admit an Assigned or desired-offline worker and these lines become the only
+// thing standing between decideUp's recycle arm and a stale stopped_since. If
+// you make that change, this gap closes and a test becomes writable: come back
+// and write it.
 //
 // Callers hold s.outsourceMu.
 func (s *apiServer) runWorkerLifecyclePasses(workers []OutsourceWorker, now float64) {

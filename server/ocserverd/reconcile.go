@@ -2658,10 +2658,37 @@ func (s *apiServer) dispatchIdentitySweepNow(memberID, keepWarden string, now fl
 // It was not one. If the two ticks are ever merged, the real constraint is a
 // different one and it is SELF-deadlock, not inversion: a merged tick holding
 // outsourceMu for its whole body must not call a helper that takes outsourceMu
-// again (Go mutexes are not reentrant) — workerSpawnObs, workerReportStopping,
-// dismissOutsourceWorkersForTask, dismissOutsourceWorkerByID,
-// noteWorkerStopNoSuchSession. runReconcileTick's call tree reaches none of
-// them today.
+// again (Go mutexes are not reentrant).
+//
+// 🔴 SECOND CORRECTION (same stage, next pass — the paragraph you are reading
+// shipped its OWN false sentence in the round that wrote the correction
+// above). It used to end with a five-name hazard list:
+//
+//	"— workerSpawnObs, workerReportStopping, dismissOutsourceWorkersForTask,
+//	 dismissOutsourceWorkerByID, noteWorkerStopNoSuchSession."
+//
+// That was not the hazard set. It omitted workerReportStopped,
+// workerReportWaking and workerRestartSelf — the three siblings sitting beside
+// workerReportStopping in the same file, called from the same handlers, taking
+// the same lock — and foldWorkerCommandResult, stampReportedLaunchFacts and
+// relocateWorkerByID besides. For a "do not call these" list, omission is the
+// dangerous direction, and this one drifted inside a single stage with nothing
+// able to report it.
+//
+// So it is not re-typed, and no successor list is offered. THE HAZARD SET IS
+// WHAT THIS GREP RETURNS, minus runOutsourceTick itself (the tick that would
+// be the one holding the lock):
+//
+//	grep -rn 'outsourceMu\.Lock()' --include='*.go' . | grep -v _test.go
+//
+// outsourceMu is a plain sync.Mutex (api_stub.go), so Lock is the only acquire
+// form and that grep cannot miss one. Run it before you merge; do not trust a
+// count written here — at the time of writing it was 18 sites in 18 distinct
+// functions, one of which is runOutsourceTick.
+//
+// The safety claim is unchanged and never rested on the list: runReconcileTick's
+// call tree reaches NONE of those acquirers today — all of them, not merely the
+// five that happened to be named.
 func (s *apiServer) identitySweepOnConnect(memberID, machineClaim string) {
 	if s.noReconcile || memberID == "" || machineClaim == "" {
 		return
