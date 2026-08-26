@@ -405,12 +405,112 @@ func stampWorkerOpReceipt(w *OutsourceWorker, reason string, now float64) {
 	w.LastOpAt = now
 }
 
+// sessionAliveWakeNote is the plain-language half of the let-pass below, and
+// the SENTINEL that makes composing idempotent: the cadence re-stamps every 30s,
+// so a compose that could run twice would grow the receipt without bound and fan
+// an SSE delta on every tick. Kept as one const so the guard and the text can
+// never drift apart.
+//
+// It says the one thing the generic wake_timeout sentence gets actively wrong.
+// "The runtime did not come up" and "the runtime was never asked to come up,
+// because the old session is still holding the seat" have opposite fixes, and
+// only the second is true here — the warden looked, found a live tmux session,
+// and deliberately refused to kill it.
+const sessionAliveWakeNote = " — the start window then lapsed, but that is NOT a " +
+	"runtime failure: the previous session is still running and the warden refused " +
+	"to stomp it, so nothing new was ever started. Do not go looking for a broken " +
+	"runtime on that machine; deal with the live session — 重啟 this worker to " +
+	"displace it, or stop it first."
+
+// wakeTimeoutOverWardenReceipt is the SYMMETRIC half of the rule
+// clearWorkerPlacementBlock already states out loud: "a warden's own receipt is
+// never touched". That protection was ONE-WAY. clearWorkerPlacementBlock guards
+// itself with isPlacementBlockedReason, so it declines to clear a warden
+// receipt; stampWorkerPlacementBlocked guarded nothing at all — its only check
+// is the anti-churn "same exact string" test, so any DIFFERENT string won.
+//
+// 🔴 WHAT THIS IS, STATED HONESTLY: a SYMMETRIC DEFENCE, not a repair of an
+// observed failure. NO REACHABLE PRODUCTION INSTANCE HAS BEEN CONSTRUCTED.
+//
+// An earlier draft of this comment asserted the field consequence outright —
+// "the warden's receipt is written, then ~90s later wake_timeout replaces it
+// with 'check that the runtime runs and is logged in'". That claim did not
+// survive review, and it is exactly the kind of confident-but-unverified causal
+// story this whole change exists to delete, so it is retracted here rather than
+// quietly softened.
+//
+// WHY IT IS NOT REACHABLE TODAY. wake_timeout is stamped only when a decision
+// carries StartTimedOut, and reconcile.go sets `startTimedOut = true` at ONE
+// place (reconcile.go:636), inside the `st.LastCommand == start` block. That
+// block opens with the clobber check at reconcile.go:587 — `obs.LastOpKind ==
+// start && HasPrefix(obs.LastOpReason, spawnClobberReasonPrefix)` — and BOTH of
+// its arms return early: the zombie-suspect arm returns decisionNone inside the
+// reconnect-confirm grace, the zombie-takeover arm returns the robust STOP after
+// it. Line 636 is therefore unreachable while the row carries the clobber
+// prefix. The condition that would make this let-pass fire and the condition
+// that routes the tick away from wake_timeout are THE SAME CONDITION.
+//
+// Both production call sites hand the FSM a row that carries the prefix if it is
+// there at all: outsource_sched.go:447 passes the tick's own snapshot, :492
+// passes a deliberate re-read. Nor is the gap a race — runOutsourceTick holds
+// s.outsourceMu across the whole worker loop, and foldWorkerCommandResult (the
+// only writer of the clobber prefix) holds the same lock for its whole body, so
+// a fold cannot land between building the observation and re-reading for the
+// stamp.
+//
+// WHY IT IS KEPT ANYWAY. "I could not construct a path" is not "proved
+// unreachable", the asymmetry it removes is real and one line long
+// (clearWorkerPlacementBlock guards; its twin did not), and the reachability
+// above rests entirely on an early return in a different file that a future FSM
+// change could reorder without anyone thinking about this function. A defence
+// that costs one pure function and cannot misfire — see the narrowness note
+// below — is worth keeping ahead of that. It is NOT worth advertising as a bug
+// fix, which is why the claim above is retracted rather than restated.
+//
+// ⚠️ AND IT IS PARTLY BLIND EVEN WHEN IT DOES FIRE. The FSM reads the verb
+// through canonicalWorkerLastOp (worker_spawn.go:1139), which folds a legacy
+// `worker_start` receipt (pre-P5b warden builds) onto `start`; the gate below
+// compares fresh.LastOp against reconcileCmdStart RAW, with no fold. A row
+// written by an old warden would therefore never compose. Left unfolded
+// deliberately: adding the fold would widen an already-unreachable branch on
+// the strength of a transition window that is itself closing, and it is better
+// recorded here than silently "fixed" into a shape nobody has exercised.
+//
+// The composition KEEPS the warden's line verbatim and IN FRONT. That is not
+// courtesy: reconcile.go:588 and api_monitoring.go dispatch on
+// HasPrefix(reason, spawnClobberReasonPrefix), so a rewrite that dropped the
+// prefix would silently disarm the zombie-takeover path.
+//
+// Deliberately NARROW. It fires only for a wake_timeout stamp landing on a
+// start-verb row that already carries the warden's clobber refusal. Every other
+// reason, and every other prior receipt, is stamped exactly as before — a
+// blanket "wake_timeout never overwrites" would trade this silence for a
+// different one (see TestWakeTimeout_StillStampsWhenThereIsNoWardenReceiptToProtect).
+func wakeTimeoutOverWardenReceipt(fresh OutsourceWorker, reason string) string {
+	if !strings.HasPrefix(reason, spawnReasonWakeTimeout+":") {
+		return reason
+	}
+	if fresh.LastOp != reconcileCmdStart ||
+		!strings.HasPrefix(fresh.LastOpReason, spawnClobberReasonPrefix+":") {
+		return reason
+	}
+	if strings.Contains(fresh.LastOpReason, sessionAliveWakeNote) {
+		// Already composed on an earlier tick. Returning the row's own string
+		// lets the anti-churn guard match and write nothing.
+		return fresh.LastOpReason
+	}
+	return fresh.LastOpReason + sessionAliveWakeNote
+}
+
 func (s *apiServer) stampWorkerPlacementBlocked(w *OutsourceWorker, reason string, now float64) {
 	outsourceLog("spawn %s (%s): %s", w.ID, w.Codename, reason)
 	fresh, err := s.dal.GetOutsourceWorker(w.ID)
 	if err != nil || fresh == nil || fresh.Status == WorkerStatusReleased {
 		return
 	}
+	// Let-pass BEFORE the anti-churn compare, so a second tick sees the composed
+	// string on both sides and correctly writes nothing.
+	reason = wakeTimeoutOverWardenReceipt(*fresh, reason)
 	if fresh.LastOp == reconcileCmdStart && fresh.LastOpReason == reason {
 		return // already stamped with this exact cause — do not churn the row
 	}
@@ -1009,7 +1109,7 @@ func (s *apiServer) reconcileWorkerLiveness(w OutsourceWorker, now float64) {
 				"collected by machine '"+target+"' but this worker never came "+
 				"online within the start window — check that the '"+
 				NormalizeRuntime(w.Runtime)+"' runtime actually runs and is logged in on "+
-				"that machine (warden log: ocwarden.err.log)", now)
+				"that machine (warden log: ocwarden.out.log)", now)
 		}
 	}
 }

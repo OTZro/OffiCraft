@@ -1037,11 +1037,11 @@ func (s *apiServer) wakeTimeoutReason(m Member) string {
 			"' reports no Claude Code installed, so this member cannot boot there. " +
 			"Fix any one: set this member's 執行環境 to Codex (that machine has it " +
 			"ready); or install Claude Code on that machine " +
-			"(warden log: ocwarden.err.log)"
+			"(warden log: ocwarden.out.log)"
 	}
 	return wakeTimeoutReasonCode + ": the START was dispatched but the agent never " +
 		"came online within the start window — check that " + runtime + " runs and is " +
-		"logged in on the target machine (warden log: ocwarden.err.log)"
+		"logged in on the target machine (warden log: ocwarden.out.log)"
 }
 
 // runtimeCapabilityReady is the HONEST readiness read of ONE reported runtime

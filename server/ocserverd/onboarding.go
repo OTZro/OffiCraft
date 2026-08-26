@@ -440,7 +440,7 @@ func (s *apiServer) wakeAssistantStep(
 				"been dispatched yet (" + dec.Reason + ") — most often this " +
 				"machine's warden has not connected back to the server. The server " +
 				"keeps retrying; if she stays offline, check the warden log " +
-				"(ocwarden.err.log)",
+				"(ocwarden.out.log)",
 		})
 		return s.finishOnboarding(report, steps)
 	}

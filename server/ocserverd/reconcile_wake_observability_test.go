@@ -436,7 +436,7 @@ func TestReconcile_WakeTimeoutNamesTheRuntimeSwitchOnACodexOnlyMachine(t *testin
 		"online within the start window — machine 'mach-codex-only' reports no Claude " +
 		"Code installed, so this member cannot boot there. Fix any one: set this " +
 		"member's 執行環境 to Codex (that machine has it ready); or install Claude Code " +
-		"on that machine (warden log: ocwarden.err.log)"
+		"on that machine (warden log: ocwarden.out.log)"
 	if codexOnly.LastOpReason != wantCodexOnly {
 		t.Errorf("a machine that reported NO claude must leave the owner a sentence "+
 			"naming the runtime switch.\n got: %q\nwant: %q",
@@ -448,7 +448,7 @@ func TestReconcile_WakeTimeoutNamesTheRuntimeSwitchOnACodexOnlyMachine(t *testin
 	// active misdirection. It keeps today's sentence, verbatim.
 	wantHasClaude := "wake_timeout: the START was dispatched but the agent never came " +
 		"online within the start window — check that claude runs and is logged in on " +
-		"the target machine (warden log: ocwarden.err.log)"
+		"the target machine (warden log: ocwarden.out.log)"
 	if hasClaude.LastOpReason != wantHasClaude {
 		t.Errorf("a machine that HAS claude must keep the machine-side advice.\n got: %q\nwant: %q",
 			hasClaude.LastOpReason, wantHasClaude)
@@ -488,7 +488,7 @@ func TestReconcile_WakeTimeoutKeepsTodaysSentenceWithoutCapabilities(t *testing.
 	got, _ := s.dal.GetMember("m-quiet")
 	want := "wake_timeout: the START was dispatched but the agent never came online " +
 		"within the start window — check that claude runs and is logged in on the " +
-		"target machine (warden log: ocwarden.err.log)"
+		"target machine (warden log: ocwarden.out.log)"
 	if got.LastOpReason != want {
 		t.Fatalf("an unreported machine must not be read as a measurement.\n got: %q\nwant: %q",
 			got.LastOpReason, want)
