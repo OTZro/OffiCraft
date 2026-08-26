@@ -355,3 +355,85 @@ func TestStaleStopping_AnOnlineWorkerIsSweptToo(t *testing.T) {
 		}
 	})
 }
+
+// ④ THE WIRE SENTENCE THE LADDER REFUSAL MAKES — pinned to VALUES, not prose.
+//
+// `OutsourceWorkerDTO.relocation_deferred` had exactly one documented cause when
+// it was added (T-ed79 parity #5): THIS relocate opened the wind-down, and the
+// move lands on the worker's own report_stopped. T-170e gave it a SECOND cause
+// and the contract text in spec/openapi.json was widened to say so: an EXISTING
+// wind-down at a HIGHER rung of 停止 → 加速停止 → 強制停止 already owns the worker,
+// the pin is saved, the ladder refuses to re-open a lower stage, and the move
+// lands at THAT wind-down's collect on the deadline it already carries.
+//
+// 🔴 That second cause had no test. The existing
+// TestRelocateWorker_WindDownIsPendingAndDeferred exercises cause (a) only — a
+// worker with NO epoch — so every assertion about the ladder arm was carried by
+// a paragraph of English that nothing would contradict if it stopped being true.
+// This test asserts the four values the paragraph promises, on the ladder arm:
+// 200, relocation_pending=true, relocation_deferred=true, the pin persisted, and
+// the open 加速停止's stage AND deadline unmoved.
+func TestRelocateWorker_ALadderRefusalIsStillPendingAndDeferred_T170e(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveOnlineWorker(t, api)
+	seedMachine(t, api, "m-elsewhere")
+	connectWarden(t, api, "m-elsewhere")
+
+	// Climb to 加速停止 so the relocate below lands on the ladder arm, not on the
+	// fresh-epoch arm cause (a) already covers.
+	if rec := postWorker(t, api, workerID, "refocus", nil,
+		api.HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost); rec.Code != http.StatusOK {
+		t.Fatalf("refocus: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := postWorker(t, api, workerID, "accelerated-stop", nil,
+		api.HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost); rec.Code != http.StatusOK {
+		t.Fatalf("accelerated-stop: %d %s", rec.Code, rec.Body.String())
+	}
+	api.hub.DrainWardenCommands(ServerSelfHost)
+	before, _ := api.dal.GetOutsourceWorker(workerID)
+	if before.RefocusOp != refocusOpAcceleratedStop {
+		t.Fatalf("setup: refocus_op=%q, want %q — the arm under test is not reached",
+			before.RefocusOp, refocusOpAcceleratedStop)
+	}
+	cfg := api.reconcileConfigLive()
+	deadlineBefore := refocusDeadlineOf(before.RefocusSince, cfg, before.RefocusOp)
+	if deadlineBefore <= 0 {
+		t.Fatalf("setup: 加速停止 must carry a deadline, got %v", deadlineBefore)
+	}
+	if before.DesiredMachineID == "m-elsewhere" {
+		t.Fatalf("setup: the worker is already pinned to the relocate target")
+	}
+
+	body := workerBody(t, postWorker(t, api, workerID, "relocate",
+		map[string]any{"machine_id": "m-elsewhere"},
+		api.HandleRelocateOutsourceWorkerApiOutsourceWorkersIdRelocatePost))
+
+	if body["relocation_pending"] != true {
+		t.Errorf("relocation_pending = %v, want true: the pin is stored and the worker "+
+			"is still on the OLD machine — a ladder refusal is NOT a landed move",
+			body["relocation_pending"])
+	}
+	if body["relocation_deferred"] != true {
+		t.Errorf("relocation_deferred = %v, want true. This is the SECOND cause "+
+			"spec/openapi.json documents for this field (T-170e): an existing "+
+			"higher-rung wind-down owns the move. Answering pending-without-deferred "+
+			"tells the cockpit to raise the \"nothing was dispatched\" alert the "+
+			"T-927a distinction exists to suppress", body["relocation_deferred"])
+	}
+
+	after, _ := api.dal.GetOutsourceWorker(workerID)
+	if after.DesiredMachineID != "m-elsewhere" {
+		t.Errorf("desired_machine_id = %q, want \"m-elsewhere\": the contract says the "+
+			"pin is SAVED and only the stage refuses to move", after.DesiredMachineID)
+	}
+	if after.RefocusOp != refocusOpAcceleratedStop {
+		t.Errorf("the ladder ran BACKWARDS on a 改機器: refocus_op %q → %q",
+			before.RefocusOp, after.RefocusOp)
+	}
+	if got := refocusDeadlineOf(after.RefocusSince, cfg, after.RefocusOp); got != deadlineBefore {
+		t.Errorf("the 加速停止 deadline MOVED (%v → %v) on a 改機器 — the contract "+
+			"promises the move lands on the deadline that wind-down ALREADY carries",
+			deadlineBefore, got)
+	}
+}
