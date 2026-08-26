@@ -14,7 +14,11 @@ const (
 	ownerAdditionsH1 = "# 使用者自訂（Owner Additions）"
 	roleH1           = "# Role: "
 	lessonsH1        = "# Lessons ("
-	bootSequenceH1   = "# 啟動程序（Boot Sequence"
+	// 🔴 舊名，故意的：這一行釘的是 seeds/boot_sequence*.md 的 H1 逐字位元組，
+	// 而那兩份 seed 的 H1 今天還寫著「啟動程序」。出貨文字要不要一併改名還在
+	// 等 owner 裁（rc-e12733548e4b），所以這裡不能先改 —— 先改就是拿一個
+	// 不存在的字串去比對，測試當場紅。seed 改的那一天，這一行跟它一起改。
+	bootSequenceH1 = "# 啟動程序（Boot Sequence"
 )
 
 // workerCtx builds a worker boot context over a minimal fixture.
@@ -106,7 +110,7 @@ func TestMemberBootContextStartsWithGlobalContext(t *testing.T) {
 //     fourth, wedged between the lessons and the boot sequence)
 //  3. persona    — staff: 角色說明 → 判準（blank ⇒ skipped）→ 長期筆記;
 //     outsource: NOTHING (no role)
-//  4. 啟動程序   — shared seed, recency-authoritative tail
+//  4. 啟動步驟   — shared seed, recency-authoritative tail
 //
 // Both halves are asserted here on purpose. The member fold is what every
 // staff agent reads on every boot, so the reorder needs a guard of its own
@@ -127,11 +131,11 @@ func TestBothBootContextsUseTheSameFourSlots(t *testing.T) {
 		owner := mustIndex(t, ctx, ownerAdditionsH1, "使用者自訂")
 		role := mustIndex(t, ctx, roleH1, "角色說明")
 		lessons := mustIndex(t, ctx, lessonsH1, "長期筆記")
-		boot := mustIndex(t, ctx, bootSequenceH1, "啟動程序")
+		boot := mustIndex(t, ctx, bootSequenceH1, "啟動步驟")
 
 		if !(owner < role && role < lessons && lessons < boot) {
-			t.Fatalf("staff slots out of order: 使用者自訂=%d 角色說明=%d 長期筆記=%d 啟動程序=%d\n"+
-				"要的順序是 系統互動 → 使用者自訂 → 角色說明 →（判準）→ 長期筆記 → 啟動程序",
+			t.Fatalf("staff slots out of order: 使用者自訂=%d 角色說明=%d 長期筆記=%d 啟動步驟=%d\n"+
+				"要的順序是 系統互動 → 使用者自訂 → 角色說明 →（判準）→ 長期筆記 → 啟動步驟",
 				owner, role, lessons, boot)
 		}
 		// The owner block must sit AFTER the shared seed, not before it.
@@ -149,11 +153,11 @@ func TestBothBootContextsUseTheSameFourSlots(t *testing.T) {
 		ctx := workerCtxOn(t, s)
 
 		owner := mustIndex(t, ctx, ownerAdditionsH1, "使用者自訂")
-		boot := mustIndex(t, ctx, bootSequenceH1, "啟動程序")
+		boot := mustIndex(t, ctx, bootSequenceH1, "啟動步驟")
 
 		if owner >= boot {
-			t.Fatalf("outsource slots out of order: 使用者自訂=%d 啟動程序=%d\n"+
-				"要的順序是 系統互動 → 使用者自訂 → 啟動程序", owner, boot)
+			t.Fatalf("outsource slots out of order: 使用者自訂=%d 啟動步驟=%d\n"+
+				"要的順序是 系統互動 → 使用者自訂 → 啟動步驟", owner, boot)
 		}
 		if owner == 0 {
 			t.Fatal("使用者自訂 must follow the 系統互動 seed, not lead the document")
@@ -204,7 +208,7 @@ func TestMemberBootContextByteIdenticalToSpecAssembly(t *testing.T) {
 	if roleTitle == "" {
 		roleTitle = roleDTO.Key
 	}
-	// §2.2 order: 系統互動 → 使用者自訂 → Role → Insight → Lessons → 啟動程序.
+	// §2.2 order: 系統互動 → 使用者自訂 → Role → Insight → Lessons → 啟動步驟.
 	// Insight, like the owner block, is skipped ENTIRELY when its folded text
 	// is blank — the gate is the text, not is_default/has_seed.
 	// DocRendered, not the raw file: since T-3201 these seeds carry a

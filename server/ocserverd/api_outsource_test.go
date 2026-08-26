@@ -248,6 +248,8 @@ func TestGetWorkerBootContext(t *testing.T) {
 	// It is the real fold: the two shared slots a worker actually receives.
 	// Without this, every absence/invariance assertion below is satisfied by an
 	// empty string.
+	// 🔴 「啟動程序」是舊名，故意留著：釘的是 seed 的 H1 逐字位元組，出貨文字
+	// 還在等 owner 裁 rc-e12733548e4b。seed 改的那一天，這一行跟它一起改。
 	for _, want := range []string{"# Global Context", "# 啟動程序（Boot Sequence"} {
 		if !strings.Contains(got.Context, want) {
 			t.Errorf("preview must contain the shared block %q", want)

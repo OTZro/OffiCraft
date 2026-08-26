@@ -257,7 +257,7 @@ func TestDecideHandoverNotice(t *testing.T) {
 		// calls: 65% stays quiet, round 5 of 5/6 fires. That is the whole rule.
 		// What is gone is only the notice REPEATING the axis back, and with it the
 		// ability to tell a codex notice from a claude one by reading it: both
-		// arms send the same document now, which is correct — 下線程序 is the same
+		// arms send the same document now, which is correct — 〈停止〉 is the same
 		// procedure whatever put the session over its line.
 		for _, leak := range []string{"compaction round", "your limits:", "%"} {
 			if strings.Contains(sig.Reason, leak) {

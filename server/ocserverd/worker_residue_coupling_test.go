@@ -9,7 +9,7 @@ import (
 // path, independently from workerSharedHead's unit-level equality test. A
 // future worker-only exclusion or rewrite changes this prefix and fails here.
 //
-// T-4595 narrowed WHAT this prefix is. It used to be 系統互動 + 啟動程序 glued
+// T-4595 narrowed WHAT this prefix is. It used to be 系統互動 + 啟動步驟 glued
 // together, because a worker got all three shared blocks grouped at the top.
 // The boot sequence is now the recency-authoritative TAIL for workers too —
 // same slot as staff — so only the system-interaction seed leads. The tail's
@@ -39,7 +39,7 @@ func TestWorkerSharedCoreStartsWithTheUnfilteredSystemSeed(t *testing.T) {
 // assembly boundary.
 func TestWorkerLaunchGuidanceIsTheSharedOneNotAReplacement(t *testing.T) {
 	ctx := crossrefWorkerCtx(t)
-	// The shared 啟動程序 block itself must be there.
+	// The shared 啟動步驟 block itself must be there.
 	if !strings.Contains(ctx, bootSequenceH1) {
 		t.Errorf("worker boot context is missing launch guidance %q", bootSequenceH1)
 	}

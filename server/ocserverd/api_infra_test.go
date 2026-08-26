@@ -317,7 +317,7 @@ func TestHandoverNoticeTick_ANewSessionStillPaysAndStillSends(t *testing.T) {
 	runs := 0
 	// A non-empty answer, because an unrenderable notice now keeps the tick
 	// SILENT — returning "" here would make this test measure that instead.
-	notice := func() string { runs++; return "下線程序" }
+	notice := func() string { runs++; return "停止" }
 	if _, ok := s.handoverNoticeTick(seedMiraID, RuntimeClaude, notice); !ok {
 		t.Fatal("first session must be told")
 	}

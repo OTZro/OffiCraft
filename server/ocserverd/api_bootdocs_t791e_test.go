@@ -179,7 +179,7 @@ func bootDocCases() []bootDocCase {
 		{"system_interaction", "/api/system-interaction", systemInteractionSeedMD, docKindSystemInteraction, systemInteractionDocKey},
 		{"boot_sequence_claude", "/api/boot-sequence/claude", bootSequenceSeedClaude, docKindBootSequence, bootSequenceKeyClaude},
 		{"boot_sequence_codex", "/api/boot-sequence/codex", bootSequenceSeedCodex, docKindBootSequence, bootSequenceKeyCodex},
-		// 下線程序 (T-c9c0) joined the family later; it is listed LAST so the
+		// 〈停止〉 (T-c9c0) joined the family later; it is listed LAST so the
 		// index-addressed cases above keep pointing at the documents they name.
 		{"offboard", "/api/offboard", offboardSeedMD, docKindOffboard, offboardDocKey},
 	}
@@ -544,8 +544,8 @@ func TestBootDoc_EditedBlocksReachTheAssembledBootContext(t *testing.T) {
 		}
 	}
 	write(docKindSystemInteraction, systemInteractionDocKey, "# 系統互動\n\n"+sysMark+"\n")
-	write(docKindBootSequence, bootSequenceKeyClaude, "# 啟動程序\n\n"+claudeMark+"\n")
-	write(docKindBootSequence, bootSequenceKeyCodex, "# 啟動程序\n\n"+codexMark+"\n")
+	write(docKindBootSequence, bootSequenceKeyClaude, "# 啟動步驟\n\n"+claudeMark+"\n")
+	write(docKindBootSequence, bootSequenceKeyCodex, "# 啟動步驟\n\n"+codexMark+"\n")
 
 	// (a) staff, claude runtime.
 	claudeBoot, err := api.buildBootContext("", &Member{ID: "m-c", Name: "C", RoleKey: seedRoleAssistant, Runtime: RuntimeClaude})
@@ -556,7 +556,7 @@ func TestBootDoc_EditedBlocksReachTheAssembledBootContext(t *testing.T) {
 		t.Fatal("the edited 系統互動 block never reached the assembled boot context")
 	}
 	if !strings.Contains(claudeBoot.Context, claudeMark) {
-		t.Fatal("the edited claude 啟動程序 never reached the assembled boot context")
+		t.Fatal("the edited claude 啟動步驟 never reached the assembled boot context")
 	}
 	if strings.Contains(claudeBoot.Context, codexMark) {
 		t.Fatal("a claude member was handed the CODEX boot sequence — that is the failure this ticket must not introduce")
@@ -569,7 +569,7 @@ func TestBootDoc_EditedBlocksReachTheAssembledBootContext(t *testing.T) {
 		t.Fatalf("codex boot context: %v", err)
 	}
 	if !strings.Contains(codexBoot.Context, codexMark) || strings.Contains(codexBoot.Context, claudeMark) {
-		t.Fatal("a codex member did not get the codex 啟動程序 (or got the claude one)")
+		t.Fatal("a codex member did not get the codex 啟動步驟 (or got the claude one)")
 	}
 
 	// (c) the OUTSOURCE fold reads the same two documents — staff and outsource
@@ -586,7 +586,7 @@ func TestBootDoc_EditedBlocksReachTheAssembledBootContext(t *testing.T) {
 		t.Fatalf("workerBootSequence: %v", err)
 	}
 	if !strings.Contains(tail, codexMark) || strings.Contains(tail, claudeMark) {
-		t.Fatal("a codex worker did not get the edited codex 啟動程序")
+		t.Fatal("a codex worker did not get the edited codex 啟動步驟")
 	}
 }
 
