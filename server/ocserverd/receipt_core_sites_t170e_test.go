@@ -155,7 +155,12 @@ func TestStampReceiptMissing_MemberArmWritesTheFiveReceiptFields(t *testing.T) {
 
 func TestStampReceiptMissing_WorkerArmWritesTheFiveReceiptFields(t *testing.T) {
 	const now = 1_769_904_325.0
-	p := pendingReceipt{RPC: reconcileCmdStart, Warden: "mach-b", Deadline: now}
+	// NOT a START on purpose: the paragraph above claims the verb is p.RPC, and a
+	// START seed cannot demonstrate that — a core with the verb hard-coded to
+	// reconcileCmdStart would still pass. This arm was seeded with a START until
+	// t-170e stage 2; it stayed green under a verb-hard-coding mutant while the
+	// member arm went red, which is how the gap was found.
+	p := pendingReceipt{RPC: reconcileCmdStop, Warden: "mach-b", Deadline: now}
 
 	s := newReconcileTestServer(t)
 	w := OutsourceWorker{
@@ -176,5 +181,5 @@ func TestStampReceiptMissing_WorkerArmWritesTheFiveReceiptFields(t *testing.T) {
 	}
 	wantReceipt(t, "stampReceiptMissing/worker",
 		got.LastOp, got.LastOpOK, got.LastOpLog, got.LastOpReason, got.LastOpAt,
-		reconcileCmdStart, receiptMissingReason(p), now)
+		reconcileCmdStop, receiptMissingReason(p), now)
 }

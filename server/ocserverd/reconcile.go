@@ -1266,12 +1266,46 @@ func (s *apiServer) reconcileTickMemberLocked(m Member, now float64) reconcileDe
 //
 // 🔴 IT IS NOT "THE ONLY SPELLING OF THE RECEIPT" — an earlier draft of this
 // comment said that and it was false, which is the failure this paragraph exists
-// to stop repeating. RECEIPT-CORE-AUDIT is the grep anchor: every production
-// writer of the five columns either calls this function or carries that anchor
-// with a reason for standing apart. Today exactly one stands apart —
-// stampWakeObservability, below — and its anchor says why. To re-check, grep
-// `OpOK = &ok` and `OpOK: &ok` over non-test .go and confirm every hit is either
-// inside this function or under a RECEIPT-CORE-AUDIT note.
+// to stop repeating. The draft AFTER that one then said "every production writer
+// of the five columns either calls this function or carries a RECEIPT-CORE-AUDIT
+// anchor", and it was false in exactly the same over-wide way: foldCommandResult
+// and foldWorkerCommandResult (api_monitoring.go) each write all five, call
+// nothing here, and carry no anchor. Worse, the recipe that draft handed out for
+// re-checking (`OpOK = &ok` / `OpOK: &ok`) could not have found them at all —
+// both spell their bool okPtr/okVal, so the recipe's reach was narrower than the
+// claim it was supposed to back. A guard whose claimed range exceeds its actual
+// range is the disease, not the cure.
+//
+// What this function IS the single source of is narrower: the SERVER-AUTHORED
+// REFUSAL receipt — "the change was saved and nothing was started" — a non-nil
+// FALSE the server decided on its own, with last_op_log cleared. The two folds
+// are a DIFFERENT CLASS and must not be routed through here: they carry the
+// AGENT's own verdict off the wire (three-valued, and a success as readily as a
+// failure) together with the log that came with it. A core that hard-writes false
+// and blanks the log would destroy the exact thing they exist to record.
+//
+// RECEIPT-CORE-AUDIT is the grep anchor for exceptions WITHIN the refusal class.
+// Today exactly one carries it — stampWakeObservability, below — and its anchor
+// says why.
+//
+// To re-check, grep `LastOpOK` over non-test .go — the COLUMN name, because the
+// `&ok` spelling is incidental and the next writer is free to name its bool
+// anything. Over the tree this comment lives in that is 27 hits, 2 of them inside
+// this comment block (the recipe finds its own subject; the previous one did
+// not). Of the rest, the hits that WRITE the column are:
+//   - seven `stampOpReceipt(&….LastOpOK, …)` call sites — reconcile.go ×3,
+//     receipt_watch.go ×2, worker_spawn.go ×2: the refusal class, all of it here;
+//   - stampWakeObservability below — refusal class, standing apart, anchored;
+//   - api_monitoring.go ×2 — the agent-verdict class described above;
+//   - three that stamp no receipt at all: dal.go's row scan, worker_spawn.go's
+//     clear back to nil, and this file's copy of an already-stamped row onto a
+//     freshly re-read one.
+//
+// Everything else the grep returns is a read or a struct field declaration. That
+// enumeration is the claim, and re-running the grep is what checks it. It does
+// NOT claim a future writer will announce itself: nothing here executes, so a new
+// hand-written receipt can appear and this paragraph will not notice. Making the
+// recipe executable is a later stage's work, not this one's.
 //
 // 🔴 IT TAKES FIELD POINTERS, NOT A ROW, ON PURPOSE. The obvious tidier shape —
 // lift the five columns into an embedded struct both rows share — reaches the
