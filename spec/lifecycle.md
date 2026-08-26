@@ -640,8 +640,8 @@ ONE-SHOT, never a standing order):
   | `HandleAcceleratedStopOutsourceWorker…` | 加速停止 | n/a — it ADVANCES the ladder, and it deliberately does not zero the anchors (the twin of the staff 加速停止 arm) |
   | `stampContextHighRecycle` promotion arm (`reconcile.go`, the `if promoting` branch) | none — the reconcile tick's own context pass, projected onto workers by the `stampContextHighRecycle(ctxProjections, now)` call in `outsource_sched.go` | n/a — it also ADVANCES, and only forwards: `canPromoteToAcceleratedStop` lets it move `context_notice` → `context_high` and nothing else. It hand-writes `refocus_since` / `refocus_op` INSTEAD of calling `armRefocusEpoch` on purpose — that helper zeroes the wind-down anchors, and here they belong to a close-out already in flight (see the `armRefocusEpoch is deliberately NOT used` note directly above that assignment) |
   ⚠️ **`重啟` (restart) is a deliberate hole in this table, not a missing row.**
-  `ownerOpRevivesStoppedWorker(restart) == true` (`worker_spawn.go`), so the
-  `!ownerOpRevivesStoppedWorker(op) && s.workerHasStateToFlush(w)` arm in
+  `ownerOpDisplacesTheSession(restart) == true` (`worker_spawn.go`), so the
+  `!ownerOpDisplacesTheSession(op) && s.workerHasStateToFlush(w)` arm in
   `respawnWorkerForOwnerOp` (`worker_spawn.go`, the arm *after* the
   `DesiredStateOffline` held-down one) is never taken for 重啟 and the ladder never
   sees it. That is intended and predates T-170e — but **NOT because 重啟 can only arrive at a worker

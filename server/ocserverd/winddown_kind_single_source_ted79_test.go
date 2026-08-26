@@ -39,7 +39,7 @@ import (
 // that lags the constants it is closing over is not a guard. Every constant in
 // member_ownerop_winddown.go's two const blocks belongs here; add the value in
 // the same edit that adds the constant. ownerOpRestart ("restart") is in for a
-// different reason: it is the ONE verb ownerOpRevivesStoppedWorker deny-lists
+// different reason: it is the ONE verb ownerOpDisplacesTheSession deny-lists
 // out of the wind-down, so it never lands in refocus_op today — but that
 // deny-list is documented as "a verb added later gets the wind-down by
 // default", so the day it stops being denied the ruling must already be pinned.
@@ -195,13 +195,18 @@ func TestWindDownKind_TheClosedSetIsActuallyClosed(t *testing.T) {
 // offboardKindOf's refocus branch and refocusDeadlineOf, and neither of those
 // is what a 停止 goes through. 下線 anchors on stopping_since, so the pair that
 // has to agree there is offboardKindOf's `DesiredState == offline` branch —
-// StoppingSince > 0 && !forcedEpochLive(m), then winddownKindFor — against
-// winddownDeadlineOf's own three zero conditions: !clocked, StoppingSince <= 0,
-// forcedEpochLive. Two hand-written spellings of one judgement, in two files,
-// which is the exact shape T-ed79 removed from the online arm. Until now the
-// offline arm had only happy-path cases (加速停止 pressed, notice arrives), and
-// an independent review measured the gap: nothing anywhere asserted that the
-// two spellings must keep coinciding.
+// "is a graceful stop epoch open", then winddownKindFor — against
+// winddownDeadlineOf's own zero conditions: !clocked, and the same epoch
+// question. Until now the offline arm had only happy-path cases (加速停止
+// pressed, notice arrives), and an independent review measured the gap: nothing
+// anywhere asserted that the two must keep coinciding.
+//
+// 🔴 THE "TWO HAND-WRITTEN SPELLINGS IN TWO FILES" THIS PARAGRAPH USED TO NAME
+// ARE GONE (T-170e stage 2 ②). Both sites now call gracefulStopEpochOpen, and
+// one of the two spellings was the NEGATION of the other, which is the shape a
+// reader checks against itself and gets wrong. This test is NOT redundant for
+// that: it still holds the sentence and the clock to each other across
+// winddownKindFor, which is a different function and a different way to split.
 //
 // 🔴 AND THE COST OF THEM COMING APART CHANGED. Before the wiring, a final call
 // whose deadline was 0 merely lost a clause — the Go builder wrote the sentence

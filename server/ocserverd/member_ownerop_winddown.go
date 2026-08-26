@@ -35,21 +35,45 @@ package main
 // the boot frame off the row, which is where the new machine / model now live.
 //
 // ── memberHasStateToFlush vs workerHasStateToFlush, cell by cell ─────────────
-// The worker predicate was reviewed twice and each round found a HIGH in it, so
-// it is COPIED, not re-derived. Its comment block (worker_spawn.go) is the
-// authority for WHY; this is the mapping:
+// 🔴 READ THIS FIRST, BECAUSE THE SENTENCE THAT USED TO OPEN IT IS NO LONGER
+// TRUE OF THE CODE. It said the staff predicate was "COPIED, not re-derived"
+// from the worker one. The COPY IS GONE: the arms that agree — a live session,
+// and this epoch's wind-down not already collected — are ONE expression,
+// hasUncollectedOnlineOwnerOpState (below), which both predicates call. Neither
+// side re-derives anything.
+//
+// What is left on each side is a SHELL of guards that do NOT agree, and this
+// table is the record of why they must not be flattened into the shared call.
+// The reason the original sentence gave still applies to the shells: both HIGH
+// findings in the worker predicate's review were the SAME boundary drawn wrong,
+// so the danger this table guards against is somebody deriving that boundary a
+// second time and drawing it differently — not somebody sharing the one that
+// was already argued. Sharing the core is the opposite of re-deriving it.
+// worker_spawn.go's comment block is still the authority for WHY each arm
+// exists; this is the mapping of what differs:
 //
 //	worker: desired_state == offline → held_down, never winds down
-//	  staff: SAME, and it is load-bearing here too. An explicit 停止 dominates
-//	  every other owner verb, and a refocus stamp on a desired-offline member is
-//	  pure noise: decideUp is not even reached (decideDown owns it) and the
-//	  agent's own gate re-checks desired_state == online, so nothing would ever
-//	  read the marker.
+//	  staff: SAME RULE, DIFFERENT PLACE, and that is the one asymmetry a reader
+//	  has to hold. On the staff side it is inside the predicate, spelled
+//	  aRefocusStampWouldReachTheAgent. On the worker side the predicate does not
+//	  carry it at all: respawnWorkerForOwnerOp's FIRST gate answers held_down
+//	  for a desired-offline worker and returns BEFORE workerHasStateToFlush is
+//	  ever consulted, so a guard inside the predicate would be unreachable.
+//	  It is load-bearing on both sides: an explicit 停止 dominates every other
+//	  owner verb, and a refocus stamp on a desired-offline row is pure noise —
+//	  decideUp is not even reached (decideDown owns it) and the agent's own gate
+//	  re-checks desired_state == online, so nothing would ever read the marker.
+//	  🔴 THE WORKER SIDE'S COMPENSATION IS PINNED, not assumed:
+//	  TestOwnerOp_StoppedWorkerStillOnlyGetsAReceipt drives a desired-offline
+//	  worker that is ONLINE — the state in which the shared core answers YES —
+//	  through the 換 model face and requires a held_down receipt, no epoch, and
+//	  zero frames. Without that test the compensation is decoration.
 //
 //	worker: !hub.IsOnline → immediate
-//	  staff: SAME predicate, and hub.IsOnline is the exact same authority
-//	  reconcileOne feeds into obs.Online — so "the recycle arm can fire" and
-//	  "we opened a wind-down" can never disagree.
+//	  staff: SAME — and "same" is now literal: this arm lives in
+//	  hasUncollectedOnlineOwnerOpState, which both shells call. hub.IsOnline is
+//	  the exact same authority reconcileOne feeds into obs.Online, so "the
+//	  recycle arm can fire" and "we opened a wind-down" can never disagree.
 //
 //	worker: Status != active (never claimed its task) → immediate
 //	  staff: NO ANALOGUE, deliberately. assigned→active WAS the get_my_task
@@ -68,21 +92,21 @@ package main
 //	  since neither staff owner-verb is on a clock).
 //
 //	worker: RefocusSince > 0 ∧ StoppedSince > 0 (this epoch already collected)
-//	  staff: COPIED VERBATIM, including the epoch scoping, because the two-latch
-//	  hazard it was written for exists here identically:
+//	  staff: SHARED, not copied — the epoch scoping included — because the
+//	  two-latch hazard it was written for exists here identically:
 //	  HandleReportStoppedApiSelfStoppedPost latches StoppedSince on the FIRST
 //	  stopped-report whether or not a handover is in flight, and only sets
 //	  recycleKill when refocus_since > 0. Read GLOBALLY, an ordinary
 //	  deactivate→report_stopped would leave a latch that claims "already
-//	  collected" and shoot every later 改機器 / 換模型 on the spot — the round-2
-//	  HIGH, in staff clothing. Pairing it with RefocusSince > 0 asks the
+//	  collected" and shoot every later 改機器 / 換模型 on the spot — the
+//	  STALE-LATCH HIGH, in staff clothing. Pairing it with RefocusSince > 0 asks the
 //	  question actually meant (is THIS epoch's wind-down collected?), and the
 //	  stale latch heals itself because arming the next epoch zeroes it.
-//	  Dropping the StoppedSince half instead resurrects the round-1 HIGH: a verb
+//	  Dropping the StoppedSince half instead resurrects the 收口-window HIGH: a verb
 //	  arriving inside the collect window would open a SECOND wind-down that
 //	  dispatches nothing, while the in-flight respawn boots on the OLD value.
 //
-//	worker: ownerOpRevivesStoppedWorker deny-list (重啟 skips the wind-down)
+//	worker: ownerOpDisplacesTheSession deny-list (重啟 skips the wind-down)
 //	  staff: N/A — 重啟 is not in this funnel. refocus_member / restart_self ARE
 //	  the wind-down (they stamp and return), and activate is a wake, not a
 //	  displacement. The staff funnel carries only 改機器 and 換模型, and both act
@@ -166,8 +190,14 @@ const (
 
 // memberHasStateToFlush answers the one question the rule turns on: is there
 // anything for this member to wind down, or should the owner's verb take
-// effect immediately? See the cell-by-cell mapping above — this is
-// workerHasStateToFlush with the staff substitutions, nothing else.
+// effect immediately?
+//
+// The ANSWER is hasUncollectedOnlineOwnerOpState, the one expression the worker
+// twin calls too. What is written here is the staff SHELL — two guards that the
+// worker side does not have in this function, each for a reason the cell-by-cell
+// mapping above states. Do not flatten them into the shared call: the kind guard
+// has no worker analogue at all, and the worker's desired-offline equivalent is
+// its caller's first gate, which returns before this question is asked.
 func (s *apiServer) memberHasStateToFlush(m Member) bool {
 	// Staff only. A warden runs no ocagent and would never read the marker;
 	// an outsource row has its own funnel (respawnWorkerForOwnerOp) and never
@@ -326,6 +356,12 @@ const (
 )
 
 // winddownStageOf reads how far along the ladder this member ALREADY is.
+//
+// STOP-EPOCH-TERM-AUDIT: this asks forcedEpochLive WITHOUT a stopping_since > 0
+// term, deliberately. It is reading which RUNG the member is on, and "forced" is
+// the top rung; the graceful-epoch compound (gracefulStopEpochOpen) asks the
+// opposite question — whether a session still has an epoch it can work — and
+// negating this one would not answer it. Not a copy of that compound.
 func winddownStageOf(m Member) int {
 	if forcedEpochLive(m) {
 		return winddownStageForced

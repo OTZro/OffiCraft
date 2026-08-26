@@ -396,13 +396,13 @@ var spawnBlockedReasonCodes = []string{
 // exists is the same: an owner verb's explanation and the change it explains
 // must be ONE row write and ONE delta. stampWorkerPlacementBlocked is the other
 // half of the pair, for callers (the tick) that own no write of their own.
+//
+// "Twin" is now literal rather than descriptive: both shells hand the same five
+// columns to stampOpReceipt (reconcile.go), which is where the receipt is
+// actually decided. What is left here is which struct the columns come off.
 func stampWorkerOpReceipt(w *OutsourceWorker, reason string, now float64) {
-	ok := false
-	w.LastOp = reconcileCmdStart
-	w.LastOpOK = &ok
-	w.LastOpLog = ""
-	w.LastOpReason = reason
-	w.LastOpAt = now
+	stampOpReceipt(&w.LastOp, &w.LastOpOK, &w.LastOpLog, &w.LastOpReason, &w.LastOpAt,
+		reconcileCmdStart, reason, now)
 }
 
 // sessionAliveWakeNote is the plain-language half of the let-pass below, and
@@ -514,12 +514,8 @@ func (s *apiServer) stampWorkerPlacementBlocked(w *OutsourceWorker, reason strin
 	if fresh.LastOp == reconcileCmdStart && fresh.LastOpReason == reason {
 		return // already stamped with this exact cause — do not churn the row
 	}
-	ok := false
-	fresh.LastOp = reconcileCmdStart
-	fresh.LastOpOK = &ok
-	fresh.LastOpLog = ""
-	fresh.LastOpReason = reason
-	fresh.LastOpAt = now
+	stampOpReceipt(&fresh.LastOp, &fresh.LastOpOK, &fresh.LastOpLog, &fresh.LastOpReason,
+		&fresh.LastOpAt, reconcileCmdStart, reason, now)
 	if err := s.dal.PutOutsourceWorker(*fresh); err != nil {
 		outsourceLog("spawn %s: placement-blocked stamp persist failed: %v", w.ID, err)
 		return
@@ -1458,7 +1454,7 @@ func (s *apiServer) respawnWorkerForOwnerOp(w OutsourceWorker, op string) ownerO
 	// principled reason a 改機器 or a 換 model should throw away the session's
 	// in-flight state when a 換手 does not — from the worker's side all four are
 	// the same event (this session ends, a new one continues the task).
-	if !ownerOpRevivesStoppedWorker(op) && s.workerHasStateToFlush(w) {
+	if !ownerOpDisplacesTheSession(op) && s.workerHasStateToFlush(w) {
 		// A ladder refusal still answers WoundDown, and deliberately: a wind-down
 		// IS open on this worker — a HIGHER one — so nothing may be dispatched
 		// here either. Falling through to the immediate arm would kill the very
@@ -1505,7 +1501,7 @@ const (
 	ownerOpModel    = "runtime/model" // 換 model / runtime / effort
 )
 
-// ownerOpRevivesStoppedWorker names the ONE verb that is not itself a request for
+// ownerOpDisplacesTheSession names the ONE verb that is not itself a request for
 // a close-out. 重啟 is not a wind-down CAUSE — it is a kill+respawn. It does not
 // ask the current session to flush and hand over, it DISPLACES it
 // (respawnWorkerForOwnerOp → respawnWorkerForOwnerOpNow → respawnWorkerNow, which
@@ -1513,7 +1509,13 @@ const (
 // 換 model are the opposite verb: they mean "the same session's work must survive
 // this change", which is exactly what T-98f4 rule 2 buys with the 預告 + window.
 //
-// 🔴 NOT because 重啟 can only arrive at a worker the owner has already stopped.
+// 🔴 IT USED TO BE CALLED ownerOpRevivesStoppedWorker, and that name carried a
+// framework this comment has spent its whole life contradicting: that the verb
+// it names arrives at a worker the owner has ALREADY STOPPED, so what it does is
+// revive one. Measured, it does not — the name was the last place that claim
+// still lived, and it is renamed rather than annotated because a name is read by
+// people who never open the body (T-170e stage 2 ⑥).
+//
 // It can arrive at ANY live worker: its handler
 // (HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost, api_outsource.go)
 // has exactly two preconditions — the row exists, and it is not released — and NO
@@ -1535,7 +1537,7 @@ const (
 // Deliberately a DENY-list, not an allow-list: a verb added later gets the
 // wind-down by default, because 「所有換手都給收尾機會」 is the rule and skipping
 // it is the exception that has to be argued for.
-func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
+func ownerOpDisplacesTheSession(op string) bool { return op == ownerOpRestart }
 
 // workerHasStateToFlush answers the ONE question rule 2 turns on: is there
 // anything for this worker to wind down, or should the owner's verb take effect
@@ -1600,8 +1602,8 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // guessing wrong here silently discards a round of learnings. Recorded honestly:
 // for the online case this is the 「照舊等滿但可提早結束」 fallback, not a
 // positive detection of unsaved work.
-// ⚠️ THE EPOCH GUARD ON THAT THIRD ARM (review round 3 — the hole round 2's
-// own fix opened). stopped_since is latched in TWO places and only one of them
+// ⚠️ THE EPOCH GUARD ON THAT THIRD ARM — the STALE-LATCH finding, which is the
+// hole the 收口-window finding's own fix opened. stopped_since is latched in TWO places and only one of them
 // is a handover: collectWorkerHandover latches it as the 收口 of a refocus
 // epoch, and workerReportStopped's ELSE arm latches it for a report arriving
 // outside any handover (an ordinary 停止 where the worker says it has finished).
@@ -1627,6 +1629,17 @@ func ownerOpRevivesStoppedWorker(op string) bool { return op == ownerOpRestart }
 // active/online/refocus/stopped with its expected verdict. Both HIGH defects in
 // this票 were mis-drawn boundaries of THIS function; a change here that the
 // table does not cover means the table is now wrong too.
+// 🔴 THE ANSWER IS SHARED WITH THE STAFF TWIN and the two shells are NOT.
+// hasUncollectedOnlineOwnerOpState (member_ownerop_winddown.go) is the whole of
+// what this function decides, and memberHasStateToFlush calls the same
+// expression. What that file's cell-by-cell table records is the part that must
+// stay apart: this predicate carries NO desired-offline arm, because
+// respawnWorkerForOwnerOp's first gate answers held_down and returns before this
+// is consulted — pinned by TestOwnerOp_StoppedWorkerStillOnlyGetsAReceipt, which
+// drives a desired-offline worker that is ONLINE (the state this predicate
+// answers YES for) and requires a receipt, no epoch and zero frames. Merging the
+// shells was measured: handing this function the staff shell closes the whole
+// worker wind-down window, because every caller is behind that gate.
 // Callers hold s.outsourceMu.
 func (s *apiServer) workerHasStateToFlush(w OutsourceWorker) bool {
 	return hasUncollectedOnlineOwnerOpState(
@@ -1963,9 +1976,12 @@ func (s *apiServer) autoHandoverWorker(w OutsourceWorker, now float64) {
 	//     (rc-27d1710174dd) and not an oversight.
 	//
 	// A live FORCED epoch is excluded on both: its kill already went out.
+	// (gracefulStopEpochOpen, api_members.go, is the "open stop epoch that is not
+	// a forced one" half — the same call the sentence, the clock and the two
+	// 加速停止 faces ask. StoppedSince is this site's own extra term: a report
+	// already in hand means nothing here is waiting for one.)
 	if w.DesiredState == DesiredStateOffline {
-		if w.StoppingSince > 0.0 && w.StoppedSince <= 0.0 &&
-			!forcedEpochLive(memberFromWorker(w)) {
+		if w.StoppedSince <= 0.0 && gracefulStopEpochOpen(memberFromWorker(w)) {
 			if sessionGone {
 				s.collectWorkerStop(w, "stop-session-gone", triggerServer)
 			} else if grace, clocked := recycleGraceFor(
@@ -2304,11 +2320,14 @@ func (s *apiServer) workerReportStopped(id, trigger string) (*Member, error) {
 			}
 			m := memberFromWorker(*w)
 			return &m, nil
-		case w.DesiredState == DesiredStateOffline && w.StoppingSince > 0.0 &&
-			!forcedEpochLive(memberFromWorker(*w)):
-			// The 停止 arm: kill, never re-spawn. forcedEpochLive is excluded
+		case w.DesiredState == DesiredStateOffline &&
+			gracefulStopEpochOpen(memberFromWorker(*w)):
+			// The 停止 arm: kill, never re-spawn. The forced epoch is excluded
 			// because a force-stopped session was cut off rather than asked —
 			// its kill already went out and nothing is waiting for a report.
+			// That exclusion is not spelled out here: it is the second half of
+			// gracefulStopEpochOpen (api_members.go), the same call every other
+			// site asks.
 			s.collectWorkerStop(*w, "stopped-report", trigger)
 			if fresh, ferr := s.resolveLiveWorker(id); ferr == nil {
 				w = fresh

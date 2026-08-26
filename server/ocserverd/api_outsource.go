@@ -563,7 +563,7 @@ func (s *apiServer) HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcc
 	}
 	switch {
 	case worker.DesiredState == DesiredStateOffline:
-		if worker.StoppingSince <= 0.0 || forcedEpochLive(memberFromWorker(*worker)) {
+		if !gracefulStopEpochOpen(memberFromWorker(*worker)) {
 			s.outsourceMu.Unlock()
 			writeError(w, http.StatusConflict, acceleratedStopWorkerNeedsAnOpenWindDownMsg)
 			return
@@ -665,13 +665,11 @@ func (s *apiServer) HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost(w htt
 	worker.DesiredState = DesiredStateOffline // owner-explicit stop intent (member parity)
 	worker.RefocusSince = 0.0                 // see the 🔴 note above — mechanical, not semantic
 	worker.RefocusOp = ""                     // …and its cause goes with it
-	// The stop epoch's anchor, stamped ONLY when this is not already a live
-	// FORCED epoch — the member deactivate's rule verbatim. Re-stamping a forced
-	// epoch's stopping_since would move it to the graceful side of
-	// forcedEpochLive and start speaking to a session that was cut off.
-	if !forcedEpochLive(memberFromWorker(*worker)) {
-		worker.StoppingSince = nowSecs()
-	}
+	// The stop epoch's anchor. NOT "the member deactivate's rule verbatim" any
+	// more — it is that rule, the same function the staff deactivate calls
+	// (stopEpochAnchor, api_members.go), which is where the reason a forced
+	// epoch's anchor must not move is written down.
+	worker.StoppingSince = stopEpochAnchor(memberFromWorker(*worker), nowSecs())
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
 		internalError(w, err)

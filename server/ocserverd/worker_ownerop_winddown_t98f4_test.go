@@ -11,14 +11,23 @@ package main
 //
 // The second half of the owner's ask is 「有東西要存才等,沒有就立刻走」, so this
 // file also pins the FAST paths. Which cases are fast is a stated criterion, not
-// a guess — see workerHasStateToFlush / ownerOpRevivesStoppedWorker.
+// a guess — see workerHasStateToFlush / ownerOpDisplacesTheSession.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // THE DECISION TABLE (written because BOTH HIGH defects in this票 were mis-drawn
-// boundaries of the SAME predicate — round 2 missed a state, round 3 drew the
+// boundaries of the SAME predicate — the 收口-window finding missed a state, and
+// the STALE-LATCH finding, whose cause was the first one's own fix, drew the
 // range too wide). Anyone changing workerHasStateToFlush: find your change in
 // this table first. A cell you cannot state an expectation for is where the
 // third defect lives.
+//
+// 🔴 THE TWO FINDINGS ARE NAMED, NOT NUMBERED (T-170e stage 2 ①). They used to
+// be "round 2" and "round 3" here and "round-1" and "round-2" in the staff twin
+// (member_ownerop_winddown.go and its test) — one ordinal apart, for the same
+// two defects, and the repo's own history does not settle it: the commit that
+// added the epoch scoping calls the arm it repaired 「第一輪 HIGH」. An ordinal
+// only the review transcript knows is not something a comment can keep true, so
+// both files now name the finding by what it was.
 //
 // TWO UPSTREAM GATES run BEFORE the predicate is even consulted, and they
 // dominate it (respawnWorkerForOwnerOp):
@@ -36,7 +45,7 @@ package main
 //	                                 worker must already be stopped — its handler
 //	                                 has NO desired-offline gate and answers 200
 //	                                 on a live, mid-加速停止 worker
-//	                                 (ownerOpRevivesStoppedWorker, worker_spawn.go).
+//	                                 (ownerOpDisplacesTheSession, worker_spawn.go).
 //	                                 (deny-list, so a NEW verb gets the wind-down
 //	                                 by default.)
 //	                                 (TestOwnerOp_RestartNeverWindsDown)
@@ -383,6 +392,15 @@ func TestOwnerOp_RestartNeverWindsDown(t *testing.T) {
 // TestOwnerOp_StoppedWorkerStillOnlyGetsAReceipt: the pre-existing
 // desired_state=offline branch point outranks everything, wind-down included —
 // an owner 停止 must never be overturned by another owner verb.
+//
+// 🔴 IT IS ALSO THE COMPENSATION SENTINEL for the one asymmetry between this
+// funnel's predicate and the staff twin's (T-170e stage 2 ①). memberHasStateToFlush
+// carries an explicit desired-online guard (aRefocusStampWouldReachTheAgent);
+// workerHasStateToFlush carries none, and what stands in for it is the gate this
+// test drives — respawnWorkerForOwnerOp returning held_down BEFORE the predicate
+// is consulted. The setup below is deliberately a worker that is desired-offline
+// AND STILL ONLINE, which is exactly the state the shared core answers YES for:
+// if the gate ever stops being first, this test is what says so.
 func TestOwnerOp_StoppedWorkerStillOnlyGetsAReceipt(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
@@ -393,6 +411,16 @@ func TestOwnerOp_StoppedWorkerStillOnlyGetsAReceipt(t *testing.T) {
 		t.Fatalf("hold down: %v", err)
 	}
 	api.hub.DrainWardenCommands(ServerSelfHost)
+
+	// The state that makes this a compensation test rather than an ordinary
+	// held-down test: the shared core says there IS something to flush, and the
+	// only thing stopping a wind-down is the caller's gate.
+	held, _ := api.dal.GetOutsourceWorker(workerID)
+	if !api.hub.IsOnline(workerID) ||
+		!hasUncollectedOnlineOwnerOpState(held.RefocusSince, held.StoppedSince, true) {
+		t.Fatalf("setup: the shared predicate must answer YES here, or the gate "+
+			"under test is not the thing doing the work: %+v", held)
+	}
 
 	rec := postWorker(t, api, workerID, "model",
 		map[string]any{"model": "claude-opus-4-8"},
@@ -412,7 +440,7 @@ func TestOwnerOp_StoppedWorkerStillOnlyGetsAReceipt(t *testing.T) {
 	}
 }
 
-// TestOwnerOp_VerbAfterTheCollectIsNotSwallowed (T-98f4 review round 2, HIGH):
+// TestOwnerOp_VerbAfterTheCollectIsNotSwallowed (T-98f4, the 收口-window HIGH):
 // the window between 「收口已latch」 and 「新 session 還沒連上」 must not eat an
 // owner verb.
 //
@@ -490,8 +518,8 @@ func TestOwnerOp_VerbAfterTheCollectIsNotSwallowed(t *testing.T) {
 	}
 }
 
-// TestOwnerOp_OrdinaryStopRestartStillWindsDownLater (T-98f4 review round 3,
-// HIGH — the hole the round-2 fix opened): the 「已收攏」 fast path must be
+// TestOwnerOp_OrdinaryStopRestartStillWindsDownLater (T-98f4, the STALE-LATCH
+// HIGH — the hole the 收口-window fix opened): the 「已收攏」 fast path must be
 // EPOCH-SCOPED, not a global read of stopped_since.
 //
 // stopped_since is latched in TWO places, and only one of them is a handover:
@@ -506,7 +534,8 @@ func TestOwnerOp_VerbAfterTheCollectIsNotSwallowed(t *testing.T) {
 // / 換 model on that worker is shot on the spot — no 預告, no grace, whatever
 // the session had not written down is gone — and it repeats for the rest of the
 // worker's life. That is the exact failure rule 2 exists to abolish, re-entering
-// through a broader and far more ordinary door than the one round 2 closed.
+// through a broader and far more ordinary door than the one the 收口-window fix
+// closed.
 func TestOwnerOp_OrdinaryStopRestartStillWindsDownLater(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
@@ -570,7 +599,7 @@ func TestOwnerOp_OrdinaryStopRestartStillWindsDownLater(t *testing.T) {
 // of the decision table: refocus > 0 ∧ stopped == 0 — a grace window that is
 // OPEN and not yet collected.
 //
-// It is the neighbour of the round-2 defect cell and the reason that fix had to
+// It is the neighbour of the 收口-window defect cell and the reason that fix had to
 // be an AND rather than "refocus > 0 ⇒ immediate": nothing has been dispatched
 // yet here, so re-stamping is harmless and the owner still gets his 收尾. What
 // makes it safe is that the new pin is persisted BEFORE the window is (re)opened,
