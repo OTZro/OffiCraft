@@ -968,7 +968,7 @@ MATRIX: dict[str, Route] = {
         requires="admin_agent",
         path="/api/boot-sequence/codex/reset",
     ),
-    # 下線程序 (T-c9c0) — same floors as the 系統互動 block: read at machine,
+    # 〈停止〉 (T-c9c0) — same floors as the 系統互動 block: read at machine,
     # write at admin_agent.
     "GET /api/offboard": Route(requires="machine"),
     "POST /api/offboard": Route(
