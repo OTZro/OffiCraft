@@ -90,8 +90,8 @@ type StartParams struct {
 	// declaration and one test fixture. Left in place rather than deleted
 	// because removing it is a wire-surface change, not a comment fix.
 	TaskType string
-	Runtime        string // claude (default) | codex
-	Model          string
+	Runtime  string // claude (default) | codex
+	Model    string
 	// Effort is the member's owner-set reasoning-effort launch intent
 	// (low/medium/high/max, from member.effort server-side). Empty ⇒ the historic
 	// "medium" default, keeping an old frame's launch line byte-identical.
