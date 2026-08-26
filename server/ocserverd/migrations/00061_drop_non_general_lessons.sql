@@ -29,20 +29,77 @@
 -- what keeps the comparison byte-exact: no wildcard, no collation surprise, no
 -- neighbouring key ('general-something') mistaken for the one being spared.
 --
--- 🔴 SCOPE, STATED SO IT IS NOT MISTAKEN FOR AN OVERSIGHT: this touches the
--- `lessons` table and nothing else. The retained-version rows under
--- document_history (document_kind = 'lessons', document_key
--- "<role_key>::<task_type>" — the shape DeleteLessonsForRole in dal.go
--- cascades on) are deliberately NOT deleted here, because the ruling this
--- change carries out named the lessons rows. A consequence a later reader
--- needs to know rather than deduce: while those history rows exist, the
--- document-history restore path can put a non-general row back.
+-- 🔴 THE PREDICATE DOES NOT DEFEND AGAINST NULL, AND DOES NOT NEED TO.
+-- `NULL <> 'general'` evaluates to NULL, not TRUE, so a NULL task_type would
+-- be SPARED by this DELETE rather than removed. That hole is closed one level
+-- down and not here: lessons.task_type is declared `TEXT NOT NULL` in
+-- 00001_schema.sql, so a NULL can never be stored to begin with — writing one
+-- is refused by SQLite with "NOT NULL constraint failed: lessons.task_type"
+-- (extended result code 1299 / SQLITE_CONSTRAINT_NOTNULL). Measured, not
+-- assumed. Stated here so the next reader does not have to re-derive it, and
+-- so that anyone who ever proposes relaxing that NOT NULL knows this migration
+-- is one of the things leaning on it.
 DELETE FROM lessons
  WHERE task_type <> 'general';
 
+-- 🔴 THE SECOND DOOR — document_history. Deleting the lessons rows above only
+-- makes the table general-only AT THIS INSTANT. document_history is a separate
+-- table holding retained revisions, and the restore route writes straight back
+-- into `lessons` from it: for document_kind = 'lessons' the restore arm of
+-- restoreDocumentHistory splits document_key on "::" and hands the task_type it
+-- finds to putLessonsOn VERBATIM — no step on that path compares the value to
+-- 'general'. Leaving those rows would therefore leave a live writer able to put
+-- a non-general row back, and the entire reason this migration runs before the
+-- column drop is that no such row may exist when the fold happens. Measured
+-- end-to-end, not inferred: see
+-- TestMigration00061RestoreCannotPutANonGeneralLessonBack, which without this
+-- statement observes the restore answer 200 and the deleted row reappear.
+--
+-- 🔑 The precedent is in the same codebase. DeleteLessonsForRole (dal.go)
+-- deletes the lessons rows and their "<role_key>::" history rows in ONE
+-- transaction, because a document and its retained versions are one thing.
+-- This statement is the migration-shaped twin of that cascade.
+--
+-- 🔴 THE PREDICATE MIRRORS THE PARSE, NOT THE CONSTRUCTION — and that
+-- distinction is the whole correctness argument. The key is BUILT as
+-- roleKey || '::' || taskType, but it is READ back by historyKeyParts in
+-- api_document_history.go with a SplitN(key, "::", 2): the task_type the
+-- restore will actually write is everything after the FIRST "::", however many
+-- separators the key contains. So this predicate splits at the first "::" too
+-- (instr + substr, never LIKE — no wildcard, no collation, no escaping
+-- question). A role_key that itself contains "::" is thereby handled the way
+-- the restore handles it rather than the way it was written: key
+-- 'a::b::general' restores task_type 'b::general', which is not 'general', and
+-- this predicate deletes it. Agreeing with the parse is what makes "no restore
+-- can reseed a non-general row" true rather than approximately true.
+--
+-- 🔴 WHAT IS DELIBERATELY SPARED, so it is not read as an oversight. The three
+-- conditions below are exactly historyKeyParts' notion of a VALID lessons key
+-- (both sides of the first "::" non-empty), plus "and the task_type is not
+-- general". Rows whose key has no "::" at all, or an empty role_key side
+-- ('::general'), or an empty task_type side ('assistant::') are NOT deleted:
+-- documentHistoryAllowed refuses such a key with 400 before any restore runs,
+-- so none of them can reseed anything, and this is an irreversible DELETE that
+-- gets to remove only what it can show is dangerous. Live writers cannot
+-- produce those shapes either — both writers (in api_roles.go) build the key
+-- from two non-empty path segments. If a later change ever makes such a key
+-- restorable, that change owns cleaning them up.
+--
+-- 🔴 EVERY OTHER document_kind IS UNTOUCHED — insight, global_context,
+-- role_definition, task_description, task_title, the boot-document kinds and
+-- both task-manual series. `document_kind = 'lessons'` is an exact equality on
+-- a column, the same fail-closed shape 00045 used, and it is asserted rather
+-- than asserted-by-comment (see the untouched-kinds fixture in the test file).
+DELETE FROM document_history
+ WHERE document_kind = 'lessons'
+   AND instr(document_key, '::') > 1
+   AND substr(document_key, instr(document_key, '::') + 2) <> ''
+   AND substr(document_key, instr(document_key, '::') + 2) <> 'general';
+
 -- +goose Down
--- NOT REVERSIBLE. The Up deleted rows and this migration kept no copy of them
--- anywhere — rolling back does not and cannot bring them back. Writing a Down
+-- NOT REVERSIBLE, on BOTH tables. The Up deleted lessons rows AND their
+-- retained document_history revisions, and this migration kept no copy of
+-- either anywhere — rolling back does not and cannot bring them back. Writing a Down
 -- that reinstated empty or synthesized rows would be a lie about what is
 -- recoverable, so the rollback is an explicit no-op: it retreats the CODE, not
 -- the data. (The original text of what was deleted was captured out-of-band
