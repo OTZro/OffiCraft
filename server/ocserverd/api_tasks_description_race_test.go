@@ -176,10 +176,13 @@ func TestTaskDescriptionRaceGuardHasTeeth(t *testing.T) {
 	}
 	// Anchored on the SYMBOL, never a line number: the enclosing text of
 	// PutTask, cut at the next top-level func.
-	const anchor = "func (d *DAL) PutTask(t Task) error {"
+	// T-52917b re-pointed this: PutTask is now a one-line delegation and its
+	// 33-column upsert lives in putTaskOn, so that the very same statement can
+	// run inside CreateTaskMintingID's transaction. The guard follows the SQL.
+	const anchor = "func putTaskOn(ex sqlExecer, t Task) error {"
 	start := strings.Index(string(raw), anchor)
 	if start < 0 {
-		t.Fatal("PutTask not found in dal_tasks.go — this guard is anchored on " +
+		t.Fatal("putTaskOn not found in dal_tasks.go — this guard is anchored on " +
 			"the symbol, not a line number; re-point it if the function moved")
 	}
 	rest := string(raw)[start+len(anchor):]

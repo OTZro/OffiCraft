@@ -315,7 +315,13 @@ func (d *DAL) CountTasksDuplicatingOriginal(originalID string) (int, error) {
 // (T-e271 node 3 explicitly did not widen into it) — PutTaskStep carries the
 // same carve-out for its `note` column one table over (T-e271 node 6), and its
 // remaining columns are still shared-write for exactly this reason.
-func (d *DAL) PutTask(t Task) error {
+func (d *DAL) PutTask(t Task) error { return putTaskOn(d.wdb, t) }
+
+// putTaskOn is PutTask's body against either pool handle or an open
+// transaction (the sqlExecer convention, dal.go) — CreateTaskMintingID needs
+// the very same statement to run INSIDE its transaction, and a second copy of a
+// 33-column upsert would drift.
+func putTaskOn(ex sqlExecer, t Task) error {
 	inputs := t.Inputs
 	if inputs == nil {
 		inputs = map[string]any{}
@@ -328,7 +334,7 @@ func (d *DAL) PutTask(t Task) error {
 	if t.OutsourceDispatched {
 		dispatched = 1
 	}
-	_, err = d.wdb.Exec(`
+	_, err = ex.Exec(`
 		INSERT INTO task (`+taskColumns+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET

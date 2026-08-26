@@ -29,6 +29,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -1978,7 +1979,9 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 
 	now := nowSecs()
 	t := Task{
-		ID:           "t-" + newHexID(12),
+		// ID is minted below, INSIDE the transaction that inserts this row
+		// (dal.CreateTaskMintingID) — T-52917b 遞增票號. It is deliberately left
+		// empty here: there is no id to read until the counter has been claimed.
 		TypeKey:      typeKey,
 		Title:        title,
 		DedupeKey:    dedupeKey,
@@ -2007,34 +2010,58 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 	trigger := requestTrigger(r)
 
 	// ① explicit 發包 (target.kind=outsource): every dispatch funnels through the
-	// SINGLE spawn gate (④) — no side door. Run it BEFORE any PutTask so a deny
-	// leaves NO orphan task (③). On admit the task lands UNASSIGNED carrying its
-	// outsource_target; the event-driven scheduler tick below mints the worker
-	// under the global parallel cap (T-35e0: no inline mint, no per-task card).
+	// SINGLE spawn gate (④) — no side door. It runs BEFORE the row lands so a deny
+	// leaves NO orphan task (③).
+	//
+	// T-52917b moved it INSIDE the create transaction rather than ahead of it,
+	// because the id it is handed no longer exists before the transaction opens:
+	// the number is claimed off task_id_seq in the same transaction that inserts
+	// the row, so that a crash between the two burns nothing. Running the gate
+	// there is strictly stronger than running it before — a deny now rolls the
+	// counter back too — and it is safe only because outsourceSpawnGate touches
+	// no database (its authz check is pure and meterOutsourceDispatch is a no-op
+	// hook); everything it needs from the DB (GetMember) is resolved out here,
+	// ahead of the transaction. 🔴 A future gate that reads or writes the database
+	// must be resolved out here as well, not left to run on the write connection
+	// the transaction is already holding.
+	//
+	// On admit the task lands UNASSIGNED carrying its outsource_target; the
+	// event-driven scheduler tick below mints the worker under the global
+	// parallel cap (T-35e0: no inline mint, no per-task card).
+	var gateDenied string
+	var precheck func(id string) error
 	if dispatchTarget != nil {
 		principal := s.principalOfRequest(r)
 		var initiator *Member
 		if principal != principalOwner {
 			initiator, _ = s.dal.GetMember(currentActor(r))
 		}
-		gate, err := s.outsourceSpawnGate(outsourceGateRequest{
-			PrincipalClass: principal, Initiator: initiator, TaskID: t.ID,
-			Runtime: dispatch.Runtime, Model: dispatch.Model,
-			Effort: dispatch.Effort, Machine: dispatch.Machine,
-			IssuedBy: currentActor(r),
-		})
-		if err != nil {
-			internalError(w, err)
-			return
-		}
-		if gate.Decision == gateDeny {
-			writeError(w, http.StatusForbidden,
-				"not permitted to 發包 to an outsource worker: "+gate.Reason)
-			return
+		issuedBy := currentActor(r)
+		precheck = func(id string) error {
+			gate, err := s.outsourceSpawnGate(outsourceGateRequest{
+				PrincipalClass: principal, Initiator: initiator, TaskID: id,
+				Runtime: dispatch.Runtime, Model: dispatch.Model,
+				Effort: dispatch.Effort, Machine: dispatch.Machine,
+				IssuedBy: issuedBy,
+			})
+			if err != nil {
+				return err
+			}
+			if gate.Decision == gateDeny {
+				gateDenied = gate.Reason
+				return errOutsourceGateDenied
+			}
+			return nil
 		}
 	}
 
-	if err := s.dal.PutTask(t); err != nil {
+	t, err = s.dal.CreateTaskMintingID(t, precheck)
+	if err != nil {
+		if errors.Is(err, errOutsourceGateDenied) {
+			writeError(w, http.StatusForbidden,
+				"not permitted to 發包 to an outsource worker: "+gateDenied)
+			return
+		}
 		internalError(w, err)
 		return
 	}

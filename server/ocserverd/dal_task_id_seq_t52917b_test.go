@@ -1,0 +1,235 @@
+package main
+
+import (
+	"database/sql"
+
+	"github.com/pressly/goose/v3"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+)
+
+// ── T-52917b: the two facts the design rests on, MEASURED ────────────────────
+
+// TestRowsAffectedIsExactOnThisDriver measures what the ticket says nobody has
+// measured: whether `sql.Result.RowsAffected()` on modernc.org/sqlite reports
+// the EXACT number of rows an UPDATE changed.
+//
+// It matters because the whole mint is a compare-and-set that reads "1" as "the
+// number is mine" and "0" as "somebody beat me". If the driver over-reported —
+// answered 1 for a WHERE that matched nothing — every claim would look like a
+// win and two transactions would mint the same number. Six-plus places in this
+// tree already decide on this value; this is the first one that measures it.
+//
+// The three cases are the three answers the CAS can get.
+func TestRowsAffectedIsExactOnThisDriver(t *testing.T) {
+	db := openTaskSeqTestDB(t)
+
+	// ① a matching CAS ⇒ exactly 1.
+	res, err := db.Exec(`UPDATE task_id_seq SET next = next + 1 WHERE id = 1 AND next = 1`)
+	if err != nil {
+		t.Fatalf("cas: %v", err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		t.Fatalf("matching CAS reported %d rows (err %v), want exactly 1 — the "+
+			"mint reads this value as \"the number is mine\"", n, err)
+	}
+
+	// ② a NON-matching CAS ⇒ exactly 0, never 1. This is the direction that
+	// would be fatal: a driver answering 1 here hands the same number twice.
+	res, err = db.Exec(`UPDATE task_id_seq SET next = next + 1 WHERE id = 1 AND next = 1`)
+	if err != nil {
+		t.Fatalf("stale cas: %v", err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 0 {
+		t.Fatalf("STALE CAS reported %d rows (err %v), want exactly 0 — a driver "+
+			"that says 1 here would mint the same task number twice", n, err)
+	}
+
+	// ③ and it is a ROW count, not a "did anything run" flag: an UPDATE that
+	// matches several rows must report several.
+	if _, err := db.Exec(`CREATE TABLE ra_probe (v INTEGER)`); err != nil {
+		t.Fatalf("probe table: %v", err)
+	}
+	for i := 0; i < 5; i++ {
+		if _, err := db.Exec(`INSERT INTO ra_probe (v) VALUES (0)`); err != nil {
+			t.Fatalf("probe insert: %v", err)
+		}
+	}
+	res, err = db.Exec(`UPDATE ra_probe SET v = 1`)
+	if err != nil {
+		t.Fatalf("probe update: %v", err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 5 {
+		t.Fatalf("multi-row UPDATE reported %d (err %v), want 5 — RowsAffected "+
+			"must be a row COUNT, not a boolean", n, err)
+	}
+}
+
+// TestWritePoolIsCappedAtOneConnection measures the other read-from-the-config
+// claim: that the WRITE handle really only ever holds one connection open. The
+// comments in migrate.go/dal.go assert it; SetMaxOpenConns(1) is the line that
+// is supposed to cause it; nothing until now watched it happen.
+//
+// The probe holds several transactions' worth of work in flight at once and
+// records the highest concurrent in-use count the pool ever reports.
+func TestWritePoolIsCappedAtOneConnection(t *testing.T) {
+	db := openTaskSeqTestDB(t)
+	if got := db.Stats().MaxOpenConnections; got != 1 {
+		t.Fatalf("write pool MaxOpenConnections = %d, want 1", got)
+	}
+
+	var peak int64
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			tx, err := db.Begin()
+			if err != nil {
+				return
+			}
+			if inUse := int64(db.Stats().InUse); inUse > atomic.LoadInt64(&peak) {
+				atomic.StoreInt64(&peak, inUse)
+			}
+			_, _ = tx.Exec(`UPDATE task_id_seq SET next = next + 1 WHERE id = 1`)
+			_ = tx.Commit()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if peak > 1 {
+		t.Fatalf("the write pool had %d connections in use at once, want at most 1 "+
+			"— BEGIN IMMEDIATE serialising in Go is what the mint's critical "+
+			"section rests on", peak)
+	}
+}
+
+// TestMintedNumberIsReturnedWhenTheCreateRollsBack pins 唯一 over 連續 from the
+// other side: a refused create must NOT burn its number, because minting and
+// inserting share one transaction.
+func TestMintedNumberIsReturnedWhenTheCreateRollsBack(t *testing.T) {
+	api := newTasksTestServer(t)
+	_, err := api.dal.CreateTaskMintingID(Task{Title: "refused"},
+		func(string) error { return errOutsourceGateDenied })
+	if err == nil {
+		t.Fatalf("a refusing precheck must fail the create")
+	}
+	got := createAdHocTask(t, api, "m-exec")
+	if got.ID != "T-1" {
+		t.Fatalf("first surviving task is %q, want T-1 — a rolled-back create must "+
+			"return its number, not burn it", got.ID)
+	}
+	var rows int
+	if err := api.dal.rdb.QueryRow(`SELECT COUNT(*) FROM task`).Scan(&rows); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("task rows = %d, want 1 — a refused create must leave no orphan", rows)
+	}
+}
+
+func openTaskSeqTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := openSQLite(filepath.Join(t.TempDir(), "seq-test.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("goose up: %v", err)
+	}
+	return db
+}
+
+// TestUpgradingADatabaseThatAlreadyHasTasks is the real upgrade path, run on a
+// database populated BEFORE migration 00060 exists: legacy "t-"+hex rows and a
+// hand-planted "T-5" are already there when the counter table is created.
+//
+// It exists because the seeding SELECT is the one piece of this change that can
+// only be wrong on somebody ELSE's database — a fresh test db has no rows for it
+// to read, so every other test here would stay green with the seed hard-coded
+// to 1 and the first mint on a live upgrade would collide with an existing row.
+func TestUpgradingADatabaseThatAlreadyHasTasks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "upgrade.db")
+	db, err := openSQLite(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	// ① migrate to the version JUST BEFORE the counter lands.
+	goose.SetBaseFS(embeddedMigrations)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatalf("dialect: %v", err)
+	}
+	if err := goose.UpTo(db, "migrations", 59); err != nil {
+		t.Fatalf("goose up-to 59: %v", err)
+	}
+	if _, err := db.Exec(`SELECT 1 FROM task_id_seq`); err == nil {
+		t.Fatal("task_id_seq already exists at version 59 — this test is not " +
+			"exercising the upgrade it claims to")
+	}
+
+	// ② populate it the way a live database is populated.
+	pre := NewDAL(db)
+	now := nowSecs()
+	for _, id := range []string{"t-72dd79b666d0", "t-ced055e27e9f", "T-5"} {
+		if err := pre.PutTask(Task{ID: id, Title: "pre-upgrade " + id,
+			Status: TaskStatusNotStarted, Priority: TaskPriorityMid,
+			ExecutorKind: TaskExecutorMember, ExecutorID: "m-exec",
+			CreatedTS: now, UpdatedTS: now}); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+
+	// ③ upgrade.
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("goose up: %v", err)
+	}
+
+	// the counter must clear the highest EXISTING T-<n>, not restart at 1
+	var next int
+	if err := db.QueryRow(`SELECT next FROM task_id_seq WHERE id = 1`).Scan(&next); err != nil {
+		t.Fatalf("read counter: %v", err)
+	}
+	if next != 6 {
+		t.Fatalf("counter seeded at %d, want 6 — an upgrade must start ABOVE the "+
+			"highest T-<n> already in the table, or the first mint overwrites it", next)
+	}
+
+	// every pre-upgrade row is untouched, by its exact original id
+	for _, id := range []string{"t-72dd79b666d0", "t-ced055e27e9f", "T-5"} {
+		got, err := pre.GetTask(id)
+		if err != nil || got == nil {
+			t.Fatalf("pre-upgrade task %q lost by the migration: %v %v", id, got, err)
+		}
+		if got.Title != "pre-upgrade "+id {
+			t.Fatalf("pre-upgrade task %q rewritten: title = %q", id, got.Title)
+		}
+	}
+
+	// and the next mint lands clear of them
+	minted, err := pre.CreateTaskMintingID(Task{Title: "post-upgrade",
+		Status: TaskStatusNotStarted, Priority: TaskPriorityMid,
+		ExecutorKind: TaskExecutorMember, ExecutorID: "m-exec",
+		CreatedTS: now, UpdatedTS: now}, nil)
+	if err != nil {
+		t.Fatalf("mint after upgrade: %v", err)
+	}
+	if minted.ID != "T-6" {
+		t.Fatalf("first mint after upgrade is %q, want T-6", minted.ID)
+	}
+	var rows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task`).Scan(&rows); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if rows != 4 {
+		t.Fatalf("task rows = %d, want 4 — the new mint must not have overwritten "+
+			"a pre-upgrade row", rows)
+	}
+}
