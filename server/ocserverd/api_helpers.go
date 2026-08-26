@@ -62,6 +62,33 @@ func currentMachineClaim(r *http.Request) string {
 	return machineID
 }
 
+// receiptReporterMachine names the MACHINE that is speaking on this request —
+// the one question a warden command_result receipt has never been able to
+// answer on its own (CommandResult carries no warden id, and per
+// caller-identity-convention it must never grow one: caller identity is taken
+// from the verified token, never from a request parameter).
+//
+// The resolution is entirely inside the identity we already hold:
+//
+//   - a WARDEN's credential is minted by mintWardenToken with sub == the warden
+//     member's own id, and a warden member's id IS the machine id
+//     (api_machines.go onboard: "mint a NEW warden member whose own id IS the
+//     machine id"). It deliberately carries NO machine_id claim — "a warden
+//     carries NO self-binding" (authz.go). So sub is the machine.
+//   - an AGENT / WORKER boot token is something running ON a machine rather
+//     than the machine itself, and mintAgentToken stamps machine_id = its host.
+//     A non-empty claim is therefore the marker for "not a warden", and we
+//     return "" rather than mistaking a member id for a machine id.
+//
+// "" means UNKNOWN, never "nobody". Every caller must treat it as no evidence
+// and fall back to the behaviour it had before it could ask.
+func receiptReporterMachine(r *http.Request) string {
+	if currentMachineClaim(r) != "" {
+		return "" // something running on a machine, not the machine
+	}
+	return currentActor(r)
+}
+
 // principalOfRequest resolves the caller's principal class (the in-handler
 // twin of the route choke — handlers.principal_at_least call sites).
 func (s *apiServer) principalOfRequest(r *http.Request) string {

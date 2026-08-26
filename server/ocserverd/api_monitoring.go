@@ -234,11 +234,37 @@ func supersededDispatchClue(m Member) string {
 		m.LastOpAt, m.LastOpReason)
 }
 
+// stringOf / boolPtrOf are the two type assertions the receipt reads use, named
+// once so the pre-routing peek at rpc/ok/reason cannot drift from the per-fold
+// reads further down (they must agree — the peek decides whether the folds'
+// own isStopNoopReceipt verdict is about to fire).
+func stringOf(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func boolPtrOf(v any) *bool {
+	b, isBool := v.(bool)
+	if !isBool {
+		return nil
+	}
+	return &b
+}
+
 // foldCommandResult folds ONE warden command_result receipt onto the
 // addressed member's last_op* fields (handlers._fold_command_result).
 // Fail-safe: a missing/blank member_id or an unknown member is ignored; any
 // storage fault is logged and swallowed (an observation fold must never 500).
-func (s *apiServer) foldCommandResult(commandResult map[string]any, trigger string) {
+//
+// reporter is the MACHINE that sent this receipt (receiptReporterMachine — the
+// verified token, never the payload; "" when it could not be resolved). It is
+// distinct from trigger, which is the SSE attribution string and happens to
+// carry the same text for a warden: conflating the two is how the fact sat
+// unused here for so long. Two consumers below need it as a FACT rather than a
+// label — the receipt deadline and the worker-stop retry, both of which have
+// always recorded which machine they were waiting on and never had anything to
+// compare it against.
+func (s *apiServer) foldCommandResult(commandResult map[string]any, trigger, reporter string) {
 	// T-9ccf: a worker receipt keys on worker_id (a worker has no roster member) —
 	// route it to the worker fold FIRST. The warden sends exactly one id per
 	// receipt (command.go), so worker_id present ⇒ this is a worker receipt.
@@ -249,8 +275,22 @@ func (s *apiServer) foldCommandResult(commandResult map[string]any, trigger stri
 	// the fold then declines to write it (a no-op stop receipt, an unknown
 	// member). Disarming only on a successful fold would stamp receipt_missing
 	// on rows whose receipt was received and read.
-	s.noteReceiptArrived(strings.TrimSpace(workerIDRaw))
-	s.noteReceiptArrived(strings.TrimSpace(memberIDRawOf(commandResult)))
+	s.noteReceiptArrived(strings.TrimSpace(workerIDRaw), reporter)
+	s.noteReceiptArrived(strings.TrimSpace(memberIDRawOf(commandResult)), reporter)
+	// AND, before the routing can return early for the very receipt class this
+	// cares about: a no_such_session stop is dropped by BOTH folds below
+	// (isStopNoopReceipt — it is not last_op evidence and must not forge one),
+	// but for the worker-stop RETRY it is the strongest evidence there is.
+	// "not worth writing down" and "not worth reading" were never the same
+	// claim; the fold conflated them, and the retry paid for it in re-dispatches.
+	if isStopNoopReceipt(
+		stringOf(commandResult["rpc"]), boolPtrOf(commandResult["ok"]),
+		stringOf(commandResult["reason"]),
+	) {
+		s.noteWorkerStopNoSuchSession(strings.TrimSpace(workerIDRaw), reporter)
+		s.noteWorkerStopNoSuchSession(
+			strings.TrimSpace(memberIDRawOf(commandResult)), reporter)
+	}
 	if workerID := strings.TrimSpace(workerIDRaw); workerID != "" {
 		s.foldWorkerCommandResult(workerID, commandResult, trigger)
 		return
@@ -692,7 +732,7 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	s.hub.Publish("monitoring", "signal", "monitoring", agentID, nil, audienceOwnerOnly(), requestTrigger(r))
 
 	if commandResult != nil {
-		s.foldCommandResult(commandResult, requestTrigger(r))
+		s.foldCommandResult(commandResult, requestTrigger(r), receiptReporterMachine(r))
 	}
 
 	writeJSON(w, http.StatusOK, agentTelemetryDTO{

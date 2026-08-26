@@ -1149,6 +1149,51 @@ type workerStopDispatch struct {
 	At     float64 // when it went out — the stop_retry clock
 }
 
+// noteWorkerStopNoSuchSession folds ONE no_such_session stop receipt onto the
+// armed worker_stop retry — the receipt half of a judgment that until now read
+// PRESENCE ALONE (retryUnlandedWorkerStop below).
+//
+// 🔴 WHY A RECEIPT OUTRANKS PRESENCE HERE. The retry's question is "did my kill
+// reach the session it addressed?", and presence can only answer a weaker one:
+// "is this id online on that machine?". Those come apart exactly when it
+// matters — a stale or rebound SSE claim keeps the id looking alive on the very
+// machine the kill went to, so the retry re-dispatches forever and the two
+// worlds it must separate ("the blade missed" vs "the blade never arrived")
+// render identically. A no_such_session receipt FROM THE TARGET collapses that:
+// it proves the frame was delivered, executed, and found nothing to kill. That
+// is the strongest evidence this system produces about a stop, and it is owed
+// its own conclusion — stop retrying.
+//
+// 🔴 WHY THE MACHINE COMPARISON IS LOAD-BEARING, not defensive polish. An
+// identity sweep broadcasts stop to EVERY warden, and every warden that never
+// hosted the session answers no_such_session as a matter of routine. Those
+// receipts are true statements about somebody else's tmux. Folding them would
+// abandon a genuinely undelivered kill on the word of a machine that was never
+// involved — turning a re-dispatch bug into a 殘活 session bug, which is the
+// worse of the two (owner ruling: 殘活 session 零容忍).
+//
+// reporter == "" is UNKNOWN, not "nobody" (receiptReporterMachine), so it can
+// never match and the retry keeps its old behaviour. Fail-closed by
+// construction: we only ever act on a positive identification.
+//
+// Takes s.outsourceMu itself — the receipt path (foldCommandResult) holds no
+// scheduler lock, exactly as foldWorkerCommandResult beneath it relies on.
+func (s *apiServer) noteWorkerStopNoSuchSession(workerID, reporter string) {
+	if workerID == "" || reporter == "" {
+		return
+	}
+	s.outsourceMu.Lock()
+	defer s.outsourceMu.Unlock()
+	armed, ok := s.workerStopLanded[workerID]
+	if !ok || armed.Target != reporter {
+		return
+	}
+	delete(s.workerStopLanded, workerID)
+	outsourceLog("worker_stop %s: %s reported no_such_session — the kill reached the "+
+		"machine it was aimed at and found nothing to kill; retry disarmed",
+		workerID, reporter)
+}
+
 // retryPendingWorkerStop re-fires a parked worker_stop (see workerStopPending)
 // once per tick until the target warden is reachable and drains it; the
 // successful enqueue clears the parking (inside enqueueWorkerStop). Killing an

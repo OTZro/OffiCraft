@@ -1462,7 +1462,7 @@ func TestFoldCommandResult_WorkerReceiptFoldsOntoWorkerRow(t *testing.T) {
 		"reason":    reason,
 		"log":       reason,
 		"at":        "2026-07-13T08:00:00Z",
-	}, "w-test")
+	}, "w-test", "")
 
 	got, err := s.dal.GetOutsourceWorker("ow-1")
 	if err != nil || got == nil {
@@ -1490,7 +1490,7 @@ func TestFoldCommandResult_WorkerReceiptUnknownWorkerIgnored(t *testing.T) {
 	s := foldTestServer(t)
 	s.foldCommandResult(map[string]any{
 		"worker_id": "ow-nope", "rpc": "worker_start", "ok": true,
-	}, "w-test")
+	}, "w-test", "")
 }
 
 func TestFoldCommandResult_ReasonPersistedVerbatim(t *testing.T) {
@@ -1509,7 +1509,7 @@ func TestFoldCommandResult_ReasonPersistedVerbatim(t *testing.T) {
 		"reason":    reason,
 		"log":       reason,
 		"at":        "2026-07-13T08:00:00Z",
-	}, "w-test")
+	}, "w-test", "")
 
 	got, err := s.dal.GetMember("mira")
 	if err != nil || got == nil {
@@ -1531,7 +1531,7 @@ func TestFoldCommandResult_ReasonClampedAtCap(t *testing.T) {
 	long := "mkdir_failed: " + strings.Repeat("x", 2*commandResultReasonMax)
 	s.foldCommandResult(map[string]any{
 		"member_id": "mira", "rpc": "start", "ok": false, "reason": long,
-	}, "w-test")
+	}, "w-test", "")
 	got, _ := s.dal.GetMember("mira")
 	if len(got.LastOpReason) != commandResultReasonMax {
 		t.Fatalf("reason must clamp to %d bytes, got %d", commandResultReasonMax, len(got.LastOpReason))
@@ -1552,7 +1552,7 @@ func TestFoldCommandResult_NoReasonFoldsEmpty(t *testing.T) {
 	}
 	s.foldCommandResult(map[string]any{
 		"member_id": "mira", "rpc": "stop", "ok": true, "log": "session=member-mira: stopped",
-	}, "w-test")
+	}, "w-test", "")
 	got, _ := s.dal.GetMember("mira")
 	if got.LastOpReason != "" {
 		t.Fatalf("a reason-less receipt must fold an empty reason, got %q", got.LastOpReason)
@@ -1586,7 +1586,7 @@ func TestFoldCommandResult_NoopStopDoesNotPolluteLastOp(t *testing.T) {
 		"reason":    "no_such_session: stop was a no-op (no session, no member process on this warden)",
 		"log":       "session=member-mira: no_such_session",
 		"at":        "2026-07-20T04:30:00Z",
-	}, "w-test")
+	}, "w-test", "")
 	got, err := s.dal.GetMember("mira")
 	if err != nil || got == nil {
 		t.Fatalf("get: %v %v", got, err)
@@ -1613,7 +1613,7 @@ func TestFoldCommandResult_FailedStopAlwaysFolds(t *testing.T) {
 	s.foldCommandResult(map[string]any{
 		"member_id": "mira", "rpc": "stop", "ok": false,
 		"reason": "no_such_session: contradictory failed no-op (defensive)",
-	}, "w-test")
+	}, "w-test", "")
 	got, _ := s.dal.GetMember("mira")
 	if got.LastOp != "stop" || got.LastOpOK == nil || *got.LastOpOK {
 		t.Fatalf("a failed stop must fold regardless of reason, got %+v", got)
@@ -1631,7 +1631,7 @@ func TestFoldCommandResult_RealStopStillFolds(t *testing.T) {
 	}
 	s.foldCommandResult(map[string]any{
 		"member_id": "mira", "rpc": "stop", "ok": true, "reason": "stopped",
-	}, "w-test")
+	}, "w-test", "")
 	got, _ := s.dal.GetMember("mira")
 	if got.LastOp != "stop" || got.LastOpOK == nil || !*got.LastOpOK {
 		t.Fatalf("a real stop receipt must keep folding, got %+v", got)
@@ -1653,7 +1653,7 @@ func TestFoldWorkerCommandResult_NoopStopSkipped(t *testing.T) {
 	s.foldCommandResult(map[string]any{
 		"worker_id": "ow-7", "rpc": "stop", "ok": true,
 		"reason": "no_such_session: stop was a no-op (no session, no member process on this warden)",
-	}, "w-test")
+	}, "w-test", "")
 	got, err := s.dal.GetOutsourceWorker("ow-7")
 	if err != nil || got == nil {
 		t.Fatalf("get worker: %v %v", got, err)
