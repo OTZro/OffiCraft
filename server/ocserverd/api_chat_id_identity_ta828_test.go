@@ -204,11 +204,18 @@ func TestChatIDs_TheSnapshotTheNotificationAndTheReReadNameTheSameMessage(t *tes
 // field on the CLI side would edit their copy and leave ours agreeing with a
 // server that no longer matches them.
 //
-// The derivation is structural: find `"#" + <ident>` inside drainChat, then find
-// where that ident was assigned, and read the single string-literal map key in
-// that assignment. Anything it cannot resolve is a FATAL — the shape of the
-// line changed, and a human has to re-check this contract rather than have the
-// test quietly widen.
+// The derivation is structural: find `"#" + <ident>` ANYWHERE in the file, then
+// find where that ident was assigned INSIDE THE SAME FUNCTION, and read the
+// single string-literal map key in that assignment. Anything it cannot resolve
+// is a FATAL — the shape of the line changed, and a human has to re-check this
+// contract rather than have the test quietly widen.
+//
+// It deliberately does NOT pin the enclosing function by name. It used to look
+// only inside drainChat, and T-bb78 moved the printing into a printChatLine
+// helper without changing one byte of what is printed — the guard went red for
+// a refactor, which teaches the next person that a red here means "re-point the
+// anchor" rather than "the contract broke". What this file is about is the
+// FIELD, so the field is what it locates.
 func notificationIDField(t *testing.T) string {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -216,38 +223,44 @@ func notificationIDField(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("parse %s: %v", ocagentListenSource, err)
 	}
+	// Which FUNCTION prints the tag, and which local holds the value after "#"?
 	var drain *ast.FuncDecl
-	for _, d := range file.Decls {
-		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "drainChat" && fn.Recv == nil {
-			drain = fn
-			break
-		}
-	}
-	if drain == nil {
-		t.Fatalf("%s no longer declares drainChat — the notification line moved, "+
-			"and this contract has to be re-derived by hand", ocagentListenSource)
-	}
-
-	// Which local holds the value printed after the "#"?
 	printed := ""
-	ast.Inspect(drain.Body, func(n ast.Node) bool {
-		be, ok := n.(*ast.BinaryExpr)
-		if !ok || be.Op != token.ADD {
+	for _, d := range file.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		here := ""
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			be, ok := n.(*ast.BinaryExpr)
+			if !ok || be.Op != token.ADD {
+				return true
+			}
+			lit, ok := be.X.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING || lit.Value != `"#"` {
+				return true
+			}
+			if id, ok := be.Y.(*ast.Ident); ok {
+				here = id.Name
+			}
 			return true
+		})
+		if here == "" {
+			continue
 		}
-		lit, ok := be.X.(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING || lit.Value != `"#"` {
-			return true
+		if printed != "" {
+			t.Fatalf("%s prints `\"#\" + <local>` in more than one function "+
+				"(%s and %s) — which one names the notification tag can no "+
+				"longer be derived; re-check it by hand",
+				ocagentListenSource, drain.Name.Name, fn.Name.Name)
 		}
-		if id, ok := be.Y.(*ast.Ident); ok {
-			printed = id.Name
-		}
-		return true
-	})
+		drain, printed = fn, here
+	}
 	if printed == "" {
-		t.Fatalf("drainChat no longer prints `\"#\" + <local>` — the message-id "+
-			"tag changed shape, so which payload field it names can no longer "+
-			"be derived; re-check %s by hand", ocagentListenSource)
+		t.Fatalf("%s no longer prints `\"#\" + <local>` anywhere — the "+
+			"message-id tag changed shape, so which payload field it names can "+
+			"no longer be derived; re-check it by hand", ocagentListenSource)
 	}
 
 	// Where did that local come from, and which payload key did it read?
@@ -281,9 +294,9 @@ func notificationIDField(t *testing.T) string {
 		return true
 	})
 	if len(keys) != 1 {
-		t.Fatalf("cannot tell which chat-payload key drainChat prints after the "+
+		t.Fatalf("cannot tell which chat-payload key %s prints after the "+
 			"'#': %q reads %v — re-check %s by hand",
-			printed, keys, ocagentListenSource)
+			drain.Name.Name, printed, keys, ocagentListenSource)
 	}
 	return keys[0]
 }
