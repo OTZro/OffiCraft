@@ -354,7 +354,7 @@ func TestDrainChat_UnreadForMeOnly_AdvancesSeen(t *testing.T) {
 	]`, time.Now().Unix()-130, time.Now().Unix(), time.Now().Unix())
 	srv, gotWith := chatServer(t, list)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
-	seen := map[string]bool{}
+	seen := loadChatSeen("")
 	var out bytes.Buffer
 
 	n := drainChat(srv.Client(), cfg, seen, &out, false)
@@ -367,7 +367,7 @@ func TestDrainChat_UnreadForMeOnly_AdvancesSeen(t *testing.T) {
 	if got := out.String(); got != "[ocagent] chat from boss (#m1, 2m ago): hello\n" {
 		t.Fatalf("drain out = %q", got)
 	}
-	if !seen["m1"] {
+	if !seen.m["m1"] {
 		t.Fatal("m1 must be marked seen")
 	}
 	// Second drain: m1 already seen ⇒ nothing new, nothing printed.
@@ -380,13 +380,13 @@ func TestDrainChat_UnreadForMeOnly_AdvancesSeen(t *testing.T) {
 func TestDrainChat_SilentAdvancesWithoutPrint(t *testing.T) {
 	srv, _ := chatServer(t, `[{"id":"m1","from":"boss","to":"kyle","body":"hi"}]`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
-	seen := map[string]bool{}
+	seen := loadChatSeen("")
 	var out bytes.Buffer
 	n := drainChat(srv.Client(), cfg, seen, &out, true) // silent baseline
 	if n != 1 || out.Len() != 0 {
 		t.Fatalf("silent drain n=%d out=%q, want count 1 and NO print", n, out.String())
 	}
-	if !seen["m1"] {
+	if !seen.m["m1"] {
 		t.Fatal("silent drain must still advance the seen cursor")
 	}
 }
@@ -395,7 +395,7 @@ func TestDrainChat_MissingTsPrintsIdTagOnly(t *testing.T) {
 	srv, _ := chatServer(t, `[{"id":"m1","from":"boss","to":"kyle","body":"hi"}]`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
-	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
+	drainChat(srv.Client(), cfg, loadChatSeen(""), &out, false)
 	if got := out.String(); got != "[ocagent] chat from boss (#m1): hi\n" {
 		t.Fatalf("no-ts drain out = %q", got)
 	}
@@ -407,7 +407,7 @@ func TestDrainChat_NoIdNoTsDropsTheTagEntirely(t *testing.T) {
 	srv, _ := chatServer(t, `[{"from":"boss","to":"kyle","body":"hi"}]`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
-	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
+	drainChat(srv.Client(), cfg, loadChatSeen(""), &out, false)
 	if got := out.String(); got != "[ocagent] chat from boss: hi\n" {
 		t.Fatalf("id-less drain out = %q", got)
 	}
@@ -423,7 +423,7 @@ func TestDrainChat_ImageAttachmentAppendsBadge(t *testing.T) {
 		"attachments":[{"id":"a1","mime":"image/png","is_image":true,"filename":"x.png"}]}]`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
-	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
+	drainChat(srv.Client(), cfg, loadChatSeen(""), &out, false)
 	got := out.String()
 	if !strings.Contains(got, "#"+wireID) {
 		t.Errorf("notification must name the message id %q so the agent can get_chat it: %q",
@@ -442,7 +442,7 @@ func TestDrainChat_EmptyBodyWithAttachmentsPrintsBadgeOnly(t *testing.T) {
 		"attachments":[{"id":"a1","is_image":true},{"id":"a2","is_image":true}]}]`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
-	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
+	drainChat(srv.Client(), cfg, loadChatSeen(""), &out, false)
 	if got := out.String(); got != "[ocagent] chat from boss (#m1): 📎2圖\n" {
 		t.Fatalf("empty-body attachment drain out = %q", got)
 	}
@@ -455,7 +455,7 @@ func TestDrainChat_MixedAttachmentsCountsImagesAndFiles(t *testing.T) {
 		{"id":"a3","is_image":false,"mime":"text/plain"}]}]`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
-	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
+	drainChat(srv.Client(), cfg, loadChatSeen(""), &out, false)
 	if got := out.String(); got != "[ocagent] chat from boss (#m1): 附件 📎1圖 2檔\n" {
 		t.Fatalf("mixed attachment drain out = %q", got)
 	}
@@ -472,7 +472,7 @@ func TestDrainChat_NoAttachmentsPrintsIdWithoutBadge(t *testing.T) {
 	srv, _ := chatServer(t, `[{"id":"`+wireID+`","from":"boss","to":"kyle","body":"hi","attachments":[]}]`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
-	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
+	drainChat(srv.Client(), cfg, loadChatSeen(""), &out, false)
 	got := out.String()
 	if !strings.Contains(got, "#"+wireID) {
 		t.Errorf("an attachment-less notification must still name the message id %q: %q",
@@ -500,7 +500,7 @@ func TestDrainChat_ReplyToPrintsMarkerNamingTheTarget(t *testing.T) {
 		fmt.Sprint(time.Now().Unix()-130)+`}]`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
-	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
+	drainChat(srv.Client(), cfg, loadChatSeen(""), &out, false)
 	got := out.String()
 	if !strings.Contains(got, "↩#"+targetID) {
 		t.Errorf("the notification must mark that this message replies to %q, "+
@@ -533,7 +533,7 @@ func TestDrainChat_NoReplyToOmitsTheMarkerEntirely(t *testing.T) {
 			srv, _ := chatServer(t, "["+tc.wire+"]")
 			cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 			var out bytes.Buffer
-			drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
+			drainChat(srv.Client(), cfg, loadChatSeen(""), &out, false)
 			got := out.String()
 			if strings.Contains(got, "↩") {
 				t.Errorf("no reply target ⇒ NO marker, got %q", got)
@@ -1461,7 +1461,7 @@ func newTestListener(srv *httptest.Server, cfg Config, out io.Writer) *listener 
 		probeUnknownSpan: probeUnknownGrace,
 		refusalGraceSpan: sseRefusalGrace,
 		cursorPath:       filepath.Join(cfgTempDir, "cursor"),
-		seen:             map[string]bool{},
+		seen:             loadChatSeen(""),
 		replySeen:        loadReplyCardSeen(filepath.Join(cfgTempDir, "replycards-seen")),
 	}
 }
@@ -2255,7 +2255,7 @@ func TestDrainChat_UndersizeBodyPrintedInFull(t *testing.T) {
 	defer srv.Close()
 	cfg := Config{Base: srv.URL, ID: "kyle", Token: "tok"}
 	var out bytes.Buffer
-	if n := drainChat(srv.Client(), cfg, map[string]bool{}, &out, false); n != 1 {
+	if n := drainChat(srv.Client(), cfg, loadChatSeen(""), &out, false); n != 1 {
 		t.Fatalf("drain = %d", n)
 	}
 	line := out.String()
@@ -2281,7 +2281,7 @@ func TestDrainChat_MultiLineBodyPrintedIndentedAsOneBlock(t *testing.T) {
 	defer srv.Close()
 	cfg := Config{Base: srv.URL, ID: "kyle", Token: "tok"}
 	var out bytes.Buffer
-	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
+	drainChat(srv.Client(), cfg, loadChatSeen(""), &out, false)
 	want := "[ocagent] chat from boss (#c-ml): 交接 SOP:\n" +
 		"    1. 先接手 listen\n" +
 		"    [ocagent] 這行看起來像事件但其實是內文\n"
@@ -2312,7 +2312,7 @@ func TestDrainChat_LongMustReadBodyPrintedInFull(t *testing.T) {
 	defer srv.Close()
 	cfg := Config{Base: srv.URL, ID: "kyle", Token: "tok"}
 	var out bytes.Buffer
-	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
+	drainChat(srv.Client(), cfg, loadChatSeen(""), &out, false)
 	if want := "[ocagent] chat from boss (#c-5k): " + long + "\n"; out.String() != want {
 		t.Fatalf("5k-char must-read body must print verbatim (len got %d want %d)",
 			len(out.String()), len(want))
@@ -2332,7 +2332,7 @@ func TestDrainChat_PathologicalBodyTrippedBySafetyValve(t *testing.T) {
 	defer srv.Close()
 	cfg := Config{Base: srv.URL, ID: "kyle", Token: "tok"}
 	var out bytes.Buffer
-	drainChat(srv.Client(), cfg, map[string]bool{}, &out, false)
+	drainChat(srv.Client(), cfg, loadChatSeen(""), &out, false)
 	line := out.String()
 	if !strings.Contains(line, "safety valve") || !strings.Contains(line, "get_chat") {
 		t.Fatalf("valve trip must point at get_chat: %q", line[:min(len(line), 200)])
