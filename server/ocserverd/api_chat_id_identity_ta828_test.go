@@ -213,11 +213,12 @@ var notificationPrinters = map[string]bool{
 // field on the CLI side would edit their copy and leave ours agreeing with a
 // server that no longer matches them.
 //
-// The derivation is structural: find `"#" + <ident>` ANYWHERE in the file, then
-// find where that ident was assigned INSIDE THE SAME FUNCTION, and read the
-// single string-literal map key in that assignment. Anything it cannot resolve
-// is a FATAL — the shape of the line changed, and a human has to re-check this
-// contract rather than have the test quietly widen.
+// The derivation is structural: find `"#" + <ident>` inside a NAMED printer
+// (see notificationPrinters below), then find where that ident was assigned
+// INSIDE THE SAME FUNCTION, and read the single string-literal map key in that
+// assignment. Anything it cannot resolve is a FATAL — the shape of the line
+// changed, and a human has to re-check this contract rather than have the test
+// quietly widen.
 //
 // The search is scoped to notificationPrinters, a NAMED list of the functions
 // that may emit that line. It used to say drainChat and nothing else, and T-bb78
@@ -233,6 +234,18 @@ var notificationPrinters = map[string]bool{
 // independent review demonstrated exactly that mutant. Scoped to named printers,
 // the same mutant resolves nothing and this FATALs instead — the shape changed,
 // so a human re-checks it.
+//
+// THERE IS NO ESCAPE HATCH, ON PURPOSE, AND YOU WILL MEET IT BEFORE YOU MEET
+// THIS COMMENT. A named printer may contain exactly ONE `"#" + <bare local>`
+// and NO `"#" + <anything else>`. So adding a SECOND "#"-prefixed tag inside
+// one — a thread tag, a task tag — FATALs in every spelling there is: written
+// as a bare local it trips the >1 branch, written any other way it trips the
+// opaque branch. That is not an oversight to be relaxed away. Both branches are
+// the fix for a fail-open an independent review actually demonstrated (a real
+// print of the WRONG field passing green beside a never-printed decoy), and
+// widening either one back puts that hole straight back. The way through is to
+// teach this guard which of the tags is the message-id one — or to build the new
+// tag outside the named printers and pass it in — never to loosen the match.
 func notificationIDField(t *testing.T) string {
 	t.Helper()
 	fset := token.NewFileSet()

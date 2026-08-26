@@ -326,6 +326,14 @@ func TestDrainChat_BacklogOverCap_TruncatesOldestAndSaysSo(t *testing.T) {
 		!strings.Contains(got, "get_chat") {
 		t.Fatalf("truncation notice missing or unhelpful; out = %q", got)
 	}
+	// The SKIPPED count is the number the reader acts on — it is what tells them
+	// how much is missing and therefore whether to go and fetch it. Asserting the
+	// prefix above leaves it unguarded: an independent review put a constant 999
+	// there and every test still passed.
+	if !strings.Contains(got, fmt.Sprintf("略過 %d 則較舊", total-chatBacklogPrintCap)) {
+		t.Fatalf("truncation notice must state the skipped count %d; out = %q",
+			total-chatBacklogPrintCap, got)
+	}
 	// the NEWEST survive, the OLDEST are dropped.
 	if !strings.Contains(got, "#"+ids[total-1]) {
 		t.Fatalf("newest message %s must print; out = %q", ids[total-1], got)
