@@ -91,11 +91,12 @@ func loadConfig(env func(string) string) Config {
 // unset env away) would resolve its state directory into the MAIN instance's
 // ~/.officraft/agents and, keyed only by lowercased agent id, collide with the main
 // instance's agent of the same id. What is at stake is bounded — the files under
-// there are the SSE cursor, the reply-card seen set and the context-report stamp,
-// i.e. pure dedup/optimisation ("losing it costs a full refetch or one silent
-// re-baseline, never truth", cursorPath) — but "instance A silently writes into
-// instance B's tree" is the exact shape this ticket exists to remove, and a
-// derivation point that is right by accident is the thing being removed.
+// there are the SSE cursor, the chat unread cursor, the reply-card seen set and
+// the context-report stamp, i.e. pure dedup/optimisation ("losing it costs a full
+// refetch or one silent re-baseline, never truth", cursorPath) — but "instance A
+// silently writes into instance B's tree" is the exact shape this ticket exists to
+// remove, and a derivation point that is right by accident is the thing being
+// removed.
 const envNamespaceKey = "OC_NAMESPACE"
 
 // namespaceShape is the locked charset, byte-identical to the other copies. It is

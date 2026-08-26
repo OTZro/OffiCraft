@@ -52,7 +52,7 @@ type listener struct {
 	cursorPath string
 	winddown   *windDownHook
 	recycle    *recycleHook
-	seen       map[string]bool     // id-keyed unread cursor for drain_chat
+	seen       *chatSeen           // persisted id-keyed unread cursor for drain_chat
 	replySeen  *replyCardSeen      // persisted answered-card dedup (drain + live delta)
 	taskSnaps  map[string]taskSnap // per-task last-seen state (the "what moved" diff)
 	once       bool                // single-connect test hook (mirrors --once)
@@ -371,9 +371,26 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 // listen degrades gracefully; a mis-wire / self-exit / signal is a clean 0). Mirrors
 // cmd_listen.
 func (l *listener) run(ctx context.Context) int {
-	// Boot BASELINE: advance the unread cursor to 'now' (silent refetch) so connecting
-	// does NOT re-print the whole chat history — only NEW messages print thereafter.
-	drainChat(l.api, l.cfg, l.seen, l.out, true)
+	// Boot BASELINE **or** BACKFILL — which one is decided by the PERSISTED unread
+	// cursor (chatSeen), not by the fact that this is a fresh process:
+	//
+	//   - no persisted cursor (first listen for this member on this machine, or a
+	//     corrupt/unreadable file) ⇒ SILENT: advance the cursor to 'now' without
+	//     printing, so a brand-new session is not washed out by history that
+	//     predates it. This is the original behaviour, now scoped to the one case
+	//     that actually needs it.
+	//   - a persisted cursor exists ⇒ PRINT the messages that arrived since it
+	//     (bounded by chatBacklogPrintCap). /api/events has no replay, so this is
+	//     the ONLY path that can recover a message fanned while this agent held no
+	//     stream — a cold boot or a listener restarted mid-life.
+	//
+	// Either way this runs ONCE per process, BEFORE the connect loop: a re-dial
+	// never re-enters here, and every id already surfaced is in the cursor, so a
+	// reconnect can never re-print history.
+	if l.seen == nil {
+		l.seen = loadChatSeen(chatSeenPath(l.cfg))
+	}
+	drainChat(l.api, l.cfg, l.seen, l.out, !l.seen.primed)
 
 	backoff := l.backoffStart
 	for {
@@ -487,7 +504,7 @@ func cmdListen(cfg Config, env func(string) string, once bool, out io.Writer) in
 		cursorPath:       cursorPath(cfg),
 		winddown:         newWindDownHook(api, cfg, out),
 		recycle:          newRecycleHook(api, cfg, out),
-		seen:             map[string]bool{},
+		seen:             loadChatSeen(chatSeenPath(cfg)),
 		replySeen:        loadReplyCardSeen(replyCardSeenPath(cfg)),
 		taskSnaps:        map[string]taskSnap{},
 		once:             once,

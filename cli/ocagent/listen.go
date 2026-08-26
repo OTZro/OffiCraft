@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -323,9 +324,9 @@ func defaultJitter() float64 { return 0.5 + rand.Float64()*0.5 }
 // ---------------------------------------------------------------------------
 
 // cursorPath is the agent's SSE cursor file: <home>/<id-lower-or-anon>/sse-cursor.
-// Local state is pure optimisation/dedup (this cursor + the reply-card seen file
-// beside it) — losing it costs a full refetch or one silent re-baseline, never
-// truth. Mirrors cursor_path.
+// Local state is pure optimisation/dedup (this cursor plus the two seen files
+// beside it — chat-seen and replycards-seen) — losing it costs a full refetch or
+// one silent re-baseline, never truth. Mirrors cursor_path.
 func cursorPath(cfg Config) string {
 	key := strings.ToLower(cfg.ID)
 	if key == "" {
@@ -738,37 +739,6 @@ func fmtAgo(secs float64) string {
 	}
 }
 
-// drainChat refetches chat and prints the unread-for-me — ONE LINE per message so the
-// spawned session's Monitor reads exactly '誰、多久前、說了什麼':
-//
-//	[ocagent] chat from m-3417933c8632 (#c-ceb835093301, 2m ago): ...
-//
-// `from` is the STABLE member id (server-stamped, never a display name) — reply
-// straight to it with post_chat. The `#…` tag is the MESSAGE id: the handle to
-// name this exact message when calling get_chat for the full body/attachments.
-// Only the id goes in — filenames, attachment ids and mimes stay OUT, because
-// this line is a token cost every agent pays on every message; get_chat is where
-// that detail belongs. The relative age is computed client-side from the message
-// ts. Any tag slot is dropped when the wire carries no id / no reply_to / no ts,
-// and a message with none of them prints without the parenthesised tag at all.
-//
-// The middle slot is the REPLY marker (T-4e95): `↩#<id>` naming the message this
-// one is replying to, present only when the wire's `reply_to` is non-empty:
-//
-//	[ocagent] chat from boss (#c-reply, ↩#c-target, 2m ago): 這個再確認一下
-//
-// It is an EXISTENCE marker, exactly like the attachment badge: the quoted
-// sender and body are NOT printed. Since 2026-08-21 the wire DOES carry them
-// (`reply_to_chat`, built on every read), so this is a deliberate choice by this
-// line rather than a limit of the payload — one console line per inbound message
-// is a token cost every agent pays on every message, and a second sentence
-// inside it doubles that for a relation most messages do not have. The id is
-// enough to tell the woken agent a reply target EXISTS; get_chat is where the
-// text belongs, and it now comes back with the quote already attached.
-//
-// Advances the seen-id cursor and returns the unread count. `silent` (the boot
-// baseline) advances the cursor WITHOUT printing so connecting does not re-print
-// history. R7: reads ONLY the refetched authority, never a delta. Mirrors drain_chat.
 // attachmentSummary renders a message's attachments as a terse badge appended
 // after the body: "📎2圖" (2 images), "📎1檔" (1 non-image file), or the mixed
 // "📎1圖 2檔". Images are counted by the server-computed is_image flag. Returns
@@ -806,50 +776,245 @@ func attachmentSummary(m map[string]any) string {
 	}
 }
 
-func drainChat(client httpClient, cfg Config, seen map[string]bool, out io.Writer, silent bool) int {
+// chatBacklogPrintCap bounds how many backlog chat lines ONE drain may print.
+//
+// WHY A CAP AT ALL: the cold-start backfill this cap guards (see chatSeen) can
+// hand a freshly booted session an arbitrarily long unread run — every line of
+// it lands in the agent's context window and competes with the work it was
+// woken for. Unbounded, a quiet weekend's backlog would wash out exactly the
+// context the backfill exists to preserve.
+//
+// WHY 20: this is a COST bound, not a frequency one — nobody has measured how
+// many messages a typical catch-up carries, so the number is chosen from what
+// the reader can afford, not from what the wire usually sends. One drain line
+// is `from` + tags + the FULL rendered body, empirically a few dozen to a few
+// hundred tokens; 20 of them is a low-thousands-of-tokens ceiling — the size of
+// one ordinary file read, an amount a session can absorb without the backlog
+// becoming the session. It also sits comfortably above a short absence (a
+// restart, a redeploy), so the cap is expected to bite only on the long-offline
+// case it was written for. REVISIT with real volume data.
+//
+// WHAT ELSE ALREADY BOUNDS THIS: GET /api/chat returns the newest
+// chatListDefaultLimit (30) messages when the caller passes no limit, and this
+// drain passes none — so the *observed* backlog can never exceed 30 lines today
+// and this cap can only ever trim the oldest ~10 of them. That server default is
+// a default, not a contract (it takes a ?limit= and can be retuned), which is
+// exactly why the client keeps its own ceiling instead of inheriting one.
+const chatBacklogPrintCap = 20
+
+// ---------------------------------------------------------------------------
+// per-agent chat unread cursor (persisted — cold-start backfill).
+// ---------------------------------------------------------------------------
+
+// chatSeen is the id-keyed "already surfaced to this session" set for drainChat,
+// persisted BESIDE the SSE cursor (<home>/<id-lower-or-anon>/chat-seen) so it
+// survives process death. Single-goroutine by construction (every caller runs on
+// the listen loop), so no lock.
+//
+// WHY PERSISTED: /api/events has no replay, so anything fanned while no listener
+// held a stream is lost, and the boot drain is the only path that can recover it.
+// With the set living only in memory, EVERY new process started from an empty set
+// and the boot drain had to run SILENT — it marked the entire inbox read and
+// printed nothing, so a message that arrived while the agent was down was never
+// seen by anyone. Persisting the set splits that one case in two:
+//
+//   - UNPRIMED (no state file, or a corrupt one) — this machine has never
+//     surfaced chat for this member. There is no "last seen" to diff against, so
+//     the boot drain PRIMES silently, exactly as before: a brand-new session must
+//     not be washed out by however much history predates it.
+//   - PRIMED — a previous process already baselined. The boot drain PRINTS what
+//     arrived since (capped by chatBacklogPrintCap), which is the whole point.
+//
+// RECONNECTS are unaffected in both directions: the boot drain runs ONCE per
+// process, before the connect loop, and re-dialing never calls it — and even if
+// it did, every id it already printed is in this set, so a re-drain prints
+// nothing. Losing the file costs one silent re-baseline, never truth.
+type chatSeen struct {
+	path   string
+	m      map[string]bool // message id → already surfaced
+	primed bool            // a baseline exists (loaded from disk or persisted once)
+}
+
+// chatSeenPath is the state file, sibling of cursorPath.
+func chatSeenPath(cfg Config) string {
+	key := strings.ToLower(cfg.ID)
+	if key == "" {
+		key = "anon"
+	}
+	return filepath.Join(cfg.Home, key, "chat-seen")
+}
+
+// loadChatSeen reads the persisted set; a missing or corrupt file yields an
+// UNPRIMED store (the first drain baselines silently). An empty-but-valid `[]`
+// IS a baseline — a member whose inbox was genuinely empty stays primed.
+func loadChatSeen(path string) *chatSeen {
+	s := &chatSeen{path: path, m: map[string]bool{}}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return s
+	}
+	var ids []string
+	if json.Unmarshal(raw, &ids) != nil || ids == nil {
+		return s
+	}
+	for _, id := range ids {
+		if id != "" {
+			s.m[id] = true
+		}
+	}
+	s.primed = true
+	return s
+}
+
+// persist writes the set as a sorted id array (sorted so the file is stable
+// across runs that saw the same inbox). A path-less store is the test/in-memory
+// shape: it primes without touching disk.
+func (s *chatSeen) persist() {
+	if s.path == "" {
+		s.primed = true
+		return
+	}
+	ids := make([]string, 0, len(s.m))
+	for id := range s.m {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return
+	}
+	if parent := filepath.Dir(s.path); parent != "" {
+		if err := os.MkdirAll(parent, 0o755); err != nil {
+			return
+		}
+	}
+	if os.WriteFile(s.path, raw, 0o644) == nil {
+		s.primed = true
+	}
+}
+
+// drainChat refetches chat and prints the unread-for-me — ONE LINE per message so the
+// spawned session's Monitor reads exactly '誰、多久前、說了什麼':
+//
+//	[ocagent] chat from m-3417933c8632 (#c-ceb835093301, 2m ago): ...
+//
+// `from` is the STABLE member id (server-stamped, never a display name) — reply
+// straight to it with post_chat. The `#…` tag is the MESSAGE id: the handle to
+// name this exact message when calling get_chat for the full body/attachments.
+// Only the id goes in — filenames, attachment ids and mimes stay OUT, because
+// this line is a token cost every agent pays on every message; get_chat is where
+// that detail belongs. The relative age is computed client-side from the message
+// ts. Any tag slot is dropped when the wire carries no id / no reply_to / no ts,
+// and a message with none of them prints without the parenthesised tag at all.
+//
+// The middle slot is the REPLY marker (T-4e95): `↩#<id>` naming the message this
+// one is replying to, present only when the wire's `reply_to` is non-empty:
+//
+//	[ocagent] chat from boss (#c-reply, ↩#c-target, 2m ago): 這個再確認一下
+//
+// It is an EXISTENCE marker, exactly like the attachment badge: the quoted
+// sender and body are NOT printed. Since 2026-08-21 the wire DOES carry them
+// (`reply_to_chat`, built on every read), so this is a deliberate choice by this
+// line rather than a limit of the payload — one console line per inbound message
+// is a token cost every agent pays on every message, and a second sentence
+// inside it doubles that for a relation most messages do not have. The id is
+// enough to tell the woken agent a reply target EXISTS; get_chat is where the
+// text belongs, and it now comes back with the quote already attached.
+//
+// Advances the seen-id cursor and returns the unread count. `silent` (the boot
+// baseline) advances the cursor WITHOUT printing so connecting does not re-print
+// history — but see chatSeen: the cursor is PERSISTED, so `silent` is true when
+// the store came up UNPRIMED, which is a first listen on this machine OR a state
+// file that could not be read; a primed one backfills what it missed (capped by
+// chatBacklogPrintCap). A fetch fault prints nothing and leaves the persisted
+// cursor untouched, so the next drain retries the same window.
+// R7: reads ONLY the refetched authority, never a delta. Mirrors drain_chat.
+func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, silent bool) int {
 	sid := strings.ToLower(strings.TrimSpace(cfg.ID))
 	now := float64(time.Now().Unix())
-	n := 0
-	for _, m := range fetchChat(client, cfg, cfg.ID) {
+	msgs := fetchChat(client, cfg, cfg.ID)
+	if msgs == nil {
+		return 0 // fetch fault: print nothing and leave the persisted set untouched
+	}
+	unread := make([]map[string]any, 0, len(msgs))
+	for _, m := range msgs {
 		if strings.ToLower(strings.TrimSpace(strOrEmpty(m["to"]))) != sid {
 			continue
 		}
 		mid := strOrEmpty(m["id"])
-		if mid != "" && seen[mid] {
+		if mid != "" && seen.m[mid] {
 			continue
 		}
-		if !silent {
-			tag := make([]string, 0, 3)
-			if mid != "" {
-				tag = append(tag, "#"+mid)
-			}
-			if rt := strings.TrimSpace(strOrEmpty(m["reply_to"])); rt != "" {
-				tag = append(tag, "↩#"+rt)
-			}
-			if ts, ok := m["ts"].(float64); ok && ts > 0 {
-				tag = append(tag, fmtAgo(now-ts)+" ago")
-			}
-			content := renderMessageBody(strOrEmpty(m["body"]), chatBodyAuthority)
-			if badge := attachmentSummary(m); badge != "" {
-				if content == "" {
-					content = badge
-				} else {
-					content += " " + badge
-				}
-			}
-			if len(tag) == 0 {
-				fmt.Fprintf(out, "[ocagent] chat from %s: %s\n", pyStr(m["from"]), content)
-			} else {
-				fmt.Fprintf(out, "[ocagent] chat from %s (%s): %s\n",
-					pyStr(m["from"]), strings.Join(tag, ", "), content)
-			}
-		}
-		if mid != "" {
-			seen[mid] = true
-		}
-		n++
+		unread = append(unread, m)
 	}
-	return n
+	if !silent {
+		// TRUNCATE FROM THE OLD END: when the backlog overruns the cap the
+		// NEWEST chatBacklogPrintCap lines print (freshest context wins) and one
+		// honest notice names what was dropped, so the session knows to reach for
+		// get_chat rather than believing it read everything. The dropped ones are
+		// still recorded as seen below — a line this session was told about must
+		// not come back on the next drain.
+		//
+		// "至少": len(unread) is what THIS FETCH could see, and fetchChat sends no
+		// ?limit=, so the server answers with its own newest-N window. A long
+		// enough absence overruns that window too, and the ones past it are not
+		// in this count — they are not printed, not counted, and nothing else
+		// says so. Reporting len(unread) as "the" unread total would be a number
+		// this line cannot know; it is a floor, so it says floor.
+		show := unread
+		if len(show) > chatBacklogPrintCap {
+			fmt.Fprintf(out, "[ocagent] chat: 至少 %d 則未讀，只補印最新 %d 則（略過 %d 則較舊 — 用 get_chat 取回）\n",
+				len(show), chatBacklogPrintCap, len(show)-chatBacklogPrintCap)
+			show = show[len(show)-chatBacklogPrintCap:]
+		}
+		for _, m := range show {
+			printChatLine(out, m, now)
+		}
+	}
+	// REBUILD from the refetched authority rather than only adding: an id absent
+	// from the list has aged out of the server's window and can never drain
+	// again, so dropping it keeps the file bounded (mirrors drainReplyCards).
+	next := make(map[string]bool, len(msgs))
+	for _, m := range msgs {
+		if strings.ToLower(strings.TrimSpace(strOrEmpty(m["to"]))) != sid {
+			continue
+		}
+		if mid := strOrEmpty(m["id"]); mid != "" {
+			next[mid] = true
+		}
+	}
+	seen.m = next
+	seen.persist()
+	return len(unread)
+}
+
+// printChatLine emits the one-line-per-message form documented on drainChat.
+func printChatLine(out io.Writer, m map[string]any, now float64) {
+	mid := strOrEmpty(m["id"])
+	tag := make([]string, 0, 3)
+	if mid != "" {
+		tag = append(tag, "#"+mid)
+	}
+	if rt := strings.TrimSpace(strOrEmpty(m["reply_to"])); rt != "" {
+		tag = append(tag, "↩#"+rt)
+	}
+	if ts, ok := m["ts"].(float64); ok && ts > 0 {
+		tag = append(tag, fmtAgo(now-ts)+" ago")
+	}
+	content := renderMessageBody(strOrEmpty(m["body"]), chatBodyAuthority)
+	if badge := attachmentSummary(m); badge != "" {
+		if content == "" {
+			content = badge
+		} else {
+			content += " " + badge
+		}
+	}
+	if len(tag) == 0 {
+		fmt.Fprintf(out, "[ocagent] chat from %s: %s\n", pyStr(m["from"]), content)
+		return
+	}
+	fmt.Fprintf(out, "[ocagent] chat from %s (%s): %s\n",
+		pyStr(m["from"]), strings.Join(tag, ", "), content)
 }
 
 // ---------------------------------------------------------------------------

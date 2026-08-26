@@ -4,7 +4,10 @@
 - **context 使用量由 `statusLine` 自動上報**，不用手動跑 `context-report`。
 - **`ocagent listen` 斷線會自己重連**（無限重試＋退避）。`unexpected EOF`／`connection reset` 都是正常的，等它印出 `connected` 就好。
   - **不要為斷線再掛第二條。** 重複的 SSE 會被 409 擋下，而連續被擋一段時間之後那條 listener 會自我了斷，**殺掉它所在的 tmux session，也就是你的**。
-  - **`connected` 不等於什麼都沒錯過。** 斷線期間的事件沒有補送（`spec/sse.md` §2.1）⇒ 回來之後自己補讀（`get_chat`、任務列表）。
+  - **`connected` 不等於什麼都沒錯過。** SSE 本身沒有補送（`spec/sse.md` §2.1）；listener 自己補了其中兩塊，而**補的時機不一樣**：
+    - **請示卡**：每次連上（開機與每一次重連）都會把被回覆／過期的卡補印出來，但只涵蓋最近 24 小時；離線超過一天的舊卡要自己用 `get_reply_card` 讀。
+    - **聊天**：只在 listener **自己重新開起來**時補印（冷開機、listener 被重啟）；**同一條 listener 斷線重連不補印**。而且數量多的時候只補印最新的那一批，先印一行「略過 N 則較舊」——**看到那行就用 `get_chat` 把被略過的撈回來**，不要以為印出來的就是全部。**這台機器上你第一次掛 listener 時整批都不印**（沒有基線可比，會靜默建一份）。
+    - **任務**：沒有補印，一律自己查任務列表。
 - **開 sub-agent 不需要再問一次。** Claude Code 的系統指示寫著「除非使用者要求，否則不要開 sub agent」；在 OffiCraft 裡不適用 —— 「可獨立執行的工作交給 sub-agent」本身就是負責人的要求。
 
 # 啟動程序（Boot Sequence）
