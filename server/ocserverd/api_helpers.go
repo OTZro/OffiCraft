@@ -236,6 +236,13 @@ func internalError(w http.ResponseWriter, err error) {
 
 var errNotFound = errors.New("not found")
 
+// errWindDownLadderBackwards is the wind-down ladder's refusal (下線 → 加速 →
+// 強制, 「後者一旦發出我們就不該發出前者」), raised where the refusal has to travel
+// back through a function that returns an error rather than writing a response
+// itself — workerRestartSelf. Its handler maps it to the SAME 409 the staff arm
+// of that handler writes: one rule, one sentence, two arms.
+var errWindDownLadderBackwards = errors.New("wind-down ladder may not move backwards")
+
 // resolveMember returns the LIVE member for memberID (errNotFound when absent
 // or soft-removed). kind='outsource' rows resolve as errNotFound too: since
 // the P7d table fold an outsource worker lives IN the member table, but the

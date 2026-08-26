@@ -1477,6 +1477,15 @@ func (s *apiServer) HandleRestartSelfApiSelfRefocusPost(w http.ResponseWriter, r
 		// button takes) — the standard SOP → stopped-report → collect carries
 		// the rest.
 		fresh, werr := s.workerRestartSelf(m.ID, now, requestTrigger(r))
+		if errors.Is(werr, errWindDownLadderBackwards) {
+			// The SAME refusal the staff arm below writes, and deliberately the
+			// same sentence: the two arms of this handler are one rule.
+			writeError(w, http.StatusConflict,
+				"restart_self is 停止 and you are already further along the "+
+					"wind-down ladder (下線 → 加速 → 強制); finish the close-out you "+
+					"were given instead")
+			return
+		}
 		if werr != nil {
 			writeResolveError(w, werr, "member", currentActor(r))
 			return

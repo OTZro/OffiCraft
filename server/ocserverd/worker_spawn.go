@@ -2298,6 +2298,16 @@ func (s *apiServer) workerReportStopped(id, trigger string) (*Member, error) {
 // refocus epoch (stale wind-down latches cleared) and open the graceful window
 // — the exact effect of the owner's refocus button, minus the owner. The
 // caller's online/min-liveness gates have already passed. Takes s.outsourceMu.
+//
+// 🔴 THE LADDER GUARD LIVES HERE because the divergence it closes lives inside
+// ONE handler: HandleRestartSelfApiSelfRefocusPost dispatches an outsource
+// caller to this funnel and returns EARLY, seven lines above the armRefocusEpoch
+// check its staff arm falls through to. So restart_self was ladder-guarded for
+// staff and unguarded for workers, in the same function, and an agent already in
+// 加速停止 could talk its way back to 停止 — taking back the deadline it was
+// counting to — purely by being a worker. Stamping through the shared
+// armRefocusEpoch on a memberFromWorker projection is what makes "armRefocusEpoch
+// is the ONE way an epoch is opened" true of this site too.
 func (s *apiServer) workerRestartSelf(id string, now float64, trigger string) (*Member, error) {
 	s.outsourceMu.Lock()
 	defer s.outsourceMu.Unlock()
@@ -2305,10 +2315,14 @@ func (s *apiServer) workerRestartSelf(id string, now float64, trigger string) (*
 	if err != nil {
 		return nil, err
 	}
-	w.RefocusSince = now
-	w.RefocusOp = refocusOpRestartSelf
-	w.StoppingSince = 0.0
-	w.StoppedSince = 0.0
+	proj := memberFromWorker(*w)
+	if !armRefocusEpoch(&proj, refocusOpRestartSelf, now) {
+		return nil, errWindDownLadderBackwards
+	}
+	w.RefocusSince = proj.RefocusSince
+	w.RefocusOp = proj.RefocusOp
+	w.StoppingSince = proj.StoppingSince
+	w.StoppedSince = proj.StoppedSince
 	if err := s.dal.PutOutsourceWorker(*w); err != nil {
 		return nil, err
 	}

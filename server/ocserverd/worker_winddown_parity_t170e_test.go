@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -170,6 +171,79 @@ func TestWorkerWindDownLadder_重新聚焦MayNotUndoAnAcceleratedStopEither(t *t
 		if w.RefocusOp != refocusOpRefocus || w.RefocusSince < first.RefocusSince {
 			t.Fatalf("refocus_op=%q refocus_since=%v (was %v) — a same-rung press must "+
 				"still open its own epoch", w.RefocusOp, w.RefocusSince, first.RefocusSince)
+		}
+	})
+}
+
+// …and a FIFTH stamp site, found by sweeping every non-test assignment to
+// RefocusSince/RefocusOp rather than by following the funnel: workerRestartSelf
+// (worker_spawn.go), the worker arm of restart_self. The divergence lives INSIDE
+// ONE handler — HandleRestartSelfApiSelfRefocusPost dispatches an outsource
+// caller to that funnel and returns EARLY, seven lines above the
+// armRefocusEpoch ladder guard the staff arm falls through to. So an agent that
+// is already in 加速停止 could talk its way back to the slower procedure, and
+// take back the deadline with it, purely by being a worker.
+func TestWorkerWindDownLadder_RestartSelfMayNotUndoAnAcceleratedStopEither(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveOnlineWorker(t, api)
+
+	if rec := postWorker(t, api, workerID, "refocus", nil,
+		api.HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost); rec.Code != http.StatusOK {
+		t.Fatalf("refocus: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := postWorker(t, api, workerID, "accelerated-stop", nil,
+		api.HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcceleratedStopPost); rec.Code != http.StatusOK {
+		t.Fatalf("accelerated-stop: %d %s", rec.Code, rec.Body.String())
+	}
+	api.hub.DrainWardenCommands(ServerSelfHost)
+	before, _ := api.dal.GetOutsourceWorker(workerID)
+	if before.RefocusOp != refocusOpAcceleratedStop {
+		t.Fatalf("setup: refocus_op=%q, want %q — the arm under test is not reached",
+			before.RefocusOp, refocusOpAcceleratedStop)
+	}
+	cfg := api.reconcileConfigLive()
+	deadlineBefore := refocusDeadlineOf(before.RefocusSince, cfg, before.RefocusOp)
+	if deadlineBefore <= 0 {
+		t.Fatalf("setup: 加速停止 must carry a deadline, got %v", deadlineBefore)
+	}
+
+	rec := httptest.NewRecorder()
+	api.HandleRestartSelfApiSelfRefocusPost(rec,
+		taskReq(t, "POST", "/api/self/refocus", map[string]any{}, workerID, "agent"))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("restart_self from a worker already in 加速停止 answered %d, want 409 "+
+			"— the staff arm of this very handler refuses it (body: %s)",
+			rec.Code, rec.Body.String())
+	}
+
+	after, _ := api.dal.GetOutsourceWorker(workerID)
+	if after.RefocusOp != refocusOpAcceleratedStop {
+		t.Fatalf("the ladder ran BACKWARDS via restart_self: refocus_op %q → %q. "+
+			"restart_self is 停止 and an agent may not talk its way out of the "+
+			"加速停止 it was given", before.RefocusOp, after.RefocusOp)
+	}
+	if got := refocusDeadlineOf(after.RefocusSince, cfg, after.RefocusOp); got != deadlineBefore {
+		t.Fatalf("the 加速停止 deadline MOVED (%v → %v) on a restart_self — the worker "+
+			"was counting down to a time that no longer exists", deadlineBefore, got)
+	}
+
+	// POSITIVE CONTROL: with no wind-down open at all, a worker's restart_self
+	// still works. Otherwise this guard has simply broken the verb.
+	t.Run("a clean worker can still restart itself", func(t *testing.T) {
+		api := newTasksTestServer(t)
+		api.noOutsource = true
+		id := newActiveOnlineWorker(t, api)
+		rec := httptest.NewRecorder()
+		api.HandleRestartSelfApiSelfRefocusPost(rec,
+			taskReq(t, "POST", "/api/self/refocus", map[string]any{}, id, "agent"))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("restart_self on a clean worker: %d %s", rec.Code, rec.Body.String())
+		}
+		w, _ := api.dal.GetOutsourceWorker(id)
+		if w.RefocusOp != refocusOpRestartSelf || w.RefocusSince <= 0 {
+			t.Fatalf("refocus_op=%q refocus_since=%v — restart_self must still open "+
+				"its own epoch", w.RefocusOp, w.RefocusSince)
 		}
 	})
 }
