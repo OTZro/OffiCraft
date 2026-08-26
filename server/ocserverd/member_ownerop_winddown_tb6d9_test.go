@@ -13,9 +13,13 @@ import (
 // happened to respawn it.
 //
 // ── the predicate's decision table (memberHasStateToFlush) ───────────────────
-// Copied from workerHasStateToFlush; the staff substitutions and the reason for
-// each are in the file comment of member_ownerop_winddown.go. Inputs, in the
-// order the function short-circuits them:
+// NOT copied from workerHasStateToFlush any more (T-170e stage 2 ①): the rows
+// the two predicates agree on are ONE expression,
+// hasUncollectedOnlineOwnerOpState, which both of them call. What is still
+// staff-only is the SHELL — the kind row and the desired-offline row below —
+// and the reason each shell guard exists (and must not be flattened into the
+// shared call) is in the file comment of member_ownerop_winddown.go. Inputs, in
+// the order the function short-circuits them:
 //
 //	kind  | desired | online | refocus | stopped | wind down? | pinned by
 //	------+---------+--------+---------+---------+------------+----------------
