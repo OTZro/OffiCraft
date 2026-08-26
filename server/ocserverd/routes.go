@@ -1014,7 +1014,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		},
 		// ── the two boot-context document kinds that became editable (T-791e) ──
 		//
-		// 系統互動 and 啟動程序 used to be go:embed seeds with no editable
+		// 系統互動 and 啟動步驟 used to be go:embed seeds with no editable
 		// representation at all: one wrong sentence cost a release. They now
 		// carry the same read / whole-document replace / reset-to-factory shape
 		// the 使用者自訂 block above has, plus document history.
@@ -1022,7 +1022,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 		// FLOORS: read at the machine floor (an agent already reads both blocks
 		// in its own boot context — nothing here is new to it); WRITE at
 		// admin_agent, because this text lands in EVERY agent's boot context and
-		// a broken 啟動程序 keeps them from coming online at all. That failure is
+		// a broken 啟動步驟 keeps them from coming online at all. That failure is
 		// silent: an agent that never boots is never there to report it, which is
 		// also why the reset route has to work from the cockpit alone, with no
 		// live agent and no MCP client anywhere in the path.
@@ -1059,7 +1059,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleGetBootSequenceApiBootSequenceRuntimeKeyGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "Read one runtime's 啟動程序 block — the boot checklist that ends that runtime's boot context. runtime_key is 'claude' or 'codex'; they are separate documents because step 3 of the two says opposite things (claude mounts its own `ocagent listen`, codex must not — the sidecar owns it), so any other value is a 404 rather than a silent fallback to claude. Folded: the owner's edit when one exists, otherwise the shipped factory seed. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
+			Summary:  "Read one runtime's 啟動步驟 block — the boot checklist that ends that runtime's boot context. runtime_key is 'claude' or 'codex'; they are separate documents because step 3 of the two says opposite things (claude mounts its own `ocagent listen`, codex must not — the sidecar owns it), so any other value is a 404 rather than a silent fallback to claude. Folded: the owner's edit when one exists, otherwise the shipped factory seed. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
 			MCPTool:  "get_boot_sequence",
 		},
 		{
@@ -1068,7 +1068,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleReplaceBootSequenceApiBootSequenceRuntimeKeyPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Replace the EDITABLE HALF of the 啟動程序 block of ONE runtime ({runtime_key, body}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. Neither runtime's document carries a read-only head today (T-6f44, owner's decision 4 removed it), so the body IS the whole document; the head machinery still exists for the kinds that do carry one, and there is no way to write a head on any face. The stored result is judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.",
+			Summary:  "Replace the EDITABLE HALF of the 啟動步驟 block of ONE runtime ({runtime_key, body}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. Neither runtime's document carries a read-only head today (T-6f44, owner's decision 4 removed it), so the body IS the whole document; the head machinery still exists for the kinds that do carry one, and there is no way to write a head on any face. The stored result is judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.",
 			MCPTool:  "replace_boot_sequence",
 		},
 		{
@@ -1077,10 +1077,10 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleResetBootSequenceApiBootSequenceRuntimeKeyResetPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Restore ONE runtime's 啟動程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). runtime_key is 'claude' or 'codex'; anything else is a 404. No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it, which is what makes this the recovery route when a bad edit has stopped agents from booting. The overlay being discarded is retained in the document history. Owner or admin assistant only.",
+			Summary:  "Restore ONE runtime's 啟動步驟 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). runtime_key is 'claude' or 'codex'; anything else is a 404. No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it, which is what makes this the recovery route when a bad edit has stopped agents from booting. The overlay being discarded is retained in the document history. Owner or admin assistant only.",
 			MCPTool:  "reset_boot_sequence",
 		},
-		// 下線程序 (T-c9c0) — the fourth owner-editable global document, and the
+		// 〈停止〉 (T-c9c0) — the fourth owner-editable global document, and the
 		// same three-row shape as the 系統互動 block above, floors included: read
 		// at the machine floor (every agent is handed this text when its session
 		// is collected), write at admin_agent (it is the last instruction an
@@ -1091,7 +1091,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleGetOffboardApiOffboardGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "Read the 下線程序 block — the wrap-up checklist the server hands an agent at the moment it is about to collect that session. It is a SINGLETON: one document for every agent and every runtime, keyed `global` like the 系統互動 block. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
+			Summary:  "Read the 〈停止〉 block — the wrap-up checklist the server hands an agent at the moment it is about to collect that session. It is a SINGLETON: one document for every agent and every runtime, keyed `global` like the 系統互動 block. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
 			MCPTool:  "get_offboard",
 		},
 		{
@@ -1100,7 +1100,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleReplaceOffboardApiOffboardPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Replace the EDITABLE HALF of the 下線程序 block ({body}) — the wrap-up checklist an agent is handed when its session is being collected. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. This document carries NO read-only head today (T-6f44, owner's decision 4 removed it), so the body IS the whole document; the head machinery still exists for the kinds that do carry one, and there is no way to write a head on any face. The stored result is judged against the doc.cap_chars.offboard cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_offboard always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.",
+			Summary:  "Replace the EDITABLE HALF of the 〈停止〉 block ({body}) — the wrap-up checklist an agent is handed when its session is being collected. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. This document carries NO read-only head today (T-6f44, owner's decision 4 removed it), so the body IS the whole document; the head machinery still exists for the kinds that do carry one, and there is no way to write a head on any face. The stored result is judged against the doc.cap_chars.offboard cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_offboard always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.",
 			MCPTool:  "replace_offboard",
 		},
 		{
@@ -1109,7 +1109,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleResetOffboardApiOffboardResetPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Restore the 下線程序 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.",
+			Summary:  "Restore the 〈停止〉 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.",
 			MCPTool:  "reset_offboard",
 		},
 		// ── The GENERIC face of the same documents (T-3201) ─────────────────
@@ -1724,7 +1724,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Stop (停止) an outsource worker: ask it to work its 下線程序 and wait for its own report_stopped -- no kill, no deadline (owner/admin agent).",
+			Summary:  "Stop (停止) an outsource worker: ask it to work its 〈停止〉 document and wait for its own report_stopped -- no kill, no deadline (owner/admin agent).",
 			MCPTool:  "stop_outsource_worker",
 		},
 		{
