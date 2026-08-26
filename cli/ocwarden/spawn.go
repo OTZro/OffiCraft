@@ -85,10 +85,9 @@ type StartParams struct {
 	// it was carried for parity with a server field that chose a lessons
 	// bucket — and the server stopped sending it when the axis was removed.
 	// The frame parse (startParamsFromArgs) still reads `task_type` when a
-	// frame carries one, and NOTHING in this binary reads the result: grep
-	// TaskType across cli/ and the only hits are that assignment, this
-	// declaration and one test fixture. Left in place rather than deleted
-	// because removing it is a wire-surface change, not a comment fix.
+	// frame carries one, and NOTHING in this binary reads the result. Left in
+	// place rather than deleted because removing it is a wire-surface change,
+	// not a comment fix.
 	TaskType string
 	Runtime  string // claude (default) | codex
 	Model    string

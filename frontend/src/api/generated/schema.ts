@@ -1082,12 +1082,11 @@ export interface paths {
          *     ALONE. WHICH FACE REFUSES THE RETIRED FIELD, MEASURED RATHER THAN INFERRED --
          *     the two are NOT the same, and only one of them tells the caller anything. The
          *     MCP tool face (``get_lessons``) refuses it by PRESENCE, ``task_type: ""``
-         *     included, with a 400 naming the field, before the call is dispatched to this
-         *     route (``fillLessonsIdentityArgs``). THIS HTTP ROUTE HAS NO SUCH DOOR: a GET
-         *     carries no body to reject unknown keys in, and a ``?task_type=`` query
+         *     included, naming the field in the refusal, before the call is dispatched to
+         *     this route (``fillLessonsIdentityArgs``). THIS HTTP ROUTE HAS NO SUCH DOOR: a
+         *     GET carries no body to reject unknown keys in, and a ``?task_type=`` query
          *     parameter is read by nothing here and answers 200 -- that is, it IS silently
-         *     ignored, the exact experience T-2 exists to end. A caller reaching the lessons
-         *     docs over HTTP rather than over MCP does not get told.
+         *     ignored, the exact experience T-2 exists to end.
          */
         get: operations["handle_get_lessons_api_lessons__role_key__get"];
         put?: never;
@@ -1115,11 +1114,11 @@ export interface paths {
          *     REQUIRED, so every caller had to spell it. Removing the field is what closes
          *     that door. WHICH FACE ANSWERS WHAT, MEASURED RATHER THAN INFERRED: the MCP tool
          *     face (``replace_lessons``) refuses the argument by PRESENCE, ``task_type: ""``
-         *     included, with a 400 naming it, before dispatch (``fillLessonsIdentityArgs``).
-         *     This HTTP route refuses a ``task_type`` in the BODY as an unknown key -- a 422
-         *     ``validation_error`` whose message names it -- NOT a 400. A ``task_type`` QUERY
-         *     parameter on this route is read by nothing and answers 200, so that one IS
-         *     silently ignored.
+         *     included, naming it in the refusal, before dispatch
+         *     (``fillLessonsIdentityArgs``). This HTTP route refuses a ``task_type`` in the
+         *     BODY as an unknown key -- a 422 ``validation_error`` whose message names it. A
+         *     ``task_type`` QUERY parameter on this route is read by nothing and answers 200,
+         *     so that one IS silently ignored.
          */
         post: operations["handle_replace_lessons_api_lessons__role_key__post"];
         delete?: never;
@@ -1147,7 +1146,7 @@ export interface paths {
          *
          *     Writes the owner overlay (``is_default`` → False) and fans a ``lessons`` delta. The receipt carries ``size``/``sha256`` verification anchors over the resulting doc.
          *
-         *     T-2 removed the ``task_type`` axis: a lessons doc is addressed by ``role_key`` ALONE. WHICH FACE ANSWERS WHAT, MEASURED RATHER THAN INFERRED: the MCP tool face (``patch_lessons``) refuses the argument by PRESENCE, ``task_type: ""`` included, with a 400 naming it, before dispatch (``fillLessonsIdentityArgs``). This HTTP route refuses a ``task_type`` in the BODY as an unknown key -- a 422 ``validation_error`` whose message names it -- NOT a 400. A ``task_type`` QUERY parameter on this route is read by nothing and answers 200, so that one IS silently ignored.
+         *     T-2 removed the ``task_type`` axis: a lessons doc is addressed by ``role_key`` ALONE. WHICH FACE ANSWERS WHAT, MEASURED RATHER THAN INFERRED: the MCP tool face (``patch_lessons``) refuses the argument by PRESENCE, ``task_type: ""`` included, naming it in the refusal, before dispatch (``fillLessonsIdentityArgs``). This HTTP route refuses a ``task_type`` in the BODY as an unknown key -- a 422 ``validation_error`` whose message names it. A ``task_type`` QUERY parameter on this route is read by nothing and answers 200, so that one IS silently ignored.
          */
         post: operations["handle_patch_lessons_api_lessons__role_key__patch_post"];
         delete?: never;
