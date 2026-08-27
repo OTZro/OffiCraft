@@ -833,6 +833,7 @@ type chatSeen struct {
 	path   string
 	m      map[string]bool // message id → already surfaced
 	primed bool            // a baseline exists (loaded from disk or persisted once)
+	warned bool            // a write failure was already announced this process
 }
 
 // chatSeenPath is the state file, sibling of cursorPath.
@@ -869,7 +870,18 @@ func loadChatSeen(path string) *chatSeen {
 // persist writes the set as a sorted id array (sorted so the file is stable
 // across runs that saw the same inbox). A path-less store is the test/in-memory
 // shape: it primes without touching disk.
-func (s *chatSeen) persist() {
+//
+// WHY IT SPEAKS WHEN IT FAILS: a write that does not land leaves NO state file,
+// so the next process loads UNPRIMED and its boot drain baselines silently —
+// which is precisely the bug this whole cursor exists to kill, resurrected in
+// full and shaped exactly like a healthy run. Nothing else in the system can
+// notice: the count is right, the drain returns normally, the agent is simply
+// never told. One line on the same stream the drain prints to is the only
+// signal there can be, so this is the one place it must not stay quiet.
+//
+// SCOPE: announce only. No retry, no fallback path, no permission repair — those
+// are separate decisions and this line does not pre-empt them.
+func (s *chatSeen) persist(out io.Writer) {
 	if s.path == "" {
 		s.primed = true
 		return
@@ -881,16 +893,52 @@ func (s *chatSeen) persist() {
 	sort.Strings(ids)
 	raw, err := json.Marshal(ids)
 	if err != nil {
+		s.warnWriteFailed(out, err)
 		return
 	}
 	if parent := filepath.Dir(s.path); parent != "" {
 		if err := os.MkdirAll(parent, 0o755); err != nil {
+			s.warnWriteFailed(out, err)
 			return
 		}
 	}
-	if os.WriteFile(s.path, raw, 0o644) == nil {
-		s.primed = true
+	if err := os.WriteFile(s.path, raw, 0o644); err != nil {
+		s.warnWriteFailed(out, err)
+		return
 	}
+	s.primed = true
+}
+
+// warnWriteFailed emits the one line that turns a silent relapse into a visible
+// one. ONCE PER PROCESS: drainChat also runs on every inbound chat delta, so an
+// unwritable home would otherwise repeat this on every message and drown the
+// context the cap above exists to protect. The first failure is the one that
+// matters — this drain's ids are already not on disk.
+//
+// 🔴 WHAT IT MAY AND MAY NOT CLAIM: which way the next boot goes depends on
+// whether a state file was EVER written, and this call cannot tell:
+//
+//   - never written (an unusable parent) ⇒ the next boot loads UNPRIMED and
+//     baselines silently: this window is swallowed, exactly the bug the cursor
+//     exists to kill.
+//   - written before, unwritable now (a read-only file under a writable dir) ⇒
+//     the next boot loads the STALE baseline and PRINTS this window AGAIN —
+//     the opposite failure, and re-printed on every boot until it is fixed.
+//
+// Both are real and this line is one sentence, so it names the loss (these ids are
+// not recorded) and the two directions it can take, and stops there. An earlier
+// draft asserted the silent-swallow branch alone; a review probe falsified it on
+// the second branch. A warning that misdescribes the failure is worse than the
+// failure — it sends the reader looking the wrong way at the one moment they
+// are relying on it.
+func (s *chatSeen) warnWriteFailed(out io.Writer, err error) {
+	if out == nil || s.warned {
+		return
+	}
+	s.warned = true
+	fmt.Fprintf(out, "[ocagent] chat-seen 寫不進去（%s）：%v — 這個行程收到的訊息沒被記下來，"+
+		"下次開機的補印可能少印或重印。修好之前請用 get_chat 自己回頭撈。\n",
+		s.path, err)
 }
 
 // drainChat refetches chat and prints the unread-for-me — ONE LINE per message so the
@@ -984,7 +1032,7 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 		}
 	}
 	seen.m = next
-	seen.persist()
+	seen.persist(out)
 	return len(unread)
 }
 
