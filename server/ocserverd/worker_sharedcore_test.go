@@ -14,11 +14,11 @@ const (
 	ownerAdditionsH1 = "# 使用者自訂（Owner Additions）"
 	roleH1           = "# Role: "
 	lessonsH1        = "# Lessons ("
-	// 🔴 舊名，故意的：這一行釘的是 seeds/boot_sequence*.md 的 H1 逐字位元組，
-	// 而那兩份 seed 的 H1 今天還寫著「啟動程序」。出貨文字要不要一併改名還在
-	// 等 owner 裁（rc-e12733548e4b），所以這裡不能先改 —— 先改就是拿一個
-	// 不存在的字串去比對，測試當場紅。seed 改的那一天，這一行跟它一起改。
-	bootSequenceH1 = "# 啟動程序（Boot Sequence"
+	// 釘的是 seeds/boot_sequence*.md 的 H1 逐字位元組。owner 在
+	// rc-e12733548e4b 裁定出貨文字一併改名（啟動程序 → 啟動步驟），兩份 seed
+	// 的 H1 與這一行在同一顆 commit 裡一起換。這是**逐字**的 pin，不是模糊
+	// 比對：下一次改名一樣要在這裡打字，否則測試會紅 —— 那正是它的用途。
+	bootSequenceH1 = "# 啟動步驟（Boot Sequence"
 )
 
 // workerCtx builds a worker boot context over a minimal fixture.

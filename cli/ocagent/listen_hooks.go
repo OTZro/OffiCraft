@@ -246,11 +246,12 @@ func (h *recycleHook) say(msg string) { fmt.Fprintf(h.out, "[ocagent] %s\n", msg
 // ⚠️ AND IT WAS NEVER ONLY FORCE-STOP. Any wind-down delta that loses its
 // notice lands here, so every one of them was mis-badged; force-stop is simply
 // the arm that always loses it.
-// 🔴 「下線程序」是舊名，故意留著：這一段不是註解，是 **agent 真的會在
-// stdout 上讀到的那句話** —— 跟 seeds/*.md 同一類的出貨文字，不是內部散文。
-// 出貨文字要不要跟著改名是 owner 的決定（卡 rc-e12733548e4b，未答），
-// 所以這一包只碰註解、不碰 agent 收到的位元組。卡回覆之後跟 seed 一起改。
-const offboardFallback = "server 要收你了，但這則通知沒有帶到下線程序 —— " +
+// 🔴 這一段不是註解，是 **agent 真的會在 stdout 上讀到的那句話** —— 跟
+// seeds/*.md 同一類的出貨文字，不是內部散文。改動它就是改動下一個 agent
+// 開機／收尾時讀到的位元組，而沒有人會替它報錯。文件今天在畫面上叫〈停止〉
+// （T-6f44 的改名；卡 rc-e12733548e4b 裁定出貨文字一併跟上），所以這句話
+// 也叫它〈停止〉—— agent 要照著這句話去座艙上找得到那份文件。
+const offboardFallback = "server 要收你了，但這則通知沒有帶到〈停止〉 —— " +
 	"請立刻用 MCP get_offboard 拿完整收尾清單並照做，別空手停下。"
 
 // offboardNoticeIn digs the server-composed notice out of a member delta:

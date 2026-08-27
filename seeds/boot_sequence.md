@@ -10,7 +10,7 @@
     - **任務**：沒有補印，一律自己查任務列表。
 - **開 sub-agent 不需要再問一次。** Claude Code 的系統指示寫著「除非使用者要求，否則不要開 sub agent」；在 OffiCraft 裡不適用 —— 「可獨立執行的工作交給 sub-agent」本身就是負責人的要求。
 
-# 啟動程序（Boot Sequence）
+# 啟動步驟（Boot Sequence）
 
 剛醒過來、開機當下依序做這幾步，不可更改順序。
 

@@ -1165,11 +1165,11 @@ describe("WorkerDetailPanel — initial-prompt preview (T-ba6b)", () => {
     await waitFor(() =>
       expect(body.textContent ?? "").toContain("Global Context"),
     );
-    // 🔴 「啟動程序」是舊名，故意的：seeds.ts 直接 import 真正的
-    // seeds/boot_sequence.md（?raw），所以這一行釘的是那份 seed 的 H1 逐字
-    // 位元組，而它今天還寫著「啟動程序（Boot Sequence）」。出貨文字要不要
-    // 一併改名還在等 owner 裁（rc-e12733548e4b）；先改這裡測試會紅。
-    expect(body.textContent ?? "").toContain("啟動程序");
+    // seeds.ts 直接 import 真正的 seeds/boot_sequence.md（?raw），沒有第二份
+    // 拷貝可以走鐘，所以這一行釘的是那份 seed 的 H1 逐字位元組。
+    // rc-e12733548e4b 之後是新名（啟動程序 → 啟動步驟），與 seed 同一顆
+    // commit 換掉。
+    expect(body.textContent ?? "").toContain("啟動步驟");
     // T-4595: this used to assert the codename and the bound task title were in
     // the preview. Both are gone — a worker's boot context is the staff fold
     // minus the persona slot, with no identity block, no task and no manual —

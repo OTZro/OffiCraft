@@ -117,9 +117,9 @@ func TestBuildWorkerBootContext_FullAssembly(t *testing.T) {
 	// by an empty string.
 	for _, want := range []string{
 		"# Global Context", // slot 1 — the 系統互動 seed's own H1
-		// 🔴 舊名，故意的 —— 釘的是 seed 的 H1 逐字位元組（見 worker_sharedcore_test.go
-		// 的 bootSequenceH1）。出貨文字等 owner 裁 rc-e12733548e4b，改了這裡會紅。
-		"# 啟動程序（Boot Sequence", // slot 4 — the shared boot sequence
+		// 釘的是 seed 的 H1 逐字位元組（見 worker_sharedcore_test.go 的
+		// bootSequenceH1）。rc-e12733548e4b 之後是新名。
+		"# 啟動步驟（Boot Sequence", // slot 4 — the shared boot sequence
 		"# Claude Code 執行環境",   // that runtime's 執行環境 section, leading slot 4
 	} {
 		if !strings.Contains(got, want) {
@@ -677,9 +677,9 @@ func TestNotifyWorkerSpawn_DispatchesMemberStart_AndPaces(t *testing.T) {
 	// boots a worker with no instructions at all), so it now checks the shared
 	// blocks, plus the absences so the removal cannot quietly come back through
 	// the spawn path.
-	// 🔴 「啟動程序」是舊名，故意留著：釘的是 seed 的 H1 逐字位元組，出貨文字
-	// 還在等 owner 裁 rc-e12733548e4b。seed 改的那一天，這一行跟它一起改。
-	for _, want := range []string{"# Global Context", "# 啟動程序（Boot Sequence"} {
+	// 釘的是 seed 的 H1 逐字位元組；rc-e12733548e4b 之後是新名，與 seed 同一顆
+	// commit 換掉。
+	for _, want := range []string{"# Global Context", "# 啟動步驟（Boot Sequence"} {
 		if !strings.Contains(persona, want) {
 			t.Errorf("persona_context is missing the shared block %q", want)
 		}

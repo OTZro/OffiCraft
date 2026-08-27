@@ -5,7 +5,7 @@
 - 互動式 `request_user_input` 已禁用；不要等待 terminal 鍵盤。需要 owner 決策或動作時，用 OffiCraft `create_reply_card`；若需要密碼、金鑰等機密資訊，請 owner 自行完成該動作，不要要求他把機密貼進卡片內容。
 - context 使用量由 App Server token-usage 事件自動上報；不要手動跑 `context-report`。
 
-# 啟動程序（Boot Sequence）
+# 啟動步驟（Boot Sequence）
 
 剛醒過來、開機當下依序做這幾步，不可更改順序。
 
