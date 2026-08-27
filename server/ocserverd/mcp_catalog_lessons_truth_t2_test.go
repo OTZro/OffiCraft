@@ -114,27 +114,65 @@ func TestListDocumentHistoryKeyDescriptionMatchesTheLessonsDoor(t *testing.T) {
 // TestPeekDocSizesDescriptionDoesNotPromiseCoverageItCannotGive.
 //
 // T-2 rewrote this description's LIMITATION paragraph into "Every capped
-// document is covered". One call falsifies it, and the mechanism has nothing to
+// document is covered". One call falsified it, and the mechanism had nothing to
 // do with the task_type axis T-2 removed: the listing iterates the ROSTER, and
-// the lessons write face never compares role_key against the roster. The same
-// catalogue's replace_lessons description already says so in as many words
-// ("it creates a lessons document under a role nobody answers to, answers
-// 200"), so the two were contradicting each other on the same page.
+// neither the lessons nor the insight write face compared role_key against it.
+// T-2 answered by NARROWING THE CLAIM rather than plugging the hole, and this
+// test's first version measured that gap and pinned the honest wording. Its own
+// failure message said what to do next: "if this ever starts refusing, the gap
+// closed and this description may widen again."
 //
-// 🔴 THE FIX IS A NARROWER CLAIM, NOT A PLUGGED HOLE. Making the write face
-// validate the roster is an owner-facing behaviour change; describing the gap
-// accurately is not. An honest gap beats a comfortable promise.
+// 🔴 IT STARTED REFUSING. The T-2 acceptance follow-up gated the LESSONS write
+// face, so this test now measures the SPLIT the description had to grow:
+//
+//	lessons  → refused (404) unless the role_key has a reader
+//	insight  → still ungated: 200, and still absent from this listing
+//
+// Both halves are measured here BEFORE any wording is asserted, because the
+// value of this file is that the sentence and the behaviour are checked against
+// each other rather than each against a reader's memory. The insight half is
+// the load-bearing one now: it is the ONLY thing keeping the description's
+// remaining gap paragraph honest, and if insight is ever gated too, THIS is the
+// assertion that says so and sends the next person to the wording.
 func TestPeekDocSizesDescriptionDoesNotPromiseCoverageItCannotGive(t *testing.T) {
-	// ① MEASURE the gap end to end.
 	api := newTasksTestServer(t)
 	const orphan = "no-such-role"
+
+	// ① LESSONS — the gap that CLOSED. A write under a role_key with no reader
+	//    is refused outright, so it can no longer produce an unlistable
+	//    document.
 	rec := httptest.NewRecorder()
 	api.HandleReplaceLessonsApiLessonsRoleKeyPost(rec,
 		taskReq(t, http.MethodPost, "/api/lessons/"+orphan, map[string]any{"text": "ORPHAN"}, "owner", "owner"),
 		orphan)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("writing LESSONS under a role_key nothing reads = %d %s, want 404 — "+
+			"if this goes back to 200 the gap has REOPENED and the description's "+
+			"\"the lessons write face no longer has that gap\" is a false promise again",
+			rec.Code, rec.Body.String())
+	}
+
+	// Positive control on the same face: a role the roster DOES carry still
+	// writes. Without it, a route broken end to end would read as "gated".
+	rec = httptest.NewRecorder()
+	api.HandleReplaceLessonsApiLessonsRoleKeyPost(rec,
+		taskReq(t, http.MethodPost, "/api/lessons/assistant", map[string]any{"text": "ROSTER ROLE"}, "owner", "owner"),
+		"assistant")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("writing lessons under a role_key no role carries = %d %s, want 200 — "+
-			"if this ever starts refusing, the gap closed and this description may widen again",
+		t.Fatalf("positive control: a ROSTER role's lessons must still be writable, got %d %s",
+			rec.Code, rec.Body.String())
+	}
+
+	// ② INSIGHT — the gap that REMAINS, and which the description now calls out
+	//    by name as insight-only. Measured, not assumed.
+	rec = httptest.NewRecorder()
+	api.HandleReplaceInsightApiInsightRoleKeyPost(rec,
+		taskReq(t, http.MethodPost, "/api/insight/"+orphan, map[string]any{"text": "ORPHAN"}, "owner", "owner"),
+		orphan)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("writing INSIGHT under a role_key no role carries = %d %s, want 200 — "+
+			"if this has started refusing too, the description's INSIGHT-ONLY paragraph "+
+			"is now stale and must be rewritten (or removed) in the same commit",
 			rec.Code, rec.Body.String())
 	}
 	rec = httptest.NewRecorder()
@@ -144,12 +182,17 @@ func TestPeekDocSizesDescriptionDoesNotPromiseCoverageItCannotGive(t *testing.T)
 		t.Fatalf("doc-sizes = %d %s", rec.Code, rec.Body.String())
 	}
 	if strings.Contains(rec.Body.String(), orphan) {
-		t.Fatalf("doc-sizes DID list the orphan lessons document — the gap this test "+
-			"describes has closed, and the description should be widened rather than "+
-			"kept narrow. Body: %s", rec.Body.String())
+		t.Fatalf("doc-sizes DID list the orphan document — the remaining gap this "+
+			"description states has closed, and the wording should be widened rather "+
+			"than kept narrow. Body: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "assistant") {
+		t.Fatalf("doc-sizes does not list `assistant`, which was just written above — "+
+			"this listing is not reporting what it claims to, so the orphan check "+
+			"above proves nothing. Body: %s", rec.Body.String())
 	}
 
-	// ② ASSERT the words against it.
+	// ③ ASSERT the words against what ① and ② just observed.
 	desc := loadMcpCatalogTool(t, "peek_doc_sizes").Description
 	if !strings.Contains(desc, "cap_chars") {
 		t.Fatalf("the peek_doc_sizes description does not mention cap_chars — this search "+
@@ -157,18 +200,25 @@ func TestPeekDocSizesDescriptionDoesNotPromiseCoverageItCannotGive(t *testing.T)
 	}
 	if strings.Contains(desc, "Every capped document is covered") {
 		t.Errorf("peek_doc_sizes still promises \"Every capped document is covered\". "+
-			"The call above wrote a capped lessons document under %q and this listing "+
+			"The insight call above wrote a capped document under %q and this listing "+
 			"did not report it. The promise is false, and it REPLACED a warning that "+
 			"was merely imprecise.", orphan)
 	}
 	for _, needed := range []struct{ text, why string }{
 		{"KEYED BY ROLE", "the listing's real boundary has to be stated, not implied"},
-		{"roster", "the gap belongs to the WRITE side not validating role_key against the roster"},
+		{"roster", "the remaining gap belongs to the WRITE side not validating role_key against the roster"},
 		{"list_roles", "an agent needs to be told where the roster it is derived from lives"},
+		{"INSIGHT-ONLY", "the gap is no longer symmetric — saying \"lessons (or insight)\" would now be false about lessons, which ① just measured as refused"},
 	} {
 		if !strings.Contains(desc, needed.text) {
 			t.Errorf("the peek_doc_sizes description does not contain %q — %s. Got: %q",
 				needed.text, needed.why, desc)
 		}
+	}
+	// The retired symmetric phrasing must be gone, not merely supplemented.
+	if strings.Contains(desc, "write lessons (or insight) under a role_key no role carries") {
+		t.Errorf("the description still says an admin can write LESSONS under a role_key " +
+			"no role carries. ① measured that as a 404. This is agent-facing text " +
+			"teaching the opposite of the shipped behaviour.")
 	}
 }

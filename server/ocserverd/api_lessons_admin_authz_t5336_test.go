@@ -57,6 +57,17 @@ func t5336Fixture(t *testing.T) (string, string, string, string) {
 
 	// The foreign role — NOT the admin's own role, NOT the plain agent's.
 	const foreignRole = "r-t5336foreign"
+	// T-2 follow-up: this fixture used to seed the doc WITHOUT ever creating
+	// the role, so "another role's lessons" was in fact a lessons doc hanging
+	// off no role at all — the exact artifact the roster gate now refuses.
+	// Making it a real role is a fixture-realism fix, not a weakening: the
+	// arms below assert reach ACROSS roles, and this role is still neither the
+	// admin's own nor the plain agent's. Nothing in any assertion moved.
+	if err := dal.PutRoleDef(RoleDef{
+		RoleKey: foreignRole, Name: "T-5336 Foreign Role", DefinitionMD: "foreign role\n",
+	}); err != nil {
+		t.Fatalf("PutRoleDef(foreign): %v", err)
+	}
 	seedLessonsOverlay(t, dal, foreignRole, "foreign role baseline\n")
 
 	if err := dal.PutMember(Member{
