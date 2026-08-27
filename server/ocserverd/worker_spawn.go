@@ -77,10 +77,10 @@ const (
 	workerBootRoleLabel = "outsource-worker"
 	// workerSpawnRetrySecs paces re-dispatch of the worker start for a worker
 	// still sitting in 'assigned' (booted but not yet claimed, or the frame
-	// was lost with its dying connection). Its retry pacing is independent of the
-	// reconcile start timeout (lifecycle §4.4 start_timeout: WakingTTLSecs): a
-	// healthy boot claims well within that window; a lost frame is re-pushed right after it.
-	workerSpawnRetrySecs = 90.0
+	// was lost with its dying connection). It mirrors the reconcile start timeout
+	// (lifecycle §4.4 start_timeout: WakingTTLSecs): a healthy boot claims well
+	// within that window; a lost frame is re-pushed at its boundary.
+	workerSpawnRetrySecs = WakingTTLSecs
 	// workerReclaimGraceSecs is the backstop window between a worker's
 	// release (task terminal) and the forced session reclaim, giving the
 	// worker time to run its §6.3 close-out duties. Mirrors stop_grace /
@@ -101,7 +101,7 @@ const (
 	// machine for that worker — this is a PAUSE, not the 換機 rotation it was
 	// under automatic placement: there is no other host to rotate to now that a
 	// worker only ever boots where it was placed. Sized at 3× the re-dispatch
-	// pace so a known-bad boot is retried after a few cycles, not every 90s.
+	// pace so a known-bad boot is retried after a few cycles, not every retry.
 	workerSpawnCooldownSecs = 3 * workerSpawnRetrySecs
 )
 
@@ -867,7 +867,7 @@ func (s *apiServer) workerSpawnObs(workerID string) (target string, at float64) 
 //
 //   - a not-online worker gets a START, paced by the FSM's start_timeout /
 //     exponential backoff (a repeatedly failing spawn slows down instead of
-//     hammering every 90s);
+//     hammering on every retry window);
 //   - a START that bounced off the warden clobber-guard (last_op receipt
 //     "start" + reason session_already_exists — a live-but-presence-deaf ghost
 //     session squatting the slot, the O-19 wedge) triggers the ZOMBIE TAKEOVER:

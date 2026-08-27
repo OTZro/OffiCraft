@@ -222,7 +222,7 @@ func TestWorkerStop_OfflineIsConfirmedBeforeTheCloseOutIsCollected(t *testing.T)
 // honest reconnect floor is about 90s (idle-read watchdog 45s + backoff cap 15s
 // + one 30s cadence tick); owner 2026-08-27 (rc-dbee69264859) selected 120s.
 // Keep this value independent of WakingTTLSecs even though both are 120s today.
-func TestWorkerOfflineConfirmGraceIsOneHundredTwentySeconds(t *testing.T) {
+func TestWorkerOfflineConfirmGraceMatchesOwnerRuling(t *testing.T) {
 	if workerOfflineConfirmGraceSecs != 120.0 {
 		t.Errorf("workerOfflineConfirmGraceSecs = %v, want 120 — owner 2026-08-27 "+
 			"(rc-dbee69264859) selected this independent confirmation window; it "+

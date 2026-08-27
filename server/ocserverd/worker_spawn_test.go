@@ -66,6 +66,13 @@ func connectWarden(t *testing.T, s *apiServer, wardenID string) {
 	t.Cleanup(func() { s.hub.Disconnect(l) })
 }
 
+func TestWorkerSpawnRetryWindowMatchesReconcileStartTimeout(t *testing.T) {
+	if workerSpawnRetrySecs != defaultReconcileConfig().StartTimeout {
+		t.Fatalf("worker spawn retry window = %v, want reconcile start timeout %v",
+			workerSpawnRetrySecs, defaultReconcileConfig().StartTimeout)
+	}
+}
+
 // decodeWardenFrame unwraps one FIFO frame ("data: {...}\n\n") into rpc + args.
 func decodeWardenFrame(t *testing.T, frame []byte) (string, map[string]any) {
 	t.Helper()

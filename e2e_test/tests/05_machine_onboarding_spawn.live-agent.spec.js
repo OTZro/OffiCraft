@@ -299,10 +299,11 @@ test.describe('C1 · machine onboarding → agent spawn → warden-log START', (
       // boot_sequence (report_waking → resume_summary → `ocagent listen`); only
       // when it mounts its own /api/events SSE does the hub flip is_online True and
       // on_first_connect clear waking_since → derived presence == "online"
-      // (domain/member.py presence_state; realtime.py SSEHub.is_online; WAKING_TTL
-      // configured waking TTL). We assert online via a GENEROUS poll (not a single shot): waking→online
-      // is claude-driven with no firm upper bound (the spike often stalled in
-      // waking), so a bounded poll+retry is the only non-flaky shape.
+      // (the server's PresenceState and live SSE hub; WakingTTLSecs is the
+      // configured waking TTL). We assert online via a GENEROUS poll (not a
+      // single shot): waking→online is claude-driven with no firm upper bound
+      // (the spike often stalled in waking), so a bounded poll+retry is the only
+      // non-flaky shape.
       //
       // waking is recorded SOFTLY (may flash past too fast to catch); online is the
       // load-bearing HARD assertion — the hole this spec previously left open.
@@ -310,7 +311,8 @@ test.describe('C1 · machine onboarding → agent spawn → warden-log START', (
       let reachedOnline = false;
       let lastPresence = null;
       let onlineAfter = -1;
-      const PRESENCE_POLL_TRIES = 40; // ~40 * 3s covers the configured waking TTL
+      // Keep this poll window strictly longer than the 120s waking TTL.
+      const PRESENCE_POLL_TRIES = 55; // 55 * 3s ≈ 165s > 120s
       // A transient ECONNREFUSED can hit mid-poll if serve briefly cycles its
       // listener (a graceful-shutdown window on the SSE hub). Playwright's
       // request.get THROWS on a refused socket, which would flake the whole run.
@@ -379,7 +381,7 @@ test.describe('C1 · machine onboarding → agent spawn → warden-log START', (
       // HARD: the agent must actually come online over its own SSE.
       expect(
         reachedOnline,
-        `agent must reach presence=online within ~120s (SSE-mounted); last presence seen: ${lastPresence}`,
+        `agent must reach presence=online within the ~165s poll window (> 120s WakingTTLSecs; SSE-mounted); last presence seen: ${lastPresence}`,
       ).toBe(true);
       testInfo.annotations.push({
         type: 'agent-presence-online',
