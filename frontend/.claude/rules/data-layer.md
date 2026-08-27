@@ -23,6 +23,8 @@ paths:
 
 api/http.ts 的 toSseDelta 只投影事件身分欄：id、from、to、reader、peer；其他 status／priority 等欄位在 seam 就丟掉，讓下游型別上不可能偷偷 merge payload。姓名任一缺少就完整 refetch，不可當成「無變更」：串流沒有 replay，空名字代表不知道漏了什麼。
 
+帶 `requestVersion` 的 hook（useMachines、useMonitoring）：那個版本號**只能由真的送出請求的路徑遞增**。事件幀不得「遞增版本卻不發請求」——那會作廢每一支在飛的請求、卻沒有任何請求負責補回來，畫面只能等下一次 trailing 重抓。事件幀的意思是「可能有更新的答案」，不是「在飛的這個答案是錯的」：讓它照自己的版本落地，另外排程 coalesced 的後續重抓。版本號守的是**送出順序**（後送出的才准 setState，與回應先後無關），那條保證仍在，不要連它一起拆掉。
+
 deltaSink 每個 burst 只做一次同步決策；coalesce 留在決策層，不要跨 tick debounce。narrowToHeld 的語意固定為：null = 全量、非空 = 指定項目、空集合 = 只指向其他項目。task topic 仍需全量，因為清單可能新增列；chat、chat_read、roster 在沒有持有項目時可跳過。
 
 只有在單筆回應是清單列的真正 superset 時才可 per-item：
