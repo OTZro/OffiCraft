@@ -1083,10 +1083,15 @@ export interface paths {
          *     the two are NOT the same, and only one of them tells the caller anything. The
          *     MCP tool face (``get_lessons``) refuses it by PRESENCE, ``task_type: ""``
          *     included, naming the field in the refusal, before the call is dispatched to
-         *     this route (``fillLessonsIdentityArgs``). THIS HTTP ROUTE HAS NO SUCH DOOR: a
-         *     GET carries no body to reject unknown keys in, and a ``?task_type=`` query
-         *     parameter is read by nothing here and answers 200 -- that is, it IS silently
-         *     ignored, the exact experience T-2 exists to end.
+         *     this route (``fillLessonsIdentityArgs``). THIS HTTP ROUTE NOW HAS ITS OWN
+         *     DOOR, and it had to be a SEPARATE one: a GET carries no body to reject unknown
+         *     keys in, so the only place ``task_type`` can arrive here is the QUERY string.
+         *     It is refused there by PRESENCE (``?task_type=``, empty value included) with a
+         *     400 ``validation_error`` whose message names the field -- the SAME wording the
+         *     MCP face uses, so the two faces cannot tell a caller two different stories.
+         *     BEFORE that door was built this route read the query string for nothing and
+         *     answered 200: the field WAS silently ignored, which is the exact experience T-2
+         *     exists to end, reproduced on the one face T-2 did not reach.
          */
         get: operations["handle_get_lessons_api_lessons__role_key__get"];
         put?: never;
@@ -1117,8 +1122,11 @@ export interface paths {
          *     included, naming it in the refusal, before dispatch
          *     (``fillLessonsIdentityArgs``). This HTTP route refuses a ``task_type`` in the
          *     BODY as an unknown key -- a 422 ``validation_error`` whose message names it. A
-         *     ``task_type`` QUERY parameter on this route is read by nothing and answers 200,
-         *     so that one IS silently ignored.
+         *     ``task_type`` QUERY parameter is refused too, by PRESENCE, with a 400
+         *     ``validation_error`` naming the field. BEFORE that door was built nothing on
+         *     this route read the query string and such a request answered 200 -- that face
+         *     DID silently ignore it, and body-only rejection was therefore not the whole
+         *     story.
          */
         post: operations["handle_replace_lessons_api_lessons__role_key__post"];
         delete?: never;
@@ -1146,7 +1154,7 @@ export interface paths {
          *
          *     Writes the owner overlay (``is_default`` → False) and fans a ``lessons`` delta. The receipt carries ``size``/``sha256`` verification anchors over the resulting doc.
          *
-         *     T-2 removed the ``task_type`` axis: a lessons doc is addressed by ``role_key`` ALONE. WHICH FACE ANSWERS WHAT, MEASURED RATHER THAN INFERRED: the MCP tool face (``patch_lessons``) refuses the argument by PRESENCE, ``task_type: ""`` included, naming it in the refusal, before dispatch (``fillLessonsIdentityArgs``). This HTTP route refuses a ``task_type`` in the BODY as an unknown key -- a 422 ``validation_error`` whose message names it. A ``task_type`` QUERY parameter on this route is read by nothing and answers 200, so that one IS silently ignored.
+         *     T-2 removed the ``task_type`` axis: a lessons doc is addressed by ``role_key`` ALONE. WHICH FACE ANSWERS WHAT, MEASURED RATHER THAN INFERRED: the MCP tool face (``patch_lessons``) refuses the argument by PRESENCE, ``task_type: ""`` included, naming it in the refusal, before dispatch (``fillLessonsIdentityArgs``). This HTTP route refuses a ``task_type`` in the BODY as an unknown key -- a 422 ``validation_error`` whose message names it. A ``task_type`` QUERY parameter is refused too, by PRESENCE, with a 400 ``validation_error`` naming the field. BEFORE that door was built nothing on this route read the query string and such a request answered 200 -- that face DID silently ignore it, and body-only rejection was therefore not the whole story.
          */
         post: operations["handle_patch_lessons_api_lessons__role_key__patch_post"];
         delete?: never;

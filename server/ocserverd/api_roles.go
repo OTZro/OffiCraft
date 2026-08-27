@@ -482,6 +482,62 @@ var errLessonsTaskTypeRetired = errors.New(
 		"refused rather than ignored so that a call which believes it named " +
 		"a classification cannot quietly land somewhere else")
 
+// lessonsRetiredQueryParam is the ONE query key the lessons routes used to
+// carry and no longer do. Named once so the three routes cannot drift apart
+// about what is retired.
+const lessonsRetiredQueryParam = "task_type"
+
+// refuseRetiredLessonsQuery answers the retired task_type when it arrives as a
+// QUERY parameter on any of the three lessons HTTP routes, and reports whether
+// the handler may proceed.
+//
+// 🔴 WHY THIS EXISTS SEPARATELY FROM THE TWO DOORS THAT WERE ALREADY THERE.
+// T-2 shipped two refusals and they covered two of the three ways the field
+// can arrive:
+//
+//   - MCP tool face → fillLessonsIdentityArgs refuses by PRESENCE, before
+//     dispatch. Covers every agent, because agents reach these routes only
+//     through the tool face.
+//   - REST request BODY → decodeJSONBodyStrict refuses it as an unknown key
+//     (422). Covers the two POSTs.
+//
+// The third way had no door at all: a QUERY parameter. Nothing on these routes
+// reads the query string, so `?task_type=whatever` was dropped on the floor and
+// the request answered 200 — on the GET, and equally on both POSTs. That is
+// not a cosmetic gap, it is the ORIGINAL DEFECT of this ticket reproduced on a
+// different face: a caller that believes it named a classification is told
+// nothing, and gets an answer that looks like the one it asked for. The two
+// existing refusals say so in their own words; this closes the face they did
+// not reach, with the SAME message, so the three faces cannot tell a caller
+// three different stories.
+//
+// PRESENCE, not blankness — deliberately identical to the MCP rule.
+// `?task_type=` is still a caller that believes the axis exists.
+//
+// 🔑 WHY THIS ONE MAY BE JUDGED BEFORE AUTHZ. The rule the lessons routes
+// follow is: a refusal may precede the authz check only when it LEAKS NOTHING
+// ABOUT SERVER STATE. This one qualifies — it is a pure judgment on the
+// caller's own request ("you sent a field that no longer exists"), the answer
+// is identical for every caller, every role and every station, and it reveals
+// only what the caller itself just sent. That is the same class as malformed
+// JSON, which is likewise answered before any identity is consulted.
+// A refusal that consults STATE — "this role does not exist here" — must come
+// AFTER authz instead, or an unauthorized caller could use it to enumerate what
+// exists. So the two orders are one rule, not two habits.
+//
+// Scoped to the retired key BY NAME. This is not a general unknown-query
+// rejector: the router binds declared query parameters and ignores the rest
+// across every route on the station, and changing THAT is a station-wide
+// posture change nobody asked for. The claim being made here is narrow and
+// checkable: the one name T-2 retired is answered instead of swallowed.
+func refuseRetiredLessonsQuery(w http.ResponseWriter, r *http.Request) bool {
+	if _, present := r.URL.Query()[lessonsRetiredQueryParam]; !present {
+		return true
+	}
+	writeError(w, http.StatusBadRequest, errLessonsTaskTypeRetired.Error())
+	return false
+}
+
 // isLessonsTool reports whether name is one of the three lessons MCP tools.
 // One predicate so the identity fold and the retired-argument refusal cannot
 // disagree about which tools they cover.
@@ -584,6 +640,9 @@ func (s *apiServer) lessonsWriteAuthz(w http.ResponseWriter, r *http.Request, ro
 // GET /api/lessons/{role_key} — the folded per-role lessons doc.
 // READ is unrestricted for any authenticated identity.
 func (s *apiServer) HandleGetLessonsApiLessonsRoleKeyGet(w http.ResponseWriter, r *http.Request, roleKey string) {
+	if !refuseRetiredLessonsQuery(w, r) {
+		return
+	}
 	dto, err := s.foldLessonsDTO(roleKey)
 	if err != nil {
 		internalError(w, err)
@@ -598,6 +657,9 @@ func (s *apiServer) HandleGetLessonsApiLessonsRoleKeyGet(w http.ResponseWriter, 
 // member's role_key (read from the roster by the verified sub, never a client
 // field).
 func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyPost(w http.ResponseWriter, r *http.Request, roleKey string) {
+	if !refuseRetiredLessonsQuery(w, r) {
+		return
+	}
 	var body LessonsReplaceDTO
 	if !decodeJSONBodyStrict(w, r, &body, "text") {
 		return
@@ -663,6 +725,9 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyPost(w http.ResponseWri
 // a substantial doc to <10%, is refused without allow_shrink=true (the r-76
 // wipe-guard posture). Same per-role write authz as replace_lessons.
 func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyPatchPost(w http.ResponseWriter, r *http.Request, roleKey string) {
+	if !refuseRetiredLessonsQuery(w, r) {
+		return
+	}
 	var body LessonsPatchDTO
 	if !decodeJSONBodyStrict(w, r, &body, "edits") {
 		return
