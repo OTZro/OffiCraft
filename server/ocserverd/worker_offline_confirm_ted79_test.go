@@ -110,8 +110,12 @@ func dropWorkerSession(t *testing.T, api *apiServer, workerID string) {
 //
 // What the 90s window protected — 「不要因為一次取樣就砍掉還活著的 worker」 — is
 // NOT lost. It moved, and to a LONGER window: the only kill an offline worker
-// can now attract is the zombie takeover, gated by ZombieConfirmGrace = 180s
-// (2 × WakingTTLSecs), twice this window. A blip therefore costs at most one
+// can now attract is the zombie takeover, gated by ZombieConfirmGrace
+// (2 × WakingTTLSecs), which is strictly LONGER than this window. The exact
+// ratio is deliberately not written here — the assertion at the bottom of this
+// file pins the ORDERING instead, so moving either constant cannot turn this
+// sentence into a lie (T-20: it used to read "= 180s ... twice this window").
+// A blip therefore costs at most one
 // refused START (the warden's clobber-guard answers session_already_exists) —
 // never a kill. That is the property the tests below assert, because it is the
 // property the owner's ruling was about.
@@ -222,9 +226,11 @@ func TestWorkerOfflineConfirmGraceIsNinetySeconds(t *testing.T) {
 	if workerOfflineConfirmGraceSecs != 90.0 {
 		t.Errorf("workerOfflineConfirmGraceSecs = %v, want 90 — the worst-case honest "+
 			"reconnect (45s idle-read watchdog + 15s backoff cap + one 30s cadence "+
-			"tick). owner 2026-08-21 (rc-7df3deb21b3b) asked for shorter than the 180s "+
-			"ZombieConfirmGrace, and 90 is that number with the doubling removed, not "+
-			"a round guess.", workerOfflineConfirmGraceSecs)
+			"tick), which is what fixes this number and is INDEPENDENT of "+
+			"WakingTTLSecs. owner 2026-08-21 (rc-7df3deb21b3b) asked for shorter than "+
+			"ZombieConfirmGrace; the second assertion below is what enforces that, so "+
+			"this one must not be re-derived from ZombieConfirmGrace's current value.",
+			workerOfflineConfirmGraceSecs)
 	}
 	if workerOfflineConfirmGraceSecs >= defaultReconcileConfig().ZombieConfirmGrace {
 		t.Errorf("the worker confirm window (%v) must be SHORTER than ZombieConfirmGrace "+

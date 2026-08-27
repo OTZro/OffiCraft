@@ -101,9 +101,15 @@ const (
 )
 
 // WakingTTLSecs: a phase="waking" signal this old (seconds), with no online
-// session having come up, falls back to offline — the wake failed. Sized at
-// 3× the runtime's 30s presence heartbeat.
-const WakingTTLSecs = 90.0
+// session having come up, falls back to offline — the wake failed. Sized to
+// span several reconcileCadenceSecs producer ticks, so a wake in flight is
+// re-examined repeatedly before it is declared failed. Keep it a comfortable
+// multiple of that cadence; the ratio is deliberately NOT written down here,
+// because a number in this sentence goes stale the moment either constant
+// moves (T-20: it said "3× the runtime's 30s presence heartbeat" for as long
+// as this was 90.0 — and no such per-member 30s heartbeat exists: presence is
+// derived from the live SSE connection, whose keepalive is 15s).
+const WakingTTLSecs = 120.0
 
 // StoppingTimeoutSecs: once stopping_since is set, a still-online member has
 // this long to wind down before a stuck collect is force-killed.

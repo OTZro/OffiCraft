@@ -75,9 +75,11 @@ type reconcileConfig struct {
 	// converged arm resets OfflineSince). BOUNDED by construction: once the
 	// window lapses with no reconnect the STOP fires — a true zombie is still
 	// reaped, just later; this can never degrade into "never kill".
-	// Sized 2×StartTimeout (180s): covers the agent's worst honest reconnect
-	// (backoff cap 15s + 45s idle-read watchdog + one 30s cadence tick ≈ 90s)
-	// with a full extra START-window of slack.
+	// Sized 2×StartTimeout — DERIVED, so the seconds are deliberately not spelled
+	// out here (T-20: this line said "(180s)" and StartTimeout then moved). It
+	// covers the agent's worst honest reconnect (backoff cap 15s + 45s idle-read
+	// watchdog + one 30s cadence tick ≈ 90s — those three ARE fixed constants,
+	// independent of StartTimeout) with a full extra START-window of slack.
 	ZombieConfirmGrace float64
 }
 
@@ -1637,7 +1639,7 @@ func (s *apiServer) stampMemberPlacementBlocked(m *Member, now float64) {
 //	    agents that successfully booted. An agent that never came up left it at
 //	    zero, so PresenceState projected plain "offline": the failed wake and the
 //	    member nobody ever woke rendered IDENTICALLY. Stamping at dispatch means
-//	    "waking" now means what it says — the server asked, and the 90s
+//	    "waking" now means what it says — the server asked, and the
 //	    WakingTTLSecs window is the honest deadline. Only stamped when the frame
 //	    was actually accepted by a warden: an undispatched START must not claim
 //	    the member is waking.
