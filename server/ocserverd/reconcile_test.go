@@ -136,6 +136,21 @@ func TestParseDesired(t *testing.T) {
 	}
 }
 
+// TestDefaultReconcileConfigTracksWakingTTLSecs pins StartTimeout and
+// ZombieConfirmGrace to WakingTTLSecs by SYMBOL, not by reading defaultReconcileConfig's
+// own output back — a comparison against cfg's own field would be tautological
+// (T-20 mutant audit: a StartTimeout/ZombieConfirmGrace mutation that stays
+// internally consistent with itself must still turn this test red).
+func TestDefaultReconcileConfigTracksWakingTTLSecs(t *testing.T) {
+	cfg := defaultReconcileConfig()
+	if cfg.StartTimeout != WakingTTLSecs {
+		t.Fatalf("StartTimeout = %v, want WakingTTLSecs (%v)", cfg.StartTimeout, WakingTTLSecs)
+	}
+	if cfg.ZombieConfirmGrace != 2*WakingTTLSecs {
+		t.Fatalf("ZombieConfirmGrace = %v, want 2*WakingTTLSecs (%v)", cfg.ZombieConfirmGrace, 2*WakingTTLSecs)
+	}
+}
+
 // ── reconcileDecide ──────────────────────────────────────────────────────────
 
 func TestReconcileDecide(t *testing.T) {

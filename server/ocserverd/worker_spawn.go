@@ -1890,9 +1890,13 @@ func (s *apiServer) stopWorkerNow(w OutsourceWorker) {
 // constants that produce it: the agent's 45s idle-read watchdog
 // (cli/ocagent/listen.go) + the 15s backoff cap + one 30s cadence tick ≈ 90s.
 // A worker still offline after that is not reconnecting, it is gone.
-// ZombieConfirmGrace (reconcile.go) is the same 90 with a full extra START
-// window of slack on top = 180s; the owner asked for shorter, so this is that
-// derivation with the doubling removed — not a rounder number.
+// ZombieConfirmGrace (reconcile.go) is derived as 2×WakingTTLSecs — back when
+// WakingTTLSecs happened to equal this same 90, that derivation read as "this
+// window plus a full extra START window of slack on top". WakingTTLSecs has
+// since moved (T-20) and workerOfflineConfirmGraceSecs is NOT defined in
+// terms of it, so the two have drifted apart; the owner asked for shorter, so
+// this constant is that ORIGINAL derivation with the doubling removed — not a
+// rounder number.
 //   - DO NOT go below 90: that starts cutting off workers that are alive and
 //     have simply not noticed the socket died yet.
 //   - DO NOT reuse ZombieConfirmGrace: that window answers a different question
