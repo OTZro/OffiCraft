@@ -109,18 +109,13 @@ var knownCatalogDrift = map[string][]string{}
 // catalog omitting it is CORRECT and openapi is the one describing a parameter
 // that does nothing.
 //
-// open_gate.bind: ReplyCardCreateDTO is SHARED by two operations. Bind is read
-// in exactly one place in the whole server — api_replycards.go:401, inside
-// HandleCreateReplyCard — and HandleOpenTaskGate (api_tasks.go) decodes the same
-// DTO and never touches it. It arrived with T-4166 on the shared DTO.
-//
-// Kept separate from knownCatalogDrift deliberately: filing this as "debt" would
-// record a bug that does not exist, and would invite someone to "fix" it by
-// advertising a lever open_gate ignores — which is the exact failure this ticket
-// is about, just pointed the other way.
-var openapiOverweight = map[string][]string{
-	"open_gate": {"bind"},
-}
+// EMPTY since T-18. Its only entry was open_gate.bind, and it existed because
+// ReplyCardCreateDTO was SHARED by two operations: bind was read inside
+// HandleCreateReplyCard and ignored by HandleOpenTaskGate, which decoded the
+// same DTO. T-18 removed open_gate — the DTO now has ONE operation, so no field
+// on it can be read by one face and ignored by another. The map is kept as the
+// seam a future deliberate entry goes through.
+var openapiOverweight = map[string][]string{}
 
 // deliberatelyOffMCP is the THIRD category, and the one the comment above
 // knownCatalogDrift said this codebase could not express: openapi accepts the

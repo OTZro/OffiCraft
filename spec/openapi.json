@@ -3897,7 +3897,7 @@
         "type": "object"
       },
       "ReplyCardCreateDTO": {
-        "description": "Open one reply card (請示): an ask the OWNER must answer before the agent can proceed. ``kind`` is the closed set ``decision`` (needs a call/approval) | ``action`` (needs the owner to DO something first). ``options`` are the quick-reply choices: 1..4 non-blank strings, and index 0 is ALWAYS the AI's own recommendation (the ``AI 建議`` pick). A free-typed answer (with attachments) is always allowed on top — options never close that door. Optional ``attachments`` ride the QUESTION side of the card (same input shape + limits as chat attachments: ``{id}`` references a blob already uploaded via ``POST /api/chat/attachments``, or ``data_b64`` carries small bytes inline; blobs land in the shared chat-attachment store). ``bind`` opts out of auto task/step binding (see the field).",
+        "description": "Open one reply card (請示): an ask the OWNER must answer before the agent can proceed. ``kind`` is the closed set ``decision`` (needs a call/approval) | ``action`` (needs the owner to DO something first). ``options`` are the quick-reply choices: 1..4 non-blank strings, and index 0 is ALWAYS the AI's own recommendation (the ``AI 建議`` pick). A free-typed answer (with attachments) is always allowed on top — options never close that door. Optional ``attachments`` ride the QUESTION side of the card (same input shape + limits as chat attachments: ``{id}`` references a blob already uploaded via ``POST /api/chat/attachments``, or ``data_b64`` carries small bytes inline; blobs land in the shared chat-attachment store). ``linked_task`` is REQUIRED and has no default: every card must SAY whether it is about a task. There is no inference — the server never guesses a binding from what work you hold, because a guess that misses is silent (the card opens with no 等我回覆 hold and the task runs past your question).",
         "properties": {
           "attachments": {
             "items": {
@@ -3905,12 +3905,6 @@
             },
             "title": "Attachments",
             "type": "array"
-          },
-          "bind": {
-            "default": "",
-            "description": "Auto-binding opt-out. Omit (or \"\") for the default AUTO binding: when you are the executor of exactly one active task, the card binds to that task's CURRENT step and places the 等我回覆 hold. Send ``\"none\"`` to declare this ask is NOT about your task — the card opens as a plain unbound 請示 regardless of what work you hold. Any other value is a 400.",
-            "title": "Bind",
-            "type": "string"
           },
           "body": {
             "default": "",
@@ -3924,6 +3918,18 @@
             ],
             "title": "Kind",
             "type": "string"
+          },
+          "linked_task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReplyCardLinkDTO"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "REQUIRED — declare, do not leave it to be inferred. Send ``null`` when the ask is NOT about a task (a plain unbound 請示), or ``{\"task_id\": ..., \"step_id\": ...}`` to bind the ask to the step it is about: that step (and its task) enters waiting_owner until the owner answers. BOTH ids are required in the object form; a task_id with no step_id is a 400, because binding a task without a step places no 等我回覆 hold — the task would finish underneath your question and the owner's answer would then be rejected for good. Omitting the field entirely is a 400 that names both legal shapes: silence used to mean 'the server guesses', and a guess that missed sent a hold-less card with no error at all.",
+            "title": "Linked Task"
           },
           "options": {
             "items": {
@@ -3940,7 +3946,8 @@
         "required": [
           "kind",
           "summary",
-          "options"
+          "options",
+          "linked_task"
         ],
         "title": "ReplyCardCreateDTO",
         "additionalProperties": false,
@@ -4054,6 +4061,17 @@
           "answer"
         ],
         "title": "ReplyCardDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "ReplyCardLinkDTO": {
+        "description": "The task/step a reply card is about. BOTH ids are required: a card bound to a task but to no step places no 等我回覆 hold, so the task keeps running past the question and the owner's eventual answer is refused (409) — the orphan shape T-4166 exists to make impossible.",
+        "properties": {
+          "step_id": {"title": "Step Id", "type": "string"},
+          "task_id": {"title": "Task Id", "type": "string"}
+        },
+        "required": ["task_id", "step_id"],
+        "title": "ReplyCardLinkDTO",
         "additionalProperties": false,
         "type": "object"
       },
@@ -7405,7 +7423,7 @@
         "type": "object"
       },
       "TaskStepDTO": {
-        "description": "One workflow node on the task timeline. Every row is one progress leaf (parallel items are separate rows sharing ``parallel_group``). A parallel stage is CONSECUTIVE rows sharing a non-empty ``parallel_group`` — submit_plan refuses (400) split groups, one-lane groups and gates inside a group, so stored plans always fold cleanly. ``status`` is the closed set ``pending`` | ``in_progress`` | ``waiting_owner`` | ``done`` | ``superseded``. ``done`` and ``superseded`` are the step's terminal states: ``superseded`` (T-1aea) is stamped by submit_plan alone — a replan freezes a step whose latest bound reply card was already answered/expired as kept history (original order, ahead of the fresh plan) unless the fresh plan re-lists the node by name; a superseded row counts toward neither ``progress_done`` nor ``progress_total``, is never the current node, is not agent-reportable and cannot be re-armed; its ``finished_ts`` is the freeze moment. Gate projection: ``is_gate`` with an empty ``reply_card_id`` is the ANNOUNCED (dashed) gate; a non-empty ``reply_card_id`` is a step carrying a live reply card — an ARMED gate, or a plain step a ``create_reply_card`` ask auto-bound to. ``reply_card_id`` always points at the LATEST bound card and persists after the step finishes (the permanent approval mark).",
+        "description": "One workflow node on the task timeline. Every row is one progress leaf (parallel items are separate rows sharing ``parallel_group``). A parallel stage is CONSECUTIVE rows sharing a non-empty ``parallel_group`` — submit_plan refuses (400) split groups, one-lane groups and gates inside a group, so stored plans always fold cleanly. ``status`` is the closed set ``pending`` | ``in_progress`` | ``waiting_owner`` | ``done`` | ``superseded``. ``done`` and ``superseded`` are the step's terminal states: ``superseded`` (T-1aea) is stamped by submit_plan alone — a replan freezes a step whose latest bound reply card was already answered/expired as kept history (original order, ahead of the fresh plan) unless the fresh plan re-lists the node by name; a superseded row counts toward neither ``progress_done`` nor ``progress_total``, is never the current node, is not agent-reportable and cannot be re-armed; its ``finished_ts`` is the freeze moment. Gate projection: ``is_gate`` with an empty ``reply_card_id`` is the ANNOUNCED (dashed) gate; a non-empty ``reply_card_id`` is a step carrying a live reply card — an ARMED gate, or a plain step a ``create_reply_card`` ask named in its ``linked_task``. ``reply_card_id`` always points at the LATEST bound card and persists after the step finishes (the permanent approval mark).",
         "properties": {
           "dod": {
             "default": "",
@@ -7592,7 +7610,7 @@
       },
       "TaskStepStatusUpdateDTO": {
 
-        "description": "Agent-reported step status (MCP ``update_step_status``): ``pending`` → ``in_progress`` → ``done`` — ``waiting_owner`` is NOT agent-reportable on either side (a step enters it only by opening a reply card: open_gate / create_reply_card auto-bind, and leaves it only when that card is answered, where the server restores in_progress), so reporting ``waiting_owner`` is a 400 and a move out of it is a 409; other illegal transitions are a 409. ``superseded`` is likewise not the agent's lever: the server freezes a replaced answered-card step itself on submit_plan (T-1aea), so reporting ``superseded`` is a 400 and no report moves a step out of it (409 — terminal). T-74f8 交棒閘: if applying this report would CLOSE the task (every step done) and the task's creator is not its executor, the server refuses the report with a 422 unless the ball's destination is declared IN THIS SAME CALL — ``handoff='return_to_creator'`` (the server mints a durable follow-up task on the creator, blocked by this one), ``handoff='follow_up'`` + ``handoff_task_id`` (the server attaches this task to that successor as a dependency), or ``handoff='none'`` + ``handoff_note`` (an explicit, recorded end of the line). The gate stands aside when a non-terminal task already depends on this one (the handover is already real). It refuses BEFORE any row is written, because a closed task can never be replanned (submit_plan turns into a permanent 409) — after the close there is nothing left to answer with.",
+        "description": "Agent-reported step status (MCP ``update_step_status``): ``pending`` → ``in_progress`` → ``done`` — ``waiting_owner`` is NOT agent-reportable on either side (a step enters it only by opening a reply card: create_reply_card carrying an explicit ``linked_task`` {task_id, step_id}, and leaves it only when that card is answered, where the server restores in_progress), so reporting ``waiting_owner`` is a 400 and a move out of it is a 409; other illegal transitions are a 409. ``superseded`` is likewise not the agent's lever: the server freezes a replaced answered-card step itself on submit_plan (T-1aea), so reporting ``superseded`` is a 400 and no report moves a step out of it (409 — terminal). T-74f8 交棒閘: if applying this report would CLOSE the task (every step done) and the task's creator is not its executor, the server refuses the report with a 422 unless the ball's destination is declared IN THIS SAME CALL — ``handoff='return_to_creator'`` (the server mints a durable follow-up task on the creator, blocked by this one), ``handoff='follow_up'`` + ``handoff_task_id`` (the server attaches this task to that successor as a dependency), or ``handoff='none'`` + ``handoff_note`` (an explicit, recorded end of the line). The gate stands aside when a non-terminal task already depends on this one (the handover is already real). It refuses BEFORE any row is written, because a closed task can never be replanned (submit_plan turns into a permanent 409) — after the close there is nothing left to answer with.",
         "properties": {
           "handoff": {
             "default": "",
@@ -8662,7 +8680,7 @@
         "summary": "Read one block of the boot context by kind/key, folded (the owner's edit ⊕ the shipped seed). Carries size_chars/cap_chars so an edit can be sized before it is made, is_default/has_seed to tell an edited block from the shipped one, and read_only for the blocks that are shown but may never be edited. An unknown kind or key is a 404 that names the keys that exist.",
         "x-mcp": {
           "include": true,
-          "order": 114,
+          "order": 113,
           "name": "get_boot_doc",
           "description": "Read one block of the boot context by kind/key, folded (the owner's edit ⊕ the shipped seed). Carries size_chars/cap_chars so an edit can be sized before it is made, is_default/has_seed to tell an edited block from the shipped one, and read_only for the blocks that are shown but may never be edited. An unknown kind or key is a 404 that names the keys that exist.",
           "legacy": {
@@ -8747,7 +8765,7 @@
         "summary": "Replace the EDITABLE HALF of one boot-context block ({kind, key, body}) — text every agent reads at boot, or is sent when a lifecycle event happens to it. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. The stored result is judged against that block's own cap. A read-only block refuses with 405 for every caller. The read-only head is NOT sent and cannot be: the server joins the shipped head back on, so no caller has any way to write it. Owner or admin assistant only.",
         "x-mcp": {
           "include": true,
-          "order": 115,
+          "order": 114,
           "name": "replace_boot_doc",
           "description": "Replace the EDITABLE HALF of one boot-context block ({kind, key, body}) — text every agent reads at boot, or is sent when a lifecycle event happens to it. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. The stored result is judged against that block's own cap. A read-only block refuses with 405 for every caller. The read-only head is NOT sent and cannot be: the server joins the shipped head back on, so no caller has any way to write it. Owner or admin assistant only.",
           "legacy": {
@@ -8824,7 +8842,7 @@
         "summary": "Restore one boot-context block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap applies on this path — the way back to factory text is never blocked by a setting, which is what makes it the recovery route after an edit that stopped agents from booting. The discarded overlay is retained in the document history. Owner or admin assistant only.",
         "x-mcp": {
           "include": true,
-          "order": 116,
+          "order": 115,
           "name": "reset_boot_doc",
           "description": "Restore one boot-context block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap applies on this path — the way back to factory text is never blocked by a setting, which is what makes it the recovery route after an edit that stopped agents from booting. The discarded overlay is retained in the document history. Owner or admin assistant only.",
           "legacy": {
@@ -8893,7 +8911,7 @@
         "summary": "Read one runtime's 啟動步驟 block — the boot checklist that ends that runtime's boot context. runtime_key is 'claude' or 'codex'; they are separate documents because step 3 of the two says opposite things (claude mounts its own `ocagent listen`, codex must not — the sidecar owns it), so any other value is a 404 rather than a silent fallback to claude. Folded: the owner's edit when one exists, otherwise the shipped factory seed. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
         "x-mcp": {
           "include": true,
-          "order": 108,
+          "order": 107,
           "name": "get_boot_sequence",
           "description": "Read one runtime's 啟動步驟 block — the boot checklist that ends that runtime's boot context. runtime_key is 'claude' or 'codex'; they are separate documents because step 3 of the two says opposite things (claude mounts its own `ocagent listen`, codex must not — the sidecar owns it), so any other value is a 404 rather than a silent fallback to claude. Folded: the owner's edit when one exists, otherwise the shipped factory seed. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
           "legacy": {
@@ -8970,7 +8988,7 @@
         "summary": "Replace the EDITABLE HALF of the 啟動步驟 block of ONE runtime ({runtime_key, body}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. Neither runtime's document carries a read-only head today (T-6f44, owner's decision 4 removed it), so the body IS the whole document; the head machinery still exists for the kinds that do carry one, and there is no way to write a head on any face. The stored result is judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.",
         "x-mcp": {
           "include": true,
-          "order": 109,
+          "order": 108,
           "name": "replace_boot_sequence",
           "description": "Replace the EDITABLE HALF of the 啟動步驟 block of ONE runtime ({runtime_key, body}). runtime_key is 'claude' or 'codex' and the two are separate documents whose step 3 contradicts each other, so writing the wrong one leaves those agents unable to come online — and nothing that never boots reports it. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. Neither runtime's document carries a read-only head today (T-6f44, owner's decision 4 removed it), so the body IS the whole document; the head machinery still exists for the kinds that do carry one, and there is no way to write a head on any face. The stored result is judged against the doc.cap_chars.boot_sequence cap (one cap, both runtimes, each measured on its own text); the refusal tells you what you wrote, the cap, and what is stored. The shipped seed is never overwritten, so reset_boot_sequence always gets the factory text back. Owner or admin assistant only.",
           "legacy": {
@@ -9039,7 +9057,7 @@
         "summary": "Restore ONE runtime's 啟動步驟 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). runtime_key is 'claude' or 'codex'; anything else is a 404. No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it, which is what makes this the recovery route when a bad edit has stopped agents from booting. The overlay being discarded is retained in the document history. Owner or admin assistant only.",
         "x-mcp": {
           "include": true,
-          "order": 110,
+          "order": 109,
           "name": "reset_boot_sequence",
           "description": "Restore ONE runtime's 啟動步驟 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). runtime_key is 'claude' or 'codex'; anything else is a 404. No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it, which is what makes this the recovery route when a bad edit has stopped agents from booting. The overlay being discarded is retained in the document history. Owner or admin assistant only.",
           "legacy": {
@@ -9949,7 +9967,7 @@
         "summary": "List the product-guide docs (slug + title).",
         "x-mcp": {
           "include": true,
-          "order": 103,
+          "order": 102,
           "name": "list_docs",
           "description": "List the product-guide docs (slug + title).",
           "legacy": {
@@ -10083,7 +10101,7 @@
         "summary": "Read one product-guide doc in full (markdown; unknown slug → 404).",
         "x-mcp": {
           "include": true,
-          "order": 104,
+          "order": 103,
           "name": "get_doc",
           "description": "Read one product-guide doc in full (markdown; unknown slug → 404).",
           "legacy": {
@@ -10153,7 +10171,7 @@
         "summary": "READ the CATALOGUE of retained versions of one editable document: which versions exist, when each was replaced and by whom, whether each was a tombstone, and HOW LONG each of its fields was. It does NOT carry the versions themselves — a version list is how you CHOOSE one, and choosing does not need the prose; fetch the one you picked with get_document_version. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.\n\nWHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.\n\nADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.\n\nCOVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.",
         "x-mcp": {
           "include": true,
-          "order": 100,
+          "order": 99,
           "name": "list_document_history",
           "description": "READ the CATALOGUE of retained versions of one editable document: which versions exist, when each was replaced and by whom, whether each was a tombstone, and HOW LONG each of its fields was. It does NOT carry the versions themselves — a version list is how you CHOOSE one, and choosing does not need the prose; fetch the one you picked with get_document_version. Read-only, newest first, and only the most recent few are kept — HOW MANY is per-document and is not stated here, because it differs by kind and this sentence would go stale silently; what you get back is the answer. Putting a version BACK is deliberately not an agent tool — the owner does that from the cockpit — so this cannot change anything.\n\nWHICH DOCUMENTS THIS COVERS, AND WHAT `key` LOOKS LIKE FOR EACH, ARE DELIBERATELY NOT LISTED HERE. A list of kinds — or of key shapes — written into a description goes stale the moment a new editable document ships, and NOTHING turns red when it does: this description used to enumerate six kinds and a key shape per kind, and both had already gone stale before the lists were taken out. Two rules you can actually execute replace them.\n\nADDRESSING: `kind` and `key` are validated by the same server-side gate that answers get_document_seed, so whatever that tool can address, this one can too, and the two can never silently disagree. A `kind` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it. Some kinds also police the shape of `key` before answering — a key this kind does not serve, or one that fails that kind's required shape, is refused with 400 naming the problem. Neither is something to guess at: ask and read the answer.\n\nCOVERAGE: a syntactically valid `key` that simply has no retained versions yet is not an error — it returns an empty list, the honest 'nothing has been saved here', not a gap to work around.",
           "legacy": {
@@ -10174,7 +10192,7 @@
         "summary": "READ the SHIPPED DEFAULT of one editable document — the text a reset would put back, i.e. the 初始版本 entry of that document's version list. Read-only: this tool writes nothing, so reading the default can never replace the live document. Putting the default BACK is deliberately not an agent tool — the owner does that from the cockpit — exactly as with list_document_history. ``content`` carries the SAME field names a retained version carries, so the same reader can compare a default against the live document.\n\nWHICH DOCUMENTS THIS COVERS IS DELIBERATELY NOT LISTED HERE. A list of kinds written into a description goes stale the moment a new editable document ships and NOTHING turns red when it does — this one had gone wrong about three kinds before the list was taken out. Two rules you can actually execute replace it.\n\nADDRESSING: ``kind`` and ``key`` name a document exactly as they do for list_document_history — the same server-side gate answers both routes, so whatever that tool addresses is addressable here, and a ``kind`` this server does not know is refused with 400 while a ``key`` that names no document of that kind is refused with 404 that names it. Neither is something to guess at: ask and read the answer.\n\nCOVERAGE: whether THAT document ships a default is answered by asking for it. 200 means it does, and ``content`` is that text. 404 means it has none at all — a role the owner created, a task manual, per-role lessons — which is the same set whose reset the server also 404s, so it is the honest 'there is nothing to go back to', not a gap to work around. 400 on a retired kind names the series that replaced it.",
         "x-mcp": {
           "include": true,
-          "order": 101,
+          "order": 100,
           "name": "get_document_seed",
           "description": "READ the SHIPPED DEFAULT of one editable document — the text a reset would put back, i.e. the 初始版本 entry of that document's version list. Read-only: this tool writes nothing, so reading the default can never replace the live document. Putting the default BACK is deliberately not an agent tool — the owner does that from the cockpit — exactly as with list_document_history. ``content`` carries the SAME field names a retained version carries, so the same reader can compare a default against the live document.\n\nWHICH DOCUMENTS THIS COVERS IS DELIBERATELY NOT LISTED HERE. A list of kinds written into a description goes stale the moment a new editable document ships and NOTHING turns red when it does — this one had gone wrong about three kinds before the list was taken out. Two rules you can actually execute replace it.\n\nADDRESSING: ``kind`` and ``key`` name a document exactly as they do for list_document_history — the same server-side gate answers both routes, so whatever that tool addresses is addressable here, and a ``kind`` this server does not know is refused with 400 while a ``key`` that names no document of that kind is refused with 404 that names it. Neither is something to guess at: ask and read the answer.\n\nCOVERAGE: whether THAT document ships a default is answered by asking for it. 200 means it does, and ``content`` is that text. 404 means it has none at all — a role the owner created, a task manual, per-role lessons — which is the same set whose reset the server also 404s, so it is the honest 'there is nothing to go back to', not a gap to work around. 400 on a retired kind names the series that replaced it.",
           "legacy": {
@@ -10195,7 +10213,7 @@
         "summary": "READ the BODY of one named retained version of an editable document — the ``content`` map that version was stored with, exactly as it was stored. Read-only: this fetches text, it never puts it back; restoring stays out of the agent tool surface, as it does for list_document_history.\n\nTHIS IS THE SECOND HALF OF A PAIR. list_document_history answers WHICH versions exist and how big each field of each one is, and carries no prose at all; this answers WHAT ONE OF THEM SAID. Name the ``id`` you read off that list. Asking for every version's text is the cost that pairing exists to remove, so fetch the one you actually mean to read.\n\nADDRESSING: ``kind`` and ``key`` name a document exactly as they do for list_document_history — the same server-side gate answers all three routes, so whatever that tool can address, this one can too, and they can never silently disagree. A ``kind`` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it; a ``key`` that fails its kind's required shape is refused with 400 naming the problem. An ``id`` that is not a retained version of THAT document is a 404 — including an id that belongs to some other document, which is why the address is the whole triple and not the id alone.",
         "x-mcp": {
           "include": true,
-          "order": 102,
+          "order": 101,
           "name": "get_document_version",
           "description": "READ the BODY of one named retained version of an editable document — the ``content`` map that version was stored with, exactly as it was stored. Read-only: this fetches text, it never puts it back; restoring stays out of the agent tool surface, as it does for list_document_history.\n\nTHIS IS THE SECOND HALF OF A PAIR. list_document_history answers WHICH versions exist and how big each field of each one is, and carries no prose at all; this answers WHAT ONE OF THEM SAID. Name the ``id`` you read off that list. Asking for every version's text is the cost that pairing exists to remove, so fetch the one you actually mean to read.\n\nADDRESSING: ``kind`` and ``key`` name a document exactly as they do for list_document_history — the same server-side gate answers all three routes, so whatever that tool can address, this one can too, and they can never silently disagree. A ``kind`` this server does not know is refused with 400; a retired kind is refused with 400 naming the series that replaced it; a ``key`` that fails its kind's required shape is refused with 400 naming the problem. An ``id`` that is not a retained version of THAT document is a 404 — including an id that belongs to some other document, which is why the address is the whole triple and not the id alone.",
           "legacy": {
@@ -12601,7 +12619,7 @@
         "summary": "加速停止: put an ALREADY-OPEN wind-down on the stop.accelerated_grace_secs clock and tell the member. 409 if nothing is winding down -- press 停止 first. Middle rung of 停止 -> 加速停止 -> 強制停止.",
         "x-mcp": {
           "include": true,
-          "order": 121,
+          "order": 120,
           "name": "accelerated_stop_member",
           "description": "加速停止: put an ALREADY-OPEN wind-down on the stop.accelerated_grace_secs clock and tell the member. 409 if nothing is winding down -- press 停止 first. Middle rung of 停止 -> 加速停止 -> 強制停止.",
           "legacy": {
@@ -13750,7 +13768,7 @@
         "summary": "Read the 〈停止〉 block — the wrap-up checklist the server hands an agent at the moment it is about to collect that session. It is a SINGLETON: one document for every agent and every runtime, keyed `global` like the 系統互動 block. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
         "x-mcp": {
           "include": true,
-          "order": 111,
+          "order": 110,
           "name": "get_offboard",
           "description": "Read the 〈停止〉 block — the wrap-up checklist the server hands an agent at the moment it is about to collect that session. It is a SINGLETON: one document for every agent and every runtime, keyed `global` like the 系統互動 block. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
           "legacy": {
@@ -13816,7 +13834,7 @@
         "summary": "Replace the EDITABLE HALF of the 〈停止〉 block ({body}) — the wrap-up checklist an agent is handed when its session is being collected. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. This document carries NO read-only head today (T-6f44, owner's decision 4 removed it), so the body IS the whole document; the head machinery still exists for the kinds that do carry one, and there is no way to write a head on any face. The stored result is judged against the doc.cap_chars.offboard cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_offboard always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.",
         "x-mcp": {
           "include": true,
-          "order": 112,
+          "order": 111,
           "name": "replace_offboard",
           "description": "Replace the EDITABLE HALF of the 〈停止〉 block ({body}) — the wrap-up checklist an agent is handed when its session is being collected. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. This document carries NO read-only head today (T-6f44, owner's decision 4 removed it), so the body IS the whole document; the head machinery still exists for the kinds that do carry one, and there is no way to write a head on any face. The stored result is judged against the doc.cap_chars.offboard cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_offboard always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.",
           "legacy": {
@@ -13874,7 +13892,7 @@
         "summary": "Restore the 〈停止〉 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.",
         "x-mcp": {
           "include": true,
-          "order": 113,
+          "order": 112,
           "name": "reset_offboard",
           "description": "Restore the 〈停止〉 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.",
           "legacy": {
@@ -13936,7 +13954,7 @@
         "summary": "List live outsource workers (codename, model, effort, task).",
         "x-mcp": {
           "include": true,
-          "order": 86,
+          "order": 85,
           "name": "list_outsource_workers",
           "description": "List live outsource workers (codename, model, effort, task).",
           "legacy": {
@@ -14068,7 +14086,7 @@
         "summary": "Read an outsource worker's boot-context preview (owner/admin agent).",
         "x-mcp": {
           "include": true,
-          "order": 87,
+          "order": 86,
           "name": "get_outsource_worker_boot_context",
           "description": "Read an outsource worker's boot-context preview (owner/admin agent).",
           "legacy": {
@@ -14137,7 +14155,7 @@
         "summary": "強制停止 an outsource worker: kill the session NOW and hold it down; says nothing to it. Third rung of 停止 -> 加速停止 -> 強制停止.",
         "x-mcp": {
           "include": true,
-          "order": 123,
+          "order": 122,
           "name": "force_stop_outsource_worker",
           "description": "強制停止 an outsource worker: kill the session NOW and hold it down; says nothing to it. Third rung of 停止 -> 加速停止 -> 強制停止.",
           "legacy": {
@@ -14216,7 +14234,7 @@
         "summary": "Change (換 model) an outsource worker's model/effort (same floor as the staff model edit).",
         "x-mcp": {
           "include": true,
-          "order": 91,
+          "order": 90,
           "name": "set_outsource_worker_model",
           "description": "Change (換 model) an outsource worker's model/effort (same floor as the staff model edit).",
           "legacy": {
@@ -14285,7 +14303,7 @@
         "summary": "Refocus (換手) an outsource worker's context (owner/admin agent, online-only else 409).",
         "x-mcp": {
           "include": true,
-          "order": 88,
+          "order": 87,
           "name": "refocus_outsource_worker",
           "description": "Refocus (換手) an outsource worker (owner/admin agent, online-only else 409).",
           "legacy": {
@@ -14354,7 +14372,7 @@
         "summary": "加速停止 an outsource worker: put its ALREADY-OPEN wind-down (a 停止 or a 換手) on the stop.accelerated_grace_secs clock and tell it. 409 if none is open.",
         "x-mcp": {
           "include": true,
-          "order": 122,
+          "order": 121,
           "name": "accelerated_stop_outsource_worker",
           "description": "加速停止 an outsource worker: put its ALREADY-OPEN wind-down (a 停止 or a 換手) on the stop.accelerated_grace_secs clock and tell it. 409 if none is open.",
           "legacy": {
@@ -14496,7 +14514,7 @@
         "summary": "Restart (重啟) an outsource worker (owner/admin agent; a live worker is displaced, not refused).",
         "x-mcp": {
           "include": true,
-          "order": 90,
+          "order": 89,
           "name": "restart_outsource_worker",
           "description": "Restart (重啟) an outsource worker (owner/admin agent; a live worker is displaced, not refused).",
           "legacy": {
@@ -14565,7 +14583,7 @@
         "summary": "Stop (停止) an outsource worker: ask it to work its 〈停止〉 document and wait for its own report_stopped -- no kill, no deadline (owner/admin agent).",
         "x-mcp": {
           "include": true,
-          "order": 89,
+          "order": 88,
           "name": "stop_outsource_worker",
           "description": "Stop (停止) an outsource worker: ask it to work its 〈停止〉 document and wait for its own report_stopped -- no kill, no deadline (owner/admin agent).",
           "legacy": {
@@ -14799,7 +14817,7 @@
         }
       },
       "post": {
-        "description": "Open a reply card (agent-side; the MCP tool ``create_reply_card``). The initiator is ALWAYS the verified JWT ``sub``. Server validation: ``kind`` must be ``decision``|``action``; ``summary`` must be non-blank; ``options`` must be 1..4 non-blank strings (index 0 = the AI recommendation) — violations are a 400. Opening a card ALSO posts one chat message (initiator → owner, body = summary, ``meta.reply_card_id`` = the card id) so the ask rides the normal chat stream (unread red dot, permanent history); the card's ``chat_message_id`` links back to it. AUTO task/step binding: when the initiator is the executor of EXACTLY ONE active task (``in_progress``|``waiting_owner``), the card binds to that task, and to its CURRENT step (the single ``in_progress`` step, else the single ``waiting_owner`` step) when that is unambiguous — the bound step enters ``waiting_owner`` carrying the card (``reply_card_id``), and the task follows into ``waiting_owner`` unless the step sits in a parallel group (sibling lanes may still run). An initiator with NO active task opens a plain unbound 請示. An initiator that IS executing active work but cannot be bound to both levels (2+ active tasks, or no single current step) is REFUSED with 409 and no card is minted — a card bound to a task but to no step places no ``waiting_owner`` hold, so the task would run on to ``done`` underneath an ask the owner can then never answer (T-4166). The explicit exit is ``open_gate`` (POST /api/tasks/{task_id}/steps/{step_id}/gate), which names the step. No request field selects the binding. Fans one ``chat`` and one ``reply_card`` SSE delta (plus a ``task`` delta when a step was bound).",
+        "description": "Open a reply card (agent-side; the MCP tool ``create_reply_card``). The initiator is ALWAYS the verified JWT ``sub``. Server validation: ``kind`` must be ``decision``|``action``; ``summary`` must be non-blank; ``options`` must be 1..4 non-blank strings (index 0 = the AI recommendation) — violations are a 400. Opening a card ALSO posts one chat message (initiator → owner, body = summary, ``meta.reply_card_id`` = the card id) so the ask rides the normal chat stream (unread red dot, permanent history); the card's ``chat_message_id`` links back to it. TASK/STEP BINDING IS DECLARED, NEVER INFERRED (T-18): ``linked_task`` is a REQUIRED field. ``null`` opens a plain unbound 請示. ``{task_id, step_id}`` binds the card to that step — the step enters ``waiting_owner`` carrying the card (``reply_card_id``), and the task follows into ``waiting_owner`` unless the step sits in a parallel group (sibling lanes may still run). The caller must be the task's executor (403 otherwise); the task must be ``in_progress``|``waiting_owner`` (409); the step must belong to the task (404) and must not be terminal — ``done``/``superseded`` (409). A ``linked_task`` object carrying a ``task_id`` but no ``step_id`` is a 400: a card bound to a task but to no step places no ``waiting_owner`` hold, so the task would run on to ``done`` underneath an ask the owner can then never answer (T-4166). OMITTING ``linked_task`` is a 400 naming both legal shapes — the field exists so that not deciding is impossible to do silently, which is exactly what the old auto-binding did whenever it could not resolve a step. Fans one ``chat`` and one ``reply_card`` SSE delta (plus a ``task`` delta when a step was bound).",
         "operationId": "handle_create_reply_card_api_reply_cards_post",
         "requestBody": {
           "content": {
@@ -14853,14 +14871,14 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Open a reply card: an ask the owner must answer (options ≤4, [0]=AI pick). Auto-binds to your single active task's CURRENT step — that step (and the task) enters waiting_owner until the owner answers; several lanes of one parallel_group running at once is fine (the lowest order_idx lane carries the card, and the whole task holds either way). If that task has NO resolvable current step the call is REFUSED with 409 and no card is opened: binding the task without a step places no hold, so the task would finish underneath your question and the owner's answer would then be rejected. Fix what the error names — report the step you are on (update_step_status in_progress), use open_gate with an explicit task_id + step_id, or send bind=\"none\" if the ask is not about the task. With no single clear active task, a plain unbound 請示 opens as before. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).",
+        "summary": "Open a reply card: an ask the owner must answer (options ≤4, [0]=AI pick). linked_task is REQUIRED and has no default — every card must SAY whether it is about a task, because the server no longer infers one. Send linked_task={\"task_id\": ..., \"step_id\": ...} to bind the ask to the step it is about: that step (and its task) enters waiting_owner until the owner answers. Send linked_task=null when the ask is not about a task — it opens as a plain unbound 請示. BOTH ids are required in the object form: a task_id with NO step_id is a 400, because a card bound to a task but to no step places no 等我回覆 hold, so the task would finish underneath your question and the owner's answer would then be rejected for good. Omitting linked_task entirely is a 400 that names both legal shapes. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).",
         "x-mcp": {
           "include": true,
           "order": 31,
           "name": "create_reply_card",
-          "description": "Open a reply card: an ask the owner must answer (options ≤4, [0]=AI pick). Auto-binds to your single active task's CURRENT step — that step (and the task) enters waiting_owner until the owner answers; several lanes of one parallel_group running at once is fine (the lowest order_idx lane carries the card, and the whole task holds either way). If that task has NO resolvable current step the call is REFUSED with 409 and no card is opened: binding the task without a step places no hold, so the task would finish underneath your question and the owner's answer would then be rejected. Fix what the error names — report the step you are on (update_step_status in_progress), use open_gate with an explicit task_id + step_id, or send bind=\"none\" if the ask is not about the task. With no single clear active task, a plain unbound 請示 opens as before. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).",
+          "description": "Open a reply card: an ask the owner must answer (options ≤4, [0]=AI pick). linked_task is REQUIRED and has no default — every card must SAY whether it is about a task, because the server no longer infers one. Send linked_task={\"task_id\": ..., \"step_id\": ...} to bind the ask to the step it is about: that step (and its task) enters waiting_owner until the owner answers. Send linked_task=null when the ask is not about a task — it opens as a plain unbound 請示. BOTH ids are required in the object form: a task_id with NO step_id is a 400, because a card bound to a task but to no step places no 等我回覆 hold, so the task would finish underneath your question and the owner's answer would then be rejected for good. Omitting linked_task entirely is a 400 that names both legal shapes. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).",
           "legacy": {
-            "descriptor": "{\n      \"description\": \"Open a reply card: an ask the owner must answer (options \\u22644, [0]=AI pick). Auto-binds to your single active task's CURRENT step \\u2014 that step (and the task) enters waiting_owner until the owner answers; several lanes of one parallel_group running at once is fine (the lowest order_idx lane carries the card, and the whole task holds either way). If that task has NO resolvable current step the call is REFUSED with 409 and no card is opened: binding the task without a step places no hold, so the task would finish underneath your question and the owner's answer would then be rejected. Fix what the error names \\u2014 report the step you are on (update_step_status in_progress), use open_gate with an explicit task_id + step_id, or send bind=\\\"none\\\" if the ask is not about the task. With no single clear active task, a plain unbound \\u8acb\\u793a opens as before. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).\",\n      \"inputSchema\": {\n        \"$defs\": {\n          \"ChatAttachmentInputDTO\": {\n            \"description\": \"An attachment carried on a posted chat message \\u2014 either INLINE BYTES or a\\nREFERENCE to a blob already in the shared attachment store.\\n\\nInline: ``data_b64`` is the bytes, base64-encoded \\u2014 a data-URI\\n(``data:<mime>;base64,....``) OR bare base64 (the handler strips a\\n``data:...;base64,`` prefix if present). ``mime`` and ``filename`` are\\noptional: an omitted ``mime`` is sniffed for images (else\\n``application/octet-stream``); an omitted ``filename`` defaults for pasted\\nimages.\\n\\nReference: ``id`` names an EXISTING blob (minted by\\n``POST /api/chat/attachments`` \\u2014 the streaming upload seam that keeps file\\nbytes out of a JSON tool call). The stored blob's mime/filename are\\nauthoritative: ``filename``/``mime`` sent alongside ``id`` are IGNORED (so\\nthe upload response ``{id, mime, filename}`` can be pasted back verbatim).\\nAn unknown ``id`` is a 400; carrying BOTH ``id`` and ``data_b64`` is a 400\\n(ambiguous intent). An item with neither ``id`` nor ``data_b64`` is a\\n400 (T-e2b2: it used to be dropped silently, so a sender that named a file it\\nnever sent got a success and the recipient got nothing). The reply-card ANSWER face is\\ninline-only: it decodes ``data_b64`` and has never resolved ``id`` references,\\nso an item carrying only an ``id`` there is a 400 (T-e2b2 — it used to be\\ndropped silently).\",\n            \"properties\": {\n              \"data_b64\": {\n                \"default\": \"\",\n                \"title\": \"Data B64\",\n                \"type\": \"string\"\n              },\n              \"filename\": {\n                \"anyOf\": [\n                  {\n                    \"type\": \"string\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ],\n                \"default\": null,\n                \"title\": \"Filename\"\n              },\n              \"id\": {\n                \"anyOf\": [\n                  {\n                    \"type\": \"string\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ],\n                \"default\": null,\n                \"title\": \"Id\"\n              },\n              \"mime\": {\n                \"anyOf\": [\n                  {\n                    \"type\": \"string\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ],\n                \"default\": null,\n                \"title\": \"Mime\"\n              }\n            },\n            \"title\": \"ChatAttachmentInputDTO\",\n            \"type\": \"object\",\n            \"additionalProperties\": false\n          }\n        },\n        \"properties\": {\n          \"attachments\": {\n            \"items\": {\n              \"$ref\": \"#/$defs/ChatAttachmentInputDTO\"\n            },\n            \"title\": \"Attachments\",\n            \"type\": \"array\"\n          },\n          \"bind\": {\n            \"default\": \"\",\n            \"description\": \"Auto-binding opt-out. Omit for the default AUTO binding (bind to your single active task's current step and place the \\u7b49\\u6211\\u56de\\u8986 hold). Send \\\"none\\\" to declare this ask is NOT about your task \\u2014 it opens as a plain unbound \\u8acb\\u793a whatever work you hold.\",\n            \"title\": \"Bind\",\n            \"type\": \"string\"\n          },\n          \"body\": {\n            \"default\": \"\",\n            \"description\": \"The question's full text - the part that lets the owner decide without going and looking things up. It is stored as sent with NO validation, so OMITTING it is not an error: the card is created with an empty body and answers 200, and what reaches the owner is a summary line and some options with no reasoning attached. Nothing warns you; the card simply arrives thinner than you meant it to.\",\n            \"title\": \"Body\",\n            \"type\": \"string\"\n          },\n          \"kind\": {\n            \"enum\": [\n              \"decision\",\n              \"action\"\n            ],\n            \"title\": \"Kind\",\n            \"type\": \"string\"\n          },\n          \"options\": {\n            \"items\": {\n              \"type\": \"string\"\n            },\n            \"title\": \"Options\",\n            \"type\": \"array\"\n          },\n          \"summary\": {\n            \"title\": \"Summary\",\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"kind\",\n          \"summary\",\n          \"options\"\n        ],\n        \"additionalProperties\": false,\n        \"type\": \"object\"\n      },\n      \"name\": \"create_reply_card\"\n    }"
+            "descriptor": "{\n      \"description\": \"Open a reply card: an ask the owner must answer (options \\u22644, [0]=AI pick). linked_task is REQUIRED and has no default \\u2014 every card must SAY whether it is about a task, because the server no longer infers one. Send linked_task={\\\"task_id\\\": ..., \\\"step_id\\\": ...} to bind the ask to the step it is about: that step (and its task) enters waiting_owner until the owner answers. Send linked_task=null when the ask is not about a task \\u2014 it opens as a plain unbound \\u8acb\\u793a. BOTH ids are required in the object form: a task_id with NO step_id is a 400, because a card bound to a task but to no step places no \\u7b49\\u6211\\u56de\\u8986 hold, so the task would finish underneath your question and the owner's answer would then be rejected for good. Omitting linked_task entirely is a 400 that names both legal shapes. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).\",\n      \"inputSchema\": {\n        \"$defs\": {\n          \"ReplyCardLinkDTO\": {\n            \"description\": \"The task/step this ask is about. BOTH ids are required: a card bound to a task but to no step places no \\u7b49\\u6211\\u56de\\u8986 hold, so the task keeps running past the question and the owner's answer is later refused.\",\n            \"properties\": {\n              \"step_id\": {\n                \"title\": \"Step Id\",\n                \"type\": \"string\"\n              },\n              \"task_id\": {\n                \"title\": \"Task Id\",\n                \"type\": \"string\"\n              }\n            },\n            \"required\": [\n              \"task_id\",\n              \"step_id\"\n            ],\n            \"title\": \"ReplyCardLinkDTO\",\n            \"type\": \"object\",\n            \"additionalProperties\": false\n          },\n          \"ChatAttachmentInputDTO\": {\n            \"description\": \"An attachment carried on a posted chat message \\u2014 either INLINE BYTES or a\\nREFERENCE to a blob already in the shared attachment store.\\n\\nInline: ``data_b64`` is the bytes, base64-encoded \\u2014 a data-URI\\n(``data:<mime>;base64,....``) OR bare base64 (the handler strips a\\n``data:...;base64,`` prefix if present). ``mime`` and ``filename`` are\\noptional: an omitted ``mime`` is sniffed for images (else\\n``application/octet-stream``); an omitted ``filename`` defaults for pasted\\nimages.\\n\\nReference: ``id`` names an EXISTING blob (minted by\\n``POST /api/chat/attachments`` \\u2014 the streaming upload seam that keeps file\\nbytes out of a JSON tool call). The stored blob's mime/filename are\\nauthoritative: ``filename``/``mime`` sent alongside ``id`` are IGNORED (so\\nthe upload response ``{id, mime, filename}`` can be pasted back verbatim).\\nAn unknown ``id`` is a 400; carrying BOTH ``id`` and ``data_b64`` is a 400\\n(ambiguous intent). An item with neither ``id`` nor ``data_b64`` is a\\n400 (T-e2b2: it used to be dropped silently, so a sender that named a file it\\nnever sent got a success and the recipient got nothing). The reply-card ANSWER face is\\ninline-only: it decodes ``data_b64`` and has never resolved ``id`` references,\\nso an item carrying only an ``id`` there is a 400 (T-e2b2 — it used to be\\ndropped silently).\",\n            \"properties\": {\n              \"data_b64\": {\n                \"default\": \"\",\n                \"title\": \"Data B64\",\n                \"type\": \"string\"\n              },\n              \"filename\": {\n                \"anyOf\": [\n                  {\n                    \"type\": \"string\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ],\n                \"default\": null,\n                \"title\": \"Filename\"\n              },\n              \"id\": {\n                \"anyOf\": [\n                  {\n                    \"type\": \"string\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ],\n                \"default\": null,\n                \"title\": \"Id\"\n              },\n              \"mime\": {\n                \"anyOf\": [\n                  {\n                    \"type\": \"string\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ],\n                \"default\": null,\n                \"title\": \"Mime\"\n              }\n            },\n            \"title\": \"ChatAttachmentInputDTO\",\n            \"type\": \"object\",\n            \"additionalProperties\": false\n          }\n        },\n        \"properties\": {\n          \"attachments\": {\n            \"items\": {\n              \"$ref\": \"#/$defs/ChatAttachmentInputDTO\"\n            },\n            \"title\": \"Attachments\",\n            \"type\": \"array\"\n          },\n          \"body\": {\n            \"default\": \"\",\n            \"description\": \"The question's full text - the part that lets the owner decide without going and looking things up. It is stored as sent with NO validation, so OMITTING it is not an error: the card is created with an empty body and answers 200, and what reaches the owner is a summary line and some options with no reasoning attached. Nothing warns you; the card simply arrives thinner than you meant it to.\",\n            \"title\": \"Body\",\n            \"type\": \"string\"\n          },\n          \"kind\": {\n            \"enum\": [\n              \"decision\",\n              \"action\"\n            ],\n            \"title\": \"Kind\",\n            \"type\": \"string\"\n          },\n          \"linked_task\": {\n            \"anyOf\": [\n              {\n                \"$ref\": \"#/$defs/ReplyCardLinkDTO\"\n              },\n              {\n                \"type\": \"null\"\n              }\n            ],\n            \"description\": \"REQUIRED \\u2014 declare it, the server never infers it. ``null`` = this ask is NOT about a task (a plain unbound \\u8acb\\u793a). ``{\\\"task_id\\\": ..., \\\"step_id\\\": ...}`` binds the ask to that step, which enters waiting_owner until the owner answers. BOTH ids are required: a task_id with no step_id is a 400, because binding a task without a step places no \\u7b49\\u6211\\u56de\\u8986 hold and the task would run past your question. Omitting the field is a 400 that names both legal shapes.\",\n            \"title\": \"Linked Task\"\n          },\n          \"options\": {\n            \"items\": {\n              \"type\": \"string\"\n            },\n            \"title\": \"Options\",\n            \"type\": \"array\"\n          },\n          \"summary\": {\n            \"title\": \"Summary\",\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"kind\",\n          \"summary\",\n          \"options\",\n          \"linked_task\"\n        ],\n        \"additionalProperties\": false,\n        \"type\": \"object\"\n      },\n      \"name\": \"create_reply_card\"\n    }"
           }
         }
       }
@@ -14988,7 +15006,7 @@
     },
     "/api/reply-cards/{card_id}/answer": {
       "post": {
-        "description": "Answer a WAITING reply card — the only POSITIVE close (there is deliberately no close/skip surface; the expire action is the sole other exit and is NOT an answer — open to the card's own author as well as the owner / an admin agent (T-6020 held it at the admin floor; T-1b88, owner 2026-08-07, widened it to the author)). The answer is an ``option_idx`` and/or free ``text`` (+ attachments); an empty answer is 400, an out-of-range ``option_idx`` is 400. Any real answer — including a counter-question typed as text — flips the card to ``answered`` and stamps ``answered_ts``; if the reply did not settle the original question the agent opens a NEW card (never reopens this one). Answering an already-answered card is a 409 (revise via PUT instead); an expired card is a 409 too (terminal — if the question still matters the agent opens a NEW card). When the card is bound to a task step (open_gate / create_reply_card auto-bind), the FIRST answer also releases the waiting_owner hold — the server restores the step (and the task, once its last bound card is answered) to in_progress; the agent then advances the work itself. Fans one ``reply_card`` SSE delta (badge −1; the agent's own connection receives it and refetches the card for the full answer context).",
+        "description": "Answer a WAITING reply card — the only POSITIVE close (there is deliberately no close/skip surface; the expire action is the sole other exit and is NOT an answer — open to the card's own author as well as the owner / an admin agent (T-6020 held it at the admin floor; T-1b88, owner 2026-08-07, widened it to the author)). The answer is an ``option_idx`` and/or free ``text`` (+ attachments); an empty answer is 400, an out-of-range ``option_idx`` is 400. Any real answer — including a counter-question typed as text — flips the card to ``answered`` and stamps ``answered_ts``; if the reply did not settle the original question the agent opens a NEW card (never reopens this one). Answering an already-answered card is a 409 (revise via PUT instead); an expired card is a 409 too (terminal — if the question still matters the agent opens a NEW card). When the card is bound to a task step (create_reply_card with an explicit ``linked_task``), the FIRST answer also releases the waiting_owner hold — the server restores the step (and the task, once its last bound card is answered) to in_progress; the agent then advances the work itself. Fans one ``reply_card`` SSE delta (badge −1; the agent's own connection receives it and refetches the card for the full answer context).",
         "operationId": "handle_answer_reply_card_api_reply_cards__card_id__answer_post",
         "parameters": [
           {
@@ -16162,7 +16180,7 @@
         "summary": "Read the 系統互動 block of the boot context — the shared studio handbook every agent reads at boot. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
         "x-mcp": {
           "include": true,
-          "order": 105,
+          "order": 104,
           "name": "get_system_interaction",
           "description": "Read the 系統互動 block of the boot context — the shared studio handbook every agent reads at boot. Folded: the owner's edit when one exists, otherwise the shipped factory seed, with is_default saying which of the two you are holding and has_seed saying a factory version exists to go back to. The reply carries size_chars/cap_chars (this document's own size limit, in characters) and is_default/has_seed, so a caller can size an edit before making it and can tell an edited block from the shipped one.",
           "legacy": {
@@ -16228,7 +16246,7 @@
         "summary": "Replace the EDITABLE HALF of the 系統互動 block of the boot context ({body}) — the handbook every agent reads at boot. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. This document carries NO read-only head today (T-6f44, owner's decision 4 removed it), so the body IS the whole document; the head machinery still exists for the kinds that do carry one, and there is no way to write a head on any face. The stored result is judged against the doc.cap_chars.system_interaction cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_system_interaction always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.",
         "x-mcp": {
           "include": true,
-          "order": 106,
+          "order": 105,
           "name": "replace_system_interaction",
           "description": "Replace the EDITABLE HALF of the 系統互動 block of the boot context ({body}) — the handbook every agent reads at boot. body is REQUIRED and unknown keys are rejected; emptying a body that had content needs allow_shrink=true. This document carries NO read-only head today (T-6f44, owner's decision 4 removed it), so the body IS the whole document; the head machinery still exists for the kinds that do carry one, and there is no way to write a head on any face. The stored result is judged against the doc.cap_chars.system_interaction cap unconditionally, and the refusal tells you what you wrote, the cap, and what is already stored. The shipped seed is never overwritten, so reset_system_interaction always gets the factory text back; the version this write replaces is retained in the document history (a save that changes nothing retains nothing). Owner or admin assistant only.",
           "legacy": {
@@ -16286,7 +16304,7 @@
         "summary": "Restore the 系統互動 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.",
         "x-mcp": {
           "include": true,
-          "order": 107,
+          "order": 106,
           "name": "reset_system_interaction",
           "description": "Restore the 系統互動 block to the FACTORY text shipped with this build (idempotent tombstone of the overlay). No length cap is applied on this path — the factory text is part of the product, so no setting can block the way back to it. The overlay being discarded is retained in the document history, so the reset is itself recoverable. Owner or admin assistant only.",
           "legacy": {
@@ -16348,7 +16366,7 @@
         "summary": "List task types WITHOUT their long documents: each row is the type identity (type_key / display_name / purpose), its input fields and its assignee setting, plus the SIZES of sop_md and learnings and the cap each is judged against. The SOP and the learnings text are not on this answer at all — read the one type you picked with get_task_manual.",
         "x-mcp": {
           "include": true,
-          "order": 92,
+          "order": 91,
           "name": "list_task_manuals",
           "description": "List task types WITHOUT their long documents: each row is the type identity (type_key / display_name / purpose), its input fields and its assignee setting, plus the SIZES of sop_md and learnings and the cap each is judged against. The SOP and the learnings text are not on this answer at all — read the one type you picked with get_task_manual.",
           "legacy": {
@@ -16414,7 +16432,7 @@
         "summary": "Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate → 409; assignee = owner/admin agent). An outsource assignee may select runtime claude/codex; absent = claude.",
         "x-mcp": {
           "include": true,
-          "order": 93,
+          "order": 92,
           "name": "create_task_manual",
           "description": "Create a task type: pass display_name; the server mints and returns the tm- type_key id (legacy explicit type_key still accepted; duplicate → 409; assignee = owner/admin agent). An outsource assignee may select runtime claude/codex; absent = claude.",
           "legacy": {
@@ -16483,7 +16501,7 @@
         "summary": "Delete a task type (open tasks of the type → 409).",
         "x-mcp": {
           "include": true,
-          "order": 96,
+          "order": 95,
           "name": "delete_task_manual",
           "description": "Delete a task type (open tasks of the type → 409).",
           "legacy": {
@@ -16550,7 +16568,7 @@
         "summary": "Read one task manual (purpose/fields/SOP/learnings/assignee). The SOP and the learnings are judged by two SEPARATE caps: read sop_md_cap_chars and learnings_cap_chars. The older cap_chars is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read sop_md_cap_chars for the SOP.",
         "x-mcp": {
           "include": true,
-          "order": 94,
+          "order": 93,
           "name": "get_task_manual",
           "description": "Read one task manual (purpose/fields/SOP/learnings/assignee). The SOP and the learnings are judged by two SEPARATE caps: read sop_md_cap_chars and learnings_cap_chars. The older cap_chars is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read sop_md_cap_chars for the SOP.",
           "legacy": {
@@ -16627,7 +16645,7 @@
         "summary": "Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent). An outsource assignee may select runtime claude/codex; absent = claude. Only the fields you name change, so omitting a field is safe — but unknown keys are rejected rather than dropped: the learnings doc goes in learnings (NOT text — that is write_task_learnings' field name). The SOP and the learnings are judged by two SEPARATE caps: read sop_md_cap_chars and learnings_cap_chars. The older cap_chars is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read sop_md_cap_chars for the SOP.",
         "x-mcp": {
           "include": true,
-          "order": 95,
+          "order": 94,
           "name": "update_task_manual",
           "description": "Edit a task manual (partial; content fields agent-editable; assignee = owner/admin agent). An outsource assignee may select runtime claude/codex; absent = claude. Only the fields you name change, so omitting a field is safe — but unknown keys are rejected rather than dropped: the learnings doc goes in learnings (NOT text — that is write_task_learnings' field name). The SOP and the learnings are judged by two SEPARATE caps: read sop_md_cap_chars and learnings_cap_chars. The older cap_chars is DEPRECATED — it carries the LEARNINGS cap only and says nothing about sop_md, so read sop_md_cap_chars for the SOP.",
           "legacy": {
@@ -16706,7 +16724,7 @@
         "summary": "Whole-doc replace of a type's learnings (task-close write-back). The doc text goes in text (NOT learnings — that is update_task_manual's field name); text is REQUIRED and unknown keys are rejected. Wiping existing learnings needs allow_shrink=true.",
         "x-mcp": {
           "include": true,
-          "order": 97,
+          "order": 96,
           "name": "write_task_learnings",
           "description": "Whole-doc replace of a type's learnings (task-close write-back). The doc text goes in text (NOT learnings — that is update_task_manual's field name); text is REQUIRED and unknown keys are rejected. Wiping existing learnings needs allow_shrink=true.",
           "legacy": {
@@ -16785,7 +16803,7 @@
         "summary": "Patch a type's learnings by unique anchors ({edits:[{old,new}]}) — the learnings twin of patch_lessons, so the write cost scales with the CHANGE, not the whole (30k-char) doc, and re-typing the whole doc can no longer silently drop content. Edits apply in order; a non-empty old must match the current learnings EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400, zero writes — the unique anchor also acts as an optimistic lock); an empty old appends. Wiping the doc, or shrinking it below a tenth, needs allow_shrink=true.",
         "x-mcp": {
           "include": true,
-          "order": 98,
+          "order": 97,
           "name": "patch_task_learnings",
           "description": "Patch a type's learnings by unique anchors ({edits:[{old,new}]}) — the learnings twin of patch_lessons, so the write cost scales with the CHANGE, not the whole (30k-char) doc, and re-typing the whole doc can no longer silently drop content. Edits apply in order; a non-empty old must match the current learnings EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400, zero writes — the unique anchor also acts as an optimistic lock); an empty old appends. Wiping the doc, or shrinking it below a tenth, needs allow_shrink=true.",
           "legacy": {
@@ -16864,7 +16882,7 @@
         "summary": "Patch a type's SOP (sop_md) by unique anchors ({edits:[{old,new}]}) — send only the section that changed, instead of re-typing the whole SOP. USE THIS WHENEVER YOU ARE AMENDING AN SOP THAT ALREADY HAS CONTENT. update_task_manual{sop_md} is a wholesale replace, so if anyone else edited the SOP between your read and your write, your copy is stale and the replace silently deletes their section — and because your stale copy is usually the LONGER one, no guard fires and nothing tells you. A patch cannot do that: a non-empty old must match the current sop_md EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400 that names which edit failed and which tool to re-read with, zero writes), so a concurrent write turns into a refusal you can see. Edits apply in order; an empty old appends. Wiping the doc, or shrinking it below a tenth, needs allow_shrink=true — for an honest rewrite from scratch use update_task_manual. The sop_md cap is judged on the RESULT and allow_shrink is not a bypass. Re-read with get_task_manual after a refusal.",
         "x-mcp": {
           "include": true,
-          "order": 99,
+          "order": 98,
           "name": "patch_task_sop",
           "description": "Patch a type's SOP (sop_md) by unique anchors ({edits:[{old,new}]}) — send only the section that changed, instead of re-typing the whole SOP. USE THIS WHENEVER YOU ARE AMENDING AN SOP THAT ALREADY HAS CONTENT. update_task_manual{sop_md} is a wholesale replace, so if anyone else edited the SOP between your read and your write, your copy is stale and the replace silently deletes their section — and because your stale copy is usually the LONGER one, no guard fires and nothing tells you. A patch cannot do that: a non-empty old must match the current sop_md EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400 that names which edit failed and which tool to re-read with, zero writes), so a concurrent write turns into a refusal you can see. Edits apply in order; an empty old appends. Wiping the doc, or shrinking it below a tenth, needs allow_shrink=true — for an honest rewrite from scratch use update_task_manual. The sop_md cap is judged on the RESULT and allow_shrink is not a bypass. Re-read with get_task_manual after a refusal.",
           "legacy": {
@@ -17348,7 +17366,7 @@
         "summary": "Register a deliverable (file, image, or link) onto the task's artifact set — the pinned deliverables shown on the task card. Append-only and repeatable: call it again to pin more. For a file or image, first upload the bytes via the chat-attachments upload to get an attachment id, then call this with kind=file|image and that attachment_id. For a link (e.g. a PR url) call it with kind=link and url — no upload needed. label is an optional display name (a link title such as \"PR #123\"). Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.",
         "x-mcp": {
           "include": true,
-          "order": 84,
+          "order": 83,
           "name": "add_task_artifact",
           "description": "Register a deliverable (file, image, or link) onto the task's artifact set — the pinned deliverables shown on the task card. Append-only and repeatable: call it again to pin more. For a file or image, first upload the bytes via the chat-attachments upload to get an attachment id, then call this with kind=file|image and that attachment_id. For a link (e.g. a PR url) call it with kind=link and url — no upload needed. label is an optional display name (a link title such as \"PR #123\"). Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.",
           "legacy": {
@@ -17426,7 +17444,7 @@
         "summary": "Un-pin (remove) one artifact from a task's artifact set — the counterpart to add_task_artifact. You may remove artifacts from a task you are the executor of (the owner/assistant may remove on any task). Give the task id and the artifact id (the id returned when it was added, or from get_task's artifacts). The underlying file blob is left intact; only the pin on the card is removed. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in both directions — remove is refused with the same 409 as add. So swap a deliverable BEFORE you close the task, not after; after the close it can neither be removed nor put back. Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.",
         "x-mcp": {
           "include": true,
-          "order": 85,
+          "order": 84,
           "name": "remove_task_artifact",
           "description": "Un-pin (remove) one artifact from a task's artifact set — the counterpart to add_task_artifact. You may remove artifacts from a task you are the executor of (the owner/assistant may remove on any task). Give the task id and the artifact id (the id returned when it was added, or from get_task's artifacts). The underlying file blob is left intact; only the pin on the card is removed. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in both directions — remove is refused with the same 409 as add. So swap a deliverable BEFORE you close the task, not after; after the close it can neither be removed nor put back. Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.",
           "legacy": {
@@ -17495,7 +17513,7 @@
         "summary": "Take over a reassigned task (the new executor claims it): clears the reassigning lock and fires the predecessor worker. The task status stays derived from its steps; only the lock is cleared. 409 if the task is not under the reassigning lock.",
         "x-mcp": {
           "include": true,
-          "order": 83,
+          "order": 82,
           "name": "claim_task",
           "description": "Take over a reassigned task (the new executor claims it): clears the reassigning lock and fires the predecessor worker. The task status stays derived from its steps; only the lock is cleared. 409 if the task is not under the reassigning lock.",
           "legacy": {
@@ -17564,7 +17582,7 @@
         "summary": "Report the task's close-out follow-ups done (terminal tasks only; idempotent).",
         "x-mcp": {
           "include": true,
-          "order": 81,
+          "order": 80,
           "name": "report_task_closeout",
           "description": "Report the task's close-out follow-ups done (terminal tasks only; idempotent).",
           "legacy": {
@@ -17643,7 +17661,7 @@
         "summary": "Replace the blocking-deps list wholesale.",
         "x-mcp": {
           "include": true,
-          "order": 80,
+          "order": 79,
           "name": "set_task_deps",
           "description": "Replace the blocking-deps list wholesale.",
           "legacy": {
@@ -18111,99 +18129,11 @@
         "summary": "Reassign a task to a member or a fresh outsource worker (executor-guarded: a plain agent may reassign only a task it executes; owner/admin drive any task). Caller authorization (正職授權矩陣, T-23cf): owner/admin may hand a task to any active member or 發包 it to a fresh outsource worker; a 一般正職 may only turn its own task into a 發包 (a member target is 403); an outsource worker may not reassign at all. An outsource target uses target.runtime claude/codex (absent = claude), lands the task unassigned for the scheduler to spawn under the global parallel cap, and enters the reassigning handover state.",
         "x-mcp": {
           "include": true,
-          "order": 82,
+          "order": 81,
           "name": "reassign_task",
           "description": "Reassign a task to a member or a fresh outsource worker (executor-guarded: a plain agent may reassign only a task it executes; owner/admin drive any task). Caller authorization (正職授權矩陣, T-23cf): owner/admin may hand a task to any active member or 發包 it to a fresh outsource worker; a 一般正職 may only turn its own task into a 發包 (a member target is 403); an outsource worker may not reassign at all. An outsource target uses target.runtime claude/codex (absent = claude), lands the task unassigned for the scheduler to spawn under the global parallel cap, and enters the reassigning handover state.",
           "legacy": {
             "descriptor": "{\n      \"description\": \"Reassign a task to a member or a fresh outsource worker (executor-guarded: a plain agent may reassign only a task it executes; owner/admin drive any task). Caller authorization (正職授權矩陣, T-23cf): owner/admin may hand a task to any active member or 發包 it to a fresh outsource worker; a 一般正職 may only turn its own task into a 發包 (a member target is 403); an outsource worker may not reassign at all. An outsource target uses target.runtime claude/codex (absent = claude), lands the task unassigned for the scheduler to spawn under the global parallel cap, and enters the reassigning handover state.\",\n      \"inputSchema\": {\n        \"properties\": {\n          \"note\": {\n            \"anyOf\": [\n              {\n                \"type\": \"string\"\n              },\n              {\n                \"type\": \"null\"\n              }\n            ],\n            \"default\": null,\n            \"description\": \"What the successor needs in order to pick the work up. The only check is a length cap, and a blank or omitted note is not an error - but it is not neutral either: the note is written onto the task ONLY when it is non-blank, so omitting it leaves whatever handover_note an EARLIER reassign put there, still carrying that author and timestamp, sitting on the card as though it described this handover. The takeover message itself is server-authored and goes out either way; your note is simply appended to it when present. On an outsource reassign there is no successor to message yet - the worker has not been minted - so the note reaches the task row only.\",\n            \"title\": \"Note\"\n          },\n          \"target\": {\n            \"description\": \"Where the task goes next. kind is required and must be 'member' or 'outsource' (anything else is a 400) - and the two branches read DIFFERENT sub-fields, which is where this call loses things quietly. member_id is a DECLARED field of target, so strict decoding accepts it under EITHER kind; send it with kind 'outsource' and the outsource branch never reads it, so it simply vanishes - no 422, no warning. The reverse direction is destructive rather than merely lossy: kind 'member' does not just ignore runtime, model, effort and machine, it RESETS the outsource spec already sitting on the task row - runtime back to 'claude', model, effort and machine blanked, the explicit-dispatch flag cleared - and none of those columns appear in any response, so nothing you can read afterwards shows they were ever there. kind 'member' also needs member_id (owner or admin-agent only; the target must be an active, non-outsource, non-warden roster row, and naming the current executor is a 409). kind 'outsource' validates runtime and effort, and resolves machine ONLY when you send a non-blank one - an id that resolves to nothing is a 400 there, but omitting the field is asked nothing at all: it is then filled from the type manual or from you the dispatcher, and when neither of those names a machine either it stays EMPTY, the reassign still answers 200, and the worker minted for the task does not boot until somebody names a machine on it (a no_machine_selected receipt on the worker row is the only trace). It also names no successor: the task lands unassigned and the scheduler mints a worker for it later, under the global cap.\",\n            \"properties\": {\n              \"effort\": {\n                \"anyOf\": [\n                  {\n                    \"type\": \"string\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ],\n                \"default\": null,\n                \"title\": \"Effort\"\n              },\n              \"kind\": {\n                \"title\": \"Kind\",\n                \"type\": \"string\"\n              },\n              \"machine\": {\n                \"anyOf\": [\n                  {\n                    \"type\": \"string\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ],\n                \"default\": null,\n                \"title\": \"Machine\"\n              },\n              \"member_id\": {\n                \"anyOf\": [\n                  {\n                    \"type\": \"string\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ],\n                \"default\": null,\n                \"title\": \"Member Id\"\n              },\n              \"model\": {\n                \"anyOf\": [\n                  {\n                    \"type\": \"string\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ],\n                \"default\": null,\n                \"title\": \"Model\"\n              },\n              \"runtime\": {\n                \"anyOf\": [\n                  {\n                    \"enum\": [\n                      \"claude\",\n                      \"codex\"\n                    ],\n                    \"type\": \"string\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ],\n                \"default\": null,\n                \"title\": \"Runtime\"\n              }\n            },\n            \"required\": [\n              \"kind\"\n            ],\n            \"type\": \"object\",\n            \"additionalProperties\": false\n          },\n          \"task_id\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"task_id\",\n          \"target\"\n        ],\n        \"additionalProperties\": false,\n        \"type\": \"object\"\n      },\n      \"name\": \"reassign_task\"\n    }"
-          }
-        }
-      }
-    },
-    "/api/tasks/{task_id}/steps/{step_id}/gate": {
-      "post": {
-        "description": "Arm a gate step (MCP ``open_gate`` — an entry into waiting_owner): opens a reply card through the M2 create machinery (same validation, same companion chat message), binds it to the step (step → waiting_owner, reply_card_id set) and flips the task to waiting_owner (a step inside a parallel group holds only its lane). Any non-terminal step is armable — a plain non-gate step too (the ad-hoc 請示 twin of create_reply_card; is_gate is a plan property and is not rewritten). The owner answers through the EXISTING reply-card answer route, where the server restores the step/task to in_progress; it still never advances the work forward (the agent reports done itself). An already-terminal step (``done`` / ``superseded`` — frozen replan history) → 409; a task that is neither in_progress nor waiting_owner → 409.",
-        "operationId": "handle_open_task_gate_api_tasks__task_id__steps__step_id__gate_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "title": "Task Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "step_id",
-            "required": true,
-            "schema": {
-              "title": "Step Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReplyCardCreateDTO"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReplyCardDTO"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
-                }
-              }
-            },
-            "description": "Validation error (unified error envelope)."
-          },
-          "4XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
-                }
-              }
-            },
-            "description": "Client error (unified error envelope)."
-          },
-          "5XX": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
-                }
-              }
-            },
-            "description": "Server error (unified error envelope)."
-          }
-        },
-        "summary": "Arm a gate step: opens the reply card the owner must answer. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).",
-        "x-mcp": {
-          "include": true,
-          "order": 79,
-          "name": "open_gate",
-          "description": "Arm a gate step: opens the reply card the owner must answer. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).",
-          "legacy": {
-            "descriptor": "{\n      \"description\": \"Arm a gate step: opens the reply card the owner must answer. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).\",\n      \"inputSchema\": {\n        \"$defs\": {\n          \"ChatAttachmentInputDTO\": {\n            \"description\": \"An attachment carried on a posted chat message — either INLINE BYTES or a\\nREFERENCE to a blob already in the shared attachment store.\\n\\nInline: ``data_b64`` is the bytes, base64-encoded — a data-URI\\n(``data:<mime>;base64,....``) OR bare base64 (the handler strips a\\n``data:...;base64,`` prefix if present). ``mime`` and ``filename`` are\\noptional: an omitted ``mime`` is sniffed for images (else\\n``application/octet-stream``); an omitted ``filename`` defaults for pasted\\nimages.\\n\\nReference: ``id`` names an EXISTING blob (minted by\\n``POST /api/chat/attachments`` — the streaming upload seam that keeps file\\nbytes out of a JSON tool call). The stored blob's mime/filename are\\nauthoritative: ``filename``/``mime`` sent alongside ``id`` are IGNORED (so\\nthe upload response ``{id, mime, filename}`` can be pasted back verbatim).\\nAn unknown ``id`` is a 400; carrying BOTH ``id`` and ``data_b64`` is a 400\\n(ambiguous intent). An item with neither ``id`` nor ``data_b64`` is a\\n400 (T-e2b2: it used to be dropped silently, so a sender that named a file it\\nnever sent got a success and the recipient got nothing). The reply-card ANSWER face is\\ninline-only: it decodes ``data_b64`` and has never resolved ``id`` references,\\nso an item carrying only an ``id`` there is a 400 (T-e2b2 — it used to be\\ndropped silently).\",\n            \"properties\": {\n              \"data_b64\": {\n                \"default\": \"\",\n                \"title\": \"Data B64\",\n                \"type\": \"string\"\n              },\n              \"filename\": {\n                \"anyOf\": [\n                  {\n                    \"type\": \"string\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ],\n                \"default\": null,\n                \"title\": \"Filename\"\n              },\n              \"id\": {\n                \"anyOf\": [\n                  {\n                    \"type\": \"string\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ],\n                \"default\": null,\n                \"title\": \"Id\"\n              },\n              \"mime\": {\n                \"anyOf\": [\n                  {\n                    \"type\": \"string\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ],\n                \"default\": null,\n                \"title\": \"Mime\"\n              }\n            },\n            \"title\": \"ChatAttachmentInputDTO\",\n            \"type\": \"object\",\n            \"additionalProperties\": false\n          }\n        },\n        \"properties\": {\n          \"attachments\": {\n            \"items\": {\n              \"$ref\": \"#/$defs/ChatAttachmentInputDTO\"\n            },\n            \"title\": \"Attachments\",\n            \"type\": \"array\"\n          },\n          \"body\": {\n            \"default\": \"\",\n            \"description\": \"The gate's full text - the background, the consequences and the trade-offs behind the approval being asked for. It is stored as sent with NO validation, so omitting it is not an error: the gate opens with an empty body and answers 200, leaving the owner a summary and some buttons with nothing explaining what he is approving. Nothing warns you that it went out empty.\",\n            \"title\": \"Body\",\n            \"type\": \"string\"\n          },\n          \"kind\": {\n            \"enum\": [\n              \"decision\",\n              \"action\"\n            ],\n            \"title\": \"Kind\",\n            \"type\": \"string\"\n          },\n          \"options\": {\n            \"items\": {\n              \"type\": \"string\"\n            },\n            \"title\": \"Options\",\n            \"type\": \"array\"\n          },\n          \"step_id\": {\n            \"type\": \"string\"\n          },\n          \"summary\": {\n            \"title\": \"Summary\",\n            \"type\": \"string\"\n          },\n          \"task_id\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"task_id\",\n          \"step_id\",\n          \"kind\",\n          \"summary\",\n          \"options\"\n        ],\n        \"additionalProperties\": false,\n        \"type\": \"object\"\n      },\n      \"name\": \"open_gate\"\n    }"
           }
         }
       }
@@ -18386,7 +18316,7 @@
     },
     "/api/tasks/{task_id}/steps/{step_id}/status": {
       "post": {
-        "description": "Agent-reported step status (MCP ``update_step_status``): ``pending`` → ``in_progress`` → ``done`` — ``waiting_owner`` is NOT agent-reportable on either side (a step enters it only by opening a reply card: open_gate / create_reply_card auto-bind, and leaves it only when that card is answered, where the server restores in_progress), so reporting ``waiting_owner`` is a 400 and a move out of it is a 409; other illegal transitions are a 409. ``superseded`` is likewise not the agent's lever: the server freezes a replaced answered-card step itself on submit_plan (T-1aea), so reporting ``superseded`` is a 400 and no report moves a step out of it (409 — terminal).",
+        "description": "Agent-reported step status (MCP ``update_step_status``): ``pending`` → ``in_progress`` → ``done`` — ``waiting_owner`` is NOT agent-reportable on either side (a step enters it only by opening a reply card: create_reply_card carrying an explicit ``linked_task`` {task_id, step_id}, and leaves it only when that card is answered, where the server restores in_progress), so reporting ``waiting_owner`` is a 400 and a move out of it is a 409; other illegal transitions are a 409. ``superseded`` is likewise not the agent's lever: the server freezes a replaced answered-card step itself on submit_plan (T-1aea), so reporting ``superseded`` is a 400 and no report moves a step out of it (409 — terminal).",
         "operationId": "handle_update_task_step_status_api_tasks__task_id__steps__step_id__status_post",
         "parameters": [
           {
@@ -18729,7 +18659,7 @@
         "summary": "List the saved custom themes — id and name only, in list order (owner/admin agent).",
         "x-mcp": {
           "include": true,
-          "order": 117,
+          "order": 116,
           "name": "list_themes",
           "description": "List the saved custom themes — id and name only, in list order (owner/admin agent).",
           "legacy": {
@@ -18798,7 +18728,7 @@
         "summary": "Delete one custom theme; deleting the active one resets display_theme to \"\".",
         "x-mcp": {
           "include": true,
-          "order": 120,
+          "order": 119,
           "name": "delete_theme",
           "description": "Delete one custom theme; deleting the active one resets display_theme to \"\".",
           "legacy": {
@@ -18865,7 +18795,7 @@
         "summary": "Read one saved custom theme (unknown id \u2192 404).",
         "x-mcp": {
           "include": true,
-          "order": 118,
+          "order": 117,
           "name": "get_theme",
           "description": "Read one saved custom theme (unknown id \u2192 404).",
           "legacy": {
@@ -18942,7 +18872,7 @@
         "summary": "Create or replace ONE custom theme; the bundle's id must match the path (owner/admin agent).",
         "x-mcp": {
           "include": true,
-          "order": 119,
+          "order": 118,
           "name": "put_theme",
           "description": "Create or replace ONE custom theme; the bundle's id must match the path (owner/admin agent).",
           "legacy": {

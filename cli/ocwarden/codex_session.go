@@ -396,61 +396,6 @@ func codexAppReader(r io.Reader) <-chan appServerMessage {
 	return out
 }
 
-func (s *codexSession) openReplyCard(question map[string]any, bind string) string {
-	header, _ := question["header"].(string)
-	body, _ := question["question"].(string)
-	secret, _ := question["isSecret"].(bool)
-	kind := "decision"
-	options := []string{}
-	if secret {
-		kind = "action"
-		options = []string{"已完成（不要在卡片中貼秘密）"}
-		body += "\n\n這是秘密資料請求；請只完成所需動作，不要把秘密貼進卡片。"
-	} else if raw, ok := question["options"].([]any); ok {
-		for _, item := range raw {
-			if option, ok := item.(map[string]any); ok {
-				if label, ok := option["label"].(string); ok && strings.TrimSpace(label) != "" {
-					options = append(options, label)
-				}
-			}
-		}
-	}
-	if len(options) == 0 {
-		options = []string{"請在文字回覆中回答"}
-	}
-	if len(options) > 4 {
-		options = options[:4]
-	}
-	if strings.TrimSpace(header) == "" {
-		header = body
-	}
-	if strings.TrimSpace(header) == "" {
-		header = "Codex 需要你的回覆"
-	}
-	payload := map[string]any{
-		"kind": kind, "summary": header, "body": body,
-		"options": options, "bind": bind,
-	}
-	raw, _ := json.Marshal(payload)
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(s.base, "/")+
-		"/api/reply-cards", bytes.NewReader(raw))
-	if err != nil {
-		return ""
-	}
-	req.Header.Set("Authorization", "Bearer "+s.token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	s.reportRejectedCodexPost("/api/reply-cards", resp.StatusCode)
-	var result map[string]any
-	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result)
-	id, _ := result["id"].(string)
-	return id
-}
-
 func jsonNumber(value any) float64 {
 	number, _ := value.(float64)
 	return number
@@ -596,6 +541,29 @@ func (s *codexSession) recordCompaction(params map[string]any) {
 	s.activity("context compacted · count %d", s.compactions)
 }
 
+// codexOpenYourOwnCardMessage is what Codex gets back instead of a card the
+// warden minted for it: an instruction to open the card ITSELF, through the
+// tool, where it can name the task and step the question is actually about.
+//
+// 🔴 THE SECRET WARNING RIDES HERE, AND IT HAS TO. While the warden opened the
+// card it inspected question["isSecret"] and, for a credential ask, put "do not
+// paste the secret into the card" into the card body itself. Nothing executes
+// that path any more. If the sentence did not move into THIS text, Codex would
+// go and open its own card for a password or an API key with nothing anywhere
+// telling it not to type the secret into the body — the guard would be gone and
+// its absence would be silent, which is the failure mode this whole ticket is
+// about.
+func codexOpenYourOwnCardMessage(question map[string]any) string {
+	message := "OffiCraft does not open reply cards on your behalf. Open it yourself with the " +
+		"create_reply_card tool, then end this turn and wait for its SSE answer event. " +
+		"linked_task is required: send {\"task_id\": ..., \"step_id\": ...} for the step this " +
+		"question is about, or null if it is not about a task."
+	if secret, _ := question["isSecret"].(bool); secret {
+		message += " 這是秘密資料請求；請只完成所需動作，不要把秘密貼進卡片。"
+	}
+	return message
+}
+
 func (s *codexSession) handleServerRequest(msg appServerMessage) {
 	method, _ := msg["method"].(string)
 	s.activity("native user-input request → OffiCraft reply card")
@@ -608,24 +576,25 @@ func (s *codexSession) handleServerRequest(msg appServerMessage) {
 	enc := json.NewEncoder(s.in)
 	switch method {
 	case "item/tool/requestUserInput":
+		// T-18: the warden no longer opens the card ON CODEX'S BEHALF. It could
+		// not do the job honestly — it holds no task_id and no step_id, so every
+		// card it minted here went out asking the server to GUESS the binding,
+		// and a guess that missed produced a card with no 等我回覆 hold that the
+		// owner's answer would later be refused for. create_reply_card now
+		// requires an explicit linked_task, and the only party that knows what
+		// work this question is about is Codex itself. So this arm REFUSES and
+		// says so, the same shape mcpServer/elicitation/request has always used.
+		//
+		// The structure is unchanged: this always answered Codex with a line of
+		// text rather than parking it — a sidecar that made the model wait on a
+		// terminal round-trip loses the whole turn the moment the connection
+		// drops. Only the sentence is different.
 		answers := map[string]any{}
 		questions, _ := params["questions"].([]any)
-		for index, raw := range questions {
+		for _, raw := range questions {
 			question, _ := raw.(map[string]any)
-			bind := "none"
-			if index == 0 {
-				bind = ""
-			}
-			cardID := s.openReplyCard(question, bind)
 			qid, _ := question["id"].(string)
-			message := "Deferred to OffiCraft; end this turn and wait for the reply-card event."
-			if cardID != "" {
-				message = "Deferred to OffiCraft reply card " + cardID +
-					"; end this turn and wait for its SSE answer event."
-			} else {
-				message = "OffiCraft reply-card creation failed; do not wait for terminal input. " +
-					"Continue if safe or report the failure through OffiCraft chat."
-			}
+			message := codexOpenYourOwnCardMessage(question)
 			answers[qid] = map[string]any{"answers": []string{message}}
 		}
 		_ = enc.Encode(appServerMessage{"id": id, "result": map[string]any{"answers": answers}})

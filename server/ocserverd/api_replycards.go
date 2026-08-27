@@ -42,7 +42,6 @@ import (
 	"errors"
 	"net/http"
 	"sort"
-	"strconv"
 )
 
 const (
@@ -281,172 +280,125 @@ func (s *apiServer) writeReplyCard(w http.ResponseWriter, c ReplyCard) {
 	writeJSON(w, http.StatusOK, dto)
 }
 
-// replyCardBindNone is the create-time opt-out (T-4166 review B3): the asker
-// declares "this ask is not about my task", and the card opens as a plain
-// unbound 請示 no matter what work the asker holds. It exists because
-// fail-closed without an escape is a trap: an agent whose task has no current
-// step would otherwise have NO route to a plain chat ask at all (open_gate
-// binds a specific step by definition, post_chat raises no 等我回覆 red dot).
-// An EXPLICIT opt-out is the honest form of "task: null" — the asker said so,
-// rather than the server quietly deciding it and hoping someone notices.
-const replyCardBindNone = "none"
+// ── the ONE card-open entrance (T-18) ────────────────────────────────────────
+//
+// Until T-18 a card could be opened two ways — create_reply_card, which
+// INFERRED its task/step binding from whatever work the caller happened to
+// hold, and open_gate, which named the step explicitly. The inference is what
+// this design deletes. Its failure mode was silence: an asker who never thought
+// about binding got a 200 and a card with no 等我回覆 hold, so the task kept
+// marching through its remaining steps into done while the agent waited, and
+// the owner's eventual answer was refused 409 forever (the code called it the
+// orphan factory).
+//
+// 🔑 WHY A REQUIRED FIELD AND NOT A WRITTEN RULE. The old default was "say
+// nothing → the server guesses → if it cannot guess, something quiet happens".
+// The new default is REFUSAL: say nothing and the call does not go out at all,
+// and the 400 hands you both legal spellings. A rule someone has to remember
+// and a parameter you cannot omit are not the same strength of guarantee — the
+// second cannot be forgotten, only answered.
+//
+// So the field is required with NO default, and its two legal shapes are the
+// two honest answers to "is this ask about a task?": null (no) and
+// {task_id, step_id} (yes, this step).
 
-// pickCurrentStep resolves the CURRENT step of a task for auto-binding, and
-// explains itself when it cannot. "Current" is the single in_progress step —
-// or, when none is in_progress, the single waiting_owner step (a follow-up ask
-// on the same held step).
-//
-// PARALLEL LANES ARE NOT AMBIGUITY (T-4166 review B2). parallel_group is a
-// first-class plan shape whose whole definition is "several steps run at once",
-// so treating 2+ in_progress steps as undecidable would refuse a legal, already
-// supported state — armStepWithCard has always accepted a card on a lane step,
-// and since the T-9ca5 ruling (any step 等我回覆 → task 等我回覆) arming ANY lane
-// derives the WHOLE task to waiting_owner. That is what makes the choice safe
-// rather than a guess: the hold this produces is byte-identical whichever lane
-// carries the card, so picking the lowest order_idx lane is a deterministic tie-
-// break, not an opinion about which lane the question is about. The lane's own
-// reply_card_id makes the choice visible in get_task.
-//
-// What stays undecidable: candidates spread across DIFFERENT parallel groups
-// (or a mix of grouped and ungrouped) — there the task-level hold is the same
-// but no single lane is the natural carrier, and 0 candidates, where there is
-// no step to hold at all. Those return a reason.
-func pickCurrentStep(task Task, steps []TaskStep) (*TaskStep, string) {
-	pick := func(status string) []int {
-		var idx []int
-		for i := range steps {
-			if steps[i].Status == status {
-				idx = append(idx, i)
-			}
-		}
-		return idx
-	}
-	candidates := pick(StepStatusInProgress)
-	level := "in_progress"
-	if len(candidates) == 0 {
-		candidates = pick(StepStatusWaitingOwner)
-		level = "waiting_owner"
-	}
-	if len(candidates) == 0 {
-		return nil, "no step of task '" + task.ID + "' is in_progress"
-	}
-	if len(candidates) == 1 {
-		return &steps[candidates[0]], ""
-	}
-	// 2+ candidates: one shared parallel group is a legal simultaneous shape.
-	group := steps[candidates[0]].ParallelGroup
-	lowest := candidates[0]
-	for _, i := range candidates {
-		if steps[i].ParallelGroup == "" || steps[i].ParallelGroup != group {
-			return nil, strconv.Itoa(len(candidates)) + " steps of task '" + task.ID +
-				"' are " + level + " across different parallel groups"
-		}
-		if steps[i].OrderIdx < steps[lowest].OrderIdx {
-			lowest = i
-		}
-	}
-	return &steps[lowest], ""
-}
+// linkedTaskRequiredMsg answers an OMITTED linked_task. It names BOTH legal
+// shapes on purpose: an error that only says "missing parameter" sends the
+// caller back to the docs, which is the same silence in a different costume.
+// ⚠️ conformance and api_replycards_test.go pin this SENTENCE, not just the
+// 400 — an error message is the whole feature here, and a later "tidy-up" to a
+// bare `invalid request` would quietly undo the ticket.
+const linkedTaskRequiredMsg = "linked_task is required and has no default — say whether " +
+	"this ask is about a task. Two legal shapes: send linked_task=null if it is NOT about a " +
+	"task (a plain unbound 請示), or linked_task={\"task_id\": \"t-...\", \"step_id\": " +
+	"\"ts-...\"} to bind the ask to the step it is about, which then holds in waiting_owner " +
+	"until you are answered. The server does not infer a binding from the work you hold: a " +
+	"guess that missed used to open a card with no 等我回覆 hold and tell you nothing."
 
-// inferCardTaskStep implements the AUTO card→step binding (owner design
-// 2026-07-14): a plain ask opened by an agent that is currently executing
-// EXACTLY ONE active task binds to that task and to its CURRENT step
-// (pickCurrentStep), and the step enters waiting_owner.
-//
-// T-4166 — FAIL-CLOSED on the ORPHAN shape, and only on it. The pre-fix code
-// degraded SILENTLY to a TASK-ONLY card (task_id set, task_step_id ""), which
-// is the orphan factory proven in production: no step binding means
-// armStepWithCard never runs, so NO waiting_owner hold exists — the agent
-// blocks on the owner while the task marches through its remaining steps into
-// done, and the card's answer route then rejects it with 409 forever. That
-// shape is now impossible (openReplyCard enforces the invariant); when the step
-// cannot be resolved the create is refused instead, with a reason that names
-// the fix.
-//
-// NOT fail-closed: an actor executing 2+ active tasks. Multi-tasking is the
-// system's ordinary state (nothing anywhere enforces one task per executor —
-// review B1 measured four live executors, one of them holding 4 tasks), and an
-// unbound card is NOT the orphan bug: with task_id empty the answer route's
-// terminal-task guard can never fire. Refusing there would break plain chat
-// asks for exactly the busiest agents to fix a DISPLAY gap. So: no clear single
-// active task → plain unbound 請示, as before.
-func (s *apiServer) inferCardTaskStep(actor string) (*Task, *TaskStep, string, error) {
-	tasks, err := s.dal.ListTasks()
-	if err != nil {
-		return nil, nil, "", err
-	}
-	var active []Task
-	for _, t := range tasks {
-		if t.ExecutorID == actor &&
-			(t.Status == TaskStatusInProgress || t.Status == TaskStatusWaitingOwner) {
-			active = append(active, t)
-		}
-	}
-	if len(active) != 1 {
-		// No task to hold, or no single clear one — a plain unbound 請示.
-		return nil, nil, "", nil
-	}
-	task := active[0]
-	steps, err := s.dal.ListTaskSteps(task.ID)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	step, why := pickCurrentStep(task, steps)
-	if step == nil {
-		return nil, nil, "cannot bind this ask to a step: " + why +
-			", so the ask can place no 等我回覆 hold and the task would keep running " +
-			"past it. Report the step you are on (update_step_status in_progress) and " +
-			"retry, open the ask on an explicit step with open_gate, or — if this ask " +
-			"is not about the task at all — send bind=\"none\" for a plain unbound 請示.", nil
-	}
-	return &task, step, "", nil
-}
+// linkedTaskStepRequiredMsg answers the ORPHAN SHAPE — a linked_task naming a
+// task but no step. T-4166 spent a whole ticket making that shape unreachable
+// through the old entrance; the new entrance must not hand it back. It is a 400
+// at the door rather than the mint's 500, so the caller gets a sentence it can
+// act on.
+const linkedTaskStepRequiredMsg = "linked_task.step_id is required: a card bound to a task " +
+	"but to no step places no 等我回覆 hold, so the task would finish underneath your " +
+	"question and the owner's answer would then be rejected for good. Send " +
+	"linked_task={\"task_id\": \"t-...\", \"step_id\": \"ts-...\"} naming the step you " +
+	"are on, or linked_task=null if this ask is not about a task."
 
-// POST /api/reply-cards — open a card. The initiator is ALWAYS the verified
-// JWT sub; the server mints the id, timestamps, and posts the companion chat
-// message (initiator → owner) the card rides in. When the initiator is the
-// executor of exactly one active task, the card AUTO-binds to that task's
-// current step (inferCardTaskStep) and the step enters waiting_owner — the
-// same state machine the explicit open_gate path drives (armStepWithCard).
-// When the initiator's single active task has no resolvable current step the
-// create is REFUSED with 409 (T-4166) — binding the task without a step is the
-// orphan factory. bind="none" opts out of auto-binding entirely (a declared
-// plain 請示); any other bind value is a 400.
+// linkedTaskTaskRequiredMsg is the mirror: a step with no task to hold.
+const linkedTaskTaskRequiredMsg = "linked_task.task_id is required: name the task the step " +
+	"belongs to, or send linked_task=null if this ask is not about a task."
+
+// POST /api/reply-cards — the ONLY way a reply card is opened. The initiator is
+// ALWAYS the verified JWT sub; the server mints the id, timestamps, and posts
+// the companion chat message (initiator → owner) the card rides in.
+//
+// linked_task is REQUIRED (see the block above). null opens a plain unbound
+// 請示. {task_id, step_id} arms that step: the guards below are the ones the
+// retired open_gate route carried, moved here verbatim with it — caller must
+// drive the task (403), task must be in_progress|waiting_owner (409), the step
+// must belong to the task (404) and must not be terminal (409) — and then the
+// step (and its task) enters waiting_owner carrying the card (armStepWithCard).
+// A plain non-gate step is armable too: is_gate is a plan-declared property
+// (submit_plan) and arming does not rewrite it. Only a terminal step is
+// refused: done (nothing waits any more) and superseded (frozen replan history
+// — its bound card pointer is audit trail and must not be re-armed).
 func (s *apiServer) HandleCreateReplyCardApiReplyCardsPost(w http.ResponseWriter, r *http.Request) {
 	var body ReplyCardCreateDTO
-	if !decodeJSONBodyRequired(w, r, &body, "kind", "summary", "options") {
+	sent, ok := decodeJSONBodyPresent(w, r, &body, "kind", "summary", "options")
+	if !ok {
 		return
 	}
-	bind := trimString(strOrEmpty(body.Bind))
-	if bind != "" && bind != replyCardBindNone {
-		writeError(w, http.StatusBadRequest,
-			"bind must be omitted (auto-bind) or \""+replyCardBindNone+"\" (a declared plain 請示)")
+	// PRESENCE, not nil-ness: `linked_task: null` is a DECLARATION (no task) and
+	// must pass, while an omitted key is the refusal this ticket exists for. A
+	// Go pointer folds both to nil, which is why the decoder reports the key set.
+	if !sent["linked_task"] {
+		writeError(w, http.StatusBadRequest, linkedTaskRequiredMsg)
 		return
 	}
-	var task *Task
+	var t *Task
 	var step *TaskStep
-	if bind != replyCardBindNone {
-		var unbindable string
+	taskID, stepID := "", ""
+	if link := body.LinkedTask; link != nil {
+		taskID = trimString(link.TaskId)
+		stepID = trimString(link.StepId)
+		if taskID == "" {
+			writeError(w, http.StatusBadRequest, linkedTaskTaskRequiredMsg)
+			return
+		}
+		if stepID == "" {
+			writeError(w, http.StatusBadRequest, linkedTaskStepRequiredMsg)
+			return
+		}
 		var err error
-		task, step, unbindable, err = s.inferCardTaskStep(currentActor(r))
+		t, err = s.resolveTask(taskID)
+		if err != nil {
+			writeResolveError(w, err, "task", taskID)
+			return
+		}
+		if !s.callerMayDriveTask(r, *t) {
+			writeError(w, http.StatusForbidden, "caller is not the task's executor")
+			return
+		}
+		if t.Status != TaskStatusInProgress && t.Status != TaskStatusWaitingOwner {
+			writeError(w, http.StatusConflict,
+				"a card can only bind to an in_progress or waiting_owner task (is "+t.Status+")")
+			return
+		}
+		step, err = s.dal.GetTaskStep(stepID)
 		if err != nil {
 			internalError(w, err)
 			return
 		}
-		// T-4166: a task whose current step cannot be resolved is REFUSED, never
-		// silently bound task-only — no card is minted, and the reason names the
-		// three exits (report the step / open_gate / bind="none").
-		if unbindable != "" {
-			writeError(w, http.StatusConflict, unbindable)
+		if step == nil || step.TaskID != taskID {
+			writeError(w, http.StatusNotFound, "step '"+stepID+"' not found")
 			return
 		}
-	}
-	taskID, stepID := "", ""
-	if task != nil {
-		taskID = task.ID
-	}
-	if step != nil {
-		stepID = step.ID
+		if StepIsTerminal(step.Status) {
+			writeError(w, http.StatusConflict, "step '"+stepID+"' is already "+step.Status)
+			return
+		}
 	}
 	card, problem, err := s.openReplyCard(currentActor(r), body, taskID, stepID)
 	if err != nil {
@@ -457,8 +409,8 @@ func (s *apiServer) HandleCreateReplyCardApiReplyCardsPost(w http.ResponseWriter
 		writeError(w, http.StatusBadRequest, problem)
 		return
 	}
-	if task != nil && step != nil {
-		if err := s.armStepWithCard(task, step, card.ID, requestTrigger(r)); err != nil {
+	if t != nil && step != nil {
+		if err := s.armStepWithCard(t, step, card.ID, requestTrigger(r)); err != nil {
 			internalError(w, err)
 			return
 		}

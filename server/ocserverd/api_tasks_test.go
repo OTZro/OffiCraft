@@ -193,7 +193,7 @@ func TestCanAgentTaskTransitionFullTable(t *testing.T) {
 		{TaskStatusInProgress, TaskStatusDone}:            true,
 	}
 	// waiting_owner is off BOTH sides now (T-68b7): the card lifecycle owns the
-	// entry (open_gate / create_reply_card) and the exit (the answer restores
+	// entry (create_reply_card with linked_task) and the exit (the answer restores
 	// in_progress). Neither {* → waiting_owner} nor {waiting_owner → *} is a
 	// legal agent report — the loop below asserts every waiting_owner pair false.
 	for _, from := range statuses {
@@ -393,9 +393,9 @@ func claimTask(t *testing.T, api *apiServer, taskID, executor string) *httptest.
 	return rec
 }
 
-// ── gate arming ──────────────────────────────────────────────────────────────
+// ── gate arming (create_reply_card + linked_task) ────────────────────────────
 
-func TestOpenGateArmsTheCardBindsTheStepAndFlipsTheTask(t *testing.T) {
+func TestBoundCardArmsTheGateStepAndFlipsTheTask(t *testing.T) {
 	api := newTasksTestServer(t)
 	task := createAdHocTask(t, api, "m-exec")
 	view := submitPlan(t, api, task.ID, "m-exec", []map[string]any{
@@ -409,14 +409,14 @@ func TestOpenGateArmsTheCardBindsTheStepAndFlipsTheTask(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	api.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost(rec,
-		taskReq(t, "POST", "/x", map[string]any{
+	api.HandleCreateReplyCardApiReplyCardsPost(rec,
+		taskReq(t, "POST", "/api/reply-cards", map[string]any{
 			"kind": "decision", "summary": "ship it?",
-			"options": []string{"ship", "hold"},
-		}, "m-exec", "agent"),
-		task.ID, gateStep.ID)
+			"options":     []string{"ship", "hold"},
+			"linked_task": map[string]any{"task_id": task.ID, "step_id": gateStep.ID},
+		}, "m-exec", "agent"))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("open gate: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("open bound card: %d %s", rec.Code, rec.Body.String())
 	}
 	card := decodeBody[replyCardDTO](t, rec)
 	if card.Status != replyCardStatusWaiting {
@@ -451,16 +451,18 @@ func TestOpenGateArmsTheCardBindsTheStepAndFlipsTheTask(t *testing.T) {
 
 }
 
-// openGateCard arms a gate/plain step via open_gate and returns the served card.
-func openGateCard(t *testing.T, api *apiServer, taskID, actor, stepID, summary string) replyCardDTO {
+// openCardOnStep arms a gate/plain step by opening a card with an explicit
+// linked_task — the ONE card-open entrance since T-18.
+func openCardOnStep(t *testing.T, api *apiServer, taskID, actor, stepID, summary string) replyCardDTO {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	api.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost(rec,
-		taskReq(t, "POST", "/x", map[string]any{
+	api.HandleCreateReplyCardApiReplyCardsPost(rec,
+		taskReq(t, "POST", "/api/reply-cards", map[string]any{
 			"kind": "decision", "summary": summary, "options": []string{"a", "b"},
-		}, actor, "agent"), taskID, stepID)
+			"linked_task": map[string]any{"task_id": taskID, "step_id": stepID},
+		}, actor, "agent"))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("open gate %s: %d %s", stepID, rec.Code, rec.Body.String())
+		t.Fatalf("open bound card on %s: %d %s", stepID, rec.Code, rec.Body.String())
 	}
 	return decodeBody[replyCardDTO](t, rec)
 }
@@ -477,7 +479,7 @@ func answerCard(t *testing.T, api *apiServer, cardID string, body map[string]any
 // TestManualWaitingOwnerReportIsRejected pins T-68b7 ②: waiting_owner is NOT an
 // agent-reportable status. A report of it on the step is a 400 (not the
 // state-machine 409) — waiting_owner is reachable only by opening a card
-// (open_gate / create_reply_card), and a rejected report moves nothing. (The
+// (create_reply_card with linked_task), and a rejected report moves nothing. (The
 // task-level status report route is gone — task status is derived, T-8449.)
 func TestManualWaitingOwnerReportIsRejected(t *testing.T) {
 	api := newTasksTestServer(t)
@@ -494,10 +496,10 @@ func TestManualWaitingOwnerReportIsRejected(t *testing.T) {
 		t.Fatalf("manual step waiting_owner report must 400, got %d %s",
 			rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "open_gate") ||
-		!strings.Contains(rec.Body.String(), "create_reply_card") {
-		t.Fatalf("step 400 must name open_gate + create_reply_card: %s",
-			rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "create_reply_card") ||
+		!strings.Contains(rec.Body.String(), "linked_task") {
+		t.Fatalf("step 400 must name the one lever that DOES enter waiting_owner "+
+			"(create_reply_card with linked_task): %s", rec.Body.String())
 	}
 	got, _ := api.dal.GetTask(task.ID)
 	if got.Status != TaskStatusInProgress {
@@ -517,7 +519,7 @@ func TestAnsweringACardResumesTheTaskAndStep(t *testing.T) {
 	})
 	gateStep := view.Steps[0]
 	startFirstStep(t, api, task.ID, "m-exec")
-	card := openGateCard(t, api, task.ID, "m-exec", gateStep.ID, "go?")
+	card := openCardOnStep(t, api, task.ID, "m-exec", gateStep.ID, "go?")
 
 	if rec := answerCard(t, api, card.ID,
 		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
@@ -562,7 +564,7 @@ func TestAnsweringACardOnATerminatedOrDoneTaskIsRejected(t *testing.T) {
 			})
 			gateStep := view.Steps[0]
 			startFirstStep(t, api, task.ID, "m-exec")
-			card := openGateCard(t, api, task.ID, "m-exec", gateStep.ID, "go?")
+			card := openCardOnStep(t, api, task.ID, "m-exec", gateStep.ID, "go?")
 
 			// closeTask is the shared terminal side-effect helper behind both
 			// the owner's terminate() and an eventual in_progress→done agent
@@ -634,8 +636,8 @@ func TestAnsweringOneOfTwoCardsKeepsTheTaskWaiting(t *testing.T) {
 		{"name": "q2", "dod": "d2"},
 	})
 	startFirstStep(t, api, task.ID, "m-exec")
-	card1 := openGateCard(t, api, task.ID, "m-exec", view.Steps[0].ID, "q1?")
-	card2 := openGateCard(t, api, task.ID, "m-exec", view.Steps[1].ID, "q2?")
+	card1 := openCardOnStep(t, api, task.ID, "m-exec", view.Steps[0].ID, "q1?")
+	card2 := openCardOnStep(t, api, task.ID, "m-exec", view.Steps[1].ID, "q2?")
 	if got, _ := api.dal.GetTask(task.ID); got.Status != TaskStatusWaitingOwner {
 		t.Fatalf("two armed cards: task must be waiting_owner, got %s", got.Status)
 	}
@@ -662,14 +664,12 @@ func TestAnsweringOneOfTwoCardsKeepsTheTaskWaiting(t *testing.T) {
 	}
 }
 
-// TestOpenGateArmsANonGatePlainStep pins the fix for the "open_gate cannot
-// raise a plain node" report: open_gate on an is_gate=false, not-done step of a
-// live task is a legitimate ad-hoc 請示. It arms the step exactly as
-// create_reply_card's auto-bind would (waiting_owner + bound card + task
-// follows) — the two card-open paths agree (armStepWithCard). is_gate is a
-// plan-declared property and is NOT flipped: the step becomes a card-carrying
-// plain step, the state resumeGateState already folds.
-func TestOpenGateArmsANonGatePlainStep(t *testing.T) {
+// TestBoundCardArmsANonGatePlainStep: a linked_task naming an is_gate=false,
+// not-done step of a live task is a legitimate ad-hoc 請示 and arms it
+// (waiting_owner + bound card + task follows). is_gate is a plan-declared
+// property and is NOT flipped: the step becomes a card-carrying plain step, the
+// state resumeGateState already folds.
+func TestBoundCardArmsANonGatePlainStep(t *testing.T) {
 	api := newTasksTestServer(t)
 	task := createAdHocTask(t, api, "m-exec")
 	view := submitPlan(t, api, task.ID, "m-exec", []map[string]any{
@@ -682,13 +682,13 @@ func TestOpenGateArmsANonGatePlainStep(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	api.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost(rec,
-		taskReq(t, "POST", "/x", map[string]any{
+	api.HandleCreateReplyCardApiReplyCardsPost(rec,
+		taskReq(t, "POST", "/api/reply-cards", map[string]any{
 			"kind": "decision", "summary": "which cloud?", "options": []string{"aws", "gcp"},
-		}, "m-exec", "agent"),
-		task.ID, plainStep.ID)
+			"linked_task": map[string]any{"task_id": task.ID, "step_id": plainStep.ID},
+		}, "m-exec", "agent"))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("open gate on a plain step must 200, got %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("binding a plain step must 200, got %d %s", rec.Code, rec.Body.String())
 	}
 	card := decodeBody[replyCardDTO](t, rec)
 	if card.Status != replyCardStatusWaiting {
@@ -702,9 +702,9 @@ func TestOpenGateArmsANonGatePlainStep(t *testing.T) {
 	if step.Status != StepStatusWaitingOwner || step.ReplyCardID != card.ID {
 		t.Fatalf("plain step must be waiting_owner + bound: %+v", step)
 	}
-	// is_gate stays false — open_gate arms, it does not rewrite the plan shape.
+	// is_gate stays false — arming does not rewrite the plan shape.
 	if step.IsGate {
-		t.Fatalf("open_gate must not flip is_gate on a plain step: %+v", step)
+		t.Fatalf("arming must not flip is_gate on a plain step: %+v", step)
 	}
 	stored, err := api.dal.GetTask(task.ID)
 	if err != nil || stored == nil {
@@ -1653,12 +1653,12 @@ func TestSubmitPlanFreezesAnsweredCardStepsAsSuperseded(t *testing.T) {
 		}
 	}
 	// "ask direction" gets an ANSWERED card; "pending ask" a still-WAITING one.
-	answered := openGateCard(t, api, task.ID, "m-exec", v1.Steps[1].ID, "which way?")
+	answered := openCardOnStep(t, api, task.ID, "m-exec", v1.Steps[1].ID, "which way?")
 	if rec := answerCard(t, api, answered.ID,
 		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
-	waiting := openGateCard(t, api, task.ID, "m-exec", v1.Steps[2].ID, "later?")
+	waiting := openCardOnStep(t, api, task.ID, "m-exec", v1.Steps[2].ID, "later?")
 
 	// Re-plan with entirely fresh names.
 	v2 := submitPlan(t, api, task.ID, "m-exec", []map[string]any{
@@ -1742,7 +1742,7 @@ func TestSubmitPlanRelistingAnsweredCardStepContinuesTheLiveRow(t *testing.T) {
 		{"name": "ask direction", "dod": "owner answered"},
 	})
 	startFirstStep(t, api, task.ID, "m-exec")
-	card := openGateCard(t, api, task.ID, "m-exec", v1.Steps[0].ID, "which way?")
+	card := openCardOnStep(t, api, task.ID, "m-exec", v1.Steps[0].ID, "which way?")
 	if rec := answerCard(t, api, card.ID,
 		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
@@ -1776,7 +1776,7 @@ func TestSubmitPlanFreezesExpiredCardStepsToo(t *testing.T) {
 		{"name": "ask direction", "dod": "owner answered"},
 	})
 	startFirstStep(t, api, task.ID, "m-exec")
-	card := openGateCard(t, api, task.ID, "m-exec", v1.Steps[0].ID, "which way?")
+	card := openCardOnStep(t, api, task.ID, "m-exec", v1.Steps[0].ID, "which way?")
 	rec := httptest.NewRecorder()
 	api.HandleExpireReplyCardApiReplyCardsCardIdExpirePost(rec,
 		taskReq(t, "POST", "/x", nil, "owner", "owner"), card.ID)
@@ -1799,7 +1799,7 @@ func TestSubmitPlanFreezesExpiredCardStepsToo(t *testing.T) {
 // TestSupersededIsTerminalOnEveryWriteFace pins the walls around the frozen
 // state: an agent report INTO superseded is a 400 (not its lever — the server
 // freezes on submit_plan), any report OUT of it is a 409 (terminal),
-// re-arming it via open_gate is a 409, a later replan neither deletes nor
+// re-arming it with a linked_task is a 409, a later replan neither deletes nor
 // re-freezes it, and a later plan may honestly re-introduce the same name as
 // a NEW pending row (superseded work was not completed — no done-style
 // dedupe).
@@ -1816,7 +1816,7 @@ func TestSupersededIsTerminalOnEveryWriteFace(t *testing.T) {
 		!strings.Contains(rec.Body.String(), "not agent-reportable") {
 		t.Fatalf("report INTO superseded must 400: %d %s", rec.Code, rec.Body.String())
 	}
-	card := openGateCard(t, api, task.ID, "m-exec", v1.Steps[0].ID, "which way?")
+	card := openCardOnStep(t, api, task.ID, "m-exec", v1.Steps[0].ID, "which way?")
 	if rec := answerCard(t, api, card.ID,
 		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
@@ -1828,7 +1828,7 @@ func TestSupersededIsTerminalOnEveryWriteFace(t *testing.T) {
 	if v2.Steps[0].Status != StepStatusSuperseded {
 		t.Fatalf("precondition: frozen row: %+v", v2.Steps[0])
 	}
-	// Start the fresh step so the task derives to in_progress — open_gate checks
+	// Start the fresh step so the task derives to in_progress — the create checks
 	// the task status before the step's superseded terminal, so the task must be
 	// armable for the superseded-specific 409 below to be the one that fires.
 	if rec := reportStepStatus(t, api, task.ID, v2.Steps[1].ID, "m-exec",
@@ -1842,13 +1842,14 @@ func TestSupersededIsTerminalOnEveryWriteFace(t *testing.T) {
 	}
 	// Re-arming the frozen row is a 409 (the card pointer is audit trail).
 	rec := httptest.NewRecorder()
-	api.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost(rec,
-		taskReq(t, "POST", "/x", map[string]any{
+	api.HandleCreateReplyCardApiReplyCardsPost(rec,
+		taskReq(t, "POST", "/api/reply-cards", map[string]any{
 			"kind": "decision", "summary": "again?", "options": []string{"a", "b"},
-		}, "m-exec", "agent"), task.ID, frozenID)
+			"linked_task": map[string]any{"task_id": task.ID, "step_id": frozenID},
+		}, "m-exec", "agent"))
 	if rec.Code != http.StatusConflict ||
 		!strings.Contains(rec.Body.String(), "superseded") {
-		t.Fatalf("open_gate on superseded must 409: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("binding a superseded step must 409: %d %s", rec.Code, rec.Body.String())
 	}
 	// A LATER replan re-listing the frozen NAME mints a fresh pending twin —
 	// the frozen row stays beside it as history, frozen exactly once.
@@ -2394,13 +2395,14 @@ func TestResumeSummaryCarriesTheCallersOpenTasksAsLightRows(t *testing.T) {
 	// Arm the "approve" gate — the task flips waiting_owner; the light row
 	// still lists it (non-terminal) without any gate/step detail.
 	rec = httptest.NewRecorder()
-	api.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost(rec,
-		taskReq(t, "POST", "/x", map[string]any{
+	api.HandleCreateReplyCardApiReplyCardsPost(rec,
+		taskReq(t, "POST", "/api/reply-cards", map[string]any{
 			"kind": "decision", "summary": "go?",
-			"options": []string{"go", "hold"},
-		}, "m-exec", "agent"), task.ID, view.Steps[2].ID)
+			"options":     []string{"go", "hold"},
+			"linked_task": map[string]any{"task_id": task.ID, "step_id": view.Steps[2].ID},
+		}, "m-exec", "agent"))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("open gate: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("open bound card: %d %s", rec.Code, rec.Body.String())
 	}
 	card := decodeBody[replyCardDTO](t, rec)
 

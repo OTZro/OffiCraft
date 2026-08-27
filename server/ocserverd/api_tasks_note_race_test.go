@@ -21,8 +21,8 @@ import (
 //
 // The WRITING side was already safe: api_tasks_note.go writes through
 // dal.SetTaskStepNote, a single-column UPDATE. The danger came from the other
-// side — update_step_status (api_tasks.go), armStepWithCard (open_gate /
-// create_reply_card auto-bind), and the reassign step-reset loop all replay the
+// side — update_step_status (api_tasks.go), armStepWithCard (a create_reply_card
+// carrying an explicit linked_task), and the reassign step-reset loop all replay the
 // note they happened to read a moment earlier, destroying a handover note the
 // note endpoint had already answered 200 to. Nothing anywhere reports it.
 //

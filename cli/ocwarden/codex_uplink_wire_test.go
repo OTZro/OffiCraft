@@ -97,9 +97,6 @@ func TestCodexUplinkBodiesMatchFrozenRequestSchemas(t *testing.T) {
 			"secondary": map[string]any{"windowDurationMins": float64(10080), "usedPercent": float64(0)},
 		})
 	})
-	drive("reply-card", func() {
-		session.openReplyCard(map[string]any{"header": "wire", "question": "ok"}, "")
-	})
 
 	// The join: what the manifest hangs on this test, per route, against the routes
 	// the real producers just posted to. Per route rather than a total on purpose —

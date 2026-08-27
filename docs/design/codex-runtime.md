@@ -156,18 +156,22 @@ reply-card mechanism instead of waiting for an unattended TUI:
    `create_reply_card` whenever owner input is required. This is the Codex equivalent of
    Claude's `--disallowedTools AskUserQuestion`; the explicit feature override pins the
    current default against version/config drift.
-2. If App Server nevertheless emits `item/tool/requestUserInput`, the sidecar validates and
-   bounds the question payload, then opens one OffiCraft reply card per question as that
-   member. Options map directly up to the existing four-option limit; the first card uses
-   normal automatic task/step binding and any additional simultaneous cards use
-   `bind="none"`. This preserves the existing one-question-per-card convention.
-3. Card creation uses the existing automatic current-task/current-step binding. Therefore
-   the task enters `waiting_owner` exactly as it does for Claude; no Codex-only card table,
-   status, or UI is introduced.
-4. The sidecar immediately completes the App Server request with a fixed deferred marker
-   and instructs the active Codex turn to yield. It MUST NOT leave the JSON-RPC request
-   pending, because that request belongs to one App Server client connection and would be
-   fragile across reconnects.
+2. If App Server nevertheless emits `item/tool/requestUserInput`, the sidecar REFUSES to
+   open the card on Codex's behalf (T-18) and answers each question with an instruction to
+   open it itself through `create_reply_card`. The warden holds no `task_id` and no
+   `step_id`, so every card it minted here relied on the server inferring a binding — and
+   an inference that missed produced a card with no `等我回覆` hold that the owner's answer
+   would later be refused for. `create_reply_card` now requires an explicit `linked_task`,
+   and the only party that knows what the question is about is Codex.
+3. That refusal text CARRIES the secret warning. While the warden opened the card it read
+   `question.isSecret` and put "do not paste the secret into the card" into the card body;
+   nothing executes that path any more, so the sentence moved into the refusal. Without it,
+   Codex would open its own card for a credential with nothing telling it not to type the
+   secret into the body.
+4. The sidecar immediately completes the App Server request with that text and instructs the
+   active Codex turn to yield. It MUST NOT leave the JSON-RPC request pending, because that
+   request belongs to one App Server client connection and would be fragile across
+   reconnects.
 5. The answer or expiry arrives through the existing directed `reply_card` SSE
    delta. The durable wake starts the next idle Codex turn, which reads the authoritative
    card(s) with `get_reply_card` and continues once the required answers are settled, or

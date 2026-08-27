@@ -811,7 +811,7 @@ func (d *DAL) TouchTaskUpdatedTS(id string, ts float64) error {
 // The hazard is structural, not exotic: this is a whole-row upsert with no
 // optimistic lock, and every OTHER step writer is a load-mutate-save
 // (dal.GetTaskStep → mutate one field → dal.PutTaskStep) — update_step_status,
-// armStepWithCard (open_gate / create_reply_card auto-bind), the reply-card
+// armStepWithCard (create_reply_card with an explicit linked_task), the reply-card
 // release path, and the reassign step reset. Nothing links those reads to those
 // writes, so the upsert asserts EVERY column as that handler read them. With
 // the note in the conflict list, an agent reporting a step's status replays the

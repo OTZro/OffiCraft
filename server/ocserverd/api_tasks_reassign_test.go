@@ -198,12 +198,13 @@ func TestReassignMemberToMemberHandsOver(t *testing.T) {
 		}
 	}
 	rec := httptest.NewRecorder()
-	api.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost(rec,
-		taskReq(t, "POST", "/x", map[string]any{
+	api.HandleCreateReplyCardApiReplyCardsPost(rec,
+		taskReq(t, "POST", "/api/reply-cards", map[string]any{
 			"kind": "decision", "summary": "go?", "options": []string{"a", "b"},
-		}, "m-old", "agent"), task.ID, view.Steps[2].ID)
+			"linked_task": map[string]any{"task_id": task.ID, "step_id": view.Steps[2].ID},
+		}, "m-old", "agent"))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("open gate: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("open bound card: %d %s", rec.Code, rec.Body.String())
 	}
 	card := decodeBody[replyCardDTO](t, rec)
 

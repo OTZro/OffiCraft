@@ -34,7 +34,7 @@ func TestIncompleteAttachmentIsRefusedOnEveryFace(t *testing.T) {
 		{"chat", "/api/chat",
 			`{"to":"owner","body":"see attached","attachments":[` + ghost + `]}`},
 		{"reply card", "/api/reply-cards",
-			`{"kind":"decision","summary":"ship it?","options":["yes","no"],"attachments":[` + ghost + `]}`},
+			`{"kind":"decision","summary":"ship it?","options":["yes","no"],"linked_task":null,"attachments":[` + ghost + `]}`},
 	} {
 		// The answer face is covered by TestReplyCardAnswerRefusesIncompleteAttachment
 		// below — it takes a live card id, so it cannot ride this table.
@@ -74,7 +74,7 @@ func TestReplyCardAnswerRefusesIncompleteAttachment(t *testing.T) {
 	open := func() string {
 		status, resp := doRaw(t, "POST", srv.URL+"/api/reply-cards", agentTok,
 			"application/json",
-			[]byte(`{"kind":"decision","summary":"ship it?","options":["yes","no"]}`))
+			[]byte(`{"kind":"decision","summary":"ship it?","options":["yes","no"],"linked_task":null}`))
 		if status != 200 {
 			t.Fatalf("open card: %d %s", status, resp)
 		}

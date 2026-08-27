@@ -1456,8 +1456,8 @@ func TaskIsTerminal(status string) bool {
 
 // agentTaskTransitions is the CLOSED legal-transition set of the agent report
 // path (POST /api/tasks/{id}/status). waiting_owner is NOT on either side of
-// this table: it is entered ONLY by opening a card (open_gate / create_reply_card
-// auto-bind) and LEFT ONLY when that card is answered — the server itself
+// this table: it is entered ONLY by opening a card (create_reply_card with an
+// explicit linked_task) and LEFT ONLY when that card is answered — the server itself
 // restores the task to in_progress on answer (releaseCardHold).
 // So the agent neither reports INTO waiting_owner (the handler 400s that, not
 // its lever) nor OUT of it (a report from waiting_owner is a 409 — the card
@@ -1483,8 +1483,8 @@ func CanAgentTaskTransition(from, to string) bool {
 
 // agentStepTransitions is the step twin (contract §B.2): pending →
 // in_progress → done. waiting_owner is NOT on either side, exactly like the
-// task table: the card-open paths set it (open_gate / create_reply_card
-// auto-bind — the handler 400s an agent report INTO it), and the answer path
+// task table: the card-open path sets it (create_reply_card with an explicit
+// linked_task — the handler 400s an agent report INTO it), and the answer path
 // restores the step to in_progress (releaseCardHold — a report
 // OUT of it is a 409). After the server restores the step, the agent advances
 // it in_progress → done as usual; if the answer did NOT settle the question the

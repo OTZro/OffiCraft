@@ -177,13 +177,6 @@
       "seam_reason": "codexSession.post: the sidecar's shared JSON send. Its four telemetry/context uplinks go through it, and the http client is built inline here, which is why they are driven through httptest rather than an injected transport."
     },
     {
-      "id": "codex-reply-card-send",
-      "source": "cli/ocwarden/codex_session.go",
-      "callsite": "resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)",
-      "kind": "seam",
-      "seam_reason": "The send half of openReplyCard's request, built inline above it. The client is constructed at the callsite rather than injected, which is why the reply-card uplink is driven through httptest."
-    },
-    {
       "id": "codex-post-seam-send",
       "source": "cli/ocwarden/codex_session.go",
       "callsite": "resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)",
@@ -237,18 +230,6 @@
       "wire_test": "cli/ocwarden/codex_uplink_wire_test.go",
       "wire_needle": "drive(\"rate-limits\", func() {",
       "wire_case": "rate-limits"
-    },
-    {
-      "id": "codex-reply-card",
-      "source": "cli/ocwarden/codex_session.go",
-      "callsite": "req, err := http.NewRequest(http.MethodPost, strings.TrimRight(s.base, \"/\")+\n\t\t\"/api/reply-cards\", bytes.NewReader(raw))",
-      "kind": "json",
-      "method": "post",
-      "path": "/api/reply-cards",
-      "request_schema": "#/components/schemas/ReplyCardCreateDTO",
-      "wire_test": "cli/ocwarden/codex_uplink_wire_test.go",
-      "wire_needle": "drive(\"reply-card\", func() {",
-      "wire_case": "reply-card"
     },
     {
       "id": "warden-runonce-hop",
@@ -333,13 +314,6 @@
       "callsite": "return cmdUpload(newStreamingClient(), cfg, args[0], *mimeType, out, os.Stderr)",
       "kind": "skip",
       "skip_reason": "Dispatch to the attachment upload command, which streams raw file bytes rather than JSON: there is no request schema to compare a body against."
-    },
-    {
-      "id": "codex-reply-card-call",
-      "source": "cli/ocwarden/codex_session.go",
-      "callsite": "cardID := s.openReplyCard(question, bind)",
-      "kind": "seam",
-      "seam_reason": "The sidecar calling its own reply-card producer. The body it builds is compared as codex-reply-card; this is the call into it."
     },
     {
       "id": "warden-install-getter",
@@ -519,13 +493,6 @@
       "seam_reason": "hop to the codex rate-limit POST declared by codex-rate-limits"
     },
     {
-      "id": "codex-hop-6",
-      "source": "cli/ocwarden/codex_session.go",
-      "callsite": "s.handleServerRequest(msg)\n\t\t\t\t}",
-      "kind": "seam",
-      "seam_reason": "hop: a codex server request reaches the reply-card POST declared by codex-reply-card"
-    },
-    {
       "id": "codex-hop-7",
       "source": "cli/ocwarden/codex_session.go",
       "callsite": "s.reportTokenUsage(params)",
@@ -538,13 +505,6 @@
       "callsite": "s.reportRateLimits(snapshot)",
       "kind": "seam",
       "seam_reason": "hop to the codex rate-limit POST declared by codex-rate-limits"
-    },
-    {
-      "id": "codex-hop-9",
-      "source": "cli/ocwarden/codex_session.go",
-      "callsite": "s.handleServerRequest(msg)\n\t\t\t}",
-      "kind": "seam",
-      "seam_reason": "hop: a codex server request reaches the reply-card POST declared by codex-reply-card"
     },
     {
       "id": "warden-command-1",

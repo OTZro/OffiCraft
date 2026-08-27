@@ -157,7 +157,26 @@ func decodeJSONBodyRequired(w http.ResponseWriter, r *http.Request, dst any, req
 	return decodeJSONBodyStrict(w, r, dst, required...)
 }
 
-// decodeJSONBodyStrict is the shared mutable-request decoder. It has two
+// decodeJSONBodyPresent decodes like decodeJSONBodyRequired and ALSO reports
+// which top-level keys the caller actually sent, so a handler can tell a field
+// that was OMITTED from one explicitly sent as null. A Go pointer collapses the
+// two (both decode to nil), and for create_reply_card's linked_task that
+// collapse would be the whole bug back again: "I did not say" would look
+// identical to "I said this ask is not about a task". The names list still
+// answers the wire-frozen 422 face; a handler that wants its own status and its
+// own sentence (a 400 that spells out both legal shapes) reads the set instead.
+func decodeJSONBodyPresent(w http.ResponseWriter, r *http.Request, dst any, required ...string) (map[string]bool, bool) {
+	return decodeJSONBodyKeys(w, r, dst, required...)
+}
+
+// decodeJSONBodyStrict is the bool-only face every other handler uses; the
+// shared body lives in decodeJSONBodyKeys.
+func decodeJSONBodyStrict(w http.ResponseWriter, r *http.Request, dst any, required ...string) bool {
+	_, ok := decodeJSONBodyKeys(w, r, dst, required...)
+	return ok
+}
+
+// decodeJSONBodyKeys is the shared mutable-request decoder. It has two
 // properties that stop a malformed request from masquerading as a valid one:
 //
 //  1. DisallowUnknownFields — any key the DTO does not declare is a 422, not a
@@ -172,24 +191,25 @@ func decodeJSONBodyRequired(w http.ResponseWriter, r *http.Request, dst any, req
 //     it empty" from "the caller did not say". Absent key ⇒ 422, never a write.
 //
 // Both faults answer 422 (the wire-frozen validation_error source), matching
-// decodeJSONBodyRequired. Semantic refusals (anchor miss, wipe guard) stay 400.
-func decodeJSONBodyStrict(w http.ResponseWriter, r *http.Request, dst any, required ...string) bool {
+// decodeJSONBodyRequired. The first result is the set of top-level keys the
+// caller actually SENT (see decodeJSONBodyPresent). Semantic refusals (anchor miss, wipe guard) stay 400.
+func decodeJSONBodyKeys(w http.ResponseWriter, r *http.Request, dst any, required ...string) (map[string]bool, bool) {
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "could not read request body")
-		return false
+		return nil, false
 	}
 	var keys map[string]json.RawMessage
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &keys); err != nil {
 			writeError(w, http.StatusUnprocessableEntity, "invalid request body: "+err.Error())
-			return false
+			return nil, false
 		}
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(dst); err != nil {
 			writeError(w, http.StatusUnprocessableEntity, "invalid request body: "+err.Error())
-			return false
+			return nil, false
 		}
 		if err := dec.Decode(&struct{}{}); err != io.EOF {
 			if err == nil {
@@ -197,16 +217,20 @@ func decodeJSONBodyStrict(w http.ResponseWriter, r *http.Request, dst any, requi
 			} else {
 				writeError(w, http.StatusUnprocessableEntity, "invalid request body: "+err.Error())
 			}
-			return false
+			return nil, false
 		}
 	}
 	for _, name := range required {
 		if _, ok := keys[name]; !ok {
 			writeError(w, http.StatusUnprocessableEntity, "field required: "+name)
-			return false
+			return nil, false
 		}
 	}
-	return true
+	sent := make(map[string]bool, len(keys))
+	for name := range keys {
+		sent[name] = true
+	}
+	return sent, true
 }
 
 // relocateNeedsMachineMsg is the 400 a relocate answers when the body carries no

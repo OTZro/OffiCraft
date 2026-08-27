@@ -70,7 +70,8 @@ def _open_card(client, asker: AgentIdentity, summary="need a call",
                kind="decision", options=("AI pick", "other")) -> dict:
     r = client.post(
         "/api/reply-cards",
-        json={"kind": kind, "summary": summary, "options": list(options)},
+        json={"kind": kind, "summary": summary, "options": list(options),
+              "linked_task": None},
         headers=_auth(asker.token),
     )
     assert r.status_code == 200, f"open card failed: {r.status_code} {r.text}"
@@ -125,12 +126,29 @@ def test_create_validation_rules(client, asker):
         return client.post(
             "/api/reply-cards", json=body, headers=_auth(asker.token))
 
-    base = {"kind": "decision", "summary": "s", "options": ["a", "b"]}
-    assert post({**base, "kind": "poll"}).status_code == 400
-    assert post({**base, "summary": "   "}).status_code == 400
-    assert post({**base, "options": []}).status_code == 400
-    assert post({**base, "options": ["a", "b", "c", "d", "e"]}).status_code == 400
-    assert post({**base, "options": ["a", "  "]}).status_code == 400
+    base = {"kind": "decision", "summary": "s", "options": ["a", "b"],
+            "linked_task": None}
+
+    def refused(body, needle):
+        """400 FOR THE STATED REASON.
+
+        linked_task is required since T-18 and its refusal is also a 400, so a
+        status-only assertion here would stay green while every rule below went
+        untested — drop linked_task from `base` and nothing would notice. Pin
+        the reason instead."""
+        r = post(body)
+        assert r.status_code == 400, f"{r.status_code} {r.text}"
+        msg = r.json()["error"]["message"]
+        assert needle in msg, f"wrong reason: wanted {needle!r}, got {msg!r}"
+        assert "linked_task" not in msg, (
+            f"never reached the rule under test — refused at the linked_task "
+            f"gate: {msg!r}")
+
+    refused({**base, "kind": "poll"}, "kind must be")
+    refused({**base, "summary": "   "}, "summary must not be blank")
+    refused({**base, "options": []}, "options")
+    refused({**base, "options": ["a", "b", "c", "d", "e"]}, "options")
+    refused({**base, "options": ["a", "  "]}, "options")
     # four options is the inclusive cap
     assert post({**base, "options": ["a", "b", "c", "d"]}).status_code == 200
     # missing required keys are the 422 (decode-layer) face
@@ -156,7 +174,7 @@ def test_card_opens_with_question_attachments(client, owner_token, asker):
         "/api/reply-cards",
         json={
             "kind": "decision", "summary": "see the screenshots?",
-            "options": ["go", "hold"],
+            "options": ["go", "hold"], "linked_task": None,
             "attachments": [
                 {"id": ref["id"]},
                 {"data_b64": _PNG_B64, "filename": "inline.png",
@@ -205,17 +223,37 @@ def test_card_without_attachments_serves_an_empty_array(client, owner_token, ask
 
 
 def test_card_attachment_input_validation(client, asker):
-    base = {"kind": "decision", "summary": "s", "options": ["a"]}
+    # 🔴 linked_task is REQUIRED (T-18) and its refusal is ALSO a 400. Without it
+    # in `base` every assertion below still passed while proving nothing: the
+    # create was rejected at the linked_task gate and never reached a single
+    # attachment rule. So each case now asserts the REASON, not just the status —
+    # a 400 for the wrong reason is indistinguishable from a 400 for the right
+    # one, which is the exact failure mode this whole ticket is about.
+    base = {"kind": "decision", "summary": "s", "options": ["a"],
+            "linked_task": None}
 
     def post(atts):
         return client.post(
             "/api/reply-cards", json={**base, "attachments": atts},
             headers=_auth(asker.token))
 
-    # unknown ref / both id+data_b64 / over the 10-item cap — all 400.
-    assert post([{"id": "att-does-not-exist"}]).status_code == 400
-    assert post([{"id": "att-x", "data_b64": _PNG_B64}]).status_code == 400
-    assert post([{"data_b64": _PNG_B64}] * 11).status_code == 400
+    def refused_because(atts, needle):
+        r = post(atts)
+        assert r.status_code == 400, f"{r.status_code} {r.text}"
+        msg = r.json()["error"]["message"]
+        assert needle in msg, (
+            f"refused for the wrong reason: wanted {needle!r}, got {msg!r}")
+        assert "linked_task" not in msg, (
+            "this case never reached the attachment rules — it was rejected at "
+            f"the linked_task gate: {msg!r}")
+
+    # unknown ref / both id+data_b64 / over the 10-item cap — all 400, each for
+    # its own reason (T-5e8a).
+    refused_because([{"id": "att-does-not-exist"}], "att-does-not-exist")
+    refused_because([{"id": "att-x", "data_b64": _PNG_B64}],
+                    "carries both id and data_b64")
+    refused_because([{"data_b64": _PNG_B64}] * 11,
+                    "at most 10 attachments")
 
 
 # ── answer: the only close ───────────────────────────────────────────────────
@@ -372,7 +410,7 @@ def test_list_rows_are_light_title_plus_decision_only(client, owner_token, asker
     # Give the card a heavy interior via the create body.
     heavy = client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "heavy ask",
+        json={"kind": "decision", "summary": "heavy ask", "linked_task": None,
               "body": "細" * 3000, "options": ["A" * 400, "B" * 400]},
         headers=_auth(asker.token),
     ).json()
@@ -421,7 +459,7 @@ def test_view_full_serves_the_same_pane_as_whole_cards(client, owner_token, aske
     card = _open_card(client, asker, summary="full view ask")
     heavy = client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "heavy full ask",
+        json={"kind": "decision", "summary": "heavy full ask", "linked_task": None,
               "body": "細" * 3000, "options": ["A" * 400, "B" * 400]},
         headers=_auth(asker.token),
     ).json()
@@ -706,14 +744,15 @@ def test_expiring_a_gate_card_resumes_the_task_and_step(
     # submit_plan answers with a bounded receipt (T-a98d); read the rows back.
     step_id = client.get(f"/api/tasks/{task_id}", headers=h_agent).json()["steps"][0]["id"]
     # Task status is DERIVED (T-9ca5): report the step in_progress so the task
-    # derives in_progress — a gate can only arm on an in_progress task.
+    # derives in_progress — a card can only bind an in_progress task.
     assert client.post(
         f"/api/tasks/{task_id}/steps/{step_id}/status",
         json={"status": "in_progress"}, headers=h_agent,
     ).status_code == 200
     r = client.post(
-        f"/api/tasks/{task_id}/steps/{step_id}/gate",
-        json={"kind": "decision", "summary": "go?", "options": ["go", "hold"]},
+        "/api/reply-cards",
+        json={"kind": "decision", "summary": "go?", "options": ["go", "hold"],
+              "linked_task": {"task_id": task_id, "step_id": step_id}},
         headers=h_agent,
     )
     assert r.status_code == 200, r.text
@@ -751,14 +790,15 @@ def test_closing_a_task_retires_its_waiting_card(client, owner_token, asker):
     # submit_plan answers with a bounded receipt (T-a98d); read the rows back.
     step_id = client.get(f"/api/tasks/{task_id}", headers=h_agent).json()["steps"][0]["id"]
     # Task status is DERIVED (T-9ca5): lift the task to in_progress via the step
-    # report so the gate can arm.
+    # report so the card can bind.
     assert client.post(
         f"/api/tasks/{task_id}/steps/{step_id}/status",
         json={"status": "in_progress"}, headers=h_agent,
     ).status_code == 200
     r = client.post(
-        f"/api/tasks/{task_id}/steps/{step_id}/gate",
-        json={"kind": "decision", "summary": "go?", "options": ["go"]},
+        "/api/reply-cards",
+        json={"kind": "decision", "summary": "go?", "options": ["go"],
+              "linked_task": {"task_id": task_id, "step_id": step_id}},
         headers=h_agent,
     )
     assert r.status_code == 200, r.text
