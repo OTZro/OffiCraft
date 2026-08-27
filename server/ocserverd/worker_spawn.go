@@ -793,6 +793,28 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 	// single-column write, never before — otherwise the whole-row write would put
 	// the stale anchor straight back.
 	s.clearSessionBootTS(w.ID)
+	// 🔴 A LANDED START STAMPS waking_since — the STAFF rule, verbatim, from the
+	// same seam (stampWakeObservability). It is what makes 「喚醒中」 ONE
+	// projection instead of two: PresenceState reads this column for both kinds,
+	// and a worker whose wake is in flight reads waking whether or not this
+	// process is the one that dispatched it.
+	//
+	// It has to be DURABLE and it has to be HERE. Durable, because the anchor it
+	// replaces (workerSpawnAt, one line down) is reborn empty by every re-exec,
+	// so a long-lived worker dispatched before a restart fell to 「離線」 mid-wake.
+	// Here, because "the server asked" is the honest start of the window — a
+	// worker that never boots never reports, and waiting for its own
+	// report_waking is exactly the reason the staff arm stopped waiting for one.
+	//
+	// Ordering: this is a single-column write, so it must run BEFORE the
+	// placement-block clear/stamp below, which re-read the row and write it back
+	// whole. Same rule as clearSessionBootTS one line up, same reason.
+	if err := s.dal.SetMemberWakingSince(w.ID, now); err != nil {
+		outsourceLog("spawn %s: waking anchor persist failed: %v", w.ID, err)
+	}
+	// …and onto the copy this dispatch publishes, so the delta's presence is the
+	// one that was just persisted rather than the pre-dispatch snapshot.
+	w.WakingSince = now
 	s.workerSpawnAt[w.ID] = now
 	s.workerSpawnTarget[w.ID] = warden
 	// The warden now owes a command_result for this worker START — same deadline
@@ -2206,7 +2228,12 @@ func (s *apiServer) resolveLiveWorker(id string) (*OutsourceWorker, error) {
 // workerReportWaking is report_waking for a kind='outsource' caller: clear the
 // recycle markers (the durable loop-break, member parity). The boot-reported
 // model is runtime telemetry, stored separately from the owner configuration.
-// waking_since itself is NOT carried on the worker vocabulary.
+// waking_since is deliberately NOT re-stamped here: since T-14 the anchor is
+// stamped at the START DISPATCH (notifyWorkerSpawn), which is the staff rule
+// (stampWakeObservability) and the whole point of the convergence — a wake
+// that never produces a boot report must still read 「喚醒中」 for its window.
+// The arriving report is what ends that window by bringing the session ONLINE,
+// and online dominates waking in deriveLiveness.
 //
 // 🔴 T-4595 — THIS IS NOW THE assigned → active WRITE POINT, the only one.
 // It used to live in get_my_task, which is retired: a worker's first boot verb

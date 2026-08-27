@@ -911,43 +911,64 @@ func TestRelocateToSameMachine(t *testing.T) {
 // distinct from lifecycle status so the cockpit can tell apart
 //   - "online"  : truly alive — holding a live SSE connection (the SAME
 //     hub.IsOnline presence authority the member roster reads);
-//   - "waking"  : not online with a fresh wake in flight (last start dispatch /
-//     row birth within WakingTTLSecs) — grey, not a false green;
+//   - "waking"  : not online with a fresh wake in flight (a landed start
+//     dispatch within WakingTTLSecs) — grey, not a false green;
 //   - "offline" : the wake window lapsed with no session, or the session died
 //     after the claim — the O-19 "綠燈但沒人" made honest in BOTH forms (the
 //     states the retired projection called "stuck").
 //
 // A released row projects "" (it is filtered off the panel anyway).
+//
+// T-14 moved the wake anchor: it is the row's DURABLE waking_since (stamped at
+// the start dispatch), not the in-memory spawn map with a CreatedTS fallback.
+// Two table rows carry that change — a row that was minted but never dispatched
+// no longer claims 「喚醒中」 off its own birth (nothing was ever asked to
+// start), and an anchor stamped before a re-exec still does.
 func TestNewOutsourceWorkerDTO_Presence(t *testing.T) {
 	const now = 1_000_000.0
 	cases := []struct {
-		name      string
-		status    string
-		createdTS float64
-		spawnAt   float64
-		online    bool
-		want      string
+		name         string
+		status       string
+		createdTS    float64
+		wakingSince  float64
+		desiredState string
+		online       bool
+		want         string
 	}{
-		{"active and online is online", WorkerStatusActive, now - 5, 0, true, "online"},
+		{"active and online is online", WorkerStatusActive, now - 5, 0, DesiredStateOnline, true, "online"},
 		// The anti-latch pin (DoD③): an 'active' worker whose SSE session died
 		// must NOT stay green. A mutant that latches on status==active turns
 		// this case red.
-		{"active but offline is offline", WorkerStatusActive, now - 500, 0, false, "offline"},
-		{"assigned fresh is waking", WorkerStatusAssigned, now - 10, 0, false, "waking"},
-		{"assigned online but unclaimed is online", WorkerStatusAssigned, now - 10, 0, true, "online"},
-		{"assigned just inside the wake window is waking", WorkerStatusAssigned, now - (WakingTTLSecs - 1), 0, false, "waking"},
-		{"assigned past the wake window is offline", WorkerStatusAssigned, now - (WakingTTLSecs + 1), 0, false, "offline"},
-		// A fresh re-dispatch (FSM respawn) re-arms the wake window off spawnAt
-		// even when the row itself is old.
-		{"stale row with a fresh dispatch is waking", WorkerStatusAssigned, now - 10_000, now - 5, false, "waking"},
-		{"released is blank", WorkerStatusReleased, now - 10000, 0, false, ""},
+		{"active but offline is offline", WorkerStatusActive, now - 500, 0, DesiredStateOnline, false, "offline"},
+		{"dispatched fresh is waking", WorkerStatusAssigned, now - 10, now - 10, DesiredStateOnline, false, "waking"},
+		{"dispatched but online is online", WorkerStatusAssigned, now - 10, now - 10, DesiredStateOnline, true, "online"},
+		{"just inside the wake window is waking", WorkerStatusAssigned, now - 10,
+			now - (WakingTTLSecs - 1), DesiredStateOnline, false, "waking"},
+		{"past the wake window is offline", WorkerStatusAssigned, now - 10,
+			now - (WakingTTLSecs + 1), DesiredStateOnline, false, "offline"},
+		// The re-exec pin (T-14): the anchor is durable, so a worker born long
+		// ago and dispatched just before the restart is still waking.
+		{"stale row with a fresh durable anchor is waking", WorkerStatusAssigned, now - 10_000,
+			now - 5, DesiredStateOnline, false, "waking"},
+		// …and the other half of that move: a minted row nobody has dispatched
+		// yet has no anchor, so it reads offline instead of borrowing its birth.
+		{"minted but never dispatched is offline", WorkerStatusAssigned, now - 10, 0,
+			DesiredStateOnline, false, "offline"},
+		// Owner intent gates the wake anchor (the staff T-7526 rule, now shared):
+		// a wake cancelled mid-flight must not paint green over an offline
+		// intent. The stop ANCHOR is what projects 「已停止」 (see
+		// TestWorkerPresence_StopIntent); intent alone just withholds the wake.
+		{"fresh wake anchor under an offline intent is offline", WorkerStatusAssigned, now - 10,
+			now - 5, DesiredStateOffline, false, "offline"},
+		{"released is blank", WorkerStatusReleased, now - 10000, now - 5, DesiredStateOnline, false, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			w := OutsourceWorker{ID: "ow-1", Codename: "O-7", Status: c.status,
-				TaskID: "t-1", CreatedTS: c.createdTS}
+				TaskID: "t-1", CreatedTS: c.createdTS, WakingSince: c.wakingSince,
+				DesiredState: c.desiredState}
 			dto := newOutsourceWorkerDTO(w, nil,
-				outsourceWorkerProjection{now: now, online: c.online, spawnAt: c.spawnAt})
+				outsourceWorkerProjection{now: now, online: c.online})
 			if dto.Presence != c.want {
 				t.Fatalf("presence = %q, want %q", dto.Presence, c.want)
 			}
@@ -1278,8 +1299,10 @@ func TestNewOutsourceWorkerDTO_GoldenWireShape(t *testing.T) {
 			w: OutsourceWorker{ID: "ow-2", Codename: "O-8",
 				Model: "claude-haiku-4-5", TaskID: "t-2",
 				Status: WorkerStatusAssigned, CreatedTS: 1999.0},
+			// presence "offline", not "waking": T-14 retired the CreatedTS
+			// fallback — a row nobody has dispatched has no wake in flight.
 			task: nil, p: outsourceWorkerProjection{now: 2000.0},
-			want: `{"id":"ow-2","avatar_url":"","codename":"O-8","runtime":"claude","model":"claude-haiku-4-5","effort":"","actual_model":"","actual_runtime":"","actual_effort":"","status":"assigned","task_id":"t-2","task_title":"","task_status":"","task_no":"","task_created_ts":0,"task_type_key":"","task_type_name":"","created_ts":1999,"unread_count":0,"presence":"waking","machine":"","desired_machine_id":"","actual_machine":"","account":null,"context_pct":null,"cost":null,"banked_cost":null,"last_op":"","last_op_ok":null,"last_op_log":"","last_op_reason":"","last_op_at":0,"creator_id":"","delegated_by":"","refocus_since":0,"refocus_op":"","refocus_deadline":0,"desired_state":""}`,
+			want: `{"id":"ow-2","avatar_url":"","codename":"O-8","runtime":"claude","model":"claude-haiku-4-5","effort":"","actual_model":"","actual_runtime":"","actual_effort":"","status":"assigned","task_id":"t-2","task_title":"","task_status":"","task_no":"","task_created_ts":0,"task_type_key":"","task_type_name":"","created_ts":1999,"unread_count":0,"presence":"offline","machine":"","desired_machine_id":"","actual_machine":"","account":null,"context_pct":null,"cost":null,"banked_cost":null,"last_op":"","last_op_ok":null,"last_op_log":"","last_op_reason":"","last_op_at":0,"creator_id":"","delegated_by":"","refocus_since":0,"refocus_op":"","refocus_deadline":0,"desired_state":""}`,
 		},
 	}
 	for _, c := range cases {

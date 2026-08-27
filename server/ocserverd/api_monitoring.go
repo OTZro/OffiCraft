@@ -998,9 +998,12 @@ type monitoringActor struct {
 //
 //	host     — observedWorkerHost, the restart-proof fold (a worker has no
 //	           desired_machine_id fallback the way observedHost gives a member).
-//	presence — workerPresence, which anchors "waking" on the spawn dispatch;
-//	           PresenceState would read a just-dispatched worker as offline
-//	           because a worker row carries no waking_since.
+//	presence — workerPresence, which is PresenceState behind a released-row
+//	           guard (T-14): a released worker is off-panel and has no presence
+//	           word. The projection itself is the member's, on the member's
+//	           durable waking_since — the spawn dispatch stamps it, so a
+//	           just-dispatched worker reads waking here for the same reason a
+//	           just-started staff member does.
 //
 // `model` is deliberately NOT among them any more. It used to be, because the
 // two kinds genuinely disagreed: a worker served its self-reported ActualModel
@@ -1217,7 +1220,6 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		if wk.Status == WorkerStatusReleased {
 			continue
 		}
-		_, spawnAt := s.workerSpawnObs(wk.ID)
 		sources = append(sources, monitoringSessionSource{
 			// memberFromWorker carries ActualModel across, so the model cell is
 			// served by the shared line below — one expression for both kinds.
@@ -1226,7 +1228,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 			// in this very response, so the session's machine cell and the
 			// machines row can never name different boxes for one worker.
 			host:     s.observedWorkerHost(wk.ID, telemetry[wk.ID]),
-			presence: workerPresence(wk, now, s.hub.IsOnline(wk.ID), spawnAt),
+			presence: workerPresence(wk, now, s.hub.IsOnline(wk.ID)),
 		})
 	}
 

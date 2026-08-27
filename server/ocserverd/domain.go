@@ -181,16 +181,53 @@ func deriveLiveness(in livenessInput) string {
 	return MemberPresenceOffline
 }
 
-// PresenceState projects a member's presence at now — a thin mapping of the
-// member's durable anchors onto the shared liveness kernel (deriveLiveness).
-// Pure: online is the caller-supplied SSE-connection fact (the ONLY authority —
-// never a DB flag, never a warden receipt: a stop receipt can lie while the
-// process is alive and still answering chat, so SSE connected ⇒ never stopped).
+// PresenceState projects ANY member row's presence at now — staff and outsource
+// alike (T-14: workerPresence is a thin released-row guard in front of THIS
+// call, not a second projection). A thin mapping of the row's durable anchors
+// onto the shared liveness kernel (deriveLiveness). Pure: online is the
+// caller-supplied SSE-connection fact (the ONLY authority — never a DB flag,
+// never a warden receipt: a stop receipt can lie while the process is alive and
+// still answering chat, so SSE connected ⇒ never stopped).
 //
-// A set stopping_since (the graceful-shutdown signal) is the member's StopIntent
-// and takes precedence over every other projection. The waking projection needs
-// owner intent (desired_state online) plus a fresh waking_since; a stale waking
-// signal is a failed wake and reads offline.
+// A set stopping_since (the graceful-shutdown signal) is the StopIntent of BOTH
+// kinds and takes precedence over every other projection.
+//
+// 🔴 IT IS THE ANCHOR, NOT desired_state, FOR BOTH KINDS — AND GETTING THERE
+// WAS THE WHOLE OF T-14's SECOND HALF. The outsource arm used to test
+// `desired_state == offline` here instead, which is a 正職／外包 gate, and the
+// identity-gate ledger's own instruction for a new one is "delete the
+// difference — preferred". It could be deleted, because the two tests already
+// answer the same on every reachable row: BOTH worker stop verbs (停止 and
+// 強制停止) stamp stopping_since before they write the offline intent, and both
+// anchors are necessarily positive — 停止 goes through stopEpochAnchor (the same
+// helper the staff deactivate calls, which cannot return zero) while 強制停止
+// stamps its own anchor inline from forced_stop_at. They are two code paths, not
+// one: an independent review of T-14 caught this comment claiming otherwise.
+// The conclusion is unchanged (the anchor is always set); the reason is not.
+// No other writer puts offline on a worker row — the staff verbs that write
+// offline without an anchor (HandleDismissMember is one) cannot reach a worker
+// row because resolveMember refuses kind=outsource. 🔴 That kind gate is an
+// UNTESTED implicit premise of this collapse: route a member verb through a
+// resolver that does not filter outsource and this expression starts lying.
+//
+// The union was tried FIRST and is wrong — a measured mutant said so. A STAFF
+// row CAN carry desired_state=offline with no anchor, and that state is the
+// ORDINARY one: the out-of-box seed ships Mira and the server warden exactly so.
+// Testing desired_state for everybody renders a station nobody has ever switched
+// on as 「已停止」 instead of 「離線」, a lie about a member nobody ever woke.
+// Pinned by TestPresenceState and the two api_chat offline-mailbox controls.
+//
+// So the stop fact is the ANCHOR, one expression, no kind branch. What that
+// costs is a synthetic row with an offline intent and no anchor reading offline
+// rather than stopped — unreachable through any writer, and the price of the
+// projection being one piece of code instead of two.
+//
+// The waking projection needs owner intent (desired_state online) plus a fresh
+// waking_since; a stale waking signal is a failed wake and reads offline. The
+// intent half is load-bearing and is NOT redundant with StopIntent above: a wake
+// cancelled mid-flight (T-7526) leaves the anchor standing, and without this
+// test the booting process would paint a fresh green over an intent that has
+// already gone offline.
 func PresenceState(m Member, now float64, online bool) string {
 	return deriveLiveness(livenessInput{
 		Online:     online,
