@@ -14,7 +14,7 @@
 // the picker's dark theme) is NOT asserted here — jsdom does not compute it.
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { render, fireEvent, waitFor } from "@testing-library/react";
+import { render, fireEvent, waitFor, configure } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { api } from "../api";
 import { zh } from "../i18n/locales/zh";
@@ -93,11 +93,45 @@ function mkWorker(over: Partial<OutsourceWorkerView>): OutsourceWorkerView {
   };
 }
 
+// The 更改 dialog's mount has been measured at ~1060ms here, 60ms past
+// dom-testing-library's 1000ms asyncUtilTimeout default. Nothing about the
+// panel is slow on purpose; the default is simply too tight for this subtree.
+// Kept UNDER vitest's own 5000ms testTimeout on purpose: at 5000 the two race
+// and vitest wins, so the timeout below reports "Test timed out" and the
+// diagnostic in openSettingsDialog never gets to say what it saw (measured).
+const SETTINGS_DIALOG_TIMEOUT_MS = 3000;
+configure({ asyncUtilTimeout: SETTINGS_DIALOG_TIMEOUT_MS });
+
 /** Absence probe. `findByTestId` can only prove presence; a "the cell is gone"
  * assertion needs a query that RESOLVES TO NULL instead of throwing, or the
  * test cannot tell "not rendered" from "rendered but unmatched". */
 function queryTestId(root: ParentNode, testId: string): HTMLElement | null {
   return root.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+}
+
+/** Click 更改 and wait for the settings dialog to actually mount.
+ *
+ * Every test below pokes at controls INSIDE that dialog, so this is the front
+ * guard they lacked: on a red the message says whether the dialog node is in
+ * the DOM, which tells "the wait was too short" apart from "it never
+ * rendered" — the two need opposite fixes. */
+async function openSettingsDialog(
+  findByTestId: (testId: string) => Promise<HTMLElement>,
+): Promise<HTMLElement> {
+  fireEvent.click(await findByTestId("worker-detail-change"));
+  try {
+    return await findByTestId("worker-detail-settings-dialog");
+  } catch (err) {
+    const inDom = queryTestId(document.body, "worker-detail-settings-dialog");
+    throw new Error(
+      `worker-detail-settings-dialog did not appear within ` +
+        `${SETTINGS_DIALOG_TIMEOUT_MS}ms of clicking 更改. At timeout it was ` +
+        (inDom
+          ? "PRESENT in the DOM — it rendered LATE, so the wait is what is too short."
+          : "ABSENT from the DOM — it never rendered, so this is not a timing problem.") +
+        ` Underlying: ${(err as Error).message}`,
+    );
+  }
 }
 
 /** Land a telemetry row for `id` reporting `model` (+ optional effort).
@@ -431,7 +465,7 @@ describe("WorkerDetailPanel — 設定改走喚醒區 (T-7526 parity)", () => {
     );
     const relocate = vi.spyOn(api, "relocateWorker");
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     const select = (await findByTestId(
       "worker-detail-settings-machine",
     )) as HTMLSelectElement;
@@ -468,7 +502,7 @@ describe("WorkerDetailPanel — 設定改走喚醒區 (T-7526 parity)", () => {
       ),
     );
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     const input = (await findByTestId("me-model-input")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "claude-opus-4-8" } });
     fireEvent.click(await findByTestId("worker-detail-settings-confirm"));
@@ -499,7 +533,7 @@ describe("WorkerDetailPanel — 設定改走喚醒區 (T-7526 parity)", () => {
       return (await api.getOutsourceWorker(id)) as never;
     });
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     const input = (await findByTestId("me-model-input")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "claude-opus-4-8" } });
     const select = (await findByTestId(
@@ -529,8 +563,7 @@ describe("WorkerDetailPanel — 設定改走喚醒區 (T-7526 parity)", () => {
     reportsModel("ow-2", "Sonnet 4.6");
     const { findByTestId, queryByTestId, rerender } =
       renderOfficeAt("#office/worker/ow-1");
-    fireEvent.click(await findByTestId("worker-detail-change"));
-    await findByTestId("worker-detail-settings-dialog");
+    await openSettingsDialog(findByTestId);
 
     // Neither caller passes a `key`, so this is a PROP change, not a remount: a
     // surviving dialog would still hold ow-1's draft and one confirm would write
@@ -1030,7 +1063,7 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
     const setModel = vi.spyOn(api, "setWorkerModel");
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
     // The ONE settings entry (T-7526) — the model cell itself is read-only.
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     // The shared ModelEffortEditor's free custom-model input (data-testid pinned).
     const input = (await findByTestId("me-model-input")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "claude-opus-4-8" } });
@@ -1048,7 +1081,7 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
     // intent was stored (the running session is still on the old one until it
     // respawns). The dialog is where the configured value lives, so that is
     // where "the save landed and the UI adopted it" is honestly observable.
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     await waitFor(async () =>
       expect(
         ((await findByTestId("me-model-input")) as HTMLInputElement).value,
@@ -1322,7 +1355,7 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
 
     // The setting lives in the 更改 dialog and is seeded from the WORKER, not
     // from what the session happens to be running.
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     expect(
       ((await findByTestId("me-model-input")) as HTMLInputElement).value,
     ).toBe("Opus 4.6");
@@ -1352,7 +1385,7 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
     );
     // …and the configured pair is intact, just not on the readout: the dialog
     // still opens on it. A blank must never reach the save body either.
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     expect(
       ((await findByTestId("me-model-input")) as HTMLInputElement).value,
     ).toBe("Opus 4.6");
@@ -1366,7 +1399,7 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
     const setModel = vi.spyOn(api, "setWorkerModel");
 
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     // Seeded from the worker, so a no-edit confirm is a true no-op. Were the
     // dialog seeded from the REPORTED pair instead, launchChanged would be true
     // and this click would silently overwrite the owner's intent with telemetry.
