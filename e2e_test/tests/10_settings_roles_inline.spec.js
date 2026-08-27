@@ -1,3 +1,43 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔴 T-10 · HOW TO TELL WHETHER A GATE IS DRAWN IN THE RIGHT PLACE
+//
+// Learned expensively across this file and its sibling (the other of
+// MonitorPage.mutation-reconcile.test.tsx / e2e_test/tests/
+// 10_settings_roles_inline.spec.js): three separate gates were written,
+// reviewed and shipped while guarding something narrower than what they said
+// they guarded.
+//
+// THE RULE. A gate's assertion message IS its specification. If a test double
+// exists that makes the message FALSE while the assertion still PASSES, the
+// gate is drawn in the wrong place — however sensible the expression it
+// evaluates happens to look.
+//
+// HOW TO APPLY IT. Write the property as one sentence (the message usually is
+// that sentence). Then list EVERY line that sentence depends on and build a
+// double for each. The expression the gate itself reads is only ONE of those
+// lines. The three worked examples, all from this ticket:
+//   • "the fake must have captured subscribers" → `.length > 0` passed happily
+//     on a store-last-only fake, which was precisely the bug it was added to
+//     catch. Guarded "not zero"; claimed "the right one".
+//   • "must FAN OUT to EVERY subscriber" → `.length > 1` still passed when the
+//     emit one line below delivered to `handlers[0]` only. The sentence
+//     depended on the emit; the enumeration had covered only the length.
+//   • "No later poll, at any speed, can satisfy this" → true of polls, false of
+//     the frame-triggered fourth request, which is neither a poll nor later.
+//
+// SCOPE: assertion messages AND comments, equally. The third example was a
+// comment, and a confidently wrong comment is worse than none — the next
+// maintainer acts on it. Anything a maintainer will act on is in scope.
+//
+// 🔴 THE LIMITATION, UNVARNISHED. This rule has caught three cases here, and in
+// two of them it only fired because a SECOND person applied it. The author of
+// these tests had already adopted the rule, applied it to his own gate, and
+// still shipped the fan-out hole — he enumerated doubles for the expression the
+// gate read and not for the line directly beneath it. So it is an effective
+// REVIEW check and is NOT reliable as an author self-check. If the only person
+// who has ever run doubles against a gate is the person who wrote it, that gate
+// has not actually been checked yet.
+// ─────────────────────────────────────────────────────────────────────────────
 // e2e_test/tests/10_settings_roles_inline.spec.js
 // B10 · 角色誌/監控 inline create rows + role rename/reset gating (M2-2 batch:
 // 8d947d1 / 23d8063 / cee768f / 49d1930 / 3f88128).
@@ -216,7 +256,37 @@ test.describe('B10 · settings roles + monitor — inline create rows & gating',
     // run 33033163627 is the same race landing 4ms the other way.
     //
     // (1) The causal anchor: read the table at the moment of collapse. No later
-    //     poll, at any speed, can retroactively satisfy this.
+    //     POLL, at any speed, can retroactively satisfy this — but see the
+    //     KNOWN GAP below, because a poll is not the only other supplier.
+    //
+    // 🔴 KNOWN GAP, NAMED RATHER THAN PAPERED OVER. Neither assertion here has
+    //    a request-count gate, and there is a fourth request that is neither a
+    //    poll nor later. `useMachines`' schedule() computes
+    //    `delay = max(0, refreshSeconds*1000 - (now - lastStarted))`, and the
+    //    timer callback's `inFlight` guard is set only by the effect's own
+    //    refresh, never by a manual `refetch()`. So once >= refreshSeconds has
+    //    elapsed since the last effect refresh, the member frame fires a real
+    //    GET IMMEDIATELY, alongside the in-flight refetch, and that GET's own
+    //    answer already contains the new row.
+    //
+    //    Measured 2026-08-27 in this browser, with a 6s idle before onboarding
+    //    and only the reconciling GET held open: reconciling GET [6187, 7689]
+    //    (still in flight), frame at 6324, extra GET [6324, 6326], row on
+    //    screen at 6352 — and the inline row did not collapse until 7964. The
+    //    row beat the collapse by 1.6 SECONDS. So against this fourth request
+    //    the "read the table at collapse" anchor is worth exactly ZERO, not
+    //    "a narrow margin": on a broken hook both assertions here would pass
+    //    DETERMINISTICALLY, not occasionally.
+    //
+    //    Why it is left as a gap rather than fixed here: this test's job is the
+    //    inline-row UX (Esc collapses, Enter creates, the registry agrees), and
+    //    bolting the full request-accounting apparatus onto it would bury that.
+    //    The flow above idles ~250ms before onboarding — roughly 20x under the
+    //    5s threshold — so the fourth request is unreachable on this path today.
+    //    That is a property of the current step ordering, not a guarantee: put a
+    //    >5s wait anywhere above and this silently stops holding.
+    //    The DETERMINISTIC T-10 guard is the forced-overlap test at the bottom
+    //    of this file, which does carry the request-count gate (gate (0)).
     const tableAtCollapse = await page
       .locator('.mon-table, table')
       .first()
@@ -359,6 +429,23 @@ test.describe('B10 · settings roles + monitor — inline create rows & gating',
     //     The flow above idles for milliseconds, not seconds, so 3 is the honest
     //     expected count; a 4th means the premise broke and this run does not
     //     count, which is a loud failure rather than a silent pass.
+    //
+    //     🔴 TWO UNGUARDED ASSUMPTIONS THIS GATE RESTS ON — same family as the
+    //     uninstall/teardown-here equivalence in
+    //     MonitorPage.mutation-reconcile.test.tsx: both are claims about how
+    //     things are wired TODAY, and nothing enforces either.
+    //     ① Counting `/api/machines` is only complete while that GET is the sole
+    //        supplier of rows to this table. It is today: MonitorPage renders
+    //        exactly two tables, `.first()` is the machine table, that table maps
+    //        `machines` alone, monitoring telemetry only joins hardware columns
+    //        onto existing rows, and the POST's response body is discarded. If a
+    //        future machine table also derives rows from `monitoring.machines`,
+    //        this gate stops being complete without changing colour.
+    //     ② If `onboard` is ever changed to insert the row optimistically from
+    //        the POST response, the row appears with ZERO GETs, the count is
+    //        still 3, and this guard fails SILENTLY. (MonitorPage currently
+    //        forbids that — "never by an optimistic guess" — but that is a
+    //        comment, not a mechanism.)
     expect(
       evidence.machineCalls.length,
       'exactly three /api/machines requests are expected here (mount load, onboard POST, ' +

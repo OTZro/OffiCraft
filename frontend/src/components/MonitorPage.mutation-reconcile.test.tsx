@@ -1,3 +1,44 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔴 T-10 · HOW TO TELL WHETHER A GATE IS DRAWN IN THE RIGHT PLACE
+//
+// Learned expensively across this file and its sibling (the other of
+// MonitorPage.mutation-reconcile.test.tsx / e2e_test/tests/
+// 10_settings_roles_inline.spec.js): three separate gates were written,
+// reviewed and shipped while guarding something narrower than what they said
+// they guarded.
+//
+// THE RULE. A gate's assertion message IS its specification. If a test double
+// exists that makes the message FALSE while the assertion still PASSES, the
+// gate is drawn in the wrong place — however sensible the expression it
+// evaluates happens to look.
+//
+// HOW TO APPLY IT. Write the property as one sentence (the message usually is
+// that sentence). Then list EVERY line that sentence depends on and build a
+// double for each. The expression the gate itself reads is only ONE of those
+// lines. The three worked examples, all from this ticket:
+//   • "the fake must have captured subscribers" → `.length > 0` passed happily
+//     on a store-last-only fake, which was precisely the bug it was added to
+//     catch. Guarded "not zero"; claimed "the right one".
+//   • "must FAN OUT to EVERY subscriber" → `.length > 1` still passed when the
+//     emit one line below delivered to `handlers[0]` only. The sentence
+//     depended on the emit; the enumeration had covered only the length.
+//   • "No later poll, at any speed, can satisfy this" → true of polls, false of
+//     the frame-triggered fourth request, which is neither a poll nor later.
+//
+// SCOPE: assertion messages AND comments, equally. The third example was a
+// comment, and a confidently wrong comment is worse than none — the next
+// maintainer acts on it. Anything a maintainer will act on is in scope.
+//
+// 🔴 THE LIMITATION, UNVARNISHED. This rule has caught three cases here, and in
+// two of them it only fired because a SECOND person applied it. The author of
+// these tests had already adopted the rule, applied it to his own gate, and
+// still shipped the fan-out hole — he enumerated doubles for the expression the
+// gate read and not for the line directly beneath it. So it is an effective
+// REVIEW check and is NOT reliable as an author self-check. If the only person
+// who has ever run doubles against a gate is the person who wrote it, that gate
+// has not actually been checked yet.
+// ─────────────────────────────────────────────────────────────────────────────
+//
 // MonitorPage · a machine mutation's own `member` frame must not cancel the
 // reconcile it triggered (T-10, at the composition layer).
 //
@@ -177,7 +218,26 @@ describe("MonitorPage · a mutation's own member frame must not cancel its recon
       "the SSE fake must FAN OUT to every subscriber — MonitorPage mounts several, so " +
         "capturing only one means the frame is going to the wrong hook and this run proves nothing",
     ).toBeGreaterThan(1);
-    act(() => { for (const cb of [...h.sseHandlers]) cb("member"); });
+
+    // …and the gate above only checks CAPTURE. Its message says "fan out to
+    // EVERY subscriber", and that claim depends on the emit below as much as on
+    // the length above: emitting to `h.sseHandlers[0]` — the single-send idiom
+    // used in ~13 sibling tests here, so a very natural thing to copy in —
+    // leaves length at 4, sails through the gate, and delivers the frame to the
+    // wrong hook. Measured: that revives the false green outright. So count what
+    // was actually DELIVERED and require it to equal what was captured.
+    let delivered = 0;
+    act(() => {
+      for (const cb of [...h.sseHandlers]) {
+        delivered += 1;
+        cb("member");
+      }
+    });
+    expect(
+      delivered,
+      "the frame must have been DELIVERED to every captured subscriber — emitting to only one " +
+        "sends it to the wrong hook and this run proves nothing",
+    ).toBe(h.sseHandlers.length);
 
     // The GET answers, and its answer already reflects the delete.
     await act(async () => {
