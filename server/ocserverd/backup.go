@@ -585,6 +585,32 @@ func rotateBackups(dbPath string, keep int) ([]string, error) {
 // DIRECTORY itself — an empty directory costs nothing and removing it would be
 // reach this function has no reason to have.
 //
+// 🔴 THE SENTENCE ABOVE IS ONLY TRUE BECAUSE OF THE LSTAT BELOW. "Directly in
+// trash/" is a claim about the FILESYSTEM, and backupFilesIn cannot make it:
+// os.ReadDir FOLLOWS a symlinked `trash`, so `trash -> backups` (they are
+// siblings, and relocating trash/ behind a symlink is the most natural thing an
+// operator does when 141.6 GiB will not fit on this disk any more) would point
+// this deleter at the LIVE backups directory and empty it, newest snapshot
+// included. Measured, not reasoned: with this guard removed,
+// TestRetention_RefusesToReapThroughASymlinkedTrash reports the reaper deleting
+// all three planted backups through the link.
+//
+// So the trash path is LSTAT'd, NEVER STAT'd, and a symlink is REFUSED — the
+// same guard, in the same shape, as G5 in this repo's sister reaper
+// cli/ocwarden/trash.go (purgeTrash), which was written for exactly this attack
+// and whose comment reads "lstat (never stat)". Two reapers that delete on the
+// owner's behalf should not disagree about whether a symlinked trash is
+// followable. Refusal is (0, nil) plus a loud log line, not an error: the
+// backlog staying on disk is a few stale gigabytes, and failing the whole backup
+// run over it would trade a disk-space problem for a missing retreat point.
+//
+// It stops at THIS layer only, deliberately. purgeTrash also carries G7/G8
+// (EvalSymlinks containment) because its root and workdir are strings assembled
+// from an agent id — attacker-shaped input. Here the only input is dbPath, and
+// the trash path is Join(Dir(dbPath), "trash"): no setting can re-point it, and
+// ReadDir's entry names are basenames, so ".." and absolute paths cannot appear.
+// The symlinked leaf was the one real hole, and it is the one closed.
+//
 // 🔴 There is no "keep the newest few" here on purpose. Every file in trash/ was
 // ALREADY judged beyond N by the rotation that put it there; re-applying a quota
 // would resurrect a retention rule for files that have already been retired
@@ -593,6 +619,13 @@ func rotateBackups(dbPath string, keep int) ([]string, error) {
 // A missing trash/ is the normal, healthy state and returns (0, nil).
 func reapBackupTrash(dbPath string) (int, error) {
 	trash := backupTrashFor(dbPath)
+	// LSTAT, NEVER STAT: we must see the LINK, not what it points at. os.Stat
+	// here would resolve the link and hand the loop below somebody else's
+	// directory. Same guard as cli/ocwarden/trash.go G5.
+	if info, err := os.Lstat(trash); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		log.Printf("[backup] REFUSED to reclaim the legacy trash backlog: %q is a symlink — refusing to follow it out of the data directory", trash)
+		return 0, nil
+	}
 	files, err := backupFilesIn(trash)
 	if err != nil {
 		if os.IsNotExist(err) {

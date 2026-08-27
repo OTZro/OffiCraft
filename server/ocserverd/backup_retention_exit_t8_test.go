@@ -385,3 +385,112 @@ func TestLiveBackupRetain_ReadsTheRealSettingTable(t *testing.T) {
 		}
 	}
 }
+
+// TestRetention_RefusesToReapThroughASymlinkedTrash — the reaper must NOT follow a
+// symlinked `trash`.
+//
+// 🔴 THE DEFECT. reapBackupTrash's own comment claims its reach is "files
+// matching officraft-*.db that sit DIRECTLY in trash/". That is a claim about
+// the filesystem, and the listing it rests on cannot make it: backupFilesIn
+// calls os.ReadDir, and os.ReadDir FOLLOWS a symlink at the directory it is
+// given. So `trash -> backups` does not mean "there is no backlog to reclaim",
+// it means "reclaim the live backups directory" — every snapshot deleted, the
+// newest one included, on the very first backup after upgrading.
+//
+// 🔴 WHY THAT SHAPE AND NOT A CONTRIVED ONE. The premise of this whole ticket is
+// that `trash/` reached 141.6 GiB. The ordinary operator response to a directory
+// that will not fit any more is to move it to another disk and leave a symlink
+// behind. The escape is therefore reachable by someone doing the sensible thing,
+// not by an attacker.
+//
+// 🔴 WHAT IS ASSERTED. Not "reaped == 0" alone — a reaper that returns 0 while
+// deleting would pass that. The assertion is on the BYTES: every file behind the
+// link is still readable afterwards, each named individually so a widened reach
+// says which file it took. reaped/err are checked too, because the contract for a
+// refusal is (0, nil): the backlog staying put is a disk-space problem, and
+// failing the backup run over it would trade that for a missing retreat point.
+//
+// 🔴 THE SISTER GUARD. cli/ocwarden/trash.go's purgeTrash carries the same guard
+// as G5 ("lstat (never stat)"), written for exactly this planted-symlink case.
+// This test pins that the server-side reaper agrees with it; without it the two
+// reapers that delete on the owner's behalf disagree about whether a symlinked
+// trash is followable, and only one of them is tested.
+//
+// SAFETY: every path is under t.TempDir(); the real server root is never named.
+func TestRetention_RefusesToReapThroughASymlinkedTrash(t *testing.T) {
+	// The link target is the LIVE backups directory — the highest-value thing
+	// within reach, and the one an operator relocating trash/ is most likely to
+	// land on by accident (they are siblings).
+	t.Run("trash symlinked at the live backups directory", func(t *testing.T) {
+		_, dbPath := seedBackupFixture(t, 3)
+		backups := backupDirFor(dbPath)
+		if err := os.MkdirAll(backups, 0o700); err != nil {
+			t.Fatalf("mkdir backups: %v", err)
+		}
+		precious := []string{
+			"officraft-20260825-040000-scheduled.db",
+			"officraft-20260826-040000-premigration.db",
+			"officraft-20260827-040000-scheduled.db", // the NEWEST retreat point
+		}
+		for _, name := range precious {
+			if err := os.WriteFile(filepath.Join(backups, name), []byte("a real backup"), 0o600); err != nil {
+				t.Fatalf("plant %s: %v", name, err)
+			}
+		}
+
+		trash := backupTrashFor(dbPath)
+		if err := os.Symlink(backups, trash); err != nil {
+			t.Fatalf("plant trash symlink: %v", err)
+		}
+
+		reaped, err := reapBackupTrash(dbPath)
+		if err != nil {
+			t.Errorf("reapBackupTrash on a symlinked trash returned %v; refusing must be (0, nil) — a stale backlog is not worth failing the backup run over", err)
+		}
+		if reaped != 0 {
+			t.Errorf("reapBackupTrash reported reaping %d file(s) through a SYMLINKED trash; it must refuse and reclaim nothing", reaped)
+		}
+		for _, name := range precious {
+			if _, err := os.Stat(filepath.Join(backups, name)); err != nil {
+				t.Errorf("the trash reaper followed the `trash -> backups` symlink and DELETED %s, a live backup outside trash/: %v — its stated reach is files DIRECTLY in trash/, and os.ReadDir follows the link unless the reaper lstats first (see cli/ocwarden/trash.go G5)", name, err)
+			}
+		}
+		// The link itself must survive too: removing it is reach this function
+		// does not have, and it would silently un-relocate the operator's trash.
+		if info, err := os.Lstat(trash); err != nil {
+			t.Errorf("the trash reaper removed the symlink at %s: %v", trash, err)
+		} else if info.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("%s is no longer a symlink after the reaper ran (mode %v)", trash, info.Mode())
+		}
+	})
+
+	// The same link pointed OUT of the data directory entirely — the literal
+	// "trash moved to another disk" case. Split from the first because the two
+	// fail for different reasons if only one guard is present: this one escapes
+	// the data root, the first one escapes only into a sibling.
+	t.Run("trash symlinked out of the data directory", func(t *testing.T) {
+		_, dbPath := seedBackupFixture(t, 3)
+		elsewhere := filepath.Join(t.TempDir(), "other-disk")
+		if err := os.MkdirAll(elsewhere, 0o700); err != nil {
+			t.Fatalf("mkdir elsewhere: %v", err)
+		}
+		const bystander = "officraft-20260810-040000-manual.db"
+		if err := os.WriteFile(filepath.Join(elsewhere, bystander), []byte("not this reaper's"), 0o600); err != nil {
+			t.Fatalf("plant %s: %v", bystander, err)
+		}
+		if err := os.Symlink(elsewhere, backupTrashFor(dbPath)); err != nil {
+			t.Fatalf("plant trash symlink: %v", err)
+		}
+
+		reaped, err := reapBackupTrash(dbPath)
+		if err != nil {
+			t.Errorf("reapBackupTrash on a symlinked trash returned %v; refusing must be (0, nil)", err)
+		}
+		if reaped != 0 {
+			t.Errorf("reapBackupTrash reported reaping %d file(s) through a trash symlinked OUTSIDE the data directory; it must refuse", reaped)
+		}
+		if _, err := os.Stat(filepath.Join(elsewhere, bystander)); err != nil {
+			t.Errorf("the trash reaper walked out of the data directory through the symlink and DELETED %s at %s: %v", bystander, elsewhere, err)
+		}
+	})
+}
