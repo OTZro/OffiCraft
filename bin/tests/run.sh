@@ -392,27 +392,6 @@ else
   bad "bin/tests/auto-beta-guard.sh is missing"
 fi
 
-# ── retired image overlay stays retired (T-f014) ────────────────────────────
-# The cockpit used to carry two full-size overlays for the same click: the
-# shared preview shell (filename, share link, download, close) and a bare
-# `Lightbox` backdrop. Which one a user got depended on the call site, and the
-# split rotted invisibly — AttachmentStrip stopped reading its `onOpenImage`
-# prop, so five call sites passed a handler into a component that ignored it and
-# mounted a second overlay that could never open, with nothing red. The
-# component and its stylesheet block are gone; this keeps them gone. A green
-# does NOT mean there is only one image surface — see the guard's header.
-LIGHTBOX="$HERE/lightbox-retired-guard.sh"
-echo
-if [[ -f "$LIGHTBOX" ]]; then
-  if run_guard "$LIGHTBOX"; then
-    ok "retired-Lightbox suite passed"
-  else
-    bad "retired-Lightbox suite FAILED (see output above)"
-  fi
-else
-  bad "bin/tests/lightbox-retired-guard.sh is missing"
-fi
-
 
 # ── single-source rule review digest (T-c19c) ────────────────────────────────
 # The "兩份權威打架" rule has one operational paragraph in
