@@ -21,6 +21,15 @@
 // Writing it out four times would be four copies of one assertion — the kind
 // of padding that makes a suite look thorough and detect nothing extra.
 //
+// 🔴 AND THAT EQUIVALENCE IS AN UNGUARDED ASSUMPTION. It is a claim about how
+// MonitorPage is wired TODAY — that uninstall and teardown-here still reconcile
+// by awaiting the same `refetchMachines()`. Nothing enforces it. The day someone
+// changes uninstall to splice the row out optimistically, or gives it its own
+// reconcile path, the equivalence silently stops holding and only delete is
+// still covered — this file will keep passing and will keep claiming, in the
+// paragraph above, to speak for all three. If you touch any of those handlers,
+// re-read that claim before trusting it.
+//
 // Delete is the representative because it is the most destructive of the
 // dialog-driven three and because those three share a shape onboard does NOT
 // have: `confirmDelete`/`runUninstall` dismiss the dialog BEFORE awaiting the
@@ -150,10 +159,24 @@ describe("MonitorPage · a mutation's own member frame must not cancel its recon
 
     // …and DELETE /api/machines/{id} publishes `member` (api_machines.go :1299),
     // which arrives while that GET is still in flight.
+    // 🔴 This gate guards the FAN-OUT, not merely "a subscriber exists". The
+    // false green it exists to prevent was never "zero captured" — it was "ONE
+    // captured, and the wrong one". `toBeGreaterThan(0)` passes happily on a
+    // store-last-only fake (`h.sseHandlers = [cb]`), which is exactly the bug,
+    // so it guarded nothing. Measured 2026-08-27: MonitorPage mounts 4
+    // subscribers (useMachines, useMonitoring, useMembers, useTasks-family).
+    // The threshold is >1 rather than ===4 deliberately: pinning the exact
+    // count would redden every time a hook is legitimately added or removed,
+    // which is the false-RED failure this ticket must not create. >1 is the
+    // minimal property that separates "fans out" from "keeps only the last
+    // one". If MonitorPage ever genuinely drops to a single subscriber this
+    // reddens loudly and says why — at which point this test's premise needs
+    // revisiting anyway, so a loud failure is the correct outcome.
     expect(
       h.sseHandlers.length,
-      "the SSE fake must have captured the page's subscribers — zero means nothing is being emitted to",
-    ).toBeGreaterThan(0);
+      "the SSE fake must FAN OUT to every subscriber — MonitorPage mounts several, so " +
+        "capturing only one means the frame is going to the wrong hook and this run proves nothing",
+    ).toBeGreaterThan(1);
     act(() => { for (const cb of [...h.sseHandlers]) cb("member"); });
 
     // The GET answers, and its answer already reflects the delete.

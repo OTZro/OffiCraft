@@ -325,10 +325,48 @@ test.describe('B10 · settings roles + monitor — inline create rows & gating',
     }));
 
     // ── ANTI-VACUITY GATE ────────────────────────────────────────────────
+    // (c) is the one that actually holds this together: it asserts the frame
+    // really landed inside the reconciling GET, and it is coupled to NOTHING
+    // else. (a) is a diagnostic — it names the likely cause when (c) fails, and
+    // its threshold is derived from HOLD_MS, so shrinking HOLD_MS relaxes (a)
+    // along with the behaviour. That is acceptable precisely because (c) does
+    // not move: a smaller window collapses the odds of the frame landing inside
+    // it (~16% at HOLD_MS=40), so (c) reddens loudly as "this run proves
+    // nothing" instead of quietly passing. The failure direction is fail-loud.
     // Without these three, a run that never actually staged the race would go
     // green and look like a pass — the failure mode that makes a guard worse
     // than no guard at all. Each says "this run does not count", not "the
     // product is fine".
+    // (0) EXACTLY three /api/machines requests may exist at this point: the
+    //     mount load, the onboard POST, and the reconciling GET. This gate does
+    //     two jobs.
+    //     • It closes the hole that would otherwise let something OTHER than the
+    //       guarded refetch put the row on screen. `schedule()` computes
+    //       `delay = max(0, refreshSeconds*1000 - (now - lastStarted))`, and the
+    //       timer callback's `inFlight` check is set only by the effect's own
+    //       refresh — never by a manual `refetch()`. So once >= refreshSeconds
+    //       has passed since the last effect refresh, the member frame fires a
+    //       real GET IMMEDIATELY, alongside the in-flight refetch, and that
+    //       fourth answer already contains the new row. Measured 2026-08-27 with
+    //       a 6s idle before onboarding: 4 requests, the extra one starting at
+    //       t=6317 against a frame at t=6316. Under the defect that extra
+    //       request would repair the view and this test would go GREEN on a
+    //       broken hook.
+    //     • It also makes the positional lookup below sound. `machineCalls[last]`
+    //       has no attribute tying it to this create; in the 4-request timeline
+    //       above the last entry is the EXTRA request, not the reconciling GET,
+    //       so every gate beneath would be measuring the wrong object.
+    //     The flow above idles for milliseconds, not seconds, so 3 is the honest
+    //     expected count; a 4th means the premise broke and this run does not
+    //     count, which is a loud failure rather than a silent pass.
+    expect(
+      evidence.machineCalls.length,
+      'exactly three /api/machines requests are expected here (mount load, onboard POST, ' +
+        `reconciling GET) — got ${JSON.stringify(evidence.machineCalls)}; a fourth means some ` +
+        'OTHER request could have supplied the row, so this run cannot attribute it to the ' +
+        'refetch under guard and proves nothing',
+    ).toBe(3);
+
     const reconcilingGet = evidence.machineCalls[evidence.machineCalls.length - 1];
     expect(
       reconcilingGet && reconcilingGet.end - reconcilingGet.start,
