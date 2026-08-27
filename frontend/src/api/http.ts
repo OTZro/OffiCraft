@@ -282,10 +282,33 @@ let sseVisibilityHandler: (() => void) | null = null;
 let sseState: SseConnectionState = "idle";
 const sseStateSubscribers = new Set<(s: SseConnectionState) => void>();
 
+// 🔴 THE THIRD FAN-OUT. There are exactly three loops in this file that hand
+// control to code we do not own (`/usr/bin/grep -n "for (const cb of"` — this
+// one, `resyncAll`, and the delta fan). The other two were isolated when a
+// throwing subscriber was found to be able to freeze the state machine; THIS one
+// was missed, and it is the worst-placed of the three because it sits UPSTREAM
+// OF THE RETRY SCHEDULER. Measured before this guard: a state subscriber that
+// threw on "connecting" left the connection count at 1 after sixty seconds —
+// `setSseState` threw, so `scheduleSseReconnect()` on the next line never ran,
+// `sseSource` was already null, and nothing would ever reopen it.
+//
+// 🔑 That is THE ORIGINAL BUG OF THIS TICKET, reached through a different door:
+// a cockpit frozen for good with a banner that promises a reconnect nobody
+// scheduled. Two defences, because either alone is a single point of failure:
+//   HERE       — no subscriber can escape this loop; and
+//   CALL SITES — the mechanism runs BEFORE the broadcast, never after, so even
+//                an un-isolated throw could not cancel a recovery.
 function setSseState(next: SseConnectionState): void {
   if (sseState === next) return;
   sseState = next;
-  for (const cb of [...sseStateSubscribers]) cb(next);
+  for (const cb of [...sseStateSubscribers]) {
+    try {
+      cb(next);
+    } catch (e) {
+      // A listener's bug must not decide whether this app reconnects.
+      console.error("sse state: subscriber threw", next, e);
+    }
+  }
 }
 
 /** The downlink's current health. Exported for tests and for the first render
@@ -301,7 +324,19 @@ export function subscribeSseConnection(
   cb: (s: SseConnectionState) => void,
 ): () => void {
   sseStateSubscribers.add(cb);
-  cb(sseState);
+  // 🔴 A FOURTH HAND-OFF TO FOREIGN CODE, and the one an enumeration misses.
+  // The review that found the other three searched for `for (const cb of` —
+  // correct for the three FAN-OUTS, and structurally blind to this one, which is
+  // a bare call, not a loop. Found by probing the behaviour instead: a listener
+  // that threw on its very first (synchronous, immediate) invocation threw out
+  // of `subscribeConnection` itself, i.e. out of the subscriber's mount effect.
+  // Same class, same fix. Counting by shape finds what the shape describes; the
+  // denominator is only as honest as the pattern that produced it.
+  try {
+    cb(sseState);
+  } catch (e) {
+    console.error("sse state: subscriber threw on subscribe", sseState, e);
+  }
   return () => {
     sseStateSubscribers.delete(cb);
   };
@@ -439,8 +474,20 @@ function resyncAll(): void {
         cb(topic, toSseDelta(topic, null));
       } catch (e) {
         // One subscriber's bug is not the other subscribers' problem, and it is
-        // certainly not the connection state's problem. Warn and carry on.
-        console.warn("sse resync: subscriber threw", topic, e);
+        // certainly not the connection state's problem. Report and carry on.
+        //
+        // ⚠️ WHAT SWALLOWING THIS COSTS, STATED PLAINLY. This app installs NO
+        // error reporter — no window.onerror, no "error"/"unhandledrejection"
+        // listener, no ErrorBoundary anywhere in src/ (measured). So this catch
+        // is the end of the line: nothing collects it, and a hook that throws on
+        // every resync will do so forever with only a console line to show for
+        // it. That silence is accepted DELIBERATELY, because the alternative is
+        // worse in kind, not degree: an escaping throw freezes the connection
+        // state machine and lies to the owner about being disconnected. We trade
+        // a quiet log for a truthful UI. `console.error`, not `.warn`, so that
+        // the day something IS listening it hears this at the right severity —
+        // a subscriber throwing is a bug, never an advisory.
+        console.error("sse resync: subscriber threw", topic, e);
       }
     }
   }
@@ -517,8 +564,8 @@ async function attemptSseReconnect(): Promise<void> {
   if (status === 401 || status === 403) {
     // The session is dead. STOP — and say so, rather than retrying forever
     // behind a banner that promises a recovery that can never come.
-    setSseState("unauthorized");
     handleUnauthorized(); // clears the token + fires oc-auth-expired → login wall
+    setSseState("unauthorized"); // mechanism first, broadcast second
     return;
   }
   // Anything else (200, 5xx, 0/offline) is a transport problem, not an auth
@@ -588,7 +635,6 @@ function ensureSseSource(): void {
   if (sseSource) return;
   const t = ownerToken();
   if (!t) return; // honest: gated, would 401 (callers already checked too)
-  setSseState("connecting");
   const es = new EventSource(`/api/events?token=${encodeURIComponent(t)}`);
   // The browser reconnects the stream transparently, but there is NO replay
   // (spec/sse.md §2.1): a delta emitted during the drop→reconnect gap is gone.
@@ -645,8 +691,24 @@ function ensureSseSource(): void {
       setSseState("idle");
       return;
     }
-    setSseState("connecting");
+    // Schedule the recovery FIRST, announce it second. Telling the world we are
+    // reconnecting is worthless if saying so is what stops us reconnecting.
+    //
+    // ⚠️ NO TEST GUARDS THIS ORDERING, AND NONE CAN — said plainly so the next
+    // person does not go looking for the guard, or "helpfully" swap the lines
+    // back. Measured 2×2 (isolation in `setSseState` × this ordering):
+    //     isolation ON,  schedule-first  → recovers
+    //     isolation ON,  announce-first  → recovers   ← indistinguishable
+    //     isolation OFF, schedule-first  → recovers   ← THIS LINE'S VALUE
+    //     isolation OFF, announce-first  → FROZEN, permanently
+    // So the ordering is a genuine second line of defence — it alone saves the
+    // app when the isolation is gone — and it is an equivalent mutant while the
+    // isolation holds. Writing a test for it would mean writing one that passes
+    // either way, which is the exact failure this ticket already made twice
+    // (an assertion that names a property it cannot reach). Belt and braces,
+    // with the braces documented instead of falsely pinned.
     scheduleSseReconnect();
+    setSseState("connecting");
   };
   es.onmessage = (e: MessageEvent) => {
     // The parse and the fan-out get SEPARATE handling on purpose. They used to
@@ -655,13 +717,25 @@ function ensureSseSource(): void {
     // frame: the remaining subscribers were skipped and the log said nothing that
     // pointed at the real cause. Same defect class as the one in `resyncAll`
     // above, with a misleading label on top.
-    let evt: { topic?: string; data?: { payload?: unknown } };
+    let evt: { topic?: string; data?: { payload?: unknown } } | null;
     try {
       evt = JSON.parse(e.data) as typeof evt;
     } catch {
       return; // Non-JSON keepalive/comment frame — genuinely ignorable.
     }
-    if (!evt.topic) return;
+    // 🔴 `!evt` IS NOT REDUNDANT, and leaving it out was a REGRESSION THIS FILE
+    // SHIPPED. Splitting the old single try/catch fixed a real bug (see below)
+    // but narrowed the protection at the same time: the property access moved
+    // OUTSIDE the try, where the old catch had been quietly covering it. And
+    // `JSON.parse("null")` does not throw — it returns `null`, so a literal
+    // `null` frame walked straight into `evt.topic` and threw a TypeError out of
+    // `es.onmessage`. Measured: the seven other malformed shapes (`: keepalive`,
+    // `5`, `"hello"`, `[1,2]`, `true`, `{"data":{}}`, empty) are all inert
+    // because reading `.topic` off a non-null primitive just yields undefined.
+    // `null` is the single value that is neither a parse error nor an object.
+    // This path must survive ANYTHING the wire delivers, so it is pinned by
+    // http.sse-malformed-frames.test.ts rather than by this comment.
+    if (!evt || !evt.topic) return;
     // Project the frame's payload to the identity fields it names (§2.2 —
     // never the values) so a subscriber can refetch ONE item.
     const delta = toSseDelta(evt.topic, evt.data?.payload ?? null);
@@ -670,11 +744,18 @@ function ensureSseSource(): void {
       try {
         cb(evt.topic, delta);
       } catch (err) {
-        console.warn("sse delta: subscriber threw", evt.topic, err);
+        // Same trade as `resyncAll` above (see the note there): nothing in this
+        // app collects this, and that is the accepted price of not letting one
+        // hook's throw stop a delta reaching the other subscribers.
+        console.error("sse delta: subscriber threw", evt.topic, err);
       }
     }
   };
   sseSource = es;
+  // Announced only once the connection actually exists — same reason as the
+  // scheduler above: the broadcast is the last thing that happens, never a step
+  // the mechanism has to survive.
+  setSseState("connecting");
 
   // Foreground-restore resync (T-b86c). A mobile browser tab sent to the
   // background often PAUSES the EventSource without closing it: no reconnect
@@ -2678,7 +2759,9 @@ export const httpApi: Api = {
       if (sseSubscribers.size === 0) {
         cancelSseReconnect();
         sseRetryAttempt = 0;
-        setSseState("idle");
+        // The whole teardown happens BEFORE the "idle" broadcast; measured, a
+        // listener throwing on "idle" used to leave the EventSource open and the
+        // foreground listeners attached.
         if (sseSource) sseSource.close();
         sseSource = null;
         // Tear down the foreground-restore listeners with the connection so a
@@ -2691,6 +2774,7 @@ export const httpApi: Api = {
           }
         }
         sseVisibilityHandler = null;
+        setSseState("idle");
       }
     };
   },

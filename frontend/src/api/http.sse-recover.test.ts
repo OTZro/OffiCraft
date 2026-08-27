@@ -23,7 +23,8 @@
 
 // MEASURED MUTANTS — every guard below was made to fail on purpose, and each one
 // is re-runnable by hand: apply the edit to api/http.ts, run this file, put it
-// back. Re-measured 2026-08-27 after independent review round 2; 18/18 caught.
+// back. Re-measured 2026-08-27 after independent review round 3; 21 caught,
+// plus 2 equivalent mutants documented below rather than falsely pinned.
 //
 // 🔴 CORRECTION, LEFT IN ON PURPOSE. An earlier version of this header claimed
 // these were "single-assertion attributions, not cascades". THAT WAS FALSE and
@@ -51,10 +52,32 @@
 //   N1b  drop the try/catch inside the live delta fan              1   "a throwing subscriber does not stop an ordinary delta…"
 //   N3   delete `sseGapPending = false` (never clear the debt)     2   "the debt is discharged ONCE…"
 //   N6   `SSE_PROBE_TIMEOUT_MS` 8000 → 600000                      1   "the probe deadline is BOUNDED, not merely present"
+//   R1   `if (!evt || !evt.topic)` → `if (!evt.topic)`               1   http.sse-malformed-frames.test.ts, the "null" row
+//   R2   drop the try/catch inside `setSseState`'s fan               4   "a listener throwing on 'connecting' does NOT cancel the reconnect"
+//   R5   drop the try/catch on the immediate first `cb(sseState)`    3   "a listener that throws on its very FIRST call…"
+//
+// ⚠️ TWO MUTANTS DELIBERATELY LEFT UNCAUGHT, because they are EQUIVALENT and a
+// test for them would be a lie. R3/R4 revert "mechanism before broadcast" at two
+// call sites (schedule-then-announce, teardown-then-announce). Measured 2×2 with
+// R2: the ordering only changes behaviour when the isolation is ALSO gone
+// (isolation off + announce-first = permanently frozen; every other combination
+// recovers). While the isolation stands, no observation can separate them. They
+// are kept as a second line and documented at the call site rather than pinned
+// by an assertion that would pass either way — writing that assertion is exactly
+// the mistake this file has already made twice.
 //
 // PROVENANCE, because it says something about where the holes were:
 //   round 1 review → M2b was a REAL DEFECT in the shipped code (not a
 //     hypothetical); M10/M11/M12 were mutants that SURVIVED it.
+//   round 3 review → R1 was a REGRESSION THIS BRANCH SHIPPED: splitting an
+//     over-broad try/catch narrowed the protection and a `null` frame began
+//     throwing out of onmessage. R2 was a pre-existing hole in the THIRD
+//     fan-out, upstream of the retry scheduler — its failure mode is this
+//     ticket's original bug reached through another door. R5 (the immediate
+//     `cb(sseState)`) was found by probing behaviour, NOT by the review's
+//     enumeration: that search was `for (const cb of`, and this hand-off is a
+//     bare call, so it was invisible to the pattern. A denominator is only as
+//     honest as the pattern that produced it.
 //   round 2 review → N1 was a REAL DEFECT (P3, found on the head); N3 and N6
 //     were mutants that survived, and both survived for the SAME reason: the
 //     test named the property but never reached the line. N3's test added a
@@ -608,6 +631,85 @@ describe("httpApi · the probe's own contract (the parts a state-machine test do
     ).toBe(true);
     expect(sseConnectionState()).toBe("live");
     expect(FakeEventSource.instances).toHaveLength(2);
+    off();
+  });
+});
+
+describe("httpApi · a CONNECTION-STATE listener that throws must not be able to freeze the app", () => {
+  // The state fan-out is the THIRD place this module hands control to code it
+  // does not own, and the worst-placed of them: it sits directly upstream of the
+  // retry scheduler. Adopted from independent review round 3, which found both
+  // of these on the head before this describe existed.
+  //
+  // 🔑 What made this worth fixing even though it is unreachable TODAY (the one
+  // consumer is ConnectionBanner's bare setState): the failure mode is not "the
+  // banner misbehaves", it is THE ORIGINAL BUG OF THIS TICKET — a cockpit frozen
+  // for good, with a banner promising a reconnect that nobody scheduled.
+
+  it("a listener throwing on 'connecting' does NOT cancel the reconnect that was about to be scheduled", async () => {
+    const off = httpApi.subscribeEvents(() => {});
+    const offState = httpApi.subscribeConnection((s) => {
+      if (s === "connecting") throw new Error("a state listener threw");
+    });
+    FakeEventSource.instances[0].open();
+    FakeEventSource.instances[0].permanentError();
+
+    await vi.advanceTimersByTimeAsync(60000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(
+      FakeEventSource.instances.length,
+      "sixty seconds with no reconnect is the frozen cockpit this whole ticket is about",
+    ).toBeGreaterThan(1);
+    offState();
+    off();
+  });
+
+  it("a listener throwing on 'idle' does NOT skip the teardown", () => {
+    const off = httpApi.subscribeEvents(() => {});
+    const es = FakeEventSource.instances[0];
+    es.open();
+    const offState = httpApi.subscribeConnection((s) => {
+      if (s === "idle") throw new Error("a state listener threw");
+    });
+
+    expect(() => off()).not.toThrow();
+
+    expect(
+      es.closed,
+      "the connection was left open with nobody listening — a phantom the server still counts",
+    ).toBe(true);
+    offState();
+  });
+
+  it("a listener that throws on its very FIRST call does not throw out of subscribeConnection", () => {
+    // Not a loop, so an enumeration of the fan-outs does not find it: the
+    // immediate call that hands a fresh subscriber the current state is a bare
+    // invocation. It runs inside the subscriber's mount effect.
+    const off = httpApi.subscribeEvents(() => {});
+    FakeEventSource.instances[0].open();
+    expect(() =>
+      httpApi.subscribeConnection(() => {
+        throw new Error("threw on the immediate first call");
+      }),
+    ).not.toThrow();
+    off();
+  });
+
+  it("one throwing listener does not stop the OTHERS from hearing the state change", () => {
+    const heard: string[] = [];
+    const off = httpApi.subscribeEvents(() => {});
+    const offBad = httpApi.subscribeConnection(() => {
+      throw new Error("boom");
+    });
+    const offGood = httpApi.subscribeConnection((s) => heard.push(s));
+    heard.length = 0;
+
+    FakeEventSource.instances[0].open();
+
+    expect(heard).toEqual(["live"]);
+    offBad();
+    offGood();
     off();
   });
 });
