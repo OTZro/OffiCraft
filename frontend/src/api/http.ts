@@ -406,16 +406,43 @@ export function toSseDelta(topic: string, payload: unknown): SseDelta {
 // tab often PAUSES the connection in the background without a reconnect, so
 // onopen never re-fires) — so every delta-backed view (unread badge, roster,
 // tasks, reply cards…) re-pulls its truth in ONE place. Snapshot the set: a
-// callback may (un)subscribe during the fan-out. Each subscriber's refetch has
-// its own .catch (verified per-hook), so a fan into an unstable network fails
-// as "keep the stale value + warn", never an unhandled rejection.
+// callback may (un)subscribe during the fan-out.
 // A resync NAMES NOTHING on purpose: the stream has no replay, so what was
 // missed is unknowable and every subscriber has to re-pull its whole snapshot.
 // The whole fan is SYNCHRONOUS, which is what lets a subscriber coalesce the 13
 // topics into one refetch (lib/deltaSink.ts) — do not make this loop async.
+//
+// 🔴 EVERY CALL IS ISOLATED, and the comment this replaced is why. It used to
+// say "each subscriber's refetch has its own .catch (verified per-hook), so a
+// fan into an unstable network fails as keep-the-stale-value + warn, never an
+// unhandled rejection" — TRUE OF REJECTED PROMISES, AND NO DEFENCE AT ALL
+// AGAINST A SYNCHRONOUS THROW. A `.catch` on the refetch cannot catch a hook
+// that throws while BUILDING that refetch (a bad read off a delta, a render-time
+// invariant). Measured on the version this replaces: one throwing subscriber
+// aborted the whole fan on the FIRST topic, so
+//   1. every OTHER subscriber received nothing — a resync silently covering a
+//      fraction of the app;
+//   2. the throw escaped `es.onopen`, so `sseGapPending` was never cleared and
+//      `sseRetryAttempt` never reset;
+//   3. `setSseState("live")` never ran ⇒ THE BANNER STAYED UP OVER A HEALTHY,
+//      DELIVERING STREAM.
+// (3) is the one that made this worth blocking on. This whole change exists to
+// make a dead connection visible; a banner that cries disconnected while the
+// stream is fine is the same lie with the sign flipped, and the owner has no
+// more way to see through it than before. Isolation per (topic, subscriber)
+// keeps one broken hook from deciding what the other 23 know — and keeps the
+// state machine's bookkeeping, which runs AFTER this returns, always reachable.
 function resyncAll(): void {
   for (const topic of SSE_RESYNC_TOPICS) {
-    for (const cb of [...sseSubscribers]) cb(topic, toSseDelta(topic, null));
+    for (const cb of [...sseSubscribers]) {
+      try {
+        cb(topic, toSseDelta(topic, null));
+      } catch (e) {
+        // One subscriber's bug is not the other subscribers' problem, and it is
+        // certainly not the connection state's problem. Warn and carry on.
+        console.warn("sse resync: subscriber threw", topic, e);
+      }
+    }
   }
 }
 
@@ -622,19 +649,29 @@ function ensureSseSource(): void {
     scheduleSseReconnect();
   };
   es.onmessage = (e: MessageEvent) => {
+    // The parse and the fan-out get SEPARATE handling on purpose. They used to
+    // share one try/catch labelled "non-JSON keepalive/comment frame — ignore",
+    // which meant a subscriber throwing mid-fan was silently filed as a malformed
+    // frame: the remaining subscribers were skipped and the log said nothing that
+    // pointed at the real cause. Same defect class as the one in `resyncAll`
+    // above, with a misleading label on top.
+    let evt: { topic?: string; data?: { payload?: unknown } };
     try {
-      const evt = JSON.parse(e.data) as {
-        topic?: string;
-        data?: { payload?: unknown };
-      };
-      if (!evt.topic) return;
-      // Project the frame's payload to the identity fields it names (§2.2 —
-      // never the values) so a subscriber can refetch ONE item.
-      const delta = toSseDelta(evt.topic, evt.data?.payload ?? null);
-      // Snapshot the set: a callback may (un)subscribe during fan-out.
-      for (const cb of [...sseSubscribers]) cb(evt.topic, delta);
+      evt = JSON.parse(e.data) as typeof evt;
     } catch {
-      // Non-JSON keepalive/comment frame — ignore.
+      return; // Non-JSON keepalive/comment frame — genuinely ignorable.
+    }
+    if (!evt.topic) return;
+    // Project the frame's payload to the identity fields it names (§2.2 —
+    // never the values) so a subscriber can refetch ONE item.
+    const delta = toSseDelta(evt.topic, evt.data?.payload ?? null);
+    // Snapshot the set: a callback may (un)subscribe during fan-out.
+    for (const cb of [...sseSubscribers]) {
+      try {
+        cb(evt.topic, delta);
+      } catch (err) {
+        console.warn("sse delta: subscriber threw", evt.topic, err);
+      }
     }
   };
   sseSource = es;

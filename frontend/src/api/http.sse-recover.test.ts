@@ -23,23 +23,21 @@
 
 // MEASURED MUTANTS — every guard below was made to fail on purpose, and each one
 // is re-runnable by hand: apply the edit to api/http.ts, run this file, put it
-// back. Re-measured 2026-08-27 after independent review; 14/14 caught.
+// back. Re-measured 2026-08-27 after independent review round 2; 18/18 caught.
 //
 // 🔴 CORRECTION, LEFT IN ON PURPOSE. An earlier version of this header claimed
 // these were "single-assertion attributions, not cascades". THAT WAS FALSE and
-// the review measured it: deleting `es.onerror` reddens TWELVE tests, not one.
-// The reds are honest — each of those tests independently needs the error path,
-// so the fan-out is SEMANTIC, not test pollution — but "each mutant maps to one
-// named assertion" was not true, and a wrong description of evidence is worse
-// than none: it tells the next person there is nothing left to check. The real
-// red-count is now in the table, and it is the number, not a word, that is the
-// claim.
+// review round 1 measured it. The reds are honest — each test independently
+// needs the path being broken, so the fan-out is SEMANTIC, not test pollution —
+// but "each mutant maps to one named assertion" was not true, and a wrong
+// description of evidence is worse than none: it tells the next person there is
+// nothing left to check. The `reds` column is the claim now, not an adjective.
 //
 //   #    the edit                                              reds  the assertion that names it
 //   ---  ----------------------------------------------------  ----  ---------------------------
-//   M1   delete the whole `es.onerror = …` handler (THE BUG)     12   "a permanently CLOSED stream is REBUILT"
-//   M2   `if (opened || sseGapPending)` → `if (opened)`           3   "the rebuilt connection's FIRST open fans a FULL resync"
-//   M2b  delete `sseGapPending = true` in the CLOSED branch       3   "a NEW subscriber mounting during the outage…"
+//   M1   delete the whole `es.onerror = …` handler (THE BUG)     13   "a permanently CLOSED stream is REBUILT"
+//   M2   `if (opened || sseGapPending)` → `if (opened)`           4   "the rebuilt connection's FIRST open fans a FULL resync"
+//   M2b  delete `sseGapPending = true` in the CLOSED branch       4   "a NEW subscriber mounting during the outage…"
 //   M3   `if (status === 401 || status === 403)` → `if (false)`   2   "401 STOPS the retry loop…"
 //   M4   `if (es.readyState !== 2 …)` → `if (false)`              1   "a TRANSIENT error … does NOT tear the connection down"
 //   M5   `const idx = Math.min(sseRetryAttempt, …)` → `= 0`       1   "repeated failures BACK OFF"
@@ -49,14 +47,25 @@
 //   M11  delete the `if (sseSource !== es) return` stale guard    1   "a handler from a connection we already replaced is IGNORED"
 //   M12  probe's `if (!t) return 401` → `return 0`                1   "no token is answered as UNAUTHORIZED…"
 //   M13  neuter the probe deadline (`setTimeout(() => {}, …)`)    1   "a probe that never answers is ENDED by its deadline"
+//   N1   drop the try/catch inside `resyncAll`'s fan               1   "one subscriber throwing SYNCHRONOUSLY…"
+//   N1b  drop the try/catch inside the live delta fan              1   "a throwing subscriber does not stop an ordinary delta…"
+//   N3   delete `sseGapPending = false` (never clear the debt)     2   "the debt is discharged ONCE…"
+//   N6   `SSE_PROBE_TIMEOUT_MS` 8000 → 600000                      1   "the probe deadline is BOUNDED, not merely present"
 //
-// M2b, M10, M11 and M12 all come from the independent review. M2b was a REAL
-// DEFECT it found in the shipped first round, not a hypothetical; M10/M11/M12
-// were mutants that SURVIVED that round — the state machine was guarded and the
-// probe's own contract was not. M12 needed the assertion strengthened before it
-// would die: the version that only checked this module's own state could not
-// see it, because the difference is entirely outside (whether oc-auth-expired
-// reaches the auth layer).
+// PROVENANCE, because it says something about where the holes were:
+//   round 1 review → M2b was a REAL DEFECT in the shipped code (not a
+//     hypothetical); M10/M11/M12 were mutants that SURVIVED it.
+//   round 2 review → N1 was a REAL DEFECT (P3, found on the head); N3 and N6
+//     were mutants that survived, and both survived for the SAME reason: the
+//     test named the property but never reached the line. N3's test added a
+//     subscriber to a healthy stream, so no second connection ever opened. N6's
+//     test advanced time BY THE CONSTANT IT WAS CHECKING — a tautology about
+//     that number, green at any value.
+//   M12 needed its assertion strengthened before it would die: the difference
+//     was entirely OUTSIDE this module (whether oc-auth-expired reaches the auth
+//     layer), so a test that only watched this module's own state was blind.
+// 🔑 The recurring lesson across all four: an assertion has to be reached, and
+// it has to be anchored to something it does not itself define.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
@@ -386,21 +395,102 @@ describe("httpApi · the doors OTHER than the retry timer (a rebuild nobody rout
     offB();
   });
 
-  it("the debt is discharged ONCE: a later ordinary reconnect does not keep re-fanning it", async () => {
+  it("the debt is discharged ONCE: a LATER connection that owes nothing does not fan a resync", async () => {
+    // 🔴 THIS TEST USED TO BE A LIE, and the shape of the lie is worth keeping
+    // written down because it is the same one the owner caught elsewhere today:
+    // it LOOKED like it guarded "the debt gets cleared", and it guarded nothing.
+    // The old version added a second subscriber while the stream was already
+    // healthy — so `ensureSseSource` early-returned, NO second connection was
+    // ever built, NO second open ever happened, and the clearing line was never
+    // on the path under test. Measured: deleting `sseGapPending = false`
+    // outright left all 35 tests green.
+    //
+    // To reach the line at all the test has to get a connection to OPEN while
+    // carrying no debt, which means tearing the downlink all the way down
+    // (last unsubscribe) and building a fresh one.
     const seen: string[] = [];
     const off = httpApi.subscribeEvents((t) => seen.push(t));
     FakeEventSource.instances[0].open();
     FakeEventSource.instances[0].permanentError();
     await runRetry();
-    latest().open(); // pays the debt
-    expect(seen).toEqual([...SSE_RESYNC_TOPICS]);
+    latest().open(); // the rebuilt connection PAYS the debt
+    expect(seen, "the outage's debt is paid on the rebuilt connection").toEqual([
+      ...SSE_RESYNC_TOPICS,
+    ]);
 
+    off(); // last subscriber leaves → the whole downlink is torn down
     seen.length = 0;
-    // A brand-new subscriber now, with the stream healthy: no debt, no fan.
-    const off2 = httpApi.subscribeEvents(() => {});
-    expect(seen).toEqual([]);
+
+    // A fresh session on a healthy station: every hook refetches on mount, so
+    // this connection owes nothing and must fan NOTHING. If the debt were never
+    // cleared, one permanent failure would condemn the rest of the session to a
+    // full 13-topic resync on every connection it ever opens.
+    const off2 = httpApi.subscribeEvents((t) => seen.push(t));
+    expect(FakeEventSource.instances, "a genuinely new connection").toHaveLength(3);
+    latest().open();
+    expect(
+      seen,
+      "a first open with no outage behind it must not resync",
+    ).toEqual([]);
     off2();
-    off();
+  });
+
+  it("one subscriber throwing SYNCHRONOUSLY must not take down the resync, the other subscribers, or the state machine", async () => {
+    // Adopted from the independent review (P3), which found this on the head
+    // before this test existed. `resyncAll` fanned WITHOUT isolation while its
+    // own comment claimed the subscribers' `.catch` covered it — a `.catch`
+    // covers a rejected promise and is no defence against a synchronous throw.
+    //
+    // The third assertion is the one that made this worth blocking a merge on:
+    // the throw escaped `es.onopen`, so `setSseState("live")` never ran and the
+    // banner stayed up OVER A HEALTHY STREAM. This whole change exists to make
+    // a dead connection visible; a banner lying in the other direction is the
+    // same defect with the sign flipped.
+    const offBad = httpApi.subscribeEvents(() => {
+      throw new Error("a subscriber threw while handling a resync");
+    });
+    const seen: string[] = [];
+    const offGood = httpApi.subscribeEvents((t) => seen.push(t));
+    FakeEventSource.instances[0].open();
+    FakeEventSource.instances[0].permanentError();
+    await runRetry();
+    latest().open();
+
+    expect(
+      seen,
+      "one broken hook must not decide what the other subscribers learn",
+    ).toEqual([...SSE_RESYNC_TOPICS]);
+    expect(
+      sseConnectionState(),
+      "the stream is open and delivering — saying otherwise is the banner lying",
+    ).toBe("live");
+
+    // And the bookkeeping that runs after the fan is still reachable: the debt
+    // was cleared, so the NEXT connection with nothing owed fans nothing.
+    offBad();
+    offGood();
+    seen.length = 0;
+    const off3 = httpApi.subscribeEvents((t) => seen.push(t));
+    latest().open();
+    expect(seen, "the debt was cleared despite the throw").toEqual([]);
+    off3();
+  });
+
+  it("a throwing subscriber does not stop an ordinary delta reaching the others either", () => {
+    const offBad = httpApi.subscribeEvents(() => {
+      throw new Error("boom");
+    });
+    const seen: string[] = [];
+    const offGood = httpApi.subscribeEvents((t) => seen.push(t));
+    FakeEventSource.instances[0].open();
+
+    FakeEventSource.instances[0].emit({ topic: "chat" });
+
+    expect(seen, "the live delta path needs the same isolation as the resync").toEqual([
+      "chat",
+    ]);
+    offBad();
+    offGood();
   });
 });
 
@@ -428,6 +518,25 @@ describe("httpApi · the probe's own contract (the parts a state-machine test do
       "a timed-out probe reads as 'no answer' and the stream is rebuilt",
     ).toHaveLength(2);
     off();
+  });
+
+  it("the probe deadline is BOUNDED, not merely present — 15s, derived from the wire contract", () => {
+    // 🔴 A SEPARATE ASSERTION FROM THE ONE ABOVE, ON PURPOSE. That test proves a
+    // deadline EXISTS, and it cannot prove anything more, because it advances
+    // time BY THE CONSTANT ITSELF — push SSE_PROBE_TIMEOUT_MS to ten minutes and
+    // it stays green while an eight-minute deadlock window opens up. A test that
+    // imports the number it is checking is a tautology about that number.
+    //
+    // So the bound is written as a LITERAL, and it comes from the wire contract
+    // rather than from taste: spec/sse.md §1 requires /api/events to open with
+    // `: connected` immediately and to emit a heartbeat whenever the stream has
+    // been quiet for 15 seconds. A probe that has not even received RESPONSE
+    // HEADERS within that window is therefore outside anything a conforming
+    // server is allowed to do — there is nothing left to wait for. Raising this
+    // ceiling means claiming the server may take longer than its own contract
+    // permits, which is a spec change, not a tuning knob.
+    expect(SSE_PROBE_TIMEOUT_MS).toBeLessThanOrEqual(15000);
+    expect(SSE_PROBE_TIMEOUT_MS).toBeGreaterThan(0);
   });
 
   it("the probe ABORTS the stream it opened — it wanted the status line, not a second live connection", async () => {
