@@ -145,10 +145,13 @@ export function ChatArea({
   // nor necessarily the window's `member`. Optional (defaults empty) so a caller
   // that only cares about owner↔agent threads need not thread it through.
   members?: Member[];
-  // The LIVE outsource workers, the sender-label twin of `members`: an
-  // outsource id is NEVER in the 正職 roster (GET /api/members excludes
-  // kind='outsource' by design), so without this list an outsource sender's
-  // label degraded to its raw ow- id while the left rail showed the codename.
+  // The LIVE outsource workers, the sender-label twin of `members`: GET
+  // /api/members DOES carry kind='outsource' rows
+  // (dal.ListMembersIncludingOutsource), but it drops every
+  // roster_status='removed' row — and releasing a worker sets exactly that —
+  // so a RELEASED outsource sender is absent from `members`. Without this list
+  // such a sender's label degraded to its raw ow- id while the left rail
+  // showed the codename.
   // Optional (defaults empty) for the same reason `members` is.
   workers?: OutsourceWorkerView[];
   // Open the member detail page. Optional: when absent the header is NOT

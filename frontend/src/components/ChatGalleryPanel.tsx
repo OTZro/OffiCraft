@@ -111,9 +111,11 @@ export function ChatGalleryPanel({
 }: {
   member: Member;
   // ChatArea's nameOf: resolves an id the server left unnamed (an outsource
-  // sender — GET /api/members excludes kind='outsource', so its from_name is
-  // "") to the SAME codename label the thread bubbles show. Optional — absent
-  // keeps the raw-id fallback.
+  // sender, whose from_name is "") to the SAME codename label the thread
+  // bubbles show. The roster alone cannot always do it: GET /api/members does
+  // carry kind='outsource' rows, but it drops roster_status='removed' ones,
+  // which is what a RELEASED worker becomes. Optional — absent keeps the
+  // raw-id fallback.
   resolveSender?: (id: string) => string;
   onClose: () => void;
 }) {

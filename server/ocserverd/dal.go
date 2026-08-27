@@ -249,10 +249,17 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 // ListMembers returns the STAFF roster (ANY roster_status — soft-removed rows
 // included; callers filter, mirroring repository.list_members). kind='outsource'
 // rows are EXCLUDED by design (A案 P7d): the merged storage keeps outsource
-// members out of every member-surface fold (REST list, reconcile, boot-context
-// rosters, monitoring) so the wire behaviour matches the pre-merge two-table
-// world — the outsource projection reads them through ListOutsourceWorkers
-// (dal_tasks.go). Behavioural roster convergence is a later, owner-gated step.
+// members out of the member-surface folds that still run through THIS
+// function — reconcile.go, api_monitoring.go, the role/machine folds and
+// worker_spawn's staff scans — so their behaviour matches the pre-merge
+// two-table world. The outsource projection reads them through
+// ListOutsourceWorkers (dal_tasks.go).
+//
+// ⚠️ NOT "every member surface" any more. The REST list
+// (HandleListMembersApiMembersGet) and the waking agent's floor roster
+// (resumeFloorParts, api_chat.go) both call ListMembersIncludingOutsource
+// instead, so ow- rows DO appear in the wire roster and in boot context.
+// Behavioural roster convergence is a later, owner-gated step.
 func (d *DAL) ListMembers() ([]Member, error) {
 	rows, err := d.rdb.Query(`SELECT ` + memberColumns +
 		` FROM member WHERE kind != 'outsource' ORDER BY name COLLATE NOCASE`)
@@ -271,7 +278,11 @@ func (d *DAL) ListMembers() ([]Member, error) {
 	return out, rows.Err()
 }
 
-// ListMembersIncludingOutsource is only for the GET /api/members wire list.
+// ListMembersIncludingOutsource backs the two surfaces that deliberately SHOW
+// contractors: the GET /api/members wire list
+// (HandleListMembersApiMembersGet) and the waking agent's floor roster
+// (resumeFloorParts, api_chat.go) — so an agent already sees outsource rows in
+// the roster it boots with, not only in the REST response.
 // Reconcile and every other member-surface fold must continue using
 // ListMembers, whose outsource exclusion keeps workers out of the member FSM.
 //
