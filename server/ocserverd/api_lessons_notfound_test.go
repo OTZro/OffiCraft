@@ -82,6 +82,18 @@ func TestLessonsMCPDefaultsCloseTheLearningLoop(t *testing.T) {
 
 	// A custom-role agent (the reported shape: role r-25debddcf5dd).
 	const customRole = "r-25debddcf5dd"
+	// T-2 follow-up: this fixture used to build the member WITHOUT ever creating
+	// the role, which is a shape that cannot boot on a real station at all —
+	// buildBootContext folds the ROLE first and returns nil, and both token
+	// paths abort on that nil. The incident this test records happened to a role
+	// that REALLY EXISTS (r-25debddcf5dd is "OffiCraft Developer"), so creating
+	// it here makes the fixture match the incident instead of an impossible
+	// station. No assertion below moved.
+	if err := dal.PutRoleDef(RoleDef{
+		RoleKey: customRole, Name: "OffiCraft Developer", DefinitionMD: "dev\n",
+	}); err != nil {
+		t.Fatalf("PutRoleDef: %v", err)
+	}
 	if err := dal.PutMember(Member{
 		ID: "joey", Kind: KindAssistant, RoleKey: customRole,
 		DesiredState: DesiredStateOnline,

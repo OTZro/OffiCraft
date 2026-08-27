@@ -637,6 +637,91 @@ func (s *apiServer) lessonsWriteAuthz(w http.ResponseWriter, r *http.Request, ro
 	return true
 }
 
+// requireLessonsAddressableRole refuses a lessons WRITE addressed to a role_key
+// that NOTHING on this station can ever address again, and reports whether the
+// handler may proceed.
+//
+// 🔴 THE HOLE THIS CLOSES. Nothing on the two lessons write routes ever
+// validated role_key. The path parameter is free text, so a caller with admin
+// capability could write a real lessons document under a name that names
+// nothing. It got a 200 and a receipt. What it created was a document that
+// draws on the SAME lessons cap as every other one, is folded into no boot
+// context, and cannot appear in peek_doc_sizes (which walks the roster). Write
+// succeeds, quota is spent, nobody can find it — the "drawer nobody opens" this
+// ticket exists to end, surviving on the ROLE NAME rather than on the
+// classification T-2 removed.
+//
+// 🔑 THE PREDICATE IS "CAN ANYTHING ADDRESS THIS DOCUMENT?", and the two ways
+// are enumerated from MEASUREMENT, not from reading the code and believing it:
+//
+//  1. the role folds (foldRoleDefDTO != nil) — the very first thing
+//     buildBootContext does, so such a doc is loaded by every boot of that role
+//     and reported by peek_doc_sizes; or
+//  2. some member carries this role_key — such a member cannot BOOT, but the
+//     owner can mint it an agent token (POST /api/mint, which does not go
+//     through the boot fold at all), and get_lessons then serves this document
+//     to it. Measured end to end through the production routes, not inferred.
+//
+// Refused: a name on NEITHER list. Nothing can reach that document — no boot, no
+// listing, and no identity that could be minted a token for it.
+//
+// 🔴 TWO WRONG VERSIONS OF THIS GATE SHIPPED BEFORE THIS ONE. Both are recorded
+// because each was wrong in a way that reading the code did not reveal.
+//
+// (a) The FIRST draft accepted branch 2 on the stated ground that such a member
+// "folds this document into its persona on every wake". THAT WAS FALSE, and the
+// falsehood reached the tool descriptions before an independent review measured
+// it: buildBootContext folds the ROLE first and yields nil, and both paths that
+// mint a MEMBER token abort on that nil. Such a member never boots. The branch
+// was right; the reason given for it was fiction.
+//
+// (b) The correction then over-swung and dropped branch 2 entirely, on the
+// ground that a member which cannot boot has no reader at all. THAT WAS ALSO
+// FALSE, and this time the wire caught it: /api/mint is a THIRD token path that
+// neither the first draft nor the review had counted, and conformance's auth
+// matrix builds exactly this shape through the public API (hire with a role_key
+// naming no role, then mint) and pins that agent's self-write at 200. Four
+// cells went red. The document IS reachable — by the agent it belongs to.
+//
+// The lesson worth more than the gate: BOTH errors came from reasoning about
+// reachability instead of measuring it. The branch list above is now the shape
+// of an experiment that was actually run.
+//
+// 404, not 403: this is "there is no such role", the same answer GET
+// /api/roles/{role} gives. Authz is judged FIRST, so a below-admin caller still
+// gets its 403 and this never becomes a way to probe what exists.
+//
+// READ is deliberately untouched: get_lessons on an unknown role folds to the
+// seed and answers 200, which spends no cap and hides nothing.
+func (s *apiServer) requireLessonsAddressableRole(w http.ResponseWriter, roleKey string) bool {
+	roleDTO, err := s.foldRoleDefDTO(roleKey)
+	if err != nil {
+		internalError(w, err)
+		return false
+	}
+	if roleDTO != nil {
+		return true
+	}
+	members, err := s.dal.ListMembers()
+	if err != nil {
+		internalError(w, err)
+		return false
+	}
+	for _, m := range members {
+		if m.RoleKey == roleKey {
+			return true
+		}
+	}
+	writeError(w, http.StatusNotFound,
+		"role '"+roleKey+"' not found — a lessons doc must be addressable by "+
+			"something: a role that folds (list_roles), or a member carrying that "+
+			"role_key (list_members). This name is neither, so the document could "+
+			"be read by nobody: no boot would load it, no member could be given a "+
+			"token for it, and peek_doc_sizes (keyed by role) would never list it, "+
+			"while it still spent the lessons cap. Check the role_key and retry")
+	return false
+}
+
 // GET /api/lessons/{role_key} — the folded per-role lessons doc.
 // READ is unrestricted for any authenticated identity.
 func (s *apiServer) HandleGetLessonsApiLessonsRoleKeyGet(w http.ResponseWriter, r *http.Request, roleKey string) {
@@ -665,6 +750,9 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyPost(w http.ResponseWri
 		return
 	}
 	if !s.lessonsWriteAuthz(w, r, roleKey) {
+		return
+	}
+	if !s.requireLessonsAddressableRole(w, roleKey) {
 		return
 	}
 	text := body.Text
@@ -738,6 +826,9 @@ func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyPatchPost(w http.Response
 		return
 	}
 	if !s.lessonsWriteAuthz(w, r, roleKey) {
+		return
+	}
+	if !s.requireLessonsAddressableRole(w, roleKey) {
 		return
 	}
 	current, err := s.foldLessonsDTO(roleKey)

@@ -664,7 +664,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Size-only overview of the capped documents on the station: each role's role definition / insight / lessons, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). THE LISTING IS KEYED BY ROLE, AND THAT IS ITS LIMIT. T-2 removed the lessons task_type axis, so a role now has exactly ONE lessons document and it is the one reported here — the old 'default bucket only' gap is gone. What remains is narrower and belongs to the WRITE side, not to this listing: nothing validates a role_key against the roster, so an admin or the owner can write lessons (or insight) under a role_key no role carries; such a document spends the same cap and, having no role to hang off, never appears here. list_roles is the roster this listing is derived from — a document under a name that is not on it is not on this page either. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.
+         * Size-only overview of the capped documents on the station: each role's role definition / insight / lessons, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). THE LISTING IS KEYED BY ROLE, AND THAT IS ITS LIMIT. T-2 removed the lessons task_type axis, so a role now has exactly ONE lessons document and it is the one reported here — the old 'default bucket only' gap is gone. What remains is narrower still and it is now INSIGHT-ONLY: nothing validates a role_key against the roster on the INSIGHT write face, so an admin or the owner can write insight under a role_key no role carries; such a document spends the insight cap and, having no role to hang off, never appears here. The LESSONS write face no longer has that gap — replace_lessons and patch_lessons refuse with 404 any role_key that nothing could read: neither a role that folds (which is what this listing walks, and what every boot loads) nor a member carrying that role_key (which cannot boot, but can be minted a token that reads the doc). A role_key on neither list now fails instead of silently producing an unreachable document. list_roles is the roster this listing is derived from — a document under a name that is not on it is not on this page either. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.
          * @description The station-wide capped-document SIZE overview (``peek_doc_sizes`` MCP tool,
          *     zero params; ``GET /api/doc-sizes``).
          *
@@ -680,13 +680,24 @@ export interface paths {
          *     listing. That axis is gone: a role has exactly ONE lessons document and it is
          *     the one reported here.
          *
-         *     What remains is narrower and lives on the WRITE side rather than in this
-         *     listing: nothing validates a ``role_key`` against the roster, so an admin or the
-         *     owner may write lessons (or insight) under a ``role_key`` no role carries. Such
-         *     a document is readable through ``get_lessons``, spends the same cap, and —
-         *     having no role to hang off — never appears here. ``list_roles`` is the roster
-         *     this page is derived from; a document under a name that is not on it is not on
-         *     this page either.
+         *     What remains is narrower still, and it is now INSIGHT-ONLY. Nothing validates a
+         *     ``role_key`` against the roster on the INSIGHT write face, so an admin or the
+         *     owner may write insight under a ``role_key`` no role carries. Such a document is
+         *     readable through ``get_insight``, spends the insight cap, and — having no role to
+         *     hang off — never appears here.
+         *
+         *     THE LESSONS WRITE FACE NO LONGER HAS THAT GAP. ``replace_lessons`` and
+         *     ``patch_lessons`` refuse with 404 any ``role_key`` that nothing could read —
+         *     neither a role that FOLDS (what this page walks, and what every boot loads) nor
+         *     a MEMBER carrying that role_key (such a member cannot boot, but the owner can
+         *     mint it a token and ``get_lessons`` serves it that doc). A name on neither list
+         *     now fails instead of silently producing a document nothing can reach. NOTE the
+         *     asymmetry this page still has: a member-carried key is writable and readable yet
+         *     has no row here, because this listing is keyed by ROLE. Reading is untouched —
+         *     ``get_lessons`` on an unknown role still folds to the seed and answers 200.
+         *
+         *     ``list_roles`` is the roster this page is derived from; a document under a name
+         *     that is not on it is not on this page either.
          *
          *     It carries NO document text. What it is FOR: a role's insight and lessons sizes
          *     are reported by no listing on this station at any price, so before this route
@@ -1096,7 +1107,7 @@ export interface paths {
         get: operations["handle_get_lessons_api_lessons__role_key__get"];
         put?: never;
         /**
-         * Replace the WHOLE per-role lessons document. text is REQUIRED and unknown keys are rejected; only that role's agent or an admin may write it; emptying or sharply shrinking it needs allow_shrink=true; and the result is still judged against the lessons cap.
+         * Replace the WHOLE per-role lessons document. text is REQUIRED and unknown keys are rejected; only that role's agent or an admin may write it; role_key must be addressable — a role that folds (list_roles), or a member carrying that role_key (list_members) — or the write is refused 404, so a lessons doc can no longer be created under a name nothing on this station could ever read; emptying or sharply shrinking it needs allow_shrink=true; and the result is still judged against the lessons cap.
          * @description Whole-doc replace of a PER-ROLE lessons doc (§3.4 #28).
          *
          *     Per-role WRITE authz (load-bearing): a caller BELOW admin capability may write
@@ -1126,7 +1137,30 @@ export interface paths {
          *     ``validation_error`` naming the field. BEFORE that door was built nothing on
          *     this route read the query string and such a request answered 200 -- that face
          *     DID silently ignore it, and body-only rejection was therefore not the whole
-         *     story.
+         *     story
+         *
+         *     ROLE_KEY MUST BE ADDRESSABLE BY SOMETHING. A write is refused with 404 when
+         *     the ``role_key`` is on neither of two lists, and the two are what MEASUREMENT
+         *     showed can reach such a document -- not what reading the code suggested:
+         *
+         *       1. the role FOLDS (it has a definition, live or seeded). This is the first
+         *          thing a boot does, so the doc is loaded by every boot of that role, and it
+         *          is what ``peek_doc_sizes`` walks; and
+         *       2. some MEMBER carries that ``role_key``. Nothing cross-checks ``role_key`` at
+         *          hire time, so this is reachable, and such a member CANNOT boot -- but the
+         *          owner can mint it an agent token, which does not go through the boot fold,
+         *          and ``get_lessons`` then serves it this document. It is that member's own
+         *          doc and stays writable by it.
+         *
+         *     Before this gate a write under a name on NEITHER list answered 200 and produced
+         *     a real document that spent the lessons cap, was folded into no boot context, and
+         *     appeared in NO listing at any price, because that listing is keyed by role and
+         *     this one hung off nothing. Only a caller at or above ``admin_agent`` could reach
+         *     it -- everyone below is confined to its own member's role_key by the authz above
+         *     -- which is why it stayed unnoticed, not why it was harmless.
+         *
+         *     READ is untouched: ``get_lessons`` on an unknown role still folds to the seed
+         *     and answers 200, because a read spends no cap and hides nothing.
          */
         post: operations["handle_replace_lessons_api_lessons__role_key__post"];
         delete?: never;
@@ -1145,7 +1179,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Patch a per-role lessons doc by unique anchors ({edits:[{old,new}]}).
+         * Patch a per-role lessons doc by unique anchors ({edits:[{old,new}]}). role_key must be addressable — a role that folds (list_roles), or a member carrying that role_key (list_members) — or the patch is refused 404.
          * @description Anchor-addressed PATCH of a PER-ROLE lessons doc (§3.4 #28b) — the write cost scales with the CHANGE, not the doc (a whole-doc ``replace_lessons`` stops fitting in one model output as the doc grows; keep replace as the last resort).
          *
          *     Semantics: ``edits`` apply IN ORDER against the doc ``get_lessons`` serves (overlay ⊕ seed fold); each non-empty ``old`` must match the current text exactly once (0 hits or >1 hits → flat 400, WHOLE batch rejected, zero writes); an empty ``old`` appends ``new`` at the end. Concurrency is last-write-wins with the unique anchor as a natural optimistic lock: a concurrent write that moved the anchor turns the next patch into a 400, never a silent mis-splice. A patch that empties the doc (or shrinks it below a tenth of its size) is refused unless ``allow_shrink=true`` — the r-76 wipe-guard posture.
@@ -1154,7 +1188,30 @@ export interface paths {
          *
          *     Writes the owner overlay (``is_default`` → False) and fans a ``lessons`` delta. The receipt carries ``size``/``sha256`` verification anchors over the resulting doc.
          *
-         *     T-2 removed the ``task_type`` axis: a lessons doc is addressed by ``role_key`` ALONE. WHICH FACE ANSWERS WHAT, MEASURED RATHER THAN INFERRED: the MCP tool face (``patch_lessons``) refuses the argument by PRESENCE, ``task_type: ""`` included, naming it in the refusal, before dispatch (``fillLessonsIdentityArgs``). This HTTP route refuses a ``task_type`` in the BODY as an unknown key -- a 422 ``validation_error`` whose message names it. A ``task_type`` QUERY parameter is refused too, by PRESENCE, with a 400 ``validation_error`` naming the field. BEFORE that door was built nothing on this route read the query string and such a request answered 200 -- that face DID silently ignore it, and body-only rejection was therefore not the whole story.
+         *     T-2 removed the ``task_type`` axis: a lessons doc is addressed by ``role_key`` ALONE. WHICH FACE ANSWERS WHAT, MEASURED RATHER THAN INFERRED: the MCP tool face (``patch_lessons``) refuses the argument by PRESENCE, ``task_type: ""`` included, naming it in the refusal, before dispatch (``fillLessonsIdentityArgs``). This HTTP route refuses a ``task_type`` in the BODY as an unknown key -- a 422 ``validation_error`` whose message names it. A ``task_type`` QUERY parameter is refused too, by PRESENCE, with a 400 ``validation_error`` naming the field. BEFORE that door was built nothing on this route read the query string and such a request answered 200 -- that face DID silently ignore it, and body-only rejection was therefore not the whole story
+         *
+         *     ROLE_KEY MUST BE ADDRESSABLE BY SOMETHING. A write is refused with 404 when
+         *     the ``role_key`` is on neither of two lists, and the two are what MEASUREMENT
+         *     showed can reach such a document -- not what reading the code suggested:
+         *
+         *       1. the role FOLDS (it has a definition, live or seeded). This is the first
+         *          thing a boot does, so the doc is loaded by every boot of that role, and it
+         *          is what ``peek_doc_sizes`` walks; and
+         *       2. some MEMBER carries that ``role_key``. Nothing cross-checks ``role_key`` at
+         *          hire time, so this is reachable, and such a member CANNOT boot -- but the
+         *          owner can mint it an agent token, which does not go through the boot fold,
+         *          and ``get_lessons`` then serves it this document. It is that member's own
+         *          doc and stays writable by it.
+         *
+         *     Before this gate a write under a name on NEITHER list answered 200 and produced
+         *     a real document that spent the lessons cap, was folded into no boot context, and
+         *     appeared in NO listing at any price, because that listing is keyed by role and
+         *     this one hung off nothing. Only a caller at or above ``admin_agent`` could reach
+         *     it -- everyone below is confined to its own member's role_key by the authz above
+         *     -- which is why it stayed unnoticed, not why it was harmless.
+         *
+         *     READ is untouched: ``get_lessons`` on an unknown role still folds to the seed
+         *     and answers 200, because a read spends no cap and hides nothing.
          */
         post: operations["handle_patch_lessons_api_lessons__role_key__patch_post"];
         delete?: never;

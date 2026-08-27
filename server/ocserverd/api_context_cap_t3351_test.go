@@ -579,7 +579,18 @@ func TestContextDocCap_ShrinkGuardAndCapCompose(t *testing.T) {
 // writes the WHOLE folded result back, so an unbounded first patch on a seed
 // role would be the one way to mint an over-cap doc from nothing.
 func TestContextDocCap_SeedRoleFirstWriteIsCapped(t *testing.T) {
-	srv, _, tok := capLessonsServer(t)
+	srv, dal, tok := capLessonsServer(t)
+
+	// The role EXISTS but has never written its lessons — that is the shape
+	// this test is about, and the two facts are separate. T-2 follow-up added a
+	// roster gate on the write face, so a role_key that exists nowhere is now a
+	// 404 before the cap is ever consulted; putting the role on the roster here
+	// is what keeps this test measuring the CAP rather than the address.
+	if err := dal.PutRoleDef(RoleDef{
+		RoleKey: "r-fresh", Name: "Fresh Role", DefinitionMD: "fresh\n",
+	}); err != nil {
+		t.Fatalf("PutRoleDef: %v", err)
+	}
 
 	// No overlay was seeded: this role folds to the shared seed.
 	if got := getLessonsText(t, srv.URL, tok, "r-fresh"); utf8.RuneCountInString(got) > contextDocMaxCharsDefault {

@@ -303,3 +303,61 @@ def test_lessons_routes_refuse_the_retired_task_type_query_parameter(
             "name T-2 retired, not to every unknown query key. "
             f"Body: {scoped.text}"
         )
+
+
+def test_lessons_write_refuses_a_role_key_nothing_reads(
+    client: httpx.Client, owner_token: str
+) -> None:
+    """T-2 follow-up: a lessons doc may not be created under a name nothing reads.
+
+    Nothing on the two lessons WRITE routes compared ``role_key`` against
+    anything, so a caller with admin capability could POST lessons for a name no
+    role and no member carries and get a 200. What that produced was a real
+    document that spent the lessons cap, folded into no boot context, and
+    appeared on no listing at any price (``peek_doc_sizes`` is keyed by role).
+    Write succeeds, quota spent, nobody can find it — the same drawer-nobody-
+    opens defect the rest of T-2 removed, surviving on the role NAME.
+
+    🔑 The paired assertion is what makes this more than a 404 test: a role the
+    roster DOES carry must still be writable AND must appear on the doc-sizes
+    page. Refusing everything would satisfy the negative half alone.
+    """
+    ghost = "r-conformance-ghost-role"
+
+    for path, body in (
+        (f"/api/lessons/{ghost}", {"text": "a doc with nothing to read it"}),
+        (
+            f"/api/lessons/{ghost}/patch",
+            {"edits": [{"old": "", "new": "a doc with nothing to read it"}]},
+        ),
+    ):
+        r = client.post(path, json=body, headers=_auth(owner_token))
+        assert r.status_code == 404, (
+            f"POST {path} answered {r.status_code}, want 404. A 200 here is a lie "
+            "by omission: the document is real, it spends the lessons cap, and "
+            f"nothing reads it. Body: {r.text}"
+        )
+        err = r.json()["error"]
+        assert err["code"] == CODE_BY_STATUS[404], err
+        assert ghost in err["message"], (
+            f"the refusal must NAME the role_key it refused: {err['message']!r}"
+        )
+
+    # PAIRED POSITIVE: a role the roster carries is still writable, and the
+    # document it produces is on the doc-sizes page. This is the invariant the
+    # gate exists to buy, and the reason the 404s above are not just strictness.
+    ok = client.post(
+        "/api/lessons/assistant",
+        json={"text": "conformance roster-gate positive control"},
+        headers=_auth(owner_token),
+    )
+    assert ok.status_code == 200, f"{ok.status_code} {ok.text}"
+    sizes = client.get("/api/doc-sizes", headers=_auth(owner_token))
+    assert sizes.status_code == 200, sizes.text
+    listed = {row["role_key"] for row in sizes.json()["roles"]}
+    assert "assistant" in listed, (
+        f"the role just written to is not on the doc-sizes page: {sorted(listed)}"
+    )
+    assert ghost not in listed, (
+        f"the refused ghost role leaked onto the doc-sizes page: {sorted(listed)}"
+    )
