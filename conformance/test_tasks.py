@@ -180,9 +180,10 @@ def test_full_task_loop(client, owner_token, executor):
 
     # Arm the gate: a real M2 reply card opens, bound both ways.
     r = client.post(
-        f"/api/tasks/{task['id']}/steps/{gate['id']}/gate",
+        "/api/reply-cards",
         json={"kind": "decision", "summary": "ship release v2?",
-              "options": ["ship it", "hold"]},
+              "options": ["ship it", "hold"],
+              "linked_task": {"task_id": task["id"], "step_id": gate["id"]}},
         headers=_auth(executor.token))
     assert r.status_code == 200, r.text
     card = r.json()
@@ -249,10 +250,10 @@ def test_full_task_loop(client, owner_token, executor):
     assert _open_count(client, owner_token) == before - 1
 
 
-def test_open_gate_arms_a_plain_non_gate_step(client, owner_token, executor):
-    """open_gate on a plain (is_gate=false) not-done step is a legitimate ad-hoc
-    請示 — the explicit twin of create_reply_card's auto-bind. It arms the step
-    (waiting_owner + bound card, task follows) WITHOUT flipping is_gate."""
+def test_linked_task_arms_a_plain_non_gate_step(client, owner_token, executor):
+    """A linked_task naming a plain (is_gate=false) not-done step is a legitimate
+    ad-hoc 請示. It arms the step (waiting_owner + bound card, task follows)
+    WITHOUT flipping is_gate."""
     task = _create_task(client, executor, title="ad-hoc ask")["task"]
     planned = _plan_view(client, executor.token, task["id"],
                          [{"name": "build", "dod": "compiles"}])
@@ -264,8 +265,9 @@ def test_open_gate_arms_a_plain_non_gate_step(client, owner_token, executor):
                         "in_progress").status_code == 200
 
     r = client.post(
-        f"/api/tasks/{task['id']}/steps/{step['id']}/gate",
+        "/api/reply-cards",
         json={"kind": "decision", "summary": "which cloud?",
+              "linked_task": {"task_id": task["id"], "step_id": step["id"]},
               "options": ["aws", "gcp"]},
         headers=_auth(executor.token))
     assert r.status_code == 200, f"plain-step arm must 200: {r.status_code} {r.text}"
@@ -508,15 +510,19 @@ def test_replan_keeps_answered_card_step_as_superseded(
 
     # Arm both; answer only the first.
     r = client.post(
-        f"/api/tasks/{task['id']}/steps/{answered_step['id']}/gate",
+        "/api/reply-cards",
         json={"kind": "decision", "summary": "which way?",
-              "options": ["a", "b"]},
+              "options": ["a", "b"],
+              "linked_task": {"task_id": task["id"],
+                              "step_id": answered_step["id"]}},
         headers=_auth(executor.token))
     assert r.status_code == 200, r.text
     answered_card = r.json()
     r = client.post(
-        f"/api/tasks/{task['id']}/steps/{waiting_step['id']}/gate",
-        json={"kind": "decision", "summary": "later?", "options": ["a", "b"]},
+        "/api/reply-cards",
+        json={"kind": "decision", "summary": "later?", "options": ["a", "b"],
+              "linked_task": {"task_id": task["id"],
+                              "step_id": waiting_step["id"]}},
         headers=_auth(executor.token))
     assert r.status_code == 200, r.text
     r = client.post(f"/api/reply-cards/{answered_card['id']}/answer",
@@ -543,8 +549,9 @@ def test_replan_keeps_answered_card_step_as_superseded(
     assert _step_status(client, executor.token, task["id"], frozen["id"],
                         "in_progress").status_code == 409
     r = client.post(
-        f"/api/tasks/{task['id']}/steps/{frozen['id']}/gate",
-        json={"kind": "decision", "summary": "again?", "options": ["a", "b"]},
+        "/api/reply-cards",
+        json={"kind": "decision", "summary": "again?", "options": ["a", "b"],
+              "linked_task": {"task_id": task["id"], "step_id": frozen["id"]}},
         headers=_auth(executor.token))
     assert r.status_code == 409, f"{r.status_code} {r.text}"
 
@@ -617,8 +624,9 @@ def test_terminated_task_refuses_every_agent_push(client, owner_token, executor)
     assert _step_status(client, executor.token, task["id"], gate_id,
                         "in_progress").status_code == 409
     assert client.post(
-        f"/api/tasks/{task['id']}/steps/{gate_id}/gate",
-        json={"kind": "decision", "summary": "s", "options": ["a"]},
+        "/api/reply-cards",
+        json={"kind": "decision", "summary": "s", "options": ["a"],
+              "linked_task": {"task_id": task["id"], "step_id": gate_id}},
         headers=h).status_code == 409
     # A second terminate is a 409 too (already closed).
     assert client.post(f"/api/tasks/{task['id']}/terminate",
@@ -676,11 +684,13 @@ def test_waiting_owner_is_a_card_lifecycle_hold(client, owner_token, executor):
     assert _step_status(client, executor.token, task["id"], s1["id"],
                         "in_progress").status_code == 200
 
-    # Arm two cards (one per step); open_gate accepts a waiting_owner task.
+    # Arm two cards (one per step); a linked_task binds onto a waiting_owner task.
     def _arm(step, summary):
-        r = client.post(f"/api/tasks/{task['id']}/steps/{step['id']}/gate",
+        r = client.post("/api/reply-cards",
                         json={"kind": "decision", "summary": summary,
-                              "options": ["a", "b"]},
+                              "options": ["a", "b"],
+                              "linked_task": {"task_id": task["id"],
+                                              "step_id": step["id"]}},
                         headers=_auth(executor.token))
         assert r.status_code == 200, r.text
         return r.json()
@@ -722,7 +732,10 @@ def test_reask_after_answer_re_enters_waiting(client, owner_token):
     def _plain_ask():
         r = client.post("/api/reply-cards",
                         json={"kind": "decision", "summary": "which?",
-                              "options": ["a", "b"]}, headers=_auth(token))
+                              "options": ["a", "b"],
+                              "linked_task": {"task_id": task["id"],
+                                              "step_id": step["id"]}},
+                        headers=_auth(token))
         assert r.status_code == 200, r.text
         return r.json()
 
@@ -1512,9 +1525,10 @@ def test_resume_summary_carries_the_callers_open_tasks_as_light_rows(
     assert _step_status(client, resumer, task["id"], steps[0]["id"],
                         "done").status_code == 200
     r = client.post(
-        f"/api/tasks/{task['id']}/steps/{steps[2]['id']}/gate",
+        "/api/reply-cards",
         json={"kind": "decision", "summary": "conf resume gate",
-              "options": ["go", "hold"]},
+              "options": ["go", "hold"],
+              "linked_task": {"task_id": task["id"], "step_id": steps[2]["id"]}},
         headers=_auth(resumer))
     assert r.status_code == 200, f"{r.status_code} {r.text}"
     card_id = r.json()["id"]
@@ -1583,20 +1597,117 @@ def test_resume_summary_task_block_is_bounded(client, owner_token):
     assert ov["tasks_returned"] == 5 and ov["tasks_open_total"] == 7
 
 
-# ── auto card→step binding (owner design 2026-07-14) ─────────────────────────
-# A plain POST /api/reply-cards by the executor of exactly one ACTIVE task
-# binds the card to that task's CURRENT step and drives the same waiting
-# machine as open_gate; the pointer persists after the step finishes.
+# ── the ONE card-open entrance: linked_task (T-18) ───────────────────────────
+# POST /api/reply-cards is the only way a card opens, and linked_task is
+# REQUIRED: null (not about a task) or {task_id, step_id} (about this step).
+# Nothing is inferred. These pin the wire behaviour, INCLUDING the sentences the
+# refusals carry — on this ticket the message is the feature.
 
 
-def test_plain_card_auto_binds_the_current_step(client, owner_token):
-    # A dedicated identity: auto-binding keys off the CALLER's active tasks,
-    # so this test must not share an executor with the rest of the module.
-    member_id = hire_member(client, owner_token, "conf-task-autobind")
+def test_create_reply_card_without_linked_task_names_both_legal_shapes(
+    client, owner_token
+):
+    """An omitted linked_task is a 400 that spells out BOTH legal shapes.
+
+    The old auto-binding failed SILENTLY: an asker who never thought about
+    binding got a 200 and a card with no 等我回覆 hold. The replacement is only
+    stronger than a written rule if the refusal tells you what to write, so the
+    message is asserted, not just the status."""
+    member_id = hire_member(client, owner_token, "conf-linked-required")
     token = mint_member_token(client, owner_token, member_id, ttl_days=1)
     me = AgentIdentity(member_id=member_id, token=token, role_key="")
 
-    task = _create_task(client, me, title="conf autobind")["task"]
+    task = _create_task(client, me, title="conf linked required")["task"]
+    view = _plan_view(client, token, task["id"], [
+        {"name": "recon", "dod": "understood"},
+    ])
+    step = view["steps"][0]
+    assert _step_status(client, token, task["id"], step["id"],
+                        "in_progress").status_code == 200
+
+    # A body that would have auto-bound perfectly before T-18 — one active task,
+    # one running step. Still refused, because the caller never SAID anything.
+    r = client.post(
+        "/api/reply-cards",
+        json={"kind": "decision", "summary": "which way?", "options": ["AI pick"]},
+        headers=_auth(token))
+    assert r.status_code == 400, f"{r.status_code} {r.text}"
+    msg = r.json()["error"]["message"]
+    for want in ("linked_task", "linked_task=null", "task_id", "step_id", "等我回覆"):
+        assert want in msg, (want, msg)
+
+    # Nothing minted, nothing moved.
+    got = _get_task(client, owner_token, task["id"])
+    assert got["status"] == "in_progress"
+    assert next(s for s in got["steps"]
+                if s["id"] == step["id"])["reply_card_id"] == ""
+
+    # Close out so this identity leaves no active task behind.
+    assert _step_status(client, token, task["id"], step["id"],
+                        "done").status_code == 200
+
+
+def test_create_reply_card_with_task_id_but_no_step_id_is_refused(
+    client, owner_token
+):
+    """The ORPHAN SHAPE stays unreachable. A card bound to a task but to no step
+    places no waiting_owner hold, so the task marches to done underneath the ask
+    and the owner's answer is refused 409 forever — the shape T-4166 spent a
+    whole ticket removing from the old entrance. The new entrance must not hand
+    it back, so this is a 400 and the message names what it costs."""
+    member_id = hire_member(client, owner_token, "conf-linked-orphan")
+    token = mint_member_token(client, owner_token, member_id, ttl_days=1)
+    me = AgentIdentity(member_id=member_id, token=token, role_key="")
+
+    task = _create_task(client, me, title="conf linked orphan")["task"]
+    view = _plan_view(client, token, task["id"], [
+        {"name": "recon", "dod": "understood"},
+    ])
+    step = view["steps"][0]
+    assert _step_status(client, token, task["id"], step["id"],
+                        "in_progress").status_code == 200
+
+    base = {"kind": "decision", "summary": "which way?", "options": ["AI pick"]}
+    r = client.post("/api/reply-cards",
+                    json={**base, "linked_task": {"task_id": task["id"]}},
+                    headers=_auth(token))
+    assert r.status_code == 400, f"{r.status_code} {r.text}"
+    msg = r.json()["error"]["message"]
+    for want in ("step_id", "等我回覆", "linked_task=null"):
+        assert want in msg, (want, msg)
+
+    # An explicitly blank step_id is the same offence, not a way round it.
+    r = client.post(
+        "/api/reply-cards",
+        json={**base, "linked_task": {"task_id": task["id"], "step_id": "  "}},
+        headers=_auth(token))
+    assert r.status_code == 400, f"{r.status_code} {r.text}"
+
+    # A step with no task is the mirror refusal.
+    r = client.post("/api/reply-cards",
+                    json={**base, "linked_task": {"step_id": step["id"]}},
+                    headers=_auth(token))
+    assert r.status_code == 400, f"{r.status_code} {r.text}"
+    assert "task_id" in r.json()["error"]["message"]
+
+    got = _get_task(client, owner_token, task["id"])
+    assert got["status"] == "in_progress"
+    assert next(s for s in got["steps"]
+                if s["id"] == step["id"])["reply_card_id"] == ""
+    assert _step_status(client, token, task["id"], step["id"],
+                        "done").status_code == 200
+
+
+def test_create_reply_card_with_linked_task_arms_the_named_step(
+    client, owner_token
+):
+    """{task_id, step_id} drives the waiting machine the retired open_gate route
+    used to, and the pointer persists after the step finishes."""
+    member_id = hire_member(client, owner_token, "conf-linked-bound")
+    token = mint_member_token(client, owner_token, member_id, ttl_days=1)
+    me = AgentIdentity(member_id=member_id, token=token, role_key="")
+
+    task = _create_task(client, me, title="conf linked bound")["task"]
     view = _plan_view(client, token, task["id"], [
         {"name": "recon", "dod": "understood"},
         {"name": "build", "dod": "built"},
@@ -1605,13 +1716,12 @@ def test_plain_card_auto_binds_the_current_step(client, owner_token):
     assert _step_status(client, token, task["id"], build["id"],
                         "in_progress").status_code == 200
 
-    # A PLAIN ask (no task/step in the body) binds to the running step.
     r = client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "which flavour?",
-              "options": ["AI pick", "other"]},
+        json={"kind": "decision", "summary": "which way?", "options": ["AI pick"],
+              "linked_task": {"task_id": task["id"], "step_id": build["id"]}},
         headers=_auth(token))
-    assert r.status_code == 200, f"{r.status_code} {r.text}"
+    assert r.status_code == 200, r.text
     card = r.json()
     assert card["task"] and card["task"]["id"] == task["id"]
 
@@ -1620,154 +1730,79 @@ def test_plain_card_auto_binds_the_current_step(client, owner_token):
     bound = next(s for s in got["steps"] if s["id"] == build["id"])
     assert bound["status"] == "waiting_owner"
     assert bound["reply_card_id"] == card["id"]
-    other = next(s for s in got["steps"] if s["id"] != build["id"])
+    # The untouched sibling never moves.
+    other = next(s for s in got["steps"] if s["id"] == view["steps"][0]["id"])
     assert other["status"] == "pending" and other["reply_card_id"] == ""
 
-    # The owner answers; the SERVER restores the held step + task to in_progress
-    # (T-68b7 — no agent-reported resume), and the agent finishes the step — the
-    # card pointer PERSISTS on the done step (the permanent approval mark).
     r = client.post(f"/api/reply-cards/{card['id']}/answer",
                     json={"option_idx": 0}, headers=_auth(owner_token))
     assert r.status_code == 200, r.text
     resumed = _get_task(client, owner_token, task["id"])
     assert resumed["status"] == "in_progress", "answering restores the task"
     assert next(s for s in resumed["steps"]
-                if s["id"] == build["id"])["status"] == "in_progress", (
-        "answering restores the held step")
+                if s["id"] == build["id"])["status"] == "in_progress"
     assert _step_status(client, token, task["id"], build["id"],
                         "done").status_code == 200
-    got = _get_task(client, owner_token, task["id"])
-    done_step = next(s for s in got["steps"] if s["id"] == build["id"])
-    assert done_step["status"] == "done"
+    done_step = next(s for s in _get_task(client, owner_token, task["id"])["steps"]
+                     if s["id"] == build["id"])
     assert done_step["reply_card_id"] == card["id"], (
         "the approval mark must persist after the step finishes")
 
-    # T-4166: with NO unambiguous current step (nothing running any more) the
-    # ask used to "degrade" to a TASK-ONLY card (task_step_id="") — no step
-    # binding, therefore no 等我回覆 hold, therefore the task ran on to done
-    # under a card the owner could never answer (409 forever). That degrade is
-    # gone: the create is REFUSED, and the refusal says what to fix.
-    r = client.post(
-        "/api/reply-cards",
-        json={"kind": "decision", "summary": "one more thing?",
-              "options": ["AI pick"]},
-        headers=_auth(token))
-    assert r.status_code == 409, f"{r.status_code} {r.text}"
-    msg = r.json()["error"]["message"]
-    assert "cannot bind this ask to a step" in msg, msg
-    assert task["id"] in msg and "open_gate" in msg, msg
-    # Nothing was minted and nothing moved.
-    waiting_ids = [c["id"] for c in client.get(
-        "/api/reply-cards?status=waiting",
-        headers=_auth(owner_token)).json()]
-    assert card["id"] not in waiting_ids  # (already answered above)
-    got = _get_task(client, owner_token, task["id"])
-    assert got["status"] == "in_progress"
-    pending = next(s for s in got["steps"] if s["status"] == "pending")
-    assert pending["reply_card_id"] == ""
-
-    # Close out so this identity leaves no active task behind (other modules
-    # open plain cards with their own agents — keep the pool clean).
-    assert _step_status(client, token, task["id"], pending["id"],
-                        "in_progress").status_code == 200
-    # The last step done auto-derives the task to done and closes it (T-9ca5).
-    assert _step_status(client, token, task["id"], pending["id"],
-                        "done").status_code == 200
+    # Close out so this identity leaves no active task behind.
+    recon = view["steps"][0]
+    for status in ("in_progress", "done"):
+        assert _step_status(client, token, task["id"], recon["id"],
+                            status).status_code == 200
     assert _get_task(client, owner_token, task["id"])["status"] == "done"
 
 
-def test_parallel_lanes_bind_the_lowest_lane_not_a_409(client, owner_token):
-    """T-4166 review B2: several lanes of ONE parallel_group running at once is
-    the shape's definition, not ambiguity. The lowest order_idx lane carries the
-    card and the WHOLE task holds — the hold is lane-independent (T-9ca5), which
-    is what makes the tie-break deterministic rather than a guess."""
-    member_id = hire_member(client, owner_token, "conf-task-lanes")
+def test_create_reply_card_with_null_linked_task_opens_a_plain_card(
+    client, owner_token
+):
+    """null is a legal ANSWER, not a fallback — and it must work for an agent
+    holding live work, otherwise "this ask is not about my task" would be
+    unsayable for exactly the people who need to say it."""
+    member_id = hire_member(client, owner_token, "conf-linked-null")
     token = mint_member_token(client, owner_token, member_id, ttl_days=1)
     me = AgentIdentity(member_id=member_id, token=token, role_key="")
 
-    task = _create_task(client, me, title="conf lanes")["task"]
+    task = _create_task(client, me, title="conf linked null")["task"]
     view = _plan_view(client, token, task["id"], [
-        {"name": "lane-a", "dod": "a", "parallel_group": "pg"},
-        {"name": "lane-b", "dod": "b", "parallel_group": "pg"},
-        {"name": "lane-c", "dod": "c", "parallel_group": "pg"},
+        {"name": "early", "dod": "d1"},
     ])
-    for st in view["steps"]:
-        assert _step_status(client, token, task["id"], st["id"],
-                            "in_progress").status_code == 200
+    early = view["steps"][0]
+    assert _step_status(client, token, task["id"], early["id"],
+                        "in_progress").status_code == 200
 
     r = client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "which lane wins?",
-              "options": ["AI pick"]},
+        json={"kind": "decision", "summary": "unrelated", "options": ["AI pick"],
+              "linked_task": None},
         headers=_auth(token))
-    assert r.status_code == 200, f"parallel lanes must NOT 409: {r.text}"
-    card = r.json()
-    assert card["task"] and card["task"]["id"] == task["id"]
-
-    got = _get_task(client, owner_token, task["id"])
-    assert got["status"] == "waiting_owner", "the whole task must hold"
-    lanes = {s["id"]: s for s in got["steps"]}
-    carrier = lanes[view["steps"][0]["id"]]
-    assert carrier["status"] == "waiting_owner"
-    assert carrier["reply_card_id"] == card["id"]
-    for st in view["steps"][1:]:
-        assert lanes[st["id"]]["status"] == "in_progress", "siblings keep running"
-        assert lanes[st["id"]]["reply_card_id"] == ""
-
-    # It answers like any bound card — and the task resumes.
-    assert client.post(f"/api/reply-cards/{card['id']}/answer",
-                       json={"option_idx": 0},
-                       headers=_auth(owner_token)).status_code == 200
-    assert _get_task(client, owner_token, task["id"])["status"] == "in_progress"
-
-
-def test_bind_none_opens_a_plain_card_whatever_the_task_state(client, owner_token):
-    """T-4166 review B3: fail-closed needs an escape. An agent whose task has no
-    resolvable current step would otherwise have NO route to a plain chat ask
-    (open_gate binds a step by definition). bind="none" is the declared route —
-    the honest form of "task: null": the ASKER said so."""
-    member_id = hire_member(client, owner_token, "conf-task-bindnone")
-    token = mint_member_token(client, owner_token, member_id, ttl_days=1)
-    me = AgentIdentity(member_id=member_id, token=token, role_key="")
-
-    task = _create_task(client, me, title="conf bind none")["task"]
-    view = _plan_view(client, token, task["id"], [
-        {"name": "early", "dod": "d1"},
-        {"name": "later", "dod": "d2"},
-    ])
-    early = view["steps"][0]
-    for status in ("in_progress", "done"):
-        assert _step_status(client, token, task["id"], early["id"],
-                            status).status_code == 200
-
-    base = {"kind": "decision", "summary": "unrelated", "options": ["AI pick"]}
-    # The auto path is refused here — this is the orphan shape.
-    r = client.post("/api/reply-cards", json=base, headers=_auth(token))
-    assert r.status_code == 409, r.text
-    assert "bind=" in r.json()["error"]["message"], r.text
-
-    # bind="none" goes through, unbound.
-    r = client.post("/api/reply-cards", json={**base, "bind": "none"},
-                    headers=_auth(token))
     assert r.status_code == 200, r.text
     card = r.json()
-    assert card["task"] is None, "bind=none must open a PLAIN card"
-    assert _get_task(client, owner_token, task["id"])["status"] == "in_progress"
+    assert card["task"] is None, "linked_task=null must open a PLAIN card"
+    got = _get_task(client, owner_token, task["id"])
+    assert got["status"] == "in_progress", "an unbound card places no hold"
+    assert next(s for s in got["steps"]
+                if s["id"] == early["id"])["reply_card_id"] == ""
     assert client.post(f"/api/reply-cards/{card['id']}/answer",
                        json={"option_idx": 0},
                        headers=_auth(owner_token)).status_code == 200
 
-    # A typo must not silently become either mode.
-    r = client.post("/api/reply-cards", json={**base, "bind": "auto"},
-                    headers=_auth(token))
-    assert r.status_code == 400, r.text
-    assert "bind must be omitted" in r.json()["error"]["message"], r.text
+    # The retired `bind` lever is refused outright (unknown field), not silently
+    # dropped — it must not look like it still works.
+    r = client.post(
+        "/api/reply-cards",
+        json={"kind": "decision", "summary": "unrelated", "options": ["AI pick"],
+              "linked_task": None, "bind": "none"},
+        headers=_auth(token))
+    assert r.status_code == 422, f"{r.status_code} {r.text}"
 
     # Close out so this identity leaves no active task behind.
-    later = view["steps"][1]
-    for status in ("in_progress", "done"):
-        assert _step_status(client, token, task["id"], later["id"],
-                            status).status_code == 200
+    assert _step_status(client, token, task["id"], early["id"],
+                        "done").status_code == 200
+
 
 
 # ── T-f3ae task quality gate ─────────────────────────────────────────────────
@@ -1990,9 +2025,10 @@ def test_reassign_hands_over_to_a_member_and_only_they_take_over(
     assert _step_status(client, executor.token, task["id"], steps[0]["id"], "in_progress").status_code == 200
     assert _step_status(client, executor.token, task["id"], steps[0]["id"], "done").status_code == 200
     r = client.post(
-        f"/api/tasks/{task['id']}/steps/{steps[2]['id']}/gate",
+        "/api/reply-cards",
         json={"kind": "decision", "summary": "reassign gate",
-              "options": ["go", "hold"]},
+              "options": ["go", "hold"],
+              "linked_task": {"task_id": task["id"], "step_id": steps[2]["id"]}},
         headers=_auth(executor.token))
     assert r.status_code == 200, r.text
     card_id = r.json()["id"]

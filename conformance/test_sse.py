@@ -408,7 +408,7 @@ def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, ow
         ("reply_card", lambda: client.post(
             "/api/reply-cards",
             json={"kind": "decision", "summary": f"topic probe {tag}",
-                  "options": ["AI pick", "other"]},
+                  "options": ["AI pick", "other"], "linked_task": None},
             headers=_auth(agent_a.token))),
         # The three M3 task-batch topics, each through an ORDINARY write face
         # (task creation / a worker field edit / manual creation) — not a
@@ -1237,12 +1237,12 @@ def test_warden_command_band_start_frame(
 # ── T-db62 diagnostic: gate-card arm must fan reply_card to owner cockpit ─────
 #
 # The 請示 nav badge (useReplyCardCount) refetches on every reply_card delta;
-# owner reported the badge staying blank for an open_gate gate card until a
-# manual reload. conformance historically triggered reply_card ONLY via the
-# standalone POST /api/reply-cards path (test_every_closed_topic_emits). This pins
-# the OTHER open path — open_gate arming — actually fans a reply_card delta to
-# the owner connection, byte-for-byte the same live-update signal the badge
-# rides. If the badge bug is a missing frame, this goes red.
+# owner reported the badge staying blank for a gate card until a manual reload.
+# test_every_closed_topic_emits triggers reply_card through an UNBOUND create;
+# this pins the BOUND create — a linked_task that arms a step (T-18 folded
+# open_gate into it) — actually fanning a reply_card delta to the owner
+# connection, byte-for-byte the same live-update signal the badge rides. If the
+# badge bug is a missing frame, this goes red.
 def test_gate_arm_emits_reply_card_frame_to_owner(
     client, owner_token, agent_a, owner_sse
 ) -> None:
@@ -1263,14 +1263,15 @@ def test_gate_arm_emits_reply_card_frame_to_owner(
     # submit_plan answers with a bounded receipt (T-a98d); read the rows back.
     step_id = client.get(f"/api/tasks/{task_id}", headers=h).json()["steps"][0]["id"]
     # Task status is DERIVED (T-9ca5): report the step in_progress so the task
-    # derives in_progress — a gate can only arm on an in_progress task.
+    # derives in_progress — a card can only bind an in_progress task.
     assert client.post(
         f"/api/tasks/{task_id}/steps/{step_id}/status",
         json={"status": "in_progress"}, headers=h,
     ).status_code == 200
     r = client.post(
-        f"/api/tasks/{task_id}/steps/{step_id}/gate",
-        json={"kind": "decision", "summary": "gate probe", "options": ["go", "hold"]},
+        "/api/reply-cards",
+        json={"kind": "decision", "summary": "gate probe", "options": ["go", "hold"],
+              "linked_task": {"task_id": task_id, "step_id": step_id}},
         headers=h,
     )
     assert r.status_code == 200, r.text

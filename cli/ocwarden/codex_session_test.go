@@ -89,18 +89,14 @@ func TestCodexPersonaInstructionPreservesBlankModelDefault(t *testing.T) {
 	}
 }
 
-func TestRequestUserInputBridgeCreatesOneCardPerQuestion(t *testing.T) {
-	var payloads []map[string]any
+func TestRequestUserInputRefusesToOpenCardsAndTellsCodexToOpenItsOwn(t *testing.T) {
+	// The warden holds no task_id or step_id, so it can no longer open a card at
+	// all: create_reply_card requires an explicit linked_task (T-18). It must put
+	// NOTHING on the wire and answer Codex with the instruction instead.
+	var posted []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer member-token" {
-			t.Errorf("authorization = %q", got)
-		}
-		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Errorf("decode card: %v", err)
-		}
-		payloads = append(payloads, payload)
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": "rc-created"})
+		posted = append(posted, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
@@ -119,16 +115,10 @@ func TestRequestUserInputBridgeCreatesOneCardPerQuestion(t *testing.T) {
 			},
 		}},
 	})
-	if len(payloads) != 2 {
-		t.Fatalf("created %d cards, want one per question", len(payloads))
+	if len(posted) != 0 {
+		t.Fatalf("the warden must open no card of its own; it posted to %v", posted)
 	}
-	if payloads[0]["bind"] != "" || payloads[1]["bind"] != "none" {
-		t.Fatalf("only the first card may auto-bind: %#v", payloads)
-	}
-	if payloads[1]["kind"] != "action" ||
-		!strings.Contains(payloads[1]["body"].(string), "不要把秘密貼進卡片") {
-		t.Fatalf("secret request must become a no-secret action card: %#v", payloads[1])
-	}
+
 	response, err := io.ReadAll(out)
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +129,42 @@ func TestRequestUserInputBridgeCreatesOneCardPerQuestion(t *testing.T) {
 	}
 	if decoded["id"] != "server-request-7" {
 		t.Fatalf("server request id was not echoed exactly: %#v", decoded)
+	}
+	result, _ := decoded["result"].(map[string]any)
+	answers, _ := result["answers"].(map[string]any)
+	if len(answers) != 2 {
+		t.Fatalf("every question must be answered: %#v", answers)
+	}
+	text := func(qid string) string {
+		one, _ := answers[qid].(map[string]any)
+		list, _ := one["answers"].([]any)
+		if len(list) != 1 {
+			t.Fatalf("%s: want exactly one answer line, got %#v", qid, one)
+		}
+		line, _ := list[0].(string)
+		return line
+	}
+	for _, qid := range []string{"q1", "q2"} {
+		for _, want := range []string{
+			"does not open reply cards on your behalf",
+			"create_reply_card",
+			"linked_task is required",
+		} {
+			if !strings.Contains(text(qid), want) {
+				t.Fatalf("%s must be told to open its own card (missing %q): %s", qid, want, text(qid))
+			}
+		}
+	}
+	// 🔴 THE LOAD-BEARING HALF. The warden used to run the isSecret check itself
+	// and write "do not paste the secret into the card" into the card body. That
+	// path is gone, so the warning has to travel in THIS text — without it Codex
+	// opens its own card for a credential with nothing telling it not to type the
+	// secret into the body, and the loss would be completely silent.
+	if !strings.Contains(text("q2"), "不要把秘密貼進卡片") {
+		t.Fatalf("a secret request must still carry the no-secret warning: %s", text("q2"))
+	}
+	if strings.Contains(text("q1"), "不要把秘密貼進卡片") {
+		t.Fatalf("the warning must ride only the secret question: %s", text("q1"))
 	}
 }
 
@@ -195,12 +221,8 @@ func TestCodexPostsRecordRejectedResponsesWithoutChangingControlFlow(t *testing.
 	var activity bytes.Buffer
 	session := &codexSession{base: server.URL, token: "member-token", out: &activity}
 	session.post("/api/monitoring/telemetry", map[string]any{"runtime": "codex"})
-	if got := session.openReplyCard(map[string]any{"kind": "decision", "header": "test"}, ""); got != "" {
-		t.Fatalf("rejected card id = %q, want empty", got)
-	}
 	for _, want := range []string{
 		"Codex POST /api/monitoring/telemetry rejected with HTTP 422",
-		"Codex POST /api/reply-cards rejected with HTTP 422",
 	} {
 		if !strings.Contains(activity.String(), want) {
 			t.Fatalf("missing rejection activity %q in %q", want, activity.String())

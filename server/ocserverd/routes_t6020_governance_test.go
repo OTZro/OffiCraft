@@ -376,11 +376,24 @@ func TestT6020OpenedToolsCarryTheirWholeParameterSet(t *testing.T) {
 	if len(rows) == 0 {
 		t.Fatalf("t6020AllOpenedRows() is empty — this test would pass vacuously")
 	}
-	if len(knownCatalogDrift)+len(openapiOverweight) == 0 {
-		t.Fatalf("both escape-hatch maps are empty — the lookups below would be " +
-			"vacuous. If that is genuinely correct, this test has stopped being " +
-			"able to catch anything and should be reconsidered, not silenced")
-	}
+	// ⚠️ RECONSIDERED, NOT SILENCED (T-18). This used to Fatal when BOTH escape
+	// hatches were empty, on the premise that at least one is always populated so
+	// the lookups below run against real data. That premise expired:
+	// knownCatalogDrift was emptied by T-1ba2 (debt repaid) and openapiOverweight's
+	// only ever entry was open_gate.bind, which existed solely because
+	// ReplyCardCreateDTO was shared by two operations — T-18 removed open_gate, so
+	// the DTO has one operation and no field on it can be read by one face and
+	// ignored by another. Both maps being empty is now the CORRECT state, not a
+	// dead test.
+	//
+	// What still has teeth, and why this is not a silencing: the loop below is
+	// fail-CLOSED. It reddens the moment anyone adds an entry for one of the 19
+	// under either key, which is the whole thing this test was ever guarding —
+	// an empty hatch cannot hide a parameter, only a populated one can. The
+	// corpus assertion above is what stops the loop going vacuous.
+	//
+	// 🔴 If a hatch is ever repopulated for an unrelated tool, restore a
+	// non-vacuity assertion here rather than leaving this comment as cover.
 	for key, tool := range t6020AllOpenedRows() {
 		if params, baselined := knownCatalogDrift[tool]; baselined {
 			t.Errorf("tool %q (%s %s) has a knownCatalogDrift baseline %v — these 19 "+

@@ -418,7 +418,7 @@ def _happy_card(ctx: HCtx) -> str:
     r = ctx.client.post(
         "/api/reply-cards",
         json={"kind": "decision", "summary": "conf happy card",
-              "options": ["AI pick", "other"]},
+              "options": ["AI pick", "other"], "linked_task": None},
         headers=_auth(ctx.agent.token),
     )
     assert r.status_code == 200, f"happy card failed: {r.status_code} {r.text}"
@@ -1213,7 +1213,7 @@ HAPPY: dict[str, Happy] = {
     "POST /api/reply-cards": Happy(
         identity="agent",
         body={"kind": "action", "summary": "conf happy open card",
-              "options": ["done, continue"]},
+              "options": ["done, continue"], "linked_task": None},
         check=lambda _c, r: _expect(
             r,
             lambda d: d["status"] == "waiting"
@@ -1840,19 +1840,6 @@ HAPPY: dict[str, Happy] = {
             r,
             lambda d: d["applied_edits"] == 1
             and d["note"] == "conf happy note patch",
-        ),
-    ),
-    "POST /api/tasks/{task_id}/steps/{step_id}/gate": Happy(
-        identity="agent",
-        path=lambda ctx: "/api/tasks/{}/steps/{}/gate".format(
-            *_happy_task_step(ctx, gate=True)),
-        body={"kind": "decision", "summary": "conf happy gate",
-              "options": ["go", "hold"]},
-        check=lambda _c, r: _expect(
-            r,
-            lambda d: d["status"] == "waiting"
-            and d["task"] is not None
-            and d["task"]["id"],
         ),
     ),
     "POST /api/tasks/{task_id}/deps": Happy(

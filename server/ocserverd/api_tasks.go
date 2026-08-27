@@ -11,10 +11,9 @@ package main
 //     it does not auto-advance a task FORWARD (in_progress → done is the
 //     agent's alone). This is the surviving half of the old H4 ruling;
 //   * waiting_owner is a card-lifecycle HOLD, bracketed entirely by the card:
-//     it is ENTERED only by opening a card — open_gate (which IS an M2 reply
-//     card, same machinery plus the task/step linkage) or a plain
-//     create_reply_card auto-bound to the current step (inferCardTaskStep +
-//     armStepWithCard) — and LEFT only when that card is answered, where the
+//     it is ENTERED only by opening a card — create_reply_card carrying an
+//     explicit linked_task {task_id, step_id}, which arms that step
+//     (armStepWithCard) — and LEFT only when that card is answered, where the
 //     server itself restores the task/step to in_progress
 //     (releaseCardHold). The agent reports NEITHER side: a
 //     report INTO waiting_owner is a 400 (not its lever), a report OUT of it a
@@ -2440,12 +2439,12 @@ func (s *apiServer) HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPos
 	if status == StepStatusWaitingOwner {
 		// The step twin of the task guard above: waiting_owner is not an
 		// agent-reportable step status. A step enters it only when a reply card
-		// binds onto it (open_gate / create_reply_card auto-bind) — never by a
-		// separate status report. A 400 (not the state-machine 409) says this is
-		// not the agent's lever.
+		// binds onto it (create_reply_card with an explicit linked_task) — never
+		// by a separate status report. A 400 (not the state-machine 409) says this
+		// is not the agent's lever.
 		writeError(w, http.StatusBadRequest,
 			"waiting_owner is not an agent-reportable status; a step enters it only "+
-				"by opening a reply card (open_gate or create_reply_card)")
+				"by opening a reply card (create_reply_card with linked_task)")
 		return
 	}
 	if status == StepStatusSuperseded {
@@ -2532,83 +2531,15 @@ func (s *apiServer) HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPos
 	s.writeTaskStepStatusReceipt(w, *t, *step)
 }
 
-// POST /api/tasks/{task_id}/steps/{step_id}/gate — arm a gate (contract §D):
-// the SAME reply-card create machinery (validation, companion chat message,
-// deltas) plus the task linkage: step → waiting_owner + reply_card_id, task →
-// waiting_owner. The ONLY entry into waiting_owner. The owner answers through
-// the existing reply-card answer route, where the server releases the hold and
-// restores the task/step to in_progress (releaseCardHold) — it
-// still never advances the work FORWARD; the agent reports done itself. A
-// second gate may arm while another still waits (SPEC §3.2: one task, many
-// cards) — the task leaves waiting_owner only once the LAST bound card is
-// answered.
-func (s *apiServer) HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost(w http.ResponseWriter, r *http.Request, taskId string, stepId string) {
-	var body ReplyCardCreateDTO
-	if !decodeJSONBodyRequired(w, r, &body, "kind", "summary", "options") {
-		return
-	}
-	t, err := s.resolveTask(taskId)
-	if err != nil {
-		writeResolveError(w, err, "task", taskId)
-		return
-	}
-	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
-		return
-	}
-	if t.Status != TaskStatusInProgress && t.Status != TaskStatusWaitingOwner {
-		writeError(w, http.StatusConflict,
-			"a gate can only arm on an in_progress or waiting_owner task (is "+t.Status+")")
-		return
-	}
-	step, err := s.dal.GetTaskStep(stepId)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if step == nil || step.TaskID != taskId {
-		writeError(w, http.StatusNotFound, "step '"+stepId+"' not found")
-		return
-	}
-	// A plain (is_gate=false) step is armable too: open_gate on the current node
-	// is a legitimate ad-hoc 請示, the explicit twin of create_reply_card's
-	// auto-bind, which already arms whatever step is current without an is_gate
-	// check. is_gate is a plan-declared property (submit_plan) — arming does not
-	// rewrite it; the step becomes a card-carrying plain step (get_task's step
-	// view carries the reply_card_id). Only a terminal step is refused: done
-	// (nothing waits any more) and superseded (frozen replan history — its
-	// bound card pointer is part of the audit trail and must not be re-armed).
-	if StepIsTerminal(step.Status) {
-		writeError(w, http.StatusConflict,
-			"step '"+stepId+"' is already "+step.Status)
-		return
-	}
-	card, problem, err := s.openReplyCard(currentActor(r), body, t.ID, step.ID)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if problem != "" {
-		writeError(w, http.StatusBadRequest, problem)
-		return
-	}
-	if err := s.armStepWithCard(t, step, card.ID, requestTrigger(r)); err != nil {
-		internalError(w, err)
-		return
-	}
-	s.writeReplyCard(w, *card)
-}
-
-// armStepWithCard applies the card→step waiting state machine shared by the
-// TWO card-open paths — the explicit open_gate arming and create_reply_card's
-// auto binding (inferCardTaskStep): the step enters waiting_owner carrying
-// the CURRENT card (reply_card_id points at the latest ask; the card's own
-// task/step birth marks keep the full history), started_ts stamps on first
-// touch, and the task follows into waiting_owner — UNLESS the step sits
-// inside a parallel group, where flipping the WHOLE task would lie while
-// sibling lanes still run (the ValidatePlanParallelShape rationale; fresh
-// gates can never be grouped, so only legacy data and auto-bound plain steps
-// hit that branch). The owner's later answer releases this hold —
+// armStepWithCard applies the card→step waiting state machine behind the ONE
+// card-open path — create_reply_card carrying an explicit linked_task
+// {task_id, step_id} (T-18 collapsed the two entrances into it): the step
+// enters waiting_owner carrying the CURRENT card (reply_card_id points at the
+// latest ask; the card's own task/step birth marks keep the full history),
+// started_ts stamps on first touch, and the task follows into waiting_owner —
+// UNLESS the step sits inside a parallel group, where flipping the WHOLE task
+// would lie while sibling lanes still run (the ValidatePlanParallelShape
+// rationale). The owner's later answer releases this hold —
 // releaseCardHold restores the step (and task) to in_progress;
 // from there the agent reports the step forward itself.
 func (s *apiServer) armStepWithCard(t *Task, step *TaskStep, cardID, trigger string) error {

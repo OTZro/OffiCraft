@@ -44,7 +44,7 @@
 //               TaskReplyCard — the SHARED M2 ReplyCardBody interior, never a
 //               re-implementation; answered cards collapse to one line).
 //               Steps that EVER carried an approval (is_gate, or a bound
-//               reply card — auto-bound plain asks included) keep a permanent
+//               reply card — plain non-gate steps included) keep a permanent
 //               審批 marker after they finish (owner 2026-07-14: 持久標記).
 //               Transitional states when there are no steps yet: unassigned →
 //               等待指派; assigned-but-no-plan → 「等待 ○○ 建立 Steps」 (○○ = the
@@ -801,7 +801,7 @@ export function TaskCard({
 
   // ── embedded reply cards ────────────────────────────────────────────────────
   // Each step carrying a card (non-empty replyCardId — an armed gate OR an
-  // auto-bound plain ask) embeds one TaskReplyCard INSIDE its step row.
+  // ad-hoc ask bound to a plain step) embeds one TaskReplyCard INSIDE its step row.
 
   // ── header stamps ──────────────────────────────────────────────────────────
   // 已歷時 ticks from created_ts (含 等待指派/等待建立 Steps — spec §3.1); a CLOSED

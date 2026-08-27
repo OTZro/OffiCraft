@@ -28,10 +28,10 @@
 #   ⑤ a step goes pending → in_progress → done. `pending → done` is not a legal
 #     agent transition (domain.go agentStepTransitions) and answers 409, so the
 #     old one-shot "report done" moved nothing.
-#   ⑥ a card opened by the executor of an ACTIVE task auto-binds to that task's
-#     CURRENT step (api_replycards.go) — and there must BE one: with no step
-#     in_progress the create is refused 409. So ⑥ comes while a step is running,
-#     and the owner side answers it (run.sh) to release the waiting_owner hold.
+#   ⑥ a card NAMES the step it is about (linked_task, T-18: create_reply_card
+#     no longer infers a binding and omitting the field is a 400) — and that step
+#     must be live, so ⑥ comes while a step is running, and the owner side
+#     answers it (run.sh) to release the waiting_owner hold.
 #   ⑦ closeout is TERMINAL-tasks-only (api_tasks.go). A task is terminal when
 #     its steps derive it there — so the last step must actually reach done
 #     first, and the handoff declaration rides THAT call, not the closeout.
@@ -117,15 +117,17 @@ if [[ -n "$TASK" ]] && ! skipped step_done; then
   fi
 fi
 
-# ⑥ 開一張等我回覆卡 — the card auto-binds to the step that is in_progress, so
-# the second step is started FIRST. That is not a trick to satisfy the server:
-# it is what "我做到這裡，需要你裁示" actually is. The step parks in
-# waiting_owner until run.sh's owner side answers, which is why ⑦ waits below.
+# ⑥ 開一張等我回覆卡 — the card NAMES the step it is about (linked_task, T-18:
+# create_reply_card no longer infers a binding, and omitting the field is a
+# 400). The second step is still started FIRST, and that is not a trick to
+# satisfy the server: it is what "我做到這裡，需要你裁示" actually is. The step
+# parks in waiting_owner until run.sh's owner side answers, which is why ⑦
+# waits below — so the binding has to be REAL, not incidental.
 if [[ -n "$TASK" ]] && ! skipped reply_card; then
   SID2="$(step_id_at 1)"
   [[ -n "$SID2" ]] && sg_step reply_card_start POST "/api/tasks/$TASK/steps/$SID2/status" '{"status":"in_progress"}' >/dev/null
   sg_step reply_card POST /api/reply-cards \
-    '{"kind":"decision","summary":"七步關卡:要不要繼續收尾?","body":"這是載體用的請示卡。","options":["繼續收尾","先停在這裡"]}' >/dev/null
+    "{\"kind\":\"decision\",\"summary\":\"七步關卡:要不要繼續收尾?\",\"body\":\"這是載體用的請示卡。\",\"options\":[\"繼續收尾\",\"先停在這裡\"],\"linked_task\":{\"task_id\":\"$TASK\",\"step_id\":\"$SID2\"}}" >/dev/null
 fi
 
 # ⑦ 回覆另一個 agent — the colleague spoke first (run.sh 3b) and is waiting. The

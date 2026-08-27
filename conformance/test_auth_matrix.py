@@ -265,7 +265,7 @@ def _matrix_card(ctx: Ctx) -> str:
     r = ctx.client.post(
         "/api/reply-cards",
         json={"kind": "decision", "summary": "conf matrix scratch card",
-              "options": ["AI pick", "other"]},
+              "options": ["AI pick", "other"], "linked_task": None},
         headers={"Authorization": f"Bearer {ctx.owner_token}"},
     )
     assert r.status_code == 200, f"scratch card failed: {r.status_code} {r.text}"
@@ -284,7 +284,7 @@ def _matrix_card_opened_by_agent_a(ctx: Ctx) -> str:
     r = ctx.client.post(
         "/api/reply-cards",
         json={"kind": "decision", "summary": "conf matrix agent-A card",
-              "options": ["AI pick", "other"]},
+              "options": ["AI pick", "other"], "linked_task": None},
         headers={"Authorization": f"Bearer {ctx.agent_a.token}"},
     )
     assert r.status_code == 200, f"agent-A card failed: {r.status_code} {r.text}"
@@ -763,7 +763,7 @@ MATRIX: dict[str, Route] = {
     "POST /api/reply-cards": Route(
         requires="machine",
         body={"kind": "decision", "summary": "conf matrix card",
-              "options": ["AI pick", "other"]},
+              "options": ["AI pick", "other"], "linked_task": None},
     ),
     "GET /api/reply-cards": Route(requires="machine"),
     "GET /api/reply-cards/count": Route(requires="machine"),
@@ -1316,14 +1316,6 @@ MATRIX: dict[str, Route] = {
         path=lambda ctx, _i: "/api/tasks/{}/steps/{}/note/patch".format(
             *_matrix_task_step(ctx)),
         body={"edits": [{"old": "", "new": "conf matrix note patch"}]},
-    ),
-    "POST /api/tasks/{task_id}/steps/{step_id}/gate": Route(
-        requires="agent",
-        overrides={"agent_other": 403},
-        path=lambda ctx, _i: "/api/tasks/{}/steps/{}/gate".format(
-            *_matrix_task_step(ctx, gate=True)),
-        body={"kind": "decision", "summary": "conf matrix gate",
-              "options": ["go", "hold"]},
     ),
     "POST /api/tasks/{task_id}/deps": Route(
         requires="agent",

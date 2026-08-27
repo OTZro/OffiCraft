@@ -154,7 +154,7 @@ describe("TaskCard 卡綁 step", () => {
             startedTs: 100,
             finishedTs: 200,
           }),
-          // A finished plain step an ask was auto-bound to: marker stays too.
+          // A finished plain step an ask was bound to: marker stays too.
           mkStep({
             name: "asked-done",
             status: "done",

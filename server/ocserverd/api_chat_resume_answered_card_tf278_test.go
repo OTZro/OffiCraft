@@ -47,7 +47,7 @@ func TestResumeSnapshotNamesStepsSittingOnAnAnsweredCard(t *testing.T) {
 		{"name": "收尾", "dod": "文件補完"},
 	})
 	startFirstStep(t, api, answeredTask.ID, "m-exec")
-	card := openGateCard(t, api, answeredTask.ID, "m-exec",
+	card := openCardOnStep(t, api, answeredTask.ID, "m-exec",
 		answeredPlan.Steps[0].ID, "要走哪一條路？")
 	if rec := answerCard(t, api, card.ID,
 		map[string]any{"option_idx": 1}); rec.Code != http.StatusOK {
@@ -59,7 +59,7 @@ func TestResumeSnapshotNamesStepsSittingOnAnAnsweredCard(t *testing.T) {
 		{"name": "等 owner 回覆", "dod": "他回了"},
 	})
 	startFirstStep(t, api, waitingTask.ID, "m-exec")
-	openGateCard(t, api, waitingTask.ID, "m-exec", waitingPlan.Steps[0].ID, "還沒回的問題")
+	openCardOnStep(t, api, waitingTask.ID, "m-exec", waitingPlan.Steps[0].ID, "還沒回的問題")
 
 	workingTask := createAdHocTask(t, api, "m-exec")
 	submitPlan(t, api, workingTask.ID, "m-exec", []map[string]any{
@@ -82,7 +82,7 @@ func TestResumeSnapshotNamesStepsSittingOnAnAnsweredCard(t *testing.T) {
 		{"name": "後面還有", "dod": "做完"},
 	})
 	startFirstStep(t, api, expiredTask.ID, "m-exec")
-	expiredCard := openGateCard(t, api, expiredTask.ID, "m-exec",
+	expiredCard := openCardOnStep(t, api, expiredTask.ID, "m-exec",
 		expiredPlan.Steps[0].ID, "沒人回的問題")
 	if rec := expireCardReq(t, api, expiredCard.ID, "owner", "owner"); rec.Code != http.StatusOK {
 		t.Fatalf("expire: %d %s", rec.Code, rec.Body.String())
@@ -98,7 +98,7 @@ func TestResumeSnapshotNamesStepsSittingOnAnAnsweredCard(t *testing.T) {
 		{"name": "還沒開始的下一步", "dod": "做完"},
 	})
 	startFirstStep(t, api, pickedUpTask.ID, "m-exec")
-	pickedUpCard := openGateCard(t, api, pickedUpTask.ID, "m-exec",
+	pickedUpCard := openCardOnStep(t, api, pickedUpTask.ID, "m-exec",
 		pickedUpPlan.Steps[0].ID, "已經消化掉的問題")
 	if rec := answerCard(t, api, pickedUpCard.ID,
 		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
@@ -222,7 +222,7 @@ func TestResumeSnapshotSaysNothingWhenNoAnswerIsWaiting(t *testing.T) {
 		{"name": "問一下", "dod": "問到了"},
 	})
 	startFirstStep(t, api, task.ID, "m-exec")
-	openGateCard(t, api, task.ID, "m-exec", plan.Steps[1].ID, "順便問的問題")
+	openCardOnStep(t, api, task.ID, "m-exec", plan.Steps[1].ID, "順便問的問題")
 
 	snap := resumeSnapshot(t, api, "m-exec")
 	if len(snap.Tasks) != 1 {

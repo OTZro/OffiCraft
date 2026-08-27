@@ -708,7 +708,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleCreateReplyCardApiReplyCardsPost,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "Open a reply card: an ask the owner must answer (options ≤4, [0]=AI pick). Auto-binds to your single active task's CURRENT step — that step (and the task) enters waiting_owner until the owner answers; several lanes of one parallel_group running at once is fine (the lowest order_idx lane carries the card, and the whole task holds either way). If that task has NO resolvable current step the call is REFUSED with 409 and no card is opened: binding the task without a step places no hold, so the task would finish underneath your question and the owner's answer would then be rejected. Fix what the error names — report the step you are on (update_step_status in_progress), use open_gate with an explicit task_id + step_id, or send bind=\"none\" if the ask is not about the task. With no single clear active task, a plain unbound 請示 opens as before. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).",
+			Summary:  "Open a reply card: an ask the owner must answer (options ≤4, [0]=AI pick). linked_task is REQUIRED and has no default — every card must SAY whether it is about a task, because the server no longer infers one. Send linked_task={\"task_id\": ..., \"step_id\": ...} to bind the ask to the step it is about: that step (and its task) enters waiting_owner until the owner answers. Send linked_task=null when the ask is not about a task — it opens as a plain unbound 請示. BOTH ids are required in the object form: a task_id with NO step_id is a 400, because a card bound to a task but to no step places no 等我回覆 hold, so the task would finish underneath your question and the owner's answer would then be rejected for good. Omitting linked_task entirely is a 400 that names both legal shapes. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).",
 			MCPTool:  "create_reply_card",
 		},
 		{
@@ -1561,15 +1561,6 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Requires: principalAgent,
 			Summary:  "Patch this step's working note by unique anchors ({edits:[{old,new}]}) — send only the part that changed, instead of re-typing the whole note. USE THIS WHENEVER YOU ARE AMENDING A NOTE THAT ALREADY HAS CONTENT. update_step_note is a wholesale replace, so if anyone else wrote to the step between your read and your write, your copy is stale and the replace silently deletes their text — and because your stale copy is usually the LONGER one, no guard fires and nothing tells you. A patch cannot do that: a non-empty old must match the current note EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400 that names which edit failed and which tool to re-read with, zero writes), so a concurrent write turns into a refusal you can see. Edits apply in order; an empty old appends. Wiping the note, or shrinking it below a tenth, needs allow_shrink=true — for an honest rewrite from scratch use update_step_note. Same executor/admin gate, same any-step-status generality, same closed-task 409 as update_step_note. Re-read with get_task after a refusal.",
 			MCPTool:  "patch_step_note",
-		},
-		{
-			Method:   "POST",
-			Path:     "/api/tasks/{task_id}/steps/{step_id}/gate",
-			Handler:  w.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost,
-			Auth:     authGated,
-			Requires: principalAgent,
-			Summary:  "Arm a gate step: opens the reply card the owner must answer. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).",
-			MCPTool:  "open_gate",
 		},
 		{
 			Method:   "POST",

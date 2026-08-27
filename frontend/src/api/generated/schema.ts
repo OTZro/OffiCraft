@@ -2624,8 +2624,8 @@ export interface paths {
         get: operations["handle_list_reply_cards_api_reply_cards_get"];
         put?: never;
         /**
-         * Open a reply card: an ask the owner must answer (options ≤4, [0]=AI pick). Auto-binds to your single active task's CURRENT step — that step (and the task) enters waiting_owner until the owner answers; several lanes of one parallel_group running at once is fine (the lowest order_idx lane carries the card, and the whole task holds either way). If that task has NO resolvable current step the call is REFUSED with 409 and no card is opened: binding the task without a step places no hold, so the task would finish underneath your question and the owner's answer would then be rejected. Fix what the error names — report the step you are on (update_step_status in_progress), use open_gate with an explicit task_id + step_id, or send bind="none" if the ask is not about the task. With no single clear active task, a plain unbound 請示 opens as before. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).
-         * @description Open a reply card (agent-side; the MCP tool ``create_reply_card``). The initiator is ALWAYS the verified JWT ``sub``. Server validation: ``kind`` must be ``decision``|``action``; ``summary`` must be non-blank; ``options`` must be 1..4 non-blank strings (index 0 = the AI recommendation) — violations are a 400. Opening a card ALSO posts one chat message (initiator → owner, body = summary, ``meta.reply_card_id`` = the card id) so the ask rides the normal chat stream (unread red dot, permanent history); the card's ``chat_message_id`` links back to it. AUTO task/step binding: when the initiator is the executor of EXACTLY ONE active task (``in_progress``|``waiting_owner``), the card binds to that task, and to its CURRENT step (the single ``in_progress`` step, else the single ``waiting_owner`` step) when that is unambiguous — the bound step enters ``waiting_owner`` carrying the card (``reply_card_id``), and the task follows into ``waiting_owner`` unless the step sits in a parallel group (sibling lanes may still run). An initiator with NO active task opens a plain unbound 請示. An initiator that IS executing active work but cannot be bound to both levels (2+ active tasks, or no single current step) is REFUSED with 409 and no card is minted — a card bound to a task but to no step places no ``waiting_owner`` hold, so the task would run on to ``done`` underneath an ask the owner can then never answer (T-4166). The explicit exit is ``open_gate`` (POST /api/tasks/{task_id}/steps/{step_id}/gate), which names the step. No request field selects the binding. Fans one ``chat`` and one ``reply_card`` SSE delta (plus a ``task`` delta when a step was bound).
+         * Open a reply card: an ask the owner must answer (options ≤4, [0]=AI pick). linked_task is REQUIRED and has no default — every card must SAY whether it is about a task, because the server no longer infers one. Send linked_task={"task_id": ..., "step_id": ...} to bind the ask to the step it is about: that step (and its task) enters waiting_owner until the owner answers. Send linked_task=null when the ask is not about a task — it opens as a plain unbound 請示. BOTH ids are required in the object form: a task_id with NO step_id is a 400, because a card bound to a task but to no step places no 等我回覆 hold, so the task would finish underneath your question and the owner's answer would then be rejected for good. Omitting linked_task entirely is a 400 that names both legal shapes. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).
+         * @description Open a reply card (agent-side; the MCP tool ``create_reply_card``). The initiator is ALWAYS the verified JWT ``sub``. Server validation: ``kind`` must be ``decision``|``action``; ``summary`` must be non-blank; ``options`` must be 1..4 non-blank strings (index 0 = the AI recommendation) — violations are a 400. Opening a card ALSO posts one chat message (initiator → owner, body = summary, ``meta.reply_card_id`` = the card id) so the ask rides the normal chat stream (unread red dot, permanent history); the card's ``chat_message_id`` links back to it. TASK/STEP BINDING IS DECLARED, NEVER INFERRED (T-18): ``linked_task`` is a REQUIRED field. ``null`` opens a plain unbound 請示. ``{task_id, step_id}`` binds the card to that step — the step enters ``waiting_owner`` carrying the card (``reply_card_id``), and the task follows into ``waiting_owner`` unless the step sits in a parallel group (sibling lanes may still run). The caller must be the task's executor (403 otherwise); the task must be ``in_progress``|``waiting_owner`` (409); the step must belong to the task (404) and must not be terminal — ``done``/``superseded`` (409). A ``linked_task`` object carrying a ``task_id`` but no ``step_id`` is a 400: a card bound to a task but to no step places no ``waiting_owner`` hold, so the task would run on to ``done`` underneath an ask the owner can then never answer (T-4166). OMITTING ``linked_task`` is a 400 naming both legal shapes — the field exists so that not deciding is impossible to do silently, which is exactly what the old auto-binding did whenever it could not resolve a step. Fans one ``chat`` and one ``reply_card`` SSE delta (plus a ``task`` delta when a step was bound).
          */
         post: operations["handle_create_reply_card_api_reply_cards_post"];
         delete?: never;
@@ -2689,7 +2689,7 @@ export interface paths {
         put: operations["handle_reanswer_reply_card_api_reply_cards__card_id__answer_put"];
         /**
          * Answer a waiting reply card — the only way a card closes.
-         * @description Answer a WAITING reply card — the only POSITIVE close (there is deliberately no close/skip surface; the expire action is the sole other exit and is NOT an answer — open to the card's own author as well as the owner / an admin agent (T-6020 held it at the admin floor; T-1b88, owner 2026-08-07, widened it to the author)). The answer is an ``option_idx`` and/or free ``text`` (+ attachments); an empty answer is 400, an out-of-range ``option_idx`` is 400. Any real answer — including a counter-question typed as text — flips the card to ``answered`` and stamps ``answered_ts``; if the reply did not settle the original question the agent opens a NEW card (never reopens this one). Answering an already-answered card is a 409 (revise via PUT instead); an expired card is a 409 too (terminal — if the question still matters the agent opens a NEW card). When the card is bound to a task step (open_gate / create_reply_card auto-bind), the FIRST answer also releases the waiting_owner hold — the server restores the step (and the task, once its last bound card is answered) to in_progress; the agent then advances the work itself. Fans one ``reply_card`` SSE delta (badge −1; the agent's own connection receives it and refetches the card for the full answer context).
+         * @description Answer a WAITING reply card — the only POSITIVE close (there is deliberately no close/skip surface; the expire action is the sole other exit and is NOT an answer — open to the card's own author as well as the owner / an admin agent (T-6020 held it at the admin floor; T-1b88, owner 2026-08-07, widened it to the author)). The answer is an ``option_idx`` and/or free ``text`` (+ attachments); an empty answer is 400, an out-of-range ``option_idx`` is 400. Any real answer — including a counter-question typed as text — flips the card to ``answered`` and stamps ``answered_ts``; if the reply did not settle the original question the agent opens a NEW card (never reopens this one). Answering an already-answered card is a 409 (revise via PUT instead); an expired card is a 409 too (terminal — if the question still matters the agent opens a NEW card). When the card is bound to a task step (create_reply_card with an explicit ``linked_task``), the FIRST answer also releases the waiting_owner hold — the server restores the step (and the task, once its last bound card is answered) to in_progress; the agent then advances the work itself. Fans one ``reply_card`` SSE delta (badge −1; the agent's own connection receives it and refetches the card for the full answer context).
          */
         post: operations["handle_answer_reply_card_api_reply_cards__card_id__answer_post"];
         delete?: never;
@@ -3582,26 +3582,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tasks/{task_id}/steps/{step_id}/gate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Arm a gate step: opens the reply card the owner must answer. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).
-         * @description Arm a gate step (MCP ``open_gate`` — an entry into waiting_owner): opens a reply card through the M2 create machinery (same validation, same companion chat message), binds it to the step (step → waiting_owner, reply_card_id set) and flips the task to waiting_owner (a step inside a parallel group holds only its lane). Any non-terminal step is armable — a plain non-gate step too (the ad-hoc 請示 twin of create_reply_card; is_gate is a plan property and is not rewritten). The owner answers through the EXISTING reply-card answer route, where the server restores the step/task to in_progress; it still never advances the work forward (the agent reports done itself). An already-terminal step (``done`` / ``superseded`` — frozen replan history) → 409; a task that is neither in_progress nor waiting_owner → 409.
-         */
-        post: operations["handle_open_task_gate_api_tasks__task_id__steps__step_id__gate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/tasks/{task_id}/steps/{step_id}/note": {
         parameters: {
             query?: never;
@@ -3657,7 +3637,7 @@ export interface paths {
         put?: never;
         /**
          * Report a step status (pending/in_progress/waiting_external/done). Entering waiting_external requires a non-blank waiting_reason (422 otherwise); the task status is derived from its steps. T-74f8 交棒閘: if this report would CLOSE the task (every step done) AND the task's creator is not its executor, the call is REFUSED with 422 unless you say where the ball goes IN THIS SAME CALL — handoff='return_to_creator' (recorded on the task and nothing else — no task is opened and nobody is notified), handoff='follow_up' + handoff_task_id=<a successor task you already created> (the server hangs this task off it as a dependency, and closing this one releases it), or handoff='none' + handoff_note=<why nothing follows>. The gate stands aside by itself when a non-terminal task already depends on this one — you never see it if the handover is already real. It refuses BEFORE writing anything, so a refused report leaves the plan fully editable: create the successor task, then re-send this same report with the declaration. This is your LAST chance — once the task closes it can never be replanned (submit_plan becomes a permanent 409).
-         * @description Agent-reported step status (MCP ``update_step_status``): ``pending`` → ``in_progress`` → ``done`` — ``waiting_owner`` is NOT agent-reportable on either side (a step enters it only by opening a reply card: open_gate / create_reply_card auto-bind, and leaves it only when that card is answered, where the server restores in_progress), so reporting ``waiting_owner`` is a 400 and a move out of it is a 409; other illegal transitions are a 409. ``superseded`` is likewise not the agent's lever: the server freezes a replaced answered-card step itself on submit_plan (T-1aea), so reporting ``superseded`` is a 400 and no report moves a step out of it (409 — terminal).
+         * @description Agent-reported step status (MCP ``update_step_status``): ``pending`` → ``in_progress`` → ``done`` — ``waiting_owner`` is NOT agent-reportable on either side (a step enters it only by opening a reply card: create_reply_card carrying an explicit ``linked_task`` {task_id, step_id}, and leaves it only when that card is answered, where the server restores in_progress), so reporting ``waiting_owner`` is a 400 and a move out of it is a 409; other illegal transitions are a 409. ``superseded`` is likewise not the agent's lever: the server freezes a replaced answered-card step itself on submit_plan (T-1aea), so reporting ``superseded`` is a 400 and no report moves a step out of it (409 — terminal).
          */
         post: operations["handle_update_task_step_status_api_tasks__task_id__steps__step_id__status_post"];
         delete?: never;
@@ -6784,17 +6764,11 @@ export interface components {
         };
         /**
          * ReplyCardCreateDTO
-         * @description Open one reply card (請示): an ask the OWNER must answer before the agent can proceed. ``kind`` is the closed set ``decision`` (needs a call/approval) | ``action`` (needs the owner to DO something first). ``options`` are the quick-reply choices: 1..4 non-blank strings, and index 0 is ALWAYS the AI's own recommendation (the ``AI 建議`` pick). A free-typed answer (with attachments) is always allowed on top — options never close that door. Optional ``attachments`` ride the QUESTION side of the card (same input shape + limits as chat attachments: ``{id}`` references a blob already uploaded via ``POST /api/chat/attachments``, or ``data_b64`` carries small bytes inline; blobs land in the shared chat-attachment store). ``bind`` opts out of auto task/step binding (see the field).
+         * @description Open one reply card (請示): an ask the OWNER must answer before the agent can proceed. ``kind`` is the closed set ``decision`` (needs a call/approval) | ``action`` (needs the owner to DO something first). ``options`` are the quick-reply choices: 1..4 non-blank strings, and index 0 is ALWAYS the AI's own recommendation (the ``AI 建議`` pick). A free-typed answer (with attachments) is always allowed on top — options never close that door. Optional ``attachments`` ride the QUESTION side of the card (same input shape + limits as chat attachments: ``{id}`` references a blob already uploaded via ``POST /api/chat/attachments``, or ``data_b64`` carries small bytes inline; blobs land in the shared chat-attachment store). ``linked_task`` is REQUIRED and has no default: every card must SAY whether it is about a task. There is no inference — the server never guesses a binding from what work you hold, because a guess that misses is silent (the card opens with no 等我回覆 hold and the task runs past your question).
          */
         ReplyCardCreateDTO: {
             /** Attachments */
             attachments?: components["schemas"]["ChatAttachmentInputDTO"][];
-            /**
-             * Bind
-             * @description Auto-binding opt-out. Omit (or "") for the default AUTO binding: when you are the executor of exactly one active task, the card binds to that task's CURRENT step and places the 等我回覆 hold. Send ``"none"`` to declare this ask is NOT about your task — the card opens as a plain unbound 請示 regardless of what work you hold. Any other value is a 400.
-             * @default
-             */
-            bind: string;
             /**
              * Body
              * @default
@@ -6805,6 +6779,11 @@ export interface components {
              * @enum {string}
              */
             kind: "decision" | "action";
+            /**
+             * Linked Task
+             * @description REQUIRED — declare, do not leave it to be inferred. Send ``null`` when the ask is NOT about a task (a plain unbound 請示), or ``{"task_id": ..., "step_id": ...}`` to bind the ask to the step it is about: that step (and its task) enters waiting_owner until the owner answers. BOTH ids are required in the object form; a task_id with no step_id is a 400, because binding a task without a step places no 等我回覆 hold — the task would finish underneath your question and the owner's answer would then be rejected for good. Omitting the field entirely is a 400 that names both legal shapes: silence used to mean 'the server guesses', and a guess that missed sent a hold-less card with no error at all.
+             */
+            linked_task: components["schemas"]["ReplyCardLinkDTO"] | null;
             /** Options */
             options: string[];
             /** Summary */
@@ -6852,6 +6831,16 @@ export interface components {
             summary: string;
             /** Task */
             task?: components["schemas"]["TaskRefDTO"] | null;
+        };
+        /**
+         * ReplyCardLinkDTO
+         * @description The task/step a reply card is about. BOTH ids are required: a card bound to a task but to no step places no 等我回覆 hold, so the task keeps running past the question and the owner's eventual answer is refused (409) — the orphan shape T-4166 exists to make impossible.
+         */
+        ReplyCardLinkDTO: {
+            /** Step Id */
+            step_id: string;
+            /** Task Id */
+            task_id: string;
         };
         /**
          * ReplyCardListItemDTO
@@ -8945,7 +8934,7 @@ export interface components {
         };
         /**
          * TaskStepDTO
-         * @description One workflow node on the task timeline. Every row is one progress leaf (parallel items are separate rows sharing ``parallel_group``). A parallel stage is CONSECUTIVE rows sharing a non-empty ``parallel_group`` — submit_plan refuses (400) split groups, one-lane groups and gates inside a group, so stored plans always fold cleanly. ``status`` is the closed set ``pending`` | ``in_progress`` | ``waiting_owner`` | ``done`` | ``superseded``. ``done`` and ``superseded`` are the step's terminal states: ``superseded`` (T-1aea) is stamped by submit_plan alone — a replan freezes a step whose latest bound reply card was already answered/expired as kept history (original order, ahead of the fresh plan) unless the fresh plan re-lists the node by name; a superseded row counts toward neither ``progress_done`` nor ``progress_total``, is never the current node, is not agent-reportable and cannot be re-armed; its ``finished_ts`` is the freeze moment. Gate projection: ``is_gate`` with an empty ``reply_card_id`` is the ANNOUNCED (dashed) gate; a non-empty ``reply_card_id`` is a step carrying a live reply card — an ARMED gate, or a plain step a ``create_reply_card`` ask auto-bound to. ``reply_card_id`` always points at the LATEST bound card and persists after the step finishes (the permanent approval mark).
+         * @description One workflow node on the task timeline. Every row is one progress leaf (parallel items are separate rows sharing ``parallel_group``). A parallel stage is CONSECUTIVE rows sharing a non-empty ``parallel_group`` — submit_plan refuses (400) split groups, one-lane groups and gates inside a group, so stored plans always fold cleanly. ``status`` is the closed set ``pending`` | ``in_progress`` | ``waiting_owner`` | ``done`` | ``superseded``. ``done`` and ``superseded`` are the step's terminal states: ``superseded`` (T-1aea) is stamped by submit_plan alone — a replan freezes a step whose latest bound reply card was already answered/expired as kept history (original order, ahead of the fresh plan) unless the fresh plan re-lists the node by name; a superseded row counts toward neither ``progress_done`` nor ``progress_total``, is never the current node, is not agent-reportable and cannot be re-armed; its ``finished_ts`` is the freeze moment. Gate projection: ``is_gate`` with an empty ``reply_card_id`` is the ANNOUNCED (dashed) gate; a non-empty ``reply_card_id`` is a step carrying a live reply card — an ARMED gate, or a plain step a ``create_reply_card`` ask named in its ``linked_task``. ``reply_card_id`` always points at the LATEST bound card and persists after the step finishes (the permanent approval mark).
          */
         TaskStepDTO: {
             /**
@@ -9130,7 +9119,7 @@ export interface components {
         };
         /**
          * TaskStepStatusUpdateDTO
-         * @description Agent-reported step status (MCP ``update_step_status``): ``pending`` → ``in_progress`` → ``done`` — ``waiting_owner`` is NOT agent-reportable on either side (a step enters it only by opening a reply card: open_gate / create_reply_card auto-bind, and leaves it only when that card is answered, where the server restores in_progress), so reporting ``waiting_owner`` is a 400 and a move out of it is a 409; other illegal transitions are a 409. ``superseded`` is likewise not the agent's lever: the server freezes a replaced answered-card step itself on submit_plan (T-1aea), so reporting ``superseded`` is a 400 and no report moves a step out of it (409 — terminal). T-74f8 交棒閘: if applying this report would CLOSE the task (every step done) and the task's creator is not its executor, the server refuses the report with a 422 unless the ball's destination is declared IN THIS SAME CALL — ``handoff='return_to_creator'`` (the server mints a durable follow-up task on the creator, blocked by this one), ``handoff='follow_up'`` + ``handoff_task_id`` (the server attaches this task to that successor as a dependency), or ``handoff='none'`` + ``handoff_note`` (an explicit, recorded end of the line). The gate stands aside when a non-terminal task already depends on this one (the handover is already real). It refuses BEFORE any row is written, because a closed task can never be replanned (submit_plan turns into a permanent 409) — after the close there is nothing left to answer with.
+         * @description Agent-reported step status (MCP ``update_step_status``): ``pending`` → ``in_progress`` → ``done`` — ``waiting_owner`` is NOT agent-reportable on either side (a step enters it only by opening a reply card: create_reply_card carrying an explicit ``linked_task`` {task_id, step_id}, and leaves it only when that card is answered, where the server restores in_progress), so reporting ``waiting_owner`` is a 400 and a move out of it is a 409; other illegal transitions are a 409. ``superseded`` is likewise not the agent's lever: the server freezes a replaced answered-card step itself on submit_plan (T-1aea), so reporting ``superseded`` is a 400 and no report moves a step out of it (409 — terminal). T-74f8 交棒閘: if applying this report would CLOSE the task (every step done) and the task's creator is not its executor, the server refuses the report with a 422 unless the ball's destination is declared IN THIS SAME CALL — ``handoff='return_to_creator'`` (the server mints a durable follow-up task on the creator, blocked by this one), ``handoff='follow_up'`` + ``handoff_task_id`` (the server attaches this task to that successor as a dependency), or ``handoff='none'`` + ``handoff_note`` (an explicit, recorded end of the line). The gate stands aside when a non-terminal task already depends on this one (the handover is already real). It refuses BEFORE any row is written, because a closed task can never be replanned (submit_plan turns into a permanent 409) — after the close there is nothing left to answer with.
          */
         TaskStepStatusUpdateDTO: {
             /**
@@ -16689,60 +16678,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskDTO"];
-                };
-            };
-            /** @description Validation error (unified error envelope). */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
-                };
-            };
-            /** @description Client error (unified error envelope). */
-            "4XX": {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
-                };
-            };
-            /** @description Server error (unified error envelope). */
-            "5XX": {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
-                };
-            };
-        };
-    };
-    handle_open_task_gate_api_tasks__task_id__steps__step_id__gate_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: string;
-                step_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ReplyCardCreateDTO"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReplyCardDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

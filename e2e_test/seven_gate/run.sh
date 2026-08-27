@@ -348,9 +348,9 @@ python3 "$HERE/collect.py" --base "$BASE" --token-file "$E2E/.state/owner.tok" \
 COLLECTOR_PID=$!
 sleep 2
 
-# 4b. THE OWNER ON THE OTHER END OF ⑥'s CARD. A card opened by the executor of an
-#     active task AUTO-BINDS to that task's current step and parks it in
-#     waiting_owner (api_replycards.go inferCardTaskStep → armStepWithCard), and
+# 4b. THE OWNER ON THE OTHER END OF ⑥'s CARD. ⑥ opens its card with an explicit
+#     linked_task naming the step it started (T-18 — the server no longer infers
+#     a binding), which parks that step in waiting_owner (armStepWithCard), and
 #     waiting_owner has exactly ONE exit: the owner answers. Without someone on
 #     that end, ⑥ succeeding is what makes ⑦ impossible — the step can never
 #     move again, the task can never close, and closeout is terminal-only. That

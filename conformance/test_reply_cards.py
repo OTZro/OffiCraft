@@ -70,7 +70,8 @@ def _open_card(client, asker: AgentIdentity, summary="need a call",
                kind="decision", options=("AI pick", "other")) -> dict:
     r = client.post(
         "/api/reply-cards",
-        json={"kind": kind, "summary": summary, "options": list(options)},
+        json={"kind": kind, "summary": summary, "options": list(options),
+              "linked_task": None},
         headers=_auth(asker.token),
     )
     assert r.status_code == 200, f"open card failed: {r.status_code} {r.text}"
@@ -125,7 +126,8 @@ def test_create_validation_rules(client, asker):
         return client.post(
             "/api/reply-cards", json=body, headers=_auth(asker.token))
 
-    base = {"kind": "decision", "summary": "s", "options": ["a", "b"]}
+    base = {"kind": "decision", "summary": "s", "options": ["a", "b"],
+            "linked_task": None}
     assert post({**base, "kind": "poll"}).status_code == 400
     assert post({**base, "summary": "   "}).status_code == 400
     assert post({**base, "options": []}).status_code == 400
@@ -156,7 +158,7 @@ def test_card_opens_with_question_attachments(client, owner_token, asker):
         "/api/reply-cards",
         json={
             "kind": "decision", "summary": "see the screenshots?",
-            "options": ["go", "hold"],
+            "options": ["go", "hold"], "linked_task": None,
             "attachments": [
                 {"id": ref["id"]},
                 {"data_b64": _PNG_B64, "filename": "inline.png",
@@ -372,7 +374,7 @@ def test_list_rows_are_light_title_plus_decision_only(client, owner_token, asker
     # Give the card a heavy interior via the create body.
     heavy = client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "heavy ask",
+        json={"kind": "decision", "summary": "heavy ask", "linked_task": None,
               "body": "細" * 3000, "options": ["A" * 400, "B" * 400]},
         headers=_auth(asker.token),
     ).json()
@@ -421,7 +423,7 @@ def test_view_full_serves_the_same_pane_as_whole_cards(client, owner_token, aske
     card = _open_card(client, asker, summary="full view ask")
     heavy = client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "heavy full ask",
+        json={"kind": "decision", "summary": "heavy full ask", "linked_task": None,
               "body": "細" * 3000, "options": ["A" * 400, "B" * 400]},
         headers=_auth(asker.token),
     ).json()
@@ -706,14 +708,15 @@ def test_expiring_a_gate_card_resumes_the_task_and_step(
     # submit_plan answers with a bounded receipt (T-a98d); read the rows back.
     step_id = client.get(f"/api/tasks/{task_id}", headers=h_agent).json()["steps"][0]["id"]
     # Task status is DERIVED (T-9ca5): report the step in_progress so the task
-    # derives in_progress — a gate can only arm on an in_progress task.
+    # derives in_progress — a card can only bind an in_progress task.
     assert client.post(
         f"/api/tasks/{task_id}/steps/{step_id}/status",
         json={"status": "in_progress"}, headers=h_agent,
     ).status_code == 200
     r = client.post(
-        f"/api/tasks/{task_id}/steps/{step_id}/gate",
-        json={"kind": "decision", "summary": "go?", "options": ["go", "hold"]},
+        "/api/reply-cards",
+        json={"kind": "decision", "summary": "go?", "options": ["go", "hold"],
+              "linked_task": {"task_id": task_id, "step_id": step_id}},
         headers=h_agent,
     )
     assert r.status_code == 200, r.text
@@ -751,14 +754,15 @@ def test_closing_a_task_retires_its_waiting_card(client, owner_token, asker):
     # submit_plan answers with a bounded receipt (T-a98d); read the rows back.
     step_id = client.get(f"/api/tasks/{task_id}", headers=h_agent).json()["steps"][0]["id"]
     # Task status is DERIVED (T-9ca5): lift the task to in_progress via the step
-    # report so the gate can arm.
+    # report so the card can bind.
     assert client.post(
         f"/api/tasks/{task_id}/steps/{step_id}/status",
         json={"status": "in_progress"}, headers=h_agent,
     ).status_code == 200
     r = client.post(
-        f"/api/tasks/{task_id}/steps/{step_id}/gate",
-        json={"kind": "decision", "summary": "go?", "options": ["go"]},
+        "/api/reply-cards",
+        json={"kind": "decision", "summary": "go?", "options": ["go"],
+              "linked_task": {"task_id": task_id, "step_id": step_id}},
         headers=h_agent,
     )
     assert r.status_code == 200, r.text
