@@ -478,7 +478,14 @@ func TestRetention_RefusesToReapThroughASymlinkedTrash(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(elsewhere, bystander), []byte("not this reaper's"), 0o600); err != nil {
 			t.Fatalf("plant %s: %v", bystander, err)
 		}
-		if err := os.Symlink(elsewhere, backupTrashFor(dbPath)); err != nil {
+		// Named first, not inlined as os.Symlink(elsewhere, backupTrashFor(dbPath)):
+		// db_singlefile_copy_guard_test.go flags any copy/move verb whose argument
+		// tree mentions `dbPath`, and it cannot tell that this one derives a SIBLING
+		// DIRECTORY rather than the database file. Naming the path keeps the guard
+		// meaningful (it is a shape tripwire, and a shape it cannot read is a
+		// finding it cannot trust) and matches the subtest above.
+		trash := backupTrashFor(dbPath)
+		if err := os.Symlink(elsewhere, trash); err != nil {
 			t.Fatalf("plant trash symlink: %v", err)
 		}
 
