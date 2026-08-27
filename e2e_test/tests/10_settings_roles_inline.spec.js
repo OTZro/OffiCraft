@@ -316,186 +316,40 @@ test.describe('B10 · settings roles + monitor — inline create rows & gating',
     ).toBeTruthy();
   });
 
-  // ── T-10 deterministic regression guard ─────────────────────────────────
-  // The test above is now a CORRECT detector, but not a deterministic one: it
-  // only reddens on the runs where the race actually flips, which unforced is
-  // ~1% (the member frame is delivered uniformly within 250ms of the POST —
-  // server api_infra.go `ssePoll = 250ms` — while the reconciling GET resolves
-  // in single-digit ms). A regression that reproduces 1% of the time gets read
-  // as "fine". This case removes the luck: it holds the reconciling GET open
-  // long enough that the frame CANNOT miss it, so the exact code path CI hits
-  // intermittently is exercised on every run.
+  // ── T-10 deterministic regression guard — RETIRED 2026-08-27 ────────────
+  // A forced-overlap case used to live here. It held the reconciling GET open
+  // 400ms so the onboard's own `member` frame would land INSIDE it, turning the
+  // ~1%-of-runs T-10 race into a certainty, and then asserted the row was on
+  // screen at the instant the inline row collapsed.
   //
-  // It widens the race window; it does NOT relax any timeout, and it leaves the
-  // assertions above untouched.
-  test('監控: 建立後那支重抓不得被 onboard 自己觸發的 member 幀作廢（T-10 迴歸護欄，強制重疊）', async ({
-    page,
-  }) => {
-    const token = await ownerToken(page.request);
-
-    // Record every SSE frame the page's own EventSource delivers, with a clock
-    // shared with resource timing (performance.now()).
-    await page.addInitScript(() => {
-      const Real = window.EventSource;
-      window.__SSE = [];
-      function Wrapped(url, cfg) {
-        const es = new Real(url, cfg);
-        es.addEventListener('message', (e) => {
-          let topic = null;
-          try {
-            topic = JSON.parse(e.data).topic ?? null;
-          } catch {
-            topic = '(non-json)';
-          }
-          window.__SSE.push({ t: performance.now(), topic });
-        });
-        return es;
-      }
-      Wrapped.prototype = Real.prototype;
-      window.EventSource = Wrapped;
-      window.__REAL_ES = Real;
-    });
-
-    await bootAuthedSpa(page, token);
-    await page.locator('.nav-tab', { hasText: '監控' }).click();
-    expect(
-      await page.evaluate(() => window.EventSource !== window.__REAL_ES),
-      'the SSE probe must be installed on the constructor the app actually uses',
-    ).toBe(true);
-
-    // Hold the reconciling GET open 400ms — comfortably longer than the 250ms
-    // worst-case frame delivery, so the overlap is certain rather than lucky.
-    const HOLD_MS = 400;
-    await page.route('**/api/machines', async (route) => {
-      if (route.request().method() === 'GET') {
-        await new Promise((r) => setTimeout(r, HOLD_MS));
-      }
-      await route.continue();
-    });
-
-    const name = uniqueName('e2e-race');
-    await page.locator('#mon-onboard-entry').click();
-    const raceRow = page.getByTestId('mon-onboard-row');
-    await expect(raceRow).toBeVisible();
-    await raceRow.locator('input').fill(name);
-    await raceRow.locator('input').press('Enter');
-    await expect(raceRow, 'a successful create collapses the row').toHaveCount(0, {
-      timeout: 15_000,
-    });
-
-    // Read the table at the moment of collapse — before any poll could run.
-    const tableAtCollapse = await page.locator('.mon-table, table').first().innerText();
-
-    const evidence = await page.evaluate(() => ({
-      frames: window.__SSE,
-      machineCalls: performance
-        .getEntriesByType('resource')
-        .filter((e) => e.name.includes('/api/machines'))
-        .map((e) => ({ start: Math.round(e.startTime), end: Math.round(e.responseEnd) })),
-    }));
-
-    // ── ANTI-VACUITY GATE ────────────────────────────────────────────────
-    // (c) is the one that actually holds this together: it asserts the frame
-    // really landed inside the reconciling GET, and it is coupled to NOTHING
-    // else. (a) is a diagnostic — it names the likely cause when (c) fails, and
-    // its threshold is derived from HOLD_MS, so shrinking HOLD_MS relaxes (a)
-    // along with the behaviour. That is acceptable precisely because (c) does
-    // not move: a smaller window collapses the odds of the frame landing inside
-    // it (~16% at HOLD_MS=40), so (c) reddens loudly as "this run proves
-    // nothing" instead of quietly passing. The failure direction is fail-loud.
-    // Without these three, a run that never actually staged the race would go
-    // green and look like a pass — the failure mode that makes a guard worse
-    // than no guard at all. Each says "this run does not count", not "the
-    // product is fine".
-    // (0) EXACTLY three /api/machines requests may exist at this point: the
-    //     mount load, the onboard POST, and the reconciling GET. This gate does
-    //     two jobs.
-    //     • It closes the hole that would otherwise let something OTHER than the
-    //       guarded refetch put the row on screen. `schedule()` computes
-    //       `delay = max(0, refreshSeconds*1000 - (now - lastStarted))`, and the
-    //       timer callback's `inFlight` check is set only by the effect's own
-    //       refresh — never by a manual `refetch()`. So once >= refreshSeconds
-    //       has passed since the last effect refresh, the member frame fires a
-    //       real GET IMMEDIATELY, alongside the in-flight refetch, and that
-    //       fourth answer already contains the new row. Measured 2026-08-27 with
-    //       a 6s idle before onboarding: 4 requests, the extra one starting at
-    //       t=6317 against a frame at t=6316. Under the defect that extra
-    //       request would repair the view and this test would go GREEN on a
-    //       broken hook.
-    //     • It also makes the positional lookup below sound. `machineCalls[last]`
-    //       has no attribute tying it to this create; in the 4-request timeline
-    //       above the last entry is the EXTRA request, not the reconciling GET,
-    //       so every gate beneath would be measuring the wrong object.
-    //     The flow above idles for milliseconds, not seconds, so 3 is the honest
-    //     expected count; a 4th means the premise broke and this run does not
-    //     count, which is a loud failure rather than a silent pass.
-    //
-    //     🔴 TWO UNGUARDED ASSUMPTIONS THIS GATE RESTS ON — same family as the
-    //     uninstall/teardown-here equivalence in
-    //     MonitorPage.mutation-reconcile.test.tsx: both are claims about how
-    //     things are wired TODAY, and nothing enforces either.
-    //     ① Counting `/api/machines` is only complete while that GET is the sole
-    //        supplier of rows to this table. It is today: MonitorPage renders
-    //        exactly two tables, `.first()` is the machine table, that table maps
-    //        `machines` alone, monitoring telemetry only joins hardware columns
-    //        onto existing rows, and the POST's response body is discarded. If a
-    //        future machine table also derives rows from `monitoring.machines`,
-    //        this gate stops being complete without changing colour.
-    //     ② If `onboard` is ever changed to insert the row optimistically from
-    //        the POST response, the row appears with ZERO GETs, the count is
-    //        still 3, and this guard fails SILENTLY. (MonitorPage currently
-    //        forbids that — "never by an optimistic guess" — but that is a
-    //        comment, not a mechanism.)
-    expect(
-      evidence.machineCalls.length,
-      'exactly three /api/machines requests are expected here (mount load, onboard POST, ' +
-        `reconciling GET) — got ${JSON.stringify(evidence.machineCalls)}; a fourth means some ` +
-        'OTHER request could have supplied the row, so this run cannot attribute it to the ' +
-        'refetch under guard and proves nothing',
-    ).toBe(3);
-
-    // 🔴 `reconcilingGet` is identified BY POSITION, and the only thing that makes
-    //     the last entry the reconciling GET is gate (0) above pinning the count at
-    //     exactly 3. Relaxing that gate (e.g. `toBe(3)` → `toBeGreaterThanOrEqual(3)`
-    //     to de-flake it under a busy runner) does not fail here — it silently
-    //     re-points these two assertions at some other request. Both messages say so
-    //     out loud, because neither would otherwise mention what it depends on.
-    const reconcilingGet = evidence.machineCalls[evidence.machineCalls.length - 1];
-    expect(
-      reconcilingGet && reconcilingGet.end - reconcilingGet.start,
-      `the 400ms hold must have applied to the reconciling GET — got ${JSON.stringify(reconcilingGet)}; ` +
-        'without it the race window was never widened and this run proves nothing. ' +
-        'NOTE: that this entry IS the reconciling GET is guaranteed only by gate (0) above ' +
-        '(exactly three /api/machines requests) — if that gate was relaxed, this is measuring ' +
-        'some other request',
-    ).toBeGreaterThan(HOLD_MS * 0.8);
-    const memberFrames = evidence.frames.filter((f) => f.topic === 'member');
-    expect(
-      memberFrames.length,
-      'POST /api/machines must have produced a member frame — no frame means the ' +
-        'cancelling event never arrived and this run proves nothing',
-    ).toBeGreaterThan(0);
-    const inWindow = memberFrames.some(
-      (f) => f.t > reconcilingGet.start && f.t < reconcilingGet.end,
-    );
-    expect(
-      inWindow,
-      `a member frame must land INSIDE the reconciling GET [${reconcilingGet.start}, ${reconcilingGet.end}] — ` +
-        `frames were ${JSON.stringify(memberFrames)}; outside it, the cancellation never had ` +
-        'anything to cancel and this run proves nothing. ' +
-        'NOTE: the window [start, end] is that of the LAST /api/machines request, which is the ' +
-        'reconciling GET only because gate (0) above pins the count at exactly three',
-    ).toBe(true);
-
-    // ── THE GUARD ────────────────────────────────────────────────────────
-    // The race was provably staged. Under a correct hook the reconciling GET's
-    // own answer lands, so the row is on screen the instant the inline row
-    // collapses. Under the T-10 defect that answer is discarded and the row
-    // cannot appear until the 5s trailing poll — which has not run here.
-    expect(
-      tableAtCollapse,
-      'with a member frame landing mid-refetch, the create refetch must STILL put the new ' +
-        'row on screen — if it only appears later, the frame cancelled it and the 5s poll repaired it',
-    ).toContain(name);
-  });
+  // It was removed on the owner's ruling, and the reason is worth keeping:
+  //
+  //   > 「這個問題不是很重要 晚一點到又怎麼了」
+  //   > 「regression 的價值在於被保護的對象的重要性」
+  //
+  // A race cannot be commanded, only observed — so the case carried an
+  // anti-vacuity gate that reddened when the staging did not happen ("this run
+  // proves nothing"). That gate was correct and it fired on main the very first
+  // time (run 33050066316 on 013de9c3: the frame landed at t=337.4 while the
+  // reconciling GET ran [360, 774] — it beat the window by 23ms because the POST
+  // itself outran the frame's delivery). Nothing was wrong with the product.
+  // But an intermittent red nobody can act on is exactly the thing that teaches
+  // everyone to re-run first, which is the defect class this repo is actively
+  // trying to remove — so a guard over a five-second cosmetic delay is not worth
+  // paying for it.
+  //
+  // WHAT STILL GUARDS T-10 (do not read this as "unguarded"):
+  //   • the unit layer — useMachines.test.ts / useMonitoring.enabled.test.ts /
+  //     useMonitoring.sse-invalidation.test.ts. Four NAMED assertions, driven
+  //     with refreshSeconds pushed to an hour and no timer ever advanced, so the
+  //     only thing that can put the row on screen is the in-flight answer
+  //     itself. Deterministic, no clock, no flake. Re-introducing the defect
+  //     reddens all four (measured).
+  //   • the case ABOVE — it asserts the row is present at the moment the inline
+  //     row collapses, which the 5s trailing poll cannot satisfy. It is a
+  //     CORRECT detector but only samples the race when it flips naturally
+  //     (~1%), so treat it as a bonus, not as the guard.
+  //
+  // If the cost of this bug ever rises (e.g. onboard stops being the only path
+  // through it), the removed case is recoverable from git history on this file.
 });
