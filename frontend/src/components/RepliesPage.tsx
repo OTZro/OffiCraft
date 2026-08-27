@@ -161,9 +161,14 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
   // the header too while the page stays open).
   const handledShown = handledLoaded ? visibleHandled.length : handledCount;
 
-  // Outsource askers (ow- ids) are never in the members roster — resolve their
-  // codename via the lazy per-id read (works for live AND released workers) so
-  // the identity row shows the same 代號 the office rail does, not the raw id.
+  // Outsource askers (ow- ids) get their codename from the lazy per-id read
+  // rather than from `members`. Not because they are missing from it — GET
+  // /api/members does carry kind='outsource' rows — but because this page
+  // must cover the RELEASED ones too, and release soft-removes the row, which
+  // is exactly what the endpoint filters out. One read that works for live AND
+  // released keeps the identity row on the same 代號 the office rail shows
+  // instead of the raw id. `whoOf` below routes to it on `kind === "outsource"`,
+  // so a live worker that IS in `members` takes this path as well.
   const workerIds = [...waiting, ...handled].map((c) => c.from);
   const codenames = useWorkerCodenames(workerIds);
   const workerAvatarUrls = useWorkerAvatarUrls(workerIds);
@@ -198,10 +203,13 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
   // in the cockpit already opens the detail panel; this card's was the one
   // hold-out). Mirrors MemberCard's avatar-as-second-target pattern and rides
   // the SAME hash seam (frontend/src/lib/hashRoute.ts) OfficePage already
-  // reads: roster members go through #office/member/<id> (detailId), an
-  // outsource asker (never in the roster) through #office/worker/<id>
-  // (workerId) — OfficePage self-heals to the plain roster view if the id
-  // doesn't resolve (e.g. a released worker), so this never dead-ends.
+  // reads: staff askers go through #office/member/<id> (detailId), an
+  // outsource asker through #office/worker/<id> (workerId) — OfficePage
+  // self-heals to the plain roster view if the id doesn't resolve (e.g. a
+  // released worker), so this never dead-ends. The split below keys on
+  // `kind === "assistant"`, NOT on absence from `members`: GET /api/members
+  // carries kind='outsource' rows, so a live worker is present in the list
+  // and only its kind tells the two panels apart.
   //
   // backTo: "replies" (owner acceptance-round finding, T-a706): without it,
   // OfficePage's own 返回 button resets to its default chat view (roster[0])

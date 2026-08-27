@@ -145,10 +145,18 @@ export function ChatArea({
   // nor necessarily the window's `member`. Optional (defaults empty) so a caller
   // that only cares about owner↔agent threads need not thread it through.
   members?: Member[];
-  // The LIVE outsource workers, the sender-label twin of `members`: an
-  // outsource id is NEVER in the 正職 roster (GET /api/members excludes
-  // kind='outsource' by design), so without this list an outsource sender's
-  // label degraded to its raw ow- id while the left rail showed the codename.
+  // The LIVE outsource workers, the sender-label twin of `members`. This list
+  // is LIVE-ONLY by construction — HandleListOutsourceWorkersApiOutsourceWorkersGet
+  // skips WorkerStatusReleased — so it is NOT what rescues a released sender;
+  // `useWorkerCodenames` below is. Its two jobs here are both about live ids:
+  //   1. `nameOf` reaches it only AFTER `members` failed to resolve the id, so
+  //      it is the codename source for a caller that passes no roster (the
+  //      prop is optional) or whose roster has not loaded yet — without it
+  //      such a sender's label degrades to its raw ow- id while the left rail
+  //      shows the codename.
+  //   2. it is the EXCLUSION SET behind `unknownOwIds`: every ow- participant
+  //      NOT in this list is handed to the lazy per-id codename read. Passing
+  //      the live list is what keeps that per-id read off the live workers.
   // Optional (defaults empty) for the same reason `members` is.
   workers?: OutsourceWorkerView[];
   // Open the member detail page. Optional: when absent the header is NOT

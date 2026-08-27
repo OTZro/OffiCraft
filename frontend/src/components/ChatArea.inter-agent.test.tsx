@@ -150,9 +150,12 @@ describe("ChatArea inter-agent thread", () => {
   });
 
   it("labels an outsource sender/recipient with its codename, not the raw ow- id", () => {
-    // The worker id is never in the 正職 roster (server excludes
-    // kind='outsource' from GET /api/members) — the label must resolve through
-    // the live worker list to the SAME codename identity the left rail shows.
+    // workerX1 is a LIVE worker. The fixture's `members` holds only the two
+    // staff participants — a deliberately minimal roster, NOT a claim about
+    // what GET /api/members returns (it does carry kind='outsource' rows) —
+    // which is what isolates the path under test: with the id unresolved by
+    // `members`, `nameOf` must fall through to the live worker list and label
+    // the sender with the SAME codename identity the left rail shows.
     messages = [
       { id: "c1", from: "ow-533c0c4f9dba", to: "owner", body: "done", ts: 1000, attachments: [], replyCardId: null },
       { id: "c2", from: "a", to: "ow-533c0c4f9dba", body: "thanks", ts: 1001, attachments: [], replyCardId: null },

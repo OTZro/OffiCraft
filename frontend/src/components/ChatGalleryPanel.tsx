@@ -111,9 +111,12 @@ export function ChatGalleryPanel({
 }: {
   member: Member;
   // ChatArea's nameOf: resolves an id the server left unnamed (an outsource
-  // sender — GET /api/members excludes kind='outsource', so its from_name is
-  // "") to the SAME codename label the thread bubbles show. Optional — absent
-  // keeps the raw-id fallback.
+  // sender, whose from_name is "") to the SAME codename label the thread
+  // bubbles show. Why from_name is blank: the gallery handler builds its names
+  // table from `dal.ListMembers` (api_chat.go), which is `WHERE kind !=
+  // 'outsource'` — so NO outsource sender is ever named there, live or
+  // released. That, not the GET /api/members roster, is the reason this
+  // resolver exists. Optional — absent keeps the raw-id fallback.
   resolveSender?: (id: string) => string;
   onClose: () => void;
 }) {
