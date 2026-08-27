@@ -125,9 +125,17 @@ fi
 # waits below — so the binding has to be REAL, not incidental.
 if [[ -n "$TASK" ]] && ! skipped reply_card; then
   SID2="$(step_id_at 1)"
-  [[ -n "$SID2" ]] && sg_step reply_card_start POST "/api/tasks/$TASK/steps/$SID2/status" '{"status":"in_progress"}' >/dev/null
-  sg_step reply_card POST /api/reply-cards \
-    "{\"kind\":\"decision\",\"summary\":\"七步關卡:要不要繼續收尾?\",\"body\":\"這是載體用的請示卡。\",\"options\":[\"繼續收尾\",\"先停在這裡\"],\"linked_task\":{\"task_id\":\"$TASK\",\"step_id\":\"$SID2\"}}" >/dev/null
+  # ⑥ needs a REAL second step: linked_task names it, and without one the card
+  # would send "step_id":"" and collect the required-field 400 instead of the
+  # honest refusal — which reads in the log like a broken card call rather than
+  # "there was no step to bind". A nested if rather than another `&&` line: as
+  # the last statement of this block a failed `&&` sets the block's status, and
+  # this file is one `set -e` away from that aborting the run.
+  if [[ -n "$SID2" ]]; then
+    sg_step reply_card_start POST "/api/tasks/$TASK/steps/$SID2/status" '{"status":"in_progress"}' >/dev/null
+    sg_step reply_card POST /api/reply-cards \
+      "{\"kind\":\"decision\",\"summary\":\"七步關卡:要不要繼續收尾?\",\"body\":\"這是載體用的請示卡。\",\"options\":[\"繼續收尾\",\"先停在這裡\"],\"linked_task\":{\"task_id\":\"$TASK\",\"step_id\":\"$SID2\"}}" >/dev/null
+  fi
 fi
 
 # ⑦ 回覆另一個 agent — the colleague spoke first (run.sh 3b) and is waiting. The

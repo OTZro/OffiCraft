@@ -24,7 +24,7 @@ Two properties make it a control rather than decoration:
 
 Run: python3 bin/tests/uplink-guard-selftest.py
 """
-import json, os, shutil, subprocess, sys, tempfile
+import json, os, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,6 +33,52 @@ GUARD = ROOT / "bin/uplink-guard.py"
 # Each case: (name, what it plants, which file the guard must name).
 # `plant` gets the staged repo root and returns nothing; it may write Go files
 # under cli/ and/or edit cli/uplinks.json.
+
+# ── choosing a row to mutate WITHOUT naming one ───────────────────────────────
+#
+# 🔴 THESE USED TO SAY `next(r for r in rows if r["id"] == "codex-reply-card")`,
+# AND THAT IS EXACTLY HOW THIS FILE BROKE. T-18 removed ocwarden's reply-card
+# uplink, and two cases below died on a bare `StopIteration` — the guard's own
+# positive control was pinned to one row's ID, so deleting that row took the
+# control with it, and the crash did not even say what it had wanted.
+#
+# That is the same shape the ticket which deleted the row was about: a check
+# whose only anchor is one specific NAME goes down the moment the name moves,
+# and it goes down mute. So: state the PROPERTIES a case needs and take any row
+# that has them. If the last qualifying row ever disappears, pick_row says which
+# properties went missing instead of raising StopIteration.
+#
+# ⚠️ Do NOT "fix" a future failure here by pinning an id again. If you ever have
+# a genuine reason to need one specific row, leave a sentence saying why and what
+# to do when it disappears — that is the bar this comment exists to set.
+
+def spells_own_route(row):
+    """The row's callsite contains a quoted /api/... literal.
+
+    Both cross-check cases below need this: the rule they target only fires when
+    the guard can read a route out of the callsite TEXT and compare it against
+    the declared path."""
+    return re.search(r'"(/api/[^"]*)"', row["callsite"]) is not None
+
+
+def join_slots(rows, exclude=None):
+    """The (wire test, producer run, route) triples the runtime join keys on."""
+    return {(r.get("wire_test"), r.get("wire_case", ""), r.get("path"))
+            for r in rows
+            if r.get("kind") == "json" and not r.get("allow_missing_spec")
+            and r is not exclude}
+
+
+def pick_row(rows, wanted, predicate):
+    """First row satisfying `predicate`, or a failure that says what was wanted."""
+    for row in rows:
+        if predicate(row):
+            return row
+    raise AssertionError(
+        "uplink-guard-selftest: no row in cli/uplinks.json is " + wanted + ", so "
+        "this case cannot be built any more. Widen the predicate, or add a row "
+        "with those properties — do NOT pin a specific id to make it pass.")
+
 
 def add_go(root, rel, body):
     path = root / rel
@@ -313,9 +359,22 @@ def _(root):
 
 @case("an uplink whose route is not in the spec at all", "is not in OpenAPI")
 def _(root):
+    # The operation to delete is READ OUT OF THE MANIFEST, not written down here.
+    # This used to delete POST /api/reply-cards, which only orphaned an uplink for
+    # as long as one happened to point there; T-18 retired that uplink and the
+    # deletion then orphaned NOTHING, so the guard stayed green and this positive
+    # control silently stopped controlling anything. Deleting the operation some
+    # LIVE row actually declares is the property the case needs.
+    manifest = json.loads((root / "cli/uplinks.json").read_text())["uplinks"]
     spec = root / "spec/openapi.json"
     doc = json.loads(spec.read_text())
-    del doc["paths"]["/api/reply-cards"]["post"]
+    victim = pick_row(
+        manifest,
+        "a JSON row whose declared route+method is an operation in spec/openapi.json "
+        "(there is nothing to orphan otherwise)",
+        lambda r: (r.get("kind") == "json"
+                   and r.get("method") in (doc["paths"].get(r.get("path")) or {})))
+    del doc["paths"][victim["path"]][victim["method"]]
     spec.write_text(json.dumps(doc, indent=2, ensure_ascii=False))
 
 @case("a row claiming to be JSON without naming its schema", "needs its OpenAPI request_schema")
@@ -358,12 +417,53 @@ def _(root):
     # rule is the only thing left to catch it. Repointing the path alone reddens on
     # the $ref instead, which would make this fixture pass while proving nothing
     # about the rule it names.
+    # The TARGET is chosen from the manifest too, not written down here. The old
+    # version hard-coded "repoint onto /api/monitoring/telemetry", which only
+    # worked because the row it also hard-coded happened to live on a THIRD route
+    # with its own producer run. With that row gone, every remaining candidate
+    # collides in the runtime join when moved onto telemetry — so a literal target
+    # is one more thing that silently expires. Take a (source, target) PAIR out of
+    # the rows themselves: the target supplies a real route + the $ref that route
+    # genuinely declares, so the $ref rule stays SATISFIED and the cross-check is
+    # the only rule left to fire — which is the whole point of this case.
+    def find_pair(rows):
+        for src in rows:
+            if src.get("kind") != "json" or src.get("allow_missing_spec"):
+                continue
+            if not spells_own_route(src):
+                continue           # the cross-check would have nothing to read
+            others = join_slots(rows, exclude=src)
+            for dst in rows:
+                if dst is src or dst.get("kind") != "json":
+                    continue
+                if dst.get("path") == src.get("path"):
+                    continue       # the repoint would move nothing
+                if dst.get("request_schema") == src.get("request_schema"):
+                    continue       # $ref unchanged means the $ref rule could fire
+                # Two rows sharing a (wire test, producer run, route) slot redden
+                # on the SLOT rule, which runs FIRST. This case would then be red
+                # for a reason it does not name — a false positive control.
+                moved = (src.get("wire_test"), src.get("wire_case", ""), dst["path"])
+                if moved in others:
+                    continue
+                return src, dst
+        return None, None
+
     def repoint(rows):
-        row = next(r for r in rows if r["id"] == "codex-reply-card")
-        row["path"] = "/api/monitoring/telemetry"
-        row["request_schema"] = "#/components/schemas/AgentTelemetryIngestDTO"
-        # The evidence slot must stay unique or the shared-witness rule fires first.
-        row["wire_needle"] = 'drive("reply-card", func() {'
+        src, dst = find_pair(rows)
+        if src is None:
+            raise AssertionError(
+                "uplink-guard-selftest: no (source, target) pair of JSON rows in "
+                "cli/uplinks.json can be repointed onto each other without tripping "
+                "the slot or $ref rule first, so this case cannot be built any more. "
+                "Widen the search or add a row on a distinct route with its own "
+                "producer run — do NOT pin a specific id to make it pass.")
+        src["path"] = dst["path"]
+        src["request_schema"] = dst["request_schema"]
+        # wire_needle is deliberately left ALONE: the guard already enforces
+        # globally unique (wire_test, wire_needle) evidence on the committed
+        # manifest, so whatever this row carries is unique by construction.
+        # Writing a literal here is what tied the old version to one row.
     edit_manifest(root, repoint)
 
 @case("a wire test that no longer performs the runtime join", "never calls manifestUplinkPaths")
@@ -475,9 +575,16 @@ def _(root):
     # a route that exists would redden on staleness instead and prove nothing about
     # the ordering this case exists for.
     def hide(rows):
-        row = next(r for r in rows if r["id"] == "codex-reply-card")
+        row = pick_row(
+            rows,
+            "a JSON row that spells its own route in its callsite (the cross-check "
+            "has nothing to read otherwise)",
+            lambda r: r.get("kind") == "json" and spells_own_route(r))
         row["allow_missing_spec"] = "retired server-side"
-        row["path"] = "/api/reply-cards-v2"
+        # Derived from the row's OWN route so it stays a route the spec cannot
+        # have, whichever row got picked. A path the spec DOES have would redden
+        # the stale-allowlist rule instead and prove nothing about the ordering.
+        row["path"] = row["path"] + "-selftest-absent"
         for gone in ("request_schema", "wire_test", "wire_needle"):
             row.pop(gone, None)
     edit_manifest(root, hide)

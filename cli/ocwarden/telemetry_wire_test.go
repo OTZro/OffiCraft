@@ -562,7 +562,7 @@ func realHeartbeat(t *testing.T) map[string]any {
 // one, and until then a check that cannot fail. A check that cannot fail is worth
 // exactly nothing as evidence, so the walker is exercised HERE against the one frozen
 // request schema that does declare required keys (ReplyCardCreateDTO: kind, summary,
-// options). If the walker is ever broken, this is what goes red.
+// options, linked_task — T-18 added the fourth). If the walker is ever broken, this is what goes red.
 func TestMissingRequiredKeysActuallyNamesAMissingKey(t *testing.T) {
 	declared := frozenRequestSchema(t, "post", "/api/reply-cards")
 	if len(declared.Required) == 0 {

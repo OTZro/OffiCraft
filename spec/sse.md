@@ -419,10 +419,12 @@ data: {"topic":"warden-command","data":{"rpc":"start","args":{"member_id":"m-1a2
       and start the next idle turn. The listener must retain pending work across App
       Server/TUI reconnects.
     - Codex `item/tool/requestUserInput` never waits on the optional TUI. The sidecar
-      converts each question into the SAME durable OffiCraft reply card used by Claude
-      (`create_reply_card`; one question per card, with the first automatically bound to
-      the current task/step), immediately resolves the App Server request with a deferred
-      marker, and yields the turn. The existing directed `reply_card` delta on owner
+      does NOT open the card itself (T-18): it holds no task_id or step_id, and
+      `create_reply_card` requires an explicit `linked_task`, so it immediately resolves
+      the App Server request with text telling Codex to open its own card through the
+      tool — carrying the no-secret warning for an `isSecret` question — and yields the
+      turn. Codex opens the SAME durable OffiCraft reply card used by Claude, one
+      question per card, naming the step the question is about. The existing directed `reply_card` delta on owner
       answer/expiry wakes the next idle turn; Codex then reads the authoritative card(s)
       through MCP. A durable
       `(thread_id, turn_id, item_id) -> reply_card_ids[]` mapping makes reconnect/replay

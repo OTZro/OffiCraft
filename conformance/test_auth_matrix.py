@@ -316,32 +316,26 @@ def _matrix_task(ctx: Ctx) -> str:
     return r.json()["task"]["id"]
 
 
-def _matrix_task_step(ctx: Ctx, gate: bool = False) -> tuple[str, str]:
-    """A fresh task with one planned (pending) step (optionally a gate);
-    returns (task_id, step_id). Task status is DERIVED from the steps now
-    (T-9ca5) — no task-level 'start' report exists any more."""
+def _matrix_task_step(ctx: Ctx) -> tuple[str, str]:
+    """A fresh task with one planned PENDING step; returns (task_id, step_id).
+
+    Task status is DERIVED from the steps (T-9ca5) — no task-level 'start'
+    report exists. The `gate=True` variant retired with the open_gate route
+    (T-18): its only caller was that route's matrix row, and a card is now
+    opened through POST /api/reply-cards with an explicit linked_task, which
+    has its own row and builds its own fixture."""
     h = {"Authorization": f"Bearer {ctx.owner_token}"}
     task_id = _matrix_task(ctx)
     r = ctx.client.post(
         f"/api/tasks/{task_id}/plan",
         json={"steps": [{"name": "conf step", "dod": "done when asserted",
-                         "is_gate": gate}]},
+                         "is_gate": False}]},
         headers=h,
     )
     assert r.status_code == 200, f"scratch plan failed: {r.status_code} {r.text}"
     # submit_plan answers with a bounded receipt (T-a98d) — the rows come from
     # the read face.
     step_id = ctx.client.get(f"/api/tasks/{task_id}", headers=h).json()["steps"][0]["id"]
-    if gate:
-        # A gate can arm only on an in_progress task — report the step
-        # in_progress (owner drives it via admin capability) so the task derives
-        # in_progress before the gate route fires. The step-status route case
-        # (gate=False) leaves the step pending for its own pending→in_progress.
-        r = ctx.client.post(
-            f"/api/tasks/{task_id}/steps/{step_id}/status",
-            json={"status": "in_progress"}, headers=h,
-        )
-        assert r.status_code == 200, f"scratch step start failed: {r.status_code} {r.text}"
     return task_id, step_id
 
 

@@ -376,24 +376,33 @@ func TestT6020OpenedToolsCarryTheirWholeParameterSet(t *testing.T) {
 	if len(rows) == 0 {
 		t.Fatalf("t6020AllOpenedRows() is empty — this test would pass vacuously")
 	}
-	// ⚠️ RECONSIDERED, NOT SILENCED (T-18). This used to Fatal when BOTH escape
+	// ⚠️ INVERTED, NOT SILENCED (T-18). This used to Fatal when BOTH escape
 	// hatches were empty, on the premise that at least one is always populated so
 	// the lookups below run against real data. That premise expired:
 	// knownCatalogDrift was emptied by T-1ba2 (debt repaid) and openapiOverweight's
 	// only ever entry was open_gate.bind, which existed solely because
 	// ReplyCardCreateDTO was shared by two operations — T-18 removed open_gate, so
 	// the DTO has one operation and no field on it can be read by one face and
-	// ignored by another. Both maps being empty is now the CORRECT state, not a
-	// dead test.
+	// ignored by another. Both maps empty is now the CORRECT state.
 	//
-	// What still has teeth, and why this is not a silencing: the loop below is
-	// fail-CLOSED. It reddens the moment anyone adds an entry for one of the 19
-	// under either key, which is the whole thing this test was ever guarding —
-	// an empty hatch cannot hide a parameter, only a populated one can. The
-	// corpus assertion above is what stops the loop going vacuous.
+	// 🔑 SO THE ASSERTION IS TURNED AROUND, and this is strictly stronger than
+	// either the old tripwire or a comment asking the next person to remember.
+	// The first draft of this fix relaxed the check and left a 🔴 note saying
+	// "restore a non-vacuity assertion if a hatch is ever repopulated" — but a
+	// rule someone has to remember and a check that cannot be forgotten are not
+	// the same strength of guarantee, which is the whole argument T-18 is built
+	// on. Applying it here: the correct state (both empty) is what gets PINNED,
+	// today, by something that is evaluated on every run.
 	//
-	// 🔴 If a hatch is ever repopulated for an unrelated tool, restore a
-	// non-vacuity assertion here rather than leaving this comment as cover.
+	// It also catches more than the loop below does. The loop only fires for the
+	// 19 T-6020 tools; this fires for ANY tool re-entering either hatch, and it
+	// makes "we re-derived why the maps are empty" a required step rather than an
+	// optional one.
+	if n := len(knownCatalogDrift) + len(openapiOverweight); n != 0 {
+		t.Fatalf("an escape hatch is populated again (%d entries) — the T-18 reasoning "+
+			"that both maps are correctly empty no longer holds; re-derive it or "+
+			"restore a per-tool non-vacuity check", n)
+	}
 	for key, tool := range t6020AllOpenedRows() {
 		if params, baselined := knownCatalogDrift[tool]; baselined {
 			t.Errorf("tool %q (%s %s) has a knownCatalogDrift baseline %v — these 19 "+

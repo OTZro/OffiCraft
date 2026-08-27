@@ -472,28 +472,24 @@ def _happy_task(ctx: HCtx) -> str:
     return r.json()["task"]["id"]
 
 
-def _happy_task_step(ctx: HCtx, gate: bool = False) -> tuple[str, str]:
-    """A fresh task with one planned step; (task_id, step_id). Task status is
-    DERIVED from the steps now (T-9ca5). For the gate case the step is reported
-    in_progress (a gate arms only on an in_progress task); the step-status case
-    leaves the step pending for its own pending→in_progress report."""
+def _happy_task_step(ctx: HCtx) -> tuple[str, str]:
+    """A fresh task with one planned PENDING step; (task_id, step_id).
+
+    Task status is DERIVED from the steps (T-9ca5). The `gate=True` variant
+    retired with the open_gate route (T-18): its only caller was that route's
+    happy row, and a card is now opened through POST /api/reply-cards with an
+    explicit linked_task, which has its own row and builds its own fixture."""
     h = _auth(ctx.agent.token)
     task_id = _happy_task(ctx)
     r = ctx.client.post(
         f"/api/tasks/{task_id}/plan",
         json={"steps": [{"name": "conf happy step", "dod": "asserted",
-                         "is_gate": gate}]},
+                         "is_gate": False}]},
         headers=h,
     )
     assert r.status_code == 200, f"happy plan failed: {r.status_code} {r.text}"
     # submit_plan answers with a bounded receipt (T-a98d); read the rows back.
     step_id = ctx.client.get(f"/api/tasks/{task_id}", headers=h).json()["steps"][0]["id"]
-    if gate:
-        r = ctx.client.post(
-            f"/api/tasks/{task_id}/steps/{step_id}/status",
-            json={"status": "in_progress"}, headers=h,
-        )
-        assert r.status_code == 200, f"happy step start failed: {r.status_code} {r.text}"
     return task_id, step_id
 
 
@@ -1811,7 +1807,7 @@ HAPPY: dict[str, Happy] = {
     ),
     "POST /api/tasks/{task_id}/steps/{step_id}/note": Happy(
         # T-cc3e. Written against a PENDING step on purpose: _happy_task_step
-        # leaves the step pending unless gate=True, and the note being writable
+        # always leaves the step pending, and the note being writable
         # with no status report first is the ticket's whole claim (waiting_reason
         # is the one bound to a status; this one is not). The check reads the
         # receipt's echoed note, so a handler that 200s without storing anything

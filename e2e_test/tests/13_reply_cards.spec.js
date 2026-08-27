@@ -45,10 +45,22 @@ const {
 
 // Open a reply card AS the agent token (the initiator is always the verified
 // JWT sub — the server mints id / timestamps / the companion chat message).
+//
+// linked_task: null is DECLARED, not defaulted-into. Since T-18 the field is
+// required and omitting it is a 400 — the server no longer infers a binding,
+// because an inference that missed used to open a card with no 等我回覆 hold
+// and say nothing. null is the honest answer HERE: this spec opens no task and
+// plans no step anywhere, so there is no step for these asks to hold. Every
+// card below is a plain chat 請示, which is exactly the circuit this file
+// tests (badge → 等我回覆 page → inline chat card → answer → 重新決定 → jump).
+//
+// ⚠️ It is spread FIRST so a caller can override it. A future case that opens a
+// card ABOUT a task must pass its own linked_task {task_id, step_id} — do not
+// let it inherit this null, or that case will silently stop testing the hold.
 async function createReplyCardAs(request, agentToken, card) {
   const res = await request.post(`${BASE}/api/reply-cards`, {
     headers: authHeaders(agentToken),
-    data: card,
+    data: { linked_task: null, ...card },
   });
   expect(res.status(), 'creating a reply card must succeed').toBe(200);
   return res.json();

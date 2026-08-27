@@ -1549,6 +1549,14 @@ func TestCreateCardWithBadAttachmentsRejectsAtomically(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("%s: want 400, got %d %s", tc.name, rec.Code, rec.Body.String())
 		}
+		// 🔴 400 FOR THE RIGHT REASON. linked_task is required since T-18 and its
+		// refusal is ALSO a 400, so the status alone cannot tell "the attachment
+		// rule fired" from "we never reached it". The conformance twin of this
+		// table shipped exactly that false green for one commit.
+		if strings.Contains(rec.Body.String(), "linked_task") {
+			t.Fatalf("%s: never reached the attachment rules — refused at the "+
+				"linked_task gate: %s", tc.name, rec.Body.String())
+		}
 	}
 	// NOTHING was created by any rejected attempt: no card, no companion
 	// message, no orphan blob (all-or-nothing resolve runs before any store).

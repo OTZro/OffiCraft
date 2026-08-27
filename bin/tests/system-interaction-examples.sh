@@ -70,13 +70,18 @@ catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
 catalog_tools = catalog.get("tools")
 if not isinstance(catalog_tools, list) or not catalog_tools:
     fail("MCP catalog has no tools list")
-catalog_names = {
-    tool.get("name")
+catalog_by_name = {
+    tool["name"]: tool
     for tool in catalog_tools
     if isinstance(tool, dict) and isinstance(tool.get("name"), str)
 }
+catalog_names = set(catalog_by_name)
 
 mcp_names = []
+# 🔴 Counts how many examples were actually confronted with a NON-EMPTY required
+# list. Without it the argument check below is satisfiable by a catalog where
+# nothing is required, and would report green while comparing nothing.
+schema_checked = 0
 command_names = []
 command_lines = []
 
@@ -110,6 +115,39 @@ for start, end, language, content in blocks:
             fail(f"lines {start}-{end}: annotation names {tool_name!r}, JSON names {actual!r}")
         if tool_name not in catalog_names:
             fail(f"lines {start}-{end}: documented MCP tool {tool_name!r} is absent from the current catalog")
+
+        # ── arguments vs the tool's inputSchema ───────────────────────────────
+        # 🔴 ADDED AFTER THIS GUARD SHIPPED A BROKEN EXAMPLE. T-18 made
+        # create_reply_card's linked_task required; the example here was not
+        # updated, and this file stayed GREEN through it — it only ever checked
+        # that the JSONC parses, that the annotation matches params.name, and
+        # that the tool exists. Nothing compared the ARGUMENTS against the
+        # schema, so an example that 400s on every call read as fine.
+        #
+        # That is worse than a red CI lane: this document is what every member
+        # reads at boot (get_system_interaction), so a stale example is not a
+        # test failure, it is agents in the field copying a call that cannot
+        # succeed. The catalog was already loaded three lines up; comparing is
+        # cheap, and it closes BOTH directions — a newly required parameter the
+        # example lacks, and a retired parameter the example still passes.
+        schema = catalog_by_name[tool_name].get("inputSchema") or {}
+        required = schema.get("required") or []
+        properties = schema.get("properties") or {}
+        arguments = params.get("arguments")
+        if not isinstance(arguments, dict):
+            fail(f"lines {start}-{end}: {tool_name!r} example has no arguments object")
+        missing = [key for key in required if key not in arguments]
+        if missing:
+            fail(f"lines {start}-{end}: {tool_name!r} example omits required "
+                 f"argument(s) {missing} — an agent copying it gets a 400. "
+                 f"Update the example (and the prose around it) to match the tool.")
+        unknown = [key for key in arguments if properties and key not in properties]
+        if unknown:
+            fail(f"lines {start}-{end}: {tool_name!r} example passes argument(s) "
+                 f"{unknown} the tool does not accept — retired or misspelled. "
+                 f"An agent copying it gets a 422.")
+        if required:
+            schema_checked += 1
         mcp_names.append(tool_name)
 
     command_annotations = [
@@ -157,6 +195,11 @@ for start, end, language, content in blocks:
 
 if not mcp_names:
     fail("system_interaction.md contains no tagged MCP tool examples")
+if not schema_checked:
+    fail("no documented MCP example was compared against a non-empty required "
+         "list, so the argument/schema check above measured nothing — either the "
+         "catalog stopped declaring required parameters or the examples stopped "
+         "using tools that have any")
 if not command_names:
     fail("system_interaction.md contains no tagged ocagent command examples")
 
@@ -167,7 +210,8 @@ for subcommand in sorted(set(command_names + command_lines)):
 
 print(
     "[system-interaction-test] all green — "
-    f"{len(mcp_names)} MCP examples match the current catalog; "
+    f"{len(mcp_names)} MCP examples match the current catalog "
+    f"({schema_checked} confronted with required arguments); "
     f"{len(set(command_names))} tagged CLI commands and {len(command_lines)} help examples match ocagent --help"
 )
 PY
