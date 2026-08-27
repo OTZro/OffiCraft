@@ -1476,6 +1476,21 @@ export interface SseDeltaNames {
   peer?: string;
 }
 
+/**
+ * The health of the delta downlink itself, as the UI is allowed to see it.
+ *
+ * This exists because a dead downlink is otherwise INDISTINGUISHABLE from a
+ * quiet one: both render as "no new anything". Publishing the state is what
+ * turns a frozen cockpit from a silent lie into something the owner can see and
+ * act on. See the shared-downlink block in api/http.ts for the transitions.
+ *
+ *   "idle"         — nobody subscribed (logged out / torn down). Not a fault.
+ *   "connecting"   — no open stream right now; what is on screen may be stale.
+ *   "live"         — open and delivering.
+ *   "unauthorized" — the session is dead; retrying has STOPPED on purpose.
+ */
+export type SseConnectionState = "idle" | "connecting" | "live" | "unauthorized";
+
 export interface SseDelta {
   topic: string;
   /** The identity fields the payload named — empty for a topic whose payload is
@@ -2538,5 +2553,18 @@ export interface Api {
    */
   subscribeEvents(
     onTopic: (topic: string, delta?: SseDelta) => void
+  ): () => void;
+  /**
+   * Watch the health of the delta downlink (see `SseConnectionState`). Fires
+   * IMMEDIATELY with the current state, then on every change. Returns an
+   * unsubscribe function.
+   *
+   * The UI's contract with this is the point of the whole method: when the
+   * downlink is not live, SAY SO. A transport that cannot go down (the mock)
+   * reports "live" once and never calls back — a subscriber must therefore work
+   * from a single synchronous call and never wait for a second one.
+   */
+  subscribeConnection(
+    onState: (state: SseConnectionState) => void
   ): () => void;
 }

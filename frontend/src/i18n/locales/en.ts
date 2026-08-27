@@ -31,6 +31,13 @@ export const en: Dict = {
     tooLargeLead: "Too long to compare line by line (",
     tooLargeTail: " lines).",
   },
+  connection: {
+    lostTitle: "Live updates disconnected",
+    lostBody:
+      "Reconnecting automatically — what you see may be out of date.",
+    reload: "Reload",
+    ariaLabel: "Live connection status",
+  },
   nav: {
     office: "Office",
     officeUnread: "Unread messages",

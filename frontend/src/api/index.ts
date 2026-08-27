@@ -18,6 +18,7 @@ export const api: Api = USE_MOCK ? mockApi : httpApi;
 
 export type {
   Api,
+  SseConnectionState,
   ChatMessage,
   MemberPatch,
   RolePatch,

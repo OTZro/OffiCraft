@@ -99,6 +99,7 @@ import type {
   ThemeListItem,
   ThemeWriteReceipt,
   ThemeDeleteResult,
+  SseConnectionState,
 } from "./adapter";
 import {
   toMember,
@@ -151,7 +152,7 @@ import {
 import type { WireReplyCard } from "./wire";
 import { ownerToken, setToken } from "./auth";
 import { ApiError, parseRetryAfter } from "./errors";
-import { client } from "./client";
+import { client, handleUnauthorized } from "./client";
 
 // Auth is cross-cutting and lives in ONE place each: owner-JWT sourcing
 // (localStorage `oc_token` + VITE_OC_TOKEN fallback) is api/auth.ts
@@ -240,15 +241,80 @@ async function credentialPost<T = { token: string }>(
 //      instead of a connection pinned to a stale JWT.
 //   3. Server-side presence projects "online" from live SSE connections; a
 //      subscriber-less phantom connection would misrepresent liveness.
-// Reconnect: unchanged — the browser's native EventSource auto-retry still
-// applies to the (single) connection; we never tear it down on transient
-// errors, only on last-unsubscribe.
+// Reconnect: the browser's native EventSource auto-retry handles the TRANSIENT
+// drops (readyState back to CONNECTING) and we never tear the connection down
+// for those. It does NOT handle a PERMANENT failure: on a non-200 response, a
+// wrong `Content-Type`, or a 401 the spec says the browser fails the connection
+// and moves it to CLOSED **without ever retrying**. That case is ours — see
+// `es.onerror` / `scheduleSseReconnect` below.
 const sseSubscribers = new Set<(topic: string, delta?: SseDelta) => void>();
 let sseSource: EventSource | null = null;
 // The document/window foreground listener that drives the foreground-restore
 // resync (installed with the connection, torn down with it). Held module-level
 // so the last-unsubscribe teardown can remove exactly the one it added.
 let sseVisibilityHandler: (() => void) | null = null;
+
+// ── the downlink's own health, published to the UI ─────────────────────────
+// A dead downlink is INVISIBLE by construction: a stream that has stopped
+// delivering deltas renders EXACTLY like a stream on which nothing has
+// happened. The cockpit then shows a frozen snapshot that looks live, and the
+// only way the owner finds out is by noticing that the world has gone
+// implausibly quiet (owner 2026-08-21: 「有時候…要 refresh page 才會更新」).
+// So the connection state is not an internal detail — it is published, and the
+// app renders it (components/ConnectionBanner.tsx). Silent self-healing was
+// explicitly rejected as the whole fix: it trades a visible stall for an
+// invisible one, and the deltas missed while the stream was down would be gone
+// with nobody the wiser. Recovery therefore ALWAYS ends in the existing full
+// `resyncAll` (below), and the down period is on screen while it lasts.
+//
+//   "live"         — the stream is open and delivering.
+//   "connecting"   — no open stream right now: first connect, the browser's own
+//                    retry, or our permanent-failure retry. What is on screen
+//                    may be stale.
+//   "unauthorized" — the session is dead (the downlink answered 401/403, or the
+//                    token is gone). We STOP retrying: hammering a server that
+//                    has already said no is not recovery. `handleUnauthorized`
+//                    bounces the app to the login wall.
+//   "idle"         — nobody is subscribed (logged out / torn down). Not a fault.
+// The state vocabulary itself lives on the seam (api/adapter.ts) — ONE
+// declaration, so the mock transport and every UI reader are typed against the
+// same set of words and a new state cannot be added to one side only.
+let sseState: SseConnectionState = "idle";
+const sseStateSubscribers = new Set<(s: SseConnectionState) => void>();
+
+function setSseState(next: SseConnectionState): void {
+  if (sseState === next) return;
+  sseState = next;
+  for (const cb of [...sseStateSubscribers]) cb(next);
+}
+
+/** The downlink's current health. Exported for tests and for the first render
+ * of a subscriber that mounts mid-flight. */
+export function sseConnectionState(): SseConnectionState {
+  return sseState;
+}
+
+/** Watch the downlink's health. Fires IMMEDIATELY with the current state (a
+ * subscriber that mounts while the stream is already down must not have to wait
+ * for the next transition to learn that), then on every change. */
+export function subscribeSseConnection(
+  cb: (s: SseConnectionState) => void,
+): () => void {
+  sseStateSubscribers.add(cb);
+  cb(sseState);
+  return () => {
+    sseStateSubscribers.delete(cb);
+  };
+}
+
+// Backoff for OUR retry (the browser's own retry needs none — it has its own).
+// Escalating, capped, and deliberately not jittered: there is exactly ONE
+// downlink per tab, so there is no thundering herd to spread out. The cap is
+// what keeps a long outage from turning into a request flood while still
+// recovering within half a minute of the server coming back.
+const SSE_RETRY_DELAYS_MS = [1000, 2000, 5000, 10000, 30000] as const;
+let sseRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let sseRetryAttempt = 0;
 
 // The CLOSED SSE topic vocabulary (spec/sse.md §3.1 / §4.1). Replayed one
 // synthetic delta per topic to every subscriber on a full resync so each hook
@@ -328,10 +394,124 @@ function resyncAll(): void {
   }
 }
 
-function ensureSseSource(): void {
+/** Ask `/api/events` ITSELF what it answers, then drop the stream on the floor.
+ *
+ * `EventSource.onerror` carries NO status code — the spec hands the page an
+ * event with nothing on it, so "the session expired" and "the server is down"
+ * arrive as the same object. Guessing between them is the one thing this must
+ * not do: guess "expired" and a server blip logs the owner out; guess "blip"
+ * and an expired session becomes an unbounded retry loop against a server that
+ * has already said no. So we ask, on the SAME URL — not on a stand-in endpoint
+ * that could answer differently — and read the real status. The body is never
+ * read and the request is aborted the moment the headers land, so the extra
+ * connection lives for one round-trip.
+ *
+ * Returns the HTTP status, or 0 when the request never got an answer at all
+ * (offline / DNS / TLS) — which is emphatically NOT an auth failure. */
+async function probeEventsEndpoint(): Promise<number> {
+  const t = ownerToken();
+  if (!t) return 401; // no token at all — the same conclusion, without a request
+  const ctrl = new AbortController();
+  try {
+    const res = await fetch(`/api/events?token=${encodeURIComponent(t)}`, {
+      method: "GET",
+      headers: { Accept: "text/event-stream" },
+      signal: ctrl.signal,
+    });
+    return res.status;
+  } catch {
+    return 0; // never reached the server — retry, do not log anyone out
+  } finally {
+    // Never consume the stream: we only ever wanted the status line.
+    try {
+      ctrl.abort();
+    } catch {
+      // Abort is best-effort — the request is already on its way out.
+    }
+  }
+}
+
+/** One retry of the downlink, gated on what the endpoint actually answers. */
+async function attemptSseReconnect(): Promise<void> {
+  // The world may have moved while the timer slept (unsubscribed, or another
+  // path already reopened the stream).
+  if (sseSubscribers.size === 0 || sseSource) return;
+  const status = await probeEventsEndpoint();
+  if (sseSubscribers.size === 0 || sseSource) return;
+  if (status === 401 || status === 403) {
+    // The session is dead. STOP — and say so, rather than retrying forever
+    // behind a banner that promises a recovery that can never come.
+    setSseState("unauthorized");
+    handleUnauthorized(); // clears the token + fires oc-auth-expired → login wall
+    return;
+  }
+  // Anything else (200, 5xx, 0/offline) is a transport problem, not an auth
+  // one: reopen. A reopen is by definition a RECONNECT, so it must resync —
+  // the stream has no replay (spec/sse.md §2.1) and everything emitted while we
+  // were down is gone.
+  ensureSseSource({ reconnect: true });
+  if (!sseSource) {
+    // ensureSseSource declined: no token. Same conclusion as a 401.
+    setSseState("unauthorized");
+    return;
+  }
+  // Open is not yet OPENED — es.onopen flips the state to "live" and resets the
+  // backoff; a second failure lands in es.onerror and schedules the next try.
+}
+
+function scheduleSseReconnect(): void {
+  if (sseRetryTimer !== null) return; // one retry in flight is enough
+  const idx = Math.min(sseRetryAttempt, SSE_RETRY_DELAYS_MS.length - 1);
+  sseRetryAttempt += 1;
+  sseRetryTimer = setTimeout(() => {
+    sseRetryTimer = null;
+    void attemptSseReconnect();
+  }, SSE_RETRY_DELAYS_MS[idx]);
+}
+
+function cancelSseReconnect(): void {
+  if (sseRetryTimer === null) return;
+  clearTimeout(sseRetryTimer);
+  sseRetryTimer = null;
+}
+
+/** Drop the whole downlink back to its module-load state.
+ *
+ * TEST-ONLY, and the same shape as `__resetMock` in api/mock.ts. It exists
+ * because the downlink is deliberately module-level singleton state: a test
+ * that fails PART WAY through leaves a live fake EventSource and an armed retry
+ * timer behind, and every later test in the file then measures that debris
+ * instead of its own subject. Without this, one genuine failure cascades into a
+ * dozen fake ones and a mutant sweep can no longer say WHICH assertion caught
+ * what. Never called by the UI. */
+export function __resetSseDownlinkForTests(): void {
+  cancelSseReconnect();
+  sseRetryAttempt = 0;
+  sseSubscribers.clear();
+  if (sseSource) {
+    try {
+      sseSource.close();
+    } catch {
+      // Already gone — nothing to do.
+    }
+  }
+  sseSource = null;
+  if (sseVisibilityHandler && typeof document !== "undefined") {
+    document.removeEventListener("visibilitychange", sseVisibilityHandler);
+    if (typeof window !== "undefined") {
+      window.removeEventListener("focus", sseVisibilityHandler);
+    }
+  }
+  sseVisibilityHandler = null;
+  sseState = "idle";
+  sseStateSubscribers.clear();
+}
+
+function ensureSseSource(opts?: { reconnect?: boolean }): void {
   if (sseSource) return;
   const t = ownerToken();
   if (!t) return; // honest: gated, would 401 (callers already checked too)
+  setSseState("connecting");
   const es = new EventSource(`/api/events?token=${encodeURIComponent(t)}`);
   // The browser reconnects the stream transparently, but there is NO replay
   // (spec/sse.md §2.1): a delta emitted during the drop→reconnect gap is gone.
@@ -341,13 +521,50 @@ function ensureSseSource(): void {
   // subscribers, refetching each snapshot. Without this a missed delta lingers
   // until a manual reload (T-db62: a lone waiting reply-card badge stuck blank
   // after a reconnect, while chat/task badges self-healed on their next frame).
-  let opened = false;
+  // `opened` starts TRUE when this EventSource is itself a reconnect (we tore
+  // the dead one down and built this one): its very first open IS the missed
+  // gap, so it must resync. Seeding it from `opts.reconnect` — rather than
+  // leaving it false as a fresh connect does — is the whole difference between
+  // "recovered" and "silently reconnected to a stream whose backlog is gone".
+  let opened = opts?.reconnect === true;
   es.onopen = () => {
     // FIRST open needs no resync — every hook refetched on mount. Only a
     // SUBSEQUENT open (a genuine reconnect after the browser dropped and
     // re-established the stream) replays the missed gap.
     if (opened) resyncAll();
     opened = true;
+    sseRetryAttempt = 0; // the connection is good again; next outage starts short
+    setSseState("live");
+  };
+  es.onerror = () => {
+    // Two very different events arrive here through the same handler, and the
+    // ONLY thing separating them is readyState:
+    //   CONNECTING — the browser dropped the stream and is retrying it itself.
+    //                Leave it alone (tearing it down here is what exhausted the
+    //                connection pool before); just say we are not live.
+    //   CLOSED     — the browser has GIVEN UP for good (non-200, 401, wrong
+    //                content-type). Nothing will ever reopen it. `sseSource` is
+    //                still non-null, so every ensureSseSource() from here on
+    //                early-returns and the cockpit stays frozen forever, with
+    //                no error on screen and no reconnect. This branch is the
+    //                bug this whole block exists to fix.
+    if (sseSource !== es) return; // a handler from a connection we already replaced
+    if (es.readyState !== 2 /* CLOSED */) {
+      setSseState("connecting");
+      return;
+    }
+    try {
+      es.close();
+    } catch {
+      // Already closed — closing twice is defined as a no-op, be defensive anyway.
+    }
+    sseSource = null; // release the guard that would block every rebuild
+    if (sseSubscribers.size === 0) {
+      setSseState("idle");
+      return;
+    }
+    setSseState("connecting");
+    scheduleSseReconnect();
   };
   es.onmessage = (e: MessageEvent) => {
     try {
@@ -379,7 +596,11 @@ function ensureSseSource(): void {
   // to both maximises the chance the restore is caught. A double fire is
   // harmless (resyncAll's refetches are idempotent). Guarded for non-DOM
   // environments (SSR / tests without document/window).
-  if (typeof document !== "undefined") {
+  //
+  // Installed ONCE per live handler, not once per EventSource: a permanent
+  // failure now rebuilds the connection without an unsubscribe in between, and
+  // re-adding the listener each time would fan one resync per outage survived.
+  if (typeof document !== "undefined" && sseVisibilityHandler === null) {
     sseVisibilityHandler = () => {
       if (document.visibilityState === "visible") resyncAll();
     };
@@ -2358,8 +2579,15 @@ export const httpApi: Api = {
     ensureSseSource();
     return () => {
       sseSubscribers.delete(sub);
-      if (sseSubscribers.size === 0 && sseSource) {
-        sseSource.close();
+      // NOTE the missing `&& sseSource`: between a permanent failure and the
+      // next retry there IS no EventSource, and the teardown still has to run —
+      // otherwise the pending retry timer and the foreground listener outlive
+      // the last subscriber and reopen a connection nobody is listening to.
+      if (sseSubscribers.size === 0) {
+        cancelSseReconnect();
+        sseRetryAttempt = 0;
+        setSseState("idle");
+        if (sseSource) sseSource.close();
         sseSource = null;
         // Tear down the foreground-restore listeners with the connection so a
         // visibilitychange/focus never fans a resync onto an empty subscriber
@@ -2373,5 +2601,15 @@ export const httpApi: Api = {
         sseVisibilityHandler = null;
       }
     };
+  },
+
+  subscribeConnection(
+    onState: (state: SseConnectionState) => void
+  ): () => void {
+    // A thin re-export of the module-level downlink health (the shared-downlink
+    // block above owns it). It is on the Api seam rather than imported straight
+    // from http.ts so the UI keeps ONE swap point (api/index.ts) and mock mode
+    // answers the same question with its own honest constant.
+    return subscribeSseConnection(onState);
   },
 };

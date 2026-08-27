@@ -58,6 +58,18 @@ data: {"seq":42,"topic":"member","op":"patch","data":{"entity":"member","key":"o
   implements no replay), and MUST perform a full resync (refetch) on every reconnect.
 - A future implementation MUST NOT "helpfully" persist the counter — clients are contracted
   to tolerate rollback, and persistence would be an observable behaviour change.
+- **"Every reconnect" includes the ones the transport will not make for you.** A browser
+  `EventSource` retries a dropped stream by itself, but on a non-200 response, a `401`, or a
+  wrong `Content-Type` it FAILS the connection permanently and never retries. That is not a
+  server-side event and produces no frame, so a client that leans on the transport's own
+  retry simply stops receiving — indistinguishable, on screen, from an owner scope where
+  nothing is happening. A client MUST detect that terminal state, rebuild the connection
+  itself, and full-resync on the rebuilt one (a rebuild WITHOUT the resync is worse than no
+  rebuild: the gap is then silently permanent). A client that answered `401` by reconnecting
+  in a loop would be wrong twice over — the session is dead, so it MUST stop and re-
+  authenticate instead of retrying. Because the failure is invisible by construction, a
+  client SHOULD also surface the not-connected state to its user rather than recover in
+  silence.
 
 ### 2.2 Reconcile-by-refetch (the client contract)
 
