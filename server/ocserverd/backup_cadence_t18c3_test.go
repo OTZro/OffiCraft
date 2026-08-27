@@ -259,7 +259,7 @@ func TestRunDatabaseBackup_AnyRestorableSnapshotIsARetreatPoint(t *testing.T) {
 	// stale, and that this one must not.
 	writeBackupFile(t, dbPath, now.Add(-time.Hour), backupReasonPreMigration)
 
-	res, err := runDatabaseBackup(db, dbPath, backupReasonScheduled, now)
+	res, err := runDatabaseBackup(db, dbPath, backupReasonScheduled, now, backupRetainDefault)
 	if err != nil {
 		t.Fatalf("backup: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestRunDatabaseBackup_AnyRestorableSnapshotIsARetreatPoint(t *testing.T) {
 	oldDB, oldPath := seedBackupFixture(t, 8)
 	writeBackupFile(t, oldPath, now.Add(-backupStaleFactor*backupInterval-time.Hour), backupReasonPreMigration)
 
-	stale, err := runDatabaseBackup(oldDB, oldPath, backupReasonScheduled, now)
+	stale, err := runDatabaseBackup(oldDB, oldPath, backupReasonScheduled, now, backupRetainDefault)
 	if err != nil {
 		t.Fatalf("backup (control): %v", err)
 	}
@@ -490,7 +490,7 @@ func TestRunDatabaseBackup_AFutureStampIsNotARecentRetreatPoint(t *testing.T) {
 
 	writeBackupFile(t, dbPath, now.Add(5*time.Hour), backupReasonPreMigration)
 
-	res, err := runDatabaseBackup(db, dbPath, backupReasonScheduled, now)
+	res, err := runDatabaseBackup(db, dbPath, backupReasonScheduled, now, backupRetainDefault)
 	if err != nil {
 		t.Fatalf("backup: %v", err)
 	}

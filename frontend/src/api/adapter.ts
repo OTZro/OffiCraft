@@ -894,6 +894,12 @@ export interface ServerSettingsView {
    * it may be lowered as well as raised, and it has its own ceiling. Default and
    * range in `chatBudget.ts` (mirroring server/ocserverd/domain.go). */
   chatBudgetChars: number;
+  /** T-8: N — how many database backup files rotation KEEPS. Everything past N
+   * is DELETED from disk. Two things the number does not carry and the settings
+   * copy therefore has to say: it counts VERSIONS, not days, and it is PER POOL
+   * (routine vs pre-migration), so the directory holds up to 2 × N files.
+   * Default and range in `backupRetain.ts` (mirroring server/ocserverd/backup.go). */
+  backupRetain: number;
   /** Whether the GitHub-release update check also admits prereleases
    * (false = official releases only, the default). */
   updaterReceiveBeta: boolean;
@@ -989,6 +995,9 @@ export interface ServerSettingsPatch {
   /** T-c9b4 wake-snapshot chat budget; range 1000..13000 (chatBudget.ts). The
    * floor is NOT the shipped default — this one may be turned down. */
   chatBudgetChars?: number;
+  /** T-8 backup retention N; range 1..20 (backupRetain.ts). Lowering it DELETES
+   * the files it puts out of range on the next backup. */
+  backupRetain?: number;
   /** Also admit GitHub prereleases in update checks (default false). */
   updaterReceiveBeta?: boolean;
   /** Arm unattended background self-upgrade (default false = manual-only). */

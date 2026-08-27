@@ -38,12 +38,40 @@ package main
 // before any of this was written: 429 ms, integrity_check ok, every table's row
 // count equal to the source, and a known row read back OUT OF THE BACKUP FILE.
 //
+// 🔴 Retention has an EXIT, and this is the part that was missing until T-8.
+// Rotation used to MOVE the evicted file into `trash/` and the comment here said
+// "reclamation is the warden's job". That sentence was FALSE the day it was
+// written, and it is recorded rather than quietly deleted because the shape of
+// the mistake is the lesson:
+//
+//   - Nothing ever read `trash/`. `backupTrashFor` had exactly one non-test
+//     caller — the rotation that wrote INTO it. No walker, no reaper, no
+//     scheduled sweep.
+//   - The warden's reaper (cli/ocwarden/trash.go, purgeTrash) could not have
+//     taken the job even if it had been asked: its first guard requires the
+//     workdir to be a DIRECT CHILD of the agents root, and the server's data
+//     directory is not under that root at all. It was never called with this
+//     path and would have refused it.
+//
+// So the retirement path was write-only, and by 2026-08-27 the studio's
+// `server/data/trash/` held 278 files / 141.6 GiB growing ~6.9 GB a day — a
+// disk-full clock, produced by a RESPONSIBILITY GAP rather than a broken
+// component: the backup engine handed reclamation to a party that had never
+// accepted it, and no code anywhere asserted the hand-off.
+//
+// Rotation therefore DELETES now (owner 2026-08-27: "我覺得應該只保留最新的 N
+// 版備份，N 可以設定，剩餘的應該直接移除"), and `reapBackupTrash` drains the
+// backlog the old path left behind. Both are bounded to files this engine can
+// prove it created — see backupFilesIn.
+//
 // 🔴 What this engine deliberately does NOT do, so nobody reads more safety
 // into it than it has:
-//   - **It never deletes anything.** Rotation MOVES the evicted file into
-//     `trash/` (repo rule: agents and the server do not `rm`; reclamation is
-//     the warden's job). A rotation that deletes is a rotation that can delete
-//     the wrong thing.
+//   - **It deletes only its OWN files, and only the ones already past the
+//     retention window.** `backupFilesIn` is the whole reach: prefix
+//     `officraft-` AND suffix `.db`, directories skipped. A hand-made
+//     `officraft.db.bak-pre-*`, a stray `.partial`, a subdirectory — none of
+//     them are visible to retention, so none of them can be counted as one of
+//     the N and none of them can be removed.
 //   - **Backups live on the SAME MACHINE as the database.** That covers a
 //     corrupt file or a bad migration; it does NOT cover losing the machine.
 //     Off-machine backup is a separate ticket, and the owner was told so
@@ -62,6 +90,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -82,12 +111,46 @@ const (
 	// busy day covers less than 30h. Do not quote the product as a guarantee.
 	backupInterval = 6 * time.Hour
 
-	// backupRetain is how many backup files are kept PER POOL (owner 2026-07-31:
-	// "我們可以保留 5 份備份檔好了" + "自動 rotate"). Evicted files are MOVED to
-	// trash/, never deleted here. Which files compete for those 5 slots is
-	// decided by backupPoolOf — see the comment there for why there are two
-	// pools rather than one.
-	backupRetain = 5
+	// backupRetainDefault is the SHIPPED value of N — how many backup files are
+	// kept PER POOL — used when `backup.retain` was never written.
+	//
+	// 🔴 WHO CHOSE 5: the owner, on 2026-07-31, in the ticket that created this
+	// engine (T-ada9; the commit that introduced the constant records it as
+	// "owner 另外指定三件：保留 5 份並自動 rotate"). T-8 made N adjustable and
+	// deliberately did NOT move the default — changing the shipped number and
+	// making it adjustable in the same change would silently re-decide something
+	// the owner already decided.
+	//
+	// 🔴 N COUNTS VERSIONS, NOT DAYS. Five is five FILES, and how much calendar
+	// they span depends entirely on how busy the day was: measured on this
+	// machine, 2026-08-19 produced 19 backups and 2026-08-24 produced 4. The
+	// same N therefore covers less than three days on a busy day and over a week
+	// on a quiet one. Anyone quoting a retention DEPTH in time is quoting a
+	// number this constant does not carry.
+	//
+	// 🔴 N IS PER POOL, NOT PER DIRECTORY. There are two pools (backupPoolOf),
+	// so the directory holds up to 2 × N files, not N. Setting 5 buys 10 files,
+	// not 5.
+	backupRetainDefault = 5
+
+	// minBackupRetain / maxBackupRetain bound what `backup.retain` may be set
+	// to. Both are the IMPLEMENTER's choice (T-8), not the owner's, and the
+	// reasoning is on each:
+	//
+	//   - The floor is 1, not 0. Zero would mean "keep nothing", i.e. delete the
+	//     snapshot that was just taken — a knob whose lowest setting destroys
+	//     the thing the knob is about. One means the newest of each pool always
+	//     survives, which is the least this engine can promise and still be a
+	//     backup engine.
+	//   - The ceiling is 20 because N is a DISK budget in disguise. At the
+	//     snapshot size measured on this machine (~712 MB) and two pools, the
+	//     steady-state cost is 2 × N × 712 MB: N=5 is ~7.4 GiB (which is exactly
+	//     what backups/ measured at), N=20 is ~28 GiB. Past that the knob starts
+	//     recreating the unbounded-growth failure this ticket exists to end, so
+	//     the ceiling is where the cost stops being a setting and starts being
+	//     an incident.
+	minBackupRetain = 1
+	maxBackupRetain = 20
 
 	// backupFreeSpaceFactor is how much room must be free relative to the
 	// database size before a backup is attempted. The snapshot is roughly the
@@ -119,7 +182,7 @@ const (
 	backupReasonPreMigration backupReason = "premigration"
 )
 
-// backupPool is the set of files that compete for one quota of backupRetain.
+// backupPool is the set of files that compete for one quota of N (backup.retain).
 type backupPool string
 
 const (
@@ -174,6 +237,11 @@ func backupReasonIn(name string) backupReason {
 // backupDirFor / backupTrashFor sit BESIDE the database file rather than under
 // a fixed path, so a namespaced instance backs itself up into its own root and
 // two instances can never write over each other.
+//
+// ⚠️ backupTrashFor no longer names a destination. Rotation stopped writing into
+// `trash/` in T-8; the only thing that still names the directory is
+// reapBackupTrash, which DRAINS the backlog the old move-based rotation left
+// there. Do not re-point an eviction at it — see the file header.
 func backupDirFor(dbPath string) string   { return filepath.Join(filepath.Dir(dbPath), "backups") }
 func backupTrashFor(dbPath string) string { return filepath.Join(filepath.Dir(dbPath), "trash") }
 
@@ -183,7 +251,8 @@ type backupResult struct {
 	Path     string
 	Bytes    int64
 	Took     time.Duration
-	Rotated  []string // files moved into trash/ by this run
+	Deleted  []string // files DELETED from backups/ by this run's rotation
+	Reaped   int      // legacy trash/ files deleted by this run (reapBackupTrash)
 	Skipped  string   // non-empty = nothing was written, and this is why
 	Reason   backupReason
 	Stale    bool   // the newest PRE-EXISTING backup was older than the alarm window
@@ -268,7 +337,12 @@ func backupFileName(now time.Time, reason backupReason) string {
 // backup. That matters more than it sounds: the whole value of this directory is
 // that everything in it can be restored, and a half-written file that is named
 // like a backup poisons that assumption.
-func runDatabaseBackup(db *sql.DB, dbPath string, reason backupReason, now time.Time) (backupResult, error) {
+// `retain` is N — how many files survive PER POOL. Every trigger passes the
+// value it read from `backup.retain` (liveBackupRetain); it is a PARAMETER
+// rather than a read inside this function so that a test can drive retention
+// without a settings table, and so that the number one run acted on is visible
+// at the call site.
+func runDatabaseBackup(db *sql.DB, dbPath string, reason backupReason, now time.Time, retain int) (backupResult, error) {
 	res := backupResult{Reason: reason}
 	dir := backupDirFor(dbPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -373,23 +447,83 @@ func runDatabaseBackup(db *sql.DB, dbPath string, reason backupReason, now time.
 	}
 	res.Path = final
 
-	rotated, err := rotateBackups(dbPath, backupRetain)
+	deleted, err := rotateBackups(dbPath, retain)
 	if err != nil {
 		// The new backup EXISTS — that is the point of this function. A
 		// rotation problem is a disk-growth problem, reported without
 		// pretending the snapshot failed.
 		log.Printf("[backup] rotation after %s failed: %v", final, err)
 	}
-	res.Rotated = rotated
+	res.Deleted = deleted
+
+	// Drain whatever the old move-based rotation left in trash/. It is bounded,
+	// idempotent and normally a no-op (an empty or absent directory), so it
+	// rides the same trigger rather than needing a cadence of its own — and a
+	// studio that upgrades into this build reclaims its backlog on the very
+	// first backup instead of on some later sweep nobody armed.
+	reaped, err := reapBackupTrash(dbPath)
+	if err != nil {
+		log.Printf("[backup] draining trash/ after %s failed: %v", final, err)
+	}
+	res.Reaped = reaped
 	return res, nil
 }
 
-// rotateBackups keeps the newest `keep` files OF EACH POOL and MOVES the rest
-// into trash/.
+// liveBackupRetain resolves N from the `backup.retain` settings row, at the
+// moment a backup is taken.
 //
-// 🔴 It moves, never deletes (repo rule). The mechanical reason matters as much
-// as the rule: a bug in a mover leaves the file findable, the same bug in a
-// deleter destroys exactly the thing this whole file exists to preserve.
+// 🔴 It reads the DATABASE rather than the apiServer's settings snapshot, and
+// that is deliberate: this engine is not a method on apiServer and holds nothing
+// from it (see startBackupCadence for why), while three of its four triggers —
+// `ocserverd backup`, the pre-migration hook, and a test harness — run with no
+// apiServer in existence at all. One indexed read per BACKUP (not per request)
+// is the cheapest way for every trigger to answer the same question from the
+// same source, and it means a PATCH from the cockpit takes effect on the next
+// snapshot with no restart.
+//
+// A missing row, an unreadable table (the pre-migration hook runs before goose)
+// or a value outside the accepted range all fall back to backupRetainDefault.
+// Falling back is safe in the direction that matters: the default is a bounded,
+// owner-chosen number, so a corrupt row can never widen this engine's reach —
+// and `serve` refuses to boot on an out-of-range row anyway (loadAuthSettings),
+// so the fallback is reachable only for the CLI triggers.
+func liveBackupRetain(db *sql.DB) int {
+	if db == nil {
+		return backupRetainDefault
+	}
+	var raw string
+	if err := db.QueryRow(`SELECT value FROM setting WHERE key = ?`, settingBackupRetain).Scan(&raw); err != nil {
+		return backupRetainDefault
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n < minBackupRetain || n > maxBackupRetain {
+		return backupRetainDefault
+	}
+	return n
+}
+
+// rotateBackups keeps the newest `keep` files OF EACH POOL and DELETES the rest.
+//
+// 🔴 IT DELETES. It used to move the evicted file into trash/ and nothing ever
+// emptied trash/, so "retired" meant "kept forever under a different name" — the
+// directory grew to 141.6 GiB (see the file header). The safety this function
+// owes is NOT "the evicted file is still findable somewhere"; it is that it
+// can only ever reach files it created ITSELF and only ever the ones already
+// beyond N. Both come from backupFilesIn, which is the only listing this
+// function has:
+//
+//	sorted by FILENAME, newest first — the stamp is fixed-width and lexically
+//	ordered, so name order IS time order. Deliberately not mtime: mtime survives
+//	neither copying a backup directory around nor a restore, and a deleter that
+//	sorts by a rewritable key can delete the newest file.
+//	filtered to prefix `officraft-` AND suffix `.db`, directories skipped — so
+//	a `.partial` (it ends in `.partial`, not `.db`), a hand-made
+//	`officraft.db.bak-pre-*` (the prefix is `officraft.`, not `officraft-`) and
+//	any subdirectory are all INVISIBLE here: never counted toward N, never
+//	deleted.
+//	names are unique within a directory by construction, so there is no
+//	same-name case to resolve — a file's name decides both its pool
+//	(backupPoolOf) and its rank, and one name is one file.
 //
 // 🔴 `keep` is per pool, not per directory. It was per directory, and that meant
 // five backups from ANY trigger could retire the pre-migration snapshot — see
@@ -426,20 +560,54 @@ func rotateBackups(dbPath string, keep int) ([]string, error) {
 	// newest-first order: the log line then reads the same way every run.
 	sort.Slice(overdue, func(i, j int) bool { return overdue[i].Name() > overdue[j].Name() })
 
-	trash := backupTrashFor(dbPath)
-	if err := os.MkdirAll(trash, 0o700); err != nil {
-		return nil, fmt.Errorf("create trash dir: %w", err)
-	}
-	var moved []string
+	var deleted []string
 	for _, e := range overdue {
-		from := filepath.Join(dir, e.Name())
-		to := filepath.Join(trash, e.Name())
-		if err := os.Rename(from, to); err != nil {
-			return moved, fmt.Errorf("retire %s: %w", e.Name(), err)
+		path := filepath.Join(dir, e.Name())
+		if err := os.Remove(path); err != nil {
+			return deleted, fmt.Errorf("retire %s: %w", e.Name(), err)
 		}
-		moved = append(moved, e.Name())
+		deleted = append(deleted, e.Name())
 	}
-	return moved, nil
+	return deleted, nil
+}
+
+// reapBackupTrash deletes the backlog that the OLD move-based rotation parked in
+// `trash/` and never came back for. It is the one-way door's other half: without
+// it, switching rotation to delete would stop the bleeding while leaving the
+// 141.6 GiB already on disk there permanently, because nothing else on this
+// machine will ever read that directory (see the file header).
+//
+// 🔴 ITS REACH IS EXACTLY ROTATION'S OWN REACH, and for the same reason: it uses
+// backupFilesIn, so it can only see files matching `officraft-*.db` that sit
+// DIRECTLY in trash/. Subdirectories are skipped (backupFilesIn skips dirs and
+// this never recurses), and anything a human or another tool parked there under
+// a different name is left exactly where it is. It never removes the trash
+// DIRECTORY itself — an empty directory costs nothing and removing it would be
+// reach this function has no reason to have.
+//
+// 🔴 There is no "keep the newest few" here on purpose. Every file in trash/ was
+// ALREADY judged beyond N by the rotation that put it there; re-applying a quota
+// would resurrect a retention rule for files that have already been retired
+// once, which is a second, invisible retention policy.
+//
+// A missing trash/ is the normal, healthy state and returns (0, nil).
+func reapBackupTrash(dbPath string) (int, error) {
+	trash := backupTrashFor(dbPath)
+	files, err := backupFilesIn(trash)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	reaped := 0
+	for _, e := range files {
+		if err := os.Remove(filepath.Join(trash, e.Name())); err != nil {
+			return reaped, fmt.Errorf("reap trash/%s: %w", e.Name(), err)
+		}
+		reaped++
+	}
+	return reaped, nil
 }
 
 // logBackupOutcome is the single voice of this engine. Every trigger reports
@@ -465,8 +633,11 @@ func logBackupOutcome(res backupResult, err error) {
 		log.Printf("[backup] SKIPPED (%s): %s — no new retreat point was created", res.Reason, res.Skipped)
 	default:
 		log.Printf("[backup] ok (%s): %s (%d MB in %s)", res.Reason, filepath.Base(res.Path), res.Bytes>>20, res.Took.Round(time.Millisecond))
-		if len(res.Rotated) > 0 {
-			log.Printf("[backup] rotated %d older backup(s) into trash/: %s", len(res.Rotated), strings.Join(res.Rotated, ", "))
+		if len(res.Deleted) > 0 {
+			log.Printf("[backup] DELETED %d backup(s) past the retention limit: %s", len(res.Deleted), strings.Join(res.Deleted, ", "))
+		}
+		if res.Reaped > 0 {
+			log.Printf("[backup] reclaimed %d file(s) from the legacy trash/ backlog", res.Reaped)
 		}
 	}
 }
@@ -530,7 +701,7 @@ func backupTick(db *sql.DB, dbPath string, now time.Time, health *backupHealthMo
 	if newest, ok := newestScheduledBackup(dbPath, now); ok && now.Sub(newest) < backupInterval {
 		return false
 	}
-	res, err := runDatabaseBackup(db, dbPath, backupReasonScheduled, now)
+	res, err := runDatabaseBackup(db, dbPath, backupReasonScheduled, now, liveBackupRetain(db))
 	logBackupOutcome(res, err)
 	// T-da06: the log line above has no reader on this machine. This is the
 	// same outcome, told to something the cockpit can see. It reports the
@@ -555,7 +726,7 @@ func backupBeforeMigrations(db *sql.DB, dbPath string, now time.Time) {
 	if err != nil || info.Size() == 0 {
 		return
 	}
-	res, err := runDatabaseBackup(db, dbPath, backupReasonPreMigration, now)
+	res, err := runDatabaseBackup(db, dbPath, backupReasonPreMigration, now, liveBackupRetain(db))
 	logBackupOutcome(res, err)
 	if err != nil || res.Skipped != "" {
 		log.Printf("[backup] proceeding with migrations WITHOUT a fresh pre-migration backup")

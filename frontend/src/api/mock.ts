@@ -140,6 +140,11 @@ import {
   CHAT_BUDGET_CHARS_MIN,
 } from "./chatBudget";
 import {
+  BACKUP_RETAIN_DEFAULT,
+  BACKUP_RETAIN_MAX,
+  BACKUP_RETAIN_MIN,
+} from "./backupRetain";
+import {
   MOCK_OWNER_ID,
   SEED_SYSTEM_INTERACTION_MD,
   SEED_ROLE_ASSISTANT_MD,
@@ -1742,6 +1747,10 @@ const DEFAULT_MOCK_SETTINGS = {
   // caps above — a settings DTO missing a field the server always sends is a
   // mock the page can go green against while the real one breaks.
   chat_budget_chars: CHAT_BUDGET_CHARS_DEFAULT,
+  // T-8 backup retention N, served for the same reason as everything above: a
+  // settings DTO missing a field the server always sends is a mock the page can
+  // go green against while the real one breaks.
+  backup_retain: BACKUP_RETAIN_DEFAULT,
   // The two software-update toggles — both OFF out of the box, mirroring the
   // server (updates come from GitHub Releases; there is no updater server to
   // configure any more).
@@ -4808,6 +4817,20 @@ export const mockApi: Api = {
         );
       }
     }
+    // T-8: its own check. Its unit is FILES, not characters, and it is the only
+    // knob on this endpoint whose value causes DELETION — so it cannot sit in a
+    // table whose shared message talks about characters and floors.
+    if (
+      patch.backupRetain !== undefined &&
+      (patch.backupRetain < BACKUP_RETAIN_MIN ||
+        patch.backupRetain > BACKUP_RETAIN_MAX)
+    ) {
+      throw mockApiError(
+        "http 422 for PATCH /api/settings",
+        422,
+        `backup_retain must be between ${BACKUP_RETAIN_MIN} and ${BACKUP_RETAIN_MAX} backups per pool`
+      );
+    }
     // T-c9b4: checked on its own, NOT as a row above — it has its own ceiling,
     // and the message above ("the floor is the shipped default … can only be
     // raised") would be a lie about a knob that may be turned down.
@@ -4926,6 +4949,9 @@ export const mockApi: Api = {
     }
     if (patch.chatBudgetChars !== undefined) {
       mockServerSettings.chat_budget_chars = patch.chatBudgetChars;
+    }
+    if (patch.backupRetain !== undefined) {
+      mockServerSettings.backup_retain = patch.backupRetain;
     }
     if (patch.updaterReceiveBeta !== undefined) {
       mockServerSettings.updater_receive_beta = patch.updaterReceiveBeta;

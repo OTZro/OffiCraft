@@ -2383,6 +2383,9 @@ type SettingsDTO struct {
 	// AgentTokenTtl Agent and outsource-worker JWT lifetime in seconds. Fresh installs default to 7 days.
 	AgentTokenTtl int `json:"agent_token_ttl"`
 
+	// BackupRetain How many database backup files rotation KEEPS — N. Everything past N is DELETED from disk, not moved aside: the retirement path used to be a move into `trash/` that nothing ever emptied, which is how this studio's trash reached 141.6 GiB / 278 files. Two things this number does NOT mean, both stated because both have already been misread: (1) N COUNTS VERSIONS, NOT DAYS — five is five FILES, and how much calendar that spans depends entirely on how busy the stretch was (this machine produced 19 backups on 2026-08-19 and 4 on 2026-08-24), so one N covers under three days on a busy day and over a week on a quiet one; (2) N IS PER POOL, NOT PER DIRECTORY — routine backups (scheduled + manual) and pre-migration backups hold separate quotas, so setting 5 keeps up to 10 files, not 5. The adjustable range is 1..20, and the ceiling is a disk budget rather than a round number (steady-state cost is 2 × N × one snapshot). Rotation only ever sees files it created itself (`officraft-`…`.db`), so hand-made snapshots, partial files and subdirectories are neither counted toward N nor deleted.
+	BackupRetain *int `json:"backup_retain,omitempty"`
+
 	// ChatBudgetChars The wake snapshot's chat block budget, in CHARACTERS (Unicode code points). It bounds EVERYTHING `overview.chat_chars` counts — the messages and their folded cards plus the snapshot header and the cut hint — and it is the same number `peek_resume_summary_size` sizes its `estimated_total_chars` against, because both faces are assembled by one code path. Unlike the `doc_cap_chars_*` knobs this one may be LOWERED as well as raised: the chat block is repacked from scratch on every read, so a smaller budget simply returns fewer messages next time, with `chat_earlier_omitted` reporting the cut. The adjustable range is 1000..13000; the ceiling is tied to how many messages the packer reads before packing, so it is not a number that can be raised on its own.
 	ChatBudgetChars *int `json:"chat_budget_chars,omitempty"`
 
@@ -2480,6 +2483,9 @@ type SettingsUpdateDTO struct {
 	// AcceleratedGraceSecs 加速停止 grace, in seconds. Must be 10 through 3600. Applies to every CLOCKED wind-down cause at once (the second context threshold and the owner-pressed 加速停止); it can never put a clock on a soft cause.
 	AcceleratedGraceSecs *int `json:"accelerated_grace_secs,omitempty"`
 	AgentTokenTtl        *int `json:"agent_token_ttl,omitempty"`
+
+	// BackupRetain How many database backup files rotation KEEPS — N; everything past N is DELETED from disk. Must be between 1 and 20. N COUNTS VERSIONS, NOT DAYS (how much calendar it buys depends on how many backups those days produced), and it is PER POOL, NOT PER DIRECTORY (routine and pre-migration hold separate quotas), so the directory holds up to 2 × N files.
+	BackupRetain *int `json:"backup_retain,omitempty"`
 
 	// ChatBudgetChars The wake snapshot's chat block budget, in CHARACTERS (Unicode code points). Must be between 1000 and 13000. Unlike the `doc_cap_chars_*` knobs the floor is NOT the shipped default — this budget may be lowered as well as raised, because the chat block is repacked on every read rather than stored. The ceiling is pinned to how many messages the packer reads before packing and cannot be raised on its own.
 	ChatBudgetChars *int `json:"chat_budget_chars,omitempty"`

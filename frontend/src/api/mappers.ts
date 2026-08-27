@@ -8,6 +8,7 @@ import type { ThemeBundle } from "../lib/themeBundle";
 import type { components } from "./generated/schema";
 import { DOC_CAP_CHARS_DEFAULTS } from "./docCap";
 import { CHAT_BUDGET_CHARS_DEFAULT } from "./chatBudget";
+import { BACKUP_RETAIN_DEFAULT } from "./backupRetain";
 import type {
   Member,
   MemberStatus,
@@ -1015,6 +1016,11 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
     // the caps above: against a server too old to send the field, 0 would read
     // as "no chat at all", which is the one answer that is never right.
     chatBudgetChars: w.chat_budget_chars ?? CHAT_BUDGET_CHARS_DEFAULT,
+    // T-8 backup retention. Same "?? the shipped default, never 0" reasoning:
+    // against a server too old to send the field, 0 would render as "keep no
+    // backups", which is the one answer that is never right — and it is the
+    // answer a reader would then try to raise, believing they were fixing it.
+    backupRetain: w.backup_retain ?? BACKUP_RETAIN_DEFAULT,
     // The two software-update toggles (schema-optional for DTO-compat; the
     // Go wire always emits both — `?? false` only fires against an older
     // server, where OFF is exactly the honest reading).

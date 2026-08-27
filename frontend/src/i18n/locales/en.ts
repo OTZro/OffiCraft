@@ -1654,6 +1654,13 @@ export const en: Dict = {
     // T-c9b4: the wake snapshot's chat budget. Deliberately not folded into the
     // doc-cap wording above — those floors are their own shipped defaults and
     // can only be raised; this one moves in both directions.
+    // T-8: backup retention N. The sub-label carries the two facts the integer
+    // cannot — versions-not-days and per-pool-not-per-directory — because the
+    // person who needs them is the one turning the knob.
+    backupRetain: "Backups kept",
+    backupRetainSub:
+      "How many database backup files are kept. Everything past this number is DELETED from disk on the next backup — it is not moved aside and it cannot be recovered. Two things this number is NOT. It counts VERSIONS, NOT DAYS: it is a count of files, so how far back it reaches depends entirely on how many backups those days happened to produce — a busy day can use the whole allowance in under three days, a quiet one can stretch it past a week. And it is PER POOL, NOT PER DIRECTORY: routine backups (scheduled and manual) and pre-migration backups keep separate allowances, so 5 here means up to TEN files on disk, not five. The range is 1 to 20; the ceiling is a disk budget, since the space used is roughly two times this number times the size of one backup.",
+    backupRetainUnit: "backups per pool",
     chatBudget: "Wake chat budget",
     chatBudgetSub:
       "How many characters the chat block of a wake snapshot (resume_summary) may spend — the messages, their folded cards, the snapshot header and the cut hint; the peek sizes itself against the same number. The range is 1000 to 13000 and it can be lowered as well as raised: the chat block is repacked on every read, so a smaller budget simply carries fewer messages, and whatever was left out is still reported as omitted.",

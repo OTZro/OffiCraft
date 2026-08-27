@@ -428,6 +428,17 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 				minChatBudgetChars, maxChatBudgetChars))
 		return
 	}
+	// backup_retain (T-8) — checked on its own too. It is not a character count,
+	// its unit is FILES, and it is the only knob on this endpoint whose value
+	// causes DELETION, so it does not belong in a table whose shared message
+	// talks about characters and shipped-default floors.
+	if body.BackupRetain != nil &&
+		(*body.BackupRetain < minBackupRetain || *body.BackupRetain > maxBackupRetain) {
+		writeError(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf("backup_retain must be between %d and %d backups per pool",
+				minBackupRetain, maxBackupRetain))
+		return
+	}
 	var orgName string
 	if body.OrgName != nil {
 		orgName = strings.TrimSpace(*body.OrgName)
@@ -580,6 +591,7 @@ func (s *apiServer) HandleUpdateSettingsApiSettingsPatch(w http.ResponseWriter, 
 		{body.DocCapCharsBootSequence, settingDocCapCharsBootSequence, &s.docCapCharsBootSequence},
 		{body.DocCapCharsOffboard, settingDocCapCharsOffboard, &s.docCapCharsOffboard},
 		{body.ChatBudgetChars, settingChatBudgetChars, &s.chatBudgetChars},
+		{body.BackupRetain, settingBackupRetain, &s.backupRetain},
 	}
 	for _, c := range capWrite {
 		if c.field == nil {
@@ -733,6 +745,7 @@ func (s *apiServer) settingsView() settingsDTO {
 		DocCapCharsBootSequence:      s.docCapCharsBootSequence,
 		DocCapCharsOffboard:          s.docCapCharsOffboard,
 		ChatBudgetChars:              s.chatBudgetChars,
+		BackupRetain:                 s.backupRetain,
 		UpdaterReceiveBeta:           s.updaterReceiveBeta,
 		UpdaterAutoUpdate:            s.updaterAutoUpdate,
 		OrgName:                      s.orgName,

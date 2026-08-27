@@ -376,6 +376,7 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 		docCapCharsBootSequence:      bootSequenceCapCharsDefault,
 		docCapCharsOffboard:          offboardCapCharsDefault,
 		chatBudgetChars:              chatBudgetCharsDefault,
+		backupRetain:                 backupRetainDefault,
 		ctxhigh:                      defaultSseContextHigh(),
 		root:                         root,
 		binHashes:                    bindistBinaryHashesFrom(bindistFS()),
@@ -548,6 +549,7 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 	api.docCapCharsBootSequence = auth.docCapCharsBootSequence
 	api.docCapCharsOffboard = auth.docCapCharsOffboard
 	api.chatBudgetChars = auth.chatBudgetChars
+	api.backupRetain = auth.backupRetain
 	api.updaterReceiveBeta = auth.updaterReceiveBeta
 	api.updaterAutoUpdate = auth.updaterAutoUpdate
 	// $OC_RELEASE_API_BASE is a HARNESS seam (conformance/e2e): it re-points

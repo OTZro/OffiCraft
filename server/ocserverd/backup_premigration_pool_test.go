@@ -41,7 +41,7 @@ import (
 // takeBackup writes one backup and returns its bare filename.
 func takeBackup(t *testing.T, db *sql.DB, dbPath string, reason backupReason, at time.Time) string {
 	t.Helper()
-	res, err := runDatabaseBackup(db, dbPath, reason, at)
+	res, err := runDatabaseBackup(db, dbPath, reason, at, backupRetainDefault)
 	if err != nil {
 		t.Fatalf("backup (%s, %s): %v", reason, at.Format(time.RFC3339), err)
 	}
@@ -111,13 +111,12 @@ func TestRotate_PreMigrationSurvivesAFloodOfScheduledBackups(t *testing.T) {
 
 	// One more than the quota, so the routine pool provably overflows.
 	var scheduled []string
-	for i := 1; i <= backupRetain+1; i++ {
+	for i := 1; i <= backupRetainDefault+1; i++ {
 		scheduled = append(scheduled, takeBackup(t, db, dbPath, backupReasonScheduled, base.Add(time.Duration(i)*time.Hour)))
 	}
 	oldestScheduled, newestScheduled := scheduled[0], scheduled[1:]
 
 	kept := namesIn(t, backupDirFor(dbPath))
-	trashed := namesIn(t, backupTrashFor(dbPath))
 
 	// (1) The two halves of the positive/negative pair, spelled out one at a
 	//     time so a failure says which half broke.
@@ -130,12 +129,11 @@ func TestRotate_PreMigrationSurvivesAFloodOfScheduledBackups(t *testing.T) {
 
 	// (2) And the whole picture, both directions, by name.
 	assertSameSet(t, "backups/", kept, append([]string{premigration}, newestScheduled...))
-	assertSameSet(t, "trash/", trashed, []string{oldestScheduled})
 
-	// Rotation retires by MOVING (repo rule), and a safety net only helps if
-	// what lands in it is a real backup.
-	if _, rows := readBackSentinel(t, filepath.Join(backupTrashFor(dbPath), oldestScheduled)); rows == 0 {
-		t.Errorf("retired backup %s is unreadable", oldestScheduled)
+	// T-8: retirement means DELETED, not relocated. Anywhere under the data root
+	// counts as still on disk.
+	if where := findUnderDataRoot(t, dbPath, oldestScheduled); where != "" {
+		t.Errorf("retired backup %s is still on disk at %s — retention must DELETE, not relocate", oldestScheduled, where)
 	}
 	// The kept pre-migration file has to still be restorable, not just present.
 	if _, rows := readBackSentinel(t, filepath.Join(backupDirFor(dbPath), premigration)); rows == 0 {
@@ -158,7 +156,7 @@ func TestRotate_PreMigrationSurvivesAManualInvestigationBurst(t *testing.T) {
 	// quotas of their own, this fixture would stop overflowing and the negative
 	// assertion below would catch it.
 	var routine []string
-	for i := 1; i <= backupRetain+1; i++ {
+	for i := 1; i <= backupRetainDefault+1; i++ {
 		reason := backupReasonManual
 		if i%2 == 0 {
 			reason = backupReasonScheduled
@@ -176,7 +174,9 @@ func TestRotate_PreMigrationSurvivesAManualInvestigationBurst(t *testing.T) {
 		t.Errorf("the oldest routine backup %s survived — manual and scheduled must share one quota, and this fixture must overflow it", oldestRoutine)
 	}
 	assertSameSet(t, "backups/", kept, append([]string{premigration}, survivors...))
-	assertSameSet(t, "trash/", namesIn(t, backupTrashFor(dbPath)), []string{oldestRoutine})
+	if where := findUnderDataRoot(t, dbPath, oldestRoutine); where != "" {
+		t.Errorf("retired backup %s is still on disk at %s — retention must DELETE, not relocate", oldestRoutine, where)
+	}
 }
 
 // TestRotate_PreMigrationPoolIsBoundedToo guards the over-correction. Giving
@@ -193,16 +193,22 @@ func TestRotate_PreMigrationPoolIsBoundedToo(t *testing.T) {
 	base := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 
 	var made []string
-	for i := 0; i < backupRetain+2; i++ {
+	for i := 0; i < backupRetainDefault+2; i++ {
 		made = append(made, takeBackup(t, db, dbPath, backupReasonPreMigration, base.Add(time.Duration(i)*time.Hour)))
 	}
 	retired, survivors := made[:2], made[2:]
 
 	assertSameSet(t, "backups/", namesIn(t, backupDirFor(dbPath)), survivors)
-	assertSameSet(t, "trash/", namesIn(t, backupTrashFor(dbPath)), retired)
 	for _, name := range retired {
-		if _, rows := readBackSentinel(t, filepath.Join(backupTrashFor(dbPath), name)); rows == 0 {
-			t.Errorf("retired pre-migration backup %s is unreadable", name)
+		if where := findUnderDataRoot(t, dbPath, name); where != "" {
+			t.Errorf("retired pre-migration backup %s is still on disk at %s — the pre-migration pool must be BOUNDED, and bounded now means deleted", name, where)
+		}
+	}
+	// The survivors have to be restorable, not merely present: a bounded pool
+	// that keeps husks is not a retreat.
+	for _, name := range survivors {
+		if _, rows := readBackSentinel(t, filepath.Join(backupDirFor(dbPath), name)); rows == 0 {
+			t.Errorf("surviving pre-migration backup %s carries no rows", name)
 		}
 	}
 }
