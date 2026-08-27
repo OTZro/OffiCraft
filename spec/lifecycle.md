@@ -642,6 +642,18 @@ ONE-SHOT, never a standing order):
     failures (token-expiry lead, survived-stop sweep) had the second shape, not the
     first. Closing it needs an AST-level guard over both producers plus an explicit
     exclusion list — T-170e stage 5, deliberately out of stage 3's scope.
+  - ✅ **CLOSED by T-170e stage 5 — `lifecycle_identity_gate_t170e_test.go`.**
+    `TestTickProducersHaveNoUndeclaredRosterLoop` walks `runReconcileTick` and
+    `runOutsourceTick` with `go/parser` and requires every iteration in them to be
+    accounted for by name AND by count in `lifecycleProducerLoopRulings`. Re-measured
+    on the mutant above: it now fails, naming the producer and the loop, and it does
+    so **without any kind expression to find** — which is the whole point, since
+    neither historical failure had one. Its sibling
+    `TestIdentityGatesAreEachOnTheRecord` is the other half: every `Kind` comparison,
+    kind switch, kind-seam call and member-kind struct stamp in the package's
+    production sources must carry a written reason. Scope limits are stated in that
+    file's header; the honest short version is that it covers **`server/ocserverd`
+    only** and that neither gate can tell a true reason from a fluent false one.
 - 🔴 **The ENTRY filter is one function too: `lifecyclePolicyFor(m).ShouldExist()`.**
   It is the only place the 正職/外包 difference may be spelled at the door — the
   owner's ruling that 「正職會不會有 instance 存活取決於 人物設定有沒有這個角色，外包則是取決於
