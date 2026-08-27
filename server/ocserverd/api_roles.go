@@ -514,6 +514,17 @@ const lessonsRetiredQueryParam = "task_type"
 // PRESENCE, not blankness — deliberately identical to the MCP rule.
 // `?task_type=` is still a caller that believes the axis exists.
 //
+// 🔑 WHY THIS ONE MAY BE JUDGED BEFORE AUTHZ. The rule the lessons routes
+// follow is: a refusal may precede the authz check only when it LEAKS NOTHING
+// ABOUT SERVER STATE. This one qualifies — it is a pure judgment on the
+// caller's own request ("you sent a field that no longer exists"), the answer
+// is identical for every caller, every role and every station, and it reveals
+// only what the caller itself just sent. That is the same class as malformed
+// JSON, which is likewise answered before any identity is consulted.
+// A refusal that consults STATE — "this role does not exist here" — must come
+// AFTER authz instead, or an unauthorized caller could use it to enumerate what
+// exists. So the two orders are one rule, not two habits.
+//
 // Scoped to the retired key BY NAME. This is not a general unknown-query
 // rejector: the router binds declared query parameters and ignores the rest
 // across every route on the station, and changing THAT is a station-wide
