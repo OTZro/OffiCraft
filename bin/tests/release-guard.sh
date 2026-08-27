@@ -121,7 +121,16 @@ fi
 if [[ "${1:-}" == "api" ]]; then
   case "${2:-}" in
     */releases/latest)
-      printf '%s' "${GH_LATEST_JSON:-}"
+      # GH_LATEST_FLIP_AFTER lets a retry case answer WRONG for its first N
+      # calls then flip to GH_LATEST_JSON_AFTER — the shape of GitHub's own
+      # eventual-consistency window on /releases/latest right after a
+      # `gh release edit --latest=true`.
+      n="$(grep -c 'api repos/.*/releases/latest' "$GH_WIRE" || true)"
+      if [[ -n "${GH_LATEST_FLIP_AFTER:-}" && "$n" -gt "${GH_LATEST_FLIP_AFTER}" ]]; then
+        printf '%s' "${GH_LATEST_JSON_AFTER:-}"
+      else
+        printf '%s' "${GH_LATEST_JSON:-}"
+      fi
       exit "${GH_LATEST_RC:-0}" ;;
   esac
 fi
@@ -292,6 +301,27 @@ check "S0c WANT_LATEST=true matches when /releases/latest IS this tag" "0" "$RC"
 
 GH_LATEST_JSON="{\"tag_name\":\"$TAG\"}" release_fn verify_stored_release "$TAG" "$SHA" prerelease false
 named_failure "S0d WANT_LATEST=false but GitHub's /releases/latest IS this tag" release-latest "$RC" "$OUT"
+
+# S0e/S0f — THE RETRY ITSELF (owner-requested 2026-08-28): the isLatest
+# read-back reuses settle_station's poll-retry shape rather than a single
+# call, because GitHub does not promise /releases/latest reflects a
+# `--latest=true` flip the instant `gh release edit` returns. GH_WIRE is
+# cleared first so the `gh api .../releases/latest` count in it is exactly
+# this case's own attempts, not a running total from earlier S-cases.
+: > "$GHWIRE"
+GH_LATEST_JSON="{\"tag_name\":\"v0.0.1-not-us\"}" \
+  GH_LATEST_JSON_AFTER="{\"tag_name\":\"$TAG\"}" GH_LATEST_FLIP_AFTER=1 \
+  OC_RELEASE_LATEST_TRIES=3 OC_RELEASE_LATEST_SLEEP=0 \
+  release_fn verify_stored_release "$TAG" "$SHA" prerelease true
+check "S0e first read WRONG, second CORRECT -> retry makes it succeed" "0" "$RC"
+check "S0e …and it actually retried (2 gh api .../releases/latest calls, not 1)" "2"   "$(grep -c 'api repos/.*/releases/latest' "$GHWIRE" || true)"
+
+: > "$GHWIRE"
+GH_LATEST_JSON="{\"tag_name\":\"v0.0.1-not-us\"}" \
+  OC_RELEASE_LATEST_TRIES=3 OC_RELEASE_LATEST_SLEEP=0 \
+  release_fn verify_stored_release "$TAG" "$SHA" prerelease true
+named_failure "S0f NEVER matches -> exhausts the retry budget and still fails closed" release-latest "$RC" "$OUT"
+check "S0f …and it spent the WHOLE retry budget (3 gh api calls), not fewer" "3"   "$(grep -c 'api repos/.*/releases/latest' "$GHWIRE" || true)"
 
 GH_VIEW_RC=1 GH_VIEW_JSON="" release_fn verify_stored_release "$TAG" "$SHA" prerelease
 named_failure "S1 gh release view FAILS (no such release)" release-exists "$RC" "$OUT"

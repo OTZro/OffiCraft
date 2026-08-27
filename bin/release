@@ -138,6 +138,11 @@
 #   OC_RELEASE_GH_REPO    GitHub repo for gh calls (default: pkyosx/OffiCraft)
 #   OC_RELEASE_SITE       station base URL polled in step 8 (default: http://127.0.0.1:7755)
 #   OC_RELEASE_SETTLE_TRIES / OC_RELEASE_SETTLE_SLEEP   step-8 polling budget
+#   OC_RELEASE_LATEST_TRIES / OC_RELEASE_LATEST_SLEEP   isLatest read-back retry
+#                          budget (verify_stored_release), same shape as
+#                          settle_station's poll-retry — GitHub's own docs do
+#                          not promise --latest is visible on /releases/latest
+#                          the instant `gh release edit` returns.
 #
 # There is deliberately NO "override the build command" knob, and none that can
 # soften the CI gate. Step 3 runs `$STAGE/bin/build` — a path INSIDE the staging
@@ -164,6 +169,8 @@ GH_REPO="${OC_RELEASE_GH_REPO:-pkyosx/OffiCraft}"
 SITE="${OC_RELEASE_SITE:-http://127.0.0.1:7755}"
 SETTLE_TRIES="${OC_RELEASE_SETTLE_TRIES:-60}"
 SETTLE_SLEEP="${OC_RELEASE_SETTLE_SLEEP:-5}"
+LATEST_TRIES="${OC_RELEASE_LATEST_TRIES:-3}"
+LATEST_SLEEP="${OC_RELEASE_LATEST_SLEEP:-2}"
 
 say()  { echo "[release] $*"; }
 die()  { echo "[release] FATAL: $*" >&2; exit "${2:-1}"; }
@@ -854,8 +861,36 @@ verify_stored_release() {
   # 404 (no release is latest yet, or the repo has none) leaves the body empty,
   # which parses to "no tag" and correctly reads as "$TAG is not latest" below
   # rather than aborting the whole read-back.
-  local latest_json
-  latest_json="$(gh api "repos/$GH_REPO/releases/latest" 2>/dev/null || true)"
+  #
+  # RETRY-WITH-BACKOFF, same shape as settle_station (owner ruling,
+  # 2026-08-28): GitHub does not document --latest as visible on
+  # /releases/latest the instant `gh release edit` returns, so a single read
+  # right after the flip can catch it mid-propagation and report a false
+  # [release-latest] failure on a promote that actually worked — training
+  # people to distrust a real red is its own failure mode, not a safer one.
+  # Only retried when a caller is actually ENFORCING isLatest (WANT_LATEST
+  # non-empty) — an unenforced, purely informational read (WANT_LATEST="",
+  # e.g. publish's pre-upload / promote's pre-flip calls) stays exactly one
+  # call, same as before this existed. Still fails CLOSED: exhausting
+  # LATEST_TRIES with no match falls through to the same VERIFY-FAILED
+  # [release-latest] as ever, from the python pass below.
+  local latest_json="" latest_tag_now="" li
+  for (( li = 1; li <= LATEST_TRIES; li++ )); do
+    latest_json="$(gh api "repos/$GH_REPO/releases/latest" 2>/dev/null || true)"
+    [[ -n "$WANT_LATEST" ]] || break
+    latest_tag_now="$(python3 -c '
+import json, sys
+try:
+    print(json.loads(sys.stdin.read() or "null").get("tag_name") or "")
+except Exception:
+    print("")
+' <<<"$latest_json" 2>/dev/null || true)"
+    if [[ "$WANT_LATEST" == "true"  && "$latest_tag_now" == "$TAG" ]] || \
+       [[ "$WANT_LATEST" == "false" && "$latest_tag_now" != "$TAG" ]]; then
+      break
+    fi
+    [[ "$li" == "$LATEST_TRIES" ]] || sleep "$LATEST_SLEEP"
+  done
 
   # ONE pass over the payload: it either prints the two blocks this function
   # contracts to return, or prints a VERIFY-FAILED line and exits 6. Keeping it
