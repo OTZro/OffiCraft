@@ -87,7 +87,7 @@ export const BOOT_DOC_CAP_CHARS_DEFAULTS: Record<BootDocKind, number> = {
   system_interaction: 60000,
   boot_sequence: 15000,
   // T-c9c0. Sized with the boot sequences rather than the handbook: the
-  // 下線程序 seed is a short ordered checklist an agent works under time
+  // 〈停止〉 seed is a short ordered checklist an agent works under time
   // pressure (a recycle gives it a bounded window; an offboard gives it none
   // but the owner is waiting), not a reference text.
   offboard: 15000,
@@ -354,7 +354,7 @@ export function capForKind(
     // codex are two documents of the same block, each measured on its own text.
     case "boot_sequence":
       return caps.bootSequence;
-    // T-3201: 加速停止 answers to the SAME setting as 下線程序. Two documents,
+    // T-3201: 加速停止 answers to the SAME setting as 〈停止〉. Two documents,
     // one number — mirrored from the server's registry row, which calls
     // `offboardCap()` for both.
     case "offboard":

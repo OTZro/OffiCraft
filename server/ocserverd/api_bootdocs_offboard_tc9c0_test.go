@@ -1,6 +1,6 @@
 package main
 
-// T-c9c0 — the 下線程序 document. Its replace / reset / cap / no-op / authz /
+// T-c9c0 — the 〈停止〉 document. Its replace / reset / cap / no-op / authz /
 // history behaviour is covered by the shared table in api_bootdocs_t791e_test.go
 // (bootDocCases). What is here is the part that table cannot see: the three
 // places where forgetting this kind fails SILENTLY.
@@ -45,8 +45,8 @@ func TestRestoringTheOffboardDocFansAGlobalContextDelta(t *testing.T) {
 			t.Fatalf("replace offboard %q: status=%d body=%s", body, rec.Code, rec.Body.String())
 		}
 	}
-	writeOffboard("# 下線程序\n\nfirst\n")
-	writeOffboard("# 下線程序\n\nsecond\n")
+	writeOffboard("# 停止\n\nfirst\n")
+	writeOffboard("# 停止\n\nsecond\n")
 
 	// Connect AFTER the writes so the queue holds only the restore frame.
 	listener, err := f.api.hub.Connect("", "")
@@ -62,7 +62,7 @@ func TestRestoringTheOffboardDocFansAGlobalContextDelta(t *testing.T) {
 
 	raw := listener.pop()
 	if raw == nil {
-		t.Fatal("restoring the 下線程序 doc fanned NO frame: the restore answered 200 and changed the " +
+		t.Fatal("restoring the 〈停止〉 doc fanned NO frame: the restore answered 200 and changed the " +
 			"database, so nothing else in the build will tell you — every open surface is now showing " +
 			"stale text. Add docKindOffboard to publishDocumentHistoryRestore.")
 	}

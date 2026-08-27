@@ -163,7 +163,7 @@ export const BOOT_DOC_ROWS: Record<
     subKey: SettingsTextKey;
   } & (
       | {
-          /** 啟動程序 is TWO documents (claude / codex), so its row opens an
+          /** 啟動步驟 is TWO documents (claude / codex), so its row opens an
            * INDEX rather than a document. Their third step means opposite
            * things, so nothing may address "the" boot sequence. */
           index: true;
@@ -321,7 +321,7 @@ import "./settings.css";
 // The old single "global" doc is the blocks of the assembled boot context
 // (global-context-3block-restructure): "system" (系統互動) / "custom"
 // (使用者自訂, the additive block behind /api/global-context) / "boot"
-// (啟動程序, ONE VIEW PER RUNTIME — see the boot view below). T-791e: all of
+// (啟動步驟, ONE VIEW PER RUNTIME — see the boot view below). T-791e: all of
 // them are owner-editable now; "read-only seed" no longer describes any of
 // them, and the two boot sequences are separate documents.
 type View =
@@ -336,7 +336,7 @@ type View =
   | { kind: "params" }
   | { kind: "theme" }
   | { kind: "custom" }
-  // 啟動程序 is TWO documents. `boot` is the INDEX — two nav rows, one per
+  // 啟動步驟 is TWO documents. `boot` is the INDEX — two nav rows, one per
   // runtime — and `bootRuntime` is one runtime's own page (T-bac4, owner:「可以
   // 改成像任務手冊那樣嗎」). The index carries no document of its own, which is
   // why it may be keyless; every document still has its own page.
@@ -731,7 +731,7 @@ export function SettingsPage({
     // BOTH documents stacked, then both stacked-and-collapsed (T-6278). Both
     // shapes were answers to the same complaint: he met this page on a phone,
     // scrolled the first document to its end, and read that as the end of the
-    // PAGE — 啟動程序 (Codex CLI) sat below the fold and might as well not have
+    // PAGE — 啟動步驟 (Codex CLI) sat below the fold and might as well not have
     // existed. Collapsing put both headings on one screen; an index does it
     // without an expand/collapse mechanism at all, so the identity of each
     // document is carried by a permanent row rather than by a heading whose
@@ -817,9 +817,9 @@ export function SettingsPage({
         // boot sequence stops that runtime's agents attaching to SSE, so they
         // never come online and nobody is left to fix it.
         confirmSaveBody={t.settings.bootDocSaveConfirmBoot}
-        // The runtime's own name is the TERMINAL crumb, so 啟動程序 sits one
+        // The runtime's own name is the TERMINAL crumb, so 啟動步驟 sits one
         // step up and stays clickable — Breadcrumbs renders the last segment as
-        // plain text on purpose, so a trail ending at 啟動程序 would leave the
+        // plain text on purpose, so a trail ending at 啟動步驟 would leave the
         // reader unable to reach the other runtime without going out to 角色誌
         // and back in.
         crumbs={[
@@ -2045,7 +2045,7 @@ function BackupHealthCard() {
  * additive block behind /api/global-context — its own route, no cap, its own
  * allow_shrink — and it is deliberately absent from BOOT_DOC_ROWS. It is
  * printed here because the boot context ASSEMBLES it between 系統互動 and
- * 啟動程序, which is the same reason it sat there before the move. Folding it
+ * 啟動步驟, which is the same reason it sat there before the move. Folding it
  * into the table as an eleventh row would give it a cap and a document kind it
  * does not have.
  */
@@ -2064,7 +2064,7 @@ function GlobalContextSection({
    * /api/global-context, with no cap and an allow_shrink of its own. It has its
    * own opener for that reason and is deliberately absent from BOOT_DOC_ROWS. */
   onOpenCustom: () => void;
-  /** 啟動程序's index. 🔴 The index, not a document: a no-argument opener that
+  /** 啟動步驟's index. 🔴 The index, not a document: a no-argument opener that
    * picked one runtime would be the wrong document half the time, with no way
    * for the reader to tell, because the two pages look identical. */
   onOpenBootIndex: () => void;
@@ -2103,7 +2103,7 @@ function GlobalContextSection({
                       : onOpenBootDoc(kind, row.docKey)
                   }
                 />
-                {/* 使用者自訂 sits between 系統互動 and 啟動程序, where the boot
+                {/* 使用者自訂 sits between 系統互動 and 啟動步驟, where the boot
                   * context assembles it. It is NOT a boot document — no cap, its
                   * own allow_shrink, its own route — so it is deliberately absent
                   * from BOOT_DOC_ROWS, and this is the one row the list prints

@@ -115,7 +115,7 @@ const (
 //  3. the persona — staff read 角色說明 → 判準 → 長期筆記 here (the 判準 block is
 //     itself skipped when that role's insight folds blank). A worker has no role,
 //     so it reads NOTHING here. That is the entire difference.
-//  4. 啟動程序   — the boot-sequence seed for the worker's OWN runtime, which
+//  4. 啟動步驟   — the boot-sequence seed for the worker's OWN runtime, which
 //     carries that runtime's 執行環境 section. Recency-authoritative, LAST.
 //
 // Not one word is written for outsource readers anywhere in this document; the
@@ -2062,7 +2062,7 @@ func (s *apiServer) clearWorkerRefocus(id, reason string) {
 // openWorkerHandoverGrace turns a freshly-stamped refocus into the member-shaped
 // graceful window: fan the member-topic 預告 delta at the worker's OWN session
 // (its ocagent recycleHook refetches GET /api/members/<self> and prints the
-// 下線程序 handover wake — the member machinery verbatim, zero client change)
+// 〈停止〉 handover wake — the member machinery verbatim, zero client change)
 // and RETURN — the kill is owned by the 收口 driver, which since T-72dd is ONE
 // thing: decideUp's recycle arm, reached through reconcileWorkerLiveness. It
 // collects when the agent's own report_stopped has latched stopped_since, or —

@@ -16,7 +16,7 @@
 // under it. Today's callers:
 //   * 角色定義 / 使用者自訂 (SettingsPage) — the original two, unchanged apart
 //     from the over-cap fix below.
-//   * 系統互動 / 啟動程序 ×2 (BootDocPage) — which pass `confirmSave`,
+//   * 系統互動 / 啟動步驟 ×2 (BootDocPage) — which pass `confirmSave`,
 //     `replaceNote` and `requireDirty`, and hold no editor state of their own.
 // InsightCard / LessonsCard / the two task-manual documents are NOT migrated
 // here yet (a separate ticket); the shell is shaped so they can be, which is
@@ -142,8 +142,8 @@ export interface DocCardProps {
   /** Put the whole card behind its own heading, CLOSED on mount (T-6278).
    *
    * 🔴 NO CALLER PASSES THIS TODAY (T-bac4). It was built for the page that
-   * stacked TWO full documents — 啟動程序, Claude then Codex — and that page is
-   * gone: 啟動程序 is now an index of two rows, one document per page, so
+   * stacked TWO full documents — 啟動步驟, Claude then Codex — and that page is
+   * gone: 啟動步驟 is now an index of two rows, one document per page, so
    * nothing has two cards to fold. This docstring used to describe that stacked
    * page in the present tense, which the independent review caught: a reader
    * would have believed the page still exists.
@@ -398,9 +398,9 @@ export function DocCard({
             /* 🔴 NO aria-label HERE. One stood here saying 展開這份文件 /
              * 收合這份文件, and the independent review measured what it cost:
              * BOTH buttons — and, through them, both <h1>s — reported the same
-             * accessible name, so a screen reader could not tell 啟動程序
+             * accessible name, so a screen reader could not tell 啟動步驟
              * (Claude Code) from (Codex CLI), and getByRole('button', {name:
-             * '啟動程序（Claude Code）'}) matched nothing. That is this
+             * '啟動步驟（Claude Code）'}) matched nothing. That is this
              * ticket's own defect (two documents you cannot tell apart) rebuilt
              * in the accessibility tree, plus WCAG 2.5.3 Label in Name.
              * The visible title IS the name; aria-expanded carries the state,

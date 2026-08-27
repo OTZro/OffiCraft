@@ -147,7 +147,7 @@ describe("BootDocPage", () => {
     // Everything except the document's first line — the part a whole-document
     // save has to carry along with the new heading.
     const rest = before.text.split("\n").slice(1).join("\n");
-    await typeWholeDoc(utils, `# 全新的啟動程序標題\n\n${rest}`);
+    await typeWholeDoc(utils, `# 全新的啟動步驟標題\n\n${rest}`);
     fireEvent.click(utils.getByTestId("doc-card-save"));
     fireEvent.click(await utils.findByTestId("doc-card-save-confirm-btn"));
 
@@ -155,7 +155,7 @@ describe("BootDocPage", () => {
     const [kind, key, text] = save.mock.calls[0];
     expect(kind).toBe("boot_sequence");
     expect(key).toBe("claude");
-    expect(text.startsWith("# 全新的啟動程序標題")).toBe(true);
+    expect(text.startsWith("# 全新的啟動步驟標題")).toBe(true);
     // The write is a WHOLE-DOCUMENT replace and always was — what the editor
     // holds is what lands, so the rest of the document has to be in it.
     //
@@ -174,7 +174,7 @@ describe("BootDocPage", () => {
 
     // And the page now RENDERS the saved document: the heading came back from
     // the adapter's response, not from local state that was never confirmed.
-    await utils.findByText("全新的啟動程序標題");
+    await utils.findByText("全新的啟動步驟標題");
     // Back out of edit mode, so a second save cannot ride the first one's draft.
     await waitFor(() =>
       expect(utils.queryByTestId("doc-card-editor")).toBeNull()
@@ -309,12 +309,12 @@ describe("BootDocPage", () => {
   });
 
   it("the restore calls the RESTORE endpoint, not the replace one — and lives only in the history list", async () => {
-    await api.saveBootDoc("boot_sequence", "claude", "被改壞的啟動程序\n");
+    await api.saveBootDoc("boot_sequence", "claude", "被改壞的啟動步驟\n");
     const reset = vi.spyOn(api, "resetBootDoc");
     const save = vi.spyOn(api, "saveBootDoc");
 
     const utils = renderClaude();
-    await utils.findAllByText(/被改壞的啟動程序/);
+    await utils.findAllByText(/被改壞的啟動步驟/);
 
     // 還原出廠版 is NOT a control of its own on this page. It stood here as a
     // top-level button until the owner overrode that on 2026-08-14 (card

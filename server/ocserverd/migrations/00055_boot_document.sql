@@ -1,5 +1,5 @@
 -- +goose Up
--- T-791e 系統互動 / 啟動程序 become EDITABLE (owner, 2026-08-13, verbatim:
+-- T-791e 系統互動 / 啟動步驟 become EDITABLE (owner, 2026-08-13, verbatim:
 -- 「我們可以把系統互動改成可以修改嗎 跟銀月的 insight 一樣是有 history / restore
 -- to default」「不用每次都改 code」「啟動程序也是一樣」).
 --

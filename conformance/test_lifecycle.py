@@ -277,7 +277,7 @@ def _expected_context(client, owner_token, role_key: str, user_text: str) -> str
     # one of them; if they disagree about FORMATTING, this file wins by design.
     #
     # Order (must match §2.2): 系統互動 → 使用者自訂 → 角色定義 → 判準 →
-    # 學習筆記 → 啟動程序.
+    # 學習筆記 → 啟動步驟.
     #
     # 使用者自訂 and 判準 are each dropped entirely when they fold blank. The
     # gate is the FOLDED TEXT — deliberately not is_default and not has_seed,

@@ -179,7 +179,7 @@ The boot context is these blocks, in this order, joined into one document:
 3. **角色定義** (`# Role:`) — what this role does;
 4. **判準** (`# Insight`) — how this role weighs things;
 5. **學習筆記** (`# Lessons`) — what it has learned doing it;
-6. **啟動程序** — the boot-sequence file seed, selected by the READER'S OWN runtime
+6. **啟動步驟** — the boot-sequence file seed, selected by the READER'S OWN runtime
    (`claude | codex`, blank folding to `claude`), and carrying that runtime's 執行環境
    section. It is LAST — the recency-authoritative tail — and nothing may be appended
    after it.
@@ -209,7 +209,7 @@ fold and the list here was not updated.
 An outsource worker's boot context is this same document **with the persona removed** —
 it has no role, so it carries no 角色定義, no 判準 and no 學習筆記 — in this same order,
 with no outsource-specific document of any kind. 使用者自訂 used to sit between 學習筆記
-and 啟動程序; T-4595 moved it above the persona so that the staff and outsource
+and 啟動步驟; T-4595 moved it above the persona so that the staff and outsource
 assemblies would line up, leaving the persona as their only difference.
 
 "No outsource-specific document of any kind" is normative and exhaustive: the outsource
@@ -408,7 +408,7 @@ decides that time is up.
   「往正職靠：外包那顆改成優雅停止，強制殺移到第三顆按鈕」).**
   `POST /api/outsource-workers/{id}/stop` is a GRACEFUL close-out: it sets
   `desired_state=offline`, stamps `stopping_since`, clears any in-flight refocus epoch,
-  fans the 下線程序 notice at the worker's own session and **returns**. It does **not**
+  fans the 〈停止〉 notice at the worker's own session and **returns**. It does **not**
   kill and it does **not** stamp `forced_stop_at` — that anchor is what keeps the FORCED
   verb silent, and this verb's whole point is that the notice arrives. The 收口 is the
   worker's own `report_stopped`, exactly as on the staff 下線 arm. An OFFLINE worker (no
@@ -547,7 +547,7 @@ ONE-SHOT, never a standing order):
 
 - A recycle never flips `desired_state` — it stays `online` throughout; the flow is:
   `refocus_since` stamped → member delta fans → the agent-side listener REFETCHES the
-  member row and, on a confirmed NEW refocus epoch, surfaces the 下線程序 text the
+  member row and, on a confirmed NEW refocus epoch, surfaces the 〈停止〉 text the
   SERVER PUSHED in that delta (`offboard_notice`) as the handover wake to
   its interactive session, which persists its state and self-reports over MCP
   (`report_stopping` → `report_stopped`; the runtime never auto-reports on the
@@ -563,8 +563,8 @@ ONE-SHOT, never a standing order):
   the `recycle_grace` row in §4.4) → the SSE drop makes
   ¬online → the next tick's plain START respawns.
 - **The wake text is the document, not client copy**: the SERVER composes the
-  sentence, folds the 下線程序 document into it and PUSHES both in the member delta
-  (`offboard_notice`), so an owner editing 下線程序 changes what the next collected
+  sentence, folds the 〈停止〉 document into it and PUSHES both in the member delta
+  (`offboard_notice`), so an owner editing 〈停止〉 changes what the next collected
   session is told with no client release.
   🔴 This REPLACES the pull model this section used to specify, and with it the
   argument for pull ("a pushed payload would fail silently on a flaky link and be

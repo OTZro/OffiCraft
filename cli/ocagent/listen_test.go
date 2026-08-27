@@ -1196,7 +1196,7 @@ func TestWindDown_SkipsWhenNotOfflineOrNotMine(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // offboardServer answers the two authoritative reads the recycle wake makes — the
-// member row and the 下線程序 document — off pointers the test mutates between
+// member row and the 〈停止〉 document — off pointers the test mutates between
 // deltas, so a wake is driven by what the SERVER holds at that moment. Bearer +
 // status are asserted here so the delivery path (auth, route, JSON shape), not a
 // stubbed seam, is what the wake rides.
@@ -1277,13 +1277,13 @@ func TestRecycle_WakesSessionWithThePushedOffboardNotice_EpochOneShot(t *testing
 	}
 
 	// A NEW epoch re-arms the wake AND prints what THAT frame carried: an owner
-	// who edits 下線程序 changes what the next collected session is told, with no
+	// who edits 〈停止〉 changes what the next collected session is told, with no
 	// release — the edit rides the next push.
 	member["refocus_since"] = float64(200)
-	if !h.maybeRecycle(recycleFrame("新版下線程序：先把 baton 發給自己")) {
+	if !h.maybeRecycle(recycleFrame("新版停止：先把 baton 發給自己")) {
 		t.Fatal("a new refocus epoch must re-wake")
 	}
-	if !strings.Contains(out.String(), "[ocagent] recycle: 新版下線程序：先把 baton 發給自己\n") {
+	if !strings.Contains(out.String(), "[ocagent] recycle: 新版停止：先把 baton 發給自己\n") {
 		t.Fatalf("the re-armed wake must carry the EDITED text:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), "收尾第一步") {
@@ -2126,7 +2126,7 @@ func TestDispatch_MemberTopicExemptFromEchoSuppression(t *testing.T) {
 	}
 	raw, _ := json.Marshal(map[string]any{"topic": "member", "trigger": "kyle",
 		"data": map[string]any{"key": "owner::kyle",
-			"payload": map[string]any{"offboard_notice": "照下線程序收尾"}}})
+			"payload": map[string]any{"offboard_notice": "照停止收尾"}}})
 	l.dispatch(raw)
 	if fetches == 0 {
 		t.Fatal("a self-triggered member delta must still nudge the hooks (restart_self)")

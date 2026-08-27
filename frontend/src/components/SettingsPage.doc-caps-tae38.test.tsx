@@ -282,9 +282,9 @@ describe("T-ae38 — capForKind routes each document kind to its own cap", () =>
     // the system block's default is four times the boot sequence's.
     expect(capForKind("system_interaction", caps)).toBe(6);
     expect(capForKind("boot_sequence", caps)).toBe(7);
-    // T-c9c0: the 下線程序 document has its own knob too.
+    // T-c9c0: the 〈停止〉 document has its own knob too.
     expect(capForKind("offboard", caps)).toBe(8);
-    // T-3201: 加速停止 shares 下線程序's knob — the server's registry row calls
+    // T-3201: 加速停止 shares 〈停止〉's knob — the server's registry row calls
     // `offboardCap()` for both — while the four task-event procedures answer to
     // the one task-event ceiling.
     expect(capForKind("accelerated_stop", caps)).toBe(8);

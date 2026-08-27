@@ -116,7 +116,9 @@ func TestBuildWorkerBootContext_FullAssembly(t *testing.T) {
 	// must really be here. Without it every absence assertion below is satisfied
 	// by an empty string.
 	for _, want := range []string{
-		"# Global Context",     // slot 1 — the 系統互動 seed's own H1
+		"# Global Context", // slot 1 — the 系統互動 seed's own H1
+		// 🔴 舊名，故意的 —— 釘的是 seed 的 H1 逐字位元組（見 worker_sharedcore_test.go
+		// 的 bootSequenceH1）。出貨文字等 owner 裁 rc-e12733548e4b，改了這裡會紅。
 		"# 啟動程序（Boot Sequence", // slot 4 — the shared boot sequence
 		"# Claude Code 執行環境",   // that runtime's 執行環境 section, leading slot 4
 	} {
@@ -166,7 +168,7 @@ func TestBuildWorkerBootContext_FullAssembly(t *testing.T) {
 // The seed's shape changed again when the owner rewrote both files (2026-08-15):
 // 執行環境 is now a top-level section that LEADS the boot-sequence block instead
 // of a subsection inside it. So "the boot sequence is the tail" is asserted on
-// the 啟動程序 heading, and 執行環境 is required to be the only heading between
+// the 啟動步驟 heading, and 執行環境 is required to be the only heading between
 // the rest of the document and it.
 func TestBuildWorkerBootContext_RuntimeGuidanceIsTheSeedsOwnAndItIsLast(t *testing.T) {
 	for _, tc := range []struct {
@@ -203,12 +205,12 @@ func TestBuildWorkerBootContext_RuntimeGuidanceIsTheSeedsOwnAndItIsLast(t *testi
 			rest := got[env+len(tc.wantEnvH1):]
 			next := strings.Index(rest, "\n# ")
 			if next < 0 || !strings.HasPrefix(rest[next+1:], bootSequenceH1) {
-				t.Fatalf("%s: 執行環境 is not immediately followed by the 啟動程序 heading — "+
+				t.Fatalf("%s: 執行環境 is not immediately followed by the 啟動步驟 heading — "+
 					"the runtime note must lead the tail block, not sit loose in the "+
 					"document", tc.name)
 			}
 			if strings.Contains(rest[next+1:], "\n# ") {
-				t.Errorf("%s: something follows the 啟動程序 block; it must be last", tc.name)
+				t.Errorf("%s: something follows the 啟動步驟 block; it must be last", tc.name)
 			}
 		})
 	}
@@ -267,14 +269,14 @@ func TestWorkerBootContextIsTheStaffFoldMinusThePersona(t *testing.T) {
 	// up to (but not including) the START of slot 4, plus the "\n\n" that joined
 	// it to the block before.
 	//
-	// Slot 4 no longer BEGINS at the 啟動程序 heading: the owner's 2026-08-15
+	// Slot 4 no longer BEGINS at the 啟動步驟 heading: the owner's 2026-08-15
 	// rewrite hoisted the runtime 執行環境 note into a top-level section that
-	// leads the block. Cutting at 啟動程序 would leave that note on one side of
+	// leads the block. Cutting at 啟動步驟 would leave that note on one side of
 	// the equality only — which is how this anchor announced the change.
 	role := strings.Index(staff.Context, "# Role: ")
 	boot := strings.Index(staff.Context, "# Claude Code 執行環境")
 	if role < 0 || boot < 0 || role >= boot {
-		t.Fatalf("cannot locate slot 3 in the staff fold (角色說明=%d 啟動程序=%d) — "+
+		t.Fatalf("cannot locate slot 3 in the staff fold (角色說明=%d 啟動步驟=%d) — "+
 			"the staff assembly moved and this equality must be re-derived", role, boot)
 	}
 	// Positive control: the persona really is a substantial block, so "minus
@@ -675,6 +677,8 @@ func TestNotifyWorkerSpawn_DispatchesMemberStart_AndPaces(t *testing.T) {
 	// boots a worker with no instructions at all), so it now checks the shared
 	// blocks, plus the absences so the removal cannot quietly come back through
 	// the spawn path.
+	// 🔴 「啟動程序」是舊名，故意留著：釘的是 seed 的 H1 逐字位元組，出貨文字
+	// 還在等 owner 裁 rc-e12733548e4b。seed 改的那一天，這一行跟它一起改。
 	for _, want := range []string{"# Global Context", "# 啟動程序（Boot Sequence"} {
 		if !strings.Contains(persona, want) {
 			t.Errorf("persona_context is missing the shared block %q", want)

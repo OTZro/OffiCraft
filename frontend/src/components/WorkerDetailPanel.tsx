@@ -50,7 +50,7 @@ interface WorkerDetailPanelProps {
    * worker twin of the member refocus. Undefined ⇒ the affordance is hidden. */
   onRefocus?: () => Promise<void>;
   /** Stop (停止 — T-f190; a GRACEFUL close-out since T-ed79): hold the worker
-   * down and show it the 下線程序; the 收口 is its own report_stopped. The FIRST
+   * down and show it the 〈停止〉; the 收口 is its own report_stopped. The FIRST
    * rung of 停止 → 加速停止 → 強制停止. */
   onStop?: () => Promise<void>;
   /** 加速停止 (T-ed79) — the MIDDLE rung: put the wind-down that is already open

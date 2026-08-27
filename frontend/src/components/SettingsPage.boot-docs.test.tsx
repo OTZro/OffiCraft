@@ -103,10 +103,15 @@ describe("SettingsPage · boot / lifecycle documents", () => {
 
   it("opens 加速停止 through its own row, not 停止's", async () => {
     // The two share a cap and sit in the same group; opening one must not land
-    // on the other. The page TITLE is what says which one is on screen — the
-    // 加速停止 body legitimately contains 「下線程序」 (it is the same procedure
-    // under a shorter clock), so a body-text assertion would be measuring the
-    // seed rather than the routing.
+    // on the other, and only an EXACT title match can tell them apart:
+    // 「加速停止」contains 「停止」 as a substring, and the accelerated seed's own
+    // H1 is literally 「# 加速停止」 — so a substring check on the title AND a
+    // body-text search both pass on either page. Hence the strict equality
+    // against s.acceleratedStopName below.
+    // ⚠️ The previous version of this comment justified the same assertion by
+    // saying the 加速停止 body "legitimately contains 「下線程序」". That is FALSE
+    // today: seeds/accelerated_stop.md contains 「下線程序」 zero times (T-6f44
+    // renamed that document). The conclusion survived; its reason did not.
     const utils = await openRolesLog();
     fireEvent.click(utils.getByTestId("boot-doc-entry-accelerated_stop"));
     await utils.findByTestId("doc-card-edit");

@@ -323,7 +323,7 @@ describe("mockApi · boot-context blocks", () => {
 //
 // The two rules pinned here are asymmetric on purpose:
 //
-//   * 系統互動 and 啟動程序 must FOLD (overlay wins) — that is the fix;
+//   * 系統互動 and 啟動步驟 must FOLD (overlay wins) — that is the fix;
 //   * the preview must take the CLAUDE boot sequence and must NOT grow a
 //     runtime parameter — the real request carries no member (http.ts sends
 //     `{role}` only, deliberately, so the server mints no token), so the real
@@ -343,12 +343,12 @@ describe("mockApi · 開機脈絡預覽", () => {
     await mockApi.saveBootDoc(
       "boot_sequence",
       "claude",
-      "啟動程序：owner 改過的版本\n"
+      "啟動步驟：owner 改過的版本\n"
     );
 
     const after = (await mockApi.getBootstrap("assistant")).context;
     expect(after).toContain("系統互動：owner 改過的版本");
-    expect(after).toContain("啟動程序：owner 改過的版本");
+    expect(after).toContain("啟動步驟：owner 改過的版本");
     // Whole-document comparison, not a keyword probe: an overlay REPLACES the
     // document, so not one byte of the seed may survive.
     expect(after).not.toContain(SEED_SYSTEM_INTERACTION_MD.trim());
@@ -356,7 +356,7 @@ describe("mockApi · 開機脈絡預覽", () => {
   });
 
   // 🔴 READ THIS BEFORE "FIXING" THE ASSERTION BELOW. It pins a limitation, not
-  // a desirable behaviour: a codex member's panel shows the CLAUDE 啟動程序,
+  // a desirable behaviour: a codex member's panel shows the CLAUDE 啟動步驟,
   // whose step 3 says the opposite of what that member is really booted with.
   // The mock is right to copy it — /api/bootstrap genuinely cannot resolve a
   // runtime, because the request names no member. The day that endpoint learns

@@ -55,7 +55,7 @@ export const SEED_ROLE_ASSISTANT_MD = foldOwnerId(SEED_ROLE_ASSISTANT_RAW);
  * An owner edit later overlays it. */
 export const SEED_LESSONS_MD = foldOwnerId(SEED_LESSONS_RAW);
 
-/** seeds/boot_sequence.md — the standalone 啟動程序 section appended LAST (after
+/** seeds/boot_sequence.md — the standalone 啟動步驟 section appended LAST (after
  * Global → Role → Insight → Lessons) so the concrete boot steps are the recency-
  * authoritative tail an agent reads. */
 export const SEED_BOOT_SEQUENCE_MD = foldOwnerId(SEED_BOOT_SEQUENCE_RAW);
@@ -64,7 +64,7 @@ export const SEED_BOOT_SEQUENCE_MD = foldOwnerId(SEED_BOOT_SEQUENCE_RAW);
  * when a member's runtime is codex. */
 export const SEED_BOOT_SEQUENCE_CODEX_MD = foldOwnerId(SEED_BOOT_SEQUENCE_CODEX_RAW);
 
-/** seeds/offboard.md — the 下線程序 checklist the server hands an agent at the
+/** seeds/offboard.md — the 〈停止〉 checklist the server hands an agent at the
  * moment it is about to collect that session (T-c9c0). One document for every
  * agent and every runtime; it is NOT part of the boot fold. */
 export const SEED_OFFBOARD_MD = foldOwnerId(SEED_OFFBOARD_RAW);

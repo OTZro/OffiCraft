@@ -286,7 +286,7 @@ func decideHandoverNotice(
 	//
 	// 🔴 THE SOFT DOCUMENT, and this is the whole of the choice: the FIRST
 	// context threshold is an advance warning with no clock behind it — nothing
-	// collects this session at a named instant — so it reads 下線程序 rather
+	// collects this session at a named instant — so it reads 〈停止〉 rather
 	// than 加速停止. The second threshold is the one that carries a deadline,
 	// and it arrives through the member delta, not through this band.
 	//

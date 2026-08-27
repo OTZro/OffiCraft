@@ -73,7 +73,7 @@ type apiServer struct {
 	docCapCharsManualLearnings int
 	// The two boot-context document kinds, editable since T-791e (DB
 	// doc.cap_chars.{system_interaction,boot_sequence}). bootSequence is ONE cap
-	// serving both runtimes. The 下線程序 document (T-c9c0) joins them with its
+	// serving both runtimes. The 〈停止〉 document (T-c9c0) joins them with its
 	// own knob, doc.cap_chars.offboard.
 	docCapCharsSystemInteraction int
 	docCapCharsBootSequence      int

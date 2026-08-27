@@ -454,7 +454,7 @@ func TestEventNoticeText_SendsTheBodyTheOwnerEditedAndNotTheShippedSeed(t *testi
 // that returns "": every downstream "we did not send it" fallback reads a
 // non-empty notice as a delivered one and stays disarmed. On the 加速停止 arm
 // the sliced-off half is the only place the deadline appears, so an agent under
-// a running clock is handed a notice quoting no instant, and 下線程序 §1 tells it
+// a running clock is handed a notice quoting no instant, and 〈停止〉 §1 tells it
 // to read that as a soft wind-down.
 //
 // The row is seeded DIRECTLY here, and that is the honest fixture rather than a
@@ -986,7 +986,7 @@ func TestBootContextDocs_RenderWithoutTheMarkerAndKeepTheirTitleLine(t *testing.
 // it is the one where this is newly load-bearing — and the join reads
 // spec.Split, which a build that undeclared the split would walk straight past.
 // ⚠️ 〈停止〉 LEFT THIS LIST IN T-6f44 and its slot was taken by 〈加速停止〉, which
-// is the stop procedure that still HAS a head. Leaving 下線程序 here would have
+// is the stop procedure that still HAS a head. Leaving 〈停止〉 here would have
 // been a case asserting that a document with no read-only head keeps its
 // read-only head.
 func TestReplaceBootDoc_NoWriteCanChangeTheReadOnlyHead(t *testing.T) {
@@ -1387,7 +1387,7 @@ func TestRestoreDocumentHistory_ABootDocRevisionGoesThroughTheWriteFacesGates(t 
 	// 加速停止: editable, split, and it DECLARES variables — all three are
 	// needed, the last one because a kind that declares none opts out of the
 	// body rule entirely and the second half below would pass vacuously.
-	// (下線程序 held this slot until T-6f44 took its read-only half away.)
+	// (〈停止〉 held this slot until T-6f44 took its read-only half away.)
 	const kind, key = docKindAcceleratedStop, acceleratedStopDocKey
 
 	// retain installs `stored` as the live row, then writes a clean body through
@@ -1435,7 +1435,7 @@ func TestRestoreDocumentHistory_ABootDocRevisionGoesThroughTheWriteFacesGates(t 
 
 		// The shape an installation that edited this document before the marker
 		// shipped is holding: body only, no boundary, no read-only half.
-		const preMarker = "# 下線程序\n\n這是分割上線前就編輯過的舊覆蓋。\n"
+		const preMarker = "# 停止\n\n這是分割上線前就編輯過的舊覆蓋。\n"
 		if _, _, split := DocSplitHeadBody(preMarker); split {
 			t.Fatal("fixture: the pre-marker probe carries a marker, so it is not that shape")
 		}

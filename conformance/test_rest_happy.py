@@ -745,7 +745,7 @@ def _check_reset_insight(ctx: HCtx, r: httpx.Response) -> None:
 
 # ── the two editable boot-context blocks (T-791e) ────────────────────────────
 
-_BOOT_DOC_EDIT = "# conformance edit — 系統互動 / 啟動程序\n\nnot the factory text\n"
+_BOOT_DOC_EDIT = "# conformance edit — 系統互動 / 啟動步驟\n\nnot the factory text\n"
 
 # T-3201 — a boot document has TWO halves on the read face (``read_only_head``
 # and ``body``) and ONE on the write face (``body``). The marker that divides
@@ -1422,7 +1422,7 @@ HAPPY: dict[str, Happy] = {
         path="/api/boot-sequence/codex/reset",
         check=_boot_doc_reset("/api/boot-sequence/codex"),
     ),
-    # ── 下線程序, the fourth owner-editable global document (T-c9c0) ──────────
+    # ── 〈停止〉, the fourth owner-editable global document (T-c9c0) ──────────
     # A singleton keyed `global`, so it takes the system-interaction shape
     # rather than the boot-sequence one: no runtime on the path.
     "GET /api/offboard": Happy(
@@ -2143,7 +2143,7 @@ SKIPPED_HAPPY: dict[str, str] = {
         "T-f190 owner 停止, a GRACEFUL close-out since T-ed79: the positive face "
         "needs a LIVE worker row (no black-box mint path). The below-owner-403 / "
         "owner-404 faces are pinned in the auth matrix; the desired_state=offline "
-        "set + refocus clear + 下線程序 notice + NO kill + collection on the "
+        "set + refocus clear + 〈停止〉 notice + NO kill + collection on the "
         "worker's own report_stopped in the server unit tests "
         "(worker_graceful_stop_ted79_test.go, TestWorkerStop_* / "
         "TestStoppedWorker_TickNeverRevives)."

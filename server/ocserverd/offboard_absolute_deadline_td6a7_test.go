@@ -65,7 +65,7 @@ import (
 // pattern reads what is left. An INSTANT is stable within the epoch; a SPAN is
 // not, and that difference is the whole ticket.
 //
-// 🔴 SCOPE — the guard reads only the composed sentence, never the 下線程序
+// 🔴 SCOPE — the guard reads only the composed sentence, never the 〈停止〉
 // document folded in beneath it. A review appended one sentence a human would
 // plausibly write to seeds/offboard.md — 「⚠️ 第 5 步收拾暫存最多花 5 分鐘」 —
 // and five tests went red on a REAL notice. The document is not what T-d6a7
@@ -98,7 +98,7 @@ var (
 // read-only head, which is its first line. Everything below that line is the
 // owner-editable body, which these guards do not police.
 //
-// ⚠️ SINCE T-6f44 THE SOFT ARM HAS NO SUCH HALF — 下線程序's read-only head was
+// ⚠️ SINCE T-6f44 THE SOFT ARM HAS NO SUCH HALF — 〈停止〉's read-only head was
 // deleted with {where}, so its notice is the document from the first byte. This
 // function then returns the document's own title line, which is body text: the
 // guards below become a check on the first line of prose rather than on a
@@ -214,7 +214,7 @@ func TestFinalCallQuotesAnAbsoluteDeadlineFromTheSameSourceAsTheCockpit(t *testi
 			// strings.Contains on the deadline clause passes just as happily on
 			// a sentence that has lost its opener, its closer, or its position
 			// clause, and this file is here because one wording change went
-			// unnoticed. (The 下線程序 document folded in under the newline is
+			// unnoticed. (The 〈停止〉 document folded in under the newline is
 			// the owner's prose and is not asserted — see composedSentence.)
 			if got := composedSentence(notice); got != deadlineEpochSentence {
 				t.Fatalf("%s sentence:\n got: %q\nwant: %q", op, got, deadlineEpochSentence)
@@ -286,7 +286,7 @@ func TestDeadlineIsRenderedInUTCWhateverTheServerProcessTimezone(t *testing.T) {
 // on a real notice is worse than no guard at all, because the repair for a
 // false positive is to weaken it. Every sentence this server actually composes
 // is dense with numbers — percentages, thresholds, compaction rounds, and the
-// numbered steps of the 下線程序 document — and none of them is a span of time.
+// numbered steps of the 〈停止〉 document — and none of them is a span of time.
 func TestTimeShapeGuardReadsRealNoticesCorrectly(t *testing.T) {
 	s := newReconcileTestServer(t)
 
@@ -321,7 +321,7 @@ func TestTimeShapeGuardReadsRealNoticesCorrectly(t *testing.T) {
 	// telling a human to hurry, not the server quoting a clock. Appended here
 	// rather than left to the staged copy so this stays covered wherever the
 	// owner's own copy of the document happens to sit.
-	notices["下線程序 prose under the sentence"] = s.winddownNoticeText(offboardKindSoft, 0) +
+	notices["〈停止〉 prose under the sentence"] = s.winddownNoticeText(offboardKindSoft, 0) +
 		"\n⚠️ 第 5 步收拾暫存最多花 5 分鐘，別在這裡耗掉交接時間。"
 
 	for name, n := range notices {

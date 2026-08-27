@@ -128,7 +128,7 @@ func TestWorkerStop_IsAGracefulCloseOutThatTheWorkerCanHear(t *testing.T) {
 	}
 	notice, ok := api.offboardDeltaPayload(m)["offboard_notice"].(string)
 	if !ok || notice == "" {
-		t.Fatalf("a worker asked to stop gracefully must be SHOWN the 下線程序 — "+
+		t.Fatalf("a worker asked to stop gracefully must be SHOWN the 〈停止〉 — "+
 			"the delta carried no offboard_notice at all (%+v)",
 			api.offboardDeltaPayload(m))
 	}
@@ -303,7 +303,7 @@ func offboardNoticeInFrame(t *testing.T, frame []byte) string {
 //
 // The 通道 is not what is at stake here (openWorkerHandoverGrace has fanned this
 // delta since T-ea82, and T-ed79 wired 停止 into it); the SENTENCE is. Without
-// it the worker is handed the generic 下線程序, which points at the boot doc's
+// it the worker is handed the generic 〈停止〉, which points at the boot doc's
 // 「記憶與學習」 section and never names the manual this particular run has.
 func TestWorkerStop_TypedTaskIsAskedToWriteBackToItsManual(t *testing.T) {
 	api := newTasksTestServer(t)

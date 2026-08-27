@@ -35,7 +35,7 @@ import (
 //
 // RECYCLE (desired_state=online ∧ refocus_since>0 — handover: a NEW me respawns):
 // ocagent does NOT report phases and does NOT self-kill. It WAKES the interactive
-// Claude session by printing the server's 下線程序 document on stdout (the session's
+// Claude session by printing the server's 〈停止〉 document on stdout (the session's
 // Monitor tool holds this listener, so the wake lands in its transcript) and the
 // SESSION walks that checklist itself over MCP. The text is NOT this binary's:
 // the SERVER composes it and pushes it IN the member delta (owner 2026-08-16:
@@ -76,7 +76,7 @@ import (
 
 // Nothing in this binary reports a presence phase any more. Both stop phases
 // are the SESSION's to report over MCP (report_stopping / report_stopped are
-// steps 1 and 6 of the 下線程序), which is the point of the change: a hook that
+// steps 1 and 6 of the 〈停止〉), which is the point of the change: a hook that
 // declared them on the session's behalf was declaring a close-out that had not
 // happened. The route and its wire body are unchanged and still served — this
 // binary simply is not one of its callers.
@@ -191,7 +191,7 @@ func (h *windDownHook) wake(notice string) {
 
 // ---------------------------------------------------------------------------
 // RecycleHook — desired_state=online ∧ refocus_since>0: wake the session with the
-// server's 下線程序 text (wake-only; the kill is server-orchestrated — see the header).
+// server's 〈停止〉 text (wake-only; the kill is server-orchestrated — see the header).
 // ---------------------------------------------------------------------------
 
 type recycleHook struct {
@@ -223,7 +223,7 @@ func newRecycleHook(client httpClient, cfg Config, out io.Writer) *recycleHook {
 func (h *recycleHook) say(msg string) { fmt.Fprintf(h.out, "[ocagent] %s\n", msg) }
 
 // offboardFallback is the ONLY hard-coded wake text left in this binary. The wake
-// message itself is the server's 下線程序 document (owner-editable, seed-backed),
+// message itself is the server's 〈停止〉 document (owner-editable, seed-backed),
 // PUSHED in the same member delta that says the agent is being collected — this
 // binary never fetches it. It is armed on `offboard_notice` being ABSENT OR BLANK:
 // a server too old to push one looks exactly like a notice that said nothing, and
@@ -246,6 +246,10 @@ func (h *recycleHook) say(msg string) { fmt.Fprintf(h.out, "[ocagent] %s\n", msg
 // ⚠️ AND IT WAS NEVER ONLY FORCE-STOP. Any wind-down delta that loses its
 // notice lands here, so every one of them was mis-badged; force-stop is simply
 // the arm that always loses it.
+// 🔴 「下線程序」是舊名，故意留著：這一段不是註解，是 **agent 真的會在
+// stdout 上讀到的那句話** —— 跟 seeds/*.md 同一類的出貨文字，不是內部散文。
+// 出貨文字要不要跟著改名是 owner 的決定（卡 rc-e12733548e4b，未答），
+// 所以這一包只碰註解、不碰 agent 收到的位元組。卡回覆之後跟 seed 一起改。
 const offboardFallback = "server 要收你了，但這則通知沒有帶到下線程序 —— " +
 	"請立刻用 MCP get_offboard 拿完整收尾清單並照做，別空手停下。"
 

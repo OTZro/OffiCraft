@@ -33,7 +33,7 @@ import (
 func TestWindDownNoticeText_TheApprovedSentence(t *testing.T) {
 	const where = "context 62% (your limits: 60% / 75%)"
 	s := newReconcileTestServer(t)
-	// 🔴 下線程序 HAS NO READ-ONLY HEAD SINCE T-6f44, so its notice IS the whole
+	// 🔴 〈停止〉 HAS NO READ-ONLY HEAD SINCE T-6f44, so its notice IS the whole
 	// document; 加速停止 still has one (its deadline), so its body is still cut.
 	softDoc := mustFoldText(t, s, s.offboardSpec())
 	_, finalBody, _ := DocSplitHeadBody(mustFoldText(t, s, s.acceleratedStopSpec()))
@@ -197,7 +197,7 @@ func TestOffboardDeltaPayload_下線NeverCarriesACountdown(t *testing.T) {
 	// report_stopped, restart_self appears nowhere in the sentence, and the
 	// rest of the approved wording is intact.
 	// ⚠️ THE FIRST LINE IS NO LONGER SOMETHING THIS SERVER COMPOSES (T-6f44):
-	// 下線程序 has no read-only head, so every byte of the notice is the
+	// 〈停止〉 has no read-only head, so every byte of the notice is the
 	// document. The claim is therefore made about the WHOLE notice, which is
 	// strictly more than the first line used to cover — and the part that
 	// mattered (report_stopped is the closer, restart_self is not named here) is
@@ -206,10 +206,10 @@ func TestOffboardDeltaPayload_下線NeverCarriesACountdown(t *testing.T) {
 		t.Fatalf("the soft notice is not the document alone:\n%s", notice)
 	}
 	if !strings.Contains(notice, "report_stopped") {
-		t.Fatal("下線程序 no longer names report_stopped — it is the closer on this arm")
+		t.Fatal("〈停止〉 no longer names report_stopped — it is the closer on this arm")
 	}
 	if strings.Contains(notice, "restart_self") {
-		t.Fatal("下線程序 names restart_self; the owner ruled it out of the close-out " +
+		t.Fatal("〈停止〉 names restart_self; the owner ruled it out of the close-out " +
 			"(rc-5d044f0c1266) and it lives in 系統互動's tool notes")
 	}
 }

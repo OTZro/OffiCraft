@@ -719,7 +719,7 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
   });
 
   // 🔴 REWRITTEN THREE TIMES FOR T-ed79. First for 「往正職靠：外包那顆改成優雅
-  // 停止，強制殺移到第三顆按鈕」 — 停止 asks the worker to work its 下線程序, so
+  // 停止，強制殺移到第三顆按鈕」 — 停止 asks the worker to work its 〈停止〉, so
   // the worker stays alive in 停止中 and the row keeps offering what can still
   // end the wait. Then for owner 2026-08-21 「不是一開始就顯示三個按鈕」「按了才
   // 出現」: the escalations are REVEALED rather than greyed out, so this walks
@@ -1165,6 +1165,10 @@ describe("WorkerDetailPanel — initial-prompt preview (T-ba6b)", () => {
     await waitFor(() =>
       expect(body.textContent ?? "").toContain("Global Context"),
     );
+    // 🔴 「啟動程序」是舊名，故意的：seeds.ts 直接 import 真正的
+    // seeds/boot_sequence.md（?raw），所以這一行釘的是那份 seed 的 H1 逐字
+    // 位元組，而它今天還寫著「啟動程序（Boot Sequence）」。出貨文字要不要
+    // 一併改名還在等 owner 裁（rc-e12733548e4b）；先改這裡測試會紅。
     expect(body.textContent ?? "").toContain("啟動程序");
     // T-4595: this used to assert the codename and the bound task title were in
     // the preview. Both are gone — a worker's boot context is the staff fold

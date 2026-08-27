@@ -1,10 +1,10 @@
-// 設定 › 全域情境 › 啟動程序 is an INDEX of two documents, one row each, and this
+// 設定 › 全域情境 › 啟動步驟 is an INDEX of two documents, one row each, and this
 // pins the state half of that: the index carries NO document body, and pressing
 // a row lands on that runtime's page ALONE (T-bac4).
 //
 // WHAT THIS REPLACED. The page used to stack both whole documents (the owner
-// met that on a phone: he scrolled 啟動程序（Claude Code）to the end of its card,
-// read the card's bottom as the end of the PAGE, and reported 啟動程序（Codex
+// met that on a phone: he scrolled 啟動步驟（Claude Code）to the end of its card,
+// read the card's bottom as the end of the PAGE, and reported 啟動步驟（Codex
 // CLI）as missing), and then stacked them COLLAPSED (T-6278). This file used to
 // pin the collapsed shape. The owner replaced it outright — 「我覺得呈現方式不好,
 // 可以改成像任務手冊那樣嗎」 — so the collapse assertions are gone rather than
@@ -44,7 +44,7 @@ beforeEach(() => {
   __resetMock();
 });
 
-describe("SettingsPage · 啟動程序 index", () => {
+describe("SettingsPage · 啟動步驟 index", () => {
   it("lists both runtimes as rows and shows no document of its own", async () => {
     const { container, getByText, getByTestId } = await openBootIndex();
 
@@ -111,7 +111,7 @@ describe("SettingsPage · 啟動程序 index", () => {
     fireEvent.click(getByTestId("boot-entry-codex"));
     await findByTestId("doc-card-edit");
 
-    // The crumb trail is 設定 › 全域情境 › 啟動程序; the last crumb returns to the
+    // The crumb trail is 設定 › 全域情境 › 啟動步驟; the last crumb returns to the
     // index. Without it a reader who opened one runtime could only reach the
     // other by going out to 全域情境 and back in.
     const crumbs = getAllByText(s.bootName);

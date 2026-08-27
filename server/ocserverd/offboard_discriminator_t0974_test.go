@@ -123,7 +123,7 @@ import (
 // concrete instant. It is still expressed as an INSTANT rather than as words,
 // for the reason the header gives — matching the words is the defect — but it no
 // longer looks for an English marker, because there is none: 加速停止's head is
-// 「你的結束時刻是 <RFC3339>。」 and 下線程序's document has no head at all.
+// 「你的結束時刻是 <RFC3339>。」 and 〈停止〉's document has no head at all.
 var discriminator = regexp.MustCompile(
 	`你的結束時刻是 \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z。`)
 
@@ -138,7 +138,7 @@ const sniffedMarker = "Your deadline is"
 func TestOffboardDiscriminator_AppliedToTheNoticesThemselves(t *testing.T) {
 	doc, err := assetRoot("").readSeedFile(offboardSeedMD)
 	if err != nil {
-		t.Fatalf("read the 下線程序 seed: %v", err)
+		t.Fatalf("read the 〈停止〉 seed: %v", err)
 	}
 	// DENOMINATOR FIRST. A comparison whose two sides are both empty reports
 	// "the same" and tells you nothing; the shipping verifier lost a round to
@@ -162,7 +162,7 @@ func TestOffboardDiscriminator_AppliedToTheNoticesThemselves(t *testing.T) {
 
 	// The LIVE producer on both arms, which is what makes "soft reads as soft"
 	// a statement about the server rather than about arguments this file chose:
-	// the soft arm is sent 下線程序, the final call 加速停止, and only the second
+	// the soft arm is sent 〈停止〉, the final call 加速停止, and only the second
 	// of the two documents carries the clause.
 	s := newReconcileTestServer(t)
 	soft := s.winddownNoticeText(offboardKindSoft, 0)
@@ -190,7 +190,7 @@ func TestOffboardDiscriminator_AppliedToTheNoticesThemselves(t *testing.T) {
 	// ITS OWN, it matches every notice that carries it and the discriminator is
 	// worthless no matter what the two cases above say.
 	if discriminator.MatchString(doc) {
-		t.Errorf("the 下線程序 document must not carry an instant — it rides "+
+		t.Errorf("the 〈停止〉 document must not carry an instant — it rides "+
 			"inside every soft notice, so one here makes every soft notice read "+
 			"as hard. Found %q", discriminator.FindString(doc))
 	}
@@ -202,7 +202,7 @@ func TestOffboardDiscriminator_AppliedToTheNoticesThemselves(t *testing.T) {
 	// either document, an agent is carrying two rules for one question and the
 	// string one breaks silently the day the other document is edited.
 	for _, d := range []struct{ name, text string }{
-		{"下線程序", doc},
+		{"停止", doc},
 		{"加速停止", accelDoc},
 	} {
 		if strings.Contains(d.text, sniffedMarker) {
@@ -218,7 +218,7 @@ func TestOffboardDiscriminator_AppliedToTheNoticesThemselves(t *testing.T) {
 	// would leave the reader with no rule at all — the exact degeneration the
 	// old version of this test guarded against from the other side.
 	if !strings.Contains(doc, "沒有人在對你倒數") {
-		t.Error("下線程序 no longer tells the agent it is NOT being counted down")
+		t.Error("〈停止〉 no longer tells the agent it is NOT being counted down")
 	}
 	if !strings.Contains(accelDoc, "你在倒數中") {
 		t.Error("加速停止 no longer tells the agent it IS being counted down")
@@ -235,7 +235,7 @@ func TestOffboardDiscriminator_AppliedToTheNoticesThemselves(t *testing.T) {
 // "?" — 「context ?% (your limits: 55% / 65%)」 on every refocus-triggered
 // close-out, an arm that is not fired by a percentage at all.
 //
-// 下線程序 no longer has a read-only head, so the notice IS the document and
+// 〈停止〉 no longer has a read-only head, so the notice IS the document and
 // carries no position at all: 「你在 59%」 has nothing to do with how to close
 // out. The defect this test was written for is therefore structurally gone
 // rather than fixed — which is a stronger state, and worth pinning as itself.
@@ -314,7 +314,7 @@ func TestOffboardNotice_NoQuestionMarkForAMissingPercentage(t *testing.T) {
 // winddownDeadlineOf(...) to BOTH arms and lets `kind` decide, so a soft arm
 // whose member happens to carry a live refocus epoch reaches the renderer with
 // a positive deadline. Since T-3201 the clause is not a Go condition at all —
-// it is a slot the 下線程序 head does not have — and this test is what pins
+// it is a slot the 〈停止〉 head does not have — and this test is what pins
 // that a deadline handed to the soft arm changes NOTHING it sends. The failure
 // it refuses is the send site picking the document by anything but `kind`.
 //
@@ -334,7 +334,7 @@ func TestOffboardNotice_ASoftNoticeIgnoresADeadlineItWasHanded(t *testing.T) {
 	s := newReconcileTestServer(t)
 
 	got := s.winddownNoticeText(offboardKindSoft, deadline)
-	// 下線程序 has no read-only head since T-6f44, so the soft notice IS the
+	// 〈停止〉 has no read-only head since T-6f44, so the soft notice IS the
 	// document — which makes "a deadline handed to the soft arm changes nothing"
 	// structural rather than conditional: there is no slot for it to land in.
 	want := mustFoldText(t, s, s.offboardSpec())

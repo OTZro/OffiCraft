@@ -33,9 +33,9 @@ import { codeForStatus } from "./errorCodes";
 const WIRE_DOC = {
   kind: "boot_sequence",
   key: "claude",
-  text: "唯讀開頭\n\n<!-- marker -->\n\n# 啟動程序",
+  text: "唯讀開頭\n\n<!-- marker -->\n\n# 啟動步驟",
   read_only_head: "唯讀開頭",
-  body: "# 啟動程序",
+  body: "# 啟動步驟",
   owner_id: "owner",
   schema_version: 3,
   size_chars: 6,

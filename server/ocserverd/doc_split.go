@@ -15,7 +15,7 @@ package main
 // that he must SEE the half he cannot edit — 「以前 global context 是固定內容我們
 // 也是會顯示 只是不給改」 — and the thing he must see is the TEMPLATE, braces and
 // all, because the whole reason this ticket exists is that he went looking for
-// `restart_self` in 〈下線程序〉 and could not find it: the word lived in the Go
+// `restart_self` in 〈停止〉 and could not find it: the word lived in the Go
 // line that wrapped the document, not in the document. A marker line inside the
 // stored text puts both halves in the one textarea he already reads.
 //

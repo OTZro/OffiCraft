@@ -66,7 +66,7 @@ func memberDeltaPayload(m Member) map[string]any {
 
 // offboardDeltaPayload is memberDeltaPayload plus the offboard notice, and it is
 // the whole of "改回真的推播" (owner 2026-08-16, card rc-66b82a584c4d): the
-// SERVER composes the sentence and carries the 下線程序 steps in the frame it
+// SERVER composes the sentence and carries the 〈停止〉 steps in the frame it
 // pushes, instead of the agent fetching them back over HTTP once it notices it
 // is being collected.
 //
@@ -107,7 +107,7 @@ func (s *apiServer) offboardDeltaPayload(m Member) map[string]any {
 //     (restart_self stays in the list above because it is a refocus CAUSE — an
 //     agent asking for its own recycle. It stopped being the verb the notice
 //     ends with: owner c-5b3d8f192a0b / rc-5d044f0c1266, and since T-3201 that
-//     sentence is the read-only head of 〈下線程序〉, not a Go literal.)
+//     sentence is the read-only head of 〈停止〉, not a Go literal.)
 //   - FINAL (加速停止) — the two 加速停止 causes, and only those: the SECOND
 //     context threshold (context_high) and the owner's own press
 //     (accelerated_stop). The collection is already under way and the recycle
@@ -913,7 +913,7 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 // owner-pinned desired_machine_id, then run the SAME event-driven reconcile the
 // activate click uses (reconcileMemberNow). A LIVE member is auto-migrated onto
 // the chosen machine, but SINCE T-b6d9 GRACEFULLY: the pin is written together
-// with a refocus epoch, the agent gets the ordinary 下線程序 wake, and
+// with a refocus epoch, the agent gets the ordinary 〈停止〉 wake, and
 // the kill+re-spawn happens at the 收口 — which since T-ed79 is its own
 // report_stopped or the owner's force-stop, and NOTHING ELSE. 🔴 A relocate has
 // no RecycleGrace ceiling any more: winddownKindFor answers soft for it, so
@@ -1369,7 +1369,7 @@ func (s *apiServer) HandleDismissMemberApiMembersMemberIdDelete(w http.ResponseW
 // — e.g. the owner's sub has none: self-report is agent-only by construction).
 // Unlike resolveMember it does NOT fold kind='outsource' onto errNotFound:
 // since the graceful worker handover (T-ea82) an outsource worker walks the
-// SAME 下線程序 wake as a member and reports its own presence through these
+// SAME 〈停止〉 wake as a member and reports its own presence through these
 // self endpoints — only the member_id-target admin surface keeps the pre-fold
 // ow- 404.
 func (s *apiServer) resolveSelf(r *http.Request) (*Member, error) {
@@ -1521,7 +1521,7 @@ func (s *apiServer) HandleReportStoppedApiSelfStoppedPost(w http.ResponseWriter,
 // the CALLER, so it is strictly weaker than the admin-gated refocus_member —
 // zero privilege-escalation surface. The EFFECT is identical to refocus_member:
 // stamp the caller's refocus_since and fan the member delta; the standard §4.5
-// recycle orchestration (the agent's own RecycleHook → 下線程序 wake →
+// recycle orchestration (the agent's own RecycleHook → 〈停止〉 wake →
 // report_stopped → server kill/respawn) carries the rest. Nothing is dispatched
 // here (same as refocus_member — no reconcileMemberNow).
 //
