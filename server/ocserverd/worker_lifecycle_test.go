@@ -19,31 +19,44 @@ import (
 
 // ── presence under owner-explicit stop ───────────────────────────────────────
 
-// TestWorkerPresence_StopIntent: an owner-stopped worker (desired_state
-// 'offline') projects the member exit vocabulary regardless of its
-// assigned/active lifecycle status — "stopping" while the session still winds
-// down (SSE alive), "stopped" once it is gone — never a fake-green latch. A
-// RELEASED row still projects "" (off-panel). Mutant: dropping the StopIntent
-// fold in workerPresence turns the offline-intent rows back to online/waking
-// → red.
+// TestWorkerPresence_StopIntent: an owner-stopped worker projects the member
+// exit vocabulary regardless of its assigned/active lifecycle status —
+// "stopping" while the session still winds down (SSE alive), "stopped" once it
+// is gone — never a fake-green latch. A RELEASED row still projects ""
+// (off-panel). Mutant: dropping the StopIntent fold in PresenceState turns the
+// stopped rows back to online/waking → red.
+//
+// T-14 moved which COLUMN carries that intent. It used to be desired_state, read
+// by a projection only workers called; it is now stopping_since, read by the
+// projection BOTH kinds call — a staff row can be desired-offline with no anchor
+// (the never-woken seed) and must stay 「離線」, so the anchor is the only test
+// that answers both kinds correctly. The rows below therefore carry the anchor
+// the two owner stop verbs stamp: both 停止 and 強制停止 write stopping_since
+// through stopEpochAnchor BEFORE they write the offline intent, so a stopped
+// worker never has one without the other.
 func TestWorkerPresence_StopIntent(t *testing.T) {
 	const now = 1_000_000.0
 	cases := []struct {
-		name    string
-		status  string
-		desired string
-		online  bool
-		want    string
+		name     string
+		status   string
+		desired  string
+		stopping float64
+		online   bool
+		want     string
 	}{
-		{"active+online but offline-intent is stopping", WorkerStatusActive, DesiredStateOffline, true, "stopping"},
-		{"assigned but offline-intent is stopped", WorkerStatusAssigned, DesiredStateOffline, false, "stopped"},
-		{"active+online with online-intent is online", WorkerStatusActive, DesiredStateOnline, true, "online"},
-		{"released even if offline-intent is blank", WorkerStatusReleased, DesiredStateOffline, false, ""},
+		{"active+online but stopped is stopping", WorkerStatusActive, DesiredStateOffline, now - 3, true, "stopping"},
+		{"assigned but stopped is stopped", WorkerStatusAssigned, DesiredStateOffline, now - 3, false, "stopped"},
+		// The self-driven arm (report_stopping stamps the anchor and touches no
+		// intent) — staff parity, and it is what the desired_state test used to
+		// miss on this side.
+		{"self-reported stopping while online is stopping", WorkerStatusActive, DesiredStateOnline, now - 3, true, "stopping"},
+		{"active+online with online-intent is online", WorkerStatusActive, DesiredStateOnline, 0, true, "online"},
+		{"released even if stopped is blank", WorkerStatusReleased, DesiredStateOffline, now - 3, false, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			w := OutsourceWorker{ID: "ow-1", Status: c.status, TaskID: "t-1",
-				CreatedTS: now - 5, DesiredState: c.desired}
+				CreatedTS: now - 5, DesiredState: c.desired, StoppingSince: c.stopping}
 			dto := newOutsourceWorkerDTO(w, nil, outsourceWorkerProjection{now: now, online: c.online})
 			if dto.Presence != c.want {
 				t.Fatalf("presence = %q, want %q", dto.Presence, c.want)

@@ -478,6 +478,22 @@ func (d *DAL) SetMemberSessionBootTS(id string, ts float64) error {
 	return err
 }
 
+// SetMemberWakingSince writes ONLY member.waking_since (T-14) — the DURABLE
+// wake anchor PresenceState projects 「喚醒中」 from, for BOTH kinds.
+//
+// Targeted column UPDATE for the second of SetMemberSessionBootTS's two reasons
+// (NO WHOLE-ROW WRITE): the outsource caller (notifyWorkerSpawn) is mid-dispatch
+// and the placement-block stamps immediately after it re-read the row and write
+// it back whole, so a snapshot write here would be clobbered by them. Touching
+// exactly one column cannot be. The first reason does NOT apply — presence IS on
+// the wire, and the dispatch fans its own outsource_worker delta right after.
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) SetMemberWakingSince(id string, ts float64) error {
+	_, err := d.wdb.Exec(`UPDATE member SET waking_since = ? WHERE id = ?`, ts, id)
+	return err
+}
+
 // HardDeleteMember PHYSICALLY deletes a member row (the custom-role cascade
 // path) — NOT the roster_status="removed" soft-remove, which stays the
 // audit-preserving dismiss seam. Returns true iff a row was deleted.

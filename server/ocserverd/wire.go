@@ -1919,10 +1919,6 @@ type outsourceWorkerProjection struct {
 	// observedWorkerHost). "" = nothing observed — the panel renders
 	// 「尚未分配」.
 	spawnTarget string
-	// spawnAt is the last start-dispatch timestamp (workerSpawnAt) — the wake
-	// anchor of the presence projection (waking while fresh). 0 = never
-	// dispatched this server run (the row's CreatedTS anchors instead).
-	spawnAt float64
 	// accountDisplay resolves the raw telemetry account key to its readable
 	// name (alias → owner-gated reported label → "") via the SHARED
 	// resolveAccountDisplay fold. "" ⇒ the DTO serves null → the panel's
@@ -2250,7 +2246,7 @@ func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProje
 		TaskID:        w.TaskID,
 		CreatedTS:     w.CreatedTS,
 		UnreadCount:   p.unread,
-		Presence:      workerPresence(w, p.now, p.online, p.spawnAt),
+		Presence:      workerPresence(w, p.now, p.online),
 		// Machine = the worker's OBSERVED host (dispatch target, or the
 		// restart-proof fallback folded upstream in projectWorker — T-c23a)
 		// resolved to a display label; "" when nothing is observed — the panel
@@ -2317,34 +2313,26 @@ func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProje
 	return dto
 }
 
-// workerPresence projects a worker's liveness onto the ONE member presence
-// vocabulary (deriveLiveness — A案 P6; see the DTO field doc for the closed
-// set). PURE function of the row + wall clock + the caller-supplied SSE-presence
-// fact (online == hub.IsOnline(w.ID) — the SAME single online authority
-// PresenceState reads for members; a worker holds its SSE via `ocagent listen`,
-// so a died-after-claim session flips offline exactly like a member's would) +
-// the in-memory last-start-dispatch anchor (spawnAt; 0 = never dispatched this
-// server run, the row's birth anchors the wake window instead).
-func workerPresence(w OutsourceWorker, now float64, online bool, spawnAt float64) string {
+// workerPresence answers 「喚醒中／上線中／停止中…」 for an outsource worker by
+// calling PresenceState — the SAME function the staff roster calls, on the SAME
+// row (memberFromWorker is the projection, not a copy of the rules). T-14: this
+// used to assemble its own livenessInput from the in-memory spawn anchor, which
+// is how the two kinds came to answer 「喚醒中」 differently — a re-exec forgot
+// that map, so a long-lived worker mid-wake fell to 「離線」.
+//
+// What is left here is the ONE thing that is genuinely outsource-only and is not
+// a presence rule at all: a released worker is off-panel, so it has no presence
+// word rather than a wrong one. Everything below that line is the member's.
+//
+// PURE function of the row + wall clock + the caller-supplied SSE-presence fact
+// (online == hub.IsOnline(w.ID) — the SAME single online authority PresenceState
+// reads for members; a worker holds its SSE via `ocagent listen`, so a
+// died-after-claim session flips offline exactly like a member's would).
+func workerPresence(w OutsourceWorker, now float64, online bool) string {
 	if w.Status == WorkerStatusReleased {
 		return "" // released / off-panel — never a live row
 	}
-	anchor := spawnAt
-	if anchor <= 0 {
-		anchor = w.CreatedTS
-	}
-	return deriveLiveness(livenessInput{
-		Online: online,
-		// Owner-explicit stop intent dominates (desired_state mirrors member):
-		// stopping while the session winds down, stopped once it is gone —
-		// never a fake-green latch (T-f190 lifecycle).
-		StopIntent: w.DesiredState == DesiredStateOffline,
-		// A fresh wake in flight: the last start dispatch (or the just-minted
-		// row awaiting placement) within the member waking TTL. Stale ⇒ the
-		// wake failed ⇒ offline — the exact member posture; the FSM rescue
-		// (reconcileWorkerLiveness), not the projection, owns recovery.
-		WakePending: anchor > 0 && now-anchor <= WakingTTLSecs,
-	})
+	return PresenceState(memberFromWorker(w), now, online)
 }
 
 // ── builders ─────────────────────────────────────────────────────────────────

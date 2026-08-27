@@ -1071,6 +1071,22 @@ type OutsourceWorker struct {
 	// mid-handover anchor.
 	StoppingSince float64
 	StoppedSince  float64
+	// WakingSince is the DURABLE wake anchor, a DIRECT mirror of
+	// member.waking_since (T-14): the timestamp of the last LANDED start
+	// dispatch, 0 when no wake is on record. Carried through workerFromMember /
+	// memberFromWorker for the same reason StoppingSince/StoppedSince are — the
+	// projection rebuilds a Member from scratch, so a column it forgets is
+	// ZEROED by the next outsource write, and zeroing this one drops a live
+	// worker out of 「喚醒中」 mid-wake.
+	//
+	// It replaces the in-memory workerSpawnAt anchor the presence projection
+	// used to read: that map is reborn empty by every re-exec, so a worker
+	// dispatched before a restart fell straight to 「離線」 while its wake was
+	// still in flight. The staff side already stamps at dispatch
+	// (stampWakeObservability, "a LANDED START stamps waking_since") — this is
+	// that same rule, not a second one. workerSpawnAt survives, but only as the
+	// re-dispatch PACE.
+	WakingSince float64
 	// DesiredState is the run-intent, a DIRECT mirror of member.DesiredState
 	// (T-f190, migrations/00020): "online" (system wants it running — the default),
 	// "offline" (owner-explicit STOP — held down, every auto-revival path skips it).
@@ -1138,6 +1154,7 @@ func workerFromMember(m Member) OutsourceWorker {
 		RefocusOp:          m.RefocusOp,
 		StoppingSince:      m.StoppingSince,
 		StoppedSince:       m.StoppedSince,
+		WakingSince:        m.WakingSince,
 		ForcedStopAt:       m.ForcedStopAt,
 		DesiredState:       m.DesiredState,
 		BankedCost:         m.BankedCost,
@@ -1187,29 +1204,19 @@ func memberFromWorker(w OutsourceWorker) Member {
 		StoppingSince:    w.StoppingSince,
 		StoppedSince:     w.StoppedSince,
 		ForcedStopAt:     w.ForcedStopAt,
-		// 🔴 ZERO IS THE DEFINITION HERE, NOT AN OMISSION. The worker vocabulary
-		// has no `waking` concept: an OutsourceWorker carries no such column, and
-		// no worker path writes one — so projecting 0 is the honest answer rather
-		// than a field somebody forgot. Written EXPLICITLY because the omission
-		// and the decision look identical in a struct literal, and this one has
-		// teeth: PutMember's ON CONFLICT SET includes waking_since, so every write
-		// through this projection stores the zero. It is NOT new — every
-		// putMember(memberFromWorker(w)) since T-72dd has done it.
+		// 🔴 CARRIED, NOT ZEROED (T-14). This used to be a hardcoded 0 with a
+		// long note explaining that the worker vocabulary had no `waking` concept
+		// and that the DTO face anchored waking on the spawn dispatch instead. That
+		// second anchor WAS the divergence: it lived in memory, so a re-exec forgot
+		// it, and the two kinds answered 「喚醒中」 with two different rules. The
+		// worker vocabulary now carries the concept (OutsourceWorker.WakingSince),
+		// the spawn dispatch stamps it exactly where the staff arm does
+		// (stampWakeObservability), and PresenceState is the ONE reader for both.
 		//
-		// 🔴 IT IS NOT UNREAD, AND THIS COMMENT USED TO SAY IT WAS (T-170e stage
-		// 2 ④). PresenceState reads waking_since, and it IS reached with an
-		// outsource row — the resume roster (api_chat.go) projects one for every
-		// kind, outsource branch included. What makes the zero safe is not that
-		// nobody looks: it is that `waking` needs waking_since > 0, so a worker
-		// can never project it, and the DTO face has its own workerPresence which
-		// anchors waking on the spawn dispatch instead. The distinction matters
-		// because "unread" would make this line free to change and it is not.
-		//
-		// This is therefore a DEAD CONSTANT, not a second implementation of a
-		// staff rule — there is nothing here to converge with the member side,
-		// and no mutant of it can be made to fail. If the worker vocabulary ever
-		// grows the concept, this line is where it has to stop being a constant.
-		WakingSince:        0,
+		// PutMember's ON CONFLICT SET includes waking_since, so this line is what
+		// decides whether a mid-wake anchor survives the next worker write. Dropping
+		// it back to a constant re-opens the exact bug.
+		WakingSince:        w.WakingSince,
 		BankedCost:         w.BankedCost,
 		LastOp:             w.LastOp,
 		LastOpOK:           w.LastOpOK,
