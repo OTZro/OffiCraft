@@ -101,7 +101,10 @@ trap cleanup EXIT
 
 # ── PATH shims ───────────────────────────────────────────────────────────────
 # gh: `release view` prints $GH_VIEW_JSON (or fails when GH_VIEW_RC is set);
-# `release create` / `release edit` only ever record themselves.
+# `api .../releases/latest` prints $GH_LATEST_JSON (default empty == "no
+# release is latest", the same shape a real 404 from that endpoint leaves
+# after bin/release's own `|| true`); `release create` / `release edit` only
+# ever record themselves.
 cat > "$SHIMDIR/gh" <<'SH'
 #!/usr/bin/env bash
 echo "gh $*" >> "$GH_WIRE"
@@ -114,6 +117,13 @@ if [[ "${1:-}" == "release" && "${2:-}" == "view" ]]; then
   printf '%s' "${GH_VIEW_JSON:-}"
   [[ "${GH_VIEW_RC:-0}" == "0" ]] || { echo "release not found" >&2; exit "${GH_VIEW_RC}"; }
   exit 0
+fi
+if [[ "${1:-}" == "api" ]]; then
+  case "${2:-}" in
+    */releases/latest)
+      printf '%s' "${GH_LATEST_JSON:-}"
+      exit "${GH_LATEST_RC:-0}" ;;
+  esac
 fi
 if [[ "${1:-}" == "release" && ( "${2:-}" == "create" || "${2:-}" == "edit" ) ]]; then
   exit "${GH_WRITE_RC:-0}"
@@ -215,7 +225,7 @@ release_cli() {
 # literal string "uploaded", and `size` is a non-zero integer — i.e. the three
 # things verify_stored_release actually keys off. Re-measure before changing the
 # shape here; do not "tidy" it to match what the code expects.
-TAG="v9.9.9-guard"
+export TAG="v9.9.9-guard"
 SHA="0123456789abcdef0123456789abcdef01234567"
 TARBALL="officraft-$TAG-darwin-arm64.tar.gz"
 stored_json() { # stored_json [key=value ...]  (values are raw JSON)
@@ -250,16 +260,38 @@ export GH_VIEW_RC=0
 export GH_VIEW_JSON="$(stored_json)"
 release_fn verify_stored_release "$TAG" "$SHA" prerelease
 check "S0 a correct prerelease reads back clean" "0" "$RC"
-# The function's CONTRACT is its stdout: line 1 = targetCommitish, lines 2+ = the
-# asset fingerprint. promote compares two of these to detect a re-upload, so a
-# silent change to this shape would break drift detection while every other
-# assertion stayed green.
+# The function's CONTRACT is its stdout: line 1 = targetCommitish, line 2 =
+# isLatest, lines 3+ = the asset fingerprint. promote compares two of these
+# (target, fingerprint) to detect a re-upload, so a silent change to this
+# shape would break drift detection while every other assertion stayed green.
 check "S0 line 1 of the contract is the targetCommitish" "$SHA" "$(printf '%s\n' "$OUT" | grep -v '^\[release\]' | sed -n '1p')"
+check "S0 line 2 of the contract is isLatest (no GH_LATEST_JSON stubbed -> False)" "False" \
+  "$(printf '%s\n' "$OUT" | grep -v '^\[release\]' | sed -n '2p')"
 check "S0 the fingerprint is name<TAB>size for all 3 assets, sorted" \
   "checksums.txt	128
 install.sh	2048
 $TARBALL	4096" \
-  "$(printf '%s\n' "$OUT" | grep -v '^\[release\]' | sed -n '2,$p')"
+  "$(printf '%s\n' "$OUT" | grep -v '^\[release\]' | sed -n '3,$p')"
+
+# S0-latest: --latest read-back is an ENFORCED, not merely informational, check
+# when a caller asks for one (this is the ticket: promote must not just flip
+# --latest and trust it landed). WANT_LATEST="" (S0 above) does not enforce;
+# these do.
+GH_LATEST_JSON="" release_fn verify_stored_release "$TAG" "$SHA" prerelease false
+check "S0a WANT_LATEST=false matches an unstubbed (not-latest) release" "0" "$RC"
+
+GH_LATEST_JSON="" release_fn verify_stored_release "$TAG" "$SHA" prerelease true
+named_failure "S0b WANT_LATEST=true but GitHub's /releases/latest is NOT this tag" release-latest "$RC" "$OUT"
+case "$OUT" in
+  *"gh release edit $TAG --repo"*"--latest=true"*) ok "S0b …names an executable next step (gh release edit ... --latest=true)" ;;
+  *) bad "S0b …names an executable next step (out: $(printf '%s' "$OUT" | tr '\n' '|'))" ;;
+esac
+
+GH_LATEST_JSON="{\"tag_name\":\"$TAG\"}" release_fn verify_stored_release "$TAG" "$SHA" prerelease true
+check "S0c WANT_LATEST=true matches when /releases/latest IS this tag" "0" "$RC"
+
+GH_LATEST_JSON="{\"tag_name\":\"$TAG\"}" release_fn verify_stored_release "$TAG" "$SHA" prerelease false
+named_failure "S0d WANT_LATEST=false but GitHub's /releases/latest IS this tag" release-latest "$RC" "$OUT"
 
 GH_VIEW_RC=1 GH_VIEW_JSON="" release_fn verify_stored_release "$TAG" "$SHA" prerelease
 named_failure "S1 gh release view FAILS (no such release)" release-exists "$RC" "$OUT"
@@ -1136,6 +1168,11 @@ named_failure "P0 promote refuses a tag that is ALREADY final" release-channel "
 
 # Happy promote needs the pre-flip view to be a prerelease and the post-flip view
 # to be final — two different answers from one shim, so it switches on a counter.
+# /releases/latest switches the SAME way, on whether `release edit` (the flip)
+# has already happened: before it, this tag is not GitHub's latest; after it,
+# it is — which is what a promote that actually applied --latest=true would
+# cause GitHub to report. This is what lets P1's post-flip isLatest=true
+# enforcement pass without a per-case GH_LATEST_JSON.
 cat > "$SHIMDIR/gh" <<'SH'
 #!/usr/bin/env bash
 echo "gh $*" >> "$GH_WIRE"
@@ -1143,6 +1180,17 @@ if [[ "${1:-}" == "release" && "${2:-}" == "view" ]]; then
   n="$(grep -c 'release view' "$GH_WIRE")"
   if [[ "$n" == "1" ]]; then printf '%s' "${GH_VIEW_BEFORE:-}"; else printf '%s' "${GH_VIEW_AFTER:-}"; fi
   exit 0
+fi
+if [[ "${1:-}" == "api" ]]; then
+  case "${2:-}" in
+    */releases/latest)
+      if [[ -n "${GH_LATEST_JSON+set}" ]]; then
+        printf '%s' "${GH_LATEST_JSON}"
+      elif grep -q 'release edit' "$GH_WIRE"; then
+        printf '{"tag_name":"%s"}' "$TAG"
+      fi
+      exit 0 ;;
+  esac
 fi
 if [[ "${1:-}" == "release" && ( "${2:-}" == "create" || "${2:-}" == "edit" ) ]]; then
   exit "${GH_WRITE_RC:-0}"
@@ -1195,6 +1243,25 @@ named_failure "P5 the flip did not take (still a prerelease afterwards)" release
 GH_WRITE_RC=1 promote "$TAG"
 check "P6 a failed gh release edit fails the promote" "1" "$RC"
 unset GH_WRITE_RC
+
+# P7 — THE TICKET ITSELF: `gh release edit --latest=true` returned success, but
+# GitHub's own /releases/latest still does NOT say this tag — the exact shape a
+# silently-ignored flag, a propagation lag, or a promote that forgot to read
+# --latest back would produce. GH_LATEST_JSON is set to a DIFFERENT tag
+# explicitly (overriding the shim's default "release edit happened -> now
+# latest" simulation), so this is reachable ONLY if cmd_promote itself demands
+# isLatest=true on the post-flip read-back — not just verify_stored_release
+# having the capability. Deleting that demand from cmd_promote (passing "" or
+# omitting the 4th argument to the AFTER verify_stored_release call) makes this
+# case pass silently at exit 0 instead of failing — that is the mutant this
+# case exists to catch.
+GH_LATEST_JSON='{"tag_name":"v0.0.1-someone-elses-release"}' promote "$TAG"
+named_failure "P7 gh release edit succeeded but GitHub never marked it Latest" release-latest "$RC" "$OUT"
+case "$OUT" in
+  *"gh release edit $TAG --repo"*"--latest=true"*) ok "P7 …names an executable next step (gh release edit ... --latest=true)" ;;
+  *) bad "P7 …names an executable next step (out: $(printf '%s' "$OUT" | tr '\n' '|'))" ;;
+esac
+unset GH_LATEST_JSON
 
 echo "release guard: $PASS ok, $FAIL failed"
 [[ "$FAIL" == "0" ]] || exit 1
