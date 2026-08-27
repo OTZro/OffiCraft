@@ -263,10 +263,24 @@ dialog seeds its runtime cell from the normalized value (`member.runtime || "cla
 `MemberDetailPanel.tsx`). Confirming it UNCHANGED is safe — both submit paths compute
 `launchChanged` over runtime/model/effort first and skip `patchMember` when nothing moved,
 and the offline wake branch sits outside that guard — so an untouched dialog writes no
-runtime. The trap is narrower and easier to walk into: editing **model or effort** makes
-`launchChanged` true, and the seeded runtime cell rides along in the same PATCH. That
-writes a concrete `claude` onto a member nobody chose one for, permanently disabling the
-resolution above.
+runtime. That left a narrower trap, and it is now CLOSED: editing **model or effort**
+makes `launchChanged` true, and the seeded runtime cell used to ride along in the same
+PATCH — writing a concrete `claude` onto a member nobody chose one for and permanently
+disabling the resolution above, from a dialog where the owner never touched the runtime
+control.
+
+The panel now sends `runtime` only when that control actually MOVED off what it was
+showing (`runtimeChanged`); an unsupplied field leaves the stored value untouched, and `""`
+cannot be sent instead because `ValidRuntime` 422s it. Pinned by
+`MemberDetailPanel.runtime-unset-not-submitted.test.tsx`, whose fourth case is the positive
+control that the panel still emits `runtime` for a real pick.
+
+⚠️ The cost, stated so nobody re-opens it as a bug: an owner looking at an unset member sees
+`claude` and cannot deliberately pin THAT claude from this dialog, because re-choosing the
+value already on screen is indistinguishable from not choosing at all. Only one of the two
+readings can be honoured and honouring the silent one is what broke resolution. A dirty-flag
+on the control would not fix this either — a native select re-choosing its current option
+fires no change event, so it would be a rule that only sometimes works.
 
 ## Launch policy
 

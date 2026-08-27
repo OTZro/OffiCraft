@@ -300,7 +300,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleHireMemberApiMembersPost,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "Hire a member (server mints the id). runtime defaults to claude and only claude/codex are accepted; effort defaults to medium and is validated; a hire that names kind or role_key is admin-gated.",
+			Summary:  "Hire a member (server mints the id). An omitted runtime is stored UNSET and resolved from the target host's reported runtime capabilities at first placement (a codex-only host grows a codex member) rather than written as claude; only claude/codex are accepted when you do name one; effort defaults to medium and is validated; a hire that names kind or role_key is admin-gated.",
 			MCPTool:  "hire_member",
 		},
 		{
@@ -1196,7 +1196,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleCreateRoleApiRolesPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Create a custom role + its founding member (one pair per call). runtime is claude/codex (absent = claude).",
+			Summary:  "Create a custom role + its founding member (one pair per call). runtime is claude/codex; absent = stored UNSET and resolved at the founding member's first placement from the host's reported capabilities, not written as claude.",
 			MCPTool:  "create_role",
 		},
 		{

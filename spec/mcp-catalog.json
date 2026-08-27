@@ -363,7 +363,7 @@
       "name": "get_members"
     },
     {
-      "description": "Hire a member (server mints the id). runtime defaults to claude and only claude/codex are accepted; effort defaults to medium and is validated; a hire that names kind or role_key is admin-gated.",
+      "description": "Hire a member (server mints the id). An omitted runtime is stored UNSET and resolved from the target host's reported runtime capabilities at first placement (a codex-only host grows a codex member) rather than written as claude; only claude/codex are accepted when you do name one; effort defaults to medium and is validated; a hire that names kind or role_key is admin-gated.",
       "inputSchema": {
         "properties": {
           "effort": {
@@ -1987,7 +1987,7 @@
       "name": "peek_doc_sizes"
     },
     {
-      "description": "Create a custom role + its founding member (one pair per call). runtime is claude/codex (absent = claude).",
+      "description": "Create a custom role + its founding member (one pair per call). runtime is claude/codex; absent = stored UNSET and resolved at the founding member's first placement from the host's reported capabilities, not written as claude.",
       "inputSchema": {
         "properties": {
           "effort": {

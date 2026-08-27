@@ -1359,7 +1359,7 @@ type MemberDTO struct {
 
 // MemberHireDTO Hire (create) a roster member (§3.4 #9; pure seam, no UI). The owner assigns
 // a display “name“; the server mints the “id“ (never client-supplied — it is
-// the attribution key). “kind“/“runtime“/“model“/“effort“/“role_key“ are optional; omitted “runtime“ defaults to “claude“.
+// the attribution key). “kind“/“runtime“/“model“/“effort“/“role_key“ are optional; an omitted “runtime“ is stored UNSET and resolved at first placement from the target host's reported runtime capabilities (a codex-only host grows a codex member); the response still reads back “claude“ until that resolution lands.
 type MemberHireDTO struct {
 	Effort  *string `json:"effort,omitempty"`
 	Kind    *string `json:"kind,omitempty"`
@@ -1367,7 +1367,7 @@ type MemberHireDTO struct {
 	Name    string  `json:"name"`
 	RoleKey *string `json:"role_key,omitempty"`
 
-	// Runtime Optional provider runtime; null/omitted defaults to ``claude``.
+	// Runtime Optional provider runtime; null/omitted is stored UNSET and resolved at first placement from the host's reported runtime capabilities, never written as a concrete ``claude`` at hire time; it reads back as ``claude`` until then.
 	Runtime *AgentRuntime `json:"runtime,omitempty"`
 }
 
@@ -2021,7 +2021,7 @@ type ResumeTaskDTO struct {
 // name — OPTIONAL: omitted/blank ⇒ the server picks a fresh name from the
 // “domain.member.MEMBER_NAME_POOL“ (Mira-style short English names), never
 // colliding with an existing roster member. “runtime“ / “model“ / “effort“
-// are the member's launch knobs — runtime is claude/codex (omitted ⇒ claude),
+// are the member's launch knobs — runtime is claude/codex (omitted ⇒ stored UNSET, resolved at the founding member's first placement from the host's reported capabilities),
 // model is a free string (blank/omitted ⇒ selected-runtime default), effort is
 // the closed low/medium/high/max vocabulary (unknown → 422; omitted ⇒ medium). The
 // server mints BOTH ids (role key + member id) — never client-supplied.
@@ -2031,7 +2031,7 @@ type RoleCreateDTO struct {
 	Model      *string `json:"model,omitempty"`
 	Name       string  `json:"name"`
 
-	// Runtime Founding member runtime; null/omitted defaults to ``claude``.
+	// Runtime Founding member runtime; null/omitted is stored UNSET and resolved at first placement from the host's reported runtime capabilities, never written as a concrete ``claude`` at creation time; it reads back as ``claude`` until then.
 	Runtime *AgentRuntime `json:"runtime,omitempty"`
 }
 
@@ -3802,7 +3802,7 @@ type ServerInterface interface {
 	// List every member that has not been removed, including outsource members by default (presence-derived MemberDTO[]). fields=light returns an identity-only projection that preserves kind.
 	// (GET /api/members)
 	HandleListMembersApiMembersGet(w http.ResponseWriter, r *http.Request, params HandleListMembersApiMembersGetParams)
-	// Hire a member (server mints the id). runtime defaults to claude and only claude/codex are accepted; effort defaults to medium and is validated; a hire that names kind or role_key is admin-gated.
+	// Hire a member (server mints the id). An omitted runtime is stored UNSET and resolved from the target host's reported runtime capabilities at first placement (a codex-only host grows a codex member) rather than written as claude; only claude/codex are accepted when you do name one; effort defaults to medium and is validated; a hire that names kind or role_key is admin-gated.
 	// (POST /api/members)
 	HandleHireMemberApiMembersPost(w http.ResponseWriter, r *http.Request)
 	// Dismiss a member (soft delete). Pure seam, no UI (§9.1).
@@ -3958,7 +3958,7 @@ type ServerInterface interface {
 	// List role definitions (seed defaults + owner edits) WITHOUT the persona bodies: each row is the role identity plus its definition size and cap, never definition_md itself. Read the one role you want with get_role.
 	// (GET /api/roles)
 	HandleListRolesApiRolesGet(w http.ResponseWriter, r *http.Request)
-	// Create a custom role + its founding member (one pair per call). runtime is claude/codex (absent = claude).
+	// Create a custom role + its founding member (one pair per call). runtime is claude/codex; absent = stored UNSET and resolved at the founding member's first placement from the host's reported capabilities, not written as claude.
 	// (POST /api/roles)
 	HandleCreateRoleApiRolesPost(w http.ResponseWriter, r *http.Request)
 	// Hard-delete a custom role + its members (seed → 403; online → 409).
