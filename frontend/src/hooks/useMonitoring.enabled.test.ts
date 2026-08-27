@@ -64,7 +64,16 @@ describe("useMonitoring enabled (default, e.g. Monitor page)", () => {
     expect(h.getMonitoring).toHaveBeenCalledTimes(2);
   });
 
-  it("waits for an in-flight request, drops its stale result, then refreshes once", async () => {
+  // T-10: the subject is the SINGLE-FLIGHT rule — a burst during an in-flight
+  // request must not fan out, and must collapse into exactly ONE follow-up.
+  // Both call-count assertions are unchanged. The middle one used to demand the
+  // in-flight answer be THROWN AWAY (`monitoring` still null after it resolved),
+  // which is the T-10 defect: it stranded the view with no request outstanding
+  // to repair it. The answer now lands; the follow-up still supersedes it.
+  // MUTANT (proven 2026-08-27): restore the bump → red on "the in-flight answer
+  // must land rather than be discarded by the burst: expected null to deeply
+  // equal { sessions: [ 'first' ] }".
+  it("waits for an in-flight request, shows its answer, then refreshes exactly once more", async () => {
     vi.useFakeTimers();
     const first = deferred<{ sessions: string[] }>();
     h.getMonitoring.mockImplementationOnce(() => first.promise);
@@ -74,17 +83,24 @@ describe("useMonitoring enabled (default, e.g. Monitor page)", () => {
     emit("monitoring");
     emit("monitoring");
     await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
-    expect(h.getMonitoring).toHaveBeenCalledTimes(1);
+    expect(h.getMonitoring, "a burst must not fan out while a request is open").toHaveBeenCalledTimes(1);
 
-    await act(async () => { first.resolve({ sessions: ["stale"] }); await Promise.resolve(); });
-    expect(result.current.monitoring).toBeNull();
+    await act(async () => { first.resolve({ sessions: ["first"] }); await Promise.resolve(); });
+    expect(
+      result.current.monitoring,
+      "the in-flight answer must land rather than be discarded by the burst",
+    ).toEqual({ sessions: ["first"] });
     h.getMonitoring.mockResolvedValueOnce({ sessions: ["fresh"] });
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    expect(h.getMonitoring).toHaveBeenCalledTimes(2);
+    expect(h.getMonitoring, "the whole burst collapses into ONE follow-up").toHaveBeenCalledTimes(2);
     await act(async () => { await Promise.resolve(); });
     expect(result.current.monitoring).toEqual({ sessions: ["fresh"] });
   });
 
+  // T-10: the INTENT — a request issued earlier must never overwrite the result
+  // of one issued later, whatever order they resolve in — is correct and kept.
+  // It is now exercised against a REAL later request (the trailing refresh
+  // actually issuing a GET) instead of a bare version bump that issued nothing.
   it("does not let an older manual refresh overwrite a later event refresh", async () => {
     vi.useFakeTimers();
     const manual = deferred<{ sessions: string[] }>();
@@ -93,15 +109,20 @@ describe("useMonitoring enabled (default, e.g. Monitor page)", () => {
     await act(async () => { await Promise.resolve(); });
 
     h.getMonitoring.mockImplementationOnce(() => manual.promise);
-    void result.current.refetch();
-    emit("monitoring");
-    await act(async () => { manual.resolve({ sessions: ["stale-manual"] }); await Promise.resolve(); });
-    expect(result.current.monitoring).toEqual({ sessions: ["initial"] });
+    const older = result.current.refetch();
 
+    emit("monitoring");
+    h.getMonitoring.mockResolvedValueOnce({ sessions: ["event"] });
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     await act(async () => { await Promise.resolve(); });
-    expect(h.getMonitoring).toHaveBeenCalledTimes(3);
-    expect(result.current.monitoring).toEqual({ sessions: [] });
+    expect(h.getMonitoring, "the event's trailing refresh must be a real request").toHaveBeenCalledTimes(3);
+    expect(result.current.monitoring).toEqual({ sessions: ["event"] });
+
+    await act(async () => { manual.resolve({ sessions: ["stale-manual"] }); await older; });
+    expect(
+      result.current.monitoring,
+      "a refetch issued BEFORE the event refresh must never overwrite it, however late it resolves",
+    ).toEqual({ sessions: ["event"] });
   });
 });
 

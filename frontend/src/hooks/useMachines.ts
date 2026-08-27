@@ -91,7 +91,36 @@ export function useMachines(opts?: { refreshSeconds?: number }): UseMachines {
       if (topic.includes("machine")) {
         refetch().catch((e) => console.warn("useMachines: registry refetch failed", e));
       } else if (topic.includes("monitor") || topic.includes("member")) {
-        requestVersion.current += 1;
+        // T-10. This branch used to open with `requestVersion.current += 1`.
+        // That bump CANCELLED every request already in flight while issuing
+        // NONE of its own, so the only thing left to repair the view was the
+        // trailing refresh below — up to `refreshSeconds` (5s) later.
+        //
+        // It fired on its own action. POST /api/machines publishes a `member`
+        // frame (api_machines.go → putMember → hub.Publish), and the stream
+        // loop drains the hub on a 250ms tick (api_infra.go ssePoll), so that
+        // frame lands uniformly at random within 250ms of the POST — often
+        // right on top of the reconciling GET that MonitorPage's onboard is
+        // awaiting. Measured in a browser with the GET held 400ms: frame at
+        // +127ms, the GET's own (correct, 12-machine) answer DROPPED at
+        // +404ms, the row only surfacing 3.9s later off the trailing poll.
+        // MonitorPage collapsed the inline row anyway, because a discarded
+        // refetch still RESOLVES.
+        //
+        // An event frame does not make an in-flight response wrong — it only
+        // means a NEWER one may exist. Discarding it strands the view on older
+        // data with nothing outstanding to fix it. So: do not invalidate.
+        // Let the in-flight request land on its own version, and schedule the
+        // coalesced follow-up (bursty telemetry still collapses into one).
+        //
+        // Ordering between real requests is UNAFFECTED: every actual request —
+        // manual `refetch` and the effect's `refresh` alike — still takes a
+        // version from this same counter, so whichever was ISSUED last is the
+        // only one allowed to call setMachines, whatever order they resolve in.
+        // That guarantee is what `does not let an older manual refresh
+        // overwrite a later event refresh` in useMachines.test.ts exists for,
+        // and it survives here; what does not survive is cancelling a request
+        // on behalf of an event that issues no replacement.
         trailing = true;
         schedule();
       }
