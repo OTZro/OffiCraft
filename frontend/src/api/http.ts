@@ -694,19 +694,31 @@ function ensureSseSource(): void {
     // Schedule the recovery FIRST, announce it second. Telling the world we are
     // reconnecting is worthless if saying so is what stops us reconnecting.
     //
-    // ⚠️ NO TEST GUARDS THIS ORDERING, AND NONE CAN — said plainly so the next
-    // person does not go looking for the guard, or "helpfully" swap the lines
-    // back. Measured 2×2 (isolation in `setSseState` × this ordering):
+    // ⚠️ NO TEST GUARDS THIS ORDERING — said plainly so the next person does not
+    // go looking for the guard, or "helpfully" swap the lines back. Measured 2×2
+    // (isolation in `setSseState` × this ordering):
     //     isolation ON,  schedule-first  → recovers
     //     isolation ON,  announce-first  → recovers   ← indistinguishable
     //     isolation OFF, schedule-first  → recovers   ← THIS LINE'S VALUE
     //     isolation OFF, announce-first  → FROZEN, permanently
     // So the ordering is a genuine second line of defence — it alone saves the
-    // app when the isolation is gone — and it is an equivalent mutant while the
+    // app when the isolation is gone — and it is an EQUIVALENT MUTANT while the
     // isolation holds. Writing a test for it would mean writing one that passes
     // either way, which is the exact failure this ticket already made twice
     // (an assertion that names a property it cannot reach). Belt and braces,
     // with the braces documented instead of falsely pinned.
+    //
+    // 🔴 THE EQUIVALENCE IS CONDITIONAL, AND HERE IS THE CONDITION. "No test can
+    // catch this" is true ONLY while the try/catch inside `setSseState` stands.
+    // Read the fourth row again: the moment that isolation is removed, weakened,
+    // or routed around, this ordering stops being redundant and becomes THE ONLY
+    // THING between a throwing listener and a permanently frozen cockpit — and
+    // at that moment it MUST be pinned by a test, because it is no longer
+    // equivalent to anything. An undocumented premise is how an honest gap turns
+    // into a lie six months later: the note stays, the reason for it quietly
+    // stops being true, and the next reader inherits a false reassurance. So if
+    // you are here because you are changing `setSseState`'s fan-out, this comment
+    // is addressed to you: you are about to invalidate it.
     scheduleSseReconnect();
     setSseState("connecting");
   };
@@ -2761,7 +2773,11 @@ export const httpApi: Api = {
         sseRetryAttempt = 0;
         // The whole teardown happens BEFORE the "idle" broadcast; measured, a
         // listener throwing on "idle" used to leave the EventSource open and the
-        // foreground listeners attached.
+        // foreground listeners attached. Same status as the ordering in
+        // `es.onerror` above, including the same expiry condition: no test can
+        // separate this from the reverse order WHILE `setSseState` isolates its
+        // callbacks, and it becomes the only defence — and so test-worthy — the
+        // moment that isolation goes.
         if (sseSource) sseSource.close();
         sseSource = null;
         // Tear down the foreground-restore listeners with the connection so a

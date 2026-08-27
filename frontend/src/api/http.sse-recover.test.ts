@@ -65,6 +65,11 @@
 // are kept as a second line and documented at the call site rather than pinned
 // by an assertion that would pass either way — writing that assertion is exactly
 // the mistake this file has already made twice.
+// 🔴 AND THE EQUIVALENCE EXPIRES. It holds only while `setSseState` isolates its
+// callbacks. Remove that isolation and the ordering becomes the sole defence
+// against a permanently frozen cockpit, at which point these stop being
+// equivalent and MUST be pinned here. Whoever weakens that try/catch owns this
+// paragraph.
 //
 // PROVENANCE, because it says something about where the holes were:
 //   round 1 review → M2b was a REAL DEFECT in the shipped code (not a
