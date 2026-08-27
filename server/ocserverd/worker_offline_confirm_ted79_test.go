@@ -44,15 +44,25 @@ func tickHandover(t *testing.T, api *apiServer, workerID string, now float64) in
 }
 
 // workerTickPass runs ONE tick's worth of the ACTIVE-worker branch for ONE
-// worker — which is now TWO passes, and both of them matter (T-72dd):
-// autoHandoverWorker (the loop-break and the 停止 arm) and then the SHARED FSM,
-// which is where every handover 收口 decision moved. A test that drives only
-// the first half is driving a function that no longer decides anything about a
-// handover, and will read "nothing happened" as a behaviour claim when it is
-// really just the wrong call site.
+// worker — which is now THREE things, and all of them matter: the shared
+// pre-decide formalities (T-170e stage 3), autoHandoverWorker (the loop-break
+// and the 停止 arm), and then the SHARED FSM, which is where every handover 收口
+// decision moved (T-72dd). A test that drives only the middle one is driving a
+// function that no longer decides anything about a handover, and will read
+// "nothing happened" as a behaviour claim when it is really just the wrong call
+// site.
 //
-// The re-read between the two mirrors outsource_sched.go exactly: the first
-// pass may have cleared the epoch, and the FSM must never act on the stale row.
+// 🔴 THE FIRST STEP IS NO LONGER HAND-COPIED, and the copy is why. This helper
+// used to spell out the projection and the entry filter itself and call exactly
+// ONE pass (stampContextHighRecycle) — which was the real tick's whole list when
+// it was written, and had not been true since T-170e stage 1 wired the
+// token-expiry and survived-stop passes beside it. Every test driving this
+// helper was therefore measuring a tick a stage behind production, silently. It
+// calls the SAME entry point runOutsourceTick calls now, so that gap cannot
+// re-open.
+//
+// The re-read between the steps mirrors outsource_sched.go exactly: an earlier
+// step may have cleared the epoch, and the FSM must never act on the stale row.
 func workerTickPass(t *testing.T, api *apiServer, workerID string, now float64) {
 	t.Helper()
 	w, err := api.dal.GetOutsourceWorker(workerID)
@@ -61,14 +71,7 @@ func workerTickPass(t *testing.T, api *apiServer, workerID string, now float64) 
 	}
 	api.outsourceMu.Lock()
 	defer api.outsourceMu.Unlock()
-	// The context-threshold pass runs FIRST in the real tick, and it is the pass
-	// that OPENS a wind-down now (it replaced autoHandoverWorker's own threshold
-	// arm), so a helper that skipped it would make every threshold fixture look
-	// like "nothing fires".
-	if w.Status == WorkerStatusActive && w.DesiredState != DesiredStateOffline {
-		proj := []Member{memberFromWorker(*w)}
-		api.stampContextHighRecycle(proj, now)
-	}
+	api.runWorkerLifecyclePasses([]OutsourceWorker{*w}, now)
 	if reread, rerr := api.dal.GetOutsourceWorker(workerID); rerr == nil && reread != nil {
 		w = reread
 	}

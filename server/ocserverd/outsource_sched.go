@@ -381,7 +381,8 @@ func (s *apiServer) runOutsourceTick(now float64) {
 	//     report arrived) is force-reclaimed after workerReclaimGraceSecs —
 	//     the grace exists so a released worker can finish its §6.3 close-out
 	//     duties before the session is taken.
-	// ── the context thresholds, from the SAME pass staff use (T-72dd) ────────
+	// ── the pre-decide formalities, from the SAME list staff use (T-72dd,
+	//    T-170e stage 3) ─────────────────────────────────────────────────────
 	//
 	// 🔴 THIS REPLACES autoHandoverWorker's own threshold arm, and replacing it
 	// is the whole point of the ticket: the ruling about WHEN a session is wound
@@ -419,36 +420,15 @@ func (s *apiServer) runOutsourceTick(now float64) {
 	// reason that holds here identically: both stamp passes skip a row that
 	// already carries refocus_since, so whichever runs first owns the epoch —
 	// and only the context pair can escalate itself to 加速停止.
-	ctxProjections := make([]Member, 0, len(workers))
-	ctxIndex := make([]int, 0, len(workers))
-	for i := range workers {
-		if workers[i].Status != WorkerStatusActive ||
-			workers[i].DesiredState == DesiredStateOffline {
-			continue
-		}
-		ctxProjections = append(ctxProjections, memberFromWorker(workers[i]))
-		ctxIndex = append(ctxIndex, i)
-	}
-	s.stampContextHighRecycle(ctxProjections, now)
-	// A worker's session token is minted by mintAgentToken with the same TTL a
-	// staff token gets (worker_spawn.go), so it dies the same way — and the whole
-	// close-out is MCP calls carrying it.
-	s.stampTokenExpiryWinddown(ctxProjections, now)
-	// The survived-stop auto-clear: a desired-online worker OBSERVED online while
-	// still carrying stopping_since is provably past that stop. Without it the
-	// anchor sat on the row for the life of the session and the cockpit read
-	// 停止中 for a worker that was plainly working — a phantom 停止中.
-	s.clearStaleStoppingOnOnline(ctxProjections, now)
-	for j, i := range ctxIndex {
-		// Only the four wind-down fields are folded back, never the whole
-		// projection: workerFromMember re-derives Status from activated_ts, and
-		// round-tripping a row through it here would let an unrelated derivation
-		// change ride in on a context stamp.
-		workers[i].RefocusSince = ctxProjections[j].RefocusSince
-		workers[i].RefocusOp = ctxProjections[j].RefocusOp
-		workers[i].StoppingSince = ctxProjections[j].StoppingSince
-		workers[i].StoppedSince = ctxProjections[j].StoppedSince
-	}
+	//
+	// 🔴 T-170e stage 3: that order — and WHICH passes run at all — is no longer
+	// re-typed here. Both were, until the list, hand-maintained twice, and the
+	// only thing keeping the copies in step was that somebody remembered. The
+	// projection, the entry filter and the four-field fold-back are all inside
+	// runWorkerLifecyclePasses now (lifecycle_roster.go), which is also what the
+	// TESTS drive — the helper that used to hand-copy this block had already
+	// drifted a whole stage behind it.
+	s.runWorkerLifecyclePasses(workers, now)
 
 	for _, w := range workers {
 		// A refused live-worker kill (owner 停止/relocate toward a warden that

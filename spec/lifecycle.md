@@ -614,15 +614,40 @@ ONE-SHOT, never a standing order):
 - 🔴 **These passes reach an OUTSOURCE WORKER through a projection, not through the
   reconcile roster (T-170e).** The reconcile tick's roster read is `ListMembers`,
   which is `kind != 'outsource'` by construction, so a worker is never offered to
-  any of them; `runOutsourceTick` projects its ACTIVE, not-held-down workers with
-  `memberFromWorker`, runs the context pass, the token-expiry pass and the
-  stale-stopping sweep over that slice in the reconcile tick's order, then folds the
-  four wind-down fields back onto the worker rows. Until T-170e only the context
-  pass was projected, so a worker had no token-expiry lead (its session simply died
-  mid-task with no close-out) and no survived-stop sweep (a `stopping_since` left by
-  a stop it survived read 停止中 in the cockpit for the life of the session). **A
-  wind-down rule that is not on this list does not apply to workers, however
-  member-shaped its code looks.**
+  any of them; `runOutsourceTick` calls `runWorkerLifecyclePasses`
+  (`lifecycle_roster.go`), which projects its ACTIVE, not-held-down workers with
+  `memberFromWorker` and folds the four wind-down fields back onto the worker rows.
+  Until T-170e only the context pass was projected, so a worker had no token-expiry
+  lead (its session simply died mid-task with no close-out) and no survived-stop
+  sweep (a `stopping_since` left by a stop it survived read 停止中 in the cockpit for
+  the life of the session).
+- 🔴 **WHICH passes run, and in what order, is now ONE list: `lifecycleRosterPasses`
+  (`lifecycle_roster.go`), read by `runReconcileTick` and `runWorkerLifecyclePasses`
+  alike (T-170e stage 3).** There is no second call list to keep in step. Each pass
+  declares its own `AppliesTo`, so a formality added to the list reaches BOTH sides
+  by construction and one that must not has to write the restriction down where a
+  reader — and `lifecycle_roster_parity_t170e_test.go` — sees it by name. Exactly
+  one pass is restricted today: `recycle_loop_break` is staff-only, because a worker
+  already has a loop-break in `autoHandoverWorker` asking a different question
+  (`boot_ts > refocus_since`). A wind-down rule that goes ON this list and is then
+  quietly narrowed to one side fails by name in that test.
+  - 🔴 **KNOWN GAP — `LIFECYCLE-LIST-IS-OPT-IN-T170E`.** An earlier draft of this
+    bullet claimed "a wind-down rule that is not on this list does not apply to
+    anybody, however member-shaped its code looks." That is a **claim, not a
+    mechanism**, and it is corrected here rather than deleted because it was the
+    stronger-sounding half. Measured: a new pre-decide roster loop written the old
+    way — inline in `runReconcileTick`, staff roster only, never entered into
+    `lifecycleRosterPasses` — is caught by **nothing**. The list guards narrowing a
+    listed formality; it does not force a formality onto the list. Both historical
+    failures (token-expiry lead, survived-stop sweep) had the second shape, not the
+    first. Closing it needs an AST-level guard over both producers plus an explicit
+    exclusion list — T-170e stage 5, deliberately out of stage 3's scope.
+- 🔴 **The ENTRY filter is one function too: `lifecyclePolicyFor(m).ShouldExist()`.**
+  It is the only place the 正職/外包 difference may be spelled at the door — the
+  owner's ruling that 「正職會不會有 instance 存活取決於 人物設定有沒有這個角色，外包則是取決於
+  task 還是不是未完成狀態。其餘的部分應該要統一才對」. It replaced four hand-copies
+  (`runReconcileTick`, `reconcileMemberNow`, `runOutsourceTick`'s projection filter,
+  and the copy inside the test helper `workerTickPass`).
 - 🔴 **The 停止 → 加速停止 → 強制停止 ladder binds the WORKER side too, and it binds
   it at every stamp site — there are FIVE, not one.** `armRefocusEpoch` is the one
   way an epoch is OPENED (the fifth row below only PROMOTES one that is already
@@ -638,7 +663,7 @@ ONE-SHOT, never a standing order):
   | `HandleRefocusOutsourceWorker…` (`api_outsource.go`) | 重新聚焦 | **409** — the owner pressed a button, so he gets an answer (the staff twin `HandleRefocusMember` refuses on the same rule; the sentence differs in exactly one noun, `this worker` vs `this member`) |
   | `workerRestartSelf` (`worker_spawn.go`) | `restart_self` | **409** — the refusal is written by `HandleRestartSelfApiSelfRefocusPost` itself, VERBATIM the sentence its own staff arm writes further down in the same function (`m.Kind == KindOutsource` arm vs the fall-through `armRefocusEpoch` arm); the two arms are one rule |
   | `HandleAcceleratedStopOutsourceWorker…` | 加速停止 | n/a — it ADVANCES the ladder, and it deliberately does not zero the anchors (the twin of the staff 加速停止 arm) |
-  | `stampContextHighRecycle` promotion arm (`reconcile.go`, the `if promoting` branch) | none — the reconcile tick's own context pass, projected onto workers by the `stampContextHighRecycle(ctxProjections, now)` call in `outsource_sched.go` | n/a — it also ADVANCES, and only forwards: `canPromoteToAcceleratedStop` lets it move `context_notice` → `context_high` and nothing else. It hand-writes `refocus_since` / `refocus_op` INSTEAD of calling `armRefocusEpoch` on purpose — that helper zeroes the wind-down anchors, and here they belong to a close-out already in flight (see the `armRefocusEpoch is deliberately NOT used` note directly above that assignment) |
+  | `stampContextHighRecycle` promotion arm (`reconcile.go`, the `if promoting` branch) | none — the reconcile tick's own context pass, projected onto workers by `runWorkerLifecyclePasses` (`lifecycle_roster.go`), which `runOutsourceTick` calls | n/a — it also ADVANCES, and only forwards: `canPromoteToAcceleratedStop` lets it move `context_notice` → `context_high` and nothing else. It hand-writes `refocus_since` / `refocus_op` INSTEAD of calling `armRefocusEpoch` on purpose — that helper zeroes the wind-down anchors, and here they belong to a close-out already in flight (see the `armRefocusEpoch is deliberately NOT used` note directly above that assignment) |
   ⚠️ **`重啟` (restart) is a deliberate hole in this table, not a missing row.**
   `ownerOpDisplacesTheSession(restart) == true` (`worker_spawn.go`), so the
   `!ownerOpDisplacesTheSession(op) && s.workerHasStateToFlush(w)` arm in

@@ -2396,10 +2396,12 @@ func (s *apiServer) clearStaleStoppingOnOnline(members []Member, now float64) {
 
 // ── the cadence tick + the event-driven seams ─────────────────────────────────
 
-// runReconcileTick runs ONE producer tick over the roster snapshot: the three
-// pre-decide passes, then decide→dispatch per candidate. Candidates (§4.1):
-// every ACTIVE non-warden member, plus any ACTIVE warden whose desired_state
-// is uninstall. Serialized with the event-driven ticks via reconcileMu;
+// runReconcileTick runs ONE producer tick over the roster snapshot: THE entry
+// filter, THE shared pre-decide formalities (lifecycle_roster.go — the same
+// list the outsource producer runs), the receipt sweep, then decide→dispatch
+// per candidate. Candidates (§4.1): every ACTIVE non-warden member, plus any
+// ACTIVE warden whose desired_state is uninstall — which is what
+// lifecyclePolicyFor's staff arm says. Serialized with the event-driven ticks via reconcileMu;
 // best-effort — a fault is logged, never raised into the cadence loop.
 func (s *apiServer) runReconcileTick(now float64) {
 	defer func() {
@@ -2416,28 +2418,20 @@ func (s *apiServer) runReconcileTick(now float64) {
 	}
 	var members []Member
 	for _, m := range all {
-		if m.RosterStatus != RosterStatusActive {
+		// THE entry filter (lifecycle_roster.go). It used to be written out here
+		// by hand, and again in reconcileMemberNow, and a third time — in its
+		// outsource dialect — in runOutsourceTick. One question, one answer.
+		if !lifecyclePolicyFor(m).ShouldExist() {
 			continue
-		}
-		if m.Kind == KindWarden && parseDesired(m.DesiredState) != DesiredStateUninstall {
-			continue // no warden reconciles another warden's spawn/stop
 		}
 		members = append(members, m)
 	}
-	s.stampContextHighRecycle(members, now)
-	// AFTER the context pair, and the order is load-bearing. Both passes skip a
-	// member that already carries refocus_since, so whichever runs first owns the
-	// epoch for that member. Reversed, a session that is BOTH out of context and
-	// near token expiry would be stamped token_expiry — a soft, unclocked cause —
-	// and stampContextHighRecycle's one promotion arm would then decline it
-	// (canPromoteToAcceleratedStop only promotes a context_notice epoch), so the
-	// second context threshold would never open its 加速停止 on that member at all.
-	// This order lets the context pair keep its own escalation, and the token pass
-	// picks up everyone the context pair did not claim.
-	s.stampTokenExpiryWinddown(members, now)
-	s.clearRecycleMarkersOnRespawn(members)
-	s.clearStaleStoppingOnOnline(members, now)
-	s.consumeUninstallIntentOnOffline(members)
+	// THE pre-decide formalities, in THE order, from THE list
+	// (lifecycle_roster.go lifecycleRosterPasses). There is no second list: the
+	// outsource producer runs this same one through runWorkerLifecyclePasses, so
+	// a formality added here reaches a worker by construction and one that must
+	// not has to say so as its own AppliesTo.
+	s.runLifecycleRosterPasses(members, now)
 	// The receipt deadline (receipt_watch.go) — swept BEFORE the decide pass so
 	// a start/stop armed by THIS tick always gets a full window, never a same-
 	// tick sweep. Covers workers too: their start/stop rides the member verbs
@@ -2485,11 +2479,13 @@ func (s *apiServer) reconcileMemberNow(memberID string) reconcileDecision {
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
 	m, err := s.dal.GetMember(memberID)
-	if err != nil || m == nil || m.RosterStatus != RosterStatusActive {
+	if err != nil || m == nil {
 		return reconcileDecision{}
 	}
-	if m.Kind == KindWarden && parseDesired(m.DesiredState) != DesiredStateUninstall {
-		return reconcileDecision{} // a warden is never an agent-lifecycle spawn/stop candidate
+	// THE entry filter, the same one the cadence asks (lifecycle_roster.go).
+	// This used to be a hand-copy of the cadence's two conditions.
+	if !lifecyclePolicyFor(*m).ShouldExist() {
+		return reconcileDecision{}
 	}
 	reconcileLog("instant tick: member %s", memberID)
 	return s.reconcileTickMemberLocked(*m, nowSecs())
@@ -2631,8 +2627,68 @@ func (s *apiServer) dispatchIdentitySweepNow(memberID, keepWarden string, now fl
 //     machine is reaped the moment the 正身 connects on the dispatched machine.
 //
 // Best-effort; a read fault or a warden sub is a clean no-op. Gated OFF by
-// --no-reconcile. Lock order: outsourceMu (worker target read) strictly BEFORE
-// reconcileMu — the one place both are held; nothing takes them reversed.
+// --no-reconcile.
+//
+// 🔴 CORRECTION (T-170e stage 3 — this comment used to say something false).
+// It read:
+//
+//	"Lock order: outsourceMu (worker target read) strictly BEFORE reconcileMu
+//	 — the one place both are held; nothing takes them reversed."
+//
+// The last clause was true; the middle one was not, and it is the half that
+// got quoted. THIS FUNCTION NEVER HOLDS BOTH LOCKS. The worker target read
+// goes through workerSpawnObs (worker_spawn.go), which takes s.outsourceMu and
+// releases it with `defer` inside its OWN body — so by the time control
+// returns here and s.reconcileMu.Lock() below runs, outsourceMu is already
+// gone. The neighbouring comments said so all along and contradicted this one:
+// workerSpawnObs's own doc ("…the identity-sweep 正身 check, which never hold
+// s.outsourceMu") and connectionIsTheGenuineArticle's ("Both callers reach
+// this WITHOUT holding s.outsourceMu").
+//
+// Re-measured over every non-test .go in the package (over-approximate call
+// graph: any identifier matching a declared name counts as an edge, so method
+// values passed without parens — `Run: s.stampContextHighRecycle` — count):
+// ZERO paths in either direction acquire one of {reconcileMu, outsourceMu}
+// while the other is held. There is therefore no ordering edge between them at
+// all, in either direction — not an order to obey, and not a deadlock to fear.
+//
+// The record is kept rather than the sentence silently swapped because the
+// false version was cited as a hard technical obstacle ("merging the two ticks
+// would invert a documented lock order") in T-170e stage 3's first write-up.
+// It was not one. If the two ticks are ever merged, the real constraint is a
+// different one and it is SELF-deadlock, not inversion: a merged tick holding
+// outsourceMu for its whole body must not call a helper that takes outsourceMu
+// again (Go mutexes are not reentrant).
+//
+// 🔴 SECOND CORRECTION (same stage, next pass — the paragraph you are reading
+// shipped its OWN false sentence in the round that wrote the correction
+// above). It used to end with a five-name hazard list:
+//
+//	"— workerSpawnObs, workerReportStopping, dismissOutsourceWorkersForTask,
+//	 dismissOutsourceWorkerByID, noteWorkerStopNoSuchSession."
+//
+// That was not the hazard set. It omitted workerReportStopped,
+// workerReportWaking and workerRestartSelf — the three siblings sitting beside
+// workerReportStopping in the same file, called from the same handlers, taking
+// the same lock — and foldWorkerCommandResult, stampReportedLaunchFacts and
+// relocateWorkerByID besides. For a "do not call these" list, omission is the
+// dangerous direction, and this one drifted inside a single stage with nothing
+// able to report it.
+//
+// So it is not re-typed, and no successor list is offered. THE HAZARD SET IS
+// WHAT THIS GREP RETURNS, minus runOutsourceTick itself (the tick that would
+// be the one holding the lock):
+//
+//	grep -rn 'outsourceMu\.Lock()' --include='*.go' . | grep -v _test.go
+//
+// outsourceMu is a plain sync.Mutex (api_stub.go), so Lock is the only acquire
+// form and that grep cannot miss one. Run it before you merge; do not trust a
+// count written here — at the time of writing it was 18 sites in 18 distinct
+// functions, one of which is runOutsourceTick.
+//
+// The safety claim is unchanged and never rested on the list: runReconcileTick's
+// call tree reaches NONE of those acquirers today — all of them, not merely the
+// five that happened to be named.
 func (s *apiServer) identitySweepOnConnect(memberID, machineClaim string) {
 	if s.noReconcile || memberID == "" || machineClaim == "" {
 		return
