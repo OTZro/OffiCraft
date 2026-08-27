@@ -282,6 +282,43 @@ export function MemberDetailPanel({
   const [settingsError, setSettingsError] = useState("");
   const [relocateUndispatched, setRelocateUndispatched] = useState(false);
 
+  // 🔴 T-ae8b. `settingsRuntime` is a DISPLAY value: a member whose runtime has
+  // never been chosen persists "" (unset — resolved against the host's measured
+  // capabilities at placement time), and the select cannot render nothing, so
+  // `member.runtime || "claude"` fills the control with claude. That fill is NOT
+  // an owner decision, and it must never leave this component as one.
+  //
+  // The bug this closes was narrow and one-way: editing ONLY the model or the
+  // effort makes `launchChanged` true, and the PATCH body then carried
+  // `runtime: settingsRuntime` — the fill — alongside the edit the owner DID
+  // make. The server stores a supplied runtime verbatim, so one model tweak
+  // wrote a concrete `claude` over the unset value and permanently switched that
+  // member off the auto-resolution this ticket exists to give them. On a
+  // codex-only host that is the original failure, re-armed, from a dialog where
+  // the owner never touched the runtime control.
+  //
+  // The rule: `runtime` rides the PATCH only when the control actually MOVED off
+  // what it was showing. An unsupplied field leaves the stored value untouched
+  // (PATCH semantics, pinned in api/http.mutations.test.ts), and "" cannot be
+  // sent instead — ValidRuntime rejects it with a 422.
+  //
+  // ⚠️ THE COST, stated: an owner looking at an unset member sees `claude` and
+  // cannot pin that same claude deliberately, because re-choosing the value on
+  // screen is indistinguishable from not choosing at all. That trade is
+  // deliberate — the two readings are already indistinguishable to the owner, and
+  // only one of them can be honoured; honouring the silent one is what broke
+  // auto-resolution. An owner who wants claude nailed down can still pick codex
+  // and come back, and on any claude-capable host the resolution lands on claude
+  // anyway. Widening this (a dirty-flag on the control) would fire on a re-pick
+  // but NOT on a native select re-choosing its current option, so it would be a
+  // rule that only sometimes works — worse than a rule that always does.
+  const runtimeChanged = settingsRuntime !== (member.runtime || "claude");
+  const launchIntentPatch = () => ({
+    ...(runtimeChanged ? { runtime: settingsRuntime } : {}),
+    model: settingsModel.trim(),
+    effort: settingsEffort,
+  });
+
   // ⚠️ NO LONGER A TWIN (T-7526). This block used to be the hand-written copy of
   // a shared relocate hook's notice hygiene, and the instruction here was
   // "change both TOGETHER" — because the outsource panel still drove that hook.
@@ -388,7 +425,7 @@ export function MemberDetailPanel({
   async function saveSettingsOnly() {
     if (!settingsMachineId || awake) return;
     const launchChanged =
-      settingsRuntime !== (member.runtime || "claude") ||
+      runtimeChanged ||
       settingsModel.trim() !== member.model ||
       settingsEffort !== member.effort;
     const machineChanged = settingsMachineId !== member.desiredMachineId;
@@ -400,11 +437,7 @@ export function MemberDetailPanel({
     setSettingsError("");
     try {
       if (launchChanged) {
-        await api.patchMember(member.id, {
-          runtime: settingsRuntime,
-          model: settingsModel.trim(),
-          effort: settingsEffort,
-        });
+        await api.patchMember(member.id, launchIntentPatch());
       }
       // Placement-only re-pin: the server's relocate never touches
       // desired_state, so for an offline member this is the whole honest effect
@@ -425,7 +458,7 @@ export function MemberDetailPanel({
   async function saveSettings() {
     if (!settingsMachineId) return;
     const launchChanged =
-      settingsRuntime !== (member.runtime || "claude") ||
+      runtimeChanged ||
       settingsModel.trim() !== member.model ||
       settingsEffort !== member.effort;
     const machineChanged = settingsMachineId !== member.desiredMachineId;
@@ -463,11 +496,7 @@ export function MemberDetailPanel({
       // owner's edit only takes effect one handover later. Reversing these two
       // lines is exactly that bug.
       if (launchChanged) {
-        await api.patchMember(member.id, {
-          runtime: settingsRuntime,
-          model: settingsModel.trim(),
-          effort: settingsEffort,
-        });
+        await api.patchMember(member.id, launchIntentPatch());
       }
       // Only a confirmed online session is gracefully relocated. A `waking`
       // member's Spawn action is the force-revive path and must reach activate.

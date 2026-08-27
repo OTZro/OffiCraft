@@ -211,6 +211,77 @@ reads (`last_op_reason` — `no_machine_selected`, and `machine_unavailable` for
 outsource worker whose named machine cannot take it), and reconcile retries after
 telemetry or placement changes.
 
+### An UNSET runtime is resolved at placement, from that machine
+
+A member row may hold NO runtime at all. That is a durable third state, distinct from
+"the owner picked claude" (T-b3d0): `seedOutOfBox` writes Mira with no runtime, and the
+two creation paths that mint a member — `hire_member` (`POST /api/members`) and
+`POST /api/roles`, the cockpit's 招攬新成員 — leave it empty when the caller names none
+(T-ae8b). `resolveEmptyRuntimeForPlacement` (`server/ocserverd/reconcile.go`) fills it at
+the first START dispatch, from the target machine's reported `runtimes` map, and persists
+the choice on the roster row: claude if ready, else codex if ready, else nothing is
+persisted — the resolver refuses to freeze a guess onto the row. It does NOT follow that
+an unready box is refused: the runtime stays unset, `NormalizeRuntime` folds it to
+`claude`, and `machineSupportsRuntime`'s claude arm is deliberately permissive
+(`api_machines.go` — the `OC_CLAUDE_CRED_CHECK=0` escape hatch), so the START is still
+dispatched and the failure surfaces at spawn time, not at the gate. A member whose
+runtime is already set is never touched; the owner's choice always wins. No capability
+map reported yet leaves it unset, which is today's legacy behaviour
+(`NormalizeRuntime("") == claude`).
+
+**One reported shape is treated as UNKNOWN rather than as an answer**: a claude entry of
+`{"installed": true, "logged_in": false}`. No current warden can produce it —
+`collectRuntimeCapabilities` is evidence-only for Claude and OMITS `logged_in` when its
+two presence checks find nothing — so an explicit `false` dates the reporter to a warden
+older than v0.5.211-beta.1, where that `false` was a guess rather than a measurement. The
+spawn-side gate routinely disproves it: it honours four env-carried credential sources the
+probe never inspects (two direct keys plus the Bedrock / Vertex managed-auth flags, where
+no local claude login exists at all). Reading the stale `false` as "this box cannot run
+Claude" already cost one machine once, permanently pinned to codex with no backfill to
+undo it; T-ae8b makes every hire born UNSET, so the same stale `false` would now reach
+every future member on that machine instead of just the seeded one. So the resolver
+declines to choose, leaves the runtime unset, and logs why and what to do about it
+(upgrade that machine's warden, or set the member's 執行環境 by hand). The START still
+goes out on the permissive claude path, so either it launches — proving the `false` was a
+guess — or it fails at spawn with `claude_not_logged_in`, which names the Codex exit. A
+visible, reversible failure is preferred to an invisible irreversible guess. Codex gets no
+such grace and must not: `codex login status` is a real command, so its `false` is a
+measurement.
+
+🔴 **The consequence, which is deliberate and owner-known: hiring is not a pure
+function of the request.** The same `hire_member` call yields a Claude member on one
+machine and a Codex member on another, because the answer is read from the machine at
+placement time, not from the request. This is the point — a codex-only box must be able
+to hire without first installing Claude Code — but it means the runtime a new member ends
+up on **cannot be predicted from the request alone**. A caller who needs a specific
+runtime must name it explicitly; naming it also pins it permanently.
+
+Nothing about this is visible on the wire. Every DTO runs `NormalizeRuntime`, so an unset
+row is reported as `claude` in API responses and in the cockpit, exactly as before; only
+the persisted value changed. One trap follows from that pairing: the cockpit's 喚醒／更改
+dialog seeds its runtime cell from the normalized value (`member.runtime || "claude"`,
+`MemberDetailPanel.tsx`). Confirming it UNCHANGED is safe — both submit paths compute
+`launchChanged` over runtime/model/effort first and skip `patchMember` when nothing moved,
+and the offline wake branch sits outside that guard — so an untouched dialog writes no
+runtime. That left a narrower trap, and it is now CLOSED: editing **model or effort**
+makes `launchChanged` true, and the seeded runtime cell used to ride along in the same
+PATCH — writing a concrete `claude` onto a member nobody chose one for and permanently
+disabling the resolution above, from a dialog where the owner never touched the runtime
+control.
+
+The panel now sends `runtime` only when that control actually MOVED off what it was
+showing (`runtimeChanged`); an unsupplied field leaves the stored value untouched, and `""`
+cannot be sent instead because `ValidRuntime` 422s it. Pinned by
+`MemberDetailPanel.runtime-unset-not-submitted.test.tsx`, whose fourth case is the positive
+control that the panel still emits `runtime` for a real pick.
+
+⚠️ The cost, stated so nobody re-opens it as a bug: an owner looking at an unset member sees
+`claude` and cannot deliberately pin THAT claude from this dialog, because re-choosing the
+value already on screen is indistinguishable from not choosing at all. Only one of the two
+readings can be honoured and honouring the silent one is what broke resolution. A dirty-flag
+on the control would not fix this either — a native select re-choosing its current option
+fires no change event, so it would be a rule that only sometimes works.
+
 ## Launch policy
 
 The selected adapter receives the shared launch knobs:

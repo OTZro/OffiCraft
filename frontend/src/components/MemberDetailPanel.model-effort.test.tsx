@@ -129,8 +129,11 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
 
     await confirmSettings();
     await waitFor(() =>
+      // NO `runtime` key: this member's runtime is unset and the owner only
+      // touched model/effort, so the dialog's claude FILL must not be written
+      // over the unset value (T-ae8b). Pinned on its own in
+      // MemberDetailPanel.runtime-unset-not-submitted.test.tsx.
       expect(patchMember).toHaveBeenCalledWith("mira", {
-        runtime: "claude",
         model: "sonnet",
         effort: "high",
       })
@@ -168,7 +171,6 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
     await confirmSettings();
     await waitFor(() =>
       expect(patchMember).toHaveBeenCalledWith("mira", {
-        runtime: "claude",
         model: "claude-x-preview",
         effort: "medium",
       })
@@ -182,7 +184,6 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
     await confirmSettings();
     await waitFor(() =>
       expect(patchMember).toHaveBeenLastCalledWith("mira", {
-        runtime: "claude",
         model: "",
         effort: "medium",
       })

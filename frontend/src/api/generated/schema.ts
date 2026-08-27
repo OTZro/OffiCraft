@@ -1717,11 +1717,11 @@ export interface paths {
         get: operations["handle_list_members_api_members_get"];
         put?: never;
         /**
-         * Hire a member (server mints the id). runtime defaults to claude and only claude/codex are accepted; effort defaults to medium and is validated; a hire that names kind or role_key is admin-gated.
+         * Hire a member (server mints the id). An omitted runtime is stored UNSET and resolved from the target host's reported runtime capabilities at first placement (a codex-only host grows a codex member) rather than written as claude; only claude/codex are accepted when you do name one; effort defaults to medium and is validated; a hire that names kind or role_key is admin-gated.
          * @description Hire a roster member (§3.4 #9; pure seam, no UI). The owner assigns the
          *     display ``name``; the server mints the ``id`` (``m-<hex>`` — never client
          *     supplied, it is the attribution key). The member starts offline/active; hiring
-         *     does NOT spawn a runtime. ``runtime`` is claude/codex (absent = claude), and
+         *     does NOT spawn a runtime. ``runtime`` is claude/codex (absent = stored UNSET and resolved at first placement from the host's reported capabilities), and
          *     ``model`` is provider-specific. A blank ``name`` or invalid runtime is a 422.
          *
          *     PRIVILEGE GUARD (closes the hire escalation hole): ``kind`` / ``role_key``
@@ -2832,7 +2832,7 @@ export interface paths {
         get: operations["handle_list_roles_api_roles_get"];
         put?: never;
         /**
-         * Create a custom role + its founding member (one pair per call). runtime is claude/codex (absent = claude).
+         * Create a custom role + its founding member (one pair per call). runtime is claude/codex; absent = stored UNSET and resolved at the founding member's first placement from the host's reported capabilities, not written as claude.
          * @description Create ONE custom role + its ONE founding member (M2-2 角色誌新增;
          *     ``POST /api/roles``). One pair per call — 同角色多成員 / 零成員 is out of
          *     scope by decree. Admin-gated (requires="admin_agent") like every role write.
@@ -2847,7 +2847,8 @@ export interface paths {
          *     server picks a fresh Mira-style name from ``domain.member.MEMBER_NAME_POOL``,
          *     skipping every name already on the roster (case-insensitive, removed rows
          *     included so a revived audit-trail name never doubles). ``runtime`` is
-         *     claude/codex (omitted ⇒ claude); ``model`` is a free provider launch string
+         *     claude/codex (omitted ⇒ stored UNSET, resolved at first placement from the
+         *     host's reported capabilities); ``model`` is a free provider launch string
          *     (blank/omitted ⇒ selected-runtime default); ``effort`` is the closed
          *     low/medium/high/max vocabulary (422 outside it; omitted ⇒ medium) — all three are
          *     baked into the NEXT wake's launch command by the reconcile START payload
@@ -6036,7 +6037,7 @@ export interface components {
          * MemberHireDTO
          * @description Hire (create) a roster member (§3.4 #9; pure seam, no UI). The owner assigns
          *     a display ``name``; the server mints the ``id`` (never client-supplied — it is
-         *     the attribution key). ``kind``/``runtime``/``model``/``effort``/``role_key`` are optional; omitted ``runtime`` defaults to ``claude``.
+         *     the attribution key). ``kind``/``runtime``/``model``/``effort``/``role_key`` are optional; an omitted ``runtime`` is stored UNSET and resolved at first placement from the target host's reported runtime capabilities (a codex-only host grows a codex member); the response still reads back ``claude`` until that resolution lands.
          */
         MemberHireDTO: {
             /** Effort */
@@ -6051,7 +6052,7 @@ export interface components {
             role_key?: string | null;
             /**
              * Runtime Key
-             * @description Optional provider runtime; null/omitted defaults to ``claude``.
+             * @description Optional provider runtime; null/omitted is stored UNSET and resolved at first placement from the host's reported runtime capabilities, never written as a concrete ``claude`` at hire time; it reads back as ``claude`` until then.
              */
             runtime?: components["schemas"]["AgentRuntime"] | null;
         };
@@ -7209,7 +7210,7 @@ export interface components {
          *     name — OPTIONAL: omitted/blank ⇒ the server picks a fresh name from the
          *     ``domain.member.MEMBER_NAME_POOL`` (Mira-style short English names), never
          *     colliding with an existing roster member. ``runtime`` / ``model`` / ``effort``
-         *     are the member's launch knobs — runtime is claude/codex (omitted ⇒ claude),
+         *     are the member's launch knobs — runtime is claude/codex (omitted ⇒ stored UNSET, resolved at the founding member's first placement from the host's reported capabilities),
          *     model is a free string (blank/omitted ⇒ selected-runtime default), effort is
          *     the closed low/medium/high/max vocabulary (unknown → 422; omitted ⇒ medium). The
          *     server mints BOTH ids (role key + member id) — never client-supplied.
@@ -7225,7 +7226,7 @@ export interface components {
             name: string;
             /**
              * Runtime Key
-             * @description Founding member runtime; null/omitted defaults to ``claude``.
+             * @description Founding member runtime; null/omitted is stored UNSET and resolved at first placement from the host's reported runtime capabilities, never written as a concrete ``claude`` at creation time; it reads back as ``claude`` until then.
              */
             runtime?: components["schemas"]["AgentRuntime"] | null;
         };

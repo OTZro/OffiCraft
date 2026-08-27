@@ -1090,6 +1090,51 @@ func (s *apiServer) resolveEmptyRuntimeForPlacement(m *Member, warden string) {
 	if len(capabilities) == 0 {
 		return
 	}
+	// LEGACY-WARDEN CLAUDE SHAPE => UNKNOWN, NOT "NO".
+	//
+	// `claude: {installed:true, logged_in:false}` is a shape no current warden
+	// can produce. collectRuntimeCapabilities (cli/ocwarden/runtimeprobe.go) is
+	// evidence-only for Claude: it has no login probe, only two presence checks
+	// (credential file, keychain item), so finding neither OMITS the key rather
+	// than asserting false. An explicit false on the claude entry therefore
+	// dates the reporter — it can only come from a warden older than the
+	// evidence-only fix, which shipped in v0.5.211-beta.1.
+	//
+	// Reading that stale guess as "this box cannot run Claude" is exactly the
+	// mistake that already happened once, and the probe's own comment records
+	// it: the spawn-side gate honours FOUR env-carried credential sources this
+	// probe never looks at (two direct keys plus the Bedrock / Vertex
+	// managed-auth flags, where no local claude login exists at all), so hosts
+	// on Bedrock or Vertex reported logged_in:false and were PERSISTED as
+	// codex — "a machine that could have run claude perfectly well, pinned to
+	// the other runtime with no way back". Before T-ae8b that cost one member
+	// (the out-of-box assistant, the only row ever born UNSET). T-ae8b makes
+	// EVERY hire and EVERY new role born UNSET, so the same stale false would
+	// now silently pin every future member on that machine.
+	//
+	// So: decline to choose, and leave the runtime unset. That is not a
+	// refusal — unset normalizes to claude and machineSupportsRuntime's claude
+	// arm is permissive by contract, so the START still goes out. Either it
+	// launches (env-carried credential, or OC_CLAUDE_CRED_CHECK=0) and the
+	// stale false is revealed as the guess it was, or it fails at spawn with
+	// claude_not_logged_in, which names the escape routes including "set this
+	// member's 執行環境 to Codex". A visible, reversible failure beats an
+	// invisible irreversible guess; the owner keeps the choice either way.
+	//
+	// Codex gets no such grace and must not: `codex login status` is a real
+	// command, so its false is a MEASUREMENT, not an absence of evidence.
+	if claude := capabilities[RuntimeClaude]; claude.Installed != nil && *claude.Installed &&
+		claude.LoggedIn != nil && !*claude.LoggedIn {
+		reconcileLog("%s: machine %q reports claude installed with logged_in:false — a shape only a "+
+			"warden older than v0.5.211-beta.1 emits, where it means \"no credential evidence found\", "+
+			"NOT \"signed out\". Declining to auto-resolve this member to codex, because persisting "+
+			"that choice is irreversible and this machine may well run claude (env-carried key, "+
+			"Bedrock/Vertex managed auth, or OC_CLAUDE_CRED_CHECK=0). Leaving 執行環境 unset: the "+
+			"start still goes out as claude, and if it really is signed out the spawn will say so and "+
+			"name the Codex exit. To choose deliberately instead: upgrade that machine's warden, or "+
+			"set this member's 執行環境 by hand.", m.ID, warden)
+		return
+	}
 	resolved := ""
 	switch {
 	case runtimeCapabilityReady(capabilities[RuntimeClaude]):
