@@ -59,6 +59,15 @@ package main
 // T-170e stage 5's scope, not this stage's — deliberately not attempted here,
 // and named rather than left as a nice-sounding claim. Grep this anchor to
 // find every place the gap is recorded.
+//
+// ✅ STAGE 5 BUILT IT: lifecycle_identity_gate_t170e_test.go. The paragraph
+// above stands as written — it was true when written and it is the record of
+// what was measured — but the "is invisible to every test in this package
+// today (measured: green)" sentence is now HISTORY, not the present tense. That
+// same mutant reddens TestTickProducersHaveNoUndeclaredRosterLoop, which
+// enumerates every iteration inside both producers by name and by count and
+// needs no kind expression to do it. Read that file's header before adding a
+// loop to either producer, or a kind branch anywhere in this package.
 
 // ── the entry filter ─────────────────────────────────────────────────────────
 
