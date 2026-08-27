@@ -120,10 +120,13 @@ describe("useMachines", () => {
   // timeout that happened to be shorter than the delay. So asserting the final
   // value alone asserts nothing.
   //
-  // The anchor here is causal, not eventual: `refreshSeconds` is pushed an hour
-  // out and NO timer is advanced, so the trailing poll provably cannot be what
-  // repaired the view — the call-count assertion pins that down. The only thing
-  // that can put the new machine on screen is the in-flight response itself.
+  // The anchor here is causal, not eventual. What actually excludes the trailing
+  // poll is that these run on FAKE TIMERS THAT ARE NEVER ADVANCED: no scheduled
+  // callback can fire at all, so no poll can be what repaired the view, and the
+  // call-count assertion pins that down. `refreshSeconds: ONE_HOUR` is belt-and-
+  // braces for a reader, not the mechanism — this case is equally non-tautological
+  // at the default 5. The only thing that can put the new machine on screen is
+  // the in-flight response itself.
   // MUTANT (proven 2026-08-27): put `requestVersion.current += 1;` back at the
   // top of the monitor/member branch in useMachines.ts → this reddens on the
   // named assertion below, "the mid-flight member frame must not discard the

@@ -13,11 +13,13 @@
 // heartbeat landing inside that refetch discarded the renamed label and left the
 // panel showing the OLD name for up to 5 seconds.
 //
-// Both cases below are anchored causally rather than eventually: `refreshSeconds`
-// is pushed an hour out and no timer is advanced, so the trailing poll provably
-// cannot be what repaired the view — the request-count assertions pin that down.
-// Asserting only "the new label shows up eventually" would pass on the broken
-// hook too, since the poll reaches the same final state.
+// Both cases below are anchored causally rather than eventually. What excludes
+// the trailing poll is that they run on FAKE TIMERS THAT ARE NEVER ADVANCED —
+// no scheduled callback can fire at all — and the request-count assertions pin
+// that down. `refreshSeconds: ONE_HOUR` is belt-and-braces for a reader, not the
+// mechanism; these stay non-tautological at the default 5. Asserting only "the
+// new label shows up eventually" would pass on the broken hook too, since the
+// poll reaches the same final state.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";

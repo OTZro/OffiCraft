@@ -196,10 +196,46 @@ test.describe('B10 · settings roles + monitor — inline create rows & gating',
     await expect(row, 'a successful create collapses the row').toHaveCount(0, {
       timeout: 10_000,
     });
+
+    // ── T-10: both assertions below are anchored so the 5s trailing poll can
+    // NOT be what satisfies them. Without that, this step is a luck detector.
+    //
+    // MonitorPage's onboard awaits `refetchMachines()` and only THEN collapses
+    // the row, so under a correct hook the new row is already committed when
+    // the collapse above passes — required latency is zero. When the hook
+    // instead discards that refetch (the T-10 defect), the row arrives only on
+    // the trailing poll, and both assertions must fail rather than wait it out.
+    //
+    // Measured on this suite's own flow (fresh station, /api/settings reports
+    // monitoring_refresh_seconds=5): the row collapses ~0.25s after mount and
+    // the trailing poll lands ~5.1s after mount — a gap of 4907/4950/5019ms
+    // over three runs. Playwright's default expect timeout is 5000ms (this
+    // config sets no `expect.timeout`), so the old bare `toContainText` was
+    // racing that poll to within ~50ms and usually LOSING the race in the
+    // defect's favour — i.e. going green on a broken hook. The CI trace on
+    // run 33033163627 is the same race landing 4ms the other way.
+    //
+    // (1) The causal anchor: read the table at the moment of collapse. No later
+    //     poll, at any speed, can retroactively satisfy this.
+    const tableAtCollapse = await page
+      .locator('.mon-table, table')
+      .first()
+      .innerText();
+    expect(
+      tableAtCollapse,
+      'the new row must already be in the table when the inline row collapses — ' +
+        'arriving later means the create refetch was discarded and only the 5s poll repaired it',
+    ).toContain(MACHINE_NAME);
+
+    // (2) The retrying assertion, kept for a genuinely slow render, but with an
+    //     explicit budget FAR below the ~4.9s poll gap. 2s is ~2900ms of
+    //     clearance under the poll while still granting 2s to a DOM check that
+    //     is already satisfied, so it cannot turn into a new false RED — the
+    //     failure mode this whole ticket must not create.
     await expect(
       page.locator('.mon-table, table').first(),
       'the machine table must show the new row under the typed name',
-    ).toContainText(MACHINE_NAME);
+    ).toContainText(MACHINE_NAME, { timeout: 2_000 });
     // API對照: the registry carries it (created via POST /api/machines).
     const machines = await (
       await request.get(`${BASE}/api/machines`, { headers: authHeaders(token) })
