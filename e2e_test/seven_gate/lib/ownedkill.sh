@@ -24,18 +24,30 @@
 #      means KILL NOTHING — the failure mode of a missing record must be a leaked
 #      session (recoverable, visible), never a wrong kill (irreversible).
 #
-# Both layers are guarded in tests_guard case (24), each with a mutant applied to
-# a COPY of the file it mutates:
-#   * MUT-nosocket  — live.sh's TMUX_SOCKET put back to `${OC_SG_TMUX_SOCKET:-officraft}`.
-#   * MUT-pgrep     — the exact-pid kill relaxed to `kill $(pgrep -f …)`.
-#   * MUT-listpick  — the exact-name kill relaxed to list-the-sessions-and-pick.
-# Verified by applying each to the REAL file and running the suite: rc=1 with
-# 4 / 2 / 2 named FAILs respectively (2026-08-10).
-# And a POSITIVE CONTROL, because every assertion here is an assertion of
-# absence and "safe" is trivially achieved by killing nothing — that green looks
-# exactly like the real one. So case 24 spawns a REAL process, records it, and
-# requires it to actually die, while a byte-identical un-recorded process next to
-# it must survive.
+# ONLY LAYER 1 IS GUARDED. tests_guard case (24) still pins the PHYSICAL layer
+# with MUT-nosocket — live.sh's TMUX_SOCKET put back to
+# `${OC_SG_TMUX_SOCKET:-officraft}` on a COPY, which must make sg_own_socket_assert
+# refuse by name before a single tmux command is issued.
+#
+# 🔴 LAYER 2 HAS NO TEST AT ALL. THIS FILE IS NOT GUARDED BY ANYTHING.
+# The ownership half of case 24 was removed by owner ruling: MUT-pgrep,
+# MUT-listpick, the positive control on real processes (a recorded pid dies while
+# a byte-identical un-recorded one survives), the ledger-is-the-authority and
+# fail-closed session assertions, and the directory-wide scan that banned
+# `pkill`/`killall`/`pgrep` from every .sh under seven_gate/.
+# CONCRETELY, and this is the shape to watch for in review because CI will not
+# say it: change the `kill "$pid"` in sg_own_kill_pids to a name match
+# (`pkill -f` / `pgrep -f "…"`), or relax the exact `kill-session` in
+# sg_own_kill_sessions to "list the sessions and pick the ones that look like
+# ours", and THE SUITE STAYS GREEN. Either shape kills processes and sessions
+# this run never created; on a fleet host that is somebody else's live agent, or
+# the ocserverd that a `pkill -f` took down for 27 seconds on 2026-08-11. The
+# socket layer above does NOT cover this — a pid has no socket, and a look-alike
+# session name on our own socket is still not ours.
+# The only remaining protection is prose: root CLAUDE.md §13, and this comment.
+# Every assertion this file's rules make is an assertion of ABSENCE, and "safe"
+# is trivially achieved by killing nothing — so the positive control that made
+# the difference visible is exactly what is gone.
 
 # The live fleet's socket name — cli/ocwarden/tmux.go `tmuxSocket`. Named here
 # ONLY so it can be refused; nothing in this harness may ever target it.

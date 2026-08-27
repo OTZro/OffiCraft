@@ -1582,7 +1582,21 @@
 }
 /* A clickable image (thread + composer preview) opens the shared full-view
  * overlay (md-preview.css). T-f014 retired the separate `chat__lightbox`
- * backdrop that used to live here — one shell for every attachment now. */
+ * backdrop that used to live here — one shell for every attachment now.
+ *
+ * 🔴 NOTHING IS STOPPING IT FROM COMING BACK. `bin/tests/lightbox-retired-guard.sh`
+ * used to scan production source on every CI run and turn red if a
+ * `.chat__lightbox` rule reappeared in this file or a `<Lightbox …/>` reappeared
+ * in any component. That guard was deleted (owner ruling: it was not worth
+ * keeping). CONCRETELY, and nothing else covers these: re-adding a
+ * `.chat__lightbox` block right here is green — no test reads this stylesheet
+ * for it; and adding a second full-size image overlay component anywhere except
+ * ChatArea's staged-composer path is green too. What survives is ONE behavioural
+ * jsdom assertion (`ChatArea.image.test.tsx`, "opens a staged composer image in
+ * the same shell", which ends on `.chat__lightbox` being absent) — one path in
+ * one component, not a scan of the source tree. So the split-overlay bug this
+ * retirement fixed (two overlays for the same click, one of which could never
+ * open) can be reintroduced almost anywhere without CI saying a word. */
 .chat__msg-image--clickable {
   cursor: zoom-in;
 }

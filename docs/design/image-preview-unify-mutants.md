@@ -54,22 +54,22 @@ M9 是**守衛自己的守衛**：把 block 改名、或把元件刪掉，迴圈
 M8 釘的是另一半：所有權只有在 block **只有一個家**時才成立；規則若散在兩張表，
 元件自己 import 也不夠，拿掉它會只壞一半、看起來像沒壞。
 
-## 第三批：舊看圖層退役守衛（`bin/tests/lightbox-retired-guard.sh`）
+## 第三批：舊看圖層退役守衛（已刪除）
 
-| # | Mutant | 守衛 rc | 紅了哪條 |
-|---|---|---|---|
-| M10 | 把 `<Lightbox … />` 種回 `ChatArea.tsx` | 1 | `<Lightbox is back in production source — use frontend/src/components/MarkdownPreviewOverlay.tsx instead:` + 命中的 `path:line` |
-| M11 | 把 `.chat__lightbox { … }` 種回 office.css | 1 | `.chat__lightbox styling is back — that block was deleted with the component:` + 命中的 `path:line` |
-| M12 | 把 `FE` 指到不存在的 `frontendz`（vacuous-green 哨兵） | 1 | `frontend/src/components is missing — every scan below would be a vacuous pass` + `scan corpus is only 0 files` |
+`bin/tests/lightbox-retired-guard.sh` 連同 `bin/tests/run.sh` 裡派它的那一段
+已依 owner 裁定刪除（這道掃描器不值得留），原本記在這裡的 M10／M11／M12
+三支 mutant 也一併作廢。
 
-M12 是本守衛最重要的一支：grep 打錯路徑會回 0 行，而 0 行正是「通過」的長相。
-守衛自己的 corpus 檢查（目錄存在 + 檔數 ≥ 100 + 倖存的彈窗檔還在）讓那種綠變紅。
-
-守衛內建的正負對照（每次執行都跑，不需人工施加 mutant）：
-在 `mktemp` 出來的假樹裡種一個 `<Lightbox>` 與一條 `.chat__lightbox` 規則，
-斷言掃描回報的是**那個 path:line**（不是「有東西失敗」）；
-再把兩個違規刪掉，斷言乾淨的樹**什麼都不報**。
-少了負向那半，一個「見檔就報」的壞掃描也能滿足兩條正向對照。
+**被抽掉之後什麼不再被守**：production source 裡再出現 `.chat__lightbox`
+樣式塊（`frontend/src/components/office.css`）或第二個全螢幕圖片覆蓋層元件，
+CI 一律綠 —— T-f014 修掉的「同一次點擊有兩個 overlay、其中一個永遠打不開」
+那個形狀可以被寫回來而沒有任何掃描會說話。唯一倖存的是**一條行為斷言**：
+`frontend/src/components/ChatArea.image.test.tsx` 的
+「opens a staged composer image in the same shell」最後那句
+`expect(container.querySelector(".chat__lightbox")).toBeNull()` ——
+一個元件的一條路徑，不是對整棵 source tree 的掃描。
+`frontend/src/components/office.css` 裡 `.chat__msg-image--clickable`
+上方的註解記著同一句。
 
 ## 這份紀錄涵蓋不到的
 

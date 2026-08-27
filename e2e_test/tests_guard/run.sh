@@ -2647,30 +2647,39 @@ fi
 # the fleet socket that class of bug is not a red run, it is an irreversible kill
 # of someone else's live agent.
 #
-# So lib/ownedkill.sh puts TWO INDEPENDENT layers between the harness and that
-# outcome, and this case is what makes each of them load-bearing rather than a
-# comment:
+# lib/ownedkill.sh puts TWO INDEPENDENT layers between the harness and that
+# outcome. THIS CASE NOW COVERS ONLY THE FIRST OF THEM:
 #
 #   ① PHYSICAL — the run gets its OWN tmux socket (`officraft-<ns>`, via the
 #      warden's OC_NAMESPACE), and sg_own_socket_assert refuses the fleet's
 #      `officraft` outright. MUTANT: point the derivation back at the fleet.
+#      That is 24a–24c below, and it is still load-bearing.
 #   ② OWNERSHIP — only the session names / pids this run WROTE DOWN at creation
-#      time may be killed. MUTANT (twice): relax the kill to `pgrep -f` pattern
-#      matching, and to "list the sessions and pick the ones that look like ours".
+#      time may be killed. THIS LAYER IS NO LONGER TESTED AT ALL.
 #
-# AND A POSITIVE CONTROL, because both layers can be satisfied by a teardown that
-# quietly kills NOTHING — and that green looks exactly like the real one. So a
-# REAL process is spawned, recorded, and must actually die; a second identical
-# process is NOT recorded, and must survive.
+# 🔴 WHAT IS NO LONGER GUARDED (removed deliberately, see lib/ownedkill.sh's
+# header for the same note next to the code it used to protect). Gone with the
+# ownership half: the POSITIVE CONTROL on real processes (a recorded pid dies, a
+# byte-identical un-recorded one survives), the ledger-is-the-authority and
+# fail-closed session assertions, MUT-pgrep, MUT-listpick, and the directory-wide
+# scan that banned `pkill`/`killall`/`pgrep` from every .sh under seven_gate/.
+# CONCRETELY: sg_own_kill_pids can be changed from `kill "$pid"` to a name match
+# (`pkill -f` / `pgrep -f`), or sg_own_kill_sessions from an exact `kill-session`
+# to list-the-sessions-and-pick, and this suite stays green — in either shape the
+# harness kills processes and sessions it never created, which on a fleet host is
+# somebody else's live agent. Nothing here says so any more; the socket layer
+# above does NOT catch it, because a pid has no socket. There is also no longer
+# any mechanical ban on `pkill` in run.sh / lib/carrier.sh / actors/live.sh — the
+# shape that took the live ocserverd down on 2026-08-11 — only root CLAUDE.md
+# §13 in prose.
 SG_OWNED="$SG_DIR/lib/ownedkill.sh"
 SG_LIVE="$SG_DIR/actors/live.sh"
 SG24="$SHIMDIR/sg24"; rm -rf "$SG24"; mkdir -p "$SG24/bin"
 SG24_TMUX_LOG="$SG24/tmux.log"; : > "$SG24_TMUX_LOG"
 
 # A RECORDING tmux, ahead of the file-wide stub on PATH. Every tmux command the
-# ownership layer issues lands in one file, so "it killed nothing" and "it killed
-# somebody else's session" stop being the same silence. It also answers
-# list-sessions, which is what a "list and pick" mutant reaches for.
+# kill path issues lands in one file, so "it refused before issuing anything" and
+# "it issued a command that went nowhere" stop being the same silence.
 cat > "$SG24/bin/tmux" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$SG24_TMUX_LOG"
@@ -2678,15 +2687,11 @@ printf '%s\n' "$*" >> "$SG24_TMUX_LOG"
 exit 0
 SH
 chmod +x "$SG24/bin/tmux"
-# The socket the fixture calls "ours", and the sessions the recording tmux will
-# report as living on it: the one this run owns, plus a FOREIGN one. The foreign
-# name is deliberately the same shape (`member-*`) as ours — that is the whole
-# point, because on the real fleet socket it always will be.
+# The socket the fixture calls "ours", and the session the recording tmux will
+# report as living on it.
 SG24_SOCK="officraft-sg24"
 SG24_OWNED_SESSION="member-m-sg24"
-SG24_FOREIGN_SESSION="member-someone-else"
-SG24_SESSIONS="$SG24_OWNED_SESSION
-$SG24_FOREIGN_SESSION"
+SG24_SESSIONS="$SG24_OWNED_SESSION"
 SG24_SLEDGER="$SG24/session-ledger"
 
 sg24_sessions() { # sg24_sessions LIB SOCKET LEDGER -> "<rc>"; tmux calls → $SG24_TMUX_LOG
@@ -2696,7 +2701,6 @@ sg24_sessions() { # sg24_sessions LIB SOCKET LEDGER -> "<rc>"; tmux calls → $S
     >"$SG24/sess.out" 2>&1
   echo $?
 }
-sg24_killed() { grep -c 'kill-session' "$SG24_TMUX_LOG" 2>/dev/null || true; }
 
 # 24a) THE REFUSAL ITSELF, on the shipped lib. This is the line that turns "we
 # are careful" into "it cannot happen", so it is exercised, not grepped.
@@ -2771,142 +2775,6 @@ else
   check "MUT-nosocket: a cleanup aimed at the fleet socket exits 2" "2" "$(sg24_sessions "$SG_OWNED" "$_sg24_mut_sock" "$SG24_SLEDGER")"
   check "MUT-nosocket: …and issued NO tmux command at all — the refusal is before the kill, not after it" "0" "$(wc -l < "$SG24_TMUX_LOG" | tr -d ' ')"
 fi
-
-# 24d) POSITIVE CONTROL, sessions: ON ITS OWN SOCKET, WITH A LEDGER, IT REALLY
-# KILLS. Without this the whole case is satisfied by a teardown that does nothing
-# — and that green is indistinguishable from the real one.
-printf '%s\n' "$SG24_OWNED_SESSION" > "$SG24_SLEDGER"
-check "ownedkill: on its own socket, a ledgered session IS killed (rc)" "0" "$(sg24_sessions "$SG_OWNED" "$SG24_SOCK" "$SG24_SLEDGER")"
-check "ownedkill: …exactly one kill-session was issued" "1" "$(sg24_killed)"
-grep -Fq -- "-L $SG24_SOCK kill-session -t $SG24_OWNED_SESSION" "$SG24_TMUX_LOG" \
-  && ok "ownedkill: …on OUR socket, naming the ledgered session exactly ($SG24_OWNED_SESSION)" \
-  || bad "ownedkill: the kill did not name the ledgered session on our socket (recorded: $(tr '\n' '|' < "$SG24_TMUX_LOG"))"
-grep -Fq "$SG24_FOREIGN_SESSION" "$SG24_TMUX_LOG" \
-  && bad "ownedkill: a session that is NOT in the ledger ($SG24_FOREIGN_SESSION) was named — the ledger is not the authority" \
-  || ok "ownedkill: the un-ledgered session $SG24_FOREIGN_SESSION was never touched"
-# FAIL-CLOSED, both shapes. A missing record must leak (recoverable, visible),
-# never kill (irreversible).
-: > "$SG24_SLEDGER"
-check "ownedkill: an EMPTY ledger kills nothing, and does not fail the run" "0" "$(sg24_sessions "$SG_OWNED" "$SG24_SOCK" "$SG24_SLEDGER")"
-check "ownedkill: …zero tmux commands issued for an empty ledger" "0" "$(wc -l < "$SG24_TMUX_LOG" | tr -d ' ')"
-check "ownedkill: an ABSENT ledger kills nothing either" "0" "$(sg24_sessions "$SG_OWNED" "$SG24_SOCK" "$SG24/no-such-ledger")"
-check "ownedkill: …zero tmux commands issued for an absent ledger" "0" "$(wc -l < "$SG24_TMUX_LOG" | tr -d ' ')"
-
-# 24e) POSITIVE CONTROL + OWNERSHIP, on REAL PROCESSES. No stub can prove this
-# half: the claim is that a recorded pid dies and an identical un-recorded one
-# lives, and "identical" is the load-bearing word — on the fleet the same binary
-# runs with the same argv, which is why `pkill -f` is banned. So both sleepers
-# are literally the same executable with the same command line.
-SG24_MARK="sg24-$$-${RANDOM}"
-SG24_SLEEPER="$SG24/$SG24_MARK"
-# `exec -a` keeps the marker in the sleeper's OWN argv (so a pattern matcher can
-# find it) while leaving exactly ONE process to kill and reap.
-printf '#!/usr/bin/env bash\nexec -a "$0" sleep 20\n' > "$SG24_SLEEPER"
-chmod +x "$SG24_SLEEPER"
-SG24_PLEDGER="$SG24/pid-ledger"
-sg24_alive() { local s; s="$(ps -p "$1" -o state= 2>/dev/null | tr -d ' ')"; [[ -n "$s" && "$s" != Z* ]]; }
-sg24_pids() { # sg24_pids LIB -> "<owned alive|dead>|<decoy alive|dead>"
-  local lib="$1" owned decoy i o=dead d=alive
-  "$SG24_SLEEPER" & owned=$!
-  "$SG24_SLEEPER" & decoy=$!
-  printf '%s\n' "$owned" > "$SG24_PLEDGER"
-  SG24_MARK="$SG24_MARK" bash -c '. "$1" || exit 9; sg_own_kill_pids "$2"' _ "$lib" "$SG24_PLEDGER" >/dev/null 2>&1
-  # `wait` is the synchronisation point: it returns only once the signal has
-  # actually landed on the pid we expected to die. The decoy then gets a bounded
-  # grace window of its own, so "the decoy survived" can never be a race — the
-  # shipped lib never signals it, so it sits out all ten rounds.
-  wait "$owned" 2>/dev/null
-  sg24_alive "$owned" && o=alive
-  for i in 1 2 3 4 5 6 7 8 9 10; do sg24_alive "$decoy" || { d=dead; break; }; sleep 0.05; done
-  kill "$decoy" 2>/dev/null; wait "$decoy" 2>/dev/null
-  printf '%s|%s\n' "$o" "$d"
-}
-_sg24_p="$(sg24_pids "$SG_OWNED")"
-check "ownedkill: POSITIVE CONTROL — the pid written to the ledger is really killed" "dead" "${_sg24_p%%|*}"
-check "ownedkill: OWNERSHIP — an IDENTICAL process that was never recorded survives" "alive" "${_sg24_p#*|}"
-# fail-closed on this side too: no ledger ⇒ the recorded-nowhere process lives.
-"$SG24_SLEEPER" & _sg24_orphan=$!
-bash -c '. "$1" || exit 9; sg_own_kill_pids "$2"' _ "$SG_OWNED" "$SG24/no-such-ledger" >/dev/null 2>&1
-sg24_alive "$_sg24_orphan" \
-  && ok "ownedkill: with NO pid ledger, nothing is killed (a leaked process is recoverable; a wrong kill is not)" \
-  || bad "ownedkill: with no pid ledger something still died — the missing-record case is not fail-closed"
-kill "$_sg24_orphan" 2>/dev/null; wait "$_sg24_orphan" 2>/dev/null
-
-# 24f) MUTANT ②a — RELAX THE PID KILL TO PATTERN MATCHING. This is the exact
-# shape root CLAUDE.md §13 bans and the exact shape that took the cockpit and
-# every agent offline for two minutes: `pkill -f` / `pgrep -f` on a name, when
-# the fleet runs the same binaries with the same argv. Name is not identity.
-SG24_PIDMUT="$SG24/ownedkill-pgrep.sh"
-sed 's|kill "$pid" 2>/dev/null|kill $(pgrep -f "$SG24_MARK") 2>/dev/null|' "$SG_OWNED" > "$SG24_PIDMUT"
-if ! grep -q 'pgrep -f' "$SG24_PIDMUT"; then
-  bad "seven_gate: MUT-pgrep did not apply to lib/ownedkill.sh — the exact-kill line moved, so case 24f is testing nothing (fix the sed)"
-else
-  _sg24_pm="$(sg24_pids "$SG24_PIDMUT")"
-  check "MUT-pgrep: the mutant still kills the process it owns (so the difference below is the PATTERN, not a broken mutant)" "dead" "${_sg24_pm%%|*}"
-  check "MUT-pgrep: …and it ALSO kills the un-recorded look-alike — 24e is pinned to the ledger, not to luck" "dead" "${_sg24_pm#*|}"
-fi
-# The text scan that would have caught this one before it ran.
-#
-# 🔴 SCOPE IS DRAWN BY CONSEQUENCE, NOT BY FILENAME — this cost a real outage.
-# The scan used to name two files (lib/ownedkill.sh, actors/live.sh), and the
-# ban's blast radius has nothing to do with which two files somebody listed:
-# ANY of these scripts runs on a machine where the live fleet's ocserverd,
-# ocwarden and agents are running the same binaries with the same argv. MEASURED
-# on the old scan, one mutant, three targets: planted in actors/live.sh → rc=1,
-# named; planted in run.sh's cleanup() → rc=0, SILENT; planted in lib/carrier.sh
-# → rc=0, SILENT. That last file is the one tests_guard case 25 EXECUTES as a
-# fixture, and on 2026-08-11 somebody put `pkill -f "ocserverd serve"` into it to
-# build a positive control, ran this suite, and took the live ocserverd down for
-# 27 seconds. So the scope is now "every .sh under seven_gate/", which is a
-# QUERY (it picks up the next file somebody adds) rather than a roll-call.
-#
-# Comments are stripped first: several of these files NAME the banned shape in
-# their headers to explain why it is banned, and a scan that reddens on its own
-# documentation is a scan somebody deletes. Those comments must stay green.
-#
-# ⚠️ `find -L` for the same reason case 23 spells out: plain `find` does not
-# descend into a symlinked directory, so "every .sh under seven_gate/" was false
-# of anything behind one — measured green with a banned shape planted there.
-_sg24_scanned=0
-while IFS= read -r _sg24_f; do
-  _sg24_scanned=$(( _sg24_scanned + 1 ))
-  _sg24_bans="$(_sg_code_only "$_sg24_f" | grep -cE '(^|[^[:alnum:]_])(pkill|killall|pgrep)([^[:alnum:]_]|$)' || true)"
-  check "seven_gate: ${_sg24_f#$SG_DIR/} uses no pkill/killall/pgrep in code (name is not identity)" "0" "${_sg24_bans:-0}"
-done < <(find -L "$SG_DIR" -name '*.sh' -type f | sort)
-# A roll-call of zero files would pass every assertion above by having none. The
-# floor is a floor, not a count: it must not need editing when a script is added,
-# only when the walk itself breaks.
-[[ "$_sg24_scanned" -ge 6 ]] \
-  && ok "seven_gate: the banned-shape scan walked $_sg24_scanned .sh files under seven_gate/ (scope is the directory, not a list of names)" \
-  || bad "seven_gate: the banned-shape scan only found $_sg24_scanned .sh file(s) under $SG_DIR — a walk that finds nothing passes silently, which is how this ban lost its reach the first time"
-# …and the three files the old two-name scan could not see are each named, so a
-# future narrowing of the walk cannot quietly drop them.
-for _sg24_must in run.sh lib/carrier.sh actors/live.sh; do
-  find -L "$SG_DIR" -name '*.sh' -type f | grep -Fqx "$SG_DIR/$_sg24_must" \
-    && ok "seven_gate: …including $_sg24_must (a mutant here used to be SILENT)" \
-    || bad "seven_gate: $_sg24_must is not in the banned-shape scan's reach — that is the file that took the live server down"
-done
-check "banned-shape scan control: the SAME scan finds the shape in the pgrep mutant" "1" \
-  "$(_sg_code_only "$SG24_PIDMUT" | grep -cE '(^|[^[:alnum:]_])(pkill|killall|pgrep)([^[:alnum:]_]|$)' || true)"
-
-# 24g) MUTANT ②b — "LIST THE SESSIONS AND PICK THE ONES THAT LOOK LIKE OURS".
-# The one the text scan above CANNOT see: it contains no pkill, no pgrep, no
-# glob — just tmux telling the truth about what is running and the harness
-# choosing. That is why 24d is behavioural and recorded rather than a grep.
-SG24_SESSMUT="$SG24/ownedkill-listpick.sh"
-sed 's@tmux -L "$socket" kill-session -t "$name" 2>/dev/null@tmux -L "$socket" list-sessions -F "#{session_name}" 2>/dev/null | grep "^member-" | while IFS= read -r n; do tmux -L "$socket" kill-session -t "$n"; done@' \
-    "$SG_OWNED" > "$SG24_SESSMUT"
-if ! grep -q 'list-sessions' "$SG24_SESSMUT"; then
-  bad "seven_gate: MUT-listpick did not apply to lib/ownedkill.sh — the kill-session line moved, so case 24g is testing nothing (fix the sed)"
-else
-  printf '%s\n' "$SG24_OWNED_SESSION" > "$SG24_SLEDGER"
-  sg24_sessions "$SG24_SESSMUT" "$SG24_SOCK" "$SG24_SLEDGER" >/dev/null
-  grep -Fq "$SG24_FOREIGN_SESSION" "$SG24_TMUX_LOG" \
-    && ok "MUT-listpick: with the kill relaxed to list-and-pick, the FOREIGN session $SG24_FOREIGN_SESSION is killed — 24d's silence is the ledger, not an empty socket"
-  grep -Fq "$SG24_FOREIGN_SESSION" "$SG24_TMUX_LOG" \
-    || bad "MUT-listpick: the list-and-pick mutant killed nobody else's session (recorded: $(tr '\n' '|' < "$SG24_TMUX_LOG")) — 24d would pass without the ledger and this case proves nothing"
-fi
-: > "$SG24_TMUX_LOG"
 
 # ── 25) T-42bb: the carrier must outlive its caller, and never die silently ──
 #
@@ -3296,7 +3164,7 @@ echo "[tests_guard] PASS=$PASS FAIL=$FAIL"
 # printed the marker with no floor evaluated at all: MEASURED, floor block
 # deleted and the trailing echo kept → PASS=153 FAIL=0 rc=0, last line
 # `[tests_guard] all green`, `bin/ci.sh` all green. Keep it in the branch.
-PASS_FLOOR=320
+PASS_FLOOR=292
 if [[ "$PASS" -lt "$PASS_FLOOR" ]]; then
   echo "[tests_guard] FATAL: only $PASS assertion(s) ran, floor is $PASS_FLOOR." >&2
   echo "[tests_guard] FAIL=0 with a collapsed PASS count means cases went missing, not that they passed." >&2
