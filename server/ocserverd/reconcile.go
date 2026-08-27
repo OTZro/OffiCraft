@@ -6,7 +6,7 @@ package main
 //
 //   * reconcileDecide — the PURE per-member state machine (machine.py decide):
 //     desired_state × observed-online → the ONE command to dispatch (or none),
-//     with the frozen timers (§4.4): start_timeout 90s, stop_grace 120s,
+//     with the frozen timers (§4.4): start_timeout WakingTTLSecs, stop_grace 120s,
 //     stop_retry 90s, recycle_grace 120s, backoff 5/300s, circuit 5/120s.
 //   * the in-memory reconcile store (lifecycle.md §3 inventory #7): per-member
 //     bookkeeping keyed by member id; restart amnesia IS the contract — a lost
@@ -99,8 +99,8 @@ func defaultReconcileConfig() reconcileConfig {
 	}
 }
 
-// reconcileCadenceSecs is the producer tick period (§4.1) — sized to the
-// runtime's 30s presence heartbeat.
+// reconcileCadenceSecs is the producer tick period (§4.1), not a member-presence
+// heartbeat.
 const reconcileCadenceSecs = 30.0
 
 // ── vocabulary ───────────────────────────────────────────────────────────────

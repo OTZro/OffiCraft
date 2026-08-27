@@ -24,7 +24,7 @@ import "./dispatch-alert.css";
  * decide a START and the member is not already online — the handler's own
  * comment lists "backoff, circuit-open, and failure modes not yet invented".
  * Review r1 (BLOCKER-1) proved with two server probes that it also fires when
- *   (a) a START from a PREVIOUS click is still in flight inside the 90s window
+ *   (a) a START from a PREVIOUS click is still in flight inside the waking window
  *       — and the wake button is deliberately still offered there
  *       (MemberActionButtons' `waking: ["cancel", "spawn"]` rescue path), and
  *   (b) the member is inside retry backoff or circuit-open AFTER a START that

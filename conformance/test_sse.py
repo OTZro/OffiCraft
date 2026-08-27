@@ -803,7 +803,7 @@ def test_first_connect_clears_waking(base_url, client, owner_token) -> None:
     """§5.2 first-connect edge: the wake completes the instant the agent holds
     /api/events — waking_since MUST be cleared (observable: presence falls to
     OFFLINE after disconnect, not back to 'waking', although desired_state is
-    still online and the 90 s waking TTL has not lapsed)."""
+    still online and the configured waking TTL has not lapsed)."""
     agent = _fresh_agent(client, owner_token, f"waking-{uuid.uuid4().hex[:6]}")
     r = client.post(
         f"/api/members/{agent.member_id}/activate", json={},

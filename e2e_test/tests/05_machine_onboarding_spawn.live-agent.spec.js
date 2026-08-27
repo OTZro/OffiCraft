@@ -300,7 +300,7 @@ test.describe('C1 · machine onboarding → agent spawn → warden-log START', (
       // when it mounts its own /api/events SSE does the hub flip is_online True and
       // on_first_connect clear waking_since → derived presence == "online"
       // (domain/member.py presence_state; realtime.py SSEHub.is_online; WAKING_TTL
-      // 90s). We assert online via a GENEROUS poll (not a single shot): waking→online
+      // configured waking TTL). We assert online via a GENEROUS poll (not a single shot): waking→online
       // is claude-driven with no firm upper bound (the spike often stalled in
       // waking), so a bounded poll+retry is the only non-flaky shape.
       //
@@ -310,7 +310,7 @@ test.describe('C1 · machine onboarding → agent spawn → warden-log START', (
       let reachedOnline = false;
       let lastPresence = null;
       let onlineAfter = -1;
-      const PRESENCE_POLL_TRIES = 40; // ~40 * 3s ≈ 120s (> WAKING_TTL 90s)
+      const PRESENCE_POLL_TRIES = 40; // ~40 * 3s covers the configured waking TTL
       // A transient ECONNREFUSED can hit mid-poll if serve briefly cycles its
       // listener (a graceful-shutdown window on the SSE hub). Playwright's
       // request.get THROWS on a refused socket, which would flake the whole run.

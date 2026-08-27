@@ -460,7 +460,7 @@ func TestPostChatQueuesRegardlessOfRecipientPresence(t *testing.T) {
 	ownerPostToMira("hello-offline")
 
 	// Leg 2 — waking: owner intent online (activate) + a fresh self-reported
-	// waking_since is exactly the 90s TTL window the compose bug locked on.
+	// waking_since is exactly the WakingTTLSecs window the compose bug locked on.
 	if status, resp := doRaw(t, "POST", srv.URL+"/api/members/mira/activate",
 		ownerTok, "application/json", []byte(`{}`)); status != 200 {
 		t.Fatalf("activate mira: want 200, got %d %s", status, resp)

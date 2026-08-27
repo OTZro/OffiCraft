@@ -52,7 +52,7 @@ const (
 	// cold claude REPL can take several seconds to accept input (rendering the
 	// welcome screen, dismissing startup notices), so we retry the Enter until the
 	// context gauge confirms submission. ~30×1s ≈ 30s covers a slow cold start yet
-	// stays COMFORTABLY under the reconcile start_timeout (WAKING_TTL_SECS=90s) so a
+	// stays COMFORTABLY under the reconcile start_timeout (the configured waking TTL) so a
 	// slow-but-successful boot is never miscounted as a start-failure → circuit trip.
 	nudgeMaxAttempts = 30
 	nudgeSettle      = 1 * time.Second

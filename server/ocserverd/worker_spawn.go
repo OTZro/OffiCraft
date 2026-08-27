@@ -77,9 +77,9 @@ const (
 	workerBootRoleLabel = "outsource-worker"
 	// workerSpawnRetrySecs paces re-dispatch of the worker start for a worker
 	// still sitting in 'assigned' (booted but not yet claimed, or the frame
-	// was lost with its dying connection). Mirrors the reconcile start
-	// timeout (lifecycle §4.4 start_timeout 90s): a healthy boot claims well
-	// within it; a lost frame is re-pushed right after it.
+	// was lost with its dying connection). Its retry pacing is independent of the
+	// reconcile start timeout (lifecycle §4.4 start_timeout: WakingTTLSecs): a
+	// healthy boot claims well within that window; a lost frame is re-pushed right after it.
 	workerSpawnRetrySecs = 90.0
 	// workerReclaimGraceSecs is the backstop window between a worker's
 	// release (task terminal) and the forced session reclaim, giving the
