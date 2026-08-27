@@ -39,7 +39,12 @@ package main
 //	    runReconcileTick / runOutsourceTick must be in
 //	    lifecycleProducerLoopRulings with a reason and an expected count. A new
 //	    pre-decide roster loop written the old way has no Kind expression to
-//	    find, but it cannot avoid BEING A LOOP IN ONE OF THOSE TWO FUNCTIONS.
+//	    find, so what gate (2) has to go on is the ITERATION — and it sees only
+//	    the iterations WRITTEN DIRECTLY IN THOSE TWO FUNCTION BODIES. That is the
+//	    spelling both real failures and stage 3's mutant had. It is NOT every
+//	    spelling: the scan does not follow calls, so the same loop lifted into a
+//	    helper and called from a producer is invisible to both gates (measured —
+//	    see the third stated limit of REACH below, which is an open hole).
 //	    Gate (2) is the one that reddens on stage 3's mutant, and
 //	    TestLifecycleTickProducerSetIsDerived keeps its two-name denominator
 //	    honest by enumerating every `*Tick` in the package and demanding each be
@@ -125,8 +130,8 @@ package main
 // that PADDING MUST SHOW UP IN THE DIFF, in the same commit, where a reviewer
 // sees it. Read new entries as claims to check, not as decisions already taken.
 //
-// Two stated limits of REACH, so that nobody reads this guard as wider than it
-// is (a guard whose claimed range exceeds its real range is the very disease
+// Three stated limits of REACH, so that nobody reads this guard as wider than
+// it is (a guard whose claimed range exceeds its real range is the very disease
 // this ticket is about):
 //
 //   - PACKAGE-LOCAL. The scan globs `*.go` in ocserverd's own directory. Kind
@@ -144,6 +149,27 @@ package main
 //     has no such restriction — it is deliberately noisy, and the ledger carries
 //     several "this is not an identity gate at all" entries as a result, because
 //     a scanner tuned to hide its own false positives stops finding true ones.
+//   - 🔴 GATE (2) IS IN-BODY ONLY. ONE CALL FRAME DOWN IS A HOLE, AND THE HOLE
+//     IS OPEN TODAY. The scan walks the bodies of runReconcileTick and
+//     runOutsourceTick and rules on the range/for statements it finds THERE. It
+//     does not descend into what those bodies call, and nothing else in the
+//     package does either. Measured on this commit, 2026-08-27, hashed before
+//     and after and restored with the hash verified back: take the same
+//     staff-only roster loop stage 3's mutant used, lift it verbatim into a new
+//     method `s.m1cStaffOnlySweep(members, now)`, and call that method from
+//     runReconcileTick right after runLifecycleRosterPasses — every test in the
+//     package stays GREEN, the stage 3 parity test included. Gate (1) is blind
+//     to it because there is still no kind expression; gate (2) is blind to it
+//     because what the producer body gained is a CALL, not a loop. Writing the
+//     same loop into runLifecycleRosterPasses' own body is green for the same
+//     reason. So the reach of these two gates over
+//     LIFECYCLE-LIST-IS-OPT-IN-T170E is NARROWED, NOT CLOSED: the inline
+//     spelling — the one both real failures and stage 3's mutant actually had —
+//     is caught, and the helper spelling is caught by nothing. This is stated as
+//     a hole, not as a roadmap: there is no test, no lint and no review step
+//     standing on it as of this commit, and reading past this paragraph on the
+//     assumption that "someone will add it" is exactly how the first version of
+//     this claim came to be false.
 //
 // 🔴 NO LINE NUMBERS anywhere in this file. Keys are file + enclosing symbol +
 // expression text. A pure-comment commit moves every line in a file and would
@@ -727,8 +753,10 @@ var identityGateLedger = map[string]string{
 		"outsource one is minted by the scheduler. A required-fields difference that " +
 		"follows from workers not existing until they are minted.",
 	"api_tasks.go :: HandleCreateTaskApiTasksPost :: kind == TaskExecutorOutsource": "" +
-		"the request-field normalisation feeding the two arms above (body target kind → " +
-		"the canonical executor kind).",
+		"the normalisation feeding the two arms above — the TASK MANUAL's stored " +
+		"assignee (manualAssignee) folded into the canonical executorKind. Not the " +
+		"request's target.kind, which is the separate " +
+		"`trimString(body.Target.Kind)` entry below.",
 	"api_tasks.go :: HandleCreateTaskApiTasksPost :: kind == TaskExecutorMember": "" +
 		"the other half of that same normalisation.",
 	"api_tasks.go :: HandleCreateTaskApiTasksPost :: trimString(body.Target.Kind) == TaskExecutorOutsource": "" +
@@ -754,7 +782,15 @@ var identityGateLedger = map[string]string{
 		"later — the twin of create_task's seam. Both exist only on the 發包 arm " +
 		"because a member reassign has its executor in hand already.",
 	"api_tasks.go :: HandleReassignTaskApiTasksTaskIdReassignPost :: kind == TaskExecutorMember": "" +
-		"the other arm of that same normalisation.",
+		"the executor RE-POINT write, member arm: bind ExecutorID to the member just " +
+		"resolved and clear the row's outsource dispatch columns. Its `else` is the " +
+		"發包 arm, which lands the task UNASSIGNED for the scheduler to mint under the " +
+		"parallel cap (T-35e0). The kinds differ here because a member executor is " +
+		"already in hand at write time and an outsource one does not exist yet — not " +
+		"because staff and 外包 get different treatment. (This entry has been wrong " +
+		"once: it used to say 'the other arm of that same normalisation', copied from " +
+		"the neighbouring entry, and there is no kind normalisation in this handler " +
+		"at all — `kind` is a plain trimString of the request field.)",
 	"api_tasks.go :: HandleReassignTaskApiTasksTaskIdReassignPost :: m.Kind == KindOutsource": "" +
 		"P7d fold parity: an outsource ROW is never a 'member'-kind reassign target — " +
 		"outsource executors are minted fresh by the outsource arm. Refusing here is " +

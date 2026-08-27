@@ -642,7 +642,7 @@ ONE-SHOT, never a standing order):
     failures (token-expiry lead, survived-stop sweep) had the second shape, not the
     first. Closing it needs an AST-level guard over both producers plus an explicit
     exclusion list — T-170e stage 5, deliberately out of stage 3's scope.
-  - ✅ **CLOSED by T-170e stage 5 — `lifecycle_identity_gate_t170e_test.go`.**
+  - 🟡 **NARROWED BY T-170e stage 5, STILL OPEN — `lifecycle_identity_gate_t170e_test.go`.**
     `TestTickProducersHaveNoUndeclaredRosterLoop` walks `runReconcileTick` and
     `runOutsourceTick` with `go/parser` and requires every iteration in them to be
     accounted for by name AND by count in `lifecycleProducerLoopRulings`. Re-measured
@@ -651,9 +651,22 @@ ONE-SHOT, never a standing order):
     neither historical failure had one. Its sibling
     `TestIdentityGatesAreEachOnTheRecord` is the other half: every `Kind` comparison,
     kind switch, kind-seam call and member-kind struct stamp in the package's
-    production sources must carry a written reason. Scope limits are stated in that
-    file's header; the honest short version is that it covers **`server/ocserverd`
-    only** and that neither gate can tell a true reason from a fluent false one.
+    production sources must carry a written reason.
+    - **What is now caught:** the loop written INLINE IN A PRODUCER'S OWN BODY.
+      That is the spelling the mutant above has, and the spelling both historical
+      failures had.
+    - 🔴 **What is still caught by nothing: the same loop one call frame down.**
+      Measured 2026-08-27: lift that staff-only loop verbatim into a new method
+      and call it from `runReconcileTick` — every test in the package stays green.
+      Gate (1) sees no kind expression; gate (2) sees a CALL, not a loop, in the
+      producer body. Putting the loop inside `runLifecycleRosterPasses`' own body
+      is green for the same reason. Nothing in the tree guards this today, and no
+      work is scheduled on it — it is written down so the next person measures
+      rather than assumes.
+    - Two further scope limits, stated in that file's header: the scan is
+      **`server/ocserverd` only**, and neither gate can tell a true reason from a
+      fluent false one. The second is not hypothetical — a shipped ledger reason
+      was already found describing the wrong mechanism, twice.
 - 🔴 **The ENTRY filter is one function too: `lifecyclePolicyFor(m).ShouldExist()`.**
   It is the only place the 正職/外包 difference may be spelled at the door — the
   owner's ruling that 「正職會不會有 instance 存活取決於 人物設定有沒有這個角色，外包則是取決於
