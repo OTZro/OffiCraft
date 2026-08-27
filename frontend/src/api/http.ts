@@ -316,6 +316,31 @@ const SSE_RETRY_DELAYS_MS = [1000, 2000, 5000, 10000, 30000] as const;
 let sseRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let sseRetryAttempt = 0;
 
+/** "There is a hole in what this client has seen, and the next stream that
+ * opens owes us a full resync."
+ *
+ * 🔴 THIS IS MODULE STATE ON PURPOSE, AND THE REASON IS A BUG THAT ALREADY
+ * HAPPENED HERE. The first version of this fix passed the same fact as an
+ * ARGUMENT — `ensureSseSource({ reconnect: true })` — from the retry path. That
+ * works right up until somebody rebuilds the connection through a DIFFERENT
+ * door, and there is another door: `subscribeEvents` calls `ensureSseSource()`
+ * too. During an outage `sseSource` is null, so the next component to mount —
+ * a reply card scrolling into view, a popover, a peer switch, any of the ~24
+ * independent subscriptions in this app — rebuilt the stream itself, with the
+ * flag defaulted to false. The connection came back, the state went "live", the
+ * banner disappeared, and the deltas from the outage were gone with nobody told.
+ * A recovery that skips the resync is strictly WORSE than not recovering: it
+ * converts a stall the owner can see into a hole he cannot.
+ *
+ * As a parameter, every call site had to REMEMBER. As module state, no call site
+ * CAN forget: whoever opens the next stream discharges the debt. That is why it
+ * is not a second flag next to `opened` but a replacement for the argument.
+ *
+ * Cleared only by an open that actually ran the resync. Deliberately NOT cleared
+ * on last-unsubscribe: an extra resync costs one round-trip per topic, a missed
+ * one costs data nobody knows is missing, so the tie breaks toward resyncing. */
+let sseGapPending = false;
+
 // The CLOSED SSE topic vocabulary (spec/sse.md §3.1 / §4.1). Replayed one
 // synthetic delta per topic to every subscriber on a full resync so each hook
 // refetches its snapshot — see resyncAll below. New topics MUST be added here.
@@ -407,22 +432,46 @@ function resyncAll(): void {
  * connection lives for one round-trip.
  *
  * Returns the HTTP status, or 0 when the request never got an answer at all
- * (offline / DNS / TLS) — which is emphatically NOT an auth failure. */
+ * (offline / DNS / TLS / too slow) — which is emphatically NOT an auth failure.
+ *
+ * 🔴 THE DEADLINE IS LOAD-BEARING, not politeness. This await is the ONLY thing
+ * standing between an outage and the recovery loop: by the time it runs the
+ * retry timer has already fired and cleared itself, and there is no EventSource
+ * alive. A `fetch` that never settles — a server that accepts the connection and
+ * then never sends headers, an overloaded proxy holding the socket — therefore
+ * does not "delay" recovery, it ENDS it: no timer, no stream, no further
+ * attempt, for the rest of the session. The banner would stay up (so the failure
+ * is at least visible, not silent) but the only way out would be a reload.
+ * Without a deadline the abort below is pure hygiene; with one it is the escape.
+ *
+ * `X-OC-SSE-Probe: 1` marks this request as the probe and NOT a real stream. A
+ * `fetch` can set a header and an `EventSource` cannot, which makes the header a
+ * property of the thing itself rather than a guess about it — the server may
+ * ignore it, and the e2e uses it to tell the two apart without leaning on the
+ * browser's own request-type classification. */
+export const SSE_PROBE_TIMEOUT_MS = 8000;
+
 async function probeEventsEndpoint(): Promise<number> {
   const t = ownerToken();
   if (!t) return 401; // no token at all — the same conclusion, without a request
   const ctrl = new AbortController();
+  const deadline = setTimeout(() => ctrl.abort(), SSE_PROBE_TIMEOUT_MS);
   try {
     const res = await fetch(`/api/events?token=${encodeURIComponent(t)}`, {
       method: "GET",
-      headers: { Accept: "text/event-stream" },
+      headers: { Accept: "text/event-stream", "X-OC-SSE-Probe": "1" },
       signal: ctrl.signal,
     });
     return res.status;
   } catch {
-    return 0; // never reached the server — retry, do not log anyone out
+    // Includes the deadline firing: a probe that timed out tells us nothing
+    // about auth, so it reads exactly like "offline" — retry, log nobody out.
+    return 0;
   } finally {
-    // Never consume the stream: we only ever wanted the status line.
+    clearTimeout(deadline);
+    // Never consume the stream: we only ever wanted the status line. Without
+    // this the probe would hold a second live SSE connection open for the rest
+    // of the session, every time it succeeds.
     try {
       ctrl.abort();
     } catch {
@@ -449,7 +498,7 @@ async function attemptSseReconnect(): Promise<void> {
   // one: reopen. A reopen is by definition a RECONNECT, so it must resync —
   // the stream has no replay (spec/sse.md §2.1) and everything emitted while we
   // were down is gone.
-  ensureSseSource({ reconnect: true });
+  ensureSseSource();
   if (!sseSource) {
     // ensureSseSource declined: no token. Same conclusion as a 401.
     setSseState("unauthorized");
@@ -503,11 +552,12 @@ export function __resetSseDownlinkForTests(): void {
     }
   }
   sseVisibilityHandler = null;
+  sseGapPending = false;
   sseState = "idle";
   sseStateSubscribers.clear();
 }
 
-function ensureSseSource(opts?: { reconnect?: boolean }): void {
+function ensureSseSource(): void {
   if (sseSource) return;
   const t = ownerToken();
   if (!t) return; // honest: gated, would 401 (callers already checked too)
@@ -521,18 +571,19 @@ function ensureSseSource(opts?: { reconnect?: boolean }): void {
   // subscribers, refetching each snapshot. Without this a missed delta lingers
   // until a manual reload (T-db62: a lone waiting reply-card badge stuck blank
   // after a reconnect, while chat/task badges self-healed on their next frame).
-  // `opened` starts TRUE when this EventSource is itself a reconnect (we tore
-  // the dead one down and built this one): its very first open IS the missed
-  // gap, so it must resync. Seeding it from `opts.reconnect` — rather than
-  // leaving it false as a fresh connect does — is the whole difference between
-  // "recovered" and "silently reconnected to a stream whose backlog is gone".
-  let opened = opts?.reconnect === true;
+  // `opened` is per-CONNECTION: has THIS EventSource opened before? That covers
+  // the browser's own transparent reconnect, where the same object opens twice.
+  let opened = false;
   es.onopen = () => {
-    // FIRST open needs no resync — every hook refetched on mount. Only a
-    // SUBSEQUENT open (a genuine reconnect after the browser dropped and
-    // re-established the stream) replays the missed gap.
-    if (opened) resyncAll();
+    // TWO independent reasons to resync, and the second is the one that is easy
+    // to lose:
+    //   `opened`         — this same connection dropped and came back by itself.
+    //   `sseGapPending`  — a PREVIOUS connection died and this one replaces it,
+    //                      no matter who built it or why. See the flag's comment.
+    // A FIRST open with no pending gap needs neither: every hook fetched on mount.
+    if (opened || sseGapPending) resyncAll();
     opened = true;
+    sseGapPending = false; // the debt is discharged only by an open that PAID it
     sseRetryAttempt = 0; // the connection is good again; next outage starts short
     setSseState("live");
   };
@@ -559,6 +610,10 @@ function ensureSseSource(opts?: { reconnect?: boolean }): void {
       // Already closed — closing twice is defined as a no-op, be defensive anyway.
     }
     sseSource = null; // release the guard that would block every rebuild
+    // Record the hole BEFORE anything can rebuild the stream — including a
+    // component mounting on the very next tick, which does not go through the
+    // retry path at all.
+    sseGapPending = true;
     if (sseSubscribers.size === 0) {
       setSseState("idle");
       return;

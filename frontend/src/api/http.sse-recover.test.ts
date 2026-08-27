@@ -21,28 +21,49 @@
 // A "fix" that satisfies (1) without (2) is strictly worse than the bug: it
 // replaces a visible stall with an invisible hole.
 
-// MEASURED MUTANTS — every guard below was made to fail on purpose, and each
-// one is re-runnable by hand: apply the edit to api/http.ts, run this file, put
-// it back. The named assertion in the right column is the ONE that reddened
-// (measured 2026-08-27; the sweep was run with each file's own afterEach reset
-// in place, so these are single-assertion attributions, not cascades).
+// MEASURED MUTANTS — every guard below was made to fail on purpose, and each one
+// is re-runnable by hand: apply the edit to api/http.ts, run this file, put it
+// back. Re-measured 2026-08-27 after independent review; 14/14 caught.
 //
-//   the edit                                          | the assertion that catches it
-//   --------------------------------------------------|------------------------------
-//   delete the whole `es.onerror = …` handler          | "a permanently CLOSED stream is REBUILT"
-//     (this IS the original bug)                       |
-//   `let opened = opts?.reconnect === true`  →  `false`| "the rebuilt connection's FIRST open fans a FULL resync"
-//   `if (status === 401 || status === 403)`  →  `if (false)` | "401 STOPS the retry loop…"
-//   `if (es.readyState !== 2 …)`             →  `if (false)` | "a TRANSIENT error … does NOT tear the connection down"
-//   `const idx = Math.min(sseRetryAttempt, …)` → `= 0`  | "repeated failures BACK OFF"
-//   drop `&& sseVisibilityHandler === null`            | "rebuilding does NOT stack a second foreground listener"
-//   restore `&& sseSource` on the last-unsubscribe test| "the LAST unsubscribe during the retry window cancels the pending retry"
+// 🔴 CORRECTION, LEFT IN ON PURPOSE. An earlier version of this header claimed
+// these were "single-assertion attributions, not cascades". THAT WAS FALSE and
+// the review measured it: deleting `es.onerror` reddens TWELVE tests, not one.
+// The reds are honest — each of those tests independently needs the error path,
+// so the fan-out is SEMANTIC, not test pollution — but "each mutant maps to one
+// named assertion" was not true, and a wrong description of evidence is worse
+// than none: it tells the next person there is nothing left to check. The real
+// red-count is now in the table, and it is the number, not a word, that is the
+// claim.
+//
+//   #    the edit                                              reds  the assertion that names it
+//   ---  ----------------------------------------------------  ----  ---------------------------
+//   M1   delete the whole `es.onerror = …` handler (THE BUG)     12   "a permanently CLOSED stream is REBUILT"
+//   M2   `if (opened || sseGapPending)` → `if (opened)`           3   "the rebuilt connection's FIRST open fans a FULL resync"
+//   M2b  delete `sseGapPending = true` in the CLOSED branch       3   "a NEW subscriber mounting during the outage…"
+//   M3   `if (status === 401 || status === 403)` → `if (false)`   2   "401 STOPS the retry loop…"
+//   M4   `if (es.readyState !== 2 …)` → `if (false)`              1   "a TRANSIENT error … does NOT tear the connection down"
+//   M5   `const idx = Math.min(sseRetryAttempt, …)` → `= 0`       1   "repeated failures BACK OFF"
+//   M6   drop `&& sseVisibilityHandler === null`                  1   "rebuilding does NOT stack a second foreground listener"
+//   M7   restore `&& sseSource` on the last-unsubscribe teardown  1   "the LAST unsubscribe during the retry window…"
+//   M10  delete `ctrl.abort()` in the probe                       1   "the probe ABORTS the stream it opened"
+//   M11  delete the `if (sseSource !== es) return` stale guard    1   "a handler from a connection we already replaced is IGNORED"
+//   M12  probe's `if (!t) return 401` → `return 0`                1   "no token is answered as UNAUTHORIZED…"
+//   M13  neuter the probe deadline (`setTimeout(() => {}, …)`)    1   "a probe that never answers is ENDED by its deadline"
+//
+// M2b, M10, M11 and M12 all come from the independent review. M2b was a REAL
+// DEFECT it found in the shipped first round, not a hypothetical; M10/M11/M12
+// were mutants that SURVIVED that round — the state machine was guarded and the
+// probe's own contract was not. M12 needed the assertion strengthened before it
+// would die: the version that only checked this module's own state could not
+// see it, because the difference is entirely outside (whether oc-auth-expired
+// reaches the auth layer).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   httpApi,
   SSE_RESYNC_TOPICS,
   sseConnectionState,
+  SSE_PROBE_TIMEOUT_MS,
   __resetSseDownlinkForTests,
 } from "./http";
 import { AUTH_EXPIRED_EVENT } from "./client";
@@ -93,17 +114,34 @@ let probeStatus = 200;
 let probeCalls = 0;
 /** Set to make the probe reject (offline: no answer at all, NOT a 401). */
 let probeThrows = false;
+/** Set to make the probe HANG — a server that accepts the socket and never
+ * sends headers. Only the deadline can end it. */
+let probeHangs = false;
+/** Everything the last probe was called with, so the request's own shape (its
+ * abort signal, its headers) can be asserted rather than assumed. */
+let lastProbe: { url: string; init: RequestInit } | null = null;
 
 beforeEach(() => {
   FakeEventSource.instances = [];
   probeStatus = 200;
   probeCalls = 0;
   probeThrows = false;
+  probeHangs = false;
+  lastProbe = null;
   vi.stubGlobal("EventSource", FakeEventSource);
-  vi.stubGlobal("fetch", (url: string) => {
+  vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
     probeCalls += 1;
+    lastProbe = { url: String(url), init };
     expect(String(url)).toContain("/api/events?token=");
     if (probeThrows) return Promise.reject(new Error("offline"));
+    if (probeHangs) {
+      // Settle ONLY on abort — exactly what a stalled server looks like.
+      return new Promise<Response>((_res, rej) => {
+        init.signal?.addEventListener("abort", () =>
+          rej(new Error("aborted")),
+        );
+      });
+    }
     return Promise.resolve({ status: probeStatus } as Response);
   });
   vi.useFakeTimers();
@@ -129,6 +167,11 @@ async function runRetry(): Promise<void> {
 }
 
 const latest = () => FakeEventSource.instances[FakeEventSource.instances.length - 1];
+/** "Is this the connection the module is still using?" — observed through
+ * behaviour (it was never closed and nothing replaced it) rather than by
+ * reaching into module internals. */
+const sseSourceIsAlive = (es: FakeEventSource) =>
+  !es.closed && latest() === es;
 
 describe("httpApi · SSE downlink recovery from a PERMANENT failure", () => {
   it("a permanently CLOSED stream is REBUILT — the old code left the corpse in place and never reconnected", async () => {
@@ -301,6 +344,161 @@ describe("httpApi · SSE downlink recovery from a PERMANENT failure", () => {
     document.dispatchEvent(new Event("visibilitychange"));
 
     expect(seen).toEqual([...SSE_RESYNC_TOPICS]);
+    off();
+  });
+});
+
+describe("httpApi · the doors OTHER than the retry timer (a rebuild nobody routed)", () => {
+  it("a NEW subscriber mounting during the outage must not cause a SILENT reconnect without resync", () => {
+    // Adopted verbatim from the independent review, which found this on the
+    // unmodified fix. It is the reason the "we owe a resync" fact is module
+    // state instead of an argument: `subscribeEvents` is a SECOND door into
+    // `ensureSseSource`, and during an outage `sseSource` is null, so the next
+    // component to mount rebuilds the stream itself. With the debt carried as a
+    // parameter that door defaulted it to false — connection back, state "live",
+    // banner gone, outage deltas silently lost. Measured before the fix:
+    // `seen` was [] where 13 topics were owed.
+    //
+    // This is NOT a hypothetical door. There is no shared fan-out layer; the
+    // app holds ~24 independent subscriptions and ordinary use adds more —
+    // ChatReplyCard subscribes per card (a long thread scrolls dozens into
+    // view), TaskArtifactsPopover on open, useChat on every peer switch. The
+    // backoff is up to 30s, and "the screen looks wrong so I start clicking" is
+    // the reported user behaviour, so this window gets hit.
+    const seen: string[] = [];
+    const offA = httpApi.subscribeEvents((t) => seen.push(t));
+    FakeEventSource.instances[0].open();
+    FakeEventSource.instances[0].permanentError();
+    expect(FakeEventSource.instances).toHaveLength(1);
+
+    const offB = httpApi.subscribeEvents(() => {});
+    expect(
+      FakeEventSource.instances,
+      "the new subscriber rebuilt the stream — that part is fine",
+    ).toHaveLength(2);
+
+    latest().open();
+    expect(
+      seen,
+      "a rebuild through ANY door still owes the full resync",
+      ).toEqual([...SSE_RESYNC_TOPICS]);
+    offA();
+    offB();
+  });
+
+  it("the debt is discharged ONCE: a later ordinary reconnect does not keep re-fanning it", async () => {
+    const seen: string[] = [];
+    const off = httpApi.subscribeEvents((t) => seen.push(t));
+    FakeEventSource.instances[0].open();
+    FakeEventSource.instances[0].permanentError();
+    await runRetry();
+    latest().open(); // pays the debt
+    expect(seen).toEqual([...SSE_RESYNC_TOPICS]);
+
+    seen.length = 0;
+    // A brand-new subscriber now, with the stream healthy: no debt, no fan.
+    const off2 = httpApi.subscribeEvents(() => {});
+    expect(seen).toEqual([]);
+    off2();
+    off();
+  });
+});
+
+describe("httpApi · the probe's own contract (the parts a state-machine test does not reach)", () => {
+  it("a probe that never answers is ENDED by its deadline — without one the whole recovery loop deadlocks", async () => {
+    probeHangs = true;
+    const off = httpApi.subscribeEvents(() => {});
+    FakeEventSource.instances[0].open();
+    FakeEventSource.instances[0].permanentError();
+
+    // Fire the retry: the probe is now hanging, no timer, no EventSource.
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(probeCalls).toBe(1);
+    expect(
+      FakeEventSource.instances,
+      "while the probe hangs nothing has reconnected — this is the deadlock window",
+    ).toHaveLength(1);
+
+    // The deadline is the only thing that can end it.
+    await vi.advanceTimersByTimeAsync(SSE_PROBE_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      FakeEventSource.instances,
+      "a timed-out probe reads as 'no answer' and the stream is rebuilt",
+    ).toHaveLength(2);
+    off();
+  });
+
+  it("the probe ABORTS the stream it opened — it wanted the status line, not a second live connection", async () => {
+    const off = httpApi.subscribeEvents(() => {});
+    FakeEventSource.instances[0].open();
+    FakeEventSource.instances[0].permanentError();
+    await runRetry();
+
+    expect(lastProbe, "the probe ran").not.toBe(null);
+    expect(
+      lastProbe?.init.signal?.aborted,
+      "left un-aborted, every successful probe leaks a second SSE connection for the rest of the session",
+    ).toBe(true);
+    // And it identifies itself as a probe by a header, which an EventSource
+    // cannot set — that is what makes it distinguishable from a real stream.
+    expect(
+      (lastProbe?.init.headers as Record<string, string>)["X-OC-SSE-Probe"],
+    ).toBe("1");
+    off();
+  });
+
+  it("no token is answered as UNAUTHORIZED without a request — and that verdict must reach the auth layer, not just this module", async () => {
+    // Two halves, and the second is the one that has teeth. Answering "no
+    // token" as `0` (offline) instead of `401` LOOKS harmless from inside this
+    // module — `ensureSseSource` declines without a token either way, so the
+    // state still lands on "unauthorized" and no stream is built. The
+    // difference is entirely OUTSIDE: only the 401 arm calls
+    // handleUnauthorized, which is what fires oc-auth-expired and drops the app
+    // to the login wall. Get it wrong and the owner sits on a frozen page,
+    // correctly labelled disconnected, with nothing telling him to log back in
+    // and no path that ever will.
+    const expired = vi.fn();
+    window.addEventListener(AUTH_EXPIRED_EVENT, expired);
+    const off = httpApi.subscribeEvents(() => {});
+    FakeEventSource.instances[0].open();
+    localStorage.removeItem(TOKEN_KEY);
+    FakeEventSource.instances[0].permanentError();
+
+    await runRetry();
+
+    expect(probeCalls, "asking the server is pointless with no credential").toBe(0);
+    expect(
+      expired,
+      "the session being unusable has to reach the auth layer, or nobody bounces to login",
+    ).toHaveBeenCalledTimes(1);
+    expect(sseConnectionState()).toBe("unauthorized");
+    expect(FakeEventSource.instances).toHaveLength(1);
+
+    window.removeEventListener(AUTH_EXPIRED_EVENT, expired);
+    off();
+  });
+
+  it("a handler from a connection we already replaced is IGNORED — a late error must not kill the live stream", async () => {
+    const off = httpApi.subscribeEvents(() => {});
+    const first = FakeEventSource.instances[0];
+    first.open();
+    first.permanentError();
+    await runRetry();
+    const second = latest();
+    second.open();
+    expect(sseConnectionState()).toBe("live");
+
+    // The dead socket fires one last error, late (browsers do this).
+    first.permanentError();
+
+    expect(
+      sseSourceIsAlive(second),
+      "the stale handler tore down the CURRENT connection",
+    ).toBe(true);
+    expect(sseConnectionState()).toBe("live");
+    expect(FakeEventSource.instances).toHaveLength(2);
     off();
   });
 });

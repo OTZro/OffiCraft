@@ -45,18 +45,23 @@ test.describe('T-b0bb · SSE downlink death is visible, and self-heals', () => {
     const token = await ownerToken(page.request);
 
     // ── who is doing the retrying, measured rather than assumed ────────────
-    // Requests to /api/events arrive in two distinguishable kinds, and the
-    // difference is the evidence:
-    //   resourceType "eventsource" — a real stream attempt;
-    //   resourceType "fetch"       — OUR auth probe, which exists only inside
-    //                                the permanent-failure recovery path.
-    // A browser retrying on its own could only ever produce the first kind. So
-    // a non-zero count of the second is a positive fingerprint of this fix
-    // running, not an inference from "something happened more than once".
-    const kinds = { eventsource: 0, fetch: 0, other: 0 };
+    // Requests to /api/events arrive in two kinds and the difference is the
+    // evidence, so the way we tell them apart has to be a PROPERTY OF THE
+    // REQUEST, not a guess about it:
+    //   `X-OC-SSE-Probe: 1` — OUR auth probe. It is a `fetch`, and a fetch can
+    //                         set a header; an EventSource structurally cannot.
+    //                         The header therefore cannot appear on a real
+    //                         stream even in principle.
+    //   no such header      — a real EventSource stream attempt.
+    // This used to key off Playwright's `resourceType` classification, which is
+    // the browser's opinion about the request rather than something the request
+    // carries — a rename upstream would have reddened this spec while the
+    // product was fine. The URL is deliberately still the SAME endpoint: the
+    // probe asks the real thing, never a stand-in that could answer differently.
+    const kinds = { probe: 0, stream: 0 };
     await page.route('**/api/events*', async (route) => {
-      const t = route.request().resourceType();
-      kinds[t === 'eventsource' || t === 'fetch' ? t : 'other'] += 1;
+      const isProbe = route.request().headers()['x-oc-sse-probe'] === '1';
+      kinds[isProbe ? 'probe' : 'stream'] += 1;
       // A non-200 with a non-stream content type: exactly the shape the spec
       // says the browser must FAIL the connection on, with no retry.
       await route.fulfill({
@@ -85,13 +90,13 @@ test.describe('T-b0bb · SSE downlink death is visible, and self-heals', () => {
       fullPage: false,
     });
 
-    // The recovery path really ran: the auth probe is a `fetch`, and nothing
-    // but this fix issues one against /api/events.
+    // The recovery path really ran: only this fix issues a probe, and it is
+    // self-identifying.
     expect(
-      kinds.fetch,
-      'no probe fetch means the permanent-failure recovery path never ran',
+      kinds.probe,
+      'no probe means the permanent-failure recovery path never ran',
     ).toBeGreaterThan(0);
-    expect(kinds.eventsource, 'the stream itself was retried too').toBeGreaterThan(1);
+    expect(kinds.stream, 'the stream itself was retried too').toBeGreaterThan(1);
 
     // ── 2. it comes back by itself ──────────────────────────────────────────
     // Remove the interception entirely rather than proxying the stream through
