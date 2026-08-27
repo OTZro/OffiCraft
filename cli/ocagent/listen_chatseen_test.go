@@ -134,9 +134,12 @@ func TestListenerRun_ColdStart_BackfillsWhatArrivedWhileDown(t *testing.T) {
 		t.Fatalf("backfill count = %d want 2", n)
 	}
 	got := out2.String()
+	// COUNT, don't merely detect: `Contains` passes just as happily on a backfill
+	// that printed the same line five times, and a duplicate backfill is its own
+	// bug (it washes out the context the cap exists to protect).
 	for _, want := range []string{"chat from boss (#m3): body-m3", "chat from boss (#m4): body-m4"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("cold-start backfill missing %q; out = %q", want, got)
+		if c := strings.Count(got, want); c != 1 {
+			t.Fatalf("cold-start backfill printed %q %d times, want exactly 1; out = %q", want, c, got)
 		}
 	}
 	if strings.Contains(got, "#m1") || strings.Contains(got, "#m2") {
@@ -451,5 +454,235 @@ func TestListenerRun_FirstEver_SilentThroughRun(t *testing.T) {
 	}
 	if got := readSeenFile(t, chatSeenPath(cfg)); len(got) != 3 {
 		t.Fatalf("first-ever boot must leave a primed baseline, got %v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The CONTROLLED COUNT. Everything above proves the pieces behave; what was
+// missing is the differential the fix is actually claimed on — same environment,
+// same message, OLD build 0, NEW build 1 — measured at the run() level, where
+// the two are wired together.
+// ---------------------------------------------------------------------------
+
+// newBackfillRunServer serves a fixed chat list plus an /api/events stream that
+// opens and closes immediately, so the listener re-dials forever and the dial
+// count can be used as a denominator.
+func newBackfillRunServer(t *testing.T, list string, conns *int32) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/chat") {
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(list))
+			return
+		}
+		if !strings.HasPrefix(r.URL.Path, eventsPath) {
+			w.WriteHeader(404)
+			return
+		}
+		atomic.AddInt32(conns, 1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// bootOnce runs one whole listener lifecycle against srv and returns what it
+// printed. It waits on the DIAL COUNT, never on the output — see the comment on
+// the differential test below for why that distinction is the whole point.
+func bootOnce(t *testing.T, srv *httptest.Server, cfg Config, conns *int32, seen *chatSeen) string {
+	t.Helper()
+	before := atomic.LoadInt32(conns)
+	out := &syncBuf{}
+	l := newTestListener(srv, cfg, out)
+	l.cursorPath = filepath.Join(cfg.Home, "cursor")
+	l.seen = seen
+	l.replySeen = loadReplyCardSeen(filepath.Join(cfg.Home, "replycards-seen"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- l.run(ctx) }()
+	waitForCond(t, func() bool { return atomic.LoadInt32(conns)-before >= 3 },
+		"the listener dialled 3 times (so the boot drain has certainly run)")
+	cancel()
+	<-done
+	return out.String()
+}
+
+// THE DIFFERENTIAL, COUNTED. Two arms differing in exactly one bit — whether the
+// persisted cursor came up primed — run against the same server, the same
+// baseline file and the same single unread message. The old build prints it
+// ZERO times (that is the bug: silently marked read); the new build prints it
+// EXACTLY once (not "at least once" — a backfill that repeats is its own bug).
+//
+// 🔴 WHY THIS WAITS ON THE DIAL COUNT AND NOT ON THE OUTPUT: the old arm's
+// expected result is silence, and you cannot wait for silence. A test that
+// blocks until the backfill appears turns the old arm into a TIMEOUT — which is
+// a chain-collapse, not evidence: a timeout is what a deadlock, a mis-wired
+// fake, or a hung dial all look like too. Waiting on dials gives every arm the
+// same bounded, positively-observed moment to be judged at, so the failure that
+// reports is `0 != 1` on a named count.
+//
+// This is the guard that was missing: reverting the boot drain to the pre-fix
+// unconditional-silent form used to redden nothing but a 3-second timeout.
+func TestListenerRun_ColdStartBackfill_CountedOldBuildVsNew(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		oldBuild bool // old build ⇒ the boot drain is unconditionally silent
+		want     int
+	}{
+		{"old-build-swallows-it", true, 0},
+		{"new-build-prints-it-once", false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			var conns int32
+			srv := newBackfillRunServer(t, msgsJSON("m1", "m2"), &conns)
+			cfg := Config{Base: srv.URL, Token: "tok", ID: "kyle", Home: home}
+
+			// identical starting state in BOTH arms: a baseline holding m1, with
+			// m2 as the one message that arrived while nobody was listening.
+			p := chatSeenPath(cfg)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(`["m1"]`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			seen := loadChatSeen(p)
+			if !seen.primed {
+				t.Fatal("both arms must start from a primed baseline")
+			}
+			if tc.oldBuild {
+				// The pre-fix world in one bit: the cursor never survived the
+				// process, so the boot drain had nothing to diff against and ran
+				// silent every single time.
+				seen.primed = false
+			}
+
+			got := strings.Count(bootOnce(t, srv, cfg, &conns, seen), "chat from boss (#m2)")
+			if got != tc.want {
+				t.Fatalf("%s: m2 printed %d times across %d dials, want %d",
+					tc.name, got, atomic.LoadInt32(&conns), tc.want)
+			}
+		})
+	}
+}
+
+// The same differential across two REAL process lifecycles, with nothing
+// hand-set: boot once on a virgin home (silent baseline), let messages arrive
+// while nothing is listening, boot again from what the first boot left on disk.
+// Every message is counted, so a backfill that prints twice fails here too.
+//
+// This closes the bypass that let the boot-drain wiring rot unnoticed: the
+// cold-start test above it calls drainChat directly and therefore cannot see a
+// mistake in how run() decides silence.
+func TestListenerRun_ColdStart_AcrossTwoBoots_PrintsEachExactlyOnce(t *testing.T) {
+	home := t.TempDir()
+	cfg := Config{Token: "tok", ID: "kyle", Home: home}
+
+	// --- boot #1: nothing on disk. Must be silent, must leave a baseline. ---
+	var conns1 int32
+	srv1 := newBackfillRunServer(t, msgsJSON("m1", "m2"), &conns1)
+	cfg.Base = srv1.URL
+	out1 := bootOnce(t, srv1, cfg, &conns1, loadChatSeen(chatSeenPath(cfg)))
+	if n := strings.Count(out1, "chat from boss"); n != 0 {
+		t.Fatalf("boot #1 (first ever) printed %d chat lines across %d dials, want 0; out = %q",
+			n, atomic.LoadInt32(&conns1), out1)
+	}
+	if got := readSeenFile(t, chatSeenPath(cfg)); len(got) != 2 {
+		t.Fatalf("boot #1 must leave a baseline of 2, got %v", got)
+	}
+
+	// --- the agent is down; m3 and m4 arrive with nobody holding a stream. ---
+	var conns2 int32
+	srv2 := newBackfillRunServer(t, msgsJSON("m1", "m2", "m3", "m4"), &conns2)
+	cfg.Base = srv2.URL
+
+	// --- boot #2: a genuinely new process, reading only what boot #1 wrote. ---
+	out2 := bootOnce(t, srv2, cfg, &conns2, loadChatSeen(chatSeenPath(cfg)))
+	for _, id := range []string{"m3", "m4"} {
+		if n := strings.Count(out2, "chat from boss (#"+id+")"); n != 1 {
+			t.Fatalf("boot #2: %s printed %d times across %d dials, want exactly 1; out = %q",
+				id, n, atomic.LoadInt32(&conns2), out2)
+		}
+	}
+	for _, id := range []string{"m1", "m2"} {
+		if strings.Contains(out2, "#"+id) {
+			t.Fatalf("boot #2 re-printed pre-baseline history %s; out = %q", id, out2)
+		}
+	}
+
+	// --- boot #3: nothing new arrived. Silence again. ---
+	var conns3 int32
+	srv3 := newBackfillRunServer(t, msgsJSON("m1", "m2", "m3", "m4"), &conns3)
+	cfg.Base = srv3.URL
+	out3 := bootOnce(t, srv3, cfg, &conns3, loadChatSeen(chatSeenPath(cfg)))
+	if n := strings.Count(out3, "chat from boss"); n != 0 {
+		t.Fatalf("boot #3 (nothing new) printed %d chat lines across %d dials, want 0; out = %q",
+			n, atomic.LoadInt32(&conns3), out3)
+	}
+}
+
+// A cursor that cannot be written must SAY SO. Without this line the failure is
+// indistinguishable from a healthy run — the drain prints, the count is right,
+// and only the NEXT boot silently swallows everything, which is the exact bug
+// this file exists to prevent.
+func TestChatSeen_PersistFailure_AnnouncesInsteadOfRelapsingSilently(t *testing.T) {
+	home := t.TempDir()
+	cfg := Config{Token: "t", ID: "kyle", Home: home}
+	// occupy the parent path with a FILE so MkdirAll can never succeed.
+	if err := os.WriteFile(filepath.Join(home, "kyle"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := newMutableChatServer(t, msgsJSON("m1", "m2"))
+	cfg.Base = srv.URL
+
+	var out bytes.Buffer
+	s := loadChatSeen(chatSeenPath(cfg))
+	drainChat(srv.Client(), cfg, s, &out, !s.primed)
+
+	// the write really did fail — otherwise this test proves nothing.
+	if _, err := os.ReadFile(chatSeenPath(cfg)); err == nil {
+		t.Fatal("negative control: the state file was written after all")
+	}
+	if s.primed {
+		t.Fatal("a failed write must not claim a baseline")
+	}
+	got := out.String()
+	if !strings.Contains(got, "chat-seen 寫不進去") {
+		t.Fatalf("an unwritable cursor must be announced; out = %q", got)
+	}
+	if !strings.Contains(got, chatSeenPath(cfg)) {
+		t.Fatalf("the warning must name the path it could not write; out = %q", got)
+	}
+	if !strings.Contains(got, "get_chat") {
+		t.Fatalf("the warning must tell the reader what to do instead; out = %q", got)
+	}
+
+	// ONCE per process: drainChat also runs on every inbound delta, and a
+	// repeated warning would drown the very context the cap protects.
+	out.Reset()
+	drainChat(srv.Client(), cfg, s, &out, false)
+	if strings.Contains(out.String(), "chat-seen 寫不進去") {
+		t.Fatalf("the warning must not repeat within one process; out = %q", out.String())
+	}
+}
+
+// Negative control on the warning: a healthy write says nothing at all.
+func TestChatSeen_PersistSuccess_SaysNothing(t *testing.T) {
+	home := t.TempDir()
+	srv := newMutableChatServer(t, msgsJSON("m1", "m2"))
+	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: home}
+	var out bytes.Buffer
+	s := loadChatSeen(chatSeenPath(cfg))
+	drainChat(srv.Client(), cfg, s, &out, !s.primed)
+	if !s.primed {
+		t.Fatal("a healthy write must prime")
+	}
+	if strings.Contains(out.String(), "chat-seen") {
+		t.Fatalf("a healthy drain must not mention the cursor at all; out = %q", out.String())
 	}
 }
