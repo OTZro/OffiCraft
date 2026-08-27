@@ -227,3 +227,79 @@ def test_envelope_message_is_human_not_detail(client: httpx.Client) -> None:
         assert "detail" not in body, (
             f"legacy detail shape leaked: {json.dumps(body)[:200]}"
         )
+
+
+def test_lessons_routes_refuse_the_retired_task_type_query_parameter(
+    client: httpx.Client, owner_token: str
+) -> None:
+    """T-2 follow-up: the retired ``task_type`` is answered on the QUERY face too.
+
+    T-2 removed the lessons classification axis and shipped two refusals — the
+    MCP tool face (by argument presence) and the REST request BODY (unknown key
+    → 422). Neither reached the third way the field can arrive. Nothing on
+    these three routes read the query string, so ``?task_type=…`` was dropped
+    on the floor and the request answered 200 — on the GET, where a query is
+    the ONLY way in, and equally on both POSTs.
+
+    That is the ticket's own defect on a face the ticket did not reach: a caller
+    that believes it named a classification is told nothing and handed an answer
+    that looks like the one it asked for. This pins the refusal on the wire.
+
+    🔑 The scoping assertion at the end is the load-bearing half. Ignoring
+    undeclared query parameters is the ROUTER's behaviour on every route this
+    station serves; only the ONE retired name is answered. A server that
+    refused every unknown query key would pass the first half of this test and
+    have changed a station-wide posture nobody asked for.
+    """
+    routes = (
+        ("GET", "/api/lessons/assistant", None),
+        ("POST", "/api/lessons/assistant", {"text": "conformance must not land"}),
+        (
+            "POST",
+            "/api/lessons/assistant/patch",
+            {"edits": [{"old": "", "new": "conformance must not land"}]},
+        ),
+    )
+    for method, path, body in routes:
+        # Positive control FIRST: the same request without the query is served.
+        # Without it a route broken end-to-end would read as "the door works".
+        ok = client.request(
+            method, path, json=body, headers=_auth(owner_token)
+        )
+        assert ok.status_code == 200, (
+            f"positive control {method} {path}: {ok.status_code} {ok.text}"
+        )
+
+        for query in ("task_type=general", "task_type="):
+            r = client.request(
+                method,
+                f"{path}?{query}",
+                json=body,
+                headers=_auth(owner_token),
+            )
+            assert r.status_code == 400, (
+                f"{method} {path}?{query} answered {r.status_code}, want 400. "
+                "Silently ignoring the retired task_type leaves the caller "
+                "believing it addressed a classification — the exact failure "
+                f"T-2 exists to end. Body: {r.text}"
+            )
+            err = r.json()["error"]
+            assert err["code"] == CODE_BY_STATUS[400], err
+            assert "task_type" in err["message"], (
+                f"the refusal must NAME the parameter it refused: {err['message']!r}"
+            )
+
+        # SCOPING: an unrecognised name that is NOT the retired one stays
+        # ignored, exactly as the router treats it everywhere else.
+        scoped = client.request(
+            method,
+            f"{path}?zzz_not_a_parameter=1",
+            json=body,
+            headers=_auth(owner_token),
+        )
+        assert scoped.status_code == 200, (
+            f"{method} {path}?zzz_not_a_parameter=1 answered "
+            f"{scoped.status_code}, want 200 — this gate is scoped to the ONE "
+            "name T-2 retired, not to every unknown query key. "
+            f"Body: {scoped.text}"
+        )
