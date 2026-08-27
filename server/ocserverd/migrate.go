@@ -264,7 +264,7 @@ func cmdBackup(env func(string) string, out io.Writer) int {
 		return 1
 	}
 	defer db.Close()
-	res, err := runDatabaseBackup(db, path, backupReasonManual, time.Now())
+	res, err := runDatabaseBackup(db, path, backupReasonManual, time.Now(), liveBackupRetain(db))
 	logBackupOutcome(res, err)
 	if err != nil {
 		fmt.Fprintf(out, "[ocserverd] backup FAILED: %v\n", err)

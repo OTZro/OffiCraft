@@ -24,6 +24,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,7 +92,7 @@ func TestRunDatabaseBackup_ProducesARestorableFile(t *testing.T) {
 		t.Fatalf("count source: %v", err)
 	}
 
-	res, err := runDatabaseBackup(db, dbPath, backupReasonManual, time.Date(2026, 7, 31, 23, 30, 0, 0, time.UTC))
+	res, err := runDatabaseBackup(db, dbPath, backupReasonManual, time.Date(2026, 7, 31, 23, 30, 0, 0, time.UTC), backupRetainDefault)
 	if err != nil {
 		t.Fatalf("backup: %v", err)
 	}
@@ -156,7 +157,7 @@ func TestRunDatabaseBackup_IsOnline(t *testing.T) {
 	}()
 	time.Sleep(50 * time.Millisecond) // let the writer actually get going
 
-	res, backupErr := runDatabaseBackup(db, dbPath, backupReasonScheduled, time.Now())
+	res, backupErr := runDatabaseBackup(db, dbPath, backupReasonScheduled, time.Now(), backupRetainDefault)
 	close(stop)
 	<-done
 
@@ -177,16 +178,25 @@ func TestRunDatabaseBackup_IsOnline(t *testing.T) {
 	}
 }
 
-// TestRotateBackups_MovesToTrashAndNeverDeletes is the rule that protects the
-// only copy of anything: rotation retires files by MOVING them. A rotation bug
-// that deletes destroys precisely what this engine exists to keep.
-func TestRotateBackups_MovesToTrashAndNeverDeletes(t *testing.T) {
+// TestRotateBackups_KeepsTheNewestNAndDeletesTheRest is the shape of retention
+// after T-8: the newest N of each pool survive BY NAME, and the rest are GONE
+// FROM DISK.
+//
+// ⚠️ It replaces TestRotateBackups_MovesToTrashAndNeverDeletes, which asserted
+// the opposite — that the evicted files were still on disk under trash/. That
+// rule was real and is now retired on the owner's ruling (2026-08-27): nothing
+// ever emptied trash/, so "never deletes" meant "keeps every backup forever",
+// and the directory reached 141.6 GiB / 278 files. The stronger half of the old
+// test is kept verbatim — the SURVIVORS are named one by one — because
+// "rotation deleted something" and "rotation deleted the RIGHT something" are
+// different claims and only the second is worth anything.
+func TestRotateBackups_KeepsTheNewestNAndDeletesTheRest(t *testing.T) {
 	db, dbPath := seedBackupFixture(t, 10)
 
 	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	var made []string
-	for i := 0; i < backupRetain+3; i++ {
-		res, err := runDatabaseBackup(db, dbPath, backupReasonScheduled, base.Add(time.Duration(i)*time.Hour))
+	for i := 0; i < backupRetainDefault+3; i++ {
+		res, err := runDatabaseBackup(db, dbPath, backupReasonScheduled, base.Add(time.Duration(i)*time.Hour), backupRetainDefault)
 		if err != nil {
 			t.Fatalf("backup %d: %v", i, err)
 		}
@@ -200,8 +210,8 @@ func TestRotateBackups_MovesToTrashAndNeverDeletes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list backups: %v", err)
 	}
-	if len(kept) != backupRetain {
-		t.Fatalf("kept %d backups, want %d", len(kept), backupRetain)
+	if len(kept) != backupRetainDefault {
+		t.Fatalf("kept %d backups, want %d", len(kept), backupRetainDefault)
 	}
 	// Newest-first: the survivors must be the LAST ones written. Keeping the
 	// wrong five would pass a count check and lose the freshest retreat point.
@@ -212,24 +222,53 @@ func TestRotateBackups_MovesToTrashAndNeverDeletes(t *testing.T) {
 		}
 	}
 
-	trashed, err := os.ReadDir(backupTrashFor(dbPath))
-	if err != nil {
-		t.Fatalf("read trash: %v", err)
+	// The three evicted files must be GONE — not relocated. Anywhere under the
+	// data root counts as "still on disk", so this walks the whole tree rather
+	// than checking the one directory rotation used to move things to.
+	for _, name := range made[:3] {
+		if where := findUnderDataRoot(t, dbPath, name); where != "" {
+			t.Errorf("evicted backup %s is still on disk at %s — retention must DELETE, not relocate", name, where)
+		}
 	}
-	if len(trashed) != 3 {
-		t.Fatalf("trash holds %d files, want 3 (rotation must move, not delete)", len(trashed))
+	// The survivors must still be REAL backups, not husks: a rotation that keeps
+	// the right NAMES while corrupting the bytes passes every check above.
+	if _, rows := readBackSentinel(t, filepath.Join(backupDirFor(dbPath), kept[0].Name())); rows == 0 {
+		t.Errorf("the newest surviving backup %s is unreadable", kept[0].Name())
 	}
-	// And the evicted files must still be REAL backups, not truncated husks —
-	// "moved to trash" is only a safety net if what lands there is intact.
-	if _, rows := readBackSentinel(t, filepath.Join(backupTrashFor(dbPath), trashed[0].Name())); rows == 0 {
-		t.Error("a retired backup is unreadable")
+}
+
+// findUnderDataRoot walks the WHOLE directory the database lives in and returns
+// the first path whose base name matches, or "" if there is none.
+//
+// 🔴 It exists because "deleted" and "moved somewhere else" are the two answers
+// this ticket has to tell apart, and looking only in backups/ and trash/ cannot:
+// a rotation rewritten to move files into a THIRD directory would satisfy a
+// narrower check while leaving every byte on disk.
+func findUnderDataRoot(t *testing.T, dbPath, name string) string {
+	t.Helper()
+	root := filepath.Dir(dbPath)
+	var found string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && d.Name() == name {
+			found = path
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("walk %s: %v", root, err)
 	}
+	return found
 }
 
 // TestRotateBackups_IgnoresFilesItDidNotCreate. The production data directory
 // already holds hand-made snapshots (`officraft.db.bak-pre-v0.5.39`) that
-// predate this engine. Rotation MOVES files, so anything it can see it can take
-// away — it must therefore only ever see its own.
+// predate this engine, a subdirectory, and a 456 MB `…-premigration.db.partial`
+// left by a VACUUM that was killed mid-write. Rotation DELETES now, so anything
+// it can see it can destroy — it must therefore only ever see its own.
 func TestRotateBackups_IgnoresFilesItDidNotCreate(t *testing.T) {
 	db, dbPath := seedBackupFixture(t, 5)
 	dir := backupDirFor(dbPath)
@@ -240,25 +279,42 @@ func TestRotateBackups_IgnoresFilesItDidNotCreate(t *testing.T) {
 	if err := os.WriteFile(foreign, []byte("not ours"), 0o600); err != nil {
 		t.Fatalf("write foreign file: %v", err)
 	}
+	// The real orphan on this machine. It is deliberately invisible to retention
+	// in BOTH directions: never counted as one of the N (the suffix is
+	// `.partial`, not `.db`), and never deleted as if it were a backup. It stays
+	// where it is — disposing of it is somebody's decision, not rotation's.
+	orphan := filepath.Join(dir, "officraft-20260101-000000-premigration.db.partial")
+	if err := os.WriteFile(orphan, []byte("half a vacuum"), 0o600); err != nil {
+		t.Fatalf("write orphan partial: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "retreat-t-dd7a"), 0o700); err != nil {
+		t.Fatalf("mkdir subdir: %v", err)
+	}
 
 	base := time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < backupRetain+2; i++ {
-		if _, err := runDatabaseBackup(db, dbPath, backupReasonScheduled, base.Add(time.Duration(i)*time.Hour)); err != nil {
+	for i := 0; i < backupRetainDefault+2; i++ {
+		if _, err := runDatabaseBackup(db, dbPath, backupReasonScheduled, base.Add(time.Duration(i)*time.Hour), backupRetainDefault); err != nil {
 			t.Fatalf("backup %d: %v", i, err)
 		}
 	}
 
 	if _, err := os.Stat(foreign); err != nil {
-		t.Fatalf("rotation touched a file it did not create: %v", err)
+		t.Errorf("rotation DELETED a hand-made snapshot it did not create: %v", err)
 	}
-	if trashed, err := os.ReadDir(backupTrashFor(dbPath)); err != nil {
-		t.Fatalf("read trash: %v", err)
-	} else {
-		for _, e := range trashed {
-			if strings.Contains(e.Name(), "bak-pre") {
-				t.Fatalf("rotation retired a foreign file: %s", e.Name())
-			}
-		}
+	if _, err := os.Stat(orphan); err != nil {
+		t.Errorf("rotation DELETED the .partial orphan: %v — a half-written file is not one of the N and is not rotation's to dispose of", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "retreat-t-dd7a")); err != nil {
+		t.Errorf("rotation removed a subdirectory of backups/: %v", err)
+	}
+	// The two foreign files must also be invisible to the COUNT: were either
+	// counted toward N, one genuine backup too many would have been deleted.
+	kept, err := backupFilesIn(dir)
+	if err != nil {
+		t.Fatalf("list backups: %v", err)
+	}
+	if len(kept) != backupRetainDefault {
+		t.Errorf("kept %d backups, want %d — a foreign file was counted toward N", len(kept), backupRetainDefault)
 	}
 }
 
@@ -294,7 +350,7 @@ func TestRunDatabaseBackup_ReportsStaleness(t *testing.T) {
 	db, dbPath := seedBackupFixture(t, 10)
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 
-	first, err := runDatabaseBackup(db, dbPath, backupReasonManual, now)
+	first, err := runDatabaseBackup(db, dbPath, backupReasonManual, now, backupRetainDefault)
 	if err != nil {
 		t.Fatalf("first backup: %v", err)
 	}
@@ -302,7 +358,7 @@ func TestRunDatabaseBackup_ReportsStaleness(t *testing.T) {
 		t.Errorf("first ever backup reported Stale=%v (%q); an empty directory IS the alarm case", first.Stale, first.StaleAge)
 	}
 
-	fresh, err := runDatabaseBackup(db, dbPath, backupReasonManual, now.Add(time.Minute))
+	fresh, err := runDatabaseBackup(db, dbPath, backupReasonManual, now.Add(time.Minute), backupRetainDefault)
 	if err != nil {
 		t.Fatalf("second backup: %v", err)
 	}
@@ -310,7 +366,7 @@ func TestRunDatabaseBackup_ReportsStaleness(t *testing.T) {
 		t.Errorf("a backup taken one minute after another reported stale (%q) — a false alarm teaches people to ignore it", fresh.StaleAge)
 	}
 
-	late, err := runDatabaseBackup(db, dbPath, backupReasonManual, now.Add(backupStaleFactor*backupInterval+time.Hour))
+	late, err := runDatabaseBackup(db, dbPath, backupReasonManual, now.Add(backupStaleFactor*backupInterval+time.Hour), backupRetainDefault)
 	if err != nil {
 		t.Fatalf("late backup: %v", err)
 	}

@@ -42,6 +42,7 @@ import {
   CHAT_BUDGET_CHARS_MAX,
   CHAT_BUDGET_CHARS_MIN,
 } from "../api/chatBudget";
+import { BACKUP_RETAIN_MAX, BACKUP_RETAIN_MIN } from "../api/backupRetain";
 
 /** The adjustable document caps (T-ae38, widened by T-30f1), in the order the
  * parameters card lists them: the three role-journal segments in journal order
@@ -1123,6 +1124,9 @@ function ServerParams({
     Partial<Record<DocCapField, string>>
   >({});
   const [chatBudgetDraft, setChatBudgetDraft] = useState<string | null>(null);
+  const [backupRetainDraft, setBackupRetainDraft] = useState<string | null>(
+    null
+  );
   const [rangeError, setRangeError] = useState(false);
 
   const ttlLabel: Record<number, string> = {
@@ -1231,6 +1235,28 @@ function ServerParams({
     }
     setChatBudgetDraft(null);
     if (n !== settings.chatBudgetChars) void onSave({ chatBudgetChars: n });
+  }
+
+  // T-8: backup retention N. Its own row and its own commit for the same reason
+  // as the chat budget — its unit is FILES, not characters, and its range is its
+  // own — plus one this page has no other example of: LOWERING this number
+  // DELETES files on the next backup. That is why the sub-label spells out what
+  // N is and is not, rather than leaving the reader to infer a time depth or a
+  // per-directory count from a bare integer.
+  function commitBackupRetain() {
+    if (!settings || backupRetainDraft === null) return;
+    const n = Number(backupRetainDraft);
+    if (
+      !Number.isInteger(n) ||
+      n < BACKUP_RETAIN_MIN ||
+      n > BACKUP_RETAIN_MAX
+    ) {
+      setRangeError(true);
+      setBackupRetainDraft(null);
+      return;
+    }
+    setBackupRetainDraft(null);
+    if (n !== settings.backupRetain) void onSave({ backupRetain: n });
   }
 
   function commitDocCap(field: DocCapField) {
@@ -1471,6 +1497,22 @@ function ServerParams({
                 onChange={(e) => { setRangeError(false); onClearSaveError(); setChatBudgetDraft(e.target.value); }}
                 onBlur={commitChatBudget} onKeyDown={(e) => { if (e.key === "Enter") commitChatBudget(); }} />
               <span className="param-pct__sign">{t.settings.chars}</span>
+            </div>
+          </div>
+
+          <div className="param-row">
+            <div className="param-row__body">
+              <div className="param-row__name">{t.settings.backupRetain}</div>
+              <div className="param-row__sub">{t.settings.backupRetainSub}</div>
+            </div>
+            <div className="param-pct">
+              <input id="param-backup-retain" className="param-input" type="number"
+                min={BACKUP_RETAIN_MIN} max={BACKUP_RETAIN_MAX}
+                aria-label={t.settings.backupRetain}
+                value={backupRetainDraft ?? String(settings.backupRetain)}
+                onChange={(e) => { setRangeError(false); onClearSaveError(); setBackupRetainDraft(e.target.value); }}
+                onBlur={commitBackupRetain} onKeyDown={(e) => { if (e.key === "Enter") commitBackupRetain(); }} />
+              <span className="param-pct__sign">{t.settings.backupRetainUnit}</span>
             </div>
           </div>
 

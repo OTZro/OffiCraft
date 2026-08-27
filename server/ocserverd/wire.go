@@ -95,6 +95,11 @@ type settingsDTO struct {
 	// the seven above it may be lowered as well as raised, and its ceiling is its
 	// own (tied to resumeChatFetch, see domain.go).
 	ChatBudgetChars int `json:"chat_budget_chars"`
+	// BackupRetain is N — how many database backup files rotation KEEPS
+	// (backup.retain; T-8). Two things about this number that its type does not
+	// carry, and that the settings page therefore has to say out loud:
+	// it counts VERSIONS, not days, and it is PER POOL, not per directory.
+	BackupRetain int `json:"backup_retain"`
 	// UpdaterReceiveBeta / UpdaterAutoUpdate are the two software-update
 	// toggles (default false): follow GitHub prereleases too / self-upgrade
 	// in the background when a newer release exists.

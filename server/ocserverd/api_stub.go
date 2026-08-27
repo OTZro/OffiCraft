@@ -83,6 +83,16 @@ type apiServer struct {
 	// resumeSnapshotParts — the ONE place the number enters the packer, which is
 	// why resume_summary and peek_resume_summary_size cannot disagree about it.
 	chatBudgetChars int
+	// backupRetain is N — how many database backup files rotation keeps PER POOL
+	// (DB backup.retain; T-8). This copy exists for the COCKPIT FACE only: GET
+	// /api/settings shows it and PATCH moves it.
+	//
+	// 🔴 It is NOT what rotation reads. backup.go holds no apiServer by design
+	// and reads the row itself (liveBackupRetain) at snapshot time, so this
+	// field being stale or wrong cannot change how many files get deleted — it
+	// can only make the settings page lie. Both sides are bounded by
+	// minBackupRetain/maxBackupRetain, which is what keeps them honest.
+	backupRetain int
 	// updaterReceiveBeta picks which GitHub releases the update check follows
 	// (false = official only, true = prereleases too); updaterAutoUpdate arms
 	// the background self-upgrade cadence (auto_update.go). Both default OFF
@@ -556,6 +566,15 @@ func (s *apiServer) chatBudget() int {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
 	return s.chatBudgetChars
+}
+
+// backupRetainSetting is the live cockpit view of N (backup.retain; T-8).
+// Read at request time like the caps above, so a PATCH shows up on the next GET
+// with no restart. See the field for why rotation does not go through here.
+func (s *apiServer) backupRetainSetting() int {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.backupRetain
 }
 
 // orgNameSnapshot returns the live studio display name (org.name; T-d693).

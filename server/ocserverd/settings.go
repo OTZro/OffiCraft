@@ -124,6 +124,24 @@ const (
 	// move in both directions. See domain.go for the range and why its ceiling is
 	// tied to resumeChatFetch.
 	settingChatBudgetChars = "chat.budget_chars"
+	// settingBackupRetain (T-8, owner 2026-08-27: 「我覺得應該只保留最新的 N 版
+	// 備份，N 可以設定，剩餘的應該直接移除」) is N — how many database backup
+	// files survive rotation. Its default, floor and ceiling all live in
+	// backup.go (backupRetainDefault / minBackupRetain / maxBackupRetain), which
+	// is also where the two things a reader will otherwise get wrong are written
+	// down:
+	//
+	//   - N counts VERSIONS, not days. The calendar depth it buys depends on how
+	//     many backups that stretch of days happened to produce.
+	//   - N is PER POOL, not per directory. Two pools ⇒ up to 2 × N files.
+	//
+	// 🔴 This row has TWO readers and that is deliberate: the cockpit face reads
+	// it through the boot snapshot below (so GET /api/settings can show it and
+	// PATCH can move it), and the backup engine reads the row DIRECTLY at
+	// snapshot time (liveBackupRetain in backup.go) because it holds no
+	// apiServer and three of its four triggers run without one. Both are bounded
+	// by the same three constants, so they cannot disagree about what is legal.
+	settingBackupRetain = "backup.retain"
 	// The retired updater.url / updater.invite_code keys belonged to the
 	// removed ocupdaterd updater-server chain (updates now ship as GitHub
 	// Releases on pkyosx/OffiCraft — update_check.go). They are no longer
@@ -262,6 +280,7 @@ type authSettings struct {
 	docCapCharsBootSequence      int    // doc.cap_chars.boot_sequence (default bootSequenceCapCharsDefault; ONE cap, both runtimes)
 	docCapCharsOffboard          int    // doc.cap_chars.offboard (default offboardCapCharsDefault)
 	chatBudgetChars              int    // chat.budget_chars (default chatBudgetCharsDefault)
+	backupRetain                 int    // backup.retain (default backupRetainDefault; N is PER POOL, and counts versions not days)
 	updaterReceiveBeta           bool   // updater.receive_beta (default false = official releases only)
 	updaterAutoUpdate            bool   // updater.auto_update (default false = manual upgrades only)
 	orgName                      string // org.name ("" = never set → localized default in the topbar)
@@ -535,6 +554,16 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 	// face would have refused.
 	if err := loadCap(settingChatBudgetChars, minChatBudgetChars, maxChatBudgetChars,
 		&out.chatBudgetChars, chatBudgetCharsDefault); err != nil {
+		return out, err
+	}
+
+	// backup.retain (T-8) — range-checked at load for the same reason as the
+	// caps above, and here it matters more than anywhere else on this list: this
+	// is the only setting whose value decides how many files get DELETED. A
+	// hand-edited row the PATCH face would have refused must stop the server,
+	// not quietly become rotation's instruction.
+	if err := loadCap(settingBackupRetain, minBackupRetain, maxBackupRetain,
+		&out.backupRetain, backupRetainDefault); err != nil {
 		return out, err
 	}
 

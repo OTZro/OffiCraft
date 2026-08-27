@@ -32,6 +32,18 @@
             "description": "Codex context-compaction threshold, 1 through 10.",
             "title": "Codex Compaction Threshold"
           },
+          "backup_retain": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many database backup files rotation KEEPS — N; everything past N is DELETED from disk (it used to be moved to a trash/ nobody emptied). Must be between 1 and 20. Two things it does NOT mean: N counts VERSIONS, not DAYS — the calendar depth depends on how many backups those days produced; and N is PER POOL, not per directory — routine (scheduled + manual) and pre-migration backups hold separate quotas, so 5 keeps up to 10 files. Read the current value from get_settings rather than assuming a number.",
+            "title": "Backup Retain"
+          },
           "chat_budget_chars": {
             "anyOf": [
               {
