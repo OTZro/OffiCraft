@@ -913,14 +913,31 @@ func (s *chatSeen) persist(out io.Writer) {
 // one. ONCE PER PROCESS: drainChat also runs on every inbound chat delta, so an
 // unwritable home would otherwise repeat this on every message and drown the
 // context the cap above exists to protect. The first failure is the one that
-// matters — the state file is already not there.
+// matters — this drain's ids are already not on disk.
+//
+// 🔴 WHAT IT MAY AND MAY NOT CLAIM: which way the next boot goes depends on
+// whether a state file was EVER written, and this call cannot tell:
+//
+//   - never written (an unusable parent) ⇒ the next boot loads UNPRIMED and
+//     baselines silently: this window is swallowed, exactly the bug the cursor
+//     exists to kill.
+//   - written before, unwritable now (a read-only file under a writable dir) ⇒
+//     the next boot loads the STALE baseline and PRINTS this window AGAIN —
+//     the opposite failure, and re-printed on every boot until it is fixed.
+//
+// Both are real and this line is one sentence, so it names the loss (these ids are
+// not recorded) and the two directions it can take, and stops there. An earlier
+// draft asserted the silent-swallow branch alone; a review probe falsified it on
+// the second branch. A warning that misdescribes the failure is worse than the
+// failure — it sends the reader looking the wrong way at the one moment they
+// are relying on it.
 func (s *chatSeen) warnWriteFailed(out io.Writer, err error) {
 	if out == nil || s.warned {
 		return
 	}
 	s.warned = true
-	fmt.Fprintf(out, "[ocagent] chat-seen 寫不進去（%s）：%v — 這個行程收到的訊息不會被記下來，"+
-		"下次開機會把這段期間的聊天靜默當成已讀而不印出來。修好之前請用 get_chat 自己回頭撈。\n",
+	fmt.Fprintf(out, "[ocagent] chat-seen 寫不進去（%s）：%v — 這個行程收到的訊息沒被記下來，"+
+		"下次開機的補印可能少印或重印。修好之前請用 get_chat 自己回頭撈。\n",
 		s.path, err)
 }
 

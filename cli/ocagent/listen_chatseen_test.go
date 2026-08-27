@@ -661,6 +661,11 @@ func TestChatSeen_PersistFailure_AnnouncesInsteadOfRelapsingSilently(t *testing.
 	if !strings.Contains(got, "get_chat") {
 		t.Fatalf("the warning must tell the reader what to do instead; out = %q", got)
 	}
+	// The SAME sentence must hold on the other branch too (see the test below),
+	// so it may not claim this one's direction.
+	if !strings.Contains(got, "沒被記下來") || !strings.Contains(got, "可能少印或重印") {
+		t.Fatalf("the warning must claim only what holds on both branches; out = %q", got)
+	}
 
 	// ONCE per process: drainChat also runs on every inbound delta, and a
 	// repeated warning would drown the very context the cap protects.
@@ -668,6 +673,73 @@ func TestChatSeen_PersistFailure_AnnouncesInsteadOfRelapsingSilently(t *testing.
 	drainChat(srv.Client(), cfg, s, &out, false)
 	if strings.Contains(out.String(), "chat-seen 寫不進去") {
 		t.Fatalf("the warning must not repeat within one process; out = %q", out.String())
+	}
+}
+
+// THE OTHER FAILURE BRANCH. Above, the cursor was NEVER written and the next
+// boot swallows the window. Here it was written once and only LATER became
+// unwritable — and the next boot does the OPPOSITE: it loads the stale baseline
+// and re-prints, every boot, until someone fixes the permission.
+//
+// 🔴 This test exists because the warning line originally asserted the
+// swallow branch as if it were the only one. It is not, and the two point in
+// opposite directions, so the line may only name the loss and the range. Both
+// branches assert the SAME sentence: that is the property under test.
+func TestChatSeen_PersistFailure_AfterAGoodWrite_RePrintsInsteadOfSwallowing(t *testing.T) {
+	home := t.TempDir()
+	srv := newMutableChatServer(t, msgsJSON("m1"))
+	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: home}
+
+	// a healthy baseline lands first — this is what makes it the OTHER branch.
+	var out bytes.Buffer
+	s0 := loadChatSeen(chatSeenPath(cfg))
+	drainChat(srv.Client(), cfg, s0, &out, !s0.primed)
+	if !s0.primed {
+		t.Fatal("setup: the first write must succeed")
+	}
+
+	// the FILE goes read-only; its directory stays writable, so MkdirAll still
+	// succeeds and only the write itself fails. (A read-only *directory* would
+	// not reproduce this: writing an existing file inside one still succeeds.)
+	if err := os.Chmod(chatSeenPath(cfg), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(chatSeenPath(cfg), 0o600) })
+
+	srv.setList(msgsJSON("m1", "m2"))
+	out.Reset()
+	s1 := loadChatSeen(chatSeenPath(cfg))
+	drainChat(srv.Client(), cfg, s1, &out, !s1.primed)
+	if c := strings.Count(out.String(), "chat from boss (#m2)"); c != 1 {
+		t.Fatalf("this process must still surface m2 once, got %d; out = %q", c, out.String())
+	}
+	if !strings.Contains(out.String(), "chat-seen 寫不進去") {
+		t.Fatalf("a failed write must be announced on this branch too; out = %q", out.String())
+	}
+
+	// THE NEXT PROCESS: m2 comes back — the failure here is duplication, not
+	// silence. Pinning it stops anyone re-asserting "silently marked read".
+	out.Reset()
+	s2 := loadChatSeen(chatSeenPath(cfg))
+	if !s2.primed {
+		t.Fatal("the stale baseline is still on disk, so this boot loads PRIMED")
+	}
+	drainChat(srv.Client(), cfg, s2, &out, !s2.primed)
+	if c := strings.Count(out.String(), "chat from boss (#m2)"); c != 1 {
+		t.Fatalf("next boot must RE-print m2 (not swallow it), got %d; out = %q", c, out.String())
+	}
+
+	// and the sentence must be true of BOTH branches: it may name the loss and
+	// the range, never one direction.
+	warning := out.String()
+	if !strings.Contains(warning, "沒被記下來") || !strings.Contains(warning, "可能少印或重印") {
+		t.Fatalf("the warning must claim only what holds on both branches; out = %q", warning)
+	}
+	if strings.Contains(warning, "靜默當成已讀") {
+		t.Fatalf("the warning must NOT assert the swallow branch — it is false here; out = %q", warning)
+	}
+	if !strings.Contains(warning, "get_chat") {
+		t.Fatalf("the warning must still say what to do instead; out = %q", warning)
 	}
 }
 
