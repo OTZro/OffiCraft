@@ -650,8 +650,13 @@ export function OfficePage() {
                 // The full roster resolves an inter-agent message's sender id →
                 // name (the sender may be a THIRD agent, not the window's peer).
                 members={members}
-                // Outsource senders are never in `members` — the live worker
-                // list resolves their codename the same way the left rail does.
+                // The live worker list, so an ow- sender `members` did not
+                // resolve still gets the codename the left rail shows. Note
+                // `members` is the UNFILTERED roster (not `roster`, which is
+                // kind==='assistant' only), and GET /api/members does carry
+                // kind='outsource' rows — so this list is a fallback, not the
+                // only outsource label source. Released workers are in
+                // neither; ChatArea's useWorkerCodenames covers those.
                 workers={outsource.workers}
                 // Reuse the existing detailId gate: the header opens the same
                 // MemberDetailPanel the left-rail MemberCard avatar opens.

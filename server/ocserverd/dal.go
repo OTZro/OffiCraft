@@ -250,10 +250,22 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 // included; callers filter, mirroring repository.list_members). kind='outsource'
 // rows are EXCLUDED by design (A案 P7d): the merged storage keeps outsource
 // members out of the member-surface folds that still run through THIS
-// function — reconcile.go, api_monitoring.go, the role/machine folds and
-// worker_spawn's staff scans — so their behaviour matches the pre-merge
-// two-table world. The outsource projection reads them through
-// ListOutsourceWorkers (dal_tasks.go).
+// function, so their behaviour matches the pre-merge two-table world. The
+// outsource projection reads them through ListOutsourceWorkers (dal_tasks.go).
+//
+// Callers are NOT limited to the obvious lifecycle folds (reconcile.go,
+// api_monitoring.go, the role/machine folds, worker_spawn's staff scans).
+// Two live in api_chat.go and are easy to miss:
+//   - the chat-gallery names table (HandleListChatAttachments…): outsource
+//     rows are absent, so every outsource sender's from_name goes out BLANK.
+//     That is the whole reason ChatGalleryPanel takes a `resolveSender` prop
+//     — it is NOT dead code, and deleting it re-prints raw ow- ids.
+//   - the unread-count total (HandleChatUnreadCount…), which unions this
+//     staff list with ListOutsourceWorkers to decide which senders still
+//     count.
+//
+// Treat the list above as illustrative, not exhaustive: grep before assuming
+// a surface does or does not see contractors.
 //
 // ⚠️ NOT "every member surface" any more. The REST list
 // (HandleListMembersApiMembersGet) and the waking agent's floor roster

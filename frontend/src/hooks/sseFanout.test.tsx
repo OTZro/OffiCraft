@@ -652,7 +652,11 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     ]);
     expect(h.counts.getOutsourceWorker).toBe(1);
     expect(h.counts.listOutsourceWorkers ?? 0).toBe(0);
-    // An `ow-` peer is not in the roster, and a chat line cannot add a member.
+    // Zero because of `narrowToHeld`, not because ow- ids are unroster-able:
+    // GET /api/members does carry kind='outsource' rows. useMembers narrows a
+    // badge-only burst to the ids it CURRENTLY HOLDS, and this fixture's roster
+    // has no ow- row — so the burst narrows to the empty set and costs nothing,
+    // neither the list nor the per-item read.
     expect(h.counts.listMembers ?? 0).toBe(0);
     expect(h.counts.getMember ?? 0).toBe(0);
     // 🔴 T-b17f CONTROL half: this row's badge REALLY moves (the recipient IS

@@ -250,10 +250,11 @@ describe("ChatGalleryPanel", () => {
   });
 
   it("resolves an unnamed outsource sender through resolveSender, not the raw id", async () => {
-    // The server leaves from_name "" for an outsource sender (never in the
-    // members roster) — the caller-provided resolver (ChatArea's nameOf
-    // codename chain) names the row and its uploader chip; without a resolver
-    // hit the raw id would show.
+    // The server leaves from_name "" for an outsource sender: the gallery
+    // handler's names table comes from `dal.ListMembers`, which is `WHERE kind
+    // != 'outsource'` (api_chat.go) — so the caller-provided resolver
+    // (ChatArea's nameOf codename chain) is what names the row and its
+    // uploader chip; without a resolver hit the raw id would show.
     galleryRows = [
       row("a1", "image/png", "ow-533c0c4f9dba", "", 100, "work.png"),
     ];
