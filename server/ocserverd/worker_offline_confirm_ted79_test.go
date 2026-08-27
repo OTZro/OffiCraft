@@ -108,13 +108,13 @@ func dropWorkerSession(t *testing.T, api *apiServer, workerID string) {
 // So "offline mid-handover" is no longer a collect question at all: there is
 // nothing alive to kill, and the FSM simply re-STARTs the worker.
 //
-// What the 90s window protected — 「不要因為一次取樣就砍掉還活著的 worker」 — is
-// NOT lost. It moved, and to a LONGER window: the only kill an offline worker
-// can now attract is the zombie takeover, gated by ZombieConfirmGrace
-// (2 × WakingTTLSecs), which is strictly LONGER than this window. The exact
-// ratio is deliberately not written here — the assertion at the bottom of this
-// file pins the ORDERING instead, so moving either constant cannot turn this
-// sentence into a lie (T-20: it used to read "= 180s ... twice this window").
+// What the confirmation window protected — 「不要因為一次取樣就砍掉還活著的
+// worker」 — is NOT lost. It moved, and to a LONGER window: the only kill an
+// offline worker can now attract is the zombie takeover, gated by
+// ZombieConfirmGrace (2 × WakingTTLSecs), which is kept strictly LONGER than
+// this window. The exact ratio is deliberately not written here — the
+// assertion at the bottom of this file pins the ORDERING instead, so moving
+// either constant cannot turn this sentence into a lie.
 // A blip therefore costs at most one
 // refused START (the warden's clobber-guard answers session_already_exists) —
 // never a kill. That is the property the tests below assert, because it is the
@@ -134,8 +134,8 @@ func TestWorkerHandover_OfflineMidHandoverIsRespawnedNeverKilled_T72dd(t *testin
 	api.hub.DrainWardenCommands(ServerSelfHost)
 	dropWorkerSession(t, api, workerID)
 
-	// Straight away, and again well past the OLD 90s window: the answer is the
-	// same both times, because offline is no longer a collect trigger.
+	// Straight away, and again well past the confirmation window: the answer is
+	// the same both times, because offline is no longer a collect trigger.
 	for _, at := range []float64{now, now + 30, now + workerOfflineConfirmGraceSecs + 1} {
 		api.hub.DrainWardenCommands(ServerSelfHost)
 		tickHandover(t, api, workerID, at)
@@ -183,7 +183,7 @@ func TestWorkerHandover_ReconnectMidHandoverIsNotKilled_T72dd(t *testing.T) {
 	}
 	api.hub.DrainWardenCommands(ServerSelfHost)
 
-	// Long past the old window, and long past ZombieConfirmGrace too — the
+	// Long past the confirmation window, and long past ZombieConfirmGrace too — the
 	// reconnect is what makes both irrelevant.
 	tickHandover(t, api, workerID, now+30)
 	tickHandover(t, api, workerID, now+30+2*workerOfflineConfirmGraceSecs)
@@ -218,18 +218,15 @@ func TestWorkerStop_OfflineIsConfirmedBeforeTheCloseOutIsCollected(t *testing.T)
 
 // ── the number itself ───────────────────────────────────────────────────────
 
-// The window is ONE constant so a later owner ruling is a one-line edit. It is
-// also the floor of what an honest reconnect costs (idle-read watchdog 45s +
-// backoff cap 15s + one 30s cadence tick), so a value below it starts cutting
-// off workers that are still alive.
-func TestWorkerOfflineConfirmGraceIsNinetySeconds(t *testing.T) {
-	if workerOfflineConfirmGraceSecs != 90.0 {
-		t.Errorf("workerOfflineConfirmGraceSecs = %v, want 90 — the worst-case honest "+
-			"reconnect (45s idle-read watchdog + 15s backoff cap + one 30s cadence "+
-			"tick), which is what fixes this number and is INDEPENDENT of "+
-			"WakingTTLSecs. owner 2026-08-21 (rc-7df3deb21b3b) asked for shorter than "+
-			"ZombieConfirmGrace; the second assertion below is what enforces that, so "+
-			"this one must not be re-derived from ZombieConfirmGrace's current value.",
+// The window is ONE constant so a later owner ruling is a one-line edit. The
+// honest reconnect floor is about 90s (idle-read watchdog 45s + backoff cap 15s
+// + one 30s cadence tick); owner 2026-08-27 (rc-dbee69264859) selected 120s.
+// Keep this value independent of WakingTTLSecs even though both are 120s today.
+func TestWorkerOfflineConfirmGraceIsOneHundredTwentySeconds(t *testing.T) {
+	if workerOfflineConfirmGraceSecs != 120.0 {
+		t.Errorf("workerOfflineConfirmGraceSecs = %v, want 120 — owner 2026-08-27 "+
+			"(rc-dbee69264859) selected this independent confirmation window; it "+
+			"must not be re-derived from WakingTTLSecs or ZombieConfirmGrace.",
 			workerOfflineConfirmGraceSecs)
 	}
 	if workerOfflineConfirmGraceSecs >= defaultReconcileConfig().ZombieConfirmGrace {
