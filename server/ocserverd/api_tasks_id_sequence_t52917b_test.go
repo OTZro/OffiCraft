@@ -328,3 +328,94 @@ func postCreateTask(t *testing.T, api *apiServer, title string) *httptest.Respon
 		"m-exec", "agent"))
 	return rec
 }
+
+// TestGetTaskAcceptsTheTaskNoTheAgentWasHanded is T-1's guard, and it exists
+// because prose alone does not stay true.
+//
+// 🔴 WHAT WENT WRONG THAT THIS PREVENTS. Before T-5291 the display number was
+// the id's first hex quartet, so 「get_task("T-6f44")」 really did 404, and
+// seeds/task_closeout.md correctly told every closing agent to detour through
+// list_tasks to trade its number for an id. T-5291 made TaskNo(id) the identity
+// function — and NOTHING IN THE TREE NOTICED. The seed kept teaching the
+// detour, and kept asserting 「⚠️ `get_task` 只吃 `id`，餵票號會 404」, for as
+// long as it took a human to spot it by hand: a live agent-facing sentence,
+// loaded on every close-out, costing one wasted call each time and false while
+// it did so. T-1 rewrote the sentence. THIS is the part that keeps it rewritten.
+//
+// The property is deliberately NOT "task_no equals id" — that is a restatement
+// of TaskNo's body and would pass even if the get_task ROUTE stopped resolving
+// the thing agents are handed. It is the end-to-end claim the seed now makes:
+// the identifier the API reports as this task's 票號, fed verbatim to the REAL
+// get_task handler, answers 200 with THIS task. Whatever a future change does
+// to id shape, minting or routing, the doc is only true while this passes.
+//
+// 🔴 BOTH NUMBER SHAPES, because the seed sentence promises both. Legacy tasks
+// keep "t-"+12-hex ids, new ones are T-<遞增整數>, and with no delete path the
+// two coexist permanently — which is exactly why the seed says 「票號就是 id」
+// rather than 「票號都是 T-<數字>」. A guard that only covered fresh mints would
+// leave the half of the claim about old tickets unpinned.
+func TestGetTaskAcceptsTheTaskNoTheAgentWasHanded(t *testing.T) {
+	api := newTasksTestServer(t)
+
+	// the legacy shape, seeded directly so its id is genuinely the old form.
+	const legacy = "t-72dd79b666d0"
+	now := nowSecs()
+	if err := api.dal.PutTask(Task{
+		ID: legacy, Title: "legacy task", Status: TaskStatusNotStarted,
+		Priority: TaskPriorityMid, ExecutorKind: TaskExecutorMember,
+		ExecutorID: "m-exec", CreatedTS: now, UpdatedTS: now,
+	}); err != nil {
+		t.Fatalf("seed legacy task: %v", err)
+	}
+
+	fresh := createAdHocTask(t, api, "m-exec")
+	if !taskSeqIDRe.MatchString(fresh.ID) {
+		t.Fatalf("the freshly minted task is %q, not T-<遞增整數> — this test would "+
+			"not be covering the new shape at all", fresh.ID)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		taskID string
+	}{
+		{"newly minted T-<遞增整數>", fresh.ID},
+		{"legacy t-+12-hex", legacy},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// ① read the number the way an AGENT gets it: off the task, as the API
+			// reports it. Not TaskNo(id) — calling the function here would make the
+			// test agree with the implementation by construction.
+			view := getTaskView(t, api, tc.taskID)
+			taskNo := view.TaskNo
+			if taskNo == "" {
+				t.Fatalf("the API reports no task_no for %q — an agent handed nothing "+
+					"cannot read its ticket at all", tc.taskID)
+			}
+
+			// ② 🔴 THE LOAD-BEARING CALL. The 票號, verbatim, straight into the real
+			// get_task route — no list_tasks in between. This is the whole of what
+			// seeds/task_closeout.md now promises.
+			rec := httptest.NewRecorder()
+			api.HandleGetTaskApiTasksTaskIdGet(rec,
+				taskReq(t, "GET", "/api/tasks/"+taskNo, nil, "owner", "owner"), taskNo)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("get_task(%q) — the task_no the API itself reported — answered "+
+					"%d, want 200. seeds/task_closeout.md tells every closing agent "+
+					"「先 `get_task` 讀這張票（票號就是 id，直接餵給它）」, and that sentence "+
+					"is now FALSE. Either restore the route so a 票號 resolves, or take "+
+					"the seed back to the owner (the last such rewrite was rc-63068f315a7c) "+
+					"— do not leave the document teaching a call that fails. Body: %s",
+					taskNo, rec.Code, rec.Body.String())
+			}
+
+			// ③ 200 is not enough: it must be THIS task. A route that resolved every
+			// number to some task would satisfy ② and still lie to the caller.
+			got := decodeBody[taskDTO](t, rec)
+			if got.ID != tc.taskID {
+				t.Fatalf("get_task(%q) answered 200 but handed back task %q, want %q — "+
+					"the number an agent is shown must address the ticket it is shown on",
+					taskNo, got.ID, tc.taskID)
+			}
+		})
+	}
+}

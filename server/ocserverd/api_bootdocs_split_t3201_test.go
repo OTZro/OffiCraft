@@ -745,29 +745,37 @@ func TestTaskCloseoutDoc_IsTheApprovedRewriteWithBothNamesMovedIntoTheHead(t *te
 		t.Fatalf("the read-only head is not the approved sentence:\n got %q\nwant %q", gotHead, wantHead)
 	}
 
-	// 🔴 THE FIRST SENTENCE NAMES list_tasks, AND THAT IS A BUG FIX, NOT A STYLE
-	// CHOICE. The rewrite that dropped {type_key} put 「先 get_task 讀這張票」 here,
-	// and an agent CANNOT do that: the only identifier it is handed is the display
+	// 🔴 THE FIRST SENTENCE ONCE NAMED list_tasks, AND THAT WAS A BUG FIX, NOT A
+	// STYLE CHOICE — THE HISTORY IS KEPT HERE BECAUSE IT EXPLAINS THE SHAPE.
+	// The rewrite that dropped {type_key} put 「先 get_task 讀這張票」 here, and an
+	// agent COULD NOT do that: the only identifier it was handed was the display
 	// number, which AT THE TIME was the id's first hex quartet, while get_task
 	// keys on the full id — measured against the live station of that era,
 	// 「get_task("T-6f44")」 answered 404. So the document was telling every agent
-	// to start with a call that fails. list_tasks is the way across: each row
-	// carries task_no AND id.
+	// to start with a call that fails, and list_tasks was the way across: each
+	// row carries task_no AND id.
 	//
-	// ⚠️ THAT PREMISE IS HISTORY AS OF T-5291, AND THE DOCUMENT BELOW HAS NOT
-	// CAUGHT UP. `TaskNo(id)` now returns the id unchanged (domain.go), so 票號
-	// and id are the SAME STRING and feeding 票號 to get_task cannot 404 any
-	// more. The approved body this test pins still carries
-	// 「⚠️ `get_task` 只吃 `id`，餵票號會 404」 — a live agent-facing sentence that
-	// is now false. It is left standing DELIBERATELY and reported rather than
-	// quietly edited: this is owner-approved seed prose that changes what every
-	// agent does, so rewriting it is a seed change with its own ruling, not a
-	// comment fix inside T-5291's blast radius. Do not "fix" it here; take it to
-	// the owner. (taskno_prose_guard_test.go DOES scan seeds/, but only for the
-	// retired ENGLISH sentences; this one is Chinese and a paraphrase besides,
-	// so no blocklist catches it — this comment is the record.)
-	wantBody := "先用 `list_tasks` 找到這張票（每一列都同時有票號與 id），拿它的 `id` 呼叫 `get_task`，" +
-		"看它屬於哪一本任務手冊（欄位 `type_key`）。⚠️ `get_task` 只吃 `id`，餵票號會 404。\n\n" +
+	// ⚠️ THAT PREMISE STOPPED BEING TRUE AT T-5291, AND T-1 IS THE SEED CHANGE
+	// THAT CAUGHT THE DOCUMENT UP. `TaskNo(id)` returns the id unchanged
+	// (domain.go), so 票號 and id are the SAME STRING and feeding 票號 to
+	// get_task cannot 404 any more. The detour therefore cost every closing
+	// agent one list_tasks call and taught it something false on the way. The
+	// previous round of this test found the stale sentence, left it standing
+	// DELIBERATELY and reported it upward rather than editing it quietly —
+	// owner-approved seed prose that changes what every agent does needs its own
+	// ruling. That ruling is rc-63068f315a7c (owner 選「改」), and this is it.
+	//
+	// 🔴 WHY THE REPLACEMENT SAYS 「票號就是 id」 AND NOT 「票號都是 T-<數字>」.
+	// Legacy tasks keep their "t-"+12-hex ids and this system has no delete
+	// path, so BOTH number shapes coexist permanently. A sentence about the
+	// SHAPE would be the next false claim; a sentence about the IDENTITY is true
+	// for both. TestGetTaskAcceptsTheTaskNoTheAgentWasHanded
+	// (api_tasks_id_sequence_t52917b_test.go) is the assertion that keeps it
+	// true — it feeds a task_no of EACH shape to the real get_task handler. If
+	// get_task ever goes back to keying on something other than the number
+	// agents are handed, that test goes red BEFORE this prose can rot again.
+	wantBody := "先用 `get_task` 讀這張票（票號就是 id，直接餵給它），" +
+		"看它屬於哪一本任務手冊（欄位 `type_key`）。\n\n" +
 		"若這一趟有值得留下的經驗（踩坑、更好做法），先用 get_task_manual 讀現況，" +
 		"再用 patch_task_learnings（type_key 用上一步讀到的值）只把改動的那一段送回" +
 		"**那本**任務手冊：改既有段落就用它的唯一錨點，第一次寫或要新增就用空錨點追加。" +
@@ -1599,9 +1607,10 @@ func TestTheTwoStopProceduresDifferInEXACTLYTheThreeLinesTheyAreMeantTo(t *testi
 // report_task_closeout, and that endpoint answers 409 for an open task
 // («close-out is reported after the task ends»). A worker handed over mid-task
 // therefore read an instruction that could not succeed — the same shape as the
-// 「餵票號給 get_task 會 404」 defect this document already carries a warning
-// about, and the same shape as every finding in T-a36c: a sentence that is true
-// on one path and false on the one it is actually delivered on.
+// 「餵票號給 get_task 會 404」 defect this document used to carry a warning about
+// (the warning is gone as of T-1 — feeding 票號 to get_task works now), and the
+// same shape as every finding in T-a36c: a sentence that is true on one path
+// and false on the one it is actually delivered on.
 //
 // This pins the CAVEAT, not the wording around it: whoever rewrites the
 // close-out step must still say what happens when the ticket is open. Nothing
