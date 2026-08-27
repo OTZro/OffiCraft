@@ -783,7 +783,9 @@ var identityGateLedger = map[string]string{
 		"because a member reassign has its executor in hand already.",
 	"api_tasks.go :: HandleReassignTaskApiTasksTaskIdReassignPost :: kind == TaskExecutorMember": "" +
 		"the executor RE-POINT write, member arm: bind ExecutorID to the member just " +
-		"resolved and clear the row's outsource dispatch columns. Its `else` is the " +
+		"resolved and RESET the row's outsource dispatch columns to their unset shape " +
+		"(runtime back to the default, model/effort/machine emptied, dispatched false — " +
+		"the runtime column is SET, not cleared). Its `else` is the " +
 		"發包 arm, which lands the task UNASSIGNED for the scheduler to mint under the " +
 		"parallel cap (T-35e0). The kinds differ here because a member executor is " +
 		"already in hand at write time and an outsource one does not exist yet — not " +
