@@ -637,92 +637,71 @@ func (s *apiServer) lessonsWriteAuthz(w http.ResponseWriter, r *http.Request, ro
 	return true
 }
 
-// requireLessonsRosterRole refuses a lessons WRITE addressed to a role_key the
-// station's roster does not carry, and reports whether the handler may proceed.
+// requireLessonsAddressableRole refuses a lessons WRITE addressed to a role_key
+// that NOTHING on this station can ever address again, and reports whether the
+// handler may proceed.
 //
-// 🔴 THE HOLE THIS CLOSES, AND WHY IT IS THE SAME DISEASE AS THE REST OF T-2.
-// Nothing on the two lessons write routes ever compared role_key against the
-// roster. The path parameter is free text, so a caller with admin capability
-// (the owner, and the admin agent — everyone below is confined to its OWN
-// member's role_key by lessonsWriteAuthz, and that key comes from the roster)
-// could write a perfectly real lessons document under a name no role carries.
-// What it got back was a 200 and a receipt. What it had actually created was:
+// 🔴 THE HOLE THIS CLOSES. Nothing on the two lessons write routes ever
+// validated role_key. The path parameter is free text, so a caller with admin
+// capability could write a real lessons document under a name that names
+// nothing. It got a 200 and a receipt. What it created was a document that
+// draws on the SAME lessons cap as every other one, is folded into no boot
+// context, and cannot appear in peek_doc_sizes (which walks the roster). Write
+// succeeds, quota is spent, nobody can find it — the "drawer nobody opens" this
+// ticket exists to end, surviving on the ROLE NAME rather than on the
+// classification T-2 removed.
 //
-//   - a document that draws on the SAME lessons cap as every other one,
-//   - that no boot context will ever fold in (buildBootContext keys off the
-//     member's roster role),
-//   - that peek_doc_sizes cannot list, because that listing walks
-//     listRoleKeys() — the roster — and this document hangs off nothing on it,
-//   - and that therefore appears in NO listing at any price.
+// 🔑 THE PREDICATE IS "CAN ANYTHING ADDRESS THIS DOCUMENT?", and the two ways
+// are enumerated from MEASUREMENT, not from reading the code and believing it:
 //
-// Write succeeds, quota is spent, nobody can find it. That is the "drawer
-// nobody opens" this whole ticket exists to end, surviving on the one axis
-// T-2 did not remove: not the classification, the ROLE NAME.
+//  1. the role folds (foldRoleDefDTO != nil) — the very first thing
+//     buildBootContext does, so such a doc is loaded by every boot of that role
+//     and reported by peek_doc_sizes; or
+//  2. some member carries this role_key — such a member cannot BOOT, but the
+//     owner can mint it an agent token (POST /api/mint, which does not go
+//     through the boot fold at all), and get_lessons then serves this document
+//     to it. Measured end to end through the production routes, not inferred.
 //
-// 🔑 WHAT THE JUDGE ACTUALLY IS: "does this document have a reader?", and the
-// two readers are enumerated rather than guessed at.
+// Refused: a name on NEITHER list. Nothing can reach that document — no boot, no
+// listing, and no identity that could be minted a token for it.
 //
-//  1. listRoleKeys() — not a lookalike of what peek_doc_sizes walks, it IS the
-//     function peek_doc_sizes walks (api_doc_sizes.go) and the one GET
-//     /api/roles serves. A doc under a key on this list is on that page.
-//  2. the member roster — a member CAN carry a role_key the role roster does
-//     not list (hire cross-checks neither field), and resolveBootRoleKey reads
-//     that same key, so buildBootContext folds the doc into that member's
-//     persona on every wake. A doc under such a key is read by an agent even
-//     though no listing shows it.
+// 🔴 TWO WRONG VERSIONS OF THIS GATE SHIPPED BEFORE THIS ONE. Both are recorded
+// because each was wrong in a way that reading the code did not reveal.
 //
-// The invariant that buys, stated so it can be tested rather than hoped for:
-// A LESSONS WRITE THAT SUCCEEDS PRODUCES A DOCUMENT WITH AT LEAST ONE READER —
-// the peek_doc_sizes page, or some member's boot context. What is refused is
-// the key that has NEITHER, which is the only shape that is genuinely a drawer
-// nobody opens.
+// (a) The FIRST draft accepted branch 2 on the stated ground that such a member
+// "folds this document into its persona on every wake". THAT WAS FALSE, and the
+// falsehood reached the tool descriptions before an independent review measured
+// it: buildBootContext folds the ROLE first and yields nil, and both paths that
+// mint a MEMBER token abort on that nil. Such a member never boots. The branch
+// was right; the reason given for it was fiction.
 //
-// 🔴 A ROSTER-ONLY JUDGE WAS THE FIRST DRAFT AND IT WAS WRONG. It bought a
-// crisper sentence ("a successful write appears in peek_doc_sizes") at the cost
-// of 404-ing a member that carries an off-roster role_key — i.e. taking the
-// learning loop away from an agent actively using it, which is T-d483 verbatim,
-// a defect this office has already paid for once. Two existing tests caught it
-// (the T-d483 regression itself, and the T-5336 admin-authz arm). The crisper
-// invariant was not worth re-shipping that bug.
+// (b) The correction then over-swung and dropped branch 2 entirely, on the
+// ground that a member which cannot boot has no reader at all. THAT WAS ALSO
+// FALSE, and this time the wire caught it: /api/mint is a THIRD token path that
+// neither the first draft nor the review had counted, and conformance's auth
+// matrix builds exactly this shape through the public API (hire with a role_key
+// naming no role, then mint) and pins that agent's self-write at 200. Four
+// cells went red. The document IS reachable — by the agent it belongs to.
 //
-// 🔴 WHY REFUSE RATHER THAN "MAKE IT VISIBLE". Making it visible is the other
-// honest fix and it was rejected on cost, not on taste: peek_doc_sizes is keyed
-// by ROLE, so surfacing role-less documents means a new top-level array on that
-// response — a frozen-wire shape change, which the handler's own comments have
-// declined once already. Refusing needs no wire change and is strictly more
-// informative: the caller learns the name is wrong at the moment it is wrong,
-// instead of learning it never from a listing it would have had to think to
-// read.
+// The lesson worth more than the gate: BOTH errors came from reasoning about
+// reachability instead of measuring it. The branch list above is now the shape
+// of an experiment that was actually run.
 //
 // 404, not 403: this is "there is no such role", the same answer GET
-// /api/roles/{role} already gives for the same name. Authz is judged FIRST and
-// separately, so a below-admin caller still gets its 403 and this refusal never
-// becomes a way to probe which roles exist from an identity that could not have
-// written to them anyway.
+// /api/roles/{role} gives. Authz is judged FIRST, so a below-admin caller still
+// gets its 403 and this never becomes a way to probe what exists.
 //
-// READ is deliberately untouched. get_lessons on an unknown role folds to the
-// seed and answers 200, which costs nothing and spends no quota; the defect is
-// the WRITE that consumes cap and then hides.
-func (s *apiServer) requireLessonsRosterRole(w http.ResponseWriter, roleKey string) bool {
-	keys, err := s.listRoleKeys()
+// READ is deliberately untouched: get_lessons on an unknown role folds to the
+// seed and answers 200, which spends no cap and hides nothing.
+func (s *apiServer) requireLessonsAddressableRole(w http.ResponseWriter, roleKey string) bool {
+	roleDTO, err := s.foldRoleDefDTO(roleKey)
 	if err != nil {
 		internalError(w, err)
 		return false
 	}
-	for _, key := range keys {
-		if key == roleKey {
-			return true
-		}
+	if roleDTO != nil {
+		return true
 	}
-	// SECOND READER: a member that boots with this role_key. Nothing
-	// cross-checks role_key against the roster at hire time (POST /api/members
-	// takes kind and role_key in the same body and compares neither), so a
-	// member CAN carry a key the roster does not list. Its lessons doc is not
-	// an orphan: resolveBootRoleKey reads that same key off the member row, so
-	// buildBootContext folds the document into that member's persona every
-	// time it wakes. It has a reader, and refusing the write would take the
-	// learning loop away from an agent that is using it — which is T-d483
-	// exactly, a defect this office has already paid for once.
 	members, err := s.dal.ListMembers()
 	if err != nil {
 		internalError(w, err)
@@ -734,12 +713,12 @@ func (s *apiServer) requireLessonsRosterRole(w http.ResponseWriter, roleKey stri
 		}
 	}
 	writeError(w, http.StatusNotFound,
-		"role '"+roleKey+"' not found — a lessons doc must have a reader: a role "+
-			"on the roster (list_roles), or a member that boots with that role_key "+
-			"(list_members). This name is on neither. Writing it used to answer 200 "+
-			"and produce a document that spends the lessons cap, folds into no boot "+
-			"context, and appears in no listing (peek_doc_sizes is keyed by role). "+
-			"Check the role_key and retry")
+		"role '"+roleKey+"' not found — a lessons doc must be addressable by "+
+			"something: a role that folds (list_roles), or a member carrying that "+
+			"role_key (list_members). This name is neither, so the document could "+
+			"be read by nobody: no boot would load it, no member could be given a "+
+			"token for it, and peek_doc_sizes (keyed by role) would never list it, "+
+			"while it still spent the lessons cap. Check the role_key and retry")
 	return false
 }
 
@@ -773,7 +752,7 @@ func (s *apiServer) HandleReplaceLessonsApiLessonsRoleKeyPost(w http.ResponseWri
 	if !s.lessonsWriteAuthz(w, r, roleKey) {
 		return
 	}
-	if !s.requireLessonsRosterRole(w, roleKey) {
+	if !s.requireLessonsAddressableRole(w, roleKey) {
 		return
 	}
 	text := body.Text
@@ -849,7 +828,7 @@ func (s *apiServer) HandlePatchLessonsApiLessonsRoleKeyPatchPost(w http.Response
 	if !s.lessonsWriteAuthz(w, r, roleKey) {
 		return
 	}
-	if !s.requireLessonsRosterRole(w, roleKey) {
+	if !s.requireLessonsAddressableRole(w, roleKey) {
 		return
 	}
 	current, err := s.foldLessonsDTO(roleKey)

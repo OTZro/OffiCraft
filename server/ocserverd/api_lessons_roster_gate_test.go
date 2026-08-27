@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -258,48 +259,89 @@ func TestLessonsReadOfAnUnknownRoleIsStillServed(t *testing.T) {
 	}
 }
 
-// TestLessonsWriteAcceptsAMemberCarriedOffRosterRole is the SECOND READER, and
-// the regression guard for the draft that had to be thrown away.
+// TestMemberCarriedRoleIsAddressableEvenThoughItCannotBoot pins the exact
+// mechanism the two earlier versions of this gate each got wrong in opposite
+// directions. It is the experiment, kept executable, so nobody has to trust a
+// paragraph again.
 //
-// A member can carry a role_key the role roster does not list — POST
-// /api/members takes kind and role_key in the same body and cross-checks
-// neither. Such a member's lessons doc is NOT an orphan: resolveBootRoleKey
-// reads that key off the member row, so buildBootContext folds the document
-// into its persona on every wake. It has a reader; it simply has no ROW on the
-// peek_doc_sizes page, which is keyed by role.
+// The member is built THROUGH THE PRODUCTION ROUTES — hire with a role_key that
+// names no role, then mint — which is precisely how conformance's auth matrix
+// builds its ordinary agents. Three facts, measured together because only
+// together do they mean anything:
 //
-// Refusing that write would take the learning loop away from an agent that is
-// using it — T-d483 exactly. This is the assertion a future "simplify the gate
-// to just the roster" edit has to turn red.
-func TestLessonsWriteAcceptsAMemberCarriedOffRosterRole(t *testing.T) {
-	srv, dal, secret := newLessonsTestServer(t)
+//	boot  → 404   the role folds to nothing, so no boot can ever load this doc
+//	read  → 200   BUT the owner can mint that member a token (/api/mint does not
+//	              go through the boot fold), and get_lessons serves it
+//	write → 200   therefore the doc IS addressable and must not be refused
+//
+// 🔴 Draft (a) of this gate accepted the write while claiming the doc was
+// "folded into that member's persona on every wake" — the boot assertion below
+// is what falsifies that. 🔴 Draft (b) then refused the write on the ground that
+// such a member has no reader at all — the read assertion below is what
+// falsifies THAT, and it is the fact /api/mint contributes.
+func TestMemberCarriedRoleIsAddressableEvenThoughItCannotBoot(t *testing.T) {
+	srv, _, secret := newLessonsTestServer(t)
 	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
 
-	const offRoster = "r-member-carries-me-but-no-role-def"
-	if err := dal.PutMember(Member{
-		ID: "carrier", Kind: KindAssistant, RoleKey: offRoster,
-		DesiredState: DesiredStateOnline, RosterStatus: RosterStatusActive,
-	}); err != nil {
-		t.Fatalf("PutMember: %v", err)
+	const offRoster = "conf-shaped-role-naming-no-role"
+	status, body := rosterREST(t, srv.URL, ownerTok, "POST", "/api/members",
+		`{"name":"Off Roster Agent","kind":"assistant","role_key":"`+offRoster+`"}`)
+	if status != http.StatusOK {
+		t.Fatalf("hire through the production route failed: %d %s", status, body)
+	}
+	memberID := jsonStringField(t, body, "id")
+
+	// PRECONDITION: the key really is off the ROLE roster, or this test is
+	// measuring something else entirely.
+	if rs, roles := rosterREST(t, srv.URL, ownerTok, "GET", "/api/roles", ""); rs != http.StatusOK ||
+		strings.Contains(roles, offRoster) {
+		t.Fatalf("precondition broken: %q is on the role roster (%d): %s", offRoster, rs, roles)
 	}
 
-	// PRECONDITION, asserted rather than assumed: this key really is off the
-	// ROLE roster. Without this the test could pass for the wrong reason (the
-	// key having quietly become a role) and would stop guarding anything.
-	rolesStatus, roles := rosterREST(t, srv.URL, ownerTok, "GET", "/api/roles", "")
-	if rolesStatus != http.StatusOK {
-		t.Fatalf("GET /api/roles: %d %s", rolesStatus, roles)
-	}
-	if strings.Contains(roles, offRoster) {
-		t.Fatalf("precondition broken: %q is on the ROLE roster, so this test is "+
-			"no longer exercising the member-carried reader at all: %s", offRoster, roles)
+	// ① CANNOT BOOT — falsifies draft (a)'s stated reason.
+	if bs, bb := rosterREST(t, srv.URL, ownerTok, "POST", "/api/bootstrap",
+		`{"member_id":"`+memberID+`"}`); bs != http.StatusNotFound {
+		t.Errorf("a member whose role_key folds to no role BOOTED: %d %s\n"+
+			"If this ever succeeds, the 'cannot boot' half of this gate's reasoning "+
+			"has changed and the wording must be revisited.", bs, bb)
 	}
 
-	if status, body := rosterREST(t, srv.URL, ownerTok, "POST", "/api/lessons/"+offRoster,
-		`{"text":"a member boots with this doc every time it wakes"}`); status != http.StatusOK {
-		t.Fatalf("a role_key carried by a MEMBER was refused: %d %s\n"+
-			"That member reads this document at every wake (resolveBootRoleKey), so "+
-			"refusing the write removes the learning loop from an agent that is using "+
-			"it — which is T-d483 re-shipped.", status, body)
+	// ② CAN BE MINTED A TOKEN AND CAN READ — falsifies draft (b)'s conclusion.
+	//    /api/mint is a THIRD token path that does not consult the boot fold.
+	ms, mb := rosterREST(t, srv.URL, ownerTok, "POST", "/api/mint",
+		`{"member_id":"`+memberID+`","ttl_days":1}`)
+	if ms != http.StatusOK {
+		t.Fatalf("owner mint for that member failed: %d %s — without a token the "+
+			"read assertion below cannot run and this test proves nothing", ms, mb)
 	}
+	agentTok := jsonStringField(t, mb, "token")
+	if rs, rb := rosterREST(t, srv.URL, agentTok, "GET", "/api/lessons/"+offRoster, ""); rs != http.StatusOK {
+		t.Errorf("the member could NOT read its own lessons with its minted token: %d %s\n"+
+			"That read is the whole reason this role_key is addressable at all.", rs, rb)
+	}
+
+	// ③ SO THE WRITE MUST LAND. Refusing it removes a capability conformance
+	//    pins at 200 (test_auth_matrix, POST /api/lessons/{role_key}[agent_self]).
+	if ws, wb := rosterREST(t, srv.URL, agentTok, "POST", "/api/lessons/"+offRoster,
+		`{"text":"its own doc, readable by it"}`); ws != http.StatusOK {
+		t.Fatalf("the agent could not write its OWN role's lessons: %d %s\n"+
+			"This is the shape conformance's auth matrix builds through the public "+
+			"API; refusing it breaks a wire-pinned capability.", ws, wb)
+	}
+}
+
+// jsonStringField pulls one top-level string field out of a JSON body without
+// a struct — the tests here only ever need an id or a token, and a decode would
+// couple them to DTO shapes they are not about.
+func jsonStringField(t *testing.T, body, field string) string {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(body), &m); err != nil {
+		t.Fatalf("decode %s: %v (body=%s)", field, err, body)
+	}
+	v, _ := m[field].(string)
+	if v == "" {
+		t.Fatalf("no %q in body: %s", field, body)
+	}
+	return v
 }

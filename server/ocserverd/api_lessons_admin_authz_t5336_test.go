@@ -76,6 +76,14 @@ func t5336Fixture(t *testing.T) (string, string, string, string) {
 	}); err != nil {
 		t.Fatalf("PutMember(admin): %v", err)
 	}
+	// Same realism fix as the foreign role above: a plain agent that is making
+	// requests at all must be on a role that can BOOT, or it could never have
+	// obtained the token it is calling with.
+	if err := dal.PutRoleDef(RoleDef{
+		RoleKey: "r-t5336plain", Name: "T-5336 Plain Role", DefinitionMD: "plain\n",
+	}); err != nil {
+		t.Fatalf("PutRoleDef(plain): %v", err)
+	}
 	if err := dal.PutMember(Member{
 		ID: "plain-t5336", Kind: KindAssistant, RoleKey: "r-t5336plain",
 		DesiredState: DesiredStateOnline, RosterStatus: RosterStatusActive,
