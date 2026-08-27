@@ -454,11 +454,20 @@ test.describe('B10 · settings roles + monitor — inline create rows & gating',
         'refetch under guard and proves nothing',
     ).toBe(3);
 
+    // 🔴 `reconcilingGet` is identified BY POSITION, and the only thing that makes
+    //     the last entry the reconciling GET is gate (0) above pinning the count at
+    //     exactly 3. Relaxing that gate (e.g. `toBe(3)` → `toBeGreaterThanOrEqual(3)`
+    //     to de-flake it under a busy runner) does not fail here — it silently
+    //     re-points these two assertions at some other request. Both messages say so
+    //     out loud, because neither would otherwise mention what it depends on.
     const reconcilingGet = evidence.machineCalls[evidence.machineCalls.length - 1];
     expect(
       reconcilingGet && reconcilingGet.end - reconcilingGet.start,
       `the 400ms hold must have applied to the reconciling GET — got ${JSON.stringify(reconcilingGet)}; ` +
-        'without it the race window was never widened and this run proves nothing',
+        'without it the race window was never widened and this run proves nothing. ' +
+        'NOTE: that this entry IS the reconciling GET is guaranteed only by gate (0) above ' +
+        '(exactly three /api/machines requests) — if that gate was relaxed, this is measuring ' +
+        'some other request',
     ).toBeGreaterThan(HOLD_MS * 0.8);
     const memberFrames = evidence.frames.filter((f) => f.topic === 'member');
     expect(
@@ -473,7 +482,9 @@ test.describe('B10 · settings roles + monitor — inline create rows & gating',
       inWindow,
       `a member frame must land INSIDE the reconciling GET [${reconcilingGet.start}, ${reconcilingGet.end}] — ` +
         `frames were ${JSON.stringify(memberFrames)}; outside it, the cancellation never had ` +
-        'anything to cancel and this run proves nothing',
+        'anything to cancel and this run proves nothing. ' +
+        'NOTE: the window [start, end] is that of the LAST /api/machines request, which is the ' +
+        'reconciling GET only because gate (0) above pins the count at exactly three',
     ).toBe(true);
 
     // ── THE GUARD ────────────────────────────────────────────────────────
