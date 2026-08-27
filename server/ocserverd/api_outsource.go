@@ -823,9 +823,17 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 	//     anyway.
 	//
 	// This is the SET, not the count: the staff activate clears two anchors
-	// (stopping/waking) because those are the two a member carries — a worker has
-	// no waking_since and does carry the two wind-down latches. Copying the staff
-	// LIST would have cleared neither of the two the code above points at.
+	// (stopping/waking) because those are the two a member carries. Copying the
+	// staff LIST would have cleared neither of the two the code above points at.
+	//
+	// 🔴 A worker DOES carry waking_since as of T-14 — this comment used to say it
+	// does not, and that stopped being true the moment the projection was unified.
+	// It is deliberately NOT cleared here: notifyWorkerSpawn stamps a fresh anchor
+	// on the re-dispatch this restart is about to trigger. ⚠️ Known residue: if
+	// that re-dispatch fails outright and the previous anchor is still inside
+	// WakingTTLSecs, the row reads 喚醒中 until the TTL lapses. Self-healing, and
+	// the staff arm has no equivalent hole because activate zeroes waking_since —
+	// so this is the same 正職／外包 divergence T-14 exists to delete, one layer up.
 	worker.RefocusSince = 0.0
 	worker.RefocusOp = ""
 	worker.StoppingSince = 0.0

@@ -198,9 +198,17 @@ func deriveLiveness(in livenessInput) string {
 // identity-gate ledger's own instruction for a new one is "delete the
 // difference — preferred". It could be deleted, because the two tests already
 // answer the same on every reachable row: BOTH worker stop verbs (停止 and
-// 強制停止) stamp stopping_since before they write the offline intent, through
-// the same stopEpochAnchor the staff deactivate calls, and that helper cannot
-// return zero. No other writer puts offline on a worker row.
+// 強制停止) stamp stopping_since before they write the offline intent, and both
+// anchors are necessarily positive — 停止 goes through stopEpochAnchor (the same
+// helper the staff deactivate calls, which cannot return zero) while 強制停止
+// stamps its own anchor inline from forced_stop_at. They are two code paths, not
+// one: an independent review of T-14 caught this comment claiming otherwise.
+// The conclusion is unchanged (the anchor is always set); the reason is not.
+// No other writer puts offline on a worker row — the staff verbs that write
+// offline without an anchor (HandleDismissMember is one) cannot reach a worker
+// row because resolveMember refuses kind=outsource. 🔴 That kind gate is an
+// UNTESTED implicit premise of this collapse: route a member verb through a
+// resolver that does not filter outsource and this expression starts lying.
 //
 // The union was tried FIRST and is wrong — a measured mutant said so. A STAFF
 // row CAN carry desired_state=offline with no anchor, and that state is the
