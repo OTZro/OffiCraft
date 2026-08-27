@@ -245,4 +245,121 @@ test.describe('B10 · settings roles + monitor — inline create rows & gating',
       'the machine registry must carry the onboarded machine',
     ).toBeTruthy();
   });
+
+  // ── T-10 deterministic regression guard ─────────────────────────────────
+  // The test above is now a CORRECT detector, but not a deterministic one: it
+  // only reddens on the runs where the race actually flips, which unforced is
+  // ~1% (the member frame is delivered uniformly within 250ms of the POST —
+  // server api_infra.go `ssePoll = 250ms` — while the reconciling GET resolves
+  // in single-digit ms). A regression that reproduces 1% of the time gets read
+  // as "fine". This case removes the luck: it holds the reconciling GET open
+  // long enough that the frame CANNOT miss it, so the exact code path CI hits
+  // intermittently is exercised on every run.
+  //
+  // It widens the race window; it does NOT relax any timeout, and it leaves the
+  // assertions above untouched.
+  test('監控: 建立後那支重抓不得被 onboard 自己觸發的 member 幀作廢（T-10 迴歸護欄，強制重疊）', async ({
+    page,
+  }) => {
+    const token = await ownerToken(page.request);
+
+    // Record every SSE frame the page's own EventSource delivers, with a clock
+    // shared with resource timing (performance.now()).
+    await page.addInitScript(() => {
+      const Real = window.EventSource;
+      window.__SSE = [];
+      function Wrapped(url, cfg) {
+        const es = new Real(url, cfg);
+        es.addEventListener('message', (e) => {
+          let topic = null;
+          try {
+            topic = JSON.parse(e.data).topic ?? null;
+          } catch {
+            topic = '(non-json)';
+          }
+          window.__SSE.push({ t: performance.now(), topic });
+        });
+        return es;
+      }
+      Wrapped.prototype = Real.prototype;
+      window.EventSource = Wrapped;
+      window.__REAL_ES = Real;
+    });
+
+    await bootAuthedSpa(page, token);
+    await page.locator('.nav-tab', { hasText: '監控' }).click();
+    expect(
+      await page.evaluate(() => window.EventSource !== window.__REAL_ES),
+      'the SSE probe must be installed on the constructor the app actually uses',
+    ).toBe(true);
+
+    // Hold the reconciling GET open 400ms — comfortably longer than the 250ms
+    // worst-case frame delivery, so the overlap is certain rather than lucky.
+    const HOLD_MS = 400;
+    await page.route('**/api/machines', async (route) => {
+      if (route.request().method() === 'GET') {
+        await new Promise((r) => setTimeout(r, HOLD_MS));
+      }
+      await route.continue();
+    });
+
+    const name = uniqueName('e2e-race');
+    await page.locator('#mon-onboard-entry').click();
+    const raceRow = page.getByTestId('mon-onboard-row');
+    await expect(raceRow).toBeVisible();
+    await raceRow.locator('input').fill(name);
+    await raceRow.locator('input').press('Enter');
+    await expect(raceRow, 'a successful create collapses the row').toHaveCount(0, {
+      timeout: 15_000,
+    });
+
+    // Read the table at the moment of collapse — before any poll could run.
+    const tableAtCollapse = await page.locator('.mon-table, table').first().innerText();
+
+    const evidence = await page.evaluate(() => ({
+      frames: window.__SSE,
+      machineCalls: performance
+        .getEntriesByType('resource')
+        .filter((e) => e.name.includes('/api/machines'))
+        .map((e) => ({ start: Math.round(e.startTime), end: Math.round(e.responseEnd) })),
+    }));
+
+    // ── ANTI-VACUITY GATE ────────────────────────────────────────────────
+    // Without these three, a run that never actually staged the race would go
+    // green and look like a pass — the failure mode that makes a guard worse
+    // than no guard at all. Each says "this run does not count", not "the
+    // product is fine".
+    const reconcilingGet = evidence.machineCalls[evidence.machineCalls.length - 1];
+    expect(
+      reconcilingGet && reconcilingGet.end - reconcilingGet.start,
+      `the 400ms hold must have applied to the reconciling GET — got ${JSON.stringify(reconcilingGet)}; ` +
+        'without it the race window was never widened and this run proves nothing',
+    ).toBeGreaterThan(HOLD_MS * 0.8);
+    const memberFrames = evidence.frames.filter((f) => f.topic === 'member');
+    expect(
+      memberFrames.length,
+      'POST /api/machines must have produced a member frame — no frame means the ' +
+        'cancelling event never arrived and this run proves nothing',
+    ).toBeGreaterThan(0);
+    const inWindow = memberFrames.some(
+      (f) => f.t > reconcilingGet.start && f.t < reconcilingGet.end,
+    );
+    expect(
+      inWindow,
+      `a member frame must land INSIDE the reconciling GET [${reconcilingGet.start}, ${reconcilingGet.end}] — ` +
+        `frames were ${JSON.stringify(memberFrames)}; outside it, the cancellation never had ` +
+        'anything to cancel and this run proves nothing',
+    ).toBe(true);
+
+    // ── THE GUARD ────────────────────────────────────────────────────────
+    // The race was provably staged. Under a correct hook the reconciling GET's
+    // own answer lands, so the row is on screen the instant the inline row
+    // collapses. Under the T-10 defect that answer is discarded and the row
+    // cannot appear until the 5s trailing poll — which has not run here.
+    expect(
+      tableAtCollapse,
+      'with a member frame landing mid-refetch, the create refetch must STILL put the new ' +
+        'row on screen — if it only appears later, the frame cancelled it and the 5s poll repaired it',
+    ).toContain(name);
+  });
 });
