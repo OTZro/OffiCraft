@@ -870,7 +870,28 @@ func TestRunReconcileTick(t *testing.T) {
 		connectOnline(t, s, "mach-new")                               // new warden reachable (START target)
 		moverConn := connectOnlineMachine(t, s, "m-move", "mach-old") // running on the OLD machine
 
+		// T-14 #4: the first tick opens a wind-down and dispatches NOTHING. It is
+		// asserted rather than skipped past, because "no frame yet" is the whole
+		// behaviour change and a tick that quietly dispatched here would be the
+		// regression. What this subtest exists for — the ROUTING of the STOP and
+		// of the respawn START — is unchanged and asserted below, one hand-off
+		// later.
 		s.runReconcileTick(1000)
+		if f := drainFrames(t, s, "mach-old"); len(f) != 0 {
+			t.Fatalf("the first tick must open a wind-down, not kill: %+v", f)
+		}
+		if f := drainFrames(t, s, "mach-new"); len(f) != 0 {
+			t.Fatalf("the first tick must dispatch nothing at all: %+v", f)
+		}
+		armed, _ := s.dal.GetMember("m-move")
+		if armed.RefocusSince <= 0 || armed.RefocusOp != memberOpRelocate {
+			t.Fatalf("the first tick must stamp a relocate wind-down: %+v", armed)
+		}
+		// The agent files its stopped report (POST /api/self/stopped) — the 收口.
+		armed.StoppedSince = 1001
+		putTestMember(t, s, *armed)
+
+		s.runReconcileTick(1002)
 		// The STOP must land on the OLD machine's warden FIFO — never the new one.
 		oldFrames := drainFrames(t, s, "mach-old")
 		if len(oldFrames) != 1 || oldFrames[0].RPC != "stop" || oldFrames[0].Args["member_id"] != "m-move" {
@@ -883,7 +904,7 @@ func TestRunReconcileTick(t *testing.T) {
 		// the NEW machine (a fresh boot token minted with desired_machine=mach-new,
 		// routed to the new machine's warden).
 		s.hub.Disconnect(moverConn)
-		s.runReconcileTick(1000 + s.reconcileCfg.StopRetry)
+		s.runReconcileTick(1002 + s.reconcileCfg.StopRetry)
 		newFrames := drainFrames(t, s, "mach-new")
 		if len(newFrames) != 1 || newFrames[0].RPC != "start" || newFrames[0].Args["member_id"] != "m-move" {
 			t.Fatalf("after the kill the START must route to the new machine: %+v", newFrames)
