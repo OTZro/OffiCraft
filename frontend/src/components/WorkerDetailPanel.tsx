@@ -10,6 +10,7 @@ import {
   slot,
 } from "./AgentDetailPanel";
 import { pendingChangeHint, reportedMachine } from "../lib/pendingChange";
+import { buildAgentDetailVm, machineOptions } from "../lib/agentDetailVm";
 import { ModelEffortEditor } from "./ModelEffortEditor";
 import { ChevronLeftIcon, ChevronRightIcon } from "./icons";
 import { AvatarEditor } from "./AvatarEditor";
@@ -33,9 +34,15 @@ import "./member-detail.css";
 interface WorkerDetailPanelProps {
   worker: OutsourceWorkerView;
   /** This worker's live telemetry row from `GET /api/monitoring` (workers ride
-   * the SAME `sessions` array as members, keyed by their `ow-` id). It — not
-   * the worker DTO — is the source for the 模型 / 思考強度 STATE readout;
-   * `undefined` (nothing reported) renders the honest dash. */
+   * the SAME `sessions` array as members, keyed by their `ow-` id).
+   *
+   * 🔴 THE PANEL NO LONGER READS IT. It used to be the source for the 模型 /
+   * 思考強度 readout, ahead of the worker DTO's own durable reported columns and
+   * with no awake gate — which is how this panel could show a model for a
+   * worker that was not up. The owner picked the member panel's rule instead
+   * (`rc-8a129bc3a188`, option [1]): awake, then the reported column, else the
+   * dash. The prop stays on the interface because callers still pass it and
+   * removing it is a separate, wider change; nothing here consumes it. */
   session?: MonSessionView;
   onBack: () => void;
   /** Jump to the bound task (#tasks/<taskId>); only wired when the worker has a
@@ -97,7 +104,6 @@ interface WorkerDetailPanelProps {
  */
 export function WorkerDetailPanel({
   worker,
-  session,
   onBack,
   onOpenTask,
   onRelocate,
@@ -124,6 +130,12 @@ export function WorkerDetailPanel({
   // server-side); "" ⇒ never dispatched ⇒ 「尚未分配」, never a fabricated
   // machine name.
   const online = worker.presence === "online";
+  // Awakened = the same two presences the member panel reads (owner presence
+  // contract T-2860). It gates the 模型 / 思考強度 readout in the SHARED vm
+  // assembly: a worker that is not up reports no model, so the cell reads the
+  // dash rather than a value left over from a session that has ended (owner
+  // ruling `rc-8a129bc3a188`, option [1]).
+  const awake = worker.presence === "online" || worker.presence === "waking";
   const offline = worker.presence === "offline";
   // 🔴 stopping and stopped are NO LONGER one mode (T-ed79). They were, while
   // 停止 killed the session on the spot: `stopping` was a blink between the
@@ -303,33 +315,14 @@ export function WorkerDetailPanel({
   // pin-only worker endpoint, i.e. a frozen-wire change (§13).
   const onlineMachines = machines.filter((m) => m.online);
   // The pinned machine stays in the list even when it is not online — labelled
-  // 離線 and disabled — the same rule MemberDetailPanel follows. Dropping it
-  // would silently move a worker the owner deliberately parked; leaving it
-  // selectable would wind the worker down onto a machine with no warden.
-  const pinnedOfflineMachine =
-    worker.desiredMachineId &&
-    !onlineMachines.some((m) => m.machineId === worker.desiredMachineId)
-      ? (machines.find((m) => m.machineId === worker.desiredMachineId) ?? {
-          machineId: worker.desiredMachineId,
-          displayName: worker.desiredMachineId,
-        })
-      : undefined;
-  const settingsMachineOptions = [
-    ...onlineMachines.map((m) => ({
-      machineId: m.machineId,
-      label: m.displayName,
-      offline: false,
-    })),
-    ...(pinnedOfflineMachine
-      ? [
-          {
-            machineId: pinnedOfflineMachine.machineId,
-            label: msg.machineOfflineOption(pinnedOfflineMachine.displayName),
-            offline: true,
-          },
-        ]
-      : []),
-  ];
+  // 離線 and disabled. That rule is now the SHARED one (lib/agentDetailVm), not
+  // a second copy of MemberDetailPanel's: the owner retired the "two copies as
+  // each other's audit" arrangement on `rc-fc9ab61ad057`.
+  const settingsMachineOptions = machineOptions(
+    machines,
+    worker.desiredMachineId ?? "",
+    msg.machineOfflineOption,
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRuntime, setSettingsRuntime] = useState<"claude" | "codex">(
     worker.runtime || "claude",
@@ -438,13 +431,6 @@ export function WorkerDetailPanel({
       setSettingsBusy(false);
     }
   }
-
-  // 累計總花費 = 已 banked 的歷史成本 + 當前 live session 成本 (DTO 保證兩者
-  // 分開不重疊 — 與正職同一口徑，T-ba6b)。兩者皆 null ⇒ null ⇒ 誠實 dash。
-  const totalCost =
-    worker.cost == null && worker.bankedCost == null
-      ? null
-      : (worker.cost ?? 0) + (worker.bankedCost ?? 0);
 
   const taskStatusText = worker.taskStatus
     ? (t.tasks.status[worker.taskStatus] ?? worker.taskStatus)
@@ -836,18 +822,21 @@ export function WorkerDetailPanel({
         extraExpandCards: slot(scheduleCard),
         afterPromptCards: slot(<ResumeSummaryCard agentId={worker.id} />),
       }}
-      vm={{
+      // The vm is BUILT by the shared assembly (lib/agentDetailVm), the SAME
+      // call the member panel makes — see the twin literal in
+      // MemberDetailPanel.tsx. What stays below is only what this side reads
+      // differently: its own domain object, its own 機器 fallback, its own i18n
+      // leaves.
+      vm={buildAgentDetailVm({
         testIdPrefix: "worker-detail",
         online,
-        runtime: worker.runtime || "claude",
+        awake,
+        runtime: worker.runtime,
         // STATE readout = what the worker's own telemetry reported; honest ""
         // when it reported nothing — never the configured value beside it.
-        // Model/effort prefer the live monitoring session and fall back to the
-        // DURABLE reported column, so they survive the session ending (T-7f28);
-        // runtime has no session source and reads the column directly.
-        reportedRuntime: worker.actualRuntime ?? "",
-        model: session?.model || (worker.actualModel ?? ""),
-        effort: session?.effort || (worker.actualEffort ?? ""),
+        actualRuntime: worker.actualRuntime,
+        actualModel: worker.actualModel,
+        actualEffort: worker.actualEffort,
         pending: {
           runtime: pendingRuntime,
           model: pendingModel,
@@ -862,28 +851,23 @@ export function WorkerDetailPanel({
         // alias/label or nulled it — the raw credential key NEVER reaches here);
         // "" ⇒ the shared panel's honest dash (T-ba6b).
         accountText: worker.account || "",
-        contextPct: worker.contextPct ?? null,
-        compactionCount: worker.compactionCount ?? null,
-        cost: totalCost,
-        onRefocus: onRefocus
-          ? async () => void (await onRefocus())
-          : undefined,
-        refocusSince: worker.refocusSince ?? null,
+        contextPct: worker.contextPct,
+        compactionCount: worker.compactionCount,
+        liveCost: worker.cost,
+        bankedCost: worker.bankedCost,
+        onRefocus,
+        refocusSince: worker.refocusSince,
         refocusOp: worker.refocusOp,
         refocusDeadline: worker.refocusDeadline,
         refocusSubmittedNote: t.workerDetail.refocusSubmittedNote,
         refocusSinceLabel: msg.workerRefocusSince,
-        lastOp: worker.lastOp ?? "",
-        lastOpVerb:
-          worker.lastOp === "start" || worker.lastOp === "worker_start"
-            ? t.workerDetail.lastOpStart
-            : worker.lastOp === "stop" || worker.lastOp === "worker_stop"
-              ? t.workerDetail.lastOpStop
-              : (worker.lastOp ?? ""),
-        lastOpOk: worker.lastOpOk ?? null,
-        lastOpLog: worker.lastOpLog ?? "",
-        lastOpReason: worker.lastOpReason ?? "",
-        lastOpAt: worker.lastOpAt ?? null,
+        lastOp: worker.lastOp,
+        lastOpStartText: t.workerDetail.lastOpStart,
+        lastOpStopText: t.workerDetail.lastOpStop,
+        lastOpOk: worker.lastOpOk,
+        lastOpLog: worker.lastOpLog,
+        lastOpReason: worker.lastOpReason,
+        lastOpAt: worker.lastOpAt,
         tmuxSession: `member-${worker.id}`,
         terminalHint: t.workerDetail.terminalHint,
         // Initial-prompt PREVIEW (boot-context): re-fetched when the viewed
@@ -897,7 +881,7 @@ export function WorkerDetailPanel({
               note: t.workerDetail.initialPromptNote,
             }
           : undefined,
-      }}
+      })}
     />
   );
 }

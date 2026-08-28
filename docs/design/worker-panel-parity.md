@@ -76,7 +76,7 @@
 | # | 項目 | 正職有什麼 | 外包有什麼 | 差在哪 | 期望行為 |
 |---|------|-----------|-----------|--------|---------|
 | B1 | AI 執行環境 / 模型 / 投入度 顯示 | 唯讀。`model` 餵 `awake ? member.actualModel : ""`，並掛 `modelIsReported: true` ⇒ 值旁標「最近一次開機回報」 | 唯讀顯示 + **一顆鉛筆「編輯」鍵**（`worker-detail-model-effort-edit`），就地展開 `ModelEffortEditor` | 差 🔴 | **拿掉就地編輯**：wrapper 不再傳 `onSaveModelEffort`；改設定一律走 A8 的 dialog |
-| B2 | 模型值的語意 | REPORTED（agent 開機回報的實際值） | CONFIGURED（`worker.model`，owner 意圖值） | 差 | **待裁定**：外包 DTO 沒有 `actual_model` 對應欄，無法呈現「回報值」。硬掛 `modelIsReported` 會是假話。是否要在 wire 加欄，交 owner |
+| B2 | 模型值的語意 | REPORTED（agent 開機回報的實際值） | ~~CONFIGURED（`worker.model`，owner 意圖值）~~ **REPORTED，同正職** | ~~差~~ **已對齊** | ✅ **已裁定（`rc-b8d219446b13` [0]）：兩邊都標「最近一次開機回報」**。原本寫的「外包 DTO 沒有 `actual_model`、硬掛 `modelIsReported` 會是假話」**今天不成立**：`OutsourceWorkerDTO` 自 T-7f28 起就有 `actual_model`（wire 見 `spec/openapi.json`；client 見 `frontend/src/api/adapter.ts` 的 `actualModel` 與 `mappers.ts` 的 `w.actual_model`），外包讀得到回報值。`frontend/src/lib/agentDetailVm.ts` 對兩側一律 `modelIsReported: true`，是有依據的敘述。owner 意圖值不會因此消失——它仍是 A8 設定 dialog round-trip 的 `worker.model` |
 | B3 | 機器格 | 唯讀。`machineText = awake ? machineName : ""`（未喚醒一律 dash，T-2860 presence 契約） | 唯讀值 `worker.machine \|\| 尚未分配`，**加一顆「編輯」鍵**（`worker-detail-relocate`，`useRelocateMachine`） | 差 🔴 | **拿掉就地「編輯」鍵**：機器改為在 A8 dialog 內選。顯示文字維持 `尚未分配`（外包的 `machine` 是「最後一次派工目標」，語意與 member 的 observed 不同，落 dash 反而更不誠實） |
 | B4 | 遷移中提示 | `machineTransition`（`→ 要換到 ○○`），`awake && machine !== desiredMachineId` 時顯示 | **無**（wrapper 沒傳 `machineTransition`） | 差 | **補上**：外包同時有 `machine`（最後派工目標）與 `desiredMachineId`（owner 釘選），兩者不同就是移動中，資料齊備。⚠️ 標**待裁定**：這是新增一個畫面元素，且外包的 `machine` 語意是派工目標而非觀測位置，提示文案「現在在 ○○」可能過度宣稱。要不要做、文案怎麼寫，交 owner |
 | B5 | 「更換中…」／逾時／失敗回執 | **無**（正職 T-927a 已改走 dialog，`useRelocateMachine` 不再驅動正職面板） | 有（`useRelocateMachine` 的 `phase`：relocating / timeout / failed + 伺服器回執原文） | 外包多 | 🔴 **待裁定**。拿掉 B3 的就地鍵＝連帶拿掉這整組進度／逾時／回執的顯示，這是**外包目前獨有、正職沒有**的可觀測性。步驟 2 會用 dialog 內的錯誤行（同正職 `settingsError`，顯示 `ApiError.serverMessage`）承接**失敗**那一半，但**非同步落地的「更換中…」與 30s 逾時判定會消失**。這是「與正職同一套形狀」的直接後果，仍請 owner 明示認可 |
@@ -119,16 +119,17 @@
 
 ## 「待裁定」清單（交回 owner）
 
-> **狀態（最後更新：owner 2026-07-31 四項裁定完成後）**：原本 8 格，現在剩 **5 格**開放。
-> 已關掉的三格：**D1**（owner 核可並已實作完成，見上表 D1 列）、**B5**（owner 明示核可，見下方裁定段）、
-> **C1**（owner 2026-07-31 裁定，見下方「owner 2026-07-31 四項裁定」）。
+> **狀態（最後更新：T-14 項目 2，2026-08-28）**：下表**只剩 B4、D2 兩格開放**。
+> 已關掉的：**D1**（owner 核可並已實作完成，見上表 D1 列）、**B5**（owner 明示核可，見下方裁定段）、
+> **C1**（owner 2026-07-31 裁定，見下方「owner 2026-07-31 四項裁定」）、**A9**（T-ed79 #5／#12 補了三個
+> optional 欄位）、**B2**（owner `rc-b8d219446b13` [0]；前提早在 T-7f28 加欄時就過期）。
 > 此表與上面的逐項表、與下方連帶後果段**必須同批更新**——文件把已完成的事仍標成待裁定，
 > 下一個人就會拿它去問一個已經有答案的問題。
 
 | 代號 | 一句話 |
 |------|--------|
 | A9 | ~~外包 relocate 的 wire 回傳沒有 `relocation_pending`，無法對齊正職的「已釘選但沒派出去」警示。要對齊＝改凍結 wire~~ → T-ed79 #5／#12 已補上三個 optional 欄位，見上表 A9 |
-| B2 | 外包 DTO 無 `actual_model`，模型格無法像正職那樣標「最近一次開機回報」。要不要加欄？ |
+| B2 | ~~外包 DTO 無 `actual_model`，模型格無法像正職那樣標「最近一次開機回報」。要不要加欄？~~ → 欄早在 T-7f28 就加了，owner `rc-b8d219446b13` [0] 裁定兩邊都標，見上表 B2 列 |
 | B4 | 要不要補「→ 要換到 ○○」遷移提示？外包的 `machine` 是派工目標而非觀測位置，文案有過度宣稱風險 |
 | D2 | `waking` 的外包無「取消喚醒」。`stop` 端點是否吃 waking 態，wire 未明說 |
 
@@ -164,10 +165,16 @@ DoD 第 1 條明文指定的改動，且**能力本身沒有消失**（改模型
 2. 身分卡動作列新增「更改」鍵（A8），開一份與正職同形狀的設定 dialog：
    `ModelEffortEditor`（執行環境／模型／投入度）＋ 機器 `<select>`（線上機器 ＋ 自己那台離線釘選，
    標「離線」且 disabled），底部 取消／更改。
-   <br>**這條規則今天仍然有效，但它的出處變了（T-170e）**：當年寫的是「照 `MachinePicker` 的規則」，
-   而那個元件已經刪除。今天兩支面板各自實作同一份 `pinnedOfflineMachine` ＋ `settingsMachineOptions`
-   （除了 `member.`／`worker.` 之外逐字相同），互為對照 —— 要 audit 這條規則請比對那兩段，不要去找 `MachinePicker`。
-   ⚠️ 那兩段只承接「留在清單裡 ＋ 標離線」；**`disabled` 那一半不在裡面**，它在各自的 `<option disabled={machine.offline}>`，要一起看。
+   <br>**這條規則今天仍然有效，出處已經換過兩次**。當年寫的是「照 `MachinePicker` 的規則」，
+   而那個元件已經刪除（T-170e）；接手的寫法是兩支面板**各自實作**一份 `pinnedOfflineMachine` ＋
+   `settingsMachineOptions`，並把「互為對照、要 audit 請比對那兩段」當成稽核手段。
+   <br>🔴 **那句話從 2026-08-28 起是假話，不要照它推理**：owner 於 `rc-fc9ab61ad057` 選 [2]
+   「合掉就好，接受少一個 audit 手段」，親自翻掉了「刻意留兩份互為對照」那條裁定（T-14 項目 2）。
+   今天只有**一份**實作：`frontend/src/lib/agentDetailVm.ts` 的 `machineOptions()`，兩支面板都呼叫它。
+   <br>**合掉之後靠什麼 audit**：① 讀 `machineOptions()` 本身 —— 它是唯一一份，沒有第二段可以漂走；
+   ② 它的測試 `frontend/src/lib/agentDetailVm.test.ts`（線上機器、釘選離線機器、釘選不在 registry、沒有釘選 四種形狀）；
+   ③ mutant 判準 —— 改 `machineOptions()` 一處，**兩支面板的測試必須同時紅**；只紅一邊就代表某一側又長回了自己的副本。
+   ⚠️ 那一份只承接「留在清單裡 ＋ 標離線」；**`disabled` 那一半不在裡面**，它在各自的 `<option disabled={machine.offline}>`，要一起看。
 3. 確認送出：`launchChanged` → `api.setWorkerModel`；`machineChanged` → `api.relocateWorker`。
    PATCH 先於 relocate（正職 `saveSettings` 的同一條理由：relocate 會重生 session，
    設定必須先落地，否則新 session 用舊模型起來）。

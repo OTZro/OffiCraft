@@ -81,11 +81,12 @@ export function OfficePage() {
   const workerDetailId = route.workerId ?? null;
   // Live session telemetry — the SAME source the Monitor page reads — so the
   // member-detail panel's context/cost match the monitor row (never divergent).
-  // GATED (T-ec2c): only fetched/subscribed while a detail panel is open — the
-  // member panel (joinSessionRuntime) or the worker panel (findSessionFor,
-  // which reads that worker's own `ow-` session row). With no panel open,
-  // merely being on the office page makes zero monitoring requests — no
-  // per-heartbeat refetch of the large fold.
+  // GATED (T-ec2c): only fetched/subscribed while a detail panel is open. The
+  // only reader left is the member panel (joinSessionRuntime): since T-14 item 2
+  // the worker panel derives model/effort from the worker DTO alone and consumes
+  // nothing from monitoring, so a worker detail still subscribes the whole fold
+  // for no reader. With no panel open, merely being on the office page makes
+  // zero monitoring requests — no per-heartbeat refetch of the large fold.
   const { monitoring } = useMonitoring({
     enabled: detailId !== null || workerDetailId !== null,
   });
@@ -314,9 +315,9 @@ export function OfficePage() {
     return (
       <WorkerDetailPanel
         worker={workerDetail}
-        // The worker's OWN telemetry row — the same `sessions` array the
-        // monitor rows join, so panel and row can never disagree about what it
-        // is running.
+        // The worker's OWN telemetry row. Still handed over, but since T-14
+        // item 2 nothing inside the panel reads it — the model/effort readout
+        // comes from the worker DTO's reported columns, not from this session.
         session={findSessionFor(workerDetail.id, monitoring?.sessions ?? [])}
         onBack={backFromWorkerDetail}
         onOpenTask={

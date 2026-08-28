@@ -30,7 +30,6 @@ import {
   __setMockMemberOnline,
 } from "../api/mock";
 import type { TaskView, OutsourceWorkerView } from "../api/adapter";
-import type { WireMonSession } from "../api/wire";
 
 let seq = 0;
 
@@ -134,29 +133,26 @@ async function openSettingsDialog(
   }
 }
 
-/** Land a telemetry row for `id` reporting `model` (+ optional effort).
+/** Make `over` a worker that is AWAKE and self-reporting `model` (+ effort).
  *
- * T-e12c: the 模型/思考強度 cells read the SELF-REPORTED pair, so a fixture that
- * only configures a worker leaves those cells at the honest dash. Tests whose
- * subject is something else (the runtime cells, the absence of an in-place
- * editor, the dialog lifecycle) say "and it is running <model>" with this,
- * rather than reaching back to the configured value the cells no longer show. */
-function reportsModel(id: string, model: string, effort = "high") {
-  __injectMockMonitoringSession({
-    id,
-    name: id,
-    role: "",
-    runtime: "claude",
-    model,
-    effort,
-    machine: "",
-    account: "",
-    presence: "online",
-    context_pct: null,
-    cost: null,
-    banked_cost: null,
-    tokens: null,
-  });
+ * The 模型/思考強度 cells read the SELF-REPORTED pair off the worker's own
+ * durable columns, and only while it is awake (owner ruling `rc-8a129bc3a188`,
+ * option [1] — the member panel's rule, adopted here). A fixture that merely
+ * CONFIGURES a worker leaves both cells at the honest dash, and so does a
+ * reported value on a worker that is not up. Tests whose subject is something
+ * else (the runtime cells, the absence of an in-place editor, the dialog
+ * lifecycle) say "and it is running <model>" with this.
+ *
+ * 🔴 It deliberately does NOT land a monitoring session: a live session is no
+ * longer a source for these two cells. It used to be the FIRST source, ahead of
+ * the durable columns and with no awake gate.
+ */
+function reporting(
+  over: Partial<OutsourceWorkerView>,
+  model: string,
+  effort = "high",
+): Partial<OutsourceWorkerView> {
+  return { presence: "online", actualModel: model, actualEffort: effort, ...over };
 }
 
 function renderOfficeAt(hash: string) {
@@ -185,19 +181,23 @@ describe("WorkerDetailPanel — aligned real info (T-f190 item 1)", () => {
   it("shows the worker's REAL machine / account / context% / est.$ when reported", async () => {
     __injectMockTask(mkTask({ id: "t-1", taskNo: "T-9c21", title: "查帳單" }));
     __injectMockOutsourceWorker(
-      mkWorker({
-        id: "ow-1",
-        codename: "O-7",
-        taskId: "t-1",
-        taskTitle: "查帳單",
-        presence: "online",
-        machine: "Warden · mbp5",
-        account: "team-a@corp",
-        contextPct: 42,
-        cost: 3.5,
-      }),
+      mkWorker(
+        reporting(
+          {
+            id: "ow-1",
+            codename: "O-7",
+            taskId: "t-1",
+            taskTitle: "查帳單",
+            presence: "online",
+            machine: "Warden · mbp5",
+            account: "team-a@corp",
+            contextPct: 42,
+            cost: 3.5,
+          },
+          "Opus 4.6",
+        ),
+      ),
     );
-    reportsModel("ow-1", "Opus 4.6");
 
     const { findByTestId, container } = renderOfficeAt("#office/worker/ow-1");
     await findByTestId("worker-detail-task");
@@ -440,9 +440,8 @@ describe("WorkerDetailPanel — 設定改走喚醒區 (T-7526 parity)", () => {
     __setMockMemberOnline("warden-mbp5", true);
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
-      mkWorker({ id: "ow-1", taskId: "t-1", model: "Opus 4.6" }),
+      mkWorker(reporting({ id: "ow-1", taskId: "t-1", model: "Opus 4.6" }, "Opus 4.6")),
     );
-    reportsModel("ow-1", "Opus 4.6");
     const { findByTestId, queryByTestId } = renderOfficeAt("#office/worker/ow-1");
     // Positive control FIRST: both cells really are on screen holding real
     // values. Without it "no edit button" would also pass on a panel that
@@ -554,13 +553,11 @@ describe("WorkerDetailPanel — 設定改走喚醒區 (T-7526 parity)", () => {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockTask(mkTask({ id: "t-2" }));
     __injectMockOutsourceWorker(
-      mkWorker({ id: "ow-1", taskId: "t-1", model: "Opus 4.6" }),
+      mkWorker(reporting({ id: "ow-1", taskId: "t-1", model: "Opus 4.6" }, "Opus 4.6")),
     );
     __injectMockOutsourceWorker(
-      mkWorker({ id: "ow-2", taskId: "t-2", model: "Sonnet 4.6" }),
+      mkWorker(reporting({ id: "ow-2", taskId: "t-2", model: "Sonnet 4.6" }, "Sonnet 4.6")),
     );
-    reportsModel("ow-1", "Opus 4.6");
-    reportsModel("ow-2", "Sonnet 4.6");
     const { findByTestId, queryByTestId, rerender } =
       renderOfficeAt("#office/worker/ow-1");
     await openSettingsDialog(findByTestId);
@@ -1044,6 +1041,18 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
       ),
     );
     expect(select.value).toBe("m-asleep");
+    // …and it really is OFFERED, labelled 離線 and disabled. Asserting the
+    // selected value alone is not enough: a list that dropped the pin, or kept
+    // it selectable, both leave `select.value` reading "m-asleep" while the
+    // owner is one click from winding the worker onto a machine with no warden.
+    // (The rule is the SHARED `machineOptions`; the member panel's twin
+    // assertion is in MemberDetailPanel.relocate.test.tsx.)
+    const asleep = Array.from(select.options).find(
+      (o) => o.value === "m-asleep",
+    )!;
+    expect(asleep).toBeTruthy();
+    expect(asleep.textContent).toBe("m-asleep（離線）");
+    expect(asleep.disabled).toBe(true);
     // Edit ONLY the model, then confirm.
     fireEvent.change((await findByTestId("me-model-input")) as HTMLInputElement, {
       target: { value: "claude-opus-4-8" },
@@ -1313,7 +1322,15 @@ describe("WorkerDetailPanel — initial-prompt preview (T-ba6b)", () => {
 // blank. T-7526 moved the editor out of the cell and into the dialog; these
 // pin the RULE, so they follow it there rather than the markup it used to have.
 describe("WorkerDetailPanel — reported state vs configured launch intent (T-e12c)", () => {
-  function liveWorkerReporting(over: Partial<WireMonSession> = {}) {
+  /** A worker that is awake and reporting a pair DIFFERENT from its configured
+   * one — and, deliberately, a live monitoring session reporting a THIRD pair.
+   *
+   * 🔴 The session is there to be IGNORED. Until owner ruling
+   * `rc-8a129bc3a188` (option [1]) it was the first source these two cells
+   * read, ahead of the worker's own durable columns and with no awake gate. If
+   * a future change reinstates it the readout below flips to the session's
+   * values, and this fixture is what makes that a red rather than a shrug. */
+  function liveWorkerReporting(over: Partial<OutsourceWorkerView> = {}) {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
       mkWorker({
@@ -1322,6 +1339,9 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
         presence: "online",
         model: "Opus 4.6",
         effort: "high",
+        actualModel: "claude-sonnet-4.9",
+        actualEffort: "low",
+        ...over,
       }),
     );
     __injectMockMonitoringSession({
@@ -1329,8 +1349,8 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
       name: "O-1",
       role: "",
       runtime: "claude",
-      model: "claude-sonnet-4.9",
-      effort: "low",
+      model: "session-only-model",
+      effort: "max",
       machine: "",
       account: "",
       presence: "online",
@@ -1338,7 +1358,6 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
       cost: null,
       banked_cost: null,
       tokens: null,
-      ...over,
     });
   }
 
@@ -1346,12 +1365,23 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
     liveWorkerReporting();
 
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    expect((await findByTestId("worker-detail-model-value")).textContent).toBe(
-      "claude-sonnet-4.9",
-    );
+    const modelValue = (await findByTestId("worker-detail-model-value"))
+      .textContent;
+    expect(modelValue).toContain("claude-sonnet-4.9");
+    // 🔴 …and it says WHOSE value that is. The tag is what keeps the row from
+    // reading as the configured model the 更改 dialog edits, and this panel
+    // grew it on owner ruling `rc-b8d219446b13` (option [0], 「兩邊都有」) — it
+    // was the member panel's alone, with nothing anywhere pinning its absence
+    // here as either a decision or an oversight.
+    expect(modelValue).toContain(zh.mp.modelReportedTag);
     expect(
       (await findByTestId("worker-detail-effort-value")).textContent,
     ).toContain("low");
+    // …and NOT the live monitoring session's pair, which is a different one
+    // again and is no longer a source for either cell.
+    expect(
+      (await findByTestId("worker-detail-model-effort-cell")).textContent,
+    ).not.toContain("session-only-model");
 
     // The setting lives in the 更改 dialog and is seeded from the WORKER, not
     // from what the session happens to be running.
@@ -1392,6 +1422,38 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
     expect(
       ((await findByTestId("me-effort-select")) as HTMLSelectElement).value,
     ).toBe("high");
+  });
+
+  it("blanks the readout for a worker that is not awake, however much it once reported", async () => {
+    // The half of the rule this panel did not have (owner ruling
+    // `rc-8a129bc3a188`, option [1] — the member panel's gate, adopted here).
+    // Reported columns are DURABLE: they survive the session that wrote them,
+    // so without the gate a stopped worker keeps stating a model it is not
+    // running. The live session below makes the old shape's answer visible —
+    // it would have been read first, and no gate would have stopped it.
+    liveWorkerReporting({ presence: "stopped" });
+
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    expect(
+      (await findByTestId("worker-detail-model-value")).textContent,
+    ).toBe("—");
+    expect(
+      (await findByTestId("worker-detail-effort-value")).textContent,
+    ).toBe("—");
+    // The dash is bare: a provenance tag beside nothing would claim a report
+    // the panel is not showing.
+    expect(
+      (await findByTestId("worker-detail-model-effort-cell")).textContent,
+    ).not.toContain(zh.mp.modelReportedTag);
+  });
+
+  it("keeps the readout on a worker that is only WAKING, which is awake too", async () => {
+    liveWorkerReporting({ presence: "waking" });
+
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    expect(
+      (await findByTestId("worker-detail-model-value")).textContent,
+    ).toContain("claude-sonnet-4.9");
   });
 
   it("writes nothing when the dialog is confirmed unchanged, so no telemetry value can reach the save", async () => {

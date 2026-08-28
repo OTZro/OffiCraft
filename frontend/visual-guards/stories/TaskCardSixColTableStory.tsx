@@ -40,6 +40,11 @@ function TasksShell({ task }: { task: ReturnType<typeof mkTask> }) {
   );
 }
 
+// 🔴 A FROZEN SNAPSHOT of the doc's rows as they read in 2026-07, kept verbatim
+// because the 390/320px measurements below are a function of this exact text.
+// Do not reason from its content: the B2 row's 「待裁定：外包 DTO 無 `actual_model`」
+// is FALSE since T-7f28 added the column, and owner `rc-b8d219446b13` closed B2.
+// The live account is docs/design/worker-panel-parity.md; this is layout input.
 export const SIX_COL_TABLE_MD = [
   "## 六欄表格（取自 worker-panel-parity 設計表的欄位形狀）",
   "",
