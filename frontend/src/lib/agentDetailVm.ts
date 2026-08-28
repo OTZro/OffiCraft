@@ -164,10 +164,16 @@ export interface AgentDetailVmInput {
   refocusSinceLabel: (t: string) => string;
   /** The last operation's own name, plus the two verbs it may be rendered as.
    * The two panels keep SEPARATE 開機 / 停止 leaves because both key sets sit on
-   * the theme-overridable whitelist in `messageKeys.generated.ts`: folding them
-   * would delete keys an existing theme pack may override, and the wording
-   * validator would then reject that pack. That is a break the screen does not
-   * show, so the leaves stay two and only the CHOICE between them is shared. */
+   * the theme-overridable whitelist in `messageKeys.generated.ts`. Folding them
+   * would delete keys an existing theme pack may override, and that override
+   * would then be dropped SILENTLY: both validators prune an off-whitelist code
+   * and merely report it through `skipped` — never a rejection (`themeWording.ts`
+   * validateWording, `wording_bundle.go` dropUnknownWordingCodes; owner ruling
+   * rc-1599a0026a80, which exists precisely so such a pack stays importable).
+   * The pack still imports; its wording just stops taking effect, unnoticed.
+   * Folding would also permanently remove the ability to word the two panels
+   * differently. So the leaves stay two and only the CHOICE between them is
+   * shared. */
   lastOp: string | undefined;
   lastOpStartText: string;
   lastOpStopText: string;
