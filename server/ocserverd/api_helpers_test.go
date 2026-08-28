@@ -1,11 +1,13 @@
 package main
 
-// api_helpers_test.go — the two member-API target resolvers.
+// api_helpers_test.go — the ONE member-API target resolver and its scope.
 //
-// resolveMember is now the OPEN one: it folds only "no row" and "soft-removed".
-// resolveStaffMember is the same plus the kind='outsource' refusal, and the
-// verbs that need that refusal ask for it BY NAME (owner ruling 2026-08-28:
-// 其他真的要過濾要明確指定).
+// resolveMember(id, scope) folds "no row" and "soft-removed" always, and
+// kind='outsource' only when the caller passes staffOnly. The population is a
+// REQUIRED PARAMETER, not a second function name (owner ruling 2026-08-28:
+// 「只有某些行為如果真的需要只拿正職或外包，才下額外參數指定」): a name can be
+// omitted by whoever writes the NEXT verb, a parameter cannot, and its zero
+// value refuses instead of widening.
 //
 // 🔑 WHY OPENING THE ITEM DOOR GIVES NOTHING AWAY: GET /api/members already
 // LISTS outsource rows to the same principal (ListMembersIncludingOutsource,
@@ -35,7 +37,7 @@ func TestResolveMember_ReadsOutsource(t *testing.T) {
 			workerID, err)
 	}
 	if _, err := api.resolveMember(workerID, staffOnly); !errors.Is(err, errNotFound) {
-		t.Fatalf("resolveStaffMember(%s) must still refuse an outsource row, got %v",
+		t.Fatalf("resolveMember(%s, staffOnly) must still refuse an outsource row, got %v",
 			workerID, err)
 	}
 
@@ -61,11 +63,36 @@ func TestResolveMember_ReadsOutsource(t *testing.T) {
 	}
 }
 
+// TestResolveMember_UnsetScopeRefuses pins the reason this is a parameter and
+// not two function names: the population a caller serves cannot be left
+// unstated. A memberScope that arrives at its zero value is a call site that
+// never chose, and the zero value refuses rather than falling back to the wider
+// population — which is the exact failure this ticket exists to remove.
+// Mutant: making memberScopeUnset behave as anyMember → red.
+func TestResolveMember_UnsetScopeRefuses(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := assignOneWorker(t, api)
+
+	var never memberScope // a caller that never said which population it serves
+	if _, err := api.resolveMember(workerID, never); !errors.Is(err, errScopeUnset) {
+		t.Fatalf("unset scope must refuse with errScopeUnset, got %v", err)
+	}
+	// Same for a staff row: the refusal is about the CALLER not choosing, not
+	// about which row was asked for.
+	if err := api.dal.PutMember(fullMember("mira")); err != nil {
+		t.Fatalf("put member: %v", err)
+	}
+	if _, err := api.resolveMember("mira", never); !errors.Is(err, errScopeUnset) {
+		t.Fatalf("unset scope on a staff row must refuse too, got %v", err)
+	}
+}
+
 // TestStaffOnlyVerbsStillRefuseOutsource is the other half of the ticket, and
-// the half nobody would notice breaking: each of these verbs asks for
-// resolveStaffMember BY NAME, and a future edit that "tidies" one back to
-// resolveMember opens it silently — an agent that can be force-stopped through
-// two different funnels, or handed a staff boot document, does not report it.
+// the half nobody would notice breaking: each of these verbs passes staffOnly,
+// and a future edit that "tidies" one to anyMember opens it silently — an agent
+// that can be force-stopped through two different funnels, or handed a staff
+// boot document, does not report it.
 //
 // 🔴 Deliberately a TABLE over the whole set rather than one test per verb: a
 // new member verb that copies the wrong resolver is caught by adding one row.
