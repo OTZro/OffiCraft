@@ -697,8 +697,9 @@ func (s *apiServer) HandleHireMemberApiMembersPost(w http.ResponseWriter, r *htt
 // is the OBSERVED position. SELF-READ exception (T-ea82): an outsource worker
 // reading its OWN row (memberId == the verified sub) resolves — the ocagent
 // recycle/wind-down hooks refetch GET /api/members/<self> and must see the
-// worker's desired_state/refocus_since; any OTHER ow- target keeps the
-// pre-fold 404 (resolveMember).
+// worker's desired_state/refocus_since. Since 2026-08-28 the item door is
+// anyMember, so an ow- target resolves for ANY caller — the self-read branch
+// below is now only the fallback for a row this scope cannot see.
 func (s *apiServer) HandleGetMemberApiMembersMemberIdGet(w http.ResponseWriter, r *http.Request, memberId string) {
 	m, err := s.resolveMember(memberId, anyMember)
 	if errors.Is(err, errNotFound) && memberId == currentActor(r) {
@@ -1372,11 +1373,11 @@ func (s *apiServer) HandleDismissMemberApiMembersMemberIdDelete(w http.ResponseW
 
 // resolveSelf is the caller's own live member (404 when it has no roster row
 // — e.g. the owner's sub has none: self-report is agent-only by construction).
-// Unlike resolveMember it does NOT fold kind='outsource' onto errNotFound:
-// since the graceful worker handover (T-ea82) an outsource worker walks the
-// SAME 〈停止〉 wake as a member and reports its own presence through these
-// self endpoints — only the member_id-target admin surface keeps the pre-fold
-// ow- 404.
+// It takes no memberScope and never folds kind='outsource': since the graceful
+// worker handover (T-ea82) an outsource worker walks the SAME 〈停止〉 wake as a
+// member and reports its own presence through these self endpoints. The
+// member_id-target ADMIN verbs are the ones that still refuse an ow- row, and
+// they do it by passing staffOnly — a choice each of them makes by name.
 func (s *apiServer) resolveSelf(r *http.Request) (*Member, error) {
 	m, err := s.dal.GetMember(currentActor(r))
 	if err != nil {

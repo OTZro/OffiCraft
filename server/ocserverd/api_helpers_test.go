@@ -20,6 +20,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -96,35 +97,139 @@ func TestResolveMember_UnsetScopeRefuses(t *testing.T) {
 //
 // 🔴 Deliberately a TABLE over the whole set rather than one test per verb: a
 // new member verb that copies the wrong resolver is caught by adding one row.
+// The set is every staffOnly call site — activate, deactivate, dismiss,
+// bootstrap, force-stop, accelerated-stop, refocus, webhook create/update/
+// revoke, and the public /in inlet. GET /api/members/{id}/webhooks (list) is
+// NOT here because it passes anyMember by design.
 func TestStaffOnlyVerbsStillRefuseOutsource(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	workerID := assignOneWorker(t, api)
 
+	// The webhook rows exist so the endpoint doors can actually be reached:
+	// resolveWebhook folds an ABSENT endpoint onto the same errNotFound as a
+	// refused member, so without a real row those cases would answer 404 for the
+	// wrong reason and pin nothing. One row per case — the revoke case deletes
+	// its own if the scope is ever widened.
+	seedHook := func(endpointID string) string {
+		t.Helper()
+		token := newWebhookToken()
+		if err := api.dal.PutWebhookEndpoint(WebhookEndpoint{
+			Token:      token,
+			MemberID:   workerID,
+			EndpointID: endpointID,
+			Status:     WebhookStatusEnabled,
+			CreatedTS:  nowSecs(),
+			Platform:   WebhookPlatformGeneric,
+		}); err != nil {
+			t.Fatalf("seed webhook %s: %v", endpointID, err)
+		}
+		return token
+	}
+	seedHook("pr-events")
+	seedHook("legacy-hook")
+	inletToken := seedHook("inlet")
+
 	cases := []struct {
 		name string
-		call func(*httptest.ResponseRecorder)
+		// wantCode is the refusal this door owes an ow- id. 404 everywhere the
+		// caller is authenticated and addressed the member by id; see the /in
+		// row for the one door whose refusal is shaped differently.
+		wantCode int
+		call     func(*httptest.ResponseRecorder)
+		// also runs after the status assertion, for a door whose real refusal
+		// is not visible in the status line.
+		also func(*testing.T)
 	}{
-		{"activate", func(rec *httptest.ResponseRecorder) {
+		{name: "activate", wantCode: http.StatusNotFound, call: func(rec *httptest.ResponseRecorder) {
 			api.HandleActivateMemberApiMembersMemberIdActivatePost(rec,
 				taskReq(t, "POST", "/api/members/"+workerID+"/activate", nil, wireOwnerID, "owner"), workerID)
 		}},
-		{"deactivate", func(rec *httptest.ResponseRecorder) {
+		{name: "deactivate", wantCode: http.StatusNotFound, call: func(rec *httptest.ResponseRecorder) {
 			api.HandleDeactivateMemberApiMembersMemberIdDeactivatePost(rec,
 				taskReq(t, "POST", "/api/members/"+workerID+"/deactivate", nil, wireOwnerID, "owner"), workerID)
 		}},
-		{"dismiss", func(rec *httptest.ResponseRecorder) {
+		{name: "dismiss", wantCode: http.StatusNotFound, call: func(rec *httptest.ResponseRecorder) {
 			api.HandleDismissMemberApiMembersMemberIdDelete(rec,
 				taskReq(t, "DELETE", "/api/members/"+workerID, nil, wireOwnerID, "owner"), workerID)
+		}},
+		// An explicit role is passed so the boot package would BUILD if the door
+		// opened: without it a widened scope could still 404 on an unknown role
+		// key and look like the refusal this row is asserting.
+		{name: "bootstrap", wantCode: http.StatusNotFound, call: func(rec *httptest.ResponseRecorder) {
+			api.HandleBootstrapApiBootstrapPost(rec,
+				taskReq(t, "POST", "/api/bootstrap",
+					map[string]any{"member_id": workerID, "role": seedRoleAssistant},
+					wireOwnerID, "owner"))
+		}},
+		{name: "force-stop", wantCode: http.StatusNotFound, call: func(rec *httptest.ResponseRecorder) {
+			api.HandleForceStopMemberApiMembersMemberIdForceStopPost(rec,
+				taskReq(t, "POST", "/api/members/"+workerID+"/force-stop", nil, wireOwnerID, "owner"), workerID)
+		}},
+		{name: "accelerated-stop", wantCode: http.StatusNotFound, call: func(rec *httptest.ResponseRecorder) {
+			api.HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStopPost(rec,
+				taskReq(t, "POST", "/api/members/"+workerID+"/accelerated-stop", nil, wireOwnerID, "owner"), workerID)
+		}},
+		{name: "refocus", wantCode: http.StatusNotFound, call: func(rec *httptest.ResponseRecorder) {
+			api.HandleRefocusMemberApiMembersMemberIdRefocusPost(rec,
+				taskReq(t, "POST", "/api/members/"+workerID+"/refocus", nil, wireOwnerID, "owner"), workerID)
+		}},
+		{name: "webhook-create", wantCode: http.StatusNotFound, call: func(rec *httptest.ResponseRecorder) {
+			api.HandleCreateWebhookApiMembersMemberIdWebhooksPost(rec,
+				taskReq(t, "POST", "/api/members/"+workerID+"/webhooks",
+					map[string]any{"endpoint_id": "smuggled"}, wireOwnerID, "owner"), workerID)
+		}},
+		{name: "webhook-update", wantCode: http.StatusNotFound, call: func(rec *httptest.ResponseRecorder) {
+			api.HandleUpdateWebhookApiMembersMemberIdWebhooksEndpointIdPatch(rec,
+				taskReq(t, "PATCH", "/api/members/"+workerID+"/webhooks/pr-events",
+					map[string]any{"status": WebhookStatusDisabled}, wireOwnerID, "owner"),
+				workerID, "pr-events")
+		}},
+		{name: "webhook-revoke", wantCode: http.StatusNotFound, call: func(rec *httptest.ResponseRecorder) {
+			api.HandleDeleteWebhookApiMembersMemberIdWebhooksEndpointIdDelete(rec,
+				taskReq(t, "DELETE", "/api/members/"+workerID+"/webhooks/legacy-hook", nil, wireOwnerID, "owner"),
+				workerID, "legacy-hook")
+		}},
+		// 🔴 The ONE row whose refusal is not a 404, and deliberately so: /in is
+		// the unauthenticated public inlet, and its whole contract is that every
+		// outcome answers the SAME silent 200 so a caller can never learn whether
+		// an endpoint exists. The refusal is therefore only visible BEHIND the
+		// response — no synthetic chat, and the endpoint stamped
+		// dropped:member_gone — which is what `also` asserts.
+		{name: "public-in", wantCode: http.StatusOK, call: func(rec *httptest.ResponseRecorder) {
+			req := httptest.NewRequest("POST", "/in?t="+inletToken,
+				strings.NewReader("PR #42 merged"))
+			api.HandleReceiveWebhookInPost(rec, req,
+				HandleReceiveWebhookInPostParams{T: &inletToken})
+		}, also: func(t *testing.T) {
+			msgs, err := api.dal.ListChatInvolving(workerID, 50)
+			if err != nil {
+				t.Fatalf("list chat: %v", err)
+			}
+			if len(msgs) != 0 {
+				t.Fatalf("POST /in must synthesise NO chat for a contractor endpoint, got %d: %+v",
+					len(msgs), msgs)
+			}
+			e, err := api.dal.GetWebhookByToken(inletToken)
+			if err != nil || e == nil {
+				t.Fatalf("read back inlet endpoint: %v %+v", err, e)
+			}
+			if e.DeliveredCount != 0 || e.LastDropReason != WebhookDropReasonMemberGone {
+				t.Fatalf("inlet must record a member_gone drop, got delivered=%d drop=%q",
+					e.DeliveredCount, e.LastDropReason)
+			}
 		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			c.call(rec)
-			if rec.Code != http.StatusNotFound {
-				t.Fatalf("%s on an ow- id must stay 404, got %d %s",
-					c.name, rec.Code, rec.Body.String())
+			if rec.Code != c.wantCode {
+				t.Fatalf("%s on an ow- id must stay %d, got %d %s",
+					c.name, c.wantCode, rec.Code, rec.Body.String())
+			}
+			if c.also != nil {
+				c.also(t)
 			}
 		})
 	}

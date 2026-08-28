@@ -627,9 +627,10 @@ var identityGateLedger = map[string]string{
 	"member_ownerop_winddown.go :: memberHasStateToFlush :: m.Kind != KindAssistant": "" +
 		"staff-only by construction, and the function's own comment says why for both " +
 		"excluded kinds: a warden runs no ocagent and would never read the marker, and " +
-		"an outsource row has its own funnel (respawnWorkerForOwnerOp) and cannot reach " +
-		"these handlers at all because resolveMember folds kind=outsource onto " +
-		"errNotFound. 🔴 Refused here RATHER THAN relied upon upstream — the " +
+		"an outsource row has its own funnel (respawnWorkerForOwnerOp) and does not reach " +
+		"these handlers because the owner-op verbs leading here each pass staffOnly — a " +
+		"per-call-site choice since 2026-08-28, not a property of the resolver. " +
+		"🔴 Refused here RATHER THAN relied upon upstream — the " +
 		"belt-and-braces is the point, but note the reach: this is an allow-list of ONE " +
 		"kind, so a fourth member kind would inherit the exclusion without anyone " +
 		"deciding to give it. Compare tokenExpiryOf, which was rewritten away from " +

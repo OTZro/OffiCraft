@@ -6,9 +6,9 @@ package main
 // its bug is decoration. The load-bearing ones are the last three: the
 // cross-month lookback (silent in February and invisible to any fixture built
 // from days 1-28), the fire-once invariant (a resend looks EXACTLY like a
-// correct delivery), and the outsource recipient (resolveMember excludes
-// outsource workers outright, so getting this wrong silently makes every
-// `ow-` schedule undeliverable — the same hole webhooks have today).
+// correct delivery), and the outsource recipient (resolving it through the
+// member door under staffOnly silently makes every `ow-` schedule
+// undeliverable, and the only symptom is a schedule that never fires).
 
 import (
 	"fmt"
@@ -721,14 +721,15 @@ func TestCreateScheduledMessageDoesNotFireOnTheFirstTick(t *testing.T) {
 	}
 }
 
-// TestScheduledMessageDeliversToAnOutsourceWorker is the resolveMember guard.
-// resolveMember (api_helpers.go) refuses Kind == KindOutsource outright, which
-// is exactly why a webhook cannot be bound to an `ow-` worker today; the design
-// requires scheduled messages to use CHAT's recipient rule instead.
+// TestScheduledMessageDeliversToAnOutsourceWorker is the recipient-rule guard.
+// The design requires scheduled messages to use CHAT's recipient rule, not the
+// member door: chat's rule says what a recipient IS, while the member door's
+// answer depends on the memberScope its caller happened to pass.
 //
-// Red when: delivery (or the CRUD) resolves the recipient with resolveMember —
-// the worker becomes a 404 on create and an undeliverable row in the tick, and
-// the only symptom is a schedule that never fires.
+// Red when: delivery (or the CRUD) resolves the recipient through the member
+// door under staffOnly — the worker becomes a 404 on create and an
+// undeliverable row in the tick, and the only symptom is a schedule that never
+// fires.
 func TestScheduledMessageDeliversToAnOutsourceWorker(t *testing.T) {
 	srv, secret, api := scheduledStack(t)
 	ownerTok, _ := mintJWT("owner", "owner", 300, secret, time.Now().Unix(), "")
@@ -745,7 +746,7 @@ func TestScheduledMessageDeliversToAnOutsourceWorker(t *testing.T) {
 			`"hour":0,"minute":0,"timezone":"UTC"}`)
 	if status != 200 {
 		t.Fatalf("create on an outsource worker: want 200, got %d %v — "+
-			"the recipient is being resolved with resolveMember, which excludes ow- workers",
+			"the recipient is being resolved through the member door under staffOnly",
 			status, created)
 	}
 	id, _ := created["id"].(string)

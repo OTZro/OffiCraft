@@ -200,9 +200,12 @@ const (
 // its caller's first gate, which returns before this question is asked.
 func (s *apiServer) memberHasStateToFlush(m Member) bool {
 	// Staff only. A warden runs no ocagent and would never read the marker;
-	// an outsource row has its own funnel (respawnWorkerForOwnerOp) and never
-	// reaches these handlers anyway (resolveMember folds kind=outsource onto
-	// errNotFound). Both are refused here rather than relied upon upstream.
+	// an outsource row has its own funnel (respawnWorkerForOwnerOp) and does not
+	// reach these handlers, because the owner-op verbs that lead here each pass
+	// staffOnly. 🔴 That upstream refusal is now a per-call-site CHOICE rather
+	// than a property of the resolver, which is exactly why this guard is not
+	// redundant: it refuses here rather than relying on every future caller
+	// making the same choice.
 	if m.Kind != KindAssistant {
 		return false
 	}
