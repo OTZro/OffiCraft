@@ -225,6 +225,8 @@ export const en: Dict = {
     reassignError: "The reassign failed. Please try again.",
     replyHeader: "Ask",
     replyBadge: "Your call",
+    // ⚠️ Nothing renders this any more (T-0b78) — see the zh note. Do not wire
+    // it to a control again.
     replyInChat: "Reply in chat",
     gateMark: "Approval",
     replyAnsweredTag: "Answered",
@@ -281,6 +283,8 @@ export const en: Dict = {
       "Expired without an answer; the member will re-ask if it still matters",
     aiPick: "AI pick",
     yourPick: "Your choice",
+    // ⚠️ Nothing renders this any more (T-0b78). It also said something FALSE:
+    // the button stopped going to the chat room. Do not wire it up again.
     jumpToChat: "View in chat",
     inputPlaceholder: "Type a reply…",
     answerError: "Reply failed. Please try again.",
