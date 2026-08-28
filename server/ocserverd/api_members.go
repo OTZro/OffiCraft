@@ -697,10 +697,11 @@ func (s *apiServer) HandleHireMemberApiMembersPost(w http.ResponseWriter, r *htt
 // is the OBSERVED position. SELF-READ exception (T-ea82): an outsource worker
 // reading its OWN row (memberId == the verified sub) resolves — the ocagent
 // recycle/wind-down hooks refetch GET /api/members/<self> and must see the
-// worker's desired_state/refocus_since; any OTHER ow- target keeps the
-// pre-fold 404 (resolveMember).
+// worker's desired_state/refocus_since. Since 2026-08-28 the item door is
+// anyMember, so an ow- target resolves for ANY caller — the self-read branch
+// below is now only the fallback for a row this scope cannot see.
 func (s *apiServer) HandleGetMemberApiMembersMemberIdGet(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveMember(memberId, anyMember)
 	if errors.Is(err, errNotFound) && memberId == currentActor(r) {
 		m, err = s.resolveSelf(r)
 	}
@@ -733,7 +734,7 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveMember(memberId, staffOnly)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -837,7 +838,7 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveMember(memberId, staffOnly)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -951,7 +952,7 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 		writeResolveError(w, err, "machine", machineID)
 		return
 	}
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveMember(memberId, staffOnly)
 	if err != nil {
 		// P7c (gate rc-2786636f30e5, 外包對齊正職): the tool's semantics are "move
 		// one agent" — an id that names no STAFF member falls through to the
@@ -1093,7 +1094,7 @@ func clearMemberHandoverMarker(m *Member) {
 // handler writes offline two statements from here. The sweep only ever sees the
 // self-driven arm (report_stopping, which touches no desired_state at all).
 func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveMember(memberId, staffOnly)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -1180,7 +1181,7 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 // it does not reopen the ruling), and this endpoint. See the endpoint's
 // description in spec/openapi.json, which says the same at length.
 func (s *apiServer) HandleForceStopMemberApiMembersMemberIdForceStopPost(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveMember(memberId, staffOnly)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -1254,7 +1255,7 @@ const acceleratedStopNeedsAnOpenWindDownMsg = "加速停止 escalates a wind-dow
 // A force-stopped epoch is refused: that session was cut off deliberately and is
 // not working a close-out, so a deadline addressed to it has no reader.
 func (s *apiServer) HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStopPost(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveMember(memberId, staffOnly)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -1309,7 +1310,7 @@ func (s *apiServer) HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStop
 // `stopping`, and refusing the owner there would mean 重新聚焦 stops working on
 // an agent that is mid-hand-off — the moment he is most likely to press it.
 func (s *apiServer) HandleRefocusMemberApiMembersMemberIdRefocusPost(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveMember(memberId, staffOnly)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -1342,7 +1343,7 @@ func (s *apiServer) HandleRefocusMemberApiMembersMemberIdRefocusPost(w http.Resp
 // DELETE /api/members/{member_id} — dismiss: a SOFT delete (roster_status=
 // removed + desired_state=offline); the audit row survives.
 func (s *apiServer) HandleDismissMemberApiMembersMemberIdDelete(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveMember(memberId, staffOnly)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -1372,11 +1373,11 @@ func (s *apiServer) HandleDismissMemberApiMembersMemberIdDelete(w http.ResponseW
 
 // resolveSelf is the caller's own live member (404 when it has no roster row
 // — e.g. the owner's sub has none: self-report is agent-only by construction).
-// Unlike resolveMember it does NOT fold kind='outsource' onto errNotFound:
-// since the graceful worker handover (T-ea82) an outsource worker walks the
-// SAME 〈停止〉 wake as a member and reports its own presence through these
-// self endpoints — only the member_id-target admin surface keeps the pre-fold
-// ow- 404.
+// It takes no memberScope and never folds kind='outsource': since the graceful
+// worker handover (T-ea82) an outsource worker walks the SAME 〈停止〉 wake as a
+// member and reports its own presence through these self endpoints. The
+// member_id-target ADMIN verbs are the ones that still refuse an ow- row, and
+// they do it by passing staffOnly — a choice each of them makes by name.
 func (s *apiServer) resolveSelf(r *http.Request) (*Member, error) {
 	m, err := s.dal.GetMember(currentActor(r))
 	if err != nil {

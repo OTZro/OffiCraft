@@ -104,6 +104,30 @@ describe("per-item DTO gaps are what the adapter really does (T-8115 follow-up)"
     expect(perItemRefetchIsFaithful("member")).toBe(true);
   });
 
+  it("serves an ow- row at BOTH doors — the list and the item can never disagree again", async () => {
+    // T-26. The two doors used to answer opposite things about the SAME row:
+    // the list carried contractors, the item door folded kind='outsource' into
+    // 404. useMembers takes the ids from the list, so a chat delta naming one
+    // contractor took the per-item fast path straight into a guaranteed 404 and
+    // then re-pulled the whole roster — the "cheap" path costing double, on
+    // every contractor chat line.
+    const listed = (await mockApi.listMembers()).filter((m) =>
+      m.id.startsWith("ow-")
+    );
+    // The fixture must carry one at all: with no contractor row, nothing below
+    // is exercised and this test passes while proving nothing.
+    expect(listed.length).toBeGreaterThan(0);
+
+    const worker = listed[0];
+    expect(worker.kind).toBe("outsource");
+
+    const single = await mockApi.getMember(worker.id);
+    expect(single.id).toBe(worker.id);
+    expect(single.kind).toBe("outsource");
+    // Same row through both doors — the property the 404 broke.
+    expect(single.name).toBe(worker.name);
+  });
+
   it("GET /api/tasks/{id} carries no dep join; GET /api/tasks does", async () => {
     __injectMockTask({
       ...blankTask("t-parity-dep"),

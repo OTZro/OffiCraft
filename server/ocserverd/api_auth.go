@@ -79,7 +79,7 @@ func (s *apiServer) HandleMintApiMintPost(w http.ResponseWriter, r *http.Request
 	if !decodeJSONBodyRequired(w, r, &body, "member_id", "ttl_days") {
 		return
 	}
-	m, err := s.resolveMember(body.MemberId)
+	m, err := s.resolveMember(body.MemberId, staffOnly)
 	if err != nil {
 		writeResolveError(w, err, "member", body.MemberId)
 		return
@@ -113,7 +113,7 @@ func (s *apiServer) HandleBootstrapApiBootstrapPost(w http.ResponseWriter, r *ht
 	}
 	var member *Member
 	if body.MemberId != nil {
-		m, err := s.resolveMember(*body.MemberId)
+		m, err := s.resolveMember(*body.MemberId, staffOnly)
 		if err != nil {
 			writeResolveError(w, err, "member", *body.MemberId)
 			return

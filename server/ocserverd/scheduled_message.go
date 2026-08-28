@@ -94,10 +94,10 @@ func (s *apiServer) runScheduledMessageTick(now float64) {
 // and fans the same "chat" delta every other message rides.
 //
 // 🔴 Recipient resolution goes through resolveChatRecipient, NOT resolveMember.
-// resolveMember excludes Kind == KindOutsource outright (api_helpers.go), so
-// using it would leave every `ow-` worker unreachable — which is exactly why a
-// webhook cannot be bound to one today. A scheduled message IS a chat message,
-// so it takes chat's recipient rule: assistants and outsource workers alike.
+// A scheduled message IS a chat message, so it takes chat's recipient rule:
+// assistants and outsource workers alike. Reaching for resolveMember would put
+// the reachability of every `ow-` worker at the mercy of one memberScope
+// argument, and a delivery loop is the worst place to discover a wrong one.
 //
 // A recipient that is gone or removed returns errNotFound. That row is skipped
 // WITHOUT advancing its cursor: the cursor means "this slot was delivered", and

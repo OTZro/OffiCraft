@@ -6,10 +6,11 @@ package main
 // scheduled_message.go and the slot arithmetic in schedule_slot.go.
 //
 // 🔴 The recipient is resolved with resolveChatRecipient, NOT resolveMember.
-// resolveMember excludes Kind == KindOutsource (api_helpers.go) — which is
-// precisely why a webhook cannot be bound to an `ow-` worker today. A scheduled
-// message IS a chat message, so it takes chat's recipient rule and staff and
-// outsource workers alike can be scheduled to.
+// A scheduled message IS a chat message, so it takes chat's recipient rule:
+// staff and outsource workers alike can be scheduled to. (resolveMember would
+// serve an ow- row too now that scope is a parameter — but only if every call
+// site here remembered to pass anyMember, and chat's rule is the one that says
+// what a recipient IS.)
 
 import (
 	"net/http"

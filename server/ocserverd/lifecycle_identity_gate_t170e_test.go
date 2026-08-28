@@ -552,10 +552,19 @@ var identityGateLedger = map[string]string{
 
 	// ── roster resolution: which face may see which population ─────────────
 	"api_helpers.go :: resolveMember :: m.Kind == KindOutsource": "" +
-		"the member face does not serve worker rows. Members and workers share ONE " +
-		"primary key space, so without this an ow- id would resolve through every " +
-		"member handler; the outsource faces (and the self-ops, which fold explicitly) " +
-		"are the intended doors. A wire-surface split, not a lifecycle difference.",
+		"the staffOnly arm of the member lookup. This refusal used to be " +
+		"UNCONDITIONAL and was therefore inherited by all 16 of its callers, including the READ " +
+		"door — which made GET /api/members/{id} answer 404 for a row that " +
+		"GET /api/members had just listed, and cost the cockpit one guaranteed " +
+		"failed request plus a whole-roster refetch per contractor chat line. " +
+		"Owner ruling 2026-08-28: 「其他真的要過濾要明確指定」 — so reads default to " +
+		"the whole population and the verbs that must refuse a contractor ask for " +
+		"THIS resolver by name (mint / bootstrap, which would hand it the WRONG " +
+		"boot document; the stop family, whose contractor equivalents drive a " +
+		"different kill funnel; dismissal, which is not how a contractor leaves; " +
+		"webhook write + the unauthenticated inlet; and relocate, which needs the " +
+		"refusal as CONTROL FLOW to fall through to the worker core). " +
+		"A wire-surface split, not a lifecycle difference.",
 	"api_helpers.go :: resolveMachine :: m.Kind != machineKind": "" +
 		"the mirror of the above on the machine face: a machine IS a member row, so " +
 		"resolveMachine is GetMember plus this kind test. Machine-vs-person axis.",
@@ -618,9 +627,10 @@ var identityGateLedger = map[string]string{
 	"member_ownerop_winddown.go :: memberHasStateToFlush :: m.Kind != KindAssistant": "" +
 		"staff-only by construction, and the function's own comment says why for both " +
 		"excluded kinds: a warden runs no ocagent and would never read the marker, and " +
-		"an outsource row has its own funnel (respawnWorkerForOwnerOp) and cannot reach " +
-		"these handlers at all because resolveMember folds kind=outsource onto " +
-		"errNotFound. 🔴 Refused here RATHER THAN relied upon upstream — the " +
+		"an outsource row has its own funnel (respawnWorkerForOwnerOp) and does not reach " +
+		"these handlers because the owner-op verbs leading here each pass staffOnly — a " +
+		"per-call-site choice since 2026-08-28, not a property of the resolver. " +
+		"🔴 Refused here RATHER THAN relied upon upstream — the " +
 		"belt-and-braces is the point, but note the reach: this is an allow-list of ONE " +
 		"kind, so a fourth member kind would inherit the exclusion without anyone " +
 		"deciding to give it. Compare tokenExpiryOf, which was rewritten away from " +
