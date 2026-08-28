@@ -8,9 +8,20 @@
 // the NEWEST message, silently, whenever the target is not in that DOM. The
 // three call sites now share this hook, and the last test here is what makes a
 // fourth copy of the fetch go red instead of shipping.
+//
+// 🔴 AND HERE IS WHAT THAT LAST TEST DOES *NOT* CATCH, stated because the
+// version before this one claimed the whole property and only enforced part of
+// it. It reads SOURCE TEXT. An independent reviewer walked straight through it
+// by assembling the method name at runtime ("getChat" + "Message") and shipped
+// a full second copy — read, overlay and failure state — with every test green
+// and typecheck clean. So it catches the copy someone writes by HAND, which is
+// the one that actually happens, and it does not catch deliberate evasion:
+// dynamic names, an alias, or going under the adapter to fetch directly.
+// Closing that needs an AST-level rule over the whole api surface; it is not
+// here, and pretending otherwise is how the previous claim got written.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { render, fireEvent, act } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
@@ -164,29 +175,57 @@ describe("useQuotedMessageOverlay", () => {
 
   // 🔴 THE ANTI-SECOND-COPY CLAUSE. Behaviour tests cannot see a duplicate:
   // a call site that grew its OWN api.getChatMessage + its own error state
-  // would draw the same pixels and pass every test above. This reads the three
-  // sources instead. It goes red both ways — a call site that stops using the
-  // shared exit, and a call site that starts fetching on its own.
-  it("is the only place the cockpit reads a quoted message by id", () => {
-    const callSites = [
+  // would draw the same pixels and pass every test above. This reads SOURCE
+  // TEXT instead. Its exact reach — and what walks through it — is written at
+  // the top of this file; the name of this test says only what it enforces.
+  it("no component names getChatMessage — the hook is the only one that does", () => {
+    // vitest runs with the frontend package as cwd.
+    const root = resolve(process.cwd(), "src");
+    // The THREE KNOWN call sites must actually take the shared exit. Named, so
+    // one quietly dropping the hook goes red here rather than only in a
+    // behaviour test that a second copy would keep green.
+    for (const rel of [
       "src/components/ChatArea.tsx",
       "src/components/RepliesPage.tsx",
       "src/components/TaskReplyCard.tsx",
-    ];
-    for (const rel of callSites) {
-      // vitest runs with the frontend package as cwd.
+    ]) {
       const src = readFileSync(resolve(process.cwd(), rel), "utf8");
       expect(src, `${rel} must take the shared exit`).toContain(
         "useQuotedMessageOverlay(",
       );
-      // Comments may NAME the api call; code may not make it.
-      const code = src
-        .split("\n")
-        .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
-        .join("\n");
-      expect(code, `${rel} must not fetch the message itself`).not.toContain(
-        "getChatMessage",
-      );
     }
+    // 🔴 AND THE SWEEP IS THE WHOLE TREE, not those three paths. The version
+    // before this one checked only the three files it already knew about, so a
+    // FOURTH component with its own copy — a new screen, a new card — passed
+    // untouched. That is the copy that actually happens: nobody edits the three
+    // guarded files to add a duplicate, they write a new one.
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const full = resolve(dir, e.name);
+        if (e.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!/\.(ts|tsx)$/.test(e.name)) continue;
+        // Tests may name it (they mock it). The api layer DEFINES it. The hook
+        // is the one place allowed to CALL it.
+        if (/\.test\.tsx?$/.test(e.name)) continue;
+        const rel = full.slice(root.length + 1);
+        if (rel.startsWith("api/")) continue;
+        if (rel === "hooks/useQuotedMessageOverlay.tsx") continue;
+        const code = readFileSync(full, "utf8")
+          .split("\n")
+          .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+          .join("\n");
+        if (code.includes("getChatMessage")) offenders.push(rel);
+      }
+    };
+    walk(root);
+    expect(
+      offenders,
+      "these files fetch the quoted message themselves instead of taking the " +
+        "shared exit (hooks/useQuotedMessageOverlay)",
+    ).toEqual([]);
   });
 });
