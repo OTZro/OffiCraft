@@ -7,17 +7,68 @@
 // is asserted on the config itself — a correct allocateFreePorts() that nobody
 // calls would leave the collision exactly where it was.
 
-import { createServer, type AddressInfo } from "node:net";
+import { createServer, type AddressInfo, type Server } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { allocateFreePorts } from "./freePort";
 
 const URL_VARS = ["PAINT_GUARD_OK_URL", "PAINT_GUARD_UNKNOWN_URL"] as const;
+
+/** Every listen()/close() any net server in this file makes, in order. */
+const probeCalls = vi.hoisted(
+  () => [] as { call: "listen" | "close"; port: number | null }[]
+);
+
+// The "all probes open at once" invariant is only observable WHILE
+// allocateFreePorts runs — by the time it returns, every probe is shut. So the
+// sockets it creates are wrapped here and asked to say when they opened and
+// when they closed.
+vi.mock("node:net", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:net")>();
+  const portOf = (server: Server) => {
+    const addr = server.address();
+    return addr !== null && typeof addr !== "string" ? addr.port : null;
+  };
+  const wrapped = (...args: never[]) => {
+    const server = actual.createServer(...args);
+    const listen = server.listen.bind(server) as (...a: never[]) => Server;
+    const close = server.close.bind(server) as (...a: never[]) => Server;
+    server.listen = ((...a: never[]) => {
+      const result = listen(...a);
+      probeCalls.push({ call: "listen", port: portOf(server) });
+      return result;
+    }) as typeof server.listen;
+    server.close = ((...a: never[]) => {
+      probeCalls.push({ call: "close", port: portOf(server) });
+      return close(...a);
+    }) as typeof server.close;
+    return server;
+  };
+  return { ...actual, default: { ...actual, createServer: wrapped }, createServer: wrapped };
+});
 
 describe("allocateFreePorts", () => {
   it("hands out the requested number of distinct ports", () => {
     const ports = allocateFreePorts(3);
     expect(ports).toHaveLength(3);
     expect(new Set(ports).size).toBe(3);
+  });
+
+  it("keeps every probe listening until the whole set is chosen", () => {
+    probeCalls.length = 0;
+    const ports = allocateFreePorts(3);
+    const firstClose = probeCalls.findIndex((entry) => entry.call === "close");
+    const stillOpenAtFirstClose = probeCalls
+      .slice(0, firstClose === -1 ? probeCalls.length : firstClose)
+      .filter((entry) => entry.call === "listen").length;
+    const trace = probeCalls
+      .map((entry) => `${entry.call}(${entry.port})`)
+      .join(" ");
+    expect(
+      stillOpenAtFirstClose,
+      `a probe was released before all 3 ports were chosen, so a later probe can ` +
+        `be handed a port this same call already gave out — chose ${ports.join(", ")}, ` +
+        `probe socket calls were ${trace}`
+    ).toBe(3);
   });
 
   it("hands out ports that can then actually be bound", async () => {
@@ -66,9 +117,11 @@ describe("playwright-paint.config.ts", () => {
   it("picks a different port for every stub on every run", async () => {
     const first = await loadConfig();
     const second = await loadConfig();
-    expect(new Set([...first.ports, ...second.ports]).size).toBe(
-      first.ports.length + second.ports.length
-    );
+    expect(
+      new Set([...first.ports, ...second.ports]).size,
+      `two evaluations of the config shared a port — first run got ` +
+        `${first.ports.join(", ")}, second run got ${second.ports.join(", ")}`
+    ).toBe(first.ports.length + second.ports.length);
   });
 
   it("publishes each stub's URL so no spec has to know a port", async () => {

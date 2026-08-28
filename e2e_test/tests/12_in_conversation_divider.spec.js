@@ -81,8 +81,11 @@ test.describe('B12 · in-conversation arrivals — chip and divider share ONE ne
     // straight on leaves the component still holding the previous answer: the
     // next arrival is auto-followed to the bottom and no chip is ever armed.
     // Resolving on the element's own scroll event puts us after that dispatch —
-    // scroll does not bubble, so React's root listener for it runs in the capture
-    // phase of the same dispatch, ahead of the target-phase listener below.
+    // scroll is one of React 18's non-delegated events, so `onScroll` is NOT a
+    // root listener: react-dom attaches it straight to this element, in the
+    // target phase, when ChatArea mounts. The listener below goes on the same
+    // element in the same phase, only later, so registration order is what puts
+    // React's handler ahead of ours.
     await thread.evaluate(
       (el) =>
         new Promise((resolve) => {
