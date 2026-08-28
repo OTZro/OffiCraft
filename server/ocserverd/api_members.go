@@ -996,7 +996,9 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 	// dump" and dispatches NOTHING (the 收口 owns the move); it still runs so the
 	// tick state is advanced here rather than up to 30s later, and it remains the
 	// path that migrates a member nobody stamped for (the decideUp relocate arm,
-	// now a backstop). An offline member is a no-op here (nothing to move). The
+	// now a backstop — which since T-14 #4 opens this same wind-down itself
+	// instead of robust-STOPping on its first pass, so the two doors behave
+	// alike; it still kills at once only for a row no epoch can be stamped on). An offline member is a no-op here (nothing to move). The
 	// pin is already persisted so the relocate never FAILS on dispatch — but we
 	// OBSERVE it: a decided recycle STOP / START that the warden could not accept
 	// (old/new machine unreachable) surfaces relocation_pending=true, so the

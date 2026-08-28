@@ -332,7 +332,8 @@ The server owns desired-state reconciliation; the warden is a stateless executor
   What "the producer" covers is wider than dispatch, including: its dispatch seams; the
   desired-state control writes that ride the same posture (`consumeUninstallOnDisconnect`
   enqueues nothing and is still gated); the row stamps the decide pass itself performs
-  (`stampWakeObservability`, `stampMemberPlacementBlocked`); the one HTTP kick that borrows it
+  (`stampWakeObservability`, `stampMemberPlacementBlocked`, and — T-14 #4 — `armDecidedHandover`,
+  which opens a relocate wind-down epoch on the row); the one HTTP kick that borrows it
   (`api_machines.go`); and — because the cadence is simply not mounted — every roster pass
   that cadence runs BEFORE it decides anything (context-high recycle stamping,
   recycle-marker and stale-stopping clears, uninstall-intent consumption,

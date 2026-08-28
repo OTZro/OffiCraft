@@ -331,7 +331,37 @@ func TestReconcileDecide(t *testing.T) {
 
 	// ── relocation: owner re-pinned a LIVE member's desired_machine (kyle-62b2) ──
 
-	t.Run("online with a machine mismatch robust-stops toward the RUNNING machine", func(t *testing.T) {
+	// T-14 #4: the mismatch is now answered in TWO ways, and which one depends on
+	// obs.HandoverArmable — "would a wind-down epoch actually be stamped on this
+	// row?". The armable case is the normal one and it WAITS; the non-armable case
+	// is the fallback and it is what the arm used to do unconditionally.
+	t.Run("online with a machine mismatch opens a wind-down instead of killing", func(t *testing.T) {
+		obs := obsRelocate("m", "mach-old", "mach-new")
+		obs.HandoverArmable = true
+		d := reconcileDecide(obs, newReconcileState(), cfg, 1000)
+		if d.Command != reconcileCmdNone {
+			t.Fatalf("a member that CAN hand over must not be killed on sight: %+v", d)
+		}
+		if d.ArmHandoverOp != memberOpRelocate {
+			t.Fatalf("the decision must ask for a relocate wind-down, got ArmHandoverOp=%q", d.ArmHandoverOp)
+		}
+		// st.LastCommand is deliberately NOT advanced: the collection belongs to
+		// the refocus arm, whose first-dispatch bookkeeping must start clean.
+		if d.State.LastCommand == reconcileCmdStop {
+			t.Fatalf("the wind-down arm must not claim a STOP it did not dispatch: %+v", d.State)
+		}
+	})
+
+	// The name is load-bearing: this is the BACKSTOP-OF-THE-BACKSTOP, not the
+	// ordinary relocation. It used to be the ONLY behaviour of this arm and the
+	// subtest was named "…robust-stops toward the RUNNING machine" with no
+	// qualifier, which stopped being true for the ordinary case in T-14 #4. The
+	// assertions below are byte-for-byte the ones that stood then — they are still
+	// right, about a NARROWER input: a member for which no wind-down can be opened
+	// (a warden row, or one already on the 強制停止 rung) has no hand-off to wait
+	// for, and waiting for one that cannot happen is not gentler than killing, it
+	// is just never converging.
+	t.Run("online with a machine mismatch and NOTHING to hand over robust-stops toward the RUNNING machine", func(t *testing.T) {
 		d := reconcileDecide(obsRelocate("m", "mach-old", "mach-new"), newReconcileState(), cfg, 1000)
 		if d.Command != reconcileCmdStop || d.State.Phase != reconcilePhaseStopping ||
 			d.State.LastCommand != reconcileCmdStop || d.State.LastCommandAt != 1000 {

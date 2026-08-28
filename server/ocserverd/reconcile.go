@@ -260,6 +260,21 @@ type memberObservation struct {
 	// a claim-less/booting member out of the relocation recycle.
 	TargetMachine  string
 	RunningMachine string
+	// HandoverArmable is "armMemberOwnerOpHandover(m, relocate) would succeed"
+	// — asked by memberOwnerOpHandoverArmable, which runs the real gates against
+	// a throwaway copy rather than re-listing them (T-14 #4).
+	//
+	// 🔴 IT IS HERE TO KEEP THE RELOCATION BACKSTOP CONVERGENT. That arm no
+	// longer kills on sight; it asks the caller to open a wind-down and lets the
+	// refocus arm collect it. But a wind-down can be REFUSED — a warden row has
+	// no ocagent to hand anything over, and a member already on the 強制停止 rung
+	// may not be walked back down the ladder — and a decision that asks for a
+	// stamp nobody writes is a tick that changes nothing and re-decides
+	// identically forever, leaving a session running on the wrong machine with
+	// no path off it. Reading the answer BEFORE choosing the branch is what lets
+	// the arm fall back to the original first-pass STOP in exactly the cases
+	// where there is no hand-off to wait for.
+	HandoverArmable bool
 }
 
 // reconcileDecision is one decision: the command to dispatch (or none), a
@@ -318,6 +333,30 @@ type reconcileDecision struct {
 	// the cases where the member wants to be online and is NOT, and the reason
 	// was previously reachable only on the server's stderr.
 	ReasonCode string
+	// ArmHandoverOp (T-14 #4) is the owner-op cause of a wind-down epoch the
+	// DECIDER wants opened on this member's row, "" on every decision that wants
+	// none. Today exactly one arm sets it: decideUp's relocation backstop, with
+	// memberOpRelocate.
+	//
+	// 🔴 WHY A DECISION FIELD AND NOT A WRITE. reconcileDecide is pure — obs / st
+	// / cfg / now in, a decision out — while opening an epoch is a durable row
+	// write. The alternative shapes were both worse:
+	//
+	//   - have the CALLER decide whether to arm, before deciding. It would have
+	//     to re-derive this arm's guard (pinned target, known running machine, an
+	//     actual mismatch, no epoch already open) outside the decider, which is
+	//     the two-copies-of-one-ruling failure StopKind's comment above exists to
+	//     describe — and the copies would sit in different files.
+	//   - a new Command kind. Command means "the frame to hand a warden";
+	//     reconcileOne's switch dispatches every value of it, and a member of that
+	//     set that no warden ever sees would make the field mean two things.
+	//
+	// This field is the same shape as StopKind and DispatchWarden: the branch is
+	// chosen where the branch conditions live, and the caller reads the answer
+	// verbatim. The caller is reconcileTickMemberLocked (it holds reconcileMu,
+	// and the arm is a whole-row write); Command is reconcileCmdNone on the same
+	// decision, so the arm never races a frame this tick also dispatched.
+	ArmHandoverOp string
 }
 
 func decisionNone(obs memberObservation, st reconcileState, reason string) reconcileDecision {
@@ -522,27 +561,60 @@ func decideUp(
 	}
 	if obs.Online {
 		// RELOCATION (§ owner re-pinned a LIVE member's desired_machine): an online,
-		// refocus-free member whose running machine no longer matches its target is
-		// robust-STOPped NOW, desired_state stays online, so the next tick's plain
-		// START re-mints the boot token on the NEW machine (wardenTargetOf routes
-		// START by desired_machine). ⚠️ THIS ARM DOES NOT WAIT — do not read it as
-		// "recycled exactly like refocus" (it said so until T-b6d9, and that
-		// sentence was false: the refocus arm above waits for the agent's dump or
-		// RecycleGrace, this one kills on the first pass). The graceful path for an
-		// owner 改機器 is upstream, in the relocate HANDLER, which stamps
-		// refocus_since so the arm ABOVE owns the move (armMemberOwnerOpHandover,
-		// T-b6d9). What is left here is the BACKSTOP for a divergence nobody
-		// stamped for: a member re-pinned while offline that later booted on the
-		// old machine, or a pin written by something other than that handler.
-		// The STOP is
-		// routed to the RUNNING machine's warden (DispatchWarden), not the target's,
-		// because that is where the session to kill actually lives. Guarded to the
-		// SAFE cases ONLY: a pinned target, a KNOWN running machine (never "" — a
-		// claim-less/booting member must never be flapped into a STOP→START loop),
-		// and an actual mismatch. refocus never reaches here (handled above), so the
-		// two recycles never stack.
+		// refocus-free member whose running machine no longer matches its target has
+		// to be moved. desired_state stays online the whole time, so once the old
+		// session is gone the next tick's plain START re-mints the boot token on the
+		// NEW machine (wardenTargetOf routes START by desired_machine).
+		//
+		// 🔴 THIS ARM WAITS (T-14 #4). It did NOT until this ticket: it robust-
+		// STOPped the session on the FIRST pass, with no 預告 and no chance to hand
+		// anything over — the exact behaviour T-b6d9 removed from the relocate
+		// HANDLER and left standing here, so the front door was graceful and the
+		// backstop was not. Owner ruling (2026-08-28/29): 「refocus 怎麼做的 這邊就
+		// 怎麼做」,「三種下線都是同一種方案…他們都是不急著下線，等它自然交接完」,
+		// 「下線以後再挑機器與 model」. So this arm now opens the SAME wind-down the
+		// handler opens (ArmHandoverOp → armMemberOwnerOpHandover, which stamps
+		// refocus_since) and hands the member to the refocus arm ABOVE, which waits
+		// for the agent's own stopped report and then issues the STOP addressed to
+		// the running machine. A 改機器 epoch is UNCLOCKED (winddownKindFor), so the
+		// wait is the agent's to end — or the owner's, via 加速停止 / 強制停止.
+		//
+		// It is still the BACKSTOP, for the divergence nobody stamped for: a member
+		// re-pinned while offline that later booted on the old machine, or a pin
+		// written by something other than that handler. What changed is only WHAT
+		// the backstop does about it.
+		//
+		// 🔴 AND IT STILL KILLS ON THE FIRST PASS WHEN THERE IS NOTHING TO WAIT FOR.
+		// A wind-down can be refused — a warden row runs no ocagent and would never
+		// read the marker, and a member already on the 強制停止 rung may not be
+		// walked back down the ladder — and asking for a stamp nobody writes would
+		// re-decide identically every 30s forever, stranding a live session on the
+		// wrong machine with no path off it. obs.HandoverArmable is that question,
+		// asked by the real gates (memberOwnerOpHandoverArmable), and the immediate
+		// STOP below is the answer when they say no. Waiting for a hand-off that
+		// cannot happen is not gentler than killing — it is just never converging.
+		//
+		// The STOP is routed to the RUNNING machine's warden (DispatchWarden), not
+		// the target's, because that is where the session to kill actually lives.
+		// Guarded to the SAFE cases ONLY: a pinned target, a KNOWN running machine
+		// (never "" — a claim-less/booting member must never be flapped into a
+		// STOP→START loop), and an actual mismatch. refocus never reaches here
+		// (handled above), so the two recycles never stack.
 		if obs.TargetMachine != "" && obs.RunningMachine != "" &&
 			obs.RunningMachine != obs.TargetMachine {
+			if obs.HandoverArmable {
+				// Nothing is dispatched and st.LastCommand is deliberately NOT
+				// advanced: the collection is the refocus arm's, and its own
+				// first-dispatch/stop_retry bookkeeping must start clean when it
+				// takes over on the next tick.
+				st.Phase = reconcilePhaseStopping
+				dec := decisionNone(obs, st,
+					"relocate: desired_machine changed (running "+obs.RunningMachine+
+						" != target "+obs.TargetMachine+") — opening a wind-down; "+
+						"the refocus arm collects it on the agent's hand-off")
+				dec.ArmHandoverOp = memberOpRelocate
+				return dec
+			}
 			firstDispatch := st.LastCommand != reconcileCmdStop
 			if firstDispatch || (now-st.LastCommandAt) >= cfg.StopRetry {
 				reason := "relocate: re-dispatch robust stop (still on old machine " +
@@ -1182,6 +1254,11 @@ func (s *apiServer) reconcileOne(m Member, st reconcileState, now float64) recon
 		LastOpReason:   m.LastOpReason,
 		TargetMachine:  m.DesiredMachineID,
 		RunningMachine: s.hub.MachineOf(m.ID),
+		// Asked here, not inside the decider, for the reason every other field on
+		// this struct is: the decider is pure and this question needs the hub and
+		// the row. The relocation backstop reads it to choose between opening a
+		// wind-down and killing on the spot — see memberObservation.HandoverArmable.
+		HandoverArmable: s.memberOwnerOpHandoverArmable(m, memberOpRelocate),
 	}
 	decision := reconcileDecide(obs, st, s.reconcileConfigLive(), now)
 	switch decision.Command {
@@ -1290,6 +1367,7 @@ func (s *apiServer) reconcileTickMemberLocked(m Member, now float64) reconcileDe
 	s.reconcileStates[m.ID] = decision.State
 	reconcileLog("%s: desired=%s command=%s — %s",
 		m.ID, parseDesired(m.DesiredState), decision.Command, decision.Reason)
+	s.armDecidedHandover(m.ID, decision)
 	s.stampWakeObservability(&m, decision, now)
 	// AFTER the wake receipt, and it yields to it: stampWakeObservability owns the
 	// EXECUTION-level diagnosis ("the start went out and the agent never came
@@ -1300,6 +1378,46 @@ func (s *apiServer) reconcileTickMemberLocked(m Member, now float64) reconcileDe
 		s.stampMemberOpBlocked(m.ID, decision.ReasonCode, now)
 	}
 	return decision
+}
+
+// armDecidedHandover executes the ONE durable write a reconcile decision can
+// ask for: opening a wind-down epoch on the member's row (T-14 #4). It is the
+// dispatch half of reconcileDecision.ArmHandoverOp, and it does nothing at all
+// on the decisions — nearly all of them — that ask for none.
+//
+// It re-reads before writing, for the reason every other stamp in this file
+// does: this is a whole-row write and the HTTP faces (activate / relocate /
+// deactivate) write member rows without holding reconcileMu, so persisting the
+// tick's snapshot would silently revert a change that landed mid-tick — here on
+// desired_machine_id itself, the very field the epoch is being opened about.
+//
+// 🔴 A REFUSAL HERE IS SAFE, and that is a property of the arm that asked, not
+// of this function. The decider only asks when obs.HandoverArmable said the
+// same gates would pass; if the re-read row has moved on and they now refuse,
+// nothing is written and the NEXT tick re-decides from that fresher row — which
+// is the row the gates just answered about, so the two agree and the member
+// takes whichever arm it now belongs on (the immediate STOP, or none at all).
+// The loop cannot repeat with the same answer twice.
+//
+// Best-effort by the stampWakeObservability rule: a persistence failure is
+// logged and changes no decision. It takes no `now`: armMemberOwnerOpHandover
+// stamps from nowSecs() like every other epoch site, and threading the tick's
+// clock in would create a second one. Caller MUST hold reconcileMu.
+func (s *apiServer) armDecidedHandover(memberID string, decision reconcileDecision) {
+	if decision.ArmHandoverOp == "" {
+		return
+	}
+	fresh, err := s.dal.GetMember(memberID)
+	if err != nil || fresh == nil || fresh.RosterStatus != RosterStatusActive {
+		return
+	}
+	if !s.armMemberOwnerOpHandover(fresh, decision.ArmHandoverOp) {
+		return // it logged which gate refused; the next tick re-decides
+	}
+	if err := s.putMember(*fresh, triggerServer); err != nil {
+		reconcileLog("%s: %s wind-down arm persist failed: %v",
+			memberID, decision.ArmHandoverOp, err)
+	}
 }
 
 // stampOpReceipt is THE five-column receipt a failed-or-deferred op leaves on a

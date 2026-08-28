@@ -393,6 +393,27 @@ func winddownStageMayAdvanceTo(m Member, op string) bool {
 	return winddownStageRankOf(op) >= winddownStageOf(m)
 }
 
+// memberOwnerOpHandoverArmable answers, WITHOUT mutating anything, the question
+// armMemberOwnerOpHandover answers by doing: would a wind-down epoch for `op`
+// actually be stamped on this member, or does one of the two gates refuse?
+//
+// 🔴 IT ASKS BY CALLING, NOT BY RE-LISTING. The gates are memberHasStateToFlush
+// and armRefocusEpoch's ladder rule; writing either of them out again here
+// would be a second copy of a ruling that already has one home, and the day the
+// two disagree nothing would report it — the same disease reconcileDecision.
+// StopKind's comment describes. So the probe runs the REAL pair against a
+// throwaway copy of the row and reports what they said; the copy is discarded,
+// which is why the `now` handed to armRefocusEpoch is irrelevant.
+//
+// The ONE caller is reconcileOne, building memberObservation.HandoverArmable:
+// the decideUp relocation backstop has to know whether an epoch it asks for
+// would be REFUSED, because "ask for an epoch nobody stamps" is a tick that
+// changes nothing and re-decides identically forever. See the arm itself.
+func (s *apiServer) memberOwnerOpHandoverArmable(m Member, op string) bool {
+	probe := m
+	return s.memberHasStateToFlush(m) && armRefocusEpoch(&probe, op, nowSecs())
+}
+
 // armMemberOwnerOpHandover stamps a FRESH refocus epoch on the member when
 // there is state to flush, and reports whether it did. It MUTATES m and
 // persists nothing: the caller folds this into its own single putMember so the
