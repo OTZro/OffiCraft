@@ -40,7 +40,6 @@ import {
   useWorkerCodenames,
 } from "../hooks/useWorkerCodenames";
 import { useHashRoute } from "../lib/hashRoute";
-import { useQuotedMessageOverlay } from "../hooks/useQuotedMessageOverlay";
 import { avatarKindForMember } from "../lib/avatarKind";
 import { ReplyCardAvatarButton } from "./ReplyCardAvatarButton";
 import { ChevronRightIcon } from "./icons";
@@ -88,10 +87,6 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
     expire,
   } = useReplyCards();
   const [, setRoute] = useHashRoute();
-  // 跳到原訊息 — the shared exit (hooks/useQuotedMessageOverlay), the same one
-  // the chat bubble uses. This page has no roster-aware name resolver of its
-  // own, so the overlay is titled with the server-resolved sender name.
-  const quotedMessage = useQuotedMessageOverlay();
 
   // Ticking clock (30s): drives the live 已等你 counters AND the client-side
   // 24h prune of the handled pane while the page stays open (the server
@@ -193,18 +188,15 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
     return { name: m.name, role };
   }
 
-  // 跳到原訊息 — show the ask ITSELF, in full, without moving the reader
-  // (T-0b78). This used to write #office/chat/<id>/msg/<msgId>, which walked the
-  // owner off this page and left ChatArea to find `[data-msg-id]` in DOM it had
-  // already painted; when the ask was not in that window the search missed and
-  // the thread simply opened on the NEWEST message with nothing on screen saying
-  // so. Density, not age, decides that: a minute-old ask on a busy line is
-  // already out of the window. The read + the failure sentence live in the
-  // shared exit — the same one the chat bubble's 看原訊息 takes — so this screen
-  // can no longer offer two behaviours for one intent.
-  function showAsk(card: ReplyCard) {
-    if (!card.chatMessageId) return;
-    void quotedMessage.open(card.chatMessageId);
+  // Jump to the origin: the ask always comes from a chat message
+  // (card.chatMessageId), so open that member's chat room WITH the message id
+  // in the route — ChatArea locates + highlights the ask (B3 聊天整合).
+  function jumpToChat(card: ReplyCard) {
+    setRoute({
+      page: "office",
+      chatId: card.from,
+      msgId: card.chatMessageId || undefined,
+    });
   }
 
   // Avatar → member panel (owner 2026-07-21: "也要可以" — every other avatar
@@ -337,16 +329,13 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
           <span className="reply-card__name">{who.name}</span>
           {who.role && <span className="reply-card__role">{who.role}</span>}
         </div>
-        {card.chatMessageId && (
-          <button
-            type="button"
-            className="reply-card__jump"
-            onClick={() => showAsk(card)}
-          >
-            {t.chat.replyQuoteJump}
-          </button>
-        )}
-        {card.chatMessageId && quotedMessage.failureNotice(card.chatMessageId)}
+        <button
+          type="button"
+          className="reply-card__jump"
+          onClick={() => jumpToChat(card)}
+        >
+          {t.replies.jumpToChat}
+        </button>
         {/* T-1aa4: 標為過期 shares .reply-card__jump with 跳到原訊息 — one
             outlined style for both header actions, so they can never drift. */}
         {expirable && (
@@ -505,8 +494,6 @@ export function RepliesPage({ replyCardId }: { replyCardId?: string }) {
           )}
         </section>
       )}
-
-      {quotedMessage.overlay}
 
       {expireTarget && (
         <ConfirmModal

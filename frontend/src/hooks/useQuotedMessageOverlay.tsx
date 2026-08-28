@@ -1,7 +1,14 @@
 // useQuotedMessageOverlay — the ONE way the cockpit opens a message somebody
-// pointed at (T-0b78).
+// pointed at WITHOUT moving them (T-0b78).
 //
-// 🔴 WHY THIS IS A HOOK AND NOT THREE HANDLERS. Until T-0b78 the cockpit had
+// 🔴 IT HAS EXACTLY ONE CALLER: the chat bubble's quote row 「看原訊息」.
+// T-0b78 briefly routed the 請示 page's 跳到原訊息 and the inline task card's
+// 在聊天室回覆 through here too; owner 2026-08-29 sent those two BACK to
+// navigating (「1 跟 2 變回去原本那樣」) and knowingly took back the miss
+// described below, parking the fix. So the history in this header is history —
+// do not read it as "three call sites still share this".
+//
+// 🔴 WHY THIS IS A HOOK AND NOT A HANDLER. Until T-0b78 the cockpit had
 // two answers to one intent, on screens that sit next to each other:
 //
 //   * the chat bubble's 看原訊息 read THAT message by id and showed it whole,
@@ -16,8 +23,9 @@
 //     already outside the window on a busy line.
 //
 // The read, the one-click latch and the failure sentence therefore live HERE,
-// once, and all three call sites take this exit. A second copy of any of them
-// is what `useQuotedMessageOverlay.test.tsx`'s last case is written to redden —
+// once. A SECOND copy of any of them — including one grown by either card that
+// went back to navigating — is what `useQuotedMessageOverlay.test.tsx`'s last
+// case is written to redden (its whole-tree sweep still covers them) —
 // behaviour tests cannot see a duplicate, because a duplicate draws the same
 // pixels right up until it drifts.
 //

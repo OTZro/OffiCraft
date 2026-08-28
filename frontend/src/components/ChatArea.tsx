@@ -183,17 +183,19 @@ export function ChatArea({
   // Locate + highlight this message once the thread loads. One-shot per id —
   // later SSE refetches never re-scroll.
   //
-  // ⚠️ NO CONTROL IN THE COCKPIT ROUTES HERE ANY MORE (T-0b78). The 請示 page
-  // and the inline task card used to write #office/chat/<id>/msg/<msgId>; both
-  // now open the message itself in the shared overlay instead, because THIS
-  // path can only find a row the thread has already painted — and when it
-  // cannot, it lands the reader on the newest message and says nothing. What
-  // still reaches it is a URL somebody kept: a bookmark, a pasted link, a
-  // restored tab.
+  // 🔴 THE COCKPIT ROUTES HERE AGAIN (owner 2026-08-29: 「1 跟 2 變回去原本那
+  // 樣」). The 請示 page's 跳到原訊息 and the inline task card's 在聊天室回覆
+  // both write #office/chat/<id>/msg/<msgId> once more; only the chat bubble's
+  // 看原訊息 takes the overlay (hooks/useQuotedMessageOverlay).
   //
-  // The "honest miss" below is therefore still HONEST — it never fabricates a
-  // location — but it is no longer an acceptable answer for a BUTTON, which is
-  // exactly why the buttons left. Do not wire a new control to it.
+  // ⚠️ AND THE KNOWN COST CAME BACK WITH THEM, knowingly: this path can only
+  // find a row the thread has already PAINTED. When the target is outside the
+  // loaded window the search misses and the reader lands on the newest message
+  // with nothing on screen saying so. The owner accepted that trade on
+  // 2026-08-29 and parked the fix (「無法跳回去很久以前訊息的問題我們改天再
+  // 說」). The "honest miss" below is honest in that it never fabricates a
+  // location — it is not honest to the READER, and that gap is deliberate, not
+  // an oversight to patch in passing.
   jumpToMsgId?: string;
   // T-e987 compose seed: a one-shot draft prefix (e.g. "[T-7d40] ") the 任務卡
   // 負責人/建立者 label routes here to (#office/chat/<id>/compose/<taskNo>) so
@@ -413,11 +415,11 @@ export function ChatArea({
   >(null);
   // 「看原訊息」 — reading that one message and showing it whole is NOT this
   // component's business any more (T-0b78). It lives in
-  // hooks/useQuotedMessageOverlay, shared with the 請示 page and the inline task
-  // card, because those two used to answer the same intent by NAVIGATING here
-  // and hoping the row was in the DOM. The hook is called below, once `nameOf`
-  // exists — it titles the overlay with the roster-aware name this window
-  // already resolves.
+  // hooks/useQuotedMessageOverlay. ⚠️ The quote row on a chat bubble is now the
+  // hook's ONLY caller: the 請示 page and the inline task card went back to
+  // NAVIGATING (owner 2026-08-29), so do not describe this as a shared exit.
+  // The hook is called below, once `nameOf` exists — it titles the overlay with
+  // the roster-aware name this window already resolves.
   // M2-3 file & image gallery panel (header icon toggles it).
   const [galleryOpen, setGalleryOpen] = useState(false);
   // The attachment whose share link was just copied (transient 「已複製」
@@ -771,8 +773,9 @@ export function ChatArea({
   // The quote row used to scroll the thread to the quoted row when that row
   // happened to be loaded, and show no control when it was not. Owner ruling
   // 2026-08-21 replaced that with 「撈那一則、跳 modal」
-  // (hooks/useQuotedMessageOverlay, shared with the 請示 page and the inline task
-  // card since T-0b78): one behaviour for every reply, no window-dependent affordance, and
+  // (hooks/useQuotedMessageOverlay — this row is its only caller since the two
+  // cards went back to navigating on 2026-08-29): one behaviour for every reply
+  // in THIS thread, no window-dependent affordance, and
   // no scroll — which also retired the "the jump moves the viewport but not the
   // FOCUS, so a keyboard user pressing it saw nothing happen" defect, because
   // there is nothing left to scroll.
@@ -790,8 +793,9 @@ export function ChatArea({
   // loaded recent window falls back to the plain land-at-bottom (honest miss —
   // the thread still opens, and nothing pretends the target was found).
   //
-  // ⚠️ Since T-0b78 nothing in the cockpit NAVIGATES here — see the prop's note.
-  // Its remaining callers are kept URLs.
+  // ⚠️ Its callers are the 請示 page's 跳到原訊息, the inline task card's
+  // 在聊天室回覆, and any URL somebody kept (bookmark, pasted link, restored
+  // tab) — see the prop's note for the miss this can still land on.
   useEffect(() => {
     if (!jumpToMsgId) return;
     if (messagesPeer !== member.id || messages.length === 0) return;
@@ -1288,10 +1292,11 @@ export function ChatArea({
               />
             </button>
           )}
-          {/* The failure sentence comes from the shared exit, so all three
-           * surfaces say it in the same words in the same place — beside the
+          {/* The failure sentence comes from the hook, so it lands beside the
            * button that was pressed, and NEVER over the quote line, whose
-           * sentence is a claim about whether the original EXISTS. */}
+           * sentence is a claim about whether the original EXISTS. (It used to
+           * be shared with the 請示 page and the inline task card; those two
+           * navigate again since 2026-08-29 and have no fetch to fail.) */}
           {quotedMessage.failureNotice(m.replyTo as string)}
         </div>
         {/* 🔴 LINE 2 — THE SENTENCE, WITH THE WHOLE ROW TO ITSELF. This is the

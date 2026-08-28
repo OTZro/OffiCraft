@@ -12,9 +12,8 @@
 //   4. 查看當初選項 expands the original options; 重新決定 re-arms them + shows
 //      the composer; picking another option updates the answer in place
 //      (stays answered); 取消 keeps the original answer.
-//   5. 跳到原訊息 opens the ask itself, IN FULL, in the shared overlay — it
-//      does not navigate and does not move the reader (T-0b78; the same exit
-//      the chat bubble's 看原訊息 uses).
+//   5. 跳到原訊息 routes to that member's chat room WITH the ask message id
+//      (#office/chat/<id>/msg/<msgId>) — ChatArea locates + highlights it (B3).
 //   6. Answering never touches the chat unread red dot — the badge and the
 //      red dot clear independently (red dot clears only by entering the
 //      conversation).
@@ -37,7 +36,7 @@ import {
   __injectMockReplyCard,
 } from "../api/mock";
 import { api } from "../api";
-import type { ChatMessage, ReplyCard } from "../api/adapter";
+import type { ReplyCard } from "../api/adapter";
 import { ApiError } from "../api/errors";
 
 // Released-worker codename cache (T-3ed8): fixed map (the hook has its own
@@ -68,19 +67,6 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     chatMessageId: "msg-1",
     answer: null,
     ...over,
-  };
-}
-
-function mkChatMessage(id: string, body: string): ChatMessage {
-  return {
-    id,
-    from: "mira",
-    to: "owner",
-    body,
-    ts: Date.now() / 1000,
-    attachments: [],
-    replyCardId: null,
-    replyCardStatus: null,
   };
 }
 
@@ -420,43 +406,19 @@ describe("RepliesPage", () => {
     expect(final?.textContent).toContain("AI 建議");
   });
 
-  // T-0b78. This control used to NAVIGATE — it wrote #office/chat/<id>/msg/<id>
-  // and left ChatArea to find the row in the DOM it had just painted, silently
-  // landing on the newest message whenever the ask was not in the window. The
-  // chat bubble's own 看原訊息 had already been ruled the right shape (fetch the
-  // one message, show it whole, stay where you are); these two are now the same
-  // exit, so the same screen can no longer offer two behaviours for one intent.
-  it("跳到原訊息 opens the ask in full and leaves the route where it was", async () => {
-    __injectMockChat(
-      mkChatMessage("msg-1", "整段原訊息，長到只有全文才看得完"),
-    );
+  // 跳到原訊息 NAVIGATES (owner 2026-08-29: 「1 跟 2 變回去原本那樣」). The
+  // control writes #office/chat/<id>/msg/<msgId> and ChatArea locates +
+  // highlights the ask (B3 聊天整合). The known cost the owner accepted with
+  // this: when the ask is not inside the loaded window ChatArea's DOM search
+  // misses and the room simply opens on the newest message, silently. That is
+  // the OLD behaviour coming back on purpose — do not "fix" it here.
+  it("跳到原訊息 routes to the member's chat with the ask message id (B3 locate target)", async () => {
     __injectMockReplyCard(mkCard({}));
     const { findAllByTestId, getByText } = renderPage();
     await findAllByTestId("waiting-card");
 
-    fireEvent.click(getByText("看原訊息"));
-
-    await waitFor(() =>
-      expect(document.querySelector(".md-preview")?.textContent).toContain(
-        "只有全文才看得完",
-      ),
-    );
-    // The reader never left the 請示 page: no route was written at all.
-    expect(window.location.hash).toBe("");
-  });
-
-  it("跳到原訊息 says on screen that the ask could not be read", async () => {
-    __injectMockReplyCard(mkCard({ chatMessageId: "msg-gone" }));
-    const { findAllByTestId, getByText, findByTestId } = renderPage();
-    await findAllByTestId("waiting-card");
-
-    fireEvent.click(getByText("看原訊息"));
-
-    expect((await findByTestId("msg-quote-error")).textContent).toBe(
-      zh.chat.replyQuoteOpenFailed,
-    );
-    expect(document.querySelector(".md-preview")).toBeNull();
-    expect(window.location.hash).toBe("");
+    fireEvent.click(getByText("跳到原訊息"));
+    expect(window.location.hash).toBe("#office/chat/mira/msg/msg-1");
   });
 
   // T-a706 (owner 2026-07-21 screenshot): the header avatar was the one place

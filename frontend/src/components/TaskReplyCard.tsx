@@ -22,7 +22,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import type { ReplyCard, ReplyCardAnswerInput } from "../api/adapter";
 import { api } from "../api";
-import { useQuotedMessageOverlay } from "../hooks/useQuotedMessageOverlay";
+import { useHashRoute } from "../lib/hashRoute";
 import { Markdown } from "./Markdown";
 import {
   ReplyCardAnsweredBody,
@@ -50,8 +50,7 @@ export function TaskReplyCard({
   fallbackSummary?: string;
 }) {
   const { t } = useI18n();
-  // The header 看原訊息 exit, shared with RepliesPage and the chat bubble.
-  const quotedMessage = useQuotedMessageOverlay();
+  const [, setRoute] = useHashRoute();
   const [card, setCard] = useState<ReplyCard | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -164,15 +163,16 @@ export function TaskReplyCard({
     }
   }
 
-  // The ask ALWAYS rides a chat message (card.chatMessageId) — the header
-  // control shows THAT message, in full, without moving the reader off the task
-  // board (T-0b78). It used to write #office/chat/<id>/msg/<msgId> and leave
-  // ChatArea to find the row in DOM it had already painted; a miss there landed
-  // the reader on the NEWEST message and said nothing. Same shared exit as
-  // RepliesPage and the chat bubble — one read, one failure sentence, one owner.
-  function showAsk() {
-    if (!card?.chatMessageId) return;
-    void quotedMessage.open(card.chatMessageId);
+  // The ask ALWAYS rides a chat message (card.chatMessageId) — the header's
+  // 在聊天室回覆 link opens that member's chat located on the ask (same
+  // hashRoute contract as RepliesPage's 跳到原訊息).
+  function jumpToChat() {
+    if (!card) return;
+    setRoute({
+      page: "office",
+      chatId: card.from,
+      msgId: card.chatMessageId || undefined,
+    });
   }
 
   // ── collapsed one-line summary (answered + not expanded) ───────────────────
@@ -248,18 +248,16 @@ export function TaskReplyCard({
         {card?.status === "waiting" && (
           <span className="reply-tag reply-tag--ai">{t.tasks.replyBadge}</span>
         )}
-        {card?.chatMessageId && (
+        {card && (
           <button
             type="button"
             className="task-reply-card__jump"
-            onClick={showAsk}
+            onClick={jumpToChat}
           >
-            {t.chat.replyQuoteJump}
+            {t.tasks.replyInChat}
             <ChevronRightIcon size={12} />
           </button>
         )}
-        {card?.chatMessageId &&
-          quotedMessage.failureNotice(card.chatMessageId)}
         {(card?.status === "answered" || card?.status === "expired") && (
           <button
             type="button"
@@ -300,8 +298,6 @@ export function TaskReplyCard({
         ) : (
           <ReplyCardAnsweredBody card={card} onReanswer={doReanswer} />
         ))}
-
-      {quotedMessage.overlay}
     </div>
   );
 }
