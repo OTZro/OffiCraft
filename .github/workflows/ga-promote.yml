@@ -19,8 +19,9 @@
 # instead of pinning its non-existence:
 #
 #   1. The action may exist and may be triggered from the GitHub UI.
-#   2. Only Seth and Eva may run it. See WHO CAN PRESS THIS below — the UI alone
-#      does NOT enforce that, so this workflow enforces it itself.
+#   2. Only people the owner has given write access to this repo may run it. See
+#      WHO CAN PRESS THIS below — the UI alone does NOT enforce that, so this
+#      workflow enforces it itself.
 #   3. "決定是我下的" — WHICH tag ships is still a human decision, so the tag
 #      arrives as an INPUT. This workflow never selects one. There is deliberately
 #      no "newest beta" lookup here: that would hand the decision to the machine,
@@ -29,21 +30,29 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # 🔴 WHO CAN PRESS THIS
 # ─────────────────────────────────────────────────────────────────────────────
-# Exactly two accounts: pkyosx (Seth) and 8thEdition (Eva).
+# Collaborators of this repo with write or admin access — nobody else. That is
+# asked of GitHub at run time, not spelled out here: the gate reads
+# `GET /repos/{owner}/{repo}/collaborators/{actor}/permission` and proceeds only
+# on `admin` or `write`. The owner's ruling was "only seth / eva"; as of
+# 2026-08-28 the repo's collaborators ARE exactly pkyosx (admin) and 8thEdition
+# (push), so this is that ruling — expressed as the permission it actually rests
+# on rather than as two strings that go stale the moment the list changes.
 #
 # ⚠️ GITHUB CANNOT ENFORCE THIS FOR US, AND THAT IS WHY THE FIRST STEP EXISTS.
-# There is no per-workflow "who may dispatch" setting: ANY account with write
-# access to this repo can press Run workflow on any workflow_dispatch, and this
-# repo currently has write-access accounts beyond those two. So the allowlist is
-# enforced in the job's FIRST STEP, before anything touches a release, and a
-# refusal is a red run that names the actor. Restricting the UI is not a
-# substitute for it and must not be treated as one.
+# There is no per-workflow "who may dispatch" setting. `workflow_dispatch` is open
+# to every account with write access, and a repo can grow read/triage
+# collaborators, org members and outside contributors who must not ship a GA. So
+# the check lives in the job's FIRST STEP, before anything touches a release, and
+# a refusal is a red run that names the actor and the permission GitHub reported.
+# Restricting the UI is not a substitute for it and must not be treated as one.
 #
-# To change who may press: edit ALLOWED_ACTORS in the authorize step below AND the
-# matching roll-call in bin/tests/auto-beta-guard.sh (W4e). The guard pins the list
-# verbatim, so the two cannot drift apart in silence — an edit to one without the
-# other reddens bin-guards. Widening it is an owner decision, the same way this
-# workflow's existence was.
+# ⚠️ FAIL-CLOSED, INCLUDING WHEN THE ANSWER NEVER ARRIVES. An API error, a missing
+# gh, an unparseable body, an absent field — all refuse. There is no "could not
+# check, carry on" path, and bin/tests/auto-beta-guard.sh (W4eD) proves that by
+# executing this step's own run: body against a stubbed gh.
+#
+# To change who may press: change who has write access to the repo. There is no
+# list in this file to edit, and adding one would be a step backwards.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # 🔴 PRESSED IT BY MISTAKE? HOW TO ROLL BACK
@@ -114,28 +123,44 @@ jobs:
     permissions:
       contents: write
     steps:
-      # 🔴 THE ALLOWLIST GATE. First step, before any checkout, so a refused actor
-      # never reaches a single line of this repo's code. Fail-closed by shape:
-      # the loop can only ever exit 0 by MATCHING, and every other path falls
-      # through to the refusal.
+      # 🔴 THE AUTHORIZATION GATE. First step, before any checkout, so a refused
+      # actor never reaches a single line of this repo's code. It does NOT carry a
+      # list of names: it ASKS GitHub what this actor's permission on this repo is,
+      # so "who may press" tracks the repo's collaborator list instead of drifting
+      # from it. Fail-closed by shape: the ONLY path that reaches `exit 0` is a
+      # successful read that came back admin or write; every other outcome — the
+      # API erroring, gh missing, the body unparseable, the field absent, a read /
+      # none / triage answer — falls through to the refusal.
       - name: authorize actor
         shell: bash
         env:
-          # Seth, Eva. Pinned verbatim by auto-beta-guard.sh W4e — edit both.
-          ALLOWED_ACTORS: 'pkyosx 8thEdition'
           ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+          # The job's own contents:write token. This endpoint needs push-level
+          # access to the repo and GitHub publishes no narrower `permissions:` key
+          # for collaborator reads (there is no `collaborators:`/`metadata:` key to
+          # ask for), so the grant the job already needs to promote is also the one
+          # that authorizes this read — nothing extra is opened for the gate.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          for a in $ALLOWED_ACTORS; do
-            if [[ "$ACTOR" == "$a" ]]; then
-              echo "[ga-promote] actor '$ACTOR' is on the allowlist — proceeding"
+          # `|| true` so a non-zero gh (403, 404, network, not installed) leaves
+          # PERM empty and lands in the refusal, rather than aborting under `set -e`
+          # with an exit status a future `continue-on-error` could mistake for noise.
+          PERM="$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq '.permission' 2>/dev/null || true)"
+          case "${PERM:-}" in
+            admin|write)
+              echo "[ga-promote] actor '$ACTOR' has '$PERM' access to $REPO — proceeding"
               exit 0
-            fi
-          done
+              ;;
+          esac
           echo "[ga-promote] REFUSED: actor '$ACTOR' may not promote a release to GA." >&2
-          echo "[ga-promote] Only these accounts may run this workflow: $ALLOWED_ACTORS" >&2
+          echo "[ga-promote] GitHub reports this account's permission on $REPO as" >&2
+          echo "[ga-promote] '${PERM:-<unreadable>}'. Only collaborators with write or admin" >&2
+          echo "[ga-promote] access may run this workflow; an unreadable answer is refused" >&2
+          echo "[ga-promote] too, because a GA flip is not something to guess at." >&2
           echo "[ga-promote] This is an owner ruling (2026-08-28, rc-f9d284c0aef7), not a" >&2
-          echo "[ga-promote] permissions accident. If you need to ship, ask Seth or Eva." >&2
+          echo "[ga-promote] permissions accident. If you need to ship, ask a repo admin." >&2
           exit 1
 
       - uses: actions/checkout@v5

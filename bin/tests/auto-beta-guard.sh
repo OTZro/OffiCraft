@@ -1345,15 +1345,16 @@ check "W3b $JOB's permission block is EXACTLY \`actions: read\` + \`contents: wr
 # file keeps the condition he attached. What changed is the SHAPE of the rule, not
 # its strength:
 #   • before — "nothing under .github/ may name the flip": a location ban.
-#   • now    — "only $GA_ALLOWED_REL may name it, and it must be gated on a pinned
-#     two-account allowlist": the same ban, plus a positive obligation (W4e).
+#   • now    — "only $GA_ALLOWED_REL may name it, and it must be gated on a live
+#     read of the actor's repo permission": the same ban, plus a positive
+#     obligation (W4e).
 #
 # 🔴 THE EXEMPTION IS ONE PATH, NOT A CATEGORY. Every other file under .github/ —
 # a second promote workflow under any other name included — still reddens W4/W4b
 # exactly as it did before, and W4pcx below proves that with a planted example
 # rather than asserting it. W4e then makes the exempt file PAY for its exemption:
-# lose the actor gate, or let it name anyone other than exactly Seth and Eva, and
-# this guard goes red.
+# lose the actor gate, stop asking GitHub who the actor is, or let it fall open
+# when the answer does not arrive, and this guard goes red.
 #
 # ⚠️ DO NOT "TIDY THIS UP" BY DROPPING W4e AND KEEPING THE EXEMPTION. The two are
 # one rule written in two halves — the exemption on its own is just a hole, and it
@@ -1362,9 +1363,14 @@ check "W3b $JOB's permission block is EXACTLY \`actions: read\` + \`contents: wr
 GA_SCAN_DIR="$ROOT/.github"
 GA_ALLOWED_REL=".github/workflows/ga-promote.yml"
 GA_ALLOWED_ABS="$ROOT/$GA_ALLOWED_REL"
-# The owner's roll-call, pinned here and pinned again inside the workflow. W4e
-# compares the two, so they cannot drift apart in silence.
-GA_ALLOWED_ACTORS="pkyosx 8thEdition"
+# 🔴 THERE IS DELIBERATELY NO ROLL-CALL CONSTANT HERE ANY MORE.
+# This used to pin `pkyosx 8thEdition` verbatim and compare it to a matching string
+# in the workflow. Two copies of a list is two things to forget, and the list was
+# never the real rule — the owner's rule is "the people I trust with this repo",
+# which GitHub already knows. The workflow now ASKS GitHub
+# (repos/{owner}/{repo}/collaborators/{actor}/permission) and admits admin/write
+# only, so W4e below pins the MECHANISM — that the gate really queries, and that
+# every non-answer refuses — instead of pinning two usernames.
 # Excuse ONLY that exact path. -F -x so a near-miss name (ga-promote.yml.bak, or a
 # copy one directory over) is NOT excused by looking similar.
 ga_except() { grep -Fxv "$GA_ALLOWED_ABS" || true; }
@@ -1441,6 +1447,11 @@ doc = json.load(open(sys.argv[1]))
 what = sys.argv[2]
 jobs = doc.get("jobs") or {}
 
+GATE_NAME = "authorize actor"
+
+def is_gate(s):
+    return isinstance(s, dict) and str(s.get("name", "")).strip() == GATE_NAME
+
 def gate_steps():
     # The FIRST step of every job. A gate that runs second is not a gate: the step
     # before it already ran with the job's `contents: write` token.
@@ -1457,15 +1468,8 @@ if what == "gate-position":
         print("no-jobs")
     else:
         print(",".join(
-            "%s=%s" % (n, "authorize" if isinstance(s, dict)
-                       and "ALLOWED_ACTORS" in ((s.get("env") or {}))
-                       else "NOT-THE-GATE")
+            "%s=%s" % (n, "authorize" if is_gate(s) else "NOT-THE-GATE")
             for n, s in gate_steps()))
-
-elif what == "allowlist":
-    vals = sorted({str((s.get("env") or {}).get("ALLOWED_ACTORS", ""))
-                   for _, s in gate_steps() if isinstance(s, dict)})
-    print("|".join(vals) if vals else "-")
 
 elif what == "actor-source":
     # The gate must read the REAL actor. Anything else (an input, a hardcoded
@@ -1476,7 +1480,7 @@ elif what == "actor-source":
 
 elif what == "gate-body":
     for _, s in gate_steps():
-        if isinstance(s, dict) and "ALLOWED_ACTORS" in ((s.get("env") or {})):
+        if is_gate(s):
             sys.stdout.write(str(s.get("run", "")))
             break
 
@@ -1495,51 +1499,104 @@ elif what == "tag-is-an-input":
 PY
     gap() { python3 "$WORK/gap.py" "$GAP_JSON" "$@"; }
 
-    check "W4e the actor allowlist is EXACTLY the owner's roll-call — Seth and Eva, nobody else (rc-f9d284c0aef7)" \
-      "$GA_ALLOWED_ACTORS" "$(gap allowlist)"
+    gap gate-body > "$WORK/gate.sh"
+
     check "W4e2 the gate reads the REAL dispatcher (github.actor), not an input it could be told" \
       '${{ github.actor }}' "$(gap actor-source)"
-    check "W4e3 the allowlist gate is the FIRST step of every job (a gate that runs second has already let a step run with contents: write)" \
+    check "W4e3 the authorize gate is the FIRST step of every job (a gate that runs second has already let a step run with contents: write)" \
       "ga-promote=authorize" "$(gap gate-position)"
     check "W4e4 the tag is a dispatch INPUT and the workflow never picks one itself (the owner makes the call; this only executes it)" \
       "inputs=tag uses-input=yes" "$(gap tag-is-an-input)"
 
-    # ── W4eD: the gate, EXECUTED ───────────────────────────────────────────────
-    # Its own `run:` body, lifted verbatim, against a table that includes the two
-    # shapes a wiring-only assertion cannot tell apart from a working gate: a
-    # stranger, and a near-miss that would pass a substring or glob comparison.
-    gap gate-body > "$WORK/gate.sh"
     if [[ ! -s "$WORK/gate.sh" ]]; then
-      bad "W4eD could not find the allowlist gate's run body in $GA_ALLOWED_REL — the gate this pack claims to pin is not there to be driven, and W4e/W4e2 above were reading an absent step"
+      bad "W4eD could not find the authorize gate's run body in $GA_ALLOWED_REL — the gate this pack claims to pin is not there to be driven, and W4e2/W4e3 above were reading an absent step. The gate is identified by its step name ('authorize actor'); renaming it without updating this guard is the same as deleting it."
     else
+      # ── W4e/W4e1: the gate ASKS, and carries no list ─────────────────────────
+      # The owner's rule is "the people I trust with this repo". GitHub already
+      # holds that answer, so the gate must go and get it. A gate that instead
+      # carries usernames is the shape this change removed, and re-introducing one
+      # is how it would quietly come back.
+      if grep -qE 'collaborators/.*ACTOR.*/permission' "$WORK/gate.sh"; then
+        ok "W4e the gate ASKS GitHub for THIS actor's permission on this repo (collaborators/<actor>/permission) rather than carrying a name list"
+      else
+        bad "W4e the gate does not read collaborators/<actor>/permission — 'who may press' is supposed to BE the repo's collaborator list, asked at run time. Body: $(tr '\n' ' ' < "$WORK/gate.sh")"
+      fi
+      if grep -qEi 'pkyosx|8thEdition|ALLOWED_ACTORS' "$WORK/gate.sh"; then
+        bad "W4e1 the gate hardcodes an account name / allowlist again. That is what this rule replaced: a list in the file goes stale against the repo's real collaborators and has to be edited in two places. Change who has write access instead. Body: $(tr '\n' ' ' < "$WORK/gate.sh")"
+      else
+        ok "W4e1 the gate carries NO hardcoded account list (nothing to widen in a diff nobody reads)"
+      fi
+
+      # ── W4eD: the gate, EXECUTED against a stubbed GitHub ─────────────────────
+      # 🔴 DRIVEN, NOT READ, for the reason W5c gives about the freshness step:
+      # asserting the YAML mentions the endpoint is a statement about WIRING, and
+      # wiring survives everything that matters (invert the case, add `read` to the
+      # admitted set, fall open when the read fails). So the gate's own `run:` body
+      # is lifted verbatim and executed with a fake `gh` on PATH that returns a
+      # chosen permission and a chosen exit status. No network, no real repo.
+      #
+      # The actor used throughout is 'mallory' — a name on nobody's list. If the
+      # allow rows pass with that actor, the verdict really did come from the
+      # permission GitHub reported and not from who was asking.
+      GA_STUB_DIR="$WORK/ga-stub"
+      mkdir -p "$GA_STUB_DIR"
+      cat > "$GA_STUB_DIR/gh" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >> "$OC_STUB_LOG"
+[ "${OC_STUB_RC:-0}" = 0 ] || exit "$OC_STUB_RC"
+[ -z "${OC_STUB_OUT:-}" ] || printf '%s\n' "$OC_STUB_OUT"
+exit 0
+STUB
+      chmod +x "$GA_STUB_DIR/gh"
+
       GATE_OUT=""
-      # actor | expected verdict
-      while IFS='|' read -r ACTOR_IN WANT; do
-        [[ -n "$ACTOR_IN$WANT" ]] || continue
-        if ALLOWED_ACTORS="$GA_ALLOWED_ACTORS" ACTOR="$ACTOR_IN" \
-             bash "$WORK/gate.sh" >/dev/null 2>"$WORK/gate.err"; then
+      # permission gh reports | gh exit status | expected verdict
+      while IFS='|' read -r PERM_IN RC_IN WANT; do
+        [[ -n "$PERM_IN$RC_IN$WANT" ]] || continue
+        : > "$WORK/stub.log"
+        if PATH="$GA_STUB_DIR:$PATH" OC_STUB_LOG="$WORK/stub.log" \
+             OC_STUB_RC="$RC_IN" OC_STUB_OUT="$PERM_IN" \
+             ACTOR="mallory" REPO="pkyosx/OffiCraft" \
+             bash "$WORK/gate.sh" >/dev/null 2>&1; then
           GOT=allow
         else
           GOT=refuse
         fi
-        GATE_OUT+="${ACTOR_IN:-<empty>}=$GOT "
+        GATE_OUT+="${PERM_IN:-<empty>}/rc$RC_IN=$GOT "
       done <<'TABLE'
-pkyosx|allow
-8thEdition|allow
-mallory|refuse
-|refuse
-pkyosx8thEdition|refuse
-pkyosx x|refuse
-PKYOSX|refuse
+admin|0|allow
+write|0|allow
+read|0|refuse
+none|0|refuse
+triage|0|refuse
+|0|refuse
+null|0|refuse
+admin|1|refuse
+admin|127|refuse
+not json at all|0|refuse
 TABLE
-      check "W4eD the gate's OWN run body, executed: it admits exactly Seth and Eva and refuses a stranger, the empty actor, a concatenation, a two-word value and a case variant" \
-        "pkyosx=allow 8thEdition=allow mallory=refuse <empty>=refuse pkyosx8thEdition=refuse pkyosx x=refuse PKYOSX=refuse " \
+      check "W4eD the gate's OWN run body, executed against a stubbed gh: admin/write proceed, read/none/triage refuse, and EVERY non-answer (empty, null, API error, gh missing, garbage) refuses — fail-closed" \
+        "admin/rc0=allow write/rc0=allow read/rc0=refuse none/rc0=refuse triage/rc0=refuse <empty>/rc0=refuse null/rc0=refuse admin/rc1=refuse admin/rc127=refuse not json at all/rc0=refuse " \
         "$GATE_OUT"
+
+      # …and it has to have actually ASKED. A gate that admits admin/write from a
+      # variable it set itself would pass the table above without ever talking to
+      # GitHub; this is the row that separates "queried" from "decided locally".
+      : > "$WORK/stub.log"
+      PATH="$GA_STUB_DIR:$PATH" OC_STUB_LOG="$WORK/stub.log" OC_STUB_RC=0 OC_STUB_OUT="admin" \
+        ACTOR="mallory" REPO="pkyosx/OffiCraft" bash "$WORK/gate.sh" >/dev/null 2>&1 || true
+      if grep -q 'repos/pkyosx/OffiCraft/collaborators/mallory/permission' "$WORK/stub.log"; then
+        ok "W4eD3 the gate really CALLED the permission endpoint for the dispatching actor on the dispatching repo (both interpolated, neither hardcoded)"
+      else
+        bad "W4eD3 the gate allowed 'mallory' without asking GitHub for repos/pkyosx/OffiCraft/collaborators/mallory/permission — it decided locally. gh saw: $(tr '\n' ' ' < "$WORK/stub.log")"
+      fi
+
       # …and the refusal has to SAY who was refused. A silent `exit 1` on the one
       # path a human meets only when something is wrong is how a real refusal gets
-      # misread as an infra flake and re-run until someone widens the list.
-      ALLOWED_ACTORS="$GA_ALLOWED_ACTORS" ACTOR="mallory" \
-        bash "$WORK/gate.sh" >"$WORK/gate.out" 2>&1 || true
+      # misread as an infra flake and re-run until someone widens the rule.
+      : > "$WORK/stub.log"
+      PATH="$GA_STUB_DIR:$PATH" OC_STUB_LOG="$WORK/stub.log" OC_STUB_RC=0 OC_STUB_OUT="read" \
+        ACTOR="mallory" REPO="pkyosx/OffiCraft" bash "$WORK/gate.sh" >"$WORK/gate.out" 2>&1 || true
       if grep -q "mallory" "$WORK/gate.out"; then
         ok "W4eD2 the refusal NAMES the actor it refused (a bare exit 1 reads as an infra flake)"
       else
