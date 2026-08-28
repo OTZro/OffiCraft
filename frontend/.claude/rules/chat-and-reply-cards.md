@@ -63,7 +63,7 @@ ChatReplyCard 的 doReanswer 保留單卡 refetch：終態 delta 可能被刻意
 
 view=full 只在 HTTP list seam 表示整個 pane 的一次請求，不上提到 adapter，也不向 agent 的 MCP tools/list 宣傳；否則 agent 會拿到一次拉整個 pane 的昂貴把手，抵消輕量摘要契約。light/default 行為不變、未知 view 回 400。等待卡的 expire 規則以 server 為準：owner/admin 或卡片作者可過期自己的 waiting 卡；其他人 403，已回答 409。
 
-hash route #office/chat/<id>/msg/<msgId> 只做一次定位與 highlight；若訊息不在最近窗口就誠實落到底。回覆卡的 red badge 與聊天未讀互不清除；任務關聯卡共用卡身，只顯示任務標題與查看詳情連結。
+回覆卡的「跳到原訊息」**不導航** —— 它撈那一則、彈全文 popup（`useQuotedMessageOverlay`，三顆按鈕唯一的出口），使用者留在原地（T-0b78）。hash route #office/chat/<id>/msg/<msgId> 仍在，機制也沒變（一次定位＋highlight，訊息不在最近窗口就誠實落到底），但**座艙已經沒有任何控制項會產生它** —— 剩下的呼叫端只有使用者自己留存的舊 URL，所以不要再把新的控制項接上去。回覆卡的 red badge 與聊天未讀互不清除；任務關聯卡共用卡身，只顯示任務標題與查看詳情連結。
 
 ## 「回覆這則」（T-4e95，owner 2026-08-21 改設計）
 
