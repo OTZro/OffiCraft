@@ -88,7 +88,7 @@ func newWebhookToken() string {
 
 // GET /api/members/{member_id}/webhooks — the member's endpoints, oldest→newest.
 func (s *apiServer) HandleListWebhooksApiMembersMemberIdWebhooksGet(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveMember(memberId, anyMember)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -113,7 +113,7 @@ func (s *apiServer) HandleCreateWebhookApiMembersMemberIdWebhooksPost(w http.Res
 	if !decodeJSONBodyRequired(w, r, &body, "endpoint_id") {
 		return
 	}
-	m, err := s.resolveStaffMember(memberId)
+	m, err := s.resolveMember(memberId, staffOnly)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -176,7 +176,7 @@ func (s *apiServer) HandleUpdateWebhookApiMembersMemberIdWebhooksEndpointIdPatch
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
-	e, err := s.resolveWebhook(memberId, endpointId, s.resolveStaffMember)
+	e, err := s.resolveWebhook(memberId, endpointId, staffOnly)
 	if err != nil {
 		writeResolveError(w, err, "webhook endpoint", endpointId)
 		return
@@ -208,7 +208,7 @@ func (s *apiServer) HandleUpdateWebhookApiMembersMemberIdWebhooksEndpointIdPatch
 // DELETE /api/members/{member_id}/webhooks/{endpoint_id} — permanent revocation
 // (the token can never deliver again).
 func (s *apiServer) HandleDeleteWebhookApiMembersMemberIdWebhooksEndpointIdDelete(w http.ResponseWriter, r *http.Request, memberId, endpointId string) {
-	e, err := s.resolveWebhook(memberId, endpointId, s.resolveStaffMember)
+	e, err := s.resolveWebhook(memberId, endpointId, staffOnly)
 	if err != nil {
 		writeResolveError(w, err, "webhook endpoint", endpointId)
 		return
@@ -226,11 +226,11 @@ func (s *apiServer) HandleDeleteWebhookApiMembersMemberIdWebhooksEndpointIdDelet
 // 🔴 THE MEMBER LOOKUP IS A PARAMETER, NOT A CONSTANT. This helper serves three
 // handlers of two different kinds — PATCH and DELETE (which change or revoke a
 // live credential) and the delivery-log listing (which only reads) — so a single
-// hard-wired lookup here would decide the contractor question for all three at
+// hard-wired scope here would decide the contractor question for all three at
 // once, out of sight of any of them. That is the shape this ticket exists to
 // remove; leaving it here and fixing it one level up would just move it.
-func (s *apiServer) resolveWebhook(memberID, endpointID string, lookup memberLookup) (*WebhookEndpoint, error) {
-	m, err := lookup(memberID)
+func (s *apiServer) resolveWebhook(memberID, endpointID string, scope memberScope) (*WebhookEndpoint, error) {
+	m, err := s.resolveMember(memberID, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +323,7 @@ func (s *apiServer) HandleReceiveWebhookInPost(w http.ResponseWriter, r *http.Re
 			return
 		}
 	}
-	m, err := s.resolveStaffMember(e.MemberID)
+	m, err := s.resolveMember(e.MemberID, staffOnly)
 	if err != nil {
 		if err == errNotFound {
 			_ = s.dal.MarkWebhookDropped(e.Token, WebhookDropReasonMemberGone, receivedTS)
@@ -370,7 +370,7 @@ func (s *apiServer) HandleReceiveWebhookInPost(w http.ResponseWriter, r *http.Re
 // never reach a plain agent; kept OFF WebhookEndpointDTO so the list wire stays
 // light).
 func (s *apiServer) HandleListWebhookRequestsApiMembersMemberIdWebhooksEndpointIdRequestsGet(w http.ResponseWriter, r *http.Request, memberId, endpointId string) {
-	e, err := s.resolveWebhook(memberId, endpointId, s.resolveMember)
+	e, err := s.resolveWebhook(memberId, endpointId, anyMember)
 	if err != nil {
 		writeResolveError(w, err, "webhook endpoint", endpointId)
 		return

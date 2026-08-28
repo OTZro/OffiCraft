@@ -2127,17 +2127,20 @@ func (s *apiServer) HandlePeekResumeSummarySizeApiResumeSummarySizeGet(w http.Re
 // unmodified resumeSnapshotParts(actor) the self-scoped route uses, called
 // with actor=member_id — no near-copy of the assembly, so this payload can
 // never drift from what resume_summary itself would carry for that member.
-// 404 if member_id does not resolve to a LIVE roster row — but the resolver is
-// resolveResumeSummaryTarget, NOT resolveMember: this is the ONE member verb
-// the owner released to workers (T-4595), so the kind='outsource' fold that
-// every other /api/members/{member_id}/... verb keeps is deliberately absent
-// here and an `ow-` id gets a 200. resolveMember's other two refusals (absent
-// row, soft-removed row) still apply, so a released worker's summary stops
-// being readable the moment its roster row goes.
+// 404 if member_id does not resolve to a LIVE roster row. The lookup is scoped
+// anyMember: this was the FIRST member verb the owner released to workers
+// (T-4595), and since 2026-08-28 reads are that way by default. The other two
+// refusals (absent row, soft-removed row) still apply, so a released worker's
+// summary stops being readable the moment its roster row goes.
 // The original /api/resume-summary route and its identity lock (actor :=
 // currentActor(r), caller = target, always) are untouched by this addition.
 func (s *apiServer) HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryGet(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveResumeSummaryTarget(memberId)
+	// anyMember, not a resolver of its own: this door reads a CONTRACTOR's
+	// resume summary by design (T-4595, rc-64b712bfc703 ①). Before the scope
+	// parameter it needed a second helper (resolveResumeSummaryTarget) purely to
+	// escape a hard-wired refusal; with the scope named at the call site that
+	// helper was one more copy of the same lookup and is gone.
+	m, err := s.resolveMember(memberId, anyMember)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return

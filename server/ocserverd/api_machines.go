@@ -1277,7 +1277,7 @@ func (s *apiServer) HandleDeleteMachineApiMachinesMemberIdDelete(w http.Response
 	// down, which refuses anything that is not a warden. Asking for the staff
 	// resolver here would add a second, weaker refusal that only changes which
 	// error an ow- id gets (404 instead of the honest 409 "not a warden").
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveMember(memberId, anyMember)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return

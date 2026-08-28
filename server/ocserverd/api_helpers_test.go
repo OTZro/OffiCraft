@@ -30,11 +30,11 @@ func TestResolveMember_ReadsOutsource(t *testing.T) {
 	api.noOutsource = true
 	workerID := assignOneWorker(t, api)
 
-	if _, err := api.resolveMember(workerID); err != nil {
+	if _, err := api.resolveMember(workerID, anyMember); err != nil {
 		t.Fatalf("resolveMember(%s) must RESOLVE an outsource row now, got %v",
 			workerID, err)
 	}
-	if _, err := api.resolveStaffMember(workerID); !errors.Is(err, errNotFound) {
+	if _, err := api.resolveMember(workerID, staffOnly); !errors.Is(err, errNotFound) {
 		t.Fatalf("resolveStaffMember(%s) must still refuse an outsource row, got %v",
 			workerID, err)
 	}

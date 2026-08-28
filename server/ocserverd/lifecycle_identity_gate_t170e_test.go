@@ -551,9 +551,9 @@ var identityGateLedger = map[string]string{
 		"third arm of the same closed-set validation; see the KindAssistant arm.",
 
 	// ── roster resolution: which face may see which population ─────────────
-	"api_helpers.go :: resolveStaffMember :: m.Kind == KindOutsource": "" +
-		"the WRITE half of the member face. This gate used to live in resolveMember " +
-		"and was therefore inherited by all 16 of its callers, including the READ " +
+	"api_helpers.go :: resolveMember :: m.Kind == KindOutsource": "" +
+		"the staffOnly arm of the member lookup. This refusal used to be " +
+		"UNCONDITIONAL and was therefore inherited by all 16 of its callers, including the READ " +
 		"door — which made GET /api/members/{id} answer 404 for a row that " +
 		"GET /api/members had just listed, and cost the cockpit one guaranteed " +
 		"failed request plus a whole-roster refetch per contractor chat line. " +

@@ -280,25 +280,67 @@ var errWindDownLadderBackwards = errors.New("wind-down ladder may not move backw
 // Anything that reads "it is in members, therefore I may call member verbs on
 // it" is wrong at runtime; the two halves are only consistent when read
 // together (see the twin note on ListMembersIncludingOutsource in dal.go).
-// memberLookup is the seam that lets a shared helper stay honest: a caller that
-// serves both a read and a write hands in the resolver its OWN door needs,
-// instead of the helper deciding for every caller behind their backs.
-type memberLookup func(string) (*Member, error)
+// memberScope is the second argument every member lookup must carry: whether
+// this door serves the WHOLE roster or staff only.
+//
+// 🔴 IT IS A REQUIRED PARAMETER RATHER THAN A SECOND FUNCTION, AND THAT IS THE
+// WHOLE POINT (owner ruling 2026-08-28: 「只有某些行為如果真的需要只拿正職或外包，
+// 才下額外參數指定」). Two differently-named functions would let the NEXT member
+// verb reach the open one by simply typing the shorter name — no decision, no
+// prompt to make one. A parameter cannot be omitted: every new call site is
+// made to say which population it serves, permanently, and not merely during
+// the refactor that introduced the split.
+//
+// The zero value is deliberately NOT "any": a scope that arrives unset is a
+// caller that never chose, and defaulting that to the wider population is the
+// exact failure this ticket exists to remove.
+type memberScope int
 
-// resolveMember looks up ONE member row by id and folds only the two states
-// that mean "there is nobody here": no row at all, and a soft-removed one.
+const (
+	// memberScopeUnset is the zero value and is never legal — see the type doc.
+	memberScopeUnset memberScope = iota
+	// anyMember serves the whole roster, contractors included. This is the
+	// DEFAULT POSTURE for reads: GET /api/members already lists ow- rows to the
+	// same principal, so an item door refusing them withheld nothing and cost
+	// the cockpit one guaranteed 404 plus a whole-roster refetch per contractor
+	// chat line.
+	anyMember
+	// staffOnly additionally refuses kind='outsource'.
+	//
+	// 🔴 WHY EACH CALLER PASSES IT — do not relax one without answering its reason:
+	//   - mint / bootstrap: a contractor's token TTL and its boot document both
+	//     come from the worker path; the staff path would hand it the WRONG
+	//     document, not merely too much authority.
+	//   - activate / deactivate / force-stop / accelerated-stop / refocus: the
+	//     contractor equivalents live under /api/outsource-workers/* and drive a
+	//     DIFFERENT kill funnel. Two funnels onto one latch is the double-kill
+	//     that T-72dd fixed.
+	//   - dismiss (DELETE): a contractor leaves by being RELEASED with its task,
+	//     not by being fired; soft-deleting the row under a live task strands it.
+	//   - relocate: 🔴 SPECIAL — this one needs errNotFound as CONTROL FLOW. Its
+	//     handler catches the refusal and falls through to the worker relocate
+	//     core (P7c, rc-2786636f30e5). Widen it and an ow- id takes the member
+	//     reconcile path instead, which is not the same operation.
+	//   - webhook create / update / revoke, and the public POST /in inlet:
+	//     nothing reclaims a webhook token when a worker is released, and /in is
+	//     the only UNAUTHENTICATED surface here.
+	staffOnly
+)
+
+// errScopeUnset is what a caller gets for passing the zero memberScope. It is a
+// programming error surfaced as a refusal rather than a silent widening.
+var errScopeUnset = errors.New("member lookup called without a memberScope")
+
+// resolveMember looks up ONE member row by id, folding the two states that mean
+// "there is nobody here" — no row at all, and a soft-removed one — plus
+// kind='outsource' when the caller asked for staffOnly.
 //
-// 🔴 IT DOES NOT FOLD kind='outsource', AND THAT IS THE POINT (owner ruling,
-// 2026-08-28): "其他真的要過濾要明確指定" — a door that must refuse contractors
-// says so AT ITS OWN CALL SITE, by asking for resolveStaffMember. The refusal
-// used to live in here, shared by 16 verbs, which made it invisible: nothing in
-// routes.go said GET /api/members/{id} refuses an ow- id, and the cockpit —
-// whose roster list DOES carry outsource rows — spent one guaranteed 404 plus
-// one whole-roster refetch on every contractor chat line because of it.
-//
-// The list door has answered for outsource since the P7 convergence
-// (rc-2786636f30e5, "外包對齊正職"); this is the item door catching up.
-func (s *apiServer) resolveMember(memberID string) (*Member, error) {
+// The list door has answered for contractors since the P7 convergence
+// (rc-2786636f30e5, 「外包對齊正職」); this is the item door catching up.
+func (s *apiServer) resolveMember(memberID string, scope memberScope) (*Member, error) {
+	if scope == memberScopeUnset {
+		return nil, errScopeUnset
+	}
 	m, err := s.dal.GetMember(memberID)
 	if err != nil {
 		return nil, err
@@ -306,63 +348,7 @@ func (s *apiServer) resolveMember(memberID string) (*Member, error) {
 	if m == nil || m.RosterStatus == RosterStatusRemoved {
 		return nil, errNotFound
 	}
-	return m, nil
-}
-
-// resolveStaffMember is resolveMember PLUS the kind='outsource' refusal, for
-// the verbs that genuinely must not reach a contractor. Each such verb names
-// this function itself, so the restriction is readable at the door rather than
-// inherited from a shared helper.
-//
-// 🔴 WHY EACH OF THEM REFUSES — do not relax one without answering its reason:
-//   - mint / bootstrap: a contractor's token TTL and its boot document both come
-//     from the worker path; the staff path would hand it the WRONG document, not
-//     merely too much authority.
-//   - activate / deactivate / force-stop / accelerated-stop / refocus: the
-//     contractor equivalents live under /api/outsource-workers/* and drive a
-//     DIFFERENT kill funnel. Two funnels onto one latch is the double-kill that
-//     T-72dd fixed.
-//   - dismiss (DELETE): a contractor leaves by being RELEASED with its task, not
-//     by being fired; soft-deleting the row underneath a live task strands it.
-//   - relocate: 🔴 SPECIAL — this one needs errNotFound as CONTROL FLOW. Its
-//     handler catches the refusal and falls through to the worker relocate core
-//     (P7c, rc-2786636f30e5). Widen it and an ow- id would take the member
-//     reconcile path instead, which is not the same operation.
-//   - webhook create / update / revoke, and the public POST /in inlet: nothing
-//     reclaims a webhook token when a worker is released, and /in is the only
-//     UNAUTHENTICATED surface here.
-func (s *apiServer) resolveStaffMember(memberID string) (*Member, error) {
-	m, err := s.dal.GetMember(memberID)
-	if err != nil {
-		return nil, err
-	}
-	if m == nil || m.RosterStatus == RosterStatusRemoved || m.Kind == KindOutsource {
-		return nil, errNotFound
-	}
-	return m, nil
-}
-
-// resolveResumeSummaryTarget is resolveMember WITHOUT the kind='outsource'
-// fold, for the ONE verb the owner released to workers: reading a worker's
-// resume summary from the cockpit (T-4595, ruling rc-64b712bfc703 option ①).
-//
-// WHY A SECOND RESOLVER RATHER THAN WIDENING resolveMember: that function has
-// 16 production call sites across five files, so dropping its outsource arm
-// would open every member verb to ow- ids at once — account and token, member
-// lifecycle, machines, webhooks. The owner picked the blast radius of one.
-// The shape is not invented here: api_members.go already keeps a sibling
-// resolver that deliberately does not fold outsource away, and GetMember has
-// the same precedent for a worker reading its own row.
-//
-// It keeps BOTH of resolveMember's other refusals: an absent row and a
-// soft-removed one are still errNotFound, so a released worker's summary stops
-// being readable at exactly the moment its roster row goes.
-func (s *apiServer) resolveResumeSummaryTarget(memberID string) (*Member, error) {
-	m, err := s.dal.GetMember(memberID)
-	if err != nil {
-		return nil, err
-	}
-	if m == nil || m.RosterStatus == RosterStatusRemoved {
+	if scope == staffOnly && m.Kind == KindOutsource {
 		return nil, errNotFound
 	}
 	return m, nil
