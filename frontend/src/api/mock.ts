@@ -1689,6 +1689,31 @@ function mapWithExtras(w: WireMember): Member {
   return toMember(w);
 }
 
+/** 加速停止 stamps the SAME two-armed clock on a member and on an outsource
+ * worker, so the two mocks must not drift apart either — server-side both DTOs
+ * now read the ONE `winddownDeadlineOf` (T-14 item 3), and before that fix the
+ * worker mock's silence about `refocus_deadline` was accidentally right because
+ * the server also answered 0. It is this change that made it a divergence, on
+ * exactly the field the change is about, in the file a cockpit developer reads
+ * first — so the arithmetic lives in one place here rather than being spelled
+ * twice.
+ *
+ * `since === null` means "leave the existing stamp alone": the 下線 arm is
+ * anchored on the stop that is ALREADY open (`desired_state=offline`), so it
+ * only adds the ceiling. The 換手 arm opens the window here and stamps both.
+ * The grace mirrors the server's shipped default (StoppingTimeoutSecs), the
+ * same literal both arms used before this helper existed. */
+function acceleratedStopStamps(windingDownToOffline: boolean): {
+  since: number | null;
+  deadline: number;
+} {
+  const graceSecs = 120;
+  const now = Date.now() / 1000;
+  return windingDownToOffline
+    ? { since: null, deadline: now + graceSecs }
+    : { since: now, deadline: now + graceSecs };
+}
+
 function findWire(id: string): WireMember {
   const w = wireMembers.find((m) => m.id === id);
   if (!w) throw new Error(`mock: member not found: ${id}`);
@@ -2449,12 +2474,9 @@ export const mockApi: Api = {
       );
     }
     w.refocus_op = "accelerated_stop";
-    if (w.desired_state === "offline") {
-      w.refocus_deadline = Date.now() / 1000 + 120;
-    } else {
-      w.refocus_since = Date.now() / 1000;
-      w.refocus_deadline = w.refocus_since + 120;
-    }
+    const stamps = acceleratedStopStamps(w.desired_state === "offline");
+    if (stamps.since !== null) w.refocus_since = stamps.since;
+    w.refocus_deadline = stamps.deadline;
   },
 
   async dismissMember(id: string): Promise<void> {
@@ -4073,6 +4095,13 @@ export const mockApi: Api = {
       );
     }
     w.refocusOp = "accelerated_stop";
+    // The SAME two arms as the member mock, through the same helper — the
+    // server's worker DTO reads the shared `winddownDeadlineOf` since T-14
+    // item 3, so a mock that stayed silent here would show the cockpit no
+    // countdown where the real wire now carries one.
+    const stamps = acceleratedStopStamps(w.desiredState === "offline");
+    if (stamps.since !== null) w.refocusSince = stamps.since;
+    w.refocusDeadline = stamps.deadline;
     emitTopic("outsource_worker");
     return {
       ...withWorkerTaskJoin(structuredClone(w)),

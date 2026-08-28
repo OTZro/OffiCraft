@@ -2308,7 +2308,22 @@ func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProje
 	// outsource workers either — the cockpit maps 0 → null → renders nothing).
 	// Reading StoppingTimeoutSecs straight reported a ceiling for every op,
 	// including the one arm that is not on a clock.
-	dto.RefocusDeadline = refocusDeadlineOf(w.RefocusSince, p.cfg, w.RefocusOp)
+	//
+	// 🔴 winddownDeadlineOf, THE SAME FUNCTION MemberDTO READS (api_helpers.go),
+	// on the SAME projection workerPresence already goes through. It used to be
+	// refocusDeadlineOf(w.RefocusSince, …) — only the 換手 axis — so the 下線
+	// axis, whose clock anchors on stopping_since, reported 0 for an epoch the
+	// tick DOES collect: the stop arm of runOutsourceTick fires at
+	// StoppingSince+grace on recycleGraceFor + gracefulStopEpochOpen — which is
+	// what winddownDeadlineOf evaluates — plus that site's own StoppedSince<=0
+	// term, and a session already confirmed gone collects EARLIER still. Both
+	// only make the tick stricter than this ceiling, which is why a ceiling is
+	// the honest word for it. An owner pressing 加速停止 on
+	// a worker started a countdown that neither the cockpit nor the agent's own
+	// notice was told about; staff never had the gap because they always read
+	// the two-axis expression. Do NOT re-inline the 下線 arm here — one
+	// expression, two callers, is the whole point.
+	dto.RefocusDeadline = winddownDeadlineOf(memberFromWorker(w), p.cfg)
 	dto.DesiredState = w.DesiredState
 	return dto
 }
