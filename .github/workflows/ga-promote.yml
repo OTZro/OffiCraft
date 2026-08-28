@@ -1,0 +1,151 @@
+# .github/workflows/ga-promote.yml — the GA button (T-39a5).
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# WHAT THIS IS, AND THE RULING THAT ALLOWS IT TO EXIST
+# ─────────────────────────────────────────────────────────────────────────────
+# Flipping a verified prerelease to the final release ("GA") used to be forbidden
+# to automate at all: bin/tests/auto-beta-guard.sh refused, under W4/W4b, any file
+# under .github/ that so much as NAMED the subcommand, on the ruling that the
+# beta->final flip is a human decision.
+#
+# 🔴 THAT RULING WAS OVERTURNED BY THE OWNER ON 2026-08-28, in rc-f9d284c0aef7,
+# with one condition attached. His words:
+#
+#     "決定是我下的 然後我會讓你幫我執行 UI 上可以有這個 action
+#      但是只有 seth / eva 可以跑這個"
+#
+# Three things follow from that sentence, and all three are mechanised — here and
+# in bin/tests/auto-beta-guard.sh (W4e/W4f), which now pins THIS FILE's shape
+# instead of pinning its non-existence:
+#
+#   1. The action may exist and may be triggered from the GitHub UI.
+#   2. Only Seth and Eva may run it. See WHO CAN PRESS THIS below — the UI alone
+#      does NOT enforce that, so this workflow enforces it itself.
+#   3. "決定是我下的" — WHICH tag ships is still a human decision, so the tag
+#      arrives as an INPUT. This workflow never selects one. There is deliberately
+#      no "newest beta" lookup here: that would hand the decision to the machine,
+#      which is the half of the old ruling that was NOT overturned.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# 🔴 WHO CAN PRESS THIS
+# ─────────────────────────────────────────────────────────────────────────────
+# Exactly two accounts: pkyosx (Seth) and 8thEdition (Eva).
+#
+# ⚠️ GITHUB CANNOT ENFORCE THIS FOR US, AND THAT IS WHY THE FIRST STEP EXISTS.
+# There is no per-workflow "who may dispatch" setting: ANY account with write
+# access to this repo can press Run workflow on any workflow_dispatch, and this
+# repo currently has write-access accounts beyond those two. So the allowlist is
+# enforced in the job's FIRST STEP, before anything touches a release, and a
+# refusal is a red run that names the actor. Restricting the UI is not a
+# substitute for it and must not be treated as one.
+#
+# To change who may press: edit ALLOWED_ACTORS in the authorize step below AND the
+# matching roll-call in bin/tests/auto-beta-guard.sh (W4e). The guard pins the list
+# verbatim, so the two cannot drift apart in silence — an edit to one without the
+# other reddens bin-guards. Widening it is an owner decision, the same way this
+# workflow's existence was.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# 🔴 PRESSED IT BY MISTAKE? HOW TO ROLL BACK
+# ─────────────────────────────────────────────────────────────────────────────
+# A wrong promote does TWO separable things, and they need two different undos.
+# Do them in this order.
+#
+# (1) STOP STATIONS FROM TAKING IT. This is the urgent half.
+#     server/ocserverd/update_check.go picks the SEMVER-GREATEST non-draft release
+#     that the channel admits, filtering on the `prerelease` flag — it reads
+#     /repos/<repo>/releases and NEVER /releases/latest. So the Latest POINTER is
+#     not what feeds stations; the prerelease FLAG is. Put the flag back:
+#
+#         gh release edit <wrongly-promoted-tag> --repo pkyosx/OffiCraft --prerelease=true
+#
+#     Stable-channel stations stop being offered it on their next check. Anyone who
+#     already upgraded in the window stays upgraded — this stops the bleeding, it
+#     does not un-ship the bytes. There is no downgrade path in the updater.
+#
+# (2) PUT THE LATEST POINTER BACK where it belongs, for the GitHub UI and for
+#     anything reading /releases/latest:
+#
+#         gh release edit <previous-good-GA-tag> --repo pkyosx/OffiCraft --latest=true
+#
+# (3) VERIFY BOTH, because issuing a command is not the same as it landing — the
+#     whole reason bin/release reads back rather than trusting `gh`:
+#
+#         gh api repos/pkyosx/OffiCraft/releases/latest --jq .tag_name
+#         gh release view <wrongly-promoted-tag> --repo pkyosx/OffiCraft --json isPrerelease
+#
+# NOTHING IS DELETED in any of this. Do NOT `gh release delete` the bad tag: the
+# assets are what someone may already be running, and bin/release's promote path
+# fingerprints the asset set precisely so the shipped bytes stay the tested bytes.
+#
+# ⚠️ IF THE RUN FAILED PART-WAY, read its log before undoing anything. promote is
+# verify -> flip -> read-back: a VERIFY-FAILED [release-latest] means the flip was
+# issued and the read-back could not confirm it, so check (3) FIRST — the release
+# may be fully promoted, not promoted at all, or promoted with the pointer unset.
+name: GA promote
+
+# Manual only. No push, no pull_request, no schedule — this workflow must never
+# fire on its own, and bin/tests/auto-beta-guard.sh (W4f) pins that: a second
+# workflow file is allowed to exist ONLY while workflow_dispatch is its one
+# trigger, because that is what keeps it out of every push/PR run and therefore
+# out of the job universe auto-beta's `needs` reasons about.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing verified prerelease tag to flip to GA, e.g. v0.5.256'
+        required: true
+        type: string
+
+# Read-only by default; the job below asks for the one write it needs.
+permissions: {}
+
+# One at a time, and never cancel one in flight: the flip is a sequence of
+# GitHub mutations followed by a read-back, and a cancelled run can leave the
+# release flipped with nothing having confirmed it.
+concurrency:
+  group: ga-promote
+  cancel-in-progress: false
+
+jobs:
+  ga-promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      # 🔴 THE ALLOWLIST GATE. First step, before any checkout, so a refused actor
+      # never reaches a single line of this repo's code. Fail-closed by shape:
+      # the loop can only ever exit 0 by MATCHING, and every other path falls
+      # through to the refusal.
+      - name: authorize actor
+        shell: bash
+        env:
+          # Seth, Eva. Pinned verbatim by auto-beta-guard.sh W4e — edit both.
+          ALLOWED_ACTORS: 'pkyosx 8thEdition'
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          for a in $ALLOWED_ACTORS; do
+            if [[ "$ACTOR" == "$a" ]]; then
+              echo "[ga-promote] actor '$ACTOR' is on the allowlist — proceeding"
+              exit 0
+            fi
+          done
+          echo "[ga-promote] REFUSED: actor '$ACTOR' may not promote a release to GA." >&2
+          echo "[ga-promote] Only these accounts may run this workflow: $ALLOWED_ACTORS" >&2
+          echo "[ga-promote] This is an owner ruling (2026-08-28, rc-f9d284c0aef7), not a" >&2
+          echo "[ga-promote] permissions accident. If you need to ship, ask Seth or Eva." >&2
+          exit 1
+
+      - uses: actions/checkout@v5
+
+      # No rebuild, by design: promote flips an EXISTING, already-verified
+      # prerelease, so the bytes that ship are the bytes that were tested. It needs
+      # gh and nothing else — no go, no node, no full history.
+      - name: promote the tag to GA
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OC_TAG: ${{ inputs.tag }}
+        run: bin/release promote "$OC_TAG"
