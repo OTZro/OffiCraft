@@ -187,8 +187,18 @@ export interface AgentDetailVmInput {
 }
 
 /** The op names that render as 開機 / 停止. The worker wire prefixes its own
- * (`worker_start` / `worker_stop`); a member never carries those words, so one
- * list covers both without either side seeing a verb it could not see before. */
+ * (`worker_start` / `worker_stop`), so one list covers both sides.
+ *
+ * This list is deliberately PERMISSIVE, not a claim about what each side can
+ * hold. What keeps a member row off the worker verbs is ROUTING, not a verb
+ * allowlist: a receipt keyed to an `ow-` id is handed to the worker fold
+ * (`foldWorkerCommandResult`), the rest to the member fold — and BOTH folds
+ * then assign the verb verbatim (`m.LastOp = rpc` / `w.LastOp = rpc`, bare,
+ * unchecked). So if a worker-prefixed verb ever reached the member fold it
+ * would be stored, and this list would render it as 開機 rather than as its
+ * raw string. That is the intended failure mode (a readable word beats a raw
+ * one), but do not read this comment as "it cannot happen" — nothing enforces
+ * that. An earlier draft of this comment asserted it did. */
 const START_OPS = ["start", "worker_start"];
 const STOP_OPS = ["stop", "worker_stop"];
 
