@@ -12075,12 +12075,12 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Read one roster member (removed → 404).",
+        "summary": "Read one member row — STAFF OR OUTSOURCE, matching what GET /api/members already lists (removed → 404). It answered 404 for an ow- id until 2026-08-28, which cost the cockpit one guaranteed failed request plus a whole-roster refetch on every contractor chat line; the write verbs on this same {member_id} keep refusing outsource and say so themselves.",
         "x-mcp": {
           "include": true,
           "order": 7,
           "name": "get_member",
-          "description": "Read one roster member (removed → 404).",
+          "description": "Read one member row — STAFF OR OUTSOURCE, matching what GET /api/members already lists (removed → 404). It answered 404 for an ow- id until 2026-08-28, which cost the cockpit one guaranteed failed request plus a whole-roster refetch on every contractor chat line; the write verbs on this same {member_id} keep refusing outsource and say so themselves.",
           "legacy": {
             "descriptor": "{\n      \"description\": \"Read one roster member (removed \\u2192 404).\",\n      \"inputSchema\": {\n        \"properties\": {\n          \"member_id\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"member_id\"\n        ],\n        \"type\": \"object\"\n      },\n      \"name\": \"get_member\"\n    }"
           }
