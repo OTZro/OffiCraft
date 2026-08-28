@@ -164,10 +164,16 @@ DoD 第 1 條明文指定的改動，且**能力本身沒有消失**（改模型
 2. 身分卡動作列新增「更改」鍵（A8），開一份與正職同形狀的設定 dialog：
    `ModelEffortEditor`（執行環境／模型／投入度）＋ 機器 `<select>`（線上機器 ＋ 自己那台離線釘選，
    標「離線」且 disabled），底部 取消／更改。
-   <br>**這條規則今天仍然有效，但它的出處變了（T-170e）**：當年寫的是「照 `MachinePicker` 的規則」，
-   而那個元件已經刪除。今天兩支面板各自實作同一份 `pinnedOfflineMachine` ＋ `settingsMachineOptions`
-   （除了 `member.`／`worker.` 之外逐字相同），互為對照 —— 要 audit 這條規則請比對那兩段，不要去找 `MachinePicker`。
-   ⚠️ 那兩段只承接「留在清單裡 ＋ 標離線」；**`disabled` 那一半不在裡面**，它在各自的 `<option disabled={machine.offline}>`，要一起看。
+   <br>**這條規則今天仍然有效，出處已經換過兩次**。當年寫的是「照 `MachinePicker` 的規則」，
+   而那個元件已經刪除（T-170e）；接手的寫法是兩支面板**各自實作**一份 `pinnedOfflineMachine` ＋
+   `settingsMachineOptions`，並把「互為對照、要 audit 請比對那兩段」當成稽核手段。
+   <br>🔴 **那句話從 2026-08-28 起是假話，不要照它推理**：owner 於 `rc-fc9ab61ad057` 選 [2]
+   「合掉就好，接受少一個 audit 手段」，親自翻掉了「刻意留兩份互為對照」那條裁定（T-14 項目 2）。
+   今天只有**一份**實作：`frontend/src/lib/agentDetailVm.ts` 的 `machineOptions()`，兩支面板都呼叫它。
+   <br>**合掉之後靠什麼 audit**：① 讀 `machineOptions()` 本身 —— 它是唯一一份，沒有第二段可以漂走；
+   ② 它的測試 `frontend/src/lib/agentDetailVm.test.ts`（線上機器、釘選離線機器、兩者都無 三種形狀）；
+   ③ mutant 判準 —— 改 `machineOptions()` 一處，**兩支面板的測試必須同時紅**；只紅一邊就代表某一側又長回了自己的副本。
+   ⚠️ 那一份只承接「留在清單裡 ＋ 標離線」；**`disabled` 那一半不在裡面**，它在各自的 `<option disabled={machine.offline}>`，要一起看。
 3. 確認送出：`launchChanged` → `api.setWorkerModel`；`machineChanged` → `api.relocateWorker`。
    PATCH 先於 relocate（正職 `saveSettings` 的同一條理由：relocate 會重生 session，
    設定必須先落地，否則新 session 用舊模型起來）。

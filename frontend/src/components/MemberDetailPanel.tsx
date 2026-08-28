@@ -23,6 +23,7 @@ import {
   slot,
 } from "./AgentDetailPanel";
 import { pendingChangeHint, reportedMachine } from "../lib/pendingChange";
+import { buildAgentDetailVm, machineOptions } from "../lib/agentDetailVm";
 import { AvatarEditor } from "./AvatarEditor";
 import { Avatar } from "./Avatar";
 import { avatarKindForMember } from "../lib/avatarKind";
@@ -236,39 +237,18 @@ export function MemberDetailPanel({
   const { machines } = useMachines();
   const onlineMachines = machines.filter((m) => m.online);
   const firstOnlineMachineId = onlineMachines[0]?.machineId;
-  // What the machine <select> may offer: every online machine, PLUS the member's
-  // own pin when that machine is not online right now — labelled 離線, the same
-  // rule WorkerDetailPanel follows. Without that entry the select's value would
-  // match no option (blank row, pin still submitted), and dropping the pin would
-  // move a member the owner deliberately parked. Both are "displayed ≠
-  // submitted"; this is the only shape that is neither.
   // Whether the 模型 row upstairs is currently showing a reported value at all
   // (same condition the tag uses): awake, and something was reported.
   const reportedModelOnScreen = awake && (member.actualModel ?? "") !== "";
-  const pinnedOfflineMachine =
-    member.desiredMachineId &&
-    !onlineMachines.some((m) => m.machineId === member.desiredMachineId)
-      ? (machines.find((m) => m.machineId === member.desiredMachineId) ?? {
-          machineId: member.desiredMachineId,
-          displayName: member.desiredMachineId,
-        })
-      : undefined;
-  const settingsMachineOptions = [
-    ...onlineMachines.map((m) => ({
-      machineId: m.machineId,
-      label: m.displayName,
-      offline: false,
-    })),
-    ...(pinnedOfflineMachine
-      ? [
-          {
-            machineId: pinnedOfflineMachine.machineId,
-            label: msg.machineOfflineOption(pinnedOfflineMachine.displayName),
-            offline: true,
-          },
-        ]
-      : []),
-  ];
+  // What the machine <select> may offer — the SHARED rule (lib/agentDetailVm),
+  // not a second copy of it. It used to be written out here and again in
+  // WorkerDetailPanel, and the parity doc pointed at the pair as the way to
+  // audit it; the owner retired that on `rc-fc9ab61ad057`.
+  const settingsMachineOptions = machineOptions(
+    machines,
+    member.desiredMachineId,
+    msg.machineOfflineOption,
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRuntime, setSettingsRuntime] = useState<"claude" | "codex">(
     member.runtime || "claude",
@@ -845,12 +825,6 @@ export function MemberDetailPanel({
     member.actualEffort ?? "",
     msg.agentPendingChange,
   );
-  // 累計總花費 = 已 banked 的歷史成本 + 當前 live session 成本(dto 保證兩者分開不重疊)。
-  // honest:兩者皆無源(null)才顯 dash;任一有值則計入(缺的一方視為尚未產生成本=0)。
-  const totalCost =
-    member.estimatedCost == null && member.bankedCost == null
-      ? null
-      : (member.estimatedCost ?? 0) + (member.bankedCost ?? 0);
 
   const identityCard = (
     <>
@@ -1647,51 +1621,46 @@ export function MemberDetailPanel({
         extraExpandCards: slot(extraExpandCards),
         afterPromptCards: slot(resumeSummaryCard),
       }}
-      vm={{
+      // The vm is BUILT by the shared assembly (lib/agentDetailVm), not written
+      // out here: every rule both panels answer the same way lives there, and
+      // what stays below is only what this side genuinely reads differently —
+      // its own domain object, its own 機器 gate, its own i18n leaves.
+      vm={buildAgentDetailVm({
         testIdPrefix: "mp",
         online,
-        runtime: member.runtime || "claude",
-        // The READOUT is the reported runtime — honest dash until something
-        // reports one. The configured value above only labels the account row.
-        reportedRuntime: member.actualRuntime ?? "",
+        awake,
+        runtime: member.runtime,
+        actualRuntime: member.actualRuntime,
+        actualModel: member.actualModel,
+        actualEffort: member.actualEffort,
         pending: {
           runtime: pendingRuntime,
           model: pendingModel,
           effort: pendingEffort,
           machine: pendingMachine,
         },
-        // The details panel reports what is actually running. A configured
-        // launch model is intentionally kept out of this read-only surface.
-        model: awake ? (member.actualModel ?? "") : "",
-        modelIsReported: true,
-        // Same rule as 模型 one line up: the panel states what is RUNNING. The
-        // configured effort lives in the 設定 dialog below, which is the only
-        // place it may be shown or written.
-        effort: awake ? (member.actualEffort ?? "") : "",
         // Gate on `awake` (owner presence contract T-2860): 機器 + Claude
         // Account are runtime facts — not-awakened reads a bare dash, never a
-        // desired/stale residual.
+        // desired/stale residual. The worker panel answers this cell
+        // differently (「尚未分配」), which is why it stays a wrapper's answer.
         machineText: awake ? machineName : "",
         accountText: (awake && member.account) || "",
         contextPct: member.contextPct,
         compactionCount: member.compactionCount,
-        cost: totalCost,
-        onRefocus: onRefocus ? async () => void (await onRefocus()) : undefined,
+        liveCost: member.estimatedCost,
+        bankedCost: member.bankedCost,
+        onRefocus,
         refocusSince: member.refocusSince,
         refocusOp: member.refocusOp,
         refocusDeadline: member.refocusDeadline,
         refocusSubmittedNote: t.mp.refocusSubmittedNote,
         refocusSinceLabel: msg.memberRefocusSince,
         lastOp: member.lastOp,
-        lastOpVerb:
-          member.lastOp === "start"
-            ? t.mp.lastOpStart
-            : member.lastOp === "stop"
-              ? t.mp.lastOpStop
-              : member.lastOp,
+        lastOpStartText: t.mp.lastOpStart,
+        lastOpStopText: t.mp.lastOpStop,
         lastOpOk: member.lastOpOk,
         lastOpLog: member.lastOpLog,
-        lastOpReason: member.lastOpReason ?? "",
+        lastOpReason: member.lastOpReason,
         lastOpAt: member.lastOpAt,
         tmuxSession: member.tmuxSession,
         terminalHint: t.mp.terminalHint,
@@ -1703,7 +1672,7 @@ export function MemberDetailPanel({
           cacheKey: member.role,
           hint: t.mp.expandableHint,
         },
-      }}
+      })}
     />
   );
 }
