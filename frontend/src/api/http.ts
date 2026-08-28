@@ -1359,7 +1359,7 @@ export const httpApi: Api = {
     // the outsource_worker SSE delta also fans so the list refetches.
     //
     // 🔴 THERE IS NO CEILING ON THIS ONE. Workers read the SAME judgement as
-    // members (wire.go's refocusDeadlineOf → recycleGraceFor → winddownKindFor,
+    // members (wire.go's winddownDeadlineOf → recycleGraceFor → winddownKindFor,
     // and autoHandoverWorker's in-flight arm), and 重新聚焦 is soft, so nothing
     // collects this epoch on a clock: the drivers are the worker's own stopped
     // report and the offline fallback. This comment used to claim "a flat
