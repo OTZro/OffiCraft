@@ -426,8 +426,11 @@ decides that time is up.
   (`worker_spawn.go`) timed a worker's in-flight handover out at
   `refocus_since + StoppingTimeoutSecs` and **never read `refocus_op`** — while the notice
   that worker was sent said nothing about time. Both the in-flight arm and the worker DTO's
-  `refocus_deadline` now go through the SAME `recycleGraceFor` / `winddownDeadlineOf` pair the
-  staff side uses, so 重新聚焦 runs no clock on either kind. (T-ed79 then widened that set:
+  `refocus_deadline` now read the SAME `refocus_op`-aware judgement the staff side reads —
+  each at its own layer, not both through both: the in-flight arm asks `recycleGraceFor`
+  directly, while the DTO asks `winddownDeadlineOf`, the two-axis expression that wraps it
+  (`recycleGraceFor` on the 下線 axis, `refocusDeadlineOf` on the 換手 one). So 重新聚焦 runs
+  no clock on either kind. (T-ed79 then widened that set:
   the only causes left on a clock, staff or worker, are `context_high` and the
   owner-pressed `accelerated_stop`.) The owner ruled the two kinds identical and rejected the asymmetry argument that had
   been offered for keeping the clock (「如果正職只有一個任務 那跟外包的代價不一樣嗎」): a
