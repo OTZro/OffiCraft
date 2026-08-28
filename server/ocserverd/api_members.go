@@ -733,7 +733,7 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveStaffMember(memberId)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -837,7 +837,7 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveStaffMember(memberId)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -951,7 +951,7 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 		writeResolveError(w, err, "machine", machineID)
 		return
 	}
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveStaffMember(memberId)
 	if err != nil {
 		// P7c (gate rc-2786636f30e5, 外包對齊正職): the tool's semantics are "move
 		// one agent" — an id that names no STAFF member falls through to the
@@ -1093,7 +1093,7 @@ func clearMemberHandoverMarker(m *Member) {
 // handler writes offline two statements from here. The sweep only ever sees the
 // self-driven arm (report_stopping, which touches no desired_state at all).
 func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveStaffMember(memberId)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -1180,7 +1180,7 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 // it does not reopen the ruling), and this endpoint. See the endpoint's
 // description in spec/openapi.json, which says the same at length.
 func (s *apiServer) HandleForceStopMemberApiMembersMemberIdForceStopPost(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveStaffMember(memberId)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -1254,7 +1254,7 @@ const acceleratedStopNeedsAnOpenWindDownMsg = "加速停止 escalates a wind-dow
 // A force-stopped epoch is refused: that session was cut off deliberately and is
 // not working a close-out, so a deadline addressed to it has no reader.
 func (s *apiServer) HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStopPost(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveStaffMember(memberId)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -1309,7 +1309,7 @@ func (s *apiServer) HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStop
 // `stopping`, and refusing the owner there would mean 重新聚焦 stops working on
 // an agent that is mid-hand-off — the moment he is most likely to press it.
 func (s *apiServer) HandleRefocusMemberApiMembersMemberIdRefocusPost(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveStaffMember(memberId)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -1342,7 +1342,7 @@ func (s *apiServer) HandleRefocusMemberApiMembersMemberIdRefocusPost(w http.Resp
 // DELETE /api/members/{member_id} — dismiss: a SOFT delete (roster_status=
 // removed + desired_state=offline); the audit row survives.
 func (s *apiServer) HandleDismissMemberApiMembersMemberIdDelete(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveMember(memberId)
+	m, err := s.resolveStaffMember(memberId)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return

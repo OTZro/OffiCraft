@@ -280,7 +280,58 @@ var errWindDownLadderBackwards = errors.New("wind-down ladder may not move backw
 // Anything that reads "it is in members, therefore I may call member verbs on
 // it" is wrong at runtime; the two halves are only consistent when read
 // together (see the twin note on ListMembersIncludingOutsource in dal.go).
+// memberLookup is the seam that lets a shared helper stay honest: a caller that
+// serves both a read and a write hands in the resolver its OWN door needs,
+// instead of the helper deciding for every caller behind their backs.
+type memberLookup func(string) (*Member, error)
+
+// resolveMember looks up ONE member row by id and folds only the two states
+// that mean "there is nobody here": no row at all, and a soft-removed one.
+//
+// 🔴 IT DOES NOT FOLD kind='outsource', AND THAT IS THE POINT (owner ruling,
+// 2026-08-28): "其他真的要過濾要明確指定" — a door that must refuse contractors
+// says so AT ITS OWN CALL SITE, by asking for resolveStaffMember. The refusal
+// used to live in here, shared by 16 verbs, which made it invisible: nothing in
+// routes.go said GET /api/members/{id} refuses an ow- id, and the cockpit —
+// whose roster list DOES carry outsource rows — spent one guaranteed 404 plus
+// one whole-roster refetch on every contractor chat line because of it.
+//
+// The list door has answered for outsource since the P7 convergence
+// (rc-2786636f30e5, "外包對齊正職"); this is the item door catching up.
 func (s *apiServer) resolveMember(memberID string) (*Member, error) {
+	m, err := s.dal.GetMember(memberID)
+	if err != nil {
+		return nil, err
+	}
+	if m == nil || m.RosterStatus == RosterStatusRemoved {
+		return nil, errNotFound
+	}
+	return m, nil
+}
+
+// resolveStaffMember is resolveMember PLUS the kind='outsource' refusal, for
+// the verbs that genuinely must not reach a contractor. Each such verb names
+// this function itself, so the restriction is readable at the door rather than
+// inherited from a shared helper.
+//
+// 🔴 WHY EACH OF THEM REFUSES — do not relax one without answering its reason:
+//   - mint / bootstrap: a contractor's token TTL and its boot document both come
+//     from the worker path; the staff path would hand it the WRONG document, not
+//     merely too much authority.
+//   - activate / deactivate / force-stop / accelerated-stop / refocus: the
+//     contractor equivalents live under /api/outsource-workers/* and drive a
+//     DIFFERENT kill funnel. Two funnels onto one latch is the double-kill that
+//     T-72dd fixed.
+//   - dismiss (DELETE): a contractor leaves by being RELEASED with its task, not
+//     by being fired; soft-deleting the row underneath a live task strands it.
+//   - relocate: 🔴 SPECIAL — this one needs errNotFound as CONTROL FLOW. Its
+//     handler catches the refusal and falls through to the worker relocate core
+//     (P7c, rc-2786636f30e5). Widen it and an ow- id would take the member
+//     reconcile path instead, which is not the same operation.
+//   - webhook create / update / revoke, and the public POST /in inlet: nothing
+//     reclaims a webhook token when a worker is released, and /in is the only
+//     UNAUTHENTICATED surface here.
+func (s *apiServer) resolveStaffMember(memberID string) (*Member, error) {
 	m, err := s.dal.GetMember(memberID)
 	if err != nil {
 		return nil, err

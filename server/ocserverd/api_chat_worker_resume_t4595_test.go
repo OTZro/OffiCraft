@@ -67,13 +67,19 @@ func TestWorkerResumeSummaryIsReadableAndNothingElseOpened(t *testing.T) {
 	// One verb per family the recon counted on resolveMember (member
 	// management / account+token / machines / webhooks), so widening the
 	// resolver cannot pass by leaving one family untouched.
+	//
+	// 🔴 "member detail" USED TO BE IN THIS LIST AND IS NOW A POSITIVE BELOW —
+	// a deliberate contract change (owner ruling 2026-08-28: reads default to
+	// everyone, "其他真的要過濾要明確指定"), not a probe someone dropped to make a
+	// red go away. It is asserted the other way immediately after this loop, so
+	// the family is still covered: a resolver change that broke the READ would
+	// now be caught by that assertion instead of this one.
 	for _, probe := range []struct {
 		who    string
 		method string
 		path   string
 		body   string
 	}{
-		{"member detail", "GET", "/api/members/" + worker.ID, ""},
 		{"member edit", "PATCH", "/api/members/" + worker.ID, `{"name":"nope"}`},
 		{"member dismissal", "DELETE", "/api/members/" + worker.ID, ""},
 		{"long-lived token mint", "POST", "/api/mint", `{"member_id":"` + worker.ID + `","ttl_days":1}`},
@@ -82,6 +88,14 @@ func TestWorkerResumeSummaryIsReadableAndNothingElseOpened(t *testing.T) {
 		if st == http.StatusOK {
 			t.Errorf("%s must NOT have opened for an outsource worker, got 200 %s", probe.who, body)
 		}
+	}
+
+	// The READ half of the same family, asserted in the opposite direction: the
+	// item door now answers for a contractor exactly as the list door already
+	// did. Losing this is how the cockpit goes back to paying one guaranteed
+	// 404 plus a whole-roster refetch per contractor chat line.
+	if st, body := revokeCall(t, "GET", srv.URL+"/api/members/"+worker.ID, owner, ""); st != http.StatusOK {
+		t.Errorf("member detail must resolve for an outsource worker, got %d %s", st, body)
 	}
 
 	// ── ③ the refusal that survives the release ────────────────────────────

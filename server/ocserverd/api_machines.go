@@ -509,7 +509,7 @@ func (s *apiServer) machineSupportsRuntime(machineID, runtime string) bool {
 // GET /api/machines — one row per ACTIVE warden member; display name folds
 // the machine-alias overlay over the member name; server-self always FIRST.
 func (s *apiServer) HandleListMachinesApiMachinesGet(w http.ResponseWriter, r *http.Request) {
-	members, err := s.dal.ListMembers()
+	members, err := s.dal.ListMembersIncludingOutsource()
 	if err != nil {
 		internalError(w, err)
 		return
@@ -1273,6 +1273,10 @@ func (s *apiServer) HandleUpgradeMachineApiMachinesMemberIdUpgradePost(w http.Re
 // right now → 409; a machine whose agents are all offline deletes directly
 // (a desired_machine_id binding alone never blocks).
 func (s *apiServer) HandleDeleteMachineApiMachinesMemberIdDelete(w http.ResponseWriter, r *http.Request, memberId string) {
+	// The open resolver on purpose: the REAL guard is the kind check three lines
+	// down, which refuses anything that is not a warden. Asking for the staff
+	// resolver here would add a second, weaker refusal that only changes which
+	// error an ow- id gets (404 instead of the honest 409 "not a warden").
 	m, err := s.resolveMember(memberId)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)

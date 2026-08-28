@@ -215,7 +215,7 @@ func (s *apiServer) resolveWorkerPlacement(w OutsourceWorker, preferred string, 
 		return "", placementReasonUnavailable + ": machine '" + preferred + "' " + detail +
 			"; no other machine is substituted"
 	}
-	members, err := s.dal.ListMembers()
+	members, err := s.dal.ListMembersIncludingOutsource()
 	if err != nil {
 		return unavailable("could not be looked up (server error)")
 	}
@@ -2422,7 +2422,7 @@ func (s *apiServer) reclaimWorkerSession(w OutsourceWorker) {
 	targets := []string{}
 	if t := s.workerSpawnTarget[w.ID]; t != "" && s.hub.IsOnline(t) {
 		targets = append(targets, t)
-	} else if members, err := s.dal.ListMembers(); err == nil {
+	} else if members, err := s.dal.ListMembersIncludingOutsource(); err == nil {
 		for _, m := range members {
 			if m.Kind == KindWarden && m.RosterStatus == RosterStatusActive &&
 				s.hub.IsOnline(m.ID) {

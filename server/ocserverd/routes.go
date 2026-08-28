@@ -309,7 +309,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleGetMemberApiMembersMemberIdGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "Read one roster member (removed → 404).",
+			Summary:  "Read one member row — STAFF OR OUTSOURCE, matching what GET /api/members already lists (removed → 404). It answered 404 for an ow- id until 2026-08-28, which cost the cockpit one guaranteed failed request plus a whole-roster refetch on every contractor chat line; the write verbs on this same {member_id} keep refusing outsource and say so themselves.",
 			MCPTool:  "get_member",
 		},
 		// ⚠️ update_member sits at the machine FLOOR **deliberately** — owner

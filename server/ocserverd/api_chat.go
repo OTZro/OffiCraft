@@ -1184,7 +1184,7 @@ func (s *apiServer) HandleListChatAttachmentsApiChatAttachmentsGet(w http.Respon
 	sort.SliceStable(involved, func(i, j int) bool {
 		return involved[i].TS > involved[j].TS
 	})
-	members, err := s.dal.ListMembers()
+	members, err := s.dal.ListMembersIncludingOutsource()
 	if err != nil {
 		internalError(w, err)
 		return
