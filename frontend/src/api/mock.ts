@@ -282,6 +282,53 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
     unread_count: 0,
     schema_version: 2,
   },
+  // A LIVE outsource worker, carried in the roster fixture because the roster
+  // ENDPOINT carries one: GET /api/members answers ListMembersIncludingOutsource
+  // (the P7 convergence), so a cockpit that runs against a mock with no `ow-`
+  // row is running against a roster the server never serves.
+  //
+  // 🔴 WHAT ITS ABSENCE COST (T-26): the roster hands an `ow-` id to the
+  // held-id mirror, a chat delta naming that one id takes the per-item fast
+  // path, and GET /api/members/{ow-} answered 404 until 2026-08-28 — one
+  // guaranteed failed request plus a whole-roster refetch on every contractor
+  // chat line. The offline mock could not reproduce ANY of that, so the whole
+  // path was invisible to every frontend test. The item door is open now, and
+  // this row is what keeps a future re-narrowing from being silent here.
+  //
+  // The office roster, the task assignee picker and the reassign dialog all
+  // filter `kind === "assistant"`, so this row changes no panel — it changes
+  // what the DATA looks like, which is the point.
+  {
+    id: "ow-7d8ad859dd9b",
+    name: "O-179", // a worker reads by its codename, never a personal name
+    kind: "outsource",
+    role_key: "", // contractors carry no role — their duty is the bound task
+    role_name: "",
+    runtime: "claude",
+    model: "claude-sonnet-4.5",
+    actual_model: "",
+    actual_runtime: "",
+    actual_effort: "",
+    actual_machine: "",
+    refocus_op: "",
+    refocus_deadline: 0,
+    effort: "medium",
+    desired_state: "online",
+    desired_machine_id: "warden-mbp5",
+    machine: "warden-mbp5",
+    presence: "online",
+    refocus_since: 0,
+    last_op: "",
+    last_op_ok: null,
+    last_op_log: "",
+    last_op_reason: "",
+    last_op_at: 0,
+    forced_stop_at: 0,
+    roster_status: "active",
+    owner_id: "",
+    unread_count: 0,
+    schema_version: 2,
+  },
 ];
 
 // ── Fixture: per-machine binary-freshness verdicts (bin_status). Mirrors the
