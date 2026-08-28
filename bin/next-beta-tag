@@ -12,16 +12,29 @@
 # exercised by a real publish on main. bin/tests/auto-beta-guard.sh drives the
 # functions below directly with fabricated tag lists instead.
 #
-# THE RULE, decided in T-9fe3 and deliberately narrow:
-#   next = v<major>.<minor>.<patch+1>-beta.1   where the base is the GREATEST
-#   EXISTING semver tag, compared by SEMVER PRECEDENCE, not by string order.
+# THE RULE, decided in T-9fe3, revised for the no-suffix naming ruling (owner,
+# rc-d388651a4e2a option 0 — "one name, one tag, promote just flips a flag"):
+#   next = v<major>.<minor>.<patch+1>   where the base is the GREATEST EXISTING
+#   semver tag, compared by SEMVER PRECEDENCE, not by string order.
 #
-# Two properties follow, and both are the point:
-#   * it is strictly greater than everything that exists. `-beta.1` sorts BELOW
-#     the same X.Y.Z release under semver, so bumping the patch first is what
-#     keeps the result above the base even when the base is itself a release.
-#   * it matches what this repo already does by hand — every existing prerelease
-#     is vX.Y.Z-beta.1 (the newest at the time of writing: v0.5.78-beta.1).
+# One property follows, and it is the point: the result is strictly greater than
+# everything that exists, INCLUDING every already-published `-beta.1` tag from
+# before this ruling (they stay on the tree — 246 releases exist, a batch of them
+# suffixed — and the transition must not be allowed to collide with or regress
+# behind any of them). Bumping the patch is what keeps the result above the base
+# regardless of whether the base is itself a plain release or an old-style
+# prerelease tag: precedence() below still ranks a release above a prerelease of
+# the same X.Y.Z and compares prerelease identifiers per spec, so a leftover
+# `-beta.N` tag is read correctly even though nothing here prints that shape
+# anymore. See bin/tests/auto-beta-guard.sh's "T" block for the pinned
+# transition case: greatest existing tag is still old-style suffixed, and the
+# computed next tag is unsuffixed and strictly greater.
+#
+# NAMING DEBT, FLAGGED NOT DECIDED: this script is still called next-beta-tag
+# and its output is still called "the next beta tag" throughout its own usage
+# text and callers, but it no longer computes a beta — it computes THE next
+# release tag. Renaming it is a separate decision (owner's, per this ticket's
+# dispatch) — see the PR description for the callsite count.
 #
 # WHY THE CANDIDATE SET IS THE UNION OF TWO SOURCES
 # `gh release create <tag>` fails if the tag is taken, and a tag can be taken by
@@ -108,7 +121,7 @@ if best is None:
 
 major, minor, patch = best_key[0], best_key[1], best_key[2]
 print(best)
-print("v%d.%d.%d-beta.1" % (major, minor, patch + 1))
+print("v%d.%d.%d" % (major, minor, patch + 1))
 '
 }
 
@@ -119,11 +132,12 @@ print("v%d.%d.%d-beta.1" % (major, minor, patch + 1))
 # greater than the greatest candidate, so it CANNOT be one of them — this check
 # does not fire on any input nbt_compute can produce, and no case in the guard
 # reaches it through nbt_compute. It is kept, and unit-tested directly, for the
-# reason the ticket asked for it: the moment the version rule changes (a
-# `-beta.N+1` bump on the same patch, say, which is the obvious next request) the
-# computation stops being monotonic and this becomes the difference between a red
-# run and overwriting a published tag. It never retries and never increments —
-# a collision is somebody else's decision to make, loudly.
+# reason the ticket asked for it: the moment the version rule changes (a second
+# release cut on the same patch, say, which is the obvious next request once
+# there is no prerelease buffer to absorb a re-cut) the computation stops being
+# monotonic and this becomes the difference between a red run and overwriting a
+# published tag. It never retries and never increments — a collision is
+# somebody else's decision to make, loudly.
 nbt_assert_tag_absent() {
   local tag="$1" line
   while IFS= read -r line; do
@@ -196,9 +210,10 @@ case "${1:-}" in
     cat >&2 <<'USAGE'
 usage: bin/next-beta-tag
 
-  Prints the next beta tag — v<major>.<minor>.<patch+1>-beta.1 off the greatest
-  existing semver tag, where "existing" means git tags AND GitHub release tags.
-  Read-only: it creates nothing. The base it chose goes to stderr.
+  Prints the next release tag — v<major>.<minor>.<patch+1>, no suffix — off the
+  greatest existing semver tag, where "existing" means git tags AND GitHub
+  release tags (old-style -beta.N tags included). Read-only: it creates
+  nothing. The base it chose goes to stderr.
 USAGE
     exit 2 ;;
   *) nbt_die "unexpected argument '$1' — this command takes none." 2 ;;

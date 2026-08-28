@@ -1839,19 +1839,23 @@ nbt_next() { # nbt_next <tags> — sets RC, TAG (stdout only) and BASE
   BASE="$(sed -n 's/^\[next-beta-tag\] base: \([^ ]*\).*/\1/p' "$WORK/nbt.err")"
 }
 
-# N0 — the shape this repo actually uses, and the reason the rule is patch+1
-# rather than beta+1: the base is itself a -beta.1, and `-beta.N` sorts BELOW the
-# same X.Y.Z under semver, so anything that did not move the patch could not come
-# out greater than its own base. The trailing non-semver tag is what pins the
+# N0 — the TRANSITION shape this repo actually has on the tree right now: the
+# greatest existing tag is an OLD-STYLE `-beta.1` (246 releases exist, a batch of
+# them suffixed that way, and none of that history gets rewritten by this
+# ruling). The rule is patch+1 rather than an in-place suffix bump precisely
+# because `-beta.N` sorts BELOW the same X.Y.Z under semver, so anything that did
+# not move the patch could not come out greater than its own base — and that
+# still holds with the suffix gone from the OUTPUT: the computed tag has none,
+# but the base that decided it can. The trailing non-semver tag is what pins the
 # other half of the rule — such a tag must be IGNORED, not rejected: mutate the
 # filter into a refusal and these three checks are the only ones that go red.
 nbt_next "v0.5.77-beta.1
 v0.5.78-beta.1
 v0.5.9
 some-tag"
-check "N0 the repo's own shape: base is the greatest beta, next bumps the patch" "0" "$RC"
-check "N0 …base chosen"      "v0.5.78-beta.1" "$BASE"
-check "N0 …next tag"         "v0.5.79-beta.1" "$TAG"
+check "N0 the repo's own transition shape: base is the greatest OLD-STYLE beta, next bumps the patch with NO suffix" "0" "$RC"
+check "N0 …base chosen (still the suffixed tag — precedence reads it correctly)" "v0.5.78-beta.1" "$BASE"
+check "N0 …next tag has NO -beta.N suffix" "v0.5.79" "$TAG"
 
 # N1 — THE case that separates semver ordering from string ordering. As strings,
 # "v1.0.0-beta.9" > "v1.0.0-beta.10"; under semver, numeric prerelease identifiers
@@ -1861,7 +1865,7 @@ check "N0 …next tag"         "v0.5.79-beta.1" "$TAG"
 nbt_next "v1.0.0-beta.9
 v1.0.0-beta.10"
 check "N1 beta.10 outranks beta.9 (numeric, not lexical, prerelease compare)" "v1.0.0-beta.10" "$BASE"
-check "N1 …and the next tag is the patch bump off it" "v1.0.1-beta.1" "$TAG"
+check "N1 …and the next tag is the patch bump off it, no suffix" "v1.0.1" "$TAG"
 
 # N2 — a candidate set with NO prerelease at all. A release outranks any
 # prerelease of the same X.Y.Z, and the patch numbers must compare numerically:
@@ -1871,7 +1875,7 @@ v0.5.8
 v0.5.9
 v0.5.78"
 check "N2 releases only: greatest is by NUMERIC patch, not string order" "v0.5.78" "$BASE"
-check "N2 …and the next tag is a beta above it" "v0.5.79-beta.1" "$TAG"
+check "N2 …and the next tag is a release above it, no suffix" "v0.5.79" "$TAG"
 
 # N3 — an EMPTY candidate set is a hard failure, not "start from v0.0.1-beta.1".
 # The realistic cause is a query that broke, and the friendly fallback would
@@ -1905,6 +1909,43 @@ fi
 nbt "v0.5.78-beta.1
 v0.5.77-beta.1" nbt_assert_tag_absent v0.5.79-beta.1
 check "N4b sentinel — an unused tag passes the collision check" "0" "$RC"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# T — THE TRANSITION: this repo's 246 existing releases include a batch tagged
+# the OLD way (vX.Y.Z-beta.1), and the no-suffix ruling does not rewrite any of
+# them. The day the new rule ships, the GREATEST existing tag can still be one
+# of those old-style ones — auto-beta's very next run has to read it correctly
+# and still hand back a bare, unsuffixed tag. N0 above already pins this shape
+# once; T0/T1 pin it explicitly and separately so it cannot be dropped as
+# collateral damage of some other N-case edit.
+# ═══════════════════════════════════════════════════════════════════════════
+echo "── T: transition — old-style suffixed tags still on the tree"
+
+# T0 — the greatest existing tag is an old-style beta, nothing newer exists at
+# all (no plain release above it yet). The computed tag must still be bare.
+nbt_next "v0.5.78-beta.1
+v0.5.77
+v0.5.9"
+check "T0 greatest existing tag is old-style suffixed → still picked as base" "v0.5.78-beta.1" "$BASE"
+case "$TAG" in
+  *-beta*) bad "T0 next tag must carry NO suffix even though its base did (got: $TAG)" ;;
+  "v0.5.79") ok "T0 next tag is bare: v0.5.79" ;;
+  *) bad "T0 next tag wrong (got: $TAG, want: v0.5.79)" ;;
+esac
+
+# T1 — an old-style beta for the SAME X.Y.Z as a plain release that also exists.
+# Semver precedence must still rank the release above the prerelease (this was
+# already true before the ruling; the point here is that it stays true once the
+# OUTPUT stops carrying the suffix that used to make the ordering easy to eyeball).
+nbt_next "v2.1.4
+v2.1.4-beta.1
+v2.1.3"
+check "T1 a release outranks an old-style beta of the same X.Y.Z" "v2.1.4" "$BASE"
+case "$TAG" in
+  *-beta*) bad "T1 next tag must carry NO suffix (got: $TAG)" ;;
+  "v2.1.5") ok "T1 next tag is the bare patch bump: v2.1.5" ;;
+  *) bad "T1 next tag wrong (got: $TAG, want: v2.1.5)" ;;
+esac
 
 # ═══════════════════════════════════════════════════════════════════════════
 # S — WHO ASSEMBLED THE CANDIDATE SET. Everything above feeds a fabricated tag
@@ -1978,8 +2019,9 @@ v0.2.0" "$(printf '%s\n' "$OUT" | grep -v '^$')"
 FAKE_GH_RC=0 FAKE_GH_OUT="v9.9.0" collect "$SWORK" --next
 check "S1 a release tag that exists ONLY on the gh side decides the base" "0" "$RC"
 case "$OUT" in
-  *"base: v9.9.0"*"v9.9.1-beta.1"*) ok "S1 …base=v9.9.0 from the gh-only tag, next=v9.9.1-beta.1" ;;
-  *) bad "S1 …base=v9.9.0 from the gh-only tag, next=v9.9.1-beta.1 (out: $(printf '%s' "$OUT" | tr '\n' '|'))" ;;
+  *"base: v9.9.0"*"v9.9.1"*"-beta"*) bad "S1 …base=v9.9.0 from the gh-only tag, next must be v9.9.1 with NO suffix (out: $(printf '%s' "$OUT" | tr '\n' '|'))" ;;
+  *"base: v9.9.0"*"v9.9.1"*) ok "S1 …base=v9.9.0 from the gh-only tag, next=v9.9.1 (no suffix)" ;;
+  *) bad "S1 …base=v9.9.0 from the gh-only tag, next=v9.9.1 (out: $(printf '%s' "$OUT" | tr '\n' '|'))" ;;
 esac
 
 # S1b — and the mirror, so S1 is not just "gh wins always": a git-only tag that is
