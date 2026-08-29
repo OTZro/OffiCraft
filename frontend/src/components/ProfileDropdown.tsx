@@ -388,10 +388,12 @@ export function ProfileDropdown({
       setNewPwd("");
       setConfirmPwd("");
     } catch (err) {
-      // 429 is the shared credential-attempt brake — this endpoint spends from
-      // the same budget as login. Without this branch it renders as "that
-      // current password is wrong", so an owner who fumbled a few logins is
-      // told their CORRECT password is wrong for up to five minutes.
+      // 429 is the shared in-flight cap — this endpoint and login draw on the
+      // same pool of concurrent credential verifications. It is NOT a failure
+      // count: there is no such counter any more, so fumbling a few logins can
+      // never produce this. Without this branch it renders as "that current
+      // password is wrong", which would tell an owner their CORRECT password is
+      // wrong. The wait is a moment (Retry-After is 1s), not minutes.
       if (isHttpStatus(err, 429)) {
         setPwdRetryAfter(retryAfterSeconds(err));
         setPwdError("throttled");

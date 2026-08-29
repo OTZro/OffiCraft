@@ -634,9 +634,10 @@ export const en: Dict = {
     pwdErrorCurrent: "That current password is wrong",
     pwdErrorTooShort: "The new password needs at least 8 characters",
     pwdErrorMismatch: "The two new passwords don't match",
-    // 429 from the shared credential-attempt brake. Without its own branch this
-    // renders as "that current password is wrong", so an owner who fumbled a few
-    // logins is told their CORRECT password is wrong for up to five minutes.
+    // 429 from the shared in-flight cap on concurrent credential verifications —
+    // never from a failure count, which no longer exists. Without its own branch
+    // this renders as "that current password is wrong", which would tell an owner
+    // their CORRECT password is wrong. The wait is a moment, not minutes.
     pwdErrorThrottled: "Too many verifications in flight — wait a moment and retry",
     // ── second factor (TOTP) ──
     mfa: "Two-factor authentication",

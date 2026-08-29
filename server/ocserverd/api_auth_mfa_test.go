@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -406,11 +407,10 @@ func TestMFADisableClearsEveryStoredKey(t *testing.T) {
 // ── the credential-attempt brake, through the handlers ──────────────────────
 //
 // 🔴 THE TWO TESTS THAT OPEN THIS SECTION ARE THE FLOOR OF THE WHOLE DESIGN.
-// /api/login refuses four materially different things — wrong password, wrong
-// password with a right code, RIGHT password with a wrong code, right password
-// with no code at all — and an attacker must not be able to tell which one they
-// just hit. That takes two independent properties, and losing either one is a
-// security regression rather than a cosmetic one:
+// /api/login refuses several materially different things and an attacker must
+// not be able to tell which one they just hit. That takes two independent
+// properties, and losing either one is a security regression rather than a
+// cosmetic one:
 //
 //	MESSAGE  TestFailedLoginRefusalsAreByteIdentical
 //	TIME     TestFailedLoginsAllCostTheSameWallClock
@@ -420,46 +420,153 @@ func TestMFADisableClearsEveryStoredKey(t *testing.T) {
 // that the password was right. The timing half is the one that gets broken by
 // optimisation. Read both before touching either handler.
 
-// loginRefusalCases builds the four refusals in one place so the two tests
-// below cannot drift apart about what "the four" means. Each returns a body for
-// an api whose MFA is already armed with `secret`.
-func loginRefusalCases(t *testing.T, secret string) []struct {
-	name string
-	body string
-} {
-	t.Helper()
-	return []struct {
-		name string
-		body string
-	}{
-		{"wrong password, no code", loginBody("not-the-password", "")},
-		{"wrong password, wrong code", loginBody("not-the-password", "000000")},
-		{"wrong password, LIVE code", loginBody("not-the-password", liveCode(t, secret))},
-		{"RIGHT password, wrong code", loginBody(mfaTestPassword, "000000")},
+// loginSpreadTolerance is how far apart TestFailedLoginsAllCostTheSameWallClock
+// lets the refusals land before it calls them distinguishable.
+//
+// 🔴 IT IS A MEASURED NUMBER, NOT A GUESSED ONE, and the measurements are here
+// so the next person can move it with evidence instead of with a hunch.
+// 12 runs of that test on this machine — `-count=6`, then `-count=6 -race` —
+// produced a spread of 879µs to 2.35ms, with every case landing between
+// 3.0001s and 3.0026s against the 3s floor. 100ms is ~42x the worst of those,
+// which is the margin that keeps a loaded CI box from producing a false red.
+//
+// ⚠️ IT WAS 1 SECOND, WHICH WAS ~425x THE OBSERVED NOISE — wide enough that any
+// single-branch divergence under a second stayed silently green. An independent
+// reviewer found that before this file's own author did.
+//
+// 🔑 WHAT THIS NUMBER GOVERNS — and the first draft of this comment got it
+// WRONG, so read the correction rather than the intuition. It claimed "catches
+// anything ≥100ms added to one branch". It does not, and it must not:
+//
+//   - Work added BELOW the floor is INVISIBLE, and that is the entire feature.
+//     The floor is a deadline at start+3s, so an extra 120ms on one branch still
+//     lands at 3.000s like every other. Measured: that mutant stays green at any
+//     tolerance, and a test that reddened on it would be asserting against the
+//     design.
+//   - What the tolerance actually governs is divergence that pushes a branch
+//     PAST the floor — work an attacker could still see because no deadline is
+//     hiding it any more. Measured: one branch at floor+150ms is RED at 100ms
+//     and GREEN at the 1s this used to be. That band is exactly what tightening
+//     bought, and it is the whole of what it bought.
+//
+// Going tighter is not supported by the data above: at 50ms the margin over the
+// worst observed spread drops to ~21x, which is where scheduler starvation on a
+// busy runner starts being a plausible cause of a red.
+const loginSpreadTolerance = 100 * time.Millisecond
+
+// loginRefusal is one way POST /api/login can refuse on credential grounds.
+// `build` puts a server into the state that refusal needs and returns it with
+// the body that provokes it — some of these need DIFFERENT server state, not
+// just a different body, which is why this is a constructor and not a string.
+type loginRefusal struct {
+	name  string
+	build func(t *testing.T) (*apiServer, string)
+}
+
+// loginRefusalCases enumerates EVERY credential refusal /api/login can produce,
+// in ONE place, so the two tests below cannot drift apart about what the set is.
+//
+// 🔴 THE LIST IS THE POINT, AND IT USED TO BE WRONG. An earlier version carried
+// four entries whose prose claimed to cover "wrong password / wrong password
+// with a right code / RIGHT password with a wrong code / right password with no
+// code at all" — but the fourth was never in the table (it held three
+// wrong-password variants instead), and the owner's own fourth case, a server
+// with NO PASSWORD SET, was in neither the table nor the prose. Two of the
+// shapes this whole ticket exists to make indistinguishable were going
+// unchecked while a comment said they were checked, which is worse than an
+// admitted gap.
+//
+// 🔑 THE NO-PASSWORD ROW IS THE SHARPEST OF THEM, and it is why this list is
+// load-bearing rather than tidy. Every other row runs a real argon2id
+// verification; that one SHORT-CIRCUITS on `hash == ""` and does no crypto at
+// all, so without the floor it answers in microseconds and announces "this
+// server has no owner password yet" to anyone who asks. It is the one case
+// where the timing spread is falsifiable by deleting a single line.
+func loginRefusalCases() []loginRefusal {
+	// armed builds a server whose factor is live, then hands `body` the secret.
+	armed := func(body func(t *testing.T, secret string) string) func(*testing.T) (*apiServer, string) {
+		return func(t *testing.T) (*apiServer, string) {
+			t.Helper()
+			api := mfaAPI(t)
+			secret := armMFA(t, api)
+			return api, body(t, secret)
+		}
+	}
+	return []loginRefusal{
+		{"wrong password, no code", armed(func(*testing.T, string) string {
+			return loginBody("not-the-password", "")
+		})},
+		{"wrong password, wrong code", armed(func(*testing.T, string) string {
+			return loginBody("not-the-password", "000000")
+		})},
+		{"wrong password, LIVE code", armed(func(t *testing.T, secret string) string {
+			return loginBody("not-the-password", liveCode(t, secret))
+		})},
+		{"RIGHT password, wrong code", armed(func(*testing.T, string) string {
+			return loginBody(mfaTestPassword, "000000")
+		})},
+		{"RIGHT password, no code at all", armed(func(*testing.T, string) string {
+			return loginBody(mfaTestPassword, "")
+		})},
+		{"no password is set on this server", func(t *testing.T) (*apiServer, string) {
+			t.Helper()
+			api := mfaAPI(t)
+			// Back to the pre-claim state. NOT the same as `s.secret == nil`,
+			// which is a server-config refusal with its own message and is
+			// deliberately distinguishable (see
+			// TestLoginUnconfiguredSecretIsNotACredentialFailure).
+			if err := api.dal.DeleteSetting(settingPasswordHash); err != nil {
+				t.Fatalf("clear hash: %v", err)
+			}
+			api.passwordHash = ""
+			return api, loginBody(mfaTestPassword, "")
+		}},
 	}
 }
 
-// TestFailedLoginRefusalsAreByteIdentical — the non-disclosure half. Status,
-// body and every header a client can read must be the same for all four, or the
-// refusal itself says which half of the credential was right.
-func TestFailedLoginRefusalsAreByteIdentical(t *testing.T) {
-	api := mfaAPI(t)
-	secret := armMFA(t, api)
+// headerFingerprint renders every header a client can read, in a STABLE order.
+//
+// 🔴 SORTED, NOT map-ranged. Go randomises map iteration order deliberately, so
+// concatenating `rec.Header()` as it comes out compares two shuffles of the same
+// set and goes red at random. It happens to be stable today only because these
+// responses carry exactly one header; the second one anybody adds would make
+// this test flake intermittently, which is the failure mode that gets a real
+// assertion deleted for being "flaky".
+func headerFingerprint(h http.Header) string {
+	keys := make([]string, 0, len(h))
+	for k := range h {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := ""
+	for _, k := range keys {
+		out += k + "=" + strings.Join(h[k], ",") + ";"
+	}
+	return out
+}
 
+// TestFailedLoginRefusalsAreByteIdentical — the non-disclosure half. Status,
+// body and every header a client can read must be the same for every entry in
+// loginRefusalCases, or the refusal itself says which half of the credential
+// was right.
+func TestFailedLoginRefusalsAreByteIdentical(t *testing.T) {
 	type answer struct {
 		name   string
 		code   int
 		body   string
 		header string
 	}
+	cases := loginRefusalCases()
+	if len(cases) < 2 {
+		t.Fatalf("only %d refusal case(s) — there is nothing to compare", len(cases))
+	}
 	var got []answer
-	for _, tc := range loginRefusalCases(t, secret) {
-		rec := callJSON(api.HandleLoginApiLoginPost, tc.body)
-		hdr := ""
-		for k, v := range rec.Header() {
-			hdr += k + "=" + strings.Join(v, ",") + ";"
-		}
-		got = append(got, answer{tc.name, rec.Code, rec.Body.String(), hdr})
+	for _, tc := range cases {
+		// A server PER CASE: the no-password row needs different state, and a
+		// shared server would also let one case's attempt leak into the next.
+		api, body := tc.build(t)
+		rec := callJSON(api.HandleLoginApiLoginPost, body)
+		got = append(got, answer{tc.name, rec.Code, rec.Body.String(), headerFingerprint(rec.Header())})
 	}
 	for _, a := range got {
 		if a.code != http.StatusUnauthorized {
@@ -482,46 +589,47 @@ func TestFailedLoginRefusalsAreByteIdentical(t *testing.T) {
 // TestFailedLoginsAllCostTheSameWallClock — the other half, and the one the
 // refusal floor exists for.
 //
-// 🔴 HOW THIS AVOIDS BEING FLAKY, because a timing assertion usually is. It
-// does NOT compare the four to each other with a tight tolerance; that would be
-// a race against the scheduler. It asserts that each of the four costs AT LEAST
-// the floor, and that the spread between them is small compared with the floor
-// itself. Both bounds are enormous next to the noise:
+// 🔴 HOW THIS AVOIDS BEING FLAKY, because a timing assertion usually is. Two
+// assertions, both far from the scheduler's noise:
 //
-//   - the lower bound can only be violated by a code change, never by a slow
-//     machine — a machine that is slow makes the elapsed time LONGER;
-//   - the upper bound is the floor plus a full second of slack, and the work
-//     being hidden underneath it is one argon2id (~50 ms, ~250 ms under -race)
-//     plus an HMAC. A run would have to be twenty times slower than -race to
-//     produce a false red.
+//   - EVERY case costs at least the floor. This bound can only be violated by a
+//     code change, never by a slow machine — a slow machine makes elapsed
+//     LONGER. It is what catches a refusal that answers as soon as it knows.
+//   - the SPREAD between them is under loginSpreadTolerance. See that constant
+//     for the measurements the number comes from and for what it does and does
+//     not catch.
 //
 // It uses the PRODUCTION floor rather than a shrunken one on purpose: the
-// property is that the floor dominates the work, and a floor小於 the work would
-// make the whole assertion vacuous. The four cases run concurrently against
-// FOUR SEPARATE servers, so the run costs one floor rather than four and no
-// case can take an in-flight slot from another.
+// property is that the floor dominates the work, and a floor smaller than the
+// work would make the whole assertion vacuous. Every case runs concurrently
+// against its OWN server, so the run costs one floor rather than N and no case
+// can take an in-flight slot from another.
+//
+// ⚠️ WHAT THIS TEST DOES NOT CATCH, stated because an independent reviewer had
+// to rediscover it: turning the deadline into `time.Sleep(floor)` leaves this
+// GREEN. Under that mutant every case still costs floor + its own work, and the
+// works are close enough together that the spread stays inside tolerance. The
+// test that catches it is TestHoldFailureFloorIsADeadlineNotASleep, which
+// measures the wait against a start instant it controls.
 func TestFailedLoginsAllCostTheSameWallClock(t *testing.T) {
-	const cases = 4
+	cases := loginRefusalCases()
 	type result struct {
 		name    string
 		elapsed time.Duration
 		code    int
 	}
-	results := make([]result, cases)
+	results := make([]result, len(cases))
 	var wg sync.WaitGroup
-	for i := 0; i < cases; i++ {
-		api := mfaAPI(t)
-		// The production floor — this test is ABOUT the floor.
-		api.credentialFailureFloor = 0
-		secret := armMFA(t, api)
-		tc := loginRefusalCases(t, secret)[i]
+	for i, tc := range cases {
+		api, body := tc.build(t)
+		api.credentialFailureFloor = 0 // the PRODUCTION floor — this test is about it
 		wg.Add(1)
-		go func(i int) {
+		go func(i int, name string) {
 			defer wg.Done()
 			start := time.Now()
-			rec := callJSON(api.HandleLoginApiLoginPost, tc.body)
-			results[i] = result{tc.name, time.Since(start), rec.Code}
-		}(i)
+			rec := callJSON(api.HandleLoginApiLoginPost, body)
+			results[i] = result{name, time.Since(start), rec.Code}
+		}(i, tc.name)
 	}
 	wg.Wait()
 
@@ -534,7 +642,7 @@ func TestFailedLoginsAllCostTheSameWallClock(t *testing.T) {
 		if r.elapsed < throttleFailureFloor {
 			t.Errorf("%s was refused after %v, less than the %v floor — the handler is "+
 				"answering as soon as it knows, so an attacker can time the difference "+
-				"between a wrong password and a wrong code", r.name, r.elapsed, throttleFailureFloor)
+				"between these refusals", r.name, r.elapsed, throttleFailureFloor)
 		}
 		if r.elapsed < lo {
 			lo = r.elapsed
@@ -543,14 +651,12 @@ func TestFailedLoginsAllCostTheSameWallClock(t *testing.T) {
 			hi = r.elapsed
 		}
 	}
-	// A whole second of slack over a 3s floor: far larger than argon2id under
-	// -race, far smaller than the difference an unfloored handler would show.
-	if spread := hi - lo; spread > time.Second {
+	if spread := hi - lo; spread > loginSpreadTolerance {
 		for _, r := range results {
-			t.Logf("  %-28s %v", r.name, r.elapsed)
+			t.Logf("  %-36s %v", r.name, r.elapsed)
 		}
-		t.Errorf("the four refusals differ by %v — they must be indistinguishable by "+
-			"time as well as by message", spread)
+		t.Errorf("the %d refusals differ by %v (tolerance %v) — they must be "+
+			"indistinguishable by time as well as by message", len(results), spread, loginSpreadTolerance)
 	}
 }
 

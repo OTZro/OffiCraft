@@ -54,8 +54,20 @@ package main
 // password, so noteSuccess was unreachable while blocked; a stranger who could
 // reach the login page could therefore hold the owner out with a trickle of a
 // dozen failures an hour, and the only escape was a host shell. A flat floor
-// has no state for an attacker to drive: the owner's correct password is
-// answered immediately, every time, no matter what anyone else has been doing.
+// has no state for an attacker to drive: nothing anyone does LEAVES ANYTHING
+// BEHIND, so the moment they stop, the owner's next correct password is
+// answered immediately.
+//
+// ⚠️ SAY THAT PRECISELY, NOT GENEROUSLY. "The owner always gets in, no matter
+// what anyone else is doing" is the sentence this design invites, and it is
+// FALSE — TestLoginRefusesTheCorrectPasswordWhenThePoolIsFull pins the
+// opposite. While the in-flight pool is full a correct password is refused with
+// a 429 like anyone else's, and that is deliberate: letting the right password
+// through a full pool would make the gate an oracle that announces the moment
+// someone guesses correctly. What is actually true is narrower and is the whole
+// improvement: the refusal is TRANSIENT and leaves no residue. Nobody can bank
+// failures against the owner, and nobody can keep the door shut by walking away
+// from it.
 // The cost accepted in exchange is that guessing is slowed rather than
 // stopped — at 4 guesses per 3s the front door is ~1.3 attempts a second,
 // which against a real password is still hopeless and against a 6-digit code

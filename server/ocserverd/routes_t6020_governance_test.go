@@ -124,7 +124,7 @@ func t6020AllOpenedRows() map[[2]string]string {
 // and own browser, not an office capability. T-c826 later added the owner's
 // explicit choice that personal member identity/presentation also stays here.
 //
-// The three /api/auth/mfa/* rows join them on the SAME reasoning as
+// The five /api/auth/mfa* rows join them on the SAME reasoning as
 // change-password, one step stronger: they decide how the OWNER authenticates.
 // An admin_agent that could reach them could weaken — or, via enroll+activate,
 // seize — the credential that governs it, so opening them would hand the office
@@ -276,9 +276,13 @@ func TestT6020OpenedToolsAreInTheFrozenCatalog(t *testing.T) {
 }
 
 func TestT6020WithheldRoutesStayOwnerOnlyAndOffTheMCPSurface(t *testing.T) {
-	// 7 from the original rulings + the 3 second-factor rows (see the table's
-	// note). The literal is kept so ADDING an owner-only row stays a deliberate
-	// act with a reason attached, which is the whole point of this file.
+	// 7 from the original rulings + the 5 second-factor rows (see the table's
+	// note) = 12. The arithmetic is spelled out because it was WRONG here —
+	// "7 + the 3 second-factor rows" against a literal of 12, in the one file
+	// whose entire job is to make this count deliberate. The rows are
+	// GET /api/auth/mfa and POST offer/enroll/activate/disable: five, not three.
+	// The literal is kept so ADDING an owner-only row stays a deliberate act
+	// with a reason attached.
 	if len(t6020Withheld) != 12 {
 		t.Fatalf("this table must list 12 owner-only routes and lists %d — 7 from the "+
 			"owner rulings plus the 5 /api/auth/mfa* rows added by the MFA change "+
