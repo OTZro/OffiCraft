@@ -462,10 +462,27 @@
   color: var(--color-accent, var(--color-text-strong));
 }
 
+/* Destructive submit — an OUTLINE button, not the accent fill with red text.
+   🔴 THE EARLIER VERSION SET ONLY `color`, WHICH CANCELLED THE SIGNAL IT WAS
+   ADDING. .profile-dd__submit fills with --color-accent, so red-on-accent lands
+   at 1.62:1 against the green (the same button's normal --color-on-accent is
+   10.55:1) — the label was near-invisible AND still shaped like the primary
+   action. The logout row it was copying is a plain row on --color-card, where
+   red text works; this is a filled CTA, where it does not.
+   The house pattern for a destructive BUTTON is confirm-modal.css's
+   .confirm-modal__btn--danger: transparent fill, danger border, danger label —
+   5.08:1 on --color-card, and unmistakably not the primary action. This is that
+   pattern, down to the same token, so a theme pack revaluing --color-danger-soft
+   moves both destructive buttons together.
+   Not --color-danger as a FILL either: chrome.css:267 already measured white on
+   it at 2.85:1, below AA. */
 .profile-dd__submit--danger {
-  /* Disarming a credential is destructive and reads that way, matching the
-     logout row's treatment. */
-  color: var(--color-danger);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--color-danger-soft) 35%, transparent);
+  color: var(--color-danger-soft);
+}
+.profile-dd__submit--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger-soft) 12%, transparent);
 }
 
 /* The enrolment QR.
