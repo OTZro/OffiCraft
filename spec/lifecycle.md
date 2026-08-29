@@ -110,20 +110,53 @@ ceiling for non-warden agent-token mints.
 - **Credential-attempt brake.** Every seam that compares a caller-supplied secret —
   `POST /api/login`, `POST /api/auth/set-password`'s claim token,
   `POST /api/auth/change-password`, and the `/api/auth/mfa/activate` + `/api/auth/mfa/disable`
-  credential checks — spends from ONE server-wide budget. Past a small free allowance the
-  next attempt is refused with **429 + `Retry-After`**, backing off exponentially to a cap;
-  a success clears it. The budget is server-wide rather than per-client because the server
-  binds loopback, so every remote caller arrives through a tunnel and is indistinguishable
-  by address. Two ordering rules are contract, not style:
+  credential checks — passes through ONE gate, and that gate keeps NO failure history:
+  there is no attempt counter, no exponential backoff, no cap and no decay window. It is
+  two mechanisms:
+  - a **concurrency cap** on credential verifications in progress at once, shared by all
+    five seams. A caller refused for concurrency gets **429 + `Retry-After`**. This is the
+    only 429 these routes can produce. It exists for memory as much as for policy:
+    argon2id is ~19 MiB a verification, so an unbounded burst is an OOM kill.
+  - a **refusal floor** on the two PUBLIC seams only (`/api/login`, `/api/auth/set-password`):
+    a refusal answers no earlier than a fixed interval after the request started. A SUCCESS
+    is answered immediately. Together with the cap this bounds the front door at
+    `cap ÷ floor` attempts a second.
+
+  The three OWNER-GATED seams (change-password, mfa/activate, mfa/disable) take the
+  concurrency cap and NOT the floor: reaching them already requires an owner token, and a
+  stolen owner token is the disaster this design defends against rather than one a delay
+  mitigates. ⚠️ The accepted consequence is that a token holder may guess the current
+  password at change-password, limited only by the cap.
+
+  There is deliberately **no lockout of any kind**, and that is the point of the shape: the
+  earlier counter refused callers BEFORE verifying them, so a stranger reaching the login
+  page could hold the owner out with a trickle of failures and only a host shell could lift
+  it. Nothing here has state an attacker can drive.
+
+  Three rules are contract, not style:
   - the brake MUST sit AFTER any refusal that consults no credential (the `409`s on
     set-password, mfa/activate and mfa/disable), or a documented 409 becomes a 429;
-  - the gate MUST reserve, not merely read: a concurrent burst that only checks the
-    deadline passes in its entirety, which both defeats the backoff and admits N
-    simultaneous argon2id verifications.
+  - the gate MUST reserve, not merely read: a concurrent burst that only inspects state
+    passes in its entirety, which both defeats the floor and admits N simultaneous
+    argon2id verifications;
+  - the floor MUST be a DEADLINE measured from the start of the request, never a sleep
+    added after the decision, and it must be served with no other lock held. Every
+    `/api/login` refusal — wrong password, wrong code, or both — MUST be indistinguishable
+    by message AND by elapsed time, or the identical refusal message discloses through
+    latency exactly what it refuses to say.
+- **Password-exposure alert.** The one `/api/login` refusal that carries information is a
+  CORRECT password with a wrong second factor: the password has leaked, and no brake
+  repairs that. The server therefore posts a durable chat message to the seeded assistant
+  asking her to have the owner change it. It MUST be dispatched asynchronously (doing the
+  work inline makes that one branch measurably slower than the others and leaks the bit the
+  floor is hiding) and MUST be rate-limited to at most one message per window, carrying the
+  number of attempts folded into it (the trigger is attacker-controlled). It is a mailbox
+  message, not a wake: an offline assistant reads it when she next comes online.
 - First-run claim: while no password is set, serve start mints a one-shot
   `auth.claim_token` and prints it ONLY to the local serve log / installer banner;
-  `POST /api/auth/set-password` MUST require it (401 mismatch; 409 once a password
-  exists; 429 once the attempt budget is spent) and MUST consume it on success. Possession proves host shell access — the gate
+  `POST /api/auth/set-password` MUST require it (401 mismatch, served no earlier than the
+  refusal floor; 409 once a password exists; 429 when the concurrency cap is full) and MUST
+  consume it on success. Possession proves host shell access — the gate
   against a public-tunnel visitor claiming a fresh server.
 - Machine claim codes: the onboard / boot-command responses mint a **one-time claim code**
   (32 random bytes, base64url) alongside the exec-token, and the `boot_command` one-liner

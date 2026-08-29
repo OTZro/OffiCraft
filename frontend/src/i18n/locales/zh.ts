@@ -535,7 +535,7 @@ export const zh = {
     // 「看不見」:message key 白名單只收 string leaf,所以 template function 裡
     // 的每一個字都無法被主題的 wording 覆寫、也不會出現在生成的 key 清單裡,
     // 於是 drift 閘門一路綠燈,而那句話其實永遠改不動。
-    throttledLead: "失敗次數過多，請於",
+    throttledLead: "目前同時處理的登入太多，請於",
     throttledTail: "秒後再試。",
     // 當一次被拒的登入其實是「少了驗證碼」而不是「密碼錯」時顯示 —— 也就是這面
     // 牆本來是過期的、剛剛才長出驗證碼欄位。必須解釋欄位為什麼突然出現，否則
@@ -716,7 +716,7 @@ export const zh = {
     pwdErrorMismatch: "兩次輸入的新密碼不一樣",
     // 共用憑證嘗試煞車回的 429。少了這個分支會顯示成「目前密碼不對」,於是
     // 剛才登入打錯幾次的 owner 會被告知他正確的密碼是錯的,最長五分鐘。
-    pwdErrorThrottled: "失敗次數過多 — 請稍候再試",
+    pwdErrorThrottled: "目前同時處理的驗證太多 — 請稍候再試",
     // ── 第二因子(TOTP) ──
     mfa: "兩步驟驗證",
     mfaSubOff: "未開啟 — 你的密碼是唯一的鑰匙",

@@ -2624,23 +2624,20 @@ def test_mfa_full_ceremony(hctx: HCtx) -> None:
     The codes are computed independently from RFC 6238 (see _totp_code) — this
     is the suite's proof that an ordinary authenticator app interoperates.
 
-    🔴 IT ALSO DEPENDS ON THE SHARED CREDENTIAL BUDGET, and that dependency is
-    real rather than theoretical — say it out loud so the next person adding a
-    negative-credential assertion here knows what they are spending.
+    ⚠️ THE SHARED FAILURE BUDGET THIS DOCSTRING USED TO WARN ABOUT NO LONGER
+    EXISTS, and the warning is kept in negative form because it is exactly the
+    kind of thing someone re-derives from an old memory. There is no attempt
+    counter, no free allowance and no backoff any more (T-19 §0): the brake is a
+    concurrency cap plus, on the PUBLIC seams only, a fixed per-refusal wait. So
+    a refusal here no longer costs a later step anything, and the `finally`
+    disable can no longer throttle ITSELF into a 429 — which two earlier versions
+    of this test managed to do, leaving the factor ARMED and cascading into every
+    later login fixture in the run.
 
-    The server's attempt brake is ONE process-wide bucket cleared only by a
-    success, and this test deliberately provokes several refusals. Each
-    successful step in the ceremony (activate, then the two-factor login) clears
-    it, which is what leaves headroom; the run currently ends with three
-    failures before the disable, against a free allowance of
-    throttleFreeFailures. Exceed it and the `finally` disable itself answers 429,
-    which leaves the factor ARMED and cascades into every later login fixture in
-    the run — a failure that surfaces far away from its cause. A previous version
-    of this test did exactly that, and an earlier still one throttled itself by
-    retrying disable with codes outside the acceptance window.
-
-    So: if you add a refusal here, add it BEFORE a step that succeeds, not after
-    the last one.
+    What a refusal DOES still cost is wall-clock, and only on the two public
+    seams: a failed /api/login here waits out the server's refusal floor before
+    answering. The mfa activate/disable refusals below are owner-gated and take
+    no floor at all, so they are as fast as they ever were.
     """
     owner = _auth(hctx.owner_token)
     password = os.environ["OC_OWNER_PASSWORD"]
@@ -2777,10 +2774,12 @@ def test_mfa_full_ceremony(hctx: HCtx) -> None:
     finally:
         if armed:
             # Disarm with BOTH factors, using the LAST unspent slot in the
-            # window (+1). No retry loop: a loop over offsets outside the ±1
-            # window can only fail, and each failure spends from the shared
-            # credential-attempt budget — which is how an earlier version of
-            # this test throttled ITSELF into a 429 instead of disarming.
+            # window (+1). Still no retry loop: a loop over offsets outside the
+            # ±1 window can only fail, so it would burn the remaining window for
+            # nothing. (It used to be worse than pointless — each failure spent
+            # from a shared credential budget, which is how an earlier version of
+            # this test throttled ITSELF into a 429 instead of disarming. That
+            # budget is gone; the loop is still wrong.)
             r = hctx.client.post(
                 "/api/auth/mfa/disable",
                 json={"password": password, "code": _totp_code(secret, step_offset=1)},

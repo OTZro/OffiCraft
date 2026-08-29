@@ -275,7 +275,7 @@ export interface paths {
          *     vs login on `password_set` and renders its code field from `mfa_required`; see
          *     AuthStatusDTO for why that second bit is disclosed to an unauthenticated
          *     caller. Nothing else about the auth state is disclosed — never the secret, the
-         *     replay floor, or the attempt budget.
+         *     replay floor, or how many verifications are in flight.
          */
         get: operations["handle_auth_status_api_auth_status_get"];
         put?: never;
@@ -1368,13 +1368,21 @@ export interface paths {
          *     and its absence or a wrong value is the same flat 401. A code is single-use —
          *     replaying one inside its ~90s acceptance window is refused.
          *
-         *     Every failed attempt — wrong password AND wrong code alike — spends from a
-         *     server-wide credential-attempt budget. Past a small free allowance the next
-         *     attempt is refused with 429 and a `Retry-After` header, backing off
-         *     exponentially to a cap; a success clears the history. The budget is
-         *     SERVER-WIDE rather than per-client on purpose: the server binds loopback, so
-         *     every remote caller arrives through a tunnel and is indistinguishable by
-         *     address.
+         *     Every failed attempt — wrong password AND wrong code alike — is answered no
+         *     earlier than a fixed interval after the request arrived, so the four ways to
+         *     fail here are indistinguishable by ELAPSED TIME as well as by message. A
+         *     success is answered immediately: knowing the password costs nothing. There is
+         *     no attempt counter, no backoff and no lockout — nobody can hold the owner out
+         *     by guessing. Separately, a server-wide cap on concurrent credential
+         *     verifications answers 429 with a `Retry-After` header when it is full; that is
+         *     the only 429 this route produces. The cap is SERVER-WIDE rather than
+         *     per-client on purpose: the server binds loopback, so every remote caller
+         *     arrives through a tunnel and is indistinguishable by address.
+         *
+         *     A correct password with a wrong code is the one refusal that means something —
+         *     the password has leaked — so the server also warns the seeded assistant, out
+         *     of band and rate-limited, asking her to have the owner change it. The response
+         *     to the caller is unchanged and takes exactly as long as any other refusal.
          *
          *     The signing secret and the password hash are loaded from the DB settings table
          *     at boot and updated in place by the owner endpoints; this handler never sees a

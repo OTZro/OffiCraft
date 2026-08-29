@@ -474,7 +474,7 @@ export const en: Dict = {
     // function is unreachable by a theme's wording overlay AND absent from the
     // generated key list, which leaves the drift gate green while the sentence
     // is silently un-overridable.
-    throttledLead: "Too many failed attempts. Try again in",
+    throttledLead: "Too many logins in flight. Try again in",
     throttledTail: "s.",
     // Shown when a refused sign-in turns out to be a MISSING code rather than a
     // wrong password — i.e. this wall was out of date and has just grown its
@@ -637,7 +637,7 @@ export const en: Dict = {
     // 429 from the shared credential-attempt brake. Without its own branch this
     // renders as "that current password is wrong", so an owner who fumbled a few
     // logins is told their CORRECT password is wrong for up to five minutes.
-    pwdErrorThrottled: "Too many failed attempts — wait a moment and retry",
+    pwdErrorThrottled: "Too many verifications in flight — wait a moment and retry",
     // ── second factor (TOTP) ──
     mfa: "Two-factor authentication",
     mfaSubOff: "Off — your password is the only key",
