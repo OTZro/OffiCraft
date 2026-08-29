@@ -302,9 +302,27 @@ func (s *apiServer) HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWrite
 // token can guess the CURRENT password here at full speed, and a successful
 // guess is a takeover rather than a read — rotating the password stamps
 // password_changed_at, which revokes the legitimate owner's own tokens and
-// leaves them locked out to a host shell. Concurrent argon2id verifications
-// (~19 MiB each, password.go) are likewise unbounded here; the bound that
-// remains is the owner token itself.
+// leaves them locked out to a host shell.
+//
+// 🔴 WHAT REMAINS IS NOT "NOTHING" — IT IS settingsMu, THREE LINES BELOW. An
+// earlier version of this comment said concurrent argon2id here was "unbounded",
+// which is a scarier claim than the code supports and the exact species of
+// defect this ticket exists to catch. The write lock is taken BEFORE
+// verifyPassword, so these verifications are FULLY SERIALISED: measured 8
+// concurrent calls at 7.1-7.9x the cost of one (ratio ≈ N), against
+// /api/login's 4 at 1.15-1.31x (ratio ≈ 1) as the positive control. A token
+// holder gets ~1 guess per verification — about 60 a second where one call is
+// 16-18 ms — and the process-wide concurrent-argon2id ceiling is login's 4 plus
+// this 1, ~95 MiB (arithmetic on the measured concurrency, not measured).
+// Dropping the gate changed neither: the old order was begin() → settingsMu →
+// verifyPassword, so settingsMu was always the binding constraint. What grew is
+// the queue behind the lock, at kilobytes per waiter.
+//
+// ⚠️ AND THAT LOCK IS SHARED WITH LOGIN. /api/login's verifyAndSpendTOTP takes
+// the same write lock, so a caller hammering this endpoint puts every login's
+// second-factor step behind its queue. That was equally true before this
+// change and is written down here because none of the three documents describing
+// this subsystem said it.
 func (s *apiServer) HandleChangePasswordApiAuthChangePasswordPost(w http.ResponseWriter, r *http.Request) {
 	var body ChangePasswordDTO
 	if !decodeJSONBodyRequired(w, r, &body, "current_password", "new_password") {

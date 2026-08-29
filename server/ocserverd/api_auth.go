@@ -85,9 +85,10 @@ func (s *apiServer) HandleLoginApiLoginPost(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusUnauthorized, "auth not configured")
 		return
 	}
-	// The brake sits BEFORE argon2id on purpose: at ~19 MiB and ~50 ms a
-	// verification, the hash is itself the cheapest denial-of-service on this
-	// server. begin RESERVES an in-flight slot, which is what stops a concurrent
+	// The brake sits BEFORE argon2id on purpose: at ~19 MiB and ~16-18 ms a
+	// verification (measured on one Darwin box — the time is hardware-specific,
+	// the memory is a parameter in password.go), the hash is itself the cheapest
+	// denial-of-service on this server. begin RESERVES an in-flight slot, which is what stops a concurrent
 	// burst running N argon2id verifications at once — and it is also what turns
 	// the floor below from a per-request latency into a rate limit, because the
 	// slot is held for the whole of that wait.

@@ -134,9 +134,22 @@ ceiling for non-warden agent-token mints.
   slot the login page needs. That coupling existed while the owner-gated seams shared the
   pool — a token holder could fill it and make the owner's own login answer 429 — and
   removing them from the brake removed it. ⚠️ The accepted consequence is that a holder of
-  an owner token may guess the current password at change-password at full speed, with
-  unbounded concurrent argon2id; the reasoning is that a stolen owner token is already the
-  disaster this design defends against rather than one a delay mitigates.
+  an owner token may guess the current password at change-password without a brake; the
+  reasoning is that a stolen owner token is already the disaster this design defends against
+  rather than one a delay mitigates.
+
+  🔑 **"Without a brake" is not "unbounded", and the difference is measured rather than
+  asserted.** change-password holds the settings write lock across its password
+  verification, so those verifications are fully SERIALISED — 8 concurrent calls cost
+  7.1–7.9x one call (ratio ≈ N), against login's 4 concurrent at 1.15–1.31x (ratio ≈ 1) as
+  the control. A token holder therefore gets roughly one guess per verification, and the
+  process-wide ceiling on concurrent password hashing is the brake's cap plus that one.
+  Removing the brake from this route changed neither figure — the lock was always the
+  binding constraint — only the depth of the queue behind the lock.
+
+  ⚠️ That settings write lock is SHARED with `/api/login`'s second-factor step, so sustained
+  traffic on change-password queues every login's code check behind it. This predates the
+  brake changes and is recorded here because it was previously written down nowhere.
 
   There is deliberately **no lockout of any kind**, and that is the point of the shape: the
   earlier counter refused callers BEFORE verifying them, so a stranger reaching the login

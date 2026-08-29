@@ -11,8 +11,9 @@ package main
 // CLAUDE.md 〈文件鐵律〉 forbids. If you need the set, ask the compiler.
 //
 // WHY THIS EXISTS: before it, /api/login had no attempt limit of any kind. The
-// only brake was argon2id's own ~50ms cost, which is a CPU brake, not a policy
-// one. Under the shipped security model (loopback bind, exposure via a tunnel
+// only brake was argon2id's own cost (~16-18 ms measured on one Darwin box;
+// the figure is hardware-specific and this comment used to quote ~50 ms with no
+// machine attached), which is a CPU brake, not a policy one. Under the shipped security model (loopback bind, exposure via a tunnel
 // the owner opens themselves — docs/guide/mobile.md) that was defensible; the
 // moment an owner follows our OWN mobile instructions and puts a tunnel in
 // front of this, it becomes an unlimited online password-guessing oracle that
@@ -106,9 +107,28 @@ package main
 // pool and make the OWNER's login answer 429 — an authenticated caller
 // degrading the front door. ⚠️ THE COST IS REAL AND THE OWNER ACCEPTED IT
 // KNOWING: whoever holds a live owner token can guess the CURRENT password at
-// change-password at full speed, with unbounded concurrent argon2id. The
-// judgement behind that is that a stolen owner token is already the disaster
-// this system defends against — 「被進來本身嚴重程度跟密碼外流是一樣的」.
+// change-password without a brake. The judgement behind that is that a stolen
+// owner token is already the disaster this system defends against —
+// 「被進來本身嚴重程度跟密碼外流是一樣的」.
+//
+// 🔴 BUT "WITHOUT A BRAKE" IS NOT "UNBOUNDED", AND AN EARLIER VERSION OF THIS
+// COMMENT SAID IT WAS. That was this file's own author writing a scarier claim
+// than the code supports, in a ticket about exactly that failure — so the
+// measurement is here rather than an adjective. change-password holds
+// settingsMu's WRITE lock across its verifyPassword, so its argon2id calls are
+// FULLY SERIALISED: measured 8 concurrent calls at 7.1–7.9x the cost of one
+// (ratio ≈ N ⇒ concurrency 1), against /api/login's 4 concurrent at 1.15–1.31x
+// (ratio ≈ 1 ⇒ genuinely parallel) as the positive control.
+//
+// So what a token holder actually gets is ~1 guess per verification, serialised:
+// about 60 a second on the machine that was measured (one call 16–18 ms). And
+// the whole-process ceiling on concurrent argon2id is login's 4 plus that 1 =
+// 5, i.e. ~95 MiB at ~19 MiB each — that number is ARITHMETIC on the measured
+// concurrency, not itself measured. Removing the gate from this route did NOT
+// change either figure: the old code was begin() → settingsMu →
+// verifyPassword, so settingsMu was always the binding constraint and the cap
+// never was. What grew is the QUEUE behind the lock, and a queued request costs
+// kilobytes, not 19 MiB.
 //
 // 🔴 THE OTHER HALF OF THAT TRADE IS THE ALERT, NOT A LOCKOUT. When
 // /api/login accepts the password and refuses the second factor, the password
