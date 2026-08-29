@@ -465,7 +465,8 @@ export const en: Dict = {
     errorWithCode: "Incorrect password or code, try again",
     codePlaceholder: "6-digit code",
     codeHint: "From your authenticator app",
-    // 429 + Retry-After: the credential-attempt brake, not a wrong password.
+    // 429 + Retry-After: the pool of concurrent verifications is full — not a
+    // wrong password, and not an attempt count; that counter no longer exists.
     //
     // LEAD/TAIL static leaves, assembled by i18n/compose.ts — NOT an
     // interpolation function in the dictionary. theming-and-i18n.md forbids the

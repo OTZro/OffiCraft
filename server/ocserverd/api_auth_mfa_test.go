@@ -423,12 +423,40 @@ func TestMFADisableClearsEveryStoredKey(t *testing.T) {
 // loginSpreadTolerance is how far apart TestFailedLoginsAllCostTheSameWallClock
 // lets the refusals land before it calls them distinguishable.
 //
-// 🔴 IT IS A MEASURED NUMBER, NOT A GUESSED ONE, and the measurements are here
-// so the next person can move it with evidence instead of with a hunch.
-// 12 runs of that test on this machine — `-count=6`, then `-count=6 -race` —
-// produced a spread of 879µs to 2.35ms, with every case landing between
-// 3.0001s and 3.0026s against the 3s floor. 100ms is ~42x the worst of those,
-// which is the margin that keeps a loaded CI box from producing a false red.
+// 🔴 IT IS A MEASURED NUMBER, NOT A GUESSED ONE — and the measurement CONDITIONS
+// are part of the number. Quoting the value without them is how a comment ends
+// up claiming a range nobody measured.
+//
+//	WHAT WAS MEASURED, AND WHERE
+//	  * this file's author: 12 runs on an idle multi-core Darwin box,
+//	    `-count=6` then `-count=6 -race`. Spread 879µs – 2.35ms; every case
+//	    landed between 3.0001s and 3.0026s against the 3s floor.
+//	  * an independent reviewer: 44 runs across 5 environments. Agreed
+//	    everywhere EXCEPT `GOMAXPROCS=1` + `-race`, which produced 1 false red
+//	    in 14 runs at a spread of 119ms.
+//
+// 100ms is ~42x the worst spread seen on any configuration that this project
+// actually runs. It is NOT 42x the worst seen anywhere: under GOMAXPROCS=1 with
+// -race it is under the noise, and that pair would flake.
+//
+// ⚠️ THAT PAIR IS NOT ON CI, and this file's author re-checked it rather than
+// taking it on report. Measured here, not quoted: every `runs-on` in
+// `.github/workflows/ci.yml` is `macos-15`; a grep for `go test … -race` or a
+// `-race` in GOFLAGS across `.github`, `Makefile`, `bin`, `conformance`,
+// `server` and `cli` finds two hits and BOTH are prose (a comment in this file
+// and cli/ocwarden/CUTOVER.md) — nothing that executes; `GOMAXPROCS` is set in
+// zero places. Positive control for the same pattern shape: `go test … -count=`
+// hits 17 lines.
+//
+// ⚠️ Do not repeat "the -race grep is a clean zero" — it is not, it is zero
+// EXECUTING hits and two textual ones, and a bare `grep -- -race` returns a
+// dozen substring matches on words like `freeze-race` and `sch-race`. Anyone
+// who ADDS `-race` under a constrained GOMAXPROCS owns re-measuring this
+// number.
+//
+// ⚠️ An earlier version of this comment said 100ms "keeps a loaded CI box from
+// producing a false red". Nobody had measured a loaded CI box. The measurements
+// above are what there is; the retry in the test is what covers the rest.
 //
 // ⚠️ IT WAS 1 SECOND, WHICH WAS ~425x THE OBSERVED NOISE — wide enough that any
 // single-branch divergence under a second stayed silently green. An independent
@@ -595,9 +623,9 @@ func TestFailedLoginRefusalsAreByteIdentical(t *testing.T) {
 //   - EVERY case costs at least the floor. This bound can only be violated by a
 //     code change, never by a slow machine — a slow machine makes elapsed
 //     LONGER. It is what catches a refusal that answers as soon as it knows.
-//   - the SPREAD between them is under loginSpreadTolerance. See that constant
-//     for the measurements the number comes from and for what it does and does
-//     not catch.
+//   - the SPREAD between them is under loginSpreadTolerance, MEASURED TWICE. See
+//     that constant for the measurements the number comes from, and the retry
+//     below for why only this half of the assertion is re-measured.
 //
 // It uses the PRODUCTION floor rather than a shrunken one on purpose: the
 // property is that the floor dominates the work, and a floor smaller than the
@@ -612,52 +640,91 @@ func TestFailedLoginRefusalsAreByteIdentical(t *testing.T) {
 // test that catches it is TestHoldFailureFloorIsADeadlineNotASleep, which
 // measures the wait against a start instant it controls.
 func TestFailedLoginsAllCostTheSameWallClock(t *testing.T) {
-	cases := loginRefusalCases()
 	type result struct {
 		name    string
 		elapsed time.Duration
 		code    int
 	}
-	results := make([]result, len(cases))
-	var wg sync.WaitGroup
-	for i, tc := range cases {
-		api, body := tc.build(t)
-		api.credentialFailureFloor = 0 // the PRODUCTION floor — this test is about it
-		wg.Add(1)
-		go func(i int, name string) {
-			defer wg.Done()
-			start := time.Now()
-			rec := callJSON(api.HandleLoginApiLoginPost, body)
-			results[i] = result{name, time.Since(start), rec.Code}
-		}(i, tc.name)
+	// measure runs every case once, concurrently, each against its OWN server.
+	// Concurrent so the run costs one floor rather than N, and separate servers
+	// so no case can take an in-flight slot from another.
+	measure := func() []result {
+		cases := loginRefusalCases()
+		results := make([]result, len(cases))
+		var wg sync.WaitGroup
+		for i, tc := range cases {
+			api, body := tc.build(t)
+			api.credentialFailureFloor = 0 // the PRODUCTION floor — this test is about it
+			wg.Add(1)
+			go func(i int, name string) {
+				defer wg.Done()
+				start := time.Now()
+				rec := callJSON(api.HandleLoginApiLoginPost, body)
+				results[i] = result{name, time.Since(start), rec.Code}
+			}(i, tc.name)
+		}
+		wg.Wait()
+		return results
 	}
-	wg.Wait()
+	spreadOf := func(rs []result) (time.Duration, time.Duration, time.Duration) {
+		lo, hi := rs[0].elapsed, rs[0].elapsed
+		for _, r := range rs {
+			if r.elapsed < lo {
+				lo = r.elapsed
+			}
+			if r.elapsed > hi {
+				hi = r.elapsed
+			}
+		}
+		return hi - lo, lo, hi
+	}
 
-	lo, hi := results[0].elapsed, results[0].elapsed
+	results := measure()
 	for _, r := range results {
 		if r.code != http.StatusUnauthorized {
 			t.Fatalf("%s → %d, want 401 (the timing assertion below would be measuring "+
 				"the wrong thing)", r.name, r.code)
 		}
+		// 🔴 THE LOWER BOUND IS NOT RETRIED, deliberately. A slow machine makes
+		// elapsed LONGER, so this bound can only be violated by a code change —
+		// there is no flake to absorb, and retrying it would just double the
+		// time it takes to report a real regression.
 		if r.elapsed < throttleFailureFloor {
 			t.Errorf("%s was refused after %v, less than the %v floor — the handler is "+
 				"answering as soon as it knows, so an attacker can time the difference "+
 				"between these refusals", r.name, r.elapsed, throttleFailureFloor)
 		}
-		if r.elapsed < lo {
-			lo = r.elapsed
-		}
-		if r.elapsed > hi {
-			hi = r.elapsed
-		}
 	}
-	if spread := hi - lo; spread > loginSpreadTolerance {
-		for _, r := range results {
-			t.Logf("  %-36s %v", r.name, r.elapsed)
-		}
-		t.Errorf("the %d refusals differ by %v (tolerance %v) — they must be "+
-			"indistinguishable by time as well as by message", len(results), spread, loginSpreadTolerance)
+
+	// 🔑 THE SPREAD IS MEASURED AGAIN BEFORE IT IS BELIEVED. Unlike the bound
+	// above, this one CAN be tripped by the scheduler rather than by the code:
+	// an independent reviewer reproduced exactly that at GOMAXPROCS=1 under
+	// -race (1 red in 14 runs, spread 119ms against a 100ms tolerance). A real
+	// regression is systematic and survives a second measurement; a descheduled
+	// goroutine does not. The retry costs 3 seconds and it costs them ONLY on a
+	// run that was about to go red, so an ordinary green run is unchanged.
+	spread, _, _ := spreadOf(results)
+	if spread <= loginSpreadTolerance {
+		return
 	}
+	t.Logf("spread %v exceeded the %v tolerance on the first measurement — "+
+		"re-measuring once before failing", spread, loginSpreadTolerance)
+	for _, r := range results {
+		t.Logf("  first   %-36s %v", r.name, r.elapsed)
+	}
+	second := measure()
+	spread2, _, _ := spreadOf(second)
+	for _, r := range second {
+		t.Logf("  second  %-36s %v", r.name, r.elapsed)
+	}
+	if spread2 <= loginSpreadTolerance {
+		t.Logf("second measurement spread %v is inside tolerance — treating the first "+
+			"as scheduler noise, not a regression", spread2)
+		return
+	}
+	t.Errorf("the %d refusals differ by %v and then by %v on a re-measurement "+
+		"(tolerance %v) — twice is not the scheduler. They must be indistinguishable "+
+		"by time as well as by message", len(second), spread, spread2, loginSpreadTolerance)
 }
 
 // TestSuccessfulLoginSpendsNoFloor — the other side of the same coin, and the
@@ -783,46 +850,21 @@ func TestSetPasswordFloorDoesNotHoldTheSettingsLock(t *testing.T) {
 	<-done
 }
 
-// TestChangePasswordTakesTheCapButNoFloor — the owner's ruling (T-19 §0): the
-// three owner-GATED seams keep the in-flight cap and nothing else. The cap is
-// there for argon2id's ~19 MiB, not as a guessing limit, and this test pins both
-// halves so that "we removed the backoff" cannot quietly become "we removed the
-// gate".
+// TestChangePasswordShortNewPasswordStaysA422 — a malformed request is not a
+// credential guess and must be answered on its own terms, before any password
+// is read. The 422 must not become a 401 by falling through to the verify.
 //
-// ⚠️ It therefore ALSO pins the accepted cost: a holder of an owner token may
-// guess the current password here without a per-attempt delay.
-func TestChangePasswordTakesTheCapButNoFloor(t *testing.T) {
-	api := mfaAPI(t)
-	api.credentialFailureFloor = 3 * time.Second // production; must go unspent
-	body := `{"current_password":"guess","new_password":"a-long-enough-new-one"}`
-
-	start := time.Now()
-	if rec := callJSON(api.HandleChangePasswordApiAuthChangePasswordPost, body); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("password guess = %d, want 401", rec.Code)
-	}
-	if elapsed := time.Since(start); elapsed >= api.credentialFailureFloor {
-		t.Errorf("a refused change-password took %v — this seam is owner-gated and "+
-			"must NOT serve the front door's refusal floor", elapsed)
-	}
-
-	occupyThrottleSlots(t, api)
-	if rec := callJSON(api.HandleChangePasswordApiAuthChangePasswordPost, body); rec.Code != http.StatusTooManyRequests {
-		t.Errorf("change-password with the pool full = %d, want 429 — without the cap, "+
-			"one token can OOM the process with concurrent argon2id verifications", rec.Code)
-	}
-}
-
-// TestChangePasswordShortNewPasswordStaysA422 — the brake must sit AFTER the
-// shape check. This is the exact ordering bug that turned set-password's
-// documented 409 into a 429 (caught by conformance, not by a unit test).
+// ⚠️ This used to fill the in-flight pool first, to prove the shape check beat
+// the BRAKE. There is no brake on this route any more (see
+// TestOwnerGatedSeamsNeverConsultTheThrottle), so that setup would assert
+// nothing; the ordering it guards is now shape-check before credential-read.
+// The same contract is still live on set-password, where the brake remains.
 func TestChangePasswordShortNewPasswordStaysA422(t *testing.T) {
 	api := mfaAPI(t)
-	occupyThrottleSlots(t, api)
 	rec := callJSON(api.HandleChangePasswordApiAuthChangePasswordPost,
 		`{"current_password":"whatever","new_password":"short"}`)
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Errorf("short new_password while throttled = %d, want 422 — a malformed "+
-			"request is not a credential guess and must not be masked by the brake", rec.Code)
+		t.Errorf("short new_password = %d, want 422", rec.Code)
 	}
 }
 
@@ -997,56 +1039,125 @@ func TestMFAActivateRefusalIsIndistinguishable(t *testing.T) {
 	}
 }
 
-// TestMFAActivateConflictsAreNotThrottled — the ordering contract set-password
-// states in caps: a path that consults no credential must keep its documented
-// status even when the budget is exhausted.
-func TestMFAActivateConflictsAreNotThrottled(t *testing.T) {
-	api := mfaAPI(t)
-	offerMFA(t, api, true)
-	occupyThrottleSlots(t, api)
-	// Nothing pending: a 409, never a 429.
-	if rec := callJSON(api.HandleMfaActivateApiAuthMfaActivatePost,
-		fmt.Sprintf(`{"password":%q,"code":"123456"}`, mfaTestPassword)); rec.Code != http.StatusConflict {
-		t.Errorf("activate with nothing pending while throttled = %d, want 409", rec.Code)
-	}
-}
+// ── the owner-gated seams take NO brake at all ──────────────────────────────
+//
+// 🔴 THIS SECTION USED TO ASSERT THE OPPOSITE, and the whole of it turned over
+// on one owner ruling: 「只有登入需要 throttling」. Three tests that lived here
+// are gone because what they pinned no longer exists, and saying which is the
+// point — a reader who finds thin coverage here should see a decision, not an
+// oversight:
+//
+//	M11  TestMFADisableTakesTheBrakeBeforeVerifying   pinned disable calls begin()
+//	M12  TestMFAActivateTakesTheBrakeBeforeVerifying  pinned activate calls begin()
+//	M13  TestMFADisableRejectionSpendsFromTheBudget   pinned a failure counter
+//
+// M13 went in the first round (§0 deleted the counter). M11 and M12 go now, for
+// the same reason one step further: those handlers no longer call the throttle
+// at all, so a test asserting that they do would be asserting against the
+// ruling. Two more went with them — TestMFAActivateConflictsAreNotThrottled and
+// TestMFADisableConflictIsNotThrottled — which pinned that a 409 beats the
+// brake on a route that now has no brake for it to beat.
+//
+// What replaces all five is ONE test of the new property, below. It is stronger
+// than what it replaces: the four removed tests asserted an ordering, this one
+// asserts that a full pool changes NOTHING about these three routes — including
+// that they still SUCCEED, which no ordering test ever checked.
 
-// TestMFADisableConflictIsNotThrottled — the mirror, and the one the conformance
-// auth matrix pins at 409. The throttle gate used to precede this 409.
-func TestMFADisableConflictIsNotThrottled(t *testing.T) {
-	api := mfaAPI(t)
-	occupyThrottleSlots(t, api)
-	if rec := callJSON(api.HandleMfaDisableApiAuthMfaDisablePost,
-		fmt.Sprintf(`{"password":%q,"code":"123456"}`, mfaTestPassword)); rec.Code != http.StatusConflict {
-		t.Errorf("disable with nothing armed while throttled = %d, want 409", rec.Code)
-	}
-}
+// TestOwnerGatedSeamsNeverConsultTheThrottle — the positive form of the owner's
+// ruling, and the guard against someone re-adding a cap here because it looks
+// prudent.
+//
+// 🔑 THE POOL IS SHARED WITH /api/login, AND THAT IS WHY THIS MATTERS BEYOND
+// TIDINESS. While these handlers took a slot, a token holder hammering
+// change-password could fill all four and make the OWNER's login answer 429 —
+// an already-authenticated caller degrading the front door for everyone. With
+// the pool held full for the whole test, every one of these three must behave
+// exactly as it would on an idle server.
+func TestOwnerGatedSeamsNeverConsultTheThrottle(t *testing.T) {
+	t.Run("change-password succeeds with the pool full", func(t *testing.T) {
+		api := mfaAPI(t)
+		occupyThrottleSlots(t, api)
+		rec := callJSON(api.HandleChangePasswordApiAuthChangePasswordPost,
+			fmt.Sprintf(`{"current_password":%q,"new_password":"a-long-enough-new-one"}`, mfaTestPassword))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("change-password with the pool full = %d %s, want 200 — this seam "+
+				"must not consult loginThrottle at all", rec.Code, rec.Body.String())
+		}
+	})
 
-// ── the two MFA seams' own brake, from the other side ───────────────────────
-//
-// 🔴 WHY THESE THREE EXIST. TestMFAActivateConflictsAreNotThrottled and
-// TestMFADisableConflictIsNotThrottled above pin only the ORDERING — that a 409
-// beats the brake — and never the positive: that these two handlers call the
-// gate at all. Deleting the whole `begin` block from either handler left every
-// test in this package green (T-19 mutants M11/M12). The same deletion at
-// /api/login, /api/auth/change-password and /api/auth/set-password turns their
-// tests red immediately, so this was a gap specific to these two.
-//
-// ⚠️ A THIRD TEST USED TO LIVE HERE (M13, TestMFADisableRejectionSpendsFromThe
-// Budget) and it is deliberately gone rather than broken. It pinned that a
-// refused disable called noteFailure — i.e. that it spent from the shared
-// failure counter — and §0 deleted that counter on the owner's ruling. Removing
-// a test whose subject no longer exists is not a coverage regression; what
-// replaced it is the pair below, which pin the gate these two handlers DO still
-// take.
-//
-// It matters most on disable: that seam takes the password AND a live code, and
-// it is the one that TAKES THE SECOND LOCK OFF. An unbraked disable is unlimited
-// guessing against exactly the endpoint whose success removes the factor.
+	t.Run("change-password still refuses a wrong password with 401", func(t *testing.T) {
+		api := mfaAPI(t)
+		api.credentialFailureFloor = 3 * time.Second // production; must go unspent
+		occupyThrottleSlots(t, api)
+		start := time.Now()
+		rec := callJSON(api.HandleChangePasswordApiAuthChangePasswordPost,
+			`{"current_password":"guess","new_password":"a-long-enough-new-one"}`)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("wrong current password with the pool full = %d, want 401 (never 429)", rec.Code)
+		}
+		if elapsed := time.Since(start); elapsed >= api.credentialFailureFloor {
+			t.Errorf("a refused change-password took %v — this seam must serve no "+
+				"refusal floor either", elapsed)
+		}
+	})
+
+	t.Run("mfa/activate arms the factor with the pool full", func(t *testing.T) {
+		api := mfaAPI(t)
+		offerMFA(t, api, true)
+		rec := callJSON(api.HandleMfaEnrollApiAuthMfaEnrollPost, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("enroll: %d %s", rec.Code, rec.Body.String())
+		}
+		secret := *decodeBody[mfaStateDTO](t, rec).Secret
+		occupyThrottleSlots(t, api)
+		rec = callJSON(api.HandleMfaActivateApiAuthMfaActivatePost,
+			fmt.Sprintf(`{"password":%q,"code":%q}`, mfaTestPassword, liveCode(t, secret)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("activate with the pool full = %d %s, want 200", rec.Code, rec.Body.String())
+		}
+		if !api.authMFAEnrolled() {
+			t.Error("activate answered 200 but armed nothing")
+		}
+	})
+
+	t.Run("mfa/disable disarms the factor with the pool full", func(t *testing.T) {
+		api := mfaAPI(t)
+		secret := armMFA(t, api)
+		occupyThrottleSlots(t, api)
+		// nextCode, not liveCode: activation SPENT the current step, so a
+		// liveCode would be refused by the replay floor for an unrelated reason.
+		rec := callJSON(api.HandleMfaDisableApiAuthMfaDisablePost,
+			fmt.Sprintf(`{"password":%q,"code":%q}`, mfaTestPassword, nextCode(t, secret)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("disable with the pool full = %d %s, want 200", rec.Code, rec.Body.String())
+		}
+		if api.authMFAEnrolled() {
+			t.Error("disable answered 200 but the factor is still armed")
+		}
+	})
+
+	t.Run("the documented 409s survive a full pool", func(t *testing.T) {
+		api := mfaAPI(t)
+		offerMFA(t, api, true)
+		occupyThrottleSlots(t, api)
+		if rec := callJSON(api.HandleMfaActivateApiAuthMfaActivatePost,
+			fmt.Sprintf(`{"password":%q,"code":"123456"}`, mfaTestPassword)); rec.Code != http.StatusConflict {
+			t.Errorf("activate with nothing pending = %d, want 409", rec.Code)
+		}
+		if rec := callJSON(api.HandleMfaDisableApiAuthMfaDisablePost,
+			fmt.Sprintf(`{"password":%q,"code":"123456"}`, mfaTestPassword)); rec.Code != http.StatusConflict {
+			t.Errorf("disable with nothing armed = %d, want 409", rec.Code)
+		}
+	})
+}
 
 // occupyThrottleSlots fills the in-flight pool and keeps it full for the rest of
-// the test. Since §0 it is the ONLY way a handler can answer 429 — there is no
-// failure ramp left to climb — and it needs no clock and no goroutine.
+// the test. It is the ONLY way any handler can answer 429 — there is no failure
+// ramp left to climb — and it needs no clock and no goroutine.
+//
+// 🔑 IT IS NOW USED IN BOTH DIRECTIONS. On the two PUBLIC seams it is the setup
+// that provokes a 429; on the three owner-gated ones it is the setup that must
+// change NOTHING. Read the call site before assuming which.
 //
 // The releases are dropped on purpose: nothing else shares this apiServer.
 func occupyThrottleSlots(t *testing.T, api *apiServer) {
@@ -1058,61 +1169,6 @@ func occupyThrottleSlots(t *testing.T, api *apiServer) {
 	}
 	if _, _, blocked := api.loginThrottle.begin(); !blocked {
 		t.Fatal("the pool admitted more than throttleMaxInFlight — the setup is not throttled")
-	}
-}
-
-// TestMFADisableTakesTheBrakeBeforeVerifying — M11. The gate must be reached on
-// the way in, with the CORRECT credentials in hand: a brake that only holds for
-// wrong answers is not a brake, and one the handler never calls is not there at
-// all.
-func TestMFADisableTakesTheBrakeBeforeVerifying(t *testing.T) {
-	api := mfaAPI(t)
-	secret := armMFA(t, api)
-	occupyThrottleSlots(t, api)
-
-	// nextCode, not liveCode: activation SPENT the current step (see nextCode's
-	// own comment), so a liveCode here would be refused by the replay floor even
-	// with the brake gone — and the "was it disarmed?" assertion below would then
-	// never be able to fire.
-	rec := callJSON(api.HandleMfaDisableApiAuthMfaDisablePost,
-		fmt.Sprintf(`{"password":%q,"code":%q}`, mfaTestPassword, nextCode(t, secret)))
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("disable with the pool full = %d, want 429 — the handler is not calling "+
-			"loginThrottle.begin, so the disable seam has no brake at all", rec.Code)
-	}
-	if rec.Header().Get("Retry-After") == "" {
-		t.Error("429 without a Retry-After header")
-	}
-	if !api.authMFAEnrolled() {
-		t.Error("the factor was DISARMED by a request the brake refused")
-	}
-}
-
-// TestMFAActivateTakesTheBrakeBeforeVerifying — M12, the same gap on the arming
-// seam. Activate demands the password, so it is a password-guessing surface in
-// its own right (that is what TestMFAActivateRequiresThePassword pins), and the
-// brake is what bounds the guessing.
-func TestMFAActivateTakesTheBrakeBeforeVerifying(t *testing.T) {
-	api := mfaAPI(t)
-	offerMFA(t, api, true)
-	rec := callJSON(api.HandleMfaEnrollApiAuthMfaEnrollPost, "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("enroll: %d %s", rec.Code, rec.Body.String())
-	}
-	secret := *decodeBody[mfaStateDTO](t, rec).Secret
-	occupyThrottleSlots(t, api)
-
-	rec = callJSON(api.HandleMfaActivateApiAuthMfaActivatePost,
-		fmt.Sprintf(`{"password":%q,"code":%q}`, mfaTestPassword, liveCode(t, secret)))
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("activate with the pool full = %d, want 429 — the handler is not calling "+
-			"loginThrottle.begin", rec.Code)
-	}
-	if rec.Header().Get("Retry-After") == "" {
-		t.Error("429 without a Retry-After header")
-	}
-	if api.authMFAEnrolled() {
-		t.Error("a factor was ARMED by a request the brake refused")
 	}
 }
 

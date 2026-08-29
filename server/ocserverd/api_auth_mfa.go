@@ -228,22 +228,17 @@ func (s *apiServer) HandleMfaActivateApiAuthMfaActivatePost(w http.ResponseWrite
 		writeError(w, http.StatusConflict, "no pending enrolment; call /api/auth/mfa/enroll first")
 		return
 	}
-	// The brake goes AFTER the two 409s — neither consults a credential, so
-	// nothing is being guessed on them and gating them would turn a documented
-	// 409 into a 429 (the same ordering contract set-password states, and the
-	// same bug measured there once).
+	// 🔴 NOTHING FROM loginThrottle IS CALLED HERE, by the owner's ruling
+	// 「只有登入需要 throttling」. This seam is owner-gated, so a caller who
+	// reaches it already holds a token — and while the gate was here it shared
+	// /api/login's pool, which meant activity on THIS endpoint could answer the
+	// owner's own login with a 429. See change-password (api_settings.go) for
+	// the full reasoning and the accepted cost. Do not re-add a brake here
+	// without a new owner ruling.
 	//
-	// 🔴 IT IS THE IN-FLIGHT CAP ONLY, no refusal floor — this seam is
-	// owner-gated, and the owner's ruling (T-19 §0) is that a caller who already
-	// holds a token is past the point a delay helps. What the cap is for here is
-	// memory, not policy: argon2id is ~19 MiB a verification (password.go), so an
-	// unbounded burst OOM-kills the process.
-	release, wait, blocked := s.loginThrottle.begin()
-	if blocked {
-		writeThrottled(w, wait)
-		return
-	}
-	defer release()
+	// (The two 409s above therefore no longer have anything to be ordered
+	// against, but they stay where they are: a path that consults no credential
+	// should decide before one is read, whatever else changes.)
 
 	// BOTH factors, ONE indistinguishable refusal — naming which half failed
 	// would confirm a correct password to someone who holds only a session.
@@ -314,23 +309,15 @@ func (s *apiServer) HandleMfaDisableApiAuthMfaDisablePost(w http.ResponseWriter,
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
 	if s.totpSecret == "" {
-		// Nothing to disarm — decided BEFORE the brake as well as before any
-		// credential, because this path consults neither. Putting it behind the
-		// in-flight gate would turn a documented 409 into a 429, which is the
-		// ordering contract set-password states in caps and the bug measured
-		// there once (it broke test_set_password_after_set_conflicts).
+		// Nothing to disarm — decided before any credential is read, because
+		// this path consults none. (It used to also have to sit before the
+		// brake, or a documented 409 became a 429 — the bug measured on
+		// set-password once, where that ordering contract is still live.)
 		writeError(w, http.StatusConflict, "no second factor is active")
 		return
 	}
-	// In-flight cap only, no refusal floor — same owner-gated reasoning as
-	// activate above, and the cap is here for argon2id's ~19 MiB rather than as
-	// a guessing limit.
-	release, wait, blocked := s.loginThrottle.begin()
-	if blocked {
-		writeThrottled(w, wait)
-		return
-	}
-	defer release()
+	// No brake of any kind — same owner ruling as activate above
+	// (「只有登入需要 throttling」). Do not re-add one without a new ruling.
 
 	// BOTH factors, and a single indistinguishable refusal for either — a
 	// message naming which half failed would confirm a correct password to

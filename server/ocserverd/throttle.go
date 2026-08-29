@@ -83,18 +83,32 @@ package main
 // attacker chooses. (If per-client is ever revisited behind a trusted proxy,
 // the key for IPv6 is the /64 prefix, not the address.)
 //
-// 🔴 THE ALREADY-AUTHENTICATED SEAMS ARE DELIBERATELY NOT FLOORED. Of the five
-// `begin` call sites, two are the front door (/api/login, /api/auth/set-password
-// — both PUBLIC) and three are owner-gated (change-password, mfa/activate,
-// mfa/disable). The gated three keep ONLY the in-flight cap, which is there for
-// memory rather than for policy: argon2id is ~19 MiB a verification
-// (password.go), so an unbounded burst is an OOM kill by anyone holding a
-// token. They spend no floor. ⚠️ THE COST IS REAL AND THE OWNER ACCEPTED IT
+// 🔴 ONLY TWO SEAMS ARE BRAKED AT ALL, AND THE LINE IS NOT WHERE PEOPLE GUESS.
+// The owner's ruling is 「只有登入需要 throttling」, and the two `begin` call
+// sites left are /api/login and /api/auth/set-password. change-password,
+// mfa/activate and mfa/disable call nothing here — no floor, no cap, not one
+// line.
+//
+// 🔑 THE DIVIDING LINE IS "CAN AN UNAUTHENTICATED CALLER REACH IT", NOT
+// "IS THE CALLER LOGGED IN". Those sound like the same sentence and are not,
+// and set-password is exactly where they come apart: it is not a login, nobody
+// is "logged in" when they call it, and it is still braked — because it is
+// PUBLIC (authPublic in routes.go), it compares a caller-supplied 32-byte
+// secret, and it runs the same argon2id as login does (m=19MiB, t=2, p=1 —
+// password.go). A stranger who can reach the port can reach it. That is the
+// whole test. If a future seam is public and verifies a secret, it belongs
+// behind this brake whether or not anyone would call it a login.
+//
+// The three that were dropped fail that test in the other direction: reaching
+// them requires an owner token, so every cost a brake imposes there is paid by
+// the honest owner against an attacker who is already inside. And the cap they
+// used to take was SHARED with /api/login, so a token holder could fill the
+// pool and make the OWNER's login answer 429 — an authenticated caller
+// degrading the front door. ⚠️ THE COST IS REAL AND THE OWNER ACCEPTED IT
 // KNOWING: whoever holds a live owner token can guess the CURRENT password at
-// change-password, limited only by the cap. The judgement behind that is that a
-// stolen owner token is already the disaster this system defends against —
-// 「被進來本身嚴重程度跟密碼外流是一樣的」 — so spending the owner's own login
-// latency to slow down an attacker who is already inside buys nothing.
+// change-password at full speed, with unbounded concurrent argon2id. The
+// judgement behind that is that a stolen owner token is already the disaster
+// this system defends against — 「被進來本身嚴重程度跟密碼外流是一樣的」.
 //
 // 🔴 THE OTHER HALF OF THAT TRADE IS THE ALERT, NOT A LOCKOUT. When
 // /api/login accepts the password and refuses the second factor, the password
@@ -131,6 +145,10 @@ const (
 	// 🔴 IT IS SPENT WHILE HOLDING AN IN-FLIGHT SLOT. Moving the wait outside
 	// the slot (or after `release`) leaves the floor a pure latency cost to the
 	// owner that limits nothing.
+	//
+	// ⚠️ Both braked seams are PUBLIC, so the pool they share is only ever
+	// contended by unauthenticated callers. Nothing an authenticated caller
+	// does can take a slot away from the login page any more.
 	throttleFailureFloor = 3 * time.Second
 	// throttleMaxInFlight bounds how many credential verifications may be in
 	// progress at once, and it is what makes the floor above mean anything.

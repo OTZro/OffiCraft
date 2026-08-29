@@ -528,7 +528,8 @@ export const zh = {
     errorWithCode: "密碼或驗證碼錯誤，請再試一次",
     codePlaceholder: "6 位數驗證碼",
     codeHint: "來自你的驗證器 App",
-    // 429 + Retry-After:這是嘗試次數的煞車,不是密碼錯。
+    // 429 + Retry-After:同時驗證中的名額額滿,不是密碼錯,也不是嘗試次數 ——
+    // 那個計數器已經不存在了。
     //
     // 用 lead/tail 靜態葉子、由 i18n/compose.ts 組裝 —— 不在 dictionary 直接放
     // interpolation function。theming-and-i18n.md 禁止後者,理由不是美觀而是

@@ -107,26 +107,36 @@ ceiling for non-warden agent-token mints.
   - `GET /api/auth/status` additionally discloses `mfa_required` to unauthenticated callers,
     deliberately: the login wall must render the right fields before any token exists, and a
     distinguishable "password ok, code missing" refusal would leak strictly more.
-- **Credential-attempt brake.** Every seam that compares a caller-supplied secret —
-  `POST /api/login`, `POST /api/auth/set-password`'s claim token,
-  `POST /api/auth/change-password`, and the `/api/auth/mfa/activate` + `/api/auth/mfa/disable`
-  credential checks — passes through ONE gate, and that gate keeps NO failure history:
-  there is no attempt counter, no exponential backoff, no cap and no decay window. It is
-  two mechanisms:
-  - a **concurrency cap** on credential verifications in progress at once, shared by all
-    five seams. A caller refused for concurrency gets **429 + `Retry-After`**. This is the
-    only 429 these routes can produce. It exists for memory as much as for policy:
-    argon2id is ~19 MiB a verification, so an unbounded burst is an OOM kill.
-  - a **refusal floor** on the two PUBLIC seams only (`/api/login`, `/api/auth/set-password`):
-    a refusal answers no earlier than a fixed interval after the request started. A SUCCESS
-    is answered immediately. Together with the cap this bounds the front door at
-    `cap ÷ floor` attempts a second.
+- **Credential-attempt brake.** It applies to the two PUBLIC credential seams and to
+  NOTHING else: `POST /api/login` and `POST /api/auth/set-password`'s claim token.
+  `POST /api/auth/change-password` and the `/api/auth/mfa/activate` +
+  `/api/auth/mfa/disable` credential checks are NOT braked in any way — no floor, no
+  concurrency cap, no call into the throttle at all.
 
-  The three OWNER-GATED seams (change-password, mfa/activate, mfa/disable) take the
-  concurrency cap and NOT the floor: reaching them already requires an owner token, and a
-  stolen owner token is the disaster this design defends against rather than one a delay
-  mitigates. ⚠️ The accepted consequence is that a token holder may guess the current
-  password at change-password, limited only by the cap.
+  🔑 **The dividing line is whether an UNAUTHENTICATED caller can reach the seam, not
+  whether the caller is logged in.** Those are different sentences and set-password is
+  where they come apart: it is not a login, yet it is braked, because it is public, it
+  compares a caller-supplied 32-byte secret, and it runs the same argon2id as login. Any
+  future seam that is public and verifies a secret belongs behind this brake regardless of
+  what it is called.
+
+  The brake keeps NO failure history: there is no attempt counter, no exponential backoff,
+  no lockout and no decay window. It is two mechanisms, both on those two seams only:
+  - a **concurrency cap** on credential verifications in progress at once, shared by the
+    two. A caller refused for concurrency gets **429 + `Retry-After`**; that is the only
+    429 these routes can produce. It exists for memory as much as for policy: argon2id is
+    ~19 MiB a verification, so an unbounded burst is an OOM kill.
+  - a **refusal floor**: a refusal answers no earlier than a fixed interval after the
+    request started, while a SUCCESS is answered immediately. Together with the cap this
+    bounds the front door at `cap ÷ floor` attempts a second.
+
+  Because both braked seams are public, nothing an AUTHENTICATED caller does can consume a
+  slot the login page needs. That coupling existed while the owner-gated seams shared the
+  pool — a token holder could fill it and make the owner's own login answer 429 — and
+  removing them from the brake removed it. ⚠️ The accepted consequence is that a holder of
+  an owner token may guess the current password at change-password at full speed, with
+  unbounded concurrent argon2id; the reasoning is that a stolen owner token is already the
+  disaster this design defends against rather than one a delay mitigates.
 
   There is deliberately **no lockout of any kind**, and that is the point of the shape: the
   earlier counter refused callers BEFORE verifying them, so a stranger reaching the login

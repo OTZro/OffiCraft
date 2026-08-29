@@ -207,10 +207,21 @@ func (s *apiServer) HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWrite
 	// test_set_password_after_set_conflicts). The brake belongs on the ONE
 	// comparison that is a guessing oracle — the token check below.
 	//
-	// The claim token is a 32-byte secret submitted by an unauthenticated
-	// caller, which makes it the same class of target as the password, so this
-	// is a FRONT-DOOR seam and carries the full brake (throttle.go): the
-	// in-flight cap here, and the refusal floor below.
+	// 🔴 THIS ONE KEEPS THE BRAKE, and it is the seam that shows what the rule
+	// actually is. The owner's ruling reads 「只有登入需要 throttling」 and this
+	// is not a login — but the line is "can an unauthenticated caller reach it",
+	// not "is the caller logged in" (throttle.go). Set-password is PUBLIC
+	// (authPublic), it compares a caller-supplied 32-byte secret, and it runs the
+	// same argon2id as login (m=19MiB, t=2, p=1 — password.go); the measured
+	// shape that made the cap non-negotiable was on exactly this class of route
+	// (500 concurrent posts ⇒ ~500 real verifications). A stranger who can reach
+	// the port can reach this. So it carries the full brake: the in-flight cap
+	// here, and the refusal floor below.
+	//
+	// ⚠️ Flagged to the owner as a deliberate exception to the literal wording of
+	// his ruling; he can overrule it. Until he does, dropping the brake here is
+	// not "following the ruling", it is opening an unauthenticated argon2id
+	// amplifier.
 	release, wait, blocked := s.loginThrottle.begin()
 	if blocked {
 		writeThrottled(w, wait)
@@ -269,22 +280,31 @@ func (s *apiServer) HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWrite
 // removed here. mfa/disable is different precisely because it DOES remove the
 // factor, which is why that one re-proves it.
 //
-// 🔴 IT TAKES THE IN-FLIGHT CAP AND NOTHING ELSE, unlike the front door, and
-// that is the owner's explicit ruling (T-19 §0) rather than an oversight. This
-// handler is owner-gated, so reaching it at all means holding a live owner
-// token — and a stolen owner token is already the whole disaster this system
-// defends against: 「被進來本身嚴重程度跟密碼外流是一樣的」. Spending the honest
-// owner's own latency to slow an attacker who is already inside buys nothing,
-// so no refusal floor is served here.
+// 🔴 IT IS NOT THROTTLED AT ALL — not the floor, not the in-flight cap, not one
+// call into loginThrottle. That is the owner's ruling, verbatim: 「只有登入需要
+// throttling」. It is deliberate, it is a narrowing of what this handler used to
+// do, and it must not be quietly re-added by someone who reads the paragraph
+// below and thinks a cap looks prudent.
+//
+// WHY IT HOLDS. Reaching this handler at all means holding a live owner token,
+// and a stolen owner token is already the whole disaster this system defends
+// against: 「被進來本身嚴重程度跟密碼外流是一樣的」. Every cost a brake imposes
+// here is paid by the honest owner in latency and in 429s, against an attacker
+// who is already inside and does not need this endpoint to hurt them.
+//
+// 🔑 AND THE CAP HAD A COST OF ITS OWN, which is what settled it: the pool was
+// SHARED with /api/login. A token holder hammering this endpoint could fill all
+// four slots and make the OWNER's login answer 429 — an already-authenticated
+// caller degrading the front door. Removing the gate here removes that coupling
+// outright rather than papering it over with a second pool.
 //
 // ⚠️ THE COST, STATED PLAINLY AND ACCEPTED KNOWINGLY: whoever holds an owner
-// token can guess the CURRENT password here as fast as throttleMaxInFlight
-// allows, and a successful guess is a takeover rather than a read — rotating
-// the password stamps password_changed_at, which revokes the legitimate owner's
-// own tokens and leaves them locked out to a host shell.
-//
-// The cap itself is not policy but memory: argon2id is ~19 MiB a verification
-// (password.go), so an unbounded burst from one token is an OOM kill.
+// token can guess the CURRENT password here at full speed, and a successful
+// guess is a takeover rather than a read — rotating the password stamps
+// password_changed_at, which revokes the legitimate owner's own tokens and
+// leaves them locked out to a host shell. Concurrent argon2id verifications
+// (~19 MiB each, password.go) are likewise unbounded here; the bound that
+// remains is the owner token itself.
 func (s *apiServer) HandleChangePasswordApiAuthChangePasswordPost(w http.ResponseWriter, r *http.Request) {
 	var body ChangePasswordDTO
 	if !decodeJSONBodyRequired(w, r, &body, "current_password", "new_password") {
@@ -294,12 +314,6 @@ func (s *apiServer) HandleChangePasswordApiAuthChangePasswordPost(w http.Respons
 		writeError(w, http.StatusUnprocessableEntity, "new_password must be at least 8 characters")
 		return
 	}
-	release, wait, blocked := s.loginThrottle.begin()
-	if blocked {
-		writeThrottled(w, wait)
-		return
-	}
-	defer release()
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
 	if s.passwordHash == "" || !verifyPassword(body.CurrentPassword, s.passwordHash) {
