@@ -51,7 +51,15 @@ package main
 //   * the counter is process-local (api_stub.go), so restarting ocserverd
 //     clears it outright. That is the escape hatch, it needs host shell, and it
 //     is the same trust substitution `ocserverd mfa-disable` makes.
-// Both facts are owner-facing and are documented in docs/guide/mobile.md.
+// 🔴 NEITHER FACT IS IN THE OWNER DOCS, AND THIS LINE USED TO CLAIM BOTH WERE.
+// docs/guide/mobile.md says exactly one thing about this brake — "連續失敗幾次
+// 之後，下一次嘗試會被擋一段時間（會越擋越久），成功登入就歸零" — i.e. the free
+// allowance, the doubling and the reset-on-success. It says nothing about the
+// decay/cap coupling and nothing about a restart clearing the counter. The
+// previous version of this line asserted they were both documented there, which
+// is the same shape of false cross-reference the comment ABOVE it was written to
+// correct: prose about a set someone else owns, that nothing turns red about.
+// If you make either fact owner-facing, write it in mobile.md and say so here.
 
 import (
 	"math"
@@ -217,7 +225,22 @@ func (t *credentialThrottle) noteFailure(now time.Time) {
 		// optional: with failures back to 0, penaltyFor returns 0 and the block
 		// below is skipped, so a stale future deadline would otherwise outlive
 		// the history it came from and keep the caller refused with an empty
-		// counter. Latent while decay > cap; LIVE now that they are equal.
+		// counter.
+		//
+		// 🔴 IT IS UNREACHABLE THROUGH THE PUBLIC SCHEDULE TODAY, and the
+		// previous version of this line said the opposite ("Latent while
+		// decay > cap; LIVE now that they are equal"), which is backwards.
+		// nextAllowed is only ever set to lastFailure+penaltyFor(...), and
+		// penaltyFor is capped at throttleMaxDelay; decay fires only once
+		// now-lastFailure >= throttleDecay. With throttleDecay >= the cap —
+		// and it is PINNED EQUAL to it — now is by definition already at or
+		// past any deadline this schedule could have armed, so the deadline
+		// found here is never in the future. Equality does not make it live;
+		// it is exactly the boundary case where it is still dead.
+		// It goes live only if someone sets decay SHORTER than the cap. Keep
+		// the clear: it is what makes that change safe instead of silent, and
+		// TestThrottleDecayClearsAStaleDeadline pins it by constructing the
+		// state directly rather than by climbing the (incapable) schedule.
 		t.failures = 0
 		t.nextAllowed = time.Time{}
 	}
