@@ -3,151 +3,168 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
-	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
 
-// base is a fixed instant; every test drives the clock explicitly so none of
-// this depends on wall time.
-var throttleBase = time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+// TestThrottleConstantsAreAbsolute — the throttle tests used to be
+// SELF-REFERENTIAL: they wrote their expectations as `throttleBaseDelay`,
+// `2*throttleBaseDelay`, `throttleMaxDelay`, so changing a constant moved both
+// sides of the assertion together and every stated security property went
+// unguarded (raising the cap to 50 minutes stayed green).
+//
+// The schedule those constants belonged to is gone, but the trap is not, so
+// this pins the two numbers that are left in ABSOLUTE terms. Both are quoted as
+// arithmetic in the prose around them, and a silent edit to either changes what
+// the front door actually costs an attacker.
+func TestThrottleConstantsAreAbsolute(t *testing.T) {
+	if throttleFailureFloor != 3*time.Second {
+		t.Errorf("failure floor = %v, want 3s — the owner's ruling, and the number "+
+			"the '~1.3 guesses a second' arithmetic rests on", throttleFailureFloor)
+	}
+	if throttleMaxInFlight != 4 {
+		t.Errorf("in-flight cap = %d, want 4 (bounds argon2id memory at ~76 MiB)", throttleMaxInFlight)
+	}
+	// The front door's ceiling, written as the arithmetic rather than as prose:
+	// the cap divided by the floor.
+	if perSecond := float64(throttleMaxInFlight) / throttleFailureFloor.Seconds(); perSecond > 1.5 {
+		t.Errorf("front-door ceiling = %.2f guesses/s, want <= 1.5", perSecond)
+	}
+}
 
-// TestPenaltyForIsFreeThenDoublesThenCaps pins the whole schedule in one table.
-// The free allowance is what keeps an owner's typo from costing anything; the
-// doubling is what makes sustained guessing pointless; the cap is what stops it
-// from becoming a lockout.
-func TestPenaltyForIsFreeThenDoublesThenCaps(t *testing.T) {
-	for _, tc := range []struct {
-		failures int
-		want     time.Duration
-	}{
-		{0, 0},
-		{1, 0},
-		{throttleFreeFailures, 0}, // the last free one
-		{throttleFreeFailures + 1, throttleBaseDelay},
-		{throttleFreeFailures + 2, 2 * throttleBaseDelay},
-		{throttleFreeFailures + 3, 4 * throttleBaseDelay},
-		{throttleFreeFailures + 4, 8 * throttleBaseDelay},
-		{100, throttleMaxDelay},
-		{10000, throttleMaxDelay}, // must saturate, never wrap
-	} {
-		if got := penaltyFor(tc.failures); got != tc.want {
-			t.Errorf("penaltyFor(%d) = %v, want %v", tc.failures, got, tc.want)
+// TestFailureFloorDefaultsToProductionWhenUnset — the override field must fail
+// SAFE. A zero value that meant "no floor" would be one forgotten line away
+// from a server with no brake and nothing red to say so.
+func TestFailureFloorDefaultsToProductionWhenUnset(t *testing.T) {
+	var s apiServer
+	if got := s.failureFloor(); got != throttleFailureFloor {
+		t.Errorf("a server that never set the override has floor %v, want the "+
+			"production %v — the zero value must mean the constant, not 'off'",
+			got, throttleFailureFloor)
+	}
+	s.credentialFailureFloor = 5 * time.Millisecond
+	if got := s.failureFloor(); got != 5*time.Millisecond {
+		t.Errorf("override ignored: floor = %v, want 5ms", got)
+	}
+}
+
+// TestHoldFailureFloorIsADeadlineNotASleep — the property the whole design
+// rests on. `sleep(floor)` would make a refusal cost `work + floor`, so every
+// difference in `work` still shows on the wire; `wait until start+floor` makes
+// every refusal cost the same however much work it did.
+//
+// Asserted as: a call that has ALREADY burned most of the floor still returns
+// at about the same total, and one that has burned all of it does not wait at
+// all. Both bounds are far from the scheduler's noise.
+func TestHoldFailureFloorIsADeadlineNotASleep(t *testing.T) {
+	const floor = 200 * time.Millisecond
+	s := &apiServer{credentialFailureFloor: floor}
+
+	// Nothing spent yet: the whole floor is owed.
+	started := time.Now()
+	s.holdFailureFloor(started)
+	if elapsed := time.Since(started); elapsed < floor {
+		t.Errorf("a fresh refusal returned after %v, want at least the floor %v", elapsed, floor)
+	}
+
+	// Half the floor already spent: the REMAINDER is owed, not another whole
+	// floor. An additive sleep would land near 1.5x here.
+	started = time.Now().Add(-floor / 2)
+	call := time.Now()
+	s.holdFailureFloor(started)
+	total := time.Since(started)
+	if total < floor {
+		t.Errorf("total wall-clock %v < floor %v — the deadline was not honoured", total, floor)
+	}
+	if waited := time.Since(call); waited > floor {
+		t.Errorf("waited a further %v after half the floor was already spent — "+
+			"that is sleep(floor), not wait-until(start+floor)", waited)
+	}
+
+	// Already past the deadline: no wait at all.
+	call = time.Now()
+	s.holdFailureFloor(time.Now().Add(-2 * floor))
+	if waited := time.Since(call); waited > floor/2 {
+		t.Errorf("waited %v on a refusal that had already outlived the floor", waited)
+	}
+}
+
+// TestThrottleBeginReservesUnderConcurrency — the gate must admit at most
+// throttleMaxInFlight callers at once. A gate that only inspects state reserves
+// nothing, so a burst walks straight through it: N guesses per floor instead of
+// one, and N concurrent argon2id verifications at ~19 MiB each.
+func TestThrottleBeginReservesUnderConcurrency(t *testing.T) {
+	var th credentialThrottle
+	const goroutines = 200
+
+	var start, done sync.WaitGroup
+	start.Add(1)
+	var mu sync.Mutex
+	admitted := 0
+	releases := []func(){}
+	for i := 0; i < goroutines; i++ {
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			start.Wait()
+			release, _, blocked := th.begin()
+			if blocked {
+				return
+			}
+			mu.Lock()
+			admitted++
+			releases = append(releases, release)
+			mu.Unlock()
+		}()
+	}
+	start.Done()
+	done.Wait()
+
+	// Nothing released yet, so the pool must be exactly full — never more.
+	if admitted != throttleMaxInFlight {
+		t.Fatalf("%d of %d concurrent callers admitted, want exactly %d — the gate "+
+			"is not reserving, so a burst bypasses the floor entirely",
+			admitted, goroutines, throttleMaxInFlight)
+	}
+	// Releasing frees the slots again.
+	for _, r := range releases {
+		r()
+	}
+	if _, _, blocked := th.begin(); blocked {
+		t.Error("still blocked after every slot was released — releases leak")
+	}
+}
+
+// TestThrottleReleaseIsIdempotent — a defer plus an explicit call must not
+// double-free, or the pool drifts upward and the cap silently stops holding.
+func TestThrottleReleaseIsIdempotent(t *testing.T) {
+	var th credentialThrottle
+	release, _, blocked := th.begin()
+	if blocked {
+		t.Fatal("fresh throttle blocked")
+	}
+	for i := 0; i < 5; i++ {
+		release()
+	}
+	// Exactly the pool size must be available — not more.
+	got := 0
+	for i := 0; i < throttleMaxInFlight+3; i++ {
+		if _, _, b := th.begin(); !b {
+			got++
 		}
 	}
-}
-
-// TestPenaltyForNeverWrapsToZero is the overflow guard. A naive `1 << over`
-// wraps at 63 doublings and hands an attacker a penalty of zero — exactly at
-// the point the attack has been running longest.
-func TestPenaltyForNeverWrapsToZero(t *testing.T) {
-	for _, failures := range []int{62, 63, 64, 65, 1 << 20} {
-		if got := penaltyFor(failures); got != throttleMaxDelay {
-			t.Errorf("penaltyFor(%d) = %v, want the cap %v", failures, got, throttleMaxDelay)
-		}
+	if got != throttleMaxInFlight {
+		t.Errorf("after %d releases of ONE slot the pool admitted %d, want %d", 5, got, throttleMaxInFlight)
 	}
 }
 
-func TestThrottleAllowsTheFreeAllowanceWithoutDelay(t *testing.T) {
+// TestThrottleZeroValueAdmits — a fresh throttle must not refuse anyone. There
+// is no history for it to carry any more, so this is the whole of its idle
+// state.
+func TestThrottleZeroValueAdmits(t *testing.T) {
 	var th credentialThrottle
-	for i := 0; i < throttleFreeFailures; i++ {
-		th.noteFailure(throttleBase)
-		if _, blocked := th.retryAfter(throttleBase); blocked {
-			t.Fatalf("blocked after only %d failure(s) — the free allowance is %d",
-				i+1, throttleFreeFailures)
-		}
-	}
-	// One past the allowance must bite.
-	th.noteFailure(throttleBase)
-	wait, blocked := th.retryAfter(throttleBase)
-	if !blocked {
-		t.Fatal("not blocked after exceeding the free allowance")
-	}
-	if wait != throttleBaseDelay {
-		t.Errorf("first penalty = %v, want %v", wait, throttleBaseDelay)
-	}
-}
-
-func TestThrottleUnblocksWhenTheWaitElapses(t *testing.T) {
-	var th credentialThrottle
-	for i := 0; i < throttleFreeFailures+1; i++ {
-		th.noteFailure(throttleBase)
-	}
-	if _, blocked := th.retryAfter(throttleBase); !blocked {
-		t.Fatal("expected a block")
-	}
-	if _, blocked := th.retryAfter(throttleBase.Add(throttleBaseDelay)); blocked {
-		t.Error("still blocked exactly at the deadline; the wait should be over")
-	}
-}
-
-// TestThrottleBlockedAttemptsDoNotDeepenThePenalty is the anti-amplification
-// property. If a refused attempt counted as a failure, anyone hammering the
-// endpoint could drive the penalty to the cap and pin it there — handing the
-// attacker a lockout tool against the owner.
-func TestThrottleBlockedAttemptsDoNotDeepenThePenalty(t *testing.T) {
-	var th credentialThrottle
-	for i := 0; i < throttleFreeFailures+1; i++ {
-		th.noteFailure(throttleBase)
-	}
-	first, blocked := th.retryAfter(throttleBase)
-	if !blocked {
-		t.Fatal("expected a block")
-	}
-	for i := 0; i < 50; i++ {
-		th.retryAfter(throttleBase)
-	}
-	again, _ := th.retryAfter(throttleBase)
-	if again != first {
-		t.Errorf("penalty moved from %v to %v just from reading it", first, again)
-	}
-}
-
-// TestThrottleSuccessClearsHistory — this is what keeps one global bucket from
-// being an owner lockout: proving you hold the credential ends the suspicion.
-func TestThrottleSuccessClearsHistory(t *testing.T) {
-	var th credentialThrottle
-	for i := 0; i < throttleFreeFailures+4; i++ {
-		th.noteFailure(throttleBase)
-	}
-	if _, blocked := th.retryAfter(throttleBase); !blocked {
-		t.Fatal("expected a block before the success")
-	}
-
-	th.noteSuccess()
-
-	if _, blocked := th.retryAfter(throttleBase); blocked {
-		t.Fatal("still blocked after a successful authentication")
-	}
-	// And the NEXT failure must start from the free allowance again, not from
-	// the old depth.
-	th.noteFailure(throttleBase)
-	if _, blocked := th.retryAfter(throttleBase); blocked {
-		t.Error("the first failure after a success was penalised; history was not cleared")
-	}
-}
-
-// TestThrottleDecaysAfterQuiet stops the counter being a ratchet that an owner
-// can never pay off.
-func TestThrottleDecaysAfterQuiet(t *testing.T) {
-	var th credentialThrottle
-	for i := 0; i < throttleFreeFailures+4; i++ {
-		th.noteFailure(throttleBase)
-	}
-	deep, _ := th.retryAfter(throttleBase)
-
-	// One more failure, but long after the quiet period.
-	later := throttleBase.Add(throttleDecay + time.Minute)
-	th.noteFailure(later)
-	if _, blocked := th.retryAfter(later); blocked {
-		t.Fatalf("a single failure after %v of quiet was still penalised (previous depth %v)",
-			throttleDecay, deep)
-	}
-}
-
-func TestThrottleZeroValueIsUnblocked(t *testing.T) {
-	var th credentialThrottle
-	if _, blocked := th.retryAfter(throttleBase); blocked {
+	if _, _, blocked := th.begin(); blocked {
 		t.Fatal("a fresh throttle must not block")
 	}
 }
@@ -155,6 +172,9 @@ func TestThrottleZeroValueIsUnblocked(t *testing.T) {
 // TestWriteThrottledShape pins the wire face: 429, a Retry-After the client can
 // act on without parsing prose, and the SAME error envelope as every other
 // refusal (code derived from the status, so the closed vocabulary is unchanged).
+//
+// The cockpit branches on exactly this (LoginPage.tsx, ProfileDropdown.tsx), so
+// it survives §0 unchanged even though the deadline it used to report is gone.
 func TestWriteThrottledShape(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeThrottled(rec, 42*time.Second)
@@ -188,9 +208,9 @@ func TestWriteThrottledRoundsUpAndFloorsAtOne(t *testing.T) {
 	}{
 		{0, "1"},
 		{1 * time.Millisecond, "1"},
-		{1 * time.Second, "1"},
+		{throttleBurstWait, "1"},
 		{1500 * time.Millisecond, "2"},
-		{throttleMaxDelay, strconv.Itoa(int(throttleMaxDelay.Seconds()))},
+		{5 * time.Minute, "300"},
 	} {
 		rec := httptest.NewRecorder()
 		writeThrottled(rec, tc.wait)

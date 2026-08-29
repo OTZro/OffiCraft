@@ -232,7 +232,13 @@ func (s *apiServer) HandleMfaActivateApiAuthMfaActivatePost(w http.ResponseWrite
 	// nothing is being guessed on them and gating them would turn a documented
 	// 409 into a 429 (the same ordering contract set-password states, and the
 	// same bug measured there once).
-	release, wait, blocked := s.loginThrottle.begin(time.Now())
+	//
+	// 🔴 IT IS THE IN-FLIGHT CAP ONLY, no refusal floor — this seam is
+	// owner-gated, and the owner's ruling (T-19 §0) is that a caller who already
+	// holds a token is past the point a delay helps. What the cap is for here is
+	// memory, not policy: argon2id is ~19 MiB a verification (password.go), so an
+	// unbounded burst OOM-kills the process.
+	release, wait, blocked := s.loginThrottle.begin()
 	if blocked {
 		writeThrottled(w, wait)
 		return
@@ -250,7 +256,6 @@ func (s *apiServer) HandleMfaActivateApiAuthMfaActivatePost(w http.ResponseWrite
 		// The pending secret survives on purpose: the overwhelmingly likely cause
 		// is a stale code or a typo, and forcing a fresh QR scan for that would
 		// train owners to abandon the ceremony half-done.
-		s.loginThrottle.noteFailure(time.Now())
 		writeError(w, http.StatusUnauthorized, invalidCredentialsMsg)
 		return
 	}
@@ -281,7 +286,6 @@ func (s *apiServer) HandleMfaActivateApiAuthMfaActivatePost(w http.ResponseWrite
 	}
 	s.totpSecret = *pending
 	s.totpLastStep = step
-	s.loginThrottle.noteSuccess()
 
 	writeJSON(w, http.StatusOK, mfaStateDTO{Offered: true, Enrolled: true})
 }
@@ -311,14 +315,17 @@ func (s *apiServer) HandleMfaDisableApiAuthMfaDisablePost(w http.ResponseWriter,
 	defer s.settingsMu.Unlock()
 	if s.totpSecret == "" {
 		// Nothing to disarm — decided BEFORE the brake as well as before any
-		// credential, because this path consults neither. Gating it on the
-		// attempt budget would turn a documented 409 into a 429, which is the
+		// credential, because this path consults neither. Putting it behind the
+		// in-flight gate would turn a documented 409 into a 429, which is the
 		// ordering contract set-password states in caps and the bug measured
 		// there once (it broke test_set_password_after_set_conflicts).
 		writeError(w, http.StatusConflict, "no second factor is active")
 		return
 	}
-	release, wait, blocked := s.loginThrottle.begin(time.Now())
+	// In-flight cap only, no refusal floor — same owner-gated reasoning as
+	// activate above, and the cap is here for argon2id's ~19 MiB rather than as
+	// a guessing limit.
+	release, wait, blocked := s.loginThrottle.begin()
 	if blocked {
 		writeThrottled(w, wait)
 		return
@@ -331,7 +338,6 @@ func (s *apiServer) HandleMfaDisableApiAuthMfaDisablePost(w http.ResponseWriter,
 	passwordOK := s.passwordHash != "" && verifyPassword(body.Password, s.passwordHash)
 	step, codeOK := totpVerify(s.totpSecret, body.Code, time.Now().Unix(), s.totpLastStep)
 	if !passwordOK || !codeOK {
-		s.loginThrottle.noteFailure(time.Now())
 		writeError(w, http.StatusUnauthorized, invalidCredentialsMsg)
 		return
 	}
@@ -353,7 +359,6 @@ func (s *apiServer) HandleMfaDisableApiAuthMfaDisablePost(w http.ResponseWriter,
 	}
 	s.totpSecret = ""
 	s.totpLastStep = 0
-	s.loginThrottle.noteSuccess()
 
 	writeJSON(w, http.StatusOK, mfaStateDTO{Offered: s.mfaOffered, Enrolled: false})
 }

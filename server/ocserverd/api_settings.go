@@ -168,6 +168,9 @@ func (s *apiServer) HandleAuthStatusApiAuthStatusGet(w http.ResponseWriter, r *h
 // token is never consulted); claim mismatch → 401; then store the hash,
 // consume the token, and log the caller straight in.
 func (s *apiServer) HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWriter, r *http.Request) {
+	// Stamped before any work: the refusal floor is a deadline measured from
+	// here, not a sleep appended to whatever this handler spent (throttle.go).
+	started := time.Now()
 	var body SetPasswordDTO
 	if !decodeJSONBodyRequired(w, r, &body, "password", "claim_token") {
 		return
@@ -177,7 +180,22 @@ func (s *apiServer) HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWrite
 		return
 	}
 	s.settingsMu.Lock()
-	defer s.settingsMu.Unlock()
+	// 🔴 NOT `defer s.settingsMu.Unlock()`, and the reason is the floor. The
+	// refusal path below waits ~3s before answering, and it must do that with
+	// this mutex RELEASED: settingsMu is the whole auth/settings snapshot, so
+	// sleeping under it would let an unauthenticated caller stall every settings
+	// read and write on the server for three seconds a request — turning a brake
+	// on guessing into a denial of service against everything else. The in-flight
+	// slot, which is what the wait is supposed to occupy, is held throughout
+	// either way.
+	unlocked := false
+	unlock := func() {
+		if !unlocked {
+			unlocked = true
+			s.settingsMu.Unlock()
+		}
+	}
+	defer unlock()
 	if s.passwordHash != "" {
 		writeError(w, http.StatusConflict, "a password is already set")
 		return
@@ -190,10 +208,10 @@ func (s *apiServer) HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWrite
 	// comparison that is a guessing oracle — the token check below.
 	//
 	// The claim token is a 32-byte secret submitted by an unauthenticated
-	// caller, which makes it the same class of target as the password, so it
-	// shares login's budget (throttle.go). First-run and login never overlap in
-	// time, so one bucket costs the owner nothing.
-	release, wait, blocked := s.loginThrottle.begin(time.Now())
+	// caller, which makes it the same class of target as the password, so this
+	// is a FRONT-DOOR seam and carries the full brake (throttle.go): the
+	// in-flight cap here, and the refusal floor below.
+	release, wait, blocked := s.loginThrottle.begin()
 	if blocked {
 		writeThrottled(w, wait)
 		return
@@ -206,11 +224,11 @@ func (s *apiServer) HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWrite
 	}
 	if stored == nil ||
 		subtle.ConstantTimeCompare([]byte(*stored), []byte(body.ClaimToken)) != 1 {
-		s.loginThrottle.noteFailure(time.Now())
+		unlock() // before the wait — see the note on the Lock above
+		s.holdFailureFloor(started)
 		writeError(w, http.StatusUnauthorized, "invalid claim token")
 		return
 	}
-	s.loginThrottle.noteSuccess()
 	phc, err := hashPassword(body.Password)
 	if err != nil {
 		internalError(w, err)
@@ -251,14 +269,22 @@ func (s *apiServer) HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWrite
 // removed here. mfa/disable is different precisely because it DOES remove the
 // factor, which is why that one re-proves it.
 //
-// 🔴 IT IS THROTTLED, and the reason is the one asymmetry above. Because no
-// code is demanded here, this is the ONE seam where a stolen owner token buys
-// unlimited guesses at the real password with the second factor standing aside
-// — and a successful guess is not a read, it is a takeover: rotating the
-// password stamps password_changed_at, which revokes the legitimate owner's
-// own tokens and leaves them locked out to a host shell. Sharing login's
-// budget costs the honest owner nothing (they know their password) and turns
-// that oracle into ~12 attempts an hour.
+// 🔴 IT TAKES THE IN-FLIGHT CAP AND NOTHING ELSE, unlike the front door, and
+// that is the owner's explicit ruling (T-19 §0) rather than an oversight. This
+// handler is owner-gated, so reaching it at all means holding a live owner
+// token — and a stolen owner token is already the whole disaster this system
+// defends against: 「被進來本身嚴重程度跟密碼外流是一樣的」. Spending the honest
+// owner's own latency to slow an attacker who is already inside buys nothing,
+// so no refusal floor is served here.
+//
+// ⚠️ THE COST, STATED PLAINLY AND ACCEPTED KNOWINGLY: whoever holds an owner
+// token can guess the CURRENT password here as fast as throttleMaxInFlight
+// allows, and a successful guess is a takeover rather than a read — rotating
+// the password stamps password_changed_at, which revokes the legitimate owner's
+// own tokens and leaves them locked out to a host shell.
+//
+// The cap itself is not policy but memory: argon2id is ~19 MiB a verification
+// (password.go), so an unbounded burst from one token is an OOM kill.
 func (s *apiServer) HandleChangePasswordApiAuthChangePasswordPost(w http.ResponseWriter, r *http.Request) {
 	var body ChangePasswordDTO
 	if !decodeJSONBodyRequired(w, r, &body, "current_password", "new_password") {
@@ -268,7 +294,7 @@ func (s *apiServer) HandleChangePasswordApiAuthChangePasswordPost(w http.Respons
 		writeError(w, http.StatusUnprocessableEntity, "new_password must be at least 8 characters")
 		return
 	}
-	release, wait, blocked := s.loginThrottle.begin(time.Now())
+	release, wait, blocked := s.loginThrottle.begin()
 	if blocked {
 		writeThrottled(w, wait)
 		return
@@ -277,11 +303,9 @@ func (s *apiServer) HandleChangePasswordApiAuthChangePasswordPost(w http.Respons
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
 	if s.passwordHash == "" || !verifyPassword(body.CurrentPassword, s.passwordHash) {
-		s.loginThrottle.noteFailure(time.Now())
 		writeError(w, http.StatusUnauthorized, "invalid password")
 		return
 	}
-	s.loginThrottle.noteSuccess()
 	phc, err := hashPassword(body.NewPassword)
 	if err != nil {
 		internalError(w, err)

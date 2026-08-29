@@ -60,29 +60,38 @@ func (s *apiServer) mintWardenToken(m Member) (string, error) {
 // covers this by wording its inline error to name both fields, which is honest
 // without the server disclosing anything.
 //
-// Failed attempts spend from the shared credential-attempt budget (throttle.go);
-// a success clears it.
+// 🔴 AND EVERY ONE OF THEM COSTS THE SAME WALL-CLOCK, which is the other half
+// of the same property. An identical SENTENCE served at a distinguishable SPEED
+// discloses exactly what the sentence refuses to: 「密碼對、碼錯」 does one
+// argon2id plus a TOTP verification while 「密碼錯」 stops after the argon2id.
+// Every refusal below therefore waits until the instant stamped on the way in
+// plus throttleFailureFloor (throttle.go). A SUCCESS does not wait at all.
 func (s *apiServer) HandleLoginApiLoginPost(w http.ResponseWriter, r *http.Request) {
+	// Stamped BEFORE any work, because the floor is a deadline measured from
+	// here — not a sleep added to whatever the handler happened to spend.
+	started := time.Now()
 	var body LoginDTO
 	if !decodeJSONBodyRequired(w, r, &body, "password") {
 		return
 	}
 	// Server CONFIGURATION is settled before any credential work: a missing
-	// signing secret is not a credential fact, so it must not spend from the
-	// attempt budget, must not burn a TOTP step, and must not be answered with
-	// the credential refusal. It used to sit after the whole verification, which
-	// made it the one distinguishable refusal on a route whose contract above
-	// says every refusal is identical.
+	// signing secret is not a credential fact, so it must not take an in-flight
+	// slot, must not burn a TOTP step, must not pay the refusal floor, and must
+	// not be answered with the credential refusal. It used to sit after the whole
+	// verification, which made it a distinguishable refusal reached THROUGH the
+	// credential path; settling it here makes it a fact about the SERVER, which
+	// GET /api/auth/status already tells anyone who asks.
 	if len(s.secret) == 0 {
 		writeError(w, http.StatusUnauthorized, "auth not configured")
 		return
 	}
 	// The brake sits BEFORE argon2id on purpose: at ~19 MiB and ~50 ms a
 	// verification, the hash is itself the cheapest denial-of-service on this
-	// server. begin (not retryAfter) both checks the deadline and RESERVES an
-	// in-flight slot, which is what stops a concurrent burst walking through the
-	// gate and running N argon2id verifications at once.
-	release, wait, blocked := s.loginThrottle.begin(time.Now())
+	// server. begin RESERVES an in-flight slot, which is what stops a concurrent
+	// burst running N argon2id verifications at once — and it is also what turns
+	// the floor below from a per-request latency into a rate limit, because the
+	// slot is held for the whole of that wait.
+	release, wait, blocked := s.loginThrottle.begin()
 	if blocked {
 		writeThrottled(w, wait)
 		return
@@ -91,7 +100,7 @@ func (s *apiServer) HandleLoginApiLoginPost(w http.ResponseWriter, r *http.Reque
 
 	hash := s.authPasswordHash()
 	if hash == "" || !verifyPassword(body.Password, hash) {
-		s.loginThrottle.noteFailure(time.Now())
+		s.holdFailureFloor(started)
 		writeError(w, http.StatusUnauthorized, invalidCredentialsMsg)
 		return
 	}
@@ -110,23 +119,32 @@ func (s *apiServer) HandleLoginApiLoginPost(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if !factorOK {
-		s.loginThrottle.noteFailure(time.Now())
+		// 🔴 THE PASSWORD WAS RIGHT. This is the one refusal on this route that
+		// is evidence of something rather than of nothing: whoever sent it holds
+		// the owner's password and only lacks the phone. No throttle repairs a
+		// leaked password, so the answer is to TELL SOMEONE — the assistant, who
+		// asks the owner to change it. Dispatched asynchronously and counted, so
+		// neither the DB write nor a flood of them can be felt from outside; see
+		// noteFactorRefusedAfterCorrectPassword.
+		s.noteFactorRefusedAfterCorrectPassword(time.Now())
+		s.holdFailureFloor(started)
 		writeError(w, http.StatusUnauthorized, invalidCredentialsMsg)
 		return
 	}
 	ttl := s.ownerTokenTTLValue()
 	token, err := mintJWT(wireOwnerID, "owner", ttl, s.secret, time.Now().Unix(), "")
 	if err != nil {
-		// Deliberately BEFORE noteSuccess: a mint failure is a server fault, and
-		// clearing the budget on it would let a failed login look like a proven
-		// one. The TOTP step is already spent either way (it had to be, to be
-		// single-use), so the owner waits for the next tick — unavoidable, but
-		// they should not also have their attempt history silently cleared.
+		// A mint failure is a SERVER fault, not a credential one, so it spends no
+		// floor and raises no alert: nothing was guessed wrong here. The TOTP
+		// step is already spent either way (it had to be, to be single-use), so
+		// the owner waits for the next tick — unavoidable, and the 500 says so
+		// rather than pretending the credentials were the problem.
 		internalError(w, err)
 		return
 	}
-	// Only now is the credential PROVEN all the way to a usable token.
-	s.loginThrottle.noteSuccess()
+	// Only now is the credential PROVEN all the way to a usable token — and this
+	// return spends NO floor. The owner who knows their password never waits;
+	// the whole cost of this brake falls on people who get it wrong.
 	writeJSON(w, http.StatusOK, tokenDTO{
 		Token:     token,
 		TokenType: "bearer",

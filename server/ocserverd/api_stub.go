@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/SherClockHolmes/webpush-go"
 )
@@ -64,14 +65,27 @@ type apiServer struct {
 	mfaOffered   bool
 	totpSecret   string
 	totpLastStep int64
-	// loginThrottle is the brute-force brake shared by every credential-guessing
-	// seam (throttle.go). In-memory and process-local, like machineClaims: a
-	// restart clears it, which is acceptable because restarting requires the
-	// host shell — an attacker who already has that does not need to guess the
-	// password.
+	// loginThrottle is the in-flight gate shared by every credential-guessing
+	// seam (throttle.go). In-memory and process-local: it holds no failure
+	// history at all, only how many verifications are running right now.
 	loginThrottle credentialThrottle
-	ownerTokenTTL int64
-	agentTokenTTL int64
+	// credentialFailureFloor overrides throttleFailureFloor for THIS server.
+	// Zero — the production value — means the constant; only this package's own
+	// tests ever set it, so that a test which is not about the floor does not
+	// pay three seconds per refusal to walk past it. See failureFloor().
+	credentialFailureFloor time.Duration
+	// authAlert* throttle the 「password accepted, second factor refused」 alert
+	// to the assistant: at most one message per authAlertInterval, carrying the
+	// number of attempts folded into it. See noteFactorRefusedAfterCorrectPassword.
+	authAlertMu      sync.Mutex
+	authAlertLastAt  time.Time
+	authAlertPending int
+	// authAlertDeliver replaces the delivery step. nil — the production value —
+	// means deliverPasswordExposedAlert. It exists so a test can prove the
+	// dispatch is asynchronous; see dispatchAuthAlert.
+	authAlertDeliver func(count int)
+	ownerTokenTTL    int64
+	agentTokenTTL    int64
 	// outsourceMaxParallel is the global cap on concurrently live outsource
 	// workers (DB task.outsource_max_parallel; M3 owner ruling ③) — read by
 	// the Phase 2 assignment scheduler.

@@ -48,6 +48,11 @@ func mfaAPI(t *testing.T) *apiServer {
 		t.Fatalf("store hash: %v", err)
 	}
 	api.passwordHash = phc
+	// 🔴 Shrink the refusal floor. Production servers leave this zero and get
+	// throttleFailureFloor (3s); a package whose tests each paid that per refusal
+	// would take minutes. The tests that are ABOUT the floor set it back to 0
+	// explicitly — see TestFailedLoginsAllCostTheSameWallClock.
+	api.credentialFailureFloor = time.Millisecond
 	return api
 }
 
@@ -239,7 +244,6 @@ func TestLoginWithMFARequiresACorrectCode(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s: %d, want 401", tc.name, rec.Code)
 		}
-		api.loginThrottle.noteSuccess() // isolate each case from the brake
 	}
 
 	rec := callJSON(api.HandleLoginApiLoginPost, loginBody(mfaTestPassword, nextCode(t, secret)))
@@ -259,7 +263,6 @@ func TestLoginRefusalDoesNotDiscloseWhichFactorFailed(t *testing.T) {
 	secret := armMFA(t, api)
 
 	wrongPassword := callJSON(api.HandleLoginApiLoginPost, loginBody("nope", nextCode(t, secret)))
-	api.loginThrottle.noteSuccess()
 	wrongCode := callJSON(api.HandleLoginApiLoginPost, loginBody(mfaTestPassword, "000000"))
 
 	if wrongPassword.Code != wrongCode.Code {
@@ -354,7 +357,6 @@ func TestMFADisableRequiresBothFactors(t *testing.T) {
 		if !api.authMFAEnrolled() {
 			t.Fatalf("%s: the factor was disarmed anyway", tc.name)
 		}
-		api.loginThrottle.noteSuccess()
 	}
 
 	rec := callJSON(api.HandleMfaDisableApiAuthMfaDisablePost,
@@ -401,108 +403,199 @@ func TestMFADisableClearsEveryStoredKey(t *testing.T) {
 	}
 }
 
-// ── the credential-attempt brake, through the login handler ─────────────────
+// ── the credential-attempt brake, through the handlers ──────────────────────
+//
+// 🔴 THE TWO TESTS THAT OPEN THIS SECTION ARE THE FLOOR OF THE WHOLE DESIGN.
+// /api/login refuses four materially different things — wrong password, wrong
+// password with a right code, RIGHT password with a wrong code, right password
+// with no code at all — and an attacker must not be able to tell which one they
+// just hit. That takes two independent properties, and losing either one is a
+// security regression rather than a cosmetic one:
+//
+//	MESSAGE  TestFailedLoginRefusalsAreByteIdentical
+//	TIME     TestFailedLoginsAllCostTheSameWallClock
+//
+// The message half is the one that gets broken by good intentions: someone
+// improving the login wall's copy adds 「驗證碼錯誤」 and hands away the fact
+// that the password was right. The timing half is the one that gets broken by
+// optimisation. Read both before touching either handler.
 
-func TestLoginThrottleEventuallyRefusesWith429AndRetryAfter(t *testing.T) {
+// loginRefusalCases builds the four refusals in one place so the two tests
+// below cannot drift apart about what "the four" means. Each returns a body for
+// an api whose MFA is already armed with `secret`.
+func loginRefusalCases(t *testing.T, secret string) []struct {
+	name string
+	body string
+} {
+	t.Helper()
+	return []struct {
+		name string
+		body string
+	}{
+		{"wrong password, no code", loginBody("not-the-password", "")},
+		{"wrong password, wrong code", loginBody("not-the-password", "000000")},
+		{"wrong password, LIVE code", loginBody("not-the-password", liveCode(t, secret))},
+		{"RIGHT password, wrong code", loginBody(mfaTestPassword, "000000")},
+	}
+}
+
+// TestFailedLoginRefusalsAreByteIdentical — the non-disclosure half. Status,
+// body and every header a client can read must be the same for all four, or the
+// refusal itself says which half of the credential was right.
+func TestFailedLoginRefusalsAreByteIdentical(t *testing.T) {
 	api := mfaAPI(t)
+	secret := armMFA(t, api)
 
-	// Spend the free allowance.
-	for i := 0; i < throttleFreeFailures; i++ {
-		if rec := callJSON(api.HandleLoginApiLoginPost, loginBody("wrong", "")); rec.Code != http.StatusUnauthorized {
-			t.Fatalf("failure %d = %d, want 401 (still inside the free allowance)", i+1, rec.Code)
+	type answer struct {
+		name   string
+		code   int
+		body   string
+		header string
+	}
+	var got []answer
+	for _, tc := range loginRefusalCases(t, secret) {
+		rec := callJSON(api.HandleLoginApiLoginPost, tc.body)
+		hdr := ""
+		for k, v := range rec.Header() {
+			hdr += k + "=" + strings.Join(v, ",") + ";"
+		}
+		got = append(got, answer{tc.name, rec.Code, rec.Body.String(), hdr})
+	}
+	for _, a := range got {
+		if a.code != http.StatusUnauthorized {
+			t.Errorf("%s → %d, want 401", a.name, a.code)
 		}
 	}
-	// One more failure arms the penalty...
-	if rec := callJSON(api.HandleLoginApiLoginPost, loginBody("wrong", "")); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("the allowance-exceeding failure = %d, want 401", rec.Code)
+	first := got[0]
+	for _, a := range got[1:] {
+		if a.body != first.body {
+			t.Errorf("login discloses WHICH half of the credential failed:\n  %s: %s\n  %s: %s",
+				first.name, first.body, a.name, a.body)
+		}
+		if a.header != first.header {
+			t.Errorf("login discloses which half failed through a HEADER:\n  %s: %s\n  %s: %s",
+				first.name, first.header, a.name, a.header)
+		}
 	}
-	// ...and the NEXT attempt is refused before any password check.
-	rec := callJSON(api.HandleLoginApiLoginPost, loginBody("wrong", ""))
+}
+
+// TestFailedLoginsAllCostTheSameWallClock — the other half, and the one the
+// refusal floor exists for.
+//
+// 🔴 HOW THIS AVOIDS BEING FLAKY, because a timing assertion usually is. It
+// does NOT compare the four to each other with a tight tolerance; that would be
+// a race against the scheduler. It asserts that each of the four costs AT LEAST
+// the floor, and that the spread between them is small compared with the floor
+// itself. Both bounds are enormous next to the noise:
+//
+//   - the lower bound can only be violated by a code change, never by a slow
+//     machine — a machine that is slow makes the elapsed time LONGER;
+//   - the upper bound is the floor plus a full second of slack, and the work
+//     being hidden underneath it is one argon2id (~50 ms, ~250 ms under -race)
+//     plus an HMAC. A run would have to be twenty times slower than -race to
+//     produce a false red.
+//
+// It uses the PRODUCTION floor rather than a shrunken one on purpose: the
+// property is that the floor dominates the work, and a floor小於 the work would
+// make the whole assertion vacuous. The four cases run concurrently against
+// FOUR SEPARATE servers, so the run costs one floor rather than four and no
+// case can take an in-flight slot from another.
+func TestFailedLoginsAllCostTheSameWallClock(t *testing.T) {
+	const cases = 4
+	type result struct {
+		name    string
+		elapsed time.Duration
+		code    int
+	}
+	results := make([]result, cases)
+	var wg sync.WaitGroup
+	for i := 0; i < cases; i++ {
+		api := mfaAPI(t)
+		// The production floor — this test is ABOUT the floor.
+		api.credentialFailureFloor = 0
+		secret := armMFA(t, api)
+		tc := loginRefusalCases(t, secret)[i]
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			start := time.Now()
+			rec := callJSON(api.HandleLoginApiLoginPost, tc.body)
+			results[i] = result{tc.name, time.Since(start), rec.Code}
+		}(i)
+	}
+	wg.Wait()
+
+	lo, hi := results[0].elapsed, results[0].elapsed
+	for _, r := range results {
+		if r.code != http.StatusUnauthorized {
+			t.Fatalf("%s → %d, want 401 (the timing assertion below would be measuring "+
+				"the wrong thing)", r.name, r.code)
+		}
+		if r.elapsed < throttleFailureFloor {
+			t.Errorf("%s was refused after %v, less than the %v floor — the handler is "+
+				"answering as soon as it knows, so an attacker can time the difference "+
+				"between a wrong password and a wrong code", r.name, r.elapsed, throttleFailureFloor)
+		}
+		if r.elapsed < lo {
+			lo = r.elapsed
+		}
+		if r.elapsed > hi {
+			hi = r.elapsed
+		}
+	}
+	// A whole second of slack over a 3s floor: far larger than argon2id under
+	// -race, far smaller than the difference an unfloored handler would show.
+	if spread := hi - lo; spread > time.Second {
+		for _, r := range results {
+			t.Logf("  %-28s %v", r.name, r.elapsed)
+		}
+		t.Errorf("the four refusals differ by %v — they must be indistinguishable by "+
+			"time as well as by message", spread)
+	}
+}
+
+// TestSuccessfulLoginSpendsNoFloor — the other side of the same coin, and the
+// reason the floor is on the REFUSAL rather than on the route. An owner who
+// knows their password must never wait: a floor on success would be a permanent
+// three-second tax on the only person entitled to be here, and it would buy
+// nothing (there is nothing left to guess once the answer is right).
+func TestSuccessfulLoginSpendsNoFloor(t *testing.T) {
+	api := mfaAPI(t)
+	api.credentialFailureFloor = 0 // the production floor
+
+	start := time.Now()
+	rec := callJSON(api.HandleLoginApiLoginPost, loginBody(mfaTestPassword, ""))
+	elapsed := time.Since(start)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login = %d %s", rec.Code, rec.Body.String())
+	}
+	if elapsed >= throttleFailureFloor {
+		t.Errorf("a CORRECT password took %v, at or past the %v refusal floor — the "+
+			"owner is paying the attacker's tax", elapsed, throttleFailureFloor)
+	}
+}
+
+// TestLoginRefusesTheCorrectPasswordWhenThePoolIsFull — the in-flight cap must
+// gate on the ATTEMPT, not on the answer. A gate that lets a correct password
+// through is an oracle: it tells an attacker exactly when they have guessed
+// right, whatever the refusal for everyone else says.
+func TestLoginRefusesTheCorrectPasswordWhenThePoolIsFull(t *testing.T) {
+	api := mfaAPI(t)
+	occupyThrottleSlots(t, api)
+	rec := callJSON(api.HandleLoginApiLoginPost, loginBody(mfaTestPassword, ""))
 	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("throttled attempt = %d, want 429", rec.Code)
+		t.Errorf("correct password with the pool full = %d, want 429 (no oracle)", rec.Code)
 	}
 	if rec.Header().Get("Retry-After") == "" {
 		t.Error("429 without a Retry-After header")
 	}
 }
 
-// TestLoginThrottleRefusesTheCORRECTPasswordToo — the brake must gate on the
-// attempt, not on the answer. A throttle that lets a correct password through
-// is an oracle: it tells an attacker exactly when they have guessed right.
-func TestLoginThrottleRefusesTheCorrectPasswordToo(t *testing.T) {
-	api := mfaAPI(t)
-	for i := 0; i < throttleFreeFailures+1; i++ {
-		callJSON(api.HandleLoginApiLoginPost, loginBody("wrong", ""))
-	}
-	rec := callJSON(api.HandleLoginApiLoginPost, loginBody(mfaTestPassword, ""))
-	if rec.Code != http.StatusTooManyRequests {
-		t.Errorf("correct password while throttled = %d, want 429 (no oracle)", rec.Code)
-	}
-}
-
-// TestLoginThrottleClearsOnSuccess — the owner must be able to pay off the
-// counter simply by getting it right, which is what makes one global bucket
-// tolerable.
-func TestLoginThrottleClearsOnSuccess(t *testing.T) {
-	api := mfaAPI(t)
-	for i := 0; i < throttleFreeFailures; i++ {
-		callJSON(api.HandleLoginApiLoginPost, loginBody("wrong", ""))
-	}
-	if rec := callJSON(api.HandleLoginApiLoginPost, loginBody(mfaTestPassword, "")); rec.Code != http.StatusOK {
-		t.Fatalf("login inside the allowance = %d", rec.Code)
-	}
-	// A fresh run of failures must start from the full allowance again.
-	for i := 0; i < throttleFreeFailures; i++ {
-		if rec := callJSON(api.HandleLoginApiLoginPost, loginBody("wrong", "")); rec.Code != http.StatusUnauthorized {
-			t.Fatalf("post-success failure %d = %d, want 401", i+1, rec.Code)
-		}
-	}
-}
-
-// TestChangePasswordIsThrottled — the ONE seam where a stolen owner token can
-// guess the real password with the second factor standing aside (this endpoint
-// deliberately demands no code). A successful guess is not a read but a
-// takeover: rotating the password stamps password_changed_at, which revokes the
-// legitimate owner's own tokens.
-func TestChangePasswordIsThrottled(t *testing.T) {
-	api := mfaAPI(t)
-	body := `{"current_password":"guess","new_password":"a-long-enough-new-one"}`
-
-	for i := 0; i < throttleFreeFailures; i++ {
-		if rec := callJSON(api.HandleChangePasswordApiAuthChangePasswordPost, body); rec.Code != http.StatusUnauthorized {
-			t.Fatalf("guess %d = %d, want 401 (inside the free allowance)", i+1, rec.Code)
-		}
-	}
-	if rec := callJSON(api.HandleChangePasswordApiAuthChangePasswordPost, body); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("the allowance-exceeding guess = %d, want 401", rec.Code)
-	}
-	if rec := callJSON(api.HandleChangePasswordApiAuthChangePasswordPost, body); rec.Code != http.StatusTooManyRequests {
-		t.Errorf("throttled password guess = %d, want 429", rec.Code)
-	}
-}
-
-// TestChangePasswordShortNewPasswordStaysA422 — the throttle must sit AFTER the
-// shape check. This is the exact ordering bug that turned set-password's
-// documented 409 into a 429 (caught by conformance, not by a unit test).
-func TestChangePasswordShortNewPasswordStaysA422(t *testing.T) {
-	api := mfaAPI(t)
-	// Drive the throttle well past its allowance first.
-	for i := 0; i < throttleFreeFailures+2; i++ {
-		callJSON(api.HandleChangePasswordApiAuthChangePasswordPost,
-			`{"current_password":"guess","new_password":"a-long-enough-new-one"}`)
-	}
-	rec := callJSON(api.HandleChangePasswordApiAuthChangePasswordPost,
-		`{"current_password":"whatever","new_password":"short"}`)
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Errorf("short new_password while throttled = %d, want 422 — a malformed "+
-			"request is not a credential guess and must not be masked by the brake", rec.Code)
-	}
-}
-
-// TestSetPasswordIsThrottledToo — the first-run claim token is a 32-byte secret
-// submitted by an unauthenticated caller, i.e. the same class of guessing target
-// as the password.
-func TestSetPasswordIsThrottledToo(t *testing.T) {
+// TestSetPasswordTakesTheFrontDoorBrake — the first-run claim token is a
+// 32-byte secret submitted by an UNAUTHENTICATED caller, i.e. the same class of
+// guessing target as the password, so this seam carries the full front-door
+// brake: the in-flight cap AND the refusal floor.
+func TestSetPasswordTakesTheFrontDoorBrake(t *testing.T) {
 	api := mfaAPI(t)
 	// Reset to the pre-password state and plant a claim token.
 	if err := api.dal.DeleteSetting(settingPasswordHash); err != nil {
@@ -512,15 +605,118 @@ func TestSetPasswordIsThrottledToo(t *testing.T) {
 	if err := api.dal.PutSetting(settingClaimToken, "the-real-claim-token"); err != nil {
 		t.Fatalf("plant claim token: %v", err)
 	}
-
 	body := `{"password":"long-enough-pw","claim_token":"guess"}`
-	for i := 0; i < throttleFreeFailures+1; i++ {
-		if rec := callJSON(api.HandleSetPasswordApiAuthSetPasswordPost, body); rec.Code != http.StatusUnauthorized {
-			t.Fatalf("claim-token guess %d = %d, want 401", i+1, rec.Code)
-		}
+
+	// The floor, at a shrunken but measurable value.
+	api.credentialFailureFloor = 300 * time.Millisecond
+	start := time.Now()
+	rec := callJSON(api.HandleSetPasswordApiAuthSetPasswordPost, body)
+	elapsed := time.Since(start)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("claim-token guess = %d, want 401", rec.Code)
 	}
+	if elapsed < api.credentialFailureFloor {
+		t.Errorf("a wrong claim token was refused after %v, less than the %v floor — "+
+			"the first-run seam has no brake on guessing", elapsed, api.credentialFailureFloor)
+	}
+
+	// And the cap.
+	api.credentialFailureFloor = time.Millisecond
+	occupyThrottleSlots(t, api)
 	if rec := callJSON(api.HandleSetPasswordApiAuthSetPasswordPost, body); rec.Code != http.StatusTooManyRequests {
-		t.Errorf("throttled claim-token guess = %d, want 429", rec.Code)
+		t.Errorf("claim-token guess with the pool full = %d, want 429", rec.Code)
+	}
+}
+
+// TestSetPasswordFloorDoesNotHoldTheSettingsLock — the refusal waits ~3s, and
+// it must do that with settingsMu RELEASED. Sleeping under it would let an
+// unauthenticated caller stall every settings read and write on the server for
+// three seconds a request: a brake on guessing turned into a denial of service
+// against everything else.
+//
+// Asserted by taking the lock from another goroutine WHILE the refusal is
+// waiting out its floor. If the handler still held it, this would block for the
+// rest of the floor.
+func TestSetPasswordFloorDoesNotHoldTheSettingsLock(t *testing.T) {
+	api := mfaAPI(t)
+	if err := api.dal.DeleteSetting(settingPasswordHash); err != nil {
+		t.Fatalf("clear hash: %v", err)
+	}
+	api.passwordHash = ""
+	if err := api.dal.PutSetting(settingClaimToken, "the-real-claim-token"); err != nil {
+		t.Fatalf("plant claim token: %v", err)
+	}
+	api.credentialFailureFloor = 2 * time.Second
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		callJSON(api.HandleSetPasswordApiAuthSetPasswordPost,
+			`{"password":"long-enough-pw","claim_token":"guess"}`)
+	}()
+	// Let the handler get past the token comparison and into the wait.
+	time.Sleep(300 * time.Millisecond)
+
+	locked := make(chan time.Duration, 1)
+	go func() {
+		start := time.Now()
+		api.settingsMu.Lock()
+		api.settingsMu.Unlock()
+		locked <- time.Since(start)
+	}()
+	select {
+	case took := <-locked:
+		if took > time.Second {
+			t.Errorf("acquiring settingsMu took %v while a refusal served its floor — "+
+				"the handler is sleeping under the lock", took)
+		}
+	case <-time.After(time.Second):
+		t.Error("settingsMu was still held a second into the refusal floor — an " +
+			"unauthenticated caller can stall every settings operation on the server")
+	}
+	<-done
+}
+
+// TestChangePasswordTakesTheCapButNoFloor — the owner's ruling (T-19 §0): the
+// three owner-GATED seams keep the in-flight cap and nothing else. The cap is
+// there for argon2id's ~19 MiB, not as a guessing limit, and this test pins both
+// halves so that "we removed the backoff" cannot quietly become "we removed the
+// gate".
+//
+// ⚠️ It therefore ALSO pins the accepted cost: a holder of an owner token may
+// guess the current password here without a per-attempt delay.
+func TestChangePasswordTakesTheCapButNoFloor(t *testing.T) {
+	api := mfaAPI(t)
+	api.credentialFailureFloor = 3 * time.Second // production; must go unspent
+	body := `{"current_password":"guess","new_password":"a-long-enough-new-one"}`
+
+	start := time.Now()
+	if rec := callJSON(api.HandleChangePasswordApiAuthChangePasswordPost, body); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("password guess = %d, want 401", rec.Code)
+	}
+	if elapsed := time.Since(start); elapsed >= api.credentialFailureFloor {
+		t.Errorf("a refused change-password took %v — this seam is owner-gated and "+
+			"must NOT serve the front door's refusal floor", elapsed)
+	}
+
+	occupyThrottleSlots(t, api)
+	if rec := callJSON(api.HandleChangePasswordApiAuthChangePasswordPost, body); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("change-password with the pool full = %d, want 429 — without the cap, "+
+			"one token can OOM the process with concurrent argon2id verifications", rec.Code)
+	}
+}
+
+// TestChangePasswordShortNewPasswordStaysA422 — the brake must sit AFTER the
+// shape check. This is the exact ordering bug that turned set-password's
+// documented 409 into a 429 (caught by conformance, not by a unit test).
+func TestChangePasswordShortNewPasswordStaysA422(t *testing.T) {
+	api := mfaAPI(t)
+	occupyThrottleSlots(t, api)
+	rec := callJSON(api.HandleChangePasswordApiAuthChangePasswordPost,
+		`{"current_password":"whatever","new_password":"short"}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("short new_password while throttled = %d, want 422 — a malformed "+
+			"request is not a credential guess and must not be masked by the brake", rec.Code)
 	}
 }
 
@@ -646,166 +842,6 @@ func TestVerifyAndSpendTOTPIsAtomicUnderConcurrency(t *testing.T) {
 	}
 }
 
-// TestThrottleBeginReservesUnderConcurrency — H1. The gate must admit at most
-// throttleMaxInFlight callers at once. retryAfter alone reserved nothing, so a
-// burst walked straight through it: N guesses per window instead of one, and N
-// concurrent argon2id verifications at ~19 MiB each.
-func TestThrottleBeginReservesUnderConcurrency(t *testing.T) {
-	var th credentialThrottle
-	const goroutines = 200
-
-	var start sync.WaitGroup
-	var done sync.WaitGroup
-	start.Add(1)
-	var mu sync.Mutex
-	admitted := 0
-	releases := []func(){}
-	for i := 0; i < goroutines; i++ {
-		done.Add(1)
-		go func() {
-			defer done.Done()
-			start.Wait()
-			release, _, blocked := th.begin(throttleBase)
-			if blocked {
-				return
-			}
-			mu.Lock()
-			admitted++
-			releases = append(releases, release)
-			mu.Unlock()
-		}()
-	}
-	start.Done()
-	done.Wait()
-
-	// Nothing released yet, so the pool must be exactly full — never more.
-	if admitted != throttleMaxInFlight {
-		t.Fatalf("%d of %d concurrent callers admitted, want exactly %d — the gate "+
-			"is not reserving, so a burst bypasses the backoff entirely",
-			admitted, goroutines, throttleMaxInFlight)
-	}
-	// Releasing frees the slots again.
-	for _, r := range releases {
-		r()
-	}
-	if _, _, blocked := th.begin(throttleBase); blocked {
-		t.Error("still blocked after every slot was released — releases leak")
-	}
-}
-
-// TestThrottleReleaseIsIdempotent — a defer plus an explicit call must not
-// double-free, or the pool drifts upward and the cap silently stops holding.
-func TestThrottleReleaseIsIdempotent(t *testing.T) {
-	var th credentialThrottle
-	release, _, blocked := th.begin(throttleBase)
-	if blocked {
-		t.Fatal("fresh throttle blocked")
-	}
-	for i := 0; i < 5; i++ {
-		release()
-	}
-	// Exactly the pool size must be available — not more.
-	got := 0
-	for i := 0; i < throttleMaxInFlight+3; i++ {
-		if _, _, b := th.begin(throttleBase); !b {
-			got++
-		}
-	}
-	if got != throttleMaxInFlight {
-		t.Errorf("after %d releases of ONE slot the pool admitted %d, want %d", 5, got, throttleMaxInFlight)
-	}
-}
-
-// TestThrottleCannotBeSustainedIndefinitely — H2, and the reason
-// throttleDecay is pinned to throttleMaxDelay.
-//
-// A refused attempt cannot extend a block, so an attacker sustaining a lockout
-// must land a FRESH failure right after each block expires. With decay == the
-// cap, the gap they just waited out is by definition long enough to decay the
-// history, so that failure starts from zero and arms nothing. If decay is ever
-// set longer than the cap (it was 15m vs 5m), the same trickle keeps the owner
-// out forever and the owner can never reach noteSuccess to clear it.
-func TestThrottleCannotBeSustainedIndefinitely(t *testing.T) {
-	if throttleDecay > throttleMaxDelay {
-		t.Fatalf("throttleDecay (%v) > throttleMaxDelay (%v): a trickle of failures "+
-			"one-per-block keeps the owner locked out indefinitely", throttleDecay, throttleMaxDelay)
-	}
-	var th credentialThrottle
-	now := throttleBase
-	// Climb the ramp exactly the way a sustaining attacker must: fail, wait the
-	// block out, fail again. Stop the moment a CAP-length block is armed — the
-	// assertion below is only meaningful from there, and stopping at an arbitrary
-	// iteration would put us mid-ramp where a new penalty is legitimate.
-	reachedCap := false
-	for i := 0; i < 100 && !reachedCap; i++ {
-		th.noteFailure(now)
-		wait, blocked := th.retryAfter(now)
-		if !blocked {
-			continue
-		}
-		reachedCap = wait == throttleMaxDelay
-		now = now.Add(wait) // wait it out, as an attacker must
-	}
-	if !reachedCap {
-		t.Fatal("never reached a cap-length block — the assertion below would be vacuous")
-	}
-	if wait, blocked := th.retryAfter(now); blocked {
-		t.Fatalf("still blocked immediately after waiting the cap out: %v", wait)
-	}
-	// The attacker lands a fresh failure the instant it expires. Because the gap
-	// they just waited (the cap) is >= decay, the history is forgotten and NO new
-	// block arms — the ratchet breaks at the top, every time.
-	th.noteFailure(now)
-	if wait, blocked := th.retryAfter(now); blocked {
-		t.Errorf("a failure landed right after a cap-length block re-armed the ratchet "+
-			"(%v) — the lockout is sustainable and the owner can never clear it", wait)
-	}
-}
-
-// TestThrottleDecayClearsAStaleDeadline — on decay, failures resets to 0 so
-// penaltyFor returns 0 and the arming block is skipped, which would leave a
-// stale FUTURE deadline outliving the history it came from.
-//
-// 🔴 THIS TEST USED TO BE VACUOUS, AND THE REASON IS WORTH KEEPING. It drove the
-// state by climbing the real schedule and then failing again after the decay
-// window — but every deadline that schedule can arm is at most
-// lastFailure+throttleMaxDelay, and decay fires only at lastFailure+throttleDecay,
-// which is PINNED EQUAL to the cap. So the deadline it found was always already
-// in the past, retryAfter answered "not blocked" whether or not noteFailure
-// cleared anything, and deleting `t.nextAllowed = time.Time{}` left it GREEN.
-//
-// The property is still worth pinning: the clear is what makes shortening the
-// decay a safe change instead of a silent one. So construct the state directly —
-// a deadline further out than the decay window, which the public schedule cannot
-// currently produce — and assert on that. The counterfactual now bites: remove
-// the clear in noteFailure and this test fails by name.
-func TestThrottleDecayClearsAStaleDeadline(t *testing.T) {
-	now := throttleBase
-	// Hand-built, and deliberately NOT reachable through penaltyFor today: a
-	// deadline that outlives the decay window is exactly the state the clear
-	// exists for, and exactly what decay == cap prevents the ramp from creating.
-	staleDeadline := now.Add(throttleDecay + 10*time.Minute)
-	th := credentialThrottle{
-		failures:    throttleFreeFailures + 4,
-		lastFailure: now,
-		nextAllowed: staleDeadline,
-	}
-	if _, blocked := th.retryAfter(now); !blocked {
-		t.Fatal("the constructed state is not blocked — the assertion below would be vacuous")
-	}
-	// A failure after the decay window: history forgotten, so no penalty is owed
-	// and the old deadline must be gone with it.
-	later := now.Add(throttleDecay + time.Second)
-	if !later.Before(staleDeadline) {
-		t.Fatalf("the deadline (%v) is not still in the future at decay time (%v) — vacuous again",
-			staleDeadline, later)
-	}
-	th.noteFailure(later)
-	if wait, blocked := th.retryAfter(later); blocked {
-		t.Errorf("a stale deadline (%v) survived the decay that cleared its history", wait)
-	}
-}
-
 // TestMFAActivateRequiresThePassword — H3. A stolen owner token alone must not
 // be able to ARM a factor: the thief would enrol a secret they control, and the
 // real owner's password would then answer 401 with no way to disarm it (disable
@@ -846,7 +882,6 @@ func TestMFAActivateRefusalIsIndistinguishable(t *testing.T) {
 
 	wrongPwd := callJSON(api.HandleMfaActivateApiAuthMfaActivatePost,
 		fmt.Sprintf(`{"password":"nope","code":%q}`, liveCode(t, secret)))
-	api.loginThrottle.noteSuccess()
 	wrongCode := callJSON(api.HandleMfaActivateApiAuthMfaActivatePost,
 		fmt.Sprintf(`{"password":%q,"code":"000000"}`, mfaTestPassword))
 
@@ -862,9 +897,7 @@ func TestMFAActivateRefusalIsIndistinguishable(t *testing.T) {
 func TestMFAActivateConflictsAreNotThrottled(t *testing.T) {
 	api := mfaAPI(t)
 	offerMFA(t, api, true)
-	for i := 0; i < throttleFreeFailures+2; i++ {
-		callJSON(api.HandleLoginApiLoginPost, loginBody("wrong", ""))
-	}
+	occupyThrottleSlots(t, api)
 	// Nothing pending: a 409, never a 429.
 	if rec := callJSON(api.HandleMfaActivateApiAuthMfaActivatePost,
 		fmt.Sprintf(`{"password":%q,"code":"123456"}`, mfaTestPassword)); rec.Code != http.StatusConflict {
@@ -876,9 +909,7 @@ func TestMFAActivateConflictsAreNotThrottled(t *testing.T) {
 // auth matrix pins at 409. The throttle gate used to precede this 409.
 func TestMFADisableConflictIsNotThrottled(t *testing.T) {
 	api := mfaAPI(t)
-	for i := 0; i < throttleFreeFailures+2; i++ {
-		callJSON(api.HandleLoginApiLoginPost, loginBody("wrong", ""))
-	}
+	occupyThrottleSlots(t, api)
 	if rec := callJSON(api.HandleMfaDisableApiAuthMfaDisablePost,
 		fmt.Sprintf(`{"password":%q,"code":"123456"}`, mfaTestPassword)); rec.Code != http.StatusConflict {
 		t.Errorf("disable with nothing armed while throttled = %d, want 409", rec.Code)
@@ -891,28 +922,35 @@ func TestMFADisableConflictIsNotThrottled(t *testing.T) {
 // TestMFADisableConflictIsNotThrottled above pin only the ORDERING — that a 409
 // beats the brake — and never the positive: that these two handlers call the
 // gate at all. Deleting the whole `begin` block from either handler left every
-// test in this package green (T-19 mutants M11/M12), and deleting the
-// noteFailure on disable's rejection path left it green too (M13). The same
-// deletion at /api/login, /api/auth/change-password and /api/auth/set-password
-// turns their tests red immediately, so this was a gap specific to these two.
+// test in this package green (T-19 mutants M11/M12). The same deletion at
+// /api/login, /api/auth/change-password and /api/auth/set-password turns their
+// tests red immediately, so this was a gap specific to these two.
+//
+// ⚠️ A THIRD TEST USED TO LIVE HERE (M13, TestMFADisableRejectionSpendsFromThe
+// Budget) and it is deliberately gone rather than broken. It pinned that a
+// refused disable called noteFailure — i.e. that it spent from the shared
+// failure counter — and §0 deleted that counter on the owner's ruling. Removing
+// a test whose subject no longer exists is not a coverage regression; what
+// replaced it is the pair below, which pin the gate these two handlers DO still
+// take.
 //
 // It matters most on disable: that seam takes the password AND a live code, and
 // it is the one that TAKES THE SECOND LOCK OFF. An unbraked disable is unlimited
 // guessing against exactly the endpoint whose success removes the factor.
 
 // occupyThrottleSlots fills the in-flight pool and keeps it full for the rest of
-// the test — the deterministic way to make begin refuse without climbing the
-// failure ramp (and without a clock or a goroutine).
+// the test. Since §0 it is the ONLY way a handler can answer 429 — there is no
+// failure ramp left to climb — and it needs no clock and no goroutine.
 //
 // The releases are dropped on purpose: nothing else shares this apiServer.
 func occupyThrottleSlots(t *testing.T, api *apiServer) {
 	t.Helper()
 	for i := 0; i < throttleMaxInFlight; i++ {
-		if _, _, blocked := api.loginThrottle.begin(time.Now()); blocked {
+		if _, _, blocked := api.loginThrottle.begin(); blocked {
 			t.Fatalf("could not take in-flight slot %d of %d", i+1, throttleMaxInFlight)
 		}
 	}
-	if _, _, blocked := api.loginThrottle.begin(time.Now()); !blocked {
+	if _, _, blocked := api.loginThrottle.begin(); !blocked {
 		t.Fatal("the pool admitted more than throttleMaxInFlight — the setup is not throttled")
 	}
 }
@@ -972,51 +1010,32 @@ func TestMFAActivateTakesTheBrakeBeforeVerifying(t *testing.T) {
 	}
 }
 
-// TestMFADisableRejectionSpendsFromTheBudget — M13. Reaching the gate is half of
-// it; a refused disable must also COST something, or the budget never runs down
-// and the 429 above is unreachable in practice. Same shape as
-// TestChangePasswordIsThrottled, on the seam that removes the second factor.
-func TestMFADisableRejectionSpendsFromTheBudget(t *testing.T) {
-	api := mfaAPI(t)
-	armMFA(t, api) // activate ends with noteSuccess, so the budget starts full
-	body := fmt.Sprintf(`{"password":"guess","code":%q}`, "000000")
-
-	for i := 0; i < throttleFreeFailures; i++ {
-		if rec := callJSON(api.HandleMfaDisableApiAuthMfaDisablePost, body); rec.Code != http.StatusUnauthorized {
-			t.Fatalf("disable guess %d = %d, want 401 (inside the free allowance)", i+1, rec.Code)
-		}
-	}
-	if rec := callJSON(api.HandleMfaDisableApiAuthMfaDisablePost, body); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("the allowance-exceeding disable guess = %d, want 401", rec.Code)
-	}
-	if rec := callJSON(api.HandleMfaDisableApiAuthMfaDisablePost, body); rec.Code != http.StatusTooManyRequests {
-		t.Errorf("throttled disable guess = %d, want 429 — a rejected disable is not "+
-			"calling noteFailure, so the second factor can be guessed at without limit", rec.Code)
-	}
-	if !api.authMFAEnrolled() {
-		t.Error("the factor came off during a run of failed attempts")
-	}
-}
-
 // TestLoginUnconfiguredSecretIsNotACredentialFailure — a missing signing secret
-// is server config, not a credential fact: it must not spend from the budget,
-// and it must be settled before any verification.
+// is server CONFIG, not a credential fact. It must be settled before any
+// credential work: it must not take an in-flight slot, must not burn a TOTP
+// step, and must not pay the refusal floor (nobody guessed anything).
+//
+// ⚠️ It is therefore the one refusal on this route that IS distinguishable, by
+// message and by speed — and that is correct rather than a leak, because it
+// discloses a fact about the SERVER (auth is not configured) and none about the
+// caller's password. GET /api/auth/status says as much to anyone who asks.
 func TestLoginUnconfiguredSecretIsNotACredentialFailure(t *testing.T) {
 	api := mfaAPI(t)
+	api.credentialFailureFloor = 0 // the production floor — it must go unspent
 	api.secret = nil
 
+	start := time.Now()
 	rec := callJSON(api.HandleLoginApiLoginPost, loginBody(mfaTestPassword, ""))
+	elapsed := time.Since(start)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unconfigured login = %d, want 401", rec.Code)
 	}
-	// The budget must be untouched: restore the secret and the free allowance
-	// must still be entirely available.
-	api.secret = []byte(interopSecret)
-	for i := 0; i < throttleFreeFailures; i++ {
-		if rec := callJSON(api.HandleLoginApiLoginPost, loginBody("wrong", "")); rec.Code != http.StatusUnauthorized {
-			t.Fatalf("failure %d = %d, want 401 — the unconfigured attempt spent from the budget", i+1, rec.Code)
-		}
+	if elapsed >= throttleFailureFloor {
+		t.Errorf("an unconfigured-server refusal took %v, at or past the %v floor — "+
+			"it is being treated as a credential failure", elapsed, throttleFailureFloor)
 	}
+	// It must also not have taken a slot on the way past.
+	occupyThrottleSlots(t, api)
 }
 
 // TestMFAActivateFloorIsPersistedBeforeTheSecret pins the write ORDER, which is
@@ -1096,55 +1115,6 @@ func TestMFAActivateUpdatesMemoryOnlyAfterEveryDBWrite(t *testing.T) {
 	}
 	if pending != nil {
 		t.Errorf("pending secret survived activation: %q", *pending)
-	}
-}
-
-// TestThrottleScheduleIsAbsolute — the throttle tests were SELF-REFERENTIAL:
-// they wrote their expectations as `throttleBaseDelay`, `2*throttleBaseDelay`,
-// `throttleMaxDelay`, so changing a constant moved both sides of the assertion
-// together and every stated security property went unguarded (raising the cap to
-// 50 minutes stayed green).
-//
-// This pins the ABSOLUTE numbers the comments promise, so a change to any
-// constant has to be a deliberate edit here as well.
-func TestThrottleScheduleIsAbsolute(t *testing.T) {
-	if throttleFreeFailures != 5 {
-		t.Errorf("free allowance = %d, want 5 (the documented human-fumbling budget)", throttleFreeFailures)
-	}
-	if throttleBaseDelay != time.Second {
-		t.Errorf("base delay = %v, want 1s", throttleBaseDelay)
-	}
-	if throttleMaxDelay != 5*time.Minute {
-		t.Errorf("cap = %v, want 5m — the comments derive '~12 attempts an hour' "+
-			"and 'one coffee break rather than a lockout' from exactly this number",
-			throttleMaxDelay)
-	}
-	if throttleMaxInFlight != 4 {
-		t.Errorf("in-flight cap = %d, want 4 (bounds argon2id memory at ~76 MiB)", throttleMaxInFlight)
-	}
-	// The absolute schedule the "~12 attempts an hour" claim rests on.
-	for _, tc := range []struct {
-		failures int
-		want     time.Duration
-	}{
-		{5, 0},
-		{6, 1 * time.Second},
-		{7, 2 * time.Second},
-		{8, 4 * time.Second},
-		// The doubling is base * 2^(over-1) where over = failures - free, so the
-		// cap is first reached at failure 15 (2^10 = 512s clamps to 300s), not 14.
-		{13, 128 * time.Second},
-		{14, 256 * time.Second},
-		{15, 5 * time.Minute},
-		{99, 5 * time.Minute},
-	} {
-		if got := penaltyFor(tc.failures); got != tc.want {
-			t.Errorf("penaltyFor(%d) = %v, want %v", tc.failures, got, tc.want)
-		}
-	}
-	// ~12 attempts an hour at the cap, stated as the arithmetic rather than as prose.
-	if perHour := int(time.Hour / throttleMaxDelay); perHour != 12 {
-		t.Errorf("attempts per hour at the cap = %d, want 12", perHour)
 	}
 }
 

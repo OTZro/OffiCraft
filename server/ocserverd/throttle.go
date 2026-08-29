@@ -18,48 +18,80 @@ package main
 // front of this, it becomes an unlimited online password-guessing oracle that
 // leaves no trace. This is the policy brake.
 //
-// 🔴 ONE GLOBAL BUCKET, NOT PER-CLIENT — and that is a conclusion about the
-// deployment, not laziness. The server binds loopback only; every request that
-// is not from this machine arrives through a tunnel or reverse proxy, so
-// r.RemoteAddr is 127.0.0.1 for the owner's phone, the owner's laptop and an
-// attacker alike, and X-Forwarded-For is attacker-controlled text. Bucketing on
-// any of those would produce a per-attacker bucket the attacker chooses — a
-// counter that reads like a limit and enforces nothing. A single global bucket
-// is the only one that actually holds here.
+// ── THE SHAPE, AND WHY IT IS THIS ONE (owner's ruling, T-19 §0) ─────────────
 //
-// THE COST, STATED PLAINLY: a global bucket means a stranger who can reach the
-// login page can also delay the OWNER's login, up to the cap. That is a real
-// denial of service and it is the deliberate trade — a bounded wait for the
-// owner, who knows their password and gets the counter reset the instant they
-// succeed, against unlimited guessing for everyone else.
+// The brake is exactly TWO mechanisms, and neither of them counts anything:
 //
-// 🔴 AND IT IS WORSE THAN "a bounded wait", SO SAY SO. A refused attempt does
-// not extend the block (see retryAfter), but nothing stops an attacker landing
-// a FRESH failure the moment a block expires — so a trickle of a dozen requests
-// an hour can keep the owner out for as long as the attacker keeps it up. The
-// owner cannot buy their way out either: they are refused BEFORE their password
-// is verified, so noteSuccess is unreachable while blocked.
+//	1. A FLOOR ON THE WALL-CLOCK OF A REFUSAL. On the way in, a front-door
+//	   handler stamps the instant it started; a refusal then waits until that
+//	   instant plus throttleFailureFloor before it answers. A SUCCESS returns
+//	   the moment it is proven — the owner never waits.
+//	2. A CONCURRENCY CAP (throttleMaxInFlight). This is the half that turns
+//	   the delay into a rate: without it, N simultaneous attempts each wait
+//	   the same 3s in parallel and the floor limits nothing at all.
 //
-// An earlier version of this comment claimed "the cap exists precisely so this
-// can never become an indefinite lockout, and there is no admin action needed
-// to clear it: it decays on its own." That was FALSE, and load-bearing — it
-// would tell the next reader no escape hatch was needed. What is actually true:
-//   * throttleDecay is pinned at throttleMaxDelay (see the constant), so a
-//     cap-length block ALWAYS decays the history behind it. The ratchet breaks
-//     at the top every time and the attacker must re-climb it, which leaves the
-//     owner real windows instead of a sealed door.
-//   * the counter is process-local (api_stub.go), so restarting ocserverd
-//     clears it outright. That is the escape hatch, it needs host shell, and it
-//     is the same trust substitution `ocserverd mfa-disable` makes.
-// 🔴 NEITHER FACT IS IN THE OWNER DOCS, AND THIS LINE USED TO CLAIM BOTH WERE.
-// docs/guide/mobile.md says exactly one thing about this brake — "連續失敗幾次
-// 之後，下一次嘗試會被擋一段時間（會越擋越久），成功登入就歸零" — i.e. the free
-// allowance, the doubling and the reset-on-success. It says nothing about the
-// decay/cap coupling and nothing about a restart clearing the counter. The
-// previous version of this line asserted they were both documented there, which
-// is the same shape of false cross-reference the comment ABOVE it was written to
-// correct: prose about a set someone else owns, that nothing turns red about.
-// If you make either fact owner-facing, write it in mobile.md and say so here.
+// Together they bound the front door at throttleMaxInFlight guesses per
+// throttleFailureFloor, and the slot is held FOR the wait (the floor is spent
+// inside the handler, before `release` runs) — that coupling is the whole
+// mechanism, not an implementation detail.
+//
+// 🔴 THE FLOOR IS A DEADLINE, NOT AN ADDED SLEEP, and the difference is the
+// security property. "Sleep 3s after you decide" makes the response time
+// `work + 3s`, so every difference in `work` still shows through — the very
+// thing the single indistinguishable refusal message exists to hide. "Wait
+// until start+3s" makes every refusal cost the SAME, whatever it did: a wrong
+// password (one argon2id) and a right password with a wrong code (one argon2id
+// plus a TOTP verification) are the same number of milliseconds on the wire.
+// TestFailedLoginsAllCostTheSameWallClock is that property, and it is the
+// floor of this whole design: 「密碼錯」 and 「碼錯」 must be indistinguishable
+// by MESSAGE (TestFailedLoginRefusalsAreByteIdentical) and by TIME. Any change
+// that makes either distinguishable is a security regression, not a UX tweak.
+//
+// 🔴 WHAT WAS DELETED, AND WHY — a counter, a doubling backoff, a cap, a decay
+// window and one process-wide bucket used to sit here. They are gone by the
+// owner's decision, and the reason is one sentence: NOBODY MAY BE ABLE TO LOCK
+// THE OWNER OUT. That design refused the owner BEFORE verifying their
+// password, so noteSuccess was unreachable while blocked; a stranger who could
+// reach the login page could therefore hold the owner out with a trickle of a
+// dozen failures an hour, and the only escape was a host shell. A flat floor
+// has no state for an attacker to drive: the owner's correct password is
+// answered immediately, every time, no matter what anyone else has been doing.
+// The cost accepted in exchange is that guessing is slowed rather than
+// stopped — at 4 guesses per 3s the front door is ~1.3 attempts a second,
+// which against a real password is still hopeless and against a 6-digit code
+// alone would not be. That is why the code is never the ONLY secret: every
+// seam that takes a code takes the password too.
+//
+// ⚠️ THERE IS NO PER-CLIENT DIMENSION HERE, and that is a conclusion about the
+// deployment rather than laziness. The server binds loopback only; every
+// request that is not from this machine arrives through a tunnel or reverse
+// proxy, so r.RemoteAddr is 127.0.0.1 for the owner's phone, the owner's
+// laptop and an attacker alike, and X-Forwarded-For is attacker-controlled
+// text. Bucketing on any of those would produce a per-attacker bucket the
+// attacker chooses. (If per-client is ever revisited behind a trusted proxy,
+// the key for IPv6 is the /64 prefix, not the address.)
+//
+// 🔴 THE ALREADY-AUTHENTICATED SEAMS ARE DELIBERATELY NOT FLOORED. Of the five
+// `begin` call sites, two are the front door (/api/login, /api/auth/set-password
+// — both PUBLIC) and three are owner-gated (change-password, mfa/activate,
+// mfa/disable). The gated three keep ONLY the in-flight cap, which is there for
+// memory rather than for policy: argon2id is ~19 MiB a verification
+// (password.go), so an unbounded burst is an OOM kill by anyone holding a
+// token. They spend no floor. ⚠️ THE COST IS REAL AND THE OWNER ACCEPTED IT
+// KNOWING: whoever holds a live owner token can guess the CURRENT password at
+// change-password, limited only by the cap. The judgement behind that is that a
+// stolen owner token is already the disaster this system defends against —
+// 「被進來本身嚴重程度跟密碼外流是一樣的」 — so spending the owner's own login
+// latency to slow down an attacker who is already inside buys nothing.
+//
+// 🔴 THE OTHER HALF OF THAT TRADE IS THE ALERT, NOT A LOCKOUT. When
+// /api/login accepts the password and refuses the second factor, the password
+// is the thing that has leaked, and no amount of throttling fixes a leaked
+// password. So that case tells the assistant, who tells the owner to change it
+// (api_auth.go, noteFactorRefusedAfterCorrectPassword). ⚠️ It is dispatched on
+// a goroutine ON PURPOSE: doing the DB write inline would make that ONE refusal
+// slower than the others and hand back, in milliseconds, exactly the bit the
+// identical message and the floor are spent hiding.
 
 import (
 	"math"
@@ -70,131 +102,66 @@ import (
 )
 
 const (
-	// throttleFreeFailures is how many consecutive failures cost nothing — the
-	// budget for human fumbling, spent before any delay appears.
+	// throttleFailureFloor is the wall-clock a REFUSED credential attempt
+	// costs, measured from the moment the handler started rather than from the
+	// moment it decided. 3 seconds.
 	//
-	// 5 is the conventional allowance (OWASP's guidance sits at 5–10 before a
-	// lockout), and it is the right number here for a specific reason: a
-	// password manager's generated password mistyped by hand, plus a TOTP code
-	// that expired mid-typing, is two failures that are nobody's fault. A
-	// tighter budget of 3 punishes an owner having a bad minute, and buys
-	// almost nothing — an attacker's cost is set by the DOUBLING and the cap
-	// below, not by whether the ramp starts on the 4th attempt or the 6th.
-	throttleFreeFailures = 5
-	// throttleBaseDelay is the penalty on the first failure PAST the free
-	// budget; each further failure doubles it.
-	throttleBaseDelay = 1 * time.Second
-	// throttleMaxDelay caps the penalty. 5 minutes holds a sustained attacker
-	// to ~12 attempts an hour — against even a weak 8-character password that
-	// is centuries, and against a 6-digit TOTP code it is ~9 years — while
-	// bounding the owner's worst case at one coffee break rather than a
-	// lockout only a shell can lift.
-	throttleMaxDelay = 5 * time.Minute
+	// The number is a trade with exactly two sides. Upwards: an owner who
+	// mistypes their password waits this long before the login wall says so,
+	// every time, and that is the ONLY price the honest owner ever pays here
+	// (a correct password is answered immediately). Downwards: with
+	// throttleMaxInFlight it sets the front door's ceiling, and 4 per 3s is
+	// ~1.3 guesses a second — against argon2id-hashed real passwords that is
+	// hopeless for an attacker, and it is deliberately NOT strong enough to
+	// protect a 6-digit code on its own, which is why no seam ever accepts a
+	// code without the password.
+	//
+	// 🔴 IT IS SPENT WHILE HOLDING AN IN-FLIGHT SLOT. Moving the wait outside
+	// the slot (or after `release`) leaves the floor a pure latency cost to the
+	// owner that limits nothing.
+	throttleFailureFloor = 3 * time.Second
 	// throttleMaxInFlight bounds how many credential verifications may be in
-	// progress at once, and it is what makes the backoff above mean anything.
+	// progress at once, and it is what makes the floor above mean anything.
 	//
 	// 🔴 WITHOUT IT THE BRAKE IS BYPASSABLE AND THE STATED DoS DEFENCE IS
-	// FICTION. retryAfter is deliberately read-only and noteFailure lands only
-	// AFTER argon2id returns, so N simultaneous requests all read "not blocked",
-	// all verify, and only then record N failures: the attacker gets N guesses
-	// per window instead of one, and N concurrent argon2id verifications at
-	// ~19 MiB each (password.go) — a few thousand is tens of GB and the process
-	// is OOM-killed by one unauthenticated burst. Measured shape: 500 concurrent
-	// wrong-password POSTs used to yield ~500 verifications, not ~6.
+	// FICTION. N simultaneous requests would each serve the same 3s floor
+	// concurrently — N guesses per window instead of one — and would run N
+	// concurrent argon2id verifications at ~19 MiB each (password.go): a few
+	// thousand is tens of GB and the process is OOM-killed by one
+	// unauthenticated burst. Measured shape: 500 concurrent wrong-password
+	// POSTs used to yield ~500 verifications, not ~6.
 	//
-	// 4 rather than 1: a single slot would 429 the loser of a genuine two-device
-	// race, and 4 still bounds memory at ~76 MiB and holds a sustained attacker
-	// to 4 guesses per window — against an 8-character password that is still
-	// hopeless for them.
+	// 4 rather than 1: a single slot would 429 the loser of a genuine
+	// two-device race, and 4 still bounds memory at ~76 MiB.
 	throttleMaxInFlight = 4
 	// throttleBurstWait is the Retry-After handed to a caller refused for
-	// concurrency rather than for a deadline. There is no deadline to report, and
-	// the slots free in argon2id time, so it says "a moment".
+	// concurrency. It is the only refusal this file still issues, and there is
+	// no deadline to report — the slots free in floor time, so it says "a
+	// moment" rather than pretending to know.
 	throttleBurstWait = 1 * time.Second
-	// throttleDecay forgets the failure history once this long has passed since
-	// the last failure. Without it the counter is a ratchet: an owner who
-	// fumbled five times last Tuesday would still be paying for it today, and
-	// the penalty would only ever grow over the life of the install.
-	//
-	// 🔴 IT IS PINNED TO throttleMaxDelay ON PURPOSE, and the coupling is a
-	// security property, not a coincidence. A blocked attempt cannot extend the
-	// block, so an attacker sustaining a lockout has to land a fresh failure
-	// right after each block expires. With decay == the cap, the gap they just
-	// waited out is BY DEFINITION long enough to decay the history, so the
-	// failure they land starts from zero and arms no penalty: the ratchet
-	// breaks at the top every single time. Set decay LONGER than the cap (it
-	// used to be 15m vs 5m) and that same trickle keeps the owner out forever.
-	//
-	// Shorter blocks stay inside the window, so the ramp below still works —
-	// only the cap-length block resets. TestThrottleCannotBeSustainedIndefinitely
-	// pins the relationship; do not change one of these without the other.
-	throttleDecay = throttleMaxDelay
 )
 
-// credentialThrottle is the failure counter behind the credential seams. Safe
+// credentialThrottle is the in-flight gate behind the credential seams. Safe
 // for concurrent use; the zero value is a ready, empty throttle.
+//
+// It holds no failure history by design — see the 🔴 WHAT WAS DELETED note at
+// the top of this file. There is nothing here for an attacker to drive.
 type credentialThrottle struct {
-	mu          sync.Mutex
-	failures    int
-	lastFailure time.Time
-	nextAllowed time.Time
+	mu sync.Mutex
 	// inFlight counts credential verifications currently running. See
 	// throttleMaxInFlight — this is the half that survives concurrency.
 	inFlight int
-}
-
-// penaltyFor is the delay owed after `failures` consecutive failures. Pure, so
-// the schedule is testable without a clock.
-func penaltyFor(failures int) time.Duration {
-	over := failures - throttleFreeFailures
-	if over <= 0 {
-		return 0
-	}
-	// Shift in float space: `1<<over` overflows int64 at 63 doublings, and a
-	// long-running attack WILL get there. math.Pow saturates into +Inf instead,
-	// which the cap below then clamps — an attacker cannot wrap the penalty
-	// around to zero.
-	delay := float64(throttleBaseDelay) * math.Pow(2, float64(over-1))
-	if delay >= float64(throttleMaxDelay) || math.IsInf(delay, 1) {
-		return throttleMaxDelay
-	}
-	return time.Duration(delay)
-}
-
-// retryAfter reports how long the caller must wait, and whether it must wait at
-// all. Read-only: a blocked attempt is NOT itself a failure. Counting it would
-// let anyone hammering the endpoint drive the penalty to the cap and hold it
-// there — turning the brake into the attacker's own lockout tool.
-//
-// ⚠️ INSPECTION ONLY — handlers must call begin instead. This reserves nothing,
-// so on its own it is bypassed by any concurrent burst.
-func (t *credentialThrottle) retryAfter(now time.Time) (time.Duration, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.nextAllowed.IsZero() || !now.Before(t.nextAllowed) {
-		return 0, false
-	}
-	return t.nextAllowed.Sub(now), true
 }
 
 // begin is THE gate every credential seam must call. It answers (release, wait,
 // blocked): on a refusal `release` is nil and `wait` is what to put in
 // Retry-After; on admission the caller MUST `defer release()`.
 //
-// 🔴 USE THIS, NOT retryAfter, IN A HANDLER. retryAfter only reads the
-// deadline; it reserves nothing, so a burst walks straight through it (see
-// throttleMaxInFlight). begin both checks the deadline AND takes an in-flight
-// slot under the same lock, which is what makes the two checks atomic with
-// respect to each other.
-//
 // release is idempotent, so a `defer` plus an early explicit call cannot
 // double-free a slot and let the pool drift upward over time.
-func (t *credentialThrottle) begin(now time.Time) (func(), time.Duration, bool) {
+func (t *credentialThrottle) begin() (func(), time.Duration, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !t.nextAllowed.IsZero() && now.Before(t.nextAllowed) {
-		return nil, t.nextAllowed.Sub(now), true
-	}
 	if t.inFlight >= throttleMaxInFlight {
 		return nil, throttleBurstWait, true
 	}
@@ -211,54 +178,33 @@ func (t *credentialThrottle) begin(now time.Time) (func(), time.Duration, bool) 
 	}, 0, false
 }
 
-// noteFailure records a rejected credential and arms the next penalty.
+// failureFloor is the wall-clock this server spends on a refused front-door
+// credential attempt. Production servers never set the field, so they get
+// throttleFailureFloor; the package's own tests shrink it, because a test that
+// is not ABOUT the floor should not pay 3 seconds to walk past it.
 //
-// Callers pass the time the failure was DETERMINED, not the time the request
-// started: stamping the deadline from the request start refunds the attacker
-// the argon2id time they just spent (measured ~250ms under -race), discounting
-// the first 1s penalty by a quarter.
-func (t *credentialThrottle) noteFailure(now time.Time) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if !t.lastFailure.IsZero() && now.Sub(t.lastFailure) >= throttleDecay {
-		// History forgotten (see throttleDecay). Clearing nextAllowed is NOT
-		// optional: with failures back to 0, penaltyFor returns 0 and the block
-		// below is skipped, so a stale future deadline would otherwise outlive
-		// the history it came from and keep the caller refused with an empty
-		// counter.
-		//
-		// 🔴 IT IS UNREACHABLE THROUGH THE PUBLIC SCHEDULE TODAY, and the
-		// previous version of this line said the opposite ("Latent while
-		// decay > cap; LIVE now that they are equal"), which is backwards.
-		// nextAllowed is only ever set to lastFailure+penaltyFor(...), and
-		// penaltyFor is capped at throttleMaxDelay; decay fires only once
-		// now-lastFailure >= throttleDecay. With throttleDecay >= the cap —
-		// and it is PINNED EQUAL to it — now is by definition already at or
-		// past any deadline this schedule could have armed, so the deadline
-		// found here is never in the future. Equality does not make it live;
-		// it is exactly the boundary case where it is still dead.
-		// It goes live only if someone sets decay SHORTER than the cap. Keep
-		// the clear: it is what makes that change safe instead of silent, and
-		// TestThrottleDecayClearsAStaleDeadline pins it by constructing the
-		// state directly rather than by climbing the (incapable) schedule.
-		t.failures = 0
-		t.nextAllowed = time.Time{}
+// 🔴 THE ZERO VALUE MUST MEAN "the production floor", not "no floor". A field
+// that defaults to off is one forgotten line away from shipping a server with
+// no brake and nothing red to say so.
+func (s *apiServer) failureFloor() time.Duration {
+	if s.credentialFailureFloor > 0 {
+		return s.credentialFailureFloor
 	}
-	t.failures++
-	t.lastFailure = now
-	if penalty := penaltyFor(t.failures); penalty > 0 {
-		t.nextAllowed = now.Add(penalty)
-	}
+	return throttleFailureFloor
 }
 
-// noteSuccess clears the history. Proving you hold the credential ends the
-// suspicion — this is what keeps a global bucket from being an owner lockout.
-func (t *credentialThrottle) noteSuccess() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.failures = 0
-	t.lastFailure = time.Time{}
-	t.nextAllowed = time.Time{}
+// holdFailureFloor blocks until `started` plus the floor has elapsed, then
+// returns. Call it on a front-door refusal IMMEDIATELY BEFORE writing the
+// response and while the in-flight slot is still held.
+//
+// 🔴 IT TAKES THE START INSTANT, NOT A DURATION. Sleeping a fixed amount here
+// would leave the work already done visible in the total, which is the leak the
+// floor exists to close; taking the deadline makes every refusal cost the same
+// regardless of what it had to compute to get here.
+func (s *apiServer) holdFailureFloor(started time.Time) {
+	if remaining := s.failureFloor() - time.Since(started); remaining > 0 {
+		time.Sleep(remaining)
+	}
 }
 
 // writeThrottled answers a rate-limited credential attempt: 429 with a
