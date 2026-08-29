@@ -762,21 +762,44 @@ func TestThrottleCannotBeSustainedIndefinitely(t *testing.T) {
 	}
 }
 
-// TestThrottleDecayClearsAStaleDeadline — the bug the decay/cap coupling makes
-// live: on decay, failures resets to 0 so penaltyFor returns 0 and the block is
-// skipped, which would leave a stale FUTURE deadline outliving the history.
+// TestThrottleDecayClearsAStaleDeadline — on decay, failures resets to 0 so
+// penaltyFor returns 0 and the arming block is skipped, which would leave a
+// stale FUTURE deadline outliving the history it came from.
+//
+// 🔴 THIS TEST USED TO BE VACUOUS, AND THE REASON IS WORTH KEEPING. It drove the
+// state by climbing the real schedule and then failing again after the decay
+// window — but every deadline that schedule can arm is at most
+// lastFailure+throttleMaxDelay, and decay fires only at lastFailure+throttleDecay,
+// which is PINNED EQUAL to the cap. So the deadline it found was always already
+// in the past, retryAfter answered "not blocked" whether or not noteFailure
+// cleared anything, and deleting `t.nextAllowed = time.Time{}` left it GREEN.
+//
+// The property is still worth pinning: the clear is what makes shortening the
+// decay a safe change instead of a silent one. So construct the state directly —
+// a deadline further out than the decay window, which the public schedule cannot
+// currently produce — and assert on that. The counterfactual now bites: remove
+// the clear in noteFailure and this test fails by name.
 func TestThrottleDecayClearsAStaleDeadline(t *testing.T) {
-	var th credentialThrottle
 	now := throttleBase
-	for i := 0; i < throttleFreeFailures+4; i++ {
-		th.noteFailure(now)
+	// Hand-built, and deliberately NOT reachable through penaltyFor today: a
+	// deadline that outlives the decay window is exactly the state the clear
+	// exists for, and exactly what decay == cap prevents the ramp from creating.
+	staleDeadline := now.Add(throttleDecay + 10*time.Minute)
+	th := credentialThrottle{
+		failures:    throttleFreeFailures + 4,
+		lastFailure: now,
+		nextAllowed: staleDeadline,
 	}
 	if _, blocked := th.retryAfter(now); !blocked {
-		t.Fatal("expected a block")
+		t.Fatal("the constructed state is not blocked — the assertion below would be vacuous")
 	}
 	// A failure after the decay window: history forgotten, so no penalty is owed
 	// and the old deadline must be gone with it.
 	later := now.Add(throttleDecay + time.Second)
+	if !later.Before(staleDeadline) {
+		t.Fatalf("the deadline (%v) is not still in the future at decay time (%v) — vacuous again",
+			staleDeadline, later)
+	}
 	th.noteFailure(later)
 	if wait, blocked := th.retryAfter(later); blocked {
 		t.Errorf("a stale deadline (%v) survived the decay that cleared its history", wait)
@@ -859,6 +882,119 @@ func TestMFADisableConflictIsNotThrottled(t *testing.T) {
 	if rec := callJSON(api.HandleMfaDisableApiAuthMfaDisablePost,
 		fmt.Sprintf(`{"password":%q,"code":"123456"}`, mfaTestPassword)); rec.Code != http.StatusConflict {
 		t.Errorf("disable with nothing armed while throttled = %d, want 409", rec.Code)
+	}
+}
+
+// ── the two MFA seams' own brake, from the other side ───────────────────────
+//
+// 🔴 WHY THESE THREE EXIST. TestMFAActivateConflictsAreNotThrottled and
+// TestMFADisableConflictIsNotThrottled above pin only the ORDERING — that a 409
+// beats the brake — and never the positive: that these two handlers call the
+// gate at all. Deleting the whole `begin` block from either handler left every
+// test in this package green (T-19 mutants M11/M12), and deleting the
+// noteFailure on disable's rejection path left it green too (M13). The same
+// deletion at /api/login, /api/auth/change-password and /api/auth/set-password
+// turns their tests red immediately, so this was a gap specific to these two.
+//
+// It matters most on disable: that seam takes the password AND a live code, and
+// it is the one that TAKES THE SECOND LOCK OFF. An unbraked disable is unlimited
+// guessing against exactly the endpoint whose success removes the factor.
+
+// occupyThrottleSlots fills the in-flight pool and keeps it full for the rest of
+// the test — the deterministic way to make begin refuse without climbing the
+// failure ramp (and without a clock or a goroutine).
+//
+// The releases are dropped on purpose: nothing else shares this apiServer.
+func occupyThrottleSlots(t *testing.T, api *apiServer) {
+	t.Helper()
+	for i := 0; i < throttleMaxInFlight; i++ {
+		if _, _, blocked := api.loginThrottle.begin(time.Now()); blocked {
+			t.Fatalf("could not take in-flight slot %d of %d", i+1, throttleMaxInFlight)
+		}
+	}
+	if _, _, blocked := api.loginThrottle.begin(time.Now()); !blocked {
+		t.Fatal("the pool admitted more than throttleMaxInFlight — the setup is not throttled")
+	}
+}
+
+// TestMFADisableTakesTheBrakeBeforeVerifying — M11. The gate must be reached on
+// the way in, with the CORRECT credentials in hand: a brake that only holds for
+// wrong answers is not a brake, and one the handler never calls is not there at
+// all.
+func TestMFADisableTakesTheBrakeBeforeVerifying(t *testing.T) {
+	api := mfaAPI(t)
+	secret := armMFA(t, api)
+	occupyThrottleSlots(t, api)
+
+	// nextCode, not liveCode: activation SPENT the current step (see nextCode's
+	// own comment), so a liveCode here would be refused by the replay floor even
+	// with the brake gone — and the "was it disarmed?" assertion below would then
+	// never be able to fire.
+	rec := callJSON(api.HandleMfaDisableApiAuthMfaDisablePost,
+		fmt.Sprintf(`{"password":%q,"code":%q}`, mfaTestPassword, nextCode(t, secret)))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("disable with the pool full = %d, want 429 — the handler is not calling "+
+			"loginThrottle.begin, so the disable seam has no brake at all", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("429 without a Retry-After header")
+	}
+	if !api.authMFAEnrolled() {
+		t.Error("the factor was DISARMED by a request the brake refused")
+	}
+}
+
+// TestMFAActivateTakesTheBrakeBeforeVerifying — M12, the same gap on the arming
+// seam. Activate demands the password, so it is a password-guessing surface in
+// its own right (that is what TestMFAActivateRequiresThePassword pins), and the
+// brake is what bounds the guessing.
+func TestMFAActivateTakesTheBrakeBeforeVerifying(t *testing.T) {
+	api := mfaAPI(t)
+	offerMFA(t, api, true)
+	rec := callJSON(api.HandleMfaEnrollApiAuthMfaEnrollPost, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("enroll: %d %s", rec.Code, rec.Body.String())
+	}
+	secret := *decodeBody[mfaStateDTO](t, rec).Secret
+	occupyThrottleSlots(t, api)
+
+	rec = callJSON(api.HandleMfaActivateApiAuthMfaActivatePost,
+		fmt.Sprintf(`{"password":%q,"code":%q}`, mfaTestPassword, liveCode(t, secret)))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("activate with the pool full = %d, want 429 — the handler is not calling "+
+			"loginThrottle.begin", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("429 without a Retry-After header")
+	}
+	if api.authMFAEnrolled() {
+		t.Error("a factor was ARMED by a request the brake refused")
+	}
+}
+
+// TestMFADisableRejectionSpendsFromTheBudget — M13. Reaching the gate is half of
+// it; a refused disable must also COST something, or the budget never runs down
+// and the 429 above is unreachable in practice. Same shape as
+// TestChangePasswordIsThrottled, on the seam that removes the second factor.
+func TestMFADisableRejectionSpendsFromTheBudget(t *testing.T) {
+	api := mfaAPI(t)
+	armMFA(t, api) // activate ends with noteSuccess, so the budget starts full
+	body := fmt.Sprintf(`{"password":"guess","code":%q}`, "000000")
+
+	for i := 0; i < throttleFreeFailures; i++ {
+		if rec := callJSON(api.HandleMfaDisableApiAuthMfaDisablePost, body); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("disable guess %d = %d, want 401 (inside the free allowance)", i+1, rec.Code)
+		}
+	}
+	if rec := callJSON(api.HandleMfaDisableApiAuthMfaDisablePost, body); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("the allowance-exceeding disable guess = %d, want 401", rec.Code)
+	}
+	if rec := callJSON(api.HandleMfaDisableApiAuthMfaDisablePost, body); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("throttled disable guess = %d, want 429 — a rejected disable is not "+
+			"calling noteFailure, so the second factor can be guessed at without limit", rec.Code)
+	}
+	if !api.authMFAEnrolled() {
+		t.Error("the factor came off during a run of failed attempts")
 	}
 }
 
