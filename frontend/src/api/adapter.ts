@@ -17,6 +17,9 @@ import type {
   VersionView,
   ReleaseCheckView,
   BackupHealthView,
+  AuthStatusView,
+  MfaEnrollView,
+  MfaStateView,
   GlobalContextView,
   BootDocKind,
   BootDocView,
@@ -2363,10 +2366,58 @@ export interface Api {
     id: number,
   ): Promise<DocumentHistoryView>;
   /**
-   * PUBLIC first-run probe (`GET /api/auth/status`): true once an owner
-   * password is set. AuthGate branches first-run setup vs login on it.
+   * PUBLIC pre-auth probe (`GET /api/auth/status`). `passwordSet` branches
+   * first-run setup vs login; `mfaRequired` tells the login wall whether to
+   * collect a TOTP code.
+   *
+   * It returns BOTH bits rather than just the first because the wall has to
+   * render the right fields before anyone holds a token. The alternative — a
+   * distinguishable "password ok, code missing" refusal from /api/login —
+   * would leak strictly more (it confirms a correct password).
    */
-  getAuthStatus(): Promise<boolean>;
+  getAuthStatus(): Promise<AuthStatusView>;
+  /**
+   * Read the owner's second-factor state (`GET /api/auth/mfa`, owner-gated):
+   * whether this server OFFERS the factor, and whether one is armed.
+   *
+   * Deliberately NOT a field on `getSettings`: that route's floor is
+   * admin_agent and its GET is an MCP tool, so the owner's credential posture
+   * would be readable by every agent in the office.
+   */
+  getMfaState(): Promise<MfaStateView>;
+  /**
+   * Turn the second-factor FEATURE on or off (`POST /api/auth/mfa/offer`,
+   * owner-gated). A rollout switch only: turning it off hides the set-up path
+   * but never disarms an armed factor, never stops login demanding a code, and
+   * never blocks `disableMfa`.
+   */
+  setMfaOffered(offered: boolean): Promise<MfaStateView>;
+  /**
+   * Begin TOTP enrolment (`POST /api/auth/mfa/enroll`, owner-gated). Returns
+   * the PENDING secret + otpauth URI once; nothing is armed until
+   * `activateMfa` proves a code from it. Rejects 409 if a factor is already
+   * active (rotation must disable first).
+   */
+  enrollMfa(): Promise<MfaEnrollView>;
+  /**
+   * Arm the second factor (`POST /api/auth/mfa/activate`, owner-gated) by
+   * proving BOTH the current password and a code from the pending secret.
+   *
+   * The password is required because ARMING is as destructive as removing: a
+   * stolen owner token alone could otherwise enrol a secret the attacker
+   * controls and activate it, locking the real owner out until someone runs
+   * `ocserverd mfa-disable` on the host. Rejects 401 on a wrong password OR
+   * code — indistinguishably, so callers must name both — and 409 when a factor
+   * is already active or nothing is pending.
+   */
+  activateMfa(password: string, code: string): Promise<void>;
+  /**
+   * Disarm the second factor (`POST /api/auth/mfa/disable`, owner-gated).
+   * Requires BOTH the current password and a live code — an owner-gated
+   * session alone must not be able to strip the factor. Rejects 401 on either,
+   * 409 when nothing is armed.
+   */
+  disableMfa(password: string, code: string): Promise<void>;
   /**
    * First-run owner-password claim (`POST /api/auth/set-password`). The
    * claim token comes from the server's local serve log / installer banner.

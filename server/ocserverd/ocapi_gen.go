@@ -395,8 +395,12 @@ type AliasUpdateDTO struct {
 // AuthStatusDTO First-run probe (`GET /api/auth/status`, PUBLIC): whether an owner password
 // has been set. The UI branches first-run setup vs login on this; /api/login
 // itself stays a flat 401 either way and never discloses the first-run state.
+//
+// `mfa_required` says whether the login wall must also collect a TOTP code. It is disclosed to an unauthenticated caller DELIBERATELY: the wall has to render the right number of fields before anyone has a token, and the alternative (a distinguishable "password ok, code missing" refusal) discloses strictly more — it confirms a correct password. What leaks here is one bit an attacker learns from a single login attempt anyway.
 type AuthStatusDTO struct {
-	PasswordSet bool `json:"password_set"`
+	// MfaRequired Whether an active TOTP secret is enrolled, i.e. whether `/api/login` demands a `code`. Optional for compatibility: a client that does not read it, or an older server that does not send it, behaves exactly as before.
+	MfaRequired *bool `json:"mfa_required,omitempty"`
+	PasswordSet bool  `json:"password_set"`
 }
 
 // BackupHealthDTO Whether the SCHEDULED database backup is still producing retreat points
@@ -1063,8 +1067,12 @@ type LessonsReplaceDTO struct {
 }
 
 // LoginDTO Owner login request: the password exchanged at `/api/login` for a JWT.
+//
+// `code` is the TOTP second factor, and it is OPTIONAL in the schema on purpose — it is required by SERVER STATE, not by the wire. While the owner has no TOTP secret enrolled it must be absent (or null) and is ignored; once enrolled, a login without it is a flat 401. Making it schema-required would break every existing client on an install that never turned MFA on.
 type LoginDTO struct {
-	Password string `json:"password"`
+	// Code TOTP code from the owner's authenticator app. Required only while MFA is enrolled (`GET /api/auth/status` → `mfa_required`). Separators are tolerated: "123 456" verifies the same as "123456".
+	Code     *string `json:"code,omitempty"`
+	Password string  `json:"password"`
 }
 
 // MachineClaimDTO Redeem a one-time machine claim code (“POST /api/machines/claim“).
@@ -1387,6 +1395,51 @@ type MemberUpdateDTO struct {
 
 	// Runtime Optional runtime replacement; null/omitted leaves the current runtime unchanged.
 	Runtime *AgentRuntime `json:"runtime,omitempty"`
+}
+
+// MfaActivateDTO Prove a pending TOTP enrolment and ARM the second factor (`POST /api/auth/mfa/activate`, owner-gated). The code must verify against the secret `…/mfa/enroll` handed out; on success that secret becomes the ACTIVE one and the second factor is armed from the next login onward. A wrong code or password leaves the pending secret in place so the owner can simply try again.
+//
+// 🔴 `password` IS REQUIRED, and the owner token alone is deliberately not enough. Arming a factor is as destructive as removing one: an attacker holding only a stolen owner token could otherwise enrol a secret THEY control and activate it, after which the real owner's password yields 401 and they cannot disable it (that needs a live code from the attacker's authenticator) — a transient token theft turned into a durable lockout recoverable only from a host shell. The same reasoning that makes `…/mfa/disable` demand both factors applies symmetrically to arming.
+type MfaActivateDTO struct {
+	// Code TOTP code generated from the pending secret. Separators are tolerated.
+	Code string `json:"code"`
+
+	// Password The current owner password. Re-proved here so a stolen session cannot arm a factor the owner does not hold.
+	Password string `json:"password"`
+}
+
+// MfaDisableDTO Turn the second factor off (`POST /api/auth/mfa/disable`, owner-gated). BOTH the current password and a live TOTP code are required: an owner-gated session alone must not be able to strip MFA, because the whole point of the factor is to survive a stolen session. An owner who has LOST their authenticator cannot satisfy this by design — that recovery path is the local `ocserverd mfa-disable` command, which proves host shell access instead.
+type MfaDisableDTO struct {
+	// Code Live TOTP code from the enrolled authenticator. Separators are tolerated.
+	Code     string `json:"code"`
+	Password string `json:"password"`
+}
+
+// MfaOfferDTO Turn the second-factor FEATURE on or off for this server (`POST /api/auth/mfa/offer`, owner-gated).
+//
+// This is a rollout switch, not a security switch: it decides whether the factor can be SET UP, and never whether an armed one is verified. Turning it off while a factor is armed is allowed and deliberately changes nothing about login — the owner still needs their code, and still removes the factor through `…/disable` (password + live code) or the local `ocserverd mfa-disable`.
+type MfaOfferDTO struct {
+	Offered bool `json:"offered"`
+}
+
+// MfaStateDTO The owner's second-factor state, answered by every `/api/auth/mfa/*` write.
+//
+// `enrolled` is the armed bit — true only once a pending secret has been PROVEN by `…/activate`.
+//
+// `secret` and `otpauth_uri` are non-null ONLY in the response to `…/enroll`, and only for the pending (not yet armed) secret. They are the one moment the secret crosses the wire, because an authenticator app cannot be enrolled without it; the server never echoes an ACTIVE secret back afterwards, so a stolen owner token cannot read out an existing enrolment and clone it.
+type MfaStateDTO struct {
+	Enrolled bool `json:"enrolled"`
+
+	// Offered Whether this server OFFERS the second factor at all — the ship-dark feature flag (`auth.mfa_offered`, default false so an existing install is unaffected until its owner turns it on).
+	//
+	// 🔴 IT GATES SET-UP, NEVER VERIFICATION. While false, `…/enroll` and `…/activate` are refused and the cockpit hides the entry; a factor that is ALREADY armed keeps being enforced at login exactly as before, and `…/disable` keeps working. Making the flag switch verification off would turn it into a bypass — a stolen owner token could simply withdraw the feature and walk past the factor it is supposed to be stopped by, which is the same reasoning that makes `…/disable` demand both factors.
+	Offered bool `json:"offered"`
+
+	// OtpauthUri The `otpauth://totp/…` URI for a pending enrolment (QR / deep-link form), else null.
+	OtpauthUri *string `json:"otpauth_uri"`
+
+	// Secret The base32 secret for a pending enrolment, for manual entry into an authenticator app; null otherwise.
+	Secret *string `json:"secret"`
 }
 
 // MintRequestDTO Owner-gated long-lived agent-token mint request (`POST /api/mint`).
@@ -3380,6 +3433,15 @@ type HandleIngestAgentContextApiAgentContextPostJSONRequestBody = AgentContextIn
 // HandleChangePasswordApiAuthChangePasswordPostJSONRequestBody defines body for HandleChangePasswordApiAuthChangePasswordPost for application/json ContentType.
 type HandleChangePasswordApiAuthChangePasswordPostJSONRequestBody = ChangePasswordDTO
 
+// HandleMfaActivateApiAuthMfaActivatePostJSONRequestBody defines body for HandleMfaActivateApiAuthMfaActivatePost for application/json ContentType.
+type HandleMfaActivateApiAuthMfaActivatePostJSONRequestBody = MfaActivateDTO
+
+// HandleMfaDisableApiAuthMfaDisablePostJSONRequestBody defines body for HandleMfaDisableApiAuthMfaDisablePost for application/json ContentType.
+type HandleMfaDisableApiAuthMfaDisablePostJSONRequestBody = MfaDisableDTO
+
+// HandleMfaOfferApiAuthMfaOfferPostJSONRequestBody defines body for HandleMfaOfferApiAuthMfaOfferPost for application/json ContentType.
+type HandleMfaOfferApiAuthMfaOfferPostJSONRequestBody = MfaOfferDTO
+
 // HandleSetPasswordApiAuthSetPasswordPostJSONRequestBody defines body for HandleSetPasswordApiAuthSetPasswordPost for application/json ContentType.
 type HandleSetPasswordApiAuthSetPasswordPostJSONRequestBody = SetPasswordDTO
 
@@ -3636,6 +3698,21 @@ type ServerInterface interface {
 	// Change the owner password (verifies the current one).
 	// (POST /api/auth/change-password)
 	HandleChangePasswordApiAuthChangePasswordPost(w http.ResponseWriter, r *http.Request)
+	// Read the owner's second-factor state (offered + enrolled).
+	// (GET /api/auth/mfa)
+	HandleMfaStateApiAuthMfaGet(w http.ResponseWriter, r *http.Request)
+	// Arm the second factor by proving a code from the pending secret.
+	// (POST /api/auth/mfa/activate)
+	HandleMfaActivateApiAuthMfaActivatePost(w http.ResponseWriter, r *http.Request)
+	// Turn the second factor off (password + live code required).
+	// (POST /api/auth/mfa/disable)
+	HandleMfaDisableApiAuthMfaDisablePost(w http.ResponseWriter, r *http.Request)
+	// Begin TOTP enrolment: mint a pending secret + otpauth URI.
+	// (POST /api/auth/mfa/enroll)
+	HandleMfaEnrollApiAuthMfaEnrollPost(w http.ResponseWriter, r *http.Request)
+	// Turn the second-factor feature on or off for this server.
+	// (POST /api/auth/mfa/offer)
+	HandleMfaOfferApiAuthMfaOfferPost(w http.ResponseWriter, r *http.Request)
 	// First-run: set the owner password (one-shot claim token gate).
 	// (POST /api/auth/set-password)
 	HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWriter, r *http.Request)
@@ -4202,6 +4279,76 @@ func (siw *ServerInterfaceWrapper) HandleChangePasswordApiAuthChangePasswordPost
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.HandleChangePasswordApiAuthChangePasswordPost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleMfaStateApiAuthMfaGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleMfaStateApiAuthMfaGet(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleMfaStateApiAuthMfaGet(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleMfaActivateApiAuthMfaActivatePost operation middleware
+func (siw *ServerInterfaceWrapper) HandleMfaActivateApiAuthMfaActivatePost(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleMfaActivateApiAuthMfaActivatePost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleMfaDisableApiAuthMfaDisablePost operation middleware
+func (siw *ServerInterfaceWrapper) HandleMfaDisableApiAuthMfaDisablePost(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleMfaDisableApiAuthMfaDisablePost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleMfaEnrollApiAuthMfaEnrollPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleMfaEnrollApiAuthMfaEnrollPost(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleMfaEnrollApiAuthMfaEnrollPost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleMfaOfferApiAuthMfaOfferPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleMfaOfferApiAuthMfaOfferPost(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleMfaOfferApiAuthMfaOfferPost(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -8235,6 +8382,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/agent/binary", wrapper.HandleAgentBinaryApiAgentBinaryGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/agent/context", wrapper.HandleIngestAgentContextApiAgentContextPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/change-password", wrapper.HandleChangePasswordApiAuthChangePasswordPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/auth/mfa", wrapper.HandleMfaStateApiAuthMfaGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/mfa/activate", wrapper.HandleMfaActivateApiAuthMfaActivatePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/mfa/disable", wrapper.HandleMfaDisableApiAuthMfaDisablePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/mfa/enroll", wrapper.HandleMfaEnrollApiAuthMfaEnrollPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/mfa/offer", wrapper.HandleMfaOfferApiAuthMfaOfferPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/set-password", wrapper.HandleSetPasswordApiAuthSetPasswordPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/auth/status", wrapper.HandleAuthStatusApiAuthStatusGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/backup-health", wrapper.HandleGetBackupHealthApiBackupHealthGet)

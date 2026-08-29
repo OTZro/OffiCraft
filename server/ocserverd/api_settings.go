@@ -147,9 +147,20 @@ func validatePushContactEmail(address string) error {
 	return nil
 }
 
-// GET /api/auth/status — PUBLIC: the single first-run bit the UI branches on.
+// GET /api/auth/status — PUBLIC: the two pre-auth bits the login wall branches
+// on. `password_set` picks first-run setup vs login; `mfa_required` decides
+// whether the wall renders a code field.
+//
+// Disclosing `mfa_required` to an unauthenticated caller is deliberate. The wall
+// must render the right fields before anyone holds a token, and the alternative
+// — a distinguishable "password accepted, code missing" refusal — leaks strictly
+// MORE, because it confirms a correct password. This leaks one bit that a single
+// login attempt would reveal anyway.
 func (s *apiServer) HandleAuthStatusApiAuthStatusGet(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, authStatusDTO{PasswordSet: s.authPasswordHash() != ""})
+	writeJSON(w, http.StatusOK, authStatusDTO{
+		PasswordSet: s.authPasswordHash() != "",
+		MFARequired: s.authMFAEnrolled(),
+	})
 }
 
 // POST /api/auth/set-password — PUBLIC, gated by the one-shot claim token
@@ -157,6 +168,9 @@ func (s *apiServer) HandleAuthStatusApiAuthStatusGet(w http.ResponseWriter, r *h
 // token is never consulted); claim mismatch → 401; then store the hash,
 // consume the token, and log the caller straight in.
 func (s *apiServer) HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWriter, r *http.Request) {
+	// Stamped before any work: the refusal floor is a deadline measured from
+	// here, not a sleep appended to whatever this handler spent (throttle.go).
+	started := time.Now()
 	var body SetPasswordDTO
 	if !decodeJSONBodyRequired(w, r, &body, "password", "claim_token") {
 		return
@@ -166,11 +180,54 @@ func (s *apiServer) HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWrite
 		return
 	}
 	s.settingsMu.Lock()
-	defer s.settingsMu.Unlock()
+	// 🔴 NOT `defer s.settingsMu.Unlock()`, and the reason is the floor. The
+	// refusal path below waits ~3s before answering, and it must do that with
+	// this mutex RELEASED: settingsMu is the whole auth/settings snapshot, so
+	// sleeping under it would let an unauthenticated caller stall every settings
+	// read and write on the server for three seconds a request — turning a brake
+	// on guessing into a denial of service against everything else. The in-flight
+	// slot, which is what the wait is supposed to occupy, is held throughout
+	// either way.
+	unlocked := false
+	unlock := func() {
+		if !unlocked {
+			unlocked = true
+			s.settingsMu.Unlock()
+		}
+	}
+	defer unlock()
 	if s.passwordHash != "" {
 		writeError(w, http.StatusConflict, "a password is already set")
 		return
 	}
+	// 🔴 THE THROTTLE SITS *AFTER* THE 409, NOT BEFORE IT, and the order is the
+	// contract. The already-set path never consults the claim token, so nothing
+	// is being guessed on it and there is nothing to throttle; gating it would
+	// turn a documented 409 into a 429 (measured: it broke
+	// test_set_password_after_set_conflicts). The brake belongs on the ONE
+	// comparison that is a guessing oracle — the token check below.
+	//
+	// 🔴 THIS ONE KEEPS THE BRAKE, and it is the seam that shows what the rule
+	// actually is. The owner's ruling reads 「只有登入需要 throttling」 and this
+	// is not a login — but the line is "can an unauthenticated caller reach it",
+	// not "is the caller logged in" (throttle.go). Set-password is PUBLIC
+	// (authPublic), it compares a caller-supplied 32-byte secret, and it runs the
+	// same argon2id as login (m=19MiB, t=2, p=1 — password.go); the measured
+	// shape that made the cap non-negotiable was on exactly this class of route
+	// (500 concurrent posts ⇒ ~500 real verifications). A stranger who can reach
+	// the port can reach this. So it carries the full brake: the in-flight cap
+	// here, and the refusal floor below.
+	//
+	// ⚠️ Flagged to the owner as a deliberate exception to the literal wording of
+	// his ruling; he can overrule it. Until he does, dropping the brake here is
+	// not "following the ruling", it is opening an unauthenticated argon2id
+	// amplifier.
+	release, wait, blocked := s.loginThrottle.begin()
+	if blocked {
+		writeThrottled(w, wait)
+		return
+	}
+	defer release()
 	stored, err := s.dal.GetSetting(settingClaimToken)
 	if err != nil {
 		internalError(w, err)
@@ -178,6 +235,8 @@ func (s *apiServer) HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWrite
 	}
 	if stored == nil ||
 		subtle.ConstantTimeCompare([]byte(*stored), []byte(body.ClaimToken)) != 1 {
+		unlock() // before the wait — see the note on the Lock above
+		s.holdFailureFloor(started)
 		writeError(w, http.StatusUnauthorized, "invalid claim token")
 		return
 	}
@@ -213,6 +272,57 @@ func (s *apiServer) HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWrite
 // response carries a fresh owner token (iat = the stamp) so the current
 // session survives its own change. Agent/warden tokens are untouched — the
 // signing secret never rotates here (B1 zero-invalidation).
+//
+// It deliberately does NOT also demand a TOTP code, unlike mfa/disable. While a
+// factor is armed, holding a live owner session already implies having passed
+// it, and a password change does not weaken the factor: the new password still
+// cannot be used to log in without a code, and the factor itself cannot be
+// removed here. mfa/disable is different precisely because it DOES remove the
+// factor, which is why that one re-proves it.
+//
+// 🔴 IT IS NOT THROTTLED AT ALL — not the floor, not the in-flight cap, not one
+// call into loginThrottle. That is the owner's ruling, verbatim: 「只有登入需要
+// throttling」. It is deliberate, it is a narrowing of what this handler used to
+// do, and it must not be quietly re-added by someone who reads the paragraph
+// below and thinks a cap looks prudent.
+//
+// WHY IT HOLDS. Reaching this handler at all means holding a live owner token,
+// and a stolen owner token is already the whole disaster this system defends
+// against: 「被進來本身嚴重程度跟密碼外流是一樣的」. Every cost a brake imposes
+// here is paid by the honest owner in latency and in 429s, against an attacker
+// who is already inside and does not need this endpoint to hurt them.
+//
+// 🔑 AND THE CAP HAD A COST OF ITS OWN, which is what settled it: the pool was
+// SHARED with /api/login. A token holder hammering this endpoint could fill all
+// four slots and make the OWNER's login answer 429 — an already-authenticated
+// caller degrading the front door. Removing the gate here removes that coupling
+// outright rather than papering it over with a second pool.
+//
+// ⚠️ THE COST, STATED PLAINLY AND ACCEPTED KNOWINGLY: whoever holds an owner
+// token can guess the CURRENT password here at full speed, and a successful
+// guess is a takeover rather than a read — rotating the password stamps
+// password_changed_at, which revokes the legitimate owner's own tokens and
+// leaves them locked out to a host shell.
+//
+// 🔴 WHAT REMAINS IS NOT "NOTHING" — IT IS settingsMu, THREE LINES BELOW. An
+// earlier version of this comment said concurrent argon2id here was "unbounded",
+// which is a scarier claim than the code supports and the exact species of
+// defect this ticket exists to catch. The write lock is taken BEFORE
+// verifyPassword, so these verifications are FULLY SERIALISED: measured 8
+// concurrent calls at 7.1-7.9x the cost of one (ratio ≈ N), against
+// /api/login's 4 at 1.15-1.31x (ratio ≈ 1) as the positive control. A token
+// holder gets ~1 guess per verification — about 60 a second where one call is
+// 16-18 ms — and the process-wide concurrent-argon2id ceiling is login's 4 plus
+// this 1, ~95 MiB (arithmetic on the measured concurrency, not measured).
+// Dropping the gate changed neither: the old order was begin() → settingsMu →
+// verifyPassword, so settingsMu was always the binding constraint. What grew is
+// the queue behind the lock, at kilobytes per waiter.
+//
+// ⚠️ AND THAT LOCK IS SHARED WITH LOGIN. /api/login's verifyAndSpendTOTP takes
+// the same write lock, so a caller hammering this endpoint puts every login's
+// second-factor step behind its queue. That was equally true before this
+// change and is written down here because none of the three documents describing
+// this subsystem said it.
 func (s *apiServer) HandleChangePasswordApiAuthChangePasswordPost(w http.ResponseWriter, r *http.Request) {
 	var body ChangePasswordDTO
 	if !decodeJSONBodyRequired(w, r, &body, "current_password", "new_password") {

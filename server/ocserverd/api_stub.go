@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/SherClockHolmes/webpush-go"
 )
@@ -54,8 +55,37 @@ type apiServer struct {
 	// revocation cut: owner-scope tokens with iat before it are refused at the
 	// auth gate (requireAuth) — stamped by change-password.
 	passwordChangedAt int64
-	ownerTokenTTL     int64
-	agentTokenTTL     int64
+	// totpSecret is the owner's ACTIVE TOTP secret ("" = MFA off). Its presence
+	// is what makes /api/login demand a second factor; totpLastStep is the
+	// replay floor (the highest step already spent). Both live under settingsMu
+	// with the rest of the auth snapshot — login reads them on every attempt.
+	// mfaOffered is the ship-dark feature flag (settings.go). It gates whether the
+	// factor can be SET UP; it is deliberately absent from every verification
+	// path, so withdrawing the feature can never disarm a live factor.
+	mfaOffered   bool
+	totpSecret   string
+	totpLastStep int64
+	// loginThrottle is the in-flight gate shared by every credential-guessing
+	// seam (throttle.go). In-memory and process-local: it holds no failure
+	// history at all, only how many verifications are running right now.
+	loginThrottle credentialThrottle
+	// credentialFailureFloor overrides throttleFailureFloor for THIS server.
+	// Zero — the production value — means the constant; only this package's own
+	// tests ever set it, so that a test which is not about the floor does not
+	// pay three seconds per refusal to walk past it. See failureFloor().
+	credentialFailureFloor time.Duration
+	// authAlert* throttle the 「password accepted, second factor refused」 alert
+	// to the assistant: at most one message per authAlertInterval, carrying the
+	// number of attempts folded into it. See noteFactorRefusedAfterCorrectPassword.
+	authAlertMu      sync.Mutex
+	authAlertLastAt  time.Time
+	authAlertPending int
+	// authAlertDeliver replaces the delivery step. nil — the production value —
+	// means deliverPasswordExposedAlert. It exists so a test can prove the
+	// dispatch is asynchronous; see dispatchAuthAlert.
+	authAlertDeliver func(count int)
+	ownerTokenTTL    int64
+	agentTokenTTL    int64
 	// outsourceMaxParallel is the global cap on concurrently live outsource
 	// workers (DB task.outsource_max_parallel; M3 owner ruling ③) — read by
 	// the Phase 2 assignment scheduler.
@@ -421,6 +451,30 @@ func (s *apiServer) authPasswordHash() string {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
 	return s.passwordHash
+}
+
+// authMFAOffered reports whether this server offers the second factor for
+// SET-UP. Never consult it when deciding whether to VERIFY a code — that is
+// driven by the presence of a secret and nothing else.
+func (s *apiServer) authMFAOffered() bool {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.mfaOffered
+}
+
+// authMFAEnrolled reports whether the second factor is armed.
+//
+// 🔴 There is deliberately NO read-only accessor that hands out the secret and
+// the replay floor together for a caller to verify against. Verification MUST
+// advance the floor, and a read-then-write pair is a replay window: two
+// concurrent logins presenting the SAME code would both read the old floor and
+// both pass, which is precisely the attack the floor exists to stop. The verify
+// and the spend live in one write-locked seam instead — verifyAndSpendTOTP
+// (api_auth_mfa.go).
+func (s *apiServer) authMFAEnrolled() bool {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.totpSecret != ""
 }
 
 // authPasswordChangedAt returns the owner-token iat floor (0 = no cut).
