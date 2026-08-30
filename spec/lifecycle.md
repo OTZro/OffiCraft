@@ -59,7 +59,7 @@ retired `var/jwt_secret` fallback file has no successor.
 | mint | scope / sub | ttl | machine_id claim |
 |---|---|---|---|
 | `POST /api/login` (owner password **+ TOTP code once enrolled** → token) | `owner` / the fixed single-tenant owner id `"owner"` | DB setting `auth.owner_token_ttl` (default **86400 s**; owner-adjustable via `PATCH /api/settings`, applies from the next login) | none |
-| `POST /api/tokens/mint` (owner-gated) | `agent` / `body.member_id` | `min(ttl_days*86400, 400 days)` — the 400-day ceiling MUST cap every long-lived agent token | none |
+| `POST /api/tokens/mint` (owner-gated) | `agent` / `body.member_id` | `min(ttl_days*86400, 400 days)` — the 400-day ceiling MUST cap every long-lived agent token. 🔴 The ceiling is not a guarantee of lifetime: this token carries NO exemption from the §1.2 cut 3 agent floor, so it dies the moment that member next reports waking, however many days are left on it (owner 2026-08-30, rc-162a4ace086d option 0 — asked and accepted). A long-lived token handed to an external script therefore stops working at that member's next boot. | none |
 | `POST /api/bootstrap` (with `member_id`) | `agent` / member id | DB setting `auth.agent_token_ttl` (default **604800 s**) | `member.desired_machine_id` (omitted if empty) |
 | reconcile START payload (server-side, per spawn) | `agent` / member id | `auth.agent_token_ttl` | `member.desired_machine_id` |
 | machine onboard / boot-command / bootstrap-here exec-token | `agent` / warden member id | **no expiry** (`exp` omitted; response `expires_in=0`) | none (warden tokens carry no placement claim) |
@@ -189,7 +189,7 @@ ceiling for non-warden agent-token mints.
   Every failed redemption (unknown / expired / already used) is the same flat 401 with no
   distinguishing hint. The legacy `install.sh?token=` surface stays byte-identical
   indefinitely.
-- Token verification is stateless with TWO revocation cuts:
+- Token verification is stateless with THREE revocation cuts:
   1. **owner scope — the password floor.** Owner-scope tokens whose `iat` is earlier than
      the DB `auth.password_changed_at` (stamped by `POST /api/auth/change-password`) MUST
      be refused (401).
@@ -233,7 +233,35 @@ ceiling for non-warden agent-token mints.
      teardown refusal MUST precede the `ocwarden` subprocess — a 409 written after
      the daemon was booted out is worse than no guard.
 
-  For every other agent token, expiry stays the only invalidation.
+  3. **agent scope — the member's own last 開工.** `POST /api/self/waking` MUST raise the
+     reporting member's `agent_iat_floor` to the `iat` of the token THAT CALL was made
+     with, and every gated route MUST then refuse (401) any `agent`-scope token whose
+     `iat` is STRICTLY LESS THAN that member's floor. A member's generations overlap on
+     purpose (§6.3 close-out), so the id alone cannot say which one is speaking; the
+     caller's `iat` can, and this cut is what makes the NEW generation coming up end the
+     previous one's authority (owner 2026-08-30, rc-fe6451abe579: 「新的一輪一上線就失效」,
+     a handover cut in half being the accepted cost).
+
+     The stamp MUST be the caller's OWN `iat` and the comparison MUST be strict. Together
+     those are what stop the session that raises the floor from being refused by it,
+     whatever the gap between its mint and its boot report and whatever the skew between
+     the two clocks; a floor stamped from the server clock would refuse a token that
+     merely took a few seconds to arrive.
+
+     Scope notes, all load-bearing: `kind="warden"` rows are EXEMPT, and that is a safety
+     property rather than an optimisation — a warden credential is `agent` scope with NO
+     `exp` (§1.3), so a floor raised above one could never expire out of the way and the
+     machine would be off the fleet permanently, recoverable only by a hand re-install.
+     A failed roster read MUST NOT refuse (unknown ≠ superseded), and a member that has
+     never reported waking (floor 0 — every row predating the cut) refuses nothing.
+
+     ⚠️ **NOT SOLVED, deliberately** (owner 2026-08-28: 「先不管搶同一秒的問題好了」):
+     `iat` is whole seconds, so two generations of one member that start inside the SAME
+     second are indistinguishable to this comparison and neither is refused. Nothing in
+     this cut claims otherwise.
+
+  For every other agent token — a `kind="warden"` credential, and any token on a member
+  that has never reported waking — expiry stays the only invalidation.
 
 ### 1.4 Credential renewal (`POST /api/machines/renew-credential`)
 
