@@ -574,7 +574,17 @@ async function attemptSseReconnect(): Promise<void> {
   // were down is gone.
   ensureSseSource();
   if (!sseSource) {
-    // ensureSseSource declined: no token. Same conclusion as a 401.
+    // ensureSseSource declined: no token. Same conclusion as a 401, so it must
+    // reach the same CONCLUSION — not merely the same local state. Until round
+    // 4 this arm only flipped `sseState`, which left the two doors asymmetric:
+    // the 401 arm fires `oc-auth-expired` and AuthGate drops the app to the
+    // login wall, while this one put up a banner over an app that still looked
+    // logged in. Review judged the divergent state unreachable in practice (the
+    // probe answers 401 first when the token is gone), so this is hygiene, not
+    // a bug fix — but "the arms agree" is the property worth keeping, and an
+    // unreachable asymmetry is exactly the kind that stops being unreachable
+    // when someone changes the probe.
+    handleUnauthorized(); // clears the token + fires oc-auth-expired
     setSseState("unauthorized");
     return;
   }
@@ -747,7 +757,19 @@ function ensureSseSource(): void {
     // `null` is the single value that is neither a parse error nor an object.
     // This path must survive ANYTHING the wire delivers, so it is pinned by
     // http.sse-malformed-frames.test.ts rather than by this comment.
-    if (!evt || !evt.topic) return;
+    //
+    // 🔴 AND TRUTHY IS NOT ENOUGH — `typeof … === "string"` is the actual
+    // guard. Review round 4 probed the FIELD shapes rather than only the root
+    // shapes and found `{"topic":123}`, `{"topic":{"a":1}}` and
+    // `{"topic":["chat"]}`: none of them throws, so the old `!evt.topic` test
+    // waved all three through, and each one then travelled the seam as a TYPE
+    // LIE. `SseDelta.topic` is declared `string` and ~24 hooks compare it with
+    // `===` against string literals, so a number/object/array topic is never
+    // equal to anything, matches no hook, and is indistinguishable from "the
+    // server sent nothing" — a silent hole rather than a loud one. The frames
+    // that reach here come off a socket; the declared type is a promise this
+    // boundary has to keep, not one it may assume.
+    if (!evt || typeof evt.topic !== "string" || evt.topic === "") return;
     // Project the frame's payload to the identity fields it names (§2.2 —
     // never the values) so a subscriber can refetch ONE item.
     const delta = toSseDelta(evt.topic, evt.data?.payload ?? null);

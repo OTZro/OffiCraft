@@ -23,8 +23,22 @@
 
 // MEASURED MUTANTS — every guard below was made to fail on purpose, and each one
 // is re-runnable by hand: apply the edit to api/http.ts, run this file, put it
-// back. Re-measured 2026-08-27 after independent review round 3; 21 caught,
-// plus 2 equivalent mutants documented below rather than falsely pinned.
+// back. Re-measured 2026-08-27 after independent review round 3, and extended
+// 2026-08-31 after round 4 (M3 split into M3/M3b, M14 and R1b added); 25
+// caught, plus 2 equivalent mutants documented below rather than falsely
+// pinned.
+//
+// ⚠️ THREE ROUND-4 FIXES CARRY NO MUTANT, and saying so is part of the record:
+//   · the WHATWG readyState constants in this file's `FakeEventSource` were
+//     inverted (CONNECTING/OPEN swapped). That is a defect in the TEST DOUBLE,
+//     not in production — nothing in api/http.ts can be mutated to detect it,
+//     because production reads only `!== CLOSED` and CLOSED was already right.
+//     What it endangered was a FUTURE assertion, so the fix is the constants
+//     themselves and there is nothing to redden.
+//   · the "15s" in one test title (the constant is 8000; 15000 is the ceiling
+//     asserted) and a missing space in .claude/rules/data-layer.md are prose.
+//   Recording them as uncaught is the point: an unmeasurable fix listed beside
+//   measured ones, with no red to its name, is how a table starts lying.
 //
 // 🔴 CORRECTION, LEFT IN ON PURPOSE. An earlier version of this header claimed
 // these were "single-assertion attributions, not cascades". THAT WAS FALSE and
@@ -34,12 +48,23 @@
 // description of evidence is worse than none: it tells the next person there is
 // nothing left to check. The `reds` column is the claim now, not an adjective.
 //
+// 🔴 SECOND CORRECTION, ALSO LEFT IN. Round 4 caught this table overstating
+// M3. It read `if (status === 401 || status === 403)` → `if (false)` / 2 reds,
+// which is a WEAK mutant: killing both arms at once, its 2 reds proved only the
+// 401 arm, and the row's presence told the next reader the 403 arm was covered.
+// It was not — review measured `→ if (status === 401)` GREEN across all 2475
+// tests. Same failure mode as the correction above, one level deeper: the
+// evidence was real, its SCOPE was not, and a row that names a condition while
+// only testing half of it is the most expensive kind of wrong. M3 is now the
+// single-arm mutant and M3b is its mirror; a two-arm condition needs two rows.
+//
 //   #    the edit                                              reds  the assertion that names it
 //   ---  ----------------------------------------------------  ----  ---------------------------
 //   M1   delete the whole `es.onerror = …` handler (THE BUG)     13   "a permanently CLOSED stream is REBUILT"
 //   M2   `if (opened || sseGapPending)` → `if (opened)`           4   "the rebuilt connection's FIRST open fans a FULL resync"
 //   M2b  delete `sseGapPending = true` in the CLOSED branch       4   "a NEW subscriber mounting during the outage…"
-//   M3   `if (status === 401 || status === 403)` → `if (false)`   2   "401 STOPS the retry loop…"
+//   M3   `… === 401 || … === 403` → `if (status === 401)`         1   "403 STOPS the retry loop too…"
+//   M3b  `… === 401 || … === 403` → `if (status === 403)`         1   "401 STOPS the retry loop…"
 //   M4   `if (es.readyState !== 2 …)` → `if (false)`              1   "a TRANSIENT error … does NOT tear the connection down"
 //   M5   `const idx = Math.min(sseRetryAttempt, …)` → `= 0`       1   "repeated failures BACK OFF"
 //   M6   drop `&& sseVisibilityHandler === null`                  1   "rebuilding does NOT stack a second foreground listener"
@@ -52,7 +77,11 @@
 //   N1b  drop the try/catch inside the live delta fan              1   "a throwing subscriber does not stop an ordinary delta…"
 //   N3   delete `sseGapPending = false` (never clear the debt)     2   "the debt is discharged ONCE…"
 //   N6   `SSE_PROBE_TIMEOUT_MS` 8000 → 600000                      1   "the probe deadline is BOUNDED, not merely present"
-//   R1   `if (!evt || !evt.topic)` → `if (!evt.topic)`               1   http.sse-malformed-frames.test.ts, the "null" row
+//   M14  delete `handleUnauthorized()` in ensureSseSource's           1   "the second door reaches the SAME conclusion…"
+//        decline arm (leave only `setSseState("unauthorized")`)
+//   R1   `if (!evt || …)` → drop the `!evt`                           1   http.sse-malformed-frames.test.ts, the "null" row
+//   R1b  `typeof evt.topic !== "string" || evt.topic === ""`          3   http.sse-malformed-frames.test.ts, the three
+//        → `!evt.topic` (truthy is not a type)                            `{"topic": <non-string>}` rows
 //   R2   drop the try/catch inside `setSseState`'s fan               4   "a listener throwing on 'connecting' does NOT cancel the reconnect"
 //   R5   drop the try/catch on the immediate first `cb(sseState)`    3   "a listener that throws on its very FIRST call…"
 //
@@ -106,14 +135,22 @@ import {
 import { AUTH_EXPIRED_EVENT } from "./client";
 import { TOKEN_KEY } from "./auth";
 
-const CONNECTING = 1;
+// WHATWG EventSource readyState (HTML §9.2). 🔴 CORRECTED round 4: this file
+// used to declare `CONNECTING = 1` and set `readyState = 0 // OPEN` in `open()`
+// — CONNECTING and OPEN swapped relative to the spec. It was harmless because
+// production only ever asks `readyState !== 2`, and 2 (CLOSED) was the one
+// value that was right; but the moment anyone adds a `readyState === OPEN`
+// branch, a fake with inverted constants tests it green against the wrong
+// value. Left named rather than inlined so the disagreement can be seen.
+const CONNECTING = 0;
+const OPEN = 1;
 const CLOSED = 2;
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
   url: string;
   closed = false;
-  readyState = CONNECTING;
+  readyState: number = CONNECTING;
   onmessage: ((e: MessageEvent) => void) | null = null;
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
@@ -127,7 +164,7 @@ class FakeEventSource {
   }
   /** The browser's native `open` event. */
   open(): void {
-    this.readyState = 0; // OPEN
+    this.readyState = OPEN;
     this.onopen?.();
   }
   /** A TRANSIENT drop: the browser is retrying this same connection itself. */
@@ -154,6 +191,10 @@ let probeThrows = false;
 /** Set to make the probe HANG — a server that accepts the socket and never
  * sends headers. Only the deadline can end it. */
 let probeHangs = false;
+/** Set to drop the token WHILE the probe is in flight — the only way to reach
+ * `ensureSseSource`'s decline arm, since the probe itself answers 401 when the
+ * token is already gone. See the test that uses it. */
+let probeDropsToken = false;
 /** Everything the last probe was called with, so the request's own shape (its
  * abort signal, its headers) can be asserted rather than assumed. */
 let lastProbe: { url: string; init: RequestInit } | null = null;
@@ -164,6 +205,7 @@ beforeEach(() => {
   probeCalls = 0;
   probeThrows = false;
   probeHangs = false;
+  probeDropsToken = false;
   lastProbe = null;
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
@@ -179,6 +221,7 @@ beforeEach(() => {
         );
       });
     }
+    if (probeDropsToken) localStorage.removeItem(TOKEN_KEY);
     return Promise.resolve({ status: probeStatus } as Response);
   });
   vi.useFakeTimers();
@@ -283,6 +326,91 @@ describe("httpApi · SSE downlink recovery from a PERMANENT failure", () => {
     await runRetry();
     expect(FakeEventSource.instances).toHaveLength(1);
     expect(probeCalls).toBe(1);
+
+    window.removeEventListener(AUTH_EXPIRED_EVENT, expired);
+    off();
+  });
+
+  // 🔴 THIS TEST EXISTS BECAUSE THE TABLE ABOVE USED TO LIE ABOUT IT. M3 was
+  // written as `→ if (false)`, which deletes BOTH arms of the status check at
+  // once; its 2 reds therefore only ever proved the 401 arm. Review round 4
+  // measured the single-arm mutant instead — `if (status === 401 || status ===
+  // 403)` → `if (status === 401)` — and the WHOLE TREE (2475 tests) stayed
+  // green. The 403 arm was live code with nothing standing over it.
+  //
+  // And it is a REACHABLE 403, not a theoretical one: `/api/events` is declared
+  // `Requires: principalMachine`, and `requirePrincipalClass` in server
+  // authz.go answers a wrong principal class with a FLAT 403 (no 401, no
+  // challenge). An owner JWT hitting a machine-only route is exactly that
+  // shape. Drop the 403 arm and the client gets precisely the disease this
+  // whole branch is against: an unbounded 30s retry loop against a server that
+  // has already said no, a banner that can never clear because recovery is
+  // impossible, and no drop to the login wall — because nothing fires
+  // oc-auth-expired. Visible-forever is not better than silent; it is the same
+  // stall with a decoration on it.
+  it("403 STOPS the retry loop too — a flat 'wrong principal' is just as final as a 401, and hammering it forever is the bug", async () => {
+    probeStatus = 403;
+    const expired = vi.fn();
+    window.addEventListener(AUTH_EXPIRED_EVENT, expired);
+    const off = httpApi.subscribeEvents(() => {});
+    FakeEventSource.instances[0].open();
+    FakeEventSource.instances[0].permanentError();
+
+    await runRetry();
+
+    expect(expired).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem(TOKEN_KEY)).toBe(null);
+    expect(sseConnectionState()).toBe("unauthorized");
+    // No new connection, and no further attempts however long we wait — the
+    // "does it stop" half is the half that separates 403 from a 5xx.
+    expect(FakeEventSource.instances).toHaveLength(1);
+    await runRetry();
+    await runRetry();
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(probeCalls).toBe(1);
+
+    window.removeEventListener(AUTH_EXPIRED_EVENT, expired);
+    off();
+  });
+
+  // The SECOND door onto "unauthorized", and until round 4 the two doors did
+  // not agree. `attemptSseReconnect` decides on the probe's status, then asks
+  // `ensureSseSource()` to rebuild — and `ensureSseSource` has a veto of its
+  // own: no token, no stream. That arm used to set `sseState = "unauthorized"`
+  // and stop there, which puts a banner over an app that still looks logged in
+  // and never fires `oc-auth-expired`, so AuthGate never drops to the login
+  // wall. Review round 4 judged the divergence unreachable through the product
+  // (the probe answers 401 first when the token is gone) and called the fix
+  // hygiene rather than a defect — correct, and the reason this test has to
+  // force the window open by hand rather than pretend it is a user story.
+  //
+  // 🔑 IT IS PINNED ANYWAY BECAUSE "UNREACHABLE" IS A CLAIM ABOUT TODAY'S PROBE.
+  // The arm is live code; nothing stops a later change to `probeEventsEndpoint`
+  // (a cached answer, a different no-token verdict) from making it reachable,
+  // and at that point the divergence is silent. Asserting the CONCLUSION both
+  // doors reach costs one test and stops the two from drifting apart again.
+  it("the second door reaches the SAME conclusion: a token that vanishes mid-probe logs out, it does not just paint a banner", async () => {
+    // 503 so the status check falls through to the rebuild path — this is
+    // explicitly NOT the 401/403 arm — while the token disappears underneath.
+    probeStatus = 503;
+    probeDropsToken = true;
+    const expired = vi.fn();
+    window.addEventListener(AUTH_EXPIRED_EVENT, expired);
+    const off = httpApi.subscribeEvents(() => {});
+    FakeEventSource.instances[0].open();
+    FakeEventSource.instances[0].permanentError();
+
+    await runRetry();
+
+    // No stream was built (ensureSseSource vetoed) …
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(sseConnectionState()).toBe("unauthorized");
+    // … and the verdict LEFT this module, which is the whole point: the state
+    // alone is invisible to AuthGate.
+    expect(
+      expired,
+      "without handleUnauthorized() the app keeps a login-looking shell behind a banner that can never clear",
+    ).toHaveBeenCalledTimes(1);
 
     window.removeEventListener(AUTH_EXPIRED_EVENT, expired);
     off();
@@ -548,7 +676,12 @@ describe("httpApi · the probe's own contract (the parts a state-machine test do
     off();
   });
 
-  it("the probe deadline is BOUNDED, not merely present — 15s, derived from the wire contract", () => {
+  // 🔴 THE TITLE USED TO READ「— 15s, derived from the wire contract」, which
+  // round 4 read as a claim about the CONSTANT. It is not: 15000 is the
+  // CEILING this asserts (spec §1's heartbeat bound), and SSE_PROBE_TIMEOUT_MS
+  // is 8000, comfortably under it. A title that names a number the code does
+  // not hold sends the next reader looking for a bug that is not there.
+  it("the probe deadline is BOUNDED, not merely present — at most 15s, the spec §1 heartbeat ceiling", () => {
     // 🔴 A SEPARATE ASSERTION FROM THE ONE ABOVE, ON PURPOSE. That test proves a
     // deadline EXISTS, and it cannot prove anything more, because it advances
     // time BY THE CONSTANT ITSELF — push SSE_PROBE_TIMEOUT_MS to ten minutes and

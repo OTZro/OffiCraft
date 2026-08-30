@@ -31,11 +31,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { httpApi, __resetSseDownlinkForTests } from "./http";
 import { TOKEN_KEY } from "./auth";
 
+// WHATWG EventSource readyState (HTML §9.2). Named, and named CORRECTLY: an
+// earlier version of this fake had `readyState = 1` for a fresh (unopened)
+// connection and set `0 // OPEN` in `open()`, i.e. CONNECTING and OPEN swapped.
+// Harmless at the time — production reads only `!== CLOSED`, and CLOSED was the
+// one constant that happened to be right — but a fake whose constants disagree
+// with the spec answers a future `readyState === OPEN` check with a confident
+// green for the wrong reason.
+const CONNECTING = 0;
+const OPEN = 1;
+const CLOSED = 2;
+
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
   url: string;
   closed = false;
-  readyState = 1;
+  readyState: number = CONNECTING;
   onmessage: ((e: MessageEvent) => void) | null = null;
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
@@ -45,10 +56,10 @@ class FakeEventSource {
   }
   close(): void {
     this.closed = true;
-    this.readyState = 2;
+    this.readyState = CLOSED;
   }
   open(): void {
-    this.readyState = 0;
+    this.readyState = OPEN;
     this.onopen?.();
   }
   /** Deliver a RAW frame body, exactly as the socket would. */
@@ -67,6 +78,19 @@ const MALFORMED: [string, string][] = [
   ["true", "valid JSON that is a boolean"],
   ['{"data":{}}', "an object with no topic"],
   ["null", "🔴 valid JSON that is NULL — parses fine, and is not an object"],
+  // ── FIELD shapes, not root shapes (added round 4) ────────────────────────
+  // Everything above this line varies the shape of the WHOLE frame. Review
+  // round 4 pointed out that the table stopped one level too early: a frame
+  // may be a perfectly good object and still carry a `topic` that is not a
+  // string. None of the three below throws, so the original `!evt.topic`
+  // guard passed them all — they are truthy — and each then crossed the seam
+  // as a TYPE LIE: `SseDelta.topic` is declared `string`, ~24 hooks compare it
+  // with `===` against string literals, and a number/object/array matches none
+  // of them. The failure is therefore silent, which is why enumeration had to
+  // reach the field.
+  ['{"topic":123}', "🔴 a NUMBER topic — truthy, so the old guard let it past"],
+  ['{"topic":{"a":1}}', "🔴 an OBJECT topic — truthy, and stringifies to junk"],
+  ['{"topic":["chat"]}', "🔴 an ARRAY topic — truthy, and `[\"chat\"] !== \"chat\"`"],
 ];
 
 beforeEach(() => {

@@ -17,22 +17,44 @@
 //     → reddens "stays silent through a SHORT drop"
 //   delete the `setShowing(false)` in the non-"connecting" arm
 //     → reddens "clears the moment the stream comes back"
+//   swallow the effect's cleanup — `useEffect(() => api.subscribeConnection(
+//     setState), [])` → `useEffect(() => { api.subscribeConnection(setState); },
+//     [])` → reddens "unsubscribes on unmount" (added round 4; see below)
 
+// 🔴 WHY THE FAKE COUNTS INSTEAD OF REMEMBERING. The first version of this
+// seam stored the callback in a single slot (`push = cb`) and cleared it on
+// unsubscribe. That shape is STRUCTURALLY BLIND to the bug it was standing in
+// front of: a second mount overwrites the slot, so a leaked subscriber and a
+// clean one look identical, and dropping the effect's cleanup entirely left
+// the whole tree green (measured, review round 4). React returns the cleanup
+// from `useEffect` only if the effect RETURNS it — a stray pair of braces
+// silently discards it — so every mount would leak a live subscriber and, in a
+// StrictMode/remount world, call `setState` on an unmounted component forever.
+// A test can only see that if the fake keeps a SET and the test asserts its
+// SIZE; "did somebody unsubscribe" is a counting question, not a memory one.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, act } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import type { SseConnectionState } from "../api/adapter";
 
-let push: ((s: SseConnectionState) => void) | null = null;
+/** Every subscriber currently registered through the fake seam — the real
+ * transport keeps a Set too (api/http.ts `sseStateSubscribers`), so this is
+ * the contract's shape, not a testing convenience. */
+const subscribers = new Set<(s: SseConnectionState) => void>();
 let current: SseConnectionState = "live";
+
+/** Deliver a state to whoever is listening, exactly as the transport fans. */
+const push = (s: SseConnectionState): void => {
+  for (const cb of [...subscribers]) cb(s);
+};
 
 vi.mock("../api", () => ({
   api: {
     subscribeConnection(cb: (s: SseConnectionState) => void) {
-      push = cb;
+      subscribers.add(cb);
       cb(current);
       return () => {
-        push = null;
+        subscribers.delete(cb);
       };
     },
   },
@@ -50,7 +72,7 @@ function mount() {
 
 function set(state: SseConnectionState): void {
   act(() => {
-    push?.(state);
+    push(state);
   });
 }
 
@@ -64,7 +86,7 @@ function waitOutGrace(): void {
 beforeEach(() => {
   vi.useFakeTimers();
   current = "live";
-  push = null;
+  subscribers.clear();
 });
 
 afterEach(() => {
@@ -128,6 +150,32 @@ describe("ConnectionBanner", () => {
     set("idle");
     waitOutGrace();
     expect(container.querySelector(".connection-banner")).toBe(null);
+  });
+
+  it("unsubscribes on unmount — a leaked subscriber outlives the component and setStates into a corpse", () => {
+    const { unmount } = mount();
+    expect(subscribers.size, "the bar is listening while mounted").toBe(1);
+
+    unmount();
+    expect(
+      subscribers.size,
+      "the transport keeps a Set: whatever is left here is fanned to forever",
+    ).toBe(0);
+
+    // And the corpse is not merely absent from the Set — pushing after unmount
+    // must reach nobody at all. This is the assertion the old single-slot fake
+    // could not make, because overwriting one slot hides an unbounded leak.
+    expect(() => push("connecting")).not.toThrow();
+
+    // Mount/unmount repeatedly: the count must come back to zero every time,
+    // not creep. One leak per mount is exactly how this fails in production,
+    // where the bar mounts once per App mount and StrictMode doubles it.
+    for (let i = 0; i < 3; i += 1) {
+      const view = mount();
+      expect(subscribers.size).toBe(1);
+      view.unmount();
+      expect(subscribers.size, `leak after mount ${i + 1}`).toBe(0);
+    }
   });
 
   it("keeps the manual escape hatch one click away while the automatic one is still trying", () => {

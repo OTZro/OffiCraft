@@ -29,7 +29,7 @@ downlink 只有一條、且是 module-level singleton。瀏覽器只會自己重
 
 401 不走重連：先問 `/api/events` 本身拿到什麼狀態碼（`onerror` 不帶狀態碼，猜就是二選一都會錯——猜過期會被伺服器抖一下就登出，猜抖動會對已經說不的伺服器無限重打），401／403 ⇒ `handleUnauthorized()` 停止重試。連不到（fetch reject）不是 401。
 
-**連線健康度要publish 給 UI**（`Api.subscribeConnection`）。整個座艙都是 delta 驅動的，所以「連線死掉」跟「今天很安靜」在畫面上長得一模一樣；靜默自癒等於把一個看得見的停頓換成一個看不見的洞。mock 沒有 transport 可以掉，只回一次 `live`。
+**連線健康度要 publish 給 UI**（`Api.subscribeConnection`）。整個座艙都是 delta 驅動的，所以「連線死掉」跟「今天很安靜」在畫面上長得一模一樣；靜默自癒等於把一個看得見的停頓換成一個看不見的洞。mock 沒有 transport 可以掉，只回一次 `live`。
 
 deltaSink 每個 burst 只做一次同步決策；coalesce 留在決策層，不要跨 tick debounce。narrowToHeld 的語意固定為：null = 全量、非空 = 指定項目、空集合 = 只指向其他項目。task topic 仍需全量，因為清單可能新增列；chat、chat_read、roster 在沒有持有項目時可跳過。
 
