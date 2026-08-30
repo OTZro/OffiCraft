@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 // ---------------------------------------------------------------------------
 // THE SAME OWNER RULING, ON THE OTHER RUNTIME (2026-08-30):
@@ -87,5 +92,89 @@ func TestCodexBootConnectWakesOnceAndIsNotAlsoForwarded(t *testing.T) {
 	if len(turns) != 4 {
 		t.Fatalf("one disconnect + one give-up must land and the mid-outage retry must "+
 			"not; turns=%q", turns)
+	}
+}
+
+// 🔴 THE DELIVERY, NOT THE DECISION. Everything above this line asks what the
+// sidecar DECIDED to do with a line. Independent review showed that is not the
+// same question as whether anything happened: it replaced the send at the end of
+// the delivery path — `s.steerOrStart(text)` → `_ = text` — inside
+// runCodexSession's real select loop, and the entire ocwarden suite plus
+// bin/uplink-guard.py stayed green while EVERY forwarded notice and every
+// chat/task event stopped reaching the codex model. A member would sit through a
+// station changeover, and through its own chat, with nothing arriving and
+// nothing anywhere reporting it.
+//
+// So this test does not record turns into a slice of its own. It builds a real
+// codexSession, hands the loop's real openTurn (s.openListenerTurn) to the real
+// decision seam, and reads the App Server bytes that came out the other end.
+func TestListenerNoticesReallyReachTheModel(t *testing.T) {
+	const disconnected = "[ocagent] listen: disconnected — connect failed: unexpected status 502"
+	const givingUp = "[ocagent] listen: giving up — context cancelled"
+
+	wire := &bufferWriteCloser{}
+	pane := &bytes.Buffer{}
+	session := &codexSession{in: wire, threadID: "th-1", effort: "medium", out: pane}
+	st := &codexListenerState{}
+	feed := func(line string) { st.handleListenerLine(line, func() {}, session.openListenerTurn) }
+
+	feed(connectedLineFixture) // boot: the post-boot wake is the turn that goes out
+	feed(disconnected)
+	feed(connectedLineFixture) // the reconnect notice
+	feed(givingUp)
+	feed("[ocagent] listen: stream ended: EOF") // mid-outage chatter: must not go out
+	feed("[ocagent] chat from owner (#CM-9F2A11, 1s ago): hello")
+
+	var sent []string
+	for _, raw := range strings.Split(strings.TrimSpace(wire.String()), "\n") {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		var msg map[string]any
+		if err := json.Unmarshal([]byte(raw), &msg); err != nil {
+			t.Fatalf("the sidecar wrote something the App Server cannot read: %v\n%s", err, raw)
+		}
+		method, _ := msg["method"].(string)
+		if method != "turn/start" && method != "turn/steer" {
+			continue
+		}
+		params, _ := msg["params"].(map[string]any)
+		input, _ := params["input"].([]any)
+		if len(input) != 1 {
+			t.Fatalf("turn %q carried %d input items, want 1: %s", method, len(input), raw)
+		}
+		item, _ := input[0].(map[string]any)
+		text, _ := item["text"].(string)
+		sent = append(sent, text)
+	}
+
+	want := []string{
+		codexPostBootWake, // boot connect
+		disconnected,      // the first failure of the outage
+		connectedLineFixture,
+		givingUp,
+		"[ocagent] chat from owner (#CM-9F2A11, 1s ago): hello",
+	}
+	if len(sent) != len(want) {
+		t.Fatalf("the model received %d turns, want %d — a notice that is decided on "+
+			"but never sent is a member sitting in silence with nothing to report it.\n"+
+			"sent=%q\nwant=%q\nwire:\n%s", len(sent), len(want), sent, want, wire.String())
+	}
+	for i := range want {
+		if sent[i] != want[i] {
+			t.Errorf("turn %d text = %q, want %q", i, sent[i], want[i])
+		}
+	}
+
+	// The steer half of the same seam: a notice arriving DURING a live turn must
+	// still reach the model, as a steer rather than a new turn.
+	wire.Reset()
+	session.active = true
+	session.turnID = "turn-9"
+	session.openListenerTurn(disconnected)
+	if !strings.Contains(wire.String(), `"turn/steer"`) ||
+		!strings.Contains(wire.String(), "listen: disconnected") {
+		t.Fatalf("a notice that arrives mid-turn must steer the live turn; wire:\n%s",
+			wire.String())
 	}
 }

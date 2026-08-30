@@ -34,15 +34,34 @@ import (
 
 // noticeLines returns the transcript lines that are disconnect-policy notices,
 // i.e. the ones that reach the agent as an interruption.
-func noticeLines(transcript, needle string) []string {
+//
+// 🔴 IT MATCHES FROM COLUMN 0, AND THAT IS THE WHOLE POINT. This helper used to
+// ask strings.Contains, and independent review walked a one-character change
+// past it: `"listen: disconnected — "` → `"net listen: disconnected — "`, both
+// Go modules green, every codex member silenced for good. The codex sidecar
+// does not read these lines the way Contains does — it TrimSpaces and then
+// HasPrefix from the first column (cli/ocwarden/codex_session.go), so anything
+// INSERTED ahead of the head breaks it while leaving a Contains test perfectly
+// happy. Asking the same question the consumer asks is what closes that gap;
+// the needle is therefore a whole prefix, agentLinePrefix included.
+func noticeLines(transcript, prefix string) []string {
 	var found []string
 	for _, line := range strings.Split(transcript, "\n") {
-		if strings.Contains(line, needle) {
+		if strings.HasPrefix(strings.TrimSpace(line), prefix) {
 			found = append(found, line)
 		}
 	}
 	return found
 }
+
+// The three notice prefixes AS THE SIDECAR SEES THEM: from column 0, with the
+// binary's own line prefix on the front. Tests below use these and never a bare
+// substring, so a head that moves rightward reddens them.
+var (
+	disconnectedPrefix = agentLinePrefix + noticeDisconnected
+	connectedPrefix    = agentLinePrefix + noticeConnected
+	givingUpPrefix     = agentLinePrefix + noticeGivingUp
+)
 
 // deadStation always refuses the SSE with a 5xx (a station mid-changeover), so
 // the run loop stays in one uninterrupted outage for as many attempts as the
@@ -90,7 +109,7 @@ func TestListener_OnlyTheFirstFailureOfAnOutageNotifiesTheAgent(t *testing.T) {
 			got, sleeps.Load())
 	}
 
-	notices := noticeLines(out.String(), "listen: disconnected")
+	notices := noticeLines(out.String(), disconnectedPrefix)
 	if len(notices) != 1 {
 		t.Fatalf("one outage must interrupt the agent exactly ONCE, got %d:\n%s",
 			len(notices), out.String())
@@ -98,7 +117,12 @@ func TestListener_OnlyTheFirstFailureOfAnOutageNotifiesTheAgent(t *testing.T) {
 	// NEGATIVE CONTROL on the other side: the retries themselves must be silent.
 	// Pinned by the literal bytes the old code printed, because that is what was
 	// actually landing in the transcript.
-	for _, banned := range []string{"listen: connect failed", "listen: stream ended"} {
+	// (the needles carry agentLinePrefix now that noticeLines matches from
+	// column 0 — without it this control would match nothing and assert nothing)
+	for _, banned := range []string{
+		agentLinePrefix + "listen: connect failed",
+		agentLinePrefix + "listen: stream ended",
+	} {
 		if extra := noticeLines(out.String(), banned); len(extra) != 0 {
 			t.Errorf("a mid-outage retry interrupted the agent (%d× %q):\n%s",
 				len(extra), banned, out.String())
@@ -128,11 +152,11 @@ func TestListener_GivingUpIsAnnouncedSoSilenceIsNeverAmbiguous(t *testing.T) {
 	go func() { done <- l.run(ctx) }()
 	<-done
 
-	if got := len(noticeLines(out.String(), "listen: disconnected")); got != 1 {
+	if got := len(noticeLines(out.String(), disconnectedPrefix)); got != 1 {
 		t.Fatalf("the outage itself must still be announced once, got %d:\n%s",
 			got, out.String())
 	}
-	if got := len(noticeLines(out.String(), "listen: giving up")); got != 1 {
+	if got := len(noticeLines(out.String(), givingUpPrefix)); got != 1 {
 		t.Fatalf("the retry loop stopped and said nothing — 「還在重試」 and 「已經放棄」 "+
 			"are now the same silence; got %d give-up lines:\n%s", got, out.String())
 	}
@@ -178,22 +202,22 @@ func TestListener_DisconnectAndRecoveryBothStillNotify(t *testing.T) {
 	done := make(chan int, 1)
 	go func() { done <- l.run(ctx) }()
 	waitForCond(t, func() bool {
-		return strings.Contains(out.String(), "listen: connected")
+		return len(noticeLines(out.String(), connectedPrefix)) > 0
 	}, "the listener to come back up after the outage")
 	cancel()
 	<-done
 
-	if got := len(noticeLines(out.String(), "listen: disconnected")); got != 1 {
+	if got := len(noticeLines(out.String(), disconnectedPrefix)); got != 1 {
 		t.Errorf("the first disconnect must reach the agent exactly once, got %d:\n%s",
 			got, out.String())
 	}
-	if got := len(noticeLines(out.String(), "listen: connected")); got != 1 {
+	if got := len(noticeLines(out.String(), connectedPrefix)); got != 1 {
 		t.Errorf("coming back must reach the agent exactly once, got %d:\n%s",
 			got, out.String())
 	}
 	// The outage is over, so the loop stopping afterwards is NOT ambiguous and
 	// must not add a give-up line to a healthy shutdown.
-	if got := len(noticeLines(out.String(), "listen: giving up")); got != 0 {
+	if got := len(noticeLines(out.String(), givingUpPrefix)); got != 0 {
 		t.Errorf("a shutdown while CONNECTED has nothing ambiguous to resolve and "+
 			"must stay quiet, got %d:\n%s", got, out.String())
 	}
@@ -249,5 +273,65 @@ func TestConnectOnce_ReconnectSaysWhetherTheStationChanged(t *testing.T) {
 	}
 	if strings.Contains(changed, "[same station]") {
 		t.Fatalf("a changeover must not also claim the station is unchanged; got:\n%s", changed)
+	}
+}
+
+// ⑤ THE GIVE-UP LINE MUST BE PRINTED BEFORE THE KILL, NOT AFTER.
+// The fail-closed refusal path self-terminates: it kills its OWN tmux session,
+// and suicide.go says outright that a successful kill SIGHUPs this process and
+// never returns. A give-up line printed after that call is dead code exactly
+// where it is needed, and seeds/boot_sequence.md promises the whole fleet that
+// the absence of that line means the listener is still retrying — so on this
+// path the fleet-wide promise was false.
+//
+// This test encodes "the kill never returns" the only way a test can: it looks
+// at the transcript AT THE MOMENT selfTerminate fires. Whatever is not there
+// yet is, on a real host, never printed at all.
+func TestListener_FailClosedSaysItGaveUpBeforeItKillsItself(t *testing.T) {
+	cfgTempDir = t.TempDir()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, eventsPath) {
+			_, _ = w.Write([]byte("[]"))
+			return
+		}
+		w.WriteHeader(409) // the stop-gate refusal: authoritative, not bad luck
+		_, _ = w.Write([]byte(`{"error":{"code":"conflict","message":"stop in effect"}}`))
+	}))
+	defer srv.Close()
+
+	cfg := Config{Base: srv.URL, Token: "tok", ID: "kyle"}
+	out := &syncBuf{}
+	l := newTestListener(srv, cfg, out)
+	l.winddown = newWindDownHook(srv.Client(), cfg, out)
+	l.recycle = newRecycleHook(srv.Client(), cfg, out)
+	l.refusalGraceSpan = 0 // count bound only — no wall-clock wait in tests
+
+	var atKill string
+	var kills int
+	l.selfTerminate = func() {
+		kills++
+		atKill = out.String() // everything the agent will EVER see on this path
+	}
+
+	done := make(chan int, 1)
+	go func() { done <- l.run(context.Background()) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the listener never reached its fail-closed exit")
+	}
+
+	if kills != 1 {
+		t.Fatalf("the fail-closed path must self-terminate exactly once, got %d", kills)
+	}
+	if got := len(noticeLines(atKill, givingUpPrefix)); got != 1 {
+		t.Fatalf("the give-up line was not in the transcript when the process was "+
+			"killed, so on a real host it is never printed at all: 「還在重試」 and "+
+			"「已經放棄」 stay the same silence on the one path that ends the "+
+			"listener for good. got %d give-up lines at kill time:\n%s", got, atKill)
+	}
+	if got := len(noticeLines(atKill, disconnectedPrefix)); got != 1 {
+		t.Errorf("the outage that led here must still have been announced once, "+
+			"got %d:\n%s", got, atKill)
 	}
 }

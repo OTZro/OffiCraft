@@ -83,8 +83,32 @@ func newSSEStreamClient() *http.Client {
 	}
 }
 
+// agentLinePrefix opens EVERY line this binary writes into an agent's pane, and
+// the sidecar's three prefix checks start their match at column 0 with it. It is
+// a constant so the notice heads below can be spelled as whole prefixes.
+const agentLinePrefix = "[ocagent] "
+
+// The heads of the three transport notices the disconnect-notice policy (owner,
+// 2026-08-30) says must reach the agent. THEY ARE THE CONTRACT WITH THE CODEX
+// SIDECAR, which matches them with HasPrefix from column 0
+// (cli/ocwarden/codex_session.go's notice*Prefix constants).
+//
+// 🔴 WHY THEY ARE CONSTANTS AND NOT INLINE STRINGS. Independent review shifted
+// ONE of these heads rightward — `"listen: disconnected — "` →
+// `"net listen: disconnected — "` — and both Go modules stayed green while every
+// codex member went permanently silent about its transport. Nothing in the
+// tests looked at column 0: they asked `strings.Contains`, which cannot see
+// anything INSERTED in front. Naming the head once means the printf can no
+// longer carry a head of its own, and listen_notice_contract_test.go requires
+// the sidecar's copy of these same bytes to still exist on the other side.
+const (
+	noticeDisconnected = "listen: disconnected"
+	noticeConnected    = "listen: connected"
+	noticeGivingUp     = "listen: giving up"
+)
+
 func (l *listener) logf(format string, args ...any) {
-	fmt.Fprintf(l.out, "[ocagent] "+format+"\n", args...)
+	fmt.Fprintf(l.out, agentLinePrefix+format+"\n", args...)
 }
 
 // foldProbe runs ONE session-existence probe and folds its tri-state verdict
@@ -194,7 +218,7 @@ func (l *listener) noteDisconnect(format string, args ...any) {
 		return // the agent has already been told; retries are its own business
 	}
 	l.inOutage = true
-	l.logf("listen: disconnected — "+format+
+	l.logf(noticeDisconnected+" — "+format+
 		" (retrying on the same schedule, quietly; the next transport line you see "+
 		"is either the reconnect or a give-up)", args...)
 }
@@ -207,7 +231,7 @@ func (l *listener) noteDisconnect(format string, args ...any) {
 func (l *listener) stopRetrying(reason string) int {
 	if l.inOutage {
 		l.inOutage = false
-		l.logf("listen: giving up — %s. No further reconnect attempts; I am NOT still "+
+		l.logf(noticeGivingUp+" — %s. No further reconnect attempts; I am NOT still "+
 			"retrying, and nothing more will arrive on this stream.", reason)
 	}
 	return 0
@@ -444,7 +468,7 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	// The stream is up: whatever outage was being announced is over, and the
 	// line below IS the second of the owner's two notices.
 	l.inOutage = false
-	l.logf("listen: connected — streaming %s%s (⇒ online while held)%s%s%s",
+	l.logf(noticeConnected+" — streaming %s%s (⇒ online while held)%s%s%s",
 		l.cfg.Base, eventsPath, verdict, station, agent)
 
 	// Boot/reconnect drain: /api/events has no replay, so any reply_card delta
@@ -537,11 +561,21 @@ func (l *listener) run(ctx context.Context) int {
 					"fail-closed: self-terminating instead of retrying forever "+
 					"(a refused listener is a zombie, not a client with bad luck).",
 					l.refusals, l.clock().Sub(l.firstRefusalAt).Round(time.Second))
+				// 🔴 SAY IT BEFORE THE KILL, NOT AFTER. selfTerminate kills my own
+				// tmux session, and suicide.go states outright that a successful
+				// kill SIGHUPs this process and never returns — so a give-up line
+				// printed after it is dead code on the path that matters most.
+				// seeds/boot_sequence.md promises the whole fleet that the absence
+				// of that line means「還在試」; on this path that promise was false,
+				// and the member left behind reads an unfinished outage as a retry
+				// still in flight. Printing first costs nothing and the ordering is
+				// the entire content of the fix.
+				rc := l.stopRetrying("the server refused this listener authoritatively " +
+					"for the whole grace window")
 				if l.selfTerminate != nil {
 					l.selfTerminate()
 				}
-				return l.stopRetrying("the server refused this listener authoritatively " +
-					"for the whole grace window")
+				return rc
 			}
 		} else {
 			// A network fault / non-409 status (server down, 5xx, …) is NOT an
