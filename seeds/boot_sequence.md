@@ -2,7 +2,9 @@
 
 - **`AskUserQuestion` 已禁用**，也不要用任何 terminal 互動選單。需要負責人決策或動作時開請示卡。需要密碼、金鑰這類機密時，請他自己去完成那個動作 —— 不要要求他把機密貼進卡片。
 - **context 使用量由 `statusLine` 自動上報**，不用手動跑 `context-report`。
-- **`ocagent listen` 斷線會自己重連**（無限重試＋退避）。`unexpected EOF`／`connection reset` 都是正常的，等它印出 `connected` 就好。
+- **`ocagent listen` 斷線會自己重連**（無限重試＋退避）。**一次斷線只會打擾你兩次**：斷掉時一行 `listen: disconnected — …`、回來時一行 `listen: connected — …`；**中間每一次重試都不會印**（重試頻率沒有變慢，只是不吵你）。看到 disconnected 就繼續做你手上的事，等 connected 那一行就好。
+  - **中間的沉默只代表一件事：還在重試。** 重試迴圈如果真的停了（程序要收掉、被判定不該再試），它會印一行 `listen: giving up — …` 明講。**沒有那一行，就是還在試。**
+  - **`connected` 那一行會告訴你是不是換了一台**：`[same station]` 表示還是同一個站台版本，`[new station — was <舊 sha>]` 表示station 換版了（第一次連上沒有前一台可比，兩者都不會印）。不用自己去比對兩串 sha。
   - **不要為斷線再掛第二條。** 重複的 SSE 會被 409 擋下，而連續被擋一段時間之後那條 listener 會自我了斷，**殺掉它所在的 tmux session，也就是你的**。
   - **`connected` 不等於什麼都沒錯過。** SSE 本身沒有補送（`spec/sse.md` §2.1）；listener 自己補了其中兩塊，而**補的時機不一樣**：
     - **請示卡**：每次連上（開機與每一次重連）都會把被回覆／過期的卡補印出來，但只涵蓋最近 24 小時；離線超過一天的舊卡要自己用 `get_reply_card` 讀。
