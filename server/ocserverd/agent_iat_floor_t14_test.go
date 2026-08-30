@@ -157,6 +157,39 @@ func TestAgentIatFloor_TheLiveGenerationAndItsNeighboursStillWork(t *testing.T) 
 	}
 }
 
+// TestAgentIatFloor_TheWakingCallerIsNeverLockedOutByItsOwnStamp is the arm
+// that separates "the caller's own iat" from "now()" — the ② arms above cannot,
+// because a token minted a moment before the wake sits either side of the
+// server clock by fractions of a second.
+//
+// The gap here is FIVE MINUTES and it is the realistic one: a token is minted
+// when the START is dispatched, and the agent's process has to launch, load its
+// boot document and reach report_waking before it is used. A floor taken from
+// the server clock at that moment sits five minutes ABOVE the caller's own iat,
+// and the very first thing that agent does after reporting itself awake is 401.
+//
+// Mutant: stamp nowSecs() instead of the caller's iat in stampAgentIatFloor →
+// this test is red, and it is the only one that reliably is.
+func TestAgentIatFloor_TheWakingCallerIsNeverLockedOutByItsOwnStamp(t *testing.T) {
+	srv, secret, api := revokeStack(t)
+	agent := testAgent("m-t14-slowboot")
+	putTestMember(t, api, agent)
+
+	// Minted five minutes before this session got as far as reporting itself up.
+	tok, err := mintJWT(agent.ID, "agent", 3600, secret, time.Now().Unix()-300, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wakeWith(t, srv.URL, tok)
+
+	if st, body := revokeCall(t, "GET", srv.URL+"/api/members", tok, ""); st != http.StatusOK {
+		t.Fatalf("the token that REPORTED the wake must still work after it: a floor "+
+			"taken from the server clock rather than from this caller's own iat puts "+
+			"the whole mint-to-boot gap above it, so the session locks itself out on "+
+			"its first request after saying it is awake. got %d %s", st, body)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // ③ warden is exempt — a SAFETY property, not an optimisation
 // ---------------------------------------------------------------------------
