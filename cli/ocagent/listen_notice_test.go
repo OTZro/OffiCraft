@@ -335,3 +335,95 @@ func TestListener_FailClosedSaysItGaveUpBeforeItKillsItself(t *testing.T) {
 			"got %d:\n%s", got, atKill)
 	}
 }
+
+// ⑥ THE OTHER SIDE OF THE OUTAGE: a stream that OPENED and then DIED.
+//
+// 🔴 WHY THIS TEST EXISTS AT ALL. ① already carries the negative control
+// `[ocagent] listen: stream ended`, and independent review measured that
+// control at ZERO discriminating power: putting the old noisy
+// `l.logf("listen: stream ended: %v", err)` back in front of noteDisconnect
+// left ① green AND the whole ocagent suite green. The reason is that ①'s
+// deadStation answers every dial with 502, so the run loop never once reaches
+// `opened == true` — the stream-ended branch is UNREACHABLE from that test, and
+// no other test in the suite went near it. The banned needle was matching
+// nothing and reporting that as success.
+//
+// The user-visible cost of that gap is exactly what the owner ruled out: two
+// lines per drop instead of one, on the most ordinary disconnect there is —
+// a live stream that ends — which is 「打擾 agent」 with nothing to catch it.
+//
+// So this drives the branch for real: connect → the stream dies → connect
+// again. One disconnect notice, two connected notices, and NOTHING raw.
+func TestListener_AStreamThatDiedNotifiesOnceAndSaysNothingRaw(t *testing.T) {
+	cfgTempDir = t.TempDir()
+	var dials atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, eventsPath) {
+			_, _ = w.Write([]byte("[]"))
+			return
+		}
+		w.Header().Set(wireStationSHAHeader, "abc123")
+		w.WriteHeader(http.StatusOK)
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+		_, _ = w.Write([]byte(": connected\n\n"))
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+		// dial 1 RETURNS — the stream it opened dies under the listener, which
+		// is the `opened == true` path ① can never take. dials 2+ hold open, so
+		// this is ONE outage with a recovery, not a flapping loop.
+		if dials.Add(1) == 1 {
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	cfg := Config{Base: srv.URL, Token: "tok", ID: "kyle"}
+	out := &syncBuf{}
+	l := newTestListener(srv, cfg, out)
+	l.winddown = newWindDownHook(srv.Client(), cfg, out)
+	l.recycle = newRecycleHook(srv.Client(), cfg, out)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The backoff CONSTANTS are untouched; only the sleep seam is short-circuited
+	// so the test does not spend the real floor waiting. The cadence assertion
+	// that matters lives in ①.
+	l.sleep = func(time.Duration) {}
+	done := make(chan int, 1)
+	go func() { done <- l.run(ctx) }()
+	waitForCond(t, func() bool {
+		return len(noticeLines(out.String(), connectedPrefix)) >= 2
+	}, "the listener to re-open a stream after the first one died")
+	cancel()
+	<-done
+
+	if got := len(noticeLines(out.String(), disconnectedPrefix)); got != 1 {
+		t.Errorf("a stream that opened and then died is ONE outage and must "+
+			"interrupt the agent exactly once, got %d:\n%s", got, out.String())
+	}
+	if got := len(noticeLines(out.String(), connectedPrefix)); got != 2 {
+		t.Errorf("both the first connect and the recovery must be announced, "+
+			"got %d connected lines:\n%s", got, out.String())
+	}
+	if got := len(noticeLines(out.String(), givingUpPrefix)); got != 0 {
+		t.Errorf("the outage ended in a recovery, so there is nothing ambiguous "+
+			"for a give-up line to resolve, got %d:\n%s", got, out.String())
+	}
+	// THE CONTROL WITH ACTUAL POWER: on this path the raw diagnostic really is
+	// reachable, so requiring its absence is a statement rather than a wish.
+	// Two lines for one drop is the thing the owner said not to do.
+	for _, banned := range []string{
+		agentLinePrefix + "listen: stream ended",
+		agentLinePrefix + "listen: connect failed",
+	} {
+		if extra := noticeLines(out.String(), banned); len(extra) != 0 {
+			t.Errorf("the agent was handed the raw transport line as well as its "+
+				"notice — two lines for one drop (%d× %q):\n%s",
+				len(extra), banned, out.String())
+		}
+	}
+}

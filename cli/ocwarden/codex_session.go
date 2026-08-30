@@ -725,6 +725,20 @@ const (
 	noticeDisconnectedPrefix = "[ocagent] listen: disconnected"
 	noticeConnectedPrefix    = "[ocagent] listen: connected"
 	noticeGivingUpPrefix     = "[ocagent] listen: giving up"
+
+	// 🔴 THE FOURTH COPY, AND FOR A LONG TIME THE ONLY UNPINNED ONE. This is the
+	// head of the blanket filter below — the bytes that decide whether a line is
+	// transport chatter at all — and until T-4 it was a bare literal inside
+	// actionableCodexListenerLine: not a constant, not in the contract test's
+	// list, held up only INDIRECTLY by one behavioural case
+	// ("stream ended: EOF" ⇒ false). Behaviour coverage is not contract
+	// coverage: move this head rightward while the producer keeps printing
+	// "[ocagent] listen: …" and the filter stops recognising ANY transport line,
+	// so every retry diagnostic starts becoming a turn on the model — the exact
+	// noise the owner's ruling exists to swallow. It is spelled once here and
+	// cli/ocagent/listen_notice_contract_test.go now requires this declaration,
+	// with this value, to still exist on this side of the module gap.
+	noticeTransportHead = "[ocagent] listen:"
 )
 
 var listenerNoticePrefixes = []string{
@@ -738,7 +752,7 @@ func actionableCodexListenerLine(line string) bool {
 	// Sending the whole retry chatter creates empty, token-heavy turns — which
 	// is exactly the mid-outage traffic the ruling above says to swallow.
 	trimmed := strings.TrimSpace(line)
-	if !strings.HasPrefix(trimmed, "[ocagent] listen:") {
+	if !strings.HasPrefix(trimmed, noticeTransportHead) {
 		return true
 	}
 	for _, prefix := range listenerNoticePrefixes {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -48,5 +49,44 @@ func TestListenNoticePrefixesMatchTheSidecarConsumer(t *testing.T) {
 				"changed: codex members will stop being told about this transport "+
 				"event, silently, for the whole life of every session.", consumer, want)
 		}
+	}
+
+	// ── THE FOURTH COPY ──────────────────────────────────────────────────────
+	// The three heads above are the EXCEPTIONS. The rule they are carved out of
+	// is the sidecar's blanket filter, whose head is the common prefix of every
+	// transport line this binary prints — and that copy sat outside this list
+	// until T-4, held up only indirectly by one behavioural case in ocwarden.
+	//
+	// Two claims, and both have to hold or the filter is deciding on bytes the
+	// producer never emits:
+	//   1. it really is the head of what THIS module prints, and
+	//   2. the consumer still declares it, verbatim, as its filter head.
+	//
+	// Move it rightward on the sidecar side and the filter recognises no
+	// transport line at all: every retry diagnostic starts becoming a turn on
+	// the model, which is precisely the mid-outage noise the owner's ruling
+	// (2026-08-30) exists to swallow.
+	const transportHead = agentLinePrefix + "listen:"
+	for _, head := range []string{noticeDisconnected, noticeConnected, noticeGivingUp} {
+		if !strings.HasPrefix(agentLinePrefix+head, transportHead) {
+			t.Fatalf("this module now prints %q, which does not start with the "+
+				"blanket transport head %q that the sidecar filters on — the "+
+				"exceptions and the rule have come apart on THIS side",
+				agentLinePrefix+head, transportHead)
+		}
+	}
+	// Matched as a DECLARATION, not as a bare substring: this head is quoted in
+	// several prose comments in that same file, so `Contains` alone would keep
+	// answering yes long after the code stopped using it.
+	decl := regexp.MustCompile(`noticeTransportHead\s*=\s*` +
+		regexp.QuoteMeta(`"`+transportHead+`"`))
+	if !decl.MatchString(text) {
+		t.Errorf("%s no longer declares noticeTransportHead = %q.\n"+
+			"That constant is the head of the sidecar's blanket transport filter "+
+			"and it is the fourth copy of these bytes across a module boundary "+
+			"neither side can import. If it moved, the filter stops recognising "+
+			"the lines this module actually prints and every retry diagnostic "+
+			"becomes a turn on the model — silently, for the whole life of every "+
+			"codex session.", consumer, transportHead)
 	}
 }
