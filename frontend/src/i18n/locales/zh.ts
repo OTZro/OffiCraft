@@ -252,10 +252,6 @@ export const zh = {
     // 內嵌請示卡(重用 M2 ReplyCardBody;可多張;內嵌在所屬 step 內)
     replyHeader: "請示",
     replyBadge: "等你回覆",
-    // ⚠️ 沒有任何畫面在用它了（T-0b78）。那顆按鈕不再帶人去聊天室，改成開
-    // popup 顯示那一則，所以它借用 chat.replyQuoteJump「看原訊息」。這個 key
-    // 留著只是為了不動生成的 key 清單——**不要再把它接到任何控制項上**，接了
-    // 就是又承諾一次不會發生的事。
     replyInChat: "在聊天室回覆",
     // 審批持久標記:曾經開過卡/標過 gate 的 step,做完後仍看得出(owner
     // 2026-07-14:不消失的標記)
@@ -313,7 +309,6 @@ export const zh = {
     // 快捷選項第 1 個一律是 AI 的首選
     aiPick: "AI 建議",
     yourPick: "你選的",
-    // ⚠️ 沒有任何畫面在用它了（T-0b78）——同 tasks.replyInChat 的理由。
     jumpToChat: "跳到原訊息",
     inputPlaceholder: "輸入回覆…",
     answerError: "回覆失敗，請稍後重試",

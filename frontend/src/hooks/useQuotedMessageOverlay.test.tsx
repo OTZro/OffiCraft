@@ -1,13 +1,12 @@
-// useQuotedMessageOverlay — the ONE exit behind every 「看原訊息／跳到原訊息」
-// button in the cockpit (T-0b78).
+// useQuotedMessageOverlay — the ONE exit behind the chat bubble's 「看原訊息」
+// (T-0b78), and the only place allowed to fetch a quoted message by id.
 //
-// 🔴 WHAT THIS FILE IS FOR. Before T-0b78 the same intent had two answers on
-// one screen: the chat bubble fetched the one message by id and showed it whole
-// (right), while the 請示 card and the inline task card wrote a route and left
-// ChatArea to find the row in the DOM it had already painted — which lands on
-// the NEWEST message, silently, whenever the target is not in that DOM. The
-// three call sites now share this hook, and the last test here is what makes a
-// fourth copy of the fetch go red instead of shipping.
+// 🔴 WHAT THIS FILE IS FOR. The chat bubble's quote row fetches the one message
+// by id and shows it whole (owner 2026-08-21). T-0b78 briefly routed the 請示
+// card and the inline task card through the same hook; owner 2026-08-29 sent
+// those two BACK to navigating (#office/chat/<id>/msg/<msgId>), so this hook has
+// exactly one caller again. The last test here is what makes a SECOND copy of
+// the fetch go red instead of shipping.
 //
 // 🔴 AND HERE IS WHAT THAT LAST TEST DOES *NOT* CATCH, stated because the
 // version before this one claimed the whole property and only enforced part of
@@ -181,14 +180,20 @@ describe("useQuotedMessageOverlay", () => {
   it("no component names getChatMessage — the hook is the only one that does", () => {
     // vitest runs with the frontend package as cwd.
     const root = resolve(process.cwd(), "src");
-    // The THREE KNOWN call sites must actually take the shared exit. Named, so
-    // one quietly dropping the hook goes red here rather than only in a
-    // behaviour test that a second copy would keep green.
-    for (const rel of [
-      "src/components/ChatArea.tsx",
-      "src/components/RepliesPage.tsx",
-      "src/components/TaskReplyCard.tsx",
-    ]) {
+    // The ONE known call site must actually take the shared exit. Named, so it
+    // quietly dropping the hook goes red here rather than only in a behaviour
+    // test that a second copy would keep green.
+    //
+    // 🔴 WHY ONLY ONE, when this list used to name three. RepliesPage.tsx and
+    // TaskReplyCard.tsx were removed on owner's 2026-08-29 ruling (「1 跟 2 變回
+    // 去原本那樣」): those two controls NAVIGATE now — they write
+    // #office/chat/<id>/msg/<msgId> and never read a message themselves — so
+    // requiring them to import this hook would be requiring a call they must not
+    // make. They are not exempt from the sweep below: if either one ever grows
+    // its own api.getChatMessage, the whole-tree sweep still catches it. What is
+    // gone is only the "must take the shared exit" obligation, and only because
+    // they have no fetch to share.
+    for (const rel of ["src/components/ChatArea.tsx"]) {
       const src = readFileSync(resolve(process.cwd(), rel), "utf8");
       expect(src, `${rel} must take the shared exit`).toContain(
         "useQuotedMessageOverlay(",

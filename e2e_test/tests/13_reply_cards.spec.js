@@ -10,8 +10,7 @@
 //   included) → both surfaces converge, badge −1 live, and the agent reads the
 //   answer back over the API WITH the original option wording → 重新決定
 //   replaces the answer (status STAYS answered; cancel keeps it) → 跳到原訊息
-//   opens the ask itself in the full-view overlay WITHOUT navigating (T-0b78 —
-//   it used to route into the room and hunt for the row).
+//   lands in the room, located + highlighted.
 //
 // ⚠ HISTORY (found while writing this spec; FIXED since): the http adapter's
 // subscribeEvents() used to open its OWN EventSource per subscriber — App
@@ -240,29 +239,22 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
       'a revision must never re-count the badge',
     ).toBe(baseWaiting + 1);
 
-    // ── 跳到原訊息: the ask itself, in full, WITHOUT leaving the page ──
-    // T-0b78. This used to navigate to #office/chat/<id>/msg/<msgId> and rely
-    // on ChatArea finding the row in the thread it had just painted — a search
-    // that misses silently whenever the ask is out of the loaded window
-    // (density, not age, decides that) and lands the reader on the newest
-    // message. It now takes the SAME exit the chat bubble's 看原訊息 takes.
-    const urlBeforeJump = page.url();
+    // ── 跳到原訊息: land in M1's room, located + highlighted ──
     await answeredA.locator('.reply-card__jump').click();
-    const askOverlay = page.locator('.md-preview');
-    await expect(askOverlay, 'the ask must open in the full-view overlay').toBeVisible();
-    await expect(askOverlay).toContainText(summaryA);
-    expect(page.url(), 'the reader must not be navigated anywhere').toBe(
-      urlBeforeJump,
+    await expect(page).toHaveURL(
+      new RegExp(`#office/chat/${M1.id}/msg/${cardA.chat_message_id}$`),
     );
-    await askOverlay.locator('.md-preview__close').click();
-    await expect(askOverlay).toHaveCount(0);
-
-    // Now go to M1's room the ordinary way (the jump no longer takes you
-    // there). The ask renders as the inline card (B3, no banner), and the two
-    // surfaces agree: A was answered (and revised) on the PAGE — the chat card
-    // shows the same standing answer.
-    await page.locator('.nav-tab', { hasText: '辦公室' }).click();
-    await page.locator('.member-card', { hasText: M1.name }).click();
+    const locatedMsg = page.locator(
+      `.chat__msg[data-msg-id="${cardA.chat_message_id}"]`,
+    );
+    await expect(locatedMsg, 'the origin message must be in the thread').toBeVisible();
+    await expect(
+      locatedMsg,
+      'the jump must locate + highlight the origin ask',
+    ).toHaveClass(/chat__msg--located/);
+    // The ask renders as the inline card (B3, no banner), and the two surfaces
+    // agree: A was answered (and revised) on the PAGE — the chat card shows
+    // the same standing answer.
     const chatCardA = chatCardOf(page, cardA);
     await expect(chatCardA).toBeVisible();
     await expect(chatCardA).toContainText(summaryA);
