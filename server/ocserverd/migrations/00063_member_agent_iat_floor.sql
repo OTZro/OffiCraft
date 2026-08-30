@@ -1,0 +1,46 @@
+-- +goose Up
+-- T-14 項目 4B — the per-member credential floor: the moment a member's NEW
+-- session reports that it is up, every token minted for an EARLIER session of
+-- that same member stops working.
+--
+-- WHY THE COLUMN HAS TO EXIST. A member's generations overlap on purpose: the
+-- replacement boots and connects while the outgoing session is still working
+-- its close-out. Every server-side effect keyed on the MEMBER id therefore
+-- cannot tell which generation is speaking, and the outgoing session's last
+-- words land on its successor. The member row had no field that answered "which
+-- generation is this request?" — the caller's token `iat` does, and this column
+-- is where the answer it is compared against lives.
+--
+-- Owner's ruling (2026-08-30, rc-fe6451abe579, option 1): 「新的一輪一上線就失效」
+-- — the cut is bound to the NEW generation coming up, not to the old one being
+-- collected, and a handover cut in half is the knowingly accepted cost.
+--
+--   0      no floor — every pre-column row starts here, which is the honest
+--          state: nothing was recorded for them, so nothing is refused. The
+--          first report_waking after the upgrade sets each member's own floor.
+--   >0     unix seconds; the `iat` of the token that last reported waking.
+--
+-- 🔴 It stores the WAKING CALLER'S OWN `iat`, not now(). The comparison in
+-- requireAuth is STRICTLY LESS THAN, so storing the caller's own iat is what
+-- guarantees the session that raises the floor can never be locked out by it —
+-- neither by the gap between mint and boot, nor by clock skew between the two.
+-- now() would refuse a token that took a few seconds to get here.
+--
+-- 🔴 WARDEN IS EXEMPT AT THE READ SIDE, and that is a safety property. A warden
+-- credential is scope="agent" with NO exp (api_auth.go mintWardenToken), so a
+-- floor raised above one could never expire out of the way: the machine would
+-- be off the fleet permanently, recoverable only by a hand re-install. This
+-- column is written for warden rows like any other; agentIatFloorRefusal is what
+-- declines to read it for them, by name.
+--
+-- ⚠️ NOT SOLVED: `iat` is whole seconds, so two generations of one member that
+-- start inside the SAME second are indistinguishable here (owner 2026-08-28:
+-- 「先不管搶同一秒的問題好了」). This column does not fix that and nothing pretends
+-- it does.
+--
+-- NOT on the wire: no DTO field, no spec/api change. A constant-DEFAULT ADD
+-- COLUMN (cheap metadata op, no table rebuild).
+ALTER TABLE member ADD COLUMN agent_iat_floor REAL NOT NULL DEFAULT 0;
+
+-- +goose Down
+ALTER TABLE member DROP COLUMN agent_iat_floor;
