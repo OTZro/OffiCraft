@@ -644,6 +644,12 @@ func (st *codexListenerState) handleListenerLine(
 	// is long over. A reconnect is a network blip — every one of them opening a
 	// fresh "go do your inventory" turn would spend tokens re-doing work and
 	// would interrupt whatever the agent is actually in the middle of.
+	//
+	// ⚠️ THE RECONNECT IS STILL REPORTED, just not as THIS turn. Since the
+	// disconnect-notice policy (owner, 2026-08-30) the connected line is itself a
+	// forwardable notice, so the second connect reaches the agent as one short
+	// line rather than as a second boot instruction. The two must never both fire
+	// for one line — see codexListenerActions.
 	if wake {
 		st.wakeSent = true
 		openTurn(codexPostBootWake)
@@ -655,13 +661,56 @@ func (st *codexListenerState) handleListenerLine(
 
 func codexListenerActions(line string, wakeAlreadySent bool) (wake, forward bool) {
 	connected := strings.HasPrefix(strings.TrimSpace(line), "[ocagent] listen: connected")
-	return connected && !wakeAlreadySent, actionableCodexListenerLine(line)
+	wake = connected && !wakeAlreadySent
+	// A line never does BOTH. The boot connect opens the post-boot wake and is
+	// not also forwarded; every later connect is forwarded as the reconnect
+	// notice and wakes nothing.
+	return wake, actionableCodexListenerLine(line) && !wake
+}
+
+// listenerNoticePrefixes are the transport lines the owner's disconnect-notice
+// policy (2026-08-30) says MUST reach the agent:
+//
+//	「應該是在第一次斷線，跟連線回來的時候發訊息給 agent，中間的 retry 我們不需要
+//	 降低頻率，但是不需要打攪 agent。」
+//
+// 🔴 A CODEX MEMBER USED TO BE TOLD ABOUT ITS TRANSPORT EXACTLY ONCE, AT BOOT.
+// The blanket "[ocagent] listen:" filter below is older than the ruling and was
+// stricter than it: it dropped every disconnect and every reconnect for the
+// whole life of the session, so a codex agent could sit through a station
+// changeover with nothing in its transcript to say its stream had been down.
+// The claude runtime sat at the opposite extreme — it printed EVERY retry
+// straight into the transcript — and neither end was what the owner asked for.
+//
+// The give-up line is on this list for the reason the owner approved alongside
+// the ruling: with only the two endpoints, `斷線 → 沉默` cannot distinguish
+// 「還在重試」 from 「已經放棄」, and an agent cannot tell whether waiting is a
+// plan. ocagent prints it at every exit of its retry loop; dropping it here
+// would put the ambiguity straight back.
+//
+// These are LONG prefixes of the same "[ocagent] listen:" head, so they are
+// exceptions carved out of the filter and not a second parser: the head itself
+// still does not move (cli/ocagent/listen_run.go's prefix note).
+var listenerNoticePrefixes = []string{
+	"[ocagent] listen: disconnected", // the first failure of an outage
+	"[ocagent] listen: connected",    // back up (and whether the station changed)
+	"[ocagent] listen: giving up",    // the retry loop really stopped
 }
 
 func actionableCodexListenerLine(line string) bool {
 	// Transport diagnostics belong in the pane, not in the model transcript.
-	// Sending the connected/reconnect chatter creates empty, token-heavy turns.
-	return !strings.HasPrefix(strings.TrimSpace(line), "[ocagent] listen:")
+	// Sending the whole retry chatter creates empty, token-heavy turns — which
+	// is exactly the mid-outage traffic the ruling above says to swallow.
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "[ocagent] listen:") {
+		return true
+	}
+	for _, prefix := range listenerNoticePrefixes {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // codexPostBootWake is the turn this sidecar opens ONCE, the first time the
