@@ -331,7 +331,37 @@ func TestReconcileDecide(t *testing.T) {
 
 	// ── relocation: owner re-pinned a LIVE member's desired_machine (kyle-62b2) ──
 
-	t.Run("online with a machine mismatch robust-stops toward the RUNNING machine", func(t *testing.T) {
+	// T-14 #4: the mismatch is now answered in TWO ways, and which one depends on
+	// obs.HandoverArmable — "would a wind-down epoch actually be stamped on this
+	// row?". The armable case is the normal one and it WAITS; the non-armable case
+	// is the fallback and it is what the arm used to do unconditionally.
+	t.Run("online with a machine mismatch opens a wind-down instead of killing", func(t *testing.T) {
+		obs := obsRelocate("m", "mach-old", "mach-new")
+		obs.HandoverArmable = true
+		d := reconcileDecide(obs, newReconcileState(), cfg, 1000)
+		if d.Command != reconcileCmdNone {
+			t.Fatalf("a member that CAN hand over must not be killed on sight: %+v", d)
+		}
+		if d.ArmHandoverOp != memberOpRelocate {
+			t.Fatalf("the decision must ask for a relocate wind-down, got ArmHandoverOp=%q", d.ArmHandoverOp)
+		}
+		// st.LastCommand is deliberately NOT advanced: the collection belongs to
+		// the refocus arm, whose first-dispatch bookkeeping must start clean.
+		if d.State.LastCommand == reconcileCmdStop {
+			t.Fatalf("the wind-down arm must not claim a STOP it did not dispatch: %+v", d.State)
+		}
+	})
+
+	// The name is load-bearing: this is the BACKSTOP-OF-THE-BACKSTOP, not the
+	// ordinary relocation. It used to be the ONLY behaviour of this arm and the
+	// subtest was named "…robust-stops toward the RUNNING machine" with no
+	// qualifier, which stopped being true for the ordinary case in T-14 #4. The
+	// assertions below are byte-for-byte the ones that stood then — they are still
+	// right, about a NARROWER input: a member for which no wind-down can be opened
+	// (a warden row, or one already on the 強制停止 rung) has no hand-off to wait
+	// for, and waiting for one that cannot happen is not gentler than killing, it
+	// is just never converging.
+	t.Run("online with a machine mismatch and NOTHING to hand over robust-stops toward the RUNNING machine", func(t *testing.T) {
 		d := reconcileDecide(obsRelocate("m", "mach-old", "mach-new"), newReconcileState(), cfg, 1000)
 		if d.Command != reconcileCmdStop || d.State.Phase != reconcilePhaseStopping ||
 			d.State.LastCommand != reconcileCmdStop || d.State.LastCommandAt != 1000 {
@@ -840,7 +870,28 @@ func TestRunReconcileTick(t *testing.T) {
 		connectOnline(t, s, "mach-new")                               // new warden reachable (START target)
 		moverConn := connectOnlineMachine(t, s, "m-move", "mach-old") // running on the OLD machine
 
+		// T-14 #4: the first tick opens a wind-down and dispatches NOTHING. It is
+		// asserted rather than skipped past, because "no frame yet" is the whole
+		// behaviour change and a tick that quietly dispatched here would be the
+		// regression. What this subtest exists for — the ROUTING of the STOP and
+		// of the respawn START — is unchanged and asserted below, one hand-off
+		// later.
 		s.runReconcileTick(1000)
+		if f := drainFrames(t, s, "mach-old"); len(f) != 0 {
+			t.Fatalf("the first tick must open a wind-down, not kill: %+v", f)
+		}
+		if f := drainFrames(t, s, "mach-new"); len(f) != 0 {
+			t.Fatalf("the first tick must dispatch nothing at all: %+v", f)
+		}
+		armed, _ := s.dal.GetMember("m-move")
+		if armed.RefocusSince <= 0 || armed.RefocusOp != memberOpRelocate {
+			t.Fatalf("the first tick must stamp a relocate wind-down: %+v", armed)
+		}
+		// The agent files its stopped report (POST /api/self/stopped) — the 收口.
+		armed.StoppedSince = 1001
+		putTestMember(t, s, *armed)
+
+		s.runReconcileTick(1002)
 		// The STOP must land on the OLD machine's warden FIFO — never the new one.
 		oldFrames := drainFrames(t, s, "mach-old")
 		if len(oldFrames) != 1 || oldFrames[0].RPC != "stop" || oldFrames[0].Args["member_id"] != "m-move" {
@@ -853,7 +904,7 @@ func TestRunReconcileTick(t *testing.T) {
 		// the NEW machine (a fresh boot token minted with desired_machine=mach-new,
 		// routed to the new machine's warden).
 		s.hub.Disconnect(moverConn)
-		s.runReconcileTick(1000 + s.reconcileCfg.StopRetry)
+		s.runReconcileTick(1002 + s.reconcileCfg.StopRetry)
 		newFrames := drainFrames(t, s, "mach-new")
 		if len(newFrames) != 1 || newFrames[0].RPC != "start" || newFrames[0].Args["member_id"] != "m-move" {
 			t.Fatalf("after the kill the START must route to the new machine: %+v", newFrames)
