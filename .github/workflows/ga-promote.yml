@@ -38,7 +38,8 @@
 # (push), so this is that ruling — expressed as the permission it actually rests
 # on rather than as two strings that go stale the moment the list changes.
 #
-# ⚠️ GITHUB CANNOT ENFORCE THIS FOR US, AND THAT IS WHY THE FIRST STEP EXISTS.
+# ⚠️ GITHUB ONLY KEEPS OUT ACCOUNTS WITHOUT WRITE ACCESS — THAT IS THE WHOLE OF
+# WHAT IT ENFORCES FOR US, AND THAT IS WHY THE FIRST STEP EXISTS.
 # There is no per-workflow "who may dispatch" setting. `workflow_dispatch` is open
 # to every account with write access, and a repo can grow read/triage
 # collaborators, org members and outside contributors who must not ship a GA. So
