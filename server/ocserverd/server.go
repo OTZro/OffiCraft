@@ -206,7 +206,10 @@ func extractToken(r *http.Request) string {
 // (lifecycle.md §1.3): an owner-scope token whose iat is EARLIER than the
 // floor was minted before the last password change and is refused — the one
 // stateful exception to stateless verification. Agent/warden tokens never
-// consult it.
+// consult it — they have their OWN floor, which is a different shape and lives
+// on the member row (agentIatFloorRefusal below): T-14 項目 4B refuses an
+// agent-scope token minted for a generation its member has already replaced.
+// Warden credentials consult neither.
 //
 // lookup (nil = no cut) is the SECOND revocation seam, added here for T-9cf8
 // and deliberately in the same place: a credential belonging to a machine the
@@ -238,6 +241,16 @@ func requireAuth(secret []byte, ownerIatFloor func() int64, lookup func(id strin
 					return
 				}
 			}
+		}
+		// The AGENT-side twin of the floor above, and deliberately next to it —
+		// same mechanism, different shape: ownerIatFloor is ONE global number
+		// (the owner has no roster row), while an agent's floor is per member
+		// and is read off that member's row through `lookup`. Warden rows are
+		// exempt by name inside; see agentIatFloorRefusal for why that is a
+		// safety property and not a shortcut.
+		if agentIatFloorRefusal(claims, lookup) {
+			writeError(w, http.StatusUnauthorized, "invalid token")
+			return
 		}
 		if permanentCredentialRefusal(claims, lookup) {
 			writeError(w, http.StatusUnauthorized, "invalid token")
