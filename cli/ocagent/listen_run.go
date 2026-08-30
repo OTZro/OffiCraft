@@ -49,6 +49,15 @@ type listener struct {
 	refusalGraceSpan time.Duration    // wall-clock bound for the refusal run
 	selfTerminate    func()           // kill my own tmux session (default: `ocagent suicide`)
 
+	// DISCONNECT-NOTICE POLICY (owner, 2026-08-30): 「第一次斷線，跟連線回來的
+	// 時候發訊息給 agent，中間的 retry 我們不需要降低頻率，但是不需要打攪 agent」.
+	// These three fields carry the whole of it; the BACKOFF is deliberately not
+	// among them, because the ruling is about the transcript and not about the
+	// cadence — see noteDisconnect.
+	inOutage    bool   // an outage has been announced and has not yet ended
+	sawConnect  bool   // at least one connection has been established this process
+	lastStation string // the station sha the previous connection reported ("" = never known)
+
 	cursorPath string
 	winddown   *windDownHook
 	recycle    *recycleHook
@@ -148,6 +157,81 @@ func (l *listener) foldRefusal() bool {
 func (l *listener) resetRefusals() {
 	l.refusals = 0
 	l.firstRefusalAt = time.Time{}
+}
+
+// ---------------------------------------------------------------------------
+// the disconnect-notice policy (owner ruling, 2026-08-30)
+//
+//	「應該是在第一次斷線，跟連線回來的時候發訊息給 agent，中間的 retry 我們不需要
+//	 降低頻率，但是不需要打攪 agent。」
+//
+// 🔴 THIS IS NOT A BACKOFF CHANGE, AND MUST NEVER BECOME ONE. An earlier
+// proposal answered the same complaint by widening the retry interval; the
+// owner replaced it with this. The loop keeps re-dialling at exactly the rhythm
+// listenBackoffStart/listenBackoffCap already give it — a member is trying just
+// as hard to get back online as it ever was. What changes is only how much of
+// that effort is narrated INTO THE AGENT'S TRANSCRIPT, where every line is an
+// interruption that costs a turn.
+//
+// Measured before this existed: one station changeover produced THREE lines for
+// ONE event on a claude member — `stream ended`, `connect failed: unexpected
+// status 502`, `connected`. The middle one is the whole complaint.
+//
+// 🔴 AND SILENCE MAY MEAN ONLY ONE THING. Reporting just the two endpoints
+// leaves the transcript reading `斷線 → 沉默 → 連上`, and in that silence
+// 「還在重試」 and 「已經放棄」 are indistinguishable — the agent cannot tell
+// whether waiting is a plan or a mistake. So every exit from the retry loop
+// prints too (stopRetrying); the silence between the two notices then means
+// exactly one thing, and it is the good one.
+// ---------------------------------------------------------------------------
+
+// noteDisconnect announces an outage ONCE. The first failure of a run prints;
+// every later failure inside the SAME uninterrupted outage is folded away. The
+// dial itself already happened before this is called and happens again after —
+// this function has no say in the cadence at all.
+func (l *listener) noteDisconnect(format string, args ...any) {
+	if l.inOutage {
+		return // the agent has already been told; retries are its own business
+	}
+	l.inOutage = true
+	l.logf("listen: disconnected — "+format+
+		" (retrying on the same schedule, quietly; the next transport line you see "+
+		"is either the reconnect or a give-up)", args...)
+}
+
+// stopRetrying prints the give-up line when the retry loop terminates while an
+// outage is still open, and returns the process exit code (always 0 — listen
+// degrades gracefully). Called at EVERY exit of run(): a loop that stops during
+// an outage and says nothing turns the disconnect notice into a lie by omission.
+// Exiting while CONNECTED prints nothing — nothing was ambiguous there.
+func (l *listener) stopRetrying(reason string) int {
+	if l.inOutage {
+		l.inOutage = false
+		l.logf("listen: giving up — %s. No further reconnect attempts; I am NOT still "+
+			"retrying, and nothing more will arrive on this stream.", reason)
+	}
+	return 0
+}
+
+// stationVerdict answers 「是不是換了一台」 on the reconnect line, so the reader
+// is told rather than left to diff two shas by eye. It is a pure function of
+// (previous sha, this sha, is-this-the-first-connect) and returns the segment to
+// APPEND — never a claim it cannot support:
+//   - first connect of the process: "" (there is no previous station; claiming
+//     "same" would be a fabrication and claiming "new" would fire on every boot).
+//   - either side unknown: "" (a station that sent no sha cannot be compared;
+//     the same rule the sha segment itself follows — nothing is invented).
+//
+// The wording deliberately avoids the bytes "[station", which the sha segment
+// owns, so the two can never be confused by a reader or by a test.
+func stationVerdict(prev, cur string, firstConnect bool) string {
+	if firstConnect || prev == "" || cur == "" {
+		return ""
+	}
+	if prev == cur {
+		return " [same station]"
+	}
+	return " [new station — was " + prev + "]"
 }
 
 // dispatch is the bridge from ONE completed SSE data payload to the agent's downlink
@@ -313,8 +397,9 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	// Absent header ⇒ the line is emitted byte-identical to what it was before
 	// this change. Nothing is fabricated and no earlier value is reused: each
 	// connection reads only its own response.
-	station := ""
+	station, stationSHA := "", ""
 	if sha := strings.TrimSpace(resp.Header.Get(stationSHAHeader)); sha != "" {
+		stationSHA = sha
 		station = " [station " + sha + "]"
 	}
 	// ── AND WHICH OCAGENT IS SAYING IT ──────────────────────────────────────
@@ -338,7 +423,29 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	if sha := strings.TrimSpace(buildSHA); sha != "" {
 		agent = " [agent " + sha + "]"
 	}
-	l.logf("listen: connected — streaming %s%s (⇒ online while held)%s%s", l.cfg.Base, eventsPath, station, agent)
+	// ── AND WHETHER IT IS THE SAME ONE AS LAST TIME ─────────────────────────
+	// The sha above NAMES the peer; this SAYS WHAT CHANGED. Both segments were
+	// already on the line before this — a reader who wanted to know whether a
+	// changeover had happened had to scroll back to the previous connection and
+	// compare two hex strings by eye, which nobody does. This is the owner's
+	// second ask on the reconnect notice (2026-08-30) and it costs no request:
+	// the comparison is against what this same process saw last time.
+	//
+	// ⚠️ POSITION: this sits BEFORE the sha segments, not after. The two
+	// existing station-sha tests assert the line ENDS with " [station <sha>]"
+	// (the agent segment is empty in any unstamped build, tests included), and
+	// appending past them would break both. Anywhere after the prefix is equally
+	// safe for the three sidecar prefix consumers, which read only the head.
+	verdict := stationVerdict(l.lastStation, stationSHA, !l.sawConnect)
+	l.sawConnect = true
+	if stationSHA != "" {
+		l.lastStation = stationSHA // an unknown sha never overwrites a known one
+	}
+	// The stream is up: whatever outage was being announced is over, and the
+	// line below IS the second of the owner's two notices.
+	l.inOutage = false
+	l.logf("listen: connected — streaming %s%s (⇒ online while held)%s%s%s",
+		l.cfg.Base, eventsPath, verdict, station, agent)
 
 	// Boot/reconnect drain: /api/events has no replay, so any reply_card delta
 	// fanned while this listener held no stream is lost — catch up from the
@@ -395,28 +502,30 @@ func (l *listener) run(ctx context.Context) int {
 	backoff := l.backoffStart
 	for {
 		if ctx.Err() != nil {
-			return 0
+			return l.stopRetrying("this process is shutting down")
 		}
 		// Lifecycle tie, probe point #1: never (re)connect an orphan.
 		if l.foldProbe() {
-			return 0
+			return l.stopRetrying("the session probe says I should no longer be here")
 		}
 
 		opened, activity, selfExit, err := l.connectOnce(ctx)
 		if selfExit {
-			return 0 // the heartbeat-line probe self-exited (probe point #2)
+			// the heartbeat-line probe self-exited (probe point #2)
+			return l.stopRetrying("the server told this listener to stand down")
 		}
 		if ctx.Err() != nil {
-			return 0 // cancelled while connected/dialing → clean exit
+			// cancelled while connected/dialing → clean exit
+			return l.stopRetrying("this process is shutting down")
 		}
 		if opened {
 			if activity {
 				backoff = l.backoffStart // a byte proved health → reconnect fast
 			}
 			l.resetRefusals() // an opened stream breaks any refusal run
-			l.logf("listen: stream ended: %v", err)
+			l.noteDisconnect("stream ended: %v", err)
 		} else if errors.Is(err, errSSERefused) {
-			l.logf("listen: connect refused: %v", err)
+			l.noteDisconnect("connect refused: %v", err)
 			if l.foldRefusal() {
 				// FAIL-CLOSED (zombie defence line B): the server has refused this
 				// listener authoritatively for the whole grace window — I am a
@@ -431,21 +540,22 @@ func (l *listener) run(ctx context.Context) int {
 				if l.selfTerminate != nil {
 					l.selfTerminate()
 				}
-				return 0
+				return l.stopRetrying("the server refused this listener authoritatively " +
+					"for the whole grace window")
 			}
 		} else {
 			// A network fault / non-409 status (server down, 5xx, …) is NOT an
 			// authoritative refusal — reset the run so a briefly-unavailable
 			// server can never accumulate toward the fail-closed kill.
 			l.resetRefusals()
-			l.logf("listen: connect failed: %v", err)
+			l.noteDisconnect("connect failed: %v", err)
 		}
 
 		if l.once {
-			return 0 // single-connect test hook
+			return l.stopRetrying("--once was set: this run makes a single attempt")
 		}
 		if !sleepCtx(ctx, l.sleep, backoff) {
-			return 0
+			return l.stopRetrying("this process is shutting down")
 		}
 		backoff = nextBackoff(backoff, l.backoffStart, l.backoffCap, l.jitter())
 	}
