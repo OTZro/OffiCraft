@@ -154,7 +154,8 @@
   gap: 8px;
   flex: none;
 }
-.md-preview__download {
+.md-preview__download,
+.md-preview__new-tab {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -169,7 +170,8 @@
     color 0.15s,
     border-color 0.15s;
 }
-.md-preview__download:hover {
+.md-preview__download:hover,
+.md-preview__new-tab:hover {
   color: var(--color-accent);
   border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
@@ -183,7 +185,8 @@
   .md-preview__actions {
     gap: 4px;
   }
-  .md-preview__download {
+  .md-preview__download,
+  .md-preview__new-tab {
     width: 32px;
     height: 32px;
     padding: 0;
@@ -411,4 +414,17 @@
     max-height: min(70vh, calc(100vh - 112px));
     max-height: min(70dvh, calc(100dvh - 112px));
   }
+}
+
+/* T-36 — the plain-words line under the header, paired with 「在新頁面顯示」:
+ * what that tab opens is shown as-is and does not react to clicks. Muted and
+ * one line high so it reads as a note rather than an error, but it is ALWAYS
+ * on screen when the button is — never a tooltip only a mouse can find. */
+.md-preview__new-tab-note {
+  flex: none;
+  padding: 8px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-overlay) 8%, transparent);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
 }

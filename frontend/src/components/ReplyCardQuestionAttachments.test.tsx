@@ -16,6 +16,7 @@ import { RepliesPage } from "./RepliesPage";
 import { ReplyCardsProvider } from "../hooks/useReplyCards";
 import { ChatReplyCard } from "./ChatReplyCard";
 import { __resetMock, __injectMockReplyCard } from "../api/mock";
+import { zh } from "../i18n/locales/zh";
 import type { ChatAttachmentView, ReplyCard } from "../api/adapter";
 
 const IMG_DATA_URI =
@@ -91,9 +92,16 @@ describe("reply-card question attachments", () => {
     expect(chip.textContent).toContain("report.pdf");
     fireEvent.click(chip);
     expect(document.body.querySelector(".md-preview")).not.toBeNull();
-    expect(
-      document.body.querySelector(".md-preview__status")?.textContent,
-    ).toContain("此檔案無法預覽，請下載");
+    // T-36 — a .pdf cannot be DRAWN here, but the browser can show it in a tab
+    // of its own, so once the share link is minted the central line points at
+    // the 「在新頁面顯示」 button rather than back at 下載. The mint is async:
+    // reading the status synchronously would pin the pre-mint 請下載 line and
+    // pass for the wrong reason.
+    await waitFor(() =>
+      expect(document.body.querySelector(".md-preview__status")?.textContent).toBe(
+        zh.chat.mdPreview.unavailableOpenInNewTab,
+      ),
+    );
     fireEvent.click(document.body.querySelector(".md-preview__close") as HTMLButtonElement);
 
     // The answered and waiting sides both use the attachment-owned modal.
