@@ -310,6 +310,25 @@ type reconcileDecision struct {
 	// tick turns this flag into a durable last_op receipt so the two are
 	// distinguishable in the UI.
 	StartTimedOut bool
+	// ConvergedOnline (T-39) is true on the tick that finds a member the owner
+	// wants running ALREADY RUNNING — decideUp's "online: converged" arm, and
+	// only that arm. It is the exact opposite signal to StartTimedOut, and the
+	// two are mutually exclusive by construction (that one is reached only when
+	// the member is NOT online).
+	//
+	// 🔴 IT EXISTS BECAUSE "THE FAILURE IS OVER" HAD NO WRITER. Every arm that
+	// stamps a failure receipt runs while the member is broken; the ONE arm that
+	// cleared anything was gated on `Command == start`, i.e. on the server having
+	// just tried AGAIN. So a receipt could only be cleared by a further attempt,
+	// never by the member simply coming back — and a member that recovered on its
+	// own kept its red 「最近操作」 line for as long as it stayed healthy (field
+	// evidence: 10.6 days). The recovery is a fact the DECIDER knows and nothing
+	// downstream could re-derive without copying decideUp's converged conditions,
+	// which is the two-copies-of-one-ruling failure StopKind's comment describes.
+	// Same shape as StopKind and ArmHandoverOp: decided where the branch lives,
+	// read verbatim by the caller (reconcileTickMemberLocked for staff,
+	// reconcileWorkerLiveness for outsource — one flag, both producers).
+	ConvergedOnline bool
 	// StopKind names WHICH of the FSM's STOPs this is (T-72dd). "" on every
 	// decision that is not a STOP.
 	//
@@ -648,7 +667,12 @@ func decideUp(
 		st.LastCommand = reconcileCmdNone
 		st.LastCommandAt = 0.0
 		st.StopDeadline = 0.0
-		return decisionNone(obs, st, "online: converged")
+		dec := decisionNone(obs, st, "online: converged")
+		// T-39: the ONE producer of ConvergedOnline. Anything the member's row
+		// still says about a FAILED operation is describing an attempt this tick
+		// has just outlived; the callers clear it here and nowhere else.
+		dec.ConvergedOnline = true
+		return dec
 	}
 
 	// Not online. A START may be in flight — give it the start window.
@@ -1454,16 +1478,24 @@ func (s *apiServer) armDecidedHandover(memberID string, decision reconcileDecisi
 //
 // To re-check, grep `LastOpOK` over non-test .go — the COLUMN name, because the
 // `&ok` spelling is incidental and the next writer is free to name its bool
-// anything. Over the tree this comment lives in that is 27 hits, 2 of them inside
+// anything. Over the tree this comment lives in that is 31 hits, 2 of them inside
 // this comment block (the recipe finds its own subject; the previous one did
-// not). Of the rest, the hits that WRITE the column are:
+// not). It was 27 before T-39 added the two converged clears, two lines each. Of
+// the rest, the hits that WRITE the column are:
 //   - seven `stampOpReceipt(&….LastOpOK, …)` call sites — reconcile.go ×3,
 //     receipt_watch.go ×2, worker_spawn.go ×2: the refusal class, all of it here;
 //   - stampWakeObservability below — refusal class, standing apart, anchored;
 //   - api_monitoring.go ×2 — the agent-verdict class described above;
-//   - three that stamp no receipt at all: dal.go's row scan, worker_spawn.go's
-//     clear back to nil, and this file's copy of an already-stamped row onto a
-//     freshly re-read one.
+//   - seven that stamp no receipt at all: dal.go's row scan, this file's copy of
+//     an already-stamped row onto a freshly re-read one, and FIVE lines that
+//     clear back to nil — worker_spawn.go's clearWorkerPlacementBlock, plus the
+//     two T-39 converged clears (stampWakeObservability below and
+//     worker_spawn.go's clearWorkerConvergedFailureReceipt), each of which reads
+//     the column to test for a FAILURE and then writes nil.
+//
+// 🔴 A CLEAR IS NOT A RECEIPT, and it must not be routed through this core: the
+// core always leaves a non-nil FALSE with a reason, the clears leave nil with
+// none. That is a different operation, not an exception to this one.
 //
 // Everything else the grep returns is a read or a struct field declaration. That
 // enumeration is the claim, and re-running the grep is what checks it. It does
@@ -1646,6 +1678,10 @@ func (s *apiServer) stampMemberPlacementBlocked(m *Member, now float64) {
 //	(b) a START that lapsed its start_timeout writes a last_op receipt, which is
 //	    what the cockpit's 「最近操作」 reads. Without it the lapse only ever
 //	    existed as exponential backoff inside the reconcile state.
+//	(c) a member that has CONVERGED back online CLEARS a failure receipt (T-39).
+//	    The counterpart to (b), and it was missing: (b) writes while the member
+//	    is broken and nothing was watching for it becoming un-broken, so the red
+//	    line the owner sees had no way to end except a second failure.
 //
 // Best-effort by contract: a persistence failure is logged and never changes the
 // reconcile decision — observability must not be able to stall the control loop.
@@ -1701,13 +1737,59 @@ func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision
 		changed = true
 		// The START landed, so a PLACEMENT-blocked explanation is now history —
 		// leaving it would make the next block look like the still-standing first
-		// one. Only a placement stamp is cleared: the wake_timeout receipt written
-		// above, and a warden's own refused-start receipt, are the record of why a
-		// boot failed and survive the retry that follows them.
+		// one. Only a placement stamp is cleared HERE: the wake_timeout receipt
+		// written above, and a warden's own refused-start receipt, are the record
+		// of why a boot failed and survive the retry that follows them — a retry
+		// is not an outcome, and blanking them on dispatch would delete the only
+		// sentence saying what went wrong while it is still going wrong.
+		//
+		// 🔴 THEY NO LONGER SURVIVE FOREVER, and this sentence used to say they
+		// did by omission (T-39). What ends them is the arm below: the member
+		// actually coming back. That is the difference the old shape could not
+		// express — it had exactly one clearing gate, "we tried again", so
+		// "cleared" and "healthy" were mutually exclusive and the receipt could
+		// outlive its failure indefinitely (10.6 days, on a member that was
+		// online the whole time). Dispatch still does not clear them; CONVERGENCE
+		// does.
 		if isPlacementBlockedReason(m.LastOpReason) {
 			m.LastOpReason = ""
 			m.LastOpLog = ""
 		}
+	}
+	// T-39 — THE MEMBER CAME BACK, SO THE FAILURE RECEIPT GOES.
+	//
+	// Owner ruling rc-f2e963132fc5 [1]: 「他回來了就把那行字直接拿掉」 — removed,
+	// not rewritten into a past-tense sentence and not archived anywhere the
+	// cockpit can still show it. The cost was put to the owner and accepted: once
+	// this fires there is NO surviving trace on the row that the member ever
+	// failed to start. The server log line still exists; nothing owner-visible
+	// does.
+	//
+	// ALL FIVE COLUMNS, because the cockpit's condition is `last_op != "" &&
+	// last_op_at != 0` (AgentDetailPanel.tsx, via mappers.ts mapping 0 → null) —
+	// clearing only last_op_reason would leave a wordless red block on screen,
+	// which is the same complaint in a worse shape. last_op_ok goes back to nil,
+	// its three-valued "nothing folded yet", for the reason
+	// clearWorkerPlacementBlock gives: a false with nothing to explain it renders
+	// as a failure nobody can act on.
+	//
+	// GATED ON A FAILURE, not on any receipt: a SUCCESS receipt is not the thing
+	// the owner asked to have removed, and deleting it would silently widen a
+	// narrow ruling. Gated on CONVERGENCE and not written unconditionally: a
+	// member that is still down must keep its receipt on screen — that one is
+	// describing something that is still true. The pair is pinned by
+	// TestReconcile_ConvergedOnlineMemberClearsStaleFailureReceipt_T39 and
+	// TestReconcile_StillOfflineMemberKeepsItsFailureReceipt_T39.
+	//
+	// It cannot churn the row: after the first clear last_op_ok is nil, so every
+	// later converged tick fails this guard and writes nothing.
+	if decision.ConvergedOnline && m.LastOpOK != nil && !*m.LastOpOK {
+		m.LastOp = ""
+		m.LastOpOK = nil
+		m.LastOpLog = ""
+		m.LastOpReason = ""
+		m.LastOpAt = 0.0
+		changed = true
 	}
 	if !changed {
 		return

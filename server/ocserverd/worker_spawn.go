@@ -529,7 +529,11 @@ func (s *apiServer) stampWorkerPlacementBlocked(w *OutsourceWorker, reason strin
 // the anti-churn guard above and write nothing, leaving the cockpit showing a
 // last_op_at from the first block — "stalled an hour ago" and "stalled right
 // now" would render identically, which is the silence this whole change removes.
-// Only a placement stamp is cleared; a warden's own receipt is never touched.
+// Only a placement stamp is cleared; a warden's own receipt is never touched —
+// a dispatch is an attempt, not an outcome, and blanking the explanation of the
+// last failure while the next one is still in flight leaves the owner nothing.
+// What DOES end those receipts is the worker coming back:
+// clearWorkerConvergedFailureReceipt below (T-39).
 func (s *apiServer) clearWorkerPlacementBlock(workerID string) {
 	fresh, err := s.dal.GetOutsourceWorker(workerID)
 	if err != nil || fresh == nil || fresh.LastOp != reconcileCmdStart {
@@ -548,6 +552,50 @@ func (s *apiServer) clearWorkerPlacementBlock(workerID string) {
 	if err := s.dal.PutOutsourceWorker(*fresh); err != nil {
 		outsourceLog("spawn %s: placement-block clear failed: %v", workerID, err)
 	}
+}
+
+// clearWorkerConvergedFailureReceipt is the outsource twin of the T-39 arm in
+// stampWakeObservability (reconcile.go): the worker the owner wants running IS
+// running, so a receipt on its row saying the last operation FAILED describes an
+// attempt that has since been outlived, and the cockpit's red 「最近操作」 line
+// is removed. Owner ruling rc-f2e963132fc5 [1], 「他回來了就把那行字直接拿掉」 —
+// with the accepted cost that nothing owner-visible then records the failure.
+//
+// TWO FUNCTIONS AND NOT ONE, deliberately: the two rows are different types with
+// their own DAL puts and their own publish (the receipt CORE takes field
+// pointers for exactly this reason — see stampOpReceipt's note on why lifting
+// the five columns into a shared struct reaches into every scan/put site). What
+// IS shared is the judgment: both read reconcileDecision.ConvergedOnline off the
+// one decider.
+//
+// All five columns, gated on a FAILURE (a non-nil false — a success receipt is
+// not what the owner asked to remove), and gated on convergence so a worker that
+// is still down keeps the receipt that is still true. Pinned by
+// TestWorkerLiveness_ConvergedOnlineWorkerClearsStaleFailureReceipt_T39 and
+// TestWorkerLiveness_StillOfflineWorkerKeepsItsFailureReceipt_T39.
+//
+// Re-reads before the whole-row write, like every other stamp on this row, and
+// is best-effort by the stampWakeObservability rule: a persist failure is logged
+// and changes no decision. Cannot churn — after the first clear last_op_ok is
+// nil and every later converged tick writes nothing. Caller holds outsourceMu.
+func (s *apiServer) clearWorkerConvergedFailureReceipt(workerID string) {
+	fresh, err := s.dal.GetOutsourceWorker(workerID)
+	if err != nil || fresh == nil {
+		return
+	}
+	if fresh.LastOpOK == nil || *fresh.LastOpOK {
+		return
+	}
+	fresh.LastOp = ""
+	fresh.LastOpOK = nil
+	fresh.LastOpLog = ""
+	fresh.LastOpReason = ""
+	fresh.LastOpAt = 0.0
+	if err := s.dal.PutOutsourceWorker(*fresh); err != nil {
+		outsourceLog("%s: converged receipt clear failed: %v", workerID, err)
+		return
+	}
+	s.publishOutsourceWorker(*fresh, triggerServer)
 }
 
 // workerMachineKey is the workerMachineCooldown map key: one bench per
@@ -1021,6 +1069,14 @@ func (s *apiServer) reconcileWorkerLiveness(w OutsourceWorker, now float64) {
 			w.ID, w.Codename, decision.Reason, target, target)
 	default:
 		s.workerReconcileStates[w.ID] = decision.State
+	}
+	// T-39: the worker is back. Read verbatim off the decider (the member arm
+	// reads the same flag in reconcileTickMemberLocked) rather than re-deriving
+	// "is it converged" here, which is the two-deciders drift this file's own
+	// StopKind note exists to prevent. Mutually exclusive with the StartTimedOut
+	// stamp below: that arm is reached only when the worker is NOT online.
+	if decision.ConvergedOnline {
+		s.clearWorkerConvergedFailureReceipt(w.ID)
 	}
 	// A START that was DISPATCHED and never produced a session is the one failure
 	// the worker path had no durable record of at all. The member producer has
