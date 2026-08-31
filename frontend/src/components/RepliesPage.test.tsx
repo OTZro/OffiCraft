@@ -160,26 +160,35 @@ describe("RepliesPage", () => {
     __injectMockReplyCard(mkCard({}));
     const { findAllByTestId } = renderPage();
     const [card] = await findAllByTestId("waiting-card");
-    // Each chip WHOLE: its 1-based number, its wording, and exactly the tags it
-    // earned. mkCard marks the SECOND option ai_pick, so the tag rides that one
-    // and the first chip is bare — a reader that tagged by position fails here.
+    // Each chip WHOLE: its wording and exactly the tags it earned. mkCard marks
+    // the SECOND option ai_pick, so the tag rides that one and the first chip is
+    // bare — a reader that tagged by position fails here. The 1/2 ordinal is
+    // gone: the chip's leading mark is the radio, which carries no text.
     expect(
       [...card.querySelectorAll(".reply-option")].map((e) => e.textContent),
-    ).toEqual(["1寄出", "2先不要AI 建議"]);
+    ).toEqual(["寄出", "先不要AI 建議"]);
   });
 
-  it("answering via an option moves the card to 近期已回覆 tagged 你選的 + AI 建議", async () => {
+  // 🔴 Written from the OWNER's side of the screen: he taps ONE option and the
+  // ask is dealt with. Nothing here presses a send button, and nothing asserts
+  // that some submit function ran — an implementation-side assertion like that
+  // would stay green the day someone puts the two-step interaction back, which
+  // is exactly how the last round shipped a card the owner could not answer
+  // (「也沒人知道有這個改變，只以為是壞掉」).
+  it("one tap on an option answers a single-select card outright — no second click anywhere", async () => {
     __injectMockReplyCard(mkCard({}));
     const { findAllByTestId, findByTestId, queryAllByTestId } = renderPage();
     const [card] = await findAllByTestId("waiting-card");
 
     fireEvent.click(card.querySelectorAll(".reply-option")[1]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(card.querySelector(".chat__send")!);
 
     // The answered pane is collapsed by default — expand it to see the card.
+    // (Expanding a pane is not answering anything: the ONLY click aimed at the
+    // card itself was the one above.)
     fireEvent.click(await findByTestId("answered-toggle"));
     const answeredCard = await findByTestId("answered-card");
+    // The ask is GONE from 待回覆 and standing in 近期已回覆 — the owner's own
+    // test of "did my tap take?".
     await waitFor(() => expect(queryAllByTestId("waiting-card")).toHaveLength(0));
     const final = answeredCard.querySelector('[data-testid="final-answer"]');
     // The circled option IS the ai_pick one → the AI 建議 tag rides alongside.
@@ -207,8 +216,6 @@ describe("RepliesPage", () => {
     const before = listSpy.mock.calls.length;
 
     fireEvent.click(card.querySelectorAll(".reply-option")[0]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(card.querySelector(".chat__send")!);
 
     const notice = await findByTestId("replies-action-error");
     expect(notice.textContent).toBe(zh.replies.answerStale);
@@ -244,8 +251,6 @@ describe("RepliesPage", () => {
     fireEvent.click(getByText("查看當初選項"));
     fireEvent.click(getByText("重新決定"));
     fireEvent.click(card.querySelectorAll(".reply-option")[1]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(card.querySelector(".chat__send")!);
 
     const notice = await findByTestId("replies-action-error");
     expect(notice.textContent).toBe(zh.replies.answerStale);
@@ -263,8 +268,6 @@ describe("RepliesPage", () => {
     const [card] = await findAllByTestId("waiting-card");
 
     fireEvent.click(card.querySelectorAll(".reply-option")[0]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(card.querySelector(".chat__send")!);
 
     const notice = await findByTestId("replies-action-error");
     expect(notice.textContent).toBe(zh.replies.answerError);
@@ -361,8 +364,8 @@ describe("RepliesPage", () => {
     // the wrong chip, or a lost AI tag, is a failure here. The two tags sit on
     // DIFFERENT chips, which is what makes a positional reader of either fail.
     expect([...options].map((e) => e.textContent)).toEqual([
-      "1寄出目前",
-      "2先不要AI 建議",
+      "寄出目前",
+      "先不要AI 建議",
     ]);
     expect((options[0] as HTMLButtonElement).disabled).toBe(true);
     // 重新決定 sits at the expansion's bottom.
@@ -388,9 +391,8 @@ describe("RepliesPage", () => {
     expect((options[0] as HTMLButtonElement).disabled).toBe(false);
     expect(getByPlaceholderText("或直接打字改寫回覆…")).toBeTruthy();
 
+    // Single-select 重新決定 also lands on the click.
     fireEvent.click(options[0]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(card.querySelector(".chat__send")!);
 
     await waitFor(async () => {
       card = await findByTestId("answered-card");
@@ -531,8 +533,6 @@ describe("RepliesPage", () => {
     const [card] = await findAllByTestId("waiting-card");
 
     fireEvent.click(card.querySelectorAll(".reply-option")[0]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(card.querySelector(".chat__send")!);
     fireEvent.click(await findByTestId("answered-toggle"));
     await findByTestId("answered-card");
 

@@ -86,8 +86,6 @@ describe("useReplyCards — one owner action costs one refetch round", () => {
     const countSpy = vi.spyOn(api, "getReplyCardCount");
 
     fireEvent.click(cards[0].querySelectorAll(".reply-option")[0]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(cards[0].querySelector(".chat__send")!);
 
     // The answered card really does leave the pane — the reconcile still works,
     // it just happens once. Without this the "exactly 1" below could also be

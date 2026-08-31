@@ -89,8 +89,6 @@ describe("ChatReplyCard — one owner action costs one card refetch", () => {
 
     const spy = vi.spyOn(api, "getReplyCard");
     fireEvent.click(container.querySelectorAll(".reply-option")[0]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(container.querySelector(".chat__send")!);
 
     // The card really does flip to answered — the reconcile still works, it
     // just happens once. Without this, "exactly 1" below would also be
@@ -134,8 +132,6 @@ describe("ChatReplyCard — one owner action costs one card refetch", () => {
       expect(container.querySelectorAll(".reply-option").length).toBeGreaterThan(1),
     );
     fireEvent.click(container.querySelectorAll(".reply-option")[0]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(container.querySelector(".chat__send")!);
 
     await waitFor(() => {
       const mine = spy.mock.calls.filter((c) => c[0] === "rc-inline");
