@@ -1226,10 +1226,28 @@ func printReplyCardExpired(out io.Writer, id string, card map[string]any, trigge
 //     ride the row — the digest carries the wording as answer.options (a list,
 //     one entry per circled index) and the attachments as a COUNT (a number).
 //
-// ⚠️ A field RENAME is invisible here: a map lookup that misses returns the zero
-// value and no error, so the pre-T-40 `answer["option_idx"]` would simply stop
-// matching and the whole picked-options clause would vanish — no panic, no log,
-// and an owner who only circled options would read a bare "(empty answer)".
+// ⚠️ A field RENAME is invisible to the READS here: a map lookup that misses
+// returns the zero value and no error, so a pre-T-40 `answer["option_idx"]`
+// would simply stop matching and the whole picked-options clause would vanish
+// — no panic, no log. That silence used to reach the reader as a bare
+// "(empty answer)", which is the owner's decision rendered as its opposite:
+// he circled an option, and the line said he had not answered. Writing the
+// hazard down in this comment did not stop it — it then happened (owner
+// circled option [0]; the listener line printed "(empty answer)").
+//
+// So the no-parts path no longer claims emptiness. The server REFUSES an empty
+// answer — applyReplyCardAnswer 400s when there is no option, no text and no
+// attachment, and `option_idxs: []` counts as empty (see the len() guard there,
+// and the same promise in the OpenAPI text mirrored at
+// frontend/src/api/generated/schema.ts) — so an ANSWERED card cannot carry an
+// empty answer. Reaching len(parts) == 0 with an answer present therefore means
+// THIS BUILD COULD NOT READ IT, not that the owner said nothing, and the line
+// says exactly that and points at get_reply_card.
+//
+// The two are NOT the same fact and must not print the same words:
+//   - answer absent entirely (nil) — no answer rides this payload. Not an
+//     error; nothing to parse.
+//   - answer present but nothing parsed out of it — a parse failure. Loud.
 func renderReplyCardAnswer(card map[string]any) string {
 	answer, _ := card["answer"].(map[string]any)
 	var parts []string
@@ -1274,10 +1292,30 @@ func renderReplyCardAnswer(card map[string]any) string {
 		}
 	}
 	if len(parts) == 0 {
-		return "(empty answer)"
+		if answer == nil {
+			// No answer on this payload at all — nothing was parsed because
+			// there was nothing to parse. Not a failure.
+			return "(no answer carried on this payload)"
+		}
+		// An answer IS present and nothing came out of it. The server refuses an
+		// empty answer, so this is a READ failure in this build — say so, and
+		// never let it read as "the owner did not answer".
+		return unreadableAnswerNotice
 	}
 	return strings.Join(parts, " — ")
 }
+
+// unreadableAnswerNotice is what the answer line says when this build cannot
+// turn a PRESENT answer into words. It must never be mistakable for "no answer":
+// it names the failure as this reader's, sends the reader to the authority
+// (get_reply_card), and names the one self-service cause — a listener process
+// older than the station's wire shape, which a listener restart replaces with
+// the on-disk build. It deliberately does NOT tell anyone to touch the updater
+// or to upgrade another agent.
+const unreadableAnswerNotice = "(UNREADABLE ANSWER — an answer IS recorded on this " +
+	"card but this ocagent could not read it; do NOT treat this as \"no answer\". " +
+	"Read the card itself with get_reply_card. This listener process may be older " +
+	"than the station's answer shape — restarting the listener runs the on-disk build.)"
 
 // ---------------------------------------------------------------------------
 // reply-card boot/reconnect drain (the offline-answer catch-up).
