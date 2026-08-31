@@ -260,6 +260,46 @@ ceiling for non-warden agent-token mints.
      second are indistinguishable to this comparison and neither is refused. Nothing in
      this cut claims otherwise.
 
+     🔴 **WHAT THIS CUT DOES NOT REACH, stated narrowly.** The refusal is evaluated at
+     REQUEST time, so a stream already accepted is never re-checked. That does NOT mean
+     "the outgoing session keeps its SSE until it happens to drop": `Hub.Connect` is
+     kick-old-admit-new inside ONE critical section — the successor's own SSE connect
+     deletes the incumbent listener and closes its `kicked` channel before inserting
+     itself — and the listener process connects at spawn, whereas `report_waking` is an
+     MCP call the model makes later in its boot. On the ordinary path the old stream is
+     therefore already gone by the time the floor rises. Two windows remain, and only two:
+
+     - **(a) before the floor rises.** Between the successor's SSE connect (which kicks
+       the incumbent off the stream) and its `report_waking` (which raises the floor), the
+       outgoing session is off the stream but its ordinary calls are still ACCEPTED — the
+       cut has not been made yet. Bounded by the successor's own boot.
+     - **(b) when the takeover is throttled.** The anti-flap guard (`takeoverBurst` kicks
+       within `takeoverWindow`, hub.go) returns 409 BEFORE the delete/close, so a
+       throttled successor does not kick anyone and the INCUMBENT keeps the slot. Its
+       `report_waking` is a separate call and still raises the floor, so here the old
+       stream really does outlive the cut, un-re-checked, until it drops on its own — at
+       which point its reconnect meets the floor and gets the §1.3 refusal marker.
+
+     Neither window is closed by this package. Re-checking live streams against the floor
+     would close both and is NOT proposed here.
+
+     🔴 **TWO NAMED DEBTS, DEFERRED BY THE OWNER, NOT CLOSED** (2026-08-31, rc-b08b0a5d678b,
+     verbatim 「都先不加」, free text, no option selected). Both were put to him as guards for
+     the `kind="warden"` exemption above and both were declined FOR NOW; they are recorded
+     here so the hole is named rather than implied by the exemption's absence:
+
+     1. **The mint door is open.** `POST /api/tokens/mint` resolves its target with
+        `staffOnly`, which refuses only `kind='outsource'` — so a mint MAY be aimed at a
+        warden member, and the token it returns is `agent` scope that NO boot report can
+        ever end (§1.3, mint table). Refusing a machine target at that route was proposed
+        and deferred.
+     2. **The floor is not raised at dispatch.** Only `report_waking` moves it, so between
+        a START dispatch and the new session's own boot report the previous generation's
+        token is still good. Raising the floor at dispatch time was proposed and deferred.
+
+     Deferral is a POSTPONEMENT and not an accepted permanent design: revisit both rather
+     than reading their absence as settled.
+
   For every other agent token — a `kind="warden"` credential, and any token on a member
   that has never reported waking — expiry stays the only invalidation.
 

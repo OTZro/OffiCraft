@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os/exec"
@@ -257,6 +258,22 @@ func requireAuth(secret []byte, ownerIatFloor func() int64, lookup func(id strin
 			// live one. Body text is unchanged on purpose — see
 			// authRefusalHeader in authz.go.
 			w.Header().Set(authRefusalHeader, refusalAgentSuperseded)
+			// And SAY SO in the log. This refusal ends a live session: the
+			// process reading the marker kills its own tmux and the model
+			// session under it. Every other way a member's session dies leaves
+			// a trace on the station; without this line the owner sees a
+			// member's tmux simply vanish with NOTHING in the server log, and
+			// the only remaining evidence is a 401 status code indistinguishable
+			// from the ordinary ones above. Nothing secret is written: the
+			// subject is a member id and the iat is a timestamp — no token, no
+			// signature, no claim body.
+			sub, _ := claims["sub"].(string)
+			iat, _ := claims["iat"].(float64)
+			log.Printf("[auth] REFUSED %s: agent credential iat=%d is below its "+
+				"member's agent_iat_floor — a newer session of this member has "+
+				"reported waking, so this one is superseded. Marked %s: %s; the "+
+				"process holding it should stop retrying and shut itself down.",
+				sub, int64(iat), authRefusalHeader, refusalAgentSuperseded)
 			writeError(w, http.StatusUnauthorized, "invalid token")
 			return
 		}

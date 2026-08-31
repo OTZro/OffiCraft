@@ -342,7 +342,16 @@ func TestAgentIatFloor_ALaterWriteWithAnOlderIatCannotLowerTheFloor(t *testing.T
 // whenever the station was briefly unable to authenticate anyone.
 //
 // Mutant: delete the w.Header().Set(authRefusalHeader, …) line in requireAuth →
-// arm (a) is red. Mutant: set it on the other 401s too → arm (b) is red.
+// arm (a) is red.
+//
+// ⚠️ arm (b) IS ONE SAMPLE, NOT A SWEEP, and this comment used to claim
+// otherwise ("set it on the other 401s too → arm (b) is red"). It is not: (b)
+// sends ONE garbage token, which reaches only the verifyJWT exit, so marking
+// missing-credentials + permanentCredentialRefusal + revocationRefusal left
+// this file — and the whole suite — green. The exhaustive version lives in
+// auth_refusal_exits_t14_test.go, which probes EVERY 401 exit requireAuth has
+// and counts them out of its AST so a new one cannot be added unprobed. (b)
+// stays here as the local sanity check it always was.
 func TestAgentIatFloor_TheRefusalIsMarkedAuthoritativeAndNothingElseIs(t *testing.T) {
 	srv, secret, api := revokeStack(t)
 	agent := testAgent("m-t14-marked")
