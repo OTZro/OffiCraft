@@ -30,7 +30,7 @@ func TestPutReplyCardWithChat_FailedCardWriteLeavesNoMessage(t *testing.T) {
 	// while proving nothing about the message-vs-card window.
 	card := ReplyCard{
 		ID: "rc-rollback", FromMember: "mira", Kind: "decision", Summary: "ship it?",
-		Options: []string{"yes", "no"}, Status: replyCardStatusWaiting,
+		Options: []ReplyCardOption{{Text: "yes"}, {Text: "no"}}, Status: replyCardStatusWaiting,
 		CreatedTS: 1, ChatMessageID: msg.ID,
 		AnswerAttachments: []any{make(chan int)},
 	}

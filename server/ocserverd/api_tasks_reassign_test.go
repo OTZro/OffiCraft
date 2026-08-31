@@ -200,7 +200,7 @@ func TestReassignMemberToMemberHandsOver(t *testing.T) {
 	rec := httptest.NewRecorder()
 	api.HandleCreateReplyCardApiReplyCardsPost(rec,
 		taskReq(t, "POST", "/api/reply-cards", map[string]any{
-			"kind": "decision", "summary": "go?", "options": []string{"a", "b"},
+			"kind": "decision", "summary": "go?", "options": []map[string]any{{"text": "a"}, {"text": "b"}},
 			"linked_task": map[string]any{"task_id": task.ID, "step_id": view.Steps[2].ID},
 		}, "m-old", "agent"))
 	if rec.Code != http.StatusOK {

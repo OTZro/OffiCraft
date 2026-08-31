@@ -61,19 +61,18 @@ func viewFullCorpus(t *testing.T, s *apiServer) (waiting []string) {
 	// The older one is the task-bound card (see the note above).
 	older := waitingCard("rc-vf-older", now-900)
 	older.Body = "the long ask body that the light row does not carry"
-	older.Options = []string{"AI 建議:照做", "先等等", "不要"}
+	older.Options = []ReplyCardOption{{Text: "照做", AIPick: true}, {Text: "先等等"}, {Text: "不要"}}
 	older.TaskID = "t-vf"
 	newer := waitingCard("rc-vf-newer", now-10)
 	newer.Body = "another body"
-	newer.Options = []string{"好", "不要"}
+	newer.Options = []ReplyCardOption{{Text: "好", AIPick: true}, {Text: "不要"}}
 	// An answered card, so the answered pane is exercised too: the light row
 	// carries a DIGEST (attachment COUNT), the full row carries real refs —
 	// the two shapes are not merely longer/shorter, they disagree on a type.
 	done := answeredCard("rc-vf-done", now-800, now-30)
 	done.Body = "answered body"
-	done.Options = []string{"是", "否"}
-	idx := 0
-	done.AnswerOptionIdx = &idx
+	done.Options = []ReplyCardOption{{Text: "是", AIPick: true}, {Text: "否"}}
+	done.AnswerOptionIdxs = []int{0}
 	done.AnswerText = "picked the first one"
 	for _, c := range []ReplyCard{older, newer, done} {
 		if err := s.dal.PutReplyCard(c); err != nil {

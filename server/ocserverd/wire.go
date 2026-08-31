@@ -385,15 +385,19 @@ type chatAttachmentUploadDTO struct {
 // ChatMessageID), so a second top-level `cards` section would carry the same
 // decision twice in one payload.
 //
-// It carries the DECISION only — options offered, which was picked, the free
-// text, and when. Summary / body / kind / attachments are deliberately absent:
-// the message this rides on already carries the ask, and get_reply_card serves
-// the rest.
+// It carries the DECISION only — options offered, which ones were circled, the
+// free text, and when. Summary / body / kind / attachments are deliberately
+// absent: the message this rides on already carries the ask, and
+// get_reply_card serves the rest.
 type chatInlineReplyCardDTO struct {
-	Options         []string `json:"options"`
-	AnswerOptionIdx *int     `json:"answer_option_idx"`
-	AnswerText      string   `json:"answer_text"`
-	AnsweredTS      float64  `json:"answered_ts"`
+	Options []ReplyCardOption `json:"options"`
+	// AnswerOptionIdxs is the circled options' indices (deduped, ascending);
+	// null when no option was circled. This is one of the AI's two read paths
+	// for an answer — the other is the ocagent line — so a card answered with
+	// two options must show both here.
+	AnswerOptionIdxs []int   `json:"answer_option_idxs"`
+	AnswerText       string  `json:"answer_text"`
+	AnsweredTS       float64 `json:"answered_ts"`
 	// AnsweredAtDisplay is AnsweredTS in the same full date+time+offset form as
 	// chatMessageDTO.TSDisplay; "" while the card is unanswered.
 	AnsweredAtDisplay string `json:"answered_at_display"`
@@ -1107,20 +1111,25 @@ type taskStepNotePatchResultDTO struct {
 }
 
 type replyCardAnswerDTO struct {
-	OptionIdx   *int                `json:"option_idx"` // null = free text only
+	// OptionIdxs: the circled options' indices, deduped + ascending; null when
+	// the answer was free text / attachments only.
+	OptionIdxs  []int               `json:"option_idxs"`
 	Text        string              `json:"text"`
 	Attachments []chatAttachmentDTO `json:"attachments"`
 }
 
 type replyCardDTO struct {
-	ID        string   `json:"id"`
-	From      string   `json:"from"`
-	Kind      string   `json:"kind"`
-	Summary   string   `json:"summary"`
-	Body      string   `json:"body"`
-	Options   []string `json:"options"`
-	Status    string   `json:"status"`
-	CreatedTS float64  `json:"created_ts"`
+	ID      string            `json:"id"`
+	From    string            `json:"from"`
+	Kind    string            `json:"kind"`
+	Summary string            `json:"summary"`
+	Body    string            `json:"body"`
+	Options []ReplyCardOption `json:"options"`
+	// SelectMode: "single" | "multi" — how many of the options the owner may
+	// circle. A separate axis from Kind (which says what the owner must DO).
+	SelectMode string  `json:"select_mode"`
+	Status     string  `json:"status"`
+	CreatedTS  float64 `json:"created_ts"`
 	// Attachments are the QUESTION-side attachments the initiator opened the
 	// card with (T-5e8a) — served refs incl. download url, always an array
 	// ([] when none), the same projection the answer side rides.
@@ -1151,13 +1160,15 @@ type replyCardListItemDTO struct {
 }
 
 // replyCardAnswerBriefDTO is the decision digest on a light answered list row:
-// the picked option's index + ORIGINAL wording, the answer text truncated to a
-// preview, and the attachment COUNT (refs ride get_reply_card only).
+// EVERY circled option's index + ORIGINAL wording, the answer text truncated to
+// a preview, and the attachment COUNT (refs ride get_reply_card only).
 type replyCardAnswerBriefDTO struct {
-	OptionIdx   *int   `json:"option_idx"` // null = free text only
-	Option      string `json:"option"`     // the picked option's original wording
-	Text        string `json:"text"`       // preview-truncated
-	Attachments int    `json:"attachments"`
+	OptionIdxs []int `json:"option_idxs"` // null = free text only
+	// Options: the circled options' original wording, one entry per OptionIdxs
+	// entry, same order.
+	Options     []string `json:"options"`
+	Text        string   `json:"text"` // preview-truncated
+	Attachments int      `json:"attachments"`
 }
 
 type replyCardCountDTO struct {
@@ -2493,7 +2504,11 @@ func replyCardIDFromMeta(meta map[string]any) string {
 func newReplyCardDTO(c ReplyCard) replyCardDTO {
 	options := c.Options
 	if options == nil {
-		options = []string{}
+		options = []ReplyCardOption{}
+	}
+	selectMode := c.SelectMode
+	if selectMode == "" {
+		selectMode = replyCardSelectModeSingle
 	}
 	dto := replyCardDTO{
 		ID:            c.ID,
@@ -2502,6 +2517,7 @@ func newReplyCardDTO(c ReplyCard) replyCardDTO {
 		Summary:       c.Summary,
 		Body:          c.Body,
 		Options:       options,
+		SelectMode:    selectMode,
 		Status:        c.Status,
 		CreatedTS:     c.CreatedTS,
 		Attachments:   attachmentDTOsFromRefs(c.Attachments),
@@ -2515,7 +2531,7 @@ func newReplyCardDTO(c ReplyCard) replyCardDTO {
 		ts := c.AnsweredTS
 		dto.AnsweredTS = &ts
 		dto.Answer = &replyCardAnswerDTO{
-			OptionIdx:   c.AnswerOptionIdx,
+			OptionIdxs:  c.AnswerOptionIdxs,
 			Text:        c.AnswerText,
 			Attachments: attachmentDTOsFromRefs(c.AnswerAttachments),
 		}

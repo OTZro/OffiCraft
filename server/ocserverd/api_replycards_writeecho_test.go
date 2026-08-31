@@ -74,7 +74,7 @@ func boundWaitingCard(t *testing.T, api *apiServer) replyCardDTO {
 		"kind":        "decision",
 		"summary":     "which way?",
 		"body":        "the long ask body that the light row does not carry",
-		"options":     []string{"AI 建議:照做", "先等等"},
+		"options": []map[string]any{{"text": "AI 建議:照做"}, {"text": "先等等"}},
 		"linked_task": map[string]any{"task_id": task.ID, "step_id": view.Steps[0].ID},
 	})
 	if rec.Code != http.StatusOK {
@@ -117,7 +117,7 @@ func TestAnswerEchoesTheWholeCard(t *testing.T) {
 	card := boundWaitingCard(t, api)
 
 	rec := answerCard(t, api, card.ID, map[string]any{
-		"option_idx": 0,
+		"option_idxs": []int{0},
 		"text":       "就這樣辦",
 	})
 	assertEchoIsTheWholeCard(t, api, card.ID, rec)
@@ -132,14 +132,14 @@ func TestAnswerEchoesTheWholeCard(t *testing.T) {
 func TestReanswerEchoesTheWholeCard(t *testing.T) {
 	api := newTasksTestServer(t)
 	card := boundWaitingCard(t, api)
-	if rec := answerCard(t, api, card.ID, map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+	if rec := answerCard(t, api, card.ID, map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("seed answer: %d %s", rec.Code, rec.Body.String())
 	}
 
 	put := httptest.NewRecorder()
 	api.HandleReanswerReplyCardApiReplyCardsCardIdAnswerPut(put,
 		taskReq(t, "PUT", "/x", map[string]any{
-			"option_idx": 1,
+			"option_idxs": []int{1},
 			"text":       "改主意了",
 		}, "owner", "owner"), card.ID)
 	assertEchoIsTheWholeCard(t, api, card.ID, put)
