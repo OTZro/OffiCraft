@@ -95,9 +95,15 @@ presence 是 **server 端算出來的**，不是 agent 自報的心跳狀態。�
 - **強制停止有確認對話框**，內文明寫「現在就砍掉 session、跳過正常收尾。進行中的未存工作會遺失。」
 
 ⚠️ **這個階梯與「換 model／換機器」的關係，寫在 [docs/guide/members.md](../guide/members.md)**：
-一個線上、手上還有沒收完狀態的成員，改設定會先開一個收尾窗，**不送 kill／start、沒有時鐘**，
-直到它自己回報停止或 owner 按加速／強制。碼上的單一決策點是
-`respawnWorkerForOwnerOp` / `openOwnerOpHandover`（`server/ocserverd/worker_spawn.go`）。
+一個線上、手上還有沒收完狀態的成員，改設定會先開一個收尾窗，**不送 kill／start、沒有時鐘**
+（但會朝它扇出一則收尾預告），直到它自己回報停止或 owner 按**加速停止**——那一刻才 kill＋重生，
+新值跟著下一手起來。**強制停止不在這條路上**：它把 `desired_state` 壓成 `offline`、清掉 refocus
+epoch 再當場砍，**沒有重生**，所以存下的新值要等之後某一次**重啟／喚醒**才生效
+（`HandleForceStopMemberApiMembersMemberIdForceStopPost` / `HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost`）。
+碼上是**兩個對稱的決策點**，不是一個：正職走
+`memberHasStateToFlush` / `armMemberOwnerOpHandover`（`server/ocserverd/member_ownerop_winddown.go`），
+外包走 `respawnWorkerForOwnerOp` / `openOwnerOpHandover`（`server/ocserverd/worker_spawn.go`）；
+兩者共用述詞 `hasUncollectedOnlineOwnerOpState`，但**不共用外殼**（該檔逐格寫明哪幾格不一致、以及為什麼不准壓平）。
 
 ### 全域情境（Global Context）
 **目標**是送到 agent 眼前的每一句話都住在一份 owner 編輯得動的文件裡：開機時讀的、以及被收走／被轉派／被指派任務時收到的那一則。於「設定 › 全域情境」檢視，依 owner 的讀法分組（**上線／下線／任務事件**三組）。（T-a241 之前它們住在「設定 › 角色誌」裡面的一個區塊；owner 2026-08-25：「這些 global context 已經脫離角色太遠了 應該有自己的獨立頁面」。）
