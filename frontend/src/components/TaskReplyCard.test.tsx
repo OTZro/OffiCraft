@@ -22,7 +22,7 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "要幫你寄出這封信嗎？",
     body: "",
-    options: [{ text: "寄出", aiPick: true }, { text: "先不要", aiPick: false }],
+    options: [{ text: "寄出", aiPick: false }, { text: "先不要", aiPick: true }],
     selectMode: "single",
     status: "waiting",
     attachments: [],
@@ -140,7 +140,10 @@ describe("TaskReplyCard", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdxs: [0], text: "", attachments: [] },
+        // The circled option is the one carrying ai_pick — and it is NOT the
+        // first one, so a chip that reads its own position instead of its own
+        // ai_pick flag puts the tag on the wrong chip and this assertion reddens.
+        answer: { optionIdxs: [1], text: "", attachments: [] },
       })
     );
     const getSpy = vi.spyOn(api, "getReplyCard");
@@ -181,7 +184,10 @@ describe("TaskReplyCard", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdxs: [0], text: "", attachments: [] },
+        // The circled option is the one carrying ai_pick — and it is NOT the
+        // first one, so a chip that reads its own position instead of its own
+        // ai_pick flag puts the tag on the wrong chip and this assertion reddens.
+        answer: { optionIdxs: [1], text: "", attachments: [] },
       })
     );
     const getSpy = vi.spyOn(api, "getReplyCard");
@@ -189,7 +195,7 @@ describe("TaskReplyCard", () => {
 
     fireEvent.click(await findByTestId("task-reply-card-expand"));
     const final = await findByTestId("final-answer");
-    expect(final.textContent).toBe("你選的AI 建議寄出");
+    expect(final.textContent).toBe("你選的AI 建議先不要");
     expect(getSpy).toHaveBeenCalledTimes(1);
   });
 
