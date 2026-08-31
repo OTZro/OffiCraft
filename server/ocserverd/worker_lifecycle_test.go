@@ -1086,8 +1086,9 @@ func TestAutoHandoverWorker_GraceTimeout_ForceCollects(t *testing.T) {
 // well before the grace deadline — nothing left can flush, so waiting out the
 // deadline is pure waste. What changed is only WHEN "gone" becomes a fact: since
 // owner 2026-08-21 (rc-7df3deb21b3b) it takes a full workerOfflineConfirmGraceSecs
-// of continuous offline instead of one instantaneous sample. Note the deadline
-// here is ~110s away and the collect still happens at +90s, so this remains the
+// of continuous offline instead of one instantaneous sample. The confirmation
+// boundary now coincides with the current 120s lifecycle window; at that point
+// a gone session is restarted rather than force-collected, so this remains the
 // D6 form and not the grace-timeout one.
 // The three faces of the window itself (inside / lapsed / cancelled by a
 // reconnect) are pinned in worker_offline_confirm_ted79_test.go.

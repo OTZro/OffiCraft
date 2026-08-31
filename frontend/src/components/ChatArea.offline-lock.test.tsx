@@ -13,7 +13,7 @@
 //     T-661b — or an outsource worker) → LOCKED, the member-panel entry.
 //
 // This REVERSES T-94c1's extra lock on waking/stopping: those are transient
-// presence states an offline member passes through (a fresh wake's 90s TTL —
+// presence states an offline member passes through (a fresh wake's configured TTL —
 // the ⚡喚醒 button itself triggers it — and a graceful wind-down), and locking
 // on them dropped a message the server was going to queue anyway. That was the
 // intermittent "sometimes an offline member can't be messaged" bug. Presence-

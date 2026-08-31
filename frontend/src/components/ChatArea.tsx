@@ -227,7 +227,7 @@ export function ChatArea({
   //
   // This REVERSES T-94c1's extra lock on waking/stopping (owner 2026-07-17),
   // which was the intermittent "sometimes offline can't be messaged" bug: an
-  // offline member reads lifecycle `waking` for the wake's 90s TTL after ANY
+  // offline member reads lifecycle `waking` for the wake's configured TTL after ANY
   // wake attempt (the ⚡喚醒 button itself included) and `stopping` while it
   // winds down — both are transient presence states an offline member passes
   // through, and the message the "dying session could miss it" rationale worried
@@ -254,7 +254,7 @@ export function ChatArea({
   // this member's lifecycle takes a new value. Once presence reflects a fresh
   // lifecycle the local optimism has handed off to the real state (`waking`
   // drives the label below), so a dispatched-but-silently-died wake (waking→
-  // offline after the 90s TTL) clears instead of latching "喚醒中…" forever.
+  // offline after the configured waking TTL) clears instead of latching "喚醒中…" forever.
   // 🔴 `member.id` IS a dependency, not decoration (review r1 SHOULD-1):
   // OfficePage renders <ChatArea> WITHOUT a key (frontend/CLAUDE.md), so a peer
   // switch is a prop change, not a remount — without keying on the peer, A's

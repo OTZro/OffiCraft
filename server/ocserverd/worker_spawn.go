@@ -77,10 +77,10 @@ const (
 	workerBootRoleLabel = "outsource-worker"
 	// workerSpawnRetrySecs paces re-dispatch of the worker start for a worker
 	// still sitting in 'assigned' (booted but not yet claimed, or the frame
-	// was lost with its dying connection). Mirrors the reconcile start
-	// timeout (lifecycle §4.4 start_timeout 90s): a healthy boot claims well
-	// within it; a lost frame is re-pushed right after it.
-	workerSpawnRetrySecs = 90.0
+	// was lost with its dying connection). It mirrors the reconcile start timeout
+	// (lifecycle §4.4 start_timeout: WakingTTLSecs): a healthy boot claims well
+	// within that window; a lost frame is re-pushed at its boundary.
+	workerSpawnRetrySecs = WakingTTLSecs
 	// workerReclaimGraceSecs is the backstop window between a worker's
 	// release (task terminal) and the forced session reclaim, giving the
 	// worker time to run its §6.3 close-out duties. Mirrors stop_grace /
@@ -101,7 +101,7 @@ const (
 	// machine for that worker — this is a PAUSE, not the 換機 rotation it was
 	// under automatic placement: there is no other host to rotate to now that a
 	// worker only ever boots where it was placed. Sized at 3× the re-dispatch
-	// pace so a known-bad boot is retried after a few cycles, not every 90s.
+	// pace so a known-bad boot is retried after a few cycles, not every retry.
 	workerSpawnCooldownSecs = 3 * workerSpawnRetrySecs
 )
 
@@ -867,7 +867,7 @@ func (s *apiServer) workerSpawnObs(workerID string) (target string, at float64) 
 //
 //   - a not-online worker gets a START, paced by the FSM's start_timeout /
 //     exponential backoff (a repeatedly failing spawn slows down instead of
-//     hammering every 90s);
+//     hammering on every retry window);
 //   - a START that bounced off the warden clobber-guard (last_op receipt
 //     "start" + reason session_already_exists — a live-but-presence-deaf ghost
 //     session squatting the slot, the O-19 wedge) triggers the ZOMBIE TAKEOVER:
@@ -1886,21 +1886,20 @@ func (s *apiServer) stopWorkerNow(w OutsourceWorker) {
 // ordinary network blip that happens to be sampled killed a live worker in the
 // middle of writing its hand-off, and the 收口 for that round was gone.
 //
-// 🔴 WHY 90. It is the worst case of an HONEST reconnect, added up from the
+// 🔴 WHY 120. The worst case of an HONEST reconnect is the sum of the
 // constants that produce it: the agent's 45s idle-read watchdog
 // (cli/ocagent/listen.go) + the 15s backoff cap + one 30s cadence tick ≈ 90s.
-// A worker still offline after that is not reconnecting, it is gone.
-// ZombieConfirmGrace (reconcile.go) is the same 90 with a full extra START
-// window of slack on top = 180s; the owner asked for shorter, so this is that
-// derivation with the doubling removed — not a rounder number.
+// The current owner ruling (2026-08-27, rc-dbee69264859) keeps an additional
+// margin and sets this independent window to 120s. WakingTTLSecs is also 120s
+// today, but neither constant may be silently derived from the other.
 //   - DO NOT go below 90: that starts cutting off workers that are alive and
 //     have simply not noticed the socket died yet.
 //   - DO NOT reuse ZombieConfirmGrace: that window answers a different question
 //     (is this presence-deaf session a zombie worth taking over) and an owner
 //     tuning one must not silently move the other.
 //   - If a later ruling names a different number, it must remain a change to
-//     THIS ONE LINE. Nothing else may hard-code 90.
-const workerOfflineConfirmGraceSecs = 90.0
+//     THIS ONE LINE; callers must continue to use the symbol.
+const workerOfflineConfirmGraceSecs = 120.0
 
 // workerSessionConfirmedGone maintains the continuous-offline anchor for ONE
 // worker and answers the only question the collect arms are allowed to ask:
@@ -2108,7 +2107,8 @@ func (s *apiServer) clearWorkerRefocus(id, reason string) {
 // arms in autoHandoverWorker (workerOfflineConfirmGraceSecs, T-ed79 #13). It
 // runs once, synchronously, at the instant the owner pressed the button, and
 // there is no window to wait out here without parking the owner's verb: an
-// already-dead worker would sit for 90s doing nothing before anything happened.
+// already-dead worker would sit for the full confirmation window doing nothing
+// before anything happened.
 // The staff twin makes the identical judgement off the identical predicate
 // (member_ownerop_winddown.go: 「worker: !hub.IsOnline → immediate / staff: SAME
 // predicate」), so the two sides stay aligned on this one — #13 changed the

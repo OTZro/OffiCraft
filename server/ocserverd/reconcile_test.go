@@ -136,6 +136,21 @@ func TestParseDesired(t *testing.T) {
 	}
 }
 
+// TestDefaultReconcileConfigUsesWakingTTLSecs pins the owner-approved value and
+// the derived config fields independently.
+func TestDefaultReconcileConfigUsesWakingTTLSecs(t *testing.T) {
+	if WakingTTLSecs != 120.0 {
+		t.Fatalf("WakingTTLSecs = %v, want 120.0 (owner ruling 2026-08-27)", WakingTTLSecs)
+	}
+	cfg := defaultReconcileConfig()
+	if cfg.StartTimeout != WakingTTLSecs {
+		t.Fatalf("StartTimeout = %v, want WakingTTLSecs (%v)", cfg.StartTimeout, WakingTTLSecs)
+	}
+	if cfg.ZombieConfirmGrace != 2*WakingTTLSecs {
+		t.Fatalf("ZombieConfirmGrace = %v, want 2*WakingTTLSecs (%v)", cfg.ZombieConfirmGrace, 2*WakingTTLSecs)
+	}
+}
+
 // ── reconcileDecide ──────────────────────────────────────────────────────────
 
 func TestReconcileDecide(t *testing.T) {

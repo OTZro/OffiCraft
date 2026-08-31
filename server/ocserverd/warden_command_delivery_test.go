@@ -339,7 +339,7 @@ func TestEventsHandler_DeliveredWardenCommandsLeaveNoResidue(t *testing.T) {
 // ── ITEM 1(b)/ITEM 2: the wake diagnosis stops blaming the wrong machine ────
 
 // TestReconcile_UndeliveredStartBlamesTheStreamNotTheMachine: when the START
-// frame never reached the machine, the 90s wake_timeout text "the START was
+// frame never reached the machine, the wake_timeout text "the START was
 // dispatched but the agent never came online — check that claude runs ... on the
 // target machine" is FALSE in its first clause and sends the owner to the wrong
 // machine. It must name the delivery failure instead.

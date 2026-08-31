@@ -571,7 +571,7 @@ DEGRADED: dict[str, str] = {
         "has no black-box counterexample to fire."
     ),
     "lifecycle §4.4 reconcile timers/backoff/circuit": (
-        "start_timeout 90s / stop_grace 120s / backoff-circuit windows are "
+        "start_timeout (WakingTTLSecs) / stop_grace 120s / backoff-circuit windows are "
         "minutes-scale; timers are injectable only white-box. The decision "
         "surface is covered at its observable edges instead (event-driven "
         "START dispatch + target-reachability gate in test_sse.py; "

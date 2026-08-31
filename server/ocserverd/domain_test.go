@@ -33,6 +33,14 @@ func TestPresenceState(t *testing.T) {
 		want   string
 	}{
 		{"online when connected", nil, 1000.0, true, MemberPresenceOnline},
+		{"owner-approved waking window still wakes at 91 seconds", func(m *Member) {
+			m.DesiredState = DesiredStateOnline
+			m.WakingSince = 1000.0
+		}, 1091.0, false, MemberPresenceWaking},
+		{"owner-approved waking window is offline at 121 seconds", func(m *Member) {
+			m.DesiredState = DesiredStateOnline
+			m.WakingSince = 1000.0
+		}, 1121.0, false, MemberPresenceOffline},
 		{"waking within ttl", func(m *Member) {
 			m.DesiredState = DesiredStateOnline
 			m.WakingSince = 1000.0
