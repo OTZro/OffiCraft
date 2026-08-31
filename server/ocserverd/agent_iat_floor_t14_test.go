@@ -246,6 +246,84 @@ func TestAgentIatFloor_WardenPermanentTokenIsExempt(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// ④ the floor only ever moves FORWARD
+// ---------------------------------------------------------------------------
+
+// TestAgentIatFloor_ALaterWriteWithAnOlderIatCannotLowerTheFloor pins the
+// direction of the write, which is the one safety property in this feature that
+// nothing else was holding.
+//
+// 🔴 WHY IT NEEDS ITS OWN TEST. Every other test here drives the floor through
+// POST /api/self/waking, and that route is itself gated by the floor — so once a
+// newer generation has stamped, an older token can no longer reach the handler
+// and no test that goes over the wire can produce a backwards write at all. The
+// backwards write happens when two generations are IN FLIGHT AT THE SAME TIME:
+// both pass requireAuth (neither floor is set yet), then the older one's UPDATE
+// lands second. The Go code cannot order them; `max()` in the statement is what
+// makes the loser harmless, and a read-modify-write in Go would not.
+//
+// The consequence of losing that is not a stale number: it is the REVOCATION
+// being undone. The floor drops back to the superseded generation's own iat, its
+// credentials start working again, and the outgoing session's last words land on
+// its successor — exactly what T-14 項目 4B exists to stop.
+//
+// So the second write below is made through the SOLE writer of the column
+// (SetMemberAgentIatFloor — the same call the handler makes), which is precisely
+// the losing racer's write, and the assertion is on the observable end: the
+// superseded token stays 401.
+//
+// Mutant: `max(agent_iat_floor, ?)` → `?` in dal.go SetMemberAgentIatFloor →
+// the floor drops to the older iat and this test is red on both arms.
+func TestAgentIatFloor_ALaterWriteWithAnOlderIatCannotLowerTheFloor(t *testing.T) {
+	srv, secret, api := revokeStack(t)
+	agent := testAgent("m-t14-forward-only")
+	putTestMember(t, api, agent)
+
+	now := time.Now().Unix()
+	oldIat, newIat := now-600, now
+	oldTok, err := mintJWT(agent.ID, "agent", 3600, secret, oldIat, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTok, err := mintJWT(agent.ID, "agent", 3600, secret, newIat, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The replacement wakes: the floor rises to its own iat and the outgoing
+	// generation's token is dead. (Positive control for everything below.)
+	wakeWith(t, srv.URL, newTok)
+	if st, body := revokeCall(t, "GET", srv.URL+"/api/members", oldTok, ""); st != http.StatusUnauthorized {
+		t.Fatalf("POSITIVE CONTROL FAILED — the superseded token must be 401 right "+
+			"after the replacement wakes, got %d %s", st, body)
+	}
+
+	// …and now the OUTGOING generation's own stamp lands, late. This is the
+	// losing side of two report_waking calls in flight together; it writes its
+	// own (older) iat through the same and only writer.
+	if err := api.dal.SetMemberAgentIatFloor(agent.ID, float64(oldIat)); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := api.dal.GetMember(agent.ID)
+	if err != nil || m == nil {
+		t.Fatalf("GetMember: %v", err)
+	}
+	if int64(m.AgentIatFloor) != newIat {
+		t.Fatalf("the credential floor MOVED BACKWARDS: want it held at the newer "+
+			"generation's iat %d, got %d. A write that carries an older iat must "+
+			"never lower the floor — the loser of two concurrent wakes would "+
+			"otherwise hand the superseded session its credentials back",
+			newIat, int64(m.AgentIatFloor))
+	}
+	if st, body := revokeCall(t, "GET", srv.URL+"/api/members", oldTok, ""); st != http.StatusUnauthorized {
+		t.Fatalf("the superseded session's token CAME BACK TO LIFE after its own "+
+			"late stamp lowered the floor: a revocation that a losing racer can "+
+			"undo is not a revocation. want 401, got %d %s", st, body)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // ⑤ the refusal names itself on the response — the client half depends on it
 // ---------------------------------------------------------------------------
 
