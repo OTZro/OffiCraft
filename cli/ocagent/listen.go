@@ -1307,15 +1307,29 @@ func renderReplyCardAnswer(card map[string]any) string {
 
 // unreadableAnswerNotice is what the answer line says when this build cannot
 // turn a PRESENT answer into words. It must never be mistakable for "no answer":
-// it names the failure as this reader's, sends the reader to the authority
-// (get_reply_card), and names the one self-service cause — a listener process
-// older than the station's wire shape, which a listener restart replaces with
-// the on-disk build. It deliberately does NOT tell anyone to touch the updater
-// or to upgrade another agent.
+// it names the failure as this reader's, and sends the reader to the authority
+// (get_reply_card), which is a tool every member already holds.
+//
+// The recovery verb is restart_self, and that choice is not cosmetic. The
+// obvious sentence — "restart the listener" — was WRONG for half the fleet and
+// unverified for the other half (caught in review, 2026-08-31):
+//
+//   - A codex member must not do it. seeds/boot_sequence_codex.md step 3 says
+//     verbatim 「不要自己啟動 `ocagent listen`、Monitor 或前景迴圈」; the sidecar
+//     owns that process. Such a member reads this line and has no hand on it.
+//   - Nobody had measured that restarting picks up the on-disk build. It is
+//     plausible, and it was still an unverified claim printed as instruction.
+//
+// restart_self is an MCP tool BOTH runtimes hold, and it is already this
+// listener's recovery verb elsewhere (the token-expiry line above says
+// "checkpoint this turn, then call restart_self"). One verb, one meaning.
+//
+// It deliberately does NOT tell anyone to touch the updater or to upgrade
+// another agent — neither is authorised here.
 const unreadableAnswerNotice = "(UNREADABLE ANSWER — an answer IS recorded on this " +
 	"card but this ocagent could not read it; do NOT treat this as \"no answer\". " +
-	"Read the card itself with get_reply_card. This listener process may be older " +
-	"than the station's answer shape — restarting the listener runs the on-disk build.)"
+	"Read the card itself with get_reply_card. This process may be older than the " +
+	"station's answer shape; if it keeps happening, checkpoint and call restart_self.)"
 
 // ---------------------------------------------------------------------------
 // reply-card boot/reconnect drain (the offline-answer catch-up).

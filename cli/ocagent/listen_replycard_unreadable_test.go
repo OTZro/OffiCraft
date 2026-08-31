@@ -78,14 +78,43 @@ func TestRenderReplyCardAnswer_AbsentAnswerIsNotAParseFailure(t *testing.T) {
 // The unreadable notice is the fragment a human acts on, so its two actionable
 // halves are pinned by name rather than left to prose drift. It must NOT tell
 // anyone to touch the updater or upgrade somebody else's agent.
+// The notice has to survive being read by a member who knows nothing about this
+// bug, on EITHER runtime. This test pins what the sentence must MEAN, not the
+// words it happens to use today — an earlier version of it pinned the literal
+// "restarting the listener", which is exactly how a wrong instruction gets a
+// guard of its own: the assertion protected the phrasing while the phrasing was
+// telling half the fleet to do something it must not do.
 func TestUnreadableAnswerNotice_IsActionableAndStaysInItsLane(t *testing.T) {
-	for _, want := range []string{"UNREADABLE ANSWER", "get_reply_card", "restarting the listener"} {
+	// (1) It names the failure as this reader's, and points at the authority.
+	for _, want := range []string{"UNREADABLE ANSWER", "get_reply_card"} {
 		if !strings.Contains(unreadableAnswerNotice, want) {
 			t.Errorf("notice is missing the actionable phrase %q: %q", want, unreadableAnswerNotice)
 		}
 	}
-	for _, forbidden := range []string{"updater", "upgrade"} {
-		if strings.Contains(strings.ToLower(unreadableAnswerNotice), forbidden) {
+
+	// (2) It names a recovery verb the reader actually HOLDS. restart_self is an
+	// MCP tool on both runtimes and is already this listener's recovery verb for
+	// token expiry. Anything not on this list has to earn its place here first.
+	recoveryVerbs := []string{"restart_self"}
+	named := false
+	for _, verb := range recoveryVerbs {
+		if strings.Contains(unreadableAnswerNotice, verb) {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("notice names no recovery verb the reader can reach (want one of %v): %q",
+			recoveryVerbs, unreadableAnswerNotice)
+	}
+
+	// (3) It must not steer the reader outside what they are authorised to do.
+	// 🔴 "restart the listener" is HERE, not in the wanted list: a codex member
+	// must not start or restart that process — seeds/boot_sequence_codex.md
+	// step 3 says 「不要自己啟動 `ocagent listen`、Monitor 或前景迴圈」, the
+	// sidecar owns it. The updater and other members' agents are nobody's to
+	// touch from this line either.
+	for _, forbidden := range []string{"updater", "upgrade", "restart the listener", "restarting the listener"} {
+		if strings.Contains(strings.ToLower(unreadableAnswerNotice), strings.ToLower(forbidden)) {
 			t.Errorf("notice steers the reader outside its lane (%q): %q", forbidden, unreadableAnswerNotice)
 		}
 	}
