@@ -1831,7 +1831,7 @@ func (d *DAL) PutMachineAlias(a MachineAlias) error {
 
 // ── reply cards (等我回覆卡) ─────────────────────────────────────────────────
 
-// ReplyCardOption is one frozen quick-reply choice (migrations/00064). AIPick
+// ReplyCardOption is one frozen quick-reply choice (migrations/00065). AIPick
 // — not the option's POSITION — is what marks the AI's own recommendation. The
 // old convention ("options[0] is the AI pick") lived in prose only: no code
 // ever read index 0 as special, so nothing enforced it and nothing broke when
@@ -1841,7 +1841,7 @@ type ReplyCardOption struct {
 	AIPick bool   `json:"ai_pick"`
 }
 
-// ReplyCard mirrors the reply_card table (migrations/00003, 00064): one ask the
+// ReplyCard mirrors the reply_card table (migrations/00003, 00065): one ask the
 // owner must answer. Options is the frozen quick-reply wording, each choice
 // carrying its own AIPick flag; AnswerAttachments are light refs into the
 // shared chat_attachment store, the same shape as chat meta["attachments"].

@@ -255,7 +255,7 @@ func TestReplyCardListItemDigestCarriesEveryCircledOption(t *testing.T) {
 	}
 }
 
-// The 00064 rebuild is where the "options[0] is the AI pick" convention is
+// The 00065 rebuild is where the "options[0] is the AI pick" convention is
 // cashed in — the one and only time it is ever executed — so a card written
 // under the OLD schema must come back with ai_pick on its first option, [3]
 // where it held 3, NULL where it held NULL, and select_mode 'single'.
@@ -311,7 +311,7 @@ func TestReplyCardMultiSelectMigrationCarriesLegacyRowsForward(t *testing.T) {
 	}
 }
 
-// migrateLegacyOptions runs the 00064 Up expression for one legacy options
+// migrateLegacyOptions runs the 00065 Up expression for one legacy options
 // value, so the test exercises the SQL the migration ships rather than a Go
 // re-implementation of it.
 func migrateLegacyOptions(t *testing.T, dal *DAL, legacy string) string {
@@ -326,7 +326,7 @@ func migrateLegacyOptions(t *testing.T, dal *DAL, legacy string) string {
 	return out
 }
 
-// migrateLegacyAnswerIdx runs the 00064 Up expression for one legacy
+// migrateLegacyAnswerIdx runs the 00065 Up expression for one legacy
 // answer_option_idx value (NULL stays NULL; 3 becomes [3]).
 func migrateLegacyAnswerIdx(t *testing.T, dal *DAL, legacy any) any {
 	t.Helper()
