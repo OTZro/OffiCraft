@@ -37,6 +37,9 @@ paths:
   - "visual-guards/stories/ResumeChatQuoteStory*"
   - "src/api/mock.reply-to.test.ts"
   - "visual-guards/scheduled-message-*"
+  # 多選卡的版面護欄與它的 story —— 改晶片/暫存態/送出列的人就是這條規則要找的人。
+  - "visual-guards/reply-multi-select*"
+  - "visual-guards/stories/ReplyMultiSelectStory*"
 ---
 
 # 聊天、composer、定期訊息、回覆卡
@@ -60,6 +63,42 @@ ChatArea、ReplyComposer、TaskCard 訊息框都是 textarea，送出決策只�
 RepliesPage 與 ChatReplyCard 共用 ReplyCardBody、ReplyComposer；兩者訂 reply_card，inline 卡另做單卡 refetch。answer、expire 與 waiting-pane 的 owner 動作採用寫入端點回傳的新卡，不再重抓；採用後按 id 保留，直到 waiting 快照不再列出它，或 handled 快照帶著不舊於新狀態的 handled 戳記。其他卡照常採用，不能丟整份快照。refresh() 仍無條件 refetch。
 
 ChatReplyCard 的 doReanswer 保留單卡 refetch：終態 delta 可能被刻意丟棄，拿掉會留下舊答案。不要把它和 doAnswer 對齊，也不要把「delta 是唯一 reconcile trigger」寫回規則。
+
+## 選項是一組集合,不是一個位置(T-40)
+
+**「AI 建議」由每個選項自己的 `aiPick` 攜帶,位置不帶任何意義。** 舊碼在三處寫死
+`idx === 0`(晶片、最終答案列、`ResumeSummaryCard` 的履歷卡),那是一個碼上沒有
+任何東西在執行的約定 —— 改一次選項順序就悄悄改掉了 AI 的建議是哪一個。**測資把
+`ai_pick` 放在第一個就等於沒測**:位置讀法在那種測資上永遠蒙對。
+
+**答覆是一份清單。** `ReplyCard.selectMode` 是 `single`|`multi`(與 `kind` 正交:
+`kind` 說 owner 要做什麼,`selectMode` 說可以圈幾個)。晶片是**暫存**的 ——
+single 點第二個取代第一個、multi toggle,再點同一個一律取消(「什麼都沒勾」必須
+到得了,因為那正是送出鍵拒絕送的狀態)。**選項與自由文字由同一顆送出鍵合成同一次
+送出**:卡片是一次性關閉,分兩條各自送的第二條必吃 409。
+
+⚠️ **`optionIdxs: []` 不是「沒圈」,它是 server 刻意的 400。** 沒圈就**省略**這個
+欄位;把空清單攤平成 `null` 會讓那個 400 永遠打不到,把它照原樣送出則會讓每一次
+純文字答覆變成錯誤。索引在 `http.ts` 的 seam 去重＋升冪 —— 勾選順序不同不可以變成
+兩份不同的 body。
+
+⚠️ **有兩條互不相干的答案線,而且不共用任何型別。** 卡片本體走
+`ReplyCard.answer.optionIdxs`;履歷摘要卡走完全獨立的
+`ChatInlineReplyCardView.answerOptionIdxs`(`adapter.ts` → `mappers.ts` →
+`ResumeSummaryCard.tsx`)。**只改一條,tsc 一聲不吭,履歷摘要卡會安靜地顯示零個
+「已選」** —— 這和上面「引文有不只一個渲染面」是同一張卡上的同一個陷阱,而且它已經
+發生過一次。顯示「你選的」的面共五個:最終答案列、「目前」標記(這兩面由三個 wrapper
+共用同一份 `ReplyCardBody`)、`TaskReplyCard` 的收合一行、`ResumeSummaryCard` 履歷卡;
+第五個 `ChatReplyCard` 收合列只印 summary,不讀答案。
+
+🔴 **前端這半沒有任何機械保護**(2026-08-31 配陽性對照確認):`api/dtoParity.ts`
+不含 ReplyCard、style ownership 的 `OWNED_SHEETS` 不含 `replies.css`、payload
+parity 的 roll-call 不列卡片內部欄位。守著這一切的只有
+`ReplyCardBody.multi-select.test.tsx`、`TaskReplyCard.test.tsx`、
+`ResumeSummaryCard.payload-parity.test.tsx` 與 `http.mutations.test.ts` 裡那幾條。
+
+class 名 `.reply-tag--ai` / `.reply-option--ai` **不要改**:`TaskReplyCard` 借用前者
+畫自己的徽章。
 
 view=full 只在 HTTP list seam 表示整個 pane 的一次請求，不上提到 adapter，也不向 agent 的 MCP tools/list 宣傳；否則 agent 會拿到一次拉整個 pane 的昂貴把手，抵消輕量摘要契約。light/default 行為不變、未知 view 回 400。等待卡的 expire 規則以 server 為準：owner/admin 或卡片作者可過期自己的 waiting 卡；其他人 403，已回答 409。
 

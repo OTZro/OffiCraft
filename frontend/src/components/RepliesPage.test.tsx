@@ -2,9 +2,10 @@
 //   1. Empty 請示 list → the ✓ 目前沒有待處理的請示 state.
 //   2. Waiting cards render newest ask first (createdTs desc); the LONGEST-
 //      waiting one keeps the highlight, each card with initiator identity,
-//      已等你 {t}, and options[0] tagged AI 建議.
+//      已等你 {t}, and the ai_pick option tagged AI 建議 (position means nothing).
 //   3. Answering (option click OR typed reply) moves the card 請示 →
-//      近期已回覆; the final answer is tagged 你選的 (+ AI 建議 when it IS the
+//      近期已回覆; the final answer is tagged 你選的 (+ AI 建議 when a circled
+//      option IS the
 //      AI pick). No close/skip control exists anywhere.
 //   3b. 近期已回覆 is COLLAPSED by default — only the toggle row (title · N +
 //      hint) renders; clicking expands the answered cards, clicking again

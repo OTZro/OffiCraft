@@ -1,9 +1,11 @@
 // Inline chat reply card (SPEC §3, B3 聊天整合). Locked here:
 //   1. A thread message carrying replyCardId renders as a CARD in the stream
-//      (no extra banner): quick-reply chips (options[0] tagged AI 建議) + the
+//      (no extra banner): quick-reply chips (the ai_pick one tagged AI 建議,
+//      wherever it sits) + the
 //      typed composer — and NO close/skip control anywhere.
 //   2. Answering in chat (chip OR typed) flips the card to 已回應 in place:
-//      final answer tagged 你選的 (+ AI 建議 when it IS the AI pick), and the
+//      final answer tagged 你選的 (+ AI 建議 when a circled option IS the AI
+//      pick), and the
 //      waiting count drops (the replies page / nav badge side of the sync).
 //   3. 查看當初選項 → 重新決定 re-arms the chips + shows the same composer;
 //      picking another option PUTs the revision (stays answered); 取消 keeps
