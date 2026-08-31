@@ -291,8 +291,6 @@ export const en: Dict = {
     // importantly, what a click DOES. A single-select click answers the card on
     // the spot, and a reply card is one-shot — "I tapped it to see" cannot be
     // undone. The tick box / radio says single-or-several; this says consequence.
-    singleModeHint: "One tap sends your answer",
-    multiModeHint: "Pick as many as you like, then send",
     selectedCountLead: "Selected",
     selectedCountTailOne: "option",
     selectedCountTailMany: "options",

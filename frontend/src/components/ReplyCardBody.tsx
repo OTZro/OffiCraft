@@ -10,7 +10,10 @@
 //                           carries its OWN aiPick) + the typed ReplyComposer.
 //                           A MULTI card stages: ticking accumulates and ONE
 //                           send button submits the ticked options AND the
-//                           typed text as a single answer. A SINGLE card does
+//                           typed text as a single answer — and it OPENS with
+//                           the ai_pick options already ticked (owner
+//                           2026-08-31), which the owner un-ticks or adds to.
+//                           A SINGLE card does
 //                           NOT stage — one click on a chip IS the answer and
 //                           sends immediately (owner, card rc-06bc715358c2),
 //                           carrying whatever is already typed alongside it.
@@ -57,6 +60,28 @@ function toggleSelection(selected: number[], idx: number): number[] {
   return [...selected, idx].sort((a, b) => a - b);
 }
 
+/** What a WAITING card starts with ticked: on a MULTI card, every option
+ * carrying `ai_pick` — owner 2026-08-31: 「多選的時候，UI 應該要預設就先把我勾好
+ * AI 建議的」. Nothing is sent by this; a tick on a multi card only stages, and
+ * the owner un-ticks or adds to it before pressing send.
+ *
+ * 🔴 SINGLE cards get an EMPTY set, unconditionally. A single card answers on
+ * the click, so on that kind "pre-ticked" would have to mean "pre-sent" — the
+ * ticked state is not something a single card can sit in at all. The `multi`
+ * test below is the whole safety of that, which is why a test pins it.
+ *
+ * A multi card with no ai_pick anywhere starts empty, as it always did.
+ *
+ * Not used by 重新決定: edit mode seeds from the answer ALREADY STANDING, so
+ * re-opening a decision never quietly rewrites it into the AI's. */
+function initialSelection(card: ReplyCard): number[] {
+  if (card.selectMode !== "multi") return [];
+  return card.options.reduce<number[]>(
+    (acc, opt, idx) => (opt.aiPick ? [...acc, idx] : acc),
+    [],
+  );
+}
+
 /** Build the answer body a card face submits: the ticked options AND the typed
  * text/attachments as ONE answer (the two used to be two separate POSTs, which
  * a multi-select answer cannot express). `optionIdxs` is OMITTED when nothing
@@ -72,29 +97,6 @@ function answerInput(
     text,
     attachments,
   };
-}
-
-/** What pressing a chip is about to DO, written above the options.
- *
- * 🔴 NOT decoration. A single-select chip click SENDS, and a reply card is
- * one-shot and cannot be taken back — so an owner who assumed the card was a
- * multi-select and clicked "just to try" has already answered it. The card's
- * kind used to be readable only from the presence of the 已選 N 項 row, i.e.
- * from the ABSENCE of something on a single card, which is not a signal at
- * all (owner: 「我UI也看不出來是單選還是多選」).
- *
- * Shown only where the chips are PICKABLE: on a static review (an answered
- * card's 當初選項, an expired card) there is nothing to press, so 「點一下就
- * 送出」 would be a false statement. */
-function ReplySelectModeHint({ card }: { card: ReplyCard }) {
-  const { t } = useI18n();
-  return (
-    <div className="reply-card__mode-hint" data-testid="reply-mode-hint">
-      {card.selectMode === "multi"
-        ? t.replies.multiModeHint
-        : t.replies.singleModeHint}
-    </div>
-  );
 }
 
 /** The quick-reply option chips. `pickable: false` renders them as a static
@@ -121,19 +123,7 @@ export function ReplyOptionChips({
   const { t } = useI18n();
   const multi = card.selectMode === "multi";
   return (
-    <>
-      {pickable && <ReplySelectModeHint card={card} />}
-      <div
-        className="reply-card__options"
-        role={pickable ? (multi ? "group" : "radiogroup") : undefined}
-        aria-label={
-          pickable
-            ? multi
-              ? t.replies.multiModeHint
-              : t.replies.singleModeHint
-            : undefined
-        }
-      >
+    <div className="reply-card__options">
       {card.options.map((opt, idx) => {
         const isCurrent = currentIdxs.includes(idx);
         const isSelected = selectedIdxs.includes(idx);
@@ -154,29 +144,40 @@ export function ReplyOptionChips({
             data-testid="reply-option"
             data-option-idx={idx}
             data-selected={isSelected ? "true" : "false"}
-            // The chip IS the control, so it carries the control's semantics:
-            // a checkbox on a multi card, a radio on a single one. NEVER
-            // `aria-pressed` alongside these — a toggle-button role and a
-            // checked role are two different promises about the same widget.
-            // A static review chip is a disabled button with no role at all:
-            // there is nothing there to check or uncheck.
-            role={pickable ? (multi ? "checkbox" : "radio") : undefined}
-            aria-checked={pickable ? isSelected : undefined}
+            // MULTI chips are checkboxes: ticking accumulates and the state
+            // persists on screen until the send, so `aria-checked` has
+            // something true to report. NEVER `aria-pressed` alongside — a
+            // toggle-button role and a checked role are two different promises
+            // about one widget.
+            //
+            // SINGLE chips are plain buttons. They used to be `role="radio"`
+            // inside a `radiogroup`, and that was a promise the card cannot
+            // keep: a single card ANSWERS on the click, so there is no
+            // "checked and not yet submitted" state for a radio to sit in —
+            // `aria-checked` would have read "false" for the whole life of the
+            // chip. A button that does something when pressed is what it is.
+            role={pickable && multi ? "checkbox" : undefined}
+            aria-checked={pickable && multi ? isSelected : undefined}
             disabled={!pickable}
             onClick={() => onToggle?.(idx)}
           >
-            <span
-              className={
-                "reply-option__mark" +
-                (multi
-                  ? " reply-option__mark--check"
-                  : " reply-option__mark--radio") +
-                (markOn ? " reply-option__mark--on" : "") +
-                (pickable ? "" : " reply-option__mark--static")
-              }
-              data-testid="reply-option-mark"
-              aria-hidden="true"
-            />
+            {multi ? (
+              <span
+                className={
+                  "reply-option__mark reply-option__mark--check" +
+                  (markOn ? " reply-option__mark--on" : "") +
+                  (pickable ? "" : " reply-option__mark--static")
+                }
+                data-testid="reply-option-mark"
+                aria-hidden="true"
+              />
+            ) : (
+              // 1/2/3/4 — owner 2026-08-31: 「單選可以跟之前一樣顯示 1, 2, 3, 4
+              // 就好嘛?」. The radio that briefly sat here was decoration: a
+              // single card sends on the click, so its "selected" ring was a
+              // state nobody could ever see it in.
+              <span className="reply-option__num">{idx + 1}</span>
+            )}
             <span className="reply-option__text">{opt.text}</span>
             {isCurrent && (
               <span className="reply-tag reply-tag--current">
@@ -191,8 +192,7 @@ export function ReplyOptionChips({
           </button>
         );
       })}
-      </div>
-    </>
+    </div>
   );
 }
 
@@ -346,7 +346,9 @@ export function ReplyCardWaitingBody({
   onAnswer: (input: ReplyCardAnswerInput) => Promise<void>;
 }) {
   const { t } = useI18n();
-  const [selected, setSelected] = useState<number[]>([]);
+  const [selected, setSelected] = useState<number[]>(() =>
+    initialSelection(card),
+  );
   const { pick, sendNowRef, takeClicked } = useChipPick(card, setSelected);
   return (
     <>

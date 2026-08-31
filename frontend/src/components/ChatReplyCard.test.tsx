@@ -144,13 +144,12 @@ describe("ChatReplyCard", () => {
     expect(row.querySelector(".chat__msg-bubble")).toBeNull();
 
     await findAllByText("寄出");
-    // Each chip WHOLE: its wording and exactly the tags it earned. mkCard puts
-    // ai_pick on the SECOND option, so the AI tag rides that one and nothing
-    // else — a reader that tags by position fails here. The leading ordinal is
-    // gone; the chip's mark is the radio/tick box, which carries no text.
+    // Each chip WHOLE: its 1/2 ordinal, its wording and exactly the tags it
+    // earned. mkCard puts ai_pick on the SECOND option, so the AI tag rides that
+    // one and nothing else — a reader that tags by position fails here.
     expect(
       [...row.querySelectorAll(".reply-option")].map((e) => e.textContent),
-    ).toEqual(["寄出", "先不要AI 建議"]);
+    ).toEqual(["1寄出", "2先不要AI 建議"]);
     // The typed composer rides the card; no close/skip control exists.
     expect(row.querySelector(".reply-composer")).not.toBeNull();
     expect(row.textContent).not.toContain("關閉");

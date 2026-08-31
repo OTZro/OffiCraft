@@ -11,10 +11,11 @@
 //   • a SINGLE card answers on the CLICK — no send button in the loop — and
 //     carries whatever is already typed with it;
 //   • a MULTI card still stages behind one send button;
-//   • the chip's leading ordinal became a tick box (multi) / radio (single),
-//     which is also how the two kinds are told apart on screen;
-//   • a line above the options says what a click is about to DO, because on a
-//     single card a click cannot be taken back.
+//   • the chip's leading ordinal became a tick box on a MULTI card, which is
+//     also how the two kinds are told apart on screen. A SINGLE card kept the
+//     1/2/3/4 ordinal (owner 2026-08-31): it answers on the click, so it has no
+//     "ticked but not yet sent" state for a radio to show, and the radio that
+//     briefly sat there was never seen in its selected form at all.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
@@ -51,6 +52,22 @@ function mkCard(over: Partial<ReplyCard> = {}): ReplyCard {
   };
 }
 
+/** A card whose options carry NO ai_pick. A MULTI card now OPENS with the
+ * ai_pick options ticked, so a test about the staging mechanics themselves
+ * ("nothing ticked" → send disabled, tick order, …) has to start from a card
+ * that genuinely starts empty. The ai_pick fixtures above stay where the tag or
+ * the default tick is what is under test. */
+function mkPlainCard(over: Partial<ReplyCard> = {}): ReplyCard {
+  return mkCard({
+    options: [
+      { text: "走海運", aiPick: false },
+      { text: "走空運", aiPick: false },
+      { text: "先擱著", aiPick: false },
+    ],
+    ...over,
+  });
+}
+
 function renderWaiting(card: ReplyCard) {
   const sent: ReplyCardAnswerInput[] = [];
   const u = render(
@@ -77,7 +94,7 @@ afterEach(() => {
 
 describe("ReplyCardWaitingBody", () => {
   it("keeps the send button disabled and fires no answer while nothing is ticked and nothing is typed", async () => {
-    const { sent, chips, send, getByPlaceholderText } = renderWaiting(mkCard());
+    const { sent, chips, send, getByPlaceholderText } = renderWaiting(mkPlainCard());
 
     expect(send().disabled).toBe(true);
     fireEvent.click(send());
@@ -102,13 +119,13 @@ describe("ReplyCardWaitingBody", () => {
   });
 
   it("sends the same answer whichever order the same options were ticked in", async () => {
-    const a = renderWaiting(mkCard());
+    const a = renderWaiting(mkPlainCard());
     fireEvent.click(a.chips()[2]);
     fireEvent.click(a.chips()[0]);
     fireEvent.click(a.send());
     a.unmount();
 
-    const b = renderWaiting(mkCard());
+    const b = renderWaiting(mkPlainCard());
     fireEvent.click(b.chips()[0]);
     fireEvent.click(b.chips()[2]);
     fireEvent.click(b.send());
@@ -121,7 +138,9 @@ describe("ReplyCardWaitingBody", () => {
   });
 
   it("carries the ticked options and the typed text in ONE answer", async () => {
-    const { sent, chips, send, getByPlaceholderText } = renderWaiting(mkCard());
+    const { sent, chips, send, getByPlaceholderText } = renderWaiting(
+      mkPlainCard(),
+    );
     fireEvent.click(chips()[1]);
     fireEvent.change(getByPlaceholderText("輸入回覆…"), {
       target: { value: "空運那條要走 DHL" },
@@ -147,7 +166,7 @@ describe("ReplyCardWaitingBody", () => {
     ]);
     single.unmount();
 
-    const multi = renderWaiting(mkCard());
+    const multi = renderWaiting(mkPlainCard());
     fireEvent.click(multi.chips()[0]);
     fireEvent.click(multi.chips()[2]);
     expect(multi.sent, "a multi card must not answer on a tick").toEqual([]);
@@ -190,50 +209,41 @@ describe("ReplyCardWaitingBody", () => {
     expect(sent).toEqual([{ text: "都不要", attachments: [] }]);
   });
 
-  it("says what kind of card this is and what a click will do", async () => {
+  it("marks a multi card's options with a tick box and a single card's with 1/2/3", async () => {
+    // The tick box is the card kind said wordlessly, AND — since accent paint
+    // means only 「你選的」 — the shape half of "is this one ticked". A single
+    // card has neither job to do: one click answers it, so nothing on it is
+    // ever "ticked but not sent", and the ordinal is what the owner reads.
+    // Assert the CLASS, which is what replies.css paints from, and the chip's
+    // own TEXT. A data-* label alongside would be a decoy: inverting the class
+    // alone left an attribute-only assertion green (measured).
     const multi = renderWaiting(mkCard());
-    expect(multi.getByTestId("reply-mode-hint").textContent).toBe(
-      "可以選多個，勾好按送出",
-    );
-    multi.unmount();
-
-    const single = renderWaiting(mkCard({ selectMode: "single" }));
-    // The consequence, not just the kind: on a single card the click IS the
-    // answer and a reply card is one-shot.
-    expect(single.getByTestId("reply-mode-hint").textContent).toBe(
-      "點一下就送出",
-    );
-  });
-
-  it("marks the options with a tick box on a multi card and a radio on a single one", async () => {
-    // The shape IS the second, wordless statement of the card's kind — and it
-    // replaced the 1/2/3 ordinal, which said nothing about either kind or
-    // selection.
-    // Assert the CLASS, which is what replies.css paints the shape from. A
-    // data-* label alongside it would be a decoy: inverting the class alone
-    // left an attribute-only assertion green (measured).
-    const shapes = (marks: Element[]) =>
-      marks.map((e) =>
-        e.className.includes("reply-option__mark--check")
-          ? "check"
-          : e.className.includes("reply-option__mark--radio")
-            ? "radio"
-            : "none",
-      );
-    const multi = renderWaiting(mkCard());
-    expect(shapes(multi.marks())).toEqual(["check", "check", "check"]);
+    expect(
+      multi.marks().map((e) => e.className.includes("reply-option__mark--check")),
+    ).toEqual([true, true, true]);
     expect(
       multi.chips().map((e) => e.textContent),
-      "the ordinal is gone — the mark carries no text",
+      "no ordinal on a multi card — the tick box carries no text",
     ).toEqual(["走海運", "走空運AI 建議", "先擱著"]);
+    expect(multi.container.querySelectorAll(".reply-option__num")).toHaveLength(0);
     multi.unmount();
 
     const single = renderWaiting(mkCard({ selectMode: "single" }));
-    expect(shapes(single.marks())).toEqual(["radio", "radio", "radio"]);
+    expect(
+      [...single.container.querySelectorAll(".reply-option__num")].map(
+        (e) => e.textContent,
+      ),
+      "a single card lists 1/2/3 again",
+    ).toEqual(["1", "2", "3"]);
+    expect(
+      single.chips().map((e) => e.textContent),
+      "and the ordinal reads as part of the chip's own line",
+    ).toEqual(["1走海運", "2走空運AI 建議", "3先擱著"]);
+    expect(single.marks()).toHaveLength(0);
   });
 
-  it("gives the chips the checked semantics of the control they now look like", async () => {
-    const multi = renderWaiting(mkCard());
+  it("gives multi chips checkbox semantics and leaves single chips plain buttons", async () => {
+    const multi = renderWaiting(mkPlainCard());
     expect(multi.chips().map((e) => e.getAttribute("role"))).toEqual([
       "checkbox",
       "checkbox",
@@ -253,22 +263,28 @@ describe("ReplyCardWaitingBody", () => {
     expect(multi.chips()[2].getAttribute("aria-checked")).toBe("true");
     multi.unmount();
 
+    // A single chip is a button that DOES something when pressed. It is not a
+    // radio: `aria-checked` would be announced "false" for the chip's whole
+    // life, because the click that would set it also answers the card and
+    // takes the chip away. A promise nothing can keep is worse than none.
     const single = renderWaiting(mkCard({ selectMode: "single" }));
-    expect(single.chips().map((e) => e.getAttribute("role"))).toEqual([
-      "radio",
-      "radio",
-      "radio",
-    ]);
+    expect(single.chips().every((e) => !e.hasAttribute("role"))).toBe(true);
+    expect(single.chips().every((e) => !e.hasAttribute("aria-checked"))).toBe(
+      true,
+    );
     expect(
-      single.container.querySelector(".reply-card__options")!.getAttribute("role"),
-      "single-select radios need the group that makes them one choice",
-    ).toBe("radiogroup");
+      single.container
+        .querySelector(".reply-card__options")!
+        .hasAttribute("role"),
+      "and no radiogroup around them either",
+    ).toBe(false);
   });
 
   it("tags the option that carries ai_pick, and counts the ticks on a multi card", async () => {
     const { chips, getByTestId } = renderWaiting(mkCard());
 
-    // Every chip WHOLE: number, wording, and exactly the tags it earned. The
+    // Every chip WHOLE: wording and exactly the tags it earned (a multi card
+    // shows no ordinal). The
     // AI tag rides the SECOND option — that is where ai_pick is — and a reader
     // that still tags index 0 disagrees with both of the first two strings.
     expect(chips().map((e) => e.textContent)).toEqual([
@@ -276,19 +292,81 @@ describe("ReplyCardWaitingBody", () => {
       "走空運AI 建議",
       "先擱著",
     ]);
-    expect(getByTestId("reply-selected-count").textContent).toBe("已選 0 項");
+    // The count opens on the ai_pick default, not on zero.
+    expect(getByTestId("reply-selected-count").textContent).toBe("已選 1 項");
 
     fireEvent.click(chips()[0]);
     fireEvent.click(chips()[2]);
-    expect(getByTestId("reply-selected-count").textContent).toBe("已選 2 項");
+    expect(getByTestId("reply-selected-count").textContent).toBe("已選 3 項");
     // The tags did not move when the ticks did: ai_pick is a property of the
     // OFFER, not of the answer.
     expect(chips().map((e) => e.getAttribute("data-selected"))).toEqual([
       "true",
-      "false",
+      "true",
       "true",
     ]);
     expect(chips()[1].textContent).toBe("走空運AI 建議");
+  });
+
+  it("opens a multi card with the ai_pick options already ticked, and a single card with nothing", async () => {
+    // owner 2026-08-31: 「多選的時候，UI 應該要預設就先把我勾好 AI 建議的」. TWO
+    // ai_pick options, neither of them the first, so a reader that pre-ticks
+    // index 0 or stops at the first hit disagrees here.
+    const twoAi = (over: Partial<ReplyCard> = {}) =>
+      mkCard({
+        options: [
+          { text: "走海運", aiPick: false },
+          { text: "走空運", aiPick: true },
+          { text: "先擱著", aiPick: true },
+        ],
+        ...over,
+      });
+    const multi = renderWaiting(twoAi());
+    expect(multi.chips().map((e) => e.getAttribute("data-selected"))).toEqual([
+      "false",
+      "true",
+      "true",
+    ]);
+    expect(multi.getByTestId("reply-selected-count").textContent).toBe(
+      "已選 2 項",
+    );
+    multi.unmount();
+
+    // 🔴 THE ONE THAT MATTERS. A single card SENDS on a tick, so a pre-ticked
+    // single card would be a pre-SENT one — an answer the owner never gave.
+    const single = renderWaiting(twoAi({ selectMode: "single" }));
+    expect(
+      single.chips().every((e) => e.getAttribute("data-selected") === "false"),
+      "a single card must open with nothing picked — a tick there IS the answer",
+    ).toBe(true);
+    expect(single.sent, "and nothing may have been sent by the render").toEqual(
+      [],
+    );
+    single.unmount();
+
+    // A multi card with no recommendation at all opens empty, as it always did.
+    const none = renderWaiting(mkPlainCard());
+    expect(
+      none.chips().every((e) => e.getAttribute("data-selected") === "false"),
+    ).toBe(true);
+    expect(none.getByTestId("reply-selected-count").textContent).toBe(
+      "已選 0 項",
+    );
+    // …and the empty-answer guard still stands: the send button refuses it.
+    expect(none.send().disabled).toBe(true);
+    none.unmount();
+
+    // The owner un-ticking the AI's defaults gets back to unsendable — the
+    // guard is not bypassed by having started full.
+    const undone = renderWaiting(twoAi());
+    fireEvent.click(undone.chips()[1]);
+    fireEvent.click(undone.chips()[2]);
+    expect(undone.getByTestId("reply-selected-count").textContent).toBe(
+      "已選 0 項",
+    );
+    expect(undone.send().disabled).toBe(true);
+    fireEvent.click(undone.send());
+    expect(undone.sent).toEqual([]);
   });
 
 });
@@ -384,14 +462,12 @@ describe("ReplyCardAnsweredBody", () => {
     expect(sent).toEqual([{ optionIdxs: [1], text: "", attachments: [] }]);
   });
 
-  it("reviews the original options without offering a control or a claim about clicking", async () => {
+  it("reviews the original options without offering a control", async () => {
     // 查看當初選項 BEFORE 重新決定 is a statement about a decision already
-    // taken. 「點一下就送出」 there would be false, and a live-looking tick box
-    // would be an affordance that does nothing.
-    const { container, getByText, queryByTestId } = renderAnswered(answered());
+    // taken: a live-looking tick box would be an affordance that does nothing.
+    const { container, getByText } = renderAnswered(answered());
     fireEvent.click(getByText("查看當初選項"));
 
-    expect(queryByTestId("reply-mode-hint")).toBeNull();
     const chips = [...container.querySelectorAll(".reply-option")];
     expect(chips.every((e) => (e as HTMLButtonElement).disabled)).toBe(true);
     expect(chips.every((e) => !e.hasAttribute("role"))).toBe(true);
@@ -407,19 +483,24 @@ describe("ReplyCardAnsweredBody", () => {
 });
 
 describe("ReplyCardExpiredBody", () => {
-  it("says nothing about clicking on a card nobody can answer any more", async () => {
-    const { queryByTestId, container } = render(
+  it("offers no control on a card nobody can answer any more", async () => {
+    const { container } = render(
       <I18nProvider>
         <ReplyCardExpiredBody
           card={mkCard({ status: "expired", selectMode: "single" })}
         />
       </I18nProvider>,
     );
-    expect(queryByTestId("reply-mode-hint")).toBeNull();
     expect(
       [...container.querySelectorAll(".reply-option")].every(
         (e) => (e as HTMLButtonElement).disabled,
       ),
     ).toBe(true);
+    expect(
+      [...container.querySelectorAll(".reply-option__num")].map(
+        (e) => e.textContent,
+      ),
+      "an expired single card still lists its options 1/2/3",
+    ).toEqual(["1", "2", "3"]);
   });
 });

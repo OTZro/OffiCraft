@@ -839,13 +839,14 @@ describe("TasksPage", () => {
     fireEvent.click(await findByTestId("task-card"));
     const embedded = await findByTestId("task-reply-card");
     // The SHARED M2 interior: the ai_pick option carries the AI 建議 tag.
-    // Each chip WHOLE — its wording and exactly the tags earned. The tagged
+    // Each chip WHOLE — its ordinal, its wording and exactly the tags earned.
+    // The tagged
     // option is deliberately NOT the first one: a chip that reads its own
     // position instead of its own ai_pick flag tags the wrong chip here.
     const options = embedded.querySelectorAll(".reply-option");
     expect([...options].map((e) => e.textContent)).toEqual([
-      "核可，直接同步上去",
-      "先不要AI 建議",
+      "1核可，直接同步上去",
+      "2先不要AI 建議",
     ]);
 
     // A single-select card answers on the CLICK → it flips answered in place.
