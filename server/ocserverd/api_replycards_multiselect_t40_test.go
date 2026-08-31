@@ -1,9 +1,13 @@
 package main
 
 import (
+	"database/sql"
 	"net/http"
+	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/pressly/goose/v3"
 )
 
 // openUnboundCard mints one plain 請示 with the given options and select_mode
@@ -255,86 +259,142 @@ func TestReplyCardListItemDigestCarriesEveryCircledOption(t *testing.T) {
 	}
 }
 
+// ── the 00065 rebuild, run for real ─────────────────────────────────────────
+//
 // The 00065 rebuild is where the "options[0] is the AI pick" convention is
-// cashed in — the one and only time it is ever executed — so a card written
-// under the OLD schema must come back with ai_pick on its first option, [3]
-// where it held 3, NULL where it held NULL, and select_mode 'single'.
-func TestReplyCardMultiSelectMigrationCarriesLegacyRowsForward(t *testing.T) {
-	dal := newTestDAL(t)
-	rows := []struct {
-		id, options string
-		answerIdx   any
-	}{
-		{"rc-legacy-answered", `["甲","乙"]`, 1},
-		{"rc-legacy-unanswered", `["甲","乙"]`, nil},
-		{"rc-legacy-nooptions", `[]`, nil},
+// cashed in — the one and only time it is ever executed, against real owner
+// data, with a Down that CANNOT undo it (it is lossy by construction). That
+// makes the shipped SQL the highest-risk code in this change, so this test
+// drives the SHIPPED FILE: it walks a temp database back to the version before
+// 00065, seeds rows in the OLD schema, and runs `goose up` through 00065 out of
+// the same embedded migrations/ the server ships. A mutant in
+// 00065_reply_card_multi_select.sql turns this red.
+//
+// (An earlier version of this test hand-copied the Up expressions into Go
+// helpers and seeded through them. It asserted against its own copy, so the
+// shipped file was free to say anything at all.)
+const (
+	migration00065Version      = 65
+	migration00065PriorVersion = 64
+)
+
+// migration00065LegacyRow is one reply_card row in the PRE-00065 schema:
+// options is a JSON array of bare strings and answer_option_idx is one INTEGER
+// or NULL.
+type migration00065LegacyRow struct {
+	id        string
+	options   string
+	answerIdx any
+	why       string
+}
+
+// migration00065Fixture. ai_pick must land on index 0 and NOWHERE else, so the
+// options fixtures differ in LENGTH and in wording — a rebuild that marked the
+// wrong index, marked all of them, or marked none is visible rather than merely
+// countable. The answer indices cover NULL, 0 (the falsy one a `WHEN idx THEN`
+// style guard would drop) and a non-zero index.
+func migration00065Fixture() []migration00065LegacyRow {
+	return []migration00065LegacyRow{
+		{"rc-legacy-answered", `["甲","乙"]`, 1, "answered on the NON-AI option"},
+		{"rc-legacy-answered-zero", `["甲","乙","丙"]`, 0, "answered on index 0 — a falsy index is still an answer"},
+		{"rc-legacy-unanswered", `["甲","乙"]`, nil, "never answered — NULL must stay NULL"},
+		{"rc-legacy-nooptions", `[]`, nil, "no options at all — stays []"},
+		{"rc-legacy-oneoption", `["只有一個"]`, nil, "a lone option IS the AI pick"},
 	}
-	for _, r := range rows {
-		if _, err := dal.wdb.Exec(`INSERT INTO reply_card
-			(id, kind, status, created_ts, options, select_mode, answer_option_idxs, summary)
-			VALUES (?, 'decision', 'waiting', 1, ?, 'single', ?, 's')`,
-			r.id, migrateLegacyOptions(t, dal, r.options),
-			migrateLegacyAnswerIdx(t, dal, r.answerIdx)); err != nil {
+}
+
+// migration00065World brings a temp database to the version just before 00065
+// and seeds the legacy fixture into the OLD reply_card schema.
+func migration00065World(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := openSQLite(filepath.Join(t.TempDir(), "reply-card-multi.db"))
+	if err != nil {
+		t.Fatalf("open temp sqlite: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("goose up: %v", err)
+	}
+	if err := goose.DownTo(db, "migrations", migration00065PriorVersion); err != nil {
+		t.Fatalf("down to %d: %v", migration00065PriorVersion, err)
+	}
+	// The seeds below are written in the OLD schema, so prove we are actually
+	// standing in it — otherwise a `goose down` that quietly did nothing would
+	// leave this test seeding and reading the same post-00065 shape.
+	var legacyCols int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('reply_card')
+		   WHERE name IN ('answer_option_idx')`).Scan(&legacyCols); err != nil {
+		t.Fatalf("read pre-00065 columns: %v", err)
+	}
+	if legacyCols != 1 {
+		t.Fatalf("expected the PRE-00065 reply_card (answer_option_idx present), got %d", legacyCols)
+	}
+	for _, r := range migration00065Fixture() {
+		if _, err := db.Exec(`INSERT INTO reply_card
+			(id, kind, status, created_ts, options, answer_option_idx, summary)
+			VALUES (?, 'decision', 'waiting', 1, ?, ?, 's')`,
+			r.id, r.options, r.answerIdx); err != nil {
 			t.Fatalf("seed %s: %v", r.id, err)
 		}
 	}
-
-	answered, err := dal.GetReplyCard("rc-legacy-answered")
-	if err != nil {
-		t.Fatalf("get answered: %v", err)
+	// ANTI-VACUITY: assertions over an empty table are indistinguishable from a
+	// working migration.
+	var seeded int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM reply_card`).Scan(&seeded); err != nil {
+		t.Fatalf("count seeded rows: %v", err)
 	}
-	if !reflect.DeepEqual(answered.Options,
-		[]ReplyCardOption{{Text: "甲", AIPick: true}, {Text: "乙"}}) {
-		t.Fatalf("legacy options must carry ai_pick on index 0 only: %+v", answered.Options)
+	if seeded != len(migration00065Fixture()) {
+		t.Fatalf("seeded %d rows, wrote %d — the fixture did not land",
+			seeded, len(migration00065Fixture()))
 	}
-	if !reflect.DeepEqual(answered.AnswerOptionIdxs, []int{1}) {
-		t.Fatalf("legacy answer 1 must become [1], got %v", answered.AnswerOptionIdxs)
-	}
-	if answered.SelectMode != replyCardSelectModeSingle {
-		t.Fatalf("a legacy card is single-select, got %q", answered.SelectMode)
-	}
-
-	unanswered, err := dal.GetReplyCard("rc-legacy-unanswered")
-	if err != nil {
-		t.Fatalf("get unanswered: %v", err)
-	}
-	if unanswered.AnswerOptionIdxs != nil {
-		t.Fatalf("a legacy NULL answer must stay nil, got %v", unanswered.AnswerOptionIdxs)
-	}
-
-	none, err := dal.GetReplyCard("rc-legacy-nooptions")
-	if err != nil {
-		t.Fatalf("get nooptions: %v", err)
-	}
-	if len(none.Options) != 0 {
-		t.Fatalf("a card with no options stays empty: %+v", none.Options)
-	}
+	return db
 }
 
-// migrateLegacyOptions runs the 00065 Up expression for one legacy options
-// value, so the test exercises the SQL the migration ships rather than a Go
-// re-implementation of it.
-func migrateLegacyOptions(t *testing.T, dal *DAL, legacy string) string {
-	t.Helper()
-	var out string
-	if err := dal.wdb.QueryRow(`SELECT json_group_array(json_object(
-		'text', j.value,
-		'ai_pick', json(CASE WHEN j.key = 0 THEN 'true' ELSE 'false' END)))
-		FROM json_each(?) AS j`, legacy).Scan(&out); err != nil {
-		t.Fatalf("carry options forward: %v", err)
+// TestReplyCardMultiSelectMigrationCarriesLegacyRowsForward runs the shipped
+// 00065 Up over legacy rows and reads the result back through the DAL — the
+// same path the server reads cards on.
+func TestReplyCardMultiSelectMigrationCarriesLegacyRowsForward(t *testing.T) {
+	db := migration00065World(t)
+	if err := goose.UpTo(db, "migrations", migration00065Version); err != nil {
+		t.Fatalf("goose up through %d: %v", migration00065Version, err)
 	}
-	return out
-}
+	dal := NewDAL(db)
 
-// migrateLegacyAnswerIdx runs the 00065 Up expression for one legacy
-// answer_option_idx value (NULL stays NULL; 3 becomes [3]).
-func migrateLegacyAnswerIdx(t *testing.T, dal *DAL, legacy any) any {
-	t.Helper()
-	var out any
-	if err := dal.wdb.QueryRow(
-		`SELECT CASE WHEN ? IS NULL THEN NULL ELSE json_array(?) END`,
-		legacy, legacy).Scan(&out); err != nil {
-		t.Fatalf("carry answer idx forward: %v", err)
+	// Worked out by hand from what 00065 CLAIMS, never derived from its SQL.
+	want := map[string]struct {
+		options []ReplyCardOption
+		idxs    []int
+	}{
+		"rc-legacy-answered": {
+			[]ReplyCardOption{{Text: "甲", AIPick: true}, {Text: "乙"}}, []int{1}},
+		"rc-legacy-answered-zero": {
+			[]ReplyCardOption{{Text: "甲", AIPick: true}, {Text: "乙"}, {Text: "丙"}}, []int{0}},
+		"rc-legacy-unanswered": {
+			[]ReplyCardOption{{Text: "甲", AIPick: true}, {Text: "乙"}}, nil},
+		"rc-legacy-nooptions": {nil, nil},
+		"rc-legacy-oneoption": {
+			[]ReplyCardOption{{Text: "只有一個", AIPick: true}}, nil},
 	}
-	return out
+	for _, r := range migration00065Fixture() {
+		card, err := dal.GetReplyCard(r.id)
+		if err != nil {
+			t.Fatalf("get %s: %v", r.id, err)
+		}
+		w := want[r.id]
+		if len(card.Options) != len(w.options) ||
+			(len(w.options) > 0 && !reflect.DeepEqual(card.Options, w.options)) {
+			t.Errorf("%s (%s): options carried forward wrong.\n got: %+v\nwant: %+v\n\n"+
+				"00065 must put ai_pick on the FIRST option and on no other — that is the "+
+				"old positional convention being cashed in, and it is unrepeatable.",
+				r.id, r.why, card.Options, w.options)
+		}
+		if !reflect.DeepEqual(card.AnswerOptionIdxs, w.idxs) {
+			t.Errorf("%s (%s): answer_option_idx %v must become %v, got %v",
+				r.id, r.why, r.answerIdx, w.idxs, card.AnswerOptionIdxs)
+		}
+		if card.SelectMode != replyCardSelectModeSingle {
+			t.Errorf("%s: every legacy card is single-select, got %q", r.id, card.SelectMode)
+		}
+	}
 }
