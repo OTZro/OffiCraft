@@ -880,6 +880,15 @@ var identityGateLedger = map[string]string{
 		"the list-item twin of newTaskDTO's copy; no decision here.",
 	"wire.go :: newTaskListItemDTO :: ReassignedFromKind: t.ReassignedFromKind": "" +
 		"the list-item twin of the predecessor-kind copy; no decision here.",
+	"api_tasks.go :: resumeTasksFor :: ReassignedFromKind: t.ReassignedFromKind": "" +
+		"T-91: the THIRD twin of the same straight copy — the wake snapshot's task " +
+		"row, which was the one projection that carried neither the lock nor the " +
+		"predecessor. No decision here either: it says how to RESOLVE the id in " +
+		"reassigned_from (roster row vs outsource worker), which is a lookup " +
+		"instruction, not a difference in treatment. 🔴 The reverse is what would " +
+		"be the gate: omitting the kind would leave an agent unable to look its " +
+		"predecessor up, and 「轉交給外包跟轉交給一個目前離線的正職應該要有同樣一套 " +
+		"方法」 (owner) is exactly what this field makes possible with one code path.",
 	"api_helpers.go :: newMemberDTO :: Kind: m.Kind": "" +
 		"the member DTO carries the row's kind to the client verbatim. The cockpit " +
 		"renders 正職 and 外包 differently BECAUSE of this field, which is the one place " +

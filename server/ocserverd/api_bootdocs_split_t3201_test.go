@@ -691,7 +691,17 @@ func TestTaskTakeoverDocs_HeadPlusBodyIsTodaysChatNoticeWithoutTheHandoverNote(t
 		values: map[string]string{
 			"task_no": "T-7e91", "predecessor": "銀月（mira）",
 		},
+		// T-91 demoted this notice to a REMINDER: the same handover is now
+		// readable off the ticket (lock + reassigned_from) and off the wake
+		// snapshot, so a successor that never receives this message — the
+		// outsource arm never does, because no worker id exists yet — still
+		// finds the handover at 開機盤點. The added clause says so out loud,
+		// because an agent that believes a message is its only source waits
+		// for one instead of looking.
 		want: "[T-7e91] 你接手了這張任務，你的前任是 銀月（mira）。" +
+			"這則訊息只是提醒，不是唯一路徑——同一件事在票上讀得到（`lock` 是 " +
+			"`reassigning`、`reassigned_from` 是前任），開機盤點就會看到，" +
+			"漏收這則也不會漏掉這張票。" +
 			"請先跟他確認交接完成（直接 post_chat 給他，問清楚目前進度與進行中的事項），" +
 			"確認後再由你自己呼叫 claim_task（認領）解除轉派鎖——只有你這個新負責人動得了；" +
 			"任務狀態一律照步驟推導，不必也不能自己報。\n",
@@ -739,8 +749,15 @@ func TestTaskCloseoutDoc_IsTheApprovedRewriteWithBothNamesMovedIntoTheHead(t *te
 	s := newEventProcServer(t)
 	spec, head, body := splitSeed(t, s, docKindTaskCloseout)
 
-	gotHead := mustRender(t, spec, head, map[string]string{"task_no": "T-7d40"})
-	wantHead := "任務 T-7d40 已結束。"
+	// T-91 added {closed_by} to the head. It is NOT a reversal of decision 3
+	// (「最低限度就是 task id」, which cut {status}/{type_key}/{manual_label}):
+	// those three are readable off the ticket and this one is not — there is no
+	// such column, and get_task cannot answer 「誰把它關掉的」. The rule the head
+	// keeps is "only the facts this notice is the sole source of".
+	gotHead := mustRender(t, spec, head, map[string]string{
+		"task_no": "T-7d40", "closed_by": "owner",
+	})
+	wantHead := "任務 T-7d40 已結束，關閉的人是 owner。"
 	if gotHead != wantHead {
 		t.Fatalf("the read-only head is not the approved sentence:\n got %q\nwant %q", gotHead, wantHead)
 	}

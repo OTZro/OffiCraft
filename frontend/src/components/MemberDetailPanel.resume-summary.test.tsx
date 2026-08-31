@@ -91,6 +91,12 @@ function mkSnapshot(): MemberResumeSummaryView {
         updatedTs: 2000,
         detailChars: 42,
         answeredCardSteps: [],
+        // T-91 additions to the wake snapshot's task row; empty is the
+        // ordinary case this fixture is showing.
+        lock: "",
+        reassignedFrom: "",
+        reassignedFromKind: "",
+        blocking: [],
       },
     ],
     // 🔴 Deliberately distinct, mutually non-substring 3-4 digit numbers —

@@ -1972,28 +1972,42 @@ func TestWaitingExternalRequiresAReasonAndClearsOnExit(t *testing.T) {
 
 // ── terminal side effects: the task-close nudge band (spec/sse.md §8) ────────
 
-// popTaskCloseFrames drains every buffered frame off l and returns the
-// task-close band frames (bare data: events — no id: line).
-func popTaskCloseFrames(t *testing.T, l *hubListener) []string {
+// taskCloseNotices returns the DURABLE close-out rows written for one recipient
+// about one task.
+//
+// 🔴 IT READS THE STORE, NOT A CONNECTION (T-91). This used to be
+// popTaskCloseFrames, draining an SSE listener — and that shape was the defect
+// rather than the harness: the assertion "the executor's live connection got a
+// frame" is only satisfiable by an executor that HAS a live connection, which
+// is exactly the executor that did not need protecting. Reading the store is
+// what "the recipient sees this at its next wake" means.
+func taskCloseNotices(t *testing.T, api *apiServer, recipient, taskID string) []ChatMessage {
 	t.Helper()
-	var out []string
-	for {
-		frame := l.pop()
-		if frame == nil {
-			return out
-		}
-		text := string(frame)
-		if !strings.Contains(text, `"topic":"task-close"`) {
+	all, err := api.dal.ListChat()
+	if err != nil {
+		t.Fatalf("list chat: %v", err)
+	}
+	var out []ChatMessage
+	for _, m := range all {
+		if m.Recipient != recipient || m.Sender != wireSystemSender {
 			continue
 		}
-		if strings.Contains(text, "id: ") {
-			t.Fatalf("a directed nudge must carry no id line: %q", text)
+		if id, _ := m.Meta["task_id"].(string); id != taskID {
+			continue
 		}
-		out = append(out, text)
+		if _, isClose := m.Meta["closed_by"]; !isClose {
+			continue // a reassign/unblock notice on the same task
+		}
+		out = append(out, m)
 	}
+	return out
 }
 
-func TestTaskCloseNudgeRidesTheExecutorsConnectionOnly(t *testing.T) {
+// Renamed from TestTaskCloseNudgeRidesTheExecutorsConnectionOnly (T-91): the
+// nudge no longer rides a connection at all. What survives is the ADDRESSING
+// claim — it is written for the executor and for nobody else — which is now
+// asserted against durable rows.
+func TestTaskCloseNudgeIsAddressedToTheExecutorAlone(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		close func(t *testing.T, api *apiServer, taskID string)
@@ -2017,34 +2031,19 @@ func TestTaskCloseNudgeRidesTheExecutorsConnectionOnly(t *testing.T) {
 			if code != http.StatusOK {
 				t.Fatalf("create: %d", code)
 			}
-			executor, err := api.hub.Connect("m-exec", "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			owner, err := api.hub.Connect("", "")
-			if err != nil {
-				t.Fatal(err)
-			}
+			// Nobody connects: the whole point is that this reaches an
+			// executor that was not there when its task closed.
 			tc.close(t, api, created.Task.ID)
-			frames := popTaskCloseFrames(t, executor)
-			if len(frames) != 1 {
-				t.Fatalf("executor must get exactly one nudge, got %d: %v",
-					len(frames), frames)
+			rows := taskCloseNotices(t, api, "m-exec", created.Task.ID)
+			if len(rows) != 1 {
+				t.Fatalf("executor must get exactly one durable nudge, got %d: %v",
+					len(rows), rows)
 			}
-			var envelope struct {
-				Topic string          `json:"topic"`
-				Data  taskCloseSignal `json:"data"`
+			if rows[0].Body == "" {
+				t.Fatalf("the nudge must carry the rendered document, not an empty body")
 			}
-			payload := strings.TrimSpace(strings.TrimPrefix(frames[0], "data: "))
-			if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
-				t.Fatalf("decode task-close nudge: %v; frame=%q", err, frames[0])
-			}
-			if envelope.Topic != taskCloseTopic || envelope.Data.To != "m-exec" ||
-				envelope.Data.TaskID != created.Task.ID || envelope.Data.Status != tc.name {
-				t.Fatalf("nudge envelope changed: %+v", envelope)
-			}
-			if got := popTaskCloseFrames(t, owner); len(got) != 0 {
-				t.Fatalf("the owner fan-out must never carry the nudge: %v", got)
+			if got := taskCloseNotices(t, api, wireOwnerID, created.Task.ID); len(got) != 0 {
+				t.Fatalf("the close nudge is the EXECUTOR's, never the owner's: %v", got)
 			}
 		})
 	}
@@ -2090,28 +2089,17 @@ func TestTaskCloseNudgeTextComesFromTheDocument(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("create: %d", code)
 	}
-	executor, connErr := api.hub.Connect("m-exec", "")
-	if connErr != nil {
-		t.Fatal(connErr)
-	}
 	driveTaskDone(t, api, created.Task.ID, "m-exec")
 
-	frames := popTaskCloseFrames(t, executor)
-	if len(frames) != 1 {
-		t.Fatalf("executor must get exactly one nudge, got %d: %v", len(frames), frames)
+	rows := taskCloseNotices(t, api, "m-exec", created.Task.ID)
+	if len(rows) != 1 {
+		t.Fatalf("executor must get exactly one nudge, got %d: %v", len(rows), rows)
 	}
-	var envelope struct {
-		Topic string          `json:"topic"`
-		Data  taskCloseSignal `json:"data"`
-	}
-	payload := strings.TrimSpace(strings.TrimPrefix(frames[0], "data: "))
-	if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
-		t.Fatalf("decode task-close nudge: %v; frame=%q", err, frames[0])
-	}
+	got := rows[0].Body
 
-	if !strings.Contains(envelope.Data.Reason, marker) {
+	if !strings.Contains(got, marker) {
 		t.Fatalf("the executor did not receive the edited document — the send site is "+
-			"still composing its own sentence.\nreason=%q", envelope.Data.Reason)
+			"still composing its own sentence.\nreason=%q", got)
 	}
 	// 🔴 THE HEAD IS THE TICKET NUMBER ALONE SINCE T-6f44 (owner's decision 3:
 	// 「最低限度就是 task id」). {status}, {type_key} and {manual_label} were all
@@ -2119,11 +2107,12 @@ func TestTaskCloseNudgeTextComesFromTheDocument(t *testing.T) {
 	// and it is what tells two simultaneous close-outs apart. The body now opens
 	// by telling the agent to get_task and read type_key from there.
 	wantHead := mustRender(t, spec, head, map[string]string{
-		"task_no": TaskNo(created.Task.ID),
+		"task_no":   TaskNo(created.Task.ID),
+		"closed_by": "m-exec",
 	})
-	if !strings.HasPrefix(envelope.Data.Reason, wantHead) {
+	if !strings.HasPrefix(got, wantHead) {
 		t.Fatalf("the nudge does not open with the approved read-only head.\n got %q\nwant prefix %q",
-			envelope.Data.Reason, wantHead)
+			got, wantHead)
 	}
 }
 
@@ -2166,30 +2155,20 @@ func TestTaskCloseNudgeFallsBackToTheRawKeyWhenTheManualIsGone(t *testing.T) {
 	if _, err := api.dal.DeleteTaskManual("review-pr"); err != nil {
 		t.Fatal(err)
 	}
-	executor, connErr := api.hub.Connect("m-exec", "")
-	if connErr != nil {
-		t.Fatal(connErr)
-	}
 	driveTaskDone(t, api, created.Task.ID, "m-exec")
 
-	frames := popTaskCloseFrames(t, executor)
-	if len(frames) != 1 {
-		t.Fatalf("a task whose manual is gone is still owed a nudge, got %d frames", len(frames))
-	}
-	var envelope struct {
-		Data taskCloseSignal `json:"data"`
-	}
-	payload := strings.TrimSpace(strings.TrimPrefix(frames[0], "data: "))
-	if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
-		t.Fatalf("decode: %v", err)
+	rows := taskCloseNotices(t, api, "m-exec", created.Task.ID)
+	if len(rows) != 1 {
+		t.Fatalf("a task whose manual is gone is still owed a nudge, got %d rows", len(rows))
 	}
 	spec, head, _ := splitSeed(t, api, docKindTaskCloseout)
 	wantHead := mustRender(t, spec, head, map[string]string{
-		"task_no": TaskNo(created.Task.ID),
+		"task_no":   TaskNo(created.Task.ID),
+		"closed_by": "m-exec",
 	})
-	if !strings.HasPrefix(envelope.Data.Reason, wantHead) {
+	if !strings.HasPrefix(rows[0].Body, wantHead) {
 		t.Fatalf("a task whose manual is gone is still owed the nudge, opening with "+
-			"its ticket number.\n got %q\nwant prefix %q", envelope.Data.Reason, wantHead)
+			"its ticket number.\n got %q\nwant prefix %q", rows[0].Body, wantHead)
 	}
 	// The head names nothing it cannot fill: no empty 「」 pair, and no leftover
 	// manual/type_key clause that would now have nothing behind it.
@@ -2215,15 +2194,11 @@ func TestTaskCloseNudgeStaysSilentWhenTheDocumentCannotRender(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("create: %d", code)
 	}
-	executor, connErr := api.hub.Connect("m-exec", "")
-	if connErr != nil {
-		t.Fatal(connErr)
-	}
 	driveTaskDone(t, api, created.Task.ID, "m-exec")
 
-	if frames := popTaskCloseFrames(t, executor); len(frames) != 0 {
+	if rows := taskCloseNotices(t, api, "m-exec", created.Task.ID); len(rows) != 0 {
 		t.Fatalf("an unrenderable 〈任務收尾〉 must send nothing, not an empty or "+
-			"substituted nudge; the executor received: %v", frames)
+			"substituted nudge; the executor received: %v", rows)
 	}
 	// Positive control: the very same fixture with an INTACT document does send —
 	// otherwise "no frame" would prove the harness broken rather than the rule kept.
@@ -2241,21 +2216,26 @@ func TestTaskCloseNudgeStaysSilentWhenTheDocumentCannotRender(t *testing.T) {
 		t.Fatalf("create: %d", code)
 	}
 	driveTaskDone(t, api, second.Task.ID, "m-exec")
-	if frames := popTaskCloseFrames(t, executor); len(frames) != 1 {
-		t.Fatalf("positive control: an intact document must still nudge, got %d frames", len(frames))
+	if rows := taskCloseNotices(t, api, "m-exec", second.Task.ID); len(rows) != 1 {
+		t.Fatalf("positive control: an intact document must still nudge, got %d rows", len(rows))
 	}
 }
 
-func TestTaskCloseNudgeSkipsAdHocTasks(t *testing.T) {
+// 🔴 THE INVERSE OF TestTaskCloseNudgeSkipsAdHocTasks, WHICH THIS REPLACES.
+// That test asserted an ad-hoc close nudges NOBODY, on the reasoning that a
+// typeless task has no manual to fold learnings into. The owner overturned it
+// in T-91: the notice's job is telling an executor its ticket is closed, and a
+// typeless ticket closes just as hard. The old test is not weakened here, it is
+// REVERSED — its subject was removed by ruling, so leaving it green would have
+// meant leaving the ruling unimplemented.
+func TestTaskCloseNudgeReachesAnAdHocTasksExecutor(t *testing.T) {
 	api := newTasksTestServer(t)
 	task := createAdHocTask(t, api, "m-exec")
-	executor, err := api.hub.Connect("m-exec", "")
-	if err != nil {
-		t.Fatal(err)
-	}
 	driveTaskDone(t, api, task.ID, "m-exec")
-	if got := popTaskCloseFrames(t, executor); len(got) != 0 {
-		t.Fatalf("an ad-hoc close has no manual — no nudge, got %v", got)
+	rows := taskCloseNotices(t, api, "m-exec", task.ID)
+	if len(rows) != 1 {
+		t.Fatalf("an ad-hoc (typeless) close must still tell its executor the "+
+			"ticket is closed, got %d rows", len(rows))
 	}
 }
 
@@ -2664,11 +2644,18 @@ func markDuplicate(t *testing.T, api *apiServer, taskID, duplicateOf, sub, scope
 	return rec
 }
 
-// TestMarkDuplicateClosesTaskPointsAtOriginalAndSkipsNudge pins the happy path:
-// the task lands in the duplicated terminal status with duplicate_of set +
-// closed_ts stamped, and — unlike done/terminated — NO learnings nudge fires
-// down the executor's connection (T-02c9 point 6: a duplicate has no lessons).
-func TestMarkDuplicateClosesTaskPointsAtOriginalAndSkipsNudge(t *testing.T) {
+// TestMarkDuplicateClosesTaskPointsAtOriginal pins the happy path: the task
+// lands in the duplicated terminal status with duplicate_of set + closed_ts
+// stamped, and its executor IS told.
+//
+// 🔴 THE "AndSkipsNudge" HALF OF THIS TEST WAS REVERSED BY OWNER RULING (T-91).
+// It asserted that a duplicated close notifies nobody, on T-02c9 point 6's
+// reasoning that a duplicate has no lessons to fold back. True about LESSONS,
+// and the wrong question: the executor of a ticket somebody else just marked
+// duplicate needs to know its ticket is closed. Marking someone else's task a
+// duplicate was, measured, one of the two ways to close a task completely
+// silently.
+func TestMarkDuplicateClosesTaskPointsAtOriginal(t *testing.T) {
 	api := newTasksTestServer(t)
 	seedManualWithKey(t, api, "review-pr")
 	original, code := createTypedTask(t, api, "review-pr", "100")
@@ -2678,10 +2665,6 @@ func TestMarkDuplicateClosesTaskPointsAtOriginalAndSkipsNudge(t *testing.T) {
 	dupCreated, code := createTypedTask(t, api, "review-pr", "101")
 	if code != http.StatusOK {
 		t.Fatalf("create dup: %d", code)
-	}
-	executor, err := api.hub.Connect(dupCreated.Task.ExecutorID, "")
-	if err != nil {
-		t.Fatal(err)
 	}
 	rec := markDuplicate(t, api, dupCreated.Task.ID, original.Task.ID,
 		dupCreated.Task.ExecutorID, "agent")
@@ -2698,8 +2681,10 @@ func TestMarkDuplicateClosesTaskPointsAtOriginalAndSkipsNudge(t *testing.T) {
 	if got.ClosedTS == nil || *got.ClosedTS <= 0 {
 		t.Fatalf("closed_ts must stamp on the terminal transition, got %v", got.ClosedTS)
 	}
-	if frames := popTaskCloseFrames(t, executor); len(frames) != 0 {
-		t.Fatalf("a duplicated close must NOT nudge learnings, got %v", frames)
+	if rows := taskCloseNotices(t, api, dupCreated.Task.ExecutorID,
+		dupCreated.Task.ID); len(rows) != 1 {
+		t.Fatalf("a duplicated close must tell its executor the ticket is closed "+
+			"(owner ruling, T-91 — this used to assert the opposite), got %d rows", len(rows))
 	}
 }
 

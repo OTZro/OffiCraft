@@ -271,7 +271,43 @@ func (s *apiServer) taskDTOOf(t Task) (taskDTO, error) {
 		return taskDTO{}, err
 	}
 	dto.Artifacts = artifacts
+	blocking, err := s.blockingTasksOf(t.ID)
+	if err != nil {
+		return taskDTO{}, err
+	}
+	dto.Blocking = blocking
 	return dto, nil
+}
+
+// blockingTasksOf resolves the REVERSE dependency edge of one task (T-91): the
+// non-terminal tasks that name it in their own blocked_by, as the same display
+// refs the forward direction serves. Never nil.
+//
+// 🔴 WHY THIS IS A READ AND NOT A NOTIFICATION. The owner ruled the blocker's
+// side is written on the TICKET and nothing is sent (deliberately unlike the
+// close notice, which he ruled the other way in the same sitting). So this is
+// the entire delivery mechanism for "N tickets are waiting on yours", together
+// with its ids-only twin on the wake snapshot. If you are here because you
+// cannot find the message, there is none by design.
+//
+// Terminal waiters are filtered out HERE rather than in SQL so the one query
+// stays the same query releaseDependentsOnClose already uses — a second,
+// nearly-identical statement is how the two answers drift apart.
+func (s *apiServer) blockingTasksOf(taskID string) ([]taskDepRefDTO, error) {
+	waiters, err := s.dal.ListTasksBlockedBy(taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := []taskDepRefDTO{}
+	for _, w := range waiters {
+		if TaskIsTerminal(w.Status) {
+			continue
+		}
+		out = append(out, taskDepRefDTO{
+			ID: w.ID, TaskNo: TaskNo(w.ID), Title: w.Title, Status: w.Status,
+		})
+	}
+	return out, nil
 }
 
 // taskArtifactDTOs lists one task's artifacts and projects them onto the wire,
@@ -400,6 +436,39 @@ func (s *apiServer) callerMayDriveTask(r *http.Request, t Task) bool {
 		return true
 	}
 	return currentActor(r) == t.ExecutorID
+}
+
+// callerMayWriteHandover is callerMayDriveTask PLUS one narrow, time-boxed
+// exception (T-91): while a task sits under the `reassigning` lock, the
+// PREDECESSOR stamped on it may still write the handover record.
+//
+// 🔴 WHY IT IS NEEDED. The reassign re-points executor_id in the same handler
+// that posts the predecessor its instructions — 「請停止推進，先把交接資訊寫到這
+// 張任務上：目前進度、進行中的事項、有哪些雷要注意」 — so by the time that
+// message exists, callerMayDriveTask already answers false for the person it is
+// addressed to. The system asked for a document and took away the pen in the
+// same transaction; measured, every step-note write from the predecessor after
+// a reassign is a 403.
+//
+// 🔴 WHY IT IS THIS NARROW, and this is an owner ruling rather than caution.
+// He was offered the wide version — both sides fully authorised for the
+// duration of the handover — and REFUSED it, choosing to open the 「寫交接」 cell
+// alone. So 全域脈絡 §3.4 (交接完成前，不得讓兩個執行者同時推進同一份工作) is
+// unchanged and every other door callerMayDriveTask guards is unchanged: plan,
+// step STATUS, deps, priority, reassign, terminate, artifacts, closeout and the
+// task's own text all still 403 for the predecessor. Widening this predicate to
+// another route is reversing that ruling, not extending it.
+//
+// The window closes by itself: claim_task clears the lock, and with it this
+// exception. Nothing here is time-based and nothing needs a reaper.
+func (s *apiServer) callerMayWriteHandover(r *http.Request, t Task) bool {
+	if s.callerMayDriveTask(r, t) {
+		return true
+	}
+	if t.Lock != TaskLockReassigning || t.ReassignedFrom == "" {
+		return false
+	}
+	return currentActor(r) == t.ReassignedFrom
 }
 
 // taskCaller captures the create/reassign caller's identity facets for the
@@ -543,14 +612,30 @@ func (s *apiServer) closeTask(t *Task, status string, now float64, trigger strin
 	// looks right. The cost is named, not discovered later: an unrenderable
 	// 〈任務收尾〉 means the executor gets NO close-out reminder, on the same
 	// terms the other nine documents already carry.
+	//
+	// 🔴 T-91 — IT IS A DURABLE CHAT ROW NOW, NOT AN SSE PUSH. The old delivery
+	// was hub.PushDirected, and decideTaskCloseNudge's own comment named the
+	// cost out loud: "an offline executor simply misses the reminder". So the
+	// single notice about a task's DEATH was the one lifecycle event with no
+	// durable copy — and the executor of a task somebody else terminated is,
+	// very often, an agent that is not connected. It now takes the same road
+	// the dependency-release notice takes (postTaskChat): a chat row that
+	// survives the recipient being offline and that its next wake snapshot
+	// folds in.
+	//
+	// 🔴 WHY NOT "just put it on the ticket", which is what the owner chose for
+	// the blocking side of this same ticket: 開機盤點 lists only tasks that have
+	// NOT ended, so a closed task is absent from that list by construction.
+	// There is no row there to write on.
 	if sig := decideTaskCloseNudge(*t); sig != nil {
+		sig.ClosedBy = trigger
 		sig.Reason = s.taskNoticeText(docKindTaskCloseout, map[string]string{
-			"task_no": sig.TaskNo,
+			"task_no":   sig.TaskNo,
+			"closed_by": sig.ClosedBy,
 		})
 		if sig.Reason != "" {
-			if frame, err := directedFrameText(taskCloseTopic, sig); err == nil {
-				s.hub.PushDirected(t.ExecutorID, frame)
-			}
+			s.postTaskChat(*t, wireSystemSender, sig.To, sig.Reason, trigger,
+				map[string]any{"closed_by": sig.ClosedBy})
 		}
 	}
 	return nil
@@ -760,6 +845,17 @@ func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]
 			detailChars += len([]rune(st.Name)) + len([]rune(st.DoD))
 		}
 		done, stepTotal := TaskProgress(steps)
+		// T-91: the reverse dependency edge, ids only. One extra query per row,
+		// and the row count is capped at resumeTasksN — the same shape as the
+		// per-task ListTaskSteps read directly above it.
+		blockingRefs, err := s.blockingTasksOf(t.ID)
+		if err != nil {
+			return nil, 0, err
+		}
+		blocking := []string{}
+		for _, b := range blockingRefs {
+			blocking = append(blocking, b.ID)
+		}
 		out = append(out, resumeTaskDTO{
 			ID:              t.ID,
 			TaskNo:          TaskNo(t.ID),
@@ -774,6 +870,13 @@ func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]
 			ProgressTotal:   stepTotal,
 			DetailChars:     detailChars,
 			UpdatedTS:       t.UpdatedTS,
+			// The handover hold, on the snapshot an agent reads at 開機盤點
+			// (T-91) — see resumeTaskDTO for why the chat notice alone was not
+			// a path anybody could rely on.
+			Lock:               t.Lock,
+			ReassignedFrom:     t.ReassignedFrom,
+			ReassignedFromKind: t.ReassignedFromKind,
+			Blocking:           blocking,
 
 			AnsweredCardSteps: answered,
 		})
@@ -1594,7 +1697,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		if notice := s.taskNoticeText(docKindTaskReassignPredecessor, map[string]string{
 			"task_no": no,
 		}); notice != "" {
-			s.postTaskChat(*t, wireSystemSender, oldExecutor, notice, trigger)
+			s.postTaskChat(*t, wireSystemSender, oldExecutor, notice, trigger, nil)
 		}
 	}
 	// 🔴 THE HANDOVER NOTE IS NO LONGER PASTED IN, AND THAT IS THE OWNER'S
@@ -1612,7 +1715,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 			// person, and 「一串 id」 alone does not say who that is.
 			"predecessor": nameWithIDSlot(s.executorLabel(oldKind, oldExecutor), oldExecutor),
 		}); notice != "" {
-			s.postTaskChat(*t, wireSystemSender, newExecutorID, notice, trigger)
+			s.postTaskChat(*t, wireSystemSender, newExecutorID, notice, trigger, nil)
 		}
 	} else if newMember != nil {
 		// A not_started task with no prior executor (no predecessor to hand over
@@ -1621,7 +1724,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 		if notice := s.taskNoticeText(docKindTaskTakeoverFresh, map[string]string{
 			"task_no": no,
 		}); notice != "" {
-			s.postTaskChat(*t, wireSystemSender, newMember.ID, notice, trigger)
+			s.postTaskChat(*t, wireSystemSender, newMember.ID, notice, trigger, nil)
 		}
 	}
 
@@ -1715,18 +1818,24 @@ func (s *apiServer) executorLabel(kind, id string) string {
 // reassign handover notices — the task-message route's meta shape: task_id /
 // task_title / task_type ride along for the client linkage). Best-effort on
 // the fan; the durable write failing is the caller's internal error.
-func (s *apiServer) postTaskChat(t Task, sender, recipient, body, trigger string) {
+// extra carries any per-notice meta keys beyond the task linkage (T-91: the
+// close-out row's closed_by). nil for the notices that need none.
+func (s *apiServer) postTaskChat(t Task, sender, recipient, body, trigger string, extra map[string]any) {
+	meta := map[string]any{
+		"task_id":    t.ID,
+		"task_title": t.Title,
+		"task_type":  t.TypeKey,
+	}
+	for k, v := range extra {
+		meta[k] = v
+	}
 	msg := ChatMessage{
 		ID:        "c-" + newHexID(12),
 		Sender:    sender,
 		Recipient: recipient,
 		Body:      body,
 		TS:        nowSecs(),
-		Meta: map[string]any{
-			"task_id":    t.ID,
-			"task_title": t.Title,
-			"task_type":  t.TypeKey,
-		},
+		Meta:      meta,
 	}
 	if err := s.dal.PutChat(msg); err != nil {
 		// Not only reassign any more — T-74f8's dependency release posts the

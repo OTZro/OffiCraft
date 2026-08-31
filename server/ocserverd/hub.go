@@ -510,11 +510,21 @@ func (h *Hub) Publish(topic, op, entity, key string, payload any, aud Audience, 
 }
 
 // PushDirected appends one directed wire-text frame onto memberID's live
-// listener buffer (the task-close nudge band, spec/sse.md §8). Best-effort
+// listener buffer (the context-high and token-expiry bands, spec/sse.md
+// §6/§6.1). Best-effort
 // at-most-once BY DESIGN: no live connection → the frame is dropped, never
 // queued — a nudge is a reminder, not a command (contrast the warden FIFO
 // below, which buffers across the NAT gap). Returns whether a listener took
 // the frame.
+//
+// 🔴 THE task-close NUDGE LEFT THIS FUNCTION IN T-91, and the reason is worth
+// carrying at the seam rather than only at the call site: "dropped, never
+// queued" is fine for a reminder whose subject stays true (your context is
+// high; your token expires soon) and is NOT fine for news the recipient can
+// never recover on its own. A closed task is absent from the boot inventory, so
+// an executor that missed the frame had no surface left to learn from. That
+// notice is a durable chat row now. Before adding a caller here, ask whether
+// its subject survives the recipient being offline.
 func (h *Hub) PushDirected(memberID string, frame []byte) bool {
 	if memberID == "" || len(frame) == 0 {
 		return false

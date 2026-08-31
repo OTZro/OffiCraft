@@ -2947,6 +2947,20 @@ export const mockApi: Api = {
           updatedTs: t.updatedTs,
           detailChars,
           answeredCardSteps,
+          // T-91 — the mock mirrors the server's own projection: the hold is
+          // copied off the task row, and `blocking` is the REVERSE dependency
+          // edge computed the same way the server computes it (every
+          // non-terminal task that names this one in its blockedBy).
+          lock: t.lock ?? "",
+          reassignedFrom: t.reassignedFrom ?? "",
+          reassignedFromKind: t.reassignedFromKind ?? "",
+          blocking: tasks
+            .filter(
+              (o) =>
+                !["completed", "terminated", "duplicated"].includes(o.status) &&
+                (o.deps ?? []).includes(t.id)
+            )
+            .map((o) => o.id),
         };
       });
 

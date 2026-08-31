@@ -176,14 +176,20 @@ def _closed_topic_set() -> set[str]:
 
     ⚠️ SCOPE of this guard (and of ocserverd's TestSSETopicsMatchSpec, the other
     edge): it covers the ENTITY-DELTA topics only — the ones that ride
-    ``hub.Publish``. The four DIRECTED bands (``context-high`` §6,
-    ``token-expiry`` §6.1, ``warden-command`` §7, ``task-close`` §8) go out through ``PushDirected``,
+    ``hub.Publish``. The three DIRECTED bands (``context-high`` §6,
+    ``token-expiry`` §6.1, ``warden-command`` §7) go out through ``PushDirected``,
     bypass ``Publish`` entirely, and are a separate envelope family by design
     (§3.1's own note: "a separate envelope family, not entity-delta topics").
     Their ABSENCE from this set is deliberate, not an oversight — do NOT "fix"
     it by adding them here or to ``sseTopics``; they are pinned by their own
     tests (``test_context_high_*``, ``test_warden_command_band_start_frame``,
     and ocserverd's token-expiry wire test).
+
+    🔴 ``task-close`` §8 used to be the fourth. T-91 retired it as a wire band —
+    the close-out nudge is a DURABLE CHAT ROW now, because an at-most-once push
+    reached nobody who was offline when its task closed. It is absent here for a
+    different reason from the other three: not "directed rather than entity",
+    but "no longer sent on the wire at all".
     """
     path = HERE.parent / "spec" / "sse.md"
     return _parse_closed_topics(path.read_text(encoding="utf-8"), source=str(path))

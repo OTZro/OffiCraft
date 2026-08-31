@@ -1132,6 +1132,12 @@ export const en: Dict = {
       // This is a pointer from the server, not a completion marker; the
       // owner's answer may require a change.
       answeredCardSteps: "Steps on answered cards (read the card; not done)",
+      // T-91 — the label for the REVERSE dependency edge the wake snapshot's
+      // task row gained. There is deliberately no second key beside it for the
+      // handover hold: the cockpit already words that badge once, as
+      // `tasks.lockReassigning`, and the resume panel reuses it rather than
+      // minting a synonym that could later disagree with it.
+      blockingLabel: "Tickets waiting on this one:",
       generatedAtLabel: "This snapshot was taken at",
       // 🔴 THE PER-MESSAGE MARK IS A MARK, NOT A SENTENCE. It used to be
       // "This message is folded — 46 characters kept on the server (re-read it

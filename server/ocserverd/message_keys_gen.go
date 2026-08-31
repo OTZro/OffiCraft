@@ -340,6 +340,7 @@ var messageKeys = map[string]bool{
 	"mp.renamePlaceholder":                             true,
 	"mp.resumeSummary.answeredCardStepChars":           true,
 	"mp.resumeSummary.answeredCardSteps":               true,
+	"mp.resumeSummary.blockingLabel":                   true,
 	"mp.resumeSummary.bodyOmittedMark":                 true,
 	"mp.resumeSummary.bodyOmittedNote":                 true,
 	"mp.resumeSummary.cardAiPickTag":                   true,

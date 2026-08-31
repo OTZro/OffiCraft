@@ -1413,6 +1413,19 @@ export interface ResumeTaskView {
   /** Steps whose answered reply card has not yet been acted on. Empty is the
    * honest normal case; non-empty is a pointer, never a done state. */
   answeredCardSteps: ResumeAnsweredCardStepView[];
+  /** The handover hold (T-91): "" or "reassigning". The wake snapshot was the
+   * one task projection that dropped it, so a ticket handed to this member
+   * looked like a ticket it had been working on. */
+  lock: string;
+  /** The predecessor this ticket was last handed over from, "" when never
+   * reassigned; `reassignedFromKind` says whether that id is a roster member
+   * or an outsource worker. */
+  reassignedFrom: string;
+  reassignedFromKind: string;
+  /** Ids of the still-open tickets waiting on THIS one (T-91) — the reverse of
+   * `deps`. Nothing is messaged about it by owner ruling, so this row is the
+   * whole delivery. */
+  blocking: string[];
 }
 
 /** The RESUME SUMMARY panel section's snapshot for a TARGET member — the SAME

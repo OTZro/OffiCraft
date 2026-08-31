@@ -88,8 +88,12 @@ data: {"seq":42,"topic":"member","op":"patch","data":{"entity":"member","key":"o
     `get_task_manual` → `patch_task_learnings` pair by `type_key`. The 〈停止〉 says only
     「回寫到長期記憶，位置看開機說明」; a worker lives one task and has no role to fall back
     on, so the concrete address is resolved server-side and delivered with the order.
-    An **ad-hoc** (typeless) task carries NO such paragraph — the same criterion the
-    task-close nudge (§8) stays silent on: no type, no manual to write into.
+    An **ad-hoc** (typeless) task carries NO such paragraph — no type, no manual to
+    write into. ⚠️ This used to cite the task-close nudge (§8) as the same criterion;
+    it no longer is. T-91 removed that criterion from the close notice, which now goes
+    out for a typeless task too, because its subject is 「你的票關掉了」 rather than
+    「去回寫手冊」. The rule HERE is unchanged and the shared-criterion claim is what was
+    withdrawn.
     Present ONLY while `offboardKindOf` says this member is being collected, and inside
     those states it rides **every** write to that row, not just the first — **the client is
     what de-duplicates**, by keying on the sentence it last printed (a server-side "only
@@ -545,44 +549,45 @@ data: {"topic":"warden-command","data":{"rpc":"start","args":{"member_id":"m-1a2
     (→ dispatch reports not-accepted → retry next tick) rather than grow a wedged backlog.
 - Band evaluation happens on quiet ticks only (buffered entity deltas drain first); relative priority among bands is an implementation detail.
 
-## 8. Task-close nudge band (directed signal, the executor's connection only)
+## 8. Task-close nudge — RETIRED AS AN SSE BAND (T-91)
 
-A directed reminder pushed down the **task executor's own** connection when its task lands
-in a terminal status (M3 Phase 6C): walk the §6.3 close-out — fold this run's learnings
-back into the type's manual with an anchor-addressed partial update (`patch_task_learnings`) after refetching current contents, clean the task's scratch, then
-report the follow-ups done (`report_task_closeout`). Owner/dashboard connections MUST
-never receive it.
+🔴 **There is no `task-close` frame on the wire any more.** The nudge still exists; it is
+a **durable chat row** written to the task's executor by `closeTask`, not a directed SSE
+signal. This section is kept — rather than deleted — because the reason it moved is the
+reason nobody should put it back.
 
-- Frame shape — a bare `data:` event, **no `id:` line** (not part of the replayable delta
-  stream; same family as §6/§7):
+**What it was.** A directed reminder pushed down the task executor's own connection when
+its task landed in a terminal status: walk the §6.3 close-out (fold this run's learnings
+back into the type's manual with `patch_task_learnings`, clean the task's scratch, then
+`report_task_closeout`). Best-effort at-most-once, no queue, no replay.
 
-```
-data: {"topic":"task-close","data":{"topic":"task-close","to":"m-1a2b3c","task_id":"t-7d40aabbccdd","task_no":"t-7d40aabbccdd","type":"review-pr","status":"done","reason":"任務 t-7d40aabbccdd 已結束（done）。…patch_task_learnings…report_task_closeout…"}}
-```
+**Why it moved.** "Best-effort at-most-once onto a live connection" means an executor that
+was not connected at the instant its task closed was never told — and an executor whose
+task somebody ELSE terminated is very often exactly that. It was the only lifecycle notice
+in the system with no durable copy, so the one thing an agent could silently miss was the
+news that every write it makes from now on will 409.
 
-  The inner payload duplicates `topic` and carries `{topic, to, task_id, task_no, type,
-  status, reason}`. `reason` wording is not contract; the envelope shape, `to` (the
-  executor id), `task_id`, `type` and `status` are.
-- `reason` is **rendered from the 〈任務收尾〉 boot document**, not composed in Go
-  (T-7870). Two consequences the wording rule does not cover: an owner edit to that
-  document changes what agents receive on the next close, and a document that cannot
-  be rendered sends **no frame at all** rather than one with an empty `reason`.
-  ⚠️ The wind-down notices refuse the same way but are NOT the same exposure: an
-  absent wind-down notice arms cli/ocagent's `offboardFallback`, so the agent still
-  learns it is winding down. `task-close` has no such net — an unrenderable document
-  is silence, and nothing anywhere reports that a reminder was owed.
-- Emission rules (all MUST hold):
-  - the task just entered a **terminal** status — `done` AND `terminated` both nudge
-    (a terminated run's lessons are worth folding back too);
-  - the task **has a type** (`type_key` non-blank) — an ad-hoc task has no manual to
-    write learnings into;
-  - the task **has an executor** — an unassigned task has nobody to remind.
-- Delivery is **best-effort at-most-once** onto the executor's live connection: no live
-  connection at close time → the frame is dropped, never queued (a nudge is a reminder,
-  not a command — contrast the §7 FIFO). No per-connection band state, no cooldown: one
-  close, at most one frame.
-- Fail-safe: a marshal fault or a missing listener MUST emit nothing and MUST NOT fail
-  the terminal-status write it follows.
+**What it is now.**
+- A server-authored chat row (`sender` = the system sender) addressed to the executor,
+  carrying the task linkage in `meta` (`task_id` / `task_title` / `task_type`) plus
+  `closed_by` — the verified trigger of the write that closed the task. It reaches the
+  recipient through the ordinary chat surfaces, including the wake snapshot, so the
+  delivery guarantee is **"readable at the recipient's next wake"**, not "delivered if
+  connected".
+- Its text is still **rendered from the 〈任務收尾〉 boot document**, not composed in Go
+  (T-7870), and a document that cannot be rendered still sends **nothing** rather than a
+  substitute.
+- Emission rules, both of which MUST hold:
+  - the task just entered a **terminal** status — `done`, `terminated` AND `duplicated`
+    all nudge;
+  - the task **has an executor** — an unassigned task has nobody to address.
+
+  ⚠️ The old rules also required a non-blank `type_key` and excluded `duplicated`. Both
+  were removed by owner ruling in T-91: they asked whether the task had LESSONS worth
+  folding into a manual, when what the recipient actually needs to know is that its ticket
+  is closed. They silenced the two shapes where the close is most likely to have been
+  somebody else's decision.
+- Fail-safe unchanged: the notice MUST NOT fail the terminal-status write it follows.
 
 ## 9. What is deliberately NOT in this contract
 

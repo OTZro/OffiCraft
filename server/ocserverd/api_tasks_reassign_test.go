@@ -304,7 +304,13 @@ func TestReassignMemberToMemberHandsOver(t *testing.T) {
 	// "the note is gone" cannot pass on a build that lost it altogether.
 	// {title} dropped and the predecessor's two slots merged into one, same
 	// ruling: 「銀月（mira）」 rather than 「Ken（id `m-old`）」.
+	// T-91: the notice opens by demoting itself to a reminder — the same
+	// handover is on the ticket (lock + reassigned_from) and on the wake
+	// snapshot, so it is no longer the only path to the fact.
 	wantNew := "[" + TaskNo(task.ID) + "] 你接手了這張任務，你的前任是 Ken（m-old）。" +
+		"這則訊息只是提醒，不是唯一路徑——同一件事在票上讀得到（`lock` 是 " +
+		"`reassigning`、`reassigned_from` 是前任），開機盤點就會看到，" +
+		"漏收這則也不會漏掉這張票。" +
 		"請先跟他確認交接完成（直接 post_chat 給他，問清楚目前進度與進行中的事項），" +
 		"確認後再由你自己呼叫 claim_task（認領）解除轉派鎖——只有你這個新負責人動得了；" +
 		"任務狀態一律照步驟推導，不必也不能自己報。"

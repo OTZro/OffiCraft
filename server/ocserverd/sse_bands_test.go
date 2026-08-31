@@ -411,12 +411,21 @@ func TestDecideTaskCloseNudge(t *testing.T) {
 		}
 	}
 
-	// An ad-hoc task (no type) has no manual to write into — never nudges.
-	adhoc := base
-	adhoc.Status = TaskStatusDone
-	adhoc.TypeKey = ""
-	if decideTaskCloseNudge(adhoc) != nil {
-		t.Fatal("ad-hoc close must stay quiet")
+	// 🔴 REVERSED BY OWNER RULING (T-91). This asserted that an ad-hoc task
+	// (no type) never nudges, because there is no manual to write learnings
+	// into. The premise is still true and is no longer the question: the
+	// notice's job is telling an executor its ticket is CLOSED, which is
+	// equally true of a typeless one. Same for a DUPLICATED close, whose gate
+	// was removed in the same change.
+	for _, silenced := range []Task{
+		{ID: "t-adhoc", Status: TaskStatusDone, TypeKey: "", ExecutorID: "m-exec"},
+		{ID: "t-dup", Status: TaskStatusDuplicated, TypeKey: "review-pr", ExecutorID: "m-exec"},
+	} {
+		if decideTaskCloseNudge(silenced) == nil {
+			t.Fatalf("%s must nudge: the two gates that used to silence it asked "+
+				"whether there were LESSONS, not whether the executor needed to "+
+				"know its ticket was closed", silenced.ID)
+		}
 	}
 
 	// A non-terminal status never nudges.
