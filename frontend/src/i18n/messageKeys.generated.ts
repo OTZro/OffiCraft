@@ -680,6 +680,8 @@ export const MESSAGE_KEYS: readonly string[] = [
   "replies.redecide",
   "replies.redecideHint",
   "replies.redecidePlaceholder",
+  "replies.selectedCountLead",
+  "replies.selectedCountTail",
   "replies.viewOptions",
   "replies.viewTask",
   "replies.waitedLabel",

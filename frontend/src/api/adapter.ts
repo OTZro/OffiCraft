@@ -155,12 +155,13 @@ export interface ChatReplyQuote {
  * summary/body/kind/attachments are deliberately NOT here (the message this
  * rides on already carries the ask). */
 export interface ChatInlineReplyCardView {
-  /** The frozen quick-reply wording as offered (`options[0]` is the AI pick).
-   * Empty for a card opened without options. */
-  options: string[];
-  /** Index into `options` of the option that was picked; null when answered
-   * with free text only, or not answered yet. */
-  answerOptionIdx: number | null;
+  /** The frozen quick-reply choices as offered, each carrying its OWN
+   * `aiPick`. Empty for a card opened without options. */
+  options: ReplyCardOption[];
+  /** Indices into `options` of EVERY option that was circled; null when
+   * answered with free text only, or not answered yet. Deduped + ascending as
+   * the server stored it. */
+  answerOptionIdxs: number[] | null;
   /** The free-text answer; "" when none was given. */
   answerText: string;
   /** Epoch seconds the card was answered; 0 while still waiting. */
@@ -249,12 +250,22 @@ export interface PushSubscriptionInput {
   keys: { p256dh: string; auth: string };
 }
 
+/** ONE frozen quick-reply choice, in view-model form. `aiPick` is the ONLY
+ * carrier of "the AI recommends this one" — it replaced the positional
+ * `options[0]` convention, so a chip must read THIS flag and never its own
+ * index. */
+export interface ReplyCardOption {
+  text: string;
+  aiPick: boolean;
+}
+
 /** The stored answer on an ANSWERED reply card, in view-model form.
- * `optionIdx` is null for a pure free-text answer (index into the card's
- * `options` otherwise); `attachments` are served refs into the shared
- * chat-attachment store (render like chat attachments). */
+ * `optionIdxs` is null for a pure free-text answer, otherwise the deduped,
+ * ascending indices into the card's `options` of EVERY circled option;
+ * `attachments` are served refs into the shared chat-attachment store (render
+ * like chat attachments). */
 export interface ReplyCardAnswer {
-  optionIdx: number | null;
+  optionIdxs: number[] | null;
   text: string;
   attachments: ChatAttachmentView[];
 }
@@ -266,8 +277,9 @@ export interface ReplyCardAnswer {
  * close/skip surface anywhere) and waiting→expired via the expire action, open to
  * the card's own author as well as the owner / an admin agent (標為過期 — NOT an
  * answer; terminal, no reopen; T-1b88 widened T-6020's admin floor); a revised answer
- * (重新決定) keeps `answered`. `options[0]` is ALWAYS the AI's own
- * recommendation. `chatMessageId` links the chat message the card rides in —
+ * (重新決定) keeps `answered`. Each entry of `options` carries its own
+ * `aiPick` (position means nothing) and `selectMode` says how many of them the
+ * owner may circle. `chatMessageId` links the chat message the card rides in —
  * the jump-to-origin anchor (B3 uses it to locate + highlight the message in
  * the member's chat; B2 only navigates to the chat room). `answeredTs`/
  * `answer` are null unless answered; `expiredTs` is null unless expired.
@@ -280,7 +292,11 @@ export interface ReplyCard {
   kind: string;
   summary: string;
   body: string;
-  options: string[];
+  options: ReplyCardOption[];
+  /** How many options the owner may circle: "single" (at most one — a second
+   * pick REPLACES the first) | "multi" (toggle any number). A separate axis
+   * from `kind`, which says what the owner must DO. */
+  selectMode: "single" | "multi";
   status: "waiting" | "answered" | "expired";
   /** QUESTION-side attachments the initiator opened the card with (T-5e8a) —
    * served refs into the shared chat-attachment store, rendered like chat
@@ -314,12 +330,17 @@ export interface TaskRefView {
   title: string;
 }
 
-/** The owner's answer to a reply card: a quick-reply `optionIdx` and/or free
- * `text`, plus optional staged `attachments` (same input shape + limits as
+/** The owner's answer to a reply card: the quick-reply `optionIdxs` and/or
+ * free `text`, plus optional staged `attachments` (same input shape + limits as
  * chat attachments). At least one of the three must be present — the server
- * rejects an empty answer (400). */
+ * rejects an empty answer (400), and an EMPTY `optionIdxs` list counts as empty
+ * rather than as an answer, so a caller with nothing circled omits the field
+ * instead of sending `[]`. Order and duplicates do not matter to the server
+ * (it stores the list deduped + ascending), but the cockpit sends it already
+ * sorted so two owners who ticked the same boxes in different orders produce a
+ * byte-identical body. */
 export interface ReplyCardAnswerInput {
-  optionIdx?: number;
+  optionIdxs?: number[];
   text?: string;
   attachments?: ChatAttachmentInput[];
 }
@@ -1808,8 +1829,9 @@ export interface Api {
   /**
    * Answer a WAITING card (`POST /api/reply-cards/{id}/answer`) — the ONLY way
    * a card ever closes (no close/skip verb exists). The answer is an option
-   * and/or free text (+ attachments); empty → 400, out-of-range optionIdx →
-   * 400, already answered → 409 (all reject as ApiError). Returns the answered
+   * LIST and/or free text (+ attachments); empty → 400 (and `optionIdxs: []`
+   * IS empty), an out-of-range index → 400, more than one index on a `single`
+   * card → 400, already answered → 409 (all reject as ApiError). Returns the answered
    * card; the caller refetches lists + count (the SSE delta also fans).
    */
   answerReplyCard(id: string, answer: ReplyCardAnswerInput): Promise<ReplyCard>;

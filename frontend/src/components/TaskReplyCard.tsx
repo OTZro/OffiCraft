@@ -49,7 +49,7 @@ export function TaskReplyCard({
    * card loads, its own summary + answer replace it. */
   fallbackSummary?: string;
 }) {
-  const { t } = useI18n();
+  const { t, msg } = useI18n();
   const [, setRoute] = useHashRoute();
   const [card, setCard] = useState<ReplyCard | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -186,9 +186,16 @@ export function TaskReplyCard({
   if ((lazyTerminal || terminal) && !answeredOpen) {
     const expiredStub =
       card?.status === "expired" || statusRef.current === "expired";
+    // The collapsed line prints EVERY circled option, joined by the locale's
+    // list separator — a multi-select answer reduced to its first option reads
+    // as a narrower decision than the owner made. Free text is the fallback
+    // only when no option was circled at all.
+    const pickedOptions = (card?.answer?.optionIdxs ?? []).map(
+      (i) => card?.options[i]?.text ?? "",
+    );
     const answerText = card
-      ? card.answer?.optionIdx != null
-        ? card.options[card.answer.optionIdx]
+      ? pickedOptions.length > 0
+        ? msg.replyPickedOptions(pickedOptions)
         : (card.answer?.text ?? "")
       : "";
     return (

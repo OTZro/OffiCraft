@@ -317,8 +317,12 @@ export const zh = {
     expireError: "標為過期失敗，請稍後重試",
     expiredTag: "已過期",
     expiredNote: "未被回答、已標為過期;若問題還在,成員會重新開卡",
-    // 快捷選項第 1 個一律是 AI 的首選
+    // 帶 ai_pick 的那個選項才是 AI 的建議;位置不再有任何意義。
     aiPick: "AI 建議",
+    // 多選卡的暫存計數:勾了幾項在送出前就寫出來——多選卡上「什麼都沒勾」與
+    // 「全都要」在畫面上只差哪幾顆亮著,所以把數字寫出來。
+    selectedCountLead: "已選",
+    selectedCountTail: "項",
     yourPick: "你選的",
     jumpToChat: "跳到原訊息",
     inputPlaceholder: "輸入回覆…",

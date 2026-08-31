@@ -63,7 +63,8 @@ const LEAD_CARD: ReplyCard = {
   // Long enough that a row sitting below it would be well past the fold of a
   // phone-height card — the very complaint that moved it.
   body: "同步之後那邊的欄位就會被覆寫，先確認一下再動。這段刻意寫長一點，讓正文佔掉整個卡片的高度。",
-  options: ["核可，直接同步上去", "先不要"],
+  options: [{ text: "核可，直接同步上去", aiPick: true }, { text: "先不要", aiPick: false }],
+  selectMode: "single",
   status: "waiting",
   attachments: [],
   createdTs: Date.now() / 1000 - 600,

@@ -57,6 +57,8 @@ export interface Messages {
   replyAnsweredAt: (time: string) => string;
   replyExpiredAt: (time: string) => string;
   replyExpireConfirmBody: (summary: string) => string;
+  replySelectedCount: (n: number) => string;
+  replyPickedOptions: (options: string[]) => string;
   // ── office ──
   outsourceLabel: (codename: string) => string;
   // ── worker detail ──
@@ -228,6 +230,18 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     replyExpiredAt: (time) => `${replies.expiredAtLabel} ${time}`,
     replyExpireConfirmBody: (summary) =>
       `${replies.expireConfirmBodyLead}${summary}${replies.expireConfirmBodyTail}`,
+    // How many options are ticked on a multi-select card. LITERAL spaces on
+    // both sides of the number — deliberately NOT `sp`: zh writes 「已選 2 項」
+    // with the digit spaced off the han characters exactly as en writes
+    // "Selected 2 options", so this is not one of the joins that differ by
+    // language and must not be routed through the variable that says they do.
+    replySelectedCount: (n) =>
+      `${replies.selectedCountLead} ${n} ${replies.selectedCountTail}`,
+    // Every circled option on one line (the collapsed task-card row). Joined by
+    // the locale's own list separator — the same one every other list in this
+    // file uses, so a multi-select decision is punctuated like a list and not
+    // like a sentence someone concatenated.
+    replyPickedOptions: (options) => options.join(listSep),
 
     // The outsource identity label has ONE source of the word 外包 now: the
     // section title. It used to have two (a title leaf and an identically

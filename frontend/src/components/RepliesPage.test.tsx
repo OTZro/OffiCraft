@@ -59,7 +59,8 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "要幫你寄出這封信嗎？",
     body: "",
-    options: ["寄出", "先不要"],
+    options: [{ text: "寄出", aiPick: true }, { text: "先不要", aiPick: false }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     createdTs: Date.now() / 1000 - 25 * 60,
@@ -152,14 +153,15 @@ describe("RepliesPage", () => {
     expect(names).not.toContain("ow-rel");
   });
 
-  it("tags the FIRST quick-reply option as the AI pick", async () => {
+  it("tags the option that carries ai_pick and leaves every other chip untagged", async () => {
     __injectMockReplyCard(mkCard({}));
     const { findAllByTestId } = renderPage();
     const [card] = await findAllByTestId("waiting-card");
-    const options = card.querySelectorAll(".reply-option");
-    expect(options).toHaveLength(2);
-    expect(options[0].textContent).toContain("AI 建議");
-    expect(options[1].textContent).not.toContain("AI 建議");
+    // Each chip WHOLE: its 1-based number, its wording, and exactly the tags it
+    // earned. mkCard marks the first option ai_pick, so the tag rides that one.
+    expect(
+      [...card.querySelectorAll(".reply-option")].map((e) => e.textContent),
+    ).toEqual(["1寄出AI 建議", "2先不要"]);
   });
 
   it("answering via an option moves the card to 近期已回覆 tagged 你選的 + AI 建議", async () => {
@@ -168,16 +170,16 @@ describe("RepliesPage", () => {
     const [card] = await findAllByTestId("waiting-card");
 
     fireEvent.click(card.querySelectorAll(".reply-option")[0]);
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(card.querySelector(".chat__send")!);
 
     // The answered pane is collapsed by default — expand it to see the card.
     fireEvent.click(await findByTestId("answered-toggle"));
     const answeredCard = await findByTestId("answered-card");
     await waitFor(() => expect(queryAllByTestId("waiting-card")).toHaveLength(0));
     const final = answeredCard.querySelector('[data-testid="final-answer"]');
-    expect(final?.textContent).toContain("寄出");
-    expect(final?.textContent).toContain("你選的");
-    // The pick IS options[0] → the AI 建議 tag rides alongside.
-    expect(final?.textContent).toContain("AI 建議");
+    // The circled option IS the ai_pick one → the AI 建議 tag rides alongside.
+    expect(final?.textContent).toBe("你選的AI 建議寄出");
   });
 
   // T-4166: a 409 on answer is TERMINAL for that card — its task closed
@@ -201,6 +203,8 @@ describe("RepliesPage", () => {
     const before = listSpy.mock.calls.length;
 
     fireEvent.click(card.querySelectorAll(".reply-option")[0]);
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(card.querySelector(".chat__send")!);
 
     const notice = await findByTestId("replies-action-error");
     expect(notice.textContent).toBe(zh.replies.answerStale);
@@ -223,7 +227,7 @@ describe("RepliesPage", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     vi.spyOn(api, "reanswerReplyCard").mockRejectedValue(
@@ -236,6 +240,8 @@ describe("RepliesPage", () => {
     fireEvent.click(getByText("查看當初選項"));
     fireEvent.click(getByText("重新決定"));
     fireEvent.click(card.querySelectorAll(".reply-option")[1]);
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(card.querySelector(".chat__send")!);
 
     const notice = await findByTestId("replies-action-error");
     expect(notice.textContent).toBe(zh.replies.answerStale);
@@ -253,6 +259,8 @@ describe("RepliesPage", () => {
     const [card] = await findAllByTestId("waiting-card");
 
     fireEvent.click(card.querySelectorAll(".reply-option")[0]);
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(card.querySelector(".chat__send")!);
 
     const notice = await findByTestId("replies-action-error");
     expect(notice.textContent).toBe(zh.replies.answerError);
@@ -271,10 +279,8 @@ describe("RepliesPage", () => {
     fireEvent.click(await findByTestId("answered-toggle"));
     const answeredCard = await findByTestId("answered-card");
     const final = answeredCard.querySelector('[data-testid="final-answer"]');
-    expect(final?.textContent).toContain("收件人是誰？");
-    expect(final?.textContent).toContain("你選的");
-    // A free-text answer is NOT the AI pick.
-    expect(final?.textContent).not.toContain("AI 建議");
+    // A free-text answer circles nothing, so it is not the AI pick either.
+    expect(final?.textContent).toBe("你選的收件人是誰？");
   });
 
   it("近期已處理 is collapsed by default; the title row toggles it open and shut", async () => {
@@ -282,7 +288,7 @@ describe("RepliesPage", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     const { findByTestId, queryAllByTestId } = renderPage();
@@ -310,7 +316,7 @@ describe("RepliesPage", () => {
         id: "rc-ans",
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     const listSpy = vi.spyOn(api, "listReplyCards");
@@ -337,7 +343,7 @@ describe("RepliesPage", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 1, text: "", attachments: [] },
+        answer: { optionIdxs: [1], text: "", attachments: [] },
       })
     );
     const { findByTestId, getByText } = renderPage();
@@ -346,10 +352,14 @@ describe("RepliesPage", () => {
 
     fireEvent.click(getByText("查看當初選項"));
     const options = card.querySelectorAll(".reply-option");
-    expect(options).toHaveLength(2);
-    // Review mode: options render but are NOT pickable yet.
+    // Review mode: options render but are NOT pickable yet, and the standing
+    // answer (index 1) wears 目前 — every chip WHOLE so a 目前 that leaked onto
+    // the wrong chip, or a lost AI tag, is a failure here.
+    expect([...options].map((e) => e.textContent)).toEqual([
+      "1寄出AI 建議",
+      "2先不要目前",
+    ]);
     expect((options[0] as HTMLButtonElement).disabled).toBe(true);
-    expect(options[1].textContent).toContain("目前");
     // 重新決定 sits at the expansion's bottom.
     expect(getByText("重新決定")).toBeTruthy();
   });
@@ -359,7 +369,7 @@ describe("RepliesPage", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     const { findByTestId, getByText, getByPlaceholderText } = renderPage();
@@ -374,13 +384,14 @@ describe("RepliesPage", () => {
     expect(getByPlaceholderText("或直接打字改寫回覆…")).toBeTruthy();
 
     fireEvent.click(options[1]);
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(card.querySelector(".chat__send")!);
 
     await waitFor(async () => {
       card = await findByTestId("answered-card");
       const final = card.querySelector('[data-testid="final-answer"]');
-      expect(final?.textContent).toContain("先不要");
       // No longer the AI pick → the AI 建議 tag is gone; 你選的 stays.
-      expect(final?.textContent).not.toContain("AI 建議");
+      expect(final?.textContent).toBe("你選的先不要");
     });
   });
 
@@ -389,7 +400,7 @@ describe("RepliesPage", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     const { findByTestId, getByText, queryByPlaceholderText } = renderPage();
@@ -402,8 +413,7 @@ describe("RepliesPage", () => {
 
     expect(queryByPlaceholderText("或直接打字改寫回覆…")).toBeNull();
     const final = card.querySelector('[data-testid="final-answer"]');
-    expect(final?.textContent).toContain("寄出");
-    expect(final?.textContent).toContain("AI 建議");
+    expect(final?.textContent).toBe("你選的AI 建議寄出");
   });
 
   // 跳到原訊息 NAVIGATES (owner 2026-08-29: 「1 跟 2 變回去原本那樣」). The
@@ -516,6 +526,8 @@ describe("RepliesPage", () => {
     const [card] = await findAllByTestId("waiting-card");
 
     fireEvent.click(card.querySelectorAll(".reply-option")[0]);
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(card.querySelector(".chat__send")!);
     fireEvent.click(await findByTestId("answered-toggle"));
     await findByTestId("answered-card");
 
@@ -579,7 +591,7 @@ describe("RepliesPage", () => {
     __injectMockReplyCard(
       mkCard({
         status: "answered",
-        answer: { optionIdx: 0, text: "好", attachments: [] },
+        answer: { optionIdxs: [0], text: "好", attachments: [] },
         answeredTs: Date.now() / 1000 - 60,
         task: { id: "t-5", typeKey: "review-pr", title: "改開機說明" },
       }),

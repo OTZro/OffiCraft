@@ -6,14 +6,17 @@
 //   • ChatReplyCard (§3) — wraps the SAME bodies in the chat-thread card.
 //
 // Three bodies, one per card state:
-//   ReplyCardWaitingBody  — the quick-reply chips (options[0] tagged AI 建議)
-//                           + the typed ReplyComposer. Answering is the only
+//   ReplyCardWaitingBody  — the quick-reply chips (each tagged AI 建議 iff it
+//                           carries its OWN aiPick) + the typed ReplyComposer,
+//                           behind ONE send button: ticking a chip STAGES it,
+//                           and the send carries the ticked options AND the
+//                           typed text as a single answer. Answering is the only
 //                           POSITIVE way out (no close/skip control exists —
 //                           spec; 標為過期 (owner/admin agent, and since T-1b88
 //                           the card's own author) lives in the card
 //                           HEAD, outside this shared interior).
-//   ReplyCardAnsweredBody — the final answer tagged 你選的 (+ AI 建議 when it
-//                           IS the AI pick), 查看當初選項 expand, and 重新決定
+//   ReplyCardAnsweredBody — the final answer tagged 你選的 (+ AI 建議 when any
+//                           circled option carries aiPick), 查看當初選項 expand, and 重新決定
 //                           at the expansion's bottom (options re-arm + the
 //                           same composer; cancel keeps the original answer).
 //   ReplyCardExpiredBody  — the terminal 已過期 state (T-1aa4): a grey static
@@ -27,52 +30,102 @@
 
 import { useState } from "react";
 import { useI18n } from "../i18n";
-import type { ReplyCard, ReplyCardAnswerInput } from "../api/adapter";
+import type {
+  ChatAttachmentInput,
+  ReplyCard,
+  ReplyCardAnswerInput,
+} from "../api/adapter";
 import { AttachmentStrip } from "./AttachmentStrip";
 import { ReplyComposer } from "./ReplyComposer";
 import { ChevronRightIcon } from "./icons";
 
+/** Toggle `idx` in the staged selection under the card's own select mode.
+ * `multi` adds/removes; `single` REPLACES whatever was ticked (and un-ticks on
+ * a second click of the same chip, so "nothing circled" stays reachable — that
+ * is the state the send button refuses to send).
+ *
+ * The result is kept SORTED ASCENDING so the staged set is a function of WHICH
+ * chips are ticked and not of the order they were ticked in. */
+export function toggleSelection(
+  selected: number[],
+  idx: number,
+  selectMode: ReplyCard["selectMode"],
+): number[] {
+  if (selected.includes(idx)) return selected.filter((i) => i !== idx);
+  if (selectMode !== "multi") return [idx];
+  return [...selected, idx].sort((a, b) => a - b);
+}
+
+/** Build the answer body a card face submits: the ticked options AND the typed
+ * text/attachments as ONE answer (the two used to be two separate POSTs, which
+ * a multi-select answer cannot express). `optionIdxs` is OMITTED when nothing
+ * is ticked — an empty list is a 400 server-side, deliberately, and sending it
+ * would turn "I typed a reply and circled nothing" into an error. */
+function answerInput(
+  selected: number[],
+  text: string,
+  attachments: ChatAttachmentInput[],
+): ReplyCardAnswerInput {
+  return {
+    ...(selected.length > 0 ? { optionIdxs: selected } : {}),
+    text,
+    attachments,
+  };
+}
+
 /** The quick-reply option chips. `pickable: false` renders them as a static
- * review (當初選項 before 重新決定 re-arms them); `currentIdx` marks the
- * standing answer on an answered card. options[0] always carries the AI 建議
- * tag (spec: the first option IS the AI's own recommendation). */
+ * review (當初選項 before 重新決定 re-arms them); `currentIdxs` marks the
+ * STANDING answer on an answered card (the 「目前」 tag), `selectedIdxs` marks
+ * what is STAGED but not yet sent.
+ *
+ * 🔴 The AI 建議 tag reads each option's OWN `aiPick`. It is NOT `idx === 0`:
+ * position stopped carrying that meaning, so a card whose recommendation is the
+ * third option tags the third option. */
 export function ReplyOptionChips({
   card,
   pickable,
-  currentIdx = null,
-  onPick,
+  selectedIdxs = [],
+  currentIdxs = [],
+  onToggle,
 }: {
   card: ReplyCard;
   pickable: boolean;
-  currentIdx?: number | null;
-  onPick?: (idx: number) => void;
+  selectedIdxs?: number[];
+  currentIdxs?: number[];
+  onToggle?: (idx: number) => void;
 }) {
   const { t } = useI18n();
   return (
     <div className="reply-card__options">
-      {card.options.map((text, idx) => {
-        const isCurrent = currentIdx === idx;
+      {card.options.map((opt, idx) => {
+        const isCurrent = currentIdxs.includes(idx);
+        const isSelected = selectedIdxs.includes(idx);
         return (
           <button
             key={idx}
             type="button"
             className={
               "reply-option" +
-              (idx === 0 ? " reply-option--ai" : "") +
+              (opt.aiPick ? " reply-option--ai" : "") +
+              (isSelected ? " reply-option--selected" : "") +
               (isCurrent ? " reply-option--current" : "") +
               (pickable ? "" : " reply-option--static")
             }
+            data-testid="reply-option"
+            data-option-idx={idx}
+            data-selected={isSelected ? "true" : "false"}
+            aria-pressed={pickable ? isSelected : undefined}
             disabled={!pickable}
-            onClick={() => onPick?.(idx)}
+            onClick={() => onToggle?.(idx)}
           >
             <span className="reply-option__num">{idx + 1}</span>
-            <span className="reply-option__text">{text}</span>
+            <span className="reply-option__text">{opt.text}</span>
             {isCurrent && (
               <span className="reply-tag reply-tag--current">
                 {t.replies.currentTag}
               </span>
             )}
-            {idx === 0 && (
+            {opt.aiPick && (
               <span className="reply-tag reply-tag--ai">
                 {t.replies.aiPick}
               </span>
@@ -80,6 +133,26 @@ export function ReplyOptionChips({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/** How many options are ticked, on a MULTI card only. On a single-select card
+ * the chips already say it (exactly one can be lit), but on a multi card
+ * "nothing ticked" and "everything ticked" differ only by which chips are lit —
+ * so the count is written out. */
+function ReplySelectionCount({
+  card,
+  selected,
+}: {
+  card: ReplyCard;
+  selected: number[];
+}) {
+  const { msg } = useI18n();
+  if (card.selectMode !== "multi") return null;
+  return (
+    <div className="reply-card__selcount" data-testid="reply-selected-count">
+      {msg.replySelectedCount(selected.length)}
     </div>
   );
 }
@@ -174,16 +247,25 @@ export function ReplyCardWaitingBody({
   onAnswer: (input: ReplyCardAnswerInput) => Promise<void>;
 }) {
   const { t } = useI18n();
+  const [selected, setSelected] = useState<number[]>([]);
   return (
     <>
       <ReplyOptionChips
         card={card}
         pickable
-        onPick={(i) => void onAnswer({ optionIdx: i }).catch(() => {})}
+        selectedIdxs={selected}
+        onToggle={(i) =>
+          setSelected((prev) => toggleSelection(prev, i, card.selectMode))
+        }
       />
+      <ReplySelectionCount card={card} selected={selected} />
       <ReplyComposer
         placeholder={t.replies.inputPlaceholder}
-        onSend={(body, attachments) => onAnswer({ text: body, attachments })}
+        hasSelection={selected.length > 0}
+        onSend={async (body, attachments) => {
+          await onAnswer(answerInput(selected, body, attachments));
+          setSelected([]);
+        }}
       />
     </>
   );
@@ -226,12 +308,22 @@ export function ReplyCardAnsweredBody({
   const [editing, setEditing] = useState(false);
 
   const ans = card.answer;
-  const optionIdx = ans?.optionIdx ?? null;
-  const isAiPick = optionIdx === 0;
+  const optionIdxs = ans?.optionIdxs ?? [];
+  // AI 建議 on the final row is a property of the OPTIONS that were circled,
+  // read off each one's own aiPick — never off index 0.
+  const isAiPick = optionIdxs.some((i) => card.options[i]?.aiPick);
+  // What 重新決定 has staged. Seeded from the standing answer when edit mode
+  // opens, so "change one of my three picks" does not start from nothing.
+  const [selected, setSelected] = useState<number[]>([]);
 
   async function doReanswer(input: ReplyCardAnswerInput) {
     await onReanswer(input);
     setEditing(false);
+  }
+
+  function startEditing() {
+    setSelected(optionIdxs);
+    setEditing(true);
   }
 
   function toggleExpanded() {
@@ -242,20 +334,25 @@ export function ReplyCardAnsweredBody({
 
   return (
     <>
-      {/* The FINAL answer: 你選的 always; AI 建議 additionally when the
-       * standing pick IS options[0] (spec: 若選的正是 AI 建議，另標). An
-       * answer may carry an option AND typed text — both render. */}
+      {/* The FINAL answer: 你選的 always; AI 建議 additionally when one of the
+       * circled options carries aiPick (spec: 若選的正是 AI 建議，另標). An
+       * answer may carry SEVERAL options AND typed text — all of them render;
+       * showing only the first would silently drop the rest of the decision. */}
       <div className="reply-card__answer" data-testid="final-answer">
         <span className="reply-tag reply-tag--pick">{t.replies.yourPick}</span>
         {isAiPick && (
           <span className="reply-tag reply-tag--ai">{t.replies.aiPick}</span>
         )}
         <span className="reply-card__answer-text">
-          {optionIdx !== null && (
-            <span className="reply-card__answer-option">
-              {card.options[optionIdx]}
+          {optionIdxs.map((i) => (
+            <span
+              className="reply-card__answer-option"
+              data-testid="reply-answer-option"
+              key={i}
+            >
+              {card.options[i]?.text ?? ""}
             </span>
-          )}
+          ))}
           {ans?.text && (
             <span className="reply-card__answer-free">{ans.text}</span>
           )}
@@ -288,15 +385,20 @@ export function ReplyCardAnsweredBody({
           <ReplyOptionChips
             card={card}
             pickable={editing}
-            currentIdx={optionIdx}
-            onPick={(i) => void doReanswer({ optionIdx: i }).catch(() => {})}
+            selectedIdxs={editing ? selected : []}
+            currentIdxs={optionIdxs}
+            onToggle={(i) =>
+              setSelected((prev) => toggleSelection(prev, i, card.selectMode))
+            }
           />
+          {editing && <ReplySelectionCount card={card} selected={selected} />}
           {editing ? (
             <>
               <ReplyComposer
                 placeholder={t.replies.redecidePlaceholder}
+                hasSelection={selected.length > 0}
                 onSend={(body, attachments) =>
-                  doReanswer({ text: body, attachments })
+                  doReanswer(answerInput(selected, body, attachments))
                 }
               />
               <button
@@ -314,7 +416,7 @@ export function ReplyCardAnsweredBody({
             <button
               type="button"
               className="reply-card__redecide"
-              onClick={() => setEditing(true)}
+              onClick={startEditing}
             >
               {t.replies.redecide}
             </button>

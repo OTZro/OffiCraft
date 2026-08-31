@@ -43,7 +43,8 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "要幫你寄出這封信嗎？",
     body: "",
-    options: ["寄出", "先不要"],
+    options: [{ text: "寄出", aiPick: true }, { text: "先不要", aiPick: false }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     createdTs: Date.now() / 1000 - 600,
@@ -139,10 +140,12 @@ describe("ChatReplyCard", () => {
     expect(row.querySelector(".chat__msg-bubble")).toBeNull();
 
     await findAllByText("寄出");
-    const options = row.querySelectorAll(".reply-option");
-    expect(options).toHaveLength(2);
-    expect(options[0].textContent).toContain("AI 建議");
-    expect(options[1].textContent).not.toContain("AI 建議");
+    // Each chip WHOLE: its 1-based number, its wording, and exactly the tags
+    // it earned. mkCard puts ai_pick on the first option, so the AI tag rides
+    // that one and nothing else.
+    expect(
+      [...row.querySelectorAll(".reply-option")].map((e) => e.textContent),
+    ).toEqual(["1寄出AI 建議", "2先不要"]);
     // The typed composer rides the card; no close/skip control exists.
     expect(row.querySelector(".reply-composer")).not.toBeNull();
     expect(row.textContent).not.toContain("關閉");
@@ -155,11 +158,13 @@ describe("ChatReplyCard", () => {
     await findAllByText("寄出");
 
     fireEvent.click(container.querySelectorAll(".reply-option")[0]);
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(container.querySelector(".chat__send")!);
 
     const final = await findByTestId("final-answer");
-    expect(final.textContent).toContain("寄出");
-    expect(final.textContent).toContain("你選的");
-    expect(final.textContent).toContain("AI 建議");
+    expect(final.textContent).toBe(
+      "你選的AI 建議寄出",
+    );
     // The chips + composer are gone — a card is answered exactly once.
     expect(container.querySelector(".reply-composer")).toBeNull();
     // The replies-page side of the sync: the waiting count dropped.
@@ -176,9 +181,7 @@ describe("ChatReplyCard", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     const final = await findByTestId("final-answer");
-    expect(final.textContent).toContain("收件人是誰？");
-    expect(final.textContent).toContain("你選的");
-    expect(final.textContent).not.toContain("AI 建議");
+    expect(final.textContent).toBe("你選的收件人是誰？");
   });
 
   it("重新決定 re-arms the chips; picking another updates the answer in place (stays answered)", async () => {
@@ -186,7 +189,7 @@ describe("ChatReplyCard", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     const { container, getByText, getByPlaceholderText, findByTestId } =
@@ -206,11 +209,12 @@ describe("ChatReplyCard", () => {
     expect(getByPlaceholderText("或直接打字改寫回覆…")).toBeTruthy();
 
     fireEvent.click(options[1]);
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(container.querySelector(".chat__send")!);
 
     await waitFor(() => {
       const final = container.querySelector('[data-testid="final-answer"]');
-      expect(final?.textContent).toContain("先不要");
-      expect(final?.textContent).not.toContain("AI 建議");
+      expect(final?.textContent).toBe("你選的先不要");
     });
     // A revision never reopens the card (waiting count stays 0).
     expect((await api.getReplyCardCount()).waiting).toBe(0);
@@ -221,7 +225,7 @@ describe("ChatReplyCard", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     const { container, getByText, queryByPlaceholderText, findByTestId } =
@@ -234,8 +238,9 @@ describe("ChatReplyCard", () => {
 
     expect(queryByPlaceholderText("或直接打字改寫回覆…")).toBeNull();
     const final = container.querySelector('[data-testid="final-answer"]');
-    expect(final?.textContent).toContain("寄出");
-    expect(final?.textContent).toContain("AI 建議");
+    expect(final?.textContent).toBe(
+      "你選的AI 建議寄出",
+    );
   });
 
   it("an answer landing through the OTHER entry point flips the inline card (reply_card delta sync)", async () => {
@@ -246,11 +251,10 @@ describe("ChatReplyCard", () => {
 
     // The 等我回覆 page (or another window) answers the card — not this
     // component. The reply_card fan-out must refetch and flip it in place.
-    await api.answerReplyCard("rc-1", { optionIdx: 1 });
+    await api.answerReplyCard("rc-1", { optionIdxs: [1] });
 
     const final = await findByTestId("final-answer");
-    expect(final.textContent).toContain("先不要");
-    expect(final.textContent).toContain("你選的");
+    expect(final.textContent).toBe("你選的先不要");
     expect(container.querySelector(".reply-composer")).toBeNull();
   });
 
@@ -260,7 +264,7 @@ describe("ChatReplyCard", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     const fireDelta = captureSseCallback();
@@ -313,7 +317,7 @@ describe("ChatReplyCard", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     const getSpy = vi.spyOn(api, "getReplyCard");
@@ -333,7 +337,7 @@ describe("ChatReplyCard", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     const getSpy = vi.spyOn(api, "getReplyCard");
@@ -342,7 +346,9 @@ describe("ChatReplyCard", () => {
     fireEvent.click(await findByTestId("chat-reply-card-expand"));
 
     const final = await findByTestId("final-answer");
-    expect(final.textContent).toContain("寄出");
+    expect(final.textContent).toBe(
+      "你選的AI 建議寄出",
+    );
     expect(getSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -360,7 +366,7 @@ describe("ChatReplyCard", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     const fireDelta = captureSseCallback();

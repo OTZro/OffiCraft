@@ -681,6 +681,8 @@ var messageKeys = map[string]bool{
 	"replies.redecide":                                 true,
 	"replies.redecideHint":                             true,
 	"replies.redecidePlaceholder":                      true,
+	"replies.selectedCountLead":                        true,
+	"replies.selectedCountTail":                        true,
 	"replies.viewOptions":                              true,
 	"replies.viewTask":                                 true,
 	"replies.waitedLabel":                              true,

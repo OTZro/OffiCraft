@@ -37,7 +37,8 @@ function mkCard(over: Partial<ReplyCard> = {}): ReplyCard {
     kind: "decision",
     summary: "要不要切到新的排程器?",
     body: "細節",
-    options: ["切過去", "先不要"],
+    options: [{ text: "切過去", aiPick: true }, { text: "先不要", aiPick: false }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     task: null,
@@ -85,6 +86,8 @@ describe("useReplyCards — one owner action costs one refetch round", () => {
     const countSpy = vi.spyOn(api, "getReplyCardCount");
 
     fireEvent.click(cards[0].querySelectorAll(".reply-option")[0]);
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(cards[0].querySelector(".chat__send")!);
 
     // The answered card really does leave the pane — the reconcile still works,
     // it just happens once. Without this the "exactly 1" below could also be

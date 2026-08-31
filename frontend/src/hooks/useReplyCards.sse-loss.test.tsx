@@ -74,7 +74,8 @@ function mkCard(over: Partial<ReplyCard> = {}): ReplyCard {
     kind: "decision",
     summary: "要不要切到新的排程器?",
     body: "細節",
-    options: ["切過去", "先不要"],
+    options: [{ text: "切過去", aiPick: true }, { text: "先不要", aiPick: false }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     task: null,
@@ -182,6 +183,8 @@ describe("reply-card writes reconcile without any event stream", () => {
     fireEvent.click(
       waitingCardById("rc-1").querySelectorAll(".reply-option")[0]
     );
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(waitingCardById("rc-1").querySelector(".chat__send")!);
 
     // The write landed (the mock accepted it and flipped the card to answered).
     // The cockpit must not keep rendering it as waiting — that is what sends the
@@ -237,6 +240,8 @@ describe("reply-card writes reconcile without any event stream", () => {
     fireEvent.click(
       waitingCardById("rc-1").querySelectorAll(".reply-option")[0]
     );
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(waitingCardById("rc-1").querySelector(".chat__send")!);
     await waitFor(() =>
       expect(queryAllByTestId("waiting-card")).toHaveLength(1)
     );
@@ -274,6 +279,8 @@ describe("reply-card writes reconcile without any event stream", () => {
     fireEvent.click(
       waitingCardById("rc-1").querySelectorAll(".reply-option")[0]
     );
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(waitingCardById("rc-1").querySelector(".chat__send")!);
     await waitFor(() =>
       expect(queryAllByTestId("waiting-card")).toHaveLength(1)
     );
@@ -335,6 +342,8 @@ describe("reply-card writes reconcile without any event stream", () => {
     await waitFor(() => expect(release).not.toBeNull());
 
     fireEvent.click(container.querySelectorAll(".reply-option")[0]);
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(container.querySelector(".chat__send")!);
     await waitFor(() =>
       expect(container.querySelector(".reply-card__answer-text")).toBeTruthy()
     );
@@ -384,6 +393,8 @@ describe("reply-card writes reconcile without any event stream", () => {
     await waitFor(() => expect(release).not.toBeNull());
 
     fireEvent.click(container.querySelectorAll(".reply-option")[0]);
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(container.querySelector(".chat__send")!);
     await waitFor(() =>
       expect(container.querySelector(".reply-card__answer-text")).toBeTruthy()
     );
@@ -409,7 +420,7 @@ describe("reply-card writes reconcile without any event stream", () => {
         summary: "早先答過的",
         status: "answered",
         answeredTs: Date.now() / 1000 - 3600,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
 
@@ -429,6 +440,8 @@ describe("reply-card writes reconcile without any event stream", () => {
 
     const cards = await findAllByTestId("waiting-card");
     fireEvent.click(cards[0].querySelectorAll(".reply-option")[0]);
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(cards[0].querySelector(".chat__send")!);
     await waitFor(() =>
       expect(queryAllByTestId("answered-card")).toHaveLength(2)
     );
@@ -446,14 +459,14 @@ describe("reply-card writes reconcile without any event stream", () => {
         id: "rc-old",
         status: "answered",
         answeredTs: Date.now() / 1000 - 3600,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       }),
       mkCard({
         id: "rc-peer",
         summary: "別人答的",
         status: "answered",
         answeredTs: Date.now() / 1000 - 120,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       }),
     ]);
 
@@ -481,11 +494,12 @@ describe("reply-card writes reconcile without any event stream", () => {
     const answeredFixture = (over: Partial<ReplyCard> = {}): ReplyCard =>
       mkCard({
         id: "rc-A",
-        options: ["OPT-ZERO", "OPT-ONE"],
+        options: [{ text: "OPT-ZERO", aiPick: true }, { text: "OPT-ONE", aiPick: false }],
+        selectMode: "single",
         status: "answered",
         createdTs: now - 3600,
         answeredTs: now - 600,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
         ...over,
       });
     __injectMockReplyCard(answeredFixture());
@@ -509,6 +523,8 @@ describe("reply-card writes reconcile without any event stream", () => {
     fireEvent.click(cards[0].querySelector(".reply-card__toggle")!);
     fireEvent.click(cards[0].querySelector(".reply-card__redecide")!);
     fireEvent.click(cards[0].querySelectorAll(".reply-option")[1]);
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(cards[0].querySelector(".chat__send")!);
     await waitFor(async () =>
       expect(answerOf((await findAllByTestId("answered-card"))[0])).toBe(
         "OPT-ONE"
@@ -554,6 +570,8 @@ describe("reply-card writes reconcile without any event stream", () => {
     );
 
     fireEvent.click(container.querySelectorAll(".reply-option")[0]);
+    // Ticking a chip STAGES it; the card's one send button submits it.
+    fireEvent.click(container.querySelector(".chat__send")!);
 
     await waitFor(() =>
       expect(container.querySelector(".reply-card__answer-text")).toBeTruthy()

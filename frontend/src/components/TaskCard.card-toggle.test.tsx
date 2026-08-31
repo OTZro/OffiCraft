@@ -81,7 +81,8 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "要現在同步到 Jira 嗎？",
     body: "",
-    options: ["核可，直接同步上去", "先不要"],
+    options: [{ text: "核可，直接同步上去", aiPick: true }, { text: "先不要", aiPick: false }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     createdTs: Date.now() / 1000 - 600,
@@ -399,7 +400,7 @@ describe("TaskCard whole-card toggle (mobile refactor)", () => {
         summary: "先前已答的",
         status: "answered",
         answeredTs: Date.now() / 1000 - 300,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     __injectMockReplyCard(mkCard({ id: "rc-wait", summary: "還等著的" }));

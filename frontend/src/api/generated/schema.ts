@@ -2740,7 +2740,7 @@ export interface paths {
          *     cards the owner marked expired within the last 24h (keyed off ``expired_ts``),
          *     newest first. Each row carries the card's
          *     ``summary`` (its title) and — on an answered row — the decision DIGEST
-         *     (picked option index + original wording, an answer-text preview, the
+         *     (every circled option's index + original wording, an answer-text preview, the
          *     attachment count), NEVER the ``body`` or the full ``options`` text; pull one
          *     card in full with ``get_reply_card``. ``?limit=N`` (N > 0) caps the rows AFTER
          *     the pane's ordering (the pane's first N survive); absent / non-positive = the
@@ -2768,8 +2768,8 @@ export interface paths {
         get: operations["handle_list_reply_cards_api_reply_cards_get"];
         put?: never;
         /**
-         * Open a reply card: an ask the owner must answer (options ≤4, [0]=AI pick). linked_task is REQUIRED and has no default — every card must SAY whether it is about a task, because the server no longer infers one. Send linked_task={"task_id": ..., "step_id": ...} to bind the ask to the step it is about: that step (and its task) enters waiting_owner until the owner answers. Send linked_task=null when the ask is not about a task — it opens as a plain unbound 請示. BOTH ids are required in the object form: a task_id with NO step_id is a 400, because a card bound to a task but to no step places no 等我回覆 hold, so the task would finish underneath your question and the owner's answer would then be rejected for good. Omitting linked_task entirely is a 400 that names both legal shapes. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).
-         * @description Open a reply card (agent-side; the MCP tool ``create_reply_card``). The initiator is ALWAYS the verified JWT ``sub``. Server validation: ``kind`` must be ``decision``|``action``; ``summary`` must be non-blank; ``options`` must be 1..4 non-blank strings (index 0 = the AI recommendation) — violations are a 400. Opening a card ALSO posts one chat message (initiator → owner, body = summary, ``meta.reply_card_id`` = the card id) so the ask rides the normal chat stream (unread red dot, permanent history); the card's ``chat_message_id`` links back to it. TASK/STEP BINDING IS DECLARED, NEVER INFERRED (T-18): ``linked_task`` is a REQUIRED field. ``null`` opens a plain unbound 請示. ``{task_id, step_id}`` binds the card to that step — the step enters ``waiting_owner`` carrying the card (``reply_card_id``), and the task follows into ``waiting_owner`` unless the step sits in a parallel group (sibling lanes may still run). The caller must be the task's executor (403 otherwise); the task must be ``in_progress``|``waiting_owner`` (409); the step must belong to the task (404) and must not be terminal — ``done``/``superseded`` (409). A ``linked_task`` object carrying a ``task_id`` but no ``step_id`` is a 400: a card bound to a task but to no step places no ``waiting_owner`` hold, so the task would run on to ``done`` underneath an ask the owner can then never answer (T-4166). OMITTING ``linked_task`` is a 400 naming both legal shapes — the field exists so that not deciding is impossible to do silently, which is exactly what the old auto-binding did whenever it could not resolve a step. Fans one ``chat`` and one ``reply_card`` SSE delta (plus a ``task`` delta when a step was bound).
+         * Open a reply card: an ask the owner must answer (options ≤4, each carrying its own ai_pick flag; select_mode single|multi). linked_task is REQUIRED and has no default — every card must SAY whether it is about a task, because the server no longer infers one. Send linked_task={"task_id": ..., "step_id": ...} to bind the ask to the step it is about: that step (and its task) enters waiting_owner until the owner answers. Send linked_task=null when the ask is not about a task — it opens as a plain unbound 請示. BOTH ids are required in the object form: a task_id with NO step_id is a 400, because a card bound to a task but to no step places no 等我回覆 hold, so the task would finish underneath your question and the owner's answer would then be rejected for good. Omitting linked_task entirely is a 400 that names both legal shapes. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).
+         * @description Open a reply card (agent-side; the MCP tool ``create_reply_card``). The initiator is ALWAYS the verified JWT ``sub``. Server validation: ``kind`` must be ``decision``|``action``; ``summary`` must be non-blank; ``options`` must be 1..4 objects ``{"text", "ai_pick"}`` with non-blank ``text``, and ``ai_pick`` — not position — is what marks the AI recommendation; ``select_mode`` is ``single`` (default) or ``multi``, and a ``single`` card may carry at most one ``ai_pick`` option — violations are a 400. Opening a card ALSO posts one chat message (initiator → owner, body = summary, ``meta.reply_card_id`` = the card id) so the ask rides the normal chat stream (unread red dot, permanent history); the card's ``chat_message_id`` links back to it. TASK/STEP BINDING IS DECLARED, NEVER INFERRED (T-18): ``linked_task`` is a REQUIRED field. ``null`` opens a plain unbound 請示. ``{task_id, step_id}`` binds the card to that step — the step enters ``waiting_owner`` carrying the card (``reply_card_id``), and the task follows into ``waiting_owner`` unless the step sits in a parallel group (sibling lanes may still run). The caller must be the task's executor (403 otherwise); the task must be ``in_progress``|``waiting_owner`` (409); the step must belong to the task (404) and must not be terminal — ``done``/``superseded`` (409). A ``linked_task`` object carrying a ``task_id`` but no ``step_id`` is a 400: a card bound to a task but to no step places no ``waiting_owner`` hold, so the task would run on to ``done`` underneath an ask the owner can then never answer (T-4166). OMITTING ``linked_task`` is a 400 naming both legal shapes — the field exists so that not deciding is impossible to do silently, which is exactly what the old auto-binding did whenever it could not resolve a step. Fans one ``chat`` and one ``reply_card`` SSE delta (plus a ``task`` delta when a step was bound).
          */
         post: operations["handle_create_reply_card_api_reply_cards_post"];
         delete?: never;
@@ -2833,7 +2833,7 @@ export interface paths {
         put: operations["handle_reanswer_reply_card_api_reply_cards__card_id__answer_put"];
         /**
          * Answer a waiting reply card — the only way a card closes.
-         * @description Answer a WAITING reply card — the only POSITIVE close (there is deliberately no close/skip surface; the expire action is the sole other exit and is NOT an answer — open to the card's own author as well as the owner / an admin agent (T-6020 held it at the admin floor; T-1b88, owner 2026-08-07, widened it to the author)). The answer is an ``option_idx`` and/or free ``text`` (+ attachments); an empty answer is 400, an out-of-range ``option_idx`` is 400. Any real answer — including a counter-question typed as text — flips the card to ``answered`` and stamps ``answered_ts``; if the reply did not settle the original question the agent opens a NEW card (never reopens this one). Answering an already-answered card is a 409 (revise via PUT instead); an expired card is a 409 too (terminal — if the question still matters the agent opens a NEW card). When the card is bound to a task step (create_reply_card with an explicit ``linked_task``), the FIRST answer also releases the waiting_owner hold — the server restores the step (and the task, once its last bound card is answered) to in_progress; the agent then advances the work itself. Fans one ``reply_card`` SSE delta (badge −1; the agent's own connection receives it and refetches the card for the full answer context).
+         * @description Answer a WAITING reply card — the only POSITIVE close (there is deliberately no close/skip surface; the expire action is the sole other exit and is NOT an answer — open to the card's own author as well as the owner / an admin agent (T-6020 held it at the admin floor; T-1b88, owner 2026-08-07, widened it to the author)). The answer is an ``option_idxs`` LIST and/or free ``text`` (+ attachments); an empty answer is 400 — and ``option_idxs: []`` IS empty, not an answer — an out-of-range index is 400, and a ``single`` card given two indices is 400. The stored list is deduped and sorted ascending, so ``[2,0]`` and ``[0,2]`` are the same stored answer. Any real answer — including a counter-question typed as text — flips the card to ``answered`` and stamps ``answered_ts``; if the reply did not settle the original question the agent opens a NEW card (never reopens this one). Answering an already-answered card is a 409 (revise via PUT instead); an expired card is a 409 too (terminal — if the question still matters the agent opens a NEW card). When the card is bound to a task step (create_reply_card with an explicit ``linked_task``), the FIRST answer also releases the waiting_owner hold — the server restores the step (and the task, once its last bound card is answered) to in_progress; the agent then advances the work itself. Fans one ``reply_card`` SSE delta (badge −1; the agent's own connection receives it and refetches the card for the full answer context).
          */
         post: operations["handle_answer_reply_card_api_reply_cards__card_id__answer_post"];
         delete?: never;
@@ -4944,14 +4944,14 @@ export interface components {
          *     HAS a home in the stream (its ``chat_message_id``), and giving it a second one
          *     would carry the same decision twice in one payload.
          *
-         *     It carries the DECISION and nothing else — the options offered, which one was
-         *     picked, the free text, and when. The card's ``summary`` / ``body`` / kind /
+         *     It carries the DECISION and nothing else — the options offered, which ones were
+         *     circled, the free text, and when. The card's ``summary`` / ``body`` / kind /
          *     attachments are NOT here: the chat message this rides on already carries the
          *     ask, and ``get_reply_card`` serves the rest.
          */
         ChatInlineReplyCardDTO: {
-            /** @description Index into ``options`` of the option that was picked; ``null`` when the card was answered with free text only, or is not answered yet. */
-            answer_option_idx?: number | null;
+            /** @description Indices into ``options`` of every option that was circled; ``null`` when the card was answered with free text / attachments only, or is not answered yet. The server stores it DEDUPED and ASCENDING, so ``[2,0]`` and ``[0,2]`` are indistinguishable once stored. A ``single`` card accepts at most one index (two is a 400). */
+            answer_option_idxs?: number[] | null;
             /**
              * Answer Text
              * @description The free-text answer, ``""`` when none was given.
@@ -4972,9 +4972,9 @@ export interface components {
             answered_ts: number;
             /**
              * Options
-             * @description The frozen quick-reply wording as it was offered (``options[0]`` is the AI pick). Empty for a card opened without options.
+             * @description The frozen quick-reply choices as they were offered, each carrying its own ``ai_pick`` flag. Empty for a card opened without options.
              */
-            options?: string[];
+            options?: components["schemas"]["ReplyCardOptionDTO"][];
         };
         /**
          * ChatMessageDTO
@@ -6928,18 +6928,21 @@ export interface components {
         };
         /**
          * ReplyCardAnswerBriefDTO
-         * @description The decision DIGEST on a light answered list row (``list_reply_cards``): ``option_idx`` (null = free text only) plus ``option`` — the picked option's ORIGINAL wording, ``text`` truncated to a preview, and ``attachments`` as a COUNT. The full answer (the untruncated text, the attachment refs) rides ``get_reply_card``.
+         * @description The decision DIGEST on a light answered list row (``list_reply_cards``): ``option_idxs`` (null = free text only) plus ``options`` — the ORIGINAL wording of EVERY circled option, one entry per ``option_idxs`` entry and in the same order, ``text`` truncated to a preview, and ``attachments`` as a COUNT. The full answer (the untruncated text, the attachment refs) rides ``get_reply_card``.
          */
         ReplyCardAnswerBriefDTO: {
             /** Attachments */
             attachments?: number;
             /**
-             * Option
-             * @default
+             * Option Idxs
+             * @description Indices into ``options`` of every option that was circled; ``null`` when the card was answered with free text / attachments only, or is not answered yet. The server stores it DEDUPED and ASCENDING, so ``[2,0]`` and ``[0,2]`` are indistinguishable once stored. A ``single`` card accepts at most one index (two is a 400).
              */
-            option: string;
-            /** Option Idx */
-            option_idx: number | null;
+            option_idxs: number[] | null;
+            /**
+             * Options
+             * @description The circled options' ORIGINAL wording, one entry per ``option_idxs`` entry, same order.
+             */
+            options?: string[];
             /**
              * Text
              * @default
@@ -6948,13 +6951,16 @@ export interface components {
         };
         /**
          * ReplyCardAnswerDTO
-         * @description The stored answer on an answered reply card. ``option_idx`` is null for a pure free-text answer; ``attachments`` are served refs into the shared chat-attachment store.
+         * @description The stored answer on an answered reply card. ``option_idxs`` is null for a pure free-text answer, otherwise the deduped, ascending list of every circled option's index; ``attachments`` are served refs into the shared chat-attachment store.
          */
         ReplyCardAnswerDTO: {
             /** Attachments */
             attachments?: components["schemas"]["ChatAttachmentDTO"][];
-            /** Option Idx */
-            option_idx: number | null;
+            /**
+             * Option Idxs
+             * @description Indices into ``options`` of every option that was circled; ``null`` when the card was answered with free text / attachments only, or is not answered yet. The server stores it DEDUPED and ASCENDING, so ``[2,0]`` and ``[0,2]`` are indistinguishable once stored. A ``single`` card accepts at most one index (two is a 400).
+             */
+            option_idxs: number[] | null;
             /**
              * Text
              * @default
@@ -6963,16 +6969,17 @@ export interface components {
         };
         /**
          * ReplyCardAnswerPostDTO
-         * @description The owner's answer to a reply card: a quick-reply ``option_idx`` (into the card's ``options``) and/or free ``text``, plus optional ``attachments`` (same input shape + limits as chat attachments; blobs land in the shared chat-attachment store). An answer must carry at least one of the three — an empty answer is rejected 400. POST answers a WAITING card (the one-shot close); PUT revises an ANSWERED card's answer (重新決定 — status stays answered).
+         * @description The owner's answer to a reply card: the quick-reply ``option_idxs`` (a LIST of indices into the card's ``options``) and/or free ``text``, plus optional ``attachments`` (same input shape + limits as chat attachments; blobs land in the shared chat-attachment store). An answer must carry at least one of the three — an empty answer is rejected 400, and ``option_idxs: []`` counts as EMPTY, not as an answer. Every index must fall in ``[0, len(options))``; a ``single`` card accepts at most one (two is a 400). The stored list is deduped and sorted ascending, so ``[2,0]`` and ``[0,2]`` store identically. POST answers a WAITING card (the one-shot close); PUT revises an ANSWERED card's answer (重新決定 — status stays answered).
          */
         ReplyCardAnswerPostDTO: {
             /** Attachments */
             attachments?: components["schemas"]["ChatAttachmentInputDTO"][];
             /**
-             * Option Idx
+             * Option Idxs
+             * @description Indices into the card's ``options`` of every option you circle. Omit it or send ``null`` to answer with text/attachments only; ``[]`` is NOT an answer (400). Order and duplicates do not matter — the server stores the list deduped and ascending.
              * @default null
              */
-            option_idx: number | null;
+            option_idxs: number[] | null;
             /**
              * Text
              * @default
@@ -6993,7 +7000,7 @@ export interface components {
         };
         /**
          * ReplyCardCreateDTO
-         * @description Open one reply card (請示): an ask the OWNER must answer before the agent can proceed. ``kind`` is the closed set ``decision`` (needs a call/approval) | ``action`` (needs the owner to DO something first). ``options`` are the quick-reply choices: 1..4 non-blank strings, and index 0 is ALWAYS the AI's own recommendation (the ``AI 建議`` pick). A free-typed answer (with attachments) is always allowed on top — options never close that door. Optional ``attachments`` ride the QUESTION side of the card (same input shape + limits as chat attachments: ``{id}`` references a blob already uploaded via ``POST /api/chat/attachments``, or ``data_b64`` carries small bytes inline; blobs land in the shared chat-attachment store). ``linked_task`` is REQUIRED and has no default: every card must SAY whether it is about a task. There is no inference — the server never guesses a binding from what work you hold, because a guess that misses is silent (the card opens with no 等我回覆 hold and the task runs past your question).
+         * @description Open one reply card (請示): an ask the OWNER must answer before the agent can proceed. ``kind`` is the closed set ``decision`` (needs a call/approval) | ``action`` (needs the owner to DO something first). ``options`` are the quick-reply choices: 1..4 objects ``{"text": ..., "ai_pick": true|false}`` with non-blank ``text``; ``ai_pick`` is what marks the AI's own recommendation — POSITION CARRIES NO MEANING. ``select_mode`` (``single``, the default, or ``multi``) says how many of them the owner may circle; a ``single`` card may mark at most one option ``ai_pick``. A free-typed answer (with attachments) is always allowed on top — options never close that door. Optional ``attachments`` ride the QUESTION side of the card (same input shape + limits as chat attachments: ``{id}`` references a blob already uploaded via ``POST /api/chat/attachments``, or ``data_b64`` carries small bytes inline; blobs land in the shared chat-attachment store). ``linked_task`` is REQUIRED and has no default: every card must SAY whether it is about a task. There is no inference — the server never guesses a binding from what work you hold, because a guess that misses is silent (the card opens with no 等我回覆 hold and the task runs past your question).
          */
         ReplyCardCreateDTO: {
             /** Attachments */
@@ -7014,13 +7021,20 @@ export interface components {
              */
             linked_task: components["schemas"]["ReplyCardLinkDTO"] | null;
             /** Options */
-            options: string[];
+            options: components["schemas"]["ReplyCardOptionDTO"][];
+            /**
+             * Select Mode
+             * @description How many options the owner may circle: ``single`` (the default — at most one, and at most one option may carry ``ai_pick``) or ``multi`` (any number). It is a SEPARATE axis from ``kind``: ``kind`` says what the owner must DO (decide / act), ``select_mode`` says how many choices the answer may carry.
+             * @default single
+             * @enum {string}
+             */
+            select_mode: "single" | "multi";
             /** Summary */
             summary: string;
         };
         /**
          * ReplyCardDTO
-         * @description One reply card (等我回覆卡). ``from`` is the initiating member (the verified JWT sub at create time). ``status`` is the closed set ``waiting`` | ``answered`` | ``expired`` — the only transitions are waiting→answered via an answer (the owner's positive close) and waiting→expired via the expire action (the card's own author, the owner, or an admin agent — T-6020 opened it to the admin floor, T-1b88 widened it to the author) (標為過期 — NOT an answer: the ask went stale and the owner declined it; terminal, no reopen); a revised answer (PUT) keeps ``answered``. ``chat_message_id`` links the chat message the card rides in (the jump-to-origin anchor); ``answered_ts``/``answer`` are null unless answered; ``expired_ts`` is null unless expired. ``attachments`` are the QUESTION-side attachments the initiator opened the card with (served refs incl. download url; always an array, ``[]`` when none).
+         * @description One reply card (等我回覆卡). ``from`` is the initiating member (the verified JWT sub at create time). ``status`` is the closed set ``waiting`` | ``answered`` | ``expired`` — the only transitions are waiting→answered via an answer (the owner's positive close) and waiting→expired via the expire action (the card's own author, the owner, or an admin agent — T-6020 opened it to the admin floor, T-1b88 widened it to the author) (標為過期 — NOT an answer: the ask went stale and the owner declined it; terminal, no reopen); a revised answer (PUT) keeps ``answered``. ``chat_message_id`` links the chat message the card rides in (the jump-to-origin anchor); ``answered_ts``/``answer`` are null unless answered; ``expired_ts`` is null unless expired. Each entry of ``options`` carries its own ``ai_pick`` flag (position means nothing) and ``select_mode`` (``single``|``multi``) says how many of them the owner may circle. ``attachments`` are the QUESTION-side attachments the initiator opened the card with (served refs incl. download url; always an array, ``[]`` when none).
          */
         ReplyCardDTO: {
             /** Answer */
@@ -7050,7 +7064,13 @@ export interface components {
             /** Kind */
             kind: string;
             /** Options */
-            options?: string[];
+            options?: components["schemas"]["ReplyCardOptionDTO"][];
+            /**
+             * Select Mode
+             * @description How many options the owner may circle: ``single`` (the default — at most one, and at most one option may carry ``ai_pick``) or ``multi`` (any number). It is a SEPARATE axis from ``kind``: ``kind`` says what the owner must DO (decide / act), ``select_mode`` says how many choices the answer may carry.
+             * @enum {string}
+             */
+            select_mode: "single" | "multi";
             /** Status */
             status: string;
             /**
@@ -7073,7 +7093,7 @@ export interface components {
         };
         /**
          * ReplyCardListItemDTO
-         * @description One LIGHT row of the reply-card list (``GET /api/reply-cards`` / the ``list_reply_cards`` MCP tool; owner ruling: 卡只需要 title+決策 — the list carries NO ``body`` and NO ``options`` full text). ``summary`` is the card's title; an answered row carries the decision DIGEST (``answer``: the picked option's index + original wording, an answer-text preview, the attachment COUNT; null otherwise); an expired row carries ``expired_ts`` (null otherwise) and NO digest — expiry is not an answer. Everything else — the body, the full option list, the untruncated answer, attachment refs, the chat anchor — is one ``get_reply_card`` away. ``task`` is the same light task reference the full card carries (null = a plain chat 請示).
+         * @description One LIGHT row of the reply-card list (``GET /api/reply-cards`` / the ``list_reply_cards`` MCP tool; owner ruling: 卡只需要 title+決策 — the list carries NO ``body`` and NO ``options`` full text). ``summary`` is the card's title; an answered row carries the decision DIGEST (``answer``: the circled options' indices + their original wording, an answer-text preview, the attachment COUNT; null otherwise); an expired row carries ``expired_ts`` (null otherwise) and NO digest — expiry is not an answer. Everything else — the body, the full option list, the untruncated answer, attachment refs, the chat anchor — is one ``get_reply_card`` away. ``task`` is the same light task reference the full card carries (null = a plain chat 請示).
          */
         ReplyCardListItemDTO: {
             /** Answer */
@@ -7102,6 +7122,20 @@ export interface components {
             summary: string;
             /** Task */
             task?: components["schemas"]["TaskRefDTO"] | null;
+        };
+        /**
+         * ReplyCardOptionDTO
+         * @description One quick-reply choice on a reply card. ``text`` is the wording as it was offered; ``ai_pick`` marks THIS option as the AI's own recommendation and is the ONLY carrier of that fact — it replaced the old positional convention (``options[0]`` = the AI pick), which nothing in the code ever enforced. A ``single`` card may mark AT MOST ONE option ``ai_pick`` (a second one is a 400); a ``multi`` card may mark any number, zero included.
+         */
+        ReplyCardOptionDTO: {
+            /**
+             * Ai Pick
+             * @description Whether THIS option is the AI's own recommendation. Marking none is legal; a ``single`` card may mark at most one.
+             * @default false
+             */
+            ai_pick: boolean;
+            /** Text */
+            text: string;
         };
         /**
          * ReportWakingDTO

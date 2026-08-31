@@ -350,30 +350,40 @@ export function ChatRow({
               <span className="mp-resume__generatedlabel">
                 {r.cardOptionsLabel}
               </span>
-              {card.options.map((opt, i) => (
-                <span
-                  className="mp-resume__cardoption"
-                  key={`${i}-${opt}`}
-                  data-testid="mp-resume-card-option"
-                  data-picked={i === card.answerOptionIdx ? "true" : "false"}
-                >
-                  {opt}
-                  {/* options[0] is the AI pick — a property of how the card
-                    * was OFFERED, which is why it is tagged separately from
-                    * which option was actually chosen. */}
-                  {i === 0 && (
-                    <span className="mp-resume__cardtag">{r.cardAiPickTag}</span>
-                  )}
-                  {i === card.answerOptionIdx && (
-                    <span
-                      className="mp-resume__cardtag mp-resume__cardtag--picked"
-                      data-testid="mp-resume-card-picked"
-                    >
-                      {r.cardPickedTag}
-                    </span>
-                  )}
-                </span>
-              ))}
+              {card.options.map((opt, i) => {
+                // EVERY circled index is marked, not just the first: a
+                // multi-select answer that drew one 已選 (or none) would read
+                // as a decision the owner never made. `answerOptionIdxs` is
+                // null while unanswered / answered with free text only.
+                const picked = (card.answerOptionIdxs ?? []).includes(i);
+                return (
+                  <span
+                    className="mp-resume__cardoption"
+                    key={`${i}-${opt.text}`}
+                    data-testid="mp-resume-card-option"
+                    data-picked={picked ? "true" : "false"}
+                  >
+                    {opt.text}
+                    {/* The AI pick is a property of how the card was OFFERED,
+                      * which is why it is tagged separately from which options
+                      * were actually chosen — and it is read off THIS option's
+                      * own aiPick, never off its position. */}
+                    {opt.aiPick && (
+                      <span className="mp-resume__cardtag">
+                        {r.cardAiPickTag}
+                      </span>
+                    )}
+                    {picked && (
+                      <span
+                        className="mp-resume__cardtag mp-resume__cardtag--picked"
+                        data-testid="mp-resume-card-picked"
+                      >
+                        {r.cardPickedTag}
+                      </span>
+                    )}
+                  </span>
+                );
+              })}
             </div>
           )}
           {card.answerText !== "" && (

@@ -21,11 +21,20 @@ import { PaperclipIcon, SendIcon } from "./icons";
 
 export function ReplyComposer({
   placeholder,
+  hasSelection = false,
   onSend,
 }: {
   placeholder: string;
-  /** Submit the typed answer (text and/or attachments; never called empty).
-   * The promise rejecting keeps the composer content so nothing is lost. */
+  /** Whether the card face has quick-reply options STAGED. This button is the
+   * card's ONE send: the answer it fires carries the ticked options and the
+   * typed text together, so a staged selection alone must be sendable even with
+   * an empty draft — and, symmetrically, an answer with NOTHING staged and
+   * NOTHING typed must not be sendable at all. */
+  hasSelection?: boolean;
+  /** Submit the answer — the typed text and attachments, which the caller
+   * combines with whatever it has staged. Never called on a wholly empty
+   * answer. The promise rejecting keeps the composer content so nothing is
+   * lost. */
   onSend: (body: string, attachments: ChatAttachmentInput[]) => Promise<void>;
 }) {
   const { t } = useI18n();
@@ -52,7 +61,10 @@ export function ReplyComposer({
   const isMobile = useIsMobile();
 
   const canSend =
-    !sending && (draft.trim().length > 0 || pendingAttachments.length > 0);
+    !sending &&
+    (hasSelection ||
+      draft.trim().length > 0 ||
+      pendingAttachments.length > 0);
 
   // Multi-line composer (desktop: Enter sends, Shift+Enter breaks a line;
   // mobile: Enter breaks a line — same as the chat composer): auto-grow the

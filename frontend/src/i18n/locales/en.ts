@@ -287,6 +287,8 @@ export const en: Dict = {
     expiredNote:
       "Expired without an answer; the member will re-ask if it still matters",
     aiPick: "AI pick",
+    selectedCountLead: "Selected",
+    selectedCountTail: "options",
     yourPick: "Your choice",
     jumpToChat: "View in chat",
     inputPlaceholder: "Type a reply…",

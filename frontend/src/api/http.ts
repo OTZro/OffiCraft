@@ -828,13 +828,23 @@ function unwrap<T>(res: { data?: T }): T {
 }
 
 /** View answer input → the wire `ReplyCardAnswerPostDTO` body. POST (answer)
- * and PUT (重新決定) share the exact same body shape. An absent option/text is
- * sent as its honest wire default (null / ""); attachments are omitted when
- * empty — same convention as postChat. */
+ * and PUT (重新決定) share the exact same body shape. An absent option list /
+ * text is sent as its honest wire default (null / ""); attachments are omitted
+ * when empty — same convention as postChat.
+ *
+ * The indices are sorted ASCENDING here, at the seam, so ticking the same boxes
+ * in a different order produces a byte-identical body. The server dedupes and
+ * sorts too, but the two owners' requests would still differ on the wire, and
+ * "the same decision" must not be two different payloads; duplicates collapse
+ * for the same reason. An EMPTY list is NOT
+ * flattened to null: `[]` is a 400 server-side and the caller means for it to
+ * be, so a caller with nothing circled omits the field. */
 function toAnswerBody(answer: ReplyCardAnswerInput) {
   const attachments = answer.attachments ?? [];
   return {
-    option_idx: answer.optionIdx ?? null,
+    option_idxs: answer.optionIdxs
+      ? [...new Set(answer.optionIdxs)].sort((x, y) => x - y)
+      : null,
     text: answer.text ?? "",
     ...(attachments.length > 0
       ? {
