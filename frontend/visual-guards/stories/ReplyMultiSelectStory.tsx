@@ -38,10 +38,10 @@ const MULTI_CARD: ReplyCard = {
   task: null,
 };
 
-// The SINGLE-select twin. T-40b gave the two kinds different chip marks (radio
-// vs tick box) and a different hint line, and both of those are new rows/boxes
-// that have to fit a phone card — the multi story alone would leave the single
-// card's own geometry unmeasured.
+// The SINGLE-select twin. The two kinds lead their chips with different boxes —
+// a tick box on multi, the 1/2/3/4 ordinal on single — and both have to fit a
+// phone card; the multi story alone would leave the single card's own geometry
+// unmeasured.
 const SINGLE_CARD: ReplyCard = {
   ...MULTI_CARD,
   id: "rc-single",

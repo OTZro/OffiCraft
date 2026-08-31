@@ -160,13 +160,13 @@ describe("RepliesPage", () => {
     __injectMockReplyCard(mkCard({}));
     const { findAllByTestId } = renderPage();
     const [card] = await findAllByTestId("waiting-card");
-    // Each chip WHOLE: its wording and exactly the tags it earned. mkCard marks
-    // the SECOND option ai_pick, so the tag rides that one and the first chip is
-    // bare — a reader that tagged by position fails here. The 1/2 ordinal is
-    // gone: the chip's leading mark is the radio, which carries no text.
+    // Each chip WHOLE: its 1/2 ordinal, its wording and exactly the tags it
+    // earned. mkCard marks the SECOND option ai_pick, so the tag rides that one
+    // and the first chip is bare — a reader that tagged by position fails
+    // here.
     expect(
       [...card.querySelectorAll(".reply-option")].map((e) => e.textContent),
-    ).toEqual(["寄出", "先不要AI 建議"]);
+    ).toEqual(["1寄出", "2先不要AI 建議"]);
   });
 
   // 🔴 Written from the OWNER's side of the screen: he taps ONE option and the
@@ -364,8 +364,8 @@ describe("RepliesPage", () => {
     // the wrong chip, or a lost AI tag, is a failure here. The two tags sit on
     // DIFFERENT chips, which is what makes a positional reader of either fail.
     expect([...options].map((e) => e.textContent)).toEqual([
-      "寄出目前",
-      "先不要AI 建議",
+      "1寄出目前",
+      "2先不要AI 建議",
     ]);
     expect((options[0] as HTMLButtonElement).disabled).toBe(true);
     // 重新決定 sits at the expansion's bottom.

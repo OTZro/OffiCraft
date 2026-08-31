@@ -280,24 +280,18 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     // A single-select card writes no 已選 N 項 row (the lit chip already says it).
     await expect(waitingA.getByTestId('reply-selected-count')).toHaveCount(0);
 
-    // A single card says so on screen, twice over: radios rather than tick
-    // boxes, and a line that names the consequence of a press.
+    // A single card leads its chips with the 1/2/3/4 ordinal (owner
+    // 2026-08-31) and wears no tick box: it answers on the tap, so it has no
+    // ticked-but-unsent state a box could report.
     await expect(
-      waitingA.getByTestId('reply-mode-hint'),
-      'a card that answers on the tap must say so BEFORE the tap',
-    ).toHaveText('點一下就送出');
+      waitingA.locator('.reply-option__num'),
+      'a single-select card numbers its options again',
+    ).toHaveText(textsA.map((_, i) => String(i + 1)));
     await expect(
-      waitingA.locator('.reply-option__mark--radio'),
-      'a single-select card wears radios, one per option',
-    ).toHaveCount(textsA.length);
-    await expect(
-      waitingA.locator('.reply-option__mark--check'),
+      waitingA.locator('.reply-option__mark'),
       'and no tick boxes — that shape means "as many as you like"',
     ).toHaveCount(0);
-    await expect(
-      chip(waitingA, 0),
-      'the 1/2/3 ordinal is gone — the mark took its seat',
-    ).toHaveText(textsA[0]);
+    await expect(chip(waitingA, 0)).toHaveText(`1${textsA[0]}`);
 
     // ── answer A on the 請示 page: ONE TAP, and the ask is dealt with ──
     // No send button is pressed here. If a second step ever comes back, this
@@ -503,23 +497,37 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
       'a multi card tags its recommendation by flag too',
     ).toContainText('AI 建議');
     await expect(chip(waiting, 0)).not.toContainText('AI 建議');
-    // …and it says, in shape and in words, that it takes more than one answer
-    // and that nothing leaves until the send.
+    // …and its leading box says, wordlessly, that it takes more than one
+    // answer.
     await expect(
-      waiting.locator('.reply-option__mark--check'),
+      waiting.locator('.reply-option__mark'),
       'a multi-select card wears tick boxes, one per option',
     ).toHaveCount(texts.length);
-    await expect(waiting.locator('.reply-option__mark--radio')).toHaveCount(0);
-    await expect(waiting.getByTestId('reply-mode-hint')).toHaveText(
-      '可以選多個，勾好按送出',
-    );
+    await expect(
+      waiting.locator('.reply-option__num'),
+      'and no ordinals — the box is what a multi card leads with',
+    ).toHaveCount(0);
+
+    // It OPENS with the AI pick already ticked (owner 2026-08-31: 「多選的時候，
+    // UI 應該要預設就先把我勾好 AI 建議的」) — and the pick is NOT the first
+    // option, so a default that keyed off position would light the wrong chip.
+    const count = waiting.getByTestId('reply-selected-count');
+    await expect(
+      chip(waiting, AI),
+      'the recommendation opens ticked',
+    ).toHaveAttribute('data-selected', 'true');
+    await expect(chip(waiting, 0)).toHaveAttribute('data-selected', 'false');
+    await expect(count).toContainText('1');
+
+    // …and it is only a TICK, not an answer: the card is still waiting.
+    expect(
+      await waitingCount(request, token),
+      'a pre-ticked recommendation must not have answered anything',
+    ).toBe(baseWaiting + 1);
 
     // A multi card writes out how many are ticked — "none" and "all" differ by
     // nothing else.
-    const count = waiting.getByTestId('reply-selected-count');
-    await expect(count).toContainText('0');
     await stage(waiting, 0);
-    await stage(waiting, AI);
     await expect(
       count,
       'a multi card keeps BOTH ticks — it does not replace',
