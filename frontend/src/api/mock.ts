@@ -976,7 +976,7 @@ function validateReplyAnswer(card: ReplyCard, answer: ReplyCardAnswerInput) {
       throw mockApiError(
         `http 400 for answer /api/reply-cards/${card.id}/answer`,
         400,
-        `option_idx ${idx} out of range`
+        `option_idxs out of range: ${idx}`
       );
     }
   }
