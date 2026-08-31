@@ -147,9 +147,33 @@ describe("TaskReplyCard", () => {
     const { findByTestId } = renderHinted("answered");
 
     const stub = await findByTestId("task-reply-card-expand");
-    expect(stub.textContent).toContain("已回覆");
-    expect(stub.textContent).toContain("核准步驟"); // the fallback, not the card
+    // The stub WHOLE: the 已回覆 tag plus the step-name fallback — no card was
+    // fetched, so none of the card's own wording can be in this row.
+    expect(stub.textContent).toBe("已回覆核准步驟");
     expect(getSpy).not.toHaveBeenCalled();
+  });
+
+  it("prints EVERY circled option on the collapsed one-line row, joined by the locale's list separator", async () => {
+    // The collapsed row is one of the five faces that draw 「你選的」, and it is
+    // the only one that has to fit a multi-select decision onto a single line.
+    // Printing only the first circled option reads as a narrower decision than
+    // the owner made — and nothing else in the tree looks at this row.
+    __injectMockReplyCard(
+      mkCard({
+        selectMode: "multi",
+        options: [
+          { text: "走海運", aiPick: false },
+          { text: "走空運", aiPick: true },
+          { text: "先擱著", aiPick: false },
+        ],
+        status: "answered",
+        answeredTs: Date.now() / 1000 - 60,
+        answer: { optionIdxs: [0, 2], text: "", attachments: [] },
+      })
+    );
+    const { findByTestId } = renderCard();
+    const stub = await findByTestId("task-reply-card-expand");
+    expect(stub.textContent).toBe("已回覆要幫你寄出這封信嗎？走海運、先擱著");
   });
 
   it("expanding an ANSWERED-hinted card fetches it once and shows the answer", async () => {
@@ -165,7 +189,7 @@ describe("TaskReplyCard", () => {
 
     fireEvent.click(await findByTestId("task-reply-card-expand"));
     const final = await findByTestId("final-answer");
-    expect(final.textContent).toContain("寄出");
+    expect(final.textContent).toBe("你選的AI 建議寄出");
     expect(getSpy).toHaveBeenCalledTimes(1);
   });
 

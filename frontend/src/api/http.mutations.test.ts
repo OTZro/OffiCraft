@@ -430,3 +430,79 @@ describe("httpApi · postChat carries the reply link (T-4e95)", () => {
     expect(JSON.parse(String((await lastRequest()).body)).reply_to).toBe("");
   });
 });
+
+describe("httpApi · reply-card answer body (ReplyCardAnswerPostDTO)", () => {
+  const WIRE_CARD = {
+    id: "rc-1",
+    from: "mira",
+    kind: "decision",
+    summary: "這批要走哪幾條線？",
+    body: "",
+    options: [
+      { text: "走海運", ai_pick: false },
+      { text: "走空運", ai_pick: true },
+      { text: "先擱著", ai_pick: false },
+    ],
+    select_mode: "multi",
+    status: "answered",
+    attachments: [],
+    created_ts: 1,
+    answered_ts: 2,
+    expired_ts: null,
+    chat_message_id: "cm-1",
+    answer: { option_idxs: [0, 2], text: "", attachments: [] },
+    task: null,
+  };
+
+  it("sends the circled indices deduped and ascending, whichever order they arrive in", async () => {
+    // Two owners who ticked the same boxes in different orders must produce a
+    // byte-identical body. The server dedupes and sorts too, but the two
+    // requests would still differ on the wire, and one decision must not be two
+    // payloads.
+    fetchMock.mockImplementation(async () => jsonResponse(WIRE_CARD));
+    await httpApi.answerReplyCard("rc-1", { optionIdxs: [2, 0, 2] });
+    const first = await lastRequest();
+    expect(first.url).toBe("/api/reply-cards/rc-1/answer");
+    expect(first.method).toBe("POST");
+    expect(JSON.parse(String(first.body))).toEqual({
+      option_idxs: [0, 2],
+      text: "",
+    });
+
+    await httpApi.answerReplyCard("rc-1", { optionIdxs: [0, 2] });
+    expect(JSON.parse(String((await lastRequest()).body))).toEqual({
+      option_idxs: [0, 2],
+      text: "",
+    });
+  });
+
+  it("sends null — the wire's 'circled nothing' — for a text-only answer", async () => {
+    // Both directions matter, and the wrong one here is not silent-but-equal:
+    // `option_idxs: []` is a 400 server-side, deliberately, so a seam that
+    // flattened an absent list to `[]` would turn every typed answer into an
+    // error.
+    fetchMock.mockImplementation(async () =>
+      jsonResponse({
+        ...WIRE_CARD,
+        answer: { option_idxs: null, text: "收件人是誰？", attachments: [] },
+      }),
+    );
+    await httpApi.answerReplyCard("rc-1", { text: "收件人是誰？" });
+    expect(JSON.parse(String((await lastRequest()).body))).toEqual({
+      option_idxs: null,
+      text: "收件人是誰？",
+    });
+  });
+
+  it("revises through PUT with the exact same body shape", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse(WIRE_CARD));
+    await httpApi.reanswerReplyCard("rc-1", { optionIdxs: [2, 0] });
+    const { url, method, body } = await lastRequest();
+    expect(url).toBe("/api/reply-cards/rc-1/answer");
+    expect(method).toBe("PUT");
+    expect(JSON.parse(String(body))).toEqual({
+      option_idxs: [0, 2],
+      text: "",
+    });
+  });
+});
