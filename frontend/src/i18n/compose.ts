@@ -236,7 +236,9 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     // "Selected 2 options", so this is not one of the joins that differ by
     // language and must not be routed through the variable that says they do.
     replySelectedCount: (n) =>
-      `${replies.selectedCountLead} ${n} ${replies.selectedCountTail}`,
+      `${replies.selectedCountLead} ${n} ${
+        n === 1 ? replies.selectedCountTailOne : replies.selectedCountTailMany
+      }`,
     // Every circled option on one line (the collapsed task-card row). Joined by
     // the locale's own list separator — the same one every other list in this
     // file uses, so a multi-select decision is punctuated like a list and not

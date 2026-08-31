@@ -322,7 +322,10 @@ export const zh = {
     // 多選卡的暫存計數:勾了幾項在送出前就寫出來——多選卡上「什麼都沒勾」與
     // 「全都要」在畫面上只差哪幾顆亮著,所以把數字寫出來。
     selectedCountLead: "已選",
-    selectedCountTail: "項",
+    // zh does not inflect for number, so both forms are the same word — the
+    // split exists for the locales that do (see interAgentExpandOne/Many).
+    selectedCountTailOne: "項",
+    selectedCountTailMany: "項",
     yourPick: "你選的",
     jumpToChat: "跳到原訊息",
     inputPlaceholder: "輸入回覆…",
