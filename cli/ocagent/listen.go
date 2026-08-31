@@ -214,11 +214,22 @@ var dispatchTopics = map[string]bool{"action": true, "task": true}
 // reconnect", distinct from an ordinary stream drop (which reconnects).
 var errSelfExit = errors.New("listen: tmux session gone — self-exit")
 
-// errSSERefused is the sentinel connectOnce wraps a pre-stream HTTP 409 in: the
-// server AUTHORITATIVELY refused this listener (the zombie stop gate, or the
-// dual-SSE single-session guard). The run loop folds consecutive refusals into
-// the fail-closed self-terminate (see sseRefusalMin/sseRefusalGrace).
-var errSSERefused = errors.New("listen: server refused the SSE connection (409)")
+// authRefusalHeader / refusalAgentSuperseded mirror the server's marker for the
+// ONE 401 that is a standing refusal rather than transient bad luck: the agent
+// credential floor (server authz.go). Copies of the server's constants — this is
+// a separate module, and the wire literal is the contract between them.
+const (
+	authRefusalHeader      = "X-OC-Auth-Refusal"
+	refusalAgentSuperseded = "agent-superseded"
+)
+
+// errSSERefused is the sentinel connectOnce wraps an AUTHORITATIVE pre-stream
+// refusal in — a 409 (the zombie stop gate, or the dual-SSE single-session
+// guard) or a 401 marked agent-superseded (this member's newer generation has
+// reported waking). See authoritativeRefusal for why status alone is not enough
+// for the 401 half. The run loop folds consecutive refusals into the
+// fail-closed self-terminate (see sseRefusalMin/sseRefusalGrace).
+var errSSERefused = errors.New("listen: server authoritatively refused the SSE connection")
 
 // ---------------------------------------------------------------------------
 // SSE line framing — copy-twin of ocwarden scanSSE, extended with id + comment

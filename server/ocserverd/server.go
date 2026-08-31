@@ -249,6 +249,14 @@ func requireAuth(secret []byte, ownerIatFloor func() int64, lookup func(id strin
 		// exempt by name inside; see agentIatFloorRefusal for why that is a
 		// safety property and not a shortcut.
 		if agentIatFloorRefusal(claims, lookup) {
+			// The refusal is AUTHORITATIVE and permanent: the floor only ever
+			// rises, so this credential can never come back. Name it on the
+			// response so the process still holding the old session's socket
+			// can stop retrying and shut itself down, instead of reconnecting
+			// every ≤15s forever while the cockpit shows the SUCCESSOR as the
+			// live one. Body text is unchanged on purpose — see
+			// authRefusalHeader in authz.go.
+			w.Header().Set(authRefusalHeader, refusalAgentSuperseded)
 			writeError(w, http.StatusUnauthorized, "invalid token")
 			return
 		}

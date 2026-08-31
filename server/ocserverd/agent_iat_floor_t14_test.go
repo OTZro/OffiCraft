@@ -244,3 +244,82 @@ func TestAgentIatFloor_WardenPermanentTokenIsExempt(t *testing.T) {
 			"got %d %s", st, body)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ⑤ the refusal names itself on the response — the client half depends on it
+// ---------------------------------------------------------------------------
+
+// TestAgentIatFloor_TheRefusalIsMarkedAuthoritativeAndNothingElseIs is the
+// server end of the fix for the orphan this cut would otherwise create.
+//
+// A superseded session's listener keeps a long-lived SSE; when it drops and
+// re-dials it gets 401 here. cli/ocagent's reconnect loop treats an unmarked
+// non-200 as "retry with backoff, forever" — right for a restarting station or
+// an expired token, and a permanent orphan for THIS refusal (the floor only ever
+// rises, so it can never resolve). The client cannot tell them apart from the
+// status line; the server can, and says so with X-OC-Auth-Refusal.
+//
+// BOTH arms matter. Marking every 401 would be worse than the bug it fixes: the
+// listener would kill its own tmux session — and everything running under it —
+// whenever the station was briefly unable to authenticate anyone.
+//
+// Mutant: delete the w.Header().Set(authRefusalHeader, …) line in requireAuth →
+// arm (a) is red. Mutant: set it on the other 401s too → arm (b) is red.
+func TestAgentIatFloor_TheRefusalIsMarkedAuthoritativeAndNothingElseIs(t *testing.T) {
+	srv, secret, api := revokeStack(t)
+	agent := testAgent("m-t14-marked")
+	putTestMember(t, api, agent)
+
+	now := time.Now().Unix()
+	oldTok, err := mintJWT(agent.ID, "agent", 3600, secret, now-600, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTok, err := mintJWT(agent.ID, "agent", 3600, secret, now, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wakeWith(t, srv.URL, newTok)
+
+	refusalMark := func(t *testing.T, token string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequest("GET", srv.URL+"/api/members", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode, resp.Header.Get(authRefusalHeader)
+	}
+
+	// (a) the floor's own refusal is marked.
+	st, mark := refusalMark(t, oldTok)
+	if st != http.StatusUnauthorized {
+		t.Fatalf("POSITIVE CONTROL FAILED — the superseded token must be 401, got %d", st)
+	}
+	if mark != refusalAgentSuperseded {
+		t.Fatalf("the superseded-generation 401 must carry %s: %q so the process still "+
+			"holding that session's socket can stop retrying and shut itself down. "+
+			"Without it the refusal is indistinguishable from a station hiccup and "+
+			"the orphan reconnects every ≤15s forever, invisibly. got %q",
+			authRefusalHeader, refusalAgentSuperseded, mark)
+	}
+
+	// (b) an ORDINARY 401 is not marked — a token this server cannot verify at
+	// all. Marking it would turn a self-healing retry into a self-kill.
+	st, mark = refusalMark(t, "not-a-token")
+	if st != http.StatusUnauthorized {
+		t.Fatalf("POSITIVE CONTROL FAILED — a garbage token must be 401, got %d", st)
+	}
+	if mark != "" {
+		t.Fatalf("an ordinary 401 must NOT be marked %s (got %q): the marker tells a "+
+			"listener to KILL ITS OWN SESSION, so putting it on a refusal that may "+
+			"resolve on its own — an expired token, a secret not loaded yet, a "+
+			"restart in flight — trades noisy self-healing for killing healthy agents",
+			authRefusalHeader, mark)
+	}
+}

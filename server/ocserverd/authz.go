@@ -243,6 +243,36 @@ func permanentCredentialRefusal(claims map[string]any, lookup func(id string) (*
 	return err != nil || m == nil || m.Kind != machineKind || m.RosterStatus != RosterStatusActive
 }
 
+// authRefusalHeader / refusalAgentSuperseded name a 401 that is a STANDING,
+// authoritative refusal rather than transient bad luck, on the ONE refusal where
+// the difference decides whether a live process should keep retrying or stop.
+//
+// 🔴 WHY A MARKER AT ALL. The agent iat floor refuses with the same
+// 401 "invalid token" as a server whose secret is not loaded yet, a token that
+// simply expired, or a restart in progress. cli/ocagent's listener treats a
+// non-authoritative failure as "reconnect with backoff, forever" — correct for
+// every one of those, and a silent orphan for this one: the superseded
+// generation would re-dial every ≤15s for the rest of the machine's uptime,
+// holding a tmux + model session that nothing on the cockpit can even see,
+// because the member's presence now belongs to the SUCCESSOR. A client cannot
+// tell the two apart from the status line alone — 401 is 401 — so the server,
+// which is the only side that knows which refusal it just made, says so.
+//
+// It rides a RESPONSE HEADER and not the body: the body text is what agents
+// read (two seeds quote "every later MCP call 401s with nothing saying why"),
+// and this must not become an instruction to a model. It is transport-level
+// advice to the process holding the socket.
+//
+// 🔴 IT IS ONLY EVER SET ON THIS ONE REFUSAL. Setting it on any other 401 —
+// expiry, an unconfigured secret, a bad signature — turns a self-healing retry
+// into a self-kill, which is strictly worse than the hammering it fixes. That
+// direction is pinned from the client side by
+// TestListener_APlain401NeverTripsFailClosed (cli/ocagent).
+const (
+	authRefusalHeader      = "X-OC-Auth-Refusal"
+	refusalAgentSuperseded = "agent-superseded"
+)
+
 // agentIatFloorRefusal is the AGENT-side credential floor (T-14 項目 4B): an
 // agent-scope token whose `iat` is STRICTLY LESS THAN its own member's
 // agent_iat_floor was minted for a generation that member has already replaced,
