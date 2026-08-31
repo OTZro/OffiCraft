@@ -57,7 +57,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n";
 import { authedAttachmentUrl } from "../api/http";
-import { copyAttachmentShareLink } from "../lib/shareLink";
+import { attachmentShareLinkUrl, copyAttachmentShareLink } from "../lib/shareLink";
 import { useEscapeLayer } from "../lib/useEscapeLayer";
 import { Markdown } from "./Markdown";
 import "./md-preview.css";
@@ -66,6 +66,7 @@ import {
   CloseIcon,
   CopyIcon,
   DownloadIcon,
+  ExternalLinkIcon,
   FileTextIcon,
 } from "./icons";
 
@@ -131,11 +132,31 @@ export function MarkdownPreviewOverlay({
   const [failed, setFailed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
+  // T-36 — the share link, resolved AHEAD of the click so the 「在新頁面顯示」
+  // control can be a real <a target="_blank">. It cannot be built here: the
+  // ?sig= credential is minted by the server, and the two ways to open a tab
+  // after an await are both worse — a popup blocker eats a late `window.open`,
+  // and the `window.open("", "_blank")`-then-navigate trick has to keep the
+  // opener handle, which is exactly what `rel="noopener"` is here to deny.
+  // null = no link to offer (not minted yet, or the mint failed): the anchor is
+  // then absent rather than pointing at a URL that would 404.
+  const [shareHref, setShareHref] = useState<string | null>(null);
   // The text to render. An inline source is authoritative and synchronous — it
   // never passes through the loading/error states, which only describe a fetch.
   const image = imageSrc !== undefined || (mime?.startsWith("image/") ?? false);
   const previewableText = isPreviewableTextAttachment(mime ?? "text/markdown", title);
   const unavailable = url !== undefined && !image && !previewableText;
+  // T-36 — WHOSE CALL IS "opens in a tab"? THE SERVER'S. This mirrors
+  // api_chat.go's isPreviewableMime, which is what decides between
+  // `Content-Disposition: inline` and `attachment` on the serve route. Offering
+  // 「在新頁面顯示」 on anything else would be a lie: the browser would download
+  // the file instead of showing it, and the button would look broken.
+  // Deliberately WIDER than `previewableText` above (which gates what THIS
+  // overlay renders in-panel, and stays narrow on purpose) — a .html or a .pdf
+  // still cannot be drawn here, but the browser can show it perfectly well in a
+  // tab of its own, and that is the whole request.
+  const inlineInBrowser =
+    attachmentId !== undefined && isInlineDisplayableMime(mime ?? "text/markdown");
   const plainText = previewableText && !isMarkdownAttachment(mime ?? "text/markdown", title);
   const source = inlineSource ?? fetched;
   const [zoom, setZoom] = useState(1);
@@ -237,6 +258,29 @@ export function MarkdownPreviewOverlay({
       alive = false;
     };
   }, [url, image, unavailable]);
+
+  // Mint the share link for the tab anchor. Only for an attachment the browser
+  // would actually DISPLAY — a downloadable one gets no anchor, so it needs no
+  // link either.
+  useEffect(() => {
+    if (attachmentId === undefined || !inlineInBrowser) {
+      setShareHref(null);
+      return;
+    }
+    let alive = true;
+    setShareHref(null);
+    attachmentShareLinkUrl(attachmentId)
+      .then((href) => {
+        if (alive) setShareHref(href);
+      })
+      .catch((e) => {
+        // No link, no anchor. Never a half-built href.
+        console.warn("MarkdownPreviewOverlay: share link for new tab failed", e);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [attachmentId, inlineInBrowser]);
 
   useEffect(() => setZoom(1), [url, imageSrc]);
 
@@ -539,6 +583,34 @@ export function MarkdownPreviewOverlay({
                     : <span className="md-preview__action-label">{t.chat.copyShareLink}</span>}
               </button>
             )}
+            {/* T-36 — 「在新頁面顯示」: the owner's own words were 「html 應該要可以
+             * 點開以後 popup new window 顯示 不然我都要複製以後找新的頁面貼很
+             * 麻煩」. It opens the SHARE link (the ?sig= credential), not the
+             * ?token= authed URL the download uses — a whole owner session
+             * token has no business sitting in another tab's address bar.
+             * Present only when the browser would show the file rather than
+             * download it (see `inlineInBrowser`). */}
+            {shareHref !== null && (
+              <a
+                /* ⚠️ NOT `md-preview__download`. Four existing tests reach for
+                 * the download link as `querySelector("a.md-preview__download")`
+                 * — the FIRST match — so borrowing that class for its styling
+                 * silently handed them this anchor instead. The shared look is
+                 * shared in the stylesheet, not by wearing the other control's
+                 * name. */
+                className="md-preview__new-tab"
+                href={shareHref}
+                target="_blank"
+                rel="noopener"
+                aria-label={t.chat.mdPreview.openInNewTab}
+                title={t.chat.mdPreview.openInNewTab}
+              >
+                <ExternalLinkIcon size={14} />
+                <span className="md-preview__action-label">
+                  {t.chat.mdPreview.openInNewTab}
+                </span>
+              </a>
+            )}
             {/* Download — the SECOND action, distinct from preview: the authed
              * blob URL (or the staged data: URI) with a download attribute. */}
             {downloadHref !== undefined && (
@@ -563,6 +635,23 @@ export function MarkdownPreviewOverlay({
             </button>
           </div>
         </div>
+        {/* 🔴 SAY IT IN PLAIN WORDS, and say it BEFORE the click, on the same
+          * screen as the button that causes it. What the new tab serves is
+          * locked down so nothing on it can run — good, and also the reason a
+          * design mockup opened there will not answer a single click. The owner
+          * asked for that to be said on screen rather than discovered
+          * (「需要 JS 的設計稿會不會動，我會在畫面上講一句」). The sentence names
+          * what the reader will SEE — buttons and boxes that do nothing — and
+          * never the mechanism behind it: this line is read by someone who does
+          * not write code.
+          *
+          * It rides the SAME condition as the button, because it is only ever
+          * true of the thing the button opens. */}
+        {shareHref !== null && (
+          <div className="md-preview__new-tab-note">
+            {t.chat.mdPreview.newTabStaticNote}
+          </div>
+        )}
         <div className="md-preview__body">
           {image && imageBytes !== undefined ? (
             <div className="md-preview__image-viewport">
@@ -660,6 +749,23 @@ export function isMarkdownAttachment(mime: string, filename: string): boolean {
   if (mime === "text/markdown" || mime === "text/x-markdown") return true;
   const name = filename.toLowerCase();
   return name.endsWith(".md") || name.endsWith(".markdown");
+}
+
+/** Whether the BROWSER will display these bytes in a tab of its own instead of
+ * downloading them. This is a mirror of the server's `isPreviewableMime`
+ * (server/ocserverd/api_chat.go): that function is what picks
+ * `Content-Disposition: inline` over `attachment` on the serve route, so it —
+ * not this file — is the source of truth for the answer. Keep the two in step;
+ * a second, home-grown notion of "previewable" on this side would put the
+ * 「在新頁面顯示」 button on files that just download.
+ *
+ * ⚠️ NOT the same question as `isPreviewableTextAttachment` below, and the two
+ * must not be merged: that one asks what THIS overlay can render in-panel and
+ * is narrow on purpose. */
+export function isInlineDisplayableMime(mime: string): boolean {
+  return (
+    mime.startsWith("image/") || mime.startsWith("text/") || mime === "application/pdf"
+  );
 }
 
 /** The stored text formats supported by the shared attachment modal. Keep this

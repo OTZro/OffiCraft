@@ -14,7 +14,20 @@ import { api } from "../api";
 export async function copyAttachmentShareLink(
   attachmentId: string,
 ): Promise<void> {
+  await navigator.clipboard.writeText(await attachmentShareLinkUrl(attachmentId));
+}
+
+/** The attachment's share link, absolutized against the page origin — the
+ * SAME value `copyAttachmentShareLink` puts on the clipboard, handed back
+ * instead of copied. Callers that need it as an `href` (the preview overlay's
+ * 「在新頁面顯示」 anchor) use this: the ?sig= credential is minted by the
+ * server, so there is no way to build the URL synchronously and a real
+ * `<a target="_blank" rel="noopener">` needs it before the click.
+ * Throws on API failure — a caller must render nothing rather than a link that
+ * would 404. */
+export async function attachmentShareLinkUrl(
+  attachmentId: string,
+): Promise<string> {
   const path = await api.getChatAttachmentShareLink(attachmentId);
-  const url = new URL(path, window.location.origin).toString();
-  await navigator.clipboard.writeText(url);
+  return new URL(path, window.location.origin).toString();
 }

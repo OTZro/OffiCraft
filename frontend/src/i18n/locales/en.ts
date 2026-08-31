@@ -774,6 +774,13 @@ export const en: Dict = {
       loading: "Loading preview…",
       error: "Could not load the preview",
       unavailable: "This file cannot be previewed. Please download it.",
+      // T-36 — open the attachment in a tab of its own (the share link), for
+      // files the browser shows rather than downloads. The note beside it is
+      // deliberately in plain words: it describes what the reader will SEE, not
+      // the mechanism behind it.
+      openInNewTab: "Open in a new tab",
+      newTabStaticNote:
+        "The new tab only shows the file as it is — buttons and boxes on it will not respond.",
       zoomControls: "Zoom image",
       zoomIn: "Zoom in",
       zoomOut: "Zoom out",
