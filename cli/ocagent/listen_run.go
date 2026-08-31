@@ -231,8 +231,8 @@ func (l *listener) noteDisconnect(format string, args ...any) {
 func (l *listener) stopRetrying(reason string) int {
 	if l.inOutage {
 		l.inOutage = false
-		l.logf(noticeGivingUp+" — %s. No further reconnect attempts; I am NOT still "+
-			"retrying, and nothing more will arrive on this stream.", reason)
+		l.logf(noticeGivingUp+" — %s. No further reconnect attempts from THIS "+
+			"listener; I am NOT still retrying.", reason)
 	}
 	return 0
 }
