@@ -55,6 +55,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "chat.mdPreview.openInNewTab",
   "chat.mdPreview.pan",
   "chat.mdPreview.unavailable",
+  "chat.mdPreview.unavailableOpenInNewTab",
   "chat.mdPreview.zoomControls",
   "chat.mdPreview.zoomIn",
   "chat.mdPreview.zoomOut",

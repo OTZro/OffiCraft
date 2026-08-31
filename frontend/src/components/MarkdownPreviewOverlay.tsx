@@ -157,6 +157,16 @@ export function MarkdownPreviewOverlay({
   // tab of its own, and that is the whole request.
   const inlineInBrowser =
     attachmentId !== undefined && isInlineDisplayableMime(mime ?? "text/markdown");
+  // T-36 (B2) — WHICH files deserve the plain-words note? ONLY the ones that
+  // look like they should answer a click. An .html page carries buttons and
+  // input boxes that will sit dead in the new tab, and the reader has to be
+  // told before they try one. A screenshot, a PDF or a .txt has no controls to
+  // be disappointed by, so the same sentence there says nothing true about what
+  // is on screen — and image preview is the HIGHEST-TRAFFIC use of this
+  // overlay, where the line would push every pasted screenshot down for
+  // nothing. The note therefore rides `looksInteractiveInNewTab`, NOT the
+  // button's own condition.
+  const interactiveLooking = looksInteractiveInNewTab(mime ?? "text/markdown", title);
   const plainText = previewableText && !isMarkdownAttachment(mime ?? "text/markdown", title);
   const source = inlineSource ?? fetched;
   const [zoom, setZoom] = useState(1);
@@ -645,9 +655,13 @@ export function MarkdownPreviewOverlay({
           * never the mechanism behind it: this line is read by someone who does
           * not write code.
           *
-          * It rides the SAME condition as the button, because it is only ever
-          * true of the thing the button opens. */}
-        {shareHref !== null && (
+          * 🔴 It rides the button's condition AND `looksInteractiveInNewTab`.
+          * It used to ride the button's condition alone, and that put it on
+          * every screenshot and every PDF — a PNG has no buttons and no input
+          * boxes, so the sentence was untrue there and cost the most common
+          * preview in the cockpit a line of height. The sentence is only ever
+          * worth saying about a file that LOOKS like it should react. */}
+        {shareHref !== null && interactiveLooking && (
           <div className="md-preview__new-tab-note">
             {t.chat.mdPreview.newTabStaticNote}
           </div>
@@ -708,7 +722,22 @@ export function MarkdownPreviewOverlay({
               </div>
             </div>
           ) : unavailable ? (
-            <div className="md-preview__status">{t.chat.mdPreview.unavailable}</div>
+            /* 🔴 T-36 (B1) — DO NOT SEND HIM BACK TO THE THING HE COMPLAINED
+             * ABOUT. This overlay cannot DRAW an .html (that contract stays
+             * narrow on purpose), but there is now a button in the header that
+             * opens it, and the biggest, most central line on the screen must
+             * point AT that button rather than at 下載 — the owner's own words
+             * for this ticket were 「不然我都要複製以後找新的頁面貼很麻煩」.
+             * 「請下載」 survives only where there is genuinely no button: a
+             * file the browser would download anyway, or a mint that failed.
+             * The line follows the BUTTON, not the mime: while the share link
+             * is still being minted neither exists yet, and they appear
+             * together on the same state change. */
+            <div className="md-preview__status">
+              {shareHref !== null
+                ? t.chat.mdPreview.unavailableOpenInNewTab
+                : t.chat.mdPreview.unavailable}
+            </div>
           ) : failed ? (
             <div className="md-preview__status">{t.chat.mdPreview.error}</div>
           ) : source === null ? (
@@ -765,6 +794,25 @@ export function isMarkdownAttachment(mime: string, filename: string): boolean {
 export function isInlineDisplayableMime(mime: string): boolean {
   return (
     mime.startsWith("image/") || mime.startsWith("text/") || mime === "application/pdf"
+  );
+}
+
+/** T-36 (B2) — does this attachment LOOK interactive once it is opened in a
+ * tab of its own? Only then is the plain-words note worth saying.
+ *
+ * NARROWER than `isInlineDisplayableMime` on purpose, and it is not the same
+ * question. That one asks "will the browser show this rather than download
+ * it?" — the button's gate. This one asks "will the reader expect the thing on
+ * screen to answer a click?", which is true of an .html page (buttons, input
+ * boxes, a design mockup) and false of a screenshot, a PDF or a .txt. Saying
+ * 「上面的按鈕和輸入格不會有反應」 over a PNG describes controls that are not
+ * there, on the busiest preview surface in the cockpit. */
+export function looksInteractiveInNewTab(mime: string, filename: string): boolean {
+  const base = mime.split(";")[0]!.trim().toLowerCase();
+  return (
+    base === "text/html" ||
+    base === "application/xhtml+xml" ||
+    /\.(html?|xhtml)$/i.test(filename)
   );
 }
 

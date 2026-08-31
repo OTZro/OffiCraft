@@ -155,7 +155,12 @@ describe("ChatGalleryPanel", () => {
     fireEvent.click(screen.getByLabelText("關閉預覽"));
     fireEvent.click(byName("doc.pdf"));
     expect(await screen.findByRole("dialog", { name: "doc.pdf" })).toBeTruthy();
-    expect(screen.getByText("此檔案無法預覽，請下載")).toBeTruthy();
+    // T-36 (B1) — the pdf still cannot be DRAWN in the panel, but the header
+    // now carries 「在新頁面顯示」 for it, so the body line points at that button
+    // instead of back at 下載 once the share link has been minted.
+    expect(
+      await screen.findByText("此檔案無法在這裡預覽，請用上方的「在新頁面顯示」開啟。"),
+    ).toBeTruthy();
     fireEvent.click(screen.getByLabelText("關閉預覽"));
     fireEvent.click(byName("bundle.zip"));
     expect(await screen.findByRole("dialog", { name: "bundle.zip" })).toBeTruthy();

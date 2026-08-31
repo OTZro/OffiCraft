@@ -774,6 +774,11 @@ export const en: Dict = {
       loading: "Loading preview…",
       error: "Could not load the preview",
       unavailable: "This file cannot be previewed. Please download it.",
+      // T-36 — same "cannot be drawn here", but when the header's new-tab
+      // button is present the line must point at THAT, not back at Download:
+      // not having to copy the file elsewhere is the whole request.
+      unavailableOpenInNewTab:
+        "This file cannot be previewed here. Use “Open in a new tab” above.",
       // T-36 — open the attachment in a tab of its own (the share link), for
       // files the browser shows rather than downloads. The note beside it is
       // deliberately in plain words: it describes what the reader will SEE, not
