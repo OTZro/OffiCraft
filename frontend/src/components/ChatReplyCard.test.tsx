@@ -45,7 +45,9 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "要幫你寄出這封信嗎？",
     body: "",
-    options: [{ text: "寄出", aiPick: true }, { text: "先不要", aiPick: false }],
+    // ai_pick sits on the SECOND option ON PURPOSE: with it on the first,
+    // reading `idx === 0` instead of `opt.aiPick` passes every assertion below.
+    options: [{ text: "寄出", aiPick: false }, { text: "先不要", aiPick: true }],
     selectMode: "single",
     status: "waiting",
     attachments: [],
@@ -117,7 +119,7 @@ function captureSseCallback(): () => void {
 }
 
 describe("ChatReplyCard", () => {
-  it("renders inline in the chat thread as a card: chips (AI 建議 first) + composer, no close/skip", async () => {
+  it("renders inline in the chat thread as a card: chips (the ai_pick one tagged) + composer, no close/skip", async () => {
     __injectMockReplyCard(mkCard({}));
     messages = [
       {
@@ -143,11 +145,11 @@ describe("ChatReplyCard", () => {
 
     await findAllByText("寄出");
     // Each chip WHOLE: its 1-based number, its wording, and exactly the tags
-    // it earned. mkCard puts ai_pick on the first option, so the AI tag rides
-    // that one and nothing else.
+    // it earned. mkCard puts ai_pick on the SECOND option, so the AI tag rides
+    // that one and nothing else — a reader that tags by position fails here.
     expect(
       [...row.querySelectorAll(".reply-option")].map((e) => e.textContent),
-    ).toEqual(["1寄出AI 建議", "2先不要"]);
+    ).toEqual(["1寄出", "2先不要AI 建議"]);
     // The typed composer rides the card; no close/skip control exists.
     expect(row.querySelector(".reply-composer")).not.toBeNull();
     expect(row.textContent).not.toContain("關閉");
@@ -159,13 +161,13 @@ describe("ChatReplyCard", () => {
     const { container, findAllByText, findByTestId } = renderCard();
     await findAllByText("寄出");
 
-    fireEvent.click(container.querySelectorAll(".reply-option")[0]);
+    fireEvent.click(container.querySelectorAll(".reply-option")[1]);
     // Ticking a chip STAGES it; the card's one send button submits it.
     fireEvent.click(container.querySelector(".chat__send")!);
 
     const final = await findByTestId("final-answer");
     expect(final.textContent).toBe(
-      "你選的AI 建議寄出",
+      "你選的AI 建議先不要",
     );
     // The chips + composer are gone — a card is answered exactly once.
     expect(container.querySelector(".reply-composer")).toBeNull();
@@ -191,7 +193,7 @@ describe("ChatReplyCard", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdxs: [0], text: "", attachments: [] },
+        answer: { optionIdxs: [1], text: "", attachments: [] },
       })
     );
     const { container, getByText, getByPlaceholderText, findByTestId } =
@@ -207,16 +209,17 @@ describe("ChatReplyCard", () => {
 
     fireEvent.click(getByText("重新決定"));
     const options = container.querySelectorAll(".reply-option");
-    expect((options[1] as HTMLButtonElement).disabled).toBe(false);
+    expect((options[0] as HTMLButtonElement).disabled).toBe(false);
     expect(getByPlaceholderText("或直接打字改寫回覆…")).toBeTruthy();
 
-    fireEvent.click(options[1]);
+    fireEvent.click(options[0]);
     // Ticking a chip STAGES it; the card's one send button submits it.
     fireEvent.click(container.querySelector(".chat__send")!);
 
     await waitFor(() => {
+      // Moved OFF the ai_pick option → the AI 建議 tag goes with it.
       const final = container.querySelector('[data-testid="final-answer"]');
-      expect(final?.textContent).toBe("你選的先不要");
+      expect(final?.textContent).toBe("你選的寄出");
     });
     // A revision never reopens the card (waiting count stays 0).
     expect((await api.getReplyCardCount()).waiting).toBe(0);
@@ -227,7 +230,7 @@ describe("ChatReplyCard", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdxs: [0], text: "", attachments: [] },
+        answer: { optionIdxs: [1], text: "", attachments: [] },
       })
     );
     const { container, getByText, queryByPlaceholderText, findByTestId } =
@@ -241,7 +244,7 @@ describe("ChatReplyCard", () => {
     expect(queryByPlaceholderText("或直接打字改寫回覆…")).toBeNull();
     const final = container.querySelector('[data-testid="final-answer"]');
     expect(final?.textContent).toBe(
-      "你選的AI 建議寄出",
+      "你選的AI 建議先不要",
     );
   });
 
@@ -253,10 +256,10 @@ describe("ChatReplyCard", () => {
 
     // The 等我回覆 page (or another window) answers the card — not this
     // component. The reply_card fan-out must refetch and flip it in place.
-    await api.answerReplyCard("rc-1", { optionIdxs: [1] });
+    await api.answerReplyCard("rc-1", { optionIdxs: [0] });
 
     const final = await findByTestId("final-answer");
-    expect(final.textContent).toBe("你選的先不要");
+    expect(final.textContent).toBe("你選的寄出");
     expect(container.querySelector(".reply-composer")).toBeNull();
   });
 
@@ -339,7 +342,7 @@ describe("ChatReplyCard", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdxs: [0], text: "", attachments: [] },
+        answer: { optionIdxs: [1], text: "", attachments: [] },
       })
     );
     const getSpy = vi.spyOn(api, "getReplyCard");
@@ -349,7 +352,7 @@ describe("ChatReplyCard", () => {
 
     const final = await findByTestId("final-answer");
     expect(final.textContent).toBe(
-      "你選的AI 建議寄出",
+      "你選的AI 建議先不要",
     );
     expect(getSpy).toHaveBeenCalledTimes(1);
   });

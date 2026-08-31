@@ -60,7 +60,9 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "要幫你寄出這封信嗎？",
     body: "",
-    options: [{ text: "寄出", aiPick: true }, { text: "先不要", aiPick: false }],
+    // ai_pick sits on the SECOND option ON PURPOSE: with it on the first,
+    // reading `idx === 0` instead of `opt.aiPick` passes every assertion below.
+    options: [{ text: "寄出", aiPick: false }, { text: "先不要", aiPick: true }],
     selectMode: "single",
     status: "waiting",
     attachments: [],
@@ -159,10 +161,11 @@ describe("RepliesPage", () => {
     const { findAllByTestId } = renderPage();
     const [card] = await findAllByTestId("waiting-card");
     // Each chip WHOLE: its 1-based number, its wording, and exactly the tags it
-    // earned. mkCard marks the first option ai_pick, so the tag rides that one.
+    // earned. mkCard marks the SECOND option ai_pick, so the tag rides that one
+    // and the first chip is bare — a reader that tagged by position fails here.
     expect(
       [...card.querySelectorAll(".reply-option")].map((e) => e.textContent),
-    ).toEqual(["1寄出AI 建議", "2先不要"]);
+    ).toEqual(["1寄出", "2先不要AI 建議"]);
   });
 
   it("answering via an option moves the card to 近期已回覆 tagged 你選的 + AI 建議", async () => {
@@ -170,7 +173,7 @@ describe("RepliesPage", () => {
     const { findAllByTestId, findByTestId, queryAllByTestId } = renderPage();
     const [card] = await findAllByTestId("waiting-card");
 
-    fireEvent.click(card.querySelectorAll(".reply-option")[0]);
+    fireEvent.click(card.querySelectorAll(".reply-option")[1]);
     // Ticking a chip STAGES it; the card's one send button submits it.
     fireEvent.click(card.querySelector(".chat__send")!);
 
@@ -180,7 +183,7 @@ describe("RepliesPage", () => {
     await waitFor(() => expect(queryAllByTestId("waiting-card")).toHaveLength(0));
     const final = answeredCard.querySelector('[data-testid="final-answer"]');
     // The circled option IS the ai_pick one → the AI 建議 tag rides alongside.
-    expect(final?.textContent).toBe("你選的AI 建議寄出");
+    expect(final?.textContent).toBe("你選的AI 建議先不要");
   });
 
   // T-4166: a 409 on answer is TERMINAL for that card — its task closed
@@ -344,7 +347,7 @@ describe("RepliesPage", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdxs: [1], text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     const { findByTestId, getByText } = renderPage();
@@ -354,11 +357,12 @@ describe("RepliesPage", () => {
     fireEvent.click(getByText("查看當初選項"));
     const options = card.querySelectorAll(".reply-option");
     // Review mode: options render but are NOT pickable yet, and the standing
-    // answer (index 1) wears 目前 — every chip WHOLE so a 目前 that leaked onto
-    // the wrong chip, or a lost AI tag, is a failure here.
+    // answer (index 0) wears 目前 — every chip WHOLE so a 目前 that leaked onto
+    // the wrong chip, or a lost AI tag, is a failure here. The two tags sit on
+    // DIFFERENT chips, which is what makes a positional reader of either fail.
     expect([...options].map((e) => e.textContent)).toEqual([
-      "1寄出AI 建議",
-      "2先不要目前",
+      "1寄出目前",
+      "2先不要AI 建議",
     ]);
     expect((options[0] as HTMLButtonElement).disabled).toBe(true);
     // 重新決定 sits at the expansion's bottom.
@@ -370,7 +374,7 @@ describe("RepliesPage", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdxs: [0], text: "", attachments: [] },
+        answer: { optionIdxs: [1], text: "", attachments: [] },
       })
     );
     const { findByTestId, getByText, getByPlaceholderText } = renderPage();
@@ -381,10 +385,10 @@ describe("RepliesPage", () => {
     fireEvent.click(getByText("重新決定"));
     // Edit mode: options pickable + the SAME typed composer appears.
     const options = card.querySelectorAll(".reply-option");
-    expect((options[1] as HTMLButtonElement).disabled).toBe(false);
+    expect((options[0] as HTMLButtonElement).disabled).toBe(false);
     expect(getByPlaceholderText("或直接打字改寫回覆…")).toBeTruthy();
 
-    fireEvent.click(options[1]);
+    fireEvent.click(options[0]);
     // Ticking a chip STAGES it; the card's one send button submits it.
     fireEvent.click(card.querySelector(".chat__send")!);
 
@@ -392,7 +396,7 @@ describe("RepliesPage", () => {
       card = await findByTestId("answered-card");
       const final = card.querySelector('[data-testid="final-answer"]');
       // No longer the AI pick → the AI 建議 tag is gone; 你選的 stays.
-      expect(final?.textContent).toBe("你選的先不要");
+      expect(final?.textContent).toBe("你選的寄出");
     });
   });
 
@@ -401,7 +405,7 @@ describe("RepliesPage", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdxs: [0], text: "", attachments: [] },
+        answer: { optionIdxs: [1], text: "", attachments: [] },
       })
     );
     const { findByTestId, getByText, queryByPlaceholderText } = renderPage();
@@ -414,7 +418,7 @@ describe("RepliesPage", () => {
 
     expect(queryByPlaceholderText("或直接打字改寫回覆…")).toBeNull();
     const final = card.querySelector('[data-testid="final-answer"]');
-    expect(final?.textContent).toBe("你選的AI 建議寄出");
+    expect(final?.textContent).toBe("你選的AI 建議先不要");
   });
 
   // 跳到原訊息 NAVIGATES (owner 2026-08-29: 「1 跟 2 變回去原本那樣」). The
