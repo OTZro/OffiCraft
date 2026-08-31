@@ -481,9 +481,9 @@
     {
       "id": "codex-hop-4",
       "source": "cli/ocwarden/codex_session.go",
-      "callsite": "s.reportIdentity()\n\t\t\t\t\ts.requestRateLimits()",
+      "callsite": "s.reportIdentity()\n\t\t\t\t\ts.requestRateLimits()\n\t\t\t\t\tidentityHeartbeat.Reset(codexTelemetryThrottle)\n\t\t\t\t},\n\t\t\t\ts.openListenerTurn)",
       "kind": "seam",
-      "seam_reason": "hop to the codex identity POST declared by codex-identity"
+      "seam_reason": "hop to the codex identity POST declared by codex-identity. The anchor deliberately runs to the CLOSING argument of handleListenerLine rather than stopping at requestRateLimits: independent review swapped that third argument for a no-op `func(string) {}` and every codex member went permanently silent — no notice, no chat event, no task event ever became a turn — with all three Go suites AND this guard green. Deleting the whole call was already caught here by accident (the reportIdentity/requestRateLimits pair lives in the closure); replacing one argument was caught by nothing. Pinning `s.openListenerTurn)` inside the anchor is what makes that swap red."
     },
     {
       "id": "codex-hop-5",

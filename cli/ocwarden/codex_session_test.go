@@ -303,8 +303,13 @@ func TestRecordCompactionCountsOnlyContextCompactionItems(t *testing.T) {
 }
 
 func TestActionableCodexListenerLineFiltersTransportDiagnostics(t *testing.T) {
+	// The `connected` line is the owner's second endpoint notice since the
+	// disconnect-notice policy (2026-08-30) and is now forwarded; the retry
+	// chatter around it still is not. The full policy table lives in
+	// codex_notice_test.go — this one keeps the ORIGINAL question it was written
+	// for: ordinary events pass, transport chatter does not.
 	for line, want := range map[string]bool{
-		"[ocagent] listen: connected — streaming http://127.0.0.1": false,
+		"[ocagent] listen: connected — streaming http://127.0.0.1": true,
 		"[ocagent] listen: stream ended: EOF":                      false,
 		"[ocagent] chat from owner (#CM-9F2A11, 1s ago): hello":    true,
 		"[ocagent] task T-1 updated · by owner":                    true,
@@ -371,16 +376,25 @@ func TestListenerLoopOpensTheWakeTurnExactlyOnce(t *testing.T) {
 	}
 
 	feed(connected) // a reconnect
-	if len(turns) != 1 {
-		t.Errorf("a reconnect opened another wake turn; turns=%q — the boot it "+
-			"exists to finish is long over by then", turns)
+	// The BOOT wake is still once-only. Since the disconnect-notice policy
+	// (2026-08-30) the reconnect does reach the agent — as the listener's own
+	// one-line notice, which is what the owner asked for — but it must never be
+	// the boot instruction again.
+	for _, turn := range turns[1:] {
+		if turn == codexPostBootWake {
+			t.Errorf("a reconnect opened another BOOT wake; turns=%q — the boot it "+
+				"exists to finish is long over by then", turns)
+		}
+	}
+	if len(turns) != 2 || turns[1] != connected {
+		t.Errorf("a reconnect must reach the agent as the notice line itself; turns=%q", turns)
 	}
 	if connects != 2 {
 		t.Errorf("telemetry must still fire on every connect, got %d", connects)
 	}
 
 	feed(event)
-	if len(turns) != 2 || turns[1] != event {
+	if len(turns) != 3 || turns[2] != event {
 		t.Errorf("an ordinary event must still be forwarded as its own turn; turns=%q", turns)
 	}
 }

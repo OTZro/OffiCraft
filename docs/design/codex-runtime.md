@@ -91,9 +91,11 @@ The Codex member boot sequence changes only execution ownership:
    itself, telling the agent to carry on with the post-SSE steps of its boot document.
    Without it the boot ends in a dead stop: this runtime's agent must not mount its own
    listener, so it hands control back after step 1 — and it only ever runs when a listener
-   line becomes a turn, while the `connected` line is exactly the one the forwarding filter
-   drops. The wake fires ONCE per session and deliberately not on reconnects, which are
-   network blips whose only effect would be to interrupt work already under way. Its text
+   line becomes a turn, and until the disconnect-notice policy below the `connected` line
+   was exactly the one the forwarding filter dropped. The wake fires ONCE per session and
+   deliberately not on reconnects, which are network blips whose only effect would be to
+   re-issue a boot instruction into work already under way — a reconnect now reaches the
+   agent as the short transport notice instead, never as this turn. Its text
    NAMES the step instead of restating it: the boot document belongs to the owner and
    moves, and a copy of its wording here would be a second source of truth.
 5. App Server `thread/tokenUsage/updated` supplies total usage plus
@@ -134,9 +136,17 @@ agent re-read authoritative state through MCP.
 
 - Idle thread: a durable pending wake starts a new turn.
 - Active thread: steer the active turn, matching Claude's Monitor delivery semantics.
-- Listener connected: transport chatter is never forwarded to the model, but the FIRST such
-  line in a session also opens the sidecar-authored post-boot wake turn described above.
-  This is the one turn whose trigger is a line the forwarding policy drops.
+- Listener transport, per the owner's disconnect-notice policy: an outage interrupts the
+  agent exactly twice — once when it starts and once when it ends — and every retry in
+  between is swallowed. The retry cadence itself is untouched; only the narration is. A
+  third line is owed when the retry loop actually STOPS, because otherwise "still
+  retrying" and "given up" are the same silence and the agent cannot tell which one it is
+  sitting in. So the sidecar forwards exactly the disconnect, the reconnect (which also
+  says whether the station changed) and the give-up line, and drops the rest of the
+  chatter. The FIRST connected line of a session is the one exception: it opens the
+  sidecar-authored post-boot wake turn described above INSTEAD of being forwarded, so one
+  line never produces two turns. Both runtimes are held to this same policy; ocagent
+  decides what is printed, and this filter decides what a codex member is shown.
 - Listener or App Server exit: terminate the sidecar. The listener child is killed/reaped,
   SSE presence drops honestly, and existing OffiCraft reconciliation restarts the selected
   runtime. Durable server state and the existing `ocagent` cursor remain authoritative.
