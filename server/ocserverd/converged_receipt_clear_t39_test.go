@@ -178,9 +178,13 @@ func TestReconcile_StillOfflineMemberKeepsItsFailureReceipt_T39(t *testing.T) {
 		// breaks the same way, and this loop reports GREEN over a row a broken
 		// clear has just wrecked. Measured, not assumed — with the predicate's
 		// `lastOp == "" || lastOpAt <= 0` guard deleted, a partial clear that blanks
-		// last_op on an offline member kept BOTH loops green while the block was
-		// gone from the screen. So the expected state is named here in this
-		// fixture's own concrete values, and it owes the predicate nothing.
+		// last_op kept the WORKER loop green while the block was gone from the
+		// screen. Only that one: an independent re-measurement (2026-08-31) found
+		// the MEMBER loop already reddening in this same scenario, at the named
+		// assertion above this comment rather than at the predicate — so "BOTH
+		// loops", which this comment used to claim under the word "Measured",
+		// was half right. The half that held is the reason this fixture names its
+		// expected state in its own concrete values and owes the predicate nothing.
 		if got.LastOp != reconcileCmdStart {
 			t.Fatalf("the member is STILL not online, so the cockpit must still be "+
 				"showing its 最近操作 block — the panel hides the block outright when "+
