@@ -358,6 +358,23 @@ sleep 2
 #     only cards this run's agent opened, on this run's isolated server.
 #     It answers CARDS. It never answers the friction questions — those are the
 #     agent's own words or they are nothing (see 〈friction〉 in CLAUDE.md).
+#
+# 🔴 THIS ANSWER MAY NEVER FAIL QUIETLY. It used to end in `|| true`, and that
+#    line is exactly how the harness breaks without anyone being told: the
+#    answer POST is the ONLY exit from waiting_owner, so a refused answer (a
+#    stale request shape, a renamed field, an expired token) leaves ⑥'s step
+#    parked forever, ⑦ impossible, and a red verdict that NAMES THE AGENT for a
+#    fault that was entirely the harness's. The rc is now read, every refusal is
+#    written to $RUN_DIR/responder.fault, and step 6b below turns that file into
+#    a refusal — because a run whose counterparty never spoke is not a verdict
+#    about the agent at all. `|| true` must not come back.
+#
+#    The answer CIRCLES THE OPTION THE AGENT FLAGGED ai_pick, read off the full
+#    card — position carries no meaning since T-40, so "the first one" is not a
+#    thing an owner can mean. A card that recommends nothing falls back to the
+#    first option; a card with no options at all is answered with text only
+#    (option_idxs: [] is a 400, deliberately).
+RESPONDER_FAULT="$RUN_DIR/responder.fault"
 (
   SG_HTTP_TAG="owner:cards"
   while :; do
@@ -373,15 +390,38 @@ for c in rows if isinstance(rows, list) else []:
     if c.get("from") == sys.argv[1] and c.get("id"):
         print(c["id"])
 ' "$AGENT" 2>/dev/null); do
-      sg_http POST "/api/reply-cards/$_cid/answer" \
-        '{"option_idx":0,"text":"（七步關卡的 owner 端）就照你列的第一個選項辦，做完照常回報收尾。"}' \
-        || true
+      _card="$(sg_http GET "/api/reply-cards/$_cid")" || _card=""
+      _body="$(printf '%s' "$_card" | python3 -c '
+import sys, json
+TEXT = "（七步關卡的 owner 端）就照你標成 AI 建議的那個選項辦，做完照常回報收尾。"
+try:
+    card = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+opts = card.get("options") or []
+idxs = [i for i, o in enumerate(opts) if isinstance(o, dict) and o.get("ai_pick")]
+if not idxs and opts:
+    idxs = [0]
+body = {"text": TEXT}
+if idxs:
+    body["option_idxs"] = idxs
+print(json.dumps(body, ensure_ascii=False))
+')" || _body=""
+      if [[ -z "$_body" ]]; then
+        _sg_http_note fail "[seven_gate] 🔴 HARNESS FAULT — could not build an owner answer for card $_cid (its read above did not parse). ⑥'s step stays in waiting_owner and ⑦ becomes impossible."
+        printf 'card %s: the answer body could not be built from the card read\n' "$_cid" >> "$RESPONDER_FAULT"
+        continue
+      fi
+      if ! sg_http POST "/api/reply-cards/$_cid/answer" "$_body" >/dev/null; then
+        _sg_http_note fail "[seven_gate] 🔴 HARNESS FAULT — the owner answer to card $_cid was REFUSED (see the [http] line above). The step stays in waiting_owner, ⑦ becomes impossible, and the verdict would blame the agent."
+        printf 'card %s: the owner answer POST was refused — body was %s\n' "$_cid" "$_body" >> "$RESPONDER_FAULT"
+      fi
     done
     sleep "${OC_SG_ANSWER_INTERVAL:-2}"
   done
 ) &
 RESPONDER_PID=$!
-echo "[seven_gate] owner card-responder pid=$RESPONDER_PID (answers ONLY $AGENT's cards)"
+echo "[seven_gate] owner card-responder pid=$RESPONDER_PID (answers ONLY $AGENT's cards, circling whichever option carries ai_pick)"
 
 # 5. the actor. Its rc is recorded and deliberately not acted on.
 #    OC_SG_OWNER_TOKEN is the COUNTERPARTY's token, and it is in the contract
@@ -406,6 +446,20 @@ kill "$COLLECTOR_PID" 2>/dev/null; wait "$COLLECTOR_PID" 2>/dev/null
 COLLECTOR_PID=""
 python3 "$HERE/judge.py" "$RUN_DIR"; RC=$?
 printf '%s\n' "$RC" > "$RUN_DIR/rc"
+
+# 6b. THE COUNTERPARTY'S OWN HEALTH, read BEFORE the verdict is believed. If the
+#     owner responder was ever refused, ⑥'s step never left waiting_owner and ⑦
+#     could not have happened — so whatever judge.py just printed about the
+#     agent is not a verdict, it is a description of the harness. That is a
+#     REFUSAL (rc 2, the same class as the collection-window assertion above),
+#     never a warning appended under a green line.
+if [[ -s "$RESPONDER_FAULT" ]]; then
+  echo
+  echo "[seven_gate] 🔴🔴 HARNESS FAULT — THE OWNER SIDE NEVER ANSWERED. This run judges NOTHING about the agent."
+  sed 's/^/[seven_gate]   /' "$RESPONDER_FAULT"
+  echo "[seven_gate] full request/response for each: $RUN_DIR/http.log — the judge verdict above (rc=$RC) is NOT usable."
+  exit 2
+fi
 
 # 7. the friction questions, verbatim from the one file that holds them. Asked on
 #    green runs too — the gate knows whether the fact landed, never whether the

@@ -134,7 +134,7 @@ if [[ -n "$TASK" ]] && ! skipped reply_card; then
   if [[ -n "$SID2" ]]; then
     sg_step reply_card_start POST "/api/tasks/$TASK/steps/$SID2/status" '{"status":"in_progress"}' >/dev/null
     sg_step reply_card POST /api/reply-cards \
-      "{\"kind\":\"decision\",\"summary\":\"七步關卡:要不要繼續收尾?\",\"body\":\"這是載體用的請示卡。\",\"options\":[\"繼續收尾\",\"先停在這裡\"],\"linked_task\":{\"task_id\":\"$TASK\",\"step_id\":\"$SID2\"}}" >/dev/null
+      "{\"kind\":\"decision\",\"summary\":\"七步關卡:要不要繼續收尾?\",\"body\":\"這是載體用的請示卡。\",\"options\":[{\"text\":\"先停在這裡\",\"ai_pick\":false},{\"text\":\"繼續收尾\",\"ai_pick\":true}],\"linked_task\":{\"task_id\":\"$TASK\",\"step_id\":\"$SID2\"}}" >/dev/null
   fi
 fi
 
