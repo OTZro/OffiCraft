@@ -9,13 +9,24 @@ import (
 //
 // The cockpit's 「最近操作」 block renders on `lastOp !== "" && lastOpAt != null`
 // (AgentDetailPanel.tsx) — no presence check, no age ceiling. So a red
-// "上一次操作失敗" line, once written, stands forever: EVERY clearing arm in the
-// server (stampWakeObservability's landed-START path, and worker_spawn.go's
-// clearWorkerPlacementBlock) is gated on a fresh dispatch — `Command == start` —
-// and a member that has CONVERGED decides `Command == none`. Neither of them
-// could clear a warden receipt at all. "Cleared" and "healthy again" were mutually exclusive — to
-// lose the line the member had to break a second time. Field evidence: one
-// receipt standing 10.6 days on a member that was online the whole time.
+// "上一次操作失敗" line, once written, stands forever.
+//
+// The scope of that "forever" was measured, not assumed. Over the server package
+// at the base commit 04cb3bee —
+//
+//	git grep -n 'LastOpReason = ""' 04cb3bee -- 'server/ocserverd/*.go' | grep -v _test.go
+//	git grep -n 'LastOp = ""'       04cb3bee -- 'server/ocserverd/*.go' | grep -v _test.go
+//	git grep -n 'LastOpAt = 0'      04cb3bee -- 'server/ocserverd/*.go' | grep -v _test.go
+//
+// — the first found exactly two sites (stampWakeObservability's landed-START
+// path and worker_spawn.go's clearWorkerPlacementBlock) and the other two found
+// NOTHING AT ALL. So both of the two blanked only the receipt's TEXT, both were
+// gated on a fresh dispatch — `Command == start` — and a member that has
+// CONVERGED decides `Command == none`; neither could clear a warden receipt, and
+// nothing in that package ever took the block itself off the screen. "Cleared"
+// and "healthy again" were mutually exclusive — to lose the line the member had
+// to break a second time. Field evidence: one receipt standing 10.6 days on a
+// member that was online the whole time.
 //
 // Owner ruling (rc-f2e963132fc5, choice [1]): 「他回來了就把那行字直接拿掉」.
 // Not rewritten, not archived — removed. The two tests per side below are the
@@ -159,13 +170,44 @@ func TestReconcile_StillOfflineMemberKeepsItsFailureReceipt_T39(t *testing.T) {
 		// re-stamps a fresh receipt with a new timestamp, and that is the
 		// production behaviour, not this change. What must never happen is the row
 		// going quiet.
-		if !receiptRendersAsFailure(got.LastOp, got.LastOpAt, got.LastOpOK) {
+		//
+		// 🔴 SPELLED OUT ON PURPOSE — DO NOT COLLAPSE THIS BACK INTO A CALL TO
+		// receiptRendersAsFailure. That predicate is the thing the T-39 clears are
+		// built on, so asking it whether the row still reads as a failure is asking
+		// the accused to be its own witness: break the predicate and the oracle
+		// breaks the same way, and this loop reports GREEN over a row a broken
+		// clear has just wrecked. Measured, not assumed — with the predicate's
+		// `lastOp == "" || lastOpAt <= 0` guard deleted, a partial clear that blanks
+		// last_op on an offline member kept BOTH loops green while the block was
+		// gone from the screen. So the expected state is named here in this
+		// fixture's own concrete values, and it owes the predicate nothing.
+		if got.LastOp != reconcileCmdStart {
 			t.Fatalf("the member is STILL not online, so the cockpit must still be "+
-				"showing a failed 最近操作; at tick +%v got op=%q ok=%v at=%v reason=%q",
-				off, got.LastOp, got.LastOpOK, got.LastOpAt, got.LastOpReason)
+				"showing its 最近操作 block — the panel hides the block outright when "+
+				"last_op is blank; at tick +%v want last_op=%q, got %q (ok=%v at=%v reason=%q)",
+				off, reconcileCmdStart, got.LastOp, got.LastOpOK, got.LastOpAt, got.LastOpReason)
 		}
+		if got.LastOpAt <= 0 {
+			t.Fatalf("nor may last_op_at be zeroed — mappers.ts turns 0 into null and the "+
+				"panel then hides the block; at tick +%v got last_op_at=%v (op=%q reason=%q)",
+				off, got.LastOpAt, got.LastOp, got.LastOpReason)
+		}
+		if got.LastOpOK != nil && *got.LastOpOK {
+			t.Fatalf("nor may the verdict flip to SUCCESS while the member is still down — "+
+				"the panel would repaint the line green; at tick +%v got last_op_ok=%v reason=%q",
+				off, *got.LastOpOK, got.LastOpReason)
+		}
+		// …and it must not go WORDLESS either: a populated last_op/last_op_at with
+		// an empty reason is still a red block, just one with nothing written in
+		// it. Not pinned to the wake_timeout sentence at every offset on purpose —
+		// a later tick may legitimately re-stamp a DIFFERENT true failure code (the
+		// worker twin below is measured doing exactly that at +300); the byte-for-
+		// byte pin lives in the off <= 60 check underneath, where nothing new has
+		// happened yet.
 		if got.LastOpReason == "" {
-			t.Fatalf("nor may it go wordless; at tick +%v the reason is empty", off)
+			t.Fatalf("nor may it go wordless — last_op/last_op_at populated with an empty "+
+				"reason paints the same red block with no sentence in it; at tick +%v "+
+				"got op=%q ok=%v at=%v", off, got.LastOp, got.LastOpOK, got.LastOpAt)
 		}
 		// And for as long as nothing NEW has happened, it is the original receipt
 		// untouched — byte for byte, timestamp included.
@@ -242,13 +284,33 @@ func TestWorkerLiveness_StillOfflineWorkerKeepsItsFailureReceipt_T39(t *testing.
 		s.reconcileWorkerLiveness(*cur, base+WakingTTLSecs+off)
 		s.outsourceMu.Unlock()
 		got, _ := s.dal.GetOutsourceWorker("ow-stuck")
-		if !receiptRendersAsFailure(got.LastOp, got.LastOpAt, got.LastOpOK) {
+		// 🔴 SPELLED OUT, for the reason the staff twin states at length: an oracle
+		// that calls receiptRendersAsFailure inherits that predicate's bugs, and
+		// this loop then goes green over a wrecked row. Named in this fixture's own
+		// concrete values instead.
+		if got.LastOp != reconcileCmdStart {
 			t.Fatalf("the worker is STILL not online, so the cockpit must still be "+
-				"showing a failed 最近操作; at tick +%v got op=%q ok=%v at=%v reason=%q",
-				off, got.LastOp, got.LastOpOK, got.LastOpAt, got.LastOpReason)
+				"showing its 最近操作 block — the panel hides the block outright when "+
+				"last_op is blank; at tick +%v want last_op=%q, got %q (ok=%v at=%v reason=%q)",
+				off, reconcileCmdStart, got.LastOp, got.LastOpOK, got.LastOpAt, got.LastOpReason)
 		}
+		if got.LastOpAt <= 0 {
+			t.Fatalf("nor may last_op_at be zeroed — mappers.ts turns 0 into null and the "+
+				"panel then hides the block; at tick +%v got last_op_at=%v (op=%q reason=%q)",
+				off, got.LastOpAt, got.LastOp, got.LastOpReason)
+		}
+		if got.LastOpOK != nil && *got.LastOpOK {
+			t.Fatalf("nor may the verdict flip to SUCCESS while the worker is still down — "+
+				"the panel would repaint the line green; at tick +%v got last_op_ok=%v reason=%q",
+				off, *got.LastOpOK, got.LastOpReason)
+		}
+		// Measured: at +300 this worker legitimately re-stamps a never_collected
+		// receipt, so what is pinned across the whole walk is "a sentence is still
+		// there", with the byte-for-byte pin left to the off <= 30 check below.
 		if got.LastOpReason == "" {
-			t.Fatalf("nor may it go wordless; at tick +%v the reason is empty", off)
+			t.Fatalf("nor may it go wordless — last_op/last_op_at populated with an empty "+
+				"reason paints the same red block with no sentence in it; at tick +%v "+
+				"got op=%q ok=%v at=%v", off, got.LastOp, got.LastOpOK, got.LastOpAt)
 		}
 		if off <= 30 && (got.LastOpReason != wantReason || got.LastOpAt != wantAt) {
 			t.Fatalf("with no new failure since, the ORIGINAL receipt must be untouched; "+
@@ -272,8 +334,16 @@ func TestWorkerLiveness_StillOfflineWorkerKeepsItsFailureReceipt_T39(t *testing.
 // to `lastOpOK != nil && !*lastOpOK` and both go red.
 
 // The staff side. The shape is hand-planted here and that is stated rather than
-// hidden: no MEMBER writer produces it today (the member placement clear leaves
-// last_op_ok at the false it found). It is pinned as defence in depth, because
+// hidden: no MEMBER writer produces it today — measured, over the server package
+// only, with
+//
+//	git grep -n 'LastOpOK = nil' HEAD -- 'server/ocserverd/*.go' | grep -v _test.go
+//
+// which returns three sites: the two in worker_spawn.go (both WORKER rows) and
+// reconcile.go's own converged clear, which blanks all five columns together and
+// so leaves nothing on screen. The member placement clear does not appear at all
+// — it leaves last_op_ok at the false it found. It is pinned as defence in
+// depth, because
 // the panel renders it red regardless of who wrote it — and the worker twin below
 // shows the server DOES write this shape on the row type that has a producer.
 func TestReconcile_ConvergedOnlineClearsTheWordlessRedBlock_T39(t *testing.T) {
@@ -508,5 +578,76 @@ func TestWorkerLiveness_ConvergedClearRulesOnTheFreshRowNotTheSnapshot_T39(t *te
 			"tick loaded its snapshot must not be destroyed (and a SUCCESS receipt "+
 			"never at all); want ok=true reason=%q at=%v, got op=%q ok=%v reason=%q at=%v",
 			"started cleanly", at, got.LastOp, got.LastOpOK, got.LastOpReason, got.LastOpAt)
+	}
+}
+
+// ── the predicate's own truth table ─────────────────────────────────────────
+//
+// receiptRendersAsFailure is the single gate both T-39 clears turn on, and until
+// this table existed nothing in the suite pinned it directly: every test that
+// touched it did so through a clear, which only ever calls it on rows that are
+// already populated failures. Whole regions of its input space — above all the
+// ALREADY-CLEARED row, which is what makes the clears non-churning — had no
+// coverage at all, and a mutant that answered "yes, still a failure" for a blank
+// row was measured surviving the entire T-39 file.
+//
+// 🔴 THE WANT COLUMN IS HAND-WRITTEN FROM THE PANEL, NOT FROM THE FUNCTION. Each
+// row's expectation is the answer to "with these five columns in the database,
+// does AgentDetailPanel paint a 最近操作 block, and is its verdict arm the ✗
+// one?" — `hasLastOp` is `lastOp !== "" && lastOpAt != null` (last_op_at 0 maps
+// to null in mappers.ts) and the verdict is `vm.lastOpOk ? "ok" : "fail"`. Read
+// the want column against the panel, never against the Go body: a table derived
+// from the implementation agrees with any mutation of it.
+//
+// ⚠️ This table does NOT cover what the two "still offline" walks cover, and it
+// is not a substitute for them: it says what the predicate answers, never what
+// the server does to a row. Those two loops are deliberately written out in
+// literal column values for that reason.
+func TestReceiptRendersAsFailure_TruthTable_T39(t *testing.T) {
+	no, yes := false, true
+	cases := []struct {
+		name     string
+		lastOp   string
+		lastOpAt float64
+		lastOpOK *bool
+		want     bool
+		why      string
+	}{
+		{"already cleared — the whole row blank", "", 0, nil, false,
+			"nothing on screen at all; answering true here makes both clears churn " +
+				"a write and a publish on every converged tick, forever"},
+		{"blank op, ok already false", "", 0, &no, false,
+			"still nothing on screen: the panel gates on last_op, not on last_op_ok"},
+		{"blank op but a stray timestamp", "", 1_000, &no, false,
+			"hasLastOp needs BOTH halves; a lone last_op_at paints nothing"},
+		{"op present but last_op_at zero", reconcileCmdStart, 0, &no, false,
+			"mappers.ts turns 0 into null, so hasLastOp is false and the block is hidden"},
+		{"op present, negative last_op_at", reconcileCmdStart, -1, &no, false,
+			"same hidden block; the guard is > 0, not != 0"},
+		{"the red line — a server-authored refusal", reconcileCmdStart, 1_000, &no, true,
+			"the case the whole ticket is about: block shown, verdict arm ✗"},
+		{"the WORDLESS red line — ok is nil", reconcileCmdStart, 1_000, nil, true,
+			"nil takes the ✗ branch of `vm.lastOpOk ? ok : fail`, so this is painted " +
+				"exactly as red as a false one; clearWorkerPlacementBlock produces it"},
+		{"a SUCCESS receipt", reconcileCmdStart, 1_000, &yes, false,
+			"the owner asked for the RED line to go; clearing a green one silently " +
+				"widens the ruling and this boundary does not move"},
+		{"a success receipt on a stop", reconcileCmdStop, 1_000, &yes, false,
+			"same boundary, and last_op is not restricted to start"},
+		{"a failed stop", reconcileCmdStop, 1_000, &no, true,
+			"the panel does not care which command failed"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := receiptRendersAsFailure(c.lastOp, c.lastOpAt, c.lastOpOK)
+			if got != c.want {
+				okStr := "nil"
+				if c.lastOpOK != nil {
+					okStr = map[bool]string{true: "true", false: "false"}[*c.lastOpOK]
+				}
+				t.Fatalf("receiptRendersAsFailure(last_op=%q, last_op_at=%v, last_op_ok=%s) "+
+					"= %v, want %v — %s", c.lastOp, c.lastOpAt, okStr, got, c.want, c.why)
+			}
+		})
 	}
 }
