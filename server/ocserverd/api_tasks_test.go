@@ -412,7 +412,7 @@ func TestBoundCardArmsTheGateStepAndFlipsTheTask(t *testing.T) {
 	api.HandleCreateReplyCardApiReplyCardsPost(rec,
 		taskReq(t, "POST", "/api/reply-cards", map[string]any{
 			"kind": "decision", "summary": "ship it?",
-			"options": []map[string]any{{"text": "ship"}, {"text": "hold"}},
+			"options":     []map[string]any{{"text": "ship"}, {"text": "hold"}},
 			"linked_task": map[string]any{"task_id": task.ID, "step_id": gateStep.ID},
 		}, "m-exec", "agent"))
 	if rec.Code != http.StatusOK {
@@ -2378,7 +2378,7 @@ func TestResumeSummaryCarriesTheCallersOpenTasksAsLightRows(t *testing.T) {
 	api.HandleCreateReplyCardApiReplyCardsPost(rec,
 		taskReq(t, "POST", "/api/reply-cards", map[string]any{
 			"kind": "decision", "summary": "go?",
-			"options": []map[string]any{{"text": "go"}, {"text": "hold"}},
+			"options":     []map[string]any{{"text": "go"}, {"text": "hold"}},
 			"linked_task": map[string]any{"task_id": task.ID, "step_id": view.Steps[2].ID},
 		}, "m-exec", "agent"))
 	if rec.Code != http.StatusOK {

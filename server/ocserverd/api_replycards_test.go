@@ -1655,7 +1655,7 @@ func TestBoundCardCarriesQuestionAttachments(t *testing.T) {
 	startFirstStep(t, api, task.ID, "m-exec")
 	rec := createCardRaw(t, api, "m-exec", map[string]any{
 		"kind": "decision", "summary": "ship it?",
-		"options": []map[string]any{{"text": "ship"}, {"text": "hold"}},
+		"options":     []map[string]any{{"text": "ship"}, {"text": "hold"}},
 		"linked_task": map[string]any{"task_id": task.ID, "step_id": view.Steps[0].ID},
 		"attachments": []map[string]any{
 			{"data_b64": onePixelPNGB64, "filename": "diff.png", "mime": "image/png"},

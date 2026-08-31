@@ -15,9 +15,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strconv"
-	"reflect"
 	"strings"
 	"testing"
 	"unicode"

@@ -1856,12 +1856,12 @@ type ReplyCard struct {
 	// schema CHECK — the 00013 posture). It is ORTHOGONAL to Kind: Kind says
 	// what the owner must DO, SelectMode says how many options the answer may
 	// carry.
-	SelectMode        string
-	Status            string // "waiting" | "answered" | "expired" (closed set in code; migrations/00013 dropped the CHECK)
-	CreatedTS         float64
-	AnsweredTS        float64 // 0.0 while waiting; latest answer time after
-	ExpiredTS         float64 // 0.0 unless expired; when the expire action ran
-	ChatMessageID     string
+	SelectMode    string
+	Status        string // "waiting" | "answered" | "expired" (closed set in code; migrations/00013 dropped the CHECK)
+	CreatedTS     float64
+	AnsweredTS    float64 // 0.0 while waiting; latest answer time after
+	ExpiredTS     float64 // 0.0 unless expired; when the expire action ran
+	ChatMessageID string
 	// AnswerOptionIdxs are the circled options' indices, stored DEDUPED and
 	// ASCENDING so that two answers circling the same options are byte-equal
 	// whatever order the owner clicked them in. nil = the answer carried no
