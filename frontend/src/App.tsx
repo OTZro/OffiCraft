@@ -22,6 +22,7 @@ import { GuidePage } from "./components/UserGuidePage";
 import { SettingsPage } from "./components/SettingsPage";
 import { ProfileDropdown } from "./components/ProfileDropdown";
 import { OnboardingBanner } from "./components/OnboardingBanner";
+import { ConnectionBanner } from "./components/ConnectionBanner";
 import { InlineEdit } from "./components/InlineEdit";
 import { PushNotifications } from "./components/PushNotifications";
 import { useOrgName } from "./hooks/useOrgName";
@@ -191,6 +192,14 @@ export default function App({ onLogout }: { onLogout?: () => void } = {}) {
           automatic first-run setup did not produce a working studio. Renders
           nothing at all unless that run actually failed. */}
       <OnboardingBanner />
+
+      {/* T-b0bb: the ONE place the cockpit admits it has stopped receiving.
+          Every view below this line is delta-driven, so a dead downlink and a
+          quiet office render identically — without this bar a frozen page is
+          indistinguishable from a calm one. Sits ABOVE the tabs so it is on
+          screen whichever page the owner is on: the stall is app-wide, not a
+          property of any one tab. Renders nothing while the stream is healthy. */}
+      <ConnectionBanner />
 
       <nav className="nav-tabs">
         <div className="nav-tabs__seg">

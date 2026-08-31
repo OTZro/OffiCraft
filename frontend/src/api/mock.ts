@@ -84,6 +84,7 @@ import type {
   ThemeListItem,
   ThemeWriteReceipt,
   ThemeDeleteResult,
+  SseConnectionState,
 } from "./adapter";
 import type {
   WireMember,
@@ -5867,6 +5868,19 @@ export const mockApi: Api = {
     return () => {
       topicSubscribers.delete(onTopic);
     };
+  },
+
+  subscribeConnection(
+    onState: (state: SseConnectionState) => void
+  ): () => void {
+    // The mock has no transport, so it has no transport to lose: report "live"
+    // once and never call back. This is the honest answer, not a stub — there
+    // is nothing here that can go stale behind the owner's back, so the
+    // connection banner must stay off in mock mode. Anything else (starting at
+    // "connecting", say) would put a permanent "reconnecting" bar on a demo
+    // that is not reconnecting to anything.
+    onState("live");
+    return () => {};
   },
 };
 

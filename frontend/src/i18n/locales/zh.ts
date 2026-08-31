@@ -28,6 +28,17 @@ export const zh = {
     tooLargeLead: "內容太長，無法逐行比對（",
     tooLargeTail: " 行）。",
   },
+  // ── 即時連線中斷提示（components/ConnectionBanner）──
+  // 這條橫幅存在的理由只有一個:連線死掉的畫面跟「沒有新消息」的畫面長得一模
+  // 一樣。使用者不會知道自己正在看一份凍結的快照(owner 2026-08-21 轉來的回報:
+  // 「要 refresh page 才會更新」)。所以斷線這件事一定要說出來,而且要說出後果
+  //(畫面可能不是最新的),不是只說「連線中」。
+  connection: {
+    lostTitle: "即時更新已中斷",
+    lostBody: "正在自動重新連線，畫面上的內容可能不是最新的。",
+    reload: "重新整理",
+    ariaLabel: "即時連線狀態",
+  },
   nav: {
     office: "辦公室",
     officeUnread: "有未讀訊息",
