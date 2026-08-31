@@ -31,7 +31,7 @@
 
 ## 5. reply cards 與 tasks
 
-- reply card 狀態機：開卡同時建立 chat link、只有 answer 能關 waiting、一次性 answer、re-answer 只對已回答卡；kind/options/summary 先驗。pane 的 waiting/answered 排序、badge 與 SSE 回 agent 都是 wire。
+- reply card 狀態機：開卡同時建立 chat link、只有 answer 能關 waiting、一次性 answer、re-answer 只對已回答卡；kind/select_mode/options（含每選項 ai_pick 與其數量上限）/summary 先驗；答覆側的索引清單先正規化（去重＋升冪）再驗範圍與單選卡的數量。pane 的 waiting/answered 排序、badge 與 SSE 回 agent 都是 wire。
 - list 預設是輕量摘要：title/summary、status、decision digest、answer preview、attachment count；body/options/chat message id 需走 full card。`?view=full` 必須是同一 pane 的完整列，未知 view 400；`view` 不向 agent 的 tools/list 宣傳，client 不得假設第三種 shape。
 - expire 是 answer 以外的終態出口；answered/expired 的再次操作、answer/PUT on expired 必須拒絕，expired delta 與 pane/count 需一致。現行 route floor 與 handler caller rule 以 manifest/source 為準：作者可處理自己的卡，owner/admin 不因此能改已回答卡；不要把舊 owner-only 文字抄回來。
 - task lifecycle 驗 dedupe、required inputs、plan/step/gate/card binding、合法 transition、waiting_owner／waiting_external 原因、deps、task message、closeout、manual CRUD 與終態防呼。答卡只解除 hold，不替 agent 推進工作進度；replan 要保留已答卡節點為 superseded，並正確計 progress。
