@@ -317,9 +317,12 @@ type reconcileDecision struct {
 	// the member is NOT online).
 	//
 	// 🔴 IT EXISTS BECAUSE "THE FAILURE IS OVER" HAD NO WRITER. Every arm that
-	// stamps a failure receipt runs while the member is broken; the ONE arm that
-	// cleared anything was gated on `Command == start`, i.e. on the server having
-	// just tried AGAIN. So a receipt could only be cleared by a further attempt,
+	// stamps a failure receipt runs while the member is broken; the only arm that
+	// could clear a WARDEN receipt was gated on `Command == start`, i.e. on the
+	// server having just tried AGAIN. (Narrowed on purpose: two other clearing
+	// arms exist — that same arm's placement-stamp clear and worker_spawn.go's
+	// clearWorkerPlacementBlock — but both are ALSO gated on a fresh dispatch and
+	// neither touches a warden receipt, so the same trap holds for all three.) So a receipt could only be cleared by a further attempt,
 	// never by the member simply coming back — and a member that recovered on its
 	// own kept its red 「最近操作」 line for as long as it stayed healthy (field
 	// evidence: 10.6 days). The recovery is a fact the DECIDER knows and nothing
@@ -328,6 +331,15 @@ type reconcileDecision struct {
 	// Same shape as StopKind and ArmHandoverOp: decided where the branch lives,
 	// read verbatim by the caller (reconcileTickMemberLocked for staff,
 	// reconcileWorkerLiveness for outsource — one flag, both producers).
+	//
+	// ⚠️ KNOWN REMAINING CASE, declared rather than discovered later: only
+	// decideUp sets this. decideDown and decideUninstall never do, so a FAILED
+	// STOP or UNINSTALL receipt on a member that has since converged OFFLINE is
+	// still shown forever — the same disease on the other side of the FSM. That
+	// is the owner's ruling honoured literally (「他回來了」 is the online
+	// direction) and not an oversight; it needs its own ruling because "the
+	// member is gone" is not obviously the moment to forget why stopping it
+	// failed.
 	ConvergedOnline bool
 	// StopKind names WHICH of the FSM's STOPs this is (T-72dd). "" on every
 	// decision that is not a STOP.
@@ -1758,38 +1770,16 @@ func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision
 	}
 	// T-39 — THE MEMBER CAME BACK, SO THE FAILURE RECEIPT GOES.
 	//
-	// Owner ruling rc-f2e963132fc5 [1]: 「他回來了就把那行字直接拿掉」 — removed,
-	// not rewritten into a past-tense sentence and not archived anywhere the
-	// cockpit can still show it. The cost was put to the owner and accepted: once
-	// this fires there is NO surviving trace on the row that the member ever
-	// failed to start. The server log line still exists; nothing owner-visible
-	// does.
-	//
-	// ALL FIVE COLUMNS, because the cockpit's condition is `last_op != "" &&
-	// last_op_at != 0` (AgentDetailPanel.tsx, via mappers.ts mapping 0 → null) —
-	// clearing only last_op_reason would leave a wordless red block on screen,
-	// which is the same complaint in a worse shape. last_op_ok goes back to nil,
-	// its three-valued "nothing folded yet", for the reason
-	// clearWorkerPlacementBlock gives: a false with nothing to explain it renders
-	// as a failure nobody can act on.
-	//
-	// GATED ON A FAILURE, not on any receipt: a SUCCESS receipt is not the thing
-	// the owner asked to have removed, and deleting it would silently widen a
-	// narrow ruling. Gated on CONVERGENCE and not written unconditionally: a
-	// member that is still down must keep its receipt on screen — that one is
-	// describing something that is still true. The pair is pinned by
-	// TestReconcile_ConvergedOnlineMemberClearsStaleFailureReceipt_T39 and
-	// TestReconcile_StillOfflineMemberKeepsItsFailureReceipt_T39.
-	//
-	// It cannot churn the row: after the first clear last_op_ok is nil, so every
-	// later converged tick fails this guard and writes nothing.
-	if decision.ConvergedOnline && m.LastOpOK != nil && !*m.LastOpOK {
-		m.LastOp = ""
-		m.LastOpOK = nil
-		m.LastOpLog = ""
-		m.LastOpReason = ""
-		m.LastOpAt = 0.0
-		changed = true
+	// 🔴 IT RETURNS. Both arms above are UNREACHABLE on a converged tick and that
+	// is structural, not luck: StartTimedOut is only ever observed on the
+	// not-online path, and a decision that carries ConvergedOnline is by
+	// construction Command == none. So there is never a wake stamp to persist
+	// alongside this clear, and the whole-row copy below — which would otherwise
+	// splat this tick's SNAPSHOT of all five receipt columns onto a freshly re-read
+	// row — must not run for it. The clear does its own re-read and its own put.
+	if decision.ConvergedOnline {
+		s.clearMemberConvergedFailureReceipt(m.ID, *m)
+		return
 	}
 	if !changed {
 		return
@@ -1812,6 +1802,94 @@ func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision
 	fresh.LastOpAt = m.LastOpAt
 	if err := s.putMember(*fresh, triggerServer); err != nil {
 		reconcileLog("%s: wake observability persist failed: %v", m.ID, err)
+	}
+}
+
+// receiptRendersAsFailure answers the ONE question the T-39 clears are allowed
+// to turn on: WOULD THE COCKPIT PAINT THIS ROW AS A FAILED OPERATION RIGHT NOW.
+//
+// 🔴 IT MIRRORS THE PANEL, NOT THE COLUMN, and that is the whole point of the
+// ticket. The owner's ruling (rc-f2e963132fc5 [1]) is 「他回來了就把那行字直接
+// 拿掉」 — the thing to remove is the RED LINE ON THE SCREEN, not "a row whose
+// last_op_ok happens to equal false". Gating on the column instead of on the
+// render was the same category of mistake this ticket exists to fix, and it left
+// a reachable hole: `last_op_ok = nil` with last_op/last_op_at populated is a
+// WORDLESS RED BLOCK, because the panel's verdict arm is `vm.lastOpOk ? "ok" :
+// "fail"` (AgentDetailPanel.tsx) and nil takes the ✗ branch. That shape is
+// PRODUCED BY THIS SERVER — clearWorkerPlacementBlock deliberately writes ok
+// back to nil while leaving last_op and last_op_at standing.
+//
+// The two halves are the panel's two conditions, verbatim:
+//
+//	last_op != "" && last_op_at > 0   — `hasLastOp` (AgentDetailPanel.tsx:412),
+//	                                    with last_op_at 0 mapped to null in
+//	                                    mappers.ts before the panel sees it;
+//	!(last_op_ok == true)             — the ✗ arm, which nil falls into.
+//
+// ⚠️ A SUCCESS RECEIPT IS NOT A FAILURE and this returns false for it. That
+// boundary does not move: the owner asked for the red line to go, and deleting a
+// green one would silently widen a narrow ruling.
+//
+// It is also what makes the clears non-churning: after one runs, last_op is ""
+// and last_op_at is 0, so every later converged tick answers false and writes
+// nothing.
+func receiptRendersAsFailure(lastOp string, lastOpAt float64, lastOpOK *bool) bool {
+	if lastOp == "" || lastOpAt <= 0 {
+		return false // the panel hides the block entirely — nothing on screen
+	}
+	return lastOpOK == nil || !*lastOpOK
+}
+
+// clearMemberConvergedFailureReceipt removes the cockpit's red 「最近操作」 line
+// from a staff member that has converged back ONLINE (T-39). The outsource twin
+// is clearWorkerConvergedFailureReceipt (worker_spawn.go); they are two functions
+// because they write two different row types, and they say the same thing because
+// both turn on receiptRendersAsFailure and on the one decider's ConvergedOnline.
+//
+// 🔴 THE RULING IS MADE ON THE RE-READ ROW, NOT ON THE TICK SNAPSHOT. This is a
+// whole-row write and the HTTP faces (activate / relocate / deactivate) write
+// member rows without holding reconcileMu — the same hazard every stamp in this
+// file re-reads for. Judging the snapshot and then blanking the fresh row would
+// be strictly worse than the bug being fixed: it would delete a receipt an owner
+// action wrote microseconds ago, which is destructive rather than merely stale.
+//
+// The snapshot IS used, but only as a short-circuit before the query, so a
+// healthy member with a clean row costs nothing on every one of its converged
+// ticks (the cadence is 30s per member, forever). The two ways the two answers
+// can differ are both safe, and deliberately asymmetric:
+//
+//   - snapshot says "nothing to clear", fresh has a receipt → skipped this tick.
+//     That receipt was written DURING this tick, so it is newer than the
+//     convergence and keeping it is the honest answer; the next tick sees it in
+//     its own snapshot and clears it then.
+//   - snapshot says "clear it", fresh disagrees → the second check refuses and
+//     nothing is written.
+//
+// Best-effort by the stampWakeObservability rule: a persistence failure is logged
+// and never changes a reconcile decision. Caller holds reconcileMu.
+func (s *apiServer) clearMemberConvergedFailureReceipt(memberID string, snapshot Member) {
+	if !receiptRendersAsFailure(snapshot.LastOp, snapshot.LastOpAt, snapshot.LastOpOK) {
+		return
+	}
+	fresh, err := s.dal.GetMember(memberID)
+	if err != nil || fresh == nil || fresh.RosterStatus != RosterStatusActive {
+		return
+	}
+	if !receiptRendersAsFailure(fresh.LastOp, fresh.LastOpAt, fresh.LastOpOK) {
+		return
+	}
+	// All five columns, because clearing only the reason leaves the block on
+	// screen with nothing written in it. last_op_ok goes back to nil — its
+	// three-valued "nothing folded yet" — which is invisible precisely BECAUSE
+	// the other four are blank; a nil beside a populated last_op is the wordless
+	// red block above.
+	fresh.LastOp = ""
+	fresh.LastOpOK = nil
+	fresh.LastOpLog = ""
+	fresh.LastOpReason = ""
+	fresh.LastOpAt = 0.0
+	if err := s.putMember(*fresh, triggerServer); err != nil {
+		reconcileLog("%s: converged receipt clear failed: %v", memberID, err)
 	}
 }
 

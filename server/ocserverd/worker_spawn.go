@@ -568,22 +568,37 @@ func (s *apiServer) clearWorkerPlacementBlock(workerID string) {
 // IS shared is the judgment: both read reconcileDecision.ConvergedOnline off the
 // one decider.
 //
-// All five columns, gated on a FAILURE (a non-nil false — a success receipt is
-// not what the owner asked to remove), and gated on convergence so a worker that
-// is still down keeps the receipt that is still true. Pinned by
-// TestWorkerLiveness_ConvergedOnlineWorkerClearsStaleFailureReceipt_T39 and
-// TestWorkerLiveness_StillOfflineWorkerKeepsItsFailureReceipt_T39.
+// All five columns (clearing only the reason leaves the block on screen with
+// nothing in it), gated on receiptRendersAsFailure — WOULD THE PANEL PAINT THIS
+// AS A FAILURE, not "is the column false"; that predicate's comment carries the
+// reasoning, and this row type is the one that can actually produce its awkward
+// case, since clearWorkerPlacementBlock above writes last_op_ok back to nil while
+// leaving last_op and last_op_at standing. A SUCCESS receipt is still never
+// touched. Gated on convergence too, so a worker that is still down keeps the
+// receipt that is still true. Pinned by
+// TestWorkerLiveness_ConvergedOnlineWorkerClearsStaleFailureReceipt_T39,
+// TestWorkerLiveness_StillOfflineWorkerKeepsItsFailureReceipt_T39 and
+// TestWorkerLiveness_ConvergedOnlineClearsTheWordlessRedBlock_T39.
 //
-// Re-reads before the whole-row write, like every other stamp on this row, and
-// is best-effort by the stampWakeObservability rule: a persist failure is logged
-// and changes no decision. Cannot churn — after the first clear last_op_ok is
-// nil and every later converged tick writes nothing. Caller holds outsourceMu.
-func (s *apiServer) clearWorkerConvergedFailureReceipt(workerID string) {
+// 🔴 THE RULING IS MADE ON THE RE-READ ROW, exactly as the member twin explains
+// at length: the tick's snapshot is stale by the time it is written, and blanking
+// a receipt an owner action wrote mid-tick would be destructive rather than
+// merely stale. The snapshot is used only to short-circuit before the query, so a
+// healthy worker with a clean row costs nothing on each of its converged ticks.
+//
+// Best-effort by the stampWakeObservability rule: a persist failure is logged and
+// changes no decision. Cannot churn — after one clear last_op is "" and
+// last_op_at is 0, so every later converged tick answers false and writes
+// nothing. Caller holds outsourceMu.
+func (s *apiServer) clearWorkerConvergedFailureReceipt(workerID string, snapshot OutsourceWorker) {
+	if !receiptRendersAsFailure(snapshot.LastOp, snapshot.LastOpAt, snapshot.LastOpOK) {
+		return
+	}
 	fresh, err := s.dal.GetOutsourceWorker(workerID)
 	if err != nil || fresh == nil {
 		return
 	}
-	if fresh.LastOpOK == nil || *fresh.LastOpOK {
+	if !receiptRendersAsFailure(fresh.LastOp, fresh.LastOpAt, fresh.LastOpOK) {
 		return
 	}
 	fresh.LastOp = ""
@@ -1076,7 +1091,7 @@ func (s *apiServer) reconcileWorkerLiveness(w OutsourceWorker, now float64) {
 	// StopKind note exists to prevent. Mutually exclusive with the StartTimedOut
 	// stamp below: that arm is reached only when the worker is NOT online.
 	if decision.ConvergedOnline {
-		s.clearWorkerConvergedFailureReceipt(w.ID)
+		s.clearWorkerConvergedFailureReceipt(w.ID, w)
 	}
 	// A START that was DISPATCHED and never produced a session is the one failure
 	// the worker path had no durable record of at all. The member producer has
