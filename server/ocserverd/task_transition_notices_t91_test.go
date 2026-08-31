@@ -277,6 +277,13 @@ func TestPredecessorMayStillWriteTheHandoverNoteUnderTheReassignHold(t *testing.
 // 全域脈絡 §3.4 (交接完成前，不得讓兩個執行者同時推進同一份工作) is untouched.
 // Every one of these is the predecessor trying to DRIVE the task, and every one
 // must still be a flat 403.
+//
+// 🔴 THE CASE LIST IS THE PREDICATE'S OWN LIST. callerMayWriteHandover's comment
+// enumerates the doors that stay shut — plan, step status, deps, priority,
+// reassign, terminate, artifacts, closeout, the task's own text — and this table
+// must cover ALL of them, because that comment is the only place the ruling is
+// written down and a door named there but missing here can be opened without
+// anything going red. Adding a name to that comment means adding a case here.
 func TestPredecessorStaysLockedOutOfEveryOtherTaskWrite(t *testing.T) {
 	api := newTasksTestServer(t)
 	task := t91Reassigned(t, api)
@@ -329,6 +336,54 @@ func TestPredecessorStaysLockedOutOfEveryOtherTaskWrite(t *testing.T) {
 				"/api/tasks/"+task.ID, map[string]any{"title": "改標題"},
 				pred, "agent"), task.ID)
 			return rec
+		}},
+		// The four below complete the predicate's own list. They were the gap:
+		// callerMayWriteHandover's comment named nine doors that must stay shut
+		// and only five of them had a case here, so widening the predicate onto
+		// terminate / closeout / artifacts / reassign was a silent change.
+		{"terminate_task", func() *httptest.ResponseRecorder {
+			rec := httptest.NewRecorder()
+			api.HandleTerminateTaskApiTasksTaskIdTerminatePost(rec, taskReq(t, "POST",
+				"/api/tasks/"+task.ID+"/terminate", nil, pred, "agent"), task.ID)
+			return rec
+		}},
+		{"report_task_closeout", func() *httptest.ResponseRecorder {
+			rec := httptest.NewRecorder()
+			api.HandleReportTaskCloseoutApiTasksTaskIdCloseoutPost(rec, taskReq(t,
+				"POST", "/api/tasks/"+task.ID+"/closeout", map[string]any{}, pred,
+				"agent"), task.ID)
+			return rec
+		}},
+		{"add_task_artifact", func() *httptest.ResponseRecorder {
+			rec := httptest.NewRecorder()
+			api.HandleAddTaskArtifactApiTasksTaskIdArtifactPost(rec, taskReq(t, "POST",
+				"/api/tasks/"+task.ID+"/artifact",
+				map[string]any{"kind": "link", "url": "https://x/pr/1"},
+				pred, "agent"), task.ID)
+			return rec
+		}},
+		{"remove_task_artifact", func() *httptest.ResponseRecorder {
+			rec := httptest.NewRecorder()
+			api.HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDelete(rec,
+				taskReq(t, "DELETE", "/api/tasks/"+task.ID+"/artifact/ta-nope", nil,
+					pred, "agent"), task.ID, "ta-nope")
+			return rec
+		}},
+		// 🔴 THE TARGET HAS TO BE AN OUTSOURCE ONE. With a member target this case
+		// is worthless as evidence: 正職授權矩陣 rule 7 refuses a member-kind
+		// reassign from any non-admin caller regardless of the executor guard, so
+		// the 403 arrives whether or not the handover exception has been widened
+		// onto this route — measured, a mutant that swaps this handler's guard for
+		// callerMayWriteHandover leaves the member-target case GREEN. 發包 is the
+		// one reassign shape rule 7 lets a 一般正職 do on its own task, which makes
+		// the executor guard the only thing standing between the predecessor and a
+		// 200.
+		{"reassign_task", func() *httptest.ResponseRecorder {
+			return reassign(t, api, task.ID, map[string]any{
+				"target": map[string]any{
+					"kind": "outsource", "model": "sonnet", "effort": "high",
+				},
+			}, pred, "agent")
 		}},
 	}
 	for _, c := range cases {
@@ -446,6 +501,80 @@ func TestResumeSummaryCarriesTheBlockingIds(t *testing.T) {
 			t.Fatalf("the wake snapshot's task row must carry the ids of the "+
 				"tickets waiting on it (nothing is messaged, so this is the whole "+
 				"delivery), got %v", row["blocking"])
+		}
+		return
+	}
+	t.Fatalf("the blocker's wake snapshot did not list its own task")
+}
+
+// 🔴 A CLOSED WAITER IS NOT A WAITER. Q3's whole delivery is this one field, so
+// its VALUE is the deliverable, not merely its presence: the blocker's executor
+// reads "3 tickets are waiting on me" and acts on it, and the only useful
+// reading of that sentence is "3 tickets are STILL waiting". The dependency row
+// survives the waiter being terminated (nothing rewrites blocked_by on close),
+// so without the terminal filter in blockingTasksOf the count only ever grows
+// and every ticket the executor was ever behind stays on the list forever —
+// which is precisely the signal-quality problem this ticket exists to fix.
+//
+// Both faces are asserted because they are two projections of the one helper
+// and each is somebody's only view: the ticket for the human, the wake snapshot
+// for the agent at 開機盤點.
+func TestBlockingSkipsWaitersThatHaveAlreadyClosed(t *testing.T) {
+	api := newTasksTestServer(t)
+	putActiveMember(t, api, "m-blocker", "Blocker", KindAssistant)
+	putActiveMember(t, api, "m-waiter", "Waiter", KindAssistant)
+	blocker := createAdHocTask(t, api, "m-blocker")
+	live := createAdHocTask(t, api, "m-waiter")
+	dead := createAdHocTask(t, api, "m-waiter")
+	t91Block(t, api, live.ID, blocker.ID, "m-waiter")
+	t91Block(t, api, dead.ID, blocker.ID, "m-waiter")
+
+	rec := httptest.NewRecorder()
+	api.HandleTerminateTaskApiTasksTaskIdTerminatePost(rec,
+		taskReq(t, "POST", "/api/tasks/"+dead.ID+"/terminate", nil, "owner", "owner"),
+		dead.ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("terminate the waiter: %d %s", rec.Code, rec.Body.String())
+	}
+	// Positive control for the whole test: the dependency edge must OUTLIVE the
+	// close. If it did not, the assertions below would pass for a reason that has
+	// nothing to do with the terminal filter.
+	stillBlocked, err := api.dal.ListTasksBlockedBy(blocker.ID)
+	if err != nil {
+		t.Fatalf("read back the reverse dep edge: %v", err)
+	}
+	if len(stillBlocked) != 2 {
+		t.Fatalf("closing a waiter must NOT delete its blocked_by row — this test "+
+			"has no subject unless the terminated waiter is still on the edge; got %d",
+			len(stillBlocked))
+	}
+
+	dto := t91GetTask(t, api, blocker.ID)
+	raw, ok := dto["blocking"].([]any)
+	if !ok {
+		t.Fatalf("the blocker's ticket must carry `blocking`, got %v", dto["blocking"])
+	}
+	if len(raw) != 1 {
+		t.Fatalf("`blocking` must name only the tickets STILL waiting — a closed "+
+			"waiter is nobody's blocker and must be filtered out, or the field grows "+
+			"monotonically and stops meaning anything; want 1, got %d: %v",
+			len(raw), raw)
+	}
+	if entry, _ := raw[0].(map[string]any); entry["id"] != live.ID {
+		t.Fatalf("`blocking` must keep the LIVE waiter (%s) and drop the terminated "+
+			"one (%s), got %v", live.ID, dead.ID, raw[0])
+	}
+
+	for _, row := range t91ResumeTasks(t, api, "m-blocker") {
+		if row["id"] != blocker.ID {
+			continue
+		}
+		ids, ok := row["blocking"].([]any)
+		if !ok || len(ids) != 1 || ids[0] != live.ID {
+			t.Fatalf("the wake snapshot's blocking ids must exclude the terminated "+
+				"waiter too — it is the same helper, and the agent's boot inventory is "+
+				"the only place Q3's ruling lets it learn this; want [%s], got %v",
+				live.ID, row["blocking"])
 		}
 		return
 	}

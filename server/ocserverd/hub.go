@@ -510,12 +510,18 @@ func (h *Hub) Publish(topic, op, entity, key string, payload any, aud Audience, 
 }
 
 // PushDirected appends one directed wire-text frame onto memberID's live
-// listener buffer (the context-high and token-expiry bands, spec/sse.md
-// §6/§6.1). Best-effort
-// at-most-once BY DESIGN: no live connection → the frame is dropped, never
-// queued — a nudge is a reminder, not a command (contrast the warden FIFO
-// below, which buffers across the NAT gap). Returns whether a listener took
-// the frame.
+// listener buffer. Best-effort at-most-once BY DESIGN: no live connection → the
+// frame is dropped, never queued — a nudge is a reminder, not a command
+// (contrast the warden FIFO below, which buffers across the NAT gap). Returns
+// whether a listener took the frame.
+//
+// 🔴 IT HAS NO PRODUCTION CALLER TODAY. Do not read the directed bands as its
+// owners: context-high (spec/sse.md §6) and token-expiry (§6.1) each build their
+// frame with directedFrameText and hand it to their OWN connection's write(),
+// inside the /api/events loop that already holds the listener; warden-command
+// (§7) goes through the FIFO. The task-close nudge was its only production
+// caller, and T-91 moved that to a durable chat row — so what is left here is
+// dead code kept for the next directed band, not a shared seam anybody is on.
 //
 // 🔴 THE task-close NUDGE LEFT THIS FUNCTION IN T-91, and the reason is worth
 // carrying at the seam rather than only at the call site: "dropped, never
