@@ -31,7 +31,9 @@ package main
 // minted. Nothing here touches a real machine, warden, or agent.
 
 import (
+	"log"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -408,5 +410,96 @@ func TestAgentIatFloor_TheRefusalIsMarkedAuthoritativeAndNothingElseIs(t *testin
 			"resolve on its own — an expired token, a secret not loaded yet, a "+
 			"restart in flight — trades noisy self-healing for killing healthy agents",
 			authRefusalHeader, mark)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ⑦ the refusal leaves a trace on the station
+// ---------------------------------------------------------------------------
+
+// TestAgentIatFloor_TheRefusalIsLoggedWithTheMemberAndNoSecret pins the one
+// line of server-side evidence this cut produces.
+//
+// 🔴 WHY A LOG LINE IS WORTH A TEST. This refusal ENDS A LIVE SESSION: the
+// process that reads the marker kills its own tmux and the model session under
+// it. Every other way a member's session dies leaves a trace on the station —
+// a stop dispatch, a receipt, a reconcile decision. This one does not. Without
+// the log.Printf in requireAuth's agent-floor branch, the owner sees a member's
+// tmux simply VANISH with nothing in the server log, and the only remaining
+// evidence is a 401 status code byte-identical to the five ordinary ones next
+// to it.
+//
+// That line therefore has to survive refactors that have no idea what it is
+// for, and until now nothing stopped one: deleting the log.Printf block (and
+// the "log" import it orphans) left this file, this package and the whole suite
+// green.
+//
+// The second half pins the comment's own claim that nothing secret is written.
+// The refusal is triggered BY a credential, so the credential is the obvious
+// thing to reach for when someone later wants the line to be more helpful —
+// and a bearer token in a server log is a token in every log shipper,
+// screenshot and paste after it. iat and sub are a timestamp and a member id;
+// they are not.
+//
+// Mutants: delete the log.Printf block → arm (a) is red. Add the token (or its
+// signature segment) to the line → arm (b) is red.
+func TestAgentIatFloor_TheRefusalIsLoggedWithTheMemberAndNoSecret(t *testing.T) {
+	srv, secret, api := revokeStack(t)
+	agent := testAgent("m-t14-logged")
+	putTestMember(t, api, agent)
+
+	now := time.Now().Unix()
+	oldTok, err := mintJWT(agent.ID, "agent", 3600, secret, now-600, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTok, err := mintJWT(agent.ID, "agent", 3600, secret, now, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wakeWith(t, srv.URL, newTok)
+
+	// Capture only from here: the waking call above is not the subject.
+	var logs lockedLogBuffer
+	oldOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldOutput) })
+
+	if st, body := revokeCall(t, "GET", srv.URL+"/api/members", oldTok, ""); st != http.StatusUnauthorized {
+		t.Fatalf("POSITIVE CONTROL FAILED — the superseded token must be 401 "+
+			"before anything about its log line means something, got %d %s", st, body)
+	}
+	got := logs.String()
+
+	// (a) the trace exists and NAMES THE MEMBER. A line that does not say who
+	// was refused cannot be matched to the tmux session that disappeared.
+	if !strings.Contains(got, agent.ID) {
+		t.Fatalf("the agent-floor refusal wrote no log line naming %s.\n"+
+			"Server log captured during the refusal:\n%s\n"+
+			"That line is the ONLY trace this refusal leaves on the station: the "+
+			"process reading X-OC-Auth-Refusal kills its own tmux and the model "+
+			"session under it, and the 401 status alone is indistinguishable from "+
+			"the ordinary refusals next to it. If it was removed in a refactor, "+
+			"put it back rather than deleting this test.", agent.ID, got)
+	}
+	if !strings.Contains(got, "agent_iat_floor") {
+		t.Fatalf("the refusal line does not say WHY it refused (no mention of "+
+			"agent_iat_floor), so a reader has a member id and no reason:\n%s", got)
+	}
+
+	// (b) …and nothing secret. The token that triggered it, and in particular
+	// its signature segment, must not be in the line.
+	if strings.Contains(got, oldTok) {
+		t.Fatalf("the refusal line contains the CREDENTIAL that triggered it. A " +
+			"bearer token in a server log is a bearer token in every log shipper, " +
+			"screenshot and paste downstream of it — and this one is refused only " +
+			"by THIS station's floor, so it is still live against anything that " +
+			"does not share the roster row. Log the sub and the iat; those are a " +
+			"member id and a timestamp.")
+	}
+	if sig := oldTok[strings.LastIndex(oldTok, ".")+1:]; sig != "" && strings.Contains(got, sig) {
+		t.Fatalf("the refusal line contains the token's SIGNATURE segment (%q). "+
+			"Even without the header and payload that is the secret-derived half "+
+			"of the credential and must never reach a log.", sig)
 	}
 }

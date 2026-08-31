@@ -40,6 +40,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -272,9 +274,35 @@ func TestAuthRefusalMarker_NoOtherRequireAuthExitCarriesIt(t *testing.T) {
 const requireAuthSource = "server.go"
 const serverModuleDir = "."
 
-// requireAuth401ExitCount counts, out of requireAuth's own AST, the calls that
-// answer http.StatusUnauthorized. Counted, not written down: a number in a
-// comment is exactly the thing that goes stale when someone adds a branch.
+// requireAuth401ExitCount counts requireAuth's refusal exits out of its own
+// AST. Counted, not written down: a number in a comment is exactly the thing
+// that goes stale when someone adds a branch.
+//
+// 🔴 IT COUNTS `return`s, NOT writeError CALLS, and that is the whole point.
+// The first version of this counter matched `writeError(…, StatusUnauthorized,
+// …)` by name, so it could only see exits written in the ONE shape the author
+// had in mind. An exit written any other way was invisible to all three gates
+// at once:
+//
+//	w.WriteHeader(http.StatusUnauthorized)   // not a writeError call
+//	return                                   // → not counted, not probed, rc=0
+//
+// and, worse, a marker could ride out on it through a one-line local alias that
+// the write-site gate below also did not match:
+//
+//	hdr := authRefusalHeader
+//	w.Header().Set(hdr, refusalAgentSuperseded)  // a live kill order, invisible
+//
+// A `return` is the one thing every refusal exit must have, whatever it wrote
+// first — requireAuth's SUCCESS path is the fall-through to next.ServeHTTP and
+// carries no return at all. So: every return inside the handler literal is a
+// refusal exit, and the table above must cover all of them.
+//
+// The writeError count is kept as a SECOND, independent read of the same
+// function and asserted to agree. Disagreement means an exit answered 401 some
+// other way (http.Error, a bare WriteHeader, a helper), which is exactly the
+// shape the probes above cannot reach — so it FATALs rather than being folded
+// into the count.
 func requireAuth401ExitCount(t *testing.T) int {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -292,29 +320,65 @@ func requireAuth401ExitCount(t *testing.T) int {
 		t.Fatalf("no func requireAuth in %s — the gate this file guards has moved; "+
 			"re-point requireAuthSource by hand", requireAuthSource)
 	}
-	n := 0
+
+	// The refusals live in the http.HandlerFunc literal requireAuth returns,
+	// not in requireAuth's own body (whose only `return` is that literal).
+	var handler *ast.FuncLit
 	ast.Inspect(fn.Body, func(node ast.Node) bool {
-		call, ok := node.(*ast.CallExpr)
-		if !ok {
-			return true
+		if handler != nil {
+			return false
 		}
-		id, ok := call.Fun.(*ast.Ident)
-		if !ok || id.Name != "writeError" {
-			return true
+		if lit, ok := node.(*ast.FuncLit); ok {
+			handler = lit
+			return false
 		}
-		for _, a := range call.Args {
-			if sel, ok := a.(*ast.SelectorExpr); ok && sel.Sel.Name == "StatusUnauthorized" {
-				n++
+		return true
+	})
+	if handler == nil {
+		t.Fatalf("requireAuth in %s no longer wraps its refusals in a handler "+
+			"literal — this counter is reading the wrong body and would count "+
+			"zero exits; re-read requireAuth by hand before trusting any gate "+
+			"in this file", requireAuthSource)
+	}
+
+	exits := 0
+	writeErr401 := 0
+	ast.Inspect(handler.Body, func(node ast.Node) bool {
+		switch n := node.(type) {
+		case *ast.ReturnStmt:
+			exits++
+		case *ast.CallExpr:
+			id, ok := n.Fun.(*ast.Ident)
+			if !ok || id.Name != "writeError" {
+				return true
+			}
+			for _, a := range n.Args {
+				if sel, ok := a.(*ast.SelectorExpr); ok && sel.Sel.Name == "StatusUnauthorized" {
+					writeErr401++
+				}
 			}
 		}
 		return true
 	})
-	if n == 0 {
-		t.Fatalf("requireAuth answers no 401 through writeError — either the refusal " +
-			"shape changed or this counter stopped matching it; re-check by hand " +
-			"rather than letting the exhaustiveness check pass on zero")
+	if exits == 0 {
+		t.Fatalf("requireAuth's handler has no `return` at all — either every " +
+			"refusal was deleted or this counter stopped matching the code; " +
+			"re-check by hand rather than letting the exhaustiveness check " +
+			"pass on zero")
 	}
-	return n
+	if exits != writeErr401 {
+		t.Fatalf("requireAuth's handler has %d exit(s) (`return`) but only %d of "+
+			"them answer through writeError(…, StatusUnauthorized, …). The "+
+			"difference is an exit that refuses some OTHER way — a bare "+
+			"w.WriteHeader, http.Error, a helper — and no probe in this file "+
+			"can reach it by body text. That is the shape that let a mutant "+
+			"hang X-OC-Auth-Refusal on an unrelated 401 with the whole suite "+
+			"green. Either write the new exit as writeError(w, "+
+			"http.StatusUnauthorized, …) and add its row to `exits`, or teach "+
+			"BOTH this counter and the probe table about it by hand.",
+			exits, writeErr401)
+	}
+	return exits
 }
 
 // TestAuthRefusalMarker_IsWrittenInExactlyOnePlace is the half the runtime
@@ -324,15 +388,47 @@ func requireAuth401ExitCount(t *testing.T) int {
 // through any of them. A marker set on one of those would be invisible to
 // every probe and green in every suite.
 //
-// So: across the whole server module, `Set(authRefusalHeader, …)` may appear
-// EXACTLY ONCE, and it must be inside requireAuth.
+// So: across the whole server module, a write of that header may appear EXACTLY
+// ONCE, and it must be inside requireAuth.
+//
+// 🔴 "A WRITE OF THAT HEADER" IS NOT THE SAME AS "Set(authRefusalHeader, …)".
+// The first version of this gate matched only the CONSTANT by name, so the most
+// ordinary way anyone would actually introduce this bug walked straight past it
+// — copy-paste:
+//
+//	w.Header().Set("X-OC-Auth-Refusal", "agent-superseded")
+//
+// which is byte-identical on the wire to the real marker and matched nothing,
+// because a *ast.BasicLit is not an *ast.Ident. A one-line local rebinding did
+// the same:
+//
+//	hdr := authRefusalHeader
+//	w.Header().Set(hdr, refusalAgentSuperseded)
+//
+// So the header is now recognised by its VALUE as well as by its name:
+// authRefusalHeader itself, any string literal whose canonical header key
+// equals it, and any identifier bound (anywhere in the module) to either of
+// those. `Add` counts as well as `Set` — both put the same bytes on the wire.
+//
+// ── NAMED DEBTS, not closed here ───────────────────────────────────────────
+//
+//  1. NOT RECURSIVE. serverModuleDir is read with os.ReadDir and directories
+//     are skipped, so only the top-level package is scanned. That is EMPTY
+//     today, not a hole: `find server/ocserverd -mindepth 2 -name '*.go'`
+//     returns nothing and `go list ./...` returns the single package
+//     `ocserverd`. The day anyone adds a SUB-PACKAGE under server/ocserverd it
+//     becomes a real hole — a marker written there would be invisible to this
+//     gate and to every probe above. Whoever adds the first subdirectory must
+//     make this walk it.
+//  2. Header maps written by INDEX rather than by method — `w.Header()["X-Oc-
+//     Auth-Refusal"] = []string{…}` — are not matched. Nothing in this module
+//     writes headers that way today.
 func TestAuthRefusalMarker_IsWrittenInExactlyOnePlace(t *testing.T) {
 	entries, err := os.ReadDir(serverModuleDir)
 	if err != nil {
 		t.Fatalf("read %s: %v", serverModuleDir, err)
 	}
-	type site struct{ file, fn string }
-	var sites []site
+	parsed := map[string]*ast.File{}
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -343,6 +439,18 @@ func TestAuthRefusalMarker_IsWrittenInExactlyOnePlace(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
+		parsed[name] = file
+	}
+	if len(parsed) == 0 {
+		t.Fatalf("no non-test .go files found under %s — this gate would pass on "+
+			"an empty scan, which is the one result it must never report",
+			serverModuleDir)
+	}
+	aliases := authRefusalHeaderAliases(parsed)
+
+	type site struct{ file, fn string }
+	var sites []site
+	for name, file := range parsed {
 		for _, d := range file.Decls {
 			fn, ok := d.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
@@ -354,16 +462,25 @@ func TestAuthRefusalMarker_IsWrittenInExactlyOnePlace(t *testing.T) {
 					return true
 				}
 				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "Set" || len(call.Args) == 0 {
+				if !ok || len(call.Args) == 0 {
 					return true
 				}
-				if id, ok := call.Args[0].(*ast.Ident); ok && id.Name == "authRefusalHeader" {
+				if sel.Sel.Name != "Set" && sel.Sel.Name != "Add" {
+					return true
+				}
+				if namesAuthRefusalHeader(call.Args[0], aliases) {
 					sites = append(sites, site{name, fn.Name.Name})
 				}
 				return true
 			})
 		}
 	}
+	sort.Slice(sites, func(i, j int) bool {
+		if sites[i].file != sites[j].file {
+			return sites[i].file < sites[j].file
+		}
+		return sites[i].fn < sites[j].fn
+	})
 	if len(sites) != 1 {
 		t.Fatalf("%s is written at %d places in the server module (%v). It must be "+
 			"written at exactly ONE, inside requireAuth's agent-iat-floor branch. "+
@@ -380,4 +497,81 @@ func TestAuthRefusalMarker_IsWrittenInExactlyOnePlace(t *testing.T) {
 			"'this member's generation is over, stop retrying forever' — a fact only "+
 			"the agent-iat-floor branch knows.", authRefusalHeader, sites[0].fn, sites[0].file)
 	}
+}
+
+// namesAuthRefusalHeader reports whether `expr`, used as the first argument of a
+// header write, puts the authRefusalHeader BYTES on the wire. Three shapes, and
+// the last two are the ones the name-only match used to miss:
+//
+//	authRefusalHeader                 — the constant itself
+//	"X-OC-Auth-Refusal"               — a copy-pasted literal, identical on the wire
+//	hdr (where hdr was bound to either) — a one-line local alias
+//
+// Header names are compared through http.CanonicalHeaderKey because that is how
+// net/http compares them: "x-oc-auth-refusal" reaches the client as exactly the
+// same header as the constant does.
+func namesAuthRefusalHeader(expr ast.Expr, aliases map[string]bool) bool {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name == "authRefusalHeader" || aliases[e.Name]
+	case *ast.BasicLit:
+		if e.Kind != token.STRING {
+			return false
+		}
+		v, err := strconv.Unquote(e.Value)
+		if err != nil {
+			return false
+		}
+		return http.CanonicalHeaderKey(v) == http.CanonicalHeaderKey(authRefusalHeader)
+	case *ast.ParenExpr:
+		return namesAuthRefusalHeader(e.X, aliases)
+	}
+	return false
+}
+
+// authRefusalHeaderAliases collects every identifier in the server module bound
+// to authRefusalHeader or to a string literal equal to it — `x := authRefusalHeader`,
+// `var x = "X-OC-Auth-Refusal"`, `const x = …`. It runs to a fixpoint so a chain
+// (a := authRefusalHeader; b := a) is followed too.
+//
+// It is deliberately NAME-scoped rather than scope-aware: a local `hdr` in one
+// function makes every `hdr` in the module suspect. That direction of
+// imprecision can only produce a FALSE ALARM on a gate whose whole job is to
+// refuse a second write site — and a false alarm here is read by a human, while
+// a miss is a live kill order nobody sees.
+func authRefusalHeaderAliases(files map[string]*ast.File) map[string]bool {
+	aliases := map[string]bool{}
+	for changed := true; changed; {
+		changed = false
+		bind := func(lhs ast.Expr, rhs ast.Expr) {
+			id, ok := lhs.(*ast.Ident)
+			if !ok || id.Name == "_" || aliases[id.Name] || id.Name == "authRefusalHeader" {
+				return
+			}
+			if namesAuthRefusalHeader(rhs, aliases) {
+				aliases[id.Name] = true
+				changed = true
+			}
+		}
+		for _, file := range files {
+			ast.Inspect(file, func(node ast.Node) bool {
+				switch n := node.(type) {
+				case *ast.AssignStmt:
+					if len(n.Lhs) == len(n.Rhs) {
+						for i := range n.Lhs {
+							bind(n.Lhs[i], n.Rhs[i])
+						}
+					}
+				case *ast.ValueSpec:
+					if len(n.Names) == len(n.Values) {
+						for i := range n.Names {
+							bind(n.Names[i], n.Values[i])
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+	return aliases
 }
