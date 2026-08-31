@@ -131,6 +131,12 @@ ocagent upload <報告路徑>
 
 兩種卡都使用同一個 `create_reply_card` MCP tool；`kind` 填 `decision` 或 `action`，其餘欄位依卡片種類填寫。依當下工具目錄確認工具名稱與參數；需要證據時沿用 §2.1 的 `ocagent upload` 流程取得 attachment id，再放入卡片的 `attachments`，不要另發一則沒有卡片的訊息。
 
+接著決定這張卡要單選還是多選（`select_mode`）：
+
+預設用 single。只有要他圈出「哪幾項」時才用 multi —— 選項彼此獨立，勾兩個不會互相矛盾。
+
+你列不出建議、或選項多到像在攤牌，那是你還沒收斂，不是該用 multi。
+
 **每張卡都必須表態這張卡是不是關於某個任務**：`linked_task` 是必填欄位，沒有預設值，不給會被拒絕（400）。兩種合法寫法，後果不同，要照實選：
 
 - `"linked_task": {"task_id": "t-...", "step_id": "ts-..."}` —— 這張卡是關於那個步驟。該步驟（與整個任務）會停在 `waiting_owner`，直到負責人回覆為止。**你在等答案的時候任務不會繼續往前跑。**
