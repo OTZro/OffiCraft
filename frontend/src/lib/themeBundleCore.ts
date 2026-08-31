@@ -115,11 +115,22 @@ export const MAX_WORDING_VALUE_LEN = 200;
 // at the ~10-keys-a-month growth actually measured」. The measured rate is
 // about 7 keys A DAY, not 10 a month — the whitelist went 1,009 (2026-08-11)
 // → 1,149 (2026-08-31), +140 in 20 days, roughly 20x the estimate. So the
-// 「a year-odd of headroom」 was gone inside those same 20 days, and T-36's two
-// keys are what ran it out. Whoever sizes this cap next needs to know the old
-// estimate was wrong, not merely what the number is today.
+// 「a year-odd of headroom」 was gone inside those same 20 days, and T-36 is
+// what ran it out.
 //
-// At the measured rate 2000 buys about FOUR MONTHS: (2000 − 1149) = 851 spare
+// PRECISELY WHAT WENT RED, because "ran out" is easy to misread: the cap 1200
+// was never EXCEEDED (the whitelist is far below it). What failed is the
+// 50-entry spare the mirror test demands ABOVE the whitelist —
+// server/ocserverd/wording_cap_mirror_test.go asserts
+// cap >= len(messageKeys) + 50. T-36's first two keys
+// (chat.mdPreview.openInNewTab, chat.mdPreview.newTabStaticNote) took the
+// whitelist 1,149 → 1,151, so 1200 − 1151 = 49 < 50 and that assertion is the
+// one that went red. T-36 ships THREE keys in total — the third,
+// chat.mdPreview.unavailableOpenInNewTab, landed after this cap was raised —
+// leaving the whitelist at 1,152. Whoever sizes this cap next needs to know the
+// old estimate was wrong, not merely what the number is today.
+//
+// At the measured rate 2000 buys about FOUR MONTHS: (2000 − 1152) = 848 spare
 // entries ÷ ~7/day ≈ 121 days. ASK THE OWNER AGAIN THEN — he chose that
 // cadence deliberately (「這次拉到 2000 就好，照實際速度大約再撐四個月，到時
 // 再問你一次」).
