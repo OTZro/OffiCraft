@@ -329,6 +329,47 @@ func (l *listener) dispatch(payload []byte) {
 	}
 }
 
+// authoritativeRefusal names WHY a non-200 on /api/events is a STANDING "you
+// must not be online here" — the only kind of failure that may accumulate
+// toward the fail-closed self-terminate — or returns "" when it is not one.
+//
+// 🔴 THIS FUNCTION IS THE WHOLE TRADE-OFF, so it is worth being explicit about
+// what it must NOT do. The listener's default for a non-200 is to reconnect with
+// backoff forever, and that default is RIGHT for a server that is restarting,
+// mid-deploy, briefly 5xx, or answering 401 because its secret is not loaded yet
+// — killing the agent's tmux session in any of those cases would turn a blip
+// into fleet-wide data loss. It is WRONG for exactly the refusals the server
+// will keep making until someone intervenes:
+//
+//   - 409 — the zombie stop gate, or the dual-SSE single-session guard.
+//   - 401 CARRYING X-OC-Auth-Refusal: agent-superseded — this member's newer
+//     generation has reported waking, so this session's token is below the
+//     member's credential floor (server authz.go agentIatFloorRefusal). The
+//     floor only ever rises, so this can never resolve itself. Without this
+//     arm the superseded session re-dials every ≤15s forever, holding a tmux
+//     session and the model session under it, none of which the cockpit can
+//     show (the member's presence belongs to the successor now) — the exact
+//     orphan the 409 ladder exists to prevent, reached through a different
+//     status code.
+//
+// 🔴 A BARE 401 IS DELIBERATELY NOT AUTHORITATIVE. Status alone cannot separate
+// "I have been replaced" from "the server is having a moment" or "my token just
+// expired", and guessing wrong in that direction kills healthy agents. Only the
+// server knows which refusal it made, so only the server's own marker counts.
+// Pinned in both directions: TestListener_SelfTerminatesWhenSupersededByANewerGeneration
+// and TestListener_APlain401NeverTripsFailClosed.
+func authoritativeRefusal(resp *http.Response) string {
+	switch {
+	case resp.StatusCode == http.StatusConflict:
+		return "409 stop gate / dual-SSE guard"
+	case resp.StatusCode == http.StatusUnauthorized &&
+		strings.TrimSpace(resp.Header.Get(authRefusalHeader)) == refusalAgentSuperseded:
+		return "401 superseded — a newer generation of this member has reported waking"
+	default:
+		return ""
+	}
+}
+
 // connectOnce dials GET /api/events (replaying from the persisted cursor via
 // Last-Event-ID), and — on a 200 — streams the body through scanSSE until it ends.
 // Returns (opened, activity, selfExit, err): opened is true once the 200 body is being
@@ -366,15 +407,14 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusConflict {
-			// An AUTHORITATIVE pre-stream refusal (the server's zombie stop gate
-			// or the dual-SSE guard) — surfaced as the errSSERefused sentinel so
-			// the run loop can fold it fail-closed. The (bounded) body carries
-			// the server's reason for the honest log line.
+		if reason := authoritativeRefusal(resp); reason != "" {
+			// An AUTHORITATIVE pre-stream refusal — surfaced as the errSSERefused
+			// sentinel so the run loop can fold it fail-closed. The (bounded)
+			// body carries the server's reason for the honest log line.
 			snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 			_, _ = io.Copy(io.Discard, resp.Body)
-			return false, false, false, fmt.Errorf("%w: %s",
-				errSSERefused, strings.TrimSpace(string(snippet)))
+			return false, false, false, fmt.Errorf("%w [%s]: %s",
+				errSSERefused, reason, strings.TrimSpace(string(snippet)))
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return false, false, false, fmt.Errorf("unexpected status %d", resp.StatusCode)

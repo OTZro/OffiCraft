@@ -529,6 +529,16 @@ var identityGateLedger = map[string]string{
 		"principalMachine. Machine-vs-person, not 正職／外包 — an outsource row and an " +
 		"assistant row both fall through to the same agent rung here, which is exactly " +
 		"the code-level sameness the constitution asks for.",
+	"authz.go :: agentIatFloorRefusal :: m.Kind == machineKind": "" +
+		"the T-14 項目 4B credential floor SKIPS machine rows. Machine-vs-person, not " +
+		"正職／外包 — an outsource row and an assistant row are both subject to the floor " +
+		"here, on the same line, which is the code-level sameness the constitution asks " +
+		"for. The exemption exists because a warden credential is scope=\"agent\" with " +
+		"NO exp (mintWardenToken), so a floor raised above one could never expire out " +
+		"of the way: the machine would be off the fleet permanently and only a hand " +
+		"re-install would bring it back. Warden does not call report_waking today, but " +
+		"that is a property of the client today, not a contract — pinned by " +
+		"TestAgentIatFloor_WardenPermanentTokenIsExempt.",
 	"authz.go :: isRemovedMachine :: m.Kind == machineKind": "" +
 		"the T-9cf8 revocation check: a DELETED machine's still-valid token must stop " +
 		"being honoured. Only machine rows have a permanent credential, so only they " +

@@ -1391,6 +1391,28 @@ func (s *apiServer) resolveSelf(r *http.Request) (*Member, error) {
 	return m, nil
 }
 
+// stampAgentIatFloor raises the caller's own member credential floor to the
+// `iat` of the token the caller is holding right now (T-14 項目 4B). Called
+// from report_waking and nowhere else: 「新的一輪一上線就失效」 (owner 2026-08-30,
+// rc-fe6451abe579) names that report as the exact instant the previous
+// generation's authority ends.
+//
+// 🔴 The caller's OWN iat, never nowSecs(). requireAuth compares with STRICTLY
+// LESS THAN, so a floor equal to the caller's iat is a floor the caller passes
+// by construction — no matter how many seconds passed between its mint and this
+// call, and no matter how the two clocks differ. nowSecs() would refuse a token
+// that merely took a while to get here.
+//
+// A token with no iat claim stamps nothing: there is no honest floor to derive
+// from it, and inventing one from the clock is precisely the bug above.
+func (s *apiServer) stampAgentIatFloor(r *http.Request) error {
+	iat, ok := claimsFromContext(r.Context())["iat"].(float64)
+	if !ok || iat <= 0 {
+		return nil
+	}
+	return s.dal.SetMemberAgentIatFloor(currentActor(r), iat)
+}
+
 // POST /api/self/waking — the boot report: stamps waking_since and clears ALL
 // recycle markers. The reported model is stored separately from the owner's
 // launch configuration.
@@ -1402,6 +1424,25 @@ func (s *apiServer) HandleReportWakingApiSelfWakingPost(w http.ResponseWriter, r
 	m, err := s.resolveSelf(r)
 	if err != nil {
 		writeResolveError(w, err, "member", currentActor(r))
+		return
+	}
+	// T-14 項目 4B — raise this member's credential floor to THIS CALLER'S OWN
+	// token iat, BEFORE either arm below commits anything. From here on every
+	// token minted for an earlier generation of this member is refused at
+	// requireAuth (agentIatFloorRefusal).
+	//
+	// It runs FIRST, and its failure is fatal, on purpose. Stamping after the
+	// wake would leave a member reported-awake with the previous generation's
+	// credentials still live and no signal that they are; stamping first means
+	// the only failure mode is a floor raised for a wake that then 500s — and
+	// that direction is harmless, because the floor is the caller's OWN iat, so
+	// the caller retrying is not locked out by it.
+	//
+	// The stamp is unconditional across kinds. A warden row gets a floor like
+	// any other, and the READ side is what exempts it — putting the exemption
+	// here as well would make the safety property depend on two places agreeing.
+	if err := s.stampAgentIatFloor(r); err != nil {
+		internalError(w, err)
 		return
 	}
 	if m.Kind == KindOutsource {

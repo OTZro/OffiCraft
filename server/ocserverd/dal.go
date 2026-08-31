@@ -179,14 +179,33 @@ type Member struct {
 	// deliberately does NOT carry it, so no whole-row snapshot can revive a
 	// claim that a session boundary just cleared. Not on the wire.
 	HandoverNoticedTS float64
-	BankedCost        float64
-	LastOp            string
-	LastOpOK          *bool // nil = no op reported yet (three-valued)
-	LastOpLog         string
-	LastOpReason      string // structured "<code>: <detail>" cause; "" = none reported
-	LastOpAt          float64
-	RosterStatus      string  // "active" | "removed" (dismiss is a SOFT delete)
-	LinkedTaskID      *string // task binding (migrations/00024); nil = unbound. Outsource members carry their bound task id here.
+	// AgentIatFloor is the per-member CREDENTIAL FLOOR (T-14 項目 4B,
+	// migrations/00063): the `iat` of the token that last reported waking for
+	// this member, 0 when none has. requireAuth refuses any agent-scope token
+	// whose iat is STRICTLY LESS THAN it — so the moment a new generation says
+	// it is up, every credential minted for an earlier one is dead.
+	//
+	// It holds the WAKING CALLER'S OWN iat rather than now() on purpose: with a
+	// strictly-less-than comparison that is what makes the session raising the
+	// floor immune to its own stamp, whatever the gap between mint and boot or
+	// the skew between the two clocks.
+	//
+	// 🔴 Warden rows carry it like any other row, and the READ side declines to
+	// consult it for them (authz.go agentIatFloorRefusal). A warden credential
+	// has no exp, so a floor above one could never expire out of the way.
+	//
+	// Written through SetMemberAgentIatFloor only; PutMember's upsert carries it
+	// on INSERT but never in its DO UPDATE SET, so no whole-row snapshot taken
+	// before a wake can put an older floor back over a newer one. Not on the wire.
+	AgentIatFloor float64
+	BankedCost    float64
+	LastOp        string
+	LastOpOK      *bool // nil = no op reported yet (three-valued)
+	LastOpLog     string
+	LastOpReason  string // structured "<code>: <detail>" cause; "" = none reported
+	LastOpAt      float64
+	RosterStatus  string  // "active" | "removed" (dismiss is a SOFT delete)
+	LinkedTaskID  *string // task binding (migrations/00024); nil = unbound. Outsource members carry their bound task id here.
 	// ── A案 P7d (migrations/00025 — the outsource_worker fold) ────────────────
 	// Codename is the outsource display codename (O-7 / S-12 / H-3), globally
 	// unique and never reused (partial UNIQUE index); "" (stored NULL) on every
@@ -217,7 +236,7 @@ const memberColumns = `id, name, kind, role_key, runtime, model, actual_model, e
 	waking_since, stopping_since, stopped_since, refocus_since, refocus_op, banked_cost,
 	last_op, last_op_ok, last_op_log, last_op_reason, last_op_at, roster_status,
 	linked_task_id, codename, created_ts, released_ts, activated_ts,
-	avatar_attachment_id, forced_stop_at, handover_noticed_ts`
+	avatar_attachment_id, forced_stop_at, handover_noticed_ts, agent_iat_floor`
 
 func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 	var m Member
@@ -231,7 +250,7 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 		&m.BankedCost,
 		&m.LastOp, &lastOpOK, &m.LastOpLog, &m.LastOpReason, &m.LastOpAt, &m.RosterStatus,
 		&linkedTaskID, &codename, &m.CreatedTS, &m.ReleasedTS, &m.ActivatedTS,
-		&m.AvatarAttachmentID, &m.ForcedStopAt, &m.HandoverNoticedTS,
+		&m.AvatarAttachmentID, &m.ForcedStopAt, &m.HandoverNoticedTS, &m.AgentIatFloor,
 	)
 	if err != nil {
 		return Member{}, err
@@ -365,7 +384,7 @@ func (d *DAL) PutMember(m Member) error {
 	}
 	_, err := d.wdb.Exec(`
 		INSERT INTO member (`+memberColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			name = excluded.name, kind = excluded.kind,
 			role_key = excluded.role_key, runtime = excluded.runtime,
@@ -408,7 +427,17 @@ func (d *DAL) PutMember(m Member) error {
 			-- carries it so a brand-new row starts at its zero value;
 			-- SetMemberHandoverNoticedTS is the only writer that moves it.
 			-- Guarded by TestHandoverNotice_ClaimSurvivesAWholeRowUpsert:
-			-- adding this column to the SET list turns that test red.`,
+			-- adding this column to the SET list turns that test red.
+			--
+			-- agent_iat_floor is ABSENT for the same reason and one more
+			-- (T-14 4B). It is a REVOCATION floor, so the only safe direction
+			-- for a whole-row writer to move it is not at all: report_waking
+			-- raises it next to HTTP faces holding member snapshots taken
+			-- BEFORE that wake, and any one of them landing here would put the
+			-- superseded generation's credentials back in service. The INSERT
+			-- carries it so a new row starts at 0 (no floor, nothing refused);
+			-- SetMemberAgentIatFloor is the only writer that moves it, and it
+			-- moves it forward only.`,
 		m.ID, m.Name, m.Kind, m.RoleKey, m.Runtime, m.Model, m.ActualModel, m.Effort,
 		m.ActualRuntime, m.ActualEffort,
 		m.DesiredState, m.DesiredMachineID, m.LastMachineID, m.SessionBootTS,
@@ -416,7 +445,7 @@ func (d *DAL) PutMember(m Member) error {
 		m.BankedCost,
 		m.LastOp, lastOpOK, m.LastOpLog, m.LastOpReason, m.LastOpAt, m.RosterStatus,
 		linkedTaskID, codename, m.CreatedTS, m.ReleasedTS, m.ActivatedTS,
-		m.AvatarAttachmentID, m.ForcedStopAt, m.HandoverNoticedTS,
+		m.AvatarAttachmentID, m.ForcedStopAt, m.HandoverNoticedTS, m.AgentIatFloor,
 	)
 	return err
 }
@@ -2780,4 +2809,27 @@ func (d *DAL) displayNames(query string) (map[string]string, error) {
 		out[key] = name
 	}
 	return out, rows.Err()
+}
+
+// SetMemberAgentIatFloor raises this member's credential floor to ts (T-14 項目
+// 4B) — the `iat` of the token that just reported waking. It is the SOLE writer
+// that moves the column: PutMember's upsert carries it on INSERT but never in
+// its DO UPDATE SET.
+//
+// FORWARD-ONLY, in SQL rather than in Go. A read-modify-write in Go loses to
+// whichever caller writes last, and the loser here is a REVOCATION: two
+// generations that wake close together would leave the floor at the older one's
+// iat and hand the superseded session its credentials back. max() in the
+// statement means the floor can only ever rise, whoever wins the race.
+//
+// ⚠️ What it still cannot do is separate two wakes in the SAME second — `iat`
+// is whole seconds and the owner has ruled that out of scope for now
+// (2026-08-28: 「先不管搶同一秒的問題好了」). max() makes the write safe; it does not
+// make the resolution finer.
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) SetMemberAgentIatFloor(id string, ts float64) error {
+	_, err := d.wdb.Exec(
+		`UPDATE member SET agent_iat_floor = max(agent_iat_floor, ?) WHERE id = ?`, ts, id)
+	return err
 }

@@ -30,6 +30,9 @@
 - session boot anchor `member.session_boot_ts` 是 durable、不上 wire。reconnect 從持久值恢復 gauge；每一條成功 enqueue 的新 session start 與 stop boundary 都要清 anchor，使用 `SetMemberSessionBootTS` 單欄更新，不用整列 `PutMember` 代替。已知邊界：舊 snapshot 的整列 upsert 仍可能復活舊 anchor；若要改變該資料競態，另行取得 owner 裁定。
 - session boundary 清掉的不只 anchor：`clearSessionBootTS` 把整組 **session-scoped gauge 讀數**一起刪（anchor、codex 輪數、context 讀數的兩半）。理由是這份 gauge 有**兩個讀者而且判準不同**——門檻端 `actionableContextPct` 要求 `context_pct_ts > boot_ts`，座艙／`get_monitoring` 端 `foldActorRuntime` 讀 raw 值不做這個檢查。留著舊 session 的讀數會讓「畫面顯示的百分比」與「門檻判斷用的百分比」變成兩個數字。不要為了讓面板不出現破折號而「保留」其中任何一半。
 - `member.handover_noticed_ts`（換手提醒的 once-per-session 認領，同樣 durable、同樣不上 wire）刻意採**相反**策略：它**不在 `PutMember` 的 `DO UPDATE SET` 裡**，只有 `SetMemberHandoverNoticedTS` 能移動它。理由是 `memberFromWorker` 從零重建 Member、不帶這個欄位，所以每次 `PutOutsourceWorker` 都會送 0 進來——把它加進 SET 會讓外包 worker 的認領在每次狀態寫入時被歸零，等於讓「一個 session 只提醒一次」從另一扇門失效。這個約束由 `TestHandoverNotice_ClaimSurvivesAWholeRowUpsert` 守住，不是靠註解。
+- `member.agent_iat_floor`（T-14 項目 4B，migrations/00063，同樣 durable、同樣不上 wire）跟 `handover_noticed_ts` 走**同一個策略**：**不在 `PutMember` 的 `DO UPDATE SET` 裡**，只有 `SetMemberAgentIatFloor` 能移動它，而且那一支是 SQL 裡的 `max()`、**只准往前**。理由多一條：它是**撤銷底線**，`memberFromWorker` 從零重建 Member 不帶這個欄位（所以每次 `PutOutsourceWorker` 都送 0），而 `report_waking` 抬高底線的同時，旁邊還有一堆手上拿著**抬高之前**的 member snapshot 的 HTTP 面——其中任何一個落地都等於把上一輪的憑證放回去用。Go 端 read-modify-write 也不行：兩輪靠近時輸的那個最後落地，底線會倒退。
+- 蓋的值是**呼叫者自己 token 的 `iat`**，不是 `nowSecs()`；`requireAuth` 那一側是**嚴格小於**。這兩件事合起來才保證「抬高底線的那一輪不會被自己關在門外」，不受發證到開機的時間差與時鐘偏移影響。⚠️ **`iat` 只到整秒，同一秒起來的兩輪分不出來**（owner 2026-08-28 裁定先不管），這件事**沒有解決**。
+- 🔴 讀的那一側（`authz.go agentIatFloorRefusal`）**明確把 `Kind == machineKind` 排除**，寫的那一側則不分 kind。這是安全性質不是最佳化：warden 憑證是 `scope="agent"` 且**沒有 `exp`**，底線一旦蓋過它就**永遠**過不了期，整台機器只能重裝才回得來。warden 今天不呼叫 `report_waking`，但那是今天的 client 而不是契約。由 `TestAgentIatFloor_WardenPermanentTokenIsExempt` 守住，不是靠註解。
 
 ## 4. attachment、文件與 context
 

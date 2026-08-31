@@ -2591,3 +2591,133 @@ func TestWindDown_FallbackIsBadgedByTheHookThatPrintedIt(t *testing.T) {
 			"while being collected:\n%q", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// fail-closed on the agent credential floor — the 401 half (T-14 項目 4B).
+//
+// The floor (server authz.go agentIatFloorRefusal) refuses the OUTGOING
+// generation's token the moment its successor reports waking. That refusal
+// arrives as 401, and a bare 401 is not authoritative here — so without the
+// server's X-OC-Auth-Refusal marker this listener reconnects every ≤15s for the
+// rest of the machine's uptime, holding a tmux + model session that the cockpit
+// cannot show (the member's presence belongs to the successor). The pair below
+// pins BOTH directions, because getting either one wrong is a real failure:
+// hammering forever, or killing a healthy agent over a server hiccup.
+// ---------------------------------------------------------------------------
+
+// TestListener_SelfTerminatesWhenSupersededByANewerGeneration is the
+// live half.
+//
+// Mutant: delete the 401 arm from authoritativeRefusal (listen_run.go) → the
+// superseded generation never accumulates a refusal run, never fail-closes, and
+// this test hangs to its 3s bound and is red.
+func TestListener_SelfTerminatesWhenSupersededByANewerGeneration(t *testing.T) {
+	cfgTempDir = t.TempDir()
+	var conns int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/chat") {
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte("[]"))
+			return
+		}
+		atomic.AddInt32(&conns, 1)
+		w.Header().Set(authRefusalHeader, refusalAgentSuperseded)
+		w.WriteHeader(401)
+		_, _ = w.Write([]byte(`{"error":{"code":"unauthorized","message":"invalid token"}}`))
+	}))
+	defer srv.Close()
+
+	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
+	out := &syncBuf{}
+	l := newTestListener(srv, cfg, out)
+	l.winddown = newWindDownHook(srv.Client(), cfg, out)
+	l.recycle = newRecycleHook(srv.Client(), cfg, out)
+	l.refusalGraceSpan = 0 // count bound only — no wall-clock wait in tests
+	var terminated int32
+	l.selfTerminate = func() { atomic.AddInt32(&terminated, 1) }
+
+	done := make(chan int, 1)
+	go func() { done <- l.run(context.Background()) }()
+
+	select {
+	case rc := <-done:
+		if rc != 0 {
+			t.Fatalf("rc = %d want 0", rc)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("the superseded generation never stopped: a listener whose member "+
+			"has already reported a NEWER generation is refused 401 forever (the "+
+			"credential floor only ever rises), so it must fail-closed and kill its "+
+			"own session instead of reconnecting for the rest of the machine's "+
+			"uptime. It was still dialling after 3s (%d dials):\n%s",
+			atomic.LoadInt32(&conns), out.String())
+	}
+	if atomic.LoadInt32(&terminated) != 1 {
+		t.Fatalf("the suicide seam must fire exactly once when this generation has "+
+			"been superseded, fired %d times:\n%s", atomic.LoadInt32(&terminated), out.String())
+	}
+	if got := atomic.LoadInt32(&conns); got != sseRefusalMin {
+		t.Fatalf("want exactly %d refused dials before the fail-closed exit, saw %d",
+			sseRefusalMin, got)
+	}
+	if !strings.Contains(out.String(), "superseded") {
+		t.Fatalf("the log must say WHY this session is going away — 「superseded」, "+
+			"not a bare 401 — or the next person reads it as an auth outage:\n%s", out.String())
+	}
+}
+
+// TestListener_APlain401NeverTripsFailClosed is the half that keeps the fix from
+// being worse than the bug. A 401 with NO server marker is every ordinary auth
+// failure: a station whose secret is not loaded yet, a token that expired, a
+// restart in flight. Those are exactly the cases the reconnect loop exists for —
+// treating them as authoritative would kill a healthy agent's tmux session (and
+// everything running under it) over a server hiccup.
+//
+// Mutant: make authoritativeRefusal return non-"" for any 401 → this test is red.
+func TestListener_APlain401NeverTripsFailClosed(t *testing.T) {
+	cfgTempDir = t.TempDir()
+	var dials int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/chat") {
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte("[]"))
+			return
+		}
+		atomic.AddInt32(&dials, 1)
+		w.WriteHeader(401) // no X-OC-Auth-Refusal — an ordinary auth failure
+		_, _ = w.Write([]byte(`{"error":{"code":"unauthorized","message":"invalid token"}}`))
+	}))
+	defer srv.Close()
+
+	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
+	out := &syncBuf{}
+	l := newTestListener(srv, cfg, out)
+	l.winddown = newWindDownHook(srv.Client(), cfg, out)
+	l.recycle = newRecycleHook(srv.Client(), cfg, out)
+	l.refusalGraceSpan = 0 // even with NO grace it must never trip
+	var terminated int32
+	l.selfTerminate = func() { atomic.AddInt32(&terminated, 1) }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan int, 1)
+	go func() { done <- l.run(ctx) }()
+
+	waitForCond(t, func() bool { return atomic.LoadInt32(&dials) >= int32(sseRefusalMin*3) },
+		"well past the fail-closed bound in unmarked 401s")
+	select {
+	case <-done:
+		t.Fatalf("the listener killed itself over UNMARKED 401s. A bare 401 is a "+
+			"station restarting, a secret not loaded, or a token that expired — "+
+			"self-terminating there trades a noisy self-healing path for one that "+
+			"kills healthy agents:\n%s", out.String())
+	default:
+	}
+	cancel()
+	<-done
+	if atomic.LoadInt32(&terminated) != 0 {
+		t.Fatalf("selfTerminate must never fire on a 401 the server did not mark "+
+			"as a standing refusal, fired %d times:\n%s",
+			atomic.LoadInt32(&terminated), out.String())
+	}
+}

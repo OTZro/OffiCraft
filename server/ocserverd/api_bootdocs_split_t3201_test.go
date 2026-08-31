@@ -1518,7 +1518,7 @@ func TestRestoreDocumentHistory_ABootDocRevisionGoesThroughTheWriteFacesGates(t 
 	})
 }
 
-// TestTheTwoStopProceduresDifferInEXACTLYTheThreeLinesTheyAreMeantTo is the
+// TestTheTwoStopProceduresDifferInEXACTLYTheLinesTheyAreMeantTo is the
 // guard the ticket asked for and the one its predecessor only half-built.
 //
 // 🔴 WHY 「they must differ」 WAS NOT ENOUGH. Before T-6f44 these two documents
@@ -1532,16 +1532,20 @@ func TestRestoreDocumentHistory_ABootDocRevisionGoesThroughTheWriteFacesGates(t 
 //
 // The two documents are 95% the same text ON PURPOSE — the wind-down steps do
 // not depend on whether a clock is running. So the honest statement is not
-// 「different」 and not 「identical」, it is: they differ in EXACTLY these three
-// lines, and nowhere else. That pins both directions at once:
-//   - a shared paragraph edited on one side only  → a 4th differing line → RED
-//   - one of the three deliberate differences erased → only 2 differ → RED
+// 「different」 and not 「identical」, it is: they differ in EXACTLY the lines
+// listed in wantDiffs below, and nowhere else. That pins both directions at once:
+//   - a shared paragraph edited on one side only  → one more differing line → RED
+//   - one of the deliberate differences erased    → one fewer differing line → RED
+//
+// The count lives ONLY in wantDiffs — deliberately not in this test's name — so
+// that adding a justified difference is an edit to the table plus its reason,
+// never a silent bump of a number that no longer matches anything.
 //
 // ⚠️ IF YOU ARE HERE BECAUSE THIS TEST WENT RED: do not "fix" it by loosening
 // the count. Either you edited one document and meant to edit both, or you
 // introduced a 4th deliberate difference — in which case add it to the table
 // below and say why it must differ.
-func TestTheTwoStopProceduresDifferInEXACTLYTheThreeLinesTheyAreMeantTo(t *testing.T) {
+func TestTheTwoStopProceduresDifferInEXACTLYTheLinesTheyAreMeantTo(t *testing.T) {
 	s := newEventProcServer(t)
 	_, soft := unsplitSeed(t, s, docKindOffboard)
 	_, _, hard := splitSeed(t, s, docKindAcceleratedStop)
@@ -1565,6 +1569,16 @@ func TestTheTwoStopProceduresDifferInEXACTLYTheThreeLinesTheyAreMeantTo(t *testi
 		{"§1 states outright which kind of notice this is — the ruling that replaced " +
 			"sniffing another document's first line for `Your deadline is`",
 			"沒有人在對你倒數", "你在倒數中"},
+		{"§1's handover warning: BOTH documents must say that taking the handover " +
+			"path kills your token the moment the successor reports in (every later MCP " +
+			"call 401s, silently) — that hazard does not care whether a clock is running, " +
+			"so the paragraph is shared. Only its OPENING framing may differ, because the " +
+			"two readers are in opposite situations: 〈停止〉 has no clock at all, so its " +
+			"job is to say a missing clock is not a missing endpoint; 〈加速停止〉 already " +
+			"has one, so its job is to say that is not the ONLY endpoint and the other one " +
+			"may land FIRST. Copying either wording onto the other side would contradict " +
+			"the §1 sentence two lines above it",
+			"「沒有時鐘」不等於「沒有終點」", "不是唯一的終點"},
 		{"§3: with a clock running you cannot wait for sub-agents to finish on their own",
 			"等 sub agent 自己完成", "請 sub agent 立刻"},
 	}

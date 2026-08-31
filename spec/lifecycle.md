@@ -59,7 +59,7 @@ retired `var/jwt_secret` fallback file has no successor.
 | mint | scope / sub | ttl | machine_id claim |
 |---|---|---|---|
 | `POST /api/login` (owner password **+ TOTP code once enrolled** → token) | `owner` / the fixed single-tenant owner id `"owner"` | DB setting `auth.owner_token_ttl` (default **86400 s**; owner-adjustable via `PATCH /api/settings`, applies from the next login) | none |
-| `POST /api/tokens/mint` (owner-gated) | `agent` / `body.member_id` | `min(ttl_days*86400, 400 days)` — the 400-day ceiling MUST cap every long-lived agent token | none |
+| `POST /api/mint` (owner-gated) | `agent` / `body.member_id` | `min(ttl_days*86400, 400 days)` — the 400-day ceiling MUST cap every long-lived agent token, and an `exp` is ALWAYS stamped (`mintJWT` computes `now + ttl` unconditionally; `ttl_days: 0` mints a token that is already expired, never a permanent one). 🔴 For a member whose `kind` is NOT `warden`, the ceiling is not a guarantee of lifetime: the token carries NO exemption from the §1.2 cut 3 agent floor, so it dies the moment that member next reports waking, however many days are left on it (owner 2026-08-30, rc-162a4ace086d option 0 — asked and accepted). A long-lived token handed to an external script therefore stops working at that member's next boot. 🔴 THE `kind="warden"` CASE IS THE EXCEPTION AND IT IS OPEN ON PURPOSE. This route resolves its target with `staffOnly`, which refuses `kind='outsource'` and NOTHING ELSE — so a mint MAY be aimed at a machine (warden) member, and §1.2 cut 3 exempts `kind="warden"` rows by design. The resulting token is therefore an `agent`-scope credential that NO boot report can end. It is NOT unrevocable: it still expires (≤ 400 days), and removing that machine from the roster still refuses it through the cut 2 machine revocation. What is missing is only the boot cut. Two guards were proposed for this — refusing a machine target here, and raising the floor at dispatch time — and owner DEFERRED both on 2026-08-31, verbatim 「都先不加」(rc-b08b0a5d678b, free text, no option selected). That is a POSTPONEMENT, not an accepted permanent gap: this paragraph MUST be revisited rather than read as a settled design. | none |
 | `POST /api/bootstrap` (with `member_id`) | `agent` / member id | DB setting `auth.agent_token_ttl` (default **604800 s**) | `member.desired_machine_id` (omitted if empty) |
 | reconcile START payload (server-side, per spawn) | `agent` / member id | `auth.agent_token_ttl` | `member.desired_machine_id` |
 | machine onboard / boot-command / bootstrap-here exec-token | `agent` / warden member id | **no expiry** (`exp` omitted; response `expires_in=0`) | none (warden tokens carry no placement claim) |
@@ -189,7 +189,7 @@ ceiling for non-warden agent-token mints.
   Every failed redemption (unknown / expired / already used) is the same flat 401 with no
   distinguishing hint. The legacy `install.sh?token=` surface stays byte-identical
   indefinitely.
-- Token verification is stateless with TWO revocation cuts:
+- Token verification is stateless with THREE revocation cuts:
   1. **owner scope — the password floor.** Owner-scope tokens whose `iat` is earlier than
      the DB `auth.password_changed_at` (stamped by `POST /api/auth/change-password`) MUST
      be refused (401).
@@ -233,7 +233,95 @@ ceiling for non-warden agent-token mints.
      teardown refusal MUST precede the `ocwarden` subprocess — a 409 written after
      the daemon was booted out is worse than no guard.
 
-  For every other agent token, expiry stays the only invalidation.
+  3. **agent scope — the member's own last 開工.** `POST /api/self/waking` MUST raise the
+     reporting member's `agent_iat_floor` to the `iat` of the token THAT CALL was made
+     with, and every gated route MUST then refuse (401) any `agent`-scope token whose
+     `iat` is STRICTLY LESS THAN that member's floor. A member's generations overlap on
+     purpose (§6.3 close-out), so the id alone cannot say which one is speaking; the
+     caller's `iat` can, and this cut is what makes the NEW generation coming up end the
+     previous one's authority (owner 2026-08-30, rc-fe6451abe579: 「新的一輪一上線就失效」,
+     a handover cut in half being the accepted cost).
+
+     The stamp MUST be the caller's OWN `iat` and the comparison MUST be strict. Together
+     those are what stop the session that raises the floor from being refused by it,
+     whatever the gap between its mint and its boot report and whatever the skew between
+     the two clocks; a floor stamped from the server clock would refuse a token that
+     merely took a few seconds to arrive.
+
+     Scope notes, all load-bearing: `kind="warden"` rows are EXEMPT, and that is a safety
+     property rather than an optimisation — a warden credential is `agent` scope with NO
+     `exp` (§1.3), so a floor raised above one could never expire out of the way and the
+     machine would be off the fleet permanently, recoverable only by a hand re-install.
+     A failed roster read MUST NOT refuse (unknown ≠ superseded), and a member that has
+     never reported waking (floor 0 — every row predating the cut) refuses nothing.
+
+     ⚠️ **NOT SOLVED, deliberately** (owner 2026-08-28: 「先不管搶同一秒的問題好了」):
+     `iat` is whole seconds, so two generations of one member that start inside the SAME
+     second are indistinguishable to this comparison and neither is refused. Nothing in
+     this cut claims otherwise.
+
+     🔴 **WHAT THIS CUT DOES NOT REACH.** The refusal is evaluated at REQUEST time, so an
+     SSE stream that was ALREADY accepted is never re-checked against the floor. On the
+     ORDINARY path that is not a narrow race but a routine gap of seconds to minutes,
+     because the boot order raises the floor FIRST and connects the stream LAST:
+
+     - Both boot sequences are `1. report_waking` → `2. resume_summary` → `3. ocagent
+       listen`, and both state 不可更改順序 in those words (`seeds/boot_sequence.md`,
+       `seeds/boot_sequence_codex.md`). `cli/ocwarden/spawn.go` restates the same order in
+       its SOP comment (`report_waking → resume_summary → ocagent listen`).
+     - NOTHING attaches a listener at spawn. On the claude path warden launches only
+       `claude`; the model itself starts `ocagent listen` at step 3. On the codex path the
+       seed forbids the model to start one at all (「不要自己啟動 `ocagent listen`」) and
+       `cli/ocwarden/codex_session.go` execs it only on the FIRST `turn/completed` — i.e.
+       AFTER the turn in which the model has already called `report_waking`.
+     - Step 2 is not instant: `resume_summary` can be big enough that the seed tells the
+       model to spend a whole sub-agent on it rather than burn its own context.
+
+     So the ordinary sequence is: the successor's `report_waking` raises the floor (step 1)
+     → from that instant the outgoing session's ordinary calls 401, WHILE ITS SSE IS STILL
+     ATTACHED and, being already accepted, never re-checked → seconds to minutes later the
+     successor finally reaches step 3 and its SSE connect kicks the incumbent off
+     (`Hub.Connect` is kick-old-admit-new inside ONE critical section: the `delete` and
+     `close(old.kicked)` run under the same `h.mu.Lock()` as the insert). For the whole of
+     that gap a live stream belongs to a credential the server has already stopped
+     accepting, and the outgoing session is a mute listener: it still receives events, it
+     just cannot act on any of them.
+
+     Two further shapes, neither closed here:
+
+     - **(a) the successor never reaches step 3.** If it stalls or dies during boot, the
+       floor stays up and the incumbent keeps the SSE slot — and keeps the member
+       projected `online` — until it drops on its own. Nothing else bounds this.
+     - **(b) when the takeover is throttled.** The anti-flap guard (`takeoverBurst` kicks
+       within `takeoverWindow`, hub.go) returns 409 BEFORE the delete/close, so a
+       throttled successor does not kick anyone and the INCUMBENT keeps the slot. Its
+       `report_waking` is a separate call and still raises the floor, so here too the old
+       stream outlives the cut, un-re-checked, until it drops on its own — at which point
+       its reconnect meets the floor and gets the `X-OC-Auth-Refusal: agent-superseded`
+       marker (authz.go).
+
+     None of this is closed by this package. Re-checking live streams against the floor
+     would close all of it and is NOT proposed here.
+
+     🔴 **TWO NAMED DEBTS, DEFERRED BY THE OWNER, NOT CLOSED** (2026-08-31, rc-b08b0a5d678b,
+     verbatim 「都先不加」, free text, no option selected). Both were put to him as guards for
+     the `kind="warden"` exemption above and both were declined FOR NOW; they are recorded
+     here so the hole is named rather than implied by the exemption's absence:
+
+     1. **The mint door is open.** `POST /api/mint` resolves its target with
+        `staffOnly`, which refuses only `kind='outsource'` — so a mint MAY be aimed at a
+        warden member, and the token it returns is `agent` scope that NO boot report can
+        ever end (§1.3, mint table). Refusing a machine target at that route was proposed
+        and deferred.
+     2. **The floor is not raised at dispatch.** Only `report_waking` moves it, so between
+        a START dispatch and the new session's own boot report the previous generation's
+        token is still good. Raising the floor at dispatch time was proposed and deferred.
+
+     Deferral is a POSTPONEMENT and not an accepted permanent design: revisit both rather
+     than reading their absence as settled.
+
+  For every other agent token — a `kind="warden"` credential, and any token on a member
+  that has never reported waking — expiry stays the only invalidation.
 
 ### 1.4 Credential renewal (`POST /api/machines/renew-credential`)
 
