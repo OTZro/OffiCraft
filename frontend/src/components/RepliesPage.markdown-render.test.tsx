@@ -18,7 +18,8 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "要幫你寄出這封信嗎？",
     body: "",
-    options: ["寄出", "先不要"],
+    options: [{ text: "寄出", aiPick: true }, { text: "先不要", aiPick: false }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     createdTs: Date.now() / 1000 - 25 * 60,
@@ -117,7 +118,7 @@ describe("RepliesPage markdown render (T-13af)", () => {
         summary: "要不要合 **fms #20054**（`919fe961`）？",
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     const { findByTestId } = renderPage();

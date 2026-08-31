@@ -1,10 +1,28 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 )
+
+// rawErrorMessage reads the unified error envelope's message off a raw response
+// body, so a refusal can be compared IN FULL. A substring probe would pass on
+// any refusal that merely contains the phrase — including one raised for a
+// different reason by a different gate.
+func rawErrorMessage(t *testing.T, resp string) string {
+	t.Helper()
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(resp), &body); err != nil {
+		t.Fatalf("response is not an error envelope: %v (%s)", err, resp)
+	}
+	return body.Error.Message
+}
 
 // T-e2b2 (owner rc-3a589dfec503, 2026-07-27): an attachment item that carries
 // NEITHER id NOR data_b64 is refused — on every face that takes attachments.
@@ -34,13 +52,13 @@ func TestIncompleteAttachmentIsRefusedOnEveryFace(t *testing.T) {
 		{"chat", "/api/chat",
 			`{"to":"owner","body":"see attached","attachments":[` + ghost + `]}`},
 		{"reply card", "/api/reply-cards",
-			`{"kind":"decision","summary":"ship it?","options":["yes","no"],"linked_task":null,"attachments":[` + ghost + `]}`},
+			`{"kind":"decision","summary":"ship it?","options":[{"text":"yes"},{"text":"no"}],"linked_task":null,"attachments":[` + ghost + `]}`},
 	} {
 		// The answer face is covered by TestReplyCardAnswerRefusesIncompleteAttachment
 		// below — it takes a live card id, so it cannot ride this table.
 		status, resp := doRaw(t, "POST", srv.URL+tc.path, agentTok,
 			"application/json", []byte(tc.body))
-		if status != 400 || !strings.Contains(resp, "neither id nor data_b64") {
+		if status != 400 || rawErrorMessage(t, resp) != "attachment carries neither id nor data_b64" {
 			t.Errorf("%s: want 400 naming the missing id/data_b64, got %d %s",
 				tc.name, status, resp)
 		}
@@ -49,8 +67,15 @@ func TestIncompleteAttachmentIsRefusedOnEveryFace(t *testing.T) {
 	// Nothing was posted: the refusal is not a message that quietly lost its
 	// attachment.
 	status, resp := doRaw(t, "GET", srv.URL+"/api/chat?with=owner", agentTok, "", nil)
-	if status != 200 || strings.Contains(resp, "see attached") {
-		t.Fatalf("a refused post must leave no message: %d %s", status, resp)
+	if status != 200 {
+		t.Fatalf("read back the stream: %d %s", status, resp)
+	}
+	var stream []map[string]any
+	if err := json.Unmarshal([]byte(resp), &stream); err != nil {
+		t.Fatalf("chat stream is not a list: %v (%s)", err, resp)
+	}
+	if len(stream) != 0 {
+		t.Fatalf("a refused post must leave no message, got %v", stream)
 	}
 }
 
@@ -74,7 +99,7 @@ func TestReplyCardAnswerRefusesIncompleteAttachment(t *testing.T) {
 	open := func() string {
 		status, resp := doRaw(t, "POST", srv.URL+"/api/reply-cards", agentTok,
 			"application/json",
-			[]byte(`{"kind":"decision","summary":"ship it?","options":["yes","no"],"linked_task":null}`))
+			[]byte(`{"kind":"decision","summary":"ship it?","options":[{"text":"yes"},{"text":"no"}],"linked_task":null}`))
 		if status != 200 {
 			t.Fatalf("open card: %d %s", status, resp)
 		}
@@ -82,28 +107,40 @@ func TestReplyCardAnswerRefusesIncompleteAttachment(t *testing.T) {
 	}
 
 	for _, tc := range []struct{ name, item, want string }{
-		{"neither id nor bytes", `{"filename":"ghost.pdf"}`, "neither id nor data_b64"},
-		{"id-only ref", `{"id":"att-whatever"}`, "must carry data_b64"},
+		{"neither id nor bytes", `{"filename":"ghost.pdf"}`,
+			"attachment carries neither id nor data_b64"},
+		{"id-only ref", `{"id":"att-whatever"}`,
+			"an answer attachment must carry data_b64; a stored-blob id " +
+				"reference is not accepted on this face"},
 		// Review U3: this face used to take the bytes, drop the id, and answer
 		// 200 — while the shared schema promised a 400 for an item carrying
 		// both. The last silent discard on the attachment surface.
 		{"both id and bytes", `{"id":"att-whatever","data_b64":"aGVsbG8="}`,
-			"both id and data_b64"},
+			"attachment carries both id and data_b64"},
 	} {
 		card := open()
 		status, resp := doRaw(t, "POST", srv.URL+"/api/reply-cards/"+card+"/answer",
 			ownerTok, "application/json",
-			[]byte(`{"option_idx":0,"text":"see attached","attachments":[`+tc.item+`]}`))
-		if status != 400 || !strings.Contains(resp, tc.want) {
+			[]byte(`{"option_idxs":[0],"text":"see attached","attachments":[`+tc.item+`]}`))
+		if status != 400 || rawErrorMessage(t, resp) != tc.want {
 			t.Errorf("%s: want 400 %q, got %d %s", tc.name, tc.want, status, resp)
 			continue
 		}
 		// The card must still be answerable — a refused answer is not a
 		// half-answered card.
 		status, resp = doRaw(t, "GET", srv.URL+"/api/reply-cards/"+card, ownerTok, "", nil)
-		if status != 200 || !strings.Contains(resp, `"status":"waiting"`) {
-			t.Errorf("%s: card must stay waiting after a refused answer, got %d %s",
-				tc.name, status, resp)
+		var got replyCardDTO
+		if status != 200 {
+			t.Errorf("%s: reread card: %d %s", tc.name, status, resp)
+			continue
+		}
+		if err := json.Unmarshal([]byte(resp), &got); err != nil {
+			t.Errorf("%s: card is not a ReplyCardDTO: %v (%s)", tc.name, err, resp)
+			continue
+		}
+		if got.Status != replyCardStatusWaiting || got.Answer != nil {
+			t.Errorf("%s: card must stay waiting after a refused answer, got %+v",
+				tc.name, got)
 		}
 	}
 }
@@ -124,7 +161,7 @@ func TestPostChatAttachmentCapIsEnforced(t *testing.T) {
 	}
 	status, resp := doRaw(t, "POST", srv.URL+"/api/chat", agentTok, "application/json",
 		[]byte(`{"to":"owner","body":"many","attachments":[`+strings.Join(items, ",")+`]}`))
-	if status != 400 || !strings.Contains(resp, "at most 10 attachments") {
+	if status != 400 || rawErrorMessage(t, resp) != "a message may carry at most 10 attachments" {
 		t.Fatalf("over-cap post must be refused, got %d %s", status, resp)
 	}
 	// The sentinel half: exactly at the cap is legal, so the guard is not just

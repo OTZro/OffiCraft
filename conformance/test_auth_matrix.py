@@ -312,7 +312,7 @@ def _matrix_card(ctx: Ctx) -> str:
     r = ctx.client.post(
         "/api/reply-cards",
         json={"kind": "decision", "summary": "conf matrix scratch card",
-              "options": ["AI pick", "other"], "linked_task": None},
+              "options": [{"text": "AI pick"}, {"text": "other"}], "linked_task": None},
         headers={"Authorization": f"Bearer {ctx.owner_token}"},
     )
     assert r.status_code == 200, f"scratch card failed: {r.status_code} {r.text}"
@@ -331,7 +331,7 @@ def _matrix_card_opened_by_agent_a(ctx: Ctx) -> str:
     r = ctx.client.post(
         "/api/reply-cards",
         json={"kind": "decision", "summary": "conf matrix agent-A card",
-              "options": ["AI pick", "other"], "linked_task": None},
+              "options": [{"text": "AI pick"}, {"text": "other"}], "linked_task": None},
         headers={"Authorization": f"Bearer {ctx.agent_a.token}"},
     )
     assert r.status_code == 200, f"agent-A card failed: {r.status_code} {r.text}"
@@ -343,7 +343,7 @@ def _matrix_answered_card(ctx: Ctx) -> str:
     card_id = _matrix_card(ctx)
     r = ctx.client.post(
         f"/api/reply-cards/{card_id}/answer",
-        json={"option_idx": 0},
+        json={"option_idxs": [0]},
         headers={"Authorization": f"Bearer {ctx.owner_token}"},
     )
     assert r.status_code == 200, f"scratch answer failed: {r.status_code} {r.text}"
@@ -847,7 +847,7 @@ MATRIX: dict[str, Route] = {
     "POST /api/reply-cards": Route(
         requires="machine",
         body={"kind": "decision", "summary": "conf matrix card",
-              "options": ["AI pick", "other"], "linked_task": None},
+              "options": [{"text": "AI pick"}, {"text": "other"}], "linked_task": None},
     ),
     "GET /api/reply-cards": Route(requires="machine"),
     "GET /api/reply-cards/count": Route(requires="machine"),
@@ -865,7 +865,7 @@ MATRIX: dict[str, Route] = {
             f"/api/reply-cards/"
             f"{_matrix_card(ctx) if i in _ADMIN_FACES else 'rc-conf-missing'}/answer"
         ),
-        body={"option_idx": 0},
+        body={"option_idxs": [0]},
     ),
     "PUT /api/reply-cards/{card_id}/answer": Route(
         requires="admin_agent",

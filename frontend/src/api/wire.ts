@@ -133,9 +133,15 @@ export type WireTeardownHereResult =
 export type WireReplyCard = components["schemas"]["ReplyCardDTO"];
 
 /** Mirrors `ReplyCardAnswerDTO`: the stored answer on an answered card.
- * `option_idx` is null for a pure free-text answer; `attachments` are served
+ * `option_idxs` is null for a pure free-text answer, otherwise the deduped,
+ * ascending list of every circled option's index; `attachments` are served
  * refs into the shared chat-attachment store. */
 export type WireReplyCardAnswer = components["schemas"]["ReplyCardAnswerDTO"];
+
+/** Mirrors `ReplyCardOptionDTO`: one frozen quick-reply choice. `ai_pick` is
+ * the ONLY carrier of "this is the AI's own recommendation" — it replaced the
+ * positional `options[0]` convention, so POSITION MEANS NOTHING here. */
+export type WireReplyCardOption = components["schemas"]["ReplyCardOptionDTO"];
 
 /** Mirrors `ReplyCardCountDTO`: the waiting count behind the nav badge
  * (`GET /api/reply-cards/count`; answered cards never count). */
@@ -366,6 +372,7 @@ export type WireResumeRosterMember =
 export type WireResumeMachines = components["schemas"]["ResumeMachinesDTO"];
 
 /** Mirrors `ChatInlineReplyCardDTO`: the reply card folded in place onto the
- * chat message that opened it — options, pick, free text, and when. */
+ * chat message that opened it — the options as offered (each with its own
+ * `ai_pick`), EVERY circled index, the free text, and when. */
 export type WireChatInlineReplyCard =
   components["schemas"]["ChatInlineReplyCardDTO"];

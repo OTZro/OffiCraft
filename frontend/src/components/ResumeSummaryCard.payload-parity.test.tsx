@@ -144,8 +144,14 @@ const WIRE: WireResumeSummary = {
       reply_to: "",
       attachments: [],
       card: {
-        options: ["照這個形狀做", "先擋著等下一輪"],
-        answer_option_idx: 1,
+        // ai_pick sits on the SECOND option and BOTH options are circled —
+        // deliberately. A first-option AI pick and a single-option answer are
+        // exactly the two shapes a positional reader gets right by accident.
+        options: [
+          { text: "照這個形狀做", ai_pick: false },
+          { text: "先擋著等下一輪", ai_pick: true },
+        ],
+        answer_option_idxs: [0, 1],
         answer_text: "先擋著,理由寫在卡上",
         answered_ts: 1786000600,
         answered_at_display: "2026-08-12 22:23:20 +08:00",
@@ -492,25 +498,28 @@ describe("ResumeSummaryCard renders the SAME snapshot the agent receives", () =>
     }
   });
 
-  it("draws the reply card ON the message that opened it: pick, free text, and when", async () => {
+  it("draws every circled option on the card that opened it, tagging the ai_pick option and not the first", async () => {
     const u = await open();
-    const card = u.getByTestId("mp-resume-chat-card");
-    const c = WIRE.chat![0].card!;
-    for (const opt of c.options!) expect(txt(card)).toContain(opt);
-    expect(txt(u.getByTestId("mp-resume-card-answer-text"))).toContain(
-      c.answer_text,
+    // Each option chip, WHOLE — the wording plus exactly the tags it earned.
+    // The AI tag rides the SECOND option here (that is where ai_pick is), and
+    // 已選 rides BOTH, because both indices are in answer_option_idxs. A reader
+    // that still tagged options[0], or that drew one 已選 for a two-option
+    // answer, disagrees with one of these strings.
+    expect(u.getAllByTestId("mp-resume-card-option").map(txt)).toEqual([
+      "照這個形狀做已選",
+      "先擋著等下一輪AI 建議已選",
+    ]);
+    expect(
+      u
+        .getAllByTestId("mp-resume-card-option")
+        .map((el) => el.getAttribute("data-picked")),
+    ).toEqual(["true", "true"]);
+    expect(txt(u.getByTestId("mp-resume-card-answer-text"))).toBe(
+      "補充文字 先擋著,理由寫在卡上",
     );
-    expect(txt(u.getByTestId("mp-resume-card-answered-at"))).toContain(
-      c.answered_at_display,
+    expect(txt(u.getByTestId("mp-resume-card-answered-at"))).toBe(
+      "回覆於 2026-08-12 22:23:20 +08:00",
     );
-    // WHICH option was picked — the decision itself, not merely that options
-    // existed. Marked on the option at answer_option_idx and nowhere else.
-    const picked = u
-      .getAllByTestId("mp-resume-card-option")
-      .filter((el) => el.getAttribute("data-picked") === "true")
-      .map(txt);
-    expect(picked).toHaveLength(1);
-    expect(picked[0]).toContain(c.options![c.answer_option_idx!]);
     // ONE home for the card: it rides the message, so there is exactly one.
     expect(u.getAllByTestId("mp-resume-chat-card")).toHaveLength(1);
   });

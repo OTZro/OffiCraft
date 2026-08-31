@@ -15,6 +15,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -82,13 +83,12 @@ var displayTimeRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-
 func TestResumeChat_CardFoldsOntoTheMessageThatOpenedIt(t *testing.T) {
 	api := resumeCtxServer(t)
 
-	idx := 1
 	if err := api.dal.PutReplyCard(ReplyCard{
 		ID: "rc-fold", FromMember: "m-exec", Kind: "decision",
 		Summary: "ship or hold", Body: "which one",
-		Options: []string{"ship it", "hold for review"},
+		Options: []ReplyCardOption{{Text: "ship it"}, {Text: "hold for review"}},
 		Status:  replyCardStatusAnswered, CreatedTS: 100, AnsweredTS: 200,
-		ChatMessageID: "c-card", AnswerOptionIdx: &idx, AnswerText: "hold, we found a leak",
+		ChatMessageID: "c-card", AnswerOptionIdxs: []int{1}, AnswerText: "hold, we found a leak",
 	}); err != nil {
 		t.Fatalf("put card: %v", err)
 	}
@@ -102,11 +102,12 @@ func TestResumeChat_CardFoldsOntoTheMessageThatOpenedIt(t *testing.T) {
 	if carded.Card == nil {
 		t.Fatalf("the message that opened the card must carry it inline: %+v", carded)
 	}
-	if got := strings.Join(carded.Card.Options, "|"); got != "ship it|hold for review" {
-		t.Fatalf("inline card must carry the options as offered, got %q", got)
+	if !reflect.DeepEqual(carded.Card.Options,
+		[]ReplyCardOption{{Text: "ship it"}, {Text: "hold for review"}}) {
+		t.Fatalf("inline card must carry the options as offered, got %+v", carded.Card.Options)
 	}
-	if carded.Card.AnswerOptionIdx == nil || *carded.Card.AnswerOptionIdx != 1 {
-		t.Fatalf("inline card must carry which option was picked: %+v", carded.Card.AnswerOptionIdx)
+	if !reflect.DeepEqual(carded.Card.AnswerOptionIdxs, []int{1}) {
+		t.Fatalf("inline card must carry which options were circled: %+v", carded.Card.AnswerOptionIdxs)
 	}
 	if carded.Card.AnswerText != "hold, we found a leak" {
 		t.Fatalf("inline card must carry the free text, got %q", carded.Card.AnswerText)
@@ -149,7 +150,7 @@ func TestResumeChat_OnlyTheSubjectsOwnCardsAreFolded(t *testing.T) {
 
 	if err := api.dal.PutReplyCard(ReplyCard{
 		ID: "rc-theirs", FromMember: "m-peer", Kind: "decision",
-		Summary: "their ask", Options: []string{"yes", "no"},
+		Summary: "their ask", Options: []ReplyCardOption{{Text: "yes"}, {Text: "no"}},
 		Status: replyCardStatusWaiting, CreatedTS: 100, ChatMessageID: "c-theirs",
 	}); err != nil {
 		t.Fatalf("put card: %v", err)
@@ -678,12 +679,11 @@ func TestResumeChat_CutMarkerIsActionableAndDistinctFromCollapse(t *testing.T) {
 func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T) {
 	api := resumeCtxServer(t)
 
-	idx := 0
 	if err := api.dal.PutReplyCard(ReplyCard{
 		ID: "rc-size", FromMember: "m-exec", Kind: "decision",
-		Summary: "s", Options: []string{"選項一", "選項二"},
+		Summary: "s", Options: []ReplyCardOption{{Text: "選項一"}, {Text: "選項二"}},
 		Status: replyCardStatusAnswered, CreatedTS: 100, AnsweredTS: 150,
-		ChatMessageID: "c-card", AnswerOptionIdx: &idx, AnswerText: "就這樣",
+		ChatMessageID: "c-card", AnswerOptionIdxs: []int{0}, AnswerText: "就這樣",
 	}); err != nil {
 		t.Fatalf("put card: %v", err)
 	}
@@ -728,11 +728,11 @@ func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T)
 		if m.Card != nil {
 			sawCard = true
 			for _, o := range m.Card.Options {
-				want += len([]rune(o))
+				want += len([]rune(o.Text))
 			}
 			want += len([]rune(m.Card.AnswerText)) + len([]rune(m.Card.AnsweredAtDisplay))
-			if m.Card.AnswerOptionIdx != nil {
-				want += len(strconv.Itoa(*m.Card.AnswerOptionIdx))
+			for _, idx := range m.Card.AnswerOptionIdxs {
+				want += len(strconv.Itoa(idx))
 			}
 		}
 	}

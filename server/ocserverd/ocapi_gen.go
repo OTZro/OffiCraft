@@ -110,6 +110,42 @@ func (e ReplyCardCreateDTOKind) Valid() bool {
 	}
 }
 
+// Defines values for ReplyCardCreateDTOSelectMode.
+const (
+	ReplyCardCreateDTOSelectModeMulti  ReplyCardCreateDTOSelectMode = "multi"
+	ReplyCardCreateDTOSelectModeSingle ReplyCardCreateDTOSelectMode = "single"
+)
+
+// Valid indicates whether the value is a known member of the ReplyCardCreateDTOSelectMode enum.
+func (e ReplyCardCreateDTOSelectMode) Valid() bool {
+	switch e {
+	case ReplyCardCreateDTOSelectModeMulti:
+		return true
+	case ReplyCardCreateDTOSelectModeSingle:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReplyCardDTOSelectMode.
+const (
+	ReplyCardDTOSelectModeMulti  ReplyCardDTOSelectMode = "multi"
+	ReplyCardDTOSelectModeSingle ReplyCardDTOSelectMode = "single"
+)
+
+// Valid indicates whether the value is a known member of the ReplyCardDTOSelectMode enum.
+func (e ReplyCardDTOSelectMode) Valid() bool {
+	switch e {
+	case ReplyCardDTOSelectModeMulti:
+		return true
+	case ReplyCardDTOSelectModeSingle:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ScheduledMessageCreateDTOCadence.
 const (
 	ScheduledMessageCreateDTOCadenceCustom  ScheduledMessageCreateDTOCadence = "custom"
@@ -683,13 +719,13 @@ type ChatGalleryEntryDTO struct {
 // HAS a home in the stream (its “chat_message_id“), and giving it a second one
 // would carry the same decision twice in one payload.
 //
-// It carries the DECISION and nothing else — the options offered, which one was
-// picked, the free text, and when. The card's “summary“ / “body“ / kind /
+// It carries the DECISION and nothing else — the options offered, which ones were
+// circled, the free text, and when. The card's “summary“ / “body“ / kind /
 // attachments are NOT here: the chat message this rides on already carries the
 // ask, and “get_reply_card“ serves the rest.
 type ChatInlineReplyCardDTO struct {
-	// AnswerOptionIdx Index into ``options`` of the option that was picked; ``null`` when the card was answered with free text only, or is not answered yet.
-	AnswerOptionIdx *int `json:"answer_option_idx,omitempty"`
+	// AnswerOptionIdxs Indices into ``options`` of every option that was circled; ``null`` when the card was answered with free text / attachments only, or is not answered yet. The server stores it DEDUPED and ASCENDING, so ``[2,0]`` and ``[0,2]`` are indistinguishable once stored. A ``single`` card accepts at most one index (two is a 400).
+	AnswerOptionIdxs *[]int `json:"answer_option_idxs,omitempty"`
 
 	// AnswerText The free-text answer, ``""`` when none was given.
 	AnswerText *string `json:"answer_text,omitempty"`
@@ -700,8 +736,8 @@ type ChatInlineReplyCardDTO struct {
 	// AnsweredTs Epoch seconds the card was answered; ``0`` while it is still waiting.
 	AnsweredTs *float64 `json:"answered_ts,omitempty"`
 
-	// Options The frozen quick-reply wording as it was offered (``options[0]`` is the AI pick). Empty for a card opened without options.
-	Options *[]string `json:"options,omitempty"`
+	// Options The frozen quick-reply choices as they were offered, each carrying its own ``ai_pick`` flag. Empty for a card opened without options.
+	Options *[]ReplyCardOptionDTO `json:"options,omitempty"`
 }
 
 // ChatMessageDTO API representation of one “domain.ChatMessage“. The wire uses “from“ /
@@ -1782,26 +1818,34 @@ type ReleaseCheckDTO struct {
 	Status         string  `json:"status"`
 }
 
-// ReplyCardAnswerBriefDTO The decision DIGEST on a light answered list row (“list_reply_cards“): “option_idx“ (null = free text only) plus “option“ — the picked option's ORIGINAL wording, “text“ truncated to a preview, and “attachments“ as a COUNT. The full answer (the untruncated text, the attachment refs) rides “get_reply_card“.
+// ReplyCardAnswerBriefDTO The decision DIGEST on a light answered list row (“list_reply_cards“): “option_idxs“ (null = free text only) plus “options“ — the ORIGINAL wording of EVERY circled option, one entry per “option_idxs“ entry and in the same order, “text“ truncated to a preview, and “attachments“ as a COUNT. The full answer (the untruncated text, the attachment refs) rides “get_reply_card“.
 type ReplyCardAnswerBriefDTO struct {
-	Attachments *int    `json:"attachments,omitempty"`
-	Option      *string `json:"option,omitempty"`
-	OptionIdx   *int    `json:"option_idx"`
-	Text        *string `json:"text,omitempty"`
+	Attachments *int `json:"attachments,omitempty"`
+
+	// OptionIdxs Indices into ``options`` of every option that was circled; ``null`` when the card was answered with free text / attachments only, or is not answered yet. The server stores it DEDUPED and ASCENDING, so ``[2,0]`` and ``[0,2]`` are indistinguishable once stored. A ``single`` card accepts at most one index (two is a 400).
+	OptionIdxs *[]int `json:"option_idxs"`
+
+	// Options The circled options' ORIGINAL wording, one entry per ``option_idxs`` entry, same order.
+	Options *[]string `json:"options,omitempty"`
+	Text    *string   `json:"text,omitempty"`
 }
 
-// ReplyCardAnswerDTO The stored answer on an answered reply card. “option_idx“ is null for a pure free-text answer; “attachments“ are served refs into the shared chat-attachment store.
+// ReplyCardAnswerDTO The stored answer on an answered reply card. “option_idxs“ is null for a pure free-text answer, otherwise the deduped, ascending list of every circled option's index; “attachments“ are served refs into the shared chat-attachment store.
 type ReplyCardAnswerDTO struct {
 	Attachments *[]ChatAttachmentDTO `json:"attachments,omitempty"`
-	OptionIdx   *int                 `json:"option_idx"`
-	Text        *string              `json:"text,omitempty"`
+
+	// OptionIdxs Indices into ``options`` of every option that was circled; ``null`` when the card was answered with free text / attachments only, or is not answered yet. The server stores it DEDUPED and ASCENDING, so ``[2,0]`` and ``[0,2]`` are indistinguishable once stored. A ``single`` card accepts at most one index (two is a 400).
+	OptionIdxs *[]int  `json:"option_idxs"`
+	Text       *string `json:"text,omitempty"`
 }
 
-// ReplyCardAnswerPostDTO The owner's answer to a reply card: a quick-reply “option_idx“ (into the card's “options“) and/or free “text“, plus optional “attachments“ (same input shape + limits as chat attachments; blobs land in the shared chat-attachment store). An answer must carry at least one of the three — an empty answer is rejected 400. POST answers a WAITING card (the one-shot close); PUT revises an ANSWERED card's answer (重新決定 — status stays answered).
+// ReplyCardAnswerPostDTO The owner's answer to a reply card: the quick-reply “option_idxs“ (a LIST of indices into the card's “options“) and/or free “text“, plus optional “attachments“ (same input shape + limits as chat attachments; blobs land in the shared chat-attachment store). An answer must carry at least one of the three — an empty answer is rejected 400, and “option_idxs: []“ counts as EMPTY, not as an answer. Every index must fall in “[0, len(options))“; a “single“ card accepts at most one (two is a 400). The stored list is deduped and sorted ascending, so “[2,0]“ and “[0,2]“ store identically. POST answers a WAITING card (the one-shot close); PUT revises an ANSWERED card's answer (重新決定 — status stays answered).
 type ReplyCardAnswerPostDTO struct {
 	Attachments *[]ChatAttachmentInputDTO `json:"attachments,omitempty"`
-	OptionIdx   *int                      `json:"option_idx,omitempty"`
-	Text        *string                   `json:"text,omitempty"`
+
+	// OptionIdxs Indices into the card's ``options`` of every option you circle. Omit it or send ``null`` to answer with text/attachments only; ``[]`` is NOT an answer (400). Order and duplicates do not matter — the server stores the list deduped and ascending.
+	OptionIdxs *[]int  `json:"option_idxs,omitempty"`
+	Text       *string `json:"text,omitempty"`
 }
 
 // ReplyCardCountDTO Reply-card counts. “waiting“ is the cockpit navigation badge: how many reply cards are currently WAITING for the owner (answered/expired cards never count — the badge counts 待回覆 only). “answered“ is the count of recently-answered cards (within the 24h 近期已回覆 window) and “expired“ the count of recently-expired cards (the same 24h window keyed off “expired_ts“) — together they let the 等我回覆 page render its collapsed 近期已處理 header (and hide the pane at zero) WITHOUT fetching the lists; the lists load only when the owner expands the pane.
@@ -1811,38 +1855,50 @@ type ReplyCardCountDTO struct {
 	Waiting  int `json:"waiting"`
 }
 
-// ReplyCardCreateDTO Open one reply card (請示): an ask the OWNER must answer before the agent can proceed. “kind“ is the closed set “decision“ (needs a call/approval) | “action“ (needs the owner to DO something first). “options“ are the quick-reply choices: 1..4 non-blank strings, and index 0 is ALWAYS the AI's own recommendation (the “AI 建議“ pick). A free-typed answer (with attachments) is always allowed on top — options never close that door. Optional “attachments“ ride the QUESTION side of the card (same input shape + limits as chat attachments: “{id}“ references a blob already uploaded via “POST /api/chat/attachments“, or “data_b64“ carries small bytes inline; blobs land in the shared chat-attachment store). “linked_task“ is REQUIRED and has no default: every card must SAY whether it is about a task. There is no inference — the server never guesses a binding from what work you hold, because a guess that misses is silent (the card opens with no 等我回覆 hold and the task runs past your question).
+// ReplyCardCreateDTO Open one reply card (請示): an ask the OWNER must answer before the agent can proceed. “kind“ is the closed set “decision“ (needs a call/approval) | “action“ (needs the owner to DO something first). “options“ are the quick-reply choices: 1..4 objects “{"text": ..., "ai_pick": true|false}“ with non-blank “text“; “ai_pick“ is what marks the AI's own recommendation — POSITION CARRIES NO MEANING. “select_mode“ (“single“, the default, or “multi“) says how many of them the owner may circle; a “single“ card may mark at most one option “ai_pick“. A free-typed answer (with attachments) is always allowed on top — options never close that door. Optional “attachments“ ride the QUESTION side of the card (same input shape + limits as chat attachments: “{id}“ references a blob already uploaded via “POST /api/chat/attachments“, or “data_b64“ carries small bytes inline; blobs land in the shared chat-attachment store). “linked_task“ is REQUIRED and has no default: every card must SAY whether it is about a task. There is no inference — the server never guesses a binding from what work you hold, because a guess that misses is silent (the card opens with no 等我回覆 hold and the task runs past your question).
 type ReplyCardCreateDTO struct {
 	Attachments *[]ChatAttachmentInputDTO `json:"attachments,omitempty"`
 	Body        *string                   `json:"body,omitempty"`
 	Kind        ReplyCardCreateDTOKind    `json:"kind"`
 
 	// LinkedTask REQUIRED — declare, do not leave it to be inferred. Send ``null`` when the ask is NOT about a task (a plain unbound 請示), or ``{"task_id": ..., "step_id": ...}`` to bind the ask to the step it is about: that step (and its task) enters waiting_owner until the owner answers. BOTH ids are required in the object form; a task_id with no step_id is a 400, because binding a task without a step places no 等我回覆 hold — the task would finish underneath your question and the owner's answer would then be rejected for good. Omitting the field entirely is a 400 that names both legal shapes: silence used to mean 'the server guesses', and a guess that missed sent a hold-less card with no error at all.
-	LinkedTask *ReplyCardLinkDTO `json:"linked_task"`
-	Options    []string          `json:"options"`
-	Summary    string            `json:"summary"`
+	LinkedTask *ReplyCardLinkDTO    `json:"linked_task"`
+	Options    []ReplyCardOptionDTO `json:"options"`
+
+	// SelectMode How many options the owner may circle: ``single`` (the default — at most one, and at most one option may carry ``ai_pick``) or ``multi`` (any number). It is a SEPARATE axis from ``kind``: ``kind`` says what the owner must DO (decide / act), ``select_mode`` says how many choices the answer may carry.
+	SelectMode *ReplyCardCreateDTOSelectMode `json:"select_mode,omitempty"`
+	Summary    string                        `json:"summary"`
 }
 
 // ReplyCardCreateDTOKind defines model for ReplyCardCreateDTO.Kind.
 type ReplyCardCreateDTOKind string
 
-// ReplyCardDTO One reply card (等我回覆卡). “from“ is the initiating member (the verified JWT sub at create time). “status“ is the closed set “waiting“ | “answered“ | “expired“ — the only transitions are waiting→answered via an answer (the owner's positive close) and waiting→expired via the expire action (the card's own author, the owner, or an admin agent — T-6020 opened it to the admin floor, T-1b88 widened it to the author) (標為過期 — NOT an answer: the ask went stale and the owner declined it; terminal, no reopen); a revised answer (PUT) keeps “answered“. “chat_message_id“ links the chat message the card rides in (the jump-to-origin anchor); “answered_ts“/“answer“ are null unless answered; “expired_ts“ is null unless expired. “attachments“ are the QUESTION-side attachments the initiator opened the card with (served refs incl. download url; always an array, “[]“ when none).
+// ReplyCardCreateDTOSelectMode How many options the owner may circle: “single“ (the default — at most one, and at most one option may carry “ai_pick“) or “multi“ (any number). It is a SEPARATE axis from “kind“: “kind“ says what the owner must DO (decide / act), “select_mode“ says how many choices the answer may carry.
+type ReplyCardCreateDTOSelectMode string
+
+// ReplyCardDTO One reply card (等我回覆卡). “from“ is the initiating member (the verified JWT sub at create time). “status“ is the closed set “waiting“ | “answered“ | “expired“ — the only transitions are waiting→answered via an answer (the owner's positive close) and waiting→expired via the expire action (the card's own author, the owner, or an admin agent — T-6020 opened it to the admin floor, T-1b88 widened it to the author) (標為過期 — NOT an answer: the ask went stale and the owner declined it; terminal, no reopen); a revised answer (PUT) keeps “answered“. “chat_message_id“ links the chat message the card rides in (the jump-to-origin anchor); “answered_ts“/“answer“ are null unless answered; “expired_ts“ is null unless expired. Each entry of “options“ carries its own “ai_pick“ flag (position means nothing) and “select_mode“ (“single“|“multi“) says how many of them the owner may circle. “attachments“ are the QUESTION-side attachments the initiator opened the card with (served refs incl. download url; always an array, “[]“ when none).
 type ReplyCardDTO struct {
-	Answer        *ReplyCardAnswerDTO  `json:"answer"`
-	AnsweredTs    *float64             `json:"answered_ts"`
-	Attachments   *[]ChatAttachmentDTO `json:"attachments,omitempty"`
-	Body          *string              `json:"body,omitempty"`
-	ChatMessageId string               `json:"chat_message_id"`
-	CreatedTs     *float64             `json:"created_ts,omitempty"`
-	ExpiredTs     *float64             `json:"expired_ts"`
-	From          string               `json:"from"`
-	Id            string               `json:"id"`
-	Kind          string               `json:"kind"`
-	Options       *[]string            `json:"options,omitempty"`
-	Status        string               `json:"status"`
-	Summary       *string              `json:"summary,omitempty"`
-	Task          *TaskRefDTO          `json:"task,omitempty"`
+	Answer        *ReplyCardAnswerDTO   `json:"answer"`
+	AnsweredTs    *float64              `json:"answered_ts"`
+	Attachments   *[]ChatAttachmentDTO  `json:"attachments,omitempty"`
+	Body          *string               `json:"body,omitempty"`
+	ChatMessageId string                `json:"chat_message_id"`
+	CreatedTs     *float64              `json:"created_ts,omitempty"`
+	ExpiredTs     *float64              `json:"expired_ts"`
+	From          string                `json:"from"`
+	Id            string                `json:"id"`
+	Kind          string                `json:"kind"`
+	Options       *[]ReplyCardOptionDTO `json:"options,omitempty"`
+
+	// SelectMode How many options the owner may circle: ``single`` (the default — at most one, and at most one option may carry ``ai_pick``) or ``multi`` (any number). It is a SEPARATE axis from ``kind``: ``kind`` says what the owner must DO (decide / act), ``select_mode`` says how many choices the answer may carry.
+	SelectMode ReplyCardDTOSelectMode `json:"select_mode"`
+	Status     string                 `json:"status"`
+	Summary    *string                `json:"summary,omitempty"`
+	Task       *TaskRefDTO            `json:"task,omitempty"`
 }
+
+// ReplyCardDTOSelectMode How many options the owner may circle: “single“ (the default — at most one, and at most one option may carry “ai_pick“) or “multi“ (any number). It is a SEPARATE axis from “kind“: “kind“ says what the owner must DO (decide / act), “select_mode“ says how many choices the answer may carry.
+type ReplyCardDTOSelectMode string
 
 // ReplyCardLinkDTO The task/step a reply card is about. BOTH ids are required: a card bound to a task but to no step places no 等我回覆 hold, so the task keeps running past the question and the owner's eventual answer is refused (409) — the orphan shape T-4166 exists to make impossible.
 type ReplyCardLinkDTO struct {
@@ -1850,7 +1906,7 @@ type ReplyCardLinkDTO struct {
 	TaskId string `json:"task_id"`
 }
 
-// ReplyCardListItemDTO One LIGHT row of the reply-card list (“GET /api/reply-cards“ / the “list_reply_cards“ MCP tool; owner ruling: 卡只需要 title+決策 — the list carries NO “body“ and NO “options“ full text). “summary“ is the card's title; an answered row carries the decision DIGEST (“answer“: the picked option's index + original wording, an answer-text preview, the attachment COUNT; null otherwise); an expired row carries “expired_ts“ (null otherwise) and NO digest — expiry is not an answer. Everything else — the body, the full option list, the untruncated answer, attachment refs, the chat anchor — is one “get_reply_card“ away. “task“ is the same light task reference the full card carries (null = a plain chat 請示).
+// ReplyCardListItemDTO One LIGHT row of the reply-card list (“GET /api/reply-cards“ / the “list_reply_cards“ MCP tool; owner ruling: 卡只需要 title+決策 — the list carries NO “body“ and NO “options“ full text). “summary“ is the card's title; an answered row carries the decision DIGEST (“answer“: the circled options' indices + their original wording, an answer-text preview, the attachment COUNT; null otherwise); an expired row carries “expired_ts“ (null otherwise) and NO digest — expiry is not an answer. Everything else — the body, the full option list, the untruncated answer, attachment refs, the chat anchor — is one “get_reply_card“ away. “task“ is the same light task reference the full card carries (null = a plain chat 請示).
 type ReplyCardListItemDTO struct {
 	Answer     *ReplyCardAnswerBriefDTO `json:"answer"`
 	AnsweredTs *float64                 `json:"answered_ts"`
@@ -1862,6 +1918,13 @@ type ReplyCardListItemDTO struct {
 	Status     string                   `json:"status"`
 	Summary    *string                  `json:"summary,omitempty"`
 	Task       *TaskRefDTO              `json:"task,omitempty"`
+}
+
+// ReplyCardOptionDTO One quick-reply choice on a reply card. “text“ is the wording as it was offered; “ai_pick“ marks THIS option as the AI's own recommendation and is the ONLY carrier of that fact — it replaced the old positional convention (“options[0]“ = the AI pick), which nothing in the code ever enforced. A “single“ card may mark AT MOST ONE option “ai_pick“ (a second one is a 400); a “multi“ card may mark any number, zero included.
+type ReplyCardOptionDTO struct {
+	// AiPick Whether THIS option is the AI's own recommendation. Marking none is legal; a ``single`` card may mark at most one.
+	AiPick *bool  `json:"ai_pick,omitempty"`
+	Text   string `json:"text"`
 }
 
 // ReportWakingDTO Body for “report_waking()“ — the boot report (identity from token, NO
@@ -4032,7 +4095,7 @@ type ServerInterface interface {
 	// List light reply-card rows (summary and decision digest, without the full body/options). status is waiting (the default, longest-waiting first), answered (the last 24 hours) or expired (the last 24 hours); a positive limit is applied after each pane is ordered. Read one card in full with get_reply_card.
 	// (GET /api/reply-cards)
 	HandleListReplyCardsApiReplyCardsGet(w http.ResponseWriter, r *http.Request, params HandleListReplyCardsApiReplyCardsGetParams)
-	// Open a reply card: an ask the owner must answer (options ≤4, [0]=AI pick). linked_task is REQUIRED and has no default — every card must SAY whether it is about a task, because the server no longer infers one. Send linked_task={"task_id": ..., "step_id": ...} to bind the ask to the step it is about: that step (and its task) enters waiting_owner until the owner answers. Send linked_task=null when the ask is not about a task — it opens as a plain unbound 請示. BOTH ids are required in the object form: a task_id with NO step_id is a 400, because a card bound to a task but to no step places no 等我回覆 hold, so the task would finish underneath your question and the owner's answer would then be rejected for good. Omitting linked_task entirely is a 400 that names both legal shapes. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).
+	// Open a reply card: an ask the owner must answer (options ≤4, each carrying its own ai_pick flag; select_mode single|multi). linked_task is REQUIRED and has no default — every card must SAY whether it is about a task, because the server no longer infers one. Send linked_task={"task_id": ..., "step_id": ...} to bind the ask to the step it is about: that step (and its task) enters waiting_owner until the owner answers. Send linked_task=null when the ask is not about a task — it opens as a plain unbound 請示. BOTH ids are required in the object form: a task_id with NO step_id is a 400, because a card bound to a task but to no step places no 等我回覆 hold, so the task would finish underneath your question and the owner's answer would then be rejected for good. Omitting linked_task entirely is a 400 that names both legal shapes. Optional attachments ride the question (same shape as post_chat: {id} from `ocagent upload` / POST /api/chat/attachments, or inline data_b64).
 	// (POST /api/reply-cards)
 	HandleCreateReplyCardApiReplyCardsPost(w http.ResponseWriter, r *http.Request)
 	// Waiting reply-card count (the cockpit badge).

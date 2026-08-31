@@ -376,7 +376,7 @@ func TestDeleteChatInvolvingCascadesMetaReferencedAttachments(t *testing.T) {
 	}
 	if err := d.PutReplyCard(ReplyCard{
 		ID: "rc-1", FromMember: "m-2", Kind: replyCardKindDecision,
-		Summary: "s", Options: []string{"A"}, Status: replyCardStatusAnswered,
+		Summary: "s", Options: []ReplyCardOption{{Text: "A"}}, Status: replyCardStatusAnswered,
 		AnswerAttachments: []any{
 			map[string]any{"id": "a-card", "mime": "", "filename": ""},
 		},
@@ -697,7 +697,7 @@ func TestDeleteChatInvolvingSparesQuestionSideCardRefs(t *testing.T) {
 	}
 	if err := d.PutReplyCard(ReplyCard{
 		ID: "rc-q", FromMember: "m-1", Kind: replyCardKindDecision,
-		Summary: "s", Options: []string{"A"}, Status: replyCardStatusWaiting,
+		Summary: "s", Options: []ReplyCardOption{{Text: "A"}}, Status: replyCardStatusWaiting,
 		ChatMessageID: "c-card",
 		Attachments: []any{
 			map[string]any{"id": "a-question", "mime": "", "filename": ""},

@@ -597,8 +597,8 @@ func testReplySeen(t *testing.T) *replyCardSeen {
 
 func TestHandleReplyCard_AnsweredPrintsOptionTextAndAttachments(t *testing.T) {
 	srv, _ := replyCardServer(t, 200, `{"id":"rc-1","from":"kyle","status":"answered",
-		"summary":"先做 A 還是 B?","options":["做 A","做 B"],
-		"answer":{"option_idx":1,"text":"順便補測試","attachments":[{"id":"a1"}]}}`)
+		"summary":"先做 A 還是 B?","options":[{"text":"做 A"},{"text":"做 B"}],
+		"answer":{"option_idxs":[1],"text":"順便補測試","attachments":[{"id":"a1"}]}}`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	handleReplyCard(srv.Client(), cfg, replyCardFrame("rc-1", "kyle"), testReplySeen(t), "owner", &out)
@@ -609,9 +609,50 @@ func TestHandleReplyCard_AnsweredPrintsOptionTextAndAttachments(t *testing.T) {
 	}
 }
 
+// A MULTI-SELECT answer must print EVERY circled option, on BOTH paths — this
+// is the live/full-card one. The renderer is the only place the owner's
+// decision becomes words for the session that asked, so an option it drops is a
+// choice the agent never learns about, and nothing else on the line would say
+// so.
+func TestHandleReplyCard_MultiSelectAnswerPrintsEveryCircledOption(t *testing.T) {
+	srv, _ := replyCardServer(t, 200, `{"id":"rc-multi","from":"kyle","status":"answered",
+		"summary":"要帶哪幾項?","select_mode":"multi",
+		"options":[{"text":"甲","ai_pick":true},{"text":"乙"},{"text":"丙"}],
+		"answer":{"option_idxs":[0,2],"text":"","attachments":[]}}`)
+	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
+	var out bytes.Buffer
+	handleReplyCard(srv.Client(), cfg, replyCardFrame("rc-multi", "kyle"), testReplySeen(t), "owner", &out)
+	want := "[ocagent] reply-card rc-multi answered: picked [0] \"甲\" — picked [2] \"丙\" " +
+		"| asked: 要帶哪幾項? · by owner\n"
+	if got := out.String(); got != want {
+		t.Fatalf("multi-select out = %q want %q", got, want)
+	}
+}
+
+// The BOOT/RECONNECT drain path of the same fact: a light row carries no card
+// options at all, so the wording has to come from the digest's own list — one
+// entry per circled index.
+func TestDrainReplyCards_MultiSelectDigestPrintsEveryCircledOption(t *testing.T) {
+	status := 200
+	list := `[{"id":"rc-multi","from":"kyle","kind":"decision","status":"answered",
+		"answered_ts":100,"summary":"要帶哪幾項?","task":null,
+		"answer":{"option_idxs":[0,2],"options":["甲","丙"],"text":"","attachments":0}}]`
+	srv := drainListServer(t, &status, &list)
+	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
+	var out bytes.Buffer
+	if n := drainReplyCards(srv.Client(), cfg, testReplySeen(t), &out); n != 1 {
+		t.Fatalf("drain printed %d, want 1: %q", n, out.String())
+	}
+	want := "[ocagent] reply-card rc-multi answered: picked [0] \"甲\" — picked [2] \"丙\" " +
+		"| asked: 要帶哪幾項?\n"
+	if got := out.String(); got != want {
+		t.Fatalf("multi-select drain out = %q want %q", got, want)
+	}
+}
+
 func TestHandleReplyCard_TextOnlyAnswerPrintsText(t *testing.T) {
 	srv, _ := replyCardServer(t, 200, `{"id":"rc-2","from":"kyle","status":"answered",
-		"summary":"要不要上?","options":["上"],"answer":{"option_idx":null,"text":"先等 CI","attachments":[]}}`)
+		"summary":"要不要上?","options":[{"text":"上"}],"answer":{"option_idxs":null,"text":"先等 CI","attachments":[]}}`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	handleReplyCard(srv.Client(), cfg, replyCardFrame("rc-2", "kyle"), testReplySeen(t), "owner", &out)
@@ -627,7 +668,7 @@ func TestHandleReplyCard_TextOnlyAnswerPrintsText(t *testing.T) {
 func TestHandleReplyCard_PathologicalAnswerTrippedBySafetyValve(t *testing.T) {
 	huge := strings.Repeat("嘮叨", 20000) // ≈ 120 KiB — over the 64 KiB valve
 	srv, _ := replyCardServer(t, 200, `{"id":"rc-big","from":"kyle","status":"answered",
-		"summary":"要不要上?","options":["上"],"answer":{"option_idx":null,"text":"`+huge+`","attachments":[]}}`)
+		"summary":"要不要上?","options":[{"text":"上"}],"answer":{"option_idxs":null,"text":"`+huge+`","attachments":[]}}`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	handleReplyCard(srv.Client(), cfg, replyCardFrame("rc-big", "kyle"), testReplySeen(t), "owner", &out)
@@ -647,7 +688,7 @@ func TestHandleReplyCard_PathologicalAnswerTrippedBySafetyValve(t *testing.T) {
 // the answered line stays one readable event block.
 func TestHandleReplyCard_MultiLineSummaryPrintedInFull(t *testing.T) {
 	srv, _ := replyCardServer(t, 200, `{"id":"rc-ml","from":"kyle","status":"answered",
-		"summary":"選項一\n選項二","options":["上"],"answer":{"option_idx":null,"text":"先等 CI","attachments":[]}}`)
+		"summary":"選項一\n選項二","options":[{"text":"上"}],"answer":{"option_idxs":null,"text":"先等 CI","attachments":[]}}`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	handleReplyCard(srv.Client(), cfg, replyCardFrame("rc-ml", "kyle"), testReplySeen(t), "owner", &out)
@@ -674,7 +715,7 @@ func TestHandleReplyCard_AuthorityFromOverridesPayloadFrom(t *testing.T) {
 	// A lying/junk payload claims the card is mine; the refetched authority says
 	// it is not — silence (the payload never decides).
 	srv, hits := replyCardServer(t, 200, `{"id":"rc-4","from":"someone","status":"answered",
-		"summary":"s","options":["o"],"answer":{"option_idx":0,"text":"","attachments":[]}}`)
+		"summary":"s","options":[{"text":"o"}],"answer":{"option_idxs":[0],"text":"","attachments":[]}}`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	handleReplyCard(srv.Client(), cfg, replyCardFrame("rc-4", "kyle"), testReplySeen(t), "owner", &out)
@@ -687,7 +728,7 @@ func TestHandleReplyCard_AuthorityFromOverridesPayloadFrom(t *testing.T) {
 func TestHandleReplyCard_WaitingCardStaysSilent(t *testing.T) {
 	// My own create rides the same fan (status waiting) — no wake yet.
 	srv, _ := replyCardServer(t, 200, `{"id":"rc-5","from":"kyle","status":"waiting",
-		"summary":"s","options":["o"],"answer":null}`)
+		"summary":"s","options":[{"text":"o"}],"answer":null}`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	handleReplyCard(srv.Client(), cfg, replyCardFrame("rc-5", "kyle"), testReplySeen(t), "owner", &out)
@@ -731,10 +772,10 @@ func TestHandleReplyCard_ReanswerPrintsRevisedAnswer(t *testing.T) {
 	// the ts, so a NEW answer is never swallowed), so the revision reaches the
 	// session too.
 	answers := []string{
-		`{"id":"rc-7","from":"kyle","status":"answered","summary":"s","options":["A","B"],
-			"answered_ts":100,"answer":{"option_idx":0,"text":"","attachments":[]}}`,
-		`{"id":"rc-7","from":"kyle","status":"answered","summary":"s","options":["A","B"],
-			"answered_ts":200,"answer":{"option_idx":1,"text":"改走 B","attachments":[]}}`,
+		`{"id":"rc-7","from":"kyle","status":"answered","summary":"s","options":[{"text":"A"},{"text":"B"}],
+			"answered_ts":100,"answer":{"option_idxs":[0],"text":"","attachments":[]}}`,
+		`{"id":"rc-7","from":"kyle","status":"answered","summary":"s","options":[{"text":"A"},{"text":"B"}],
+			"answered_ts":200,"answer":{"option_idxs":[1],"text":"改走 B","attachments":[]}}`,
 	}
 	var call int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -757,8 +798,8 @@ func TestHandleReplyCard_ReanswerPrintsRevisedAnswer(t *testing.T) {
 
 func TestHandleReplyCard_DuplicateDeltaSameAnswerPrintsOnce(t *testing.T) {
 	srv, _ := replyCardServer(t, 200, `{"id":"rc-8","from":"kyle","status":"answered",
-		"summary":"s","options":["A"],"answered_ts":100,
-		"answer":{"option_idx":0,"text":"","attachments":[]}}`)
+		"summary":"s","options":[{"text":"A"}],"answered_ts":100,
+		"answer":{"option_idxs":[0],"text":"","attachments":[]}}`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	seen := testReplySeen(t)
 	var out bytes.Buffer
@@ -773,7 +814,7 @@ func TestHandleReplyCard_ExpiredPrintsGuidanceLine(t *testing.T) {
 	// T-1aa4: an owner-expired card wakes the initiator with a self-carrying
 	// guidance line (reopen fresh vs move on) — not the answered line.
 	srv, _ := replyCardServer(t, 200, `{"id":"rc-x1","from":"kyle","status":"expired",
-		"summary":"還要等這個嗎?","options":["等"],"expired_ts":100,"answer":null}`)
+		"summary":"還要等這個嗎?","options":[{"text":"等"}],"expired_ts":100,"answer":null}`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	var out bytes.Buffer
 	handleReplyCard(srv.Client(), cfg, replyCardFrame("rc-x1", "kyle"), testReplySeen(t), "owner", &out)
@@ -788,7 +829,7 @@ func TestHandleReplyCard_ExpiredPrintsGuidanceLine(t *testing.T) {
 
 func TestHandleReplyCard_DuplicateDeltaSameExpiryPrintsOnce(t *testing.T) {
 	srv, _ := replyCardServer(t, 200, `{"id":"rc-x2","from":"kyle","status":"expired",
-		"summary":"s","options":["A"],"expired_ts":150,"answer":null}`)
+		"summary":"s","options":[{"text":"A"}],"expired_ts":150,"answer":null}`)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	seen := testReplySeen(t)
 	var out bytes.Buffer
@@ -837,25 +878,25 @@ func drainPanesServer(t *testing.T, status *int, answered, expired *string) *htt
 
 // answeredCardJSON is one answered LIGHT list row — the exact shape the server
 // serves on GET /api/reply-cards since T-3f31 (卡只需要 title+決策): NO body /
-// options full text; the decision digest carries the picked option's ORIGINAL
-// wording as answer.option and the attachments as a COUNT (a JSON number).
+// options full text; the decision digest carries the circled options' ORIGINAL
+// wording as answer.options and the attachments as a COUNT (a JSON number).
 func answeredCardJSON(id string, ts float64, summary string) string {
 	return fmt.Sprintf(`{"id":%q,"from":"kyle","kind":"decision","status":"answered",
 		"answered_ts":%v,"summary":%q,"task":null,
-		"answer":{"option_idx":0,"option":"ok","text":"","attachments":0}}`,
+		"answer":{"option_idxs":[0],"options":["ok"],"text":"","attachments":0}}`,
 		id, ts, summary)
 }
 
 func TestDrainReplyCards_LightRowDigestPrintsWordingAndAttachmentCount(t *testing.T) {
 	// The drain consumes the LIGHT pane rows directly (no per-id refetch):
-	// the printed line must take the picked option's wording from the digest's
-	// answer.option (no options array exists on a light row) and the
+	// the printed line must take the circled options' wording from the digest's
+	// answer.options (the card's own options never ride a light row) and the
 	// attachment count from the digest's NUMBER — the two spots the pre-T-3f31
 	// renderer would have silently dropped.
 	status := 200
 	list := `[{"id":"rc-light","from":"kyle","kind":"decision","status":"answered",
 		"answered_ts":100,"summary":"走哪個方案?","task":null,
-		"answer":{"option_idx":1,"option":"方案 B","text":"補個理由","attachments":2}}]`
+		"answer":{"option_idxs":[1],"options":["方案 B"],"text":"補個理由","attachments":2}}]`
 	srv := drainListServer(t, &status, &list)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
 	seen := testReplySeen(t)
@@ -899,7 +940,7 @@ func TestDrainReplyCards_PrintsOnlyMyNewAnswersOldestFirst(t *testing.T) {
 	// already surfaced at this exact answered_ts.
 	list := `[` + answeredCardJSON("rc-new2", 300, "later?") + `,
 		{"id":"rc-other","from":"someone","status":"answered","answered_ts":250,
-		 "summary":"not mine","options":["x"],"answer":{"option_idx":0,"text":"","attachments":[]}},` +
+		 "summary":"not mine","options":[{"text":"x"}],"answer":{"option_idxs":[0],"text":"","attachments":[]}},` +
 		answeredCardJSON("rc-seen", 150, "seen?") + `,` + answeredCardJSON("rc-new1", 100, "earlier?") + `]`
 	srv := drainListServer(t, &status, &list)
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle"}
@@ -920,8 +961,8 @@ func TestDrainReplyCards_SkipsWhatTheLiveDeltaAlreadyPrinted(t *testing.T) {
 	// The live handler surfaced the answer (and recorded it) while connected —
 	// the next reconnect drain must stay quiet about it.
 	cardSrv, _ := replyCardServer(t, 200, `{"id":"rc-live","from":"kyle","status":"answered",
-		"summary":"live?","options":["ok"],"answered_ts":100,
-		"answer":{"option_idx":0,"text":"","attachments":[]}}`)
+		"summary":"live?","options":[{"text":"ok"}],"answered_ts":100,
+		"answer":{"option_idxs":[0],"text":"","attachments":[]}}`)
 	cfg := Config{Base: cardSrv.URL, Token: "t", ID: "kyle"}
 	seen := testReplySeen(t)
 	var out bytes.Buffer
@@ -1400,8 +1441,8 @@ func eventsServer(frames []string, chatList string, gotLastEventID *string, conn
 		if strings.HasPrefix(r.URL.Path, "/api/reply-cards/") {
 			w.WriteHeader(200)
 			_, _ = w.Write([]byte(`{"id":"rc-9","from":"kyle","status":"answered",
-				"summary":"ship it?","options":["ship","hold"],
-				"answer":{"option_idx":0,"text":"","attachments":[]}}`))
+				"summary":"ship it?","options":[{"text":"ship"},{"text":"hold"}],
+				"answer":{"option_idxs":[0],"text":"","attachments":[]}}`))
 			return
 		}
 		if !strings.HasPrefix(r.URL.Path, eventsPath) {

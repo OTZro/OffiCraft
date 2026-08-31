@@ -90,7 +90,8 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "要現在同步到 Jira 嗎？",
     body: "",
-    options: ["核可，直接同步上去", "先不要"],
+    options: [{ text: "核可，直接同步上去", aiPick: false }, { text: "先不要", aiPick: true }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     createdTs: Date.now() / 1000 - 600,
@@ -837,19 +838,25 @@ describe("TasksPage", () => {
     // collapsed) — expand first.
     fireEvent.click(await findByTestId("task-card"));
     const embedded = await findByTestId("task-reply-card");
-    // The SHARED M2 interior: options[0] carries the AI 建議 tag.
+    // The SHARED M2 interior: the ai_pick option carries the AI 建議 tag.
+    // Each chip WHOLE — its number, its wording, and exactly the tags earned.
+    // The tagged option is deliberately NOT the first one: a chip that reads its
+    // own position instead of its own ai_pick flag tags the wrong chip here.
     const options = embedded.querySelectorAll(".reply-option");
-    expect(options).toHaveLength(2);
-    expect(options[0].textContent).toContain("AI 建議");
+    expect([...options].map((e) => e.textContent)).toEqual([
+      "1核可，直接同步上去",
+      "2先不要AI 建議",
+    ]);
 
-    // Answer by option → the card flips answered in place.
-    fireEvent.click(options[0]);
+    // Tick an option, then send → the card flips answered in place.
+    fireEvent.click(options[1]);
+    fireEvent.click(embedded.querySelector(".chat__send")!);
     await waitFor(async () => {
       expect(
         (await findByTestId("task-reply-card")).querySelector(
           '[data-testid="final-answer"]'
         )?.textContent
-      ).toContain("你選的");
+      ).toBe("你選的AI 建議先不要");
     });
     // The 等我回覆 page shares the same store: the card is answered there too.
     const answered = await api.listReplyCards("answered");

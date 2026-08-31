@@ -412,7 +412,7 @@ func TestBoundCardArmsTheGateStepAndFlipsTheTask(t *testing.T) {
 	api.HandleCreateReplyCardApiReplyCardsPost(rec,
 		taskReq(t, "POST", "/api/reply-cards", map[string]any{
 			"kind": "decision", "summary": "ship it?",
-			"options":     []string{"ship", "hold"},
+			"options":     []map[string]any{{"text": "ship"}, {"text": "hold"}},
 			"linked_task": map[string]any{"task_id": task.ID, "step_id": gateStep.ID},
 		}, "m-exec", "agent"))
 	if rec.Code != http.StatusOK {
@@ -458,7 +458,7 @@ func openCardOnStep(t *testing.T, api *apiServer, taskID, actor, stepID, summary
 	rec := httptest.NewRecorder()
 	api.HandleCreateReplyCardApiReplyCardsPost(rec,
 		taskReq(t, "POST", "/api/reply-cards", map[string]any{
-			"kind": "decision", "summary": summary, "options": []string{"a", "b"},
+			"kind": "decision", "summary": summary, "options": []map[string]any{{"text": "a"}, {"text": "b"}},
 			"linked_task": map[string]any{"task_id": taskID, "step_id": stepID},
 		}, actor, "agent"))
 	if rec.Code != http.StatusOK {
@@ -522,7 +522,7 @@ func TestAnsweringACardResumesTheTaskAndStep(t *testing.T) {
 	card := openCardOnStep(t, api, task.ID, "m-exec", gateStep.ID, "go?")
 
 	if rec := answerCard(t, api, card.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 	step, _ := api.dal.GetTaskStep(gateStep.ID)
@@ -584,7 +584,7 @@ func TestAnsweringACardOnATerminatedOrDoneTaskIsRejected(t *testing.T) {
 			strandLegacyOrphanCard(t, api, card.ID)
 			beforeUpdatedTS := stored.UpdatedTS
 
-			rec := answerCard(t, api, card.ID, map[string]any{"option_idx": 0})
+			rec := answerCard(t, api, card.ID, map[string]any{"option_idxs": []int{0}})
 			if rec.Code != http.StatusConflict {
 				t.Fatalf("answering an orphaned card on a %s task must 409, got %d %s",
 					status, rec.Code, rec.Body.String())
@@ -644,7 +644,7 @@ func TestAnsweringOneOfTwoCardsKeepsTheTaskWaiting(t *testing.T) {
 
 	// Answer the first: its step resumes, but the task stays waiting (card2).
 	if rec := answerCard(t, api, card1.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer 1: %d %s", rec.Code, rec.Body.String())
 	}
 	if s0, _ := api.dal.GetTaskStep(view.Steps[0].ID); s0.Status != StepStatusInProgress {
@@ -656,7 +656,7 @@ func TestAnsweringOneOfTwoCardsKeepsTheTaskWaiting(t *testing.T) {
 
 	// Answer the last: now the task resumes too.
 	if rec := answerCard(t, api, card2.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer 2: %d %s", rec.Code, rec.Body.String())
 	}
 	if got, _ := api.dal.GetTask(task.ID); got.Status != TaskStatusInProgress {
@@ -684,7 +684,7 @@ func TestBoundCardArmsANonGatePlainStep(t *testing.T) {
 	rec := httptest.NewRecorder()
 	api.HandleCreateReplyCardApiReplyCardsPost(rec,
 		taskReq(t, "POST", "/api/reply-cards", map[string]any{
-			"kind": "decision", "summary": "which cloud?", "options": []string{"aws", "gcp"},
+			"kind": "decision", "summary": "which cloud?", "options": []map[string]any{{"text": "aws"}, {"text": "gcp"}},
 			"linked_task": map[string]any{"task_id": task.ID, "step_id": plainStep.ID},
 		}, "m-exec", "agent"))
 	if rec.Code != http.StatusOK {
@@ -1655,7 +1655,7 @@ func TestSubmitPlanFreezesAnsweredCardStepsAsSuperseded(t *testing.T) {
 	// "ask direction" gets an ANSWERED card; "pending ask" a still-WAITING one.
 	answered := openCardOnStep(t, api, task.ID, "m-exec", v1.Steps[1].ID, "which way?")
 	if rec := answerCard(t, api, answered.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 	waiting := openCardOnStep(t, api, task.ID, "m-exec", v1.Steps[2].ID, "later?")
@@ -1721,7 +1721,7 @@ func TestSubmitPlanFreezesAnsweredCardStepsAsSuperseded(t *testing.T) {
 	// removed step (releaseCardHold's guards) — 200, and the task resumes
 	// in_progress since no other card waits.
 	if rec := answerCard(t, api, waiting.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answering the orphaned card must still 200: %d %s",
 			rec.Code, rec.Body.String())
 	}
@@ -1744,7 +1744,7 @@ func TestSubmitPlanRelistingAnsweredCardStepContinuesTheLiveRow(t *testing.T) {
 	startFirstStep(t, api, task.ID, "m-exec")
 	card := openCardOnStep(t, api, task.ID, "m-exec", v1.Steps[0].ID, "which way?")
 	if rec := answerCard(t, api, card.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 	v2 := submitPlan(t, api, task.ID, "m-exec", []map[string]any{
@@ -1818,7 +1818,7 @@ func TestSupersededIsTerminalOnEveryWriteFace(t *testing.T) {
 	}
 	card := openCardOnStep(t, api, task.ID, "m-exec", v1.Steps[0].ID, "which way?")
 	if rec := answerCard(t, api, card.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 	v2 := submitPlan(t, api, task.ID, "m-exec", []map[string]any{
@@ -1844,7 +1844,7 @@ func TestSupersededIsTerminalOnEveryWriteFace(t *testing.T) {
 	rec := httptest.NewRecorder()
 	api.HandleCreateReplyCardApiReplyCardsPost(rec,
 		taskReq(t, "POST", "/api/reply-cards", map[string]any{
-			"kind": "decision", "summary": "again?", "options": []string{"a", "b"},
+			"kind": "decision", "summary": "again?", "options": []map[string]any{{"text": "a"}, {"text": "b"}},
 			"linked_task": map[string]any{"task_id": task.ID, "step_id": frozenID},
 		}, "m-exec", "agent"))
 	if rec.Code != http.StatusConflict ||
@@ -2378,7 +2378,7 @@ func TestResumeSummaryCarriesTheCallersOpenTasksAsLightRows(t *testing.T) {
 	api.HandleCreateReplyCardApiReplyCardsPost(rec,
 		taskReq(t, "POST", "/api/reply-cards", map[string]any{
 			"kind": "decision", "summary": "go?",
-			"options":     []string{"go", "hold"},
+			"options":     []map[string]any{{"text": "go"}, {"text": "hold"}},
 			"linked_task": map[string]any{"task_id": task.ID, "step_id": view.Steps[2].ID},
 		}, "m-exec", "agent"))
 	if rec.Code != http.StatusOK {

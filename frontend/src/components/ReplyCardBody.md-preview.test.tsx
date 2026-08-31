@@ -41,7 +41,8 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "看一下這份設計文件，可以嗎？",
     body: "",
-    options: ["可以", "再調整"],
+    options: [{ text: "可以", aiPick: true }, { text: "再調整", aiPick: false }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     createdTs: Date.now() / 1000 - 600,
@@ -151,7 +152,7 @@ describe("reply-card ANSWER attachments: .md preview (T-7bc2)", () => {
     const card = mkCard({
       status: "answered",
       answer: {
-        optionIdx: null,
+        optionIdxs: null,
         text: "附上結果文件",
         attachments: [mdAtt("att-ans-md")],
       },

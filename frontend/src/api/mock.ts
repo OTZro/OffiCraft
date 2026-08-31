@@ -947,11 +947,21 @@ function emitTopic(topic: string): void {
   for (const cb of [...topicSubscribers]) cb(topic);
 }
 
+/** The circled indices as the SERVER stores them: deduped + ascending, so
+ * `[2,0]` and `[0,2]` are the same stored answer. */
+function storedOptionIdxs(idxs: number[]): number[] {
+  return [...new Set(idxs)].sort((a, b) => a - b);
+}
+
 /** Answer-input validation shared by answer/re-answer — mirrors the server's
- * 400s: an empty answer (no option, no text, no attachments) and an
- * out-of-range option_idx are both rejected. */
+ * 400s: an empty answer (no option, no text, no attachments) is rejected, and
+ * an EMPTY `optionIdxs` list counts as empty rather than as an answer (the
+ * server's len() guard — a nil check would let `[]` through and close the card
+ * on nothing); an out-of-range index is rejected; and a `single` card given
+ * more than one index is rejected. */
 function validateReplyAnswer(card: ReplyCard, answer: ReplyCardAnswerInput) {
-  const hasOption = answer.optionIdx !== undefined && answer.optionIdx !== null;
+  const idxs = answer.optionIdxs ?? [];
+  const hasOption = idxs.length > 0;
   const hasText = (answer.text ?? "").trim().length > 0;
   const hasAtts = (answer.attachments ?? []).length > 0;
   if (!hasOption && !hasText && !hasAtts) {
@@ -961,15 +971,21 @@ function validateReplyAnswer(card: ReplyCard, answer: ReplyCardAnswerInput) {
       "an answer needs an option, text, or attachments"
     );
   }
-  if (hasOption) {
-    const idx = answer.optionIdx as number;
+  for (const idx of idxs) {
     if (idx < 0 || idx >= card.options.length) {
       throw mockApiError(
         `http 400 for answer /api/reply-cards/${card.id}/answer`,
         400,
-        `option_idx ${idx} out of range`
+        `option_idxs out of range: ${idx}`
       );
     }
+  }
+  if (card.selectMode !== "multi" && storedOptionIdxs(idxs).length > 1) {
+    throw mockApiError(
+      `http 400 for answer /api/reply-cards/${card.id}/answer`,
+      400,
+      "this card takes at most one option"
+    );
   }
 }
 
@@ -995,8 +1011,9 @@ function toStoredReplyAnswer(
       };
     }
   );
+  const idxs = answer.optionIdxs ?? [];
   return {
-    optionIdx: answer.optionIdx ?? null,
+    optionIdxs: idxs.length > 0 ? storedOptionIdxs(idxs) : null,
     text: (answer.text ?? "").trim(),
     attachments,
   };

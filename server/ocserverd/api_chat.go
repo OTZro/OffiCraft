@@ -1513,11 +1513,11 @@ func (s *apiServer) resumeChatMessageDTO(subject string, m ChatMessage, names ma
 			if c.FromMember == subject {
 				options := c.Options
 				if options == nil {
-					options = []string{}
+					options = []ReplyCardOption{}
 				}
 				d.Card = &chatInlineReplyCardDTO{
 					Options:           options,
-					AnswerOptionIdx:   c.AnswerOptionIdx,
+					AnswerOptionIdxs:  c.AnswerOptionIdxs,
 					AnswerText:        c.AnswerText,
 					AnsweredTS:        c.AnsweredTS,
 					AnsweredAtDisplay: resumeDisplayTime(c.AnsweredTS),
@@ -1581,12 +1581,12 @@ func resumeChatMessageChars(d chatMessageDTO) int {
 	}
 	if d.Card != nil {
 		for _, o := range d.Card.Options {
-			n += utf8.RuneCountInString(o)
+			n += utf8.RuneCountInString(o.Text)
 		}
 		n += utf8.RuneCountInString(d.Card.AnswerText) +
 			utf8.RuneCountInString(d.Card.AnsweredAtDisplay)
-		if d.Card.AnswerOptionIdx != nil {
-			n += len(strconv.Itoa(*d.Card.AnswerOptionIdx))
+		for _, idx := range d.Card.AnswerOptionIdxs {
+			n += len(strconv.Itoa(idx))
 		}
 	}
 	return n

@@ -1831,23 +1831,46 @@ func (d *DAL) PutMachineAlias(a MachineAlias) error {
 
 // ── reply cards (等我回覆卡) ─────────────────────────────────────────────────
 
-// ReplyCard mirrors the reply_card table (migrations/00003): one ask the owner
-// must answer. Options is the frozen quick-reply wording ([0] = the AI pick);
-// AnswerAttachments are light refs into the shared chat_attachment store, the
-// same shape as chat meta["attachments"].
+// ReplyCardOption is one frozen quick-reply choice (migrations/00065). AIPick
+// — not the option's POSITION — is what marks the AI's own recommendation. The
+// old convention ("options[0] is the AI pick") lived in prose only: no code
+// ever read index 0 as special, so nothing enforced it and nothing broke when
+// it was ignored. This field is that fact made executable.
+type ReplyCardOption struct {
+	Text   string `json:"text"`
+	AIPick bool   `json:"ai_pick"`
+}
+
+// ReplyCard mirrors the reply_card table (migrations/00003, 00065): one ask the
+// owner must answer. Options is the frozen quick-reply wording, each choice
+// carrying its own AIPick flag; AnswerAttachments are light refs into the
+// shared chat_attachment store, the same shape as chat meta["attachments"].
 type ReplyCard struct {
-	ID                string
-	FromMember        string
-	Kind              string // closed set: "decision" | "action" (schema CHECK)
-	Summary           string
-	Body              string
-	Options           []string
-	Status            string // "waiting" | "answered" | "expired" (closed set in code; migrations/00013 dropped the CHECK)
-	CreatedTS         float64
-	AnsweredTS        float64 // 0.0 while waiting; latest answer time after
-	ExpiredTS         float64 // 0.0 unless expired; when the expire action ran
-	ChatMessageID     string
-	AnswerOptionIdx   *int // nil = free-text-only answer (or not answered yet)
+	ID         string
+	FromMember string
+	Kind       string // closed set: "decision" | "action" (schema CHECK)
+	Summary    string
+	Body       string
+	Options    []ReplyCardOption
+	// SelectMode is the closed set "single" | "multi" (closed in code, no
+	// schema CHECK — the 00013 posture). It is ORTHOGONAL to Kind: Kind says
+	// what the owner must DO, SelectMode says how many options the answer may
+	// carry.
+	SelectMode    string
+	Status        string // "waiting" | "answered" | "expired" (closed set in code; migrations/00013 dropped the CHECK)
+	CreatedTS     float64
+	AnsweredTS    float64 // 0.0 while waiting; latest answer time after
+	ExpiredTS     float64 // 0.0 unless expired; when the expire action ran
+	ChatMessageID string
+	// AnswerOptionIdxs are the circled options' indices, stored DEDUPED and
+	// ASCENDING so that two answers circling the same options are byte-equal
+	// whatever order the owner clicked them in. nil = the answer carried no
+	// option at all (free text / attachments only, or not answered yet).
+	//
+	// ⚠️ nil and an EMPTY non-nil slice are the same thing to every reader
+	// here, and a nil check does NOT catch the empty one — test emptiness with
+	// len(), never with == nil.
+	AnswerOptionIdxs  []int
 	AnswerText        string
 	AnswerAttachments []any // [{id, mime, filename}] refs (chat_attachment ids)
 	// Attachments are the QUESTION-side refs the initiator opened the card
@@ -1862,18 +1885,19 @@ type ReplyCard struct {
 }
 
 const replyCardColumns = `id, from_member, kind, summary, body, options,
-	status, created_ts, answered_ts, expired_ts, chat_message_id,
-	answer_option_idx, answer_text, answer_attachments, attachments,
+	select_mode, status, created_ts, answered_ts, expired_ts, chat_message_id,
+	answer_option_idxs, answer_text, answer_attachments, attachments,
 	task_id, task_step_id`
 
 func scanReplyCard(row interface{ Scan(...any) error }) (ReplyCard, error) {
 	var c ReplyCard
 	var options, answerAttachments, attachments string
-	var optionIdx sql.NullInt64
+	var optionIdxs sql.NullString
 	err := row.Scan(
 		&c.ID, &c.FromMember, &c.Kind, &c.Summary, &c.Body, &options,
-		&c.Status, &c.CreatedTS, &c.AnsweredTS, &c.ExpiredTS, &c.ChatMessageID,
-		&optionIdx, &c.AnswerText, &answerAttachments, &attachments,
+		&c.SelectMode, &c.Status, &c.CreatedTS, &c.AnsweredTS, &c.ExpiredTS,
+		&c.ChatMessageID,
+		&optionIdxs, &c.AnswerText, &answerAttachments, &attachments,
 		&c.TaskID, &c.TaskStepID,
 	)
 	if err != nil {
@@ -1888,9 +1912,10 @@ func scanReplyCard(row interface{ Scan(...any) error }) (ReplyCard, error) {
 	if err := json.Unmarshal([]byte(attachments), &c.Attachments); err != nil {
 		return ReplyCard{}, fmt.Errorf("reply_card %s: bad attachments JSON: %w", c.ID, err)
 	}
-	if optionIdx.Valid {
-		idx := int(optionIdx.Int64)
-		c.AnswerOptionIdx = &idx
+	if optionIdxs.Valid {
+		if err := json.Unmarshal([]byte(optionIdxs.String), &c.AnswerOptionIdxs); err != nil {
+			return ReplyCard{}, fmt.Errorf("reply_card %s: bad answer_option_idxs JSON: %w", c.ID, err)
+		}
 	}
 	return c, nil
 }
@@ -2026,7 +2051,7 @@ func (d *DAL) PutReplyCard(c ReplyCard) error { return putReplyCardOn(d.wdb, c) 
 func putReplyCardOn(ex sqlExecer, c ReplyCard) error {
 	options := c.Options
 	if options == nil {
-		options = []string{}
+		options = []ReplyCardOption{}
 	}
 	answerAttachments := c.AnswerAttachments
 	if answerAttachments == nil {
@@ -2048,28 +2073,40 @@ func putReplyCardOn(ex sqlExecer, c ReplyCard) error {
 	if err != nil {
 		return err
 	}
-	var optionIdx any
-	if c.AnswerOptionIdx != nil {
-		optionIdx = *c.AnswerOptionIdx
+	selectMode := c.SelectMode
+	if selectMode == "" {
+		selectMode = replyCardSelectModeSingle
+	}
+	// nil AND empty both store as SQL NULL: "no option was circled" has one
+	// representation on disk, so a round trip cannot turn [] into an answer.
+	var optionIdxs any
+	if len(c.AnswerOptionIdxs) > 0 {
+		blob, err := json.Marshal(c.AnswerOptionIdxs)
+		if err != nil {
+			return err
+		}
+		optionIdxs = string(blob)
 	}
 	_, err = ex.Exec(`
 		INSERT INTO reply_card (`+replyCardColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			from_member = excluded.from_member, kind = excluded.kind,
 			summary = excluded.summary, body = excluded.body,
-			options = excluded.options, status = excluded.status,
+			options = excluded.options, select_mode = excluded.select_mode,
+			status = excluded.status,
 			created_ts = excluded.created_ts, answered_ts = excluded.answered_ts,
 			expired_ts = excluded.expired_ts,
 			chat_message_id = excluded.chat_message_id,
-			answer_option_idx = excluded.answer_option_idx,
+			answer_option_idxs = excluded.answer_option_idxs,
 			answer_text = excluded.answer_text,
 			answer_attachments = excluded.answer_attachments,
 			attachments = excluded.attachments,
 			task_id = excluded.task_id, task_step_id = excluded.task_step_id`,
 		c.ID, c.FromMember, c.Kind, c.Summary, c.Body, string(optionsBlob),
-		c.Status, c.CreatedTS, c.AnsweredTS, c.ExpiredTS, c.ChatMessageID,
-		optionIdx, c.AnswerText, string(answerAttachmentsBlob),
+		selectMode, c.Status, c.CreatedTS, c.AnsweredTS, c.ExpiredTS,
+		c.ChatMessageID,
+		optionIdxs, c.AnswerText, string(answerAttachmentsBlob),
 		string(attachmentsBlob), c.TaskID, c.TaskStepID,
 	)
 	return err

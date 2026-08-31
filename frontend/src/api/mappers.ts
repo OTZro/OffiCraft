@@ -77,6 +77,7 @@ import type {
   WireChatRead,
   WireChatGalleryEntry,
   WireReplyCard,
+  WireReplyCardOption,
   WireWebhookEndpoint,
   WireWebhookRequestLog,
   WireScheduledMessage,
@@ -104,6 +105,7 @@ import type {
   ChatReadReceipt,
   GalleryAttachment,
   ReplyCard,
+  ReplyCardOption,
   ServerSettingsView,
   OnboardingReportView,
   TaskView,
@@ -354,16 +356,19 @@ export function toChatMessage(w: WireChatMessage): ChatMessage {
 }
 
 /** Map one wire in-place reply card (`ChatMessageDTO.card`) → the view model.
- * Pure passthrough of the DECISION fields; `answer_option_idx` keeps its
- * three-way meaning (a number = that option was picked, null = free text only
- * or not answered yet), so it is NOT coerced to a sentinel index. */
+ * Pure passthrough of the DECISION fields; `answer_option_idxs` keeps its
+ * three-way meaning (a list = those options were circled, null = free text only
+ * or not answered yet), so an absent list is NOT coerced to an empty one — the
+ * card face draws 「你選的」 off membership in this list, and an empty list and
+ * a null one must not both mean "answered with nothing". */
 export function toChatInlineReplyCard(
   w: WireChatInlineReplyCard,
 ): ChatInlineReplyCardView {
   return {
-    options: w.options ?? [],
-    answerOptionIdx:
-      typeof w.answer_option_idx === "number" ? w.answer_option_idx : null,
+    options: (w.options ?? []).map(toReplyCardOption),
+    answerOptionIdxs: Array.isArray(w.answer_option_idxs)
+      ? w.answer_option_idxs
+      : null,
     answerText: w.answer_text ?? "",
     answeredTs: w.answered_ts ?? 0,
     answeredAtDisplay: w.answered_at_display ?? "",
@@ -394,6 +399,13 @@ export function toGalleryAttachment(
  * `answer` stays null unless answered (never fabricated); the wire guarantees
  * `status` ∈ {waiting, answered, expired} (the narrowing cast mirrors
  * `toMember`'s). */
+/** Map one wire quick-reply option → the view model. `ai_pick` defaults FALSE
+ * when the wire omits it: an unmarked option is not the AI's recommendation,
+ * and there is no positional fallback to guess with. */
+export function toReplyCardOption(w: WireReplyCardOption): ReplyCardOption {
+  return { text: w.text, aiPick: w.ai_pick ?? false };
+}
+
 export function toReplyCard(w: WireReplyCard): ReplyCard {
   return {
     id: w.id,
@@ -401,7 +413,8 @@ export function toReplyCard(w: WireReplyCard): ReplyCard {
     kind: w.kind,
     summary: w.summary ?? "",
     body: w.body ?? "",
-    options: w.options ?? [],
+    options: (w.options ?? []).map(toReplyCardOption),
+    selectMode: w.select_mode,
     status: w.status as ReplyCard["status"],
     // QUESTION-side attachments (T-5e8a): honest passthrough of the served
     // refs — an absent/defaulted wire field reads as an empty list.
@@ -427,7 +440,7 @@ export function toReplyCard(w: WireReplyCard): ReplyCard {
       : null,
     answer: w.answer
       ? {
-          optionIdx: w.answer.option_idx,
+          optionIdxs: w.answer.option_idxs,
           text: w.answer.text ?? "",
           attachments: (w.answer.attachments ?? []).map((a) => ({
             id: a.id,

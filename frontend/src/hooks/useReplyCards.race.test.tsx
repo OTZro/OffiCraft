@@ -56,6 +56,7 @@ function card(id: string): ReplyCard {
     summary: `q-${id}`,
     body: "",
     options: [],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     createdTs: 1000,

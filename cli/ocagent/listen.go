@@ -1210,26 +1210,48 @@ func printReplyCardExpired(out io.Writer, id string, card map[string]any, trigge
 		id, renderMessageBody(strOrEmpty(card["summary"]), replyCardBodyAuthority), byTrigger(trigger))
 }
 
-// renderReplyCardAnswer renders a card's answer as ONE terse fragment: the
-// picked option's ORIGINAL wording (the option index alone is meaningless to
-// a session), any typed text, and an attachment count. It accepts BOTH wire
-// shapes the two callers feed it (T-3f31):
-//   - the FULL card (the live delta path's per-id refetch): the wording sits
-//     in the card's options array; answer.attachments is the refs ARRAY;
-//   - the LIGHT list row (the boot/reconnect drain's answered pane): no
-//     options ride the row — the digest carries the wording as answer.option
-//     and the attachments as a COUNT (a JSON number).
+// renderReplyCardAnswer renders a card's answer as ONE terse fragment: EVERY
+// circled option's ORIGINAL wording (an index alone is meaningless to a
+// session), any typed text, and an attachment count. This is the only place the
+// owner's decision becomes words for the session that asked, so an option the
+// owner circled and this line drops is a choice the agent never learns about.
+//
+// It accepts BOTH wire shapes the two callers feed it (T-3f31), and T-40
+// changed BOTH of them:
+//   - the FULL card (the live delta path's per-id refetch): answer.option_idxs
+//     is a LIST of indices into the card's options, whose entries are now
+//     OBJECTS ({text, ai_pick}) rather than strings; answer.attachments is the
+//     refs ARRAY;
+//   - the LIGHT list row (the boot/reconnect drain's answered pane): no options
+//     ride the row — the digest carries the wording as answer.options (a list,
+//     one entry per circled index) and the attachments as a COUNT (a number).
+//
+// ⚠️ A field RENAME is invisible here: a map lookup that misses returns the zero
+// value and no error, so the pre-T-40 `answer["option_idx"]` would simply stop
+// matching and the whole picked-options clause would vanish — no panic, no log,
+// and an owner who only circled options would read a bare "(empty answer)".
 func renderReplyCardAnswer(card map[string]any) string {
 	answer, _ := card["answer"].(map[string]any)
 	var parts []string
 	if answer != nil {
-		if idx, ok := answer["option_idx"].(float64); ok {
+		idxs, _ := answer["option_idxs"].([]any)
+		// The light digest's own wording list wins when present; otherwise the
+		// wording is resolved out of the full card's options array.
+		digest, _ := answer["options"].([]any)
+		fullOptions, _ := card["options"].([]any)
+		for n, raw := range idxs {
+			idx, ok := raw.(float64)
+			if !ok {
+				continue
+			}
 			i := int(idx)
-			wording := strings.TrimSpace(strOrEmpty(answer["option"])) // light digest
-			if wording == "" {
-				if opts, _ := card["options"].([]any); i >= 0 && i < len(opts) {
-					wording = strOrEmpty(opts[i]) // full card
-				}
+			wording := ""
+			if n < len(digest) {
+				wording = strings.TrimSpace(strOrEmpty(digest[n]))
+			}
+			if wording == "" && i >= 0 && i < len(fullOptions) {
+				opt, _ := fullOptions[i].(map[string]any)
+				wording = strings.TrimSpace(strOrEmpty(opt["text"]))
 			}
 			if wording != "" {
 				parts = append(parts, fmt.Sprintf("picked [%d] %q", i, wording))
@@ -1268,9 +1290,9 @@ func renderReplyCardAnswer(card map[string]any) string {
 // above never fires. The drain closes that hole: on EVERY successful stream
 // open (boot and each reconnect) it refetches the answered AND expired panes
 // (GET /api/reply-cards?status=answered / ?status=expired — the server's 24h
-// authorities; LIGHT rows since T-3f31, whose decision digest — answer.option
-// wording, text preview, attachment COUNT — is exactly what the printed line
-// needs) and prints MY cards whose answer/expiry was not yet surfaced. Beyond
+// authorities; LIGHT rows since T-3f31, whose decision digest — the circled
+// options' wording in answer.options, text preview, attachment COUNT — is
+// exactly what the printed line needs) and prints MY cards whose answer/expiry was not yet surfaced. Beyond
 // the panes' 24h window the server keeps no listable answered/expired view, so
 // an agent offline longer than a day reads older outcomes via get_reply_card,
 // not the drain.

@@ -36,7 +36,11 @@ function fullCard(id: string, summary: string) {
     status: "waiting",
     summary,
     body: `the ask body of ${id}`,
-    options: ["AI 建議:照做", "先等等"],
+    options: [
+      { text: "AI 建議:照做", ai_pick: true },
+      { text: "先等等", ai_pick: false },
+    ],
+    select_mode: "single",
     chat_message_id: `cm-${id}`,
     created_ts: 100,
     answered_ts: null,
@@ -95,7 +99,10 @@ describe("httpApi.listReplyCards · one request per pane (T-a3e4)", () => {
     // returned husks — or nothing at all.
     expect(cards.map((c) => c.id)).toEqual(["rc-1", "rc-2", "rc-3"]);
     expect(cards[0].body).toBe("the ask body of rc-1");
-    expect(cards[0].options).toEqual(["AI 建議:照做", "先等等"]);
+    expect(cards[0].options).toEqual([
+      { text: "AI 建議:照做", aiPick: true },
+      { text: "先等等", aiPick: false },
+    ]);
     expect(cards[0].chatMessageId).toBe("cm-rc-1");
   });
 

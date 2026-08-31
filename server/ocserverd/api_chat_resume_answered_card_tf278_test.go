@@ -50,7 +50,7 @@ func TestResumeSnapshotNamesStepsSittingOnAnAnsweredCard(t *testing.T) {
 	card := openCardOnStep(t, api, answeredTask.ID, "m-exec",
 		answeredPlan.Steps[0].ID, "要走哪一條路？")
 	if rec := answerCard(t, api, card.ID,
-		map[string]any{"option_idx": 1}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{1}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 
@@ -101,7 +101,7 @@ func TestResumeSnapshotNamesStepsSittingOnAnAnsweredCard(t *testing.T) {
 	pickedUpCard := openCardOnStep(t, api, pickedUpTask.ID, "m-exec",
 		pickedUpPlan.Steps[0].ID, "已經消化掉的問題")
 	if rec := answerCard(t, api, pickedUpCard.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := reportStepStatus(t, api, pickedUpTask.ID, pickedUpPlan.Steps[0].ID,

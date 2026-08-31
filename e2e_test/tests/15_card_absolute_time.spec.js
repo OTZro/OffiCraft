@@ -64,7 +64,13 @@ test.describe('C2 · reply cards stamp open time ABSOLUTE (formatAbsolute), not 
       kind: 'decision',
       summary,
       body: '報告已整理完畢,等你確認。',
-      options: ['寄出(AI 建議)', '先不要'],
+      // T-40 option shape: objects carrying their own ai_pick. The pick sits
+      // on the SECOND option on purpose — position carries no meaning, and a
+      // card that put it first would keep passing against the old convention.
+      options: [
+        { text: '先不要', ai_pick: false },
+        { text: '寄出', ai_pick: true },
+      ],
     });
     expect(card.status).toBe('waiting');
 

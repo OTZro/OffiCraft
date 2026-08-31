@@ -182,7 +182,7 @@ def test_full_task_loop(client, owner_token, executor):
     r = client.post(
         "/api/reply-cards",
         json={"kind": "decision", "summary": "ship release v2?",
-              "options": ["ship it", "hold"],
+              "options": [{"text": "ship it"}, {"text": "hold"}],
               "linked_task": {"task_id": task["id"], "step_id": gate["id"]}},
         headers=_auth(executor.token))
     assert r.status_code == 200, r.text
@@ -215,7 +215,7 @@ def test_full_task_loop(client, owner_token, executor):
 
     # The owner answers through the EXISTING reply-card route…
     r = client.post(f"/api/reply-cards/{card['id']}/answer",
-                    json={"option_idx": 0}, headers=_auth(owner_token))
+                    json={"option_idxs": [0]}, headers=_auth(owner_token))
     assert r.status_code == 200, r.text
     # …and the SERVER restores the held step and the task to in_progress
     # (T-68b7 "答卡→回前態" — supersedes H4's "answering moves nothing").
@@ -268,7 +268,7 @@ def test_linked_task_arms_a_plain_non_gate_step(client, owner_token, executor):
         "/api/reply-cards",
         json={"kind": "decision", "summary": "which cloud?",
               "linked_task": {"task_id": task["id"], "step_id": step["id"]},
-              "options": ["aws", "gcp"]},
+              "options": [{"text": "aws"}, {"text": "gcp"}]},
         headers=_auth(executor.token))
     assert r.status_code == 200, f"plain-step arm must 200: {r.status_code} {r.text}"
     card = r.json()
@@ -512,7 +512,7 @@ def test_replan_keeps_answered_card_step_as_superseded(
     r = client.post(
         "/api/reply-cards",
         json={"kind": "decision", "summary": "which way?",
-              "options": ["a", "b"],
+              "options": [{"text": "a"}, {"text": "b"}],
               "linked_task": {"task_id": task["id"],
                               "step_id": answered_step["id"]}},
         headers=_auth(executor.token))
@@ -520,13 +520,13 @@ def test_replan_keeps_answered_card_step_as_superseded(
     answered_card = r.json()
     r = client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "later?", "options": ["a", "b"],
+        json={"kind": "decision", "summary": "later?", "options": [{"text": "a"}, {"text": "b"}],
               "linked_task": {"task_id": task["id"],
                               "step_id": waiting_step["id"]}},
         headers=_auth(executor.token))
     assert r.status_code == 200, r.text
     r = client.post(f"/api/reply-cards/{answered_card['id']}/answer",
-                    json={"option_idx": 0}, headers=_auth(owner_token))
+                    json={"option_idxs": [0]}, headers=_auth(owner_token))
     assert r.status_code == 200, r.text
 
     # Replan with entirely fresh names.
@@ -550,7 +550,7 @@ def test_replan_keeps_answered_card_step_as_superseded(
                         "in_progress").status_code == 409
     r = client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "again?", "options": ["a", "b"],
+        json={"kind": "decision", "summary": "again?", "options": [{"text": "a"}, {"text": "b"}],
               "linked_task": {"task_id": task["id"], "step_id": frozen["id"]}},
         headers=_auth(executor.token))
     assert r.status_code == 409, f"{r.status_code} {r.text}"
@@ -625,7 +625,7 @@ def test_terminated_task_refuses_every_agent_push(client, owner_token, executor)
                         "in_progress").status_code == 409
     assert client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "s", "options": ["a"],
+        json={"kind": "decision", "summary": "s", "options": [{"text": "a"}],
               "linked_task": {"task_id": task["id"], "step_id": gate_id}},
         headers=h).status_code == 409
     # A second terminate is a 409 too (already closed).
@@ -688,7 +688,7 @@ def test_waiting_owner_is_a_card_lifecycle_hold(client, owner_token, executor):
     def _arm(step, summary):
         r = client.post("/api/reply-cards",
                         json={"kind": "decision", "summary": summary,
-                              "options": ["a", "b"],
+                              "options": [{"text": "a"}, {"text": "b"}],
                               "linked_task": {"task_id": task["id"],
                                               "step_id": step["id"]}},
                         headers=_auth(executor.token))
@@ -700,7 +700,7 @@ def test_waiting_owner_is_a_card_lifecycle_hold(client, owner_token, executor):
 
     # Answer the first: its step resumes, the task keeps waiting on c2.
     assert client.post(f"/api/reply-cards/{c1['id']}/answer",
-                       json={"option_idx": 0},
+                       json={"option_idxs": [0]},
                        headers=_auth(owner_token)).status_code == 200
     view = _get_task(client, owner_token, task["id"])
     assert view["status"] == "waiting_owner", "still one card waiting"
@@ -709,7 +709,7 @@ def test_waiting_owner_is_a_card_lifecycle_hold(client, owner_token, executor):
 
     # Answer the last: the task resumes too.
     assert client.post(f"/api/reply-cards/{c2['id']}/answer",
-                       json={"option_idx": 0},
+                       json={"option_idxs": [0]},
                        headers=_auth(owner_token)).status_code == 200
     assert _get_task(client, owner_token, task["id"])["status"] == "in_progress"
 
@@ -732,7 +732,7 @@ def test_reask_after_answer_re_enters_waiting(client, owner_token):
     def _plain_ask():
         r = client.post("/api/reply-cards",
                         json={"kind": "decision", "summary": "which?",
-                              "options": ["a", "b"],
+                              "options": [{"text": "a"}, {"text": "b"}],
                               "linked_task": {"task_id": task["id"],
                                               "step_id": step["id"]}},
                         headers=_auth(token))
@@ -743,7 +743,7 @@ def test_reask_after_answer_re_enters_waiting(client, owner_token):
     assert _get_task(client, owner_token, task["id"])["status"] == "waiting_owner"
     # Answer it → the hold releases, the step is back to in_progress.
     assert client.post(f"/api/reply-cards/{first['id']}/answer",
-                       json={"option_idx": 0},
+                       json={"option_idxs": [0]},
                        headers=_auth(owner_token)).status_code == 200
     got = _get_task(client, owner_token, task["id"])
     assert got["status"] == "in_progress"
@@ -1527,7 +1527,7 @@ def test_resume_summary_carries_the_callers_open_tasks_as_light_rows(
     r = client.post(
         "/api/reply-cards",
         json={"kind": "decision", "summary": "conf resume gate",
-              "options": ["go", "hold"],
+              "options": [{"text": "go"}, {"text": "hold"}],
               "linked_task": {"task_id": task["id"], "step_id": steps[2]["id"]}},
         headers=_auth(resumer))
     assert r.status_code == 200, f"{r.status_code} {r.text}"
@@ -1564,7 +1564,7 @@ def test_resume_summary_carries_the_callers_open_tasks_as_light_rows(
 
     # The owner answers the gate card → the caller's card counts fold over.
     r = client.post(f"/api/reply-cards/{card_id}/answer",
-                    json={"option_idx": 0}, headers=_auth(owner_token))
+                    json={"option_idxs": [0]}, headers=_auth(owner_token))
     assert r.status_code == 200, f"{r.status_code} {r.text}"
     ov = _resume(client, resumer)["overview"]
     assert ov["cards_waiting"] == 0 and ov["cards_answered_recent"] == 1
@@ -1629,7 +1629,7 @@ def test_create_reply_card_without_linked_task_names_both_legal_shapes(
     # one running step. Still refused, because the caller never SAID anything.
     r = client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "which way?", "options": ["AI pick"]},
+        json={"kind": "decision", "summary": "which way?", "options": [{"text": "AI pick"}]},
         headers=_auth(token))
     assert r.status_code == 400, f"{r.status_code} {r.text}"
     msg = r.json()["error"]["message"]
@@ -1667,7 +1667,7 @@ def test_create_reply_card_with_task_id_but_no_step_id_is_refused(
     assert _step_status(client, token, task["id"], step["id"],
                         "in_progress").status_code == 200
 
-    base = {"kind": "decision", "summary": "which way?", "options": ["AI pick"]}
+    base = {"kind": "decision", "summary": "which way?", "options": [{"text": "AI pick"}]}
     r = client.post("/api/reply-cards",
                     json={**base, "linked_task": {"task_id": task["id"]}},
                     headers=_auth(token))
@@ -1718,7 +1718,7 @@ def test_create_reply_card_with_linked_task_arms_the_named_step(
 
     r = client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "which way?", "options": ["AI pick"],
+        json={"kind": "decision", "summary": "which way?", "options": [{"text": "AI pick"}],
               "linked_task": {"task_id": task["id"], "step_id": build["id"]}},
         headers=_auth(token))
     assert r.status_code == 200, r.text
@@ -1735,7 +1735,7 @@ def test_create_reply_card_with_linked_task_arms_the_named_step(
     assert other["status"] == "pending" and other["reply_card_id"] == ""
 
     r = client.post(f"/api/reply-cards/{card['id']}/answer",
-                    json={"option_idx": 0}, headers=_auth(owner_token))
+                    json={"option_idxs": [0]}, headers=_auth(owner_token))
     assert r.status_code == 200, r.text
     resumed = _get_task(client, owner_token, task["id"])
     assert resumed["status"] == "in_progress", "answering restores the task"
@@ -1776,7 +1776,7 @@ def test_create_reply_card_with_null_linked_task_opens_a_plain_card(
 
     r = client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "unrelated", "options": ["AI pick"],
+        json={"kind": "decision", "summary": "unrelated", "options": [{"text": "AI pick"}],
               "linked_task": None},
         headers=_auth(token))
     assert r.status_code == 200, r.text
@@ -1787,14 +1787,14 @@ def test_create_reply_card_with_null_linked_task_opens_a_plain_card(
     assert next(s for s in got["steps"]
                 if s["id"] == early["id"])["reply_card_id"] == ""
     assert client.post(f"/api/reply-cards/{card['id']}/answer",
-                       json={"option_idx": 0},
+                       json={"option_idxs": [0]},
                        headers=_auth(owner_token)).status_code == 200
 
     # The retired `bind` lever is refused outright (unknown field), not silently
     # dropped — it must not look like it still works.
     r = client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "unrelated", "options": ["AI pick"],
+        json={"kind": "decision", "summary": "unrelated", "options": [{"text": "AI pick"}],
               "linked_task": None, "bind": "none"},
         headers=_auth(token))
     assert r.status_code == 422, f"{r.status_code} {r.text}"
@@ -2027,7 +2027,7 @@ def test_reassign_hands_over_to_a_member_and_only_they_take_over(
     r = client.post(
         "/api/reply-cards",
         json={"kind": "decision", "summary": "reassign gate",
-              "options": ["go", "hold"],
+              "options": [{"text": "go"}, {"text": "hold"}],
               "linked_task": {"task_id": task["id"], "step_id": steps[2]["id"]}},
         headers=_auth(executor.token))
     assert r.status_code == 200, r.text

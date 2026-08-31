@@ -144,7 +144,7 @@ func TestReplyCardExpiredMigrationRoundTrip(t *testing.T) {
 	} {
 		if _, err := db.Exec(`INSERT INTO reply_card
 			(id, kind, status, created_ts, answered_ts, expired_ts, options, summary)
-			VALUES (?, 'decision', ?, 1, ?, ?, '["A"]', 's')`,
+			VALUES (?, 'decision', ?, 1, ?, ?, '[{"text":"A","ai_pick":true}]', 's')`,
 			row.id, row.status, row.answered, row.expired); err != nil {
 			t.Fatalf("seed %s: %v", row.id, err)
 		}

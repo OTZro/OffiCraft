@@ -52,9 +52,17 @@ const (
 	replyCardStatusAnswered = "answered"
 	replyCardStatusExpired  = "expired"
 
-	// replyCardMaxOptions caps the quick-reply choices (SPEC: ≤4, [0] = the
-	// AI recommendation).
+	// replyCardMaxOptions caps the quick-reply choices (SPEC: ≤4). WHICH one
+	// the AI recommends is carried by each option's own ai_pick flag — never
+	// by its position (T-40).
 	replyCardMaxOptions = 4
+
+	// The select_mode closed set (T-40): how many options the owner may
+	// circle. Orthogonal to kind — kind says what the owner must DO, this says
+	// how many choices the answer may carry — which is why kind (and its
+	// schema CHECK) was left alone rather than grown a third value.
+	replyCardSelectModeSingle = "single"
+	replyCardSelectModeMulti  = "multi"
 
 	// replyCardAnsweredWindowSecs is the recently-answered pane retention
 	// (SPEC: 近期已回覆保留一天).
@@ -128,23 +136,64 @@ func recentExpiredReplyCards(cards []ReplyCard, now float64) []ReplyCard {
 	return out
 }
 
-// validateReplyCardOptions enforces the quick-reply contract: 1..4 non-blank
-// options ("" = the violation message; trims in place).
-func validateReplyCardOptions(options []string) ([]string, string) {
+// validateReplyCardOptions enforces the quick-reply contract: 1..4 options with
+// non-blank text (trimmed in place), and the ai_pick budget the card's
+// select_mode allows ("" = no violation).
+//
+// The ai_pick budget is the whole point of T-40. A `single` card may mark AT
+// MOST ONE option as the AI's recommendation, because the owner can only circle
+// one — two recommendations on a card that accepts one answer is a question with
+// no honest reading. A `multi` card may mark any number, zero included.
+func validateReplyCardOptions(options []ReplyCardOptionDTO, selectMode string) ([]ReplyCardOption, string) {
 	if len(options) == 0 {
-		return nil, "options must carry at least one choice (index 0 = the AI recommendation)"
+		return nil, "options must carry at least one choice"
 	}
 	if len(options) > replyCardMaxOptions {
 		return nil, "a reply card may carry at most 4 options"
 	}
-	trimmed := make([]string, len(options))
+	out := make([]ReplyCardOption, len(options))
+	picks := 0
 	for i, opt := range options {
-		trimmed[i] = trimString(opt)
-		if trimmed[i] == "" {
+		out[i].Text = trimString(opt.Text)
+		if out[i].Text == "" {
 			return nil, "options must not be blank"
 		}
+		out[i].AIPick = opt.AiPick != nil && *opt.AiPick
+		if out[i].AIPick {
+			picks++
+		}
 	}
-	return trimmed, ""
+	if selectMode == replyCardSelectModeSingle && picks > 1 {
+		return nil, "a single-select card may mark at most one option ai_pick"
+	}
+	return out, ""
+}
+
+// normalizeAnswerOptionIdxs is the ONE place a circled-option list becomes its
+// stored form: deduped, ascending. It exists because the owner's CLICK ORDER is
+// not part of the decision — an answer of [2,0] and an answer of [0,2] say the
+// same thing — and a reader that saw the raw order once mistook a re-ordered
+// re-answer for a CHANGED one and swallowed a delivery. Storing the canonical
+// form makes the two byte-identical, so no reader can ever draw that
+// distinction again.
+//
+// Returns nil for an empty input: nil and [] are the same fact ("no option was
+// circled") and must not be two representations of it.
+func normalizeAnswerOptionIdxs(idxs []int) []int {
+	if len(idxs) == 0 {
+		return nil
+	}
+	seen := make(map[int]bool, len(idxs))
+	out := make([]int, 0, len(idxs))
+	for _, i := range idxs {
+		if seen[i] {
+			continue
+		}
+		seen[i] = true
+		out = append(out, i)
+	}
+	sort.Ints(out)
+	return out
 }
 
 // openReplyCard is the ONE create machinery both entry points share (the
@@ -180,7 +229,17 @@ func (s *apiServer) openReplyCard(actor string, body ReplyCardCreateDTO, taskID,
 	if summary == "" {
 		return nil, "summary must not be blank", nil
 	}
-	options, problem := validateReplyCardOptions(body.Options)
+	selectMode := replyCardSelectModeSingle
+	if body.SelectMode != nil {
+		selectMode = trimString(string(*body.SelectMode))
+	}
+	// Same posture as kind above: the generated type carries the enum the spec
+	// declares, but the decode path never calls its Valid(), so the closed set
+	// is checked HERE and answered as a 400 rather than the decoder's 422.
+	if selectMode != replyCardSelectModeSingle && selectMode != replyCardSelectModeMulti {
+		return nil, "select_mode must be 'single' or 'multi'", nil
+	}
+	options, problem := validateReplyCardOptions(body.Options, selectMode)
 	if problem != "" {
 		return nil, problem, nil
 	}
@@ -228,6 +287,7 @@ func (s *apiServer) openReplyCard(actor string, body ReplyCardCreateDTO, taskID,
 		Summary:       summary,
 		Body:          strOrEmpty(body.Body),
 		Options:       options,
+		SelectMode:    selectMode,
 		Status:        replyCardStatusWaiting,
 		CreatedTS:     now,
 		ChatMessageID: msg.ID,
@@ -444,14 +504,13 @@ func (s *apiServer) replyCardListItemOf(c ReplyCard) (replyCardListItemDTO, erro
 		if len([]rune(text)) > replyCardAnswerTextPreview {
 			text = string([]rune(text)[:replyCardAnswerTextPreview]) + "…"
 		}
-		option := ""
-		if c.AnswerOptionIdx != nil && *c.AnswerOptionIdx >= 0 &&
-			*c.AnswerOptionIdx < len(c.Options) {
-			option = c.Options[*c.AnswerOptionIdx]
-		}
+		// EVERY circled option's wording, not just the first. The light row is
+		// the agent-facing contract, so a digest that reported one option of a
+		// multi-select answer would tell the asker the owner chose less than it
+		// did — silently, since the row would still look well-formed.
 		dto.Answer = &replyCardAnswerBriefDTO{
-			OptionIdx:   c.AnswerOptionIdx,
-			Option:      option,
+			OptionIdxs:  c.AnswerOptionIdxs,
+			Options:     replyCardOptionWording(c),
 			Text:        text,
 			Attachments: len(c.AnswerAttachments),
 		}
@@ -466,6 +525,21 @@ func (s *apiServer) replyCardListItemOf(c ReplyCard) (replyCardListItemDTO, erro
 		}
 	}
 	return dto, nil
+}
+
+// replyCardOptionWording resolves the circled indices back to the ORIGINAL
+// wording, one entry per index and in the same order. An index that no longer
+// addresses an option contributes nothing rather than a placeholder: the row is
+// a digest for a human/agent to read, and inventing text for an unresolvable
+// index would be worse than the shorter list.
+func replyCardOptionWording(c ReplyCard) []string {
+	out := []string{}
+	for _, i := range c.AnswerOptionIdxs {
+		if i >= 0 && i < len(c.Options) {
+			out = append(out, c.Options[i].Text)
+		}
+	}
+	return out
 }
 
 // The ?view projection (T-a3e4, owner-approved 2026-08-02). LIGHT is the
@@ -612,9 +686,21 @@ func (s *apiServer) applyReplyCardAnswer(w http.ResponseWriter, r *http.Request,
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
-	if body.OptionIdx != nil &&
-		(*body.OptionIdx < 0 || *body.OptionIdx >= len(card.Options)) {
-		writeError(w, http.StatusBadRequest, "option_idx out of range")
+	var optionIdxs []int
+	if body.OptionIdxs != nil {
+		optionIdxs = normalizeAnswerOptionIdxs(*body.OptionIdxs)
+	}
+	for _, idx := range optionIdxs {
+		if idx < 0 || idx >= len(card.Options) {
+			writeError(w, http.StatusBadRequest, "option_idxs out of range")
+			return
+		}
+	}
+	// A single-select card accepts one circled option, full stop. Silently
+	// keeping the first would record an answer the owner did not give.
+	if card.SelectMode != replyCardSelectModeMulti && len(optionIdxs) > 1 {
+		writeError(w, http.StatusBadRequest,
+			"this card is single-select: option_idxs may carry at most one index")
 		return
 	}
 	// EVERY item is judged (T-e2b2, review R2): this face used to drop anything
@@ -670,7 +756,13 @@ func (s *apiServer) applyReplyCardAnswer(w http.ResponseWriter, r *http.Request,
 		decoded = append(decoded, att)
 	}
 	text := trimmedOrEmpty(body.Text)
-	if body.OptionIdx == nil && text == "" && len(decoded) == 0 {
+	// 🔴 len(), NOT a nil check. This guard used to read `body.OptionIdx == nil`
+	// against a *int, where "absent" was the only way to have no option. Against
+	// a LIST, `option_idxs: []` decodes to a non-nil EMPTY slice — a nil check
+	// waves it through, and an answer carrying nothing at all gets stored as an
+	// answer, closing the card and releasing the task hold on a decision the
+	// owner never made.
+	if len(optionIdxs) == 0 && text == "" && len(decoded) == 0 {
 		writeError(w, http.StatusBadRequest,
 			"answer must carry an option, text, or an attachment")
 		return
@@ -688,7 +780,7 @@ func (s *apiServer) applyReplyCardAnswer(w http.ResponseWriter, r *http.Request,
 	}
 	card.Status = replyCardStatusAnswered
 	card.AnsweredTS = nowSecs()
-	card.AnswerOptionIdx = body.OptionIdx
+	card.AnswerOptionIdxs = optionIdxs
 	card.AnswerText = text
 	card.AnswerAttachments = refs
 	if err := s.dal.PutReplyCardWithAttachments(card, fresh); err != nil {

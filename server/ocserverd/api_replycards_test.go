@@ -4,14 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"reflect"
 	"testing"
 )
 
 func waitingCard(id string, created float64) ReplyCard {
 	return ReplyCard{
 		ID: id, FromMember: "m-a", Kind: replyCardKindDecision,
-		Summary: "s", Options: []string{"A", "B"},
+		Summary: "s", Options: []ReplyCardOption{{Text: "A"}, {Text: "B"}},
 		Status: replyCardStatusWaiting, CreatedTS: created,
 	}
 }
@@ -71,30 +71,85 @@ func TestRecentExpiredReplyCardsAppliesThe24hWindowNewestFirst(t *testing.T) {
 	}
 }
 
-func TestValidateReplyCardOptionsEnforcesOneToFourNonBlank(t *testing.T) {
+func opt(text string) ReplyCardOptionDTO { return ReplyCardOptionDTO{Text: text} }
+
+func aiOpt(text string) ReplyCardOptionDTO {
+	pick := true
+	return ReplyCardOptionDTO{Text: text, AiPick: &pick}
+}
+
+func TestValidateReplyCardOptions(t *testing.T) {
 	cases := []struct {
-		name    string
-		options []string
-		wantOK  bool
+		name       string
+		options    []ReplyCardOptionDTO
+		selectMode string
+		wantOK     bool
 	}{
-		{"empty", nil, false},
-		{"one", []string{"A"}, true},
-		{"four", []string{"A", "B", "C", "D"}, true},
-		{"five", []string{"A", "B", "C", "D", "E"}, false},
-		{"blank member", []string{"A", "  "}, false},
+		{"empty", nil, replyCardSelectModeSingle, false},
+		{"one", []ReplyCardOptionDTO{opt("A")}, replyCardSelectModeSingle, true},
+		{"four", []ReplyCardOptionDTO{opt("A"), opt("B"), opt("C"), opt("D")},
+			replyCardSelectModeSingle, true},
+		{"five", []ReplyCardOptionDTO{opt("A"), opt("B"), opt("C"), opt("D"), opt("E")},
+			replyCardSelectModeSingle, false},
+		{"blank member", []ReplyCardOptionDTO{opt("A"), opt("  ")},
+			replyCardSelectModeSingle, false},
+		{"single with one ai_pick", []ReplyCardOptionDTO{aiOpt("A"), opt("B")},
+			replyCardSelectModeSingle, true},
+		{"single with no ai_pick", []ReplyCardOptionDTO{opt("A"), opt("B")},
+			replyCardSelectModeSingle, true},
+		{"single with two ai_picks", []ReplyCardOptionDTO{aiOpt("A"), aiOpt("B")},
+			replyCardSelectModeSingle, false},
+		{"multi with two ai_picks", []ReplyCardOptionDTO{aiOpt("A"), aiOpt("B")},
+			replyCardSelectModeMulti, true},
+		{"multi with four ai_picks",
+			[]ReplyCardOptionDTO{aiOpt("A"), aiOpt("B"), aiOpt("C"), aiOpt("D")},
+			replyCardSelectModeMulti, true},
 	}
 	for _, tc := range cases {
-		got, problem := validateReplyCardOptions(tc.options)
+		got, problem := validateReplyCardOptions(tc.options, tc.selectMode)
 		if (problem == "") != tc.wantOK {
 			t.Fatalf("%s: wantOK=%v got problem=%q", tc.name, tc.wantOK, problem)
 		}
 		if tc.wantOK && len(got) != len(tc.options) {
-			t.Fatalf("%s: trimmed options lost entries: %v", tc.name, got)
+			t.Fatalf("%s: validated options lost entries: %v", tc.name, got)
 		}
 	}
-	trimmed, problem := validateReplyCardOptions([]string{" A ", "B"})
-	if problem != "" || trimmed[0] != "A" {
-		t.Fatalf("options must be trimmed: %v %q", trimmed, problem)
+	trimmed, problem := validateReplyCardOptions(
+		[]ReplyCardOptionDTO{opt(" A "), aiOpt("B")}, replyCardSelectModeSingle)
+	if problem != "" {
+		t.Fatalf("unexpected problem: %q", problem)
+	}
+	if !reflect.DeepEqual(trimmed,
+		[]ReplyCardOption{{Text: "A"}, {Text: "B", AIPick: true}}) {
+		t.Fatalf("options must be trimmed and carry ai_pick per option: %+v", trimmed)
+	}
+}
+
+// normalizeAnswerOptionIdxs is the whole reason the stored answer cannot depend
+// on the owner's click order: [2,0] and [0,2] are the same decision, and a
+// reader that could tell them apart once mistook a re-ordered re-answer for a
+// changed one and swallowed the delivery.
+func TestNormalizeAnswerOptionIdxs(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []int
+		want []int
+	}{
+		{"nil is nil", nil, nil},
+		{"empty is nil", []int{}, nil},
+		{"single", []int{2}, []int{2}},
+		{"descending sorts", []int{2, 0}, []int{0, 2}},
+		{"ascending unchanged", []int{0, 2}, []int{0, 2}},
+		{"duplicates collapse", []int{1, 1, 0, 1}, []int{0, 1}},
+	}
+	for _, tc := range cases {
+		if got := normalizeAnswerOptionIdxs(tc.in); !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: normalize(%v) = %v, want %v", tc.name, tc.in, got, tc.want)
+		}
+	}
+	if !reflect.DeepEqual(normalizeAnswerOptionIdxs([]int{2, 0}),
+		normalizeAnswerOptionIdxs([]int{0, 2})) {
+		t.Fatal("[2,0] and [0,2] must normalize to the same stored answer")
 	}
 }
 
@@ -214,9 +269,8 @@ func TestNewReplyCardDTONullsAnswerWhileWaiting(t *testing.T) {
 	if dto.AnsweredTS != nil || dto.Answer != nil {
 		t.Fatalf("an expired card carries no answer projection: %+v", dto)
 	}
-	idx := 1
 	c := answeredCard("rc-2", 5, 9)
-	c.AnswerOptionIdx = &idx
+	c.AnswerOptionIdxs = []int{1}
 	c.AnswerText = "ok"
 	c.AnswerAttachments = []any{
 		map[string]any{"id": "att-1", "mime": "image/png", "filename": "a.png"},
@@ -225,7 +279,8 @@ func TestNewReplyCardDTONullsAnswerWhileWaiting(t *testing.T) {
 	if dto.AnsweredTS == nil || *dto.AnsweredTS != 9 {
 		t.Fatalf("answered_ts not projected: %+v", dto)
 	}
-	if dto.Answer == nil || *dto.Answer.OptionIdx != 1 || dto.Answer.Text != "ok" {
+	if dto.Answer == nil || !reflect.DeepEqual(dto.Answer.OptionIdxs, []int{1}) ||
+		dto.Answer.Text != "ok" {
 		t.Fatalf("answer not projected: %+v", dto.Answer)
 	}
 	if len(dto.Answer.Attachments) != 1 ||
@@ -236,13 +291,12 @@ func TestNewReplyCardDTONullsAnswerWhileWaiting(t *testing.T) {
 
 func TestReplyCardDALRoundTrip(t *testing.T) {
 	dal := newTestDAL(t)
-	idx := 0
 	card := ReplyCard{
 		ID: "rc-round", FromMember: "m-a", Kind: replyCardKindAction,
 		Summary: "do the thing", Body: "details",
-		Options: []string{"done, continue"},
+		Options: []ReplyCardOption{{Text: "done, continue"}},
 		Status:  replyCardStatusAnswered, CreatedTS: 1.5, AnsweredTS: 2.5,
-		ChatMessageID: "c-1", AnswerOptionIdx: &idx, AnswerText: "done",
+		ChatMessageID: "c-1", AnswerOptionIdxs: []int{0}, AnswerText: "done",
 		AnswerAttachments: []any{
 			map[string]any{"id": "att-1", "mime": "image/png", "filename": "a.png"},
 		},
@@ -259,12 +313,12 @@ func TestReplyCardDALRoundTrip(t *testing.T) {
 		got.AnsweredTS != 2.5 || got.AnswerText != "done" {
 		t.Fatalf("round trip mismatch: %+v", got)
 	}
-	if len(got.Options) != 1 || got.Options[0] != "done, continue" {
+	if !reflect.DeepEqual(got.Options, []ReplyCardOption{{Text: "done, continue"}}) {
 		t.Fatalf("options JSON round trip: %+v", got.Options)
 	}
-	if got.AnswerOptionIdx == nil || *got.AnswerOptionIdx != 0 {
-		t.Fatalf("answer_option_idx must round-trip 0 (not fold to null): %+v",
-			got.AnswerOptionIdx)
+	if !reflect.DeepEqual(got.AnswerOptionIdxs, []int{0}) {
+		t.Fatalf("answer_option_idxs must round-trip [0] (not fold to null): %+v",
+			got.AnswerOptionIdxs)
 	}
 	if len(got.AnswerAttachments) != 1 {
 		t.Fatalf("answer_attachments JSON round trip: %+v", got.AnswerAttachments)
@@ -299,7 +353,7 @@ func openPlainCardRaw(t *testing.T, api *apiServer, actor string) *httptest.Resp
 	t.Helper()
 	return createCardRaw(t, api, actor, map[string]any{
 		"kind": "decision", "summary": "which way?",
-		"options": []string{"A", "B"}, "linked_task": nil,
+		"options": []map[string]any{{"text": "A"}, {"text": "B"}}, "linked_task": nil,
 	})
 }
 
@@ -308,7 +362,7 @@ func openPlainCardRaw(t *testing.T, api *apiServer, actor string) *httptest.Resp
 func openBoundCardRaw(t *testing.T, api *apiServer, actor, taskID, stepID string) *httptest.ResponseRecorder {
 	t.Helper()
 	return createCardRaw(t, api, actor, map[string]any{
-		"kind": "decision", "summary": "which way?", "options": []string{"A", "B"},
+		"kind": "decision", "summary": "which way?", "options": []map[string]any{{"text": "A"}, {"text": "B"}},
 		"linked_task": map[string]any{"task_id": taskID, "step_id": stepID},
 	})
 }
@@ -398,22 +452,13 @@ func TestCreateReplyCardWithoutLinkedTaskNamesBothLegalShapes(t *testing.T) {
 	// is the executor of exactly one active task with exactly one running step.
 	// It is still refused, because the caller never SAID anything.
 	rec := createCardRaw(t, api, "m-exec", map[string]any{
-		"kind": "decision", "summary": "which way?", "options": []string{"A", "B"},
+		"kind": "decision", "summary": "which way?", "options": []map[string]any{{"text": "A"}, {"text": "B"}},
 	})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("an omitted linked_task must be a 400, got %d %s", rec.Code, rec.Body.String())
 	}
-	msg := errorMessageOf(t, rec)
-	for _, want := range []string{
-		"linked_task",      // names the field
-		"linked_task=null", // legal shape #1, spelled out
-		"task_id",          // legal shape #2, spelled out
-		"step_id",          // ...and BOTH ids of it
-		"等我回覆",             // says what is lost when you get it wrong
-	} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("the refusal must spell out both legal shapes (missing %q): %q", want, msg)
-		}
+	if msg := errorMessageOf(t, rec); msg != linkedTaskRequiredMsg {
+		t.Fatalf("the refusal must be the sentence that spells out both legal shapes: %q", msg)
 	}
 	assertNoCardMinted(t, api)
 
@@ -439,24 +484,20 @@ func TestCreateReplyCardWithTaskIdButNoStepIdIsRefused(t *testing.T) {
 	startStep(t, api, task.ID, view.Steps[0].ID, "m-exec")
 
 	rec := createCardRaw(t, api, "m-exec", map[string]any{
-		"kind": "decision", "summary": "which way?", "options": []string{"A", "B"},
+		"kind": "decision", "summary": "which way?", "options": []map[string]any{{"text": "A"}, {"text": "B"}},
 		"linked_task": map[string]any{"task_id": task.ID},
 	})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("a task-only linked_task must be a 400, got %d %s", rec.Code, rec.Body.String())
 	}
-	msg := errorMessageOf(t, rec)
-	for _, want := range []string{"step_id", "等我回覆", "linked_task=null"} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("the refusal must name the missing step and what it costs (missing %q): %q",
-				want, msg)
-		}
+	if msg := errorMessageOf(t, rec); msg != linkedTaskStepRequiredMsg {
+		t.Fatalf("the refusal must be the sentence naming the missing step and what it costs: %q", msg)
 	}
 	assertNoCardMinted(t, api)
 
 	// An explicitly BLANK step_id is the same offence, not a way round it.
 	rec = createCardRaw(t, api, "m-exec", map[string]any{
-		"kind": "decision", "summary": "which way?", "options": []string{"A", "B"},
+		"kind": "decision", "summary": "which way?", "options": []map[string]any{{"text": "A"}, {"text": "B"}},
 		"linked_task": map[string]any{"task_id": task.ID, "step_id": "  "},
 	})
 	if rec.Code != http.StatusBadRequest {
@@ -474,14 +515,14 @@ func TestCreateReplyCardWithStepIdButNoTaskIdIsRefused(t *testing.T) {
 	startStep(t, api, task.ID, view.Steps[0].ID, "m-exec")
 
 	rec := createCardRaw(t, api, "m-exec", map[string]any{
-		"kind": "decision", "summary": "which way?", "options": []string{"A", "B"},
+		"kind": "decision", "summary": "which way?", "options": []map[string]any{{"text": "A"}, {"text": "B"}},
 		"linked_task": map[string]any{"step_id": view.Steps[0].ID},
 	})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("a step-only linked_task must be a 400, got %d %s", rec.Code, rec.Body.String())
 	}
-	if msg := errorMessageOf(t, rec); !strings.Contains(msg, "task_id") {
-		t.Fatalf("the refusal must name the missing task_id: %q", msg)
+	if msg := errorMessageOf(t, rec); msg != linkedTaskTaskRequiredMsg {
+		t.Fatalf("the refusal must be the sentence naming the missing task_id: %q", msg)
 	}
 	assertNoCardMinted(t, api)
 }
@@ -617,8 +658,9 @@ func TestCreateReplyCardRefusesAStepThatIsNotOnTheTask(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("a step of another task must be a 404, got %d %s", rec.Code, rec.Body.String())
 	}
-	if msg := errorMessageOf(t, rec); !strings.Contains(msg, otherView.Steps[0].ID) {
-		t.Fatalf("the refusal must name the step it could not find: %q", msg)
+	if msg, want := errorMessageOf(t, rec),
+		"step '"+otherView.Steps[0].ID+"' not found"; msg != want {
+		t.Fatalf("the refusal must name the step it could not find, want %q got %q", want, msg)
 	}
 	assertNoCardMinted(t, api)
 }
@@ -641,8 +683,9 @@ func TestCreateReplyCardRefusesATerminalStep(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("a done step must be a 409, got %d %s", rec.Code, rec.Body.String())
 	}
-	if msg := errorMessageOf(t, rec); !strings.Contains(msg, "already done") {
-		t.Fatalf("the refusal must name the terminal status: %q", msg)
+	if msg, want := errorMessageOf(t, rec),
+		"step '"+view.Steps[0].ID+"' is already done"; msg != want {
+		t.Fatalf("the refusal must name the terminal status, want %q got %q", want, msg)
 	}
 	assertNoCardMinted(t, api)
 }
@@ -666,16 +709,18 @@ func TestOpenReplyCardRefusesAStepLessTaskBinding(t *testing.T) {
 	api := newTasksTestServer(t)
 	task := createAdHocTask(t, api, "m-exec")
 	body := ReplyCardCreateDTO{
-		Kind: "decision", Summary: "which way?", Options: []string{"A", "B"},
+		Kind: "decision", Summary: "which way?", Options: []ReplyCardOptionDTO{opt("A"), opt("B")},
 	}
 	card, problem, err := api.openReplyCard("m-exec", body, task.ID, "")
 	if err == nil {
 		t.Fatalf("a step-less task binding must fail loudly, got card=%+v problem=%q",
 			card, problem)
 	}
-	if !strings.Contains(err.Error(), "with no step") ||
-		!strings.Contains(err.Error(), task.ID) {
-		t.Fatalf("the refusal must name the offence and the task, got %q", err)
+	want := "refusing to mint a reply card bound to task '" + task.ID +
+		"' with no step: a step-less task binding places no 等我回覆 hold " +
+		"and orphans the card when the task closes"
+	if err.Error() != want {
+		t.Fatalf("the refusal must name the offence and the task, want %q got %q", want, err)
 	}
 	if card != nil {
 		t.Fatalf("a refused mint must return no card: %+v", card)
@@ -716,7 +761,7 @@ func TestCreateReplyCardOnAGroupedStepFlipsTheWholeTask(t *testing.T) {
 func TestCreateReplyCardRejectsTheRetiredBindField(t *testing.T) {
 	api := newTasksTestServer(t)
 	rec := createCardRaw(t, api, "m-exec", map[string]any{
-		"kind": "decision", "summary": "which way?", "options": []string{"A", "B"},
+		"kind": "decision", "summary": "which way?", "options": []map[string]any{{"text": "A"}, {"text": "B"}},
 		"linked_task": nil, "bind": "none",
 	})
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -746,7 +791,7 @@ func TestBoundCardStillAnswersAndReleasesTheHold(t *testing.T) {
 	}
 
 	if rec := answerCard(t, api, card.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("a live bound card must still answer 200, got %d %s",
 			rec.Code, rec.Body.String())
 	}
@@ -805,12 +850,12 @@ func TestExpireFlipsAWaitingCardToTerminalExpired(t *testing.T) {
 	if rec := expireCardReq(t, api, card.ID, "owner", "owner"); rec.Code != http.StatusConflict {
 		t.Fatalf("double expire must 409, got %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := answerCard(t, api, card.ID, map[string]any{"option_idx": 0}); rec.Code != http.StatusConflict {
+	if rec := answerCard(t, api, card.ID, map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusConflict {
 		t.Fatalf("answer on an expired card must 409, got %d %s", rec.Code, rec.Body.String())
 	}
 	put := httptest.NewRecorder()
 	api.HandleReanswerReplyCardApiReplyCardsCardIdAnswerPut(put,
-		taskReq(t, "PUT", "/x", map[string]any{"option_idx": 0}, "owner", "owner"), card.ID)
+		taskReq(t, "PUT", "/x", map[string]any{"option_idxs": []int{0}}, "owner", "owner"), card.ID)
 	if put.Code != http.StatusConflict {
 		t.Fatalf("PUT on an expired card must 409, got %d %s", put.Code, put.Body.String())
 	}
@@ -823,7 +868,7 @@ func TestExpireFlipsAWaitingCardToTerminalExpired(t *testing.T) {
 func TestExpireOnAnsweredOrMissingCardIsRefused(t *testing.T) {
 	api := newTasksTestServer(t)
 	card := openPlainCard(t, api, "m-a")
-	if rec := answerCard(t, api, card.ID, map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+	if rec := answerCard(t, api, card.ID, map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := expireCardReq(t, api, card.ID, "owner", "owner"); rec.Code != http.StatusConflict {
@@ -873,8 +918,8 @@ func TestExpireByAnotherAgentIsRefusedAsNotItsCard(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("a stranger must be refused 403, got %d %s", rec.Code, rec.Body.String())
 	}
-	if got := rec.Body.String(); !strings.Contains(got, expireNotYourCardMsg) {
-		t.Fatalf("the refusal must name the boundary, got %s", got)
+	if msg := errorMessageOf(t, rec); msg != expireNotYourCardMsg {
+		t.Fatalf("the refusal must name the boundary, got %q", msg)
 	}
 	stored, _ := api.dal.GetReplyCard(card.ID)
 	if stored.Status != replyCardStatusWaiting || stored.ExpiredTS != 0 {
@@ -887,7 +932,7 @@ func TestExpireByTheAuthorOnAnAnsweredCardIsRefusedAsSettled(t *testing.T) {
 	// that answer is a decision and no one — author included — erases it.
 	api := newTasksTestServer(t)
 	card := openPlainCard(t, api, "m-a")
-	if rec := answerCard(t, api, card.ID, map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+	if rec := answerCard(t, api, card.ID, map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 
@@ -922,12 +967,13 @@ func TestExpireRefusesAStrangerBeforeItLooksAtTheStatus(t *testing.T) {
 	// a card is a separate, unrestricted surface (GET /api/reply-cards/{card_id}
 	// and the list route sit at the machine floor with NO ownership check), so
 	// the order hides nothing that is not already readable by any agent. The
-	// status string is asserted absent purely because it is the OBSERVABLE that
-	// distinguishes the two rungs: swap the checks and the refusal starts
-	// talking about the card's state instead of the caller's standing.
+	// The refusal TEXT is the observable that distinguishes the two rungs: swap
+	// the checks and it starts talking about the card's state instead of the
+	// caller's standing, so the assertion below pins the whole authorship
+	// sentence rather than probing for a keyword.
 	api := newTasksTestServer(t)
 	card := openPlainCard(t, api, "m-a")
-	if rec := answerCard(t, api, card.ID, map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+	if rec := answerCard(t, api, card.ID, map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 
@@ -935,8 +981,8 @@ func TestExpireRefusesAStrangerBeforeItLooksAtTheStatus(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("authorship is checked before status: got %d %s", rec.Code, rec.Body.String())
 	}
-	if got := rec.Body.String(); strings.Contains(got, replyCardStatusAnswered) {
-		t.Fatalf("the refusal names the card's status, so the status check ran first, got %s", got)
+	if msg := errorMessageOf(t, rec); msg != expireNotYourCardMsg {
+		t.Fatalf("the authorship rung must answer, not the status rung, got %q", msg)
 	}
 }
 
@@ -1109,7 +1155,7 @@ func TestExpiringAnOrphanCardSucceedsWithoutTouchingTheClosedTask(t *testing.T) 
 
 			// The orphan still cannot be ANSWERED (T-f571 unchanged)…
 			if rec := answerCard(t, api, card.ID,
-				map[string]any{"option_idx": 0}); rec.Code != http.StatusConflict {
+				map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusConflict {
 				t.Fatalf("orphan answer must stay 409, got %d", rec.Code)
 			}
 			// …but it CAN be expired.
@@ -1438,7 +1484,7 @@ func createCardWithAttachments(t *testing.T, api *apiServer, actor string, attac
 	api.HandleCreateReplyCardApiReplyCardsPost(rec,
 		taskReq(t, "POST", "/api/reply-cards", map[string]any{
 			"kind": "decision", "summary": "which way?",
-			"options": []string{"A", "B"}, "linked_task": nil, "attachments": attachments,
+			"options": []map[string]any{{"text": "A"}, {"text": "B"}}, "linked_task": nil, "attachments": attachments,
 		}, actor, "agent"))
 	return rec
 }
@@ -1525,25 +1571,29 @@ func TestCreateCardWithRefAttachmentReusesTheStoredBlob(t *testing.T) {
 
 func TestCreateCardWithBadAttachmentsRejectsAtomically(t *testing.T) {
 	api := newTasksTestServer(t)
-	cases := []struct {
-		name string
-		atts []map[string]any
-	}{
-		{"unknown ref", []map[string]any{{"id": "att-nope"}}},
+	type badAttachmentCase struct {
+		name    string
+		atts    []map[string]any
+		wantMsg string
+	}
+	cases := []badAttachmentCase{
+		{"unknown ref", []map[string]any{{"id": "att-nope"}},
+			"attachment 'att-nope' not found"},
 		{"id and data_b64 together", []map[string]any{
-			{"id": "att-x", "data_b64": onePixelPNGB64}}},
-		{"bad base64", []map[string]any{{"data_b64": "@@not-base64@@"}}},
+			{"id": "att-x", "data_b64": onePixelPNGB64}},
+			"attachment carries both id and data_b64"},
+		{"bad base64", []map[string]any{{"data_b64": "@@not-base64@@"}},
+			"attachment is not valid base64"},
 		{"good sibling before a bad item", []map[string]any{
-			{"data_b64": onePixelPNGB64}, {"id": "att-nope"}}},
+			{"data_b64": onePixelPNGB64}, {"id": "att-nope"}},
+			"attachment 'att-nope' not found"},
 	}
 	over := make([]map[string]any, chatAttachmentsMaxCount+1)
 	for i := range over {
 		over[i] = map[string]any{"data_b64": onePixelPNGB64}
 	}
-	cases = append(cases, struct {
-		name string
-		atts []map[string]any
-	}{"over the count cap", over})
+	cases = append(cases, badAttachmentCase{
+		"over the count cap", over, "a reply card may carry at most 10 attachments"})
 	for _, tc := range cases {
 		rec := createCardWithAttachments(t, api, "m-exec", tc.atts)
 		if rec.Code != http.StatusBadRequest {
@@ -1552,10 +1602,11 @@ func TestCreateCardWithBadAttachmentsRejectsAtomically(t *testing.T) {
 		// 🔴 400 FOR THE RIGHT REASON. linked_task is required since T-18 and its
 		// refusal is ALSO a 400, so the status alone cannot tell "the attachment
 		// rule fired" from "we never reached it". The conformance twin of this
-		// table shipped exactly that false green for one commit.
-		if strings.Contains(rec.Body.String(), "linked_task") {
-			t.Fatalf("%s: never reached the attachment rules — refused at the "+
-				"linked_task gate: %s", tc.name, rec.Body.String())
+		// table shipped exactly that false green for one commit. Pinning the
+		// WHOLE message is what keeps that distinction: the linked_task refusal
+		// is a different sentence, so it cannot pass as this one.
+		if msg := errorMessageOf(t, rec); msg != tc.wantMsg {
+			t.Fatalf("%s: want refusal %q, got %q", tc.name, tc.wantMsg, msg)
 		}
 	}
 	// NOTHING was created by any rejected attempt: no card, no companion
@@ -1604,7 +1655,7 @@ func TestBoundCardCarriesQuestionAttachments(t *testing.T) {
 	startFirstStep(t, api, task.ID, "m-exec")
 	rec := createCardRaw(t, api, "m-exec", map[string]any{
 		"kind": "decision", "summary": "ship it?",
-		"options":     []string{"ship", "hold"},
+		"options":     []map[string]any{{"text": "ship"}, {"text": "hold"}},
 		"linked_task": map[string]any{"task_id": task.ID, "step_id": view.Steps[0].ID},
 		"attachments": []map[string]any{
 			{"data_b64": onePixelPNGB64, "filename": "diff.png", "mime": "image/png"},
