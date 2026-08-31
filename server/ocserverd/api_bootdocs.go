@@ -231,9 +231,23 @@ var bootDocRegistry = []bootDocReg{{
 	// 值」 and 「**那本**」, and the body opens by telling the agent to get_task the
 	// ticket and read type_key off it. Cutting the variables alone would leave a
 	// document that reads perfectly and instructs the agent to look at nothing.
+	//
+	// 🔴 {closed_by} JOINED THE HEAD IN T-91, AND IT IS NOT A REVERSAL OF THAT
+	// RULING — it is the same test applied to a different fact. Decision 3 cut
+	// {status}, {type_key} and {manual_label} because every one of them is
+	// READ OFF THE TICKET, so carrying them in the head was a second copy that
+	// could go stale. WHO CLOSED THE TASK is not on the ticket: there is no such
+	// column, and get_task cannot answer it. The head is still "the facts the
+	// notice is the only source of", which is now two of them rather than one.
+	//
+	// It matters because the executor of a task it did NOT close is exactly the
+	// reader this notice reaches (T-91 also removed the two gates that used to
+	// silence the duplicate and ad-hoc cases), and "my last step report finished
+	// it" and "somebody terminated it under me" are opposite situations that the
+	// old single sentence rendered identically.
 	Split: true,
 	Join:  "\n",
-	Vars:  []string{"task_no"},
+	Vars:  []string{"task_no", "closed_by"},
 }, {
 	Kind:    docKindTaskReassignPredecessor,
 	Keys:    []string{taskReassignPredecessorDocKey},

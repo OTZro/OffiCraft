@@ -204,7 +204,13 @@ func (s *apiServer) resolveStepForNoteWrite(w http.ResponseWriter, r *http.Reque
 		writeResolveError(w, err, "task", taskId)
 		return nil, nil, false
 	}
-	if !s.callerMayDriveTask(r, *t) {
+	// T-91: the ONE door that also admits the stamped predecessor while the task
+	// is under the `reassigning` lock — the step note IS the handover record the
+	// reassign notice orders it to write, and the same reassign had already
+	// taken its executor rights away. Every OTHER task-driving write keeps
+	// callerMayDriveTask verbatim (owner ruled the narrow version, not the wide
+	// one) — see callerMayWriteHandover.
+	if !s.callerMayWriteHandover(r, *t) {
 		writeError(w, http.StatusForbidden, "caller is not the task's executor")
 		return nil, nil, false
 	}

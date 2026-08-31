@@ -32,8 +32,11 @@ package main
 //     event-driven click seams, grace clocks, reconcile store) lives in
 //     reconcile.go.
 //
-//   * task-close (§8): the terminal-task nudge that asks an executor to write
-//     back its learnings and report closeout.
+//   * task-close (§8): RETIRED AS A BAND (T-91) — the terminal-task nudge is a
+//     DURABLE CHAT ROW now (closeTask → postTaskChat), not an SSE frame. The
+//     DECISION still lives in this file (decideTaskCloseNudge) because that is
+//     where its siblings live and where it is cheapest to test; nothing here
+//     pushes it. See spec/sse.md §8 for why it moved.
 
 import (
 	"bytes"
@@ -426,12 +429,26 @@ func directedFrameText(topic string, data any) ([]byte, error) {
 	return []byte("data: " + string(raw) + "\n\n"), nil
 }
 
-// ── task-close nudge band (§8): learnings write-back reminder ────────────────
+// ── task-close nudge (§8): the terminal-task notice ─────────────────────────
+//
+// 🔴 NO LONGER A BAND. The decision stays here; the DELIVERY is a durable chat
+// row written by closeTask. taskCloseTopic survives as the payload's self-label
+// (and as the name conformance and spec §8 still use for this notice), not as a
+// topic anything publishes.
 
 const taskCloseTopic = "task-close"
 
-// taskCloseSignal is the inner directed payload {topic,to,task_id,task_no,
-// type,status,reason} (the envelope duplicates topic, exactly like §6).
+// taskCloseSignal is the close-out nudge's decided payload: who it is owed to
+// and about which task.
+//
+// 🔴 IT IS NO LONGER AN SSE FRAME (T-91). The nudge used to be pushed down the
+// executor's own live connection and nowhere else; the previous version of the
+// comment below said so plainly — "an offline executor simply misses the
+// reminder" — which made the ONE notice about a task's death the only lifecycle
+// notice in the system with no durable copy. It is now a durable chat row, so
+// the executor reads it at its next wake whether or not it was connected when
+// the task closed. Topic/To/TaskID/TaskNo/Type/Status are kept because they are
+// the decision's facts; Reason carries the rendered document text.
 type taskCloseSignal struct {
 	Topic  string `json:"topic"`
 	To     string `json:"to"`
@@ -440,6 +457,13 @@ type taskCloseSignal struct {
 	Type   string `json:"type"`
 	Status string `json:"status"`
 	Reason string `json:"reason"`
+	// ClosedBy is the verified trigger of the write that closed the task — the
+	// owner, an admin agent, the executor itself, or "boot-reconcile" when the
+	// reconciler closed an all-done task with no caller present. There was no
+	// such field at all before T-91: the notice said a task ended and gave the
+	// recipient no way to tell its own last step report from somebody else
+	// terminating the work under it, which are opposite situations.
+	ClosedBy string `json:"closed_by"`
 }
 
 // decideTaskCloseNudge is the pure band DECISION — whether a nudge is owed and
@@ -447,11 +471,26 @@ type taskCloseSignal struct {
 // the 〈任務收尾〉 document and are folded in at the send site (T-7870), the same
 // road the other nine lifecycle documents take. Evaluated when a task lands in
 // a terminal status (closeTask — done AND terminated both count: a terminated
-// task's executor has lessons worth folding back too). nil = stay quiet:
-//   - a DUPLICATED task carries no lessons (T-02c9 point 6): it is a duplicate
-//     of another ticket, so there is nothing to fold back into the manual;
-//   - an AD-HOC task (no type) has no manual to write learnings into;
-//   - an unassigned task has nobody to remind.
+// task's executor has lessons worth folding back too). nil = stay quiet, and
+// there is now exactly ONE reason left:
+//   - an unassigned task has nobody to remind. That is a fact about ADDRESSING,
+//     not a judgement about whether the news matters.
+//
+// 🔴 TWO GATES WERE REMOVED (T-91, owner ruling), AND THE REASONING THAT PUT
+// THEM THERE WAS SOUND — about a different question. Both asked "does this task
+// have learnings worth folding into a manual?": a DUPLICATED task is a
+// duplicate of another ticket (T-02c9 point 6), and an AD-HOC task has no
+// manual to fold into. Both true, and both beside the point once you ask what
+// the recipient actually loses by not being told: its ticket is CLOSED, so
+// every write it makes from here on is a 409. Filtering by "is there a manual"
+// silenced exactly the two shapes where the close is most likely to have been
+// somebody ELSE's decision rather than the executor's own last step report.
+//
+// ⚠️ THE CONSEQUENCE FOR THE DOCUMENT IS REAL AND IS NOT A DEFECT. 〈任務收尾〉's
+// body walks the reader through patch_task_learnings, and an ad-hoc task's
+// type_key is "". The body already opens by telling the agent to read type_key
+// off the ticket, so it finds nothing to write back and skips that half; the
+// scratch cleanup and the close-out report are the parts that still apply.
 //
 // 🔴 WHY THE SENTENCE LEFT THIS FUNCTION. Being pure was the named reason this
 // one document never got wired: with no *apiServer there is no overlay to fold.
@@ -462,12 +501,24 @@ type taskCloseSignal struct {
 // EMPTY here on purpose: a default sentence composed here would be a second
 // source of truth for the same words, which is the drift T-7870 exists to end.
 //
-// Delivery is best-effort at-most-once down the executor's own live SSE
-// connection (hub.PushDirected) — an offline executor simply misses the
-// reminder; the learnings patch stays reachable through the seed SOP.
+// 🔴 DELIVERY IS NO LONGER BEST-EFFORT SSE. This comment used to end "an
+// offline executor simply misses the reminder", and that sentence was the whole
+// defect: the reminder was pushed down the executor's own live connection with
+// no durable copy and no replay, so whether an agent ever learned its task had
+// been closed depended on whether it happened to be connected at that instant —
+// and an agent that has just been stopped, or a worker minted afterwards, never
+// is. closeTask now writes it as a DURABLE chat row (postTaskChat), which is
+// the same persistence the dependency-release notice already uses and the same
+// row a wake snapshot folds in. The delivery guarantee is therefore "readable
+// at the recipient's next wake", not "delivered if connected".
+//
+// 🔴 WHY THIS ONE IS A MESSAGE WHILE THE BLOCKER NOTICE (T-91's other half) IS
+// NOT. 開機盤點 lists tasks that have NOT ended. A closed task is absent from it
+// by construction, so "write it on the ticket" — the answer the owner chose for
+// the blocking side — cannot reach anybody here: there is no ticket in the list
+// to read it off.
 func decideTaskCloseNudge(t Task) *taskCloseSignal {
-	if !TaskIsTerminal(t.Status) || t.Status == TaskStatusDuplicated ||
-		t.TypeKey == "" || t.ExecutorID == "" {
+	if !TaskIsTerminal(t.Status) || t.ExecutorID == "" {
 		return nil
 	}
 	return &taskCloseSignal{

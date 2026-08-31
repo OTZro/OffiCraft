@@ -7376,6 +7376,11 @@ export interface components {
             /** Answered Card Steps */
             answered_card_steps?: components["schemas"]["ResumeAnsweredCardStepDTO"][];
             /**
+             * Blocking
+             * @description The ids of the NON-TERMINAL tasks that name THIS task in their ``blocked_by`` — i.e. who is waiting on you (T-91). Never null ([] when nobody is). The count is the length and the ids are the identity: a task id IS its ``task_no`` (T-5291), so no join is needed to name them. It rides the wake snapshot because a blocker's executor is otherwise told NOTHING when a ticket is hung off theirs — the delta of a ``set_task_deps`` write fans to the BLOCKED task's audience only. Deliberately ids-only: the owner ruled this side is written on the ticket and never messaged, and the wake snapshot is size-capped.
+             */
+            blocking?: string[];
+            /**
              * Current Step Id
              * @default
              */
@@ -7389,12 +7394,30 @@ export interface components {
             detail_chars: number;
             /** Id */
             id: string;
+            /**
+             * Lock
+             * @description The task's orthogonal system hold — ``''`` or ``reassigning`` (T-9ca5). It rides the WAKE SNAPSHOT (T-91) so a handover is visible at 開機盤點 and not only in a chat notice that may have been posted while you were offline: ``reassigning`` means the ticket has moved to you and is waiting for your ``claim_task``, or has moved AWAY from you and is waiting for the successor's. Same value and same vocabulary as ``TaskDTO.lock`` / ``TaskListItemDTO.lock``.
+             * @default
+             */
+            lock: string;
             /** Priority */
             priority: string;
             /** Progress Done */
             progress_done: number;
             /** Progress Total */
             progress_total: number;
+            /**
+             * Reassigned From
+             * @description The PREDECESSOR this task was last handed over from — the id of the executor it moved AWAY from on its most recent reassign (T-ba04), ``''`` when it was never reassigned. On the wake snapshot (T-91) it is the answer to 「跟誰交接」 for a ticket you find under the ``reassigning`` lock.
+             * @default
+             */
+            reassigned_from: string;
+            /**
+             * Reassigned From Kind
+             * @description The kind of ``reassigned_from`` (``member`` | ``outsource``), so the id is resolved the right way (roster row vs outsource worker). ``''`` whenever ``reassigned_from`` is ``''``.
+             * @default
+             */
+            reassigned_from_kind: string;
             /** Status */
             status: string;
             /** Task No */
@@ -8417,6 +8440,11 @@ export interface components {
         TaskDTO: {
             /** Artifacts */
             artifacts?: components["schemas"]["TaskArtifactDTO"][];
+            /**
+             * Blocking
+             * @description THE REVERSE OF ``deps``: the NON-TERMINAL tasks that name THIS task in their own ``blocked_by`` — who is waiting on you (T-91). Never null ([] when nobody is). Until this field existed the blocking side was invisible: ``set_task_deps`` fans the delta to the BLOCKED task's audience only, so the executor of the ticket everyone is queued behind was told nothing, by any channel. The owner ruled that this stays WRITTEN ON THE TICKET and is never messaged, which is why there is no notification to match it — read it here and on the wake snapshot (``ResumeTaskDTO.blocking``, ids only). Each entry carries the waiting task's ``id``/``task_no``/``title``/``status``, resolved the same way ``dep_tasks`` resolves the forward direction. TERMINAL waiters are omitted: a closed ticket is not waiting for anything.
+             */
+            blocking?: components["schemas"]["TaskDepRefDTO"][];
             /** Closed Ts */
             closed_ts: number | null;
             /**

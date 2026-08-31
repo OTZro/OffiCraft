@@ -2059,19 +2059,31 @@ type ResumeSummarySizeDTO struct {
 // ResumeTaskDTO One task the resuming caller EXECUTES, in the resume-summary snapshot (SPEC §6.2) — a LIGHT row (owner ruling: 任務不該包含細節; the wake snapshot carries NO steps and NO DoD text). It names the task (“task_no“/“title“/“type_key“), its “status“/“priority“/“waiting_reason“, the current node (“current_step_id“ + “current_step_name“ — the first non-terminal step — “superseded“ replan history is skipped like “done“; both “”“ when the plan is empty or complete), the executed-vs-pending boundary as “progress_done“/“progress_total“, and “updated_ts“. “detail_chars“ is the SIZE (in characters) of the plan text this row omits (every step's name + DoD) — the peek-then-decide signal: check it BEFORE pulling detail, and hand a large “get_task“ pull to a sub-agent instead of loading it into your own context. “answered_card_steps“ names the steps of THIS task that sit on a reply card the owner has ALREADY ANSWERED while the step is still “in_progress“ — the answer arrived and nobody picked it up; empty on a normal row. It is the one thing on this row a status field cannot tell you, because an answered card releases its step back to “in_progress“, which is the SAME value a step being actively worked carries. Read the card (“get_reply_card“) before deciding — the answer may well be 不通過／改做, and nothing about this signal marks the step done. Non-terminal tasks only; the list is BOUNDED (most recently updated first) — page the rest with “list_tasks“ / “get_task“.
 type ResumeTaskDTO struct {
 	AnsweredCardSteps *[]ResumeAnsweredCardStepDTO `json:"answered_card_steps,omitempty"`
-	CurrentStepId     *string                      `json:"current_step_id,omitempty"`
-	CurrentStepName   *string                      `json:"current_step_name,omitempty"`
-	DetailChars       int                          `json:"detail_chars"`
-	Id                string                       `json:"id"`
-	Priority          string                       `json:"priority"`
-	ProgressDone      int                          `json:"progress_done"`
-	ProgressTotal     int                          `json:"progress_total"`
-	Status            string                       `json:"status"`
-	TaskNo            string                       `json:"task_no"`
-	Title             *string                      `json:"title,omitempty"`
-	TypeKey           *string                      `json:"type_key,omitempty"`
-	UpdatedTs         *float64                     `json:"updated_ts,omitempty"`
-	WaitingReason     *string                      `json:"waiting_reason,omitempty"`
+
+	// Blocking The ids of the NON-TERMINAL tasks that name THIS task in their ``blocked_by`` — i.e. who is waiting on you (T-91). Never null ([] when nobody is). The count is the length and the ids are the identity: a task id IS its ``task_no`` (T-5291), so no join is needed to name them. It rides the wake snapshot because a blocker's executor is otherwise told NOTHING when a ticket is hung off theirs — the delta of a ``set_task_deps`` write fans to the BLOCKED task's audience only. Deliberately ids-only: the owner ruled this side is written on the ticket and never messaged, and the wake snapshot is size-capped.
+	Blocking        *[]string `json:"blocking,omitempty"`
+	CurrentStepId   *string   `json:"current_step_id,omitempty"`
+	CurrentStepName *string   `json:"current_step_name,omitempty"`
+	DetailChars     int       `json:"detail_chars"`
+	Id              string    `json:"id"`
+
+	// Lock The task's orthogonal system hold — ``''`` or ``reassigning`` (T-9ca5). It rides the WAKE SNAPSHOT (T-91) so a handover is visible at 開機盤點 and not only in a chat notice that may have been posted while you were offline: ``reassigning`` means the ticket has moved to you and is waiting for your ``claim_task``, or has moved AWAY from you and is waiting for the successor's. Same value and same vocabulary as ``TaskDTO.lock`` / ``TaskListItemDTO.lock``.
+	Lock          *string `json:"lock,omitempty"`
+	Priority      string  `json:"priority"`
+	ProgressDone  int     `json:"progress_done"`
+	ProgressTotal int     `json:"progress_total"`
+
+	// ReassignedFrom The PREDECESSOR this task was last handed over from — the id of the executor it moved AWAY from on its most recent reassign (T-ba04), ``''`` when it was never reassigned. On the wake snapshot (T-91) it is the answer to 「跟誰交接」 for a ticket you find under the ``reassigning`` lock.
+	ReassignedFrom *string `json:"reassigned_from,omitempty"`
+
+	// ReassignedFromKind The kind of ``reassigned_from`` (``member`` | ``outsource``), so the id is resolved the right way (roster row vs outsource worker). ``''`` whenever ``reassigned_from`` is ``''``.
+	ReassignedFromKind *string  `json:"reassigned_from_kind,omitempty"`
+	Status             string   `json:"status"`
+	TaskNo             string   `json:"task_no"`
+	Title              *string  `json:"title,omitempty"`
+	TypeKey            *string  `json:"type_key,omitempty"`
+	UpdatedTs          *float64 `json:"updated_ts,omitempty"`
+	WaitingReason      *string  `json:"waiting_reason,omitempty"`
 }
 
 // RoleCreateDTO Create ONE custom role + its ONE founding member in a single call (M2-2
@@ -2692,12 +2704,15 @@ type TaskCreateTargetDTO struct {
 
 // TaskDTO One task (M3 任務卡): a workflow with a Definition of Done, executed by a roster member or an anonymous outsource worker. “task_no“ IS the id itself, unchanged (T-5291) — there is no projection any more, so the number shown in the UI is byte-for-byte the “task_id“ you look the task up with. “status“ is DERIVED from the steps (not agent-reported): the work states not_started/in_progress/waiting_owner/waiting_external plus the terminals done/terminated/duplicated. “reassigning“ is NO LONGER a status — it is the orthogonal “lock“ field (the owner/admin handover hold, cleared by the claim action; see “POST /api/tasks/{task_id}/reassign“); “priority“ includes “frozen“ (pause-pushing — a priority, not a status). “executor_kind='outsource'“ with an empty “executor_id“ is the transient unassigned state. “closed_ts“ is null while open. “deps“ are the blocking task ids (display markers, never a status change); “progress_done“/“progress_total“ count step leaves (“superseded“ replan history counts toward neither side). “closeout_reported“ flips true once the executor reports the close-out follow-ups done (“report_task_closeout“; terminal tasks only). “creator_id“ is the verified token sub of the task's creator (a member id, an outsource worker id, or the literal "owner"); "" on rows created before the column existed. “duplicate_of“ is the id of the ORIGINAL task this one duplicates — non-empty ONLY while “status='duplicated'“ (MCP “mark_duplicate“); the graph is depth-1 by construction so the cockpit link always resolves in one hop.
 type TaskDTO struct {
-	Artifacts        *[]TaskArtifactDTO `json:"artifacts,omitempty"`
-	ClosedTs         *float64           `json:"closed_ts"`
-	CloseoutReported *bool              `json:"closeout_reported,omitempty"`
-	CreatedTs        *float64           `json:"created_ts,omitempty"`
-	CreatorId        *string            `json:"creator_id,omitempty"`
-	DedupeKey        *string            `json:"dedupe_key,omitempty"`
+	Artifacts *[]TaskArtifactDTO `json:"artifacts,omitempty"`
+
+	// Blocking THE REVERSE OF ``deps``: the NON-TERMINAL tasks that name THIS task in their own ``blocked_by`` — who is waiting on you (T-91). Never null ([] when nobody is). Until this field existed the blocking side was invisible: ``set_task_deps`` fans the delta to the BLOCKED task's audience only, so the executor of the ticket everyone is queued behind was told nothing, by any channel. The owner ruled that this stays WRITTEN ON THE TICKET and is never messaged, which is why there is no notification to match it — read it here and on the wake snapshot (``ResumeTaskDTO.blocking``, ids only). Each entry carries the waiting task's ``id``/``task_no``/``title``/``status``, resolved the same way ``dep_tasks`` resolves the forward direction. TERMINAL waiters are omitted: a closed ticket is not waiting for anything.
+	Blocking         *[]TaskDepRefDTO `json:"blocking,omitempty"`
+	ClosedTs         *float64         `json:"closed_ts"`
+	CloseoutReported *bool            `json:"closeout_reported,omitempty"`
+	CreatedTs        *float64         `json:"created_ts,omitempty"`
+	CreatorId        *string          `json:"creator_id,omitempty"`
+	DedupeKey        *string          `json:"dedupe_key,omitempty"`
 
 	// Deps The blocking task ids. Since T-74f8 a dep is a real hold, not only a display marker: an unassigned outsource task with a live blocker is NOT minted by the 發包 scheduler, and when its last blocker reaches a terminal status the server releases it — durable notice to its executor plus an immediate scheduler tick. It still never rewrites this task's status (status stays derived from its steps).
 	Deps         []string `json:"deps"`

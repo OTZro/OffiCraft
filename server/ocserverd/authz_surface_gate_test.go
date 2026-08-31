@@ -470,6 +470,16 @@ var authzOutsideRouteTable = map[string]string{
 		"caller-vs-resource comparison, not expressible as a route floor.",
 	"api_tasks.go :: callerMayDriveTask :: currentActor(r) == t.ExecutorID": "" +
 		"the self half of the same rule: the executor drives its own task.",
+	"api_tasks.go :: callerMayWriteHandover :: currentActor(r) == t.ReassignedFrom": "" +
+		"T-91, owner ruling: while a task sits under the `reassigning` lock, the " +
+		"stamped PREDECESSOR may still write the handover record (the step note the " +
+		"reassign notice orders it to write) — and nothing else. It cannot be a route " +
+		"floor: the subject is a per-task, per-moment fact (task.reassigned_from " +
+		"AND task.lock), not a principal class. 🔴 The owner was offered the WIDE " +
+		"version — both sides fully authorised during the handover — and refused it, " +
+		"so this predicate guards ONE door (the step-note write faces) and " +
+		"callerMayDriveTask still guards every other task write. Widening its call " +
+		"sites reverses that ruling; 全域脈絡 §3.4 is unchanged.",
 	"api_replycards.go :: callerMayExpireCard :: principalAtLeast(s.principalOfRequest(r), principalAdminAgent)": "" +
 		"T-1b88 (owner 2026-08-07, card rc-3ff94b116970) revised T-6020 for the expire " +
 		"row: admin+ may retire ANY reply card, and below that only the card's own " +

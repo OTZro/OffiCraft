@@ -271,6 +271,14 @@ const WIRE: WireResumeSummary = {
       progress_total: 3,
       updated_ts: 1786000900,
       detail_chars: 375,
+      // T-91: the wake snapshot's task row carries the handover hold and the
+      // reverse dependency edge. Present-and-empty here on purpose — this is
+      // the ordinary row, so the parity fixture must show what an ordinary row
+      // looks like, not omit the fields.
+      lock: "",
+      reassigned_from: "",
+      reassigned_from_kind: "",
+      blocking: [],
       answered_card_steps: ANSWERED_CARD_STEPS,
     },
   ],
@@ -361,6 +369,10 @@ const RESUME_TASK_WIRE_TO_VIEW = {
   updated_ts: "updatedTs",
   detail_chars: "detailChars",
   answered_card_steps: "answeredCardSteps",
+  lock: "lock",
+  reassigned_from: "reassignedFrom",
+  reassigned_from_kind: "reassignedFromKind",
+  blocking: "blocking",
 } as const;
 
 const ANSWERED_CARD_STEP_WIRE_TO_VIEW = {

@@ -339,6 +339,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "mp.renamePlaceholder",
   "mp.resumeSummary.answeredCardStepChars",
   "mp.resumeSummary.answeredCardSteps",
+  "mp.resumeSummary.blockingLabel",
   "mp.resumeSummary.bodyOmittedMark",
   "mp.resumeSummary.bodyOmittedNote",
   "mp.resumeSummary.cardAiPickTag",

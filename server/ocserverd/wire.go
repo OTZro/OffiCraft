@@ -1361,6 +1361,27 @@ type resumeTaskDTO struct {
 	ProgressTotal   int     `json:"progress_total"`
 	DetailChars     int     `json:"detail_chars"` // runes of the omitted plan text
 	UpdatedTS       float64 `json:"updated_ts"`
+	// Lock / ReassignedFrom / ReassignedFromKind carry the HANDOVER HOLD onto
+	// the wake snapshot (T-91). The full taskDTO and the light list row have
+	// carried all three for a while; this projection was the one that did not,
+	// which is exactly the projection an agent reads at 開機盤點 — so a task
+	// under the `reassigning` lock looked like any other open task, and the only
+	// thing that said otherwise was a chat notice that is posted ONCE and, for
+	// an outsource successor, is not posted at all (there is no worker id to
+	// address until the scheduler mints one).
+	//
+	// 🔴 THE POINT IS THAT THE TICKET, NOT THE MESSAGE, IS THE PATH. The notice
+	// still goes out; it is now a reminder rather than the only way to find out.
+	// A member who was offline when the handover happened, and a worker minted
+	// after it, both land on this row.
+	Lock               string `json:"lock"`
+	ReassignedFrom     string `json:"reassigned_from"`
+	ReassignedFromKind string `json:"reassigned_from_kind"`
+	// Blocking is the ids of the non-terminal tasks waiting on THIS one (T-91)
+	// — the wake-snapshot half of taskDTO.Blocking, ids only. Always present.
+	// Ids and not rows because a task id IS its task_no (T-5291), so an id names
+	// the ticket without a join, and this snapshot is size-capped.
+	Blocking []string `json:"blocking"`
 	// AnsweredCardSteps names the steps of THIS task that sit on a reply card
 	// the owner has ALREADY answered while the step itself is still
 	// in_progress — the answer landed and nobody has acted on it yet (T-f278).
@@ -1588,6 +1609,22 @@ type taskDTO struct {
 	Handoff       string `json:"handoff"`
 	HandoffNote   string `json:"handoff_note"`
 	HandoffTaskID string `json:"handoff_task_id"`
+	// Blocking is the REVERSE of Deps (T-91): the NON-TERMINAL tasks that name
+	// THIS task in their own blocked_by. Always present ([] when nobody waits).
+	//
+	// 🔴 IT EXISTS BECAUSE THE BLOCKING SIDE HAD NO CHANNEL AT ALL. set_task_deps
+	// publishes the delta of the BLOCKED task only, so hanging a ticket off
+	// someone else's told that someone else nothing — not a message, not a
+	// field, not a badge. The owner ruled the fix is written ON THE TICKET and
+	// is NEVER a message (deliberately the opposite of the close notice), so
+	// this field and its wake-snapshot twin (resumeTaskDTO.Blocking) are the
+	// whole delivery: there is no notification to look for, and adding one
+	// would be reversing the ruling rather than completing it.
+	//
+	// Terminal waiters are dropped: a closed ticket is not waiting for anything,
+	// and a blocker's executor reading "3 tickets are waiting" wants the 3 that
+	// still are.
+	Blocking []taskDepRefDTO `json:"blocking"`
 	// FrozenBy names WHO put this task into the frozen priority (T-6020):
 	// "owner" for the owner's own click, else the member / outsource-worker id.
 	// "" whenever priority != frozen (and on pre-column rows). Served because
@@ -2026,7 +2063,13 @@ func newTaskDTO(t Task, steps []TaskStep, deps []string, cardStatus map[string]s
 		// Artifacts default to [] — the handler (taskDTOOf) folds the resolved
 		// set in after this pure projection, since resolving file/image blob
 		// metadata needs a DAL lookup that does not belong in a pure builder.
-		Artifacts:     []taskArtifactDTO{},
+		Artifacts: []taskArtifactDTO{},
+		// Blocking defaults to [] for the same reason Artifacts does: resolving
+		// the reverse edge is a DAL read, and this builder is pure. taskDTOOf
+		// folds the real set in; a projection built without it (the create
+		// result) honestly says "nobody is waiting", which is true of a task
+		// that was born one line ago.
+		Blocking:      []taskDepRefDTO{},
 		Handoff:       t.Handoff,
 		HandoffNote:   t.HandoffNote,
 		HandoffTaskID: t.HandoffTaskID,

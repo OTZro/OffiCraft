@@ -1684,6 +1684,13 @@ export function toResumeTask(w: WireResumeTask): ResumeTaskView {
     answeredCardSteps: (w.answered_card_steps ?? []).map(
       toResumeAnsweredCardStep,
     ),
+    // T-91 — the handover hold and the reverse dependency edge. The ?? ""
+    // arms are the ordinary additive-optional posture, not a guess: a server
+    // that predates these fields honestly means "no hold, nobody waiting".
+    lock: w.lock ?? "",
+    reassignedFrom: w.reassigned_from ?? "",
+    reassignedFromKind: w.reassigned_from_kind ?? "",
+    blocking: w.blocking ?? [],
   };
 }
 

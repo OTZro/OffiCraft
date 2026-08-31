@@ -755,6 +755,40 @@ export function ResumeSummaryCard({ agentId }: { agentId: string }) {
                         <span className="mp-resume__tasktitle">{rt.title}</span>
                         <span className="mp-resume__taskstatus">{rt.status}</span>
                       </div>
+                      {/* T-91 — the handover hold and the reverse dependency
+                        * edge, drawn because the cockpit must show what the
+                        * agent is handed. Both render ONLY when they carry
+                        * something: an always-present empty row would say
+                        * "no handover" on every ordinary ticket, which is
+                        * noise the panel already refuses elsewhere. */}
+                      {rt.lock !== "" && (
+                        <div
+                          className="mp-resume__taskhold"
+                          data-testid="mp-resume-task-hold"
+                        >
+                          <span className="mp-resume__taskholdlabel">
+                            {t.tasks.lockReassigning}
+                          </span>
+                          <code className="mp-resume__taskholdfrom">
+                            {rt.reassignedFrom}
+                          </code>
+                        </div>
+                      )}
+                      {rt.blocking.length > 0 && (
+                        <div
+                          className="mp-resume__taskblocking"
+                          data-testid="mp-resume-task-blocking"
+                        >
+                          <span className="mp-resume__taskblockinglabel">
+                            {t.mp.resumeSummary.blockingLabel}
+                          </span>
+                          {rt.blocking.map((id) => (
+                            <code className="mp-resume__taskblockingid" key={id}>
+                              {id}
+                            </code>
+                          ))}
+                        </div>
+                      )}
                       {rt.answeredCardSteps.length > 0 && (
                         <div
                           className="mp-resume__answeredcard"
