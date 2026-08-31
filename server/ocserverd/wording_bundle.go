@@ -43,17 +43,32 @@ const (
 	// submits exactly len(messageKeys) entries, and a cap at or below that number
 	// makes that pack refuse itself.
 	//
-	// 1200 (owner ruling 2026-08-11) against a whitelist of ~1009: ~190 spare
-	// entries is a year-odd of headroom at the ~10-keys-a-month growth actually
-	// measured, for +20% on the worst-case stored row. Deliberately not larger —
-	// wording_cap_mirror_test.go turns the next collision into a message that
-	// names both numbers and says to raise both twins, so there is no need to buy
-	// slack by doubling the worst-case payload.
+	// 2000 — owner ruling 2026-08-31 on card rc-e5780adf4f1d, replacing the 1200
+	// of 2026-08-11.
+	//
+	// ⚠️ THE 1200 RESTED ON A GROWTH RATE THAT WAS MEASURED WRONG, and the wrong
+	// sentence is kept here rather than quietly overwritten. It read: 「1200
+	// against a whitelist of ~1009: ~190 spare entries is a year-odd of headroom
+	// at the ~10-keys-a-month growth actually measured」. The measured rate is
+	// about 7 keys A DAY, not 10 a month — the whitelist went 1,009 (2026-08-11)
+	// → 1,149 (2026-08-31), +140 in 20 days, roughly 20x the estimate. So the
+	// 「a year-odd of headroom」 was gone inside those same 20 days, and T-36's two
+	// keys are what ran it out. Whoever sizes this cap next needs to know the old
+	// estimate was wrong, not merely what the number is today.
+	//
+	// At the measured rate 2000 buys about FOUR MONTHS: (2000 − 1149) = 851 spare
+	// entries ÷ ~7/day ≈ 121 days. ASK THE OWNER AGAIN THEN — he chose that
+	// cadence deliberately (「這次拉到 2000 就好，照實際速度大約再撐四個月，到時
+	// 再問你一次」).
+	//
+	// 🔴 IT STAYS A HARD-CODED NUMBER. Making the cap track the whitelist length
+	// automatically was on the same card as an option and the owner did NOT pick
+	// it. Do not "improve" this into a computed value.
 	//
 	// Raise this together with its TypeScript twin (MAX_WORDING_ENTRIES_PER_LANG in
 	// frontend/src/lib/themeBundleCore.ts); they are asserted equal, so moving one
 	// alone is red.
-	maxWordingEntriesPerLang = 1200
+	maxWordingEntriesPerLang = 2000
 )
 
 // wordingLangAllowed is the closed set of override languages (the two UI
