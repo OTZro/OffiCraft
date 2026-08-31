@@ -183,8 +183,6 @@ describe("reply-card writes reconcile without any event stream", () => {
     fireEvent.click(
       waitingCardById("rc-1").querySelectorAll(".reply-option")[0]
     );
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(waitingCardById("rc-1").querySelector(".chat__send")!);
 
     // The write landed (the mock accepted it and flipped the card to answered).
     // The cockpit must not keep rendering it as waiting — that is what sends the
@@ -240,8 +238,6 @@ describe("reply-card writes reconcile without any event stream", () => {
     fireEvent.click(
       waitingCardById("rc-1").querySelectorAll(".reply-option")[0]
     );
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(waitingCardById("rc-1").querySelector(".chat__send")!);
     await waitFor(() =>
       expect(queryAllByTestId("waiting-card")).toHaveLength(1)
     );
@@ -279,8 +275,6 @@ describe("reply-card writes reconcile without any event stream", () => {
     fireEvent.click(
       waitingCardById("rc-1").querySelectorAll(".reply-option")[0]
     );
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(waitingCardById("rc-1").querySelector(".chat__send")!);
     await waitFor(() =>
       expect(queryAllByTestId("waiting-card")).toHaveLength(1)
     );
@@ -342,8 +336,6 @@ describe("reply-card writes reconcile without any event stream", () => {
     await waitFor(() => expect(release).not.toBeNull());
 
     fireEvent.click(container.querySelectorAll(".reply-option")[0]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(container.querySelector(".chat__send")!);
     await waitFor(() =>
       expect(container.querySelector(".reply-card__answer-text")).toBeTruthy()
     );
@@ -393,8 +385,6 @@ describe("reply-card writes reconcile without any event stream", () => {
     await waitFor(() => expect(release).not.toBeNull());
 
     fireEvent.click(container.querySelectorAll(".reply-option")[0]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(container.querySelector(".chat__send")!);
     await waitFor(() =>
       expect(container.querySelector(".reply-card__answer-text")).toBeTruthy()
     );
@@ -440,8 +430,6 @@ describe("reply-card writes reconcile without any event stream", () => {
 
     const cards = await findAllByTestId("waiting-card");
     fireEvent.click(cards[0].querySelectorAll(".reply-option")[0]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(cards[0].querySelector(".chat__send")!);
     await waitFor(() =>
       expect(queryAllByTestId("answered-card")).toHaveLength(2)
     );
@@ -523,8 +511,6 @@ describe("reply-card writes reconcile without any event stream", () => {
     fireEvent.click(cards[0].querySelector(".reply-card__toggle")!);
     fireEvent.click(cards[0].querySelector(".reply-card__redecide")!);
     fireEvent.click(cards[0].querySelectorAll(".reply-option")[1]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(cards[0].querySelector(".chat__send")!);
     await waitFor(async () =>
       expect(answerOf((await findAllByTestId("answered-card"))[0])).toBe(
         "OPT-ONE"
@@ -570,8 +556,6 @@ describe("reply-card writes reconcile without any event stream", () => {
     );
 
     fireEvent.click(container.querySelectorAll(".reply-option")[0]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(container.querySelector(".chat__send")!);
 
     await waitFor(() =>
       expect(container.querySelector(".reply-card__answer-text")).toBeTruthy()

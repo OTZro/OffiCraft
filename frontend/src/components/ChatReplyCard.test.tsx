@@ -144,26 +144,30 @@ describe("ChatReplyCard", () => {
     expect(row.querySelector(".chat__msg-bubble")).toBeNull();
 
     await findAllByText("寄出");
-    // Each chip WHOLE: its 1-based number, its wording, and exactly the tags
-    // it earned. mkCard puts ai_pick on the SECOND option, so the AI tag rides
-    // that one and nothing else — a reader that tags by position fails here.
+    // Each chip WHOLE: its wording and exactly the tags it earned. mkCard puts
+    // ai_pick on the SECOND option, so the AI tag rides that one and nothing
+    // else — a reader that tags by position fails here. The leading ordinal is
+    // gone; the chip's mark is the radio/tick box, which carries no text.
     expect(
       [...row.querySelectorAll(".reply-option")].map((e) => e.textContent),
-    ).toEqual(["1寄出", "2先不要AI 建議"]);
+    ).toEqual(["寄出", "先不要AI 建議"]);
     // The typed composer rides the card; no close/skip control exists.
     expect(row.querySelector(".reply-composer")).not.toBeNull();
     expect(row.textContent).not.toContain("關閉");
     expect(row.textContent).not.toContain("略過");
   });
 
-  it("answering via a chip flips the card to answered (你選的 + AI 建議) and drops the waiting count", async () => {
+  // The same owner-side claim on the CHAT surface: one tap on a chip and the
+  // inline card is answered in place. Deliberately not "the answer POST fired"
+  // — that phrasing survives a return to the two-step interaction.
+  it("one tap on a chip flips the inline card to answered (你選的 + AI 建議) and drops the waiting count", async () => {
     __injectMockReplyCard(mkCard({}));
     const { container, findAllByText, findByTestId } = renderCard();
     await findAllByText("寄出");
 
+    // A SINGLE card (mkCard's default) answers on the CLICK — no send button
+    // in the loop (owner, rc-06bc715358c2).
     fireEvent.click(container.querySelectorAll(".reply-option")[1]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(container.querySelector(".chat__send")!);
 
     const final = await findByTestId("final-answer");
     expect(final.textContent).toBe(
@@ -213,8 +217,6 @@ describe("ChatReplyCard", () => {
     expect(getByPlaceholderText("或直接打字改寫回覆…")).toBeTruthy();
 
     fireEvent.click(options[0]);
-    // Ticking a chip STAGES it; the card's one send button submits it.
-    fireEvent.click(container.querySelector(".chat__send")!);
 
     await waitFor(() => {
       // Moved OFF the ai_pick option → the AI 建議 tag goes with it.

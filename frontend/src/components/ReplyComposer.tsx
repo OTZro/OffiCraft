@@ -22,6 +22,7 @@ import { PaperclipIcon, SendIcon } from "./icons";
 export function ReplyComposer({
   placeholder,
   hasSelection = false,
+  sendNowRef,
   onSend,
 }: {
   placeholder: string;
@@ -31,6 +32,13 @@ export function ReplyComposer({
    * an empty draft — and, symmetrically, an answer with NOTHING staged and
    * NOTHING typed must not be sendable at all. */
   hasSelection?: boolean;
+  /** Handed a callback that fires this composer's CURRENT content (typed text
+   * + staged attachments) as part of an answer the CARD is submitting for its
+   * own reason — a single-select chip click, which IS the decision. The
+   * empty-answer refusal does not apply there (the click carries the option),
+   * so the callback bypasses `canSend`; the in-flight latch still holds, so a
+   * second click during the POST cannot double-answer. */
+  sendNowRef?: React.MutableRefObject<(() => void) | null>;
   /** Submit the answer — the typed text and attachments, which the caller
    * combines with whatever it has staged. Never called on a wholly empty
    * answer. The promise rejecting keeps the composer content so nothing is
@@ -75,8 +83,9 @@ export function ReplyComposer({
     if (draftRef.current) autosizeTextarea(draftRef.current);
   }, [draft]);
 
-  async function submit() {
-    if (!canSend) return;
+  async function submit({ force = false }: { force?: boolean } = {}) {
+    if (sending) return;
+    if (!force && !canSend) return;
     const body = draft.trim();
     const attachments: ChatAttachmentInput[] = pendingAttachments.map((a) => ({
       dataB64: a.dataUri,
@@ -96,6 +105,16 @@ export function ReplyComposer({
       setSending(false);
     }
   }
+
+  // Re-published on EVERY render so the callback the card holds closes over
+  // this render's draft/attachments — a stale one would send yesterday's text.
+  useLayoutEffect(() => {
+    if (!sendNowRef) return;
+    sendNowRef.current = () => void submit({ force: true });
+    return () => {
+      sendNowRef.current = null;
+    };
+  });
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     // Shared send rule (IME gate + mobile-newline) — see lib/composerKeys.

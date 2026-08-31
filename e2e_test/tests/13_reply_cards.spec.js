@@ -6,7 +6,7 @@
 //   agent opens (POST /api/reply-cards, agent token) → cockpit badge +1,
 //   等我回覆 page lists it (longest-waiting first), the SAME ask renders as an
 //   inline card in the chat thread → the owner answers on EITHER surface
-//   (tick a chip then SEND on the page / typed text in the chat — a
+//   (ONE TAP on a chip on the page / typed text in the chat — a
 //   counter-question included) → both surfaces converge, badge −1 live, and the
 //   agent reads the answer back over the API WITH the original option wording →
 //   重新決定 replaces the answer (status STAYS answered; cancel keeps it) →
@@ -24,12 +24,31 @@
 //       first chip. The option TEXT never contains the words "AI 建議" either,
 //       for the same reason: the tag has to come from the tag.
 //
-//   (2) TICKING A CHIP STAGES, IT DOES NOT SEND. The card has ONE send button
-//       (ReplyComposer), and the answer it fires carries the ticked options AND
-//       the typed text as a single POST — `{"option_idxs": [...], "text": …}`.
-//       The old one-click-one-answer interaction cannot express a multi-select
-//       answer at all, so every option answer here ticks, ASSERTS THE CARD IS
-//       STILL WAITING, and only then sends.
+//   (2) THE TWO CARD KINDS ANSWER DIFFERENTLY, and each half is written from
+//       the OWNER's side of the screen — what he does, and whether the ask is
+//       dealt with afterwards:
+//
+//         • SINGLE — ONE TAP ON AN OPTION ANSWERS THE CARD. No send button is
+//           pressed anywhere on this path, and the assertion that follows a tap
+//           is that the ask has LEFT 待回覆 and is standing answered. Written
+//           the other way — "the answer POST fired" — it would stay green the
+//           day someone puts a second step back in, which is exactly how a
+//           previous round shipped a card the owner could not answer
+//           (「也沒人知道有這個改變，只以為是壞掉」, owner; the fix is card
+//           rc-06bc715358c2: 「單選卡點一下就送出，多選卡才要按送出」).
+//
+//         • MULTI — ticking STAGES. The card has ONE send button
+//           (ReplyComposer) and the answer it fires carries the ticked options
+//           AND the typed text as a single POST
+//           — `{"option_idxs": [...], "text": …}`, which a one-click answer
+//           cannot express. So the multi leg ticks, ASSERTS THE CARD IS STILL
+//           WAITING, and only then sends.
+//
+//   (3) THE CHIP'S LEADING MARK IS THE CARD KIND, WORDLESSLY. The 1/2/3/4
+//       ordinal is gone: a multi card's options carry tick boxes, a single
+//       card's carry radios (owner: 「那個1, 2, 3, 4直接變成打勾的嗎」), and a
+//       line above the options says what a press will DO — the only thing
+//       standing between "I tapped to see" and an answer that is one-shot.
 //
 // ⚠ HISTORY (found while writing this spec; FIXED since): the http adapter's
 // subscribeEvents() used to open its OWN EventSource per subscriber — App
@@ -137,14 +156,22 @@ function chip(scope, idx) {
   return scope.locator(`[data-testid="reply-option"][data-option-idx="${idx}"]`);
 }
 
-// Tick a chip and prove the tick did NOT answer anything: the chip lights up
-// STAGED and the card is still sitting there waiting for the send.
+// MULTI cards only. Tick a chip and prove the tick did NOT answer anything: the
+// chip lights up STAGED and the card is still sitting there waiting for the
+// send.
 async function stage(scope, idx) {
   await chip(scope, idx).click();
   await expect(
     chip(scope, idx),
     `chip ${idx} must light up as STAGED, not fire an answer`,
   ).toHaveAttribute('data-selected', 'true');
+}
+
+// SINGLE cards. ONE tap and the ask is dealt with — `answered` is what the
+// caller then asserts has appeared. Deliberately does NOT press send and does
+// not look at any POST: the owner's question is 「我點了一下，事情有沒有成？」.
+async function tapOption(scope, idx) {
+  await chip(scope, idx).click();
 }
 
 // The card's ONE send button (ReplyComposer). `scope` must already be narrowed
@@ -154,7 +181,7 @@ function sendButton(scope) {
 }
 
 test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => {
-  test('open → badge/page/chat · stage+send on the page · typed answer in chat · live SSE sync · agent readback · 重新決定 · 跳到原訊息', async ({
+  test('open → badge/page/chat · ONE TAP answers the single card on the page · typed answer in chat · live SSE sync · agent readback · 重新決定 · 跳到原訊息', async ({
     page,
   }) => {
     const request = page.request;
@@ -253,29 +280,38 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     // A single-select card writes no 已選 N 項 row (the lit chip already says it).
     await expect(waitingA.getByTestId('reply-selected-count')).toHaveCount(0);
 
-    // ── answer A on the 請示 page: tick → (still waiting) → send ──
-    await stage(waitingA, 0);
-    // Ticking a SECOND chip on a single card REPLACES the first — and still
-    // sends nothing.
-    await stage(waitingA, 1);
+    // A single card says so on screen, twice over: radios rather than tick
+    // boxes, and a line that names the consequence of a press.
+    await expect(
+      waitingA.getByTestId('reply-mode-hint'),
+      'a card that answers on the tap must say so BEFORE the tap',
+    ).toHaveText('點一下就送出');
+    await expect(
+      waitingA.locator('.reply-option__mark--radio'),
+      'a single-select card wears radios, one per option',
+    ).toHaveCount(textsA.length);
+    await expect(
+      waitingA.locator('.reply-option__mark--check'),
+      'and no tick boxes — that shape means "as many as you like"',
+    ).toHaveCount(0);
     await expect(
       chip(waitingA, 0),
-      'a single-select card holds at most one staged chip',
-    ).toHaveAttribute('data-selected', 'false');
-    await expect(
-      waitingA,
-      'ticking a chip must NOT answer the card — it stages it',
-    ).toBeVisible();
-    expect(
-      await waitingCount(request, token),
-      'no answer may have landed server-side before the send button is pressed',
-    ).toBe(baseWaiting + 2);
+      'the 1/2/3 ordinal is gone — the mark took its seat',
+    ).toHaveText(textsA[0]);
 
-    await sendButton(waitingA).click();
+    // ── answer A on the 請示 page: ONE TAP, and the ask is dealt with ──
+    // No send button is pressed here. If a second step ever comes back, this
+    // leg goes red at the very next line rather than quietly adapting.
+    await tapOption(waitingA, 1);
     await expect(
       waitingA,
-      'an answered card must leave the 待回覆 pane',
+      'ONE tap on an option must answer a single-select card outright — it leaves 待回覆',
     ).toHaveCount(0);
+    await expect
+      .poll(() => waitingCount(request, token), {
+        message: 'the tap alone must have answered it server-side',
+      })
+      .toBe(baseWaiting + 1);
     // 近期已處理 collapses by default and loads lazily — expand it first.
     await page.getByTestId('answered-toggle').click();
     const answeredA = page
@@ -316,8 +352,9 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
 
     // Re-pick the option that IS the AI pick — the third one.
     await answeredA.locator('.reply-card__redecide').click();
-    await stage(pastA, AI_A);
-    await sendButton(pastA).click();
+    // 重新決定 on a single card lands on the tap too — the same one-step rule,
+    // on the same card kind.
+    await tapOption(pastA, AI_A);
     await expect(finalA).toContainText(textsA[AI_A]);
     await expect(
       finalA,
@@ -466,6 +503,16 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
       'a multi card tags its recommendation by flag too',
     ).toContainText('AI 建議');
     await expect(chip(waiting, 0)).not.toContainText('AI 建議');
+    // …and it says, in shape and in words, that it takes more than one answer
+    // and that nothing leaves until the send.
+    await expect(
+      waiting.locator('.reply-option__mark--check'),
+      'a multi-select card wears tick boxes, one per option',
+    ).toHaveCount(texts.length);
+    await expect(waiting.locator('.reply-option__mark--radio')).toHaveCount(0);
+    await expect(waiting.getByTestId('reply-mode-hint')).toHaveText(
+      '可以選多個，勾好按送出',
+    );
 
     // A multi card writes out how many are ticked — "none" and "all" differ by
     // nothing else.
@@ -561,13 +608,11 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     await expect(chatCard1, 'card 1 must mount inline').toBeVisible();
     await expect(chatCard2, 'card 2 must mount inline ALONGSIDE card 1').toBeVisible();
 
-    // Answer card 1 by ticking a chip and pressing ITS send — the POST must
-    // complete, not hang.
-    await stage(chatCard1, 0);
-    await sendButton(chatCard1).click();
+    // Answer card 1 with ONE tap on a chip — the POST must complete, not hang.
+    await tapOption(chatCard1, 0);
     await expect(
       chatCard1.getByTestId('final-answer'),
-      'the staged-chip answer POST must complete with two cards mounted',
+      'the one-tap answer POST must complete with two cards mounted',
     ).toBeVisible({ timeout: 15_000 });
 
     // Answer card 2 by TYPING in its composer — the second POST too.
@@ -623,8 +668,7 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     // Answer from the 等我回覆 page WITHOUT ever entering M's conversation.
     await repliesTab(page).click();
     const waiting = page.getByTestId('waiting-card').filter({ hasText: summary });
-    await stage(waiting, 0);
-    await sendButton(waiting).click();
+    await tapOption(waiting, 0);
     await expect(waiting).toHaveCount(0);
     // 近期已處理 collapses by default and loads lazily — expand it first.
     await page.getByTestId('answered-toggle').click();

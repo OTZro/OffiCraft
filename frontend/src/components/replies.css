@@ -239,16 +239,14 @@
 .reply-option:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
 }
-/* The AI pick — accent-tinted so the recommendation reads first. It is the
-   option carrying ai_pick, wherever it sits in the list. */
-.reply-option--ai {
-  border-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
-  background: var(--color-accent-cta-bg);
-  color: var(--color-accent);
-}
-.reply-option--ai:hover:not(:disabled) {
-  background: var(--color-accent-cta-bg-hover);
-}
+/* The AI pick carries NO colour of its own — owner 2026-08-31: 「AI建議的都不要
+   特別標顏色好了，右邊已經有label了，現在的顏色就只用在使用者選的時候」. It used
+   to paint the SAME `--color-accent-cta-bg` background as `--selected`, so the
+   chip the AI recommends and the chip the owner ticked were near-identical
+   (「現在AI建議的，跟我選的，根本看不出來」). The 「AI 建議」 tag on the right is
+   now the only carrier of the recommendation, and accent paint means one thing
+   only: what YOU chose. Deliberately no `.reply-option--ai` rule at all — an
+   empty one would invite a colour back. */
 /* 當初選項 review mode: chips render but are not pickable (no dead-click
  * affordance) until 重新決定 re-arms them. */
 .reply-option--static {
@@ -267,24 +265,68 @@
   border-color: var(--color-accent);
   background: var(--color-accent-cta-bg);
 }
-.reply-option__num {
+/* What pressing a chip is about to do, above the options. Single-select cards
+   send on the click itself, so this line is what stands between "I clicked to
+   see what happens" and an answer that cannot be taken back. */
+.reply-card__mode-hint {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+}
+/* The selection indicator, in the seat the 1/2/3/4 ordinal used to occupy —
+   owner 2026-08-31: 「你可以不要列選項，那個1, 2, 3, 4直接變成打勾的嗎？這樣就不用
+   調顏色」. It carries TWO facts at once that the ordinal carried neither of:
+   whether THIS option is picked, and — by its SHAPE — whether the card takes
+   one answer or several. A square tick box is the universal "several"; a round
+   radio is the universal "one".
+   Same 22px box as the ordinal it replaces, so no chip changes height. */
+.reply-option__mark {
   flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  position: relative;
+  box-sizing: border-box;
   width: 22px;
   height: 22px;
   border-radius: 6px;
-  border: 1.5px solid color-mix(in srgb, var(--color-overlay) 14%, transparent);
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--color-text-muted);
+  border: 1.5px solid color-mix(in srgb, var(--color-overlay) 22%, transparent);
+  background: transparent;
 }
-.reply-option--ai .reply-option__num,
-.reply-option--selected .reply-option__num,
-.reply-option--current .reply-option__num {
-  border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
-  color: var(--color-accent);
+.reply-option__mark--radio {
+  border-radius: 50%;
+}
+/* ON = ticked (a pickable chip) or standing (a static review of the answer). */
+.reply-option__mark--on {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+/* The tick: two borders of a rotated box. Drawn in the chip's own background
+   colour so it reads on the filled mark in every theme. */
+.reply-option__mark--check.reply-option__mark--on::after {
+  content: "";
+  position: absolute;
+  left: 6.5px;
+  top: 3px;
+  width: 5px;
+  height: 10px;
+  border: solid var(--color-bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+/* The radio's inner dot. */
+.reply-option__mark--radio.reply-option__mark--on::after {
+  content: "";
+  position: absolute;
+  left: 5.25px;
+  top: 5.25px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-bg);
+}
+/* A REVIEW-mode mark states a fact about a decision already taken; it must not
+   read as a control someone could still press. */
+.reply-option__mark--static {
+  opacity: 0.85;
 }
 .reply-option__text {
   flex: 1;

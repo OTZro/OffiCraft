@@ -7,11 +7,15 @@
 //
 // Three bodies, one per card state:
 //   ReplyCardWaitingBody  — the quick-reply chips (each tagged AI 建議 iff it
-//                           carries its OWN aiPick) + the typed ReplyComposer,
-//                           behind ONE send button: ticking a chip STAGES it,
-//                           and the send carries the ticked options AND the
-//                           typed text as a single answer. Answering is the only
-//                           POSITIVE way out (no close/skip control exists —
+//                           carries its OWN aiPick) + the typed ReplyComposer.
+//                           A MULTI card stages: ticking accumulates and ONE
+//                           send button submits the ticked options AND the
+//                           typed text as a single answer. A SINGLE card does
+//                           NOT stage — one click on a chip IS the answer and
+//                           sends immediately (owner, card rc-06bc715358c2),
+//                           carrying whatever is already typed alongside it.
+//                           Answering is the only POSITIVE way out
+//                           (no close/skip control exists —
 //                           spec; 標為過期 (owner/admin agent, and since T-1b88
 //                           the card's own author) lives in the card
 //                           HEAD, outside this shared interior).
@@ -28,7 +32,7 @@
 // the composer content (ReplyComposer's contract) / the standing answer; the
 // caller shows its own error notice.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import type {
   ChatAttachmentInput,
@@ -39,20 +43,17 @@ import { AttachmentStrip } from "./AttachmentStrip";
 import { ReplyComposer } from "./ReplyComposer";
 import { ChevronRightIcon } from "./icons";
 
-/** Toggle `idx` in the staged selection under the card's own select mode.
- * `multi` adds/removes; `single` REPLACES whatever was ticked (and un-ticks on
- * a second click of the same chip, so "nothing circled" stays reachable — that
- * is the state the send button refuses to send).
+/** Add or remove `idx` from a MULTI card's staged selection. The result is kept
+ * SORTED ASCENDING so the staged set is a function of WHICH chips are ticked and
+ * not of the order they were ticked in.
  *
- * The result is kept SORTED ASCENDING so the staged set is a function of WHICH
- * chips are ticked and not of the order they were ticked in. */
-export function toggleSelection(
-  selected: number[],
-  idx: number,
-  selectMode: ReplyCard["selectMode"],
-): number[] {
+ * Multi only, by construction: a single card does not stage — its click answers
+ * — so there is no single branch here to go stale.
+ *
+ * Un-ticking must stay reachable: "nothing circled" is the state the send button
+ * refuses to send. */
+function toggleSelection(selected: number[], idx: number): number[] {
   if (selected.includes(idx)) return selected.filter((i) => i !== idx);
-  if (selectMode !== "multi") return [idx];
   return [...selected, idx].sort((a, b) => a - b);
 }
 
@@ -71,6 +72,29 @@ function answerInput(
     text,
     attachments,
   };
+}
+
+/** What pressing a chip is about to DO, written above the options.
+ *
+ * 🔴 NOT decoration. A single-select chip click SENDS, and a reply card is
+ * one-shot and cannot be taken back — so an owner who assumed the card was a
+ * multi-select and clicked "just to try" has already answered it. The card's
+ * kind used to be readable only from the presence of the 已選 N 項 row, i.e.
+ * from the ABSENCE of something on a single card, which is not a signal at
+ * all (owner: 「我UI也看不出來是單選還是多選」).
+ *
+ * Shown only where the chips are PICKABLE: on a static review (an answered
+ * card's 當初選項, an expired card) there is nothing to press, so 「點一下就
+ * 送出」 would be a false statement. */
+function ReplySelectModeHint({ card }: { card: ReplyCard }) {
+  const { t } = useI18n();
+  return (
+    <div className="reply-card__mode-hint" data-testid="reply-mode-hint">
+      {card.selectMode === "multi"
+        ? t.replies.multiModeHint
+        : t.replies.singleModeHint}
+    </div>
+  );
 }
 
 /** The quick-reply option chips. `pickable: false` renders them as a static
@@ -95,11 +119,27 @@ export function ReplyOptionChips({
   onToggle?: (idx: number) => void;
 }) {
   const { t } = useI18n();
+  const multi = card.selectMode === "multi";
   return (
-    <div className="reply-card__options">
+    <>
+      {pickable && <ReplySelectModeHint card={card} />}
+      <div
+        className="reply-card__options"
+        role={pickable ? (multi ? "group" : "radiogroup") : undefined}
+        aria-label={
+          pickable
+            ? multi
+              ? t.replies.multiModeHint
+              : t.replies.singleModeHint
+            : undefined
+        }
+      >
       {card.options.map((opt, idx) => {
         const isCurrent = currentIdxs.includes(idx);
         const isSelected = selectedIdxs.includes(idx);
+        // A pickable mark shows what is TICKED; a review mark shows what was
+        // CIRCLED. Both are "this one", read at the right moment.
+        const markOn = pickable ? isSelected : isCurrent;
         return (
           <button
             key={idx}
@@ -114,11 +154,29 @@ export function ReplyOptionChips({
             data-testid="reply-option"
             data-option-idx={idx}
             data-selected={isSelected ? "true" : "false"}
-            aria-pressed={pickable ? isSelected : undefined}
+            // The chip IS the control, so it carries the control's semantics:
+            // a checkbox on a multi card, a radio on a single one. NEVER
+            // `aria-pressed` alongside these — a toggle-button role and a
+            // checked role are two different promises about the same widget.
+            // A static review chip is a disabled button with no role at all:
+            // there is nothing there to check or uncheck.
+            role={pickable ? (multi ? "checkbox" : "radio") : undefined}
+            aria-checked={pickable ? isSelected : undefined}
             disabled={!pickable}
             onClick={() => onToggle?.(idx)}
           >
-            <span className="reply-option__num">{idx + 1}</span>
+            <span
+              className={
+                "reply-option__mark" +
+                (multi
+                  ? " reply-option__mark--check"
+                  : " reply-option__mark--radio") +
+                (markOn ? " reply-option__mark--on" : "") +
+                (pickable ? "" : " reply-option__mark--static")
+              }
+              data-testid="reply-option-mark"
+              aria-hidden="true"
+            />
             <span className="reply-option__text">{opt.text}</span>
             {isCurrent && (
               <span className="reply-tag reply-tag--current">
@@ -133,7 +191,8 @@ export function ReplyOptionChips({
           </button>
         );
       })}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -236,6 +295,46 @@ export function ReplyCardTaskRef({
   );
 }
 
+/** The chip-click behaviour BOTH pickable faces share, which is not the same
+ * behaviour on the two card kinds:
+ *
+ *   • multi  — a click STAGES. Nothing leaves the browser until the send.
+ *   • single — a click IS the answer and fires it on the spot (owner,
+ *     rc-06bc715358c2: 「單選卡點一下就送出，多選卡才要按送出」).
+ *
+ * The single click sends through the COMPOSER (`sendNowRef`) rather than
+ * calling the answer callback directly, so the text the owner has already
+ * typed rides along instead of being thrown away — 「點了就送」 must not be
+ * paid for with the words he typed.
+ *
+ * The clicked index travels in a ref, not in `selected`: a state write is not
+ * readable until the next render, which is one turn too late for the send this
+ * very click fires. `takeClicked()` reads it once and disarms it, so the next
+ * send (a typed answer, say) falls back to the staged set. */
+function useChipPick(
+  card: ReplyCard,
+  setSelected: React.Dispatch<React.SetStateAction<number[]>>,
+) {
+  const sendNowRef = useRef<(() => void) | null>(null);
+  const clicked = useRef<number[] | null>(null);
+  return {
+    sendNowRef,
+    takeClicked: () => {
+      const v = clicked.current;
+      clicked.current = null;
+      return v;
+    },
+    pick: (i: number) => {
+      if (card.selectMode === "multi") {
+        setSelected((prev) => toggleSelection(prev, i));
+        return;
+      }
+      clicked.current = [i];
+      sendNowRef.current?.();
+    },
+  };
+}
+
 /** A WAITING card's interior: pickable chips + the typed composer. `onAnswer`
  * rejecting must be surfaced by the caller (the chips can simply be clicked
  * again; the composer keeps its content). */
@@ -248,22 +347,22 @@ export function ReplyCardWaitingBody({
 }) {
   const { t } = useI18n();
   const [selected, setSelected] = useState<number[]>([]);
+  const { pick, sendNowRef, takeClicked } = useChipPick(card, setSelected);
   return (
     <>
       <ReplyOptionChips
         card={card}
         pickable
         selectedIdxs={selected}
-        onToggle={(i) =>
-          setSelected((prev) => toggleSelection(prev, i, card.selectMode))
-        }
+        onToggle={pick}
       />
       <ReplySelectionCount card={card} selected={selected} />
       <ReplyComposer
         placeholder={t.replies.inputPlaceholder}
         hasSelection={selected.length > 0}
+        sendNowRef={sendNowRef}
         onSend={async (body, attachments) => {
-          await onAnswer(answerInput(selected, body, attachments));
+          await onAnswer(answerInput(takeClicked() ?? selected, body, attachments));
           setSelected([]);
         }}
       />
@@ -315,6 +414,7 @@ export function ReplyCardAnsweredBody({
   // What 重新決定 has staged. Seeded from the standing answer when edit mode
   // opens, so "change one of my three picks" does not start from nothing.
   const [selected, setSelected] = useState<number[]>([]);
+  const { pick, sendNowRef, takeClicked } = useChipPick(card, setSelected);
 
   async function doReanswer(input: ReplyCardAnswerInput) {
     await onReanswer(input);
@@ -322,7 +422,11 @@ export function ReplyCardAnsweredBody({
   }
 
   function startEditing() {
-    setSelected(optionIdxs);
+    // Seed edit mode from the standing answer so 「改掉三個裡的一個」 does not
+    // start from nothing — MULTI only. A single card stages nothing (its click
+    // sends), and a seeded set there would arm the send button to re-submit the
+    // answer that is already standing.
+    setSelected(card.selectMode === "multi" ? optionIdxs : []);
     setEditing(true);
   }
 
@@ -387,9 +491,7 @@ export function ReplyCardAnsweredBody({
             pickable={editing}
             selectedIdxs={editing ? selected : []}
             currentIdxs={optionIdxs}
-            onToggle={(i) =>
-              setSelected((prev) => toggleSelection(prev, i, card.selectMode))
-            }
+            onToggle={pick}
           />
           {editing && <ReplySelectionCount card={card} selected={selected} />}
           {editing ? (
@@ -397,8 +499,11 @@ export function ReplyCardAnsweredBody({
               <ReplyComposer
                 placeholder={t.replies.redecidePlaceholder}
                 hasSelection={selected.length > 0}
+                sendNowRef={sendNowRef}
                 onSend={(body, attachments) =>
-                  doReanswer(answerInput(selected, body, attachments))
+                  doReanswer(
+                    answerInput(takeClicked() ?? selected, body, attachments),
+                  )
                 }
               />
               <button

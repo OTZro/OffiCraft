@@ -1,15 +1,27 @@
 // T-40: the reply card's options became a SET, and the AI recommendation moved
-// off position onto each option's own ai_pick. These are the three claims the
+// off position onto each option's own ai_pick. These are the claims the
 // cockpit half of that change rests on, and nothing else in the tree holds
 // them: the DTO-parity gate does not cover ReplyCard, the style-ownership gate
 // does not own replies.css, and the payload-parity roll-call does not list a
 // card's inner fields.
+//
+// T-40b (owner, card rc-06bc715358c2 + 2026-08-31 follow-ups) splits the two
+// card kinds apart again, and every claim below that names "single" is one of
+// the halves that changed:
+//   • a SINGLE card answers on the CLICK — no send button in the loop — and
+//     carries whatever is already typed with it;
+//   • a MULTI card still stages behind one send button;
+//   • the chip's leading ordinal became a tick box (multi) / radio (single),
+//     which is also how the two kinds are told apart on screen;
+//   • a line above the options says what a click is about to DO, because on a
+//     single card a click cannot be taken back.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import {
   ReplyCardAnsweredBody,
+  ReplyCardExpiredBody,
   ReplyCardWaitingBody,
 } from "./ReplyCardBody";
 import type { ReplyCard, ReplyCardAnswerInput } from "../api/adapter";
@@ -52,8 +64,11 @@ function renderWaiting(card: ReplyCard) {
     </I18nProvider>,
   );
   const chips = () => [...u.container.querySelectorAll(".reply-option")];
+  const marks = () => [
+    ...u.container.querySelectorAll(".reply-option__mark"),
+  ];
   const send = () => u.container.querySelector(".chat__send") as HTMLButtonElement;
-  return { ...u, sent, chips, send };
+  return { ...u, sent, chips, marks, send };
 }
 
 afterEach(() => {
@@ -76,7 +91,8 @@ describe("ReplyCardWaitingBody", () => {
 
     // One tick arms it; un-ticking that same chip disarms it again — "nothing
     // circled" has to stay reachable, because that is the state this button
-    // refuses to send.
+    // refuses to send. (A MULTI card: on a single one the first click would
+    // already have answered.)
     fireEvent.click(chips()[0]);
     expect(send().disabled).toBe(false);
     fireEvent.click(chips()[0]);
@@ -119,11 +135,13 @@ describe("ReplyCardWaitingBody", () => {
     ]);
   });
 
-  it("replaces the tick on a single card and adds to it on a multi card", async () => {
+  it("answers a single card on the click itself and only stages on a multi card", async () => {
+    // owner, rc-06bc715358c2: 「單選卡點一下就送出，多選卡才要按送出」. One click,
+    // one answer — the send button is not in this loop at all, so a test that
+    // pressed it afterwards could not tell a click-to-send card from a staging
+    // one.
     const single = renderWaiting(mkCard({ selectMode: "single" }));
-    fireEvent.click(single.chips()[0]);
     fireEvent.click(single.chips()[2]);
-    fireEvent.click(single.send());
     expect(single.sent).toEqual([
       { optionIdxs: [2], text: "", attachments: [] },
     ]);
@@ -132,10 +150,119 @@ describe("ReplyCardWaitingBody", () => {
     const multi = renderWaiting(mkCard());
     fireEvent.click(multi.chips()[0]);
     fireEvent.click(multi.chips()[2]);
+    expect(multi.sent, "a multi card must not answer on a tick").toEqual([]);
     fireEvent.click(multi.send());
     expect(multi.sent).toEqual([
       { optionIdxs: [0, 2], text: "", attachments: [] },
     ]);
+  });
+
+  it("carries the half-typed text along when a single card is answered by a click", async () => {
+    // 「點了就送」 must not be paid for with the words already in the box: the
+    // click routes THROUGH the composer, so the draft rides the same answer.
+    const { sent, chips, getByPlaceholderText } = renderWaiting(
+      mkCard({ selectMode: "single" }),
+    );
+    fireEvent.change(getByPlaceholderText("輸入回覆…"), {
+      target: { value: "但空運要先問報價" },
+    });
+    fireEvent.click(chips()[1]);
+    expect(sent).toEqual([
+      { optionIdxs: [1], text: "但空運要先問報價", attachments: [] },
+    ]);
+  });
+
+  it("keeps refusing a wholly empty answer on a single card, where the send button is still the only text route", async () => {
+    // The empty-answer guard is NOT a casualty of click-to-send: a single card
+    // whose owner typed nothing and clicked nothing must still be unsendable.
+    const { sent, send, getByPlaceholderText } = renderWaiting(
+      mkCard({ selectMode: "single" }),
+    );
+    expect(send().disabled).toBe(true);
+    fireEvent.keyDown(getByPlaceholderText("輸入回覆…"), { key: "Enter" });
+    expect(sent).toEqual([]);
+
+    // …and a text-only answer on a single card circles nothing.
+    fireEvent.change(getByPlaceholderText("輸入回覆…"), {
+      target: { value: "都不要" },
+    });
+    fireEvent.click(send());
+    expect(sent).toEqual([{ text: "都不要", attachments: [] }]);
+  });
+
+  it("says what kind of card this is and what a click will do", async () => {
+    const multi = renderWaiting(mkCard());
+    expect(multi.getByTestId("reply-mode-hint").textContent).toBe(
+      "可以選多個，勾好按送出",
+    );
+    multi.unmount();
+
+    const single = renderWaiting(mkCard({ selectMode: "single" }));
+    // The consequence, not just the kind: on a single card the click IS the
+    // answer and a reply card is one-shot.
+    expect(single.getByTestId("reply-mode-hint").textContent).toBe(
+      "點一下就送出",
+    );
+  });
+
+  it("marks the options with a tick box on a multi card and a radio on a single one", async () => {
+    // The shape IS the second, wordless statement of the card's kind — and it
+    // replaced the 1/2/3 ordinal, which said nothing about either kind or
+    // selection.
+    // Assert the CLASS, which is what replies.css paints the shape from. A
+    // data-* label alongside it would be a decoy: inverting the class alone
+    // left an attribute-only assertion green (measured).
+    const shapes = (marks: Element[]) =>
+      marks.map((e) =>
+        e.className.includes("reply-option__mark--check")
+          ? "check"
+          : e.className.includes("reply-option__mark--radio")
+            ? "radio"
+            : "none",
+      );
+    const multi = renderWaiting(mkCard());
+    expect(shapes(multi.marks())).toEqual(["check", "check", "check"]);
+    expect(
+      multi.chips().map((e) => e.textContent),
+      "the ordinal is gone — the mark carries no text",
+    ).toEqual(["走海運", "走空運AI 建議", "先擱著"]);
+    multi.unmount();
+
+    const single = renderWaiting(mkCard({ selectMode: "single" }));
+    expect(shapes(single.marks())).toEqual(["radio", "radio", "radio"]);
+  });
+
+  it("gives the chips the checked semantics of the control they now look like", async () => {
+    const multi = renderWaiting(mkCard());
+    expect(multi.chips().map((e) => e.getAttribute("role"))).toEqual([
+      "checkbox",
+      "checkbox",
+      "checkbox",
+    ]);
+    expect(multi.chips().map((e) => e.getAttribute("aria-checked"))).toEqual([
+      "false",
+      "false",
+      "false",
+    ]);
+    // aria-pressed is a DIFFERENT promise (a toggle button) and must not ride
+    // alongside — a screen reader would be told two things about one widget.
+    expect(multi.chips().every((e) => !e.hasAttribute("aria-pressed"))).toBe(
+      true,
+    );
+    fireEvent.click(multi.chips()[2]);
+    expect(multi.chips()[2].getAttribute("aria-checked")).toBe("true");
+    multi.unmount();
+
+    const single = renderWaiting(mkCard({ selectMode: "single" }));
+    expect(single.chips().map((e) => e.getAttribute("role"))).toEqual([
+      "radio",
+      "radio",
+      "radio",
+    ]);
+    expect(
+      single.container.querySelector(".reply-card__options")!.getAttribute("role"),
+      "single-select radios need the group that makes them one choice",
+    ).toBe("radiogroup");
   });
 
   it("tags the option that carries ai_pick, and counts the ticks on a multi card", async () => {
@@ -145,9 +272,9 @@ describe("ReplyCardWaitingBody", () => {
     // AI tag rides the SECOND option — that is where ai_pick is — and a reader
     // that still tags index 0 disagrees with both of the first two strings.
     expect(chips().map((e) => e.textContent)).toEqual([
-      "1走海運",
-      "2走空運AI 建議",
-      "3先擱著",
+      "走海運",
+      "走空運AI 建議",
+      "先擱著",
     ]);
     expect(getByTestId("reply-selected-count").textContent).toBe("已選 0 項");
 
@@ -161,7 +288,7 @@ describe("ReplyCardWaitingBody", () => {
       "false",
       "true",
     ]);
-    expect(chips()[1].textContent).toBe("2走空運AI 建議");
+    expect(chips()[1].textContent).toBe("走空運AI 建議");
   });
 
 });
@@ -223,9 +350,9 @@ describe("ReplyCardAnsweredBody", () => {
       "true",
     ]);
     expect(chips.map((e) => e.textContent)).toEqual([
-      "1走海運目前",
-      "2走空運AI 建議",
-      "3先擱著目前",
+      "走海運目前",
+      "走空運AI 建議",
+      "先擱著目前",
     ]);
 
     fireEvent.click(chips[1]);
@@ -233,5 +360,66 @@ describe("ReplyCardAnsweredBody", () => {
     expect(sent).toEqual([
       { optionIdxs: [0, 1, 2], text: "", attachments: [] },
     ]);
+  });
+
+  it("re-decides a single card on the click, replacing the standing answer outright", async () => {
+    const { sent, container, getByText } = renderAnswered(
+      answered({
+        selectMode: "single",
+        answer: { optionIdxs: [0], text: "", attachments: [] },
+      }),
+    );
+    fireEvent.click(getByText("查看當初選項"));
+    fireEvent.click(getByText("重新決定"));
+    const chips = [...container.querySelectorAll(".reply-option")];
+    // Nothing is staged when edit mode opens on a single card — a seeded set
+    // would arm the send button to re-submit the answer already standing — and
+    // the click that follows IS the new decision.
+    expect(chips.map((e) => e.getAttribute("data-selected"))).toEqual([
+      "false",
+      "false",
+      "false",
+    ]);
+    fireEvent.click(chips[1]);
+    expect(sent).toEqual([{ optionIdxs: [1], text: "", attachments: [] }]);
+  });
+
+  it("reviews the original options without offering a control or a claim about clicking", async () => {
+    // 查看當初選項 BEFORE 重新決定 is a statement about a decision already
+    // taken. 「點一下就送出」 there would be false, and a live-looking tick box
+    // would be an affordance that does nothing.
+    const { container, getByText, queryByTestId } = renderAnswered(answered());
+    fireEvent.click(getByText("查看當初選項"));
+
+    expect(queryByTestId("reply-mode-hint")).toBeNull();
+    const chips = [...container.querySelectorAll(".reply-option")];
+    expect(chips.every((e) => (e as HTMLButtonElement).disabled)).toBe(true);
+    expect(chips.every((e) => !e.hasAttribute("role"))).toBe(true);
+    expect(chips.every((e) => !e.hasAttribute("aria-checked"))).toBe(true);
+    // …but it still SHOWS which ones were circled: the mark lights on the
+    // standing answer, not on nothing.
+    expect(
+      [...container.querySelectorAll(".reply-option__mark")].map((e) =>
+        e.className.includes("reply-option__mark--on"),
+      ),
+    ).toEqual([true, false, true]);
+  });
+});
+
+describe("ReplyCardExpiredBody", () => {
+  it("says nothing about clicking on a card nobody can answer any more", async () => {
+    const { queryByTestId, container } = render(
+      <I18nProvider>
+        <ReplyCardExpiredBody
+          card={mkCard({ status: "expired", selectMode: "single" })}
+        />
+      </I18nProvider>,
+    );
+    expect(queryByTestId("reply-mode-hint")).toBeNull();
+    expect(
+      [...container.querySelectorAll(".reply-option")].every(
+        (e) => (e as HTMLButtonElement).disabled,
+      ),
+    ).toBe(true);
   });
 });

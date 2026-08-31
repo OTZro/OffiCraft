@@ -38,12 +38,27 @@ const MULTI_CARD: ReplyCard = {
   task: null,
 };
 
+// The SINGLE-select twin. T-40b gave the two kinds different chip marks (radio
+// vs tick box) and a different hint line, and both of those are new rows/boxes
+// that have to fit a phone card — the multi story alone would leave the single
+// card's own geometry unmeasured.
+const SINGLE_CARD: ReplyCard = {
+  ...MULTI_CARD,
+  id: "rc-single",
+  summary: "這批貨要走哪一條線？只能選一條。",
+  selectMode: "single",
+  chatMessageId: "msg-single",
+};
+
 export function ReplyMultiSelectStory() {
   return (
     <I18nProvider>
       <div className="replies">
         <article className="reply-card" data-testid="card-multi">
           <ReplyCardWaitingBody card={MULTI_CARD} onAnswer={async () => {}} />
+        </article>
+        <article className="reply-card" data-testid="card-single">
+          <ReplyCardWaitingBody card={SINGLE_CARD} onAnswer={async () => {}} />
         </article>
       </div>
     </I18nProvider>

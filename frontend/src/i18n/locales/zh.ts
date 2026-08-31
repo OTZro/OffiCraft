@@ -321,6 +321,12 @@ export const zh = {
     aiPick: "AI 建議",
     // 多選卡的暫存計數:勾了幾項在送出前就寫出來——多選卡上「什麼都沒勾」與
     // 「全都要」在畫面上只差哪幾顆亮著,所以把數字寫出來。
+    // 選項上方的一行:同時說出卡的種類,以及「按下去會發生什麼」。後者是真正
+    // 護著人的那半 —— 單選卡點一下就送出,而請示卡是一次性的、送出去收不回來,
+    // 所以「以為是多選、點來試試看」必須在點之前就被擋住。勾/圓鈕已經說了種類,
+    // 這行說的是後果。
+    singleModeHint: "點一下就送出",
+    multiModeHint: "可以選多個，勾好按送出",
     selectedCountLead: "已選",
     // zh does not inflect for number, so both forms are the same word — the
     // split exists for the locales that do (see interAgentExpandOne/Many).
