@@ -510,7 +510,7 @@ def _happy_card(ctx: HCtx) -> str:
     r = ctx.client.post(
         "/api/reply-cards",
         json={"kind": "decision", "summary": "conf happy card",
-              "options": ["AI pick", "other"], "linked_task": None},
+              "options": [{"text": "AI pick"}, {"text": "other"}], "linked_task": None},
         headers=_auth(ctx.agent.token),
     )
     assert r.status_code == 200, f"happy card failed: {r.status_code} {r.text}"
@@ -521,7 +521,7 @@ def _happy_answered_card(ctx: HCtx) -> str:
     card_id = _happy_card(ctx)
     r = ctx.client.post(
         f"/api/reply-cards/{card_id}/answer",
-        json={"option_idx": 0},
+        json={"option_idxs": [0]},
         headers=_auth(ctx.owner_token),
     )
     assert r.status_code == 200, f"happy answer failed: {r.status_code} {r.text}"
@@ -1320,7 +1320,7 @@ HAPPY: dict[str, Happy] = {
     "POST /api/reply-cards": Happy(
         identity="agent",
         body={"kind": "action", "summary": "conf happy open card",
-              "options": ["done, continue"], "linked_task": None},
+              "options": [{"text": "done, continue"}], "linked_task": None},
         check=lambda _c, r: _expect(
             r,
             lambda d: d["status"] == "waiting"
@@ -1343,11 +1343,11 @@ HAPPY: dict[str, Happy] = {
     ),
     "POST /api/reply-cards/{card_id}/answer": Happy(
         path=lambda ctx: f"/api/reply-cards/{_happy_card(ctx)}/answer",
-        body={"option_idx": 0},
+        body={"option_idxs": [0]},
         check=lambda _c, r: _expect(
             r,
             lambda d: d["status"] == "answered"
-            and d["answer"]["option_idx"] == 0
+            and d["answer"]["option_idxs"] == [0]
             and d["answered_ts"],
         ),
     ),
@@ -1358,7 +1358,7 @@ HAPPY: dict[str, Happy] = {
             r,
             lambda d: d["status"] == "answered"
             and d["answer"]["text"] == "conf happy revised"
-            and d["answer"]["option_idx"] is None,
+            and d["answer"]["option_idxs"] is None,
         ),
     ),
     "POST /api/reply-cards/{card_id}/expire": Happy(

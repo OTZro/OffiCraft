@@ -414,7 +414,7 @@ def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, ow
         ("reply_card", lambda: client.post(
             "/api/reply-cards",
             json={"kind": "decision", "summary": f"topic probe {tag}",
-                  "options": ["AI pick", "other"], "linked_task": None},
+                  "options": [{"text": "AI pick"}, {"text": "other"}], "linked_task": None},
             headers=_auth(agent_a.token))),
         # The three M3 task-batch topics, each through an ORDINARY write face
         # (task creation / a worker field edit / manual creation) — not a
@@ -1276,7 +1276,7 @@ def test_gate_arm_emits_reply_card_frame_to_owner(
     ).status_code == 200
     r = client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "gate probe", "options": ["go", "hold"],
+        json={"kind": "decision", "summary": "gate probe", "options": [{"text": "go"}, {"text": "hold"}],
               "linked_task": {"task_id": task_id, "step_id": step_id}},
         headers=h,
     )

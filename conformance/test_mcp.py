@@ -665,3 +665,79 @@ def test_t6020_opened_tool_is_refused_for_a_plain_agent(client, agent_a) -> None
         f"a plain agent must NOT reach get_settings: {r.text}"
     )
     assert '"forbidden"' in result["content"][0]["text"], result
+
+
+# ── the catalog descriptor ↔ live wire seam (T-40) ───────────────────────────
+#
+# 🔴 THIS IS THE UNGUARDED JOINT. The MCP tool schema an agent is handed comes
+# from x-mcp.legacy.descriptor — a hand-written JSON STRING in spec/openapi.json
+# that bin/gen-mcp-catalog copies through verbatim, checking only that its name
+# and description match the operation's. It is cross-checked against
+# components/schemas by NOTHING. The server, meanwhile, decodes tool arguments
+# with DisallowUnknownFields.
+#
+# So a schema change that misses the descriptor is silent at build time and
+# fatal at call time: every real MCP call carrying the new field is a 422, and
+# every agent that trusts the advertised schema is wrong. These two tests close
+# that joint the only way it can be closed from outside — by taking the LIVE
+# tools/list schema and actually CALLING the tool with what it advertises.
+
+
+def _tool_schema(client, token, name: str) -> dict[str, Any]:
+    tools = _result(_rpc(client, token, "tools/list"))["tools"]
+    for tool in tools:
+        if tool["name"] == name:
+            return tool["inputSchema"]
+    raise AssertionError(f"{name} is absent from tools/list")
+
+
+def test_create_reply_card_descriptor_matches_what_the_server_accepts(
+    client, owner_token, agent_a
+) -> None:
+    schema = _tool_schema(client, agent_a.token, "create_reply_card")
+    props = schema["properties"]
+
+    # What the descriptor ADVERTISES.
+    assert props["options"]["items"] == {"$ref": "#/$defs/ReplyCardOptionDTO"}, props
+    option_def = schema["$defs"]["ReplyCardOptionDTO"]
+    assert set(option_def["properties"]) == {"text", "ai_pick"}, option_def
+    assert option_def["required"] == ["text"], option_def
+    assert props["select_mode"]["enum"] == ["single", "multi"], props
+    assert props["select_mode"]["default"] == "single", props
+
+    # ...and that the server ACCEPTS exactly that, field for field. The server
+    # rejects unknown fields, so this call is what proves the two agree.
+    result = _call(client, agent_a.token, "create_reply_card", {
+        "kind": "decision",
+        "summary": "descriptor parity",
+        "options": [{"text": "甲", "ai_pick": True}, {"text": "乙", "ai_pick": False}],
+        "select_mode": "multi",
+        "linked_task": None,
+    })
+    assert result.get("isError") is not True, result
+    card = result["structuredContent"]
+    assert card["select_mode"] == "multi", card
+    assert card["options"] == [{"text": "甲", "ai_pick": True},
+                               {"text": "乙", "ai_pick": False}], card
+
+
+def test_answer_reply_card_descriptor_matches_what_the_server_accepts(
+    client, owner_token, agent_a
+) -> None:
+    schema = _tool_schema(client, owner_token, "answer_reply_card")
+    idxs = schema["properties"]["option_idxs"]
+    assert idxs["anyOf"] == [{"items": {"type": "integer"}, "type": "array"},
+                             {"type": "null"}], idxs
+    assert "option_idx" not in schema["properties"], schema["properties"]
+
+    opened = _call(client, agent_a.token, "create_reply_card", {
+        "kind": "decision", "summary": "descriptor parity: answer",
+        "options": [{"text": "甲"}, {"text": "乙"}, {"text": "丙"}],
+        "select_mode": "multi", "linked_task": None,
+    })["structuredContent"]
+
+    answered = _call(client, owner_token, "answer_reply_card", {
+        "card_id": opened["id"], "option_idxs": [2, 0],
+    })
+    assert answered.get("isError") is not True, answered
+    assert answered["structuredContent"]["answer"]["option_idxs"] == [0, 2], answered
