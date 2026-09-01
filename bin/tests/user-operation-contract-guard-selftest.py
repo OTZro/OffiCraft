@@ -10,7 +10,7 @@ load-bearing direction of the guard:
   inferred by a reader;
 * the reverse ReplyCardBody caller enumeration is derived from the fixture tree:
   removing one known caller makes the reported count drop, and omitting its
-  mapping is red;
+  mapping is red; adding a fourth caller without a mapping is red too;
 * an orphan named assertion is red, so adding an assertion does not silently
   create an undocumented contract;
 * deleting a row without a ruling record is red, so deletion is not a bypass.
@@ -36,6 +36,7 @@ GUARD = ROOT / "bin/user-operation-contract-guard.py"
 CONTRACT_REL = "docs/design/user-operation-contracts.md"
 SPEC_REL = "e2e_test/tests/uoc_contract_fixture.spec.js"
 SURFACE_MANIFEST_REL = "docs/design/user-operation-contract-surfaces.json"
+UNCLAIMED_SURFACE_REL = "frontend/src/components/FourthReplyCard.tsx"
 
 SURFACE_ROWS = [
     {
@@ -174,6 +175,9 @@ def reset_fixture(root: Path) -> None:
     )
     for row in SURFACE_ROWS:
         (root / row["source"]).write_text(SURFACE_SOURCE, encoding="utf-8")
+    unclaimed = root / UNCLAIMED_SURFACE_REL
+    if unclaimed.exists():
+        unclaimed.unlink()
 
 
 def mutate_narrow(root: Path) -> None:
@@ -211,6 +215,11 @@ def mutate_surface_manifest(root: Path) -> None:
         raise AssertionError("surface manifest fixture shape changed")
     payload["surfaces"] = rows[1:]
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def mutate_new_surface(root: Path) -> None:
+    path = root / UNCLAIMED_SURFACE_REL
+    path.write_text(SURFACE_SOURCE, encoding="utf-8")
 
 
 def mutate_orphan_marker(root: Path) -> None:
@@ -298,6 +307,18 @@ def case_surface_manifest_omits_caller(root: Path, clean_sha: str) -> None:
     )
 
 
+def case_new_unclaimed_surface(root: Path, clean_sha: str) -> None:
+    reset_fixture(root)
+    mutate_new_surface(root)
+    require_red(
+        root,
+        clean_sha,
+        "new unclaimed surface",
+        "discovered 4 production ReplyCardBody caller(s)",
+        "unclaimed production ReplyCardBody caller(s)",
+    )
+
+
 def case_orphan_marker(root: Path, clean_sha: str) -> None:
     reset_fixture(root)
     mutate_orphan_marker(root)
@@ -325,6 +346,7 @@ def main() -> int:
         case_missing_screen(root, clean_sha)
         case_surface_import_removed(root, clean_sha)
         case_surface_manifest_omits_caller(root, clean_sha)
+        case_new_unclaimed_surface(root, clean_sha)
         case_orphan_marker(root, clean_sha)
         case_delete(root, clean_sha)
         reset_fixture(root)
@@ -333,7 +355,7 @@ def main() -> int:
     print(
         "[user-operation-contract-guard-selftest] OK — clean, narrowing, "
         "multi-screen coverage, reverse surface enumeration, orphan marker and "
-        "deletion mutants all behaved"
+        "deletion and fourth-surface mutants all behaved"
     )
     return 0
 
