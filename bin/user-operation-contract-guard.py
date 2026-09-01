@@ -9,6 +9,12 @@ The contract is deliberately checked in two directions:
   in the same diff.  A narrowing is a change too, even when the new sentence is
   still true.
 
+The reply-card scope is also checked backwards from production code: every
+production caller importing the shared ReplyCardBody must appear in the surface
+enumeration input, and every contract scope must equal that discovered set.  The
+enumerator prints its derived count before validating the mapping, so a narrowed
+scan cannot hide behind a fixed number.
+
 The baseline is resolved from the PR base SHA / origin/main / HEAD^ and can be
 explicitly supplied by OC_UOC_BASE_SHA for hermetic selftests.  The guard reads
 the working tree, so it also protects an uncommitted new contract during local
@@ -25,6 +31,14 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from reply_card_surface_guard import (  # noqa: E402
+    SURFACE_SET,
+    Surface,
+    SurfaceEnumerationError,
+    enumerate_and_report,
+)
 
 
 ROOT = Path(
@@ -73,6 +87,7 @@ class ContractBlock:
     scope: Tuple[str, ...]
     ruling: str
     evidence: str
+    surface_set: str
     sentence: str
     assertions: Tuple[AssertionSpec, ...]
     start_line: int
@@ -114,7 +129,7 @@ def parse_metadata(payload: str, line: int, source: str) -> Dict[str, str]:
                 "keep exactly one value for each contract field"
             )
         values[key] = value
-    required = {"id", "scope", "ruling", "evidence"}
+    required = {"id", "scope", "ruling", "evidence", "surface_set"}
     missing = sorted(required - set(values))
     extra = sorted(set(values) - required)
     if missing or extra:
@@ -125,7 +140,7 @@ def parse_metadata(payload: str, line: int, source: str) -> Dict[str, str]:
             detail.append("unknown " + ", ".join(extra))
         raise GuardError(
             f"{source}:{line}: contract metadata has {'; '.join(detail)}; next "
-            "action: keep id, scope, ruling and evidence only"
+            "action: keep id, scope, surface_set, ruling and evidence only"
         )
     if not ID_RE.fullmatch(values["id"]):
         raise GuardError(
@@ -157,6 +172,12 @@ def parse_metadata(payload: str, line: int, source: str) -> Dict[str, str]:
         raise GuardError(
             f"{source}:{line}: empty evidence for {values['id']}; next action: "
             "point to the current source-of-truth line"
+        )
+    if values["surface_set"] != SURFACE_SET:
+        raise GuardError(
+            f"{source}:{line}: unknown surface_set {values['surface_set']!r} for "
+            f"{values['id']}; next action: use {SURFACE_SET!r} so the scope is "
+            "derived from the ReplyCardBody caller enumeration"
         )
     return values
 
@@ -256,6 +277,7 @@ def parse_contract(text: str, source: str) -> Tuple[List[ContractBlock], Dict[st
                     scope=scope,
                     ruling=meta["ruling"],
                     evidence=meta["evidence"],
+                    surface_set=meta["surface_set"],
                     sentence=sentence_lines[0][1],
                     assertions=tuple(assertions),
                     start_line=i + 1,
@@ -367,6 +389,34 @@ def validate_bindings(blocks: Sequence[ContractBlock], markers: Sequence[Marker]
             f"{marker.path}:{marker.line}: UOC_ASSERT {name} ({contract_id}, "
             f"screen={screen}) is not listed in the contract; next action: add "
             "its screen/marker binding to the contract or remove the marker"
+        )
+
+
+def validate_surface_scopes(
+    blocks: Sequence[ContractBlock], surfaces: Sequence[Surface]
+) -> None:
+    expected = {surface.screen for surface in surfaces}
+    if not expected:
+        raise GuardError(
+            "ReplyCardBody caller enumeration is empty; next action: restore a "
+            "production surface before evaluating contract scope"
+        )
+    for block in blocks:
+        actual = set(block.scope)
+        if actual == expected:
+            continue
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        detail: List[str] = []
+        if missing:
+            detail.append("missing enumerated screen(s) " + ", ".join(missing))
+        if extra:
+            detail.append("not found in enumeration " + ", ".join(extra))
+        raise GuardError(
+            f"{CONTRACT_REL}:{block.start_line}: {block.contract_id} scope does not "
+            f"equal the reverse ReplyCardBody caller enumeration ({'; '.join(detail)}); "
+            "next action: list every discovered caller in this entry and bind one "
+            "named assertion to each screen"
         )
 
 
@@ -483,8 +533,13 @@ def run() -> None:
         )
     current_text = CONTRACT_PATH.read_text(encoding="utf-8")
     blocks, retired = parse_contract(current_text, CONTRACT_REL)
+    try:
+        surfaces = enumerate_and_report(ROOT)
+    except SurfaceEnumerationError as exc:
+        raise GuardError(str(exc)) from exc
     markers = scan_markers()
     validate_bindings(blocks, markers)
+    validate_surface_scopes(blocks, surfaces)
     base = resolve_base()
     validate_change_sources(current_text, blocks, retired, base)
     print(

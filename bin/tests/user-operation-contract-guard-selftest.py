@@ -8,6 +8,9 @@ load-bearing direction of the guard:
   harmless narrowing cannot silently reduce the protected behavior;
 * a row claiming two screens with one named assertion is red, so scope cannot be
   inferred by a reader;
+* the reverse ReplyCardBody caller enumeration is derived from the fixture tree:
+  removing one known caller makes the reported count drop, and omitting its
+  mapping is red;
 * an orphan named assertion is red, so adding an assertion does not silently
   create an undocumented contract;
 * deleting a row without a ruling record is red, so deletion is not a bypass.
@@ -20,6 +23,7 @@ git baseline and a real working-tree diff.
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -31,18 +35,37 @@ ROOT = Path(__file__).resolve().parents[2]
 GUARD = ROOT / "bin/user-operation-contract-guard.py"
 CONTRACT_REL = "docs/design/user-operation-contracts.md"
 SPEC_REL = "e2e_test/tests/uoc_contract_fixture.spec.js"
+SURFACE_MANIFEST_REL = "docs/design/user-operation-contract-surfaces.json"
+
+SURFACE_ROWS = [
+    {
+        "source": "frontend/src/components/ChatReplyCard.tsx",
+        "screen": "chat-page",
+    },
+    {
+        "source": "frontend/src/components/RepliesPage.tsx",
+        "screen": "replies-page",
+    },
+    {
+        "source": "frontend/src/components/TaskReplyCard.tsx",
+        "screen": "tasks-page",
+    },
+]
 
 CLEAN_CONTRACT = """# fixture
 
-<!-- user-operation-contract: id=UOC-TEST-TWO-SCREENS scope=replies-page,chat-page ruling=rc-test-one evidence=fixture:1 -->
+<!-- user-operation-contract: id=UOC-TEST-TWO-SCREENS scope=replies-page,chat-page,tasks-page surface_set=reply-card-body-callers ruling=rc-test-one evidence=fixture:1 -->
 - sentence: 點一下選項就完成回答。
 - assertion: screen=replies-page marker=test_replies_one_tap
 - assertion: screen=chat-page marker=test_chat_one_tap
+- assertion: screen=tasks-page marker=test_tasks_one_tap
 <!-- /user-operation-contract -->
 
-<!-- user-operation-contract: id=UOC-TEST-SECOND scope=replies-page ruling=rc-test-two evidence=fixture:2 -->
+<!-- user-operation-contract: id=UOC-TEST-SECOND scope=replies-page,chat-page,tasks-page surface_set=reply-card-body-callers ruling=rc-test-two evidence=fixture:2 -->
 - sentence: 打字後送出會保留文字。
 - assertion: screen=replies-page marker=test_replies_draft
+- assertion: screen=chat-page marker=test_chat_draft
+- assertion: screen=tasks-page marker=test_tasks_draft
 <!-- /user-operation-contract -->
 """
 
@@ -53,10 +76,18 @@ test('fixture assertions', async ({ page }) => {
   await expect(page, 'replies one tap').toHaveURL('/');
   // UOC_ASSERT id=UOC-TEST-TWO-SCREENS screen=chat-page name=test_chat_one_tap
   await expect(page, 'chat one tap').toHaveURL('/');
+  // UOC_ASSERT id=UOC-TEST-TWO-SCREENS screen=tasks-page name=test_tasks_one_tap
+  await expect(page, 'tasks one tap').toHaveURL('/');
   // UOC_ASSERT id=UOC-TEST-SECOND screen=replies-page name=test_replies_draft
   await expect(page, 'draft is kept').toHaveURL('/');
+  // UOC_ASSERT id=UOC-TEST-SECOND screen=chat-page name=test_chat_draft
+  await expect(page, 'chat draft is kept').toHaveURL('/');
+  // UOC_ASSERT id=UOC-TEST-SECOND screen=tasks-page name=test_tasks_draft
+  await expect(page, 'tasks draft is kept').toHaveURL('/');
 });
 """
+
+SURFACE_SOURCE = "import { ReplyCardWaitingBody } from \"./ReplyCardBody\";\n"
 
 
 def git(root: Path, *args: str) -> str:
@@ -83,8 +114,15 @@ def stage_fixture(tmp: Path) -> Tuple[Path, str]:
     root = tmp / "tree"
     (root / "docs/design").mkdir(parents=True)
     (root / "e2e_test/tests").mkdir(parents=True)
+    (root / "frontend/src/components").mkdir(parents=True)
     (root / CONTRACT_REL).write_text(CLEAN_CONTRACT, encoding="utf-8")
     (root / SPEC_REL).write_text(CLEAN_SPEC, encoding="utf-8")
+    (root / SURFACE_MANIFEST_REL).write_text(
+        json.dumps({"surfaces": SURFACE_ROWS}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    for row in SURFACE_ROWS:
+        (root / row["source"]).write_text(SURFACE_SOURCE, encoding="utf-8")
     subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
     subprocess.run(["git", "-C", str(root), "config", "user.name", "selftest"], check=True)
     subprocess.run(
@@ -130,6 +168,12 @@ def require_red(root: Path, base: str, label: str, *needles: str) -> None:
 def reset_fixture(root: Path) -> None:
     (root / CONTRACT_REL).write_text(CLEAN_CONTRACT, encoding="utf-8")
     (root / SPEC_REL).write_text(CLEAN_SPEC, encoding="utf-8")
+    (root / SURFACE_MANIFEST_REL).write_text(
+        json.dumps({"surfaces": SURFACE_ROWS}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    for row in SURFACE_ROWS:
+        (root / row["source"]).write_text(SURFACE_SOURCE, encoding="utf-8")
 
 
 def mutate_narrow(root: Path) -> None:
@@ -149,6 +193,24 @@ def mutate_missing_screen_assertion(root: Path) -> None:
     if old not in text:
         raise AssertionError("screen assertion anchor disappeared")
     path.write_text(text.replace(old, "", 1), encoding="utf-8")
+
+
+def mutate_surface_import(root: Path) -> None:
+    path = root / SURFACE_ROWS[0]["source"]
+    text = path.read_text(encoding="utf-8")
+    if SURFACE_SOURCE not in text:
+        raise AssertionError("surface import anchor disappeared")
+    path.write_text(text.replace(SURFACE_SOURCE, "", 1), encoding="utf-8")
+
+
+def mutate_surface_manifest(root: Path) -> None:
+    path = root / SURFACE_MANIFEST_REL
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    rows = payload["surfaces"]
+    if len(rows) != len(SURFACE_ROWS):
+        raise AssertionError("surface manifest fixture shape changed")
+    payload["surfaces"] = rows[1:]
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
 def mutate_orphan_marker(root: Path) -> None:
@@ -178,6 +240,7 @@ def mutate_delete_entry(root: Path) -> None:
     for marker in (
         "  // UOC_ASSERT id=UOC-TEST-TWO-SCREENS screen=replies-page name=test_replies_one_tap\n",
         "  // UOC_ASSERT id=UOC-TEST-TWO-SCREENS screen=chat-page name=test_chat_one_tap\n",
+        "  // UOC_ASSERT id=UOC-TEST-TWO-SCREENS screen=tasks-page name=test_tasks_one_tap\n",
     ):
         if marker not in spec:
             raise AssertionError("deleted-entry marker anchor disappeared")
@@ -211,6 +274,30 @@ def case_missing_screen(root: Path, clean_sha: str) -> None:
     )
 
 
+def case_surface_import_removed(root: Path, clean_sha: str) -> None:
+    reset_fixture(root)
+    mutate_surface_import(root)
+    require_red(
+        root,
+        clean_sha,
+        "reverse surface enumeration",
+        "discovered 2 production ReplyCardBody caller(s)",
+        "no longer import ReplyCardBody",
+    )
+
+
+def case_surface_manifest_omits_caller(root: Path, clean_sha: str) -> None:
+    reset_fixture(root)
+    mutate_surface_manifest(root)
+    require_red(
+        root,
+        clean_sha,
+        "surface manifest omission",
+        "discovered 3 production ReplyCardBody caller(s)",
+        "unclaimed production ReplyCardBody caller(s)",
+    )
+
+
 def case_orphan_marker(root: Path, clean_sha: str) -> None:
     reset_fixture(root)
     mutate_orphan_marker(root)
@@ -236,6 +323,8 @@ def main() -> int:
         require_green(root, clean_sha, "initial fixture")
         case_narrowing(root, clean_sha)
         case_missing_screen(root, clean_sha)
+        case_surface_import_removed(root, clean_sha)
+        case_surface_manifest_omits_caller(root, clean_sha)
         case_orphan_marker(root, clean_sha)
         case_delete(root, clean_sha)
         reset_fixture(root)
@@ -243,7 +332,8 @@ def main() -> int:
         require_green(root, restored_sha, "restored fixture")
     print(
         "[user-operation-contract-guard-selftest] OK — clean, narrowing, "
-        "multi-screen coverage, orphan marker and deletion mutants all behaved"
+        "multi-screen coverage, reverse surface enumeration, orphan marker and "
+        "deletion mutants all behaved"
     )
     return 0
 

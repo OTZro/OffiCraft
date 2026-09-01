@@ -1,9 +1,9 @@
 // Focused browser checks for the user-operation contract list.
 //
 // 13_reply_cards.spec.js owns the larger historical loop and remains behaviorally
-// unchanged; this file adds the missing single-card draft-preservation checks on
-// both surfaces so the two sentences in docs/guide/quickstart.md:88 do not share
-// one vague assertion.
+// unchanged; this file adds the single-card draft-preservation checks on every
+// ReplyCardBody caller so the two sentences in docs/guide/quickstart.md:88 do not
+// share one vague assertion.
 const { test, expect } = require('@playwright/test');
 const {
   BASE,
@@ -44,6 +44,46 @@ async function readReplyCardAs(request, token, cardId) {
   });
   expect(res.status(), 'reading the answered reply card must succeed').toBe(200);
   return res.json();
+}
+
+async function createTaskAs(request, token, title, executorId) {
+  const res = await request.post(`${BASE}/api/tasks`, {
+    headers: authHeaders(token),
+    data: { title, executor_member_id: executorId },
+  });
+  expect(res.status(), 'creating a task must succeed').toBe(200);
+  const payload = await res.json();
+  expect(payload.task, 'task create must return a task').toBeTruthy();
+  return payload.task;
+}
+
+async function submitPlanAs(request, token, taskId) {
+  const res = await request.post(`${BASE}/api/tasks/${taskId}/plan`, {
+    headers: authHeaders(token),
+    data: {
+      steps: [{ name: 'UOC reply step', dod: 'The owner can answer this step.' }],
+    },
+  });
+  expect(res.status(), 'submitting a task plan must succeed').toBe(200);
+}
+
+async function readTaskAs(request, token, taskId) {
+  const res = await request.get(`${BASE}/api/tasks/${taskId}`, {
+    headers: authHeaders(token),
+  });
+  expect(res.status(), 'reading task detail must succeed').toBe(200);
+  return res.json();
+}
+
+async function setStepInProgressAs(request, token, taskId, stepId) {
+  const res = await request.post(
+    `${BASE}/api/tasks/${taskId}/steps/${stepId}/status`,
+    {
+      headers: authHeaders(token),
+      data: { status: 'in_progress' },
+    },
+  );
+  expect(res.status(), 'starting the task step must succeed').toBe(200);
 }
 
 test.describe('user-operation contract · single card draft preservation', () => {
@@ -117,6 +157,58 @@ test.describe('user-operation contract · single card draft preservation', () =>
     await expect(
       chatCard.getByTestId('final-answer'),
       'the chat one-tap answer must keep the draft text',
+    ).toContainText(draft);
+
+    const readback = await readReplyCardAs(request, memberToken, card.id);
+    expect(readback.answer.option_idxs).toEqual([1]);
+    expect(readback.answer.text).toBe(draft);
+  });
+
+  test('a task-page embedded one-tap answer carries the text already in its composer', async ({
+    page,
+  }) => {
+    const request = page.request;
+    const token = await ownerToken(request);
+    const member = await hireMember(request, token, uniqueName('UOC task member'));
+    const memberToken = await mintMemberToken(request, token, member.id, 1);
+    const title = uniqueName('UOC 任務內嵌卡');
+    const summary = uniqueName('任務內嵌單選');
+    const draft = uniqueName('任務字不能丟');
+    const task = await createTaskAs(request, token, title, member.id);
+    await submitPlanAs(request, memberToken, task.id);
+    const planned = await readTaskAs(request, memberToken, task.id);
+    const step = planned.steps[0];
+    expect(step, 'the planned task must return its reply-card step').toBeTruthy();
+    await setStepInProgressAs(request, memberToken, task.id, step.id);
+    const card = await createReplyCardAs(request, memberToken, {
+      kind: 'decision',
+      summary,
+      options: options(['保留', '送出'], 1),
+      select_mode: 'single',
+      linked_task: { task_id: task.id, step_id: step.id },
+    });
+
+    await bootAuthedSpa(page, token);
+    await page.locator('.nav-tab', { hasText: '任務' }).click();
+    const taskCard = page.getByTestId('task-card').filter({ hasText: title });
+    await expect(taskCard).toBeVisible();
+    await taskCard.locator('.task-card__head').click();
+    const embedded = taskCard.locator(
+      `[data-testid="task-reply-card"][data-reply-card-id="${card.id}"]`,
+    );
+    await expect(embedded).toBeVisible();
+    await embedded.locator('.chat__input').fill(draft);
+    await chip(embedded, 1).click();
+
+    // UOC_ASSERT id=UOC-RC-SINGLE-TAP screen=tasks-page name=single_option_tap_answers_on_tasks_page
+    await expect(
+      embedded.getByTestId('final-answer'),
+      'one tap on the task-page option must answer the embedded card',
+    ).toBeVisible();
+    // UOC_ASSERT id=UOC-RC-SINGLE-DRAFT screen=tasks-page name=single_option_keeps_draft_on_tasks_page
+    await expect(
+      embedded.getByTestId('final-answer'),
+      'the task-page one-tap answer must keep the draft text',
     ).toContainText(draft);
 
     const readback = await readReplyCardAs(request, memberToken, card.id);
