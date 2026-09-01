@@ -157,7 +157,12 @@ def test_create_validation_rules(client, asker):
     refused({**base, "options": []}, "options must carry at least one choice")
     refused({**base, "options": [{"text": "a"}, {"text": "b"}, {"text": "c"},
                                  {"text": "d"}, {"text": "e"}]},
-            "a reply card may carry at most 4 options")
+            "a single-select card may carry at most 4 options")
+    # T-43: the cap is per select_mode, so the multi card refuses at ITS OWN
+    # number — asserting only the single one would leave 20 unpinned.
+    refused({**base, "select_mode": "multi",
+             "options": [{"text": str(i)} for i in range(21)]},
+            "a multi-select card may carry at most 20 options")
     refused({**base, "options": [{"text": "a"}, {"text": "  "}]},
             "options must not be blank")
     refused({**base, "select_mode": "many"},
@@ -171,8 +176,11 @@ def test_create_validation_rules(client, asker):
     assert post({**base, "select_mode": "multi",
                  "options": [{"text": "a", "ai_pick": True},
                              {"text": "b", "ai_pick": True}]}).status_code == 200
-    # four options is the inclusive cap
+    # four options is the inclusive cap on a single card…
     assert post({**base, "options": [{"text": "a"}, {"text": "b"}, {"text": "c"}, {"text": "d"}]}).status_code == 200
+    # …and twenty is the inclusive cap on a multi one (T-43).
+    assert post({**base, "select_mode": "multi",
+                 "options": [{"text": str(i)} for i in range(20)]}).status_code == 200
     # missing required keys are the 422 (decode-layer) face
     assert post({"summary": "s", "options": [{"text": "a"}]}).status_code == 422
     assert post({"kind": "action", "options": [{"text": "a"}]}).status_code == 422

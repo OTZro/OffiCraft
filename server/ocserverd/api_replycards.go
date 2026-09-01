@@ -42,6 +42,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strconv"
 )
 
 const (
@@ -52,10 +53,15 @@ const (
 	replyCardStatusAnswered = "answered"
 	replyCardStatusExpired  = "expired"
 
-	// replyCardMaxOptions caps the quick-reply choices (SPEC: ≤4). WHICH one
-	// the AI recommends is carried by each option's own ai_pick flag — never
-	// by its position (T-40).
-	replyCardMaxOptions = 4
+	// The quick-reply choice cap, and it is TWO numbers because the two
+	// select_modes ask different questions (T-43). A single card asks "which
+	// road", and a road list that runs past four is an un-converged question
+	// dressed up as a choice — it stays at 4. A multi card asks "which of
+	// these", where the list is whatever the world actually holds, so a
+	// six-item ask must be expressible: 20. WHICH option the AI recommends is
+	// carried by each option's own ai_pick flag — never by its position (T-40).
+	replyCardMaxOptionsSingle = 4
+	replyCardMaxOptionsMulti  = 20
 
 	// The select_mode closed set (T-40): how many options the owner may
 	// circle. Orthogonal to kind — kind says what the owner must DO, this says
@@ -136,9 +142,14 @@ func recentExpiredReplyCards(cards []ReplyCard, now float64) []ReplyCard {
 	return out
 }
 
-// validateReplyCardOptions enforces the quick-reply contract: 1..4 options with
-// non-blank text (trimmed in place), and the ai_pick budget the card's
-// select_mode allows ("" = no violation).
+// validateReplyCardOptions enforces the quick-reply contract: at least one
+// option, at most as many as the card's select_mode allows (single 4, multi
+// 20), each with non-blank text (trimmed in place), plus the ai_pick budget
+// that same select_mode allows ("" = no violation).
+//
+// An unrecognised select_mode is capped as single — the strict side. The
+// caller rejects anything outside the closed set BEFORE reaching here, so this
+// is a fallback that cannot widen the cap, never a second vocabulary.
 //
 // The ai_pick budget is the whole point of T-40. A `single` card may mark AT
 // MOST ONE option as the AI's recommendation, because the owner can only circle
@@ -148,8 +159,13 @@ func validateReplyCardOptions(options []ReplyCardOptionDTO, selectMode string) (
 	if len(options) == 0 {
 		return nil, "options must carry at least one choice"
 	}
-	if len(options) > replyCardMaxOptions {
-		return nil, "a reply card may carry at most 4 options"
+	maxOptions, modeLabel := replyCardMaxOptionsSingle, replyCardSelectModeSingle
+	if selectMode == replyCardSelectModeMulti {
+		maxOptions, modeLabel = replyCardMaxOptionsMulti, replyCardSelectModeMulti
+	}
+	if len(options) > maxOptions {
+		return nil, "a " + modeLabel + "-select card may carry at most " +
+			strconv.Itoa(maxOptions) + " options"
 	}
 	out := make([]ReplyCardOption, len(options))
 	picks := 0

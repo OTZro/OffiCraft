@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"testing"
 )
 
@@ -73,6 +74,14 @@ func TestRecentExpiredReplyCardsAppliesThe24hWindowNewestFirst(t *testing.T) {
 
 func opt(text string) ReplyCardOptionDTO { return ReplyCardOptionDTO{Text: text} }
 
+func opts(n int) []ReplyCardOptionDTO {
+	out := make([]ReplyCardOptionDTO, n)
+	for i := range out {
+		out[i] = opt("opt-" + strconv.Itoa(i))
+	}
+	return out
+}
+
 func aiOpt(text string) ReplyCardOptionDTO {
 	pick := true
 	return ReplyCardOptionDTO{Text: text, AiPick: &pick}
@@ -91,6 +100,12 @@ func TestValidateReplyCardOptions(t *testing.T) {
 			replyCardSelectModeSingle, true},
 		{"five", []ReplyCardOptionDTO{opt("A"), opt("B"), opt("C"), opt("D"), opt("E")},
 			replyCardSelectModeSingle, false},
+		// T-43: the cap is per select_mode. The five-option single above and
+		// these three rows are the whole contract — a multi card takes 20,
+		// refuses 21, and the single cap does NOT move with it.
+		{"multi five", opts(5), replyCardSelectModeMulti, true},
+		{"multi twenty", opts(20), replyCardSelectModeMulti, true},
+		{"multi twenty-one", opts(21), replyCardSelectModeMulti, false},
 		{"blank member", []ReplyCardOptionDTO{opt("A"), opt("  ")},
 			replyCardSelectModeSingle, false},
 		{"single with one ai_pick", []ReplyCardOptionDTO{aiOpt("A"), opt("B")},
@@ -114,6 +129,22 @@ func TestValidateReplyCardOptions(t *testing.T) {
 			t.Fatalf("%s: validated options lost entries: %v", tc.name, got)
 		}
 	}
+	// The refusal NAMES which cap was hit; conformance pins the same two
+	// sentences on the wire, and an agent that reads "at most 4" on a multi
+	// card would stop at the wrong number.
+	for _, tc := range []struct {
+		options    []ReplyCardOptionDTO
+		selectMode string
+		want       string
+	}{
+		{opts(5), replyCardSelectModeSingle, "a single-select card may carry at most 4 options"},
+		{opts(21), replyCardSelectModeMulti, "a multi-select card may carry at most 20 options"},
+	} {
+		if _, problem := validateReplyCardOptions(tc.options, tc.selectMode); problem != tc.want {
+			t.Fatalf("%s over-cap refusal = %q, want %q", tc.selectMode, problem, tc.want)
+		}
+	}
+
 	trimmed, problem := validateReplyCardOptions(
 		[]ReplyCardOptionDTO{opt(" A "), aiOpt("B")}, replyCardSelectModeSingle)
 	if problem != "" {
