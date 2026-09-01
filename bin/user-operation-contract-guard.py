@@ -5,9 +5,9 @@ The contract is deliberately checked in two directions:
 
 * every listed screen must have a named e2e assertion, and every assertion marker
   must be listed, so a row cannot quietly claim more screens than it tests;
-* every literal change to a contract block must add an owner-ruling metadata line
-  in the same diff.  A narrowing is a change too, even when the new sentence is
-  still true.
+* every literal change to an existing contract block must change its owner
+  `ruling=` value to a different value.  A narrowing is a change too, even when
+  the new sentence is still true; a new block must add its ruling metadata.
 
 The reply-card scope is also checked backwards from production code: every
 production caller importing the shared ReplyCardBody must appear in the surface
@@ -15,10 +15,11 @@ enumeration input, and every contract scope must equal that discovered set.  The
 enumerator prints its derived count before validating the mapping, so a narrowed
 scan cannot hide behind a fixed number.
 
-The baseline is resolved from the PR base SHA / origin/main / HEAD^ and can be
-explicitly supplied by OC_UOC_BASE_SHA for hermetic selftests.  The guard reads
-the working tree, so it also protects an uncommitted new contract during local
-development.
+The baseline is resolved from the explicit selftest override or the
+merge-base of HEAD and origin/main.  Every committed contract change in the
+entire baseline..HEAD range is checked, not only HEAD^; the working tree is
+checked separately so an uncommitted change is protected during local
+development too.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from reply_card_surface_guard import (  # noqa: E402
@@ -113,7 +114,12 @@ def git(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def parse_metadata(payload: str, line: int, source: str) -> Dict[str, str]:
+def parse_metadata(
+    payload: str,
+    line: int,
+    source: str,
+    allow_legacy_surface_set: bool = False,
+) -> Dict[str, str]:
     tokens = payload.split()
     if not tokens or any(not META_TOKEN_RE.fullmatch(token) for token in tokens):
         raise GuardError(
@@ -132,6 +138,12 @@ def parse_metadata(payload: str, line: int, source: str) -> Dict[str, str]:
     required = {"id", "scope", "ruling", "evidence", "surface_set"}
     missing = sorted(required - set(values))
     extra = sorted(set(values) - required)
+    if allow_legacy_surface_set and missing == ["surface_set"]:
+        # The first T-46 commit predates the reverse surface enumeration field.
+        # Historical snapshots still need to be comparable, while the current
+        # worktree remains strict below.
+        values["surface_set"] = SURFACE_SET
+        missing = []
     if missing or extra:
         detail = []
         if missing:
@@ -182,7 +194,11 @@ def parse_metadata(payload: str, line: int, source: str) -> Dict[str, str]:
     return values
 
 
-def parse_contract(text: str, source: str) -> Tuple[List[ContractBlock], Dict[str, str]]:
+def parse_contract(
+    text: str,
+    source: str,
+    allow_legacy_surface_set: bool = False,
+) -> Tuple[List[ContractBlock], Dict[str, str]]:
     lines = text.splitlines()
     blocks: List[ContractBlock] = []
     retired: Dict[str, str] = {}
@@ -192,7 +208,12 @@ def parse_contract(text: str, source: str) -> Tuple[List[ContractBlock], Dict[st
         start_match = START_RE.fullmatch(lines[i])
         if start_match:
             start = i
-            meta = parse_metadata(start_match.group(1), i + 1, source)
+            meta = parse_metadata(
+                start_match.group(1),
+                i + 1,
+                source,
+                allow_legacy_surface_set=allow_legacy_surface_set,
+            )
             end = None
             for j in range(i + 1, len(lines)):
                 if lines[j] == END_LINE:
@@ -425,6 +446,13 @@ def resolve_base() -> str:
     explicit = os.environ.get("OC_UOC_BASE_SHA", "").strip()
     if explicit:
         candidates.append(explicit)
+    # A feature worktree can legitimately be behind a moving origin/main.  Use
+    # the common ancestor first so a later main merge does not silently become
+    # this branch's baseline.  The explicit override above is only for
+    # hermetic selftests; CI's real baseline is this merge-base.
+    merge_base = git("merge-base", "HEAD", "origin/main")
+    if merge_base.returncode == 0 and merge_base.stdout.strip():
+        candidates.append(merge_base.stdout.strip())
     github_base = os.environ.get("GITHUB_BASE_SHA", "").strip()
     if github_base:
         candidates.append(github_base)
@@ -439,20 +467,14 @@ def resolve_base() -> str:
                 candidates.append(str(event_base))
         except (OSError, json.JSONDecodeError):
             pass
-    # A feature worktree can legitimately be behind a moving origin/main.  Use
-    # the common ancestor first so a later main merge does not silently become
-    # this branch's baseline; all output still names the resolved SHA.
-    merge_base = git("merge-base", "HEAD", "origin/main")
-    if merge_base.returncode == 0 and merge_base.stdout.strip():
-        candidates.append(merge_base.stdout.strip())
-    candidates.extend(["origin/main", "HEAD^"])
     for candidate in candidates:
         checked = git("rev-parse", "--verify", f"{candidate}^{{commit}}")
         if checked.returncode == 0:
             return checked.stdout.strip()
     raise GuardError(
-        "cannot resolve a contract baseline; next action: fetch origin/main or "
-        "set OC_UOC_BASE_SHA to the commit whose contract this change updates"
+        "cannot resolve the PR contract baseline; next action: fetch origin/main "
+        "so merge-base is available, or set OC_UOC_BASE_SHA only for a hermetic "
+        "selftest"
     )
 
 
@@ -508,25 +530,28 @@ def added_lines_between(old_ref: str, new_ref: str) -> Set[str]:
 
 
 def validate_snapshot_change(
-    current_text: str,
     current_blocks: Sequence[ContractBlock],
     current_retired: Dict[str, str],
     previous_text: Optional[str],
     baseline_label: str,
     added: Set[str],
 ) -> None:
-    """Require a ruling for every changed full contract block.
+    """Require a new owner ruling for every changed full contract block.
 
     `ContractBlock.raw` deliberately includes the metadata line, sentence, every
     assertion, and the closing marker.  Comparing only metadata would let a
     sentence reverse its meaning while the row's id/scope/ruling stayed the
-    same.  The primary PR base can predate this newly-added contract file, so a
-    second comparison against the local committed snapshot is made below for
-    dirty worktrees and follow-up commits.
+    same.  A changed existing block is authorized only when its `ruling=` value
+    changes to a different value; moving an `evidence=` line is not a new
+    ruling.  A newly-added block must add its metadata line, and a deletion
+    must add a retired ruling record.
     """
     previous_blocks: List[ContractBlock] = []
+    previous_retired: Dict[str, str] = {}
     if previous_text is not None:
-        previous_blocks, _ = parse_contract(previous_text, baseline_label)
+        previous_blocks, previous_retired = parse_contract(
+            previous_text, baseline_label, allow_legacy_surface_set=True
+        )
     previous_by_id = {block.contract_id: block for block in previous_blocks}
     current_by_id = {block.contract_id: block for block in current_blocks}
     for contract_id in sorted(set(previous_by_id) | set(current_by_id)):
@@ -544,17 +569,47 @@ def validate_snapshot_change(
                     "user-operation-contract-ruling record naming the owner rc-... "
                     "card, or restore the entry"
                 )
+            retired_match = RETIRED_RE.fullmatch(ruling_line)
+            old_retired = previous_retired.get(contract_id)
+            old_ruling = old.ruling if old is not None else None
+            new_ruling = retired_match.group(2) if retired_match else None
+            if old_ruling is not None and new_ruling == old_ruling:
+                raise GuardError(
+                    f"{CONTRACT_REL}: contract {contract_id} was removed with "
+                    f"the same owner ruling {old_ruling}; next action: add a "
+                    "different ruling=rc-... source in the retired record"
+                )
+            if old_retired is not None and old_retired == ruling_line:
+                raise GuardError(
+                    f"{CONTRACT_REL}: retired ruling for {contract_id} was not "
+                    "new in this change; next action: add a different owner "
+                    "ruling record or restore the entry"
+                )
             continue
-        if new.metadata_line not in added:
-            change_kind = "added" if old is None else "changed"
+        if old is None:
+            if new.metadata_line not in added:
+                raise GuardError(
+                    f"{CONTRACT_REL}:{new.start_line}: full contract block for "
+                    f"{contract_id} was added without an owner ruling source "
+                    f"in the {baseline_label} diff; next action: add the block "
+                    "metadata line with ruling=rc-... from the owner裁定"
+                )
+            continue
+        if "surface_set=" not in old.metadata_line:
+            # This is the one schema migration in the existing T-46 history:
+            # surface_set became mandatory when reverse enumeration was added.
+            # Do not demand a second owner ruling merely for introducing that
+            # required field; all current snapshots are still strict.
+            continue
+        if new.ruling == old.ruling:
             raise GuardError(
                 f"{CONTRACT_REL}:{new.start_line}: full contract block for "
-                f"{contract_id} was {change_kind} without an owner ruling source "
-                f"in the {baseline_label} diff; this compares the sentence, "
-                "scope, assertions and metadata, and includes narrowing or a "
-                "sentence meaning reversal. Next action: add/rewrite this "
-                "block's metadata line with ruling=rc-... from the owner裁定 "
-                "before changing any literal"
+                f"{contract_id} changed in the {baseline_label} diff, but "
+                "the sentence/scope/assertions have no new owner ruling source: "
+                f"ruling={new.ruling} did not change from the previous value; "
+                "evidence-only metadata edits are not a new owner ruling. "
+                "Next action: change ruling= to a different rc-... value from "
+                "the new owner裁定 before changing any literal"
             )
 
 
@@ -564,52 +619,58 @@ def validate_change_sources(
     current_retired: Dict[str, str],
     base: str,
 ) -> None:
-    previous_text = baseline_text(base)
-    validate_snapshot_change(
-        current_text,
-        current_blocks,
-        current_retired,
-        previous_text,
-        f"baseline {base}",
-        added_lines_against(base, current_text),
-    )
-
-    # When the PR base predates the contract file, every line in the new file is
-    # necessarily an addition.  That is enough to approve the initial entry,
-    # but not enough to catch a reviewer mutating that entry in the worktree.
-    # Compare the full current block to HEAD as well; the metadata line is not
-    # added in a sentence-only mutant, so the mutant is rejected.
-    head_text = baseline_text("HEAD")
-    if head_text is not None and head_text != current_text:
+    # Validate the complete committed branch range.  Looking only at HEAD^ is
+    # insufficient: an unauthorized sentence change can be committed first
+    # and hidden under an unrelated follow-up commit.  Each snapshot is parsed
+    # at the commit where it changed, so a base that predates this new file is
+    # not allowed to make every later edit look like an initial addition.
+    commits = git("rev-list", "--reverse", f"{base}..HEAD")
+    if commits.returncode != 0:
+        raise GuardError(
+            f"cannot enumerate committed contract changes from baseline {base}; "
+            "next action: fetch the complete PR history and retry"
+        )
+    for commit in (line for line in commits.stdout.splitlines() if line.strip()):
+        parent = git("rev-parse", f"{commit}^")
+        if parent.returncode != 0:
+            raise GuardError(
+                f"cannot resolve parent of contract commit {commit}; next action: "
+                "fetch the complete PR history and retry"
+            )
+        parent_ref = parent.stdout.strip()
+        previous_text = baseline_text(parent_ref)
+        committed_text = baseline_text(commit)
+        if previous_text == committed_text:
+            continue
+        if committed_text is None:
+            committed_blocks: List[ContractBlock] = []
+            committed_retired: Dict[str, str] = {}
+        else:
+            committed_blocks, committed_retired = parse_contract(
+                committed_text,
+                f"{commit}:{CONTRACT_REL}",
+                allow_legacy_surface_set=True,
+            )
         validate_snapshot_change(
-            current_text,
+            committed_blocks,
+            committed_retired,
+            previous_text,
+            f"committed {parent_ref}..{commit}",
+            added_lines_between(parent_ref, commit),
+        )
+
+    # The committed range above protects a clean CI checkout.  Also compare
+    # the working tree to HEAD so local development cannot hide an uncommitted
+    # sentence change (including a newly-created contract file).
+    head_text = baseline_text("HEAD")
+    if head_text != current_text:
+        validate_snapshot_change(
             current_blocks,
             current_retired,
             head_text,
             "working tree vs HEAD",
             added_lines_against("HEAD", current_text),
         )
-
-    # Also protect a sentence change that was committed as a follow-up commit
-    # after the contract file was introduced.  The PR-base comparison cannot
-    # distinguish those edits while the file is new in the PR, but the nearest
-    # committed file version can.
-    parent = git("rev-parse", "HEAD^")
-    if parent.returncode == 0 and head_text is not None:
-        parent_ref = parent.stdout.strip()
-        parent_text = baseline_text(parent_ref)
-        if parent_text is not None and parent_text != head_text:
-            head_blocks, head_retired = parse_contract(
-                head_text, f"HEAD:{CONTRACT_REL}"
-            )
-            validate_snapshot_change(
-                head_text,
-                head_blocks,
-                head_retired,
-                parent_text,
-                f"committed {parent_ref}..HEAD",
-                added_lines_between(parent_ref, "HEAD"),
-            )
 
 
 def run() -> None:

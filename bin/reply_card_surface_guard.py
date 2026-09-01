@@ -4,13 +4,15 @@
 The user-operation contracts cover a rendered behavior, not a component name.
 That means the scope must come from the tree in which the shared body is used:
 
-    production source files that import ReplyCardBody
+    rendered production callers that import ReplyCardBody directly or through
+    a re-export barrel
         == the checked-in source-to-screen mapping
 
 The mapping supplies the human-facing screen name; it is not allowed to hide a
-caller.  A caller absent from the mapping, or a mapping row whose import was
-removed, is a failure.  The caller set is discovered on every run, and the
-count is printed so a narrowed scan cannot look like a healthy fixed number.
+caller or substitute the barrel itself for downstream callers.  A caller absent
+from the mapping, or a mapping row whose import was removed, is a failure.  The
+caller set is discovered on every run, and the count is printed so a narrowed
+scan cannot look like a healthy fixed number.
 """
 
 from __future__ import annotations
@@ -32,11 +34,20 @@ SCREEN_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 SOURCE_RE = re.compile(r"^frontend/src/[A-Za-z0-9_./-]+\.(?:ts|tsx)$")
 TEST_FILE_RE = re.compile(r"(?:\.test|\.spec)\.[^.]+$")
 
-# This intentionally names the module, not today's three paths.  A fourth
+# This intentionally names the module, not today's three paths.  It accepts
+# ordinary imports, lazy imports, and explicit source extensions.  A fourth
 # production caller is therefore in the discovered set without any edit to
 # this predicate; the manifest comparison then makes the missing claim red.
 IMPORT_RE = re.compile(
-    r"(?:\bfrom\s*|\bimport\s*)[\"']([^\"']*(?:^|/)ReplyCardBody)[\"']"
+    r"(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)[\"']"
+    r"(?:[^\"']*/)?ReplyCardBody(?:\.[A-Za-z0-9_-]+)?[\"']"
+)
+MODULE_REFERENCE_RE = re.compile(
+    r"(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)[\"']([^\"']+)[\"']"
+)
+REEXPORT_RE = re.compile(
+    r"\bexport\s+(?:\*|\*\s+as\s+[A-Za-z_$][A-Za-z0-9_$]*|\{[^}]*\})"
+    r"\s+from\s*[\"']([^\"']+)[\"']"
 )
 
 
@@ -131,10 +142,96 @@ def _is_production_source(path: Path, root: Path) -> bool:
 
 
 def _imports_shared_body(text: str) -> bool:
-    # The source tree currently uses ordinary ES module imports, including
-    # multi-line named imports.  This shape is deliberately module-based rather
-    # than path-based: renaming/moving a caller does not retire the scan.
+    # This is deliberately module-based rather than path-based: renaming or
+    # moving a caller does not retire the scan.  The optional parentheses cover
+    # dynamic import("./ReplyCardBody"), and the optional suffix covers imports
+    # such as from "./ReplyCardBody.tsx".
     return IMPORT_RE.search(text) is not None
+
+
+def _module_references(text: str) -> Tuple[str, ...]:
+    return tuple(match.group(1) for match in MODULE_REFERENCE_RE.finditer(text))
+
+
+def _reexport_references(text: str) -> Tuple[str, ...]:
+    return tuple(match.group(1) for match in REEXPORT_RE.finditer(text))
+
+
+def _resolve_relative_module(source: Path, specifier: str) -> Path | None:
+    """Resolve a local TS/JS module reference when its target is in the tree."""
+
+    if not specifier.startswith("."):
+        return None
+    candidate = source.parent / specifier
+    candidates = [candidate]
+    if candidate.suffix == "":
+        candidates.extend(
+            candidate.with_suffix(suffix)
+            for suffix in (".ts", ".tsx", ".js", ".jsx")
+        )
+    candidates.extend(
+        candidate / f"index{suffix}"
+        for suffix in (".ts", ".tsx", ".js", ".jsx")
+    )
+    for resolved in candidates:
+        if resolved.is_file():
+            return resolved.resolve()
+    return None
+
+
+def _discover_rendered_callers(
+    root: Path, source_texts: Dict[Path, str]
+) -> Set[Path]:
+    """Find body callers while keeping re-export-only barrels out of scope.
+
+    A barrel is an export-only hop, not a rendered surface.  When a production
+    file imports that barrel, the importer is the discovered caller.  The
+    fixed-point walk handles more than one barrel in the chain and prevents a
+    manifest entry for the barrel itself from hiding downstream screens.
+    """
+
+    body_modules = {path for path in source_texts if path.stem == "ReplyCardBody"}
+    references = {
+        path: tuple(
+            resolved
+            for specifier in _module_references(text)
+            if (resolved := _resolve_relative_module(path, specifier)) is not None
+        )
+        for path, text in source_texts.items()
+    }
+    reexports = {
+        path: tuple(
+            resolved
+            for specifier in _reexport_references(text)
+            if (resolved := _resolve_relative_module(path, specifier)) is not None
+        )
+        for path, text in source_texts.items()
+    }
+
+    barrels: Set[Path] = {
+        path for path, targets in reexports.items() if set(targets) & body_modules
+    }
+    changed = True
+    while changed:
+        changed = False
+        for path, targets in reexports.items():
+            if path not in barrels and set(targets) & barrels:
+                barrels.add(path)
+                changed = True
+
+    direct_callers = {
+        path
+        for path, text in source_texts.items()
+        if _imports_shared_body(text)
+        and path not in body_modules
+        and path not in barrels
+    }
+    barrel_callers = {
+        path
+        for path, targets in references.items()
+        if set(targets) & barrels and path not in barrels and path not in body_modules
+    }
+    return direct_callers | barrel_callers
 
 
 def discover_callers(root: Path) -> Tuple[str, ...]:
@@ -144,7 +241,7 @@ def discover_callers(root: Path) -> Tuple[str, ...]:
             f"{source_root}: frontend source tree is missing; next action: restore "
             "the production callers before evaluating reply-card coverage"
         )
-    callers: List[str] = []
+    source_texts: Dict[Path, str] = {}
     for path in sorted(source_root.rglob("*")):
         if not path.is_file() or not _is_production_source(path, root):
             continue
@@ -155,8 +252,9 @@ def discover_callers(root: Path) -> Tuple[str, ...]:
                 f"{path.relative_to(root)}: cannot read production source: {exc}; "
                 "next action: make the source readable to the enumeration"
             ) from exc
-        if _imports_shared_body(text):
-            callers.append(path.relative_to(root).as_posix())
+        source_texts[path.resolve()] = text
+    caller_paths = _discover_rendered_callers(root, source_texts)
+    callers = sorted(path.relative_to(root).as_posix() for path in caller_paths)
     if not callers:
         raise SurfaceEnumerationError(
             f"{source_root}: reverse enumeration found zero production ReplyCardBody "
@@ -183,7 +281,8 @@ def enumerate_surfaces(root: Path) -> Tuple[Surface, ...]:
             )
         if stale:
             details.append(
-                "surface manifest row(s) no longer import ReplyCardBody: "
+                "surface manifest row(s) no longer represent a rendered "
+                "ReplyCardBody caller: "
                 + ", ".join(stale)
             )
         raise SurfaceEnumerationError(
