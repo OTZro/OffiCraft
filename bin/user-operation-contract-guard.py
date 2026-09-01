@@ -485,19 +485,50 @@ def added_lines_against(base: str, current_text: str) -> Set[str]:
     }
 
 
-def validate_change_sources(
+def added_lines_between(old_ref: str, new_ref: str) -> Set[str]:
+    diff = git(
+        "diff",
+        "--no-ext-diff",
+        "--unified=0",
+        old_ref,
+        new_ref,
+        "--",
+        CONTRACT_REL,
+    )
+    if diff.returncode != 0:
+        raise GuardError(
+            f"cannot compare {CONTRACT_REL} between {old_ref} and {new_ref}; "
+            "next action: fetch the baseline commits and retry"
+        )
+    return {
+        line[1:]
+        for line in diff.stdout.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    }
+
+
+def validate_snapshot_change(
     current_text: str,
     current_blocks: Sequence[ContractBlock],
     current_retired: Dict[str, str],
-    base: str,
+    previous_text: Optional[str],
+    baseline_label: str,
+    added: Set[str],
 ) -> None:
-    previous_text = baseline_text(base)
+    """Require a ruling for every changed full contract block.
+
+    `ContractBlock.raw` deliberately includes the metadata line, sentence, every
+    assertion, and the closing marker.  Comparing only metadata would let a
+    sentence reverse its meaning while the row's id/scope/ruling stayed the
+    same.  The primary PR base can predate this newly-added contract file, so a
+    second comparison against the local committed snapshot is made below for
+    dirty worktrees and follow-up commits.
+    """
     previous_blocks: List[ContractBlock] = []
     if previous_text is not None:
-        previous_blocks, _ = parse_contract(previous_text, f"{base}:{CONTRACT_REL}")
+        previous_blocks, _ = parse_contract(previous_text, baseline_label)
     previous_by_id = {block.contract_id: block for block in previous_blocks}
     current_by_id = {block.contract_id: block for block in current_blocks}
-    added = added_lines_against(base, current_text)
     for contract_id in sorted(set(previous_by_id) | set(current_by_id)):
         old = previous_by_id.get(contract_id)
         new = current_by_id.get(contract_id)
@@ -517,11 +548,67 @@ def validate_change_sources(
         if new.metadata_line not in added:
             change_kind = "added" if old is None else "changed"
             raise GuardError(
-                f"{CONTRACT_REL}:{new.start_line}: contract {contract_id} was "
-                f"{change_kind} without an owner ruling source in the diff; this "
-                "includes narrowing a previously broader sentence. Next action: "
-                "add/rewrite this block's metadata line with ruling=rc-... from "
-                "the owner裁定 before changing any literal"
+                f"{CONTRACT_REL}:{new.start_line}: full contract block for "
+                f"{contract_id} was {change_kind} without an owner ruling source "
+                f"in the {baseline_label} diff; this compares the sentence, "
+                "scope, assertions and metadata, and includes narrowing or a "
+                "sentence meaning reversal. Next action: add/rewrite this "
+                "block's metadata line with ruling=rc-... from the owner裁定 "
+                "before changing any literal"
+            )
+
+
+def validate_change_sources(
+    current_text: str,
+    current_blocks: Sequence[ContractBlock],
+    current_retired: Dict[str, str],
+    base: str,
+) -> None:
+    previous_text = baseline_text(base)
+    validate_snapshot_change(
+        current_text,
+        current_blocks,
+        current_retired,
+        previous_text,
+        f"baseline {base}",
+        added_lines_against(base, current_text),
+    )
+
+    # When the PR base predates the contract file, every line in the new file is
+    # necessarily an addition.  That is enough to approve the initial entry,
+    # but not enough to catch a reviewer mutating that entry in the worktree.
+    # Compare the full current block to HEAD as well; the metadata line is not
+    # added in a sentence-only mutant, so the mutant is rejected.
+    head_text = baseline_text("HEAD")
+    if head_text is not None and head_text != current_text:
+        validate_snapshot_change(
+            current_text,
+            current_blocks,
+            current_retired,
+            head_text,
+            "working tree vs HEAD",
+            added_lines_against("HEAD", current_text),
+        )
+
+    # Also protect a sentence change that was committed as a follow-up commit
+    # after the contract file was introduced.  The PR-base comparison cannot
+    # distinguish those edits while the file is new in the PR, but the nearest
+    # committed file version can.
+    parent = git("rev-parse", "HEAD^")
+    if parent.returncode == 0 and head_text is not None:
+        parent_ref = parent.stdout.strip()
+        parent_text = baseline_text(parent_ref)
+        if parent_text is not None and parent_text != head_text:
+            head_blocks, head_retired = parse_contract(
+                head_text, f"HEAD:{CONTRACT_REL}"
+            )
+            validate_snapshot_change(
+                head_text,
+                head_blocks,
+                head_retired,
+                parent_text,
+                f"committed {parent_ref}..HEAD",
+                added_lines_between(parent_ref, "HEAD"),
             )
 
 

@@ -6,6 +6,8 @@ load-bearing direction of the guard:
 
 * narrowing a sentence without changing its owner ruling is red, so a seemingly
   harmless narrowing cannot silently reduce the protected behavior;
+* reversing a sentence's meaning while leaving every metadata field untouched
+  is red, including when the PR base did not yet contain the new contract file;
 * a row claiming two screens with one named assertion is red, so scope cannot be
   inferred by a reader;
 * the reverse ReplyCardBody caller enumeration is derived from the fixture tree:
@@ -56,7 +58,7 @@ SURFACE_ROWS = [
 CLEAN_CONTRACT = """# fixture
 
 <!-- user-operation-contract: id=UOC-TEST-TWO-SCREENS scope=replies-page,chat-page,tasks-page surface_set=reply-card-body-callers ruling=rc-test-one evidence=fixture:1 -->
-- sentence: 點一下選項就完成回答。
+- sentence: 點一下選項就直接送出，不需要第二次按送出。
 - assertion: screen=replies-page marker=test_replies_one_tap
 - assertion: screen=chat-page marker=test_chat_one_tap
 - assertion: screen=tasks-page marker=test_tasks_one_tap
@@ -111,8 +113,8 @@ def commit(root: Path, message: str) -> str:
     return git(root, "rev-parse", "HEAD")
 
 
-def stage_fixture(tmp: Path) -> Tuple[Path, str]:
-    root = tmp / "tree"
+def stage_fixture(tmp: Path, name: str = "tree") -> Tuple[Path, str]:
+    root = tmp / name
     (root / "docs/design").mkdir(parents=True)
     (root / "e2e_test/tests").mkdir(parents=True)
     (root / "frontend/src/components").mkdir(parents=True)
@@ -131,6 +133,17 @@ def stage_fixture(tmp: Path) -> Tuple[Path, str]:
         check=True,
     )
     return root, commit(root, "clean fixture")
+
+
+def stage_new_contract_fixture(tmp: Path) -> Tuple[Path, str]:
+    """Create a PR-like history whose base does not contain the contract file."""
+    root, _ = stage_fixture(tmp, "new-contract-tree")
+    contract_path = root / CONTRACT_REL
+    contract_path.unlink()
+    base_sha = commit(root, "base without user-operation contract")
+    contract_path.write_text(CLEAN_CONTRACT, encoding="utf-8")
+    commit(root, "add user-operation contract")
+    return root, base_sha
 
 
 def run_guard(root: Path, base: str) -> Tuple[int, str]:
@@ -181,12 +194,22 @@ def reset_fixture(root: Path) -> None:
 
 
 def mutate_narrow(root: Path) -> None:
-    old = "點一下選項就完成回答。"
-    new = "在桌面寬版請示列表頁點一下選項就完成回答。"
+    old = "點一下選項就直接送出，不需要第二次按送出。"
+    new = "在桌面寬版請示列表頁點一下選項就直接送出。"
     path = root / CONTRACT_REL
     text = path.read_text(encoding="utf-8")
     if old not in text:
         raise AssertionError("narrowing anchor disappeared")
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def mutate_sentence_reversal(root: Path) -> None:
+    old = "點一下選項就直接送出，不需要第二次按送出。"
+    new = "點一下選項不會送出，必須再按一次送出。"
+    path = root / CONTRACT_REL
+    text = path.read_text(encoding="utf-8")
+    if old not in text:
+        raise AssertionError("sentence reversal anchor disappeared")
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
@@ -270,6 +293,34 @@ def case_narrowing(root: Path, clean_sha: str) -> None:
     )
 
 
+def case_sentence_reversal(root: Path, clean_sha: str) -> None:
+    reset_fixture(root)
+    mutate_sentence_reversal(root)
+    require_red(
+        root,
+        clean_sha,
+        "sentence meaning reversal",
+        "UOC-TEST-TWO-SCREENS",
+        "full contract block",
+        "sentence",
+    )
+
+
+def case_new_contract_sentence_reversal() -> None:
+    with tempfile.TemporaryDirectory(prefix="oc-uoc-new-contract-selftest-") as raw:
+        root, base_sha = stage_new_contract_fixture(Path(raw))
+        require_green(root, base_sha, "new contract addition")
+        mutate_sentence_reversal(root)
+        require_red(
+            root,
+            base_sha,
+            "new-file sentence meaning reversal",
+            "UOC-TEST-TWO-SCREENS",
+            "working tree vs HEAD",
+            "full contract block",
+        )
+
+
 def case_missing_screen(root: Path, clean_sha: str) -> None:
     reset_fixture(root)
     mutate_missing_screen_assertion(root)
@@ -343,6 +394,7 @@ def main() -> int:
         root, clean_sha = stage_fixture(Path(raw))
         require_green(root, clean_sha, "initial fixture")
         case_narrowing(root, clean_sha)
+        case_sentence_reversal(root, clean_sha)
         case_missing_screen(root, clean_sha)
         case_surface_import_removed(root, clean_sha)
         case_surface_manifest_omits_caller(root, clean_sha)
@@ -354,8 +406,9 @@ def main() -> int:
         require_green(root, restored_sha, "restored fixture")
     print(
         "[user-operation-contract-guard-selftest] OK — clean, narrowing, "
-        "multi-screen coverage, reverse surface enumeration, orphan marker and "
-        "deletion and fourth-surface mutants all behaved"
+        "sentence-reversal, new-file baseline, multi-screen coverage, reverse "
+        "surface enumeration, orphan marker and deletion and fourth-surface "
+        "mutants all behaved"
     )
     return 0
 

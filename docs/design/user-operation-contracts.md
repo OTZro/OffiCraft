@@ -10,8 +10,10 @@ e2e 斷言，不能把涵蓋範圍留給讀者推測。`surface_set=reply-card-b
 可重讀的行。
 
 任何條目內容（包括句子、scope、surface_set、斷言綁定與出處）改動，都必須在該條目的
-metadata 行同時帶上 owner 的新裁定出處；把句子改窄也算改動。守衛會檢查這個
-變更邊界，並把每個 scope 對到 e2e 裡的 `UOC_ASSERT` marker。
+metadata 行同時帶上 owner 的新裁定出處；把句子改窄也算改動。守衛會把 metadata、
+sentence、每個 assertion 與結尾標記組成的完整 block 逐字對 baseline，比對這個變更
+邊界，並把每個 scope 對到 e2e 裡的 `UOC_ASSERT` marker。若 PR base 尚未有這份新檔，
+守衛也會對照本地已提交的 `HEAD`；因此只改句子而不改 metadata 的語意反轉仍會失敗。
 
 <!-- user-operation-contract: id=UOC-RC-SINGLE-TAP scope=replies-page,chat-page,tasks-page surface_set=reply-card-body-callers ruling=rc-06bc715358c2 evidence=docs/guide/glossary.md:63,docs/guide/quickstart.md:88,docs/design/SPEC.md:319 -->
 - sentence: 單選請示卡在請示列表頁、聊天頁與任務頁展開後的內嵌請示卡上，點一下選項就直接送出，不需要第二次按送出。
