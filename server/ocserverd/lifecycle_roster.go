@@ -53,7 +53,7 @@ package main
 // So this layer converts "somebody has to remember" into "somebody has to
 // write it down" — real progress, and strictly weaker than "it cannot be done
 // wrong". Closing it needs a guard this list cannot provide from inside
-// itself: an AST-level assertion that the two producers contain no pre-decide
+// itself: an AST-level assertion that the tick producers contain no pre-decide
 // roster loop other than their one call into here, with an explicit exclusion
 // list and a required stated reason for any kind-gated branch. That is
 // T-170e stage 5's scope, not this stage's — deliberately not attempted here,
@@ -65,9 +65,18 @@ package main
 // what was measured — but the "is invisible to every test in this package
 // today (measured: green)" sentence is now HISTORY, not the present tense. That
 // same mutant reddens TestTickProducersHaveNoUndeclaredRosterLoop, which
-// enumerates every iteration inside both producers by name and by count and
+// enumerates every iteration inside the producers by name and by count and
 // needs no kind expression to do it. Read that file's header before adding a
-// loop to either producer, or a kind branch anywhere in this package.
+// loop to any producer, or a kind branch anywhere in this package.
+//
+// 📌 SINCE T-14 item 5 THERE ARE THREE PRODUCER NAMES, NOT TWO. The two 30s
+// cadence goroutines were merged into one loop (startLifecycleCadence,
+// lifecycle_tick.go), and its entry runLifecycleTick JOINED
+// lifecycleTickProducers rather than being excused — the newest and most
+// obvious place to write a roster loop is watched like the other two. It
+// iterates nothing, so it contributes no loop rulings. Wherever the paragraphs
+// above say "the two producers", read "the producers": the set is derived, not
+// asserted, so lifecycleTickProducers is the authority on how many there are.
 
 // ── the entry filter ─────────────────────────────────────────────────────────
 

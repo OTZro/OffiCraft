@@ -238,17 +238,24 @@ type apiServer struct {
 	// e.g. dependency-free test tables) → an honest -32603.
 	loopback http.Handler
 	// ── reconcile producer state (reconcile.go; lifecycle.md §3 inventory #7) ──
-	// reconcileMu serializes the 30s cadence tick with any event-driven
-	// immediate tick (the Python per-app tick lock) AND guards the store.
+	// reconcileMu serializes the RECONCILE HALF of the 30s cadence tick
+	// (runReconcileTick, called first by runLifecycleTick — lifecycle_tick.go)
+	// with any event-driven immediate tick (the Python per-app tick lock) AND
+	// guards the store. It is still never held at the same time as outsourceMu:
+	// the merged tick takes this lock, drops it, and only then enters the
+	// outsource half.
 	reconcileMu sync.Mutex
 	// reconcileStates is the in-memory per-member bookkeeping — restart
 	// amnesia is contract (the next tick re-decides from presence).
 	reconcileStates map[string]reconcileState
 	reconcileCfg    reconcileConfig
-	// noReconcile is the --no-reconcile serve flag: disables the cadence loop
-	// AND the event-driven warden-command dispatch the producer owns (the
-	// shadow-deployment kill-switch) while the rest of the server runs
-	// unchanged. Not a server-wide gate — see spec/lifecycle.md §4.1.
+	// noReconcile is the --no-reconcile serve flag: skips the RECONCILE HALF of
+	// the cadence tick AND disables the event-driven warden-command dispatch the
+	// producer owns (the shadow-deployment kill-switch) while the rest of the
+	// server runs unchanged. Since T-14 item 5 the cadence LOOP is mounted
+	// either way — the flag is read at the call site, runLifecycleTick — so this
+	// no longer means "no goroutine", it means "that half does no work". Not a
+	// server-wide gate — see spec/lifecycle.md §4.1.
 	//
 	// 🔴 SAY THE TRUE THING WHERE THE FALSE ONE STOOD (owner ruling, T-941e
 	// 2026-08-18). A SHADOW SERVER WITH THIS FLAG SET STILL COMMANDS REAL
@@ -281,13 +288,23 @@ type apiServer struct {
 	receiptMu      sync.Mutex
 	receiptPending map[string]pendingReceipt
 	// ── outsource assignment scheduler state (outsource_sched.go; M3 Phase 2) ──
-	// outsourceMu serializes the scheduler's 30s cadence tick with the
-	// event-driven create_task tick. There is no in-memory ledger to guard —
-	// the outsource_worker rows are the bookkeeping (every tick recounts).
+	// outsourceMu serializes the OUTSOURCE HALF of the 30s cadence tick
+	// (runOutsourceTick, called second by runLifecycleTick — lifecycle_tick.go)
+	// with the event-driven create_task tick. There is no in-memory ledger to
+	// guard — the outsource_worker rows are the bookkeeping (every tick
+	// recounts). Never held together with reconcileMu: the merged tick has
+	// dropped that lock before this half is entered.
 	outsourceMu sync.Mutex
-	// noOutsource is the --no-outsource serve flag: disables the scheduler
-	// wholesale (cadence AND the event-driven tick) — the --no-reconcile
-	// mirror for the outsource-assignment producer.
+	// noOutsource is the --no-outsource serve flag: skips the OUTSOURCE HALF of
+	// the cadence tick AND disables the event-driven create_task tick — the
+	// --no-reconcile mirror for the outsource-assignment producer.
+	//
+	// 🔴 WHERE THIS FIELD IS READ IS LOAD-BEARING. It is read at the call site
+	// (runLifecycleTick) and in outsourceTickNow, and deliberately NOT inside
+	// runOutsourceTick: 169 test sites across 34 files set it to true and then
+	// drive the scheduler by hand, so a read inside the tick body would turn
+	// them into silent no-ops. lifecycle_tick.go carries the full ruling and the
+	// commands behind those counts; lifecycle_tick_test.go pins it both ways.
 	noOutsource bool
 	// ── outsource worker wake/reclaim state (worker_spawn.go; M3 Phase 6) ────
 	// All three maps live under outsourceMu. IN-MEMORY ONLY by design: a

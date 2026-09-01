@@ -18,7 +18,9 @@ package main
 //     the fail-closed START payload fold+mint. A refused dispatch keeps the
 //     PRIOR state so the next tick retries (never record an undelivered
 //     command).
-//   * the 30s cadence tick (runReconcileTick) with the four pre-decide roster
+//   * the RECONCILE HALF of the 30s cadence tick (runReconcileTick — since
+//     T-14 item 5 one loop runs both halves in order, startLifecycleCadence in
+//     lifecycle_tick.go), with the four pre-decide roster
 //     passes (auto-recycle stamp / recycle loop-break / stale-stopping clear /
 //     offline-warden uninstall-intent consumption)
 //     and the event-driven single-member tick (reconcileMemberNow — the
@@ -37,7 +39,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // ── config (spec/lifecycle.md §4.4 — defaults are contract) ──────────────────
@@ -98,10 +99,6 @@ func defaultReconcileConfig() reconcileConfig {
 		ZombieConfirmGrace: 2 * WakingTTLSecs,
 	}
 }
-
-// reconcileCadenceSecs is the producer tick period (§4.1), not a member-presence
-// heartbeat.
-const reconcileCadenceSecs = 30.0
 
 // ── vocabulary ───────────────────────────────────────────────────────────────
 
@@ -2723,19 +2720,11 @@ func (s *apiServer) runReconcileTick(now float64) {
 	}
 }
 
-// startReconcileCadence mounts the always-on 30s producer loop (§4.1) — the
-// Python mount_reconcile_producer twin. The first tick fires one full period
-// after start (sleep-then-tick, matching the asyncio cadence). Never called
-// when --no-reconcile is set.
-func (s *apiServer) startReconcileCadence(period time.Duration) {
-	go func() {
-		for {
-			time.Sleep(period)
-			s.runReconcileTick(nowSecs())
-		}
-	}()
-	reconcileLog("cadence started (period=%gs)", period.Seconds())
-}
+// The 30s cadence that used to mount runReconcileTick on its own goroutine
+// (startReconcileCadence) is gone: T-14 item 5 merged it with the outsource
+// producer's identical loop into the single startLifecycleCadence
+// (lifecycle_tick.go), which runs this half first and the outsource half
+// after, each under its own lock and never both at once.
 
 // reconcileMemberNow is the EVENT-DRIVEN immediate reconcile for ONE member —
 // the activate/deactivate/uninstall click seam (producer.py
@@ -2935,10 +2924,18 @@ func (s *apiServer) dispatchIdentitySweepNow(memberID, keepWarden string, now fl
 // The record is kept rather than the sentence silently swapped because the
 // false version was cited as a hard technical obstacle ("merging the two ticks
 // would invert a documented lock order") in T-170e stage 3's first write-up.
-// It was not one. If the two ticks are ever merged, the real constraint is a
-// different one and it is SELF-deadlock, not inversion: a merged tick holding
-// outsourceMu for its whole body must not call a helper that takes outsourceMu
-// again (Go mutexes are not reentrant).
+// It was not one.
+//
+// ✅ THE TICKS HAVE SINCE BEEN MERGED (T-14 item 5, lifecycle_tick.go), and
+// this paragraph's forecast held. The constraint that actually bit was the one
+// named here — SELF-deadlock, not inversion — and the merge avoided it by not
+// creating the situation at all: runLifecycleTick holds NEITHER mutex, and each
+// half takes its own inside its own body and has dropped it before the next
+// line runs. So there is still no goroutine in this package holding both, and
+// the "ZERO paths in either direction" measurement above still describes the
+// code as it stands. A future merged region that held outsourceMu across a
+// helper which takes it again would still self-deadlock; that is why the halves
+// are sequenced rather than wrapped.
 //
 // 🔴 SECOND CORRECTION (same stage, next pass — the paragraph you are reading
 // shipped its OWN false sentence in the round that wrote the correction
