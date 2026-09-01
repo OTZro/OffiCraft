@@ -36,11 +36,13 @@ package main
 //	    call, or a member-kind constant written into a struct field) must be in
 //	    identityGateLedger WITH A REASON. This is the DoD's literal sentence.
 //	(2) TestTickProducersHaveNoUndeclaredRosterLoop — every iteration inside
-//	    runReconcileTick / runOutsourceTick must be in
+//	    the functions named in lifecycleTickProducers (since T-14 item 5 that is
+//	    runLifecycleTick, runReconcileTick and runOutsourceTick — the merged
+//	    tick's entry joined the list rather than being excused) must be in
 //	    lifecycleProducerLoopRulings with a reason and an expected count. A new
 //	    pre-decide roster loop written the old way has no Kind expression to
 //	    find, so what gate (2) has to go on is the ITERATION — and it sees only
-//	    the iterations WRITTEN DIRECTLY IN THOSE TWO FUNCTION BODIES. That is the
+//	    the iterations WRITTEN DIRECTLY IN THOSE FUNCTION BODIES. That is the
 //	    spelling both real failures and stage 3's mutant had. It is NOT every
 //	    spelling: the scan does not follow calls, so the same loop lifted into a
 //	    helper and called from a producer is invisible to both gates (measured —
@@ -1297,18 +1299,31 @@ type producerLoopRuling struct {
 	Why   string
 }
 
-// lifecycleTickProducers are the two functions that turn a roster snapshot into
+// lifecycleTickProducers are the functions that turn a roster snapshot into
 // decisions. They are named as strings, which is a stale-name risk — so the gate
-// FATALS if either name resolves to no function declaration, rather than
+// FATALS if any name resolves to no function declaration, rather than
 // quietly scanning one producer or none.
 //
-// ⚠️ TWO NAMES IS A CLAIM ABOUT A SET, so the set is built rather than asserted.
-// "these are the only producers" is exactly the shape of sentence this ticket
-// has been burned by, so TestLifecycleTickProducerSetIsDerived enumerates every
-// `*Tick` method on apiServer and requires each one to be either a producer here
-// or an entry in lifecycleNonRosterTicks with a reason. A new tick cannot be
-// added to this package without that check saying something.
-var lifecycleTickProducers = []string{"runReconcileTick", "runOutsourceTick"}
+// ⚠️ A NAME LIST IS A CLAIM ABOUT A SET, so the set is built rather than
+// asserted. "these are the only producers" is exactly the shape of sentence this
+// ticket has been burned by, so TestLifecycleTickProducerSetIsDerived enumerates
+// every `*Tick` method on apiServer and requires each one to be either a
+// producer here or an entry in lifecycleNonRosterTicks with a reason. A new tick
+// cannot be added to this package without that check saying something.
+//
+// 🔴 T-14 item 5 added the THIRD name, and it is deliberately not the shape the
+// warning below is about. runLifecycleTick is the merged cadence entry — it
+// replaced two 30s goroutines with one ordered tick — and its whole body is two
+// flag-gated calls to the halves already on this list. It reads no rows and
+// iterates nothing, so it brings no loop rulings with it. It is listed as a
+// producer rather than excused in lifecycleNonRosterTicks for one reason: being
+// on this list is what makes TestTickProducersHaveNoUndeclaredRosterLoop watch
+// it, so a roster loop written into the merged entry — the newest, most obvious
+// place to put one — has to be declared like any other. Excusing it as a
+// non-roster tick would be true today and unwatched tomorrow.
+var lifecycleTickProducers = []string{
+	"runLifecycleTick", "runReconcileTick", "runOutsourceTick",
+}
 
 // lifecycleNonRosterTicks are the OTHER cadence/loop ticks in this package —
 // the ones that are not pre-decide roster producers — each with the reason it
@@ -1432,8 +1447,11 @@ func TestLifecycleTickProducerSetIsDerived(t *testing.T) {
 // lifecycleProducerLoopFloor guards against the walk silently matching nothing.
 const lifecycleProducerLoopFloor = 4
 
-// lifecycleProducerLoopRulings — every iteration inside the two producers, what
-// it is for, and how many times that exact `range` expression appears.
+// lifecycleProducerLoopRulings — every iteration inside the producers named in
+// lifecycleTickProducers, what it is for, and how many times that exact `range`
+// expression appears. (Three names since T-14 item 5; runLifecycleTick appears
+// in none of the rulings below because it iterates nothing — it calls one half,
+// then the other.)
 //
 // 🔴 ADDING A LOOP HERE IS THE THING TO THINK TWICE ABOUT. If it walks the
 // roster and does something to rows BEFORE the decide pass, it is a
