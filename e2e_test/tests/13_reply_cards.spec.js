@@ -297,6 +297,7 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     // No send button is pressed here. If a second step ever comes back, this
     // leg goes red at the very next line rather than quietly adapting.
     await tapOption(waitingA, 1);
+    // UOC_ASSERT id=UOC-RC-SINGLE-TAP screen=replies-page name=single_option_tap_answers_on_replies_page
     await expect(
       waitingA,
       'ONE tap on an option must answer a single-select card outright — it leaves 待回覆',
@@ -618,6 +619,7 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
 
     // Answer card 1 with ONE tap on a chip — the POST must complete, not hang.
     await tapOption(chatCard1, 0);
+    // UOC_ASSERT id=UOC-RC-SINGLE-TAP screen=chat-page name=single_option_tap_answers_in_chat
     await expect(
       chatCard1.getByTestId('final-answer'),
       'the one-tap answer POST must complete with two cards mounted',
