@@ -104,7 +104,7 @@ REGEN_PAIR_GATE = $(P) \
 
 .PHONY: \
   lint-go-naming lint-go-fmt lint-go-vet lint-uplink-contract lint-effort-vocab \
-  lint-shadow-claim \
+  lint-shadow-claim lint-user-operation-contract \
   lint-conformance-blackbox lint-ts lint-css-tokens lint-css-token-roles \
   build-embed-assets build-go build-frontend-deps \
   test-e2e-isolation-guard test-bin-guards test-go test-system-interaction-examples \
@@ -316,6 +316,16 @@ lint-shadow-claim:
 	echo "[lint-shadow-claim] no sentence may promise a coverage the flag does not have"; \
 	python3 bin/shadow-claim-guard.py; \
 	python3 bin/tests/shadow-claim-guard-selftest.py; \
+	$(DONE)
+
+# User-operation contract gate (T-46) plus its positive controls. The guard
+# checks both explicit screen→assertion coverage and owner-ruling provenance for
+# every literal contract change, including a narrowing.
+lint-user-operation-contract:
+	@$(P) \
+	echo "[lint-user-operation-contract] every scoped user action has a named browser result and ruled wording"; \
+	python3 bin/user-operation-contract-guard.py; \
+	python3 bin/tests/user-operation-contract-guard-selftest.py; \
 	$(DONE)
 
 # The conformance suite is the language-agnostic black-box definition of the

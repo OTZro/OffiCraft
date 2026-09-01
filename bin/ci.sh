@@ -143,6 +143,7 @@ OC_ROUND=(
   lint-uplink-contract
   lint-effort-vocab
   lint-shadow-claim
+  lint-user-operation-contract
   drift-ocapi
   drift-mcp-catalog
   lint-conformance-blackbox

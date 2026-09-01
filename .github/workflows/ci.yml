@@ -259,7 +259,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
-      - run: bash bin/run-checks.sh lint-uplink-contract lint-effort-vocab lint-shadow-claim
+        with:
+          # The user-operation guard compares every changed contract block with
+          # the PR base; a shallow checkout would turn that provenance check into
+          # an unverified guess.
+          fetch-depth: 0
+      - run: bash bin/run-checks.sh lint-uplink-contract lint-effort-vocab lint-shadow-claim lint-user-operation-contract
 
   # ---------------------------------------------------------------------------
   # conformance — the black-box import lint (fast, static) and then the full

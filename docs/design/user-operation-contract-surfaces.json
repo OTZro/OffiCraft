@@ -1,0 +1,16 @@
+{
+  "surfaces": [
+    {
+      "source": "frontend/src/components/ChatReplyCard.tsx",
+      "screen": "chat-page"
+    },
+    {
+      "source": "frontend/src/components/RepliesPage.tsx",
+      "screen": "replies-page"
+    },
+    {
+      "source": "frontend/src/components/TaskReplyCard.tsx",
+      "screen": "tasks-page"
+    }
+  ]
+}

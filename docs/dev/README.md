@@ -28,6 +28,9 @@ docs/         設計文件
 oc.toml.example  server 設定範本
 ```
 
+使用者操作契約清單（含畫面 scope 與具名瀏覽器斷言綁定）見
+[`docs/design/user-operation-contracts.md`](../design/user-operation-contracts.md)。
+
 runtime 落點統一在 `~/.officraft/`：`server/`（canonical 安裝）、`warden/`（token / 設定）、`agents/`（各 agent 工作區）。
 
 ## 怎麼跑
