@@ -17,7 +17,13 @@
 //      roster is the canonical clean root, i.e. an EMPTY hash, not "#office".
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, screen, waitFor } from "@testing-library/react";
+import {
+  render,
+  fireEvent,
+  screen,
+  waitFor,
+  act,
+} from "@testing-library/react";
 import { I18nProvider } from "./i18n";
 import { zh } from "./i18n/locales/zh";
 
@@ -36,7 +42,24 @@ vi.mock("./hooks/useOwnerName", () => ({
     setOwnerName: () => {},
   }),
 }));
-vi.mock("./components/OfficePage", () => ({ OfficePage: () => null }));
+// OfficePage is stubbed, but it now carries the two props App uses to hand a
+// vanished restored chat back (C-153d), so the stub records them for the wiring
+// tests below. vi.hoisted keeps the box alive above the hoisted vi.mock factory.
+const officeStub = vi.hoisted(() => ({
+  props: null as null | {
+    restoredChatId?: string;
+    onRestoredChatGone?: () => void;
+  },
+}));
+vi.mock("./components/OfficePage", () => ({
+  OfficePage: (props: {
+    restoredChatId?: string;
+    onRestoredChatGone?: () => void;
+  }) => {
+    officeStub.props = props;
+    return null;
+  },
+}));
 vi.mock("./components/RepliesPage", () => ({ RepliesPage: () => null }));
 vi.mock("./components/TasksPage", () => ({ TasksPage: () => null }));
 vi.mock("./components/MonitorPage", () => ({ MonitorPage: () => null }));
@@ -69,6 +92,7 @@ describe("辦公室 記住最後的對話", () => {
   beforeEach(() => {
     history.replaceState(null, "", window.location.pathname);
     localStorage.clear();
+    officeStub.props = null;
   });
 
   it("re-opens the last chat when coming back from another tab", async () => {
@@ -238,6 +262,75 @@ describe("辦公室 記住最後的對話", () => {
       setItem.mockRestore();
       removeItem.mockRestore();
     }
+  });
+
+  // The remembered id is read at mount and never again. A useRef INITIALIZER
+  // ARGUMENT is evaluated on every render, so the obvious spelling
+  // `useRef(readLastOfficeChat())` hits localStorage on every repaint of the
+  // console — a synchronous storage read per render for a value that can only
+  // change through this component's own writer.
+  it("reads the remembered chat from localStorage once, not on every render", async () => {
+    localStorage.setItem(LAST_OFFICE_CHAT_KEY, "m-1892d870ded7");
+    const getItem = vi.spyOn(globalThis.localStorage, "getItem");
+    try {
+      renderApp();
+      await screen.findByText(zh.nav.office);
+      // Plenty of re-renders: each nav click re-routes and re-renders the shell.
+      await clickTab(zh.nav.tasks);
+      await clickTab(zh.nav.monitor);
+      await clickTab(zh.nav.office);
+
+      const reads = getItem.mock.calls.filter(
+        ([key]) => key === LAST_OFFICE_CHAT_KEY,
+      );
+      expect(reads).toHaveLength(1);
+    } finally {
+      getItem.mockRestore();
+    }
+  });
+
+  // The peer can be gone by the time you come back (member fired / outsource
+  // worker released). App cannot tell — it has no roster — so OfficePage raises
+  // it, and ONLY for a chat that was restored from memory. See
+  // OfficePage.restored-chat-gone.test.tsx for the load-gating that makes that
+  // verdict safe to act on.
+  it("hands a restored chat to OfficePage so a vanished peer can be reported", async () => {
+    localStorage.setItem(LAST_OFFICE_CHAT_KEY, "m-1892d870ded7");
+    renderApp();
+    await waitFor(() =>
+      expect(window.location.hash).toBe("#office/chat/m-1892d870ded7"),
+    );
+    expect(officeStub.props?.restoredChatId).toBe("m-1892d870ded7");
+  });
+
+  it("falls back to the roster and forgets the chat once OfficePage reports it gone", async () => {
+    localStorage.setItem(LAST_OFFICE_CHAT_KEY, "m-1892d870ded7");
+    renderApp();
+    await waitFor(() =>
+      expect(window.location.hash).toBe("#office/chat/m-1892d870ded7"),
+    );
+
+    await act(async () => {
+      officeStub.props!.onRestoredChatGone!();
+    });
+
+    expect(window.location.hash).toBe(""); // roster = canonical clean root
+    // …and the dead id is not left behind to re-fire on the NEXT cold load.
+    expect(localStorage.getItem(LAST_OFFICE_CHAT_KEY)).toBeNull();
+  });
+
+  it("never offers an EXPLICITLY deep-linked chat for forgetting (T-661b)", async () => {
+    // Reached by hash, not by memory: a departed peer opened this way keeps its
+    // read-only history. Marking it restorable would let App bounce it to the
+    // roster and undo T-661b.
+    history.replaceState(
+      null,
+      "",
+      window.location.pathname + "#office/chat/ow-353820f2c636",
+    );
+    renderApp();
+    await screen.findByText(zh.nav.office);
+    expect(officeStub.props?.restoredChatId).toBeUndefined();
   });
 
   it("forgets the chat once the owner closes it back to the roster", async () => {
