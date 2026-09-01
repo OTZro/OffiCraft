@@ -45,6 +45,11 @@ vi.mock("./components/UserGuidePage", () => ({ GuidePage: () => null }));
 
 import App from "./App";
 
+// Must stay in step with App.tsx's own LAST_OFFICE_CHAT_KEY (not exported —
+// it is an implementation detail of the module, and the tests below only need
+// to aim the private-mode stubs at the same key).
+const LAST_OFFICE_CHAT_KEY = "oc_last_office_chat";
+
 function renderApp() {
   return render(
     <I18nProvider>
@@ -153,7 +158,7 @@ describe("辦公室 記住最後的對話", () => {
   });
 
   it("does NOT hijack an explicit #office on a cold load", async () => {
-    localStorage.setItem("oc_last_office_chat", "m-1892d870ded7");
+    localStorage.setItem(LAST_OFFICE_CHAT_KEY, "m-1892d870ded7");
     history.replaceState(null, "", window.location.pathname + "#office");
     renderApp();
     await screen.findByText(zh.nav.office);
@@ -161,24 +166,77 @@ describe("辦公室 記住最後的對話", () => {
   });
 
   it("does NOT hijack a deep link into another tab on a cold load", async () => {
-    localStorage.setItem("oc_last_office_chat", "m-1892d870ded7");
+    localStorage.setItem(LAST_OFFICE_CHAT_KEY, "m-1892d870ded7");
     history.replaceState(null, "", window.location.pathname + "#tasks");
     renderApp();
     await screen.findByText(zh.nav.tasks);
     expect(window.location.hash).toBe("#tasks");
   });
 
-  it("degrades to the roster when localStorage throws (private mode)", async () => {
-    const getItem = Storage.prototype.getItem;
-    Storage.prototype.getItem = () => {
-      throw new Error("storage blocked");
-    };
+  // Safari private mode / 3rd-party storage blocking: the Storage object is
+  // there, but its methods throw on access. Both halves — the READ at boot and
+  // the WRITE on every office route change — must degrade quietly.
+  //
+  // The stub goes on `globalThis.localStorage` itself, NOT on
+  // `Storage.prototype`: test/setup.ts replaces the globals with instances of
+  // its own MemoryStorage class, whose methods live on MemoryStorage.prototype,
+  // so a Storage.prototype patch is never reached and would silently do nothing
+  // (the mistake this pair of tests was rewritten to fix). Scoped to our one
+  // key so every other storage user in the app keeps working, and each test
+  // asserts the stub was actually hit — an unreached mock is a green test that
+  // proves nothing.
+  it("degrades to the roster when the localStorage READ throws (private mode)", async () => {
+    const getItem = vi
+      .spyOn(globalThis.localStorage, "getItem")
+      .mockImplementation((key: string) => {
+        if (key === LAST_OFFICE_CHAT_KEY) throw new Error("storage blocked");
+        return null;
+      });
     try {
       renderApp();
       await screen.findByText(zh.nav.office);
+      expect(getItem).toHaveBeenCalledWith(LAST_OFFICE_CHAT_KEY);
       expect(window.location.hash).toBe("");
     } finally {
-      Storage.prototype.getItem = getItem;
+      getItem.mockRestore();
+    }
+  });
+
+  it("survives a blocked localStorage WRITE and still remembers in-session", async () => {
+    const blocked = (key: string) => {
+      if (key === LAST_OFFICE_CHAT_KEY) throw new Error("storage blocked");
+    };
+    const setItem = vi
+      .spyOn(globalThis.localStorage, "setItem")
+      .mockImplementation(blocked);
+    const removeItem = vi
+      .spyOn(globalThis.localStorage, "removeItem")
+      .mockImplementation(blocked);
+    try {
+      history.replaceState(
+        null,
+        "",
+        window.location.pathname + "#office/chat/m-1892d870ded7",
+      );
+      // The recorder effect writes on mount — a throw that escapes it would
+      // tear the tree down here, so simply rendering is half the assertion.
+      renderApp();
+      await screen.findByText(zh.nav.office);
+      expect(setItem).toHaveBeenCalledWith(
+        LAST_OFFICE_CHAT_KEY,
+        "m-1892d870ded7",
+      );
+      expect(window.location.hash).toBe("#office/chat/m-1892d870ded7");
+
+      // Persistence is gone, but the in-memory ref still carries the session:
+      // leaving for another tab and coming back re-opens the same peer.
+      await clickTab(zh.nav.tasks);
+      expect(window.location.hash).toBe("#tasks");
+      await clickTab(zh.nav.office);
+      expect(window.location.hash).toBe("#office/chat/m-1892d870ded7");
+    } finally {
+      setItem.mockRestore();
+      removeItem.mockRestore();
     }
   });
 
