@@ -898,3 +898,55 @@ func TestListenerRun_FirstEverWithAFaultedBootDrain_ConnectDrainStaysSilent(t *t
 		t.Fatalf("the connect drain must still leave a primed baseline, got %v", got)
 	}
 }
+
+// THE SAME INVARIANT ON THE THIRD PATH. Boot and connect both decide silence
+// from the persisted cursor; the live chat delta must too, and the case that
+// separates them is identical to the connect one: a boot drain that FAULTED
+// leaves the store unprimed, and if a delta beats the next reconnect then the
+// delta drain is the first thing ever to see this member's inbox.
+//
+// A delta is a NUDGE ("something arrived"), never a licence to print whatever a
+// refetch happens to return. Deciding silence from "I am a delta, deltas print"
+// is deciding it from the CALLER, and the caller is exactly what cannot know
+// whether this machine has a baseline to diff against.
+func TestListenerDispatch_ChatDeltaOnAnUnprimedStore_StaysSilent(t *testing.T) {
+	home := t.TempDir()
+	var chatHits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/chat") {
+			w.WriteHeader(404)
+			return
+		}
+		if atomic.AddInt32(&chatHits, 1) == 1 {
+			w.WriteHeader(500) // the BOOT drain faults ⇒ the store stays unprimed
+			return
+		}
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(msgsJSON("m1", "m2", "m3")))
+	}))
+	defer srv.Close()
+	cfg := Config{Base: srv.URL, Token: "tok", ID: "kyle", Home: home}
+
+	var out bytes.Buffer
+	l := newTestListener(srv, cfg, &out)
+	l.seen = loadChatSeen(chatSeenPath(cfg))
+
+	// the boot drain, faulting: it prints nothing and records nothing.
+	l.drainChatNow()
+	if l.seen.primed {
+		t.Fatal("precondition: a drain that could not fetch must leave the store UNPRIMED")
+	}
+	if out.Len() != 0 {
+		t.Fatalf("precondition: a faulted drain prints nothing, got %q", out.String())
+	}
+
+	// …and now a chat delta arrives before any reconnect could re-drain.
+	l.dispatch([]byte(`{"topic":"chat","data":{"id":"m3"}}`))
+
+	if strings.Contains(out.String(), "chat from boss") {
+		t.Fatalf("a delta drain on an unprimed store must print NO history; out = %q", out.String())
+	}
+	if got := readSeenFile(t, chatSeenPath(cfg)); len(got) != 3 {
+		t.Fatalf("the delta drain must still leave a primed baseline, got %v", got)
+	}
+}

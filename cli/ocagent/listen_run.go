@@ -294,7 +294,17 @@ func (l *listener) dispatch(payload []byte) {
 	case "chat":
 		// R7 HARD CONSTRAINT: the chat delta payload is convenience — NEVER merged.
 		// The delta is a pure NUDGE ⇒ REFETCH /api/chat and print the unread-for-me.
-		drainChat(l.api, l.cfg, l.seen, l.out, false)
+		//
+		// Same entrance as boot and reconnect, so the same rule: whether this
+		// prints is the CURSOR's call, not the caller's. A delta says "something
+		// arrived", which is not a licence to print whatever the refetch returns —
+		// on an unprimed store there is no baseline to diff against, and printing
+		// then washes a brand-new session out with history that predates it. The
+		// store is normally primed long before any delta lands (the boot drain, and
+		// now every connect drain, get there first), so this changes nothing in the
+		// ordinary case; it closes the one where a faulted boot drain leaves the
+		// store unprimed and a delta beats the next reconnect.
+		l.drainChatNow()
 	case replyCardTopic:
 		// R7 again: the payload ({id, from, status}) only routes — the printed
 		// answer comes from a refetch of GET /api/reply-cards/{id}.
@@ -545,20 +555,28 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	return true, activity, false, err
 }
 
-// drainChatNow runs the catch-up chat drain shared by the two no-stream-held
-// paths: process boot (run, before the connect loop) and every connect/reconnect
-// (connectOnce, before the live stream takes over).
+// drainChatNow is THE way this listener drains chat. All three entrances go
+// through it: process boot (run, before the connect loop), every
+// connect/reconnect (connectOnce, before the live stream takes over), and every
+// inbound chat delta (dispatch).
 //
 // 🔴 SILENCE IS DECIDED BY THE CURSOR, NOT BY WHICH PATH CALLED. An UNPRIMED
 // store means this machine has never surfaced chat for this member, and there is
 // no "last seen" to diff against — printing then would wash a brand-new session
-// out with however much history predates it. That must hold on the connect path
-// too: a boot whose drain could not fetch leaves the store unprimed, and the
-// connect drain that follows is the first one to see the inbox. Passing a bare
-// `false` there would dump the whole history in exactly the case the silent
-// baseline exists to protect. In the ordinary cold boot the boot drain has
-// already primed and marked what it saw, so the connect drain finds nothing
-// unread and prints nothing — silence there comes from the cursor, not the flag.
+// out with however much history predates it. The caller is precisely what cannot
+// know whether a baseline exists, so no caller gets to pass its own answer.
+//
+// The case that separates a cursor-decided silence from a caller-decided one is
+// the same on both non-boot paths: a boot drain that could not FETCH leaves the
+// store unprimed, and then whichever comes first — the next connect drain or a
+// chat delta — is the first thing ever to see this member's inbox. A hardcoded
+// `false` on either would dump the entire history in exactly the case the silent
+// baseline exists to protect. Ordinarily neither is reached: the boot drain has
+// already primed and marked what it saw, so the later drains find nothing unread
+// and print nothing — that silence comes from the cursor, not from a flag.
+//
+// This centralisation IS the guardrail. The rule held on two of three paths for
+// a while precisely because each site spelled its own answer out by hand.
 func (l *listener) drainChatNow() int {
 	if l.seen == nil {
 		l.seen = loadChatSeen(chatSeenPath(l.cfg))
