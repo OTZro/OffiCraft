@@ -17,6 +17,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -244,73 +245,98 @@ func TestUnassignedTaskStillRefusesAThirdParty(t *testing.T) {
 	}
 }
 
+// executorGuardRefusal is the sentence every task-driving guard writes when it
+// turns a non-executor away. The shut-door test matches on it because a bare
+// 403 is not evidence: several of these handlers have a SECOND rule that also
+// answers 403, and a cell that accepts any 403 cannot tell the guard under test
+// from the rule behind it.
+const executorGuardRefusal = "caller is not the task's executor"
+
 // TestUnassignedTaskCreatorReachesNoTaskDrivingDoor — the other half of the
 // 射程. Owner opened 改文字類 and named what stays shut: 凍結/priority, 撤票,
 // 改派, claim, mark_duplicate, plan, step status, closeout, deps. Each of these
-// still runs on callerMayDriveTask, so a creator on an unbound task is refused.
-// Without this, a later hand could swap the widened predicate into any of them
-// and nothing in the package would notice.
+// still runs on callerMayDriveTask (terminate on callerMayTerminateTask, which
+// re-derives the same executor identity), so a creator on an unbound task is
+// refused. Without this, a later hand could swap the widened predicate into any
+// of them and nothing in the package would notice.
+//
+// 🔴 WHY EACH CELL ASSERTS THE REFUSAL SENTENCE AND NOT JUST 403. Measured
+// 2026-09-02: this test used to send the reassign door a MEMBER target aimed at
+// the caller itself, and swapping that door's guard to callerMayEditTaskText
+// left the cell GREEN — the widened guard admitted the creator, and the 正職
+// 授權矩陣 rule 7 ("only owner/admin may hand a task to another 正職") produced
+// its own 403 one step later. The cell was measuring rule 7, not the guard.
+// Two things fix it and both are load-bearing: the reassign cell now sends an
+// OUTSOURCE target, which is the one reassign a plain 正職 is allowed to make,
+// so nothing downstream stands in for the guard; and every cell pins the
+// sentence, so a 403 arriving from any other rule can no longer pass for this
+// one.
 func TestUnassignedTaskCreatorReachesNoTaskDrivingDoor(t *testing.T) {
 	shut := []struct {
 		name string
-		call func(t *testing.T, api *apiServer, taskID, caller string) int
+		call func(t *testing.T, api *apiServer, taskID, caller string) *httptest.ResponseRecorder
 	}{
-		{"set_task_priority", func(t *testing.T, api *apiServer, taskID, caller string) int {
+		{"set_task_priority", func(t *testing.T, api *apiServer, taskID, caller string) *httptest.ResponseRecorder {
 			rec := httptest.NewRecorder()
 			api.HandleSetTaskPriorityApiTasksTaskIdPriorityPost(rec, taskReq(t, "POST",
 				"/api/tasks/"+taskID+"/priority", map[string]any{"priority": "frozen"},
 				caller, "agent"), taskID)
-			return rec.Code
+			return rec
 		}},
-		{"terminate_task", func(t *testing.T, api *apiServer, taskID, caller string) int {
+		{"terminate_task", func(t *testing.T, api *apiServer, taskID, caller string) *httptest.ResponseRecorder {
 			rec := httptest.NewRecorder()
 			api.HandleTerminateTaskApiTasksTaskIdTerminatePost(rec, taskReq(t, "POST",
 				"/api/tasks/"+taskID+"/terminate", nil, caller, "agent"), taskID)
-			return rec.Code
+			return rec
 		}},
-		{"reassign_task", func(t *testing.T, api *apiServer, taskID, caller string) int {
-			return reassign(t, api, taskID, memberTarget(caller), caller, "agent").Code
+		{"reassign_task", func(t *testing.T, api *apiServer, taskID, caller string) *httptest.ResponseRecorder {
+			// 發包, not 轉派 to a colleague: a member target would be refused by
+			// the 正職授權矩陣 regardless of this door's guard (see the note
+			// above), which is exactly what made this cell a false green.
+			return reassign(t, api, taskID, map[string]any{
+				"target": map[string]any{"kind": "outsource", "model": "sonnet", "effort": "medium"},
+			}, caller, "agent")
 		}},
-		{"claim_task", func(t *testing.T, api *apiServer, taskID, caller string) int {
+		{"claim_task", func(t *testing.T, api *apiServer, taskID, caller string) *httptest.ResponseRecorder {
 			rec := httptest.NewRecorder()
 			api.HandleClaimTaskApiTasksTaskIdClaimPost(rec, taskReq(t, "POST",
 				"/api/tasks/"+taskID+"/claim", nil, caller, "agent"), taskID)
-			return rec.Code
+			return rec
 		}},
-		{"mark_duplicate", func(t *testing.T, api *apiServer, taskID, caller string) int {
+		{"mark_duplicate", func(t *testing.T, api *apiServer, taskID, caller string) *httptest.ResponseRecorder {
 			rec := httptest.NewRecorder()
 			api.HandleMarkTaskDuplicateApiTasksTaskIdDuplicatePost(rec, taskReq(t, "POST",
 				"/api/tasks/"+taskID+"/duplicate", map[string]any{"duplicate_of": "t-other"},
 				caller, "agent"), taskID)
-			return rec.Code
+			return rec
 		}},
-		{"submit_plan", func(t *testing.T, api *apiServer, taskID, caller string) int {
+		{"submit_plan", func(t *testing.T, api *apiServer, taskID, caller string) *httptest.ResponseRecorder {
 			rec := httptest.NewRecorder()
 			api.HandleSubmitTaskPlanApiTasksTaskIdPlanPost(rec, taskReq(t, "POST",
 				"/api/tasks/"+taskID+"/plan",
 				map[string]any{"steps": []map[string]any{{"name": "one"}}},
 				caller, "agent"), taskID)
-			return rec.Code
+			return rec
 		}},
-		{"update_step_status", func(t *testing.T, api *apiServer, taskID, caller string) int {
+		{"update_step_status", func(t *testing.T, api *apiServer, taskID, caller string) *httptest.ResponseRecorder {
 			rec := httptest.NewRecorder()
 			api.HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost(rec,
 				taskReq(t, "POST", "/api/tasks/"+taskID+"/steps/st-1/status",
 					map[string]any{"status": "in_progress"}, caller, "agent"), taskID, "st-1")
-			return rec.Code
+			return rec
 		}},
-		{"report_task_closeout", func(t *testing.T, api *apiServer, taskID, caller string) int {
+		{"report_task_closeout", func(t *testing.T, api *apiServer, taskID, caller string) *httptest.ResponseRecorder {
 			rec := httptest.NewRecorder()
 			api.HandleReportTaskCloseoutApiTasksTaskIdCloseoutPost(rec, taskReq(t, "POST",
 				"/api/tasks/"+taskID+"/closeout", nil, caller, "agent"), taskID)
-			return rec.Code
+			return rec
 		}},
-		{"set_task_deps", func(t *testing.T, api *apiServer, taskID, caller string) int {
+		{"set_task_deps", func(t *testing.T, api *apiServer, taskID, caller string) *httptest.ResponseRecorder {
 			rec := httptest.NewRecorder()
 			api.HandleSetTaskDepsApiTasksTaskIdDepsPost(rec, taskReq(t, "POST",
 				"/api/tasks/"+taskID+"/deps", map[string]any{"blocked_by": []string{}},
 				caller, "agent"), taskID)
-			return rec.Code
+			return rec
 		}},
 	}
 	for _, door := range shut {
@@ -318,8 +344,11 @@ func TestUnassignedTaskCreatorReachesNoTaskDrivingDoor(t *testing.T) {
 			api := newTasksTestServer(t)
 			task := unboundOutsourceTask(t, api, "m-creator")
 			seedStep(t, api, task.ID, "st-1")
-			if got := door.call(t, api, task.ID, "m-creator"); got != http.StatusForbidden {
-				t.Fatalf("creator at %s = %d, want 403 (this door stays shut)", door.name, got)
+			rec := door.call(t, api, task.ID, "m-creator")
+			if rec.Code != http.StatusForbidden ||
+				!strings.Contains(rec.Body.String(), executorGuardRefusal) {
+				t.Fatalf("creator at %s = %d %s, want 403 %q (this door stays shut)",
+					door.name, rec.Code, rec.Body.String(), executorGuardRefusal)
 			}
 		})
 	}
