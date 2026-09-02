@@ -1,11 +1,15 @@
 // LINE/FB-style unread jump (M2 batch 19) — black-box pins on ChatArea:
 //
-//   ① NEW-MESSAGE FLOATING CHIP: the owner has scrolled UP (latest below the
-//      fold) and a new message addressed to them lands → a floating
-//      "有新訊息" chip appears; clicking it scrolls to the FIRST unseen
-//      message (the anchor stays the first one even as more accumulate);
-//      reaching the bottom dismisses it. At the bottom the existing
-//      auto-follow stays: new message → follow, NO chip.
+//   ① THE ROUND 回到最新訊息 ARROW: shows whenever the NEWEST message is not in
+//      the viewport — scrolling up alone is enough, no arrival required — and
+//      hides again at the bottom. Clicking it goes to the LATEST message.
+//   ②' THE NEW-MESSAGE PREVIEW STRIP (T-48, replaces the 「有新訊息」 pill): a
+//      new inbound message while scrolled up puts ONE strip above the composer
+//      carrying the sender and the line. A further arrival REPLACES it — never
+//      a second strip. It and the arrow are MUTUALLY EXCLUSIVE. Clicking it
+//      goes to the LATEST message; its x drops it (after which the arrow takes
+//      over, because dismissing a preview is not reading it). At the bottom the
+//      existing auto-follow stays: new message → follow, no strip, no arrow.
 //   ② ENTRY POSITIONING: entering a conversation whose roster badge carried
 //      unreadCount > 0 lands on the FIRST unread message (an "以下是未讀訊息"
 //      divider pinned to the top of the viewport), derived from the
@@ -160,8 +164,10 @@ describe("② entry positioning (first unread)", () => {
       targets.some((el) => el.classList.contains("chat__scroll-anchor")),
     ).toBe(false);
 
-    // No floating chip on entry — the chip is for NEW arrivals only.
-    expect(container.querySelector(".chat__new-msg-chip")).toBeNull();
+    // No preview strip on entry — the strip is for NEW arrivals only.
+    expect(
+      container.querySelector("[data-testid='chat-new-msg-preview']"),
+    ).toBeNull();
   });
 
   it("switching from a NON-EMPTY thread still renders the divider (stale-peer latch regression)", () => {
@@ -248,8 +254,45 @@ describe("② entry positioning (first unread)", () => {
   });
 });
 
-describe("① new-message floating chip", () => {
-  it("scrolled up + new inbound → chip appears, click jumps to the FIRST unseen, bottom dismisses", () => {
+describe("① 回到最新箭頭 + ② 新訊息預覽列", () => {
+  it("scrolling up alone raises the arrow — no arrival required — and the bottom hides it again", () => {
+    // 🔴 THE CONDITION IS 「最新那一則不在視窗內」 (owner rc-72054864ff88), not
+    // "a new message arrived" and not "scrolled more than a screen". The pill
+    // this replaces had the arrival condition, so a reader who had scrolled up
+    // to read history had NO way back to the bottom until somebody wrote.
+    messages = [
+      mkMsg("c1", "b", "owner", 1000),
+      mkMsg("c2", "b", "owner", 1001),
+    ];
+    const { container } = renderChat(0);
+    const list = container.querySelector(".chat__messages")!;
+    expect(container.querySelector("[data-testid='chat-jump-latest']")).toBeNull();
+
+    // Only 200px of content below the fold — well under one screen.
+    setScrollGeometry(list, {
+      scrollHeight: 1000,
+      clientHeight: 800,
+      scrollTop: 0,
+    });
+    fireEvent.scroll(list);
+    expect(
+      container.querySelector("[data-testid='chat-jump-latest']"),
+    ).not.toBeNull();
+    // Nothing arrived, so there is no strip to show.
+    expect(
+      container.querySelector("[data-testid='chat-new-msg-preview']"),
+    ).toBeNull();
+
+    setScrollGeometry(list, {
+      scrollHeight: 1000,
+      clientHeight: 800,
+      scrollTop: 200,
+    });
+    fireEvent.scroll(list);
+    expect(container.querySelector("[data-testid='chat-jump-latest']")).toBeNull();
+  });
+
+  it("scrolled up + new inbound → ONE preview strip that REPLACES its content, never a second one, and the arrow gives way to it", () => {
     messages = [
       mkMsg("c1", "b", "owner", 1000),
       mkMsg("c2", "b", "owner", 1001),
@@ -265,6 +308,10 @@ describe("① new-message floating chip", () => {
       scrollTop: 100,
     });
     fireEvent.scroll(list);
+    // Scrolled up with nothing new: the arrow, alone.
+    expect(
+      container.querySelector("[data-testid='chat-jump-latest']"),
+    ).not.toBeNull();
     scrollCalls = [];
 
     // A new inbound message lands.
@@ -275,15 +322,23 @@ describe("① new-message floating chip", () => {
       </I18nProvider>,
     );
 
-    // Chip appears; the viewport was NOT yanked to the bottom.
-    expect(container.querySelector(".chat__new-msg-chip")).not.toBeNull();
+    // 🔴 MUTUAL EXCLUSION. The strip took the arrow's place; both on screen at
+    // once is the owner's 「兩者互斥」 ruling broken, and it is the mutant the
+    // obvious `!latestInView` arrow condition produces.
+    const strip = container.querySelector("[data-testid='chat-new-msg-preview']");
+    expect(strip).not.toBeNull();
+    expect(container.querySelector("[data-testid='chat-jump-latest']")).toBeNull();
+    // Sender + the line itself — the whole reason the pill was replaced.
+    expect(strip!.textContent).toContain("Beto");
+    expect(strip!.textContent).toContain("msg c4");
+    // The viewport was NOT yanked to the bottom.
     expect(
-      scrollCalls.some((c) =>
-        c.el.classList.contains("chat__scroll-anchor"),
-      ),
+      scrollCalls.some((c) => c.el.classList.contains("chat__scroll-anchor")),
     ).toBe(false);
 
-    // MORE messages accumulate — the anchor stays the FIRST unseen (c4).
+    // MORE messages accumulate → still exactly ONE strip, now showing the
+    // LATEST arrival. (The pill had a constant label and so could not stack
+    // visibly; a strip with content can, and must not.)
     messages = [...messages, mkMsg("c5", "b", "owner", 1004)];
     rerender(
       <I18nProvider>
@@ -291,28 +346,139 @@ describe("① new-message floating chip", () => {
       </I18nProvider>,
     );
     expect(
-      container.querySelectorAll(".chat__new-msg-chip").length,
+      container.querySelectorAll("[data-testid='chat-new-msg-preview']").length,
     ).toBe(1);
+    const restrip = container.querySelector(
+      "[data-testid='chat-new-msg-preview']",
+    )!;
+    expect(restrip.textContent).toContain("msg c5");
+    expect(restrip.textContent).not.toContain("msg c4");
 
-    // Click → smooth-scroll to the first unseen message (c4).
-    fireEvent.click(container.querySelector(".chat__new-msg-chip")!);
+    // Click → land on the LATEST message (c5), not the first unseen (c4).
+    // 🔴 THIS IS ③. The old chip jumped to the first unseen one, so a burst of
+    // arrivals left the reader mid-block with the rest still below the fold —
+    // reproduced in the isolated environment with ten messages. The first-unseen
+    // position is still marked, by the divider, which does not move.
+    fireEvent.click(
+      container.querySelector("[data-testid='chat-new-msg-jump']")!,
+    );
     const jump = scrollCalls[scrollCalls.length - 1];
-    expect(jump.el.getAttribute("data-msg-id")).toBe("c4");
-    expect(jump.args).toEqual({ behavior: "smooth", block: "start" });
+    expect(jump.el.getAttribute("data-msg-id")).toBe("c5");
+    expect(jump.args).toEqual({ block: "end" });
+    // The strip is consumed by the jump; the arrow does not come back either,
+    // because we are now looking at the newest message.
+    expect(
+      container.querySelector("[data-testid='chat-new-msg-preview']"),
+    ).toBeNull();
+    expect(container.querySelector("[data-testid='chat-jump-latest']")).toBeNull();
+  });
 
-    // Reaching the bottom dismisses the chip (and marks the newest read —
-    // the existing bottom-crossing behavior).
+  it("the strip's x drops it and hands the place back to the arrow — dismissing is not reading", () => {
+    messages = [mkMsg("c1", "b", "owner", 1000)];
+    const { container, rerender } = renderChat(0);
+    const list = container.querySelector(".chat__messages")!;
+    setScrollGeometry(list, {
+      scrollHeight: 1000,
+      clientHeight: 200,
+      scrollTop: 100,
+    });
+    fireEvent.scroll(list);
+    messages = [...messages, mkMsg("c2", "b", "owner", 1001)];
+    rerender(
+      <I18nProvider>
+        <ChatArea member={mkMember(0)} members={[mkMember(0)]} />
+      </I18nProvider>,
+    );
+    expect(
+      container.querySelector("[data-testid='chat-new-msg-preview']"),
+    ).not.toBeNull();
+    scrollCalls = [];
+
+    fireEvent.click(
+      container.querySelector("[data-testid='chat-new-msg-dismiss']")!,
+    );
+    expect(
+      container.querySelector("[data-testid='chat-new-msg-preview']"),
+    ).toBeNull();
+    // The newest message is still off screen ⇒ the arrow, and no scrolling.
+    expect(
+      container.querySelector("[data-testid='chat-jump-latest']"),
+    ).not.toBeNull();
+    expect(scrollCalls).toEqual([]);
+  });
+
+  it("正在回覆某則時，預覽列排在回覆橫幅上面", () => {
+    // owner 指定的順序。版面上「誰在上面」由兩件事決定：DOM 順序（這裡）與 CSS
+    // 有沒有把它翻回去（visual-guards/chat-bottom-affordance.ct.spec.tsx 量的）。
+    // 只驗其中一件都會漏 —— jsdom 看得到順序但看不到版面，真瀏覽器量得到版面但
+    // 那個順序是 story 自己寫的。
+    messages = [mkMsg("c1", "b", "owner", 1000)];
+    const { container, rerender } = renderChat(0);
+    const list = container.querySelector(".chat__messages")!;
+    setScrollGeometry(list, {
+      scrollHeight: 1000,
+      clientHeight: 200,
+      scrollTop: 100,
+    });
+    fireEvent.scroll(list);
+    messages = [...messages, mkMsg("c2", "b", "owner", 1001)];
+    rerender(
+      <I18nProvider>
+        <ChatArea member={mkMember(0)} members={[mkMember(0)]} />
+      </I18nProvider>,
+    );
+
+    // 對第一則按「回覆這則」，把橫幅叫出來。
+    fireEvent.click(container.querySelectorAll(".chat__msg-reply")[0]);
+    const strip = container.querySelector(
+      "[data-testid='chat-new-msg-preview']",
+    )!;
+    const banner = container.querySelector(
+      "[data-testid='chat-reply-banner']",
+    )!;
+    expect(strip).not.toBeNull();
+    expect(banner).not.toBeNull();
+    expect(
+      strip.compareDocumentPosition(banner) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      "預覽列必須排在回覆橫幅前面",
+    ).toBeTruthy();
+  });
+
+  it("reaching the bottom drops the strip and marks the newest read", () => {
+    messages = [mkMsg("c1", "b", "owner", 1000)];
+    const { container, rerender } = renderChat(0);
+    const list = container.querySelector(".chat__messages")!;
+    setScrollGeometry(list, {
+      scrollHeight: 1000,
+      clientHeight: 200,
+      scrollTop: 100,
+    });
+    fireEvent.scroll(list);
+    messages = [...messages, mkMsg("c2", "b", "owner", 1004)];
+    rerender(
+      <I18nProvider>
+        <ChatArea member={mkMember(0)} members={[mkMember(0)]} />
+      </I18nProvider>,
+    );
+    expect(
+      container.querySelector("[data-testid='chat-new-msg-preview']"),
+    ).not.toBeNull();
+
     setScrollGeometry(list, {
       scrollHeight: 1000,
       clientHeight: 200,
       scrollTop: 800,
     });
     fireEvent.scroll(list);
-    expect(container.querySelector(".chat__new-msg-chip")).toBeNull();
+    expect(
+      container.querySelector("[data-testid='chat-new-msg-preview']"),
+    ).toBeNull();
+    expect(container.querySelector("[data-testid='chat-jump-latest']")).toBeNull();
     expect(markRead).toHaveBeenCalledWith(1004);
   });
 
-  it("at the bottom + new inbound → auto-follows, NO chip", () => {
+  it("at the bottom + new inbound → auto-follows, NO strip and NO arrow", () => {
     messages = [mkMsg("c1", "b", "owner", 1000)];
     const { container, rerender } = renderChat(0);
     scrollCalls = [];
@@ -324,18 +490,21 @@ describe("① new-message floating chip", () => {
       </I18nProvider>,
     );
 
-    // Followed the bottom sentinel; no chip surfaced.
+    // Followed the bottom sentinel; neither affordance surfaced.
     expect(
       scrollCalls.some((c) =>
         c.el.classList.contains("chat__scroll-anchor"),
       ),
     ).toBe(true);
-    expect(container.querySelector(".chat__new-msg-chip")).toBeNull();
+    expect(
+      container.querySelector("[data-testid='chat-new-msg-preview']"),
+    ).toBeNull();
+    expect(container.querySelector("[data-testid='chat-jump-latest']")).toBeNull();
   });
 
-  it("scrolled up + new inbound → the unread divider anchors at the SAME first unseen message as the chip (owner bug: chip without divider)", () => {
+  it("scrolled up + new inbound → the unread divider anchors at the FIRST unseen message while the strip shows the LAST", () => {
     // Owner report: staying IN the conversation (window foreground), two new
-    // messages land → the chip appears, but clicking it showed NO
+    // messages land → the affordance appears, but jumping showed NO
     // "以下是未讀訊息" divider — the divider only ever anchored at
     // conversation ENTRY and had no path for in-conversation arrivals.
     messages = [
@@ -366,15 +535,20 @@ describe("① new-message floating chip", () => {
       </I18nProvider>,
     );
 
-    // Chip AND divider — both anchored at the FIRST unseen message (c3).
-    expect(container.querySelector(".chat__new-msg-chip")).not.toBeNull();
+    // The divider marks where the unread block STARTS (c3); the strip previews
+    // what most recently arrived (c4). Two ends of the same batch, on purpose.
+    const strip = container.querySelector(
+      "[data-testid='chat-new-msg-preview']",
+    );
+    expect(strip).not.toBeNull();
+    expect(strip!.textContent).toContain("msg c4");
     const divider = container.querySelector(".chat__unread-divider");
     expect(divider).not.toBeNull();
     expect(divider!.nextElementSibling?.getAttribute("data-msg-id")).toBe(
       "c3",
     );
     // The re-anchor must NOT yank the viewport (no scrollIntoView at all —
-    // the entry-positioning scroll is entry-only; the chip is the opt-in jump).
+    // the entry-positioning scroll is entry-only; the jump is opt-in).
     expect(scrollCalls).toEqual([]);
 
     // Reading down to the bottom CLOSES the run; the next unseen inbound
@@ -438,8 +612,10 @@ describe("① new-message floating chip", () => {
       </I18nProvider>,
     );
 
-    // Chip arms, but the divider stays at the ENTRY anchor (c2): one run.
-    expect(container.querySelector(".chat__new-msg-chip")).not.toBeNull();
+    // The strip is up, but the divider stays at the ENTRY anchor (c2): one run.
+    expect(
+      container.querySelector("[data-testid='chat-new-msg-preview']"),
+    ).not.toBeNull();
     const after = container.querySelector(".chat__unread-divider");
     expect(after!.nextElementSibling?.getAttribute("data-msg-id")).toBe("c2");
     expect(
@@ -447,7 +623,7 @@ describe("① new-message floating chip", () => {
     ).toBe(1);
   });
 
-  it("scrolled up + a new INTER-AGENT message (not addressed to the owner) → no chip", () => {
+  it("scrolled up + a new INTER-AGENT message (not addressed to the owner) → no strip", () => {
     messages = [mkMsg("c1", "b", "owner", 1000)];
     const { container, rerender } = renderChat(0);
     const list = container.querySelector(".chat__messages")!;
@@ -464,7 +640,14 @@ describe("① new-message floating chip", () => {
         <ChatArea member={mkMember(0)} members={[mkMember(0)]} />
       </I18nProvider>,
     );
-    expect(container.querySelector(".chat__new-msg-chip")).toBeNull();
+    expect(
+      container.querySelector("[data-testid='chat-new-msg-preview']"),
+    ).toBeNull();
+    // The arrow stays: the newest message is still off screen, whoever it is
+    // addressed to.
+    expect(
+      container.querySelector("[data-testid='chat-jump-latest']"),
+    ).not.toBeNull();
   });
 });
 

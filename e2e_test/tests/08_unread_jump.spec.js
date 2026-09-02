@@ -20,6 +20,7 @@ const {
   hireMember,
   mintMemberToken,
   postChatAs,
+  markChatRead,
   unreadCountOf,
   bootAuthedSpa,
   uniqueName,
@@ -49,15 +50,19 @@ test.describe('B9 · unread — badge, entry divider anchor, list-即讀, floati
     // touches M's watermark).
     await postChatAs(request, token, decoy.id, `hello decoy ${PAD}`);
 
-    // ── fixture: OLD read context (M → owner ×14, then the owner LISTS the
-    // thread = list 即讀, watermark advances) + NEW unread tail (M → owner ×5).
+    // ── fixture: OLD read context (M → owner ×14, read up to the last of
+    // them) + NEW unread tail (M → owner ×5).
+    //
+    // 🔴 THE READ IS REPORTED EXPLICITLY. It used to be produced by LISTING the
+    // thread — `GET /api/chat?with=` advanced the watermark as a side effect —
+    // and commit 8cd4fff9 removed that write from every path. A fixture still
+    // built on the listing quietly leaves all 19 messages unread, and this
+    // spec then fails 60 lines later on a count it never talks about.
+    let lastOld;
     for (let i = 1; i <= OLD_COUNT; i++) {
-      await postChatAs(request, tokM, 'owner', `old read message ${i} ${PAD}`);
+      lastOld = await postChatAs(request, tokM, 'owner', `old read message ${i} ${PAD}`);
     }
-    const listRes = await request.get(`${BASE}/api/chat?with=${M.id}&limit=100`, {
-      headers: authHeaders(token),
-    });
-    expect(listRes.status(), 'owner listing the thread must succeed (marks read)').toBe(200);
+    await markChatRead(request, token, M.id, lastOld.ts);
     const newMsgs = [];
     for (let i = 1; i <= NEW_COUNT; i++) {
       newMsgs.push(
@@ -153,7 +158,9 @@ test.describe('B9 · unread — badge, entry divider anchor, list-即讀, floati
       `the divider's top must sit flush with the thread's top, got ${dividerOffset}px off`,
     ).toBeLessThanOrEqual(2);
 
-    // ── read convergence: entering the room IS reading (list 即讀) ──
+    // ── read convergence: entering the room IS reading. It is the COCKPIT
+    // that reports it now (ChatArea's entry read receipt → POST
+    // /api/chat/mark-read), not the listing — see the fixture note above. ──
     await expect
       .poll(async () => unreadCountOf(request, token, M.id), {
         message: 'the unread count must converge to 0 after the room lists the thread',
@@ -164,20 +171,44 @@ test.describe('B9 · unread — badge, entry divider anchor, list-即讀, floati
       'the roster badge must be gone once read',
     ).toHaveCount(0);
 
-    // ── floating "有新訊息" chip: owner scrolled up + new inbound via SSE ──
+    // ── T-48 新訊息預覽列: owner scrolled up + new inbound via SSE. The
+    // 「有新訊息」 pill this replaces said one fixed sentence; the strip names
+    // the sender and quotes the line, and clicking it lands on the LATEST
+    // message rather than the first unseen one.
     await thread.evaluate((el) => {
       el.scrollTop = 0;
     });
-    await postChatAs(request, tokM, 'owner', `late-breaking message ${PAD}`);
-    const chip = page.locator('.chat__new-msg-chip');
-    await expect(chip, 'the floating chip must appear (SSE-pushed inbound)').toBeVisible({
+    // ── T-48 ①: 捲上去，什麼都還沒發生 —— 圓形箭頭就該在了。owner 的條件是
+    // 「最新那一則不在視窗內」（rc-72054864ff88），不是「有新訊息」。退場的
+    // 「有新訊息」藥丸用的是後者，所以一個往回讀歷史的人在別人開口之前沒有任何
+    // 路可以回到底部。這一條在真 server、真瀏覽器上釘住那個差別。
+    await expect(
+      page.getByTestId('chat-jump-latest'),
+      'scrolling up alone must raise the arrow — no arrival required',
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(
+      page.getByTestId('chat-new-msg-preview'),
+      'nothing arrived, so there is nothing to preview',
+    ).toBeHidden();
+
+    const lateBody = `late-breaking message ${PAD}`;
+    await postChatAs(request, tokM, 'owner', lateBody);
+    const strip = page.getByTestId('chat-new-msg-preview');
+    await expect(strip, 'the preview strip must appear (SSE-pushed inbound)').toBeVisible({
       timeout: 15_000,
     });
-    await expect(chip).toHaveText('有新訊息');
-    await chip.click();
-    // Click jumps toward the anchor / bottom; reaching the bottom clears it.
-    await expect(chip, 'reaching the bottom must dismiss the chip').toBeHidden({
+    await expect(strip).toContainText(lateBody);
+    // Mutually exclusive with the round jump-to-latest arrow.
+    await expect(
+      page.getByTestId('chat-jump-latest'),
+      'the arrow must give way to the strip',
+    ).toBeHidden();
+    await page.getByTestId('chat-new-msg-jump').click();
+    // The jump lands on the latest message ⇒ the strip is consumed and the
+    // arrow stays away (nothing is off screen any more).
+    await expect(strip, 'reaching the latest message must dismiss the strip').toBeHidden({
       timeout: 10_000,
     });
+    await expect(page.getByTestId('chat-jump-latest')).toBeHidden();
   });
 });

@@ -731,9 +731,15 @@ export const en: Dict = {
     removeAttachmentLabel: "Remove attachment",
     downloadAttachment: "Download",
     read: "Read",
-    // M2 batch 19 unread jump: the floating chip shown when a new message lands
-    // while scrolled up; the thin divider above the first unread message on entry.
-    newMessages: "New messages",
+    // T-48: the round arrow that surfaces whenever the NEWEST message is not in
+    // the viewport, and the x on the new-message preview strip that replaces it
+    // while unseen arrivals are waiting. (`newMessages`, the old 「有新訊息」
+    // pill's label, went with the pill — the strip names the sender and quotes
+    // the line instead, so a fixed sentence has nothing left to say.)
+    jumpToLatest: "Jump to the latest message",
+    newMsgPreviewDismiss: "Dismiss the new-message preview",
+    // M2 batch 19 unread jump: the thin divider above the first unread message
+    // on entry.
     unreadBelow: "Unread messages below",
     // T-bf82 scrollback: the top-of-thread marker once the history is
     // exhausted (hasMore=false).

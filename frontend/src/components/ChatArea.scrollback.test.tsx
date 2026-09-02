@@ -184,8 +184,10 @@ describe("scroll-top history loading", () => {
     });
 
     expect(loadOlderCalls).toBe(1);
-    // History is not fresh: no chip, no unread divider.
-    expect(container.querySelector(".chat__new-msg-chip")).toBeNull();
+    // History is not fresh: no new-message preview strip, no unread divider.
+    expect(
+      container.querySelector("[data-testid='chat-new-msg-preview']"),
+    ).toBeNull();
     expect(container.querySelector(".chat__unread-divider")).toBeNull();
   });
 

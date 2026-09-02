@@ -25,10 +25,14 @@ import {
 import { useWindowActive } from "../hooks/useWindowActive";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { enterShouldSend } from "../lib/composerKeys";
+import { chatBottomAffordance } from "../lib/chatBottomAffordance";
+import { scrollToLatest } from "../lib/scrollToLatest";
 import { AttachmentStrip } from "./AttachmentStrip";
 import { Avatar } from "./Avatar";
 import { avatarKindForMember } from "../lib/avatarKind";
 import { ChatGalleryPanel } from "./ChatGalleryPanel";
+import { ChatJumpLatestButton } from "./ChatJumpLatestButton";
+import { ChatNewMsgPreview } from "./ChatNewMsgPreview";
 import { ChatReplyCard } from "./ChatReplyCard";
 import { ComposerAttachmentPreview } from "./ComposerAttachmentPreview";
 import { Markdown } from "./Markdown";
@@ -511,12 +515,27 @@ export function ChatArea({
   // unread message. Drives the "以下是未讀訊息" divider (kept for the whole
   // session, like LINE) and the initial scroll target.
   const [firstUnreadId, setFirstUnreadId] = useState<string | null>(null);
-  // ① NEW-MESSAGE FLOATING CHIP: when the owner has scrolled UP and a new
-  // message addressed to them lands below the fold, a floating "有新訊息" chip
-  // appears. Its anchor = the FIRST new inbound message accumulated since the
-  // chip appeared (session-tracked; no server involvement). Cleared when the
-  // owner reaches the bottom (click-scroll or naturally).
-  const [newMsgAnchorId, setNewMsgAnchorId] = useState<string | null>(null);
+  // ① IS THE NEWEST MESSAGE IN THE VIEWPORT? The round 回到最新訊息 arrow's
+  // ONLY condition (owner card rc-72054864ff88) — not "scrolled more than a
+  // screen", not "a new message arrived". Measured from the scroll viewport's
+  // own geometry in `onMessagesScroll` and wherever this component moves the
+  // viewport itself. Starts true: every entry path lands at the bottom or
+  // measures honestly before this can be read.
+  const [latestInView, setLatestInView] = useState(true);
+  // ② THE NEW-MESSAGE PREVIEW STRIP's content — the LATEST unseen inbound
+  // message (sender + body), or null when there is nothing waiting.
+  //
+  // 🔴 THE LATEST, NOT THE FIRST, AND IT IS REPLACED RATHER THAN QUEUED. The
+  // pill this replaces said a constant sentence and so had nothing to update;
+  // a strip that names a sender and quotes a line must show the CURRENT one,
+  // and there must only ever be one of it (owner screenshot). The FIRST unseen
+  // message keeps its own job — anchoring the 「以下是未讀訊息」 divider below —
+  // which is why the two are tracked separately.
+  const [newMsgPreview, setNewMsgPreview] = useState<{
+    id: string;
+    from: string;
+    body: string;
+  } | null>(null);
   // Ids seen on the previous messages render — the diff basis for "which
   // messages are NEW" (refetch replaces the whole array, so append detection
   // must go through ids, not length).
@@ -575,7 +594,8 @@ export function ChatArea({
     seedConsumedRef.current = null;
     prependAnchorRef.current = null;
     setFirstUnreadId(null);
-    setNewMsgAnchorId(null);
+    setNewMsgPreview(null);
+    setLatestInView(true);
     setHighlightMsgId(null);
     // T-8aaa: swap the composer to the NEW peer's saved draft. Render-phase
     // state adjustment (same pattern as the resets above) so the committed
@@ -697,8 +717,15 @@ export function ChatArea({
     // the latch stays untouched here.
   }, [messages, messagesPeer, member.id]);
 
-  // Threshold (px) within which the viewport counts as "at the bottom".
+  // Threshold (px) within which the viewport counts as "at the bottom" for
+  // auto-follow and the read watermark.
   const NEAR_BOTTOM_PX = 80;
+  // ① A MUCH TIGHTER SLACK, and it is not the same number for a reason: this
+  // one answers "is the NEWEST MESSAGE on screen", which is what the arrow is
+  // for, while 80px answers "is the owner still following along". Reusing the
+  // 80 would hide the arrow with the newest message's bottom 80px cut off. The
+  // 4px covers sub-pixel scroll positions only.
+  const AT_LATEST_PX = 4;
   function onMessagesScroll() {
     const el = messagesRef.current;
     if (!el) return;
@@ -710,16 +737,23 @@ export function ChatArea({
     }
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     const nowNearBottom = distance <= NEAR_BOTTOM_PX;
+    // ① The arrow's condition, and it is a DIFFERENT question from
+    // `nowNearBottom`: auto-follow may forgive 80px, but the owner asked for
+    // the arrow whenever the newest message is not in the viewport. The newest
+    // row is the last content in this box, so "any content still below the
+    // fold" IS "the newest row is cut off" — up to the 12px flex gap that
+    // follows it, which the slack absorbs.
+    setLatestInView(distance <= AT_LATEST_PX);
     // Crossing into the bottom band = the owner has now read to the latest → mark
     // the newest message read (monotonic server-side; safe to fire repeatedly).
     if (nowNearBottom && !nearBottomRef.current && newestTs > 0) {
       void markRead(newestTs);
     }
-    // Reaching the bottom means the "new messages" chip's content has been
-    // seen → dismiss it (no-op when already null), and the current unread run
-    // is CLOSED — the next unseen inbound starts a new run (divider re-anchors).
+    // Reaching the bottom means the preview strip's message has been seen →
+    // drop it (no-op when already null), and the current unread run is CLOSED —
+    // the next unseen inbound starts a new run (divider re-anchors).
     if (nowNearBottom) {
-      setNewMsgAnchorId(null);
+      setNewMsgPreview(null);
       unreadRunOpenRef.current = false;
     }
     nearBottomRef.current = nowNearBottom;
@@ -814,6 +848,8 @@ export function ChatArea({
       el.scrollIntoView({ block: "center" });
       // Located mid-thread → not at the bottom; a later arrival must not yank.
       nearBottomRef.current = false;
+      // …and the newest message is somewhere below, so the arrow belongs here.
+      setLatestInView(false);
       setHighlightMsgId(jumpToMsgId);
       // Async content above the target (images decoding to their real height,
       // inline reply cards refetching) reflows AFTER this paint-time scroll and
@@ -892,30 +928,41 @@ export function ChatArea({
     prevIdsRef.current = new Set(messages.map((m) => m.id));
     if (nearBottomRef.current) {
       endRef.current?.scrollIntoView();
-      // Following the bottom = everything is being seen; any armed chip is
-      // stale (e.g. the owner just sent a reply, which force-follows), and
-      // the unread run — if one was open — is being read right now.
-      setNewMsgAnchorId(null);
+      // Following the bottom = everything is being seen; any strip up is stale
+      // (e.g. the owner just sent a reply, which force-follows), the newest
+      // message is on screen, and the unread run — if one was open — is being
+      // read right now.
+      setNewMsgPreview(null);
+      setLatestInView(true);
       unreadRunOpenRef.current = false;
       return;
     }
-    // Scrolled up + a new message addressed to the owner → arm the chip. The
-    // anchor stays the FIRST unseen message even as more accumulate.
-    const inboundNew = fresh.find(
+    // Scrolled up + new messages addressed to the owner. Two different anchors
+    // come out of the SAME arrival batch and they are deliberately different
+    // ends of it:
+    //   • the preview strip shows the LAST one — it is a preview of what just
+    //     came in, and it replaces whatever it was showing (never stacks);
+    //   • the 「以下是未讀訊息」 divider anchors at the FIRST one — it marks
+    //     where the unread block STARTS, and it is what stays behind after the
+    //     jump lands the reader at the end of that block.
+    const inboundNew = fresh.filter(
       (m) => m.to === OWNER_ID && m.from !== OWNER_ID,
     );
-    if (inboundNew) {
-      setNewMsgAnchorId((cur) => cur ?? inboundNew.id);
-      // Chip/divider alignment (owner bug): the chip and the "以下是未讀訊息"
-      // divider share the SAME "start of the new messages". If no unread run
-      // is open (the owner had seen everything up to now), this first unseen
-      // inbound STARTS one → anchor the divider here, so jumping via the chip
-      // lands on a LINE-style divider. If a run is already open (e.g. the
-      // entry divider's tail was never read down to), the arrival extends the
-      // SAME run — the divider stays put.
+    if (inboundNew.length > 0) {
+      const latest = inboundNew[inboundNew.length - 1];
+      setNewMsgPreview({ id: latest.id, from: latest.from, body: latest.body });
+      // Appended below the fold ⇒ the newest message is, by construction, not
+      // in the viewport. Say so without waiting for a scroll event that may
+      // never come (the owner is reading, not scrolling).
+      setLatestInView(false);
+      // Strip/divider alignment (owner bug): if no unread run is open (the
+      // owner had seen everything up to now), this first unseen inbound STARTS
+      // one → anchor the divider here. If a run is already open (e.g. the entry
+      // divider's tail was never read down to), the arrival extends the SAME
+      // run — the divider stays put.
       if (!unreadRunOpenRef.current) {
         unreadRunOpenRef.current = true;
-        setFirstUnreadId(inboundNew.id);
+        setFirstUnreadId(inboundNew[0].id);
       }
     }
   }, [messages, messagesPeer, member.id]);
@@ -940,21 +987,50 @@ export function ChatArea({
     divider?.scrollIntoView({ block: "start" });
     const distance = box.scrollHeight - box.scrollTop - box.clientHeight;
     nearBottomRef.current = distance <= NEAR_BOTTOM_PX;
+    // Landing on the divider usually leaves the newest message below the fold —
+    // that is the whole point of landing there — so the arrow must be able to
+    // come up immediately, without waiting for the owner to scroll first.
+    setLatestInView(distance <= AT_LATEST_PX);
     // NOTE: the run deliberately stays OPEN even when a short thread lands at
     // the bottom here — every real "the owner saw it" path (a bottom-crossing
     // scroll, or an at-bottom auto-follow) closes it; closing on this
     // layout-dependent measurement would misfire under test/jsdom geometry.
   }, [firstUnreadId]);
 
-  // ① chip click: smooth-scroll to the first unseen message. The chip itself is
-  // dismissed by onMessagesScroll once the bottom is actually reached (or the
-  // owner reads down to it naturally) — not by the click.
-  function jumpToNewMessages() {
-    if (!newMsgAnchorId) return;
-    messagesRef.current
-      ?.querySelector(`[data-msg-id="${newMsgAnchorId}"]`)
-      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  // ③ THE ONE JUMP BEHIND BOTH BOTTOM AFFORDANCES: go to the LATEST message.
+  //
+  // 🔴 IT USED TO GO TO THE FIRST UNSEEN ONE, and that was the bug (reproduced
+  // in the isolated environment: ten messages injected, the jump landed on
+  // message 1 with five still below the fold). The first-unseen position is
+  // still marked — by the 「以下是未讀訊息」 divider, which stays where it is —
+  // so nothing was lost by moving the landing to the end of the block.
+  //
+  // The landing is CORRECTED after the layout settles (lib/scrollToLatest):
+  // images above the target decode to their real height after this frame and
+  // shove the row straight back out of view.
+  const jumpSettleRef = useRef<(() => void) | null>(null);
+  function jumpToLatest() {
+    const el = messagesRef.current;
+    if (!el) return;
+    jumpSettleRef.current?.();
+    jumpSettleRef.current = scrollToLatest(el);
+    // The strip's message is exactly what we are going to look at.
+    setNewMsgPreview(null);
+    setLatestInView(true);
+    nearBottomRef.current = true;
+    unreadRunOpenRef.current = false;
   }
+  // A pending correction must not outlive the conversation it was aiming at.
+  useEffect(() => () => jumpSettleRef.current?.(), []);
+
+  // ①② WHICH bottom affordance is on screen — at most ONE, ever (owner: the
+  // preview strip 讓位 rule). Derived in one place so the exclusion is a single
+  // fact rather than two booleans that have to agree; see the module's note for
+  // why writing `!latestInView` inline is the mistake this shape prevents.
+  const bottomAffordance = chatBottomAffordance({
+    latestInView,
+    hasNewMsgPreview: newMsgPreview !== null,
+  });
 
   // OWNER read receipt: entering the conversation (or a new message landing while
   // the owner is at the bottom) means the owner has SEEN up to the newest message
@@ -1718,17 +1794,11 @@ export function ChatArea({
               {/* Bottom sentinel — scrolled into view to follow new messages. */}
               <div ref={endRef} className="chat__scroll-anchor" aria-hidden />
             </div>
-            {/* ① floating "有新訊息" chip — appears when a new inbound message
-             * lands while the owner is scrolled up; click jumps to the first
-             * unseen message; dismissed once the bottom is reached. */}
-            {newMsgAnchorId && (
-              <button
-                type="button"
-                className="chat__new-msg-chip"
-                onClick={jumpToNewMessages}
-              >
-                {t.chat.newMessages}
-              </button>
+            {/* ① the round 回到最新訊息 arrow, bottom-right of the pane and
+             * therefore directly above the composer. It is NOT rendered
+             * whenever the preview strip is (see bottomAffordance). */}
+            {bottomAffordance === "arrow" && (
+              <ChatJumpLatestButton onClick={jumpToLatest} />
             )}
           </>
         ) : isOffline ? (
@@ -1757,6 +1827,24 @@ export function ChatArea({
       </div>
 
       <footer className="chat__composer">
+        {/* ② the new-message preview strip. FIRST child of the composer, so it
+         * sits above the 「正在回覆」 banner (owner's requirement) and above the
+         * wake row and the attachment previews as well — and it is outside the
+         * locked/unlocked fork on purpose: a read-only peer's thread still
+         * receives messages, and the owner still has to be told.
+         *
+         * The whole strip is one jump target; the x drops it without moving the
+         * viewport, after which the round arrow takes its place (the newest
+         * message is still not on screen — dismissing a preview is not reading
+         * it). */}
+        {bottomAffordance === "preview" && newMsgPreview && (
+          <ChatNewMsgPreview
+            who={nameOf(newMsgPreview.from)}
+            body={newMsgPreview.body}
+            onJump={jumpToLatest}
+            onDismiss={() => setNewMsgPreview(null)}
+          />
+        )}
         {composerLocked ? (
           /* T-9c3c: the composer locks ONLY for a peer with NO queue path — a
            * synthetic released/removed peer (read-only, T-661b) or an outsource

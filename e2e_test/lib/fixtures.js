@@ -89,6 +89,25 @@ async function postChatAs(request, token, to, body, attachments) {
   return res.json();
 }
 
+// Mark a conversation read up to `lastReadTs`, as the token's identity.
+//
+// 🔴 THIS REPLACED "list 即讀" IN THE FIXTURES. `GET /api/chat?with=` used to
+// advance the reader's watermark as a side effect, and every spec that needed a
+// READ thread produced one by listing it. Commit 8cd4fff9
+// (「GET /api/chat 不再寫已讀水位」) removed that write from every path — a
+// listing is now a pure read — so a fixture built on it silently produces an
+// UNREAD thread and the spec fails somewhere far away, on an unread count it
+// never mentions. Reading is now reported explicitly, by the same endpoint the
+// cockpit itself calls (useChat's markRead → POST /api/chat/mark-read).
+async function markChatRead(request, token, peer, lastReadTs) {
+  const res = await request.post(`${BASE}/api/chat/mark-read`, {
+    headers: authHeaders(token),
+    data: { peer, last_read_ts: lastReadTs },
+  });
+  expect(res.status(), `marking ${peer} read must succeed`).toBe(200);
+  return res.json();
+}
+
 // GET /api/members as the token's identity; returns the MemberDTO rows.
 async function listMembers(request, token) {
   const res = await request.get(`${BASE}/api/members`, {
@@ -125,6 +144,7 @@ module.exports = {
   hireMember,
   mintMemberToken,
   postChatAs,
+  markChatRead,
   listMembers,
   unreadCountOf,
   bootAuthedSpa,

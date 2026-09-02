@@ -561,7 +561,7 @@
   display: grid;
   place-items: center;
   padding: 24px;
-  /* Anchor for the floating "有新訊息" chip (absolute, bottom-center). */
+  /* Anchor for the floating 回到最新訊息 arrow (absolute, bottom-right). */
   position: relative;
   /* 🔴 T-7fa1 手機高度字疊字: this pane is the ONLY flex item of `.chat` allowed
    * to shrink (`flex:1; min-height:0`), so every pixel the composer GAINS is a
@@ -588,27 +588,133 @@
   overflow-y: auto;
   overflow-x: hidden;
 }
-/* ① M2 batch 19: floating "有新訊息" chip — surfaces when a new inbound message
- * lands while the owner is scrolled up. Low-emphasis grey pill (card surface,
- * NOT the accent CTA), floating just above the composer edge; click jumps to
- * the first unseen message; dismissed on reaching the bottom. */
-.chat__new-msg-chip {
+/* ① T-48 回到最新訊息: the round arrow floating over the bottom-RIGHT of the
+ * message pane, just above the composer. It surfaces whenever the newest
+ * message is not in the viewport, and hands its place to the new-message
+ * preview strip (below) whenever one is up — the two are mutually exclusive.
+ *
+ * 🔴 THE VISUAL LANGUAGE IS THE RETIRED 「有新訊息」 PILL'S, ON PURPOSE (owner
+ * c-7ecbaac9c1c1: 「跟現在的風格差不多」): card surface, hairline border, soft
+ * shadow, and NOT ONE HARD-CODED COLOUR — every value is a theme token, because
+ * this element floats over the thread in every theme the owner can install.
+ * What changed from the pill is the SHAPE (a 34px circle) and the SIDE. */
+.chat__jump-latest {
   position: absolute;
+  right: 12px;
   bottom: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
   border: 1px solid var(--color-border);
   border-radius: 999px;
   background: var(--color-card);
   color: var(--color-text);
-  font-size: 12px;
-  line-height: 1;
   cursor: pointer;
   box-shadow: 0 4px 14px color-mix(in srgb, var(--color-shadow) 35%, transparent);
 }
-.chat__new-msg-chip:hover {
+.chat__jump-latest:hover,
+.chat__jump-latest:focus-visible {
   border-color: var(--color-text-muted);
+}
+
+/* ② T-48 新訊息預覽列: one strip above the composer — sender on one line, the
+ * message on the next — replacing the 「有新訊息」 pill. It sits ABOVE the
+ * 「正在回覆」 banner (ChatArea renders it first inside `.chat__composer`), and
+ * a lighter ground than the banner's accent wash keeps the answer-target the
+ * louder of the two.
+ *
+ * 🔴 FIXED HEIGHT, TWO CLIPPED LINES — the reply banner's rule, and here it
+ * matters MORE. The banner's text changes only when the owner aims at another
+ * message; this one changes on its own, every time somebody writes. Letting it
+ * wrap would move the input box out from under the owner's hands mid-sentence.
+ * `white-space: nowrap` on the column + `text-overflow: ellipsis` per line is
+ * the same mechanism, deliberately copied rather than re-invented. */
+.chat__new-msg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 5px 6px 5px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-card) 60%, transparent);
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+}
+/* The strip IS the jump target (owner screenshot: no separate control), so it
+ * is a full-width button — but a button that must look like the strip, not like
+ * a button. */
+.chat__new-msg__hit {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.chat__new-msg__text {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* One per line, each ellipsised on its own — same shape as
+ * `.chat__reply-banner__who` / `__body`, for the same reason.
+ *
+ * 🔴 `min-height` IS THE OTHER HALF OF "FIXED HEIGHT", and the reply banner
+ * does not need it while this strip does. The banner always has a quoted
+ * sentence; this strip previews whatever arrived, and an ATTACHMENT-ONLY
+ * message has an EMPTY body — an empty line box is 0px tall, so the strip
+ * measured 36px against 44px for every other message and the composer jumped by
+ * 8px the moment somebody sent a picture. Measured in the CT harness at both
+ * 390 and 1280. One line's worth of height, reserved whether or not there is
+ * anything to put in it. */
+.chat__new-msg__who,
+.chat__new-msg__body {
+  flex: none;
+  min-width: 0;
+  min-height: 1.35em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat__new-msg__who {
+  font-weight: 600;
+  color: var(--color-text);
+}
+/* The x, sized to the same 24px touch box the reply banner's uses and pinned to
+ * the far edge so it never moves as the previewed message changes length. */
+.chat__new-msg__x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    background-color 0.15s;
+}
+.chat__new-msg__x:hover,
+.chat__new-msg__x:focus-visible {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-overlay) 8%, transparent);
 }
 /* ② M2 batch 19: the "以下是未讀訊息" divider above the first message that was
  * unread at conversation entry — a thin low-emphasis rule, same visual language
