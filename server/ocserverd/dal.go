@@ -789,9 +789,21 @@ func (d *DAL) listChatWindow(participant, caller string, start, end *chatAnchor,
 // is the same set whether you take the last N ascending or the first N
 // descending-then-reverse, which is exactly what the two paths do.
 //
-// 🔴 DELIBERATELY NO INDEX on (sender, recipient) or (ts): measured on the same
-// real table, adding one made the scrollback page (listChatBefore) 23× SLOWER,
-// and ANALYZE changed nothing. This scan is the cheap side of that trade.
+// 🔴 DELIBERATELY NO SINGLE-COLUMN INDEX on (sender, recipient) or (ts):
+// measured on the same real table, adding one made the scrollback page
+// (listChatBefore) 23× SLOWER, and ANALYZE changed nothing. This scan is the
+// cheap side of that trade.
+//
+// ⚠️ T-48: a COMPOSITE index on (recipient, sender, ts) DOES now exist
+// (migration 00067) — do not read the paragraph above as "this table carries no
+// index". It is a different shape, added for a different query: it COVERS the
+// unread count (2.7× there) and leaves this path untouched, because the
+// scrollback query cannot use it at all and the planner keeps
+// idx_chat_message_ts. The two statements are about two different indexes; the
+// 23× result above still stands for the single-column one.
+// 🔑 The 00067 numbers are SYNTHETIC (owner ruled it in on that basis, knowingly
+// — rc-6b67aa1a331c). The 23× above is from a real-data copy. Do not quote them
+// as if they came from the same measurement.
 func (d *DAL) ListChatLatest(participant, caller string, limit int) ([]ChatMessage, error) {
 	if limit == 0 {
 		return nil, nil
