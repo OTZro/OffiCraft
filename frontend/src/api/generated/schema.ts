@@ -1968,7 +1968,11 @@ export interface paths {
          *
          *     The actor is resolved the way the banking fold (`bankLiveCost`) resolves it, so ONE route serves both kinds: a staff member, or a LIVE outsource worker.
          *
-         *     🔴 A RELEASED worker is a 404, and that is a deliberate boundary rather than an oversight: releasing a worker removes its roster row, and every other outsource write door refuses a removed row, so this one does too instead of being the single owner-only destructive route that reaches further than its neighbours. The consequence is worth stating because it is visible: a released worker's spend still counts on the account card (`GET /api/monitoring` deliberately keeps it there) and this route cannot clear it — so zeroing every actor an account still lists does NOT drive that account's total to absent; a residue remains. Widening this is a separate decision, not a bug report.
+         *     🔴 A RELEASED worker is a 404, and that is a deliberate boundary rather than an oversight: releasing a worker removes its roster row, and every other outsource write door refuses a removed row, so this one does too instead of being the single owner-only destructive route that reaches further than its neighbours. The consequence is worth stating because a caller can see it: a released worker's spend still counts on the account card (`GET /api/monitoring` deliberately keeps it there) and this route cannot clear it — so resetting every actor an account still lists does NOT drive that account's total to absent. A residue remains.
+         *
+         *     HOW BIG A RESIDUE IS NOT SOMETHING THIS API CAN TELL YOU, and that is a property of the system rather than a gap in this description. It depends entirely on the deployment — on how many workers have been released and what they spent — and no endpoint reports it, because there is no per-charge ledger to total up. That absence is the same one that makes this endpoint a reset rather than a recount. The closest a caller can get is to subtract the actors an account still lists from that account's total, which is an INFERENCE, not a per-row census: it attributes the whole difference to released workers and cannot show its working.
+         *
+         *     Widening this route to reach released workers is a separate decision, not a bug report.
          *
          *     An id that resolves to neither kind is likewise a 404, and nothing is written — the same deny-first ordering the rest of the member routes use.
          *
