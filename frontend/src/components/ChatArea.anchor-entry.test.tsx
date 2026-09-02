@@ -325,6 +325,59 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     expect(bubbles(container)).toEqual(["b0", "b1", "b2", "b3", "b4"]);
   });
 
+  it("切走再切回同一個人,上一趟的錨點失敗不准把橫幅貼到這一趟,也不准把這一趟捲到底", async () => {
+    // 🔴 第六輪 R6-1。這一族的第六個實例,而且它指出了前五個共同的根:
+    // **身分被寫成「是哪一個人」,而不變量是「是哪一次造訪」**。
+    // 上一顆補的兩道防線綁的都是 `member.id` 這個字串 ——
+    // `ChatArea` 的 `peerIdRef.current !== firedFor`,以及 `useKeyedState` 的
+    // key 比對 —— A→B→**A** 回到同一個人時字串相等,**兩道同時放行**:
+    // 上一趟的「現在讀不到那則訊息」橫幅(附一顆按了沒反應的重試鈕,因為這一趟
+    // 沒有 jumpToMsgId)貼進這一趟,而且這一趟被捲到底。
+    // 真人版:從連結進 A 的一則舊訊息 → 那一對 window 請求吃到 502 → 在它回來
+    // 之前切到 B,再從 roster 切回 A。
+    seed(A, "a", 80, 100);
+    seed(B, "b", 5, 9000);
+
+    holdWindows = () => {};
+    windowsFail = true;
+    const { container, rerender } = render(view(alice, "a3"));
+    await waitFor(() => expect(windowCalls).toHaveLength(2));
+
+    await act(async () => {
+      rerender(view(bruno));
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    await waitFor(() =>
+      expect(bubbles(container)).toEqual(["b0", "b1", "b2", "b3", "b4"]),
+    );
+
+    // 再切回 A —— 這一趟是一般進房(沒有錨點),所以它要的是最新一頁。
+    await act(async () => {
+      rerender(view(alice));
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    await waitFor(() => expect(bubbles(container)).toContain("a79"));
+
+    scrolls = [];
+    await act(async () => {
+      const release = holdWindows;
+      holdWindows = null;
+      release?.();
+      await new Promise((r) => setTimeout(r, 30));
+    });
+
+    expect(
+      container.querySelector(".chat__jump-miss"),
+      "回到 A 的這一趟不該出現上一趟的跳轉失敗通知",
+    ).toBeNull();
+    expect(
+      scrolls.map((s) => s.on),
+      "上一趟的失敗回呼不准去捲這一趟的 viewport",
+    ).not.toContain("chat__scroll-anchor");
+    // …而這一趟的內容本身沒有被動到。
+    expect(bubbles(container)).toContain("a79");
+  });
+
   it("上一條對話按下「回到最新」留下的待辦,不准把帶著錨點進來的新對話捲到活尾巴", async () => {
     // 🔴 第五輪 R5-3 的護欄。`pendingLatestScroll` 這一輪從跨 peer 的 ref 改判
     // 進紀錄,但當時**一條會紅的測試都沒有** —— 把它改回跨 peer,src/components/

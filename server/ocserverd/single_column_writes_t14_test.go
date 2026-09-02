@@ -338,7 +338,7 @@ func TestEveryColumnOutOfTheSetListIsRegistered(t *testing.T) {
 // asking for one — so a newly constrained column cannot slip past the guard by
 // being unprobeable. The value only has to DIFFER from what fullMember seeds.
 var probeOverrides = map[string]string{
-	"kind": KindWarden, // CHECK kind IN ('assistant','warden','outsource'); fullMember seeds "assistant"
+	"kind": KindWarden, // CHECK kind IN ('staff','warden','outsource'); fullMember seeds "staff"
 }
 
 // survivesAStaleWholeRowUpsert writes a probe value straight into one column,

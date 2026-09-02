@@ -25,6 +25,15 @@ import { useRef } from "react";
  *    the record survives — an unconditional rebuild would re-arm a latch behind
  *    a job that already ran (R4-2's shape).
  *
+ * 🔴 THE RECORD IS ALSO THE VISIT TOKEN (T-48, R6-1). Its identity changes on
+ * every visit — A→B→A hands back a THIRD object, not A's first one — which is
+ * the one question the peer id cannot answer ("is this still the visit I was
+ * started on?" rather than "is this still the same person?"). Everything else
+ * in this feature that needs that answer is bound to this object: the React
+ * state half (`useKeyedState(record, …)`), and the explicit guards on the
+ * things no per-key primitive can own — `scrollIntoView` and the generation
+ * clock. Do not re-derive the answer from a string.
+ *
  * Render-phase, per the React docs' "adjusting state when props change"
  * pattern: the record is already the new key's by the time effects run.
  * `make` must be pure — it is invoked during render and may be invoked twice

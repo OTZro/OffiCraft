@@ -560,6 +560,20 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     latches: openLatches(peer, entryAnchorRef.current !== undefined),
     dropDebt: null,
   }));
+  // 🔴 THE RECORD IS ALSO THIS HOOK'S VISIT TOKEN (T-48, R6-1), and this is the
+  // one place that has to be able to ask "is the record I captured still the
+  // live one?" from inside an async callback. `resetToLatest` writes the
+  // GLOBAL, never-reset generation clock, which is the one thing a captured
+  // record cannot protect — see the guard down there for what a peer-id
+  // comparison let through.
+  //
+  // ⚠️ THIS MIRROR IS ALSO HALF OF THE R4-1 FOOTGUN (latch-inventory §3 rule
+  // 2): with it in scope, "release whatever record is current" becomes
+  // writable again. Do not use it to acquire or release a latch — a lease
+  // handle is bound to the record it came from, and that is the whole design.
+  // It exists to ANSWER a question, never to reach a latch.
+  const convRef = useRef(conv);
+  convRef.current = conv;
   // 🔴 "THE LAST LOAD NEVER LANDED" (T-929f). `load()` below used to end a
   // rejection at `console.warn` and nothing else. Two failure worlds, and only
   // one of them was already covered:
@@ -659,18 +673,26 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     try {
       const next = await api.listChat(withId);
       if (seq < committedSeqRef.current) return;
-      // 🔴 A LATE CROSS-CONVERSATION RESET MUST NOT BURN A GENERATION TICKET
-      // (T-48, R5-1). The peer guard used to live only on `setThread` below,
-      // so this line ran unconditionally: a `resetToLatest` belonging to the
-      // conversation the owner has LEFT (ChatArea fires one from the anchor
-      // fetch's miss branch when the thread is empty) would raise the global
-      // watermark and then drop its own page — and every load the NEW
-      // conversation had already started, ticketed lower, was silently judged
-      // superseded and thrown away. No spinner, no error; the room just sits
-      // there until the next SSE burst happens to heal it. `loadSeqRef` /
-      // `committedSeqRef` are deliberately global and never reset (see their
-      // note), which is exactly why writing to them has to be earned.
-      if (threadRef.current.peer !== withId) return;
+      // 🔴 A LATE RESET MUST NOT BURN A GENERATION TICKET (T-48, R5-1; bound to
+      // the VISIT in R6-1). This line used to run unconditionally: a
+      // `resetToLatest` belonging to a conversation the owner has LEFT
+      // (ChatArea fires one from the anchor fetch's miss branch when the thread
+      // is empty) would raise the global watermark and then drop its own page —
+      // and every load the NEW conversation had already started, ticketed
+      // lower, was silently judged superseded and thrown away. No spinner, no
+      // error; the room just sits there until the next SSE burst happens to
+      // heal it. `loadSeqRef` / `committedSeqRef` are deliberately global and
+      // never reset (see their note), which is exactly why writing to them has
+      // to be earned.
+      //
+      // R5-1 spelled the guard as `threadRef.current.peer !== withId` — a
+      // STRING comparison against a ref that is shared by every conversation,
+      // so it only caught a reset that was late ACROSS peers. A→B→**A** made it
+      // say yes again: the first visit's late reset burned a ticket and pushed
+      // the newest page over the second visit's anchor window, which is the
+      // intermediate frame this ticket exists to delete. `conv` is the record
+      // this call captured; `convRef.current` is the one on screen.
+      if (convRef.current !== conv) return;
       committedSeqRef.current = seq;
       setThread((prev) =>
         prev.peer !== withId
@@ -693,6 +715,15 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // front) — never replace, or the loaded scrollback would vanish under the
     // owner. Takes a generation ticket like load() does — see loadSeqRef.
     //
+    // 🔴 A POST-SEND REFRESH BELONGS TO THE VISIT THAT SENT (T-48, R6-1). Its
+    // only caller is `send`, and a send survives a conversation switch: the
+    // POST is in the air, the owner clicks away and clicks back, and this
+    // refresh then commits a newest page — burning a generation ticket and, if
+    // the visit it lands in opened at an ANCHOR, replacing that window with the
+    // live tail. Same defect as `resetToLatest`'s below, one caller over; the
+    // peer id cannot see it, because the peer is the same one. The message
+    // itself is not lost: this visit's own load is what will carry it.
+    if (convRef.current !== conv) return;
     // SENDING RETURNS TO THE LIVE TAIL (T-48 ③). While the thread is an anchor
     // window the message we just sent is BEYOND it, so a merge would drop it on
     // the floor and the composer's own line would never appear. Nothing else
@@ -755,7 +786,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // rather than deleted because removing it is a behaviour change with no
     // guard of its own, not because a reason was found for it.
     await refetchReads();
-  }, [withId, refetchReads, resetToLatest]);
+  }, [withId, conv, refetchReads, resetToLatest]);
 
   useEffect(() => {
     let alive = true;
@@ -1023,6 +1054,12 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
         beforeTs: oldest.ts,
         beforeId: oldest.id,
       });
+      // 🔴 …AND A VISIT SWITCH MID-FLIGHT (T-48, R6-1). The cursor below was
+      // taken from the thread THIS visit was holding; a re-entry to the same
+      // peer is holding a different one (an anchor window, most sharply), so
+      // prepending this page there splices history in front of rows it does not
+      // join onto. `prev.peer !== withId` cannot see it — the peer is the same.
+      if (convRef.current !== conv) return;
       setThread((prev) => {
         // A peer switch mid-flight: the page belongs to the OLD peer — drop it.
         if (prev.peer !== withId) return prev;
@@ -1082,6 +1119,10 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // A later load committed while we were paging forwards ⇒ the thread this
       // page continues no longer exists. Drop it whole.
       if (seq < committedSeqRef.current) return;
+      // 🔴 And so does a walk left over from an earlier VISIT (T-48, R6-1) —
+      // which would otherwise burn a generation ticket in a room that never
+      // asked for a forward page, dropping the loads that room started first.
+      if (convRef.current !== conv) return;
       committedSeqRef.current = seq;
       setThread((prev) => {
         if (prev.peer !== withId) return prev;

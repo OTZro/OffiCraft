@@ -174,6 +174,41 @@ describe("ChatArea · in-chat wake that was never dispatched (T-7fa1)", () => {
     expect(queryByTestId("chat-wake-undispatched")).toBeNull();
   });
 
+  it("an IN-FLIGHT wake's verdict never lands on the NEXT VISIT to the same peer (R6-1)", async () => {
+    // 🔴 第六輪 R6-1,第七個實例。這一對 state 是 per-conversation 的,而它們
+    // 上一顆用的是 plain `useState` ＋ 手寫的 effect 重置 ＋ 那句
+    // `peerIdRef.current !== firedFor` —— 三樣東西比的都是**「是哪一個人」**。
+    // A→B→**A** 回到同一個人時字串相等:重置不觸發,守衛放行,上一趟的裁決
+    // 直接寫進這一趟。兩位 member 都是 offline,所以 lifecycle 那條路也不會救。
+    let resolveWake: (r: MemberActivateResult) => void = () => {};
+    const onWake = vi.fn(
+      () =>
+        new Promise<MemberActivateResult>((res) => {
+          resolveWake = res;
+        }),
+    );
+    const { wakeBtn, queryByTestId, rerender } = renderChat(onWake);
+
+    fireEvent.click(wakeBtn());
+    await waitFor(() => expect(onWake).toHaveBeenCalledTimes(1));
+
+    const show = (id: string, name: string) =>
+      rerender(
+        <I18nProvider>
+          <ChatArea member={makeMember({ id, name })} onWake={onWake} />
+        </I18nProvider>,
+      );
+    show("m2", "Kyle");
+    show("m1", "Mira");
+
+    resolveWake({ activationPending: true });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(
+      queryByTestId("chat-wake-undispatched"),
+      "回到同一個人的這一趟,不該收到上一趟的喚醒裁決",
+    ).toBeNull();
+  });
+
   it("a RETRY clears the previous verdict (mutant MC)", async () => {
     let pending = true;
     const onWake = vi.fn(async () => ({ activationPending: pending }));

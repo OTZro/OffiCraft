@@ -156,6 +156,114 @@ describe("useChat scrollback (loadOlder / hasMore)", () => {
     expect(h.listChat.mock.calls.length).toBe(calls);
   });
 
+  it("切走再切回同一個人,上一趟還在飛的往上捲頁不准接到這一趟的線頭上", async () => {
+    // 🔴 第六輪 R6-1,同一個根。往上捲的游標取自**上一趟**手上那條線的最舊一則;
+    // 這一趟手上的可能是完全另一段(最極端的就是帶錨點進來的那個視窗)。
+    // `prev.peer !== withId` 看不到 —— 人根本沒有換。
+    const hung = deferred<ChatMessage[]>();
+    h.listChat.mockResolvedValueOnce(page("n", 1000, 30));
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useChat(id),
+      { initialProps: { id: "a" } },
+    );
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    h.listChat.mockReturnValueOnce(hung.promise);
+    let older!: Promise<void>;
+    act(() => {
+      older = result.current.loadOlder();
+    });
+
+    h.listChat.mockResolvedValue(page("b", 500, 5));
+    await act(async () => {
+      rerender({ id: "b" });
+      await settle();
+    });
+    h.listChat.mockResolvedValue(page("z", 9000, 5));
+    await act(async () => {
+      rerender({ id: "a" });
+      await settle();
+    });
+    const nowShowing = result.current.messages.map((m) => m.id);
+
+    await act(async () => {
+      hung.resolve(page("o", 1, 5));
+      await older;
+      await settle();
+    });
+    expect(
+      result.current.messages.map((m) => m.id),
+      "上一趟的往上捲頁不准接到這一趟的線頭上",
+    ).toEqual(nowShowing);
+  });
+
+  it("切走再切回同一個人,上一趟還在飛的往下捲頁不准接到這一趟的錨點窗上", async () => {
+    // 🔴 同上,`loadNewer` 那一側。它的錨是**上一趟**手上那條線的最新一則,接回來
+    // 的那一頁跟這一趟手上的線毫無關係。世代票救不了這一條:走訪的票是在上一趟
+    // **開跑時**就抽的,一定比這一趟任何載入都早,所以只要這一趟還沒有人 commit
+    // (帶錨點進來的房間正是這個狀態),`seq < committedSeq` 就攔不住它 ——
+    // 它會把一頁陌生的訊息貼進正在等自己視窗的房間,並把 `hasNewer` 一起寫掉。
+    h.listChat.mockResolvedValueOnce(page("n", 1000, 30));
+    const { result, rerender } = renderHook(
+      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
+      { initialProps: { id: "a", anchor: undefined as string | undefined } },
+    );
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+    // 讓這條線變成「歷史視窗」,forward 走訪才有得走。
+    await act(async () => {
+      h.listChatWindow.mockResolvedValueOnce(page("w", 100, 30));
+      h.listChatWindow.mockResolvedValueOnce(page("w", 129, 30));
+      await result.current.loadAround("w0");
+      await settle();
+    });
+    const hungForward = deferred<ChatMessage[]>();
+    h.listChatWindow.mockReturnValueOnce(hungForward.promise);
+    let forward!: Promise<void>;
+    act(() => {
+      forward = result.current.loadNewer();
+    });
+
+    // 中間那一間也是從連結進來的,它的視窗還沒到 —— 所以這段路上**沒有人 commit**,
+    // 世代票的水位一步都沒有動,這正是世代票攔不住晚到走訪的那條路。
+    await act(async () => {
+      rerender({ id: "b", anchor: "b0" });
+      await settle();
+    });
+    // 回到 A,而且這一趟也是帶著錨點進來的 —— 房間刻意是空的,等它自己的視窗。
+    const above = deferred<ChatMessage[]>();
+    const below = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(above.promise)
+      .mockReturnValueOnce(below.promise);
+    await act(async () => {
+      rerender({ id: "a", anchor: "a0" });
+      await settle();
+    });
+    let pending!: Promise<JumpOutcome>;
+    act(() => {
+      pending = result.current.loadAround("a0");
+    });
+    expect(result.current.messages, "前提:這一趟在等它自己的視窗").toEqual([]);
+
+    await act(async () => {
+      hungForward.resolve(page("f", 9000, 30));
+      await forward;
+      await settle();
+    });
+    expect(
+      result.current.messages,
+      "上一趟的往下捲頁不准貼進這一趟的錨點窗",
+    ).toEqual([]);
+
+    above.resolve(page("a", 100, 30));
+    below.resolve(page("a", 129, 30));
+    await act(async () => {
+      await pending;
+      await settle();
+    });
+    expect(result.current.messages.length).toBeGreaterThan(0);
+  });
+
   it("a FIRST page shorter than the window means no history (hasMore=false)", async () => {
     h.listChat.mockResolvedValueOnce([mkMsg("c1", "b", "owner", 1000)]);
     const { result } = renderHook(() => useChat("b"));
@@ -966,6 +1074,135 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       result.current.messages.map((m) => m.id),
       "B 自己的第一頁不准被上一條對話燒掉的世代票丟掉",
     ).toEqual(["z0", "z1", "z2", "z3", "z4"]);
+  });
+
+  it("切走再切回同一個人,上一趟晚到的「回到最新」不准把這一趟的錨點窗蓋掉,也不准燒它的世代票", async () => {
+    // 🔴 第六輪 R6-1 的另一半。上一顆補的守衛是
+    // `if (threadRef.current.peer !== withId) return;` —— **字串比對**,而
+    // `threadRef` 是不分 peer、不重置的共用鏡子。A→B→**A** 之後
+    // `threadRef.current.peer === "a" === withId`,守衛照樣放行:上一趟的
+    // 「回到最新」燒掉一張世代票,並且把一頁最新的蓋到這一趟的錨點窗上 ——
+    // 正是這張票要刪掉的那格中間畫面,只是來源換成了同一個人的上一趟造訪。
+    // 綁「哪一次造訪」(捕捉到的紀錄)而不是「哪一個人」才擋得住。
+    const aPage = deferred<ChatMessage[]>();
+    h.listChat.mockImplementation(async (withId: string) =>
+      withId === "a" ? aPage.promise : page("b", 500, 5),
+    );
+
+    const { result, rerender } = renderHook(
+      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
+      { initialProps: { id: "a", anchor: undefined as string | undefined } },
+    );
+    await waitFor(() => expect(h.listChat).toHaveBeenCalled());
+    // 第一趟 A 的收尾在切走之前就抓在手上了(ChatArea 的 then 回呼)。
+    const staleResetToLatest = result.current.resetToLatest;
+
+    await act(async () => {
+      rerender({ id: "b", anchor: undefined });
+      await settle();
+    });
+    // …再從 roster 切回 A,而且這一趟是**帶著錨點**進來的。
+    const above = deferred<ChatMessage[]>();
+    const below = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(above.promise)
+      .mockReturnValueOnce(below.promise);
+    await act(async () => {
+      rerender({ id: "a", anchor: "a0" });
+      await settle();
+    });
+    let pending!: Promise<JumpOutcome>;
+    act(() => {
+      pending = result.current.loadAround("a0");
+    });
+    expect(result.current.messages, "前提:這一趟在等它自己的視窗").toEqual([]);
+
+    // 上一趟的「回到最新」這時才落地。
+    await act(async () => {
+      const call = staleResetToLatest();
+      aPage.resolve(page("z", 9000, 5));
+      await call;
+      await settle();
+    });
+    expect(
+      result.current.messages,
+      "上一趟的最新頁不准蓋到這一趟的錨點窗上",
+    ).toEqual([]);
+
+    // …而這一趟自己的視窗照樣 commit 得了(世代票沒有被上一趟燒掉)。
+    above.resolve(page("a", 100, 30));
+    below.resolve(page("a", 129, 30));
+    await act(async () => {
+      await pending;
+      await settle();
+    });
+    expect(
+      result.current.messages.length,
+      "這一趟的視窗不准被上一趟燒掉的世代票判成 superseded",
+    ).toBeGreaterThan(0);
+  });
+
+  it("切走再切回同一個人,上一趟送出的那則訊息的 post-send refetch 不准蓋掉這一趟的錨點窗", async () => {
+    // 🔴 第六輪 R6-1,同一個根的第三處。`refetch` 的唯一呼叫者是 `send`,而一次
+    // 送出撐得過切換:POST 還在空中,人切到 B 再切回 A,這個 refresh 才落地 ——
+    // 它會燒一張世代票,並且把一頁最新的合進**這一趟**;若這一趟是帶著錨點進來
+    // 的,那就是這張票要刪掉的那格中間畫面。`prev.peer !== withId` 看不到它,
+    // 因為人根本沒有換。
+    const posted = deferred<unknown>();
+    h.postChat.mockReturnValue(posted.promise);
+    h.listChat.mockImplementation(async (withId: string) =>
+      withId === "a" ? page("z", 9000, 5) : page("b", 500, 5),
+    );
+
+    const { result, rerender } = renderHook(
+      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
+      { initialProps: { id: "a", anchor: undefined as string | undefined } },
+    );
+    await waitFor(() => expect(result.current.messages).toHaveLength(5));
+    let sending!: Promise<void>;
+    act(() => {
+      sending = result.current.send("在 A 打的字");
+    });
+
+    await act(async () => {
+      rerender({ id: "b", anchor: undefined });
+      await settle();
+    });
+    const above = deferred<ChatMessage[]>();
+    const below = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(above.promise)
+      .mockReturnValueOnce(below.promise);
+    await act(async () => {
+      rerender({ id: "a", anchor: "a0" });
+      await settle();
+    });
+    let pending!: Promise<JumpOutcome>;
+    act(() => {
+      pending = result.current.loadAround("a0");
+    });
+    expect(result.current.messages, "前提:這一趟在等它自己的視窗").toEqual([]);
+
+    await act(async () => {
+      posted.resolve({});
+      await sending;
+      await settle();
+    });
+    expect(
+      result.current.messages,
+      "上一趟送出後的最新頁不准蓋到這一趟的錨點窗上",
+    ).toEqual([]);
+
+    above.resolve(page("a", 100, 30));
+    below.resolve(page("a", 129, 30));
+    await act(async () => {
+      await pending;
+      await settle();
+    });
+    expect(
+      result.current.messages.length,
+      "這一趟的視窗不准被上一趟燒掉的世代票判成 superseded",
+    ).toBeGreaterThan(0);
   });
 
   it("錨點被超車、caller 不再重排之後,這間房仍然刷新得起來", async () => {

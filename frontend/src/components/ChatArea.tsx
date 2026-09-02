@@ -337,6 +337,28 @@ export function ChatArea({
   headerTaskTitle?: string;
 }) {
   const { t, msg } = useI18n();
+  // 🔴 THE PER-CONVERSATION MUTABLE STATE, REBUILT BY MACHINE (T-48). ChatArea
+  // is NOT remounted when the selected member changes (OfficePage renders one
+  // instance), so this used to be a hand-written list of ~13 assignments that
+  // four reviews kept finding holes in. `useKeyedRecord` owns the list now: a
+  // switch replaces the whole record, and an async job that captured the old
+  // one settles into an orphan instead of clearing the NEW conversation's
+  // latch. Adding a field without a reset value does not compile.
+  //
+  // 🔴 AND IT IS THIS COMPONENT'S VISIT TOKEN (T-48, R6-1). Its identity — not
+  // `member.id` — is what every "is this still mine?" question below is asked
+  // against: the React-state half (`useKeyedState(session, …)`), the draft swap
+  // and the explicit guards on the things no per-key primitive can own (the DOM
+  // and the screen). A→B→A hands back a THIRD record, so a late writer from the
+  // FIRST visit to A is recognised as late even though the peer id is equal
+  // again. See the note at the top of `useKeyedRecord`.
+  //
+  // The entry unread snapshot lives in it, taken synchronously at the first
+  // render for this visit, strictly before any effect runs.
+  const session = useKeyedRecord(member.id, () =>
+    freshChatSession(member.unreadCount),
+  );
+
   const isOffline = member.status === "offline";
   // T-9c3c (owner 2026-07-24, "有時候離線還是沒辦法發訊息"): a REAL roster member
   // (onWake wired) can ALWAYS be messaged — the server NEVER gates on recipient
@@ -367,25 +389,30 @@ export function ChatArea({
   // Wake-click instant feedback: the activate POST only writes the wake INTENT;
   // presence flips to waking via SSE shortly after. Optimistically disable the
   // button meanwhile so a double-tap can't fire two activates.
-  const [wakePending, setWakePending] = useState(false);
+  //
+  // 🔴 PER VISIT, BY MACHINE (T-48, R6-1 — the census in latch-inventory §2.4
+  // had missed this pair). These two are per-conversation ("A's optimistic
+  // notice must not linger on B's now-shared wake row") and used to say so with
+  // a plain `useState` plus a hand-written reset effect keyed on `member.id` —
+  // the exact shape `useKeyedState` exists to retire, one commit late (an
+  // effect runs AFTER the frame that already showed the previous
+  // conversation's 「喚醒中…」) and with the same string-guarded async ending
+  // that R6-1 walked through: on the second visit to the same peer the reset
+  // did not fire and the first visit's verdict wrote straight into it.
+  const [wakePending, setWakePending] = useKeyedState(session, false);
   // T-7fa1: the activate reported that nothing was dispatched. Distinct from
   // wakePending — "not waiting, because nothing was sent". Never both true.
-  const [wakeUndispatched, setWakeUndispatched] = useState(false);
-  // Reset the optimistic bridge whenever REALITY moves — the peer changes, or
-  // this member's lifecycle takes a new value. Once presence reflects a fresh
-  // lifecycle the local optimism has handed off to the real state (`waking`
-  // drives the label below), so a dispatched-but-silently-died wake (waking→
-  // offline after the configured waking TTL) clears instead of latching "喚醒中…" forever.
-  // 🔴 `member.id` IS a dependency, not decoration (review r1 SHOULD-1):
-  // OfficePage renders <ChatArea> WITHOUT a key (frontend/CLAUDE.md), so a peer
-  // switch is a prop change, not a remount — without keying on the peer, A's
-  // optimistic notice would linger on B's now-shared wake row. Keying on
-  // `member.lifecycle` (T-9c3c) replaces the old `offlineQueue` dep, which no
-  // longer flips across offline↔waking now that the wake row shows for both.
+  const [wakeUndispatched, setWakeUndispatched] = useKeyedState(session, false);
+  // The OTHER thing that clears the optimistic bridge: reality moving on this
+  // member. Once presence reflects a fresh lifecycle the local optimism has
+  // handed off to the real state (`waking` drives the label below), so a
+  // dispatched-but-silently-died wake (waking→offline after the configured
+  // waking TTL) clears instead of latching 「喚醒中…」 forever. The peer half of
+  // this effect's old dependency list is gone — the record does it, earlier.
   useEffect(() => {
     setWakePending(false);
     setWakeUndispatched(false);
-  }, [member.lifecycle, member.id]);
+  }, [member.lifecycle]);
   // The wake row's button shows "喚醒中…" while a wake is in flight — either the
   // just-clicked optimism, or the server-confirmed `waking` presence itself.
   const wakeInFlight = wakePending || member.lifecycle === "waking";
@@ -628,14 +655,13 @@ export function ChatArea({
 
   // ===== LINE/FB-style unread jump (M2 batch 19) =====
   //
-  // The per-conversation session record (see ChatSession above) — the entry
-  // unread snapshot lives in it, taken synchronously at the first render for
-  // this peer, strictly before any effect runs.
+  // The per-visit session record is declared at the top of this component (it
+  // is also the visit token every state and guard below is bound to).
   // Set once per conversation when entry positioning ran: the id of the first
   // unread message. Drives the "以下是未讀訊息" divider (kept for the whole
   // session, like LINE) and the initial scroll target.
   const [firstUnreadId, setFirstUnreadId] = useKeyedState<string | null>(
-    member.id,
+    session,
     null,
   );
   // ① IS THE NEWEST MESSAGE IN THE VIEWPORT? The round 回到最新訊息 arrow's
@@ -644,7 +670,7 @@ export function ChatArea({
   // own geometry in `onMessagesScroll` and wherever this component moves the
   // viewport itself. Starts true: every entry path lands at the bottom or
   // measures honestly before this can be read.
-  const [latestInView, setLatestInView] = useKeyedState(member.id, true);
+  const [latestInView, setLatestInView] = useKeyedState(session, true);
   // ② THE NEW-MESSAGE PREVIEW STRIP's content — the LATEST unseen inbound
   // message (sender + body), or null when there is nothing waiting.
   //
@@ -658,7 +684,7 @@ export function ChatArea({
     id: string;
     from: string;
     body: string;
-  } | null>(member.id, null);
+  } | null>(session, null);
   // 🔴 T-48: the jump target the server has NO RECORD OF ("missing"), and — a
   // DIFFERENT fact that used to be collapsed into it — an anchor fetch that was
   // repeatedly OVERTAKEN by newer loads ("interrupted"). The fallback (open at
@@ -667,7 +693,7 @@ export function ChatArea({
   // rendered. A `console.warn` is not a user-visible thing.
   const [jumpNotice, setJumpNotice] = useKeyedState<
     null | "missing" | "unreachable" | "interrupted"
-  >(member.id, null);
+  >(session, null);
   // How many times a jump may be re-scheduled after being overtaken. `load()`
   // is held off for the duration of the anchor fetch, so losing the race even
   // once takes a deliberate 回到最新 or a send; three is a ceiling on a loop,
@@ -679,22 +705,11 @@ export function ChatArea({
   // there until some unrelated render happened to carry it. BOUNDED: without a
   // ceiling a load that keeps winning the race turns "retry" into an unbounded
   // fetch loop, which is a worse failure than the one being fixed.
-  const [jumpRetry, setJumpRetry] = useKeyedState(member.id, 0);
+  const [jumpRetry, setJumpRetry] = useKeyedState(session, 0);
   // The transient highlight on the row a jump located (cleared after the flash).
   const [highlightMsgId, setHighlightMsgId] = useKeyedState<string | null>(
-    member.id,
+    session,
     null,
-  );
-
-  // 🔴 THE PER-CONVERSATION MUTABLE STATE, REBUILT BY MACHINE (T-48). ChatArea
-  // is NOT remounted when the selected member changes (OfficePage renders one
-  // instance), so this used to be a hand-written list of ~13 assignments that
-  // four reviews kept finding holes in. `useKeyedRecord` owns the list now: a
-  // switch replaces the whole record, and an async job that captured the old
-  // one settles into an orphan instead of clearing the NEW conversation's
-  // latch. Adding a field without a reset value does not compile.
-  const session = useKeyedRecord(member.id, () =>
-    freshChatSession(member.unreadCount),
   );
 
   // 🔴 AND THE REACT-STATE HALF IS MACHINE-MAINTAINED TOO (T-48, R5-1). This
@@ -712,13 +727,21 @@ export function ChatArea({
   // What is genuinely left here is what no per-key primitive can do on its
   // own: the composer is not RESET on a switch, it is swapped to the new
   // peer's SAVED draft, which has to be read from storage and pushed through
-  // the staging API. `peerIdRef` is the key mirror for this block and is
-  // therefore the one thing that cannot live in the record it keys; it is also
-  // why the block does not run on first mount (the draft restore below would
-  // double-apply on top of the mount-time one).
-  const peerIdRef = useRef(member.id);
-  if (peerIdRef.current !== member.id) {
-    peerIdRef.current = member.id;
+  // the staging API. `visitRef` is the visit mirror for this block and is
+  // therefore the one thing that cannot live in the record it mirrors; it is
+  // also why the block does not run on first mount (the draft restore below
+  // would double-apply on top of the mount-time one).
+  //
+  // 🔴 IT MIRRORS THE RECORD, NOT `member.id` (T-48, R6-1). This used to be
+  // `peerIdRef`, a string, and every async guard below then asked "is this
+  // still the same PERSON?" — which answers YES on the second visit to the
+  // same person, letting the first visit's late failure banner, its
+  // `scrollIntoView` and its wake verdict all land on a screen that is not
+  // theirs. The record's identity answers the question the guards actually
+  // mean, and answers it for the state half at the same time.
+  const visitRef = useRef(session);
+  if (visitRef.current !== session) {
+    visitRef.current = session;
     // T-8aaa: swap the composer to the NEW peer's saved draft. Render-phase
     // state adjustment (same pattern as the resets above) so the committed
     // render already carries the new peer's text+attachments — no stale frame
@@ -1068,7 +1091,7 @@ export function ChatArea({
         session.initialPositioned = true;
         session.prevIds = new Set(messages.map((m) => m.id));
         session.nearBottom = false;
-        const firedFor = member.id;
+        const firedFor = session;
         void loadAround(jumpToMsgId).then((outcome) => {
           // 🔴 THE OWNER MAY HAVE LEFT WHILE THE PAIR WAS IN THE AIR (T-48,
           // R5-1). Two of the three endings below reach the OUTSIDE world —
@@ -1086,7 +1109,14 @@ export function ChatArea({
           // latches do not: `session` is the one this render captured, so a
           // late write lands in an orphan nobody reads. The guard is here for
           // what a captured record cannot cover — the DOM and the screen.
-          if (peerIdRef.current !== firedFor) return;
+          //
+          // 🔴 IT COMPARES RECORDS, NOT PEER IDS (R6-1). Asking "is B on screen
+          // now?" let the SAME conversation's next visit through: enter A at an
+          // anchor, the pair 502s in the air, switch to B and back to A, and
+          // this callback painted the first visit's 「讀不到那則訊息」 banner
+          // (retry button and all — dead, because this visit has no jump
+          // target) onto the second visit, and scrolled it to the bottom.
+          if (visitRef.current !== firedFor) return;
           if (outcome === "found") return;
           if (
             outcome === "superseded" &&
@@ -1452,6 +1482,10 @@ export function ChatArea({
     // nothing to do with, which the recipient then reads as context. The failure
     // mode flipped from a visible refusal to a silent mis-send.
     const sendPeer = member.id;
+    // The draft above is filed under the PEER (storage is peer-keyed); putting
+    // it back on SCREEN is a question about the visit — a re-entry to the same
+    // peer has already restored that draft from storage for itself.
+    const sendVisit = session;
     // ALL staged attachments ride the SAME message, in staged order.
     const attachments = attachmentsSnapshot.map((a) => ({
       dataB64: a.dataUri,
@@ -1514,7 +1548,7 @@ export function ChatArea({
       // Not this room any more → the words are back where they were typed, and
       // putting them on screen here would put one room's words, and one room's
       // reply target, into another.
-      if (peerIdRef.current !== sendPeer) return;
+      if (visitRef.current !== sendVisit) return;
       // Restore the user's unsent content so it isn't silently lost. Only put
       // back what the user hasn't already retyped/restaged — if they started a
       // new draft while the send was in flight, don't clobber it.
@@ -2278,9 +2312,10 @@ export function ChatArea({
                       // peer-keyed reset effect above is a reset, not a CANCEL:
                       // an activate still in flight when the owner switches
                       // peers resolves AFTER the reset and writes A's verdict
-                      // into a room that is already B's. `peerIdRef` is the
-                      // render-time mirror of the CURRENT peer.
-                      const firedFor = member.id;
+                      // into a room that is already B's. `visitRef` is the
+                      // render-time mirror of the CURRENT visit (R6-1: the peer
+                      // id said yes to the same peer's next visit too).
+                      const firedFor = session;
                       // Revert the optimistic pending if the activate POST
                       // rejects (else the button sticks on "喚醒中…" forever) —
                       // same discipline as MemberDetailPanel's wake. The success
@@ -2292,14 +2327,14 @@ export function ChatArea({
                       // from sitting on 「喚醒中…」 for a wake nobody sent.
                       Promise.resolve(onWake())
                         .then((result) => {
-                          if (peerIdRef.current !== firedFor) return;
+                          if (visitRef.current !== firedFor) return;
                           if (result?.activationPending) {
                             setWakePending(false);
                             setWakeUndispatched(true);
                           }
                         })
                         .catch(() => {
-                          if (peerIdRef.current !== firedFor) return;
+                          if (visitRef.current !== firedFor) return;
                           setWakePending(false);
                         });
                     }}
