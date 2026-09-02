@@ -1288,11 +1288,19 @@ func TestPutOutsourceWorker_KeepsWindDownAnchors(t *testing.T) {
 		t.Fatal("report_stopping must stamp the worker's stopping_since")
 	}
 
-	// Any unrelated read-modify-write of the worker row (the tick shape).
+	// Any unrelated read-modify-write of the worker row (the tick shape). The
+	// unrelated field has to be one the whole-row write still CARRIES: effort
+	// left PutMember's DO UPDATE SET in T-55, so writing it here would make this
+	// an upsert that changes nothing at all — the test would still pass, while no
+	// longer standing for the thing it is named after.
 	w, _ := api.dal.GetOutsourceWorker(workerID)
-	w.Effort = "high"
+	w.LastOp = "tick"
 	if err := api.dal.PutOutsourceWorker(*w); err != nil {
 		t.Fatalf("put worker: %v", err)
+	}
+	if reread, _ := api.dal.GetOutsourceWorker(workerID); reread == nil || reread.LastOp != "tick" {
+		t.Fatalf("the unrelated write must actually land, else this test asserts "+
+			"nothing: %+v", reread)
 	}
 	after, _ := api.dal.GetOutsourceWorker(workerID)
 	if after.StoppingSince != before.StoppingSince {

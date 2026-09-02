@@ -161,7 +161,14 @@ func TestExplicitClaudeChoiceIsNeverOverridden(t *testing.T) {
 		t.Fatalf("telemetry ingest: %d %s", rec.Code, rec.Body.String())
 	}
 	m := wakeSeedAssistant(t, s)
+	// The owner's explicit pick, stored the way the 成員設定 face stores it since
+	// T-55: through runtime's sole writer. The seed row already exists (with an
+	// empty runtime, which is the whole point of this test), so a whole-row write
+	// would persist nothing and storedRuntime below would read "".
 	m.Runtime = RuntimeClaude
+	if err := s.dal.SetMemberRuntime(m.ID, RuntimeClaude); err != nil {
+		t.Fatalf("store the explicit choice: %v", err)
+	}
 	putTestMember(t, s, m)
 
 	s.reconcileOne(m, reconcileState{}, 1000)

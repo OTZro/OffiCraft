@@ -1012,7 +1012,14 @@ func TestNotifyWorkerSpawn_BlockedReasonNamesTheCause(t *testing.T) {
 		w := blockedSpawnFixture(t, s, c.taskID, c.workerID, c.machine)
 		if c.runtime != "" {
 			w.Runtime = c.runtime
-			putWorkerFixture(t, s, w)
+			// The row already exists (blockedSpawnFixture built it), so the
+			// column moves through its sole writer since T-55. Placement reads
+			// the VALUE it is handed, so the in-memory field is what this case
+			// actually exercises — but leaving the row disagreeing with it would
+			// make this a false green the day placement re-reads the row.
+			if err := s.dal.SetMemberRuntime(c.workerID, c.runtime); err != nil {
+				t.Fatalf("%s: set runtime: %v", c.name, err)
+			}
 		}
 		s.outsourceMu.Lock()
 		if c.bench {
