@@ -523,12 +523,18 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   //   · a latch can never gate another conversation's load — the reader does
   //     not get the record at all;
   //   · a switch resets ALL of them at once (the subscription setup body
-  //     builds a fresh record), and `freshLatches` is an object literal of
-  //     the full type, so adding a latch that has no reset value does not
-  //     compile.
+  //     builds a fresh record for the new peer), and `freshLatches` is an
+  //     object literal of the full type, so adding a latch that has no reset
+  //     value does not compile.
   // An in-flight loader that comes back to a record that is no longer its
   // own writes into an orphan nobody reads — which is exactly right: its
   // debts died with its conversation.
+  //
+  // ⚠️ WHAT THE REBUILD DOES **NOT** BUY, so nobody derives it again: it
+  // guarantees no FIELD is forgotten; it does not by itself pair an acquire
+  // with its release. That pairing is a separate rule — hold the record you
+  // captured (see `withAnchorFetch`) — and the record must therefore be
+  // rebuilt per CONVERSATION rather than per effect run (see the setup body).
   //
   // What each latch holds off:
   //  • `anchorPending` — this subscription started at an anchor, so the
@@ -744,17 +750,32 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   useEffect(() => {
     let alive = true;
     // 🔴 THE ONE PLACE EVERY LATCH IS RESET, AND IT RESETS ALL OF THEM (see
-    // `latchesRef`). A fresh subscription — including a peer switch — starts
-    // by loading unconditionally: it owes nothing yet, it is entered at the
-    // anchor named NOW, and any debt the PREVIOUS peer left behind is not
-    // this conversation's to pay. Because the record is rebuilt whole, a
-    // latch that somebody adds later cannot be forgotten here.
+    // `latchesRef`). A fresh conversation starts by loading unconditionally:
+    // it owes nothing yet, it is entered at the anchor named NOW, and any debt
+    // the PREVIOUS peer left behind is not this conversation's to pay. Because
+    // the record is rebuilt whole, a latch that somebody adds later cannot be
+    // forgotten here.
     // (Setup body, never only cleanup — a cleanup-only write is stuck off
     // forever under StrictMode's setup→cleanup→setup.)
-    latchesRef.current = freshLatches(
-      withId,
-      entryAnchorRef.current !== undefined,
-    );
+    //
+    // 🔴 KEYED ON THE CONVERSATION, NOT ON THE EFFECT RUN (fourth-review
+    // R4-2). These latches live as long as the conversation does; this effect
+    // can re-run WITHOUT the conversation changing, and StrictMode's
+    // setup→cleanup→setup does exactly that on every mount. Rebuilding there
+    // re-arms `anchorPending` behind a `loadAround` that already ran: the
+    // acquire and the release both land on the record the call captured, while
+    // the new record's latch is set with nobody left to clear it — ChatArea's
+    // `jumpFetchedRef` is one-shot per id, so no second `loadAround` happens.
+    // The room then never refreshes again, which is R3-1's symptom reached
+    // without a peer switch. Rebuilding only on a real switch also stops an
+    // in-flight `loadOlder`/`loadNewer` from having its mutex silently dropped
+    // under it by an unrelated re-subscribe.
+    if (latchesRef.current.peer !== withId) {
+      latchesRef.current = freshLatches(
+        withId,
+        entryAnchorRef.current !== undefined,
+      );
+    }
 
     // Switching conversations: drop the PREVIOUS peer's thread/receipt state
     // immediately instead of letting it linger under the new peer's header
@@ -1103,28 +1124,53 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // branch on it: the defect being fixed here was a miss (target older than the
   // loaded window) that landed the reader at the bottom, pixel-identical to a
   // hit on a recent message.
-  const loadAround = useCallback(
-    async (msgId: string): Promise<JumpOutcome> => {
-      const seq = ++loadSeqRef.current;
-      // 🔴 THE ANCHOR LATCH IS RELEASED ON EVERY ENDING, AND THAT IS WHY THIS
-      // IS A `finally` (T-48, R3-3). The superseded branch used to keep
-      // `anchorPending` SET on purpose — "the caller re-schedules" — and hand
-      // the clearing to ChatArea, whose only clearing path fires when the
-      // thread is EMPTY. But `superseded` means another load committed, i.e.
-      // the thread is NOT empty: with the retries spent, nobody cleared it and
-      // the conversation stopped refreshing for the rest of the session. A
-      // latch whose release depends on a caller reaching one particular branch
-      // is the same defect this hook has now shipped three times, so the
-      // release moved to the one place that runs on all of them.
-      //
-      // What that costs: between a superseded attempt and its retry a
-      // newest-page `load()` can slip through. It is one wasted request and a
-      // bounded re-race (MAX_JUMP_RETRIES), and the retry's own
-      // `anchorFetching` closes the window again — against a room that never
-      // refreshes again, silently.
-      const latches = latchesOf(withId);
+  // 🔴 THE ANCHOR LATCHES ARE TAKEN AND RELEASED IN ONE PLACE, AND ON THE ONE
+  // RECORD THIS CALL CAPTURED (T-48, R3-3 + fourth-review R4-1). Two separate
+  // rules are being enforced by putting the pair in a function of its own, and
+  // both of them were previously only a comment somebody had to keep:
+  //
+  //  1. RELEASE ON EVERY ENDING. The superseded branch used to keep
+  //     `anchorPending` SET on purpose — "the caller re-schedules" — and hand
+  //     the clearing to ChatArea, whose only clearing path fires when the
+  //     thread is EMPTY. But `superseded` means another load committed, i.e.
+  //     the thread is NOT empty: with the retries spent, nobody cleared it and
+  //     the conversation stopped refreshing for the rest of the session.
+  //  2. RELEASE THE RECORD THAT WAS ACQUIRED, never a re-lookup. `latchesOf`
+  //     answers "the record that is current NOW", and by the time an anchor
+  //     pair lands that can be a DIFFERENT record for the SAME peer (leave the
+  //     conversation and come back through the same link, or re-enter it at a
+  //     second anchor). Releasing that one decrements a counter this call never
+  //     incremented — `anchorFetching` goes to -1, which disables the `> 0`
+  //     gate outright — and unlatches an anchor that is still in the air, so
+  //     the next SSE burst puts the live tail on screen. That is the very
+  //     intermediate screen this ticket removed.
+  //
+  // Neither rule can be broken from `loadAround` any more, because `loadAround`
+  // has no acquire and no release to edit: the whole pair is these six lines,
+  // whose only job is to keep them paired. See latch-inventory.md §3 rule 2.
+  const withAnchorFetch = useCallback(
+    async <T,>(peer: string, body: () => Promise<T>): Promise<T> => {
+      const latches = latchesOf(peer);
       if (latches) latches.anchorFetching += 1;
       try {
+        return await body();
+      } finally {
+        // A record that is no longer current is an orphan nobody reads —
+        // releasing it is a no-op, which is the correct answer for an anchor
+        // whose conversation (or whose entry) the owner has already left.
+        if (latches) {
+          latches.anchorFetching -= 1;
+          latches.anchorPending = false;
+        }
+      }
+    },
+    [latchesOf],
+  );
+
+  const loadAround = useCallback(
+    (msgId: string): Promise<JumpOutcome> =>
+      withAnchorFetch(withId, async () => {
+        const seq = ++loadSeqRef.current;
         let older: ChatMessage[];
         let newer: ChatMessage[];
         try {
@@ -1186,18 +1232,8 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
               },
         );
         return "found";
-      } finally {
-        // EVERY ending, including the ones a future branch adds. A record that
-        // is no longer ours is an orphan nobody reads — releasing it is a
-        // no-op, which is the correct answer for a conversation the owner has
-        // left.
-        if (latches) {
-          latches.anchorFetching -= 1;
-          latches.anchorPending = false;
-        }
-      }
-    },
-    [withId, latchesOf],
+      }),
+    [withId, withAnchorFetch],
   );
 
   const markRead = useCallback(

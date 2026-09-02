@@ -964,4 +964,61 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       "被超車的錨點不准把這間房留在「永遠不刷新」",
     ).toBe(before + 1);
   });
+
+  it("從同一條連結回到同一個人時,上一趟的收尾不准解開這一趟的錨點閂", async () => {
+    // 🔴 第四輪 R4-1。`loadAround` 的收尾放的是**它自己捕捉到的**那份紀錄,而不是
+    // 「現在」查得到的那一份 —— 兩者在 A→B→A 這條路上不是同一個東西:回到 A 時
+    // latch 紀錄已經重建過,peer 欄位卻又是 "a",所以 `latchesOf("a")` 會**成功**
+    // 交出第二趟的紀錄。用它來放閂的話,第一趟的收尾會替第二趟解開錨點閂,
+    // 而且把 `anchorFetching` 減成 -1(連 `> 0` 那道閘一起失效),下一個 SSE burst
+    // 就把一頁最新的蓋在還沒撈完的錨點上 —— 這張票要拿掉的那格中間畫面。
+    const above = deferred<ChatMessage[]>();
+    const below = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(above.promise)
+      .mockReturnValueOnce(below.promise);
+
+    const { result, rerender } = renderHook(
+      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
+      { initialProps: { id: "a", anchor: "a0" as string | undefined } },
+    );
+    await waitFor(() => expect(h.listChatReads).toHaveBeenCalled());
+    let firstTrip!: Promise<JumpOutcome>;
+    act(() => {
+      firstTrip = result.current.loadAround("a0");
+    });
+
+    // 中途切去 B(一般進房),再從同一條連結回到 A —— 第二趟的錨點還沒有人去撈。
+    h.listChat.mockResolvedValue(page("z", 9000, 30));
+    await act(async () => {
+      rerender({ id: "b", anchor: undefined });
+      await settle();
+    });
+    await act(async () => {
+      rerender({ id: "a", anchor: "a0" });
+      await settle();
+    });
+    const beforeA = h.listChat.mock.calls.filter((c) => c[0] === "a").length;
+    expect(beforeA, "前提:第二趟進 A 還在等它自己的視窗").toBe(0);
+
+    // 第一趟現在才落地(它已經被 B 的載入超車,所以只剩收尾這件事)。
+    above.resolve(page("a", 100, 30));
+    below.resolve(page("a", 129, 30));
+    await act(async () => {
+      await firstTrip;
+      await settle();
+    });
+    await act(async () => {
+      h.sseHandler?.("chat");
+      await settle();
+    });
+
+    expect(
+      h.listChat.mock.calls.filter((c) => c[0] === "a").length,
+      "A 的第二次進房錨點還沒撈,不准先蓋一頁最新的上去",
+    ).toBe(0);
+    expect(result.current.messages, "第二趟的房間還在等它自己的視窗").toEqual(
+      [],
+    );
+  });
 });

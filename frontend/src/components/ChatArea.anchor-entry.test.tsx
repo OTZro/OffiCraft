@@ -15,6 +15,7 @@
 // 第二件(R3-1)只有把兩者接在一起才量得到:切換對話是 ChatArea 換 `member` prop,
 // 而被上一條對話的錨點鎖住的是 useChat 的閂。
 
+import { StrictMode } from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, act, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
@@ -243,5 +244,36 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
       await new Promise((r) => setTimeout(r, 30));
     });
     expect(bubbles(container)).toEqual(["b0", "b1", "b2", "b3", "b4"]);
+  });
+
+  it("StrictMode 的 setup→cleanup→setup 之後,錨點進的那間房照樣刷新得起來", async () => {
+    // 🔴 第四輪 R4-2。閂的紀錄本來是**每次 effect 跑**就整份重建一次,而
+    // `main.tsx` 用的就是 `<StrictMode>` —— 掛載時是 setup → cleanup → setup。
+    // 第一次 setup 之後 `loadAround` 就發車了,收尾放的是它捕捉到的那一份;第二次
+    // setup 又把 `anchorPending` 設回 true,而 `jumpFetchedRef` 已經記下這個 id,
+    // reactor 直接 early-return —— 沒有第二次 `loadAround` 會來清它。那間房從此
+    // 不刷新(SSE burst / focus / visibilitychange 全被擋),畫面看起來卻完全正常。
+    // 錨點選在靠近活尾巴的一則:`start_id` 那頁回得短 ⇒ `hasNewer === false`,
+    // 所以 `load()` 不會被 `hasNewer` 那道閘擋著,量到的就是 `anchorPending` 本身。
+    seed(A, "a", 10, 100);
+    const targetId = "a7";
+
+    const { container } = render(<StrictMode>{view(alice, targetId)}</StrictMode>);
+    await waitFor(() =>
+      expect(
+        container.querySelector(`[data-msg-id="${targetId}"]`),
+      ).not.toBeNull(),
+    );
+
+    plainCalls = [];
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    expect(
+      plainCalls,
+      "錨點落地之後這間房必須回到一般的刷新 —— 空的就是 anchorPending 被留在 true",
+    ).toEqual([A]);
   });
 });
