@@ -903,6 +903,13 @@ func (s *apiServer) bankLiveCost(actorID string) {
 // a cost reset that bankLiveCost's pop() is the half of a bank: same key, same
 // read-modify-Set shape, so the two operations cannot drift apart on where the
 // live figure lives.
+//
+// 🔴 CALL IT AFTER THE DURABLE WRITE HAS SUCCEEDED, never before. It is not
+// undoable and its subject exists nowhere else, so calling it first turns any
+// durable-write failure into unrecoverable data loss on a request that then
+// answers 500. bankLiveCost pops BEFORE its write for the opposite reason
+// (exactly-once banking on an edge that will not be retried) — do not copy that
+// ordering here.
 func (s *apiServer) dropLiveCost(actorID string) *float64 {
 	entry := s.telemetry.Get(actorID)
 	if entry == nil {
@@ -945,13 +952,21 @@ func (s *apiServer) HandleResetCostApiMembersMemberIdCostResetPost(w http.Respon
 	// resets) through the WORKER branch, never as a member patch.
 	if m, err := s.dal.GetMember(memberId); err == nil && m != nil &&
 		m.RosterStatus != RosterStatusRemoved && m.Kind != KindOutsource {
-		cleared := s.dropLiveCost(memberId)
 		clearedBanked := nonZeroCost(m.BankedCost)
 		m.BankedCost = 0
+		// 🔴 DURABLE FIRST, LIVE SECOND, and the order is the whole safety
+		// property (found by independent review, T-54). The live figure lives
+		// only in memory and this call is its executioner: drop it before the
+		// durable write and a failed write answers 500 having ALREADY destroyed
+		// half the number, with the receipt — the one record of what was
+		// destroyed — never reaching the caller. Nothing anywhere could
+		// reconstruct it. This way round, a failed write leaves BOTH halves
+		// exactly as they were, and the owner simply presses again.
 		if err := s.putMember(*m, requestTrigger(r)); err != nil {
 			internalError(w, err)
 			return
 		}
+		cleared := s.dropLiveCost(memberId)
 		s.publishMonitoringSignal(memberId, requestTrigger(r))
 		writeJSON(w, http.StatusOK, costResetDTO{
 			MemberID:          memberId,
@@ -969,13 +984,15 @@ func (s *apiServer) HandleResetCostApiMembersMemberIdCostResetPost(w http.Respon
 		writeError(w, http.StatusNotFound, "member '"+memberId+"' not found")
 		return
 	}
-	cleared := s.dropLiveCost(memberId)
 	clearedBanked := nonZeroCost(wk.BankedCost)
 	wk.BankedCost = 0
+	// Durable first, live second — the same ordering the member arm above
+	// explains, for the same reason. Both arms must fail the same way.
 	if err := s.dal.PutOutsourceWorker(*wk); err != nil {
 		internalError(w, err)
 		return
 	}
+	cleared := s.dropLiveCost(memberId)
 	s.publishOutsourceWorker(*wk, requestTrigger(r))
 	s.publishMonitoringSignal(memberId, requestTrigger(r))
 	writeJSON(w, http.StatusOK, costResetDTO{

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 )
 
@@ -213,4 +214,113 @@ func TestResetCost_ReleasedWorkerIsRefused(t *testing.T) {
 		t.Errorf("banked_cost = %v, want 3.0 untouched — a refused call writes nothing",
 			after.BankedCost)
 	}
+}
+
+// A failed durable write must destroy NOTHING — found by independent review
+// (T-54), which probed a PutMember failure and caught the live figure already
+// gone while banked_cost still stood, on a request that answered 500.
+//
+// This is the worst shape this endpoint can take. The live figure exists in one
+// process's memory and nowhere else; the receipt is the only record of what a
+// reset destroyed, and a 500 carries no receipt. So dropping it before the
+// durable write means a failed request silently annihilates half the number
+// with nothing anywhere able to reconstruct it — and the owner, seeing an
+// error, would reasonably assume nothing happened.
+//
+// The injection closes the WRITE pool while leaving the READ pool open, which
+// is why it needs NewDALPools rather than the shared-handle test DAL: closing a
+// shared handle fails the handler's own lookup too, so it never reaches the
+// drop and the bug hides. That is exactly what happened on the first attempt at
+// this test — it passed against the buggy ordering.
+//
+// 🔴 MUTANT: move the `s.dropLiveCost(...)` call back above its arm's durable
+// write (either arm) → the matching sub-test goes RED.
+func TestResetCost_AFailedDurableWriteDestroysNothing(t *testing.T) {
+	// writeDeadServer returns a server whose reads work and whose every write
+	// fails — the production two-pool shape with the write half shut.
+	writeDeadServer := func(t *testing.T, seed func(*apiServer)) *apiServer {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "cost-reset.db")
+		w, err := openSQLite(path)
+		if err != nil {
+			t.Fatalf("open write pool: %v", err)
+		}
+		if err := runMigrations(w); err != nil {
+			t.Fatalf("goose up: %v", err)
+		}
+		r, err := openSQLite(path)
+		if err != nil {
+			t.Fatalf("open read pool: %v", err)
+		}
+		t.Cleanup(func() { r.Close() })
+		s := &apiServer{dal: NewDALPools(w, r), hub: NewHub(),
+			telemetry: newMemStore(), gauge: newMemStore()}
+		seed(s)
+		if err := w.Close(); err != nil {
+			t.Fatalf("close write pool: %v", err)
+		}
+		return s
+	}
+
+	t.Run("staff member", func(t *testing.T) {
+		s := writeDeadServer(t, func(s *apiServer) {
+			m := fullMember("seth")
+			m.BankedCost = 4.0
+			if err := s.dal.PutMember(m); err != nil {
+				t.Fatalf("seed member: %v", err)
+			}
+			if rec := doIngestTelemetry(s, "seth", "m-seth-m5",
+				`{"runtime":"claude","account":"seth-m5-claude","cost":1.5}`); rec.Code != 200 {
+				t.Fatalf("member ingest: %d %s", rec.Code, rec.Body.String())
+			}
+		})
+		// Premise: the handler can still SEE the actor, so it really does reach
+		// the write. Without this the test could pass for the wrong reason.
+		if m, err := s.dal.GetMember("seth"); err != nil || m == nil {
+			t.Fatalf("read pool must still serve: m=%v err=%v", m != nil, err)
+		}
+
+		if rec := doResetCost(t, s, "seth"); rec.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500 on a failed durable write, got %d %s",
+				rec.Code, rec.Body.String())
+		}
+
+		// The half that cannot be reconstructed from anywhere.
+		v, present := liveCostOf(s, "seth")
+		if !present {
+			t.Fatal("live cost was destroyed by a request that then failed — the " +
+				"figure exists only in memory and the 500 carried no receipt, so " +
+				"nothing can put it back")
+		}
+		if v != 1.5 {
+			t.Errorf("live cost = %v, want 1.5 untouched", v)
+		}
+	})
+
+	t.Run("outsource worker", func(t *testing.T) {
+		s := writeDeadServer(t, func(s *apiServer) {
+			seedWorker(t, s, "ow-7", "S7", 0.25, WorkerStatusActive)
+			if rec := doIngestTelemetry(s, "ow-7", "m-seth-m5",
+				`{"runtime":"claude","account":"seth-m5-claude","cost":0.5}`); rec.Code != 200 {
+				t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
+			}
+		})
+		if wk, err := s.dal.GetOutsourceWorker("ow-7"); err != nil || wk == nil {
+			t.Fatalf("read pool must still serve: wk=%v err=%v", wk != nil, err)
+		}
+
+		if rec := doResetCost(t, s, "ow-7"); rec.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500 on a failed durable write, got %d %s",
+				rec.Code, rec.Body.String())
+		}
+
+		v, present := liveCostOf(s, "ow-7")
+		if !present {
+			t.Fatal("live cost destroyed on a failed worker reset — both arms must " +
+				"fail the same way")
+		}
+		if v != 0.5 {
+			t.Errorf("live cost = %v, want 0.5 untouched", v)
+		}
+	})
 }
