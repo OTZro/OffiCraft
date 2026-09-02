@@ -1966,7 +1966,11 @@ export interface paths {
          *
          *     BOTH halves of the figure are cleared, and clearing only one would not be a smaller version of this endpoint — it would be a broken one. The durable accumulator (`member.banked_cost` / `outsource_worker.banked_cost`) is written to 0, AND the live in-memory telemetry `cost` key is dropped from the actor's entry. Clearing the durable half alone leaves the live figure to reappear on the very next cockpit read, which is indistinguishable to the owner from the button doing nothing.
          *
-         *     The actor is resolved exactly the way the banking fold (`bankLiveCost`) resolves it, so ONE route serves both kinds: a staff member, or an outsource worker (including a released one, whose spend still shows on the account card). An id that resolves to neither is a 404 and nothing is written — the same deny-first ordering the rest of the member routes use.
+         *     The actor is resolved the way the banking fold (`bankLiveCost`) resolves it, so ONE route serves both kinds: a staff member, or a LIVE outsource worker.
+         *
+         *     🔴 A RELEASED worker is a 404, and that is a deliberate boundary rather than an oversight: releasing a worker removes its roster row, and every other outsource write door refuses a removed row, so this one does too instead of being the single owner-only destructive route that reaches further than its neighbours. The consequence is worth stating because it is visible: a released worker's spend still counts on the account card (`GET /api/monitoring` deliberately keeps it there) and this route cannot clear it — so zeroing every actor an account still lists does NOT drive that account's total to absent; a residue remains. Widening this is a separate decision, not a bug report.
+         *
+         *     An id that resolves to neither kind is likewise a 404, and nothing is written — the same deny-first ordering the rest of the member routes use.
          *
          *     IDEMPOTENT: resetting an actor that already has nothing measured writes 0 over 0, drops a key that is not there, and answers 200 with both figures null.
          *
@@ -5216,7 +5220,7 @@ export interface components {
             cleared_cost?: number | null;
             /**
              * Member Id
-             * @description The actor whose spend was reset — a staff member or an outsource worker, resolved the same way the banking fold resolves it.
+             * @description The actor whose spend was reset — a staff member or a LIVE outsource worker, resolved the same way the banking fold resolves it. A released worker never reaches this receipt: it is refused with a 404.
              */
             member_id: string;
         };

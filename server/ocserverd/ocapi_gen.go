@@ -858,7 +858,7 @@ type CostResetDTO struct {
 	// ClearedCost The live in-memory telemetry figure as it stood BEFORE the write, i.e. the live amount this call dropped. Null when the actor had no live figure being tracked.
 	ClearedCost *float64 `json:"cleared_cost,omitempty"`
 
-	// MemberId The actor whose spend was reset — a staff member or an outsource worker, resolved the same way the banking fold resolves it.
+	// MemberId The actor whose spend was reset — a staff member or a LIVE outsource worker, resolved the same way the banking fold resolves it. A released worker never reaches this receipt: it is refused with a 404.
 	MemberId string `json:"member_id"`
 }
 
