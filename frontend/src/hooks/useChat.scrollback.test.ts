@@ -24,7 +24,6 @@ const h = vi.hoisted(() => {
           before?: ChatCursor,
         ) => Promise<unknown[]>
       >(),
-    peekChat: vi.fn<(withId: string, limit?: number) => Promise<unknown[]>>(),
     listChatReads: vi.fn(async () => [] as unknown[]),
     markChatRead: vi.fn(async () => ({
       readerId: "owner",
@@ -39,7 +38,6 @@ const h = vi.hoisted(() => {
 vi.mock("../api", () => ({
   api: {
     listChat: h.listChat,
-    peekChat: h.peekChat,
     listChatReads: h.listChatReads,
     markChatRead: h.markChatRead,
     postChat: h.postChat,
@@ -78,7 +76,6 @@ let hasFocusSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   h.listChat.mockReset().mockResolvedValue([]);
-  h.peekChat.mockReset().mockResolvedValue([]);
   h.listChatReads.mockClear();
   h.markChatRead.mockClear();
   h.sseHandler = null;

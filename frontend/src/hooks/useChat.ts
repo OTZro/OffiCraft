@@ -10,21 +10,20 @@
 // advancing arrives as a "chat_read" topic → we refetch the receipts. The owner
 // side calls markRead() when it enters / scrolls to the bottom of the thread.
 //
-// READING REQUIRES LOOKING (badge-flash fix): `listChat(?with=)` is "list 即讀"
-// — the server advances the owner's read watermark as a side effect. That side
-// effect is legitimate ONLY while the owner can actually see the thread. When
-// the window is backgrounded / the tab hidden (isWindowActive() false), every
-// load here goes through the READ-ONLY `peekChat` instead — the thread keeps
-// updating (new messages still render on return) but the unread badge keeps
-// counting. Coming back to the foreground re-runs the marking listChat, so the
-// badge clears exactly when the owner really looks.
+// READING REQUIRES LOOKING (badge-flash fix): loading a thread never marks it
+// read — `listChat` is read-only on every path since T-48. The badge clears
+// only when ChatArea calls markRead(), which it does while the owner can
+// actually see the thread, so a backgrounded window keeps counting even though
+// it keeps loading.
 //
-// 🔴 AND BECAUSE IT IS A WRITE, IT COMES BACK AS AN EVENT (T-8115): the server
-// fans a `chat_read` delta for the watermark this client just advanced. Loading
-// this thread for a delta about a DIFFERENT conversation therefore manufactures a
-// second fan-out round out of nothing, once per chat line anywhere in the company.
-// Both SSE branches below are gated on the delta's own participants for that
-// reason — see frontend/CLAUDE.md 「一則通知 = 一次『只抓它碰到的那一項』」.
+// 🔴 EVERY LOAD USED TO BE A WRITE, AND WRITES COME BACK AS EVENTS (T-8115):
+// the server fanned a `chat_read` delta for the watermark a load had advanced,
+// so loading this thread for a delta about a DIFFERENT conversation
+// manufactured a second fan-out round out of nothing, once per chat line
+// anywhere in the company. markRead() is now the only thing that can start
+// that round, but the SSE branches below stay gated on the delta's own
+// participants — a load nobody asked for is still a wasted request. See
+// frontend/CLAUDE.md 「一則通知 = 一次『只抓它碰到的那一項』」.
 
 // SCROLLBACK (T-bf82): the thread starts as the newest page (server default
 // 30) and grows BACKWARDS through loadOlder() — a keyset-cursor page
@@ -523,21 +522,18 @@ export function useChat(withId: string): UseChat {
     setThread({ peer: withId, messages: [], hasMore: true, gapSuspected: false });
     setPeerLastReadTs(0);
 
-    // ONE load path (initial + SSE + refocus). Only a load fired while the
-    // owner is actually looking may take the side-effectful "list 即讀" route;
-    // a background window loads through the READ-ONLY peek so the thread stays
-    // fresh WITHOUT consuming the unread state. Never swallow a rejection into
-    // a phantom-empty thread — log it (a 401 is already handled at the http
-    // layer, which bounces to login).
+    // ONE load path (initial + SSE + refocus), and since T-48 ONE door: the
+    // load never marks anything read, so a backgrounded window loads exactly
+    // like a foreground one and the unread state is left to markRead(). Never
+    // swallow a rejection into a phantom-empty thread — log it (a 401 is
+    // already handled at the http layer, which bounces to login).
     const load = () => {
       // The generation ticket is taken at FIRE time, so a load that started
       // later always outranks one that started earlier, however long each of
       // them spends in the backfill. See loadSeqRef.
       const seq = ++loadSeqRef.current;
-      const fetching = isWindowActive()
-        ? api.listChat(withId)
-        : api.peekChat(withId);
-      fetching
+      api
+        .listChat(withId)
         .then(async (next) => {
           if (!alive) return;
           // Landed ⇒ whatever we owed is paid off.
@@ -653,9 +649,9 @@ export function useChat(withId: string): UseChat {
       })
     );
 
-    // Coming BACK to the foreground while this thread is open: the owner is now
-    // actually looking → run the marking listChat so everything accumulated in
-    // the background is read now (and the roster badge clears now, not before).
+    // Coming BACK to the foreground while this thread is open: refresh, so what
+    // accumulated in the background is on screen when the owner looks. (The
+    // badge is cleared by ChatArea's markRead, not by this load.)
     const onMaybeActive = () => {
       if (isWindowActive()) load();
     };

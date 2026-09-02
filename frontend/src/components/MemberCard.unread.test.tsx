@@ -98,10 +98,10 @@ describe("MemberCard unread count badge", () => {
 
   it("a SELECTED card still shows the badge while the window is BACKGROUNDED", () => {
     // Badge-flash fix: suppression assumes the open conversation is being
-    // WATCHED (its auto-mark consumes new messages instantly). With the window
-    // backgrounded the open thread stops consuming reads (useChat peeks
-    // read-only), unread genuinely accumulates — the selected card must show
-    // it, or the owner returns to a red dot that silently died.
+    // WATCHED (ChatArea marks each new message read as it lands). With the
+    // window backgrounded nothing marks anything read, unread genuinely
+    // accumulates — the selected card must show it, or the owner returns to a
+    // red dot that silently died.
     const spy = vi.spyOn(document, "hasFocus").mockReturnValue(false);
     try {
       const { getByTestId } = renderCard(mkMember({ unreadCount: 4 }), true);

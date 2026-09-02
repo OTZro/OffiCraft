@@ -843,12 +843,11 @@ let chatLog: ChatMessage[] = [];
 let mockChatSeq = 0;
 
 // In-memory read receipts, keyed `{reader}::{peer}` → the monotonic last-read
-// watermark. Mirrors the BE chat_read table. In mock mode the OWNER reads its own
-// messages back and marks them read (via listChat / markChatRead), and — since the
-// mock never fabricates a member reply — a message the owner sends to a member is
-// marked read by that member ONLY if listChat(withId) is called as that member,
-// which the single-owner mock UI never does. So the mock's "read ✓" is honest: it
-// reflects only real recorded watermarks, never a fabricated peer read.
+// watermark. Mirrors the BE chat_read table. In mock mode the OWNER marks its own
+// messages read through markChatRead, and — since the mock never fabricates a
+// member reply — a message the owner sends to a member is never marked read by
+// that member at all. So the mock's "read ✓" is honest: it reflects only real
+// recorded watermarks, never a fabricated peer read.
 const chatReads = new Map<string, ChatReadReceipt>();
 
 // In-memory reply cards (等我回覆卡). HONEST HARD LINE (same as chatLog): the
@@ -3146,22 +3145,6 @@ export const mockApi: Api = {
     const found = chatLog.find((m) => m.id === id);
     if (!found) throw new Error(`no message carries id ${id}`);
     return mockServedChatMessage(found);
-  },
-
-  async peekChat(withId: string, limit = 30): Promise<ChatMessage[]> {
-    // READ-ONLY twin of listChat: SAME filter/order/window, but NEVER advances
-    // the owner's read watermark (mirrors the BE ?peek=true — filter+cap by
-    // ?with= with no auto-mark). Used while the owner is not actually looking
-    // (backgrounded window) so the unread badge keeps counting. Default 30
-    // mirrors the http adapter (and the server default) so mock and http return
-    // the same window for a bare peekChat(withId).
-    let msgs = chatLog
-      .filter((m) => m.from === withId || m.to === withId)
-      .sort((a, b) => a.ts - b.ts);
-    if (limit >= 0) {
-      msgs = limit === 0 ? [] : msgs.slice(-limit);
-    }
-    return msgs.map(mockServedChatMessage);
   },
 
   async listChatAttachments(withId: string): Promise<GalleryAttachment[]> {

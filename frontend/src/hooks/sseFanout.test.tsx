@@ -112,10 +112,6 @@ vi.mock("../api", () => ({
       bump("listChat");
       return [];
     },
-    peekChat: async () => {
-      bump("peekChat");
-      return [];
-    },
     listChatReads: async () => {
       bump("listChatReads");
       return [];
@@ -192,8 +188,8 @@ function useCockpit() {
 }
 
 beforeEach(() => {
-  // The owner is LOOKING. jsdom's hasFocus() is false, which would route every
-  // thread load through the read-only peek and hide the self-drive entirely.
+  // The owner is LOOKING: ChatArea's markRead only fires on a focused window,
+  // and the self-drive under test starts at that write.
   document.hasFocus = () => true;
   h.counts = {};
   h.handlers = [];
@@ -291,7 +287,6 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     // The open thread belongs to someone else — no reload, and above all no
     // marking read (that read is what fans the echo round).
     expect(h.counts.listChat ?? 0).toBe(0);
-    expect(h.counts.peekChat ?? 0).toBe(0);
     expect(h.counts.listChatReads ?? 0).toBe(0);
     // A chat line cannot assign or release an 外包, so the rail has nothing to do.
     expect(h.counts.listOutsourceWorkers ?? 0).toBe(0);
@@ -803,7 +798,6 @@ describe("the read echo does not drive another round (T-8115)", () => {
     // must not re-pull the receipts either — `peerLastReadTs` is the PEER's
     // watermark and this delta says we are the reader, so it cannot move.
     expect(h.counts.listChat ?? 0).toBe(0);
-    expect(h.counts.peekChat ?? 0).toBe(0);
     expect(h.counts.listChatReads ?? 0).toBe(0);
     expect(h.counts.getMember).toBe(1);
     expect(h.counts.listMembers ?? 0).toBe(0);

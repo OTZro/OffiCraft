@@ -1,11 +1,12 @@
 // useChat — "reading requires looking" (badge-flash fix) black-box pins.
 //
-// The chat thread must stay fresh through BOTH windows states, but only an
-// ACTIVE window (tab visible + OS focus) may take the side-effectful
-// "list 即讀" route (listChat ?with= → the server advances the owner's read
-// watermark). A backgrounded window loads through the READ-ONLY peekChat —
-// messages keep flowing, unread keeps counting — and returning to the
-// foreground re-runs the marking listChat so the badge clears exactly then.
+// The chat thread must stay fresh through BOTH window states, and since T-48
+// it does so through ONE door: `listChat` marks nothing read, so a
+// backgrounded window loads exactly like an active one — messages keep
+// flowing, unread keeps counting — and the badge clears only when ChatArea
+// calls markRead, which it does when the owner is really looking. (A separate
+// `peekChat` existed for the background case while a cursorless list still
+// advanced the watermark; that side effect is gone and so is the second door.)
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
@@ -14,7 +15,6 @@ import type { ChatMessage } from "../api/adapter";
 const h = vi.hoisted(() => {
   return {
     listChat: vi.fn<(withId: string, limit?: number) => Promise<unknown[]>>(),
-    peekChat: vi.fn<(withId: string, limit?: number) => Promise<unknown[]>>(),
     listChatReads: vi.fn(async (_peer: string) => [] as unknown[]),
     markChatRead: vi.fn(async () => ({
       readerId: "owner",
@@ -29,7 +29,6 @@ const h = vi.hoisted(() => {
 vi.mock("../api", () => ({
   api: {
     listChat: h.listChat,
-    peekChat: h.peekChat,
     listChatReads: h.listChatReads,
     markChatRead: h.markChatRead,
     postChat: h.postChat,
@@ -53,7 +52,6 @@ let hasFocusSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   h.listChat.mockReset().mockResolvedValue([]);
-  h.peekChat.mockReset().mockResolvedValue([]);
   h.listChatReads.mockReset().mockResolvedValue([]);
   h.markChatRead.mockClear();
   h.sseHandler = null;
@@ -66,61 +64,56 @@ afterEach(() => {
 });
 
 describe("useChat load routing (active vs background)", () => {
-  it("an ACTIVE window loads through the marking listChat", async () => {
+  it("an ACTIVE window loads through listChat", async () => {
     h.listChat.mockResolvedValue([mkMsg("c1", "b", "owner", 1000)]);
     const { result } = renderHook(() => useChat("b"));
     await waitFor(() => expect(result.current.messages).toHaveLength(1));
     expect(h.listChat).toHaveBeenCalledWith("b");
-    expect(h.peekChat).not.toHaveBeenCalled();
     expect(result.current.messagesPeer).toBe("b");
   });
 
-  it("a BACKGROUNDED window loads through the read-only peekChat — messages still flow", async () => {
+  it("a BACKGROUNDED window loads through the SAME listChat — messages still flow", async () => {
     hasFocusSpy.mockReturnValue(false);
-    h.peekChat.mockResolvedValue([mkMsg("c1", "b", "owner", 1000)]);
+    h.listChat.mockResolvedValue([mkMsg("c1", "b", "owner", 1000)]);
     const { result } = renderHook(() => useChat("b"));
     await waitFor(() => expect(result.current.messages).toHaveLength(1));
-    // The thread stayed fresh WITHOUT the watermark side effect.
-    expect(h.peekChat).toHaveBeenCalledWith("b");
-    expect(h.listChat).not.toHaveBeenCalled();
+    // The thread stays fresh with no watermark side effect — the load never
+    // had one to skip, so there is no second door to take.
+    expect(h.listChat).toHaveBeenCalledWith("b");
   });
 
-  it("an SSE 'chat' event while backgrounded peeks; while active it lists", async () => {
+  it("an SSE 'chat' event refetches in EITHER window state", async () => {
     const { result } = renderHook(() => useChat("b"));
     await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(1));
 
-    // Background → the SSE-driven refetch must NOT consume the unread state.
+    // Background → the refetch still runs, and still consumes no unread state.
     hasFocusSpy.mockReturnValue(false);
-    h.peekChat.mockResolvedValue([mkMsg("c2", "b", "owner", 2000)]);
+    h.listChat.mockResolvedValue([mkMsg("c2", "b", "owner", 2000)]);
     act(() => h.sseHandler?.("chat"));
-    await waitFor(() => expect(h.peekChat).toHaveBeenCalledTimes(1));
-    expect(h.listChat).toHaveBeenCalledTimes(1); // unchanged
+    await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(2));
     // The new inbound message still landed (訊息更新不能斷).
     await waitFor(() => expect(result.current.messages).toHaveLength(1));
     expect(result.current.messages[0].id).toBe("c2");
 
-    // Foreground again → the SSE refetch is the marking list once more.
     hasFocusSpy.mockReturnValue(true);
     act(() => h.sseHandler?.("chat"));
-    await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(2));
-    expect(h.peekChat).toHaveBeenCalledTimes(1); // unchanged
+    await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(3));
   });
 
-  it("returning to the foreground re-runs the MARKING list (badge clears on real look)", async () => {
+  it("returning to the foreground re-loads the thread", async () => {
     hasFocusSpy.mockReturnValue(false);
     renderHook(() => useChat("b"));
-    await waitFor(() => expect(h.peekChat).toHaveBeenCalledTimes(1));
-    expect(h.listChat).not.toHaveBeenCalled();
+    await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(1));
 
     hasFocusSpy.mockReturnValue(true);
     act(() => {
       window.dispatchEvent(new Event("focus"));
     });
-    await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(2));
     expect(h.listChat).toHaveBeenCalledWith("b");
   });
 
-  it("a blur that leaves the window inactive does NOT trigger a marking list", async () => {
+  it("a blur that leaves the window inactive does NOT trigger a load", async () => {
     renderHook(() => useChat("b"));
     await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(1));
 
@@ -129,9 +122,8 @@ describe("useChat load routing (active vs background)", () => {
       window.dispatchEvent(new Event("blur"));
       document.dispatchEvent(new Event("visibilitychange"));
     });
-    // No additional load of either kind was fired by the deactivation itself.
+    // No additional load was fired by the deactivation itself.
     expect(h.listChat).toHaveBeenCalledTimes(1);
-    expect(h.peekChat).not.toHaveBeenCalled();
   });
 
   it("switching peers resets the thread and re-loads for the new peer", async () => {

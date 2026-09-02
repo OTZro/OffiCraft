@@ -6,7 +6,7 @@
 //   1. only messages ADDRESSED TO the owner count — an agent↔agent message
 //      never counts (AC #1);
 //   2. NOTHING about reading clears the count any more (T-48): entering the
-//      conversation (listChat / peekChat) leaves the watermark alone, and the
+//      conversation (listChat) leaves the watermark alone, and the
 //      ONLY thing that advances it is the explicit markChatRead choke — the
 //      mock mirrors the BE, where GET /api/chat stopped writing a watermark on
 //      every path (owner ruling 2026-09-02);
@@ -69,7 +69,10 @@ describe("mock adapter unread parity", () => {
     expect((await miraUnread()).unreadCount).toBe(3);
     // T-48: the FE's open-thread call no longer marks anything read. This used
     // to assert 0 here; asserting 3 is what makes the removal load-bearing.
-    await mockApi.listChat("mira");
+    // listChat is the ONLY read door — the `peekChat` twin that used to exist
+    // for exactly this "look without consuming" case was merged into it.
+    const listed = await mockApi.listChat("mira");
+    expect(listed).toHaveLength(3);
     expect((await miraUnread()).unreadCount).toBe(3);
     await mockApi.markChatRead({ peer: "mira", lastReadTs: 1002 });
     expect((await miraUnread()).unreadCount).toBe(0);
@@ -91,22 +94,6 @@ describe("mock adapter unread parity", () => {
     expect((await miraUnread()).unreadCount).toBe(0);
   });
 
-  it("peekChat and listChat return the SAME thread and NEITHER clears the count", async () => {
-    // The badge-flash seam is now the whole contract: no read door consumes
-    // unread state. peekChat and listChat differ in name only (T-48 removed
-    // the ?peek= opt-out because there is nothing left to opt out of).
-    inbound("mira", MOCK_OWNER_ID, 1000);
-    inbound("mira", MOCK_OWNER_ID, 1001);
-    const peeked = await mockApi.peekChat("mira");
-    expect(peeked).toHaveLength(2);
-    expect((await miraUnread()).unreadCount).toBe(2); // still unread
-    const listed = await mockApi.listChat("mira");
-    expect(listed.map((m) => m.id)).toEqual(peeked.map((m) => m.id));
-    expect((await miraUnread()).unreadCount).toBe(2); // STILL unread
-    // Only the explicit choke clears.
-    await mockApi.markChatRead({ peer: "mira", lastReadTs: 1001 });
-    expect((await miraUnread()).unreadCount).toBe(0);
-  });
 });
 
 describe("mock adapter getChatUnreadCount (the office red-dot signal)", () => {

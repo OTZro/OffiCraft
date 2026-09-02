@@ -1707,24 +1707,19 @@ export interface Api {
    * `before` (T-bf82 scrollback) is the composite keyset cursor
    * (`?before_ts=&before_id=`, both together): the page becomes the `limit`
    * messages strictly OLDER than that (ts, id) point, still oldest→newest.
-   * A page shorter than `limit` means the history is exhausted. A HISTORY
-   * PAGE NEVER ADVANCES THE READ WATERMARK — the "list 即讀" auto-mark fires
-   * only on a cursorless list of the newest window. */
+   * A page shorter than `limit` means the history is exhausted.
+   *
+   * READ-ONLY ON EVERY PATH (T-48): listing a conversation advances NO read
+   * watermark — not the newest window, not a history page. Marking a
+   * conversation read is `markChatRead` and nothing else, so a caller that
+   * must keep the thread fresh WITHOUT consuming the unread badge (a
+   * backgrounded window) just calls this. The `peekChat` twin that used to
+   * carry that case was merged into this method in T-48. */
   listChat(
     withId: string,
     limit?: number,
     before?: ChatCursor,
   ): Promise<ChatMessage[]>;
-  /** READ-ONLY view of the same conversation: identical shape/order/window as
-   * `listChat`, but WITHOUT the "list 即讀" read-watermark side effect. Used
-   * when the thread must stay fresh while the owner is NOT actually looking
-   * (window backgrounded / tab hidden) — the unread badge must keep counting
-   * until the owner really reads. Rides the EXISTING wire surface only:
-   * `GET /api/chat` with NO `?with=` never advances a watermark (the server's
-   * auto-mark fires only when a specific conversation is requested), so the
-   * http adapter fetches the unfiltered stream (`limit=-1`) and applies the
-   * same participant filter + recent-window cap client-side. */
-  peekChat(withId: string, limit?: number): Promise<ChatMessage[]>;
   /** Read back ONE named message in full (`GET /api/chat?ids=<id>`), with NO
    * read-watermark side effect. Rejects when the id names nothing (the server
    * refuses the whole call) and when the read fails.

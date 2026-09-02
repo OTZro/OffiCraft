@@ -39,7 +39,6 @@ import type { ChatMessage, SseDelta } from "../api/adapter";
 
 const h = vi.hoisted(() => ({
   listChat: vi.fn<(withId: string, limit?: number) => Promise<unknown[]>>(),
-  peekChat: vi.fn<(withId: string, limit?: number) => Promise<unknown[]>>(),
   listChatReads: vi.fn(async () => [] as unknown[]),
   markChatRead: vi.fn(async () => ({})) as unknown as ReturnType<typeof vi.fn>,
   postChat: vi.fn(async () => ({}) as unknown),
@@ -49,7 +48,6 @@ const h = vi.hoisted(() => ({
 vi.mock("../api", () => ({
   api: {
     listChat: h.listChat,
-    peekChat: h.peekChat,
     listChatReads: h.listChatReads,
     markChatRead: h.markChatRead,
     postChat: h.postChat,
@@ -105,7 +103,6 @@ let hasFocusSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   h.listChat.mockReset().mockResolvedValue([]);
-  h.peekChat.mockReset().mockResolvedValue([]);
   h.listChatReads.mockClear();
   h.sseHandler = null;
   hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -195,7 +192,6 @@ describe("useChat: a failed load is marked and paid on the next relevant event",
 
     await emit(elsewhere);
     expect(h.listChat).toHaveBeenCalledTimes(1);
-    expect(h.peekChat).not.toHaveBeenCalled();
   });
 
   it("a burst carrying ONLY chat_read pays the debt — the mark is not narrowed to chat lines", async () => {

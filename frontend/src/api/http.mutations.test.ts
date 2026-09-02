@@ -158,24 +158,34 @@ describe("httpApi · owner avatar mutations", () => {
 });
 
 describe("httpApi · perf-light query contracts (T-2b9d/cf91/ec2c)", () => {
-  it("peekChat pulls the filtered+capped window and sends NO peek parameter (T-48), NOT the whole history", async () => {
+  it("listChat pulls the peer's window and sends NO peek parameter (T-48), NOT the whole history", async () => {
     fetchMock.mockImplementation(async () => jsonResponse([]));
-    await httpApi.peekChat("m-1");
+    await httpApi.listChat("m-1");
     const { url, method } = await lastRequest();
     const q = new URLSearchParams(url.split("?")[1] ?? "");
     expect(method).toBe("GET");
     expect(url.split("?")[0]).toBe("/api/chat");
-    // LOAD-BEARING: scoped to the peer, capped — and NEVER the old
-    // whole-company `limit=-1` pull. MUTANT: revert peekChat to `{ limit: -1 }`
-    // and these go red.
+    // LOAD-BEARING: scoped to the peer, and the recent window is the SERVER's
+    // default (no `limit` on the wire) — never the old whole-company
+    // `limit=-1` pull. MUTANT: give this call `{ limit: -1 }` and these go red.
     expect(q.get("with")).toBe("m-1");
-    expect(q.get("limit")).toBe("30");
-    expect(q.get("limit")).not.toBe("-1");
+    expect(q.get("limit")).toBeNull();
     // T-48 removed ?peek= from the wire: GET /api/chat marks nothing read on
-    // any path, so the opt-out has nothing to opt out of. Asserting its ABSENCE
-    // rather than deleting the check keeps a re-added parameter — which would
-    // now be silently ignored by the server — from going unnoticed.
+    // any path, so the opt-out has nothing to opt out of — which is also why
+    // the `peekChat` twin of this method is gone. Asserting the parameter's
+    // ABSENCE rather than deleting the check keeps a re-added parameter —
+    // which would now be silently ignored by the server — from going unnoticed.
     expect(q.get("peek")).toBeNull();
+  });
+
+  it("listChat(-1) still asks for the WHOLE history (the gallery path)", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse([]));
+    await httpApi.listChat("m-1", -1);
+    const q = new URLSearchParams(
+      (await lastRequest()).url.split("?")[1] ?? "",
+    );
+    expect(q.get("with")).toBe("m-1");
+    expect(q.get("limit")).toBe("-1");
   });
 
   it("listMembers({light}) sends fields=light; default omits it", async () => {
