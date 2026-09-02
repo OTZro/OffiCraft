@@ -674,6 +674,108 @@ func (d *DAL) listChatBefore(participant, caller string, beforeTS float64, befor
 	return out, nil
 }
 
+// chatAnchor is one endpoint of a start_id/end_id window: the (ts, id) pair of
+// a real message, resolved before any row is read so an unknown id can be
+// refused by name rather than answered as an empty page. The pair — not the id
+// alone — is what the window is expressed in, because the stream's order is
+// (ts, id) and comparing on id alone would order nothing.
+type chatAnchor struct {
+	TS float64
+	ID string
+}
+
+// newerThan reports whether a comes strictly after b in the stream's total
+// (ts, id) order — the SAME comparison listChatBefore pages by, so "start is
+// past end" here means exactly what "older than the cursor" means there.
+func (a chatAnchor) newerThan(b chatAnchor) bool {
+	if a.TS != b.TS {
+		return a.TS > b.TS
+	}
+	return a.ID > b.ID
+}
+
+// listChatWindow answers the T-48 start_id/end_id window: the messages between
+// the two anchors INCLUSIVE, oldest→newest, capped at `limit`.
+//
+// Either anchor may be nil, and which one is nil decides which END the cap eats
+// from — that is the whole difference between the two parameters:
+//
+//   - start only  — the anchor and the limit-1 messages AFTER it. Ascending
+//     LIMIT: the far (newest) end is what gets cut.
+//   - end only    — the anchor and the limit-1 messages BEFORE it. Descending
+//     LIMIT then reversed: the far (oldest) end is what gets cut, which is the
+//     same walk listChatBefore does, only inclusive of the anchor.
+//   - both        — one bounded window, still anchored at start: ascending
+//     LIMIT, so an over-wide window keeps start_id and loses rows at the end_id
+//     side. `start_id` promises "this message and the limit-1 that follow it"
+//     in so many words, and a truncation that dropped the anchor would break
+//     the INCLUSIVE guarantee the parameter is named for.
+//
+// A window with no anchor at all is not this function's business — the handler
+// only reaches here once at least one was sent, and the anchorless request is
+// the legacy path, which must not change.
+//
+// `limit` arrives already validated to 1..200 by the handler; this function
+// still guards limit <= 0 as "read nothing" so it cannot be turned into an
+// unbounded scan by a future caller that forgets.
+func (d *DAL) listChatWindow(participant, caller string, start, end *chatAnchor, limit int) ([]ChatMessage, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	query := `
+		SELECT id, sender, recipient, body, ts, meta FROM chat_message
+		WHERE 1=1`
+	var args []any
+	if start != nil {
+		query += ` AND (ts > ? OR (ts = ? AND id >= ?))`
+		args = append(args, start.TS, start.TS, start.ID)
+	}
+	if end != nil {
+		query += ` AND (ts < ? OR (ts = ? AND id <= ?))`
+		args = append(args, end.TS, end.TS, end.ID)
+	}
+	if participant != "" {
+		query += ` AND (sender = ? OR recipient = ?)`
+		args = append(args, participant, participant)
+	}
+	if caller != "" {
+		query += ` AND (sender = ? OR recipient = ?)`
+		args = append(args, caller, caller)
+	}
+	// start present ⇒ walk forwards from it; end-only ⇒ walk backwards from it.
+	descending := start == nil
+	if descending {
+		query += ` ORDER BY ts DESC, id DESC LIMIT ?`
+	} else {
+		query += ` ORDER BY ts, id LIMIT ?`
+	}
+	args = append(args, limit)
+	rows, err := d.rdb.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var got []ChatMessage
+	for rows.Next() {
+		m, err := scanChat(rows)
+		if err != nil {
+			return nil, err
+		}
+		got = append(got, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if !descending {
+		return got, nil
+	}
+	out := make([]ChatMessage, len(got))
+	for i, m := range got {
+		out[len(got)-1-i] = m
+	}
+	return out, nil
+}
+
 // ListChatLatest returns the most recent `limit` messages, oldest→newest —
 // the CURSORLESS page GET /api/chat serves. `participant` narrows to a
 // conversation line (sender OR recipient) and `caller` narrows again to the

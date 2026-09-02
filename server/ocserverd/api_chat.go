@@ -860,6 +860,47 @@ const (
 	chatByIDsNotFoundMsg = "no message carries id %s — the whole call is refused rather " +
 		"than answered short, because a shortened answer is indistinguishable from the " +
 		"folded message you are trying to read back; drop that id and ask again"
+	// ── the T-48 start_id/end_id window ─────────────────────────────────────
+	//
+	// chatWindowMaxLimit bounds `limit` on the WINDOW path only. It is a ROW
+	// count, and that is the honest description of what it does: 200 rows was
+	// MEASURED at 687 KB, so this constant does NOT bound the payload. Nothing
+	// on this route does. Say so rather than let the next reader assume the
+	// number is a size guard.
+	//
+	// 🔴 It deliberately does NOT reach the anchorless legacy path. There
+	// `limit=-1` (uncapped) is a spec-verbatim promise with committed callers,
+	// and `limit=0` answers an empty list; T-48's own first rule is that a
+	// request sending neither anchor behaves byte for byte as it does today.
+	// Tightening those is a different ticket with a different owner question.
+	chatWindowMaxLimit = 200
+	// chatWindowBadLimitMsg states the bound AND that it is path-specific, so a
+	// caller that has been passing limit=-1 for years is not left guessing why
+	// the same value it always sent is suddenly refused.
+	chatWindowBadLimitMsg = "limit must be between 1 and %d when start_id or end_id is " +
+		"given (got %d) — the legacy anchorless listing keeps its own semantics, " +
+		"where a negative limit is uncapped and 0 is an empty page"
+	// chatWindowAnchorNotFoundMsg refuses an anchor no message carries, and
+	// names it. 404 rather than an empty 200 for the reason the `ids` refusal
+	// gives: an empty page is what a REAL window at the end of the stream
+	// answers, so a mistyped anchor and an exhausted one must not read alike.
+	chatWindowAnchorNotFoundMsg = "no message carries id %s — a window anchor must name a " +
+		"real message, because an empty page is what a real window at the edge of the " +
+		"stream returns and the two must not be indistinguishable"
+	// chatWindowMixedCursorsMsg refuses the two cursor families in one request.
+	// Honouring one and dropping the other is the failure mode being bought
+	// off: they disagree about DIRECTION, so the silent winner decides which
+	// end of the stream the caller reads and the caller never learns which.
+	chatWindowMixedCursorsMsg = "start_id/end_id cannot be combined with the deprecated " +
+		"before_ts/before_id cursor — the two families disagree about direction; " +
+		"send one family or the other"
+	// chatWindowContradictionMsg refuses start_id strictly NEWER than end_id.
+	// Deliberately not an empty array: an empty array is the honest answer of a
+	// real but empty window, so a contradictory request would be answered in
+	// the same bytes as a legitimate one that found nothing.
+	chatWindowContradictionMsg = "start_id %s is newer than end_id %s — the window is " +
+		"empty by construction; refused rather than answered with an empty array, " +
+		"which is what a real empty window returns"
 	// chatReplyToMetaKey is where a reply link is STORED — the same open meta
 	// map every caller can write to, which is why the POST handler deletes any
 	// caller-supplied value under this key before writing its own. The key is
@@ -956,6 +997,143 @@ func (s *apiServer) serveChatByIDs(w http.ResponseWriter, r *http.Request, ids [
 	writeJSON(w, http.StatusOK, out)
 }
 
+// requestedChatWindow reads the T-48 window anchors OFF THE QUERY STRING rather
+// than out of the generated params struct.
+//
+// 🔴 WHY NOT params.StartId: ocapi_gen.go is generated from spec/openapi.json
+// and guarded by `make drift-ocapi`, which regenerates and diffs. The spec
+// carrying these two parameters lands on its own branch (t-48/spec-chat-api);
+// hand-adding the fields here would make that gate red for a file this branch
+// is not allowed to own. Reading the query is byte-equivalent to what the
+// generated binder does for an optional string — every caller reaches this
+// handler through ServerInterfaceWrapper, which parses this same URL — so when
+// the spec branch merges this can switch to params.StartId/params.EndId with no
+// behaviour change.
+//
+// PRESENCE, not emptiness, selects the window path: `?start_id=` sent blank is
+// SENT, and is refused as an id no message carries. Dropping a blank anchor
+// back onto the legacy path would answer a malformed window request with a full
+// unbounded listing and no word said — the exact silent-fallback shape this
+// ticket exists to remove.
+func requestedChatWindow(r *http.Request) (startID string, hasStart bool, endID string, hasEnd bool) {
+	q := r.URL.Query()
+	return q.Get("start_id"), q.Has("start_id"), q.Get("end_id"), q.Has("end_id")
+}
+
+// chatWindowRequest is one window read, already stripped of the transport.
+type chatWindowRequest struct {
+	with       string
+	callerOnly bool
+	actor      string
+	limit      int
+	startID    string
+	hasStart   bool
+	endID      string
+	hasEnd     bool
+	beforeSent bool
+}
+
+// serveChatWindow answers ?start_id= / ?end_id= — the T-48 window, both ends
+// INCLUSIVE, still oldest→newest. It is reached ONLY when at least one anchor
+// was sent; a request sending neither never touches this function, which is
+// what keeps T-48's first and most important rule ("neither given ⇒ today's
+// behaviour, byte for byte") a structural property rather than a promise.
+//
+// REFUSAL ORDER is fixed and tested, because a request can be wrong in more
+// than one way at once and a caller fixing them one at a time needs the order
+// to be stable:
+//
+//  1. mixed cursor families (before_ts/before_id alongside)   422
+//  2. limit outside 1..200                                    422
+//  3. an anchor naming no message                             404
+//  4. start_id strictly newer than end_id                     422
+//
+// 1 and 2 come first because they are answerable without touching the table:
+// the request is malformed on its face, and reporting a 404 for an anchor in a
+// request that was never going to be served would send the caller hunting for a
+// missing message instead of fixing the parameter it actually got wrong.
+//
+// 🔴 THE 200-ROW CAP BOUNDS ROWS, NOT BYTES — 200 rows measured 687 KB. This
+// path has NO payload bound; do not read the cap as one.
+//
+// 🔴 NO READ-WATERMARK WRITE, like every other path on this route since T-48.
+func (s *apiServer) serveChatWindow(w http.ResponseWriter, r *http.Request, req chatWindowRequest) {
+	if req.beforeSent {
+		writeError(w, http.StatusUnprocessableEntity, chatWindowMixedCursorsMsg)
+		return
+	}
+	if req.limit < 1 || req.limit > chatWindowMaxLimit {
+		writeError(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf(chatWindowBadLimitMsg, chatWindowMaxLimit, req.limit))
+		return
+	}
+	wanted := []string{}
+	if req.hasStart {
+		wanted = append(wanted, req.startID)
+	}
+	if req.hasEnd && req.endID != req.startID {
+		wanted = append(wanted, req.endID)
+	}
+	found, err := s.dal.ListChatByIDs(wanted)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	byID := make(map[string]ChatMessage, len(found))
+	for _, m := range found {
+		byID[m.ID] = m
+	}
+	// Anchors are resolved WITHOUT the participant / caller_only filters on
+	// purpose: "does this message exist" and "is it in the slice you asked
+	// for" are different questions, and folding them together would answer a
+	// real id outside the filter with a 404 that says the message does not
+	// exist. The FILTER still applies to the rows returned below — a window
+	// anchored outside it simply comes back empty, which is the honest answer.
+	var start, end *chatAnchor
+	if req.hasStart {
+		m, ok := byID[req.startID]
+		if !ok {
+			writeError(w, http.StatusNotFound,
+				fmt.Sprintf(chatWindowAnchorNotFoundMsg, req.startID))
+			return
+		}
+		start = &chatAnchor{TS: m.TS, ID: m.ID}
+	}
+	if req.hasEnd {
+		m, ok := byID[req.endID]
+		if !ok {
+			writeError(w, http.StatusNotFound,
+				fmt.Sprintf(chatWindowAnchorNotFoundMsg, req.endID))
+			return
+		}
+		end = &chatAnchor{TS: m.TS, ID: m.ID}
+	}
+	if start != nil && end != nil && start.newerThan(*end) {
+		writeError(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf(chatWindowContradictionMsg, req.startID, req.endID))
+		return
+	}
+	caller := ""
+	if req.callerOnly {
+		caller = req.actor
+	}
+	msgs, err := s.dal.listChatWindow(req.with, caller, start, end, req.limit)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	out := []chatMessageDTO{}
+	for _, m := range msgs {
+		dto, err := s.servedChatMessageDTO(m)
+		if err != nil {
+			internalError(w, err)
+			return
+		}
+		out = append(out, dto)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // GET /api/chat — the stream oldest→newest, capped to the most recent limit
 // (default 30; negative = uncapped; 0 = empty). ?with= filters to a
 // participant.
@@ -978,6 +1156,14 @@ func (s *apiServer) serveChatByIDs(w http.ResponseWriter, r *http.Request, ids [
 // equalled a message nobody had read, so "unread" was cleared by the act of
 // polling. Do not reintroduce a write here.
 //
+// WINDOW BY MESSAGE ID (T-48): ?start_id= walks TOWARDS THE NEWEST from that
+// message and ?end_id= TOWARDS THE OLDEST, both ends INCLUSIVE — the direction
+// before_ts/before_id cannot express. Sending EITHER selects serveChatWindow
+// and its guardrails (mixed cursors 422, limit 1..200 422, unknown anchor 404,
+// contradictory pair 422). Sending NEITHER never reaches that function at all,
+// which is how "today's behaviour, byte for byte" is kept structural: the
+// legacy limit semantics below (negative = uncapped, 0 = empty) are untouched.
+//
 // SCROLLBACK (T-bf82): ?before_ts=&before_id= (both together, else 422) is a
 // composite keyset cursor — the page is the `limit` messages strictly OLDER
 // than (before_ts, before_id) in the stream's total (ts, id) order, still
@@ -999,6 +1185,20 @@ func (s *apiServer) HandleListChatApiChatGet(w http.ResponseWriter, r *http.Requ
 	limit := chatListDefaultLimit
 	if params.Limit != nil {
 		limit = *params.Limit
+	}
+	if startID, hasStart, endID, hasEnd := requestedChatWindow(r); hasStart || hasEnd {
+		s.serveChatWindow(w, r, chatWindowRequest{
+			with:       with,
+			callerOnly: callerOnly,
+			actor:      actor,
+			limit:      limit,
+			startID:    startID,
+			hasStart:   hasStart,
+			endID:      endID,
+			hasEnd:     hasEnd,
+			beforeSent: params.BeforeTs != nil || params.BeforeId != nil,
+		})
+		return
 	}
 	if params.BeforeTs != nil || params.BeforeId != nil {
 		if params.BeforeTs == nil || params.BeforeId == nil {
