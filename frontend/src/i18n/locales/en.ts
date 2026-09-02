@@ -771,6 +771,14 @@ export const en: Dict = {
     // attachment senders, stacking with the Images/Files tabs).
     gallerySenderFilterLabel: "Filter by uploader",
     gallerySenderAll: "All",
+    // T-51 ②: the chip row became a Jira-style checkbox dropdown. Collapsed it
+    // is one line; the search box lives INSIDE the popover as a shortcut, never
+    // as the only way in — the owner's objection to a search-only design was
+    // 「我怎麼會知道有誰，沒辦法打字」 (you cannot type a name you do not know).
+    gallerySenderSelected: (n: number) => `${n} selected`,
+    gallerySenderSearch: "Search uploaders",
+    gallerySenderNoMatch: "No matching uploader",
+    gallerySenderClear: "Clear selection",
     galleryClose: "Close gallery",
     galleryPreviewHint: "Preview in a new tab",
     galleryDownloadHint: "Download",
@@ -799,6 +807,11 @@ export const en: Dict = {
       openInNewTab: "Open in a new tab",
       newTabStaticNote:
         "The new tab only shows the file as it is — buttons and boxes on it will not respond.",
+      // T-51 ① — the two paging chevrons. They are the ONLY control for a
+      // zoomed image or a text file, where the arrow keys stay with the pan and
+      // the scroll, so the accessible name has to stand on its own.
+      previous: "Previous item",
+      next: "Next item",
       zoomControls: "Zoom image",
       zoomIn: "Zoom in",
       zoomOut: "Zoom out",

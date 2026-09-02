@@ -97,7 +97,7 @@ test("text: shared header and literal txt/log content render in Chromium", async
   await page.screenshot({ path: `${SHOT_DIR}/text-modal.png`, fullPage: true });
 });
 
-test("390px: popup header keeps filename space while actions become labelled icons", async ({ mount, page }) => {
+test("390px: popup header keeps filename space while the actions are icons with names", async ({ mount, page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   // mountBlob mounts the overlay alone, and it portals to `document.body`
   // (T-76cd) — nothing it renders is under the mount root, so the return value
@@ -108,9 +108,25 @@ test("390px: popup header keeps filename space while actions become labelled ico
     attachmentId: "att-mobile-pdf",
     mime: "application/pdf",
   });
+  // 🔴 THE ACCESSIBLE NAME IS THE ONLY NAME NOW (T-51 ④, owner: 「又都有字太多
+  // 了，可以一起改成圖示就好嘛」). These two reaches are BY NAME, so they are
+  // exactly the assertion that survives the label going away — an icon button
+  // that lost its `aria-label` would stop matching and redden here.
   await expect(page.getByRole("button", { name: "複製分享連結" })).toBeVisible();
   await expect(page.getByRole("link", { name: "下載" })).toBeVisible();
-  await expect(page.locator(".md-preview__action-label").first()).toBeHidden();
+  // ⚠️ THIS REPLACES an assertion that the label span was HIDDEN at this width.
+  // The span no longer exists at any width, and Playwright's `toBeHidden()`
+  // passes for an element that is absent — so the old line would have stayed
+  // green while asserting nothing at all. What is pinned instead is the state
+  // the change actually created: the header's action cluster renders NO visible
+  // text, and each control is still square.
+  const actions = page.locator(".md-preview__actions");
+  await expect(actions).toHaveText("");
+  for (const sel of [".md-preview__share", ".md-preview__new-tab", ".md-preview__download"]) {
+    const box = await page.locator(sel).boundingBox();
+    expect(box, `${sel} must be on screen`).not.toBeNull();
+    expect(box!.width, `${sel} is an icon square, not a labelled pill`).toBeLessThanOrEqual(40);
+  }
   await page.screenshot({ path: `${SHOT_DIR}/mobile-popup-header.png`, fullPage: true });
 });
 

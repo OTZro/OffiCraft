@@ -59,7 +59,10 @@ describe("MarkdownPreviewOverlay", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "Hello" })).toBeTruthy());
     expect(screen.getByText("body")).toBeTruthy();
     // The download action is present and separate from the preview render.
-    const dl = screen.getByText("下載").closest("a.md-preview__download")!;
+    // Reached by ACCESSIBLE NAME, not by visible text: T-51 ④ made the header
+    // controls icon-only (owner: 「又都有字太多了，可以一起改成圖示就好嘛」), so
+    // 下載 is now the `aria-label` and nothing in the header prints it.
+    const dl = screen.getByRole("link", { name: "下載" }) as HTMLAnchorElement;
     expect(dl.getAttribute("download")).toBe("design.md");
     expect(dl.getAttribute("href")).toContain("/api/chat/attachment/att-1");
   });
@@ -315,7 +318,10 @@ describe("MarkdownPreviewOverlay 複製分享連結 (T-d10b)", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "doc" })).toBeTruthy());
     const actions = document.body.querySelector(".md-preview__actions")!;
     const share = screen.getByRole("button", { name: "複製分享連結" });
-    const dl = screen.getByText("下載").closest("a.md-preview__download")!;
+    // Reached by ACCESSIBLE NAME, not by visible text: T-51 ④ made the header
+    // controls icon-only (owner: 「又都有字太多了，可以一起改成圖示就好嘛」), so
+    // 下載 is now the `aria-label` and nothing in the header prints it.
+    const dl = screen.getByRole("link", { name: "下載" }) as HTMLAnchorElement;
     expect(actions.contains(share)).toBe(true);
     expect(share.compareDocumentPosition(dl) & 4).toBe(4);
   });

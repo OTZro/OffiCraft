@@ -29,7 +29,7 @@ import type { GalleryAttachment, SseDelta } from "../api/adapter";
 import { api } from "../api";
 import { createDeltaSink } from "../lib/deltaSink";
 import { authedAttachmentUrl } from "../api/http";
-import { CloseIcon, FileTextIcon } from "./icons";
+import { ChevronDownIcon, CloseIcon, FileTextIcon } from "./icons";
 import { MarkdownPreviewOverlay } from "./MarkdownPreviewOverlay";
 
 // The owner's sender id — the real backend stamps `from` from the verified JWT
@@ -89,10 +89,6 @@ export function chatDeltaTouchesMember(d: SseDelta, memberId: string): boolean {
 /** The two gallery tabs: images vs every other file kind. */
 type GalleryTab = "images" | "files";
 
-/** Uploader filter sentinel: 「全部」 = no sender filtering. A real sender id
- * is never empty (the backend stamps `from` from the verified JWT sub). */
-const ALL_SENDERS = "";
-
 /** Format an epoch-second ts as a local "M/D hh:mm" — gallery history spans
  * days, so the bare hh:mm of the thread is not enough. Never fabricated. */
 function formatDateTime(ts: number): string {
@@ -102,6 +98,133 @@ function formatDateTime(ts: number): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+/** The uploader filter: one line closed, a fixed-height scrolling list of
+ * checkboxes open (T-51 ②, the shape the owner named — a Jira-style checkbox
+ * dropdown, reference screenshot pinned on the ticket).
+ *
+ * ⚠️ IT LISTS EVERY UPLOADER IT IS GIVEN, INCLUDING PEOPLE WHO HAVE LEFT. The
+ * server resolves a sender's name from the roster at ANY status on purpose
+ * (`api_chat.go`: "ANY roster status — dismissed still reads by name"), and
+ * hiding a departed colleague here would make their files unreachable — the
+ * gallery is where the owner goes to find an old file, and old files come from
+ * people who have since gone. "Folded into a dropdown" is not "removed from the
+ * list".
+ *
+ * The search box is INSIDE the popover and is a shortcut, never the entrance:
+ * the whole list is visible above it without typing a character. */
+function GallerySenderFilter({
+  senders,
+  selected,
+  onChange,
+}: {
+  senders: { id: string; label: string; count: number }[];
+  selected: ReadonlySet<string>;
+  onChange: (next: ReadonlySet<string>) => void;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  // Esc closes the POPOVER, not the gallery behind it: this layer nests inside
+  // the panel's, so it takes the key first and the panel only sees the next one.
+  useEscapeLayer(() => setOpen(false), boxRef, open);
+
+  // A click anywhere else closes it. Bound only while open, and on the capture
+  // phase so a click that unmounts its own target still counts as outside.
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (!boxRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick, true);
+    return () => document.removeEventListener("mousedown", onDocClick, true);
+  }, [open]);
+
+  const needle = query.trim().toLowerCase();
+  const matches =
+    needle === ""
+      ? senders
+      : senders.filter((s) => s.label.toLowerCase().includes(needle));
+
+  const toggle = (id: string) => {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onChange(next);
+  };
+
+  return (
+    <div className="chat__gallery-senders" ref={boxRef}>
+      <button
+        type="button"
+        className={`chat__gallery-sender-toggle${
+          selected.size > 0 ? " chat__gallery-sender-toggle--active" : ""
+        }`}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={t.chat.gallerySenderFilterLabel}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="chat__gallery-sender-toggle-text">
+          {selected.size === 0
+            ? t.chat.gallerySenderAll
+            : t.chat.gallerySenderSelected(selected.size)}
+        </span>
+        <ChevronDownIcon size={14} />
+      </button>
+      {open && (
+        <div
+          className="chat__gallery-sender-menu"
+          role="dialog"
+          aria-label={t.chat.gallerySenderFilterLabel}
+        >
+          <input
+            type="search"
+            className="chat__gallery-sender-search"
+            value={query}
+            placeholder={t.chat.gallerySenderSearch}
+            aria-label={t.chat.gallerySenderSearch}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <div className="chat__gallery-sender-options">
+            {matches.length === 0 ? (
+              <div className="chat__gallery-sender-none">
+                {t.chat.gallerySenderNoMatch}
+              </div>
+            ) : (
+              matches.map((s) => (
+                <label className="chat__gallery-sender-option" key={s.id}>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(s.id)}
+                    onChange={() => toggle(s.id)}
+                  />
+                  <span className="chat__gallery-sender-option-name">
+                    {s.label}
+                  </span>
+                  <span className="chat__gallery-sender-option-count">
+                    {s.count}
+                  </span>
+                </label>
+              ))
+            )}
+          </div>
+          {selected.size > 0 && (
+            <button
+              type="button"
+              className="chat__gallery-sender-clear"
+              onClick={() => onChange(new Set())}
+            >
+              {t.chat.gallerySenderClear}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function ChatGalleryPanel({
@@ -123,12 +246,21 @@ export function ChatGalleryPanel({
   const { t } = useI18n();
   const [entries, setEntries] = useState<GalleryAttachment[]>([]);
   const [tab, setTab] = useState<GalleryTab>("images");
-  // Uploader filter (batch 18): the selected sender id, ALL_SENDERS = 「全部」.
-  const [sender, setSender] = useState<string>(ALL_SENDERS);
+  // Uploader filter (batch 18, reshaped by T-51 ②): the SET of selected sender
+  // ids. Empty = 「全部」 — the sentinel id is gone, because "nobody is ticked"
+  // already says it and a set with a magic member in it does not.
+  const [senderSel, setSenderSel] = useState<ReadonlySet<string>>(new Set());
   // Honest empty state: 「還沒有…」 only AFTER the fetch settles — never
   // flash it while loading.
   const [loaded, setLoaded] = useState(false);
-  const [preview, setPreview] = useState<GalleryAttachment | null>(null);
+  // T-51 ① — WHICH row the preview is showing, held as the row's own key
+  // rather than the row object, because the list underneath is live: an SSE
+  // refetch replaces every object, and a filter change re-slices the list. A
+  // key survives both and re-resolves to a POSITION, which is what paging needs
+  // and what a stored object cannot give. If the row is gone from the current
+  // list (deleted, or filtered out), the lookup fails and the overlay closes —
+  // the honest outcome, and the only one that cannot show a stale file.
+  const [previewKey, setPreviewKey] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -141,13 +273,15 @@ export function ChatGalleryPanel({
           if (!alive) return;
           setEntries(rows);
           setLoaded(true);
-          // If the selected uploader vanished from the fresh rows (e.g. after
-          // a member switch), fall back to 「全部」 — never a stuck-blank filter.
-          setSender((cur) =>
-            cur !== ALL_SENDERS && !rows.some((r) => r.from === cur)
-              ? ALL_SENDERS
-              : cur,
-          );
+          // Drop any selected uploader that vanished from the fresh rows (e.g.
+          // after a member switch) — never a stuck filter that matches nothing.
+          // Dropping ALL of them lands back on 「全部」 by construction.
+          setSenderSel((cur) => {
+            if (cur.size === 0) return cur;
+            const alive = new Set(rows.map((r) => r.from));
+            const kept = new Set([...cur].filter((id) => alive.has(id)));
+            return kept.size === cur.size ? cur : kept;
+          });
         })
         .catch((e) => console.warn("ChatGalleryPanel: load failed", e));
     };
@@ -198,24 +332,57 @@ export function ChatGalleryPanel({
       ? t.chat.me
       : e.fromName || resolveSender?.(e.from) || e.from;
 
-  // Uploader filter options — derived from the ACTUAL rows' senders (never
-  // hardcoded), deduped in row order (rows are newest→oldest), labelled with
-  // the same senderLabel the list rows use (owner → 「我」, others → fromName,
-  // fallback id — the raw internal id never renders when a name exists).
-  const senders: { id: string; label: string }[] = [];
-  for (const e of entries) {
-    if (!senders.some((s) => s.id === e.from)) {
-      senders.push({ id: e.from, label: senderLabel(e) });
-    }
+  // Everything the CURRENT TAB holds. Both the uploader options and the list
+  // are cut from this one slice, and that is the fix, not a tidy-up:
+  //
+  // 🔴 THE OPTIONS USED TO BE BUILT FROM `entries` — every row, both tabs —
+  // while the list applied the tab. Two different populations, so on 「圖片」 the
+  // filter offered every uploader who had ever sent ANY file, and ticking one
+  // who had only ever sent zips answered with an empty gallery. Measured on the
+  // owner's own line (Kyle, 2026-09-02): 114 uploaders in the row, but only 48
+  // have an image — 66 of them were dead options. A filter whose options do not
+  // come from the same population as its results is not a filter.
+  const inTab = entries.filter((e) => (tab === "images" ? e.isImage : !e.isImage));
+
+  // Uploader options — derived from the ACTUAL rows' senders (never hardcoded),
+  // deduped in row order (rows are newest→oldest), labelled with the same
+  // senderLabel the list rows use (owner → 「我」, others → fromName, fallback id
+  // — the raw internal id never renders when a name exists). The count is what
+  // makes the long tail legible: 「只丟過 1 個檔案的人」 is most of this list.
+  const senders: { id: string; label: string; count: number }[] = [];
+  for (const e of inTab) {
+    const seen = senders.find((s) => s.id === e.from);
+    if (seen) seen.count += 1;
+    else senders.push({ id: e.from, label: senderLabel(e), count: 1 });
   }
 
   // The two dimensions STACK: the 圖片/檔案 tab split (same server-derived
-  // isImage flag the thread bubbles use) AND the uploader filter.
-  const shown = entries.filter(
-    (e) =>
-      (tab === "images" ? e.isImage : !e.isImage) &&
-      (sender === ALL_SENDERS || e.from === sender),
-  );
+  // isImage flag the thread bubbles use) AND the uploader filter. No ticks = no
+  // uploader filtering.
+  const shown =
+    senderSel.size === 0 ? inTab : inTab.filter((e) => senderSel.has(e.from));
+
+  // Switching tab re-cuts the population, so a tick with no rows on the new tab
+  // is dropped rather than left to produce an empty gallery. Same rule as the
+  // refetch prune above, applied to the other thing that changes the options.
+  // The dep is the option ids flattened to a STRING: a Set is a new identity
+  // every render, the string only changes when the options really do.
+  const senderIdsKey = senders.map((s) => s.id).join("\u0000");
+  useEffect(() => {
+    const alive = new Set(senderIdsKey.split("\u0000"));
+    setSenderSel((cur) => {
+      if (cur.size === 0) return cur;
+      const kept = new Set([...cur].filter((id) => alive.has(id)));
+      return kept.size === cur.size ? cur : kept;
+    });
+  }, [senderIdsKey]);
+
+  // The row key is the same one the list items are keyed by — one definition,
+  // used by both, so a paging lookup can never disagree with what is rendered.
+  const rowKey = (e: GalleryAttachment): string => `${e.messageId}-${e.id}`;
+  const previewIndex =
+    previewKey === null ? -1 : shown.findIndex((e) => rowKey(e) === previewKey);
+  const preview = previewIndex >= 0 ? shown[previewIndex] : null;
 
   return (
     <div
@@ -262,40 +429,20 @@ export function ChatGalleryPanel({
           {t.chat.galleryTabFiles}
         </button>
       </div>
-      {/* Uploader filter chips (batch 18) — grey chips under the tabs, same
-       * muted seg vocabulary; only rendered once loaded (never flash while
-       * loading) and only when there is something to filter. Stacks with the
-       * tab split above. */}
+      {/* Uploader filter (T-51 ②) — ONE LINE when closed, whatever the number of
+        * uploaders. The chip row this replaces had no cap and no scroll
+        * container, so it grew a line per uploader: measured on a 2,200-file
+        * corpus it stood 1,168px tall inside a 696px panel and pushed the file
+        * list clean off the screen. The owner rejected the two cheaper shapes
+        * himself — collapse-and-expand (「然後呢？」: the expanded thing is the
+        * same wall) and search-only (「我怎麼會知道有誰，沒辦法打字」: you cannot
+        * type a name you have not seen) — and named this one. */}
       {loaded && senders.length > 0 && (
-        <div
-          className="chat__gallery-senders"
-          role="group"
-          aria-label={t.chat.gallerySenderFilterLabel}
-        >
-          <button
-            type="button"
-            aria-pressed={sender === ALL_SENDERS}
-            className={`chat__gallery-sender-chip${
-              sender === ALL_SENDERS ? " chat__gallery-sender-chip--active" : ""
-            }`}
-            onClick={() => setSender(ALL_SENDERS)}
-          >
-            {t.chat.gallerySenderAll}
-          </button>
-          {senders.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              aria-pressed={sender === s.id}
-              className={`chat__gallery-sender-chip${
-                sender === s.id ? " chat__gallery-sender-chip--active" : ""
-              }`}
-              onClick={() => setSender(s.id)}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
+        <GallerySenderFilter
+          senders={senders}
+          selected={senderSel}
+          onChange={setSenderSel}
+        />
       )}
       {!loaded ? null : shown.length === 0 ? (
         <div className="chat__gallery-empty">
@@ -307,16 +454,16 @@ export function ChatGalleryPanel({
             const href = authedAttachmentUrl(e.url);
             return (
               <div
-                key={`${e.messageId}-${e.id}`}
+                key={rowKey(e)}
                 className="chat__gallery-item"
                 role="button"
                 tabIndex={0}
                 title={t.chat.galleryPreviewHint}
-                onClick={() => setPreview(e)}
+                onClick={() => setPreviewKey(rowKey(e))}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
-                    setPreview(e);
+                    setPreviewKey(rowKey(e));
                   }
                 }}
               >
@@ -344,7 +491,24 @@ export function ChatGalleryPanel({
           })}
         </div>
       )}
-      {preview && <MarkdownPreviewOverlay title={preview.filename || t.chat.downloadAttachment} url={preview.url} attachmentId={preview.id} mime={preview.mime} onClose={() => setPreview(null)} />}
+      {preview && (
+        <MarkdownPreviewOverlay
+          title={preview.filename || t.chat.downloadAttachment}
+          url={preview.url}
+          attachmentId={preview.id}
+          mime={preview.mime}
+          /* T-51 ① — paging is over the list the reader is LOOKING AT (both
+           * filters applied), not over every attachment the member ever sent:
+           * stepping out of the tab or the uploader they picked would answer a
+           * question nobody asked. */
+          pager={{
+            index: previewIndex,
+            total: shown.length,
+            onGo: (i) => setPreviewKey(rowKey(shown[i])),
+          }}
+          onClose={() => setPreviewKey(null)}
+        />
+      )}
     </div>
   );
 }

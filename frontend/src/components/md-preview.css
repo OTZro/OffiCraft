@@ -109,6 +109,9 @@
 .md-preview__panel {
   display: flex;
   flex-direction: column;
+  /* The paging chevrons (T-51 ①) hang off this box's own edges, so it has to be
+   * their containing block. Nothing else here is positioned. */
+  position: relative;
   width: min(760px, 100%);
   /* The cap is stated TWICE on purpose, and the second one is not a percentage:
    * a percentage max-height needs its parent's height to resolve, and this panel
@@ -158,8 +161,10 @@
 .md-preview__new-tab {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--color-overlay) 10%, transparent);
   background: color-mix(in srgb, var(--color-overlay) 3%, transparent);
@@ -176,24 +181,17 @@
   border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
 @media (max-width: 600px) {
-  /* Mobile keeps the header on one line: title remains the readable priority,
-   * while labelled icon controls retain their accessible names + tooltips. */
+  /* Mobile tightens the same icon-only header: the controls are already square
+   * at every width (owner 2026-09-02, c-36e8473bc6d8 — 「都有字太多了，可以一起
+   * 改成圖示就好嘛」), so only the surrounding spacing gives way here. The
+   * accessible name and the tooltip stay on every control; the label was the
+   * visible text and it is gone at ALL widths, not hidden at this one. */
   .md-preview__header {
     gap: 8px;
     padding: 10px 12px;
   }
   .md-preview__actions {
     gap: 4px;
-  }
-  .md-preview__download,
-  .md-preview__new-tab {
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    justify-content: center;
-  }
-  .md-preview__action-label {
-    display: none;
   }
 }
 .md-preview__share {
@@ -427,4 +425,57 @@
   color: var(--color-text-muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* T-51 ① — paging chevrons and the position counter.
+ *
+ * The chevrons sit ON the panel's edges (see the JSX for why they are not in
+ * the header) and are painted as their own small surface so they stay readable
+ * over both a white screenshot and a dark one. Every colour is a theme token:
+ * this overlay opens in whatever theme the reader chose, and a hardcoded
+ * rgba() here would be invisible in one of them. */
+.md-preview__pager {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--color-overlay) 10%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-card) 88%, transparent);
+  color: var(--color-text);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    opacity 0.15s;
+}
+.md-preview__pager--prev {
+  left: 10px;
+}
+.md-preview__pager--next {
+  right: 10px;
+}
+.md-preview__pager:hover:not(:disabled) {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+/* Disabled at the ends: kept in place rather than removed, so the other one
+ * does not jump sideways on the first and last item. */
+.md-preview__pager:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.md-preview__pager-count {
+  flex: none;
+  margin-left: 2px;
+  font-size: 12px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
 }

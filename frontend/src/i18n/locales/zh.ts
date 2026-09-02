@@ -854,6 +854,14 @@ export const zh = {
     // 與圖片/檔案分頁疊加生效)。
     gallerySenderFilterLabel: "依上傳者篩選",
     gallerySenderAll: "全部",
+    // T-51 ②:chip 列改成 Jira 式的勾選下拉(owner 逐字:「或是像 jira 一樣,
+    // 你可以打開時,展開一個下拉式選單做勾選就好」)。收起時只有一行;搜尋框在
+    // 浮層裡面,是抄近路用的,不是唯一入口——他明講過「我怎麼會知道有誰,沒辦
+    // 法打字」。
+    gallerySenderSelected: (n: number) => `已選 ${n} 位`,
+    gallerySenderSearch: "搜尋上傳者",
+    gallerySenderNoMatch: "沒有符合的上傳者",
+    gallerySenderClear: "清除選取",
     galleryClose: "關閉檔案庫",
     galleryPreviewHint: "開新分頁預覽",
     galleryDownloadHint: "下載",
@@ -878,6 +886,11 @@ export const zh = {
       // 什麼」，不是背後的機制。
       openInNewTab: "在新頁面顯示",
       newTabStaticNote: "新頁面只會照原樣顯示，上面的按鈕和輸入格不會有反應。",
+      // T-51 ① — the two paging chevrons. They are the ONLY control for a
+      // zoomed image or a text file, where the arrow keys stay with the pan and
+      // the scroll, so the accessible name has to stand on its own.
+      previous: "上一個",
+      next: "下一個",
       zoomControls: "縮放圖片",
       zoomIn: "放大",
       zoomOut: "縮小",

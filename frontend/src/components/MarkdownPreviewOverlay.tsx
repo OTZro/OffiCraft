@@ -63,6 +63,8 @@ import { Markdown } from "./Markdown";
 import "./md-preview.css";
 import {
   CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   CloseIcon,
   CopyIcon,
   DownloadIcon,
@@ -78,10 +80,34 @@ function clampZoom(value: number): number {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));
 }
 
+/** Paging across a list of previewable items the CALLER owns (T-51 ①).
+ *
+ * The overlay stays a single-item surface: it is handed the item to show
+ * through the union below, exactly as before, plus WHERE that item sits in the
+ * caller's list. It never holds the list, never filters it and never decides
+ * what "next" means — the gallery's own tab + uploader filters do, and the
+ * overlay would have to duplicate them to answer that question itself.
+ *
+ * OPTIONAL on purpose: four of the five call sites (AttachmentStrip, TaskCard,
+ * ChatArea, TaskArtifactsPopover) open ONE attachment with no list behind it,
+ * and must not be forced to invent one. */
+type PreviewPager = {
+  /** 0-based position of the item currently shown. */
+  index: number;
+  /** How many items the caller's current list holds. */
+  total: number;
+  /** Show the item at this index. The caller re-renders this overlay with the
+   * new item's title/url/mime — nothing here mutates. */
+  onGo: (index: number) => void;
+};
+
 type MarkdownPreviewOverlayProps = {
   /** Display name shown in the header (the blob's filename, or the sender of
    * the message being read). */
   title: string;
+  /** Absent = this overlay shows one item with nothing either side of it, and
+   * no paging control renders. */
+  pager?: PreviewPager;
   onClose: () => void;
 } & (
   | {
@@ -120,6 +146,7 @@ type MarkdownPreviewOverlayProps = {
 
 export function MarkdownPreviewOverlay({
   title,
+  pager,
   url,
   attachmentId,
   mime,
@@ -170,6 +197,16 @@ export function MarkdownPreviewOverlay({
   const plainText = previewableText && !isMarkdownAttachment(mime ?? "text/markdown", title);
   const source = inlineSource ?? fetched;
   const [zoom, setZoom] = useState(1);
+  // T-51 ① — A NEW ITEM IS A NEW IMAGE, so the previous one's zoom must not
+  // survive the step: the fit box is re-measured per image and a 300% carried
+  // over from a wide screenshot would open a portrait photo already scrolled
+  // into a corner. Paging is the ONLY way the shown item changes while this
+  // overlay stays mounted — every other caller unmounts it to show something
+  // else — and remounting per step instead would re-run the focus handoff below
+  // on every arrow press, stealing focus back from wherever the reader put it.
+  useEffect(() => {
+    setZoom(1);
+  }, [url, imageSrc]);
   // The bytes the header's 下載 link points at. A stored blob needs the ?token=
   // gate; a staged data: URI already IS the bytes. An inline text `source` has
   // neither — nothing is fabricated for it.
@@ -554,12 +591,43 @@ export function MarkdownPreviewOverlay({
       aria-modal="true"
       aria-label={title}
       onClick={onClose}
+      onKeyDown={(e) => {
+        if (pager === undefined) return;
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        // 🔴 THE ARROW KEYS WERE ALREADY SPOKEN FOR, and paging does not get to
+        // take them back. Two claims stand ahead of this one:
+        //   - a ZOOMED image (`zoom > 1`): the wrap is a real scroll container
+        //     by then (T-7e68 made the zoom real layout precisely so it would
+        //     be), and the arrows are how a keyboard reaches the edges the zoom
+        //     pushed out of the frame. Stealing them there would re-open the
+        //     owner report that whole change exists to answer 「可以放大，但無法
+        //     左右或上下移動」.
+        //   - a TEXT body: it scrolls with the arrow keys too, and this overlay
+        //     has no second way to reach the bottom of a long file.
+        // So the keys page only for an image shown at 100%, where nothing can
+        // scroll and the keys are genuinely free. The buttons stay available in
+        // every case — they are the answer for the two situations above, not a
+        // duplicate of the keyboard.
+        if (!image || zoom > 1) return;
+        const next = e.key === "ArrowLeft" ? pager.index - 1 : pager.index + 1;
+        if (next < 0 || next >= pager.total) return;
+        e.preventDefault();
+        pager.onGo(next);
+      }}
     >
       <div className="md-preview__panel" onClick={(e) => e.stopPropagation()}>
         <div className="md-preview__header">
           <span className="md-preview__title">
             <FileTextIcon size={16} />
             {title}
+            {/* Position within the caller's list. Digits only — nothing to
+              * translate, and it is the one thing the two chevrons cannot say:
+              * whether there are three more or three hundred. */}
+            {pager !== undefined && (
+              <span className="md-preview__pager-count">
+                {pager.index + 1} / {pager.total}
+              </span>
+            )}
           </span>
           <div className="md-preview__actions">
             {/* Share needs a STORED blob id. Download only needs bytes, so it
@@ -586,11 +654,6 @@ export function MarkdownPreviewOverlay({
                 onClick={() => void onCopyShareLink()}
               >
                 {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
-                {copyFailed
-                  ? <span className="md-preview__action-label">{t.chat.shareLinkCopyFailed}</span>
-                  : copied
-                    ? <span className="md-preview__action-label">{t.chat.shareLinkCopied}</span>
-                    : <span className="md-preview__action-label">{t.chat.copyShareLink}</span>}
               </button>
             )}
             {/* T-36 — 「在新頁面顯示」: the owner's own words were 「html 應該要可以
@@ -616,9 +679,6 @@ export function MarkdownPreviewOverlay({
                 title={t.chat.mdPreview.openInNewTab}
               >
                 <ExternalLinkIcon size={14} />
-                <span className="md-preview__action-label">
-                  {t.chat.mdPreview.openInNewTab}
-                </span>
               </a>
             )}
             {/* Download — the SECOND action, distinct from preview: the authed
@@ -632,7 +692,6 @@ export function MarkdownPreviewOverlay({
                 title={t.chat.mdPreview.download}
               >
                 <DownloadIcon size={14} />
-                <span className="md-preview__action-label">{t.chat.mdPreview.download}</span>
               </a>
             )}
             <button
@@ -661,6 +720,37 @@ export function MarkdownPreviewOverlay({
           * boxes, so the sentence was untrue there and cost the most common
           * preview in the cockpit a line of height. The sentence is only ever
           * worth saying about a file that LOOKS like it should react. */}
+        {/* T-51 ① — the two chevrons ride the PANEL's edges rather than the
+          * header, for two reasons that are not taste: the header at 390px is
+          * already carrying a filename plus four controls, and an edge chevron
+          * is where a thumb goes. They are `disabled` at the ends instead of
+          * wrapping — a gallery has a first and a last item, and silently
+          * jumping from one end to the other is how a reader loses their place
+          * in a list of a thousand. */}
+        {pager !== undefined && (
+          <>
+            <button
+              type="button"
+              className="md-preview__pager md-preview__pager--prev"
+              aria-label={t.chat.mdPreview.previous}
+              title={t.chat.mdPreview.previous}
+              disabled={pager.index <= 0}
+              onClick={() => pager.onGo(pager.index - 1)}
+            >
+              <ChevronLeftIcon size={20} />
+            </button>
+            <button
+              type="button"
+              className="md-preview__pager md-preview__pager--next"
+              aria-label={t.chat.mdPreview.next}
+              title={t.chat.mdPreview.next}
+              disabled={pager.index >= pager.total - 1}
+              onClick={() => pager.onGo(pager.index + 1)}
+            >
+              <ChevronRightIcon size={20} />
+            </button>
+          </>
+        )}
         {shareHref !== null && interactiveLooking && (
           <div className="md-preview__new-tab-note">
             {t.chat.mdPreview.newTabStaticNote}
