@@ -42,6 +42,16 @@ func wakeSeedAssistant(t *testing.T, s *apiServer) Member {
 	}
 	m.DesiredState = DesiredStateOnline
 	m.DesiredMachineID = ServerSelfHost
+	// The pin needs its sole writer (T-55). The seed row already exists, so the
+	// whole-row write below carries desired_state but NOT this — and today that
+	// happens to be harmless only because the seed is born on ServerSelfHost
+	// anyway. This helper's doc says it returns "the row as stored"; leaving the
+	// pin to that coincidence would make the returned struct and the row disagree
+	// the moment anyone changes what the seed is born with, and the readers here
+	// are split (reconcileOne takes the VALUE, the placement arms re-read the ROW).
+	if err := s.dal.SetMemberDesiredMachineID(m.ID, ServerSelfHost); err != nil {
+		t.Fatalf("pin the seed assistant: %v", err)
+	}
 	putTestMember(t, s, *m)
 	return *m
 }

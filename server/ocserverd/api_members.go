@@ -835,12 +835,28 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 			stampMemberOpReceipt(m, memberHeldDownReceipt(memberOpModel), nowSecs())
 		}
 	}
+	if err := s.putMember(*m, requestTrigger(r)); err != nil {
+		internalError(w, err)
+		return
+	}
 	// The three launch intents left PutMember's DO UPDATE SET in T-55, so the
-	// whole-row write below no longer carries them — their sole writers do, and
-	// ONLY for a field this request actually carried. That asymmetry is the
-	// point: a save that touches effort alone must not restate the model beside
-	// it, because the model it would restate is the one this handler read before
-	// the owner-op wind-down (or another face) touched the row.
+	// write above no longer carries them — their sole writers do, and ONLY for a
+	// field this request actually carried. That asymmetry is the point: a save
+	// that touches effort alone must not restate the model beside it, because the
+	// model it would restate is the one this handler read before the owner-op
+	// wind-down (or another face) touched the row.
+	//
+	// 🔴 THEY RUN AFTER THE WHOLE-ROW WRITE, AND THE ORDER IS THE WHOLE POINT.
+	// What used to be one write is now two, so one of them can fail alone — and
+	// the two orders fail differently. The wind-down epoch armed above is what
+	// makes a launch-intent change TAKE EFFECT (T-b6d9: without it the member
+	// runs on the old model until something unrelated respawns it), and it lands
+	// with the whole-row write. Put the setters first and a failure here leaves
+	// the new model stored with NO epoch — the exact bug T-b6d9 fixed, arriving
+	// through a different door, and nothing ever converges it. This way round, a
+	// failure leaves the epoch open with the OLD value: the member winds down and
+	// comes back on what it was already running. One wasted recycle, and the
+	// owner's 500 is honest — nothing they asked for was stored.
 	if body.Model != nil {
 		if err := s.dal.SetMemberModel(m.ID, m.Model); err != nil {
 			internalError(w, err)
@@ -858,10 +874,6 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 			internalError(w, err)
 			return
 		}
-	}
-	if err := s.putMember(*m, requestTrigger(r)); err != nil {
-		internalError(w, err)
-		return
 	}
 	s.writeMemberDTO(w, *m)
 }

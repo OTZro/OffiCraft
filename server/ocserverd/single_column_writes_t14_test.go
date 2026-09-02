@@ -104,6 +104,26 @@ var singleColumnOwnedFields = []struct {
 		read:   func(m Member) any { return m.Effort },
 		stale:  func(m *Member) { m.Effort = "" },
 	},
+	{
+		// The OLDEST member of this class and the last one to be registered:
+		// avatar_attachment_id has been out of the SET list since T-c826, with
+		// ReplaceMemberAvatar / DeleteMemberAvatar as its only update seams —
+		// but nothing enforced that, so putting the column back would have gone
+		// unnoticed here while every OTHER migrated column was guarded. The
+		// consequence is worse than the usual clobber: the pointer's previous
+		// blob is DELETEd on replace, so a stale snapshot restoring the old id
+		// leaves the row pointing at a blob that no longer exists.
+		column: "avatar_attachment_id",
+		writer: "ReplaceMemberAvatar / DeleteMemberAvatar",
+		stamp: func(d *DAL, id string) error {
+			return d.ReplaceMemberAvatar(id, ChatAttachment{
+				ID: "ava-" + id, Mime: "image/png", Data: avatarTestPNG,
+			})
+		},
+		want:  "ava-m-avatar_attachment_id",
+		read:  func(m Member) any { return m.AvatarAttachmentID },
+		stale: func(m *Member) { m.AvatarAttachmentID = "" },
+	},
 }
 
 // TestPutMemberNeverOverwritesSingleColumnOwnedFields is the automatic guard.
@@ -114,8 +134,8 @@ func TestPutMemberNeverOverwritesSingleColumnOwnedFields(t *testing.T) {
 	// A deleted row is the one mutation the loop below cannot see: the guard
 	// would pass by iterating less. Bump this deliberately when the registry
 	// grows.
-	if len(singleColumnOwnedFields) != 7 {
-		t.Fatalf("singleColumnOwnedFields has %d entries, expected 7. Adding a "+
+	if len(singleColumnOwnedFields) != 8 {
+		t.Fatalf("singleColumnOwnedFields has %d entries, expected 8. Adding a "+
 			"column? Bump this number. REMOVING one? That means a column went "+
 			"BACK into PutMember's DO UPDATE SET — say why in the commit",
 			len(singleColumnOwnedFields))

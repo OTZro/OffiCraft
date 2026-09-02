@@ -938,35 +938,9 @@ func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(
 		launchIntentChanged = launchIntentChanged || effort != worker.Effort
 		worker.Effort = effort
 	}
-	// Same seam as the staff face (T-55): the three intents left PutMember's
-	// SET list, so PutOutsourceWorker no longer carries them and each one lands
-	// through its sole writer — only for a field this request actually carried.
-	if body.Model != nil {
-		if err := s.dal.SetMemberModel(worker.ID, worker.Model); err != nil {
-			s.outsourceMu.Unlock()
-			internalError(w, err)
-			return
-		}
-	}
-	if body.Runtime != nil {
-		// NORMALISED, matching memberFromWorker: the worker projection has
-		// always stored NormalizeRuntime(w.Runtime), and the sole writer must
-		// not quietly start storing a second form on the same column. (Today
-		// ValidRuntime already narrows this to claude|codex, so the call is
-		// identity — it is here so the property survives the next runtime.)
-		if err := s.dal.SetMemberRuntime(worker.ID, NormalizeRuntime(worker.Runtime)); err != nil {
-			s.outsourceMu.Unlock()
-			internalError(w, err)
-			return
-		}
-	}
-	if body.Effort != nil {
-		if err := s.dal.SetMemberEffort(worker.ID, worker.Effort); err != nil {
-			s.outsourceMu.Unlock()
-			internalError(w, err)
-			return
-		}
-	}
+	// The values this request means to store, held apart from `worker` because
+	// the re-read below replaces that pointer.
+	wantModel, wantRuntime, wantEffort := worker.Model, NormalizeRuntime(worker.Runtime), worker.Effort
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
 		internalError(w, err)
@@ -979,9 +953,54 @@ func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(
 	// copies drift (this one used to skip silently, leaving no receipt).
 	if launchIntentChanged && worker.Status == WorkerStatusActive && s.hub.IsOnline(worker.ID) {
 		s.respawnWorkerForOwnerOp(*worker, ownerOpModel)
-		if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
-			worker = fresh
+	}
+	// Same seam as the staff face (T-55): the three intents left PutMember's SET
+	// list, so PutOutsourceWorker no longer carries them and each one lands
+	// through its sole writer — only for a field this request actually carried.
+	//
+	// 🔴 AFTER the respawn, and for the reason HandleUpdateMember spells out at
+	// length: one write became two, and only this order fails convergently. Store
+	// the value FIRST and a failure here leaves the new value on the row with no
+	// wind-down — and the retry cannot heal it, because launchIntentChanged
+	// compares the request against the STORED value, which now already matches, so
+	// the second attempt opens no session either. The worker would run the old
+	// model until something unrelated respawned it. This way round a failure
+	// leaves the OLD value with a wind-down already open: one wasted recycle onto
+	// the value it was already running, and the retry still sees a change.
+	//
+	// The whole sequence holds outsourceMu, so the collection that would act on
+	// that wind-down cannot land between the two writes.
+	if body.Model != nil {
+		if err := s.dal.SetMemberModel(id, wantModel); err != nil {
+			s.outsourceMu.Unlock()
+			internalError(w, err)
+			return
 		}
+	}
+	if body.Runtime != nil {
+		// NORMALISED, matching memberFromWorker: the worker projection has
+		// always stored NormalizeRuntime(w.Runtime), and the sole writer must
+		// not quietly start storing a second form on the same column. (Today
+		// ValidRuntime already narrows this to claude|codex, so the call is
+		// identity — it is here so the property survives the next runtime.)
+		if err := s.dal.SetMemberRuntime(id, wantRuntime); err != nil {
+			s.outsourceMu.Unlock()
+			internalError(w, err)
+			return
+		}
+	}
+	if body.Effort != nil {
+		if err := s.dal.SetMemberEffort(id, wantEffort); err != nil {
+			s.outsourceMu.Unlock()
+			internalError(w, err)
+			return
+		}
+	}
+	// Re-read AFTER both writes so the projection the owner gets back is the row
+	// as it now stands — the respawn stamps its own fields, and the setters land
+	// after it.
+	if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
+		worker = fresh
 	}
 	s.publishOutsourceWorker(*worker, requestTrigger(r))
 	s.outsourceMu.Unlock()

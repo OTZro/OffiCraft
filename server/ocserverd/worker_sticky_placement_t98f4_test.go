@@ -243,8 +243,8 @@ func TestSticky_ConnectStampsTheLandingFromTheTokenClaim(t *testing.T) {
 	}
 	// corroborates the claim below — written through the pin's sole writer,
 	// since T-55 removed desired_machine_id from PutMember's DO UPDATE SET and
-	// this row already exists.
-	staff.DesiredMachineID = "m-other"
+	// this row already exists. (`staff` itself is not used past this point; the
+	// row is re-read below.)
 	if err := s.dal.SetMemberDesiredMachineID("g-staff", "m-other"); err != nil {
 		t.Fatalf("pin staff: %v", err)
 	}
