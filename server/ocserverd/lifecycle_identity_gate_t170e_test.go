@@ -949,7 +949,7 @@ var identityGateLedger = map[string]string{
 		"NOT an identity gate — the other arm of the same handoff-plan switch.",
 	"api_members.go :: HandleHireMemberApiMembersPost :: trimmedOrEmpty(body.Kind) != \"\"": "" +
 		"the `privileged` predicate of the §4 hire 閉環: hiring WITH a kind is " +
-		"privilege-bearing (otherwise an agent hires itself an 'assistant' and walks up " +
+		"privilege-bearing (otherwise an agent hires itself a 'staff' colleague and walks up " +
 		"the ladder), so it is admin-gated inside the handler. It tests whether a kind " +
 		"was SUPPLIED, not which one. Also in authzOutsideRouteTable.",
 }

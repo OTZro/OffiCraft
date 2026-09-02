@@ -8,8 +8,8 @@
 //      messages; > 99 clamps to "99+".
 //   3. SUPPRESSED IN THE OPEN CONVERSATION: while THIS member's chat is open
 //      (`selected`), the badge never shows — in the open thread a new message is
-//      read immediately (listChat auto-mark), so it must not accumulate (AC #3,
-//      the UI-side guarantee).
+//      read immediately (ChatArea marks read on arrival while the window is
+//      focused), so it must not accumulate (AC #3, the UI-side guarantee).
 //   4. count 0 → NOT RENDERED at all (no empty pill, no leftover dot).
 
 import { describe, it, expect, vi } from "vitest";

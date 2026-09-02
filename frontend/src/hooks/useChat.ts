@@ -73,7 +73,8 @@ import { isWindowActive } from "./useWindowActive";
 //
 // THE FIX, and why it has this shape. There is NO forward cursor on the server
 // (`HandleListChatApiChatGetParams` is With / Limit / BeforeTs / BeforeId /
-// Peek / CallerOnly / Ids — verified against api_chat.go, not against a doc),
+// StartId / EndId / CallerOnly / Ids — verified against api_chat.go, not
+// against a doc; `Peek` was removed with T-48),
 // and adding one is out of scope. So we detect the seam and page BACKWARDS into
 // it with the cursor that does exist:
 //   1. after a newest page lands, compare its OLDEST row against our NEWEST row

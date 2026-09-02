@@ -9,11 +9,12 @@
 //   2. ONE resync (http.ts fans one synthetic delta per closed topic, 13 of
 //      them, synchronously) costs each hook ONE refetch — not one per topic it
 //      happens to listen to.
-//   3. Reading a thread is itself a durable write (`GET /api/chat?with=` = 列表
-//      即讀), so the server fans a `chat_read` delta BACK at us. That echo must
-//      not re-run the fan-out, and above all a delta about ANOTHER conversation
-//      must not re-enter the marking read — that is the cockpit driving its own
-//      event loop.
+//   3. Reading a thread is a durable write — since T-48 not the listing itself
+//      but ChatArea's explicit POST /api/chat/mark-read, which fires once the
+//      open thread's newest page lands on a focused window — so the server fans
+//      a `chat_read` delta BACK at us. That echo must not re-run the fan-out,
+//      and above all a delta about ANOTHER conversation must not re-enter the
+//      marking read — that is the cockpit driving its own event loop.
 //
 // 🔴 EVERY cost assertion here is paired with a VALUE assertion, because "fewer
 // requests" is trivially satisfied by a hook that stopped updating. The numbers

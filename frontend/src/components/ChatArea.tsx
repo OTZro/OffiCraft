@@ -502,11 +502,14 @@ export function ChatArea({
   // ② ENTRY POSITIONING: entering a conversation with unread messages must land
   // on the FIRST unread message, not the bottom. The "first unread" anchor is
   // derived from `member.unreadCount` (the roster badge count) SNAPSHOT at
-  // conversation entry — this is the race-free source: the server clears the
-  // read watermark as a side effect of the very `listChat` this component
-  // triggers ("list 即讀"), and the roster's unreadCount refetches to 0 right
-  // after, so anything read *after* entry would already be wiped. The snapshot
-  // happens synchronously at first render, strictly before the listChat fires.
+  // conversation entry — this is the race-free source. Since T-48 the LISTING
+  // no longer writes a watermark, but the window that opens on it does: the
+  // read-receipt effect below (`windowActive` + `messagesPeer === member.id` →
+  // `markRead(newestTs)`, POST /api/chat/mark-read) fires the moment the first
+  // page lands, and the roster's unreadCount refetches to 0 right after. The
+  // clearer moved from the server's side effect to this component's own
+  // explicit write; the race did not go away, so neither does the snapshot. It
+  // happens synchronously at first render, strictly before any effect runs.
   // unreadCount counts exactly the peer→owner messages above the watermark, so
   // the first unread = the earliest of the LAST `unreadCount` peer→owner
   // messages in the loaded thread.

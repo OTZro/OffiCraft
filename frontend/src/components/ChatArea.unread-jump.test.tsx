@@ -13,8 +13,10 @@
 //   ② ENTRY POSITIONING: entering a conversation whose roster badge carried
 //      unreadCount > 0 lands on the FIRST unread message (an "以下是未讀訊息"
 //      divider pinned to the top of the viewport), derived from the
-//      unreadCount SNAPSHOT taken at entry — race-free against the server's
-//      list-即讀 watermark clear. No unread → the existing land-at-bottom.
+//      unreadCount SNAPSHOT taken at entry — race-free against ChatArea's own
+//      mark-read, which fires as soon as the first page lands on a focused
+//      window and drives the badge to 0. No unread → the existing
+//      land-at-bottom.
 //
 //   ③ B3 跳到原訊息 (jumpToMsgId): entering with a message target locates it
 //      (center scroll + transient highlight) and OWNS the entry positioning

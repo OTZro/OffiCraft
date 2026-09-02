@@ -5944,7 +5944,7 @@ export function __setMockFirstRun(): string {
 // Test-only hook: land an INBOUND message (e.g. member → owner) in the mock log,
 // the way a real agent reply would arrive server-side. The mock UI itself never
 // fabricates one (see the chatLog note) — this exists so tests can exercise the
-// unread/read seam (unreadCountOf ↔ listChat auto-mark) against real log entries.
+// unread/read seam (unreadCountOf ↔ markChatRead) against real log entries.
 export function __injectMockChat(msg: ChatMessage): void {
   chatLog.push(msg);
 }

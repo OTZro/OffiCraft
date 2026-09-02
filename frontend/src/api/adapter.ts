@@ -1752,7 +1752,8 @@ export interface Api {
    * attachment of the member's conversations, flattened newest→oldest —
    * owner↔member BOTH directions AND the member's inter-agent threads — each
    * row carrying the sender id + server-resolved display name + send time.
-   * READ-ONLY (no read-watermark side effect, unlike listChat's auto-mark). */
+   * READ-ONLY, like every read door on this API since T-48 — the only thing
+   * that advances a read watermark is `markChatRead`. */
   listChatAttachments(withId: string): Promise<GalleryAttachment[]>;
   /** Mint the PERMANENT share link for one attachment
    * (`GET /api/chat/attachments/{id}/share-link`): resolves to the blob's

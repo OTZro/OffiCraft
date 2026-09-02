@@ -1,12 +1,13 @@
 // e2e_test/tests/08_unread_jump.spec.js
-// B9 · unread badge → 進房 divider 錨定 → list-即讀 歸零 → SSE 新訊息浮條
+// B9 · unread badge → 進房 divider 錨定 → 進房 mark-read 歸零 → SSE 新訊息浮條
 // (M2 batch 19, 31e4e96 + 1473ff1).
 //
 // The race this spec exists to cover (vitest can't): the FE snapshots
-// `member.unreadCount` at conversation entry STRICTLY BEFORE its own listChat
-// fires — because that very listChat is "list 即讀" (the server advances the
-// read watermark as a side effect) and the roster refetches to 0 right after.
-// Only a real server + real HTTP ordering exercises that.
+// `member.unreadCount` at conversation entry STRICTLY BEFORE the entry read
+// receipt goes out — since 8cd4fff9 the LISTING marks nothing, but ChatArea
+// fires POST /api/chat/mark-read as soon as the newest page lands on a focused
+// window, and the roster refetches to 0 right after. The clearer changed; the
+// ordering hazard did not. Only a real server + real HTTP ordering exercises it.
 //
 // ⚠ ordering is load-bearing throughout: every unread_count sample happens
 // BEFORE anything lists M's thread. The spec hires its OWN member (M is never
@@ -34,8 +35,8 @@ const NEW_COUNT = 5; // the unread tail
 const PAD =
   '— padding line so the thread overflows one screen height and the entry position is a real scroll decision';
 
-test.describe('B9 · unread — badge, entry divider anchor, list-即讀, floating chip', () => {
-  test('badge shows the server count; entering anchors at the divider; listing clears it; SSE chip on new inbound', async ({
+test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, floating chip', () => {
+  test('badge shows the server count; entering anchors at the divider; entering clears it; SSE chip on new inbound', async ({
     page,
   }) => {
     const request = page.request;

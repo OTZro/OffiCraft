@@ -5,8 +5,10 @@
 //     unrelated conversation, resolves `from_name` server-side (owner = honest
 //     ""), orders newest→oldest, and 422s on a blank `with`.
 //   • API: the endpoint is READ-ONLY — it must NOT advance the read watermark
-//     (contrast: GET /api/chat?with= IS "list 即讀"). ⚠ the unread_count sample
-//     MUST be taken BEFORE anything lists A's thread — order is the assertion.
+//     (contrast: POST /api/chat/mark-read, the ONE door that does; since
+//     8cd4fff9 GET /api/chat?with= is a pure read too). ⚠ the unread_count
+//     sample MUST still be taken BEFORE anything reports A's thread read —
+//     order is the assertion.
 //   • browser: gallery panel opens from the chat header, 圖片/檔案 tabs split
 //     by is_image, sender chips (全部/我/per-sender) stack with the tabs, and
 //     an over-filtered view shows the honest empty state.
@@ -61,8 +63,8 @@ test.describe('B8 · chat gallery — scope, sender labels, tabs + chips', () =>
       { data_b64: PNG_1x1_B64, filename: 'c-pic.png', mime: 'image/png' },
     ]);
 
-    // ⚠ READ-ONLY watermark sample — taken BEFORE anything lists A's thread
-    // (GET /api/chat?with=A auto-marks read; order IS the assertion here).
+    // ⚠ READ-ONLY watermark sample — taken BEFORE anything reports A's thread
+    // read (the markChatRead below does; order IS the assertion here).
     const unreadBefore = await unreadCountOf(request, token, A.id);
     expect(
       unreadBefore,
