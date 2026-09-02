@@ -4,9 +4,12 @@
 // perspective — owner↔member BOTH directions AND the member's inter-agent
 // threads (member↔other agent, both ways) — newest→oldest, split into an
 // 「圖片」 and a 「檔案」 tab, each row labelled with its sender's display name
-// + send time. Batch 18 adds an uploader filter chip row under the tabs —
-// options derived from the ACTUAL rows' senders (never hardcoded), stacking
-// with the image/file tab split.
+// + send time. Batch 18 added an uploader filter under the tabs — options
+// derived from the ACTUAL rows' senders (never hardcoded), stacking with the
+// image/file tab split. T-51 ② reshaped it from a wrapping chip row into a
+// one-line checkbox dropdown and cut its options from the CURRENT TAB (they
+// used to come from every row, so the 圖片 tab offered uploaders who had only
+// ever sent files and ticking one answered with an empty gallery).
 //
 // DATA SOURCE: the dedicated gallery query `listChatAttachments(memberId)`
 // (`GET /api/chat/attachments?with=`) — the server flattens the rows and
@@ -247,9 +250,25 @@ export function ChatGalleryPanel({
   const [entries, setEntries] = useState<GalleryAttachment[]>([]);
   const [tab, setTab] = useState<GalleryTab>("images");
   // Uploader filter (batch 18, reshaped by T-51 ②): the SET of selected sender
-  // ids. Empty = 「全部」 — the sentinel id is gone, because "nobody is ticked"
-  // already says it and a set with a magic member in it does not.
-  const [senderSel, setSenderSel] = useState<ReadonlySet<string>>(new Set());
+  // ids — empty = 「全部」, because "nobody is ticked" already says it and a set
+  // with a magic member in it does not.
+  //
+  // 🔴 ONE SET PER TAB, and that is not tidiness. The two tabs hold DIFFERENT
+  // populations (the uploaders with an image are not the uploaders with a
+  // file), so a tick belongs to the population it was made in. An earlier draft
+  // kept one shared set and pruned it whenever the options changed; the
+  // independent review showed what that costs: tick someone on 圖片, glance at
+  // 檔案, come back — and the tick is gone, silently, because the glance pruned
+  // it. Keeping them apart means a round trip changes nothing, and no pruning
+  // is needed for the tab at all (rows disappearing entirely is a different
+  // matter, and the refetch below still handles that).
+  const [senderSelByTab, setSenderSelByTab] = useState<{
+    images: ReadonlySet<string>;
+    files: ReadonlySet<string>;
+  }>({ images: new Set(), files: new Set() });
+  const senderSel = senderSelByTab[tab];
+  const setSenderSel = (next: ReadonlySet<string>) =>
+    setSenderSelByTab((cur) => ({ ...cur, [tab]: next }));
   // Honest empty state: 「還沒有…」 only AFTER the fetch settles — never
   // flash it while loading.
   const [loaded, setLoaded] = useState(false);
@@ -275,12 +294,21 @@ export function ChatGalleryPanel({
           setLoaded(true);
           // Drop any selected uploader that vanished from the fresh rows (e.g.
           // after a member switch) — never a stuck filter that matches nothing.
-          // Dropping ALL of them lands back on 「全部」 by construction.
-          setSenderSel((cur) => {
-            if (cur.size === 0) return cur;
+          // Dropping ALL of them lands back on 「全部」 by construction. This is
+          // about rows that no longer EXIST, which is why it reads the whole
+          // answer rather than one tab's slice.
+          setSenderSelByTab((cur) => {
+            if (cur.images.size === 0 && cur.files.size === 0) return cur;
             const alive = new Set(rows.map((r) => r.from));
-            const kept = new Set([...cur].filter((id) => alive.has(id)));
-            return kept.size === cur.size ? cur : kept;
+            const keep = (sel: ReadonlySet<string>) => {
+              const kept = new Set([...sel].filter((id) => alive.has(id)));
+              return kept.size === sel.size ? sel : kept;
+            };
+            const images = keep(cur.images);
+            const files = keep(cur.files);
+            return images === cur.images && files === cur.files
+              ? cur
+              : { images, files };
           });
         })
         .catch((e) => console.warn("ChatGalleryPanel: load failed", e));
@@ -349,12 +377,17 @@ export function ChatGalleryPanel({
   // senderLabel the list rows use (owner → 「我」, others → fromName, fallback id
   // — the raw internal id never renders when a name exists). The count is what
   // makes the long tail legible: 「只丟過 1 個檔案的人」 is most of this list.
-  const senders: { id: string; label: string; count: number }[] = [];
+  // Keyed by id rather than scanned per row: this runs on every render, and a
+  // linear `find` inside the loop is rows x uploaders — on the corpus this
+  // ticket was measured against (2,200 rows, 114 uploaders) that is six figures
+  // of comparisons for a list that has not changed.
+  const senderById = new Map<string, { id: string; label: string; count: number }>();
   for (const e of inTab) {
-    const seen = senders.find((s) => s.id === e.from);
+    const seen = senderById.get(e.from);
     if (seen) seen.count += 1;
-    else senders.push({ id: e.from, label: senderLabel(e), count: 1 });
+    else senderById.set(e.from, { id: e.from, label: senderLabel(e), count: 1 });
   }
+  const senders = [...senderById.values()];
   // 🔴 ORDER DECIDES WHETHER A LIST OF A HUNDRED PEOPLE IS USABLE. Row order
   // (newest first) reads as no order at all once you are scrolling past twenty
   // names. Sorted by how many files each person actually sent, the handful the
@@ -369,21 +402,6 @@ export function ChatGalleryPanel({
   // uploader filtering.
   const shown =
     senderSel.size === 0 ? inTab : inTab.filter((e) => senderSel.has(e.from));
-
-  // Switching tab re-cuts the population, so a tick with no rows on the new tab
-  // is dropped rather than left to produce an empty gallery. Same rule as the
-  // refetch prune above, applied to the other thing that changes the options.
-  // The dep is the option ids flattened to a STRING: a Set is a new identity
-  // every render, the string only changes when the options really do.
-  const senderIdsKey = senders.map((s) => s.id).join("\u0000");
-  useEffect(() => {
-    const alive = new Set(senderIdsKey.split("\u0000"));
-    setSenderSel((cur) => {
-      if (cur.size === 0) return cur;
-      const kept = new Set([...cur].filter((id) => alive.has(id)));
-      return kept.size === cur.size ? cur : kept;
-    });
-  }, [senderIdsKey]);
 
   // The row key is the same one the list items are keyed by — one definition,
   // used by both, so a paging lookup can never disagree with what is rendered.

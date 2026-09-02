@@ -26,6 +26,8 @@
 //   - give `.chat__gallery-senders` `flex-wrap: wrap` and render one button per
 //     uploader beside the toggle → (1) goes red: the old bug exactly.
 //   - drop `max-height` from `.chat__gallery-sender-options` → (3) goes red.
+//   - make `.chat__gallery-sender-menu` `position: static` (the popover renders
+//     in flow) → the list-unchanged pair at the end goes red.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { GalleryFilterStory } from "./stories/GalleryFilterStory";
 
@@ -79,10 +81,20 @@ test("1440px: the uploader filter stays one line and leaves the file list its he
     await options.evaluate((el) => el.scrollHeight > el.clientHeight + 1),
     "and it scrolls its own overflow rather than growing",
   ).toBe(true);
+  // ⚠️ NOT "the panel did not resize": the panel is `absolute; top:64px;
+  // bottom:0`, so its height is pinned by its parent and that assertion is
+  // unfalsifiable — no mutation can redden it (the independent review caught it
+  // asserting nothing). What IS falsifiable is that the popover OVERLAYS rather
+  // than displaces: if it ever rendered in flow, the file list below would be
+  // pushed down and shortened, which is the old chip row's bug in a new shape.
+  const listAfter = (await list.boundingBox())!;
+  expect(listAfter.y, "the list does not move when the filter opens").toBe(
+    listBox.y,
+  );
   expect(
-    (await panel.boundingBox())!.height,
-    "opening the filter does not resize the panel",
-  ).toBe(panelBox.height);
+    listAfter.height,
+    "…and it keeps its height: the popover floats over it, it does not push it",
+  ).toBe(listBox.height);
 
   await page.screenshot({ path: `${SHOT_DIR}/filter-open-1440.png` });
 });

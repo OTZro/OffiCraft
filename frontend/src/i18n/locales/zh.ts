@@ -850,8 +850,8 @@ export const zh = {
     galleryTabFiles: "檔案",
     galleryEmptyImages: "還沒有圖片",
     galleryEmptyFiles: "還沒有檔案",
-    // M2 批次 18:上傳者篩選 chip 列(選項由實際附件的寄件者動態生成,
-    // 與圖片/檔案分頁疊加生效)。
+    // M2 批次 18:上傳者篩選(選項由實際附件的寄件者動態生成,與圖片/檔案分頁
+    // 疊加生效)。T-51 ② 把它從 chip 列改成下面那個勾選下拉。
     gallerySenderFilterLabel: "依上傳者篩選",
     gallerySenderAll: "全部",
     // T-51 ②:chip 列改成 Jira 式的勾選下拉(owner 逐字:「或是像 jira 一樣,

@@ -320,6 +320,38 @@ describe("ChatGalleryPanel", () => {
     expect(optionLabels()).toEqual(["Bob"]);
   });
 
+  it("keeps each tab's ticks while the reader looks at the other tab", async () => {
+    // 🔴 A GLANCE MUST NOT COST A SELECTION. The first draft kept one shared set
+    // and pruned it whenever the options changed, so ticking someone on 圖片,
+    // switching to 檔案 and switching back left the filter silently on 全部 —
+    // the reader's choice deleted by the act of looking somewhere else. The two
+    // tabs hold different populations, so each keeps its own ticks.
+    galleryRows = [
+      row("a3", "image/png", "m2", "Bob", 300, "bob.png"),
+      row("a2", "image/png", "m1", "Mira", 200, "mira.png"),
+      row("a1", "application/pdf", "m1", "Mira", 100, "mira.pdf"),
+    ];
+    const { container } = renderPanel();
+    await waitFor(() => expect(itemsIn(container).length).toBe(2));
+    openFilter();
+    tickOption("Bob");
+    await waitFor(() => expect(itemsIn(container).length).toBe(1));
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "檔案" }));
+    fireEvent.click(screen.getByRole("tab", { name: "檔案" }));
+    await waitFor(() => expect(itemsIn(container).length).toBe(1));
+    expect(
+      filterToggle().textContent,
+      "the other tab has its own ticks — Bob's does not follow the reader there",
+    ).toContain("全部");
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "圖片" }));
+    fireEvent.click(screen.getByRole("tab", { name: "圖片" }));
+    await waitFor(() => expect(filterToggle().textContent).toContain("已選 1 位"));
+    expect(itemsIn(container).length).toBe(1);
+    expect(itemsIn(container)[0].textContent).toContain("bob.png");
+  });
+
   it("keeps a departed member in the list so their old files stay reachable", async () => {
     // The server resolves a sender's name at ANY roster status on purpose
     // (api_chat.go: "ANY roster status — dismissed still reads by name").

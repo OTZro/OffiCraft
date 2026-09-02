@@ -767,8 +767,9 @@ export const en: Dict = {
     galleryTabFiles: "Files",
     galleryEmptyImages: "No images yet",
     galleryEmptyFiles: "No files yet",
-    // M2 batch 18: uploader filter chips (options derived from the actual
-    // attachment senders, stacking with the Images/Files tabs).
+    // M2 batch 18: the uploader filter (options derived from the actual
+    // attachment senders, stacking with the Images/Files tabs). Reshaped from a
+    // chip row into the checkbox dropdown below by T-51 ②.
     gallerySenderFilterLabel: "Filter by uploader",
     gallerySenderAll: "All",
     // T-51 ②: the chip row became a Jira-style checkbox dropdown. Collapsed it

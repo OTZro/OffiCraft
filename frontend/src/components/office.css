@@ -1735,10 +1735,6 @@
   color: var(--color-text-strong);
 }
 
-/* Uploader filter chips (batch 18) — a wrap row of small grey chips under the
- * 圖片/檔案 tabs: 「全部」 + one chip per actual sender. Same muted grey
- * vocabulary as the tabs (never the accent — content filter, not action);
- * stacks with the tab split. */
 /* T-51 ② — the uploader filter: ONE LINE closed, a fixed-height scrolling
  * popover open.
  *

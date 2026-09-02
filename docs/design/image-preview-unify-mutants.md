@@ -73,7 +73,10 @@ CI 一律綠 —— T-f014 修掉的「同一次點擊有兩個 overlay、其中
 
 ## 這份紀錄涵蓋不到的
 
-- **CSS 抽檔有沒有改到畫面**：靠 162 條 Playwright CT visual guard 在真瀏覽器裡跑過
+- **CSS 抽檔有沒有改到畫面**：靠 `frontend/visual-guards/` 底下的 Playwright CT
+  visual guard 在真瀏覽器裡跑過（**不要在這裡寫數量** —— 原本這行寫「162 條」，
+  T-51 的獨立審查實查是四百多條，那個數字從寫下的那天起就在過期；要知道現在幾條就
+  `npx playwright test -c playwright-ct.config.ts --list`）
   （含 `md-preview.ct.spec`、`t-c645-attachment-preview`（縮放 transform、
   `md-preview__action-label` 在窄寬度的 media query — **該 label 與那條 media
   query 已於 T-51 ④ 移除**：owner 2026-09-02 要三顆頂列按鈕一律只留圖示，所以那條

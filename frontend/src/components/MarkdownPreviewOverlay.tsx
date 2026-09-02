@@ -62,6 +62,7 @@ import { useEscapeLayer } from "../lib/useEscapeLayer";
 import { Markdown } from "./Markdown";
 import "./md-preview.css";
 import {
+  AlertTriangleIcon,
   CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -88,9 +89,15 @@ function clampZoom(value: number): number {
  * what "next" means — the gallery's own tab + uploader filters do, and the
  * overlay would have to duplicate them to answer that question itself.
  *
- * OPTIONAL on purpose: four of the five call sites (AttachmentStrip, TaskCard,
- * ChatArea, TaskArtifactsPopover) open ONE attachment with no list behind it,
- * and must not be forced to invent one. */
+ * OPTIONAL on purpose: every other place that opens this overlay shows ONE
+ * attachment with no list behind it, and must not be forced to invent one.
+ *
+ * ⚠️ DO NOT WRITE THE CALLERS DOWN AS A LIST HERE — an earlier draft did, and
+ * it was wrong on both ends: it named a file that imports this component but
+ * never renders it, and it missed one that does. The count drifts too (one file
+ * renders it three times). Ask the tree instead:
+ *   grep -rn "<MarkdownPreviewOverlay" frontend/src --include=*.tsx | grep -v test
+ */
 type PreviewPager = {
   /** 0-based position of the item currently shown. */
   index: number;
@@ -197,16 +204,6 @@ export function MarkdownPreviewOverlay({
   const plainText = previewableText && !isMarkdownAttachment(mime ?? "text/markdown", title);
   const source = inlineSource ?? fetched;
   const [zoom, setZoom] = useState(1);
-  // T-51 ① — A NEW ITEM IS A NEW IMAGE, so the previous one's zoom must not
-  // survive the step: the fit box is re-measured per image and a 300% carried
-  // over from a wide screenshot would open a portrait photo already scrolled
-  // into a corner. Paging is the ONLY way the shown item changes while this
-  // overlay stays mounted — every other caller unmounts it to show something
-  // else — and remounting per step instead would re-run the focus handoff below
-  // on every arrow press, stealing focus back from wherever the reader put it.
-  useEffect(() => {
-    setZoom(1);
-  }, [url, imageSrc]);
   // The bytes the header's 下載 link points at. A stored blob needs the ?token=
   // gate; a staged data: URI already IS the bytes. An inline text `source` has
   // neither — nothing is fabricated for it.
@@ -329,7 +326,50 @@ export function MarkdownPreviewOverlay({
     };
   }, [attachmentId, inlineInBrowser]);
 
+  // A new blob is a new image, so the zoom starts over. This predates paging and
+  // is exactly what paging needs: T-51 ① made the shown item change WITHOUT a
+  // remount, and a 300% carried over from a wide screenshot would open the next
+  // photo already scrolled into a corner. Nothing was added for it — the deps
+  // were already the right ones. (An earlier draft of ① added a second, verbatim
+  // copy of this effect above; the independent review caught it.)
   useEffect(() => setZoom(1), [url, imageSrc]);
+
+  // T-51 ① — PAGING KEYS ARE BOUND ON THE DOCUMENT, NOT ON THIS ROOT, and that
+  // is a correctness property rather than a style choice. Bound as a React
+  // `onKeyDown` on the portal root, paging worked only while focus was still
+  // inside the overlay — and the surest way to lose that focus is to USE the
+  // feature: stepping to the last item disables the very button under the
+  // pointer, and disabling a focused button blurs it to <body>. The keyboard
+  // then went dead until the reader reached for the mouse. This file already
+  // documents that trap one screen above (the T-4e95 note on the opener), which
+  // is exactly where the independent review found it re-introduced.
+  //
+  // 🔴 THE ARROW KEYS WERE ALREADY SPOKEN FOR, and paging does not take them
+  // back. Two claims stand ahead of it:
+  //   - a ZOOMED image (`zoom > 1`): the wrap is a real scroll container by then
+  //     (T-7e68 made the zoom real layout precisely so it would be), and the
+  //     arrows are how a keyboard reaches the edges the zoom pushed out of the
+  //     frame. Stealing them there re-opens the owner report that whole change
+  //     exists to answer: 「可以放大，但無法左右或上下移動」.
+  //   - a TEXT body: it scrolls with the arrow keys too, and this overlay has no
+  //     second way to reach the bottom of a long file.
+  // So the keys page only for an image shown at 100%, where nothing can scroll
+  // and the keys are genuinely free. The BUTTONS stay available in every case —
+  // they are the answer for the two situations above, not a duplicate of the
+  // keyboard.
+  useEffect(() => {
+    if (pager === undefined) return;
+    if (!image || zoom > 1) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      const next = e.key === "ArrowLeft" ? pager.index - 1 : pager.index + 1;
+      if (next < 0 || next >= pager.total) return;
+      e.preventDefault();
+      pager.onGo(next);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [pager, image, zoom]);
 
   // Back at 100% the stage fits the frame again, so any pan offset left over
   // from the zoomed view has to go with it — otherwise the recentred image
@@ -591,44 +631,25 @@ export function MarkdownPreviewOverlay({
       aria-modal="true"
       aria-label={title}
       onClick={onClose}
-      onKeyDown={(e) => {
-        if (pager === undefined) return;
-        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-        // 🔴 THE ARROW KEYS WERE ALREADY SPOKEN FOR, and paging does not get to
-        // take them back. Two claims stand ahead of this one:
-        //   - a ZOOMED image (`zoom > 1`): the wrap is a real scroll container
-        //     by then (T-7e68 made the zoom real layout precisely so it would
-        //     be), and the arrows are how a keyboard reaches the edges the zoom
-        //     pushed out of the frame. Stealing them there would re-open the
-        //     owner report that whole change exists to answer 「可以放大，但無法
-        //     左右或上下移動」.
-        //   - a TEXT body: it scrolls with the arrow keys too, and this overlay
-        //     has no second way to reach the bottom of a long file.
-        // So the keys page only for an image shown at 100%, where nothing can
-        // scroll and the keys are genuinely free. The buttons stay available in
-        // every case — they are the answer for the two situations above, not a
-        // duplicate of the keyboard.
-        if (!image || zoom > 1) return;
-        const next = e.key === "ArrowLeft" ? pager.index - 1 : pager.index + 1;
-        if (next < 0 || next >= pager.total) return;
-        e.preventDefault();
-        pager.onGo(next);
-      }}
     >
       <div className="md-preview__panel" onClick={(e) => e.stopPropagation()}>
         <div className="md-preview__header">
           <span className="md-preview__title">
             <FileTextIcon size={16} />
             {title}
-            {/* Position within the caller's list. Digits only — nothing to
-              * translate, and it is the one thing the two chevrons cannot say:
-              * whether there are three more or three hundred. */}
-            {pager !== undefined && (
-              <span className="md-preview__pager-count">
-                {pager.index + 1} / {pager.total}
-              </span>
-            )}
           </span>
+          {/* Position within the caller's list. Digits only — nothing to
+            * translate, and it is the one thing the two chevrons cannot say:
+            * whether there are three more or three hundred.
+            *
+            * ⚠️ OUTSIDE the title span, not inside it: that span is the one
+            * that ellipsises, so a long filename would eat the counter before
+            * it eats itself. */}
+          {pager !== undefined && (
+            <span className="md-preview__pager-count">
+              {pager.index + 1} / {pager.total}
+            </span>
+          )}
           <div className="md-preview__actions">
             {/* Share needs a STORED blob id. Download only needs bytes, so it
              * also serves a staged `imageSrc`. An inline text source has
@@ -653,7 +674,20 @@ export function MarkdownPreviewOverlay({
                 }
                 onClick={() => void onCopyShareLink()}
               >
-                {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+                {/* ⚠️ THREE STATES, THREE ICONS. While the button carried its
+                  * label, a failed copy said so in words; icon-only, a failure
+                  * drawn as the idle icon is indistinguishable from "nothing
+                  * happened yet" — and a copy that silently did not happen is
+                  * the one outcome the reader must not have to guess at. The
+                  * accessible name says the same thing (it already switched on
+                  * these three states); this is the half a sighted reader gets. */}
+                {copied ? (
+                  <CheckIcon size={14} />
+                ) : copyFailed ? (
+                  <AlertTriangleIcon size={14} />
+                ) : (
+                  <CopyIcon size={14} />
+                )}
               </button>
             )}
             {/* T-36 — 「在新頁面顯示」: the owner's own words were 「html 應該要可以

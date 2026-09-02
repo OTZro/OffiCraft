@@ -23,6 +23,15 @@ oc.lock
 # it must be ignored, or every CI run would stamp its own provenance line DIRTY.
 .ci-lock/
 
+# One-off measurement/seeding scripts an agent drops beside a suite while it is
+# working. They are reproducible artefacts of ONE ticket, name a selector or a
+# fixture that the same ticket is busy changing, and nothing runs them — so a
+# committed one is a file that reads like a test and is already wrong. (T-51:
+# four of them rode in on a `git add -A`; CI has nothing that catches this.)
+tmp-*.js
+tmp-*.mjs
+tmp-*.py
+
 # Agent scratch/debug dir — never commit
 scratchpad/
 # Agent quarantine dir for removed files (deletes go here, never `rm`)

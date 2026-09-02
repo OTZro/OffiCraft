@@ -8,7 +8,8 @@
 //     (contrast: GET /api/chat?with= IS "list 即讀"). ⚠ the unread_count sample
 //     MUST be taken BEFORE anything lists A's thread — order is the assertion.
 //   • browser: gallery panel opens from the chat header, 圖片/檔案 tabs split
-//     by is_image, sender chips (全部/我/per-sender) stack with the tabs, and
+//     by is_image, the uploader filter (全部 / a checkbox per sender, T-51 ②)
+//     stacks with the tabs, and
 //     an over-filtered view shows the honest empty state.
 const { test, expect } = require('@playwright/test');
 const {
@@ -29,8 +30,8 @@ const NAME_A = uniqueName('Gal Target');
 const NAME_B = uniqueName('Gal Peer');
 const NAME_C = uniqueName('Gal Outsider');
 
-test.describe('B8 · chat gallery — scope, sender labels, tabs + chips', () => {
-  test('gallery API scope/order/from_name/422 + READ-ONLY, then tabs & sender chips in the UI', async ({
+test.describe('B8 · chat gallery — scope, sender labels, tabs + uploader filter', () => {
+  test('gallery API scope/order/from_name/422 + READ-ONLY, then tabs & the uploader filter in the UI', async ({
     page,
   }) => {
     const request = page.request;
@@ -114,7 +115,7 @@ test.describe('B8 · chat gallery — scope, sender labels, tabs + chips', () =>
       'listing the thread (GET /api/chat?with=) must clear the unread count',
     ).toBe(0);
 
-    // ── browser: tabs + sender chips (stacking) + honest empty state ──
+    // ── browser: tabs + the uploader filter (stacking) + honest empty state ──
     await bootAuthedSpa(page, token);
     await page.locator('.member-card', { hasText: NAME_A }).click();
     await page.locator('.chat__gallery-toggle').click();
@@ -140,10 +141,11 @@ test.describe('B8 · chat gallery — scope, sender labels, tabs + chips', () =>
     // no files. That combination is now UNREACHABLE by construction: the
     // options are cut from the current tab, so every uploader you can tick has
     // at least one row there. The empty state itself still exists — for a tab
-    // with no rows at all — and is asserted at unit level in
-    // `frontend/src/components/ChatGalleryPanel.test.tsx`
-    // ("shows per-tab honest empty states once loaded"), because this fixture
-    // deliberately has rows in both tabs.
+    // with no rows at all — a DIFFERENT case, asserted at unit level in
+    // `frontend/src/components/ChatGalleryPanel.test.tsx` ("shows per-tab
+    // honest empty states once loaded"). Say it plainly: the OVER-FILTERED
+    // empty view now has no test anywhere, and that is correct — there is no
+    // longer any sequence of clicks that reaches it.
     //
     // Uploader filter (T-51 ②): ONE line when closed, whatever the number of
     // uploaders. The wrapping chip row it replaced grew a line per uploader.

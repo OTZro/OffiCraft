@@ -472,8 +472,11 @@
   cursor: default;
 }
 .md-preview__pager-count {
+  /* A sibling of the title, not a child of it: the title ellipsises, and a long
+   * filename must not be able to eat the counter. `flex: none` keeps it at its
+   * own width while the title gives way. */
   flex: none;
-  margin-left: 2px;
+  margin-right: auto;
   font-size: 12px;
   font-weight: 400;
   font-variant-numeric: tabular-nums;
